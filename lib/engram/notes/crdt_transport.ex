@@ -11,6 +11,7 @@ defmodule Engram.Notes.CrdtTransport do
   callback encrypts + logs the update). Reads rebuild the doc read-only from the
   persisted snapshot + tail. Never span-diffs, never applies a base_hash CAS.
   """
+  import Bitwise
   import Ecto.Query
 
   alias Engram.{Crypto, Notes, Repo}
@@ -32,18 +33,72 @@ defmodule Engram.Notes.CrdtTransport do
 
   `since_sv == nil` returns the full state; otherwise the delta after the
   client's state vector (`Yex.encode_state_as_update(doc, since_sv)`).
+
+  A `since_sv` that is valid base64 but not a real Yjs state vector (the
+  controller only checks base64-ness) can hit the NIF in two different ways,
+  confirmed empirically: most malformed byte sequences make it return
+  `{:error, {:encoding_exception, _}}`, which we map to `{:error, :bad_since}`
+  below — BUT a small, easily-crafted subset (e.g. `<<128, 128, 128, 128,
+  15>>`, 5 bytes) decodes as a ~2^31-entry state vector and makes the NIF
+  request a ~150 GB allocation. Rust's default OOM handler for that doesn't
+  panic (catchable); it calls `abort()`, which kills the ENTIRE BEAM VM
+  process — every user, every connection, not just this request. No
+  try/rescue in Elixir can intercept an abort(). `plausible_state_vector?/1`
+  rejects implausible shapes BEFORE the bytes ever reach the NIF, which is
+  the only place this can actually be stopped.
   """
   @spec read_delta(map(), map(), String.t(), binary() | nil) ::
-          {:ok, %{update: binary(), head: String.t()}} | {:error, :not_found}
+          {:ok, %{update: binary(), head: String.t()}} | {:error, :not_found | :bad_since}
   def read_delta(user, vault, note_id, since_sv) do
     with {:ok, doc} <- load_doc(user, vault, note_id) do
-      {:ok, update} =
-        case since_sv do
-          nil -> Yex.encode_state_as_update(doc)
-          sv -> Yex.encode_state_as_update(doc, sv)
-        end
+      case encode_update(doc, since_sv) do
+        {:ok, update} -> {:ok, %{update: update, head: head_marker(doc)}}
+        {:error, _} -> {:error, :bad_since}
+      end
+    end
+  end
 
-      {:ok, %{update: update, head: head_marker(doc)}}
+  defp encode_update(doc, nil), do: Yex.encode_state_as_update(doc)
+
+  defp encode_update(doc, sv) do
+    if plausible_state_vector?(sv) do
+      Yex.encode_state_as_update(doc, sv)
+    else
+      {:error, :implausible_state_vector}
+    end
+  end
+
+  # The y-protocols v1 state vector format is `varUint(client_count)` followed
+  # by `client_count * (varUint client_id, varUint clock)`. yrs trusts the
+  # decoded client_count verbatim when sizing its client map, so a state
+  # vector claiming millions of entries in a handful of bytes crashes the NIF
+  # (see read_delta/4 doc). Each real entry needs at least 2 bytes on the
+  # wire (a 0 still costs 1 byte per varUint), so a vector claiming N clients
+  # must have at least 2*N bytes left after the count header — anything
+  # short of that is rejected without ever calling the NIF.
+  @spec plausible_state_vector?(binary()) :: boolean()
+  defp plausible_state_vector?(sv) do
+    case read_leb128_varuint(sv) do
+      {:ok, count, rest} -> byte_size(rest) >= count * 2
+      :error -> false
+    end
+  end
+
+  # LEB128 varuint reader, capped at 10 continuation bytes (enough for any
+  # 64-bit value) so a run of 0x80 bytes can't loop unbounded either.
+  @max_varuint_bytes 10
+  defp read_leb128_varuint(bin), do: read_leb128_varuint(bin, 0, 0, @max_varuint_bytes)
+
+  defp read_leb128_varuint(_bin, _acc, _shift, 0), do: :error
+  defp read_leb128_varuint(<<>>, _acc, _shift, _budget), do: :error
+
+  defp read_leb128_varuint(<<byte, rest::binary>>, acc, shift, budget) do
+    value = bor(acc, bsl(band(byte, 0x7F), shift))
+
+    if band(byte, 0x80) == 0 do
+      {:ok, value, rest}
+    else
+      read_leb128_varuint(rest, value, shift + 7, budget - 1)
     end
   end
 
@@ -61,7 +116,15 @@ defmodule Engram.Notes.CrdtTransport do
           | {:error, :not_found | :invalid_update | :room_unavailable}
   def apply_update(user, vault, note_id, update) do
     if Notes.note_in_vault?(user, vault.id, note_id) do
-      with {:ok, room} <- CrdtRegistry.ensure_started(user.id, vault.id, note_id),
+      # ensure_observed (not ensure_started): registers THIS process (the
+      # per-request caller) as a SharedDoc observer so the room's lifetime is
+      # bounded by ours. auto_exit is :DOWN-driven — a room started via
+      # ensure_started has no observer and never reaps, leaking an immortal
+      # :global room + linked CrdtCheckpointTimer per distinct note_id POSTed
+      # here. With an observer, when this process exits (end of request, or
+      # here in tests, the spawned caller), the room checkpoints and exits
+      # unless a live channel is also observing it.
+      with {:ok, room} <- CrdtRegistry.ensure_observed(user.id, vault.id, note_id),
            {:ok, head} <- apply_in_room(room, note_id, update) do
         {:ok, %{head: head}}
       else
@@ -108,9 +171,15 @@ defmodule Engram.Notes.CrdtTransport do
       0 -> {:error, :room_unavailable}
     end
   catch
-    :exit, {:noproc, _} -> {:error, :room_unavailable}
-    :exit, {:normal, _} -> {:error, :room_unavailable}
-    :exit, {:shutdown, _} -> {:error, :room_unavailable}
+    :exit, {:noproc, _} ->
+      {:error, :room_unavailable}
+
+    :exit, {:normal, _} ->
+      {:error, :room_unavailable}
+
+    :exit, {:shutdown, _} ->
+      {:error, :room_unavailable}
+
     :exit, reason ->
       Logger.error(
         "crdt transport room apply exited",
@@ -134,7 +203,10 @@ defmodule Engram.Notes.CrdtTransport do
     {:ok, ids} =
       Repo.with_tenant(user.id, fn ->
         Note
-        |> where([n], n.vault_id == ^vault.id and is_nil(n.deleted_at))
+        |> where(
+          [n],
+          n.vault_id == ^vault.id and n.user_id == ^user.id and is_nil(n.deleted_at)
+        )
         |> select([n], n.id)
         |> Repo.all()
       end)

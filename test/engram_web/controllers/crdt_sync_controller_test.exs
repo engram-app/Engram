@@ -49,6 +49,34 @@ defmodule EngramWeb.CrdtSyncControllerTest do
       conn = get(conn, "/api/notes/#{note.id}/updates?since[]=x")
       assert json_response(conn, 400)
     end
+
+    test "400 (not 500) when since is valid base64 but not a real state vector", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      note = seed_note(user, vault, "T/I.md", "# I")
+
+      since = Base.url_encode64(:binary.copy(<<0x80>>, 10), padding: false)
+      conn = get(conn, "/api/notes/#{note.id}/updates?since=#{since}")
+      assert json_response(conn, 400)
+    end
+
+    test "400 (not a VM-crashing NIF call) when since claims an implausible entry count", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      note = seed_note(user, vault, "T/J.md", "# J")
+
+      # <<128, 128, 128, 128, 15>> decodes as a state vector claiming ~2^31
+      # client entries in 5 bytes — see CrdtTransport.plausible_state_vector?/1.
+      # Unguarded, this crashes the whole BEAM VM (Rust allocator abort), not
+      # just this request; this test proves the guard rejects it as bad input.
+      since = Base.url_encode64(<<128, 128, 128, 128, 15>>, padding: false)
+      conn = get(conn, "/api/notes/#{note.id}/updates?since=#{since}")
+      assert json_response(conn, 400)
+    end
   end
 
   describe "POST /api/notes/:id/updates" do

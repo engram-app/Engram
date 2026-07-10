@@ -61,6 +61,36 @@ defmodule Engram.Notes.CrdtTransportTest do
       assert {:error, :not_found} =
                CrdtTransport.read_delta(user, vault, Ecto.UUID.generate(), nil)
     end
+
+    test "valid-base64 but non-state-vector since bytes → {:error, :bad_since}, never raises",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "T/BadSV.md", content: "# X", mtime: 1_000.0})
+
+      # A short truncated-varint pattern: the NIF itself rejects it with
+      # {:error, {:encoding_exception, _}} (confirmed empirically), no crash.
+      assert {:error, :bad_since} =
+               CrdtTransport.read_delta(user, vault, note.id, :binary.copy(<<0x80>>, 10))
+    end
+
+    test "state vector claiming an implausible entry count → {:error, :bad_since}, never crashes",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "T/BadSV2.md", content: "# Y", mtime: 1_000.0})
+
+      # DELIBERATELY NOT random bytes: <<128, 128, 128, 128, 15>> decodes as a
+      # state vector claiming ~2^31 client entries in 5 bytes. Handed directly
+      # to Yex.encode_state_as_update/2, this makes the NIF request a ~150 GB
+      # allocation; Rust's OOM handler calls abort() (not a catchable panic),
+      # which kills the whole BEAM VM process for every user. Confirmed via a
+      # throwaway `mix run` script outside the test suite (would otherwise
+      # crash the test runner itself). plausible_state_vector?/1 must reject
+      # this before it ever reaches the NIF.
+      malicious_sv = <<128, 128, 128, 128, 15>>
+
+      assert {:error, :bad_since} =
+               CrdtTransport.read_delta(user, vault, note.id, malicious_sv)
+    end
   end
 
   describe "apply_update/4" do
@@ -103,6 +133,41 @@ defmodule Engram.Notes.CrdtTransportTest do
     test "note in another vault → {:error, :not_found}", %{user: user, vault: vault} do
       assert {:error, :not_found} =
                CrdtTransport.apply_update(user, vault, Ecto.UUID.generate(), <<0, 0>>)
+    end
+
+    test "apply_update observes so the room reaps when the caller exits (no immortal-room leak)",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "T/Leak.md", content: "# Leak", mtime: 1_000.0})
+
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+
+      {:ok, %{update: full}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      client = CrdtBridge.new_doc()
+      :ok = Yex.apply_update(client, full)
+      before_sv = Yex.encode_state_vector!(client)
+      CrdtBridge.ingest_plaintext(client, "# Leak edit")
+      {:ok, upd} = Yex.encode_state_as_update(client, before_sv)
+
+      test_pid = self()
+
+      caller =
+        spawn(fn ->
+          {:ok, _} = CrdtTransport.apply_update(user, vault, note.id, upd)
+          send(test_pid, :applied)
+        end)
+
+      caller_ref = Process.monitor(caller)
+      assert_receive :applied, 5000
+
+      # The room exists (the apply started/observed it); capture + monitor it.
+      room = CrdtRegistry.lookup(note.id)
+      assert is_pid(room), "apply_update should have started the room"
+      room_ref = Process.monitor(room)
+
+      # Caller process exits → its observer :DOWN → room (sole observer) must reap.
+      assert_receive {:DOWN, ^caller_ref, :process, ^caller, _}, 5000
+      assert_receive {:DOWN, ^room_ref, :process, ^room, _}, 5000
     end
   end
 
