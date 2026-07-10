@@ -153,6 +153,10 @@ defmodule EngramWeb.FoldersController do
 
     case Notes.create_folder_marker(user, vault, folder) do
       {:ok, marker} ->
+        # Same event the batch ops emit — lets connected devices (plugin/web)
+        # materialize the empty folder live instead of on the next pull.
+        broadcast_batch(user, vault, %{op: "create", folder: marker.folder})
+
         conn
         |> put_status(:created)
         |> json(%{folder: %{name: marker.folder, count: 0}})
@@ -191,7 +195,16 @@ defmodule EngramWeb.FoldersController do
 
     # Idempotent: treat :no_dek (user never encrypted anything) as "nothing to delete".
     case Notes.delete_folder_marker(user, vault, folder) do
-      {:ok, _} ->
+      {:ok, :deleted} ->
+        # Tell connected devices (plugin/web) to drop the folder live instead of
+        # waiting for their next pull. Only on a REAL delete — broadcasting on a
+        # no-op (:not_found) would fan out a phantom "delete folder" that triggers
+        # spurious client resyncs (and, plugin-side, a folder-delete echo).
+        broadcast_batch(user, vault, %{op: "delete", folder: folder})
+
+        send_resp(conn, 204, "")
+
+      {:ok, :not_found} ->
         send_resp(conn, 204, "")
 
       {:error, :no_dek} ->

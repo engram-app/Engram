@@ -77,6 +77,37 @@ def wait_for_file_gone(
     raise TimeoutError(f"File {rel_path} still exists after {timeout}s")
 
 
+def wait_for_folder(
+    vault_path: Path, rel_path: str, timeout: float = 30, poll: float = 0.3
+) -> None:
+    """Poll until an (empty) folder directory materializes in the vault.
+
+    Empty-folder markers are not in the cursor feed; the plugin materializes
+    them via the folders.batch resync, so allow the same delivery budget as a
+    note (30s). Raise TimeoutError.
+    """
+    full = vault_path / rel_path
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if full.is_dir():
+            return
+        time.sleep(poll)
+    raise TimeoutError(f"Folder {rel_path} did not appear within {timeout}s")
+
+
+def wait_for_folder_gone(
+    vault_path: Path, rel_path: str, timeout: float = 30, poll: float = 0.3
+) -> None:
+    """Poll until a folder directory is removed from the vault. Raise TimeoutError."""
+    full = vault_path / rel_path
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not full.exists():
+            return
+        time.sleep(poll)
+    raise TimeoutError(f"Folder {rel_path} still exists after {timeout}s")
+
+
 def wait_for_content(
     vault_path: Path,
     rel_path: str,
