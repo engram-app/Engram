@@ -404,14 +404,37 @@ defmodule EngramWeb.Router do
 
     # Embedding status
     get "/embed-status", EmbedStatusController, :index
+  end
 
-    # MCP endpoint (JSON-RPC 2.0 over HTTP POST). OAuthScopeEnforce surfaces
-    # vault_id/scope claims from OAuth-issued JWTs so the controller can lock
-    # tool calls to the bound vault.
-    scope "/" do
-      pipe_through EngramWeb.Plugs.OAuthScopeEnforce
-      post "/mcp", McpController, :handle
-    end
+  # MCP endpoint (JSON-RPC 2.0 over HTTP POST). Same auth / onboarding /
+  # rate-limit stack as the vault-scoped API above, but deliberately WITHOUT
+  # VaultPlug: McpController resolves the target vault itself (from the tool's
+  # vault_id arg or the OAuth scope). VaultPlug would resolve the *default*
+  # vault up front and either 404 the whole request when there is no default
+  # (deleted default vault, #951) or 403 a restricted key whose permitted set
+  # excludes the default — blocking valid clients before the controller's own
+  # credential-scoped resolution (#729) can run. OAuthScopeEnforce surfaces the
+  # vault_id/scope claims from OAuth-issued JWTs so the controller can honor the
+  # bound vault.
+  scope "/api", EngramWeb do
+    pipe_through [
+      :api,
+      EngramWeb.Plugs.PreAuthRateLimit,
+      EngramWeb.Plugs.Auth,
+      EngramWeb.Plugs.AccountDeleted,
+      EngramWeb.Plugs.DeviceFingerprint,
+      EngramWeb.Plugs.RotationLockCheck,
+      EngramWeb.Plugs.RequireOnboarding,
+      EngramWeb.Plugs.RequireActiveSubscription,
+      EngramWeb.Plugs.BumpActivity,
+      EngramWeb.Plugs.RequireApiRpsBudget,
+      EngramWeb.Plugs.EnforceSearchCap,
+      EngramWeb.Plugs.RequireApiWriteEnabled,
+      EngramWeb.Plugs.TraceUserAttrs,
+      EngramWeb.Plugs.OAuthScopeEnforce
+    ]
+
+    post "/mcp", McpController, :handle
   end
 
   # MCP transport is POST-only JSON-RPC (see the authed scope above).

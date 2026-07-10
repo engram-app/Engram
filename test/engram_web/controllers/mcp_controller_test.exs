@@ -835,6 +835,61 @@ defmodule EngramWeb.McpControllerTest do
     end
   end
 
+  # =========================================================================
+  # MCP is not gated by VaultPlug's default-vault resolution. Before MCP got its
+  # own (VaultPlug-free) pipeline, VaultPlug resolved the DEFAULT vault up front
+  # and 403'd a restricted key that couldn't reach the default (#729) or 404'd
+  # the whole request when there was no default (#951) — blocking the
+  # controller's own credential-scoped resolution.
+  # =========================================================================
+
+  describe "MCP reachable without a usable default vault (#729/#951)" do
+    test "a restricted key whose permitted vault is NOT the default still reaches MCP" do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      vault_a = insert(:vault, user: user, is_default: true, name: "A")
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, vault_b} = Engram.Vaults.create_vault(user, %{name: "B"})
+      {:ok, api_key, key_rec} = Engram.Accounts.create_api_key(user, "b-only")
+      grant_api_write!(user)
+
+      # Restrict the key to vault B — which is NOT the account default (A).
+      Engram.Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(key_rec.id), vault_id: Ecto.UUID.dump!(vault_b.id)}
+      ])
+
+      conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> call_tool("list_vaults")
+
+      # 200 (not VaultPlug's 403 on the forbidden default), scoped to B only.
+      text = tool_text(conn)
+      assert text =~ to_string(vault_b.id)
+      refute text =~ to_string(vault_a.id)
+    end
+
+    test "list_vaults works when the user has no default vault at all" do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      v1 = insert(:vault, user: user, is_default: false, name: "One")
+      _v2 = insert(:vault, user: user, is_default: false, name: "Two")
+      {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "k")
+      grant_api_write!(user)
+
+      conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> call_tool("list_vaults")
+
+      # 200 (not VaultPlug's 404 for a dangling/absent default). The discovery
+      # call a client needs to recover is now reachable.
+      text = tool_text(conn)
+      assert text =~ to_string(v1.id)
+    end
+  end
+
   # Helper: rebuild authed conn (since conn is consumed after first request)
   defp build_authed(conn) do
     auth_header =
