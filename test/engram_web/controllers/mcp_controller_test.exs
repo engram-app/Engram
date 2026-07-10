@@ -193,6 +193,102 @@ defmodule EngramWeb.McpControllerTest do
   end
 
   # =========================================================================
+  # Multi-vault selection — regression for #985 (set_vault was cosmetic; reads
+  # silently hit the default vault). The account here owns two vaults.
+  # =========================================================================
+
+  describe "MCP multi-vault selection (#985)" do
+    # Self-contained fresh user (not the single-vault main-setup user, whose
+    # vaults_cap is already resolved at 1). Override is inserted BEFORE any
+    # create_vault so the cap resolves at 10 from the first call.
+    setup do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+
+      {:ok, default} = Engram.Vaults.create_vault(user, %{name: "Personal"})
+      {:ok, vault_b} = Engram.Vaults.create_vault(user, %{name: "Health"})
+      {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "multi-key")
+      grant_api_write!(user)
+
+      # A note that lives ONLY in the default vault.
+      Engram.Notes.upsert_note(user, default, %{
+        "path" => "Health/Supplements.md",
+        "content" => "# Supplements\n\nOmega 3.",
+        "mtime" => 1_000.0
+      })
+
+      # A note that lives ONLY in vault_b, in a folder the default vault lacks.
+      Engram.Notes.upsert_note(user, vault_b, %{
+        "path" => "Journal/Checkup.md",
+        "content" => "# Checkup\n\nBlood pressure noted.",
+        "mtime" => 1_000.0
+      })
+
+      authed = build_conn() |> put_req_header("authorization", "Bearer #{api_key}")
+      %{conn: authed, user: user, vault_b: vault_b, default: default}
+    end
+
+    test "a read with no vault_id fails loud instead of silently using the default",
+         %{conn: conn} do
+      conn = call_tool(conn, "list_folders")
+      resp = json_response(conn, 200)
+
+      assert resp["result"]["isError"] == true
+      text = resp["result"]["content"] |> hd() |> Map.get("text")
+      assert text =~ "multiple vaults"
+      assert text =~ "list_vaults"
+    end
+
+    test "a read targets the requested non-default vault", %{conn: conn, vault_b: vault_b} do
+      conn = call_tool(conn, "list_folder", %{"folder" => "Journal", "vault_id" => vault_b.id})
+      text = tool_text(conn)
+
+      assert text =~ "Checkup"
+      refute text =~ "Error"
+    end
+
+    test "requesting vault B does NOT leak the default vault's content",
+         %{conn: conn, vault_b: vault_b} do
+      # The default vault has Health/Supplements.md; vault_b has no Health folder.
+      conn = call_tool(conn, "list_folder", %{"folder" => "Health", "vault_id" => vault_b.id})
+      text = tool_text(conn)
+
+      refute text =~ "Supplements"
+    end
+
+    test "requesting the default vault explicitly still returns its content",
+         %{conn: conn, default: default} do
+      conn = call_tool(conn, "list_folder", %{"folder" => "Health", "vault_id" => default.id})
+      text = tool_text(conn)
+
+      assert text =~ "Supplements"
+    end
+
+    test "an unknown vault_id fails loud (no silent default fallback)", %{conn: conn} do
+      conn =
+        call_tool(conn, "list_folder", %{
+          "folder" => "Health",
+          "vault_id" => "00000000-0000-0000-0000-000000000000"
+        })
+
+      resp = json_response(conn, 200)
+      assert resp["result"]["isError"] == true
+      text = resp["result"]["content"] |> hd() |> Map.get("text")
+      assert text =~ "Vault not found"
+    end
+
+    test "list_vaults advertises every vault for an unrestricted credential",
+         %{conn: conn, vault_b: vault_b, default: default} do
+      conn = call_tool(conn, "list_vaults")
+      text = tool_text(conn)
+
+      assert text =~ to_string(vault_b.id)
+      assert text =~ to_string(default.id)
+    end
+  end
+
+  # =========================================================================
   # Read tool tests (no Qdrant needed)
   # =========================================================================
 
@@ -641,6 +737,28 @@ defmodule EngramWeb.McpControllerTest do
 
       text = tool_text(conn)
       # Should succeed (list_vaults doesn't use vault_id arg, but validates it works)
+      refute text =~ "Error:"
+    end
+
+    test "list_vaults advertises only the vaults the restricted key can use (#729)",
+         %{conn: conn, vault_a: vault_a, vault_b: vault_b} do
+      conn = call_tool(conn, "list_vaults")
+      text = tool_text(conn)
+
+      refute text =~ "Error:"
+      assert text =~ to_string(vault_a.id)
+      # vault_b is restricted away — it must NOT announce itself to this key.
+      refute text =~ to_string(vault_b.id)
+    end
+
+    test "restricted key with no vault_id resolves to its single permitted vault",
+         %{conn: conn} do
+      # user owns 2 vaults but the key can reach only vault_a → unambiguous,
+      # so a bare read must succeed (not fail-loud) and hit vault_a.
+      conn = call_tool(conn, "list_folders")
+      text = tool_text(conn)
+
+      refute text =~ "multiple vaults"
       refute text =~ "Error:"
     end
   end

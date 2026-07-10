@@ -8,17 +8,22 @@ defmodule Engram.MCP.Handlers do
 
   # -- Vault tools --
 
-  def handle("list_vaults", user, _vault, _args) do
-    vaults = Vaults.list_vaults(user)
+  # `vaults` is pre-scoped by the controller to the set THIS credential can use
+  # (OAuth binding + API-key restrictions), so we never advertise a vault the
+  # caller can't actually read or write (#729).
+  def handle("list_vaults", _user, vaults, _args) when is_list(vaults) do
+    if vaults == [] do
+      {:ok, "No vaults are accessible with this connection."}
+    else
+      lines =
+        Enum.map(vaults, fn v ->
+          default = if v.is_default, do: " (default)", else: ""
+          desc = if v.description, do: " — #{v.description}", else: ""
+          "- **#{v.name}**#{default} (ID: #{v.id})#{desc}"
+        end)
 
-    lines =
-      Enum.map(vaults, fn v ->
-        default = if v.is_default, do: " (default)", else: ""
-        desc = if v.description, do: " — #{v.description}", else: ""
-        "- **#{v.name}**#{default} (ID: #{v.id})#{desc}"
-      end)
-
-    {:ok, Enum.join(lines, "\n")}
+      {:ok, Enum.join(lines, "\n")}
+    end
   end
 
   def handle("set_vault", user, _vault, args) do
