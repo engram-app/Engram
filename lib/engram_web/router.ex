@@ -14,6 +14,25 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
   end
 
+  # Shared auth / abuse / onboarding / rate-limit stack for authenticated API
+  # endpoints. Used by BOTH the vault-scoped REST scope and the MCP scope so a
+  # new security control can't be added to one and silently missed on the other.
+  # Each scope appends its own tail (VaultPlug for REST; OAuthScopeEnforce for
+  # MCP) after this pipeline.
+  pipeline :authed_api do
+    plug EngramWeb.Plugs.PreAuthRateLimit
+    plug EngramWeb.Plugs.Auth
+    plug EngramWeb.Plugs.AccountDeleted
+    plug EngramWeb.Plugs.DeviceFingerprint
+    plug EngramWeb.Plugs.RotationLockCheck
+    plug EngramWeb.Plugs.RequireOnboarding
+    plug EngramWeb.Plugs.RequireActiveSubscription
+    plug EngramWeb.Plugs.BumpActivity
+    plug EngramWeb.Plugs.RequireApiRpsBudget
+    plug EngramWeb.Plugs.EnforceSearchCap
+    plug EngramWeb.Plugs.RequireApiWriteEnabled
+  end
+
   pipeline :require_admin do
     plug EngramWeb.Plugs.RequireAdmin
   end
@@ -331,17 +350,7 @@ defmodule EngramWeb.Router do
     # lib/engram/onboarding.ex).
     pipe_through [
       :api,
-      EngramWeb.Plugs.PreAuthRateLimit,
-      EngramWeb.Plugs.Auth,
-      EngramWeb.Plugs.AccountDeleted,
-      EngramWeb.Plugs.DeviceFingerprint,
-      EngramWeb.Plugs.RotationLockCheck,
-      EngramWeb.Plugs.RequireOnboarding,
-      EngramWeb.Plugs.RequireActiveSubscription,
-      EngramWeb.Plugs.BumpActivity,
-      EngramWeb.Plugs.RequireApiRpsBudget,
-      EngramWeb.Plugs.EnforceSearchCap,
-      EngramWeb.Plugs.RequireApiWriteEnabled,
+      :authed_api,
       EngramWeb.Plugs.VaultPlug,
       # Runs last so both current_user and current_vault are resolved:
       # stamps app.user_id AND app.vault_id on the request span.
@@ -419,17 +428,10 @@ defmodule EngramWeb.Router do
   scope "/api", EngramWeb do
     pipe_through [
       :api,
-      EngramWeb.Plugs.PreAuthRateLimit,
-      EngramWeb.Plugs.Auth,
-      EngramWeb.Plugs.AccountDeleted,
-      EngramWeb.Plugs.DeviceFingerprint,
-      EngramWeb.Plugs.RotationLockCheck,
-      EngramWeb.Plugs.RequireOnboarding,
-      EngramWeb.Plugs.RequireActiveSubscription,
-      EngramWeb.Plugs.BumpActivity,
-      EngramWeb.Plugs.RequireApiRpsBudget,
-      EngramWeb.Plugs.EnforceSearchCap,
-      EngramWeb.Plugs.RequireApiWriteEnabled,
+      :authed_api,
+      # No VaultPlug: McpController self-resolves the vault. TraceUserAttrs still
+      # stamps app.user_id (app.vault_id stays nil — MCP is multi-vault per
+      # connection, so there is no single request-level vault to tag).
       EngramWeb.Plugs.TraceUserAttrs,
       EngramWeb.Plugs.OAuthScopeEnforce
     ]

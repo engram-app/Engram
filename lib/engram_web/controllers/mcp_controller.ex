@@ -212,16 +212,12 @@ defmodule EngramWeb.McpController do
 
   # `list_vaults` and `set_vault` don't operate on a single vault's contents, so
   # they aren't blocked by the controller's own vault resolution — `list_vaults`
-  # is the discovery call a client uses to pick a vault in a multi-vault account.
+  # is the discovery call a client uses to pick a vault in a multi-vault account,
+  # and to recover when there is no usable default (deleted default #951, or a
+  # restricted key that excludes it). That recovery works because MCP is off the
+  # VaultPlug pipeline (see router.ex) — no default-vault 404/403 gates it.
   # `list_vaults` is handed the credential-scoped vault set so it can't advertise
   # vaults this token/key cannot use (#729).
-  #
-  # NOTE: this only bypasses the *controller's* resolution. `VaultPlug` still runs
-  # earlier in the pipeline and 404s the whole request when the user has no
-  # default vault (deleted default, #951) or 403s a restricted key whose permitted
-  # set excludes the default — so these calls can't yet recover from those states.
-  # Fixing that means taking MCP off the VaultPlug path (it self-resolves); see
-  # docs/context/mcp-vault-selection.md.
   defp dispatch_tool(%{name: "list_vaults"} = tool, user, args, conn) do
     call_tool(tool, user, accessible_vaults(user, conn), args)
   end
@@ -335,13 +331,17 @@ defmodule EngramWeb.McpController do
         resolve_requested_vault(user, requested, conn)
 
       # Bare call → resolve the credential's sole reachable vault, or fail loud.
+      # Fetch the vault list once and reuse it for the empty-set message (no
+      # second list_vaults query on the error path).
       _ ->
-        case accessible_vaults(user, conn) do
+        all = Engram.Vaults.list_vaults(user)
+
+        case scope_vaults(all, conn) do
           [only] ->
             {:ok, only}
 
           [] ->
-            {:error, no_vault_message(user)}
+            {:error, no_vault_message_for(all)}
 
           _many ->
             {:error,
@@ -389,8 +389,6 @@ defmodule EngramWeb.McpController do
   # Empty accessible set: distinguish "user has no vaults at all" (sync to make
   # one) from "the credential can reach none of the user's vaults" (a scope /
   # deleted-vault problem that syncing won't fix).
-  defp no_vault_message(user), do: no_vault_message_for(Engram.Vaults.list_vaults(user))
-
   defp no_vault_message_for([]), do: "No vault found. Sync from Obsidian to create one."
 
   defp no_vault_message_for(_vaults),
