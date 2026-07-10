@@ -68,6 +68,13 @@ async def test_concurrent_edits_both_survive(vault_a, vault_b, cdp_a, cdp_b, api
     path = "E2E/Crdt/Merge.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "shared base\n", "shared base")
 
+    # Lazy enrollment: a note holds a live CRDT room ONLY while open in the editor.
+    # Character-level merge needs both devices sharing one Y.Doc, so live-bind the
+    # note on each before diverging — otherwise the writes route through convergent
+    # REST (last-write-wins) and one edit is lost.
+    await cdp_a.open_note_in_editor(path)
+    await cdp_b.open_note_in_editor(path)
+
     # Independent edits at different positions, applied close together so neither
     # device has seen the other's change yet (true concurrency).
     write_note(vault_a, path, "shared base\nFROM_A\n")
@@ -89,6 +96,11 @@ async def test_no_conflict_modal_on_divergence(vault_a, vault_b, cdp_a, cdp_b, a
     under CRDT — no modal is shown (the C1 guard's whole purpose)."""
     path = "E2E/Crdt/NoModal.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "base line\n", "base line")
+
+    # Live-bind both sides: under lazy enrollment only an editor-open note holds a
+    # live CRDT room, and silent merge (no conflict modal) is a CRDT-room property.
+    await cdp_a.open_note_in_editor(path)
+    await cdp_b.open_note_in_editor(path)
 
     write_note(vault_a, path, "base line\nA change\n")
     write_note(vault_b, path, "base line\nB change\n")

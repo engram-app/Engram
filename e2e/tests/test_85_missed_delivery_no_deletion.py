@@ -108,24 +108,35 @@ async def test_missed_delivery_then_local_push_no_deletion(
         # Reconnect unconditionally — the session's later tests need B live.
         await cdp_b.reconnect_stream()
 
-    # After reconnect: B and the server converge on the same main-file
-    # content within one catch-up cycle, no restart.
-
-    async def _converged() -> bool:
-        server = (api_sync.get_note(path) or {}).get("content", "")
-        b_file = vault_b / path
-        if not (server.strip() and b_file.exists() and b_file.stat().st_size > 0):
-            return False
-        return server.strip() in b_file.read_text(encoding="utf-8")
-
+    # Durable end state — the incident invariant this test guards is
+    # "no silent deletion + no data loss on EITHER side". Under lazy enrollment a
+    # cold (never editor-opened) note holds no live CRDT room, so a genuine
+    # conflict cannot character-merge into one main file: it resolves keep-both.
+    # B surfaces the server edit it missed (delivered by its own ignorant push's
+    # 409, which carries the server body over REST — channel-independent, not the
+    # reconnect above; the reconnect just restores live sync for later tests) as a
+    # conflict-copy file, its local edit stays as the main file, and the server
+    # retains its edit. We do NOT assert single-main convergence (a live-room
+    # property, not a cold note's) — that would only pass vacuously here.
+    #
+    # Three legs, each failing a distinct real regression: the server edit deleted
+    # (the ignorant-push clobber), B's local edit lost (a keep-remote overwrite),
+    # or B never surfacing the server edit at all (the permanent-miss black hole).
+    # Poll: the 409 conflict-copy write can lag the push under CI load.
     deadline = 30
     while deadline > 0:
-        if await _converged():
+        b_union = _vault_texts(vault_b, folder)
+        server_body = (api_sync.get_note(path) or {}).get("content", "")
+        if server_marker in server_body and local_marker in b_union and server_marker in b_union:
             break
         await asyncio.sleep(1)
         deadline -= 1
-    assert deadline > 0, (
-        "B never converged to the server content after reconnect "
-        f"(server={(api_sync.get_note(path) or {}).get('content', '')[:200]!r}, "
-        f"b={(vault_b / path).read_text(encoding='utf-8')[:200] if (vault_b / path).exists() else None!r})"
+    assert server_marker in server_body, (
+        f"the ignorant push deleted the server edit (server={server_body[:200]!r})"
+    )
+    assert local_marker in b_union, (
+        f"B's local edit was lost to the server edit (b={b_union[:300]!r})"
+    )
+    assert server_marker in b_union, (
+        f"B never surfaced the missed server edit — permanent miss (b={b_union[:300]!r})"
     )

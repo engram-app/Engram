@@ -684,6 +684,44 @@ class CdpClient:
         )
         return bool(result)
 
+    async def open_note_in_editor(self, path: str, timeout: float = 10) -> None:
+        """Open ``path`` in an Obsidian markdown editor and wait until it is
+        live-bound to its CRDT room.
+
+        Under lazy enrollment a note holds a live CRDT room ONLY while it is open
+        in the editor; a note nobody opened routes through convergent REST, not
+        the shared Y.Doc. So a test that needs true character-level CRDT merge
+        (both edits survive) must live-bind the note on each device first — this
+        helper is that step.
+
+        Opening the file fires the plugin's ``file-open`` handler → ``crdtLiveViews
+        .refresh()`` → ``EditorController.bindTo()``. ``bindTo`` is async (it awaits
+        the Y.Text from the CRDT manager), so we poll ``isBound(path)`` rather than
+        assuming the bind completes synchronously with the open.
+        """
+        escaped_path = json.dumps(path)
+        deadline = f"Date.now() + {int(timeout * 1000)}"
+        result = await self.evaluate(
+            f"""
+            (async () => {{
+                const p = {PLUGIN_PATH};
+                const file = app.vault.getFileByPath({escaped_path});
+                if (!file) return "no-file";
+                await app.workspace.getLeaf(false).openFile(file);
+                p.crdtLiveViews?.refresh();
+                const end = {deadline};
+                while (Date.now() < end) {{
+                    if (p.crdtLiveViews?.isBound(file.path)) return "bound";
+                    await new Promise((r) => setTimeout(r, 50));
+                }}
+                return "timeout";
+            }})()
+            """,
+            await_promise=True,
+        )
+        if result != "bound":
+            raise CdpError(f"open_note_in_editor({path!r}) did not live-bind: {result}")
+
     async def trigger_pull(self) -> int:
         """Call syncEngine.pull() and return count of pulled notes."""
         result = await self.evaluate(
