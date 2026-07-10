@@ -619,6 +619,25 @@ defmodule Engram.Vaults do
     end
   end
 
+  @doc """
+  Returns an API key's vault-restriction set: `:all` for an unrestricted key
+  (or `nil`, i.e. non-API-key auth), or the explicit list of permitted vault
+  ids. One query — lets callers filter a vault list in memory instead of one
+  `check_api_key_access/2` round-trip per vault.
+  """
+  def accessible_vault_ids(nil), do: :all
+
+  def accessible_vault_ids(api_key) do
+    ids =
+      from(akv in "api_key_vaults",
+        where: akv.api_key_id == type(^api_key.id, Ecto.UUID),
+        select: type(akv.vault_id, Ecto.UUID)
+      )
+      |> Repo.all(skip_tenant_check: true)
+
+    if ids == [], do: :all, else: ids
+  end
+
   # ── Private helpers ─────────────────────────────────────────────────────────
 
   # Phase B.1 — inject HMAC + ciphertext for the vault name.

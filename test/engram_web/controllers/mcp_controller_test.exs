@@ -159,21 +159,25 @@ defmodule EngramWeb.McpControllerTest do
   end
 
   describe "set_vault tool" do
-    test "without vault_id returns default vault", %{conn: conn} do
+    test "without vault_id explains MCP keeps no active-vault state", %{conn: conn} do
       conn = call_tool(conn, "set_vault")
       text = tool_text(conn)
 
-      assert text =~ "Active vault:"
-      assert text =~ "(default)"
+      # It must NOT claim an active vault was set (MCP is stateless — #985).
+      refute text =~ "Active vault:"
+      assert text =~ "no active-vault state"
+      assert text =~ "list_vaults"
     end
 
-    test "with valid vault_id returns that vault", %{conn: conn, user: user} do
+    test "with valid vault_id validates it and echoes the id to thread",
+         %{conn: conn, user: user} do
       {:ok, vault} = Engram.Vaults.get_default_vault(user)
       conn = call_tool(conn, "set_vault", %{"vault_id" => vault.id})
       text = tool_text(conn)
 
-      assert text =~ "Active vault:"
+      refute text =~ "Active vault:"
       assert text =~ vault.name
+      assert text =~ vault.id
     end
 
     test "with invalid vault_id returns error", %{conn: conn} do
@@ -760,6 +764,17 @@ defmodule EngramWeb.McpControllerTest do
 
       refute text =~ "multiple vaults"
       refute text =~ "Error:"
+    end
+
+    test "set_vault cannot confirm a vault the restricted key can't reach (#729)",
+         %{conn: conn, vault_b: vault_b} do
+      conn = call_tool(conn, "set_vault", %{"vault_id" => vault_b.id})
+      text = tool_text(conn)
+
+      # Refused, and it must not echo vault B as a valid/named vault.
+      assert text =~ "Error:"
+      assert text =~ "not accessible"
+      refute text =~ "is valid"
     end
   end
 

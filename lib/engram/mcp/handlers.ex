@@ -4,7 +4,7 @@ defmodule Engram.MCP.Handlers do
   Each function takes (user, vault, args) and returns a markdown-formatted string.
   """
 
-  alias Engram.{Notes, Search, Vaults}
+  alias Engram.{Notes, Search}
 
   # -- Vault tools --
 
@@ -26,18 +26,29 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
-  def handle("set_vault", user, _vault, args) do
+  # `accessible` is the credential-scoped vault set (see the controller's
+  # dispatch_tool). set_vault does NOT persist anything — MCP is stateless — so
+  # it only validates the id against what this credential can reach and echoes
+  # the id to thread on subsequent calls. It must never confirm a vault outside
+  # the accessible set (#729).
+  def handle("set_vault", _user, accessible, args) when is_list(accessible) do
     case args["vault_id"] do
       nil ->
-        case Vaults.get_default_vault(user) do
-          {:ok, v} -> {:ok, "Active vault: **#{v.name}** (default)"}
-          {:error, _} -> {:error, "No default vault found"}
-        end
+        {:ok,
+         "MCP keeps no active-vault state between calls. Pass `vault_id` on each " <>
+           "vault-scoped tool call to target a vault. Call list_vaults to see the IDs."}
 
       vault_id ->
-        case Vaults.get_vault(user, vault_id) do
-          {:ok, v} -> {:ok, "Active vault: **#{v.name}**"}
-          {:error, _} -> {:error, "Vault not found"}
+        case Enum.find(accessible, &(to_string(&1.id) == to_string(vault_id))) do
+          nil ->
+            {:error,
+             "Vault not found or not accessible: #{vault_id}. Call list_vaults to see the " <>
+               "vaults this connection can use."}
+
+          v ->
+            {:ok,
+             "Vault **#{v.name}** (ID: #{v.id}) is valid. Pass vault_id=\"#{v.id}\" on each " <>
+               "tool call to target it — MCP stores no active vault between calls."}
         end
     end
   end
