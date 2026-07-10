@@ -868,13 +868,18 @@ end
 # unless the OTLP endpoint is set (prod points it at the Alloy sidecar
 # on loopback; Alloy forwards to Tempo). ENGRAM_OTEL_SAMPLE_RATIO tunes
 # head sampling without a code deploy (1.0 = every trace).
+#
+# The root sampler drops health-check / scrape traffic outright (~96% of
+# span volume — see Engram.Observability.TraceSampler), then delegates the
+# rest to the ratio sampler. Under :parent_based a root :drop cascades, so
+# probe traces never build child spans or hit Tempo.
 if otlp_endpoint = System.get_env("OTEL_EXPORTER_OTLP_ENDPOINT") do
   ratio = Engram.Observability.Otel.sample_ratio(System.get_env("ENGRAM_OTEL_SAMPLE_RATIO"), 1.0)
 
   config :opentelemetry,
     span_processor: :batch,
     traces_exporter: :otlp,
-    sampler: {:parent_based, %{root: {:trace_id_ratio_based, ratio}}},
+    sampler: {:parent_based, %{root: {Engram.Observability.TraceSampler, %{ratio: ratio}}}},
     resource: [
       service: [name: "engram-backend"],
       deployment: [environment: to_string(config_env())]
