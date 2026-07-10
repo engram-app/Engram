@@ -318,6 +318,19 @@ export function handleNotesBatch(
 	}
 }
 
+/** A folder marker was created/deleted/moved on the server (from the web app or
+ *  the plugin). The tree renders from the ["folders", vaultId] query, so a
+ *  single invalidation refetches it — the created folder appears, the deleted
+ *  one drops — instead of waiting for a full reload. The event is already
+ *  vault-scoped by the sync topic, so the payload carries no vault_id to check. */
+export function handleFoldersBatch(
+	_payload: { op?: string; folder?: string },
+	queryClient: QueryClient,
+	vaultId: string,
+): void {
+	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
+}
+
 export async function connectChannel({
 	userId,
 	vaultId,
@@ -363,6 +376,10 @@ export async function connectChannel({
 
 	channel.on("notes.batch", (payload: NotesBatchPayload) => {
 		handleNotesBatch(payload, queryClient, vaultId);
+	});
+
+	channel.on("folders.batch", (payload: { op?: string; folder?: string }) => {
+		handleFoldersBatch(payload, queryClient, vaultId);
 	});
 
 	channel

@@ -196,6 +196,10 @@ defmodule EngramWeb.FoldersController do
     # Idempotent: treat :no_dek (user never encrypted anything) as "nothing to delete".
     case Notes.delete_folder_marker(user, vault, folder) do
       {:ok, _} ->
+        # Mirror create/batch: tell connected devices (plugin/web) to drop the
+        # folder live instead of waiting for their next pull.
+        broadcast_batch(user, vault, %{op: "delete", folder: folder})
+
         send_resp(conn, 204, "")
 
       {:error, :no_dek} ->

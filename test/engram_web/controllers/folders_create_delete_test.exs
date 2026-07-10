@@ -82,5 +82,20 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
       conn = delete(conn, "/api/folders/Has%20Space/Sub")
       assert response(conn, 204)
     end
+
+    test "broadcasts folders.batch delete on the sync channel", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      _ = post(conn, ~p"/api/folders", %{"folder" => "Live/Gone"})
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      delete(conn, ~p"/api/folders/Live/Gone")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "folders.batch",
+        payload: %{op: "delete", folder: "Live/Gone"}
+      }
+    end
   end
 end
