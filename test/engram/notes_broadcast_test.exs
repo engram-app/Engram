@@ -171,6 +171,36 @@ defmodule Engram.NotesBroadcastTest do
     end
   end
 
+  describe "rename_note/4 delete-leg broadcast (#976)" do
+    # Sibling of the folder-rename cascade leg: the single-note rename's
+    # old-path delete broadcast must also carry the moved note's id so
+    # receivers correlate the delete+upsert pair as a relocation instead of
+    # resolving by path mid-move. Without this assertion the :1320 leg could
+    # silently regress to nil and stay green.
+    test "delete broadcast for the old path carries the moved note's id", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old.md",
+          "content" => "# Old",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      {:ok, _} = Notes.rename_note(user, vault, "Old.md", "New.md")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "Old.md"} = payload
+      }
+
+      assert payload["id"] == note.id
+    end
+  end
+
   describe "delete_folder/3 empty-folder broadcast" do
     test "deleting an empty folder still broadcasts a note_changed delete event", %{
       user: user,
