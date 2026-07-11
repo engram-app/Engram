@@ -290,10 +290,14 @@ defmodule Engram.Notes.CrdtTransport do
     end
   end
 
-  # Latest tail-row id for the note (uuidv7 → time-ordered, unique, monotonic on
-  # append; falls to a lower value / '' on prune). Captured BEFORE the rebuild so
-  # store_head_if_unchanged can detect a tail that advanced under it.
-  defp tail_watermark(user, note_id) do
+  @doc """
+  Latest tail-row id for the note (uuidv7 → time-ordered, unique, monotonic on
+  append; falls to a lower value / '' on prune). Captured BEFORE a rebuild so
+  `store_head_if_unchanged/4` can detect a tail that advanced under it. Public
+  for the CAS regression tests.
+  """
+  @spec tail_watermark(map(), String.t()) :: String.t()
+  def tail_watermark(user, note_id) do
     {:ok, wm} =
       Repo.with_tenant(user.id, fn ->
         Repo.one(
@@ -306,11 +310,17 @@ defmodule Engram.Notes.CrdtTransport do
     wm
   end
 
-  # Persist the head ONLY if the column is still NULL (don't overwrite a peer
-  # self-heal) AND the tail hasn't advanced since `watermark` was taken (don't
-  # persist a head computed from a now-stale tail). A losing CAS leaves NULL for
-  # the next poll — bounded one-poll staleness instead of a persisted stale head.
-  defp store_head_if_unchanged(user, note_id, head, watermark) do
+  @doc """
+  Persist the head ONLY if the column is still NULL (don't overwrite a peer
+  self-heal) AND the tail hasn't advanced since `watermark` was taken (don't
+  persist a head computed from a now-stale tail). A losing CAS leaves NULL for
+  the next poll — bounded one-poll staleness instead of a persisted stale head.
+  Returns `{:ok, {count, nil}}` (count is 0 when the CAS rejects). Public for
+  the CAS regression tests.
+  """
+  @spec store_head_if_unchanged(map(), String.t(), String.t(), String.t()) ::
+          {:ok, {non_neg_integer(), nil}}
+  def store_head_if_unchanged(user, note_id, head, watermark) do
     Repo.with_tenant(user.id, fn ->
       from(n in Note,
         where:

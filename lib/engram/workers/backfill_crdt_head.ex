@@ -31,8 +31,13 @@ defmodule Engram.Workers.BackfillCrdtHead do
   alias Engram.Repo
   alias Engram.Vaults
 
-  @batch_size 100
+  @default_batch_size 100
   @start_cursor "00000000-0000-0000-0000-000000000000"
+
+  # Config-overridable so a test can exercise the cursor re-enqueue loop without
+  # inserting @default_batch_size+1 notes. Prod uses the default.
+  defp batch_size,
+    do: Application.get_env(:engram, :crdt_head_backfill_batch_size, @default_batch_size)
 
   @doc "Enqueue one job per (user, vault) that still has a NULL-crdt_head note. Returns the count."
   @spec enqueue_all() :: non_neg_integer()
@@ -84,6 +89,8 @@ defmodule Engram.Workers.BackfillCrdtHead do
   end
 
   defp backfill_batch(user, vault, cursor) do
+    limit = batch_size()
+
     {:ok, ids} =
       Repo.with_tenant(user.id, fn ->
         from(n in Note,
@@ -92,7 +99,7 @@ defmodule Engram.Workers.BackfillCrdtHead do
               is_nil(n.deleted_at),
           order_by: [asc: n.id],
           select: n.id,
-          limit: @batch_size
+          limit: ^limit
         )
         |> Repo.all()
       end)
@@ -101,7 +108,7 @@ defmodule Engram.Workers.BackfillCrdtHead do
     # it is called outside the batch-select transaction, once per note.
     Enum.each(ids, fn id -> CrdtTransport.backfill_head(user, vault, id) end)
 
-    if length(ids) == @batch_size do
+    if length(ids) == limit do
       %{"user_id" => user.id, "vault_id" => vault.id, "cursor" => List.last(ids)}
       |> __MODULE__.new()
       |> Oban.insert()
