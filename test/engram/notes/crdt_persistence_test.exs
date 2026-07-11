@@ -191,6 +191,34 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert {:ok, ^upd} = Crypto.decrypt_crdt_state(raw_note, user)
   end
 
+  test "update_v1/4 fans out the update over the vault sync channel", ctx do
+    %{user: user, note: note} = ctx
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
+
+    {:ok, %{state: upd}} = CrdtBridge.merge_plaintext(nil, "hello fanout")
+
+    # Simulate the room: SharedDoc applies the update BEFORE calling update_v1,
+    # so head_marker(doc) reflects post-apply state.
+    doc = CrdtBridge.new_doc()
+    :ok = Yex.apply_update(doc, upd)
+
+    topic = "sync:#{user.id}:#{note.vault_id}"
+    EngramWeb.Endpoint.subscribe(topic)
+
+    _st2 = CrdtPersistence.update_v1(st, upd, note.id, doc)
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      topic: ^topic,
+      event: "note_yjs_update",
+      payload: %{"note_id" => note_id, "b64" => b64, "head" => head}
+    }
+
+    assert note_id == note.id
+    assert {:ok, ^upd} = Base.decode64(b64)
+    assert is_binary(head) and head != ""
+    assert head == Engram.Notes.CrdtTransport.head_marker(doc)
+  end
+
   test "update_v1/4 with cached user does not hit Accounts.get_user!", ctx do
     %{user: user, note: note} = ctx
     # Bind first so the cached user is in the state
