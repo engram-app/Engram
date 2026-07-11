@@ -362,8 +362,13 @@ export async function connectChannel({
 	// trigger. The socket can drop events while disconnected (no replay), so a
 	// reconnect kicks a cursor pull to backfill the gap.
 	// Also re-arms CRDT handshakes on reconnect so the session re-syncs state.
+	// Folder markers no longer ride that feed (backend #976 excludes kind=="folder"),
+	// so an empty-folder delete missed while offline carries no note rows to pull.
+	// Reconcile the folder snapshot directly on (re)connect — snapshot-diff, like
+	// the plugin — so a reconnecting tab drops folders deleted in the gap.
 	socket.onOpen(() => {
 		resyncOpenDocs();
+		queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 		onSocketOpen?.();
 	});
 

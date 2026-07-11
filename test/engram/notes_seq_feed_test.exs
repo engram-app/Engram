@@ -62,4 +62,31 @@ defmodule Engram.NotesSeqFeedTest do
     paths = Enum.map(p1.changes ++ p2.changes, & &1.path)
     assert Enum.sort(paths) == ["n1.md", "n2.md", "n3.md"]
   end
+
+  # #976: folder-marker rows (kind="folder") carried path=nil into the cursor
+  # feed and crashed tombstone apply on old plugins (new ones skip them, but
+  # the feed should not emit them at all). Markers sync via their own
+  # endpoint, never the cursor feed.
+  test "folder-marker rows are excluded from the seq feed", %{user: user, vault: vault} do
+    {:ok, _marker} = Notes.create_folder_marker(user, vault, "Empty")
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"})
+
+    {:ok, %{changes: all}} = Notes.list_changes_by_seq(user, vault, 0)
+    assert Enum.map(all, & &1.path) == ["a.md"]
+  end
+
+  test "folder rename keeps note rows + tombstones in the feed, not the marker", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, _marker} = Notes.create_folder_marker(user, vault, "Old")
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "Old/c.md", "content" => "C"})
+    assert {:ok, 2} = Notes.rename_folder(user, vault, "Old", "New")
+
+    {:ok, %{changes: all}} = Notes.list_changes_by_seq(user, vault, 0)
+    # renamed note + its old-path tombstone flow through; the marker row does not
+    assert Enum.any?(all, &(&1.path == "New/c.md" and not &1.deleted))
+    assert Enum.any?(all, &(&1.path == "Old/c.md" and &1.deleted))
+    refute Enum.any?(all, &is_nil(&1.path))
+  end
 end
