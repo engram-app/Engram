@@ -14,6 +14,7 @@ import {
 	subscribeToCrdtSyncStatus,
 } from "../crdt/session";
 import { useRightSidebar } from "../layout/right-sidebar-context";
+import { noteName } from "../lib/note-name";
 import LoadingPane from "./loading-pane";
 import NoteToc from "./note-toc";
 import NoteView from "./note-view";
@@ -112,7 +113,8 @@ export default function NotePage() {
 		return <p className="p-6 text-muted-foreground">Note not found</p>;
 	}
 
-	const titlePath = note.folder ? `${note.folder}/${note.title}` : note.title;
+	const name = noteName(note.path);
+	const titlePath = note.folder ? `${note.folder}/${name}` : name;
 
 	return (
 		<section className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]">
@@ -126,7 +128,7 @@ export default function NotePage() {
 					{Boolean(note.folder) && (
 						<span className="min-w-0 shrink truncate text-muted-foreground">{note.folder}/</span>
 					)}
-					<span className="min-w-0 truncate font-medium">{note.title}</span>
+					<span className="min-w-0 truncate font-medium">{name}</span>
 				</h2>
 				<Button
 					variant="ghost"

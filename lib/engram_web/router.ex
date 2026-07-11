@@ -14,6 +14,25 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
   end
 
+  # Shared auth / abuse / onboarding / rate-limit stack for authenticated API
+  # endpoints. Used by BOTH the vault-scoped REST scope and the MCP scope so a
+  # new security control can't be added to one and silently missed on the other.
+  # Each scope appends its own tail (VaultPlug for REST; OAuthScopeEnforce for
+  # MCP) after this pipeline.
+  pipeline :authed_api do
+    plug EngramWeb.Plugs.PreAuthRateLimit
+    plug EngramWeb.Plugs.Auth
+    plug EngramWeb.Plugs.AccountDeleted
+    plug EngramWeb.Plugs.DeviceFingerprint
+    plug EngramWeb.Plugs.RotationLockCheck
+    plug EngramWeb.Plugs.RequireOnboarding
+    plug EngramWeb.Plugs.RequireActiveSubscription
+    plug EngramWeb.Plugs.BumpActivity
+    plug EngramWeb.Plugs.RequireApiRpsBudget
+    plug EngramWeb.Plugs.EnforceSearchCap
+    plug EngramWeb.Plugs.RequireApiWriteEnabled
+  end
+
   pipeline :require_admin do
     plug EngramWeb.Plugs.RequireAdmin
   end
@@ -331,17 +350,7 @@ defmodule EngramWeb.Router do
     # lib/engram/onboarding.ex).
     pipe_through [
       :api,
-      EngramWeb.Plugs.PreAuthRateLimit,
-      EngramWeb.Plugs.Auth,
-      EngramWeb.Plugs.AccountDeleted,
-      EngramWeb.Plugs.DeviceFingerprint,
-      EngramWeb.Plugs.RotationLockCheck,
-      EngramWeb.Plugs.RequireOnboarding,
-      EngramWeb.Plugs.RequireActiveSubscription,
-      EngramWeb.Plugs.BumpActivity,
-      EngramWeb.Plugs.RequireApiRpsBudget,
-      EngramWeb.Plugs.EnforceSearchCap,
-      EngramWeb.Plugs.RequireApiWriteEnabled,
+      :authed_api,
       EngramWeb.Plugs.VaultPlug,
       # Runs last so both current_user and current_vault are resolved:
       # stamps app.user_id AND app.vault_id on the request span.
@@ -355,6 +364,9 @@ defmodule EngramWeb.Router do
     get "/notes/changes", NotesController, :changes
     get "/notes/by-id/:id", NotesController, :show_by_id
     delete "/notes/by-id/:id", NotesController, :delete_by_id
+    post "/notes/:id/updates", CrdtSyncController, :post_update
+    get "/notes/:id/updates", CrdtSyncController, :get_updates
+    get "/vault/heads", CrdtSyncController, :vault_heads
     get "/notes/*path", NotesController, :show
     delete "/notes/*path", NotesController, :delete
 
@@ -404,14 +416,30 @@ defmodule EngramWeb.Router do
 
     # Embedding status
     get "/embed-status", EmbedStatusController, :index
+  end
 
-    # MCP endpoint (JSON-RPC 2.0 over HTTP POST). OAuthScopeEnforce surfaces
-    # vault_id/scope claims from OAuth-issued JWTs so the controller can lock
-    # tool calls to the bound vault.
-    scope "/" do
-      pipe_through EngramWeb.Plugs.OAuthScopeEnforce
-      post "/mcp", McpController, :handle
-    end
+  # MCP endpoint (JSON-RPC 2.0 over HTTP POST). Same auth / onboarding /
+  # rate-limit stack as the vault-scoped API above, but deliberately WITHOUT
+  # VaultPlug: McpController resolves the target vault itself (from the tool's
+  # vault_id arg or the OAuth scope). VaultPlug would resolve the *default*
+  # vault up front and either 404 the whole request when there is no default
+  # (deleted default vault, #951) or 403 a restricted key whose permitted set
+  # excludes the default — blocking valid clients before the controller's own
+  # credential-scoped resolution (#729) can run. OAuthScopeEnforce surfaces the
+  # vault_id/scope claims from OAuth-issued JWTs so the controller can honor the
+  # bound vault.
+  scope "/api", EngramWeb do
+    pipe_through [
+      :api,
+      :authed_api,
+      # No VaultPlug: McpController self-resolves the vault. TraceUserAttrs still
+      # stamps app.user_id (app.vault_id stays nil — MCP is multi-vault per
+      # connection, so there is no single request-level vault to tag).
+      EngramWeb.Plugs.TraceUserAttrs,
+      EngramWeb.Plugs.OAuthScopeEnforce
+    ]
+
+    post "/mcp", McpController, :handle
   end
 
   # MCP transport is POST-only JSON-RPC (see the authed scope above).

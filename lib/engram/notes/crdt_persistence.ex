@@ -19,7 +19,15 @@ defmodule Engram.Notes.CrdtPersistence do
   import Ecto.Query
   alias Engram.{Accounts, Crypto, Repo}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpointTimer, CrdtUpdateLog, Note}
+
+  alias Engram.Notes.{
+    CheckpointGate,
+    CrdtBridge,
+    CrdtCheckpointTimer,
+    CrdtUpdateLog,
+    Enqueue,
+    Note
+  }
 
   require Logger
 
@@ -100,6 +108,17 @@ defmodule Engram.Notes.CrdtPersistence do
             update_nonce: nonce
           })
           |> Repo.insert!()
+
+          # Invalidate the cached head in the SAME txn as the tail append: this
+          # update advanced the doc, so any stored crdt_head is now stale.
+          # vault_heads self-heals the NULL by rebuilding once (snapshot + full
+          # tail = authoritative), so we never trust an off-by-one head. Guard on
+          # not-nil so an already-invalidated hot note skips the write. Sets ONLY
+          # crdt_head — no updated_at/version/seq churn (checkpoint owns those).
+          from(n in Note,
+            where: n.id == ^note_id and n.kind == "note" and not is_nil(n.crdt_head)
+          )
+          |> Repo.update_all(set: [crdt_head: nil])
         end)
 
       {:error, reason} ->
@@ -120,15 +139,41 @@ defmodule Engram.Notes.CrdtPersistence do
     state
   end
 
-  # Runs on graceful room terminate (SharedDoc `auto_exit: true`). Delegates to
-  # CrdtCheckpoint.checkpoint/5, which runs synchronously: it materializes
+  # Runs on graceful room terminate (SharedDoc `auto_exit: true`). Materializes
   # content/content_hash/seq into the notes row and enqueues a debounced embed.
   # When text is unchanged, checkpoint degrades to a snapshot-compaction write
-  # with no version/seq churn (the content_hash no-op guard). Any raise inside
-  # checkpoint is caught and logged there, so unbind always returns :ok.
+  # with no version/seq churn (the content_hash no-op guard).
+  #
+  # Concurrency-bounded (2026-07-09 pool-exhaustion fix): a socket drop with
+  # `auto_exit: true` terminates ALL of that client's rooms at once, so up to
+  # N synchronous checkpoints would fight the 10-connection pool and time out
+  # (`DBConnection.ConnectionError`). CheckpointGate caps inline checkpoints;
+  # under the cap we checkpoint synchronously as before (preserving
+  # materialization timing for the common single-note-close case), and beyond
+  # it we overflow to the durable, bounded `crdt_checkpoint` Oban queue so the
+  # storm drains without exhausting the pool. Loss-free either way: the tail-WAL
+  # is pruned only on a successful checkpoint. Any raise inside checkpoint is
+  # caught and logged there, so unbind always returns :ok.
   @impl true
   def unbind(%{user_id: user_id, vault_id: vault_id, note_id: note_id}, _doc_name, doc) do
-    Engram.Notes.CrdtCheckpoint.checkpoint(user_id, vault_id, note_id, doc)
+    _ =
+      if CheckpointGate.acquire() do
+        try do
+          Engram.Notes.CrdtCheckpoint.checkpoint(user_id, vault_id, note_id, doc)
+        after
+          CheckpointGate.release()
+        end
+      else
+        Enqueue.enqueue(
+          Engram.Workers.CheckpointNote.new(%{
+            user_id: user_id,
+            vault_id: vault_id,
+            note_id: note_id
+          }),
+          "crdt_checkpoint"
+        )
+      end
+
     :ok
   end
 

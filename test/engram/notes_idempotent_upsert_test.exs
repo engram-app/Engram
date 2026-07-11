@@ -98,16 +98,17 @@ defmodule Engram.NotesIdempotentUpsertTest do
     refute_receive %Phoenix.Socket.Broadcast{event: "notes.batch"}, 100
   end
 
-  test "re-push after a delete resurrects instead of short-circuiting", %{
-    user: user,
-    vault: vault
-  } do
-    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"})
+  test "re-push after a delete is refused within the delete-wins window (delete not silently undone)",
+       %{user: user, vault: vault} do
+    {:ok, _n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"})
     :ok = Notes.delete_note(user, vault, "a.md")
 
-    {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"})
-
-    assert is_nil(n2.deleted_at)
-    refute n2.id == n1.id
+    # Delete-wins (Todd's chosen policy): a pathless re-push at a just-deleted
+    # path is refused, so a stale device cannot resurrect a note deleted
+    # elsewhere — the delete is neither silently short-circuited nor undone.
+    # Post-window restore + the re-minted-id boundary live in
+    # Engram.NotesDeleteTombstoneTest.
+    assert {:error, :recently_deleted} =
+             Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"})
   end
 end

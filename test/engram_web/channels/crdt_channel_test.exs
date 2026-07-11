@@ -238,6 +238,25 @@ defmodule EngramWeb.CrdtChannelTest do
       assert CrdtRegistry.lookup(note.id) == nil
     end
 
+    test "a crafted syncStep1 with an implausible state vector is rejected before the NIF (P0 #989)",
+         %{socket: socket, doc_id: doc_id, note: note} do
+      # <<0, 0>> step1 + varUint8Array(<<128, 128, 128, 128, 15>>): a 5-byte
+      # state vector claiming ~2^31 client entries. Reaching the y_ex NIF
+      # (Yex.encode_state_as_update/2) would OOM-abort the ENTIRE node,
+      # uncatchable. The guard must reject it with an error reply and never
+      # start the room / touch the NIF. Deterministic bytes only — a random SV
+      # here has crashed the VM before.
+      malicious = <<0, 0, 5, 128, 128, 128, 128, 15>>
+
+      ref = push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(malicious)})
+
+      assert_reply ref, :error, %{reason: "implausible_state_vector"}, 3000
+
+      # Rejected before ensure_room, so the room never started and the frame
+      # never reached SharedDoc.send_yjs_message / the NIF.
+      assert CrdtRegistry.lookup(note.id) == nil
+    end
+
     # -------------------------------------------------------------------------
     # Log hygiene: doc_id (note_id) must appear in metadata, not the message body
     # -------------------------------------------------------------------------
@@ -678,6 +697,35 @@ defmodule EngramWeb.CrdtChannelTest do
         Process.sleep(10)
         wait_until(condition, deadline)
       end
+    end
+  end
+
+  describe "per-socket room cap (abuse backstop)" do
+    test "rejects a new room once the socket hits max_rooms_per_socket",
+         %{socket: socket, user: user, vault: vault, note: note} do
+      Application.put_env(:engram, :max_rooms_per_socket, 1)
+      on_exit(fn -> Application.delete_env(:engram, :max_rooms_per_socket) end)
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+
+      {:ok, note2} = Notes.upsert_note(user, vault, %{"path" => "p2.md", "content" => "base2"})
+      on_exit(fn -> CrdtRegistry.terminate_room(note2.id) end)
+
+      step1_b64 = fn ->
+        client = CrdtBridge.new_doc()
+        {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+        {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+        Base.encode64(frame)
+      end
+
+      # First distinct note opens room #1 (rooms 0 < cap 1). The server answers a
+      # known note's step1 with a step2 push — wait for it so room #1 is up and
+      # in this socket's assigns before the next frame is handled.
+      push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => step1_b64.()})
+      assert_push "crdt_msg", %{"doc_id" => _, "b64" => _}, 3000
+
+      # Second distinct note would open room #2 (rooms 1 >= cap 1) → refused.
+      ref = push(socket, "crdt_msg", %{"doc_id" => note2.id, "b64" => step1_b64.()})
+      assert_reply ref, :error, %{reason: "room_limit"}, 3000
     end
   end
 end
