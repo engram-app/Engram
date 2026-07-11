@@ -109,9 +109,10 @@ defmodule Engram.Workers.BackfillCrdtHead do
     Enum.each(ids, fn id -> CrdtTransport.backfill_head(user, vault, id) end)
 
     if length(ids) == limit do
-      %{"user_id" => user.id, "vault_id" => vault.id, "cursor" => List.last(ids)}
-      |> __MODULE__.new()
-      |> Oban.insert()
+      _ =
+        %{"user_id" => user.id, "vault_id" => vault.id, "cursor" => List.last(ids)}
+        |> __MODULE__.new()
+        |> Oban.insert()
     end
 
     :ok

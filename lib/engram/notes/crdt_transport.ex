@@ -274,15 +274,19 @@ defmodule Engram.Notes.CrdtTransport do
   NULL with a now-stale head (silent missed cold-sync). If the tail advanced, we
   leave the column NULL and the next poll re-heals. Returns `{:error, :not_found}`
   if the note was deleted between selection and rebuild.
+
+  No @spec: the `BackfillCrdtHead` worker calls this with concrete
+  `%User{}`/`%Vault{}`, so a hand-written `map()/map()` contract is a supertype
+  of what Dialyzer infers (contract_supertype) — same reason `load_doc/3` omits
+  its spec.
   """
-  @spec backfill_head(map(), map(), String.t()) :: {:ok, String.t()} | {:error, :not_found}
   def backfill_head(user, vault, note_id) do
     watermark = tail_watermark(user, note_id)
 
     case load_doc(user, vault, note_id) do
       {:ok, doc} ->
         head = head_marker(doc)
-        store_head_if_unchanged(user, note_id, head, watermark)
+        _ = store_head_if_unchanged(user, note_id, head, watermark)
         {:ok, head}
 
       {:error, :not_found} ->
@@ -294,9 +298,8 @@ defmodule Engram.Notes.CrdtTransport do
   Latest tail-row id for the note (uuidv7 → time-ordered, unique, monotonic on
   append; falls to a lower value / '' on prune). Captured BEFORE a rebuild so
   `store_head_if_unchanged/4` can detect a tail that advanced under it. Public
-  for the CAS regression tests.
+  for the CAS regression tests. (No @spec — see backfill_head/3.)
   """
-  @spec tail_watermark(map(), String.t()) :: String.t()
   def tail_watermark(user, note_id) do
     {:ok, wm} =
       Repo.with_tenant(user.id, fn ->
@@ -316,10 +319,8 @@ defmodule Engram.Notes.CrdtTransport do
   persist a head computed from a now-stale tail). A losing CAS leaves NULL for
   the next poll — bounded one-poll staleness instead of a persisted stale head.
   Returns `{:ok, {count, nil}}` (count is 0 when the CAS rejects). Public for
-  the CAS regression tests.
+  the CAS regression tests. (No @spec — see backfill_head/3.)
   """
-  @spec store_head_if_unchanged(map(), String.t(), String.t(), String.t()) ::
-          {:ok, {non_neg_integer(), nil}}
   def store_head_if_unchanged(user, note_id, head, watermark) do
     Repo.with_tenant(user.id, fn ->
       from(n in Note,
