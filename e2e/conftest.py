@@ -351,30 +351,33 @@ def _oauth_ws_warm(cdp_a, clerk_client):
         clerk_user_id, tokens = await provision_oauth_tokens(clerk_client, API_URL, label="warm")
         try:
             original = await swap_to_oauth(cdp_a, tokens)
-            # From here on cdp_a wears the throwaway OAuth identity, whose
-            # Clerk user the outer finally deletes. restore_auth must run on
-            # EVERY exit path, or the session-scoped cdp_a serves the rest of
-            # the suite as a deleted user and one diagnosable warm-up failure
-            # cascades into dozens of misleading auth errors downstream.
+            # From here on cdp_a wears the throwaway OAuth identity, whose Clerk
+            # user the outer finally deletes. restore_auth MUST run and MUST
+            # rebind cdp_a back to its original identity on every exit path, or
+            # the session-scoped cdp_a serves the rest of the suite cross-bound
+            # (or as a deleted user) and one warm-up hiccup cascades into dozens
+            # of misleading "Stream not connected" failures downstream.
+            warm_err: TimeoutError | None = None
             try:
                 await wait_for_stream(cdp_a, timeout=120)
             except TimeoutError as e:
+                warm_err = e
+
+            # Always restore, warm-up success or not. restore_auth now VERIFIES
+            # the rebind and raises on a cross-bind. We do NOT swallow that: a
+            # cross-bound session-scoped device poisons every later test, which
+            # is strictly worse than losing the warm-up error — so a restore
+            # failure is surfaced as primary (it names the real, session-level
+            # problem). A generous timeout covers the cold reconnect.
+            await restore_auth(cdp_a, original, verify_timeout=120)
+
+            if warm_err is not None:
                 raise TimeoutError(
                     "OAuth WS cold-boot warm-up (fixture _oauth_ws_warm) timed "
-                    f"out: {e}. This is one-time suite setup absorbing the "
+                    f"out: {warm_err}. This is one-time suite setup absorbing the "
                     "first-connect cost, not the behavior under test -- check "
                     "backend/Clerk health before assuming a real regression."
-                ) from e
-            finally:
-                try:
-                    await restore_auth(cdp_a, original)
-                except Exception as restore_exc:  # noqa: BLE001 - must not mask the warm-up error
-                    # Best-effort on the failure path: swallowing here keeps the
-                    # original timeout as the reported cause; the cascade risk it
-                    # leaves behind is exactly what this restore tried to avoid,
-                    # so make the attempt loudly visible.
-                    print(f"_oauth_ws_warm: restore_auth failed after warm-up error: {restore_exc}")
-            await wait_for_stream(cdp_a, timeout=120)
+                ) from warm_err
         finally:
             clerk_client.delete_user(clerk_user_id)
 

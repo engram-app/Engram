@@ -988,29 +988,19 @@ class CdpClient:
 
 
     async def reconnect_stream(self) -> None:
-        """Force a CLEAN reconnect of the real-time WebSocket channel.
+        """Reconnect the real-time stream after a disconnect.
 
-        `disconnect()` THEN `connect()` — not connect() alone. The plugin's
-        `channel.connect()` opens with `if (this.ws) return`, so calling it
-        while a socket object lingers but has not reached `connected`
-        (connecting / join-pending / join-rejected-pre-close) is a NO-OP: the
-        stream then stays down until its own up-to-60s reconnect backoff fires.
-        `disconnect()` nulls `this.ws` and clears the pending backoff timer, so
-        the following connect() reliably opens a fresh socket immediately. This
-        is what makes the test_84/85 "force a known-good connection" mitigation
-        actually forceful (e2e-clerk "Stream not connected after 20s" flake).
+        For WebSocket channels, connect() opens a new WebSocket and re-joins.
         """
-        await self.evaluate(f"{PLUGIN_PATH}.noteStream.disconnect()")
         await self.evaluate(f"{PLUGIN_PATH}.noteStream.connect()")
-        logger.info("Stream force-reconnect (disconnect+connect) on CDP port %d", self.port)
-        # Check before sleeping: a fast fresh join can be connected on the first
-        # poll. 15 attempts covers a fresh full handshake under CI load.
-        for _ in range(15):
+        logger.info("Stream reconnect initiated on CDP port %d", self.port)
+        # Wait for the connection to establish and trigger onStatusChange
+        for _ in range(10):
+            await asyncio.sleep(1)
             if await self.check_stream_connected():
                 logger.info("Stream reconnected on CDP port %d", self.port)
                 return
-            await asyncio.sleep(1)
-        logger.warning("Stream did not reconnect within 15s on CDP port %d", self.port)
+        logger.warning("Stream did not reconnect within 10s on CDP port %d", self.port)
 
 
     async def simulate_offline(self) -> None:

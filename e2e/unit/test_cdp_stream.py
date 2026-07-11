@@ -1,19 +1,13 @@
-"""Unit tests for helpers.cdp stream-(re)connect helpers — no CI stack needed.
+"""Unit tests for helpers.cdp stream diagnostics — no CI stack needed.
 
-Regression lock for the e2e-clerk "Stream not connected after 20s" flake
-(test_37/78/84/85). Two independent guarantees:
-
-1. `reconnect_stream()` must FORCE a clean reconnect (disconnect THEN connect).
-   The plugin's `channel.connect()` bails on `if (this.ws) return`, so calling
-   connect() while a non-connected socket lingers is a no-op — the stream then
-   stays down until its own up-to-60s backoff fires, blowing the 20s wait.
-   Disconnecting first nulls `this.ws` + clears the backoff timer so connect()
-   reliably opens a fresh socket.
-
-2. `wait_for_stream_connected()` must dump the channel's internal state on
-   timeout, so a recurrence reports WHICH stuck state it hit (ws readyState,
-   connected, crdtJoined, crdtJoinFailedReason, pending reconnect) instead of a
-   bare timeout — CI does not capture plugin-runtime logs.
+`wait_for_stream_connected()` must dump the channel's internal state on timeout,
+so a recurrence of the e2e-clerk "Stream not connected after 20s" flake
+(test_37/78/84/85) reports WHICH stuck state it hit (ws readyState, connected,
+crdtJoined, crdtJoinFailedReason, pending reconnect) instead of a bare timeout —
+CI does not capture plugin-runtime logs. This diagnostic is what surfaced the
+real root cause: crdtJoinFailedReason="unauthorized" from an OAuth
+identity-rebind ordering bug (fix in helpers/oauth.py + Engram-obsidian#229;
+guarded by test_oauth_rebind.py).
 
 These fake the CDP layer; they run without any stack.
 """
@@ -60,22 +54,6 @@ def _client(check_result: bool) -> tuple[CdpClient, list[str]]:
     client.evaluate = fake_evaluate  # type: ignore[method-assign]
     client.check_stream_connected = fake_check  # type: ignore[method-assign]
     return client, calls
-
-
-def test_reconnect_stream_disconnects_before_connecting():
-    # Stream reports connected right after the forced reconnect, so the poll
-    # returns on the first check (no real sleeps).
-    client, calls = _client(check_result=True)
-
-    asyncio.run(client.reconnect_stream())
-
-    # Match the full method call: "connect()" is a substring of "disconnect()",
-    # so filter on the qualified name to tell the two calls apart.
-    dis = [i for i, c in enumerate(calls) if "noteStream.disconnect()" in c]
-    con = [i for i, c in enumerate(calls) if "noteStream.connect()" in c]
-    assert dis, "reconnect_stream must disconnect() first to null a lingering socket"
-    assert con, "reconnect_stream must connect() after disconnecting"
-    assert dis[0] < con[0], "disconnect() must run strictly before connect()"
 
 
 def test_wait_for_stream_connected_dumps_channel_diag_on_timeout():
