@@ -362,6 +362,12 @@ def _oauth_ws_warm(cdp_a, clerk_client):
                 await wait_for_stream(cdp_a, timeout=120)
             except TimeoutError as e:
                 warm_err = e
+                # Log now: if the restore below ALSO raises, it propagates as
+                # primary and the re-raise at line ~374 never runs, so this
+                # would otherwise be the only trace of the warm-up timeout.
+                logging.getLogger(__name__).warning(
+                    "OAuth WS warm-up timed out (restoring anyway): %s", e
+                )
 
             # Always restore, warm-up success or not. restore_auth now VERIFIES
             # the rebind and raises on a cross-bind. We do NOT swallow that: a

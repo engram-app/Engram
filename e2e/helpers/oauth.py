@@ -230,7 +230,7 @@ async def swap_to_oauth(cdp, tokens: dict) -> str:
     return original
 
 
-async def restore_auth(cdp, original_settings_json: str, verify_timeout: float = 30) -> None:
+async def restore_auth(cdp, original_settings_json: str, verify_timeout: float = 60) -> None:
     """Restore Obsidian plugin to its original auth settings via CDP.
 
     Like swap_to_oauth, this rotates the sync fingerprint back, so the
@@ -239,6 +239,11 @@ async def restore_auth(cdp, original_settings_json: str, verify_timeout: float =
     Verifies the restore rebound the channel (stream reconnects as the restored
     identity) and raises TimeoutError if not — a cross-bind must fail here, not
     silently poison every later test that reuses this session-scoped device.
+
+    verify_timeout defaults to 60s, not 30: under 2-worker load the OAuth
+    reconnect chain (getMe → socket connect → crdt join) intermittently takes
+    ~35s — flake #643 established 60 as the floor. A tighter budget here would
+    turn a legit-but-slow reconnect into a hard failure at the restore site.
     """
     settings = json.loads(original_settings_json)
     api_key = json.dumps(settings.get("apiKey", ""))
