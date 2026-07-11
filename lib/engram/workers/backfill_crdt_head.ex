@@ -44,7 +44,7 @@ defmodule Engram.Workers.BackfillCrdtHead do
   def enqueue_all do
     pairs =
       from(n in Note,
-        where: is_nil(n.crdt_head) and is_nil(n.deleted_at),
+        where: n.kind == "note" and is_nil(n.crdt_head) and is_nil(n.deleted_at),
         group_by: [n.user_id, n.vault_id],
         select: {n.user_id, n.vault_id}
       )
@@ -95,8 +95,8 @@ defmodule Engram.Workers.BackfillCrdtHead do
       Repo.with_tenant(user.id, fn ->
         from(n in Note,
           where:
-            n.vault_id == ^vault.id and n.id > ^cursor and is_nil(n.crdt_head) and
-              is_nil(n.deleted_at),
+            n.vault_id == ^vault.id and n.kind == "note" and n.id > ^cursor and
+              is_nil(n.crdt_head) and is_nil(n.deleted_at),
           order_by: [asc: n.id],
           select: n.id,
           limit: ^limit

@@ -239,7 +239,8 @@ defmodule Engram.Notes.CrdtTransport do
         Note
         |> where(
           [n],
-          n.vault_id == ^vault.id and n.user_id == ^user.id and is_nil(n.deleted_at)
+          n.vault_id == ^vault.id and n.user_id == ^user.id and is_nil(n.deleted_at) and
+            n.kind == "note"
         )
         |> select([n], {n.id, n.crdt_head})
         |> Repo.all()
@@ -325,7 +326,7 @@ defmodule Engram.Notes.CrdtTransport do
     Repo.with_tenant(user.id, fn ->
       from(n in Note,
         where:
-          n.id == ^note_id and is_nil(n.crdt_head) and
+          n.id == ^note_id and n.kind == "note" and is_nil(n.crdt_head) and
             fragment(
               "(SELECT coalesce(max(id::text), '') FROM crdt_update_log WHERE note_id = ?) = ?",
               n.id,

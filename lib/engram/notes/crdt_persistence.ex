@@ -115,7 +115,9 @@ defmodule Engram.Notes.CrdtPersistence do
           # tail = authoritative), so we never trust an off-by-one head. Guard on
           # not-nil so an already-invalidated hot note skips the write. Sets ONLY
           # crdt_head — no updated_at/version/seq churn (checkpoint owns those).
-          from(n in Note, where: n.id == ^note_id and not is_nil(n.crdt_head))
+          from(n in Note,
+            where: n.id == ^note_id and n.kind == "note" and not is_nil(n.crdt_head)
+          )
           |> Repo.update_all(set: [crdt_head: nil])
         end)
 
