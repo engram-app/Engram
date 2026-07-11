@@ -51,4 +51,27 @@ describe("connectChannel onSocketOpen", () => {
 		registered();
 		expect(onSocketOpen).toHaveBeenCalledTimes(1);
 	});
+
+	// Folder markers no longer ride the /sync/changes feed (backend #976 excludes
+	// kind=="folder" — they crashed pre-#216 plugins). An offline tab therefore
+	// misses an empty-folder delete: it produces no descendant note rows, so the
+	// catch-up pull carries nothing to invalidate ["folders"]. Reconcile the
+	// folder snapshot on every (re)connect instead, matching the plugin's
+	// snapshot-diff approach. Regression guard for tree-ops-sync.spec.ts:487.
+	it("invalidates the folders snapshot on (re)connect so missed empty-folder deletes converge", async () => {
+		const invalidateQueries = vi.fn();
+		const queryClient = { invalidateQueries } as never;
+
+		await connectChannel({
+			userId: "u1",
+			vaultId: "v1",
+			getToken: async () => "t",
+			queryClient,
+		});
+
+		const registered = onOpen.mock.calls[0]![0] as () => void;
+		registered();
+
+		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["folders", "v1"] });
+	});
 });
