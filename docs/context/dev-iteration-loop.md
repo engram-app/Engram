@@ -1,5 +1,7 @@
 # Dev iteration loop (frontend + backend)
 
+_Last verified: 2026-06-18_
+
 How to make changes show up in a browser when iterating locally on this VM. Pattern is non-obvious; this doc exists because we hit a white-page mystery on 2026-04-30.
 
 ## TL;DR

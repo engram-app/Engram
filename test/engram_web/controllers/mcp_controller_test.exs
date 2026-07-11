@@ -159,21 +159,25 @@ defmodule EngramWeb.McpControllerTest do
   end
 
   describe "set_vault tool" do
-    test "without vault_id returns default vault", %{conn: conn} do
+    test "without vault_id explains MCP keeps no active-vault state", %{conn: conn} do
       conn = call_tool(conn, "set_vault")
       text = tool_text(conn)
 
-      assert text =~ "Active vault:"
-      assert text =~ "(default)"
+      # It must NOT claim an active vault was set (MCP is stateless — #985).
+      refute text =~ "Active vault:"
+      assert text =~ "no active-vault state"
+      assert text =~ "list_vaults"
     end
 
-    test "with valid vault_id returns that vault", %{conn: conn, user: user} do
+    test "with valid vault_id validates it and echoes the id to thread",
+         %{conn: conn, user: user} do
       {:ok, vault} = Engram.Vaults.get_default_vault(user)
       conn = call_tool(conn, "set_vault", %{"vault_id" => vault.id})
       text = tool_text(conn)
 
-      assert text =~ "Active vault:"
+      refute text =~ "Active vault:"
       assert text =~ vault.name
+      assert text =~ vault.id
     end
 
     test "with invalid vault_id returns error", %{conn: conn} do
@@ -189,6 +193,119 @@ defmodule EngramWeb.McpControllerTest do
       text = tool_text(conn)
 
       assert text =~ "Vault not found"
+    end
+  end
+
+  # =========================================================================
+  # Multi-vault selection — regression for #985 (set_vault was cosmetic; reads
+  # silently hit the default vault). The account here owns two vaults.
+  # =========================================================================
+
+  describe "MCP multi-vault selection (#985)" do
+    # Self-contained fresh user (not the single-vault main-setup user, whose
+    # vaults_cap is already resolved at 1). Override is inserted BEFORE any
+    # create_vault so the cap resolves at 10 from the first call.
+    setup do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+
+      {:ok, default} = Engram.Vaults.create_vault(user, %{name: "Personal"})
+      {:ok, vault_b} = Engram.Vaults.create_vault(user, %{name: "Health"})
+      {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "multi-key")
+      grant_api_write!(user)
+
+      # A note that lives ONLY in the default vault.
+      Engram.Notes.upsert_note(user, default, %{
+        "path" => "Health/Supplements.md",
+        "content" => "# Supplements\n\nOmega 3.",
+        "mtime" => 1_000.0
+      })
+
+      # A note that lives ONLY in vault_b, in a folder the default vault lacks.
+      Engram.Notes.upsert_note(user, vault_b, %{
+        "path" => "Journal/Checkup.md",
+        "content" => "# Checkup\n\nBlood pressure noted.",
+        "mtime" => 1_000.0
+      })
+
+      authed = build_conn() |> put_req_header("authorization", "Bearer #{api_key}")
+      %{conn: authed, user: user, vault_b: vault_b, default: default}
+    end
+
+    test "a navigation read with no vault_id fails loud instead of silently using the default",
+         %{conn: conn} do
+      conn = call_tool(conn, "list_folders")
+      resp = json_response(conn, 200)
+
+      assert resp["result"]["isError"] == true
+      text = resp["result"]["content"] |> hd() |> Map.get("text")
+      assert text =~ "multiple vaults"
+      assert text =~ "list_vaults"
+    end
+
+    test "search_notes with no vault_id routes to cross-vault, not the multi-vault guard",
+         %{conn: conn} do
+      # Unlike navigation reads, a bare search spans every vault the credential
+      # can reach. Search execution needs Qdrant/embedder (absent in unit tests),
+      # so the tool errors — but crucially NOT with the navigation fail-loud
+      # guard, which proves it routed INTO search rather than refusing. The
+      # trapped search-unavailable log is expected here and captured.
+      {resp, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          call_tool(conn, "search_notes", %{"query" => "anything"}) |> json_response(200)
+        end)
+
+      text = resp["result"]["content"] |> hd() |> Map.get("text")
+      refute text =~ "multiple vaults"
+      refute text =~ "specify which one"
+    end
+
+    test "a read targets the requested non-default vault", %{conn: conn, vault_b: vault_b} do
+      conn = call_tool(conn, "list_folder", %{"folder" => "Journal", "vault_id" => vault_b.id})
+      text = tool_text(conn)
+
+      assert text =~ "Checkup"
+      refute text =~ "Error"
+    end
+
+    test "requesting vault B does NOT leak the default vault's content",
+         %{conn: conn, vault_b: vault_b} do
+      # The default vault has Health/Supplements.md; vault_b has no Health folder.
+      conn = call_tool(conn, "list_folder", %{"folder" => "Health", "vault_id" => vault_b.id})
+      text = tool_text(conn)
+
+      refute text =~ "Supplements"
+    end
+
+    test "requesting the default vault explicitly still returns its content",
+         %{conn: conn, default: default} do
+      conn = call_tool(conn, "list_folder", %{"folder" => "Health", "vault_id" => default.id})
+      text = tool_text(conn)
+
+      assert text =~ "Supplements"
+    end
+
+    test "an unknown vault_id fails loud (no silent default fallback)", %{conn: conn} do
+      conn =
+        call_tool(conn, "list_folder", %{
+          "folder" => "Health",
+          "vault_id" => "00000000-0000-0000-0000-000000000000"
+        })
+
+      resp = json_response(conn, 200)
+      assert resp["result"]["isError"] == true
+      text = resp["result"]["content"] |> hd() |> Map.get("text")
+      assert text =~ "Vault not found"
+    end
+
+    test "list_vaults advertises every vault for an unrestricted credential",
+         %{conn: conn, vault_b: vault_b, default: default} do
+      conn = call_tool(conn, "list_vaults")
+      text = tool_text(conn)
+
+      assert text =~ to_string(vault_b.id)
+      assert text =~ to_string(default.id)
     end
   end
 
@@ -642,6 +759,134 @@ defmodule EngramWeb.McpControllerTest do
       text = tool_text(conn)
       # Should succeed (list_vaults doesn't use vault_id arg, but validates it works)
       refute text =~ "Error:"
+    end
+
+    test "list_vaults advertises only the vaults the restricted key can use (#729)",
+         %{conn: conn, vault_a: vault_a, vault_b: vault_b} do
+      conn = call_tool(conn, "list_vaults")
+      text = tool_text(conn)
+
+      refute text =~ "Error:"
+      assert text =~ to_string(vault_a.id)
+      # vault_b is restricted away — it must NOT announce itself to this key.
+      refute text =~ to_string(vault_b.id)
+    end
+
+    test "restricted key with no vault_id resolves to its single permitted vault",
+         %{conn: conn} do
+      # user owns 2 vaults but the key can reach only vault_a → unambiguous,
+      # so a bare read must succeed (not fail-loud) and hit vault_a.
+      conn = call_tool(conn, "list_folders")
+      text = tool_text(conn)
+
+      refute text =~ "multiple vaults"
+      refute text =~ "Error:"
+    end
+
+    test "set_vault cannot confirm a vault the restricted key can't reach (#729)",
+         %{conn: conn, vault_b: vault_b} do
+      conn = call_tool(conn, "set_vault", %{"vault_id" => vault_b.id})
+      text = tool_text(conn)
+
+      # Refused, and it must not echo vault B as a valid/named vault.
+      assert text =~ "Error:"
+      assert text =~ "not accessible"
+      refute text =~ "is valid"
+    end
+  end
+
+  # =========================================================================
+  # Cross-vault search must not leak vaults a restricted credential can't reach.
+  # A key permitted to a >1 SUBSET of the user's vaults cannot cross-vault
+  # search (Qdrant has no multi-vault filter), so it must be told to choose one
+  # rather than silently searching every vault (#729 privacy boundary).
+  # =========================================================================
+
+  describe "cross-vault search privacy for a subset-restricted key" do
+    setup do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+
+      {:ok, va} = Engram.Vaults.create_vault(user, %{name: "A"})
+      {:ok, vb} = Engram.Vaults.create_vault(user, %{name: "B"})
+      {:ok, _vc} = Engram.Vaults.create_vault(user, %{name: "C"})
+
+      {:ok, api_key, key_rec} = Engram.Accounts.create_api_key(user, "subset-key")
+      grant_api_write!(user)
+
+      # Permit the key to A and B only — NOT C. accessible = 2, total = 3.
+      Engram.Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(key_rec.id), vault_id: Ecto.UUID.dump!(va.id)},
+        %{api_key_id: Ecto.UUID.dump!(key_rec.id), vault_id: Ecto.UUID.dump!(vb.id)}
+      ])
+
+      %{conn: build_conn() |> put_req_header("authorization", "Bearer #{api_key}")}
+    end
+
+    test "bare search on a >1 vault subset refuses to cross-vault (asks to choose)",
+         %{conn: conn} do
+      conn = call_tool(conn, "search_notes", %{"query" => "anything"})
+      resp = json_response(conn, 200)
+      text = resp["result"]["content"] |> hd() |> Map.get("text")
+
+      assert resp["result"]["isError"] == true
+      assert text =~ "limited to specific vaults"
+    end
+  end
+
+  # =========================================================================
+  # MCP is not gated by VaultPlug's default-vault resolution. Before MCP got its
+  # own (VaultPlug-free) pipeline, VaultPlug resolved the DEFAULT vault up front
+  # and 403'd a restricted key that couldn't reach the default (#729) or 404'd
+  # the whole request when there was no default (#951) — blocking the
+  # controller's own credential-scoped resolution.
+  # =========================================================================
+
+  describe "MCP reachable without a usable default vault (#729/#951)" do
+    test "a restricted key whose permitted vault is NOT the default still reaches MCP" do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      vault_a = insert(:vault, user: user, is_default: true, name: "A")
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, vault_b} = Engram.Vaults.create_vault(user, %{name: "B"})
+      {:ok, api_key, key_rec} = Engram.Accounts.create_api_key(user, "b-only")
+      grant_api_write!(user)
+
+      # Restrict the key to vault B — which is NOT the account default (A).
+      Engram.Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(key_rec.id), vault_id: Ecto.UUID.dump!(vault_b.id)}
+      ])
+
+      conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> call_tool("list_vaults")
+
+      # 200 (not VaultPlug's 403 on the forbidden default), scoped to B only.
+      text = tool_text(conn)
+      assert text =~ to_string(vault_b.id)
+      refute text =~ to_string(vault_a.id)
+    end
+
+    test "list_vaults works when the user has no default vault at all" do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      v1 = insert(:vault, user: user, is_default: false, name: "One")
+      _v2 = insert(:vault, user: user, is_default: false, name: "Two")
+      {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "k")
+      grant_api_write!(user)
+
+      conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> call_tool("list_vaults")
+
+      # 200 (not VaultPlug's 404 for a dangling/absent default). The discovery
+      # call a client needs to recover is now reachable.
+      text = tool_text(conn)
+      assert text =~ to_string(v1.id)
     end
   end
 

@@ -1,5 +1,7 @@
 # Paddle list pagination: stop on `has_more`, never `next`
 
+_Last verified: 2026-06-23_
+
 How to paginate Paddle list endpoints without an infinite loop. Owner: billing. Status: fixed in PR #723.
 
 ## The gotcha

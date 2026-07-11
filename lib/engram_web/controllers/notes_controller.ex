@@ -63,6 +63,12 @@ defmodule EngramWeb.NotesController do
             current
           )
 
+        {:error, :recently_deleted} ->
+          # Delete-wins: a create at a path deleted seconds ago, identical
+          # content — a stale re-push racing an explicit delete. Refuse so the
+          # delete stands; the client converges by dropping its local copy.
+          conn |> put_status(409) |> json(%{conflict: true, reason: "recently_deleted"})
+
         {:error, reason} ->
           require Logger
 
@@ -134,6 +140,12 @@ defmodule EngramWeb.NotesController do
              }) do
           {:ok, note} ->
             json(conn, %{created: true, path: path, note: note_json(note)})
+
+          {:error, :recently_deleted} ->
+            # Delete-wins: append-as-create races an explicit delete of the same
+            # path. Refuse cleanly (409) — never fall through to format_errors/1,
+            # which crashes on the :recently_deleted atom (it expects a changeset).
+            conn |> put_status(409) |> json(%{conflict: true, reason: "recently_deleted"})
 
           {:error, changeset} ->
             conn |> put_status(422) |> json(%{errors: format_errors(changeset)})

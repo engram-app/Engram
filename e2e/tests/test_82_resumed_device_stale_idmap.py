@@ -69,6 +69,17 @@ async def test_resumed_device_with_stale_idmap_syncs_both_ways(
 ):
     inst_a, inst_b, cdp_a, cdp_b = fresh_instance_pair
 
+    # Unlike test_84/85 (session-scoped fixtures that inherit the suite's
+    # socket churn), fresh_instance_pair boots BRAND-NEW instances — a stream
+    # that isn't connected here means the fresh plugin's initial WS join is
+    # slow or broken. WAIT for it (fresh boots legitimately take a few
+    # seconds under suite load — CI run 28985769854 failed Phase 1 on that),
+    # but never force-reconnect: a forced retry would mask real fresh-boot
+    # connect regressions on the one e2e that exercises a resumed-device
+    # boot (review finding on PR #979).
+    for cdp in (cdp_a, cdp_b):
+        await cdp.wait_for_stream_connected(timeout=30)
+
     # Phase 1: normal sync so B earns a cursor + populated map, and learns the
     # ids of two pre-existing notes (one per direction we'll test post-resume).
     write_note(inst_a.vault_path, "E2E/Resumed-pull-seed.md", "# PullSeed\noriginal")

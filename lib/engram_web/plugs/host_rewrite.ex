@@ -30,7 +30,7 @@ defmodule EngramWeb.Plugs.HostRewrite do
   # Every top-level segment under `scope "/api", EngramWeb` in router.ex.
   # Missing entries silently 404 in prod — guarded by a regression test.
   @api_top_segments ~w(
-    notes folders search vaults attachments oauth mcp auth admin billing
+    notes folders search vaults vault attachments oauth mcp auth admin billing
     tasks health user me onboarding bootstrap api-keys connections tags sync
     logs telemetry embed-status openapi
   )

@@ -1,5 +1,7 @@
 # Rate limiter & cap architecture — and why NOT Mnesia, why NOT Redis
 
+_Last verified: 2026-07-08_
+
 **TL;DR:** Engram rate limiting is **Postgres + BEAM only, zero Redis**. Two mechanisms, split by limiter character:
 
 - **Short-window abuse/burst limiters** (preauth 60s, auth, `api_rps` 1s, Voyage RPM) → **`EngramWeb.RateLimiter.DistributedETS`**: per-node Hammer ETS counter + `Phoenix.PubSub` broadcast. Eventually consistent, permissive on failure.
@@ -47,7 +49,7 @@ Redis/Valkey (ElastiCache) was previously the SaaS-only shared store for exact c
 
 - **Eventual consistency**: overshoot ≈ rate × intra-cluster PubSub propagation (~ms); new nodes start empty; netsplits drop in-flight increments. All failure modes bias **permissive** — correct for abuse/burst limiters.
 - **Voyage RPM** is a *global external-quota* throttle, not a per-user abuse cap, so eventual consistency can briefly exceed Voyage's account RPM (new-node/netsplit). **Accepted** (60s window ≫ ms propagation; Voyage 429s handled downstream) — tracked in issue #685; tighten via per-node budget division if it bites.
-- **No rate-limiter telemetry** currently (the Redis `backend_error` metric was removed with the backend). Follow-up #687.
+- **Rate-limiter telemetry** is in-tree via `Engram.PromEx.RateLimiter` (`lib/engram/prom_ex/rate_limiter.ex`); #687 tracks any remaining completion.
 
 ## Pointers
 

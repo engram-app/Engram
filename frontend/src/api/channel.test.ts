@@ -1,7 +1,12 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { beacon, tracingEnabled } from "../observability/trace";
-import { __resetNoteChangeBatch, handleNoteChanged, handleNotesBatch } from "./channel";
+import {
+	__resetNoteChangeBatch,
+	handleFoldersBatch,
+	handleNoteChanged,
+	handleNotesBatch,
+} from "./channel";
 
 // Stub the tracing gate + beacon buffer; keep the real parseTraceparent so
 // the render beacon's id extraction is exercised end to end. The buffer's
@@ -278,5 +283,19 @@ describe("handleNotesBatch", () => {
 		const qc = mockQueryClient();
 		handleNotesBatch({ op: "delete", vault_id: "7" }, qc, "7");
 		expect(qc.invalidateQueries).not.toHaveBeenCalled();
+	});
+});
+
+describe("handleFoldersBatch", () => {
+	it("refetches the folder tree so a folder delete lands live", () => {
+		const qc = mockQueryClient();
+		handleFoldersBatch({ op: "delete", folder: "Gone" }, qc, "7");
+		expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["folders", "7"] });
+	});
+
+	it("refetches the folder tree so a folder create lands live", () => {
+		const qc = mockQueryClient();
+		handleFoldersBatch({ op: "create", folder: "New/Empty" }, qc, "7");
+		expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["folders", "7"] });
 	});
 });

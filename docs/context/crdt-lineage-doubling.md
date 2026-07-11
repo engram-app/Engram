@@ -1,5 +1,7 @@
 # CRDT lineage doubling — why the same edit must be encoded exactly once
 
+_Last verified: 2026-07-02_
+
 **Status:** root-caused + fixed 2026-07-02 (PR #846, deliver-out state-apply commit).
 **Symptom class:** stored/live note content duplicates or char-interleaves under
 rapid REST writes with a live room: `"Iteration 6"` + `"Iteration 7"` →

@@ -1,5 +1,7 @@
 # Data migrations vs FORCE ROW LEVEL SECURITY — silent 0-row no-op
 
+_Last verified: 2026-07-02_
+
 ## The trap
 
 Raw DML (`execute("UPDATE/DELETE/INSERT ...")`) in a migration against a

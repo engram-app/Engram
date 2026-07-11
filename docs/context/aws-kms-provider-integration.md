@@ -1,5 +1,7 @@
 # AWS KMS Provider Integration — Phase 1 Gotchas
 
+_Last verified: 2026-06-18_
+
 > Non-obvious discoveries from Phase 1 (PR #110). Prevents rediscovery in Phase 2 (BootCanary polymorphism) and Phase 3 (ProviderMigration).
 >
 > **Status update 2026-06-18:** All three phases shipped. Phase 2 — `Engram.Crypto.BootCanary.verify!/0` calls `Resolver.provider()` + `provider.boot_check/0` + `provider.unwrap_dek_no_fallback/2`; `MasterRotation` uses `Resolver.provider_for/1`. **Phase 3 — the cross-provider migration state machine is live:** `Engram.Crypto.ProviderMigration` (`lib/engram/crypto/provider_migration.ex`) + the `Engram.Workers.MigrateUserProvider` Oban worker + the `mix engram.migrate_provider` task (`lib/mix/tasks/engram.migrate_provider.ex`). Per-user Local→KMS migration no longer requires a DB wipe — see the corrected "Phase 3" note at the bottom.

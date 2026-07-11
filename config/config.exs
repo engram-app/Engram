@@ -76,6 +76,13 @@ config :engram, Oban,
     export: 1,
     cleanup: 1,
     indexing: 2,
+    # Overflow lane for CRDT unbind checkpoints under a reconnect storm (see
+    # Engram.Notes.CheckpointGate + Engram.Workers.CheckpointNote). Combined
+    # peak DB-connection budget on this path is inline (CheckpointGate default
+    # 3) + this lane (3) = 6 of POOL_SIZE (10), leaving headroom for REST/search/
+    # embed AND ungated room binds during the storm; excess unbind checkpoints
+    # wait in Postgres, not on the pool.
+    crdt_checkpoint: 3,
     default: 1
   ],
   plugins: [

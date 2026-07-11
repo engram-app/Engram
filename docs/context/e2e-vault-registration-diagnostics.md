@@ -1,5 +1,7 @@
 # E2E Vault-Registration Diagnostics
 
+_Last verified: 2026-06-19_
+
 When an Obsidian E2E test fails with `TimeoutError: Vault not registered after 15s`, the cause is almost never the timeout itself. Skip the urge to bump the timeout — instead, follow this diagnostic ladder.
 
 ## Symptom

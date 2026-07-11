@@ -1,5 +1,7 @@
 # ExUnit Application.put_env race — async-mutator anti-pattern
 
+_Last verified: 2026-05-21_
+
 Tests that mutate `Application.put_env/3` (or `Application.delete_env/2`) while declared `async: true` are a flake source. `Application` env is a single global ETS table — the Ecto SQL sandbox isolates DB rows per test, but does **nothing** for application env. Concurrent readers in other async modules can observe the temporary value mid-test.
 
 ## Symptom shape

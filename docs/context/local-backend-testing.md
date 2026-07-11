@@ -1,5 +1,7 @@
 # Running the backend ExUnit suite locally
 
+_Last verified: 2026-06-27_
+
 Fast local `mix test` against a docker Postgres — no CI round-trip. The
 `scripts/test-local.sh` wrapper encodes everything below; reach for the doc only
 when the script misbehaves or you want to understand the moving parts.
