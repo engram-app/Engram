@@ -108,12 +108,15 @@ defmodule Engram.Workers.BackfillCrdtHead do
     # it is called outside the batch-select transaction, once per note.
     Enum.each(ids, fn id -> CrdtTransport.backfill_head(user, vault, id) end)
 
-    if length(ids) == limit do
-      _ =
+    # A full batch means more remain — re-enqueue the next cursor. Bind the whole
+    # `if` (it yields the insert result or nil) so its value isn't a discarded
+    # non-trivial return (:unmatched_returns).
+    _ =
+      if length(ids) == limit do
         %{"user_id" => user.id, "vault_id" => vault.id, "cursor" => List.last(ids)}
         |> __MODULE__.new()
         |> Oban.insert()
-    end
+      end
 
     :ok
   end
