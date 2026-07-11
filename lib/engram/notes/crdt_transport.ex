@@ -16,7 +16,7 @@ defmodule Engram.Notes.CrdtTransport do
 
   alias Engram.{Crypto, Notes, Repo}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtRegistry, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtRegistry, CrdtUpdateLog, Note}
   alias Yex.Sync.SharedDoc
 
   require Logger
@@ -224,28 +224,104 @@ defmodule Engram.Notes.CrdtTransport do
   @doc """
   Map every note in the vault to its head marker so a client can diff against
   its local per-note heads and learn which cold notes advanced.
+
+  Reads the persisted `crdt_head` column — O(notes) cheap row reads, NO doc
+  rebuilds. The column is NULLed on every CRDT-state change (`update_v1` on a
+  tail append; a `crdt_state_ciphertext` trigger on any snapshot write), and a
+  NULL is self-healed once here via `backfill_head/3`; the `BackfillCrdtHead`
+  worker warms NULLs in the background so a live poll rarely pays that cost. So
+  steady-state cost is O(notes changed since the last poll), not O(vault).
   """
   @spec vault_heads(map(), map()) :: %{String.t() => String.t()}
   def vault_heads(user, vault) do
-    # ponytail: rebuilds every note's doc read-only — O(notes) NIF work per call,
-    # and read_delta also decrypts each note's content it then discards. NO client
-    # polls this in Phase 1; it is dormant until Phase 3. Upgrade path (spec open
-    # Q#1): persist a `crdt_head` column updated in update_v1/checkpoint, or ETag
-    # the index, before any client polls it at scale.
-    {:ok, ids} =
+    {:ok, rows} =
       Repo.with_tenant(user.id, fn ->
         Note
         |> where(
           [n],
           n.vault_id == ^vault.id and n.user_id == ^user.id and is_nil(n.deleted_at)
         )
-        |> select([n], n.id)
+        |> select([n], {n.id, n.crdt_head})
         |> Repo.all()
       end)
 
-    Map.new(ids, fn note_id ->
-      {:ok, %{head: head}} = read_delta(user, vault, note_id, nil)
-      {note_id, head}
+    Enum.reduce(rows, %{}, fn
+      {note_id, nil}, acc ->
+        case backfill_head(user, vault, note_id) do
+          {:ok, head} -> Map.put(acc, note_id, head)
+          {:error, :not_found} -> acc
+        end
+
+      {note_id, head}, acc ->
+        Map.put(acc, note_id, head)
+    end)
+  end
+
+  @doc """
+  Rebuild a note's doc once, compute its head marker, persist it to the
+  `crdt_head` column, and return it. The self-heal path for a NULL column
+  (pre-migration notes, or notes never CRDT-written since the column landed).
+
+  Shared by `vault_heads/2`' inline self-heal and the `BackfillCrdtHead` worker
+  so the O(doc-rebuild) cost is paid at most once per note. The head equals what
+  `read_delta/4` computes for the same state (both are sha256 of the same state
+  vector), so self-healed heads never disagree with the transport's own.
+
+  CONCURRENCY: the tail high-watermark is snapshotted BEFORE the rebuild, and
+  the write is a compare-and-set (`store_head_if_unchanged/4`). A room edit that
+  lands after this reads the tail appends a row and — finding `crdt_head` already
+  NULL — no-op-invalidates; without the CAS this self-heal could clobber that
+  NULL with a now-stale head (silent missed cold-sync). If the tail advanced, we
+  leave the column NULL and the next poll re-heals. Returns `{:error, :not_found}`
+  if the note was deleted between selection and rebuild.
+  """
+  @spec backfill_head(map(), map(), String.t()) :: {:ok, String.t()} | {:error, :not_found}
+  def backfill_head(user, vault, note_id) do
+    watermark = tail_watermark(user, note_id)
+
+    case load_doc(user, vault, note_id) do
+      {:ok, doc} ->
+        head = head_marker(doc)
+        store_head_if_unchanged(user, note_id, head, watermark)
+        {:ok, head}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+    end
+  end
+
+  # Latest tail-row id for the note (uuidv7 → time-ordered, unique, monotonic on
+  # append; falls to a lower value / '' on prune). Captured BEFORE the rebuild so
+  # store_head_if_unchanged can detect a tail that advanced under it.
+  defp tail_watermark(user, note_id) do
+    {:ok, wm} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.one(
+          from l in CrdtUpdateLog,
+            where: l.note_id == ^note_id,
+            select: fragment("coalesce(max(?::text), '')", l.id)
+        )
+      end)
+
+    wm
+  end
+
+  # Persist the head ONLY if the column is still NULL (don't overwrite a peer
+  # self-heal) AND the tail hasn't advanced since `watermark` was taken (don't
+  # persist a head computed from a now-stale tail). A losing CAS leaves NULL for
+  # the next poll — bounded one-poll staleness instead of a persisted stale head.
+  defp store_head_if_unchanged(user, note_id, head, watermark) do
+    Repo.with_tenant(user.id, fn ->
+      from(n in Note,
+        where:
+          n.id == ^note_id and is_nil(n.crdt_head) and
+            fragment(
+              "(SELECT coalesce(max(id::text), '') FROM crdt_update_log WHERE note_id = ?) = ?",
+              n.id,
+              ^watermark
+            )
+      )
+      |> Repo.update_all(set: [crdt_head: head])
     end)
   end
 

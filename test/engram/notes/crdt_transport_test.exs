@@ -190,6 +190,109 @@ defmodule Engram.Notes.CrdtTransportTest do
     end
   end
 
+  describe "crdt_head maintenance + vault_heads memory hardening" do
+    test "a room edit invalidates a warmed crdt_head; vault_heads self-heals to the new head",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "MH/A.md", content: "# A\n\nseed", mtime: 1_000.0})
+
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+
+      # Warm the column so we can prove the edit INVALIDATES it (not just that a
+      # never-set column stays NULL).
+      _ = CrdtTransport.vault_heads(user, vault)
+      {:ok, warmed} = Notes.get_note_by_id(user, vault, note.id)
+      refute is_nil(warmed.crdt_head)
+
+      {:ok, %{update: full}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      client = CrdtBridge.new_doc()
+      :ok = Yex.apply_update(client, full)
+      before_sv = Yex.encode_state_vector!(client)
+      CrdtBridge.ingest_plaintext(client, "# A\n\nseed and edit")
+      {:ok, upd} = Yex.encode_state_as_update(client, before_sv)
+
+      {:ok, %{head: head}} = CrdtTransport.apply_update(user, vault, note.id, upd)
+
+      # The tail append (update_v1) invalidated the stale head...
+      {:ok, invalidated} = Notes.get_note_by_id(user, vault, note.id)
+      assert is_nil(invalidated.crdt_head), "a room edit must invalidate the cached head"
+
+      # ...and vault_heads self-heals to the authoritative post-edit head.
+      heads = CrdtTransport.vault_heads(user, vault)
+      assert heads[note.id] == head
+    end
+
+    test "vault_heads self-heals a NULL crdt_head and persists it for cheap re-reads",
+         %{user: user, vault: vault} do
+      {:ok, a} =
+        Notes.upsert_note(user, vault, %{path: "MH/B.md", content: "# B", mtime: 1_000.0})
+
+      # A freshly upserted note is INSERTed (the invalidation trigger is
+      # BEFORE UPDATE, so it doesn't fire), so crdt_head starts NULL.
+      {:ok, a0} = Notes.get_note_by_id(user, vault, a.id)
+      assert is_nil(a0.crdt_head)
+
+      heads = CrdtTransport.vault_heads(user, vault)
+      assert is_binary(heads[a.id])
+
+      {:ok, a1} = Notes.get_note_by_id(user, vault, a.id)
+      assert a1.crdt_head == heads[a.id], "self-heal must persist the column"
+    end
+
+    test "vault_heads head equals read_delta's head for the same note",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "MH/C.md", content: "# C", mtime: 1_000.0})
+
+      {:ok, %{head: rd_head}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      heads = CrdtTransport.vault_heads(user, vault)
+      assert heads[note.id] == rd_head
+    end
+
+    test "a REST edit invalidates the head so vault_heads reflects the new state",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "MH/D.md", content: "# D\n\none", mtime: 1_000.0})
+
+      heads0 = CrdtTransport.vault_heads(user, vault)
+      h0 = heads0[note.id]
+      assert is_binary(h0)
+
+      # A REST update rewrites crdt_state via maybe_merge_crdt; the trigger
+      # nulls crdt_head so a stale head cannot survive the content change.
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          path: "MH/D.md",
+          content: "# D\n\none two",
+          mtime: 2_000.0
+        })
+
+      {:ok, mid} = Notes.get_note_by_id(user, vault, note.id)
+      assert is_nil(mid.crdt_head), "trigger must invalidate crdt_head on a crdt_state change"
+
+      heads1 = CrdtTransport.vault_heads(user, vault)
+      assert heads1[note.id] != h0, "head must advance after a REST edit"
+    end
+
+    test "backfill_head computes, persists, and returns a head matching read_delta",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "MH/E.md", content: "# E", mtime: 1_000.0})
+
+      assert {:ok, head} = CrdtTransport.backfill_head(user, vault, note.id)
+      {:ok, %{head: rd_head}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      assert head == rd_head
+
+      {:ok, reloaded} = Notes.get_note_by_id(user, vault, note.id)
+      assert reloaded.crdt_head == head
+    end
+
+    test "backfill_head returns :not_found for an unknown note", %{user: user, vault: vault} do
+      assert {:error, :not_found} =
+               CrdtTransport.backfill_head(user, vault, Ecto.UUID.generate())
+    end
+  end
+
   describe "safe_wire_frame?/1 (P0 #989 — WS state-vector DoS guard)" do
     test "non-step1 frames are always allowed (step2, update, non-sync)" do
       assert CrdtTransport.safe_wire_frame?(<<0, 1, 5>>), "syncStep2"
