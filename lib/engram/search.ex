@@ -72,7 +72,7 @@ defmodule Engram.Search do
 
     result =
       if cross_vault do
-        case Engram.Billing.check_feature(user, :cross_vault_search) do
+        case cross_vault_allowed(user, opts) do
           :ok -> do_search(user, nil, query, opts)
           {:error, _} = err -> err
         end
@@ -129,6 +129,20 @@ defmodule Engram.Search do
 
       _ ->
         result
+    end
+  end
+
+  # Cross-vault is a Pro billing feature on the web/API path. The MCP server
+  # makes multi-vault search the default for every tier (product decision
+  # 2026-07-10), so it passes `allow_cross_vault: true` to bypass the gate.
+  # The MCP caller is responsible for having already narrowed `vault: nil` to
+  # the credential's ACCESSIBLE set (it only enables this when the credential
+  # can reach every vault), so this never widens beyond what the caller may see.
+  defp cross_vault_allowed(user, opts) do
+    if Keyword.get(opts, :allow_cross_vault, false) do
+      :ok
+    else
+      Engram.Billing.check_feature(user, :cross_vault_search)
     end
   end
 

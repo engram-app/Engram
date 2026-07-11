@@ -4,77 +4,72 @@ defmodule Engram.MCP.Handlers do
   Each function takes (user, vault, args) and returns a markdown-formatted string.
   """
 
-  alias Engram.{Notes, Search, Vaults}
+  alias Engram.{Notes, Search}
 
   # -- Vault tools --
 
-  def handle("list_vaults", user, _vault, _args) do
-    vaults = Vaults.list_vaults(user)
+  # `vaults` is pre-scoped by the controller to the set THIS credential can use
+  # (OAuth binding + API-key restrictions), so we never advertise a vault the
+  # caller can't actually read or write (#729).
+  def handle("list_vaults", _user, vaults, _args) when is_list(vaults) do
+    if vaults == [] do
+      {:ok, "No vaults are accessible with this connection."}
+    else
+      lines =
+        Enum.map(vaults, fn v ->
+          default = if v.is_default, do: " (default)", else: ""
+          desc = if v.description, do: " — #{v.description}", else: ""
+          "- **#{v.name}**#{default} (ID: #{v.id})#{desc}"
+        end)
 
-    lines =
-      Enum.map(vaults, fn v ->
-        default = if v.is_default, do: " (default)", else: ""
-        desc = if v.description, do: " — #{v.description}", else: ""
-        "- **#{v.name}**#{default} (ID: #{v.id})#{desc}"
-      end)
-
-    {:ok, Enum.join(lines, "\n")}
+      {:ok, Enum.join(lines, "\n")}
+    end
   end
 
-  def handle("set_vault", user, _vault, args) do
+  # `accessible` is the credential-scoped vault set (see the controller's
+  # dispatch_tool). set_vault does NOT persist anything — MCP is stateless — so
+  # it only validates the id against what this credential can reach and echoes
+  # the id to thread on subsequent calls. It must never confirm a vault outside
+  # the accessible set (#729).
+  def handle("set_vault", _user, accessible, args) when is_list(accessible) do
     case args["vault_id"] do
       nil ->
-        case Vaults.get_default_vault(user) do
-          {:ok, v} -> {:ok, "Active vault: **#{v.name}** (default)"}
-          {:error, _} -> {:error, "No default vault found"}
-        end
+        {:ok,
+         "MCP keeps no active-vault state between calls. Pass `vault_id` on each " <>
+           "vault-scoped tool call to target a vault. Call list_vaults to see the IDs."}
 
       vault_id ->
-        case Vaults.get_vault(user, vault_id) do
-          {:ok, v} -> {:ok, "Active vault: **#{v.name}**"}
-          {:error, _} -> {:error, "Vault not found"}
+        case Enum.find(accessible, &(to_string(&1.id) == to_string(vault_id))) do
+          nil ->
+            {:error,
+             "Vault not found or not accessible: #{vault_id}. Call list_vaults to see the " <>
+               "vaults this connection can use."}
+
+          v ->
+            {:ok,
+             "Vault **#{v.name}** (ID: #{v.id}) is valid. Pass vault_id=\"#{v.id}\" on each " <>
+               "tool call to target it — MCP stores no active vault between calls."}
         end
     end
   end
 
   # -- Read tools --
 
+  # Cross-vault default (the credential can reach every vault and no vault_id was
+  # given): search all vaults at once and label each hit with its vault so the
+  # caller can follow up (e.g. get_note) against the right one. `allow_cross_vault`
+  # bypasses the Pro billing gate — multi-vault search is the MCP default on every
+  # tier (product decision 2026-07-10).
+  def handle("search_notes", user, {:cross_vault, vaults}, args) do
+    query = args["query"] || ""
+    opts = Keyword.merge(build_search_opts(args), cross_vault: true, allow_cross_vault: true)
+    names = Map.new(vaults, &{to_string(&1.id), &1.name})
+    render_search(Search.search(user, nil, query, opts), names)
+  end
+
   def handle("search_notes", user, vault, args) do
     query = args["query"] || ""
-    opts = build_search_opts(args)
-
-    case Search.search(user, vault, query, opts) do
-      {:ok, results} when results != [] ->
-        text =
-          results
-          |> Enum.with_index(1)
-          |> Enum.map_join("\n", fn {r, i} ->
-            lines = ["## Result #{i} (score: #{Float.round(r.score, 3)})"]
-            lines = if r[:title], do: lines ++ ["**Title:** #{r.title}"], else: lines
-
-            lines =
-              if r[:heading_path], do: lines ++ ["**Section:** #{r.heading_path}"], else: lines
-
-            lines =
-              if r[:source_path], do: lines ++ ["**Source:** #{r.source_path}"], else: lines
-
-            lines =
-              if r[:tags] && r.tags != [],
-                do: lines ++ ["**Tags:** #{Enum.join(r.tags, ", ")}"],
-                else: lines
-
-            lines = lines ++ ["\n#{r.text}\n"]
-            Enum.join(lines, "\n")
-          end)
-
-        {:ok, text}
-
-      {:ok, []} ->
-        {:ok, "No results found."}
-
-      {:error, _reason} ->
-        {:ok, "Search unavailable."}
-    end
+    render_search(Search.search(user, vault, query, build_search_opts(args)), %{})
   end
 
   def handle("list_tags", user, vault, _args) do
@@ -524,6 +519,46 @@ defmodule Engram.MCP.Handlers do
         other ->
           other
       end
+    end
+  end
+
+  @doc false
+  # Render Search.search/4 output for the search_notes tool. `names` maps
+  # vault_id → vault name; when non-empty (cross-vault mode) each hit is labelled
+  # with its vault so the caller knows which vault to act against. Public (doc:
+  # false) so the vault-labelling can be unit-tested without standing up Qdrant.
+  def render_search({:ok, results}, names) when results != [] do
+    text =
+      results
+      |> Enum.with_index(1)
+      |> Enum.map_join("\n", fn {r, i} -> format_search_result(r, i, names) end)
+
+    {:ok, text}
+  end
+
+  def render_search({:ok, _empty}, _names), do: {:ok, "No results found."}
+  def render_search({:error, _reason}, _names), do: {:ok, "Search unavailable."}
+
+  defp format_search_result(r, i, names) do
+    ["## Result #{i} (score: #{Float.round(r.score, 3)})"]
+    |> maybe_line(vault_label(r, names))
+    |> maybe_line(r[:title] && "**Title:** #{r.title}")
+    |> maybe_line(r[:heading_path] && "**Section:** #{r.heading_path}")
+    |> maybe_line(r[:source_path] && "**Source:** #{r.source_path}")
+    |> maybe_line(r[:tags] && r.tags != [] && "**Tags:** #{Enum.join(r.tags, ", ")}")
+    |> Kernel.++(["\n#{r.text}\n"])
+    |> Enum.join("\n")
+  end
+
+  defp maybe_line(lines, line) when is_binary(line), do: lines ++ [line]
+  defp maybe_line(lines, _falsy), do: lines
+
+  defp vault_label(_r, names) when map_size(names) == 0, do: nil
+
+  defp vault_label(r, names) do
+    case names[to_string(r[:vault_id])] do
+      name when is_binary(name) -> "**Vault:** #{name} (#{r[:vault_id]})"
+      _ -> nil
     end
   end
 

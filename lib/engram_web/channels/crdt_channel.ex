@@ -17,6 +17,7 @@ defmodule EngramWeb.CrdtChannel do
   alias Engram.Logger.Metadata
   alias Engram.{Notes, Vaults}
   alias Engram.Notes.CrdtRegistry
+  alias Engram.Notes.CrdtTransport
   alias Yex.Sync.SharedDoc
 
   require Logger
@@ -39,6 +40,15 @@ defmodule EngramWeb.CrdtChannel do
   # per-describe setup in crdt_channel_test.exs) so tests don't push 241 frames.
   @msg_limit 240
   @msg_scale_ms 10_000
+
+  # Per-socket ceiling on distinct rooms (notes) a single connection may enroll.
+  # Each room pins a server Y.Doc + checkpoint timer, so an unbounded client
+  # (buggy or hostile) could STEP1 endlessly and exhaust node RAM + the DB pool.
+  # ponytail: sized as a high ABUSE ceiling, not a working limit — 4096 clears a
+  # 2400-note vault under today's enroll-everything client with headroom. Tighten
+  # toward the real active-set (~256) once lazy enrollment is the plugin default.
+  # Runtime-overridable via config so it can be lowered without a redeploy.
+  @default_max_rooms 4096
 
   # Handshake (STEP1/STEP2) budget — separate from @msg_limit so connect-time
   # enrollment (one STEP1 per note) can never starve edit frames (the
@@ -118,6 +128,7 @@ defmodule EngramWeb.CrdtChannel do
     # cost, never at MB-scale decode cost.
     with :ok <- check_rate(socket, frame_class_b64(b64)),
          {:ok, frame} <- decode_frame(b64),
+         :ok <- guard_frame(frame),
          {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id) do
       SharedDoc.send_yjs_message(room, frame)
       {:noreply, socket}
@@ -125,9 +136,21 @@ defmodule EngramWeb.CrdtChannel do
       {:error, :rate_limited} ->
         {:reply, {:error, %{reason: "rate_limited"}}, socket}
 
+      {:error, :implausible_state_vector} ->
+        # A crafted syncStep1 whose state vector would OOM-abort the whole VM
+        # in the y_ex NIF (P0 #989). Rejected before it reaches SharedDoc.
+        log_dropped(socket, doc_id, :implausible_state_vector)
+        {:reply, {:error, %{reason: "implausible_state_vector"}}, socket}
+
       {:error, :frame_too_large} ->
         log_dropped(socket, doc_id, :frame_too_large)
         {:reply, {:error, %{reason: "frame_too_large"}}, socket}
+
+      {:error, :room_limit} ->
+        # This socket hit the per-connection room cap (abuse backstop). Reply so
+        # the client stops hammering; log_dropped emits an alertable :sync warn.
+        log_dropped(socket, doc_id, :room_limit)
+        {:reply, {:error, %{reason: "room_limit"}}, socket}
 
       {:error, :not_found} = err ->
         # Unknown note_id: the frame is undeliverable, and the SENDER is the
@@ -305,6 +328,15 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  # A syncStep1 frame carries a client state vector that reaches the y_ex NIF
+  # (SharedDoc.send_yjs_message -> encode_state_as_update). A crafted vector
+  # OOM-aborts the ENTIRE BEAM node, uncatchable — reuse the REST transport's
+  # plausibility guard to reject it before it is applied (P0 #989). Non-step1
+  # frames pass through unchanged.
+  defp guard_frame(frame) do
+    if CrdtTransport.safe_wire_frame?(frame), do: :ok, else: {:error, :implausible_state_vector}
+  end
+
   # Lazily start + observe the room for `doc_id`, caching it in assigns. On the
   # first reference, validates doc_id (the note_id) belongs to the vault, then
   # calls CrdtRegistry.ensure_started and SharedDoc.observe so {:yjs, frame, room}
@@ -315,31 +347,42 @@ defmodule EngramWeb.CrdtChannel do
         {:ok, socket, entry}
 
       :error ->
-        %{vault: vault} = socket.assigns
-        user = socket.assigns.current_user
-
-        with {:ok, note_id} <- resolve_note_id(user, vault, doc_id),
-             {:ok, room} <- CrdtRegistry.ensure_observed(user.id, vault.id, note_id) do
-          # Watch the room: if it dies (crash, node loss), evict it from the cache so
-          # the next crdt_msg re-creates it. Without this, send_yjs_message casts to a
-          # dead pid return :ok and every subsequent edit is silently dropped.
-          _ref = Process.monitor(room)
-
-          entry = %{room: room, note_id: note_id}
-
-          socket =
-            socket
-            |> assign(:rooms, Map.put(socket.assigns.rooms, doc_id, entry))
-            |> assign(:room_doc, Map.put(socket.assigns.room_doc, room, doc_id))
-
-          # Announce to all OTHER clients on this vault's crdt: channel that a
-          # room is now active for doc_id. Recipients send a sync-step-1 (state
-          # vector) which the server answers with step-2 (the diff they're
-          # missing), so any device that doesn't yet have this note gets it.
-          broadcast_from!(socket, "crdt_doc_ready", %{"doc_id" => doc_id})
-
-          {:ok, socket, entry}
+        # Abuse backstop: refuse a new room once this socket already holds the max,
+        # so one connection can't pin unbounded Y.Docs + pool connections. Reply-
+        # carrying (see handle_in) so the client backs off. High ceiling for now.
+        if map_size(socket.assigns.rooms) >= max_rooms() do
+          {:error, :room_limit}
+        else
+          start_and_observe_room(socket, doc_id)
         end
+    end
+  end
+
+  defp start_and_observe_room(socket, doc_id) do
+    %{vault: vault} = socket.assigns
+    user = socket.assigns.current_user
+
+    with {:ok, note_id} <- resolve_note_id(user, vault, doc_id),
+         {:ok, room} <- CrdtRegistry.ensure_observed(user.id, vault.id, note_id) do
+      # Watch the room: if it dies (crash, node loss), evict it from the cache so
+      # the next crdt_msg re-creates it. Without this, send_yjs_message casts to a
+      # dead pid return :ok and every subsequent edit is silently dropped.
+      _ref = Process.monitor(room)
+
+      entry = %{room: room, note_id: note_id}
+
+      socket =
+        socket
+        |> assign(:rooms, Map.put(socket.assigns.rooms, doc_id, entry))
+        |> assign(:room_doc, Map.put(socket.assigns.room_doc, room, doc_id))
+
+      # Announce to all OTHER clients on this vault's crdt: channel that a
+      # room is now active for doc_id. Recipients send a sync-step-1 (state
+      # vector) which the server answers with step-2 (the diff they're
+      # missing), so any device that doesn't yet have this note gets it.
+      broadcast_from!(socket, "crdt_doc_ready", %{"doc_id" => doc_id})
+
+      {:ok, socket, entry}
     end
   end
 
@@ -358,6 +401,10 @@ defmodule EngramWeb.CrdtChannel do
         {:error, :bad_doc_id}
     end
   end
+
+  # Per-socket room ceiling. Read from config at call time (not compiled in) so
+  # ops can lower it live via Application.put_env under abuse, no redeploy.
+  defp max_rooms, do: Application.get_env(:engram, :max_rooms_per_socket, @default_max_rooms)
 
   # Test builds allow overriding the crdt_msg rate limit via
   # Application.put_env(:engram, :crdt_msg_rate_limit_override, n) so tests

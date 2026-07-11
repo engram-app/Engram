@@ -26,6 +26,7 @@ from helpers.api import ApiClient
 from helpers.billing import grant_test_plan
 from helpers.clerk import ClerkClient
 from helpers.clerk_auth import provision_clerk_user
+from helpers.crypto_probe import latest_note_path_hmac, wait_for_qdrant_indexed
 
 logger = logging.getLogger(__name__)
 
@@ -227,12 +228,15 @@ def test_vault_registration_idempotent(vault_setup):
 
 
 def test_mcp_respects_vault_scoping(vault_setup):
-    """MCP get_note should respect X-Vault-ID header vault scoping."""
+    """MCP get_note scopes to the vault_id ARG (MCP uses vault_id, not X-Vault-ID)."""
     api_a = vault_setup["api_vault_a"]
+    vault_a_id = vault_setup["vault_a_id"]
 
-    # Call MCP get_note for a vault-A note from vault-A context
+    # MCP resolves the vault from the vault_id arg (X-Vault-ID is a REST-only
+    # mechanism; the MCP server is off the VaultPlug path).
     resp, status = api_a.mcp_call("get_note", {
-        "source_path": "E2E/VaultA-Secret.md"
+        "source_path": "E2E/VaultA-Secret.md",
+        "vault_id": vault_a_id,
     })
     assert status == 200
     content = resp.get("result", {}).get("content", [{}])
@@ -241,18 +245,56 @@ def test_mcp_respects_vault_scoping(vault_setup):
 
 
 def test_mcp_cannot_see_other_vault_notes(vault_setup):
-    """MCP get_note from vault A context should NOT see vault B notes."""
+    """Scoped to vault A (via vault_id), a vault B note path is not found."""
     api_a = vault_setup["api_vault_a"]
+    vault_a_id = vault_setup["vault_a_id"]
 
     resp, status = api_a.mcp_call("get_note", {
-        "source_path": "E2E/VaultB-Secret.md"
+        "source_path": "E2E/VaultB-Secret.md",
+        "vault_id": vault_a_id,
     })
     assert status == 200
     content = resp.get("result", {}).get("content", [{}])
     text = content[0].get("text", "") if content else ""
     assert "Note not found" in text, (
-        f"ISOLATION BREACH: MCP from vault A can see vault B note: {text[:200]}"
+        f"ISOLATION BREACH: MCP scoped to vault A can see vault B note: {text[:200]}"
     )
+
+
+def test_mcp_search_spans_all_vaults_by_default(vault_setup):
+    """A bare search_notes (no vault_id) searches across ALL the user's vaults
+    and labels each hit with its vault (cross-vault default; #985)."""
+    api = vault_setup["unrestricted_api"]
+    vault_a_id = vault_setup["vault_a_id"]
+    vault_b_id = vault_setup["vault_b_id"]
+
+    # Both seeded notes must be embedded before a semantic search can find them.
+    wait_for_qdrant_indexed(vault_a_id, latest_note_path_hmac(vault_a_id), timeout=90)
+    wait_for_qdrant_indexed(vault_b_id, latest_note_path_hmac(vault_b_id), timeout=90)
+
+    resp, status = api.mcp_call("search_notes", {"query": "Secret"})
+    assert status == 200
+    text = resp.get("result", {}).get("content", [{}])[0].get("text", "")
+
+    # Cross-vault results are labelled by vault id; BOTH vaults must be present.
+    assert vault_a_id in text, f"cross-vault search missed vault A: {text[:300]}"
+    assert vault_b_id in text, f"cross-vault search missed vault B: {text[:300]}"
+
+
+def test_mcp_search_scoped_to_vault_id_excludes_others(vault_setup):
+    """search_notes with a vault_id arg limits the search to that vault only."""
+    api = vault_setup["unrestricted_api"]
+    vault_a_id = vault_setup["vault_a_id"]
+    vault_b_id = vault_setup["vault_b_id"]
+
+    wait_for_qdrant_indexed(vault_a_id, latest_note_path_hmac(vault_a_id), timeout=90)
+
+    resp, status = api.mcp_call("search_notes", {"query": "Secret", "vault_id": vault_a_id})
+    assert status == 200
+    text = resp.get("result", {}).get("content", [{}])[0].get("text", "")
+
+    # Scoped to A → must not surface vault B's id.
+    assert vault_b_id not in text, f"scoped search leaked vault B: {text[:300]}"
 
 
 def test_mcp_vault_id_override_same_user(vault_setup):
