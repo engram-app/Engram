@@ -747,6 +747,41 @@ class CdpClient:
         result = await self.evaluate(f"{PLUGIN_PATH}.isLiveConnected()")
         return result is True
 
+    async def _stream_diag(self) -> str:
+        """Best-effort snapshot of the live channel's internal state.
+
+        CI does not capture plugin-runtime logs, so a bare "Stream not
+        connected" timeout gives no clue WHICH stuck state the channel was in.
+        Read the observable channel fields (ws readyState, connected,
+        crdtJoined, crdtJoinFailedReason, pending reconnect) so a recurrence is
+        diagnosable from the assertion message alone.
+        """
+        try:
+            raw = await self.evaluate(
+                f"""
+                (() => {{
+                    const p = {PLUGIN_PATH};
+                    const ns = p && p.noteStream;
+                    if (!ns) return JSON.stringify({{error: 'no noteStream'}});
+                    return JSON.stringify({{
+                        isLiveConnected: typeof p.isLiveConnected === 'function' ? p.isLiveConnected() : null,
+                        wsReadyState: ns.ws ? ns.ws.readyState : null,
+                        connected: typeof ns.isConnected === 'function' ? ns.isConnected() : null,
+                        crdtJoined: typeof ns.isCrdtConnected === 'function' ? ns.isCrdtConnected() : null,
+                        crdtJoinFailedReason: ns.crdtJoinFailedReason ?? null,
+                        reconnectPending: ns.reconnectTimer != null,
+                        connId: typeof ns.getConnId === 'function' ? ns.getConnId() : null
+                    }});
+                }})()
+                """
+            )
+            return raw if isinstance(raw, str) else json.dumps(raw)
+        except Exception as e:  # noqa: BLE001
+            # Instrumentation must never mask the TimeoutError it annotates: a
+            # CDP evaluate can itself fail mid-teardown. Degrade to a reason
+            # string; the real timeout is still raised by the caller.
+            return f"<stream diag unavailable: {e!r}>"
+
     async def wait_for_stream_connected(self, timeout: float = 10) -> None:
         """Poll until the WebSocket channel reports connected.
 
@@ -759,8 +794,9 @@ class CdpClient:
             if await self.check_stream_connected():
                 return
             await asyncio.sleep(0.5)
+        diag = await self._stream_diag()
         raise TimeoutError(
-            f"Stream not connected after {timeout}s on CDP port {self.port}"
+            f"Stream not connected after {timeout}s on CDP port {self.port} — channel={diag}"
         )
 
 
@@ -952,19 +988,29 @@ class CdpClient:
 
 
     async def reconnect_stream(self) -> None:
-        """Reconnect the real-time stream after a disconnect.
+        """Force a CLEAN reconnect of the real-time WebSocket channel.
 
-        For WebSocket channels, connect() opens a new WebSocket and re-joins.
+        `disconnect()` THEN `connect()` — not connect() alone. The plugin's
+        `channel.connect()` opens with `if (this.ws) return`, so calling it
+        while a socket object lingers but has not reached `connected`
+        (connecting / join-pending / join-rejected-pre-close) is a NO-OP: the
+        stream then stays down until its own up-to-60s reconnect backoff fires.
+        `disconnect()` nulls `this.ws` and clears the pending backoff timer, so
+        the following connect() reliably opens a fresh socket immediately. This
+        is what makes the test_84/85 "force a known-good connection" mitigation
+        actually forceful (e2e-clerk "Stream not connected after 20s" flake).
         """
+        await self.evaluate(f"{PLUGIN_PATH}.noteStream.disconnect()")
         await self.evaluate(f"{PLUGIN_PATH}.noteStream.connect()")
-        logger.info("Stream reconnect initiated on CDP port %d", self.port)
-        # Wait for the connection to establish and trigger onStatusChange
-        for _ in range(10):
-            await asyncio.sleep(1)
+        logger.info("Stream force-reconnect (disconnect+connect) on CDP port %d", self.port)
+        # Check before sleeping: a fast fresh join can be connected on the first
+        # poll. 15 attempts covers a fresh full handshake under CI load.
+        for _ in range(15):
             if await self.check_stream_connected():
                 logger.info("Stream reconnected on CDP port %d", self.port)
                 return
-        logger.warning("Stream did not reconnect within 10s on CDP port %d", self.port)
+            await asyncio.sleep(1)
+        logger.warning("Stream did not reconnect within 15s on CDP port %d", self.port)
 
 
     async def simulate_offline(self) -> None:
