@@ -4,7 +4,7 @@ defmodule Engram.Notes.CrdtTransportTest do
   use Engram.DataCase, async: false
 
   alias Engram.Notes
-  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtTransport}
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtTransport, CrdtUpdateLog, Note}
 
   setup do
     user = insert(:user)
@@ -12,6 +12,27 @@ defmodule Engram.Notes.CrdtTransportTest do
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "TransportTest"})
     %{user: user, vault: vault}
+  end
+
+  # Append a crdt_update_log (tail) row SYNCHRONOUSLY, to advance the tail
+  # watermark deterministically in the CAS tests. (A real apply_update settles
+  # the tail asynchronously — which is exactly the race the CAS guards, but it
+  # makes a watermark assertion non-deterministic.) Returns the new row's id.
+  defp append_tail_row(user, vault, note_id) do
+    {:ok, row} =
+      Repo.with_tenant(user.id, fn ->
+        %CrdtUpdateLog{}
+        |> CrdtUpdateLog.changeset(%{
+          note_id: note_id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: <<0>>,
+          update_nonce: <<0>>
+        })
+        |> Repo.insert!()
+      end)
+
+    row.id
   end
 
   describe "read_delta/4" do
@@ -187,6 +208,199 @@ defmodule Engram.Notes.CrdtTransportTest do
       heads1 = CrdtTransport.vault_heads(user, vault)
       assert heads1[a.id] != heads0[a.id], "edited note's head must advance"
       assert heads1[b.id] == heads0[b.id], "untouched note's head must be stable"
+    end
+  end
+
+  describe "crdt_head maintenance + vault_heads memory hardening" do
+    test "a room edit invalidates a warmed crdt_head; vault_heads self-heals to the new head",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "MH/A.md", content: "# A\n\nseed", mtime: 1_000.0})
+
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+
+      # Warm the column so we can prove the edit INVALIDATES it (not just that a
+      # never-set column stays NULL).
+      _ = CrdtTransport.vault_heads(user, vault)
+      {:ok, warmed} = Notes.get_note_by_id(user, vault, note.id)
+      refute is_nil(warmed.crdt_head)
+
+      {:ok, %{update: full}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      client = CrdtBridge.new_doc()
+      :ok = Yex.apply_update(client, full)
+      before_sv = Yex.encode_state_vector!(client)
+      CrdtBridge.ingest_plaintext(client, "# A\n\nseed and edit")
+      {:ok, upd} = Yex.encode_state_as_update(client, before_sv)
+
+      {:ok, %{head: head}} = CrdtTransport.apply_update(user, vault, note.id, upd)
+
+      # The tail append (update_v1) invalidated the stale head...
+      {:ok, invalidated} = Notes.get_note_by_id(user, vault, note.id)
+      assert is_nil(invalidated.crdt_head), "a room edit must invalidate the cached head"
+
+      # ...and vault_heads self-heals to the authoritative post-edit head.
+      heads = CrdtTransport.vault_heads(user, vault)
+      assert heads[note.id] == head
+    end
+
+    test "vault_heads self-heals a NULL crdt_head and persists it for cheap re-reads",
+         %{user: user, vault: vault} do
+      {:ok, a} =
+        Notes.upsert_note(user, vault, %{path: "MH/B.md", content: "# B", mtime: 1_000.0})
+
+      # A freshly upserted note is INSERTed (the invalidation trigger is
+      # BEFORE UPDATE, so it doesn't fire), so crdt_head starts NULL.
+      {:ok, a0} = Notes.get_note_by_id(user, vault, a.id)
+      assert is_nil(a0.crdt_head)
+
+      heads = CrdtTransport.vault_heads(user, vault)
+      assert is_binary(heads[a.id])
+
+      {:ok, a1} = Notes.get_note_by_id(user, vault, a.id)
+      assert a1.crdt_head == heads[a.id], "self-heal must persist the column"
+    end
+
+    test "vault_heads head equals read_delta's head for the same note",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "MH/C.md", content: "# C", mtime: 1_000.0})
+
+      {:ok, %{head: rd_head}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      heads = CrdtTransport.vault_heads(user, vault)
+      assert heads[note.id] == rd_head
+    end
+
+    test "a REST edit invalidates the head so vault_heads reflects the new state",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "MH/D.md", content: "# D\n\none", mtime: 1_000.0})
+
+      heads0 = CrdtTransport.vault_heads(user, vault)
+      h0 = heads0[note.id]
+      assert is_binary(h0)
+
+      # A REST update rewrites crdt_state via maybe_merge_crdt; the trigger
+      # nulls crdt_head so a stale head cannot survive the content change.
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          path: "MH/D.md",
+          content: "# D\n\none two",
+          mtime: 2_000.0
+        })
+
+      {:ok, mid} = Notes.get_note_by_id(user, vault, note.id)
+      assert is_nil(mid.crdt_head), "trigger must invalidate crdt_head on a crdt_state change"
+
+      heads1 = CrdtTransport.vault_heads(user, vault)
+      assert heads1[note.id] != h0, "head must advance after a REST edit"
+    end
+
+    test "backfill_head computes, persists, and returns a head matching read_delta",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "MH/E.md", content: "# E", mtime: 1_000.0})
+
+      assert {:ok, head} = CrdtTransport.backfill_head(user, vault, note.id)
+      {:ok, %{head: rd_head}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      assert head == rd_head
+
+      {:ok, reloaded} = Notes.get_note_by_id(user, vault, note.id)
+      assert reloaded.crdt_head == head
+    end
+
+    test "backfill_head returns :not_found for an unknown note", %{user: user, vault: vault} do
+      assert {:error, :not_found} =
+               CrdtTransport.backfill_head(user, vault, Ecto.UUID.generate())
+    end
+
+    test "store_head_if_unchanged persists when the tail watermark still matches (CAS accept)",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          path: "MH/CAS1.md",
+          content: "# C\n\nseed",
+          mtime: 1_000.0
+        })
+
+      # Advance the tail so the watermark is a real row, then store against it.
+      append_tail_row(user, vault, note.id)
+      wm = CrdtTransport.tail_watermark(user, note.id)
+
+      assert {:ok, {1, nil}} = CrdtTransport.store_head_if_unchanged(user, note.id, "HEADX", wm)
+      {:ok, reloaded} = Notes.get_note_by_id(user, vault, note.id)
+      assert reloaded.crdt_head == "HEADX"
+    end
+
+    test "store_head_if_unchanged does NOT persist when the tail advanced under it (CAS reject)",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          path: "MH/CAS2.md",
+          content: "# C\n\none",
+          mtime: 1_000.0
+        })
+
+      append_tail_row(user, vault, note.id)
+      stale_wm = CrdtTransport.tail_watermark(user, note.id)
+
+      # A concurrent edit appends another tail row AFTER the watermark was taken —
+      # exactly the race the CAS guards. The self-heal's head (computed from the
+      # pre-edit tail) must be refused (0 rows), leaving NULL for the next poll.
+      append_tail_row(user, vault, note.id)
+
+      assert {:ok, {0, nil}} =
+               CrdtTransport.store_head_if_unchanged(user, note.id, "STALEHEAD", stale_wm)
+
+      {:ok, reloaded} = Notes.get_note_by_id(user, vault, note.id)
+      assert is_nil(reloaded.crdt_head), "a stale-watermark store must leave the column NULL"
+    end
+
+    test "any crdt_state_ciphertext write invalidates a warmed crdt_head (invalidation trigger)",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "MH/TRG.md", content: "# T", mtime: 1_000.0})
+
+      _ = CrdtTransport.vault_heads(user, vault)
+      {:ok, warmed} = Notes.get_note_by_id(user, vault, note.id)
+      refute is_nil(warmed.crdt_head)
+
+      # Rewrite crdt_state_ciphertext directly, exactly as checkpoint compaction
+      # does — the BEFORE UPDATE OF crdt_state_ciphertext trigger must NULL
+      # crdt_head, structurally covering the checkpoint snapshot writer (and any
+      # future one), not just the REST maybe_merge_crdt path the round-trip test
+      # exercises.
+      {:ok, {1, nil}} =
+        Repo.with_tenant(user.id, fn ->
+          from(n in Note, where: n.id == ^note.id)
+          |> Repo.update_all(set: [crdt_state_ciphertext: <<9, 9, 9>>])
+        end)
+
+      {:ok, reloaded} = Notes.get_note_by_id(user, vault, note.id)
+
+      assert is_nil(reloaded.crdt_head),
+             "a crdt_state write must invalidate the head via the trigger"
+    end
+
+    test "a crdt_head-only write does NOT fire the invalidation trigger (column-scoped)",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "MH/COL.md", content: "# C", mtime: 1_000.0})
+
+      _ = CrdtTransport.vault_heads(user, vault)
+      {:ok, warmed} = Notes.get_note_by_id(user, vault, note.id)
+      head = warmed.crdt_head
+      refute is_nil(head)
+
+      # Writing ONLY crdt_head (as update_v1/store_head do) must not re-trip the
+      # BEFORE UPDATE OF crdt_state_ciphertext trigger and null it back out.
+      {:ok, {1, nil}} =
+        Repo.with_tenant(user.id, fn ->
+          from(n in Note, where: n.id == ^note.id)
+          |> Repo.update_all(set: [crdt_head: "MANUAL"])
+        end)
+
+      {:ok, reloaded} = Notes.get_note_by_id(user, vault, note.id)
+      assert reloaded.crdt_head == "MANUAL", "trigger must not fire on a crdt_head-only write"
     end
   end
 

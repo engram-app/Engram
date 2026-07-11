@@ -699,4 +699,33 @@ defmodule EngramWeb.CrdtChannelTest do
       end
     end
   end
+
+  describe "per-socket room cap (abuse backstop)" do
+    test "rejects a new room once the socket hits max_rooms_per_socket",
+         %{socket: socket, user: user, vault: vault, note: note} do
+      Application.put_env(:engram, :max_rooms_per_socket, 1)
+      on_exit(fn -> Application.delete_env(:engram, :max_rooms_per_socket) end)
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+
+      {:ok, note2} = Notes.upsert_note(user, vault, %{"path" => "p2.md", "content" => "base2"})
+      on_exit(fn -> CrdtRegistry.terminate_room(note2.id) end)
+
+      step1_b64 = fn ->
+        client = CrdtBridge.new_doc()
+        {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+        {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+        Base.encode64(frame)
+      end
+
+      # First distinct note opens room #1 (rooms 0 < cap 1). The server answers a
+      # known note's step1 with a step2 push — wait for it so room #1 is up and
+      # in this socket's assigns before the next frame is handled.
+      push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => step1_b64.()})
+      assert_push "crdt_msg", %{"doc_id" => _, "b64" => _}, 3000
+
+      # Second distinct note would open room #2 (rooms 1 >= cap 1) → refused.
+      ref = push(socket, "crdt_msg", %{"doc_id" => note2.id, "b64" => step1_b64.()})
+      assert_reply ref, :error, %{reason: "room_limit"}, 3000
+    end
+  end
 end
