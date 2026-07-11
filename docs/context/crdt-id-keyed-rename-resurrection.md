@@ -1,5 +1,7 @@
 # CRDT id-keyed rename — old-path resurrection on the receiver
 
+_Last verified: 2026-07-06_
+
 **Status:** root-caused + fixed 2026-07-06 (plugin PR engram-app/Engram-obsidian#183,
 branch `fix/crdt-rename-old-path-resurrection`).
 **Symptom:** e2e `test_10_rename_propagation` flaked ~50% in e2e-clerk — after an

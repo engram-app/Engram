@@ -1,5 +1,7 @@
 # Running the OAuth/Clerk e2e tests locally
 
+_Last verified: 2026-06-27_
+
 The OAuth e2e tests (`test_47_oauth_websocket_live_sync`, `test_48_oauth_reconnect_catchup`)
 `skipif` when `E2E_CLERK_SECRET_KEY` is unset, so the default local harness
 (`AUTH_PROVIDER=local`) silently skips them — they only run in CI's `e2e-clerk`

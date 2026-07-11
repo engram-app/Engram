@@ -1,5 +1,7 @@
 # Pricing v2 §G — Server-Side Enforcement Audit
 
+_Last verified: 2026-06-18_
+
 **Date:** 2026-05-21 (shipped with PR #198).
 
 > **Snapshot — catalog has drifted.** This is a point-in-time audit of the `LimitKeys` catalog as of the date above. Since then the catalog moved (now at `lib/engram/billing/limit_keys.ex`): `realtime_sync_enabled` and `inactivity_warn_60_days` listed below are dead, and roughly eight newer keys are not represented here. Treat the table as historical; re-run `mix engram.lint.no_client_only_rate_limits` for the live picture.

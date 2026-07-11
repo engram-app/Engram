@@ -1,5 +1,7 @@
 # CRDT note_id-collision corruption (2026-07-06)
 
+_Last verified: 2026-07-06_
+
 Prod data-corruption incident on the day the CRDT **id-keying cutover** shipped
 (`#925` id-keyed doc_id + `#934` CRDT-state wipe, `release-v0.5.634/636`).
 Symptom chain reported by the (single, pre-launch) user:

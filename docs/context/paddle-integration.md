@@ -1,6 +1,8 @@
 # Paddle integration
 
-How Engram talks to Paddle Billing. Owner: billing / monetization. Status: backend wired (`feat/paddle-cutover`), frontend overlay still to land.
+_Last verified: 2026-07-08_
+
+How Engram talks to Paddle Billing. Owner: billing / monetization. Status: shipped end-to-end (PR #132; Stripe removed entirely). Billing is live, `RequireOnboarding` gates the vault pipeline, and the Paddle.js overlay is wired.
 
 ## Why Paddle
 
@@ -37,7 +39,7 @@ Paddle webhooks → POST /webhooks/paddle
 | `Engram.Paddle.Client.HTTP` (`lib/engram/paddle/client/http.ex`) | Default Req-based impl. Base URL switches on `:paddle_env` (`production` → api.paddle.com, else sandbox-api.paddle.com). |
 | `Engram.Billing` (`lib/engram/billing.ex`) | `upsert_from_paddle_event/1`, `create_portal_session/1`, `tier/1`, `active?/1`, `trial_days_remaining/1`. |
 | `EngramWeb.WebhookController.paddle/2` | Signature verify + dispatch to `upsert_from_paddle_event/1`. |
-| `EngramWeb.BillingController` | `:status`, `:config` (overlay payload), `:customer_portal`. |
+| `EngramWeb.BillingController` | `:status`, `:config` (overlay payload), `:customer_portal`, `:subscription_detail`, `:transactions`, `:transaction_invoice`, `:cancel_subscription`, `:reverse_cancel`, `:plan_change_preview`, `:plan_change_confirm`, `:payment_update_transaction` (see the billing scope in `router.ex`). |
 
 ## Webhook signature
 

@@ -1,6 +1,8 @@
 # OpenAPI docs pipeline
 
-_First cut shipped in PR #649 (2026-06-19). Health endpoints only; remaining ~100 REST endpoints annotated incrementally._
+_Last verified: 2026-07-08_
+
+_First cut shipped in PR #649 (2026-06-19). Now covers 45 paths across the REST API, enforced by `test/engram_web/api_spec_coverage_test.exs` (every endpoint needs a description + request example; use `"x-internal": true` to exclude)._
 
 ## What & where
 

@@ -1,5 +1,7 @@
 # OIDC deploy cutover
 
+_Last verified: 2026-06-18_
+
 > **STAGING-ONLY / LARGELY SUPERSEDED — historical record.**
 > This cutover applied to the **FastRaid (now staging)** deploy path, and
 > only to the daemon's `/deploy` (image-roll) endpoint. That endpoint is now

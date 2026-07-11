@@ -1,5 +1,7 @@
 # Refresh token rotation — reuse detection + leeway (as-built)
 
+_Last verified: 2026-06-18_
+
 _Status: SHIPPED 2026-05-28 (Engram PR #341), v0.5.245. Backend repo (`engram`).
 Both halves landed: the leeway/overlap window AND token-family reuse-detection
 revocation. This doc describes the as-built behavior; the old "build plan"

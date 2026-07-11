@@ -1,5 +1,7 @@
 # Quality Tooling Baseline
 
+_Last verified: 2026-06-19_
+
 _Captured 2026-05-09 on `chore/quality-tooling-foundation` (PR #TBD). Each subsequent phase fixes findings + updates this doc with the new ratchet ceiling._
 
 

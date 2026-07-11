@@ -1,5 +1,7 @@
 # MCP OAuth 2.1 + DCR — How It Works
 
+_Last verified: 2026-06-19_
+
 End-to-end OAuth 2.1 + Dynamic Client Registration on Engram's MCP endpoint, so Claude Connectors / Cursor / ChatGPT custom GPTs / any other standards-compliant client can auto-auth against `mcp.engram.page/api/mcp` (saas) or `engram.ax/api/mcp` (selfhost) without per-client integration code.
 
 > **Host note:** the saas MCP endpoint is `mcp.engram.page`, NOT `app.engram.page`. The `host_rewrite.ex` plug rejects `/api/mcp` and `/oauth/*` on `app.engram.page` (old path now 405s). All curl examples below use `mcp.engram.page`.

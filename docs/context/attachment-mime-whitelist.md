@@ -1,5 +1,7 @@
 # Attachment MIME / Extension Whitelist (Pricing v2 §H)
 
+_Last verified: 2026-06-18_
+
 Two-phase abuse defense against using Free vault storage as a malware /
 illegal-content cache. Phase 1 ships at pricing v2 launch; Phase 2 is
 deferred but the milestone trigger is documented here.
