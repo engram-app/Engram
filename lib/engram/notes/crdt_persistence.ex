@@ -19,11 +19,13 @@ defmodule Engram.Notes.CrdtPersistence do
   import Ecto.Query
   alias Engram.{Accounts, Crypto, Repo}
   alias Engram.Logger.Metadata
+  alias Engram.Sync.Broadcast
 
   alias Engram.Notes.{
     CheckpointGate,
     CrdtBridge,
     CrdtCheckpointTimer,
+    CrdtTransport,
     CrdtUpdateLog,
     Enqueue,
     Note
@@ -92,7 +94,7 @@ defmodule Engram.Notes.CrdtPersistence do
         %{user_id: user_id, vault_id: vault_id, note_id: note_id} = state,
         update,
         _name,
-        _doc
+        doc
       ) do
     user = state[:user] || Accounts.get_user!(user_id)
 
@@ -120,6 +122,37 @@ defmodule Engram.Notes.CrdtPersistence do
           )
           |> Repo.update_all(set: [crdt_head: nil])
         end)
+
+        # Fan out the update to every device on this vault over the single
+        # per-vault sync channel (Relay's `document.updated` model). This is
+        # what lets an IDLE note (one the client never STEP1-enrolled) converge
+        # without opening its own CRDT room: the client applies these pushed
+        # bytes straight to the note's Y.Doc. Fires on EVERY update source
+        # (channel, REST /updates, deliver-out) because they all funnel here.
+        # base64 because the JSON serializer can't carry raw binary; `head` lets
+        # the client advance its per-note watermark without a REST round-trip.
+        # Self-echo is harmless: the client applies with REMOTE_ORIGIN (no
+        # re-broadcast) and Yjs re-apply is a no-op.
+        #
+        # NOTE — `b64` here is the DELTA (this single update), paired with the
+        # FULL post-apply `head`. `CrdtDeliver.fanout_idle` sends FULL state under
+        # the same contract. A device behind the delta's causal deps (it never
+        # STEP1-enrolled and missed an earlier update) PENDS the delta in Yjs, so
+        # it does NOT actually reach `head`. The client MUST NOT blind-trust `head`
+        # in that case: `applyPushedNoteUpdate` checks `hasPendingGap` post-apply
+        # and, on a gap, pulls the full delta from its real state vector and
+        # advances the watermark only to the head it truly reached (plugin
+        # `e2304ed`). Without that client guard, the cheap cold-reconcile hash gate
+        # would skip a silently-partial note.
+        Broadcast.emit(
+          "sync:#{user_id}:#{vault_id}",
+          "note_yjs_update",
+          %{
+            "note_id" => note_id,
+            "b64" => Base.encode64(update),
+            "head" => CrdtTransport.head_marker(doc)
+          }
+        )
 
       {:error, reason} ->
         Logger.error(

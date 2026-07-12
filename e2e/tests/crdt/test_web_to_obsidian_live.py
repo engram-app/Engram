@@ -77,16 +77,19 @@ async def test_web_edit_reaches_obsidian_live(web, vault_b, cdp_b, api_sync, syn
 async def test_web_edit_reaches_obsidian_that_missed_room_open(
     web, vault_b, cdp_b, api_sync, sync_vault_id
 ):
-    """Regression guard for the checkpoint-announce backstop (#940).
+    """Regression guard: a live web edit reaches an Obsidian instance that was
+    OFF the channel when the web opened the note's room.
 
-    Delivery of a live web edit to Obsidian normally rides the channel's
-    ROOM-OPEN announce (fired when the web opens the note) + observation. But if
-    Obsidian is OFF the channel at that instant, it misses the room-open announce
-    and does not observe the room. The ONLY thing that can then notify it of the
-    subsequent edit is the CHECKPOINT's own announce — the fix under test.
+    Under the vault-channel model B no longer relies on the old checkpoint-
+    ROOM-OPEN announce (#940). B is disconnected when the web opens the note, so
+    it misses any room-open announce and never observes the room. When B
+    reconnects, its reconnect catch-up runs pull() → coldReceive(), which diffs
+    the server head-index against B's persisted per-note crdtHead and pulls +
+    applies the web edit's Yjs delta — converging B's disk without B ever
+    opening the note's room.
 
-    So this FAILS on a backend without the checkpoint announce (the edit never
-    reaches B) and PASSES with it. Verified: red on 0.5.638, green on 0.5.639.
+    So this FAILS if the cold-receive reconnect path is broken (the edit never
+    reaches B) and PASSES with it.
     """
     path = "E2E/Crdt/WebMissedOpen.md"
 

@@ -39,7 +39,8 @@ defmodule Engram.Notes.CrdtDeliver do
 
   alias Engram.{Accounts, Crypto, Repo}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtRegistry, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtTransport, Note}
+  alias Engram.Sync.Broadcast
   alias Yex.Sync.SharedDoc
 
   require Logger
@@ -62,8 +63,58 @@ defmodule Engram.Notes.CrdtDeliver do
     # files sync via the legacy push path, so only deliver/announce for `.md`.
     if String.ends_with?(path, ".md") do
       push_to_live_room(user_id, note_id, content)
+      # fanout_idle ALWAYS runs, even when a live room exists. It is NOT redundant
+      # with the room's `update_v1`: `update_v1` broadcasts a DELTA (converges a
+      # device that already holds the note, via gap-heal), while `fanout_idle`
+      # broadcasts FULL STATE — the only thing that makes a device which has NEVER
+      # seen the note history-FULL. Gating this off when a room exists left a
+      # first-delivery device history-LESS (delta into an empty doc), so a
+      # concurrent edit resolved to keep-both instead of a clean CRDT merge
+      # (e2e test_concurrent_edits_both_survive). The two broadcasts serve
+      # different device populations; the double-delivery for a device that has
+      # both is an idempotent Yjs re-apply.
+      fanout_idle(user_id, vault_id, note_id)
       announce(user_id, vault_id, note_id)
     end
+
+    :ok
+  end
+
+  # Vault-channel fan-out for a NON-CRDT-origin write (REST / MCP / web / cascade):
+  # broadcast the note's just-committed Yjs state over the per-vault `sync:` topic
+  # so an IDLE device (one with no open room for this note) converges room-free by
+  # applying these bytes (`applyPushedNoteUpdate` on the client). This is the
+  # FIRST-DELIVERY leg the room's `update_v1` fan-out cannot cover: a REST/MCP/web
+  # create+update never enters a live room, so without this an idle device only
+  # ever learns the note through slow pull discovery (the announce enrolls it, but
+  # the plugin now leaves idle notes room-free under the fan-out model).
+  #
+  # Broadcasts the FULL committed state (not a delta) so a device that has never
+  # seen the note converges from an empty doc; the client skips it while the note
+  # is live-bound (its own room owns it). Emitted AFTER the `note_changed` upsert
+  # broadcast, on the SAME `sync:` topic (ordered delivery), so the client has
+  # already mapped + confirmed the note_id before these bytes arrive. Best-effort
+  # and post-commit like the rest of deliver-out: a state-less (legacy/lazy) row
+  # or a load failure simply skips — the announce still fires for enrolled clients.
+  defp fanout_idle(user_id, vault_id, note_id) do
+    _ =
+      with {:ok, state} when is_binary(state) <- load_merged_state(user_id, note_id) do
+        head =
+          case CrdtBridge.doc_from_state(state) do
+            {:ok, doc} -> CrdtTransport.head_marker(doc)
+            _ -> nil
+          end
+
+        Broadcast.emit(
+          "sync:#{user_id}:#{vault_id}",
+          "note_yjs_update",
+          %{
+            "note_id" => note_id,
+            "b64" => Base.encode64(state),
+            "head" => head
+          }
+        )
+      end
 
     :ok
   end

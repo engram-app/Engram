@@ -140,3 +140,170 @@ async def test_edit_after_discovery_round_trips(vault_a, vault_b, cdp_a, cdp_b, 
 
     a_content = wait_for_content(vault_a, path, "appended on B", timeout=CRDT_TIMEOUT)
     assert "origin A" in a_content and "appended on B" in a_content
+
+
+# ---------------------------------------------------------------------------
+# Vault-channel fan-out isolation
+# ---------------------------------------------------------------------------
+#
+# The tests above prove eventual convergence but NOT that it rides the vault-
+# channel fan-out (`note_yjs_update` → applyPushedNoteUpdate). Two checkpoint-
+# driven backstops on the receiving device also converge a cold note: pull()'s
+# cursor-feed backfill (flushFromCrdt) and coldReceive() (invoked at pull()'s
+# tail). So if applyPushedNoteUpdate were completely broken, every test above
+# would STILL pass at ~5s checkpoint latency, masking a dead fan-out.
+#
+# The tests below suppress those backstops on the RECEIVING device via
+# cdp.suppress_fanout_backstops() (stubs pull, coldReceive AND handleStreamEvent
+# — the note_changed room-enroll path — while leaving applyPushedNoteUpdate
+# untouched, since the fan-out is a separate channel dispatch). With the
+# backstops dead, a disk-convergence assert can ONLY be satisfied by the
+# fan-out, so a broken fan-out actually FAILS. See helpers/cdp.py.
+
+
+async def _confirm_room_free(cdp, path):
+    """Precondition for a fan-out isolation test: the device has mapped +
+    confirmed `path` and holds NO CRDT room for it (so convergence can't ride a
+    crdt_msg room stream). Returns the note_id.
+
+    trigger_full_sync() drives the idle pull-discovery path, which maps +
+    confirms the note but does NOT STEP1-enroll a not-live-bound note
+    (sync.ts:3790/3820 guards) — so the note stays room-free.
+    """
+    await cdp.wait_for_stream_connected()
+    await cdp.trigger_full_sync()
+    note_id = await cdp.get_note_id_for_path(path)
+    assert note_id, f"device never mapped a note_id for {path} — cannot prove fan-out"
+    enrolled = await cdp.get_enrolled_note_ids()
+    assert note_id not in enrolled, (
+        f"precondition violated: device holds a CRDT room for idle note {path} "
+        f"(note_id={note_id}); convergence could ride crdt_msg, not the fan-out"
+    )
+    return note_id
+
+
+@pytest.mark.asyncio
+async def test_idle_note_converges_via_fanout_only(vault_a, vault_b, cdp_a, cdp_b, api_sync):
+    """[P0] A pre-existing IDLE note on B converges to A's edit via the vault-
+    channel fan-out ALONE.
+
+    B never opens or edits the note. Before A's edit we suppress every
+    checkpoint-driven backstop on B (pull() cursor-backfill + coldReceive, and
+    the note_changed room-enroll path). The ONLY path that can then converge B's
+    disk is the server's `note_yjs_update` broadcast → applyPushedNoteUpdate. So
+    a broken fan-out FAILS here instead of silently passing at checkpoint latency.
+    """
+    path = "E2E/Crdt/FanoutPassive.md"
+    await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "shared base\n", "shared base")
+    await _confirm_room_free(cdp_b, path)
+    try:
+        await cdp_b.suppress_fanout_backstops()
+
+        # A edits. With B's backstops dead, delivery can ONLY be the fan-out.
+        write_note(vault_a, path, "shared base\nFANOUT_ONLY\n")
+        b_final = wait_for_content(vault_b, path, "FANOUT_ONLY", timeout=CRDT_TIMEOUT)
+        assert "shared base" in b_final, f"base content lost on B: {b_final!r}"
+    finally:
+        await cdp_b.restore_fanout_backstops()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_cold_edits_survive_over_fanout(vault_a, vault_b, cdp_a, cdp_b, api_sync):
+    """[P0] A and B concurrently edit the SAME note while NEITHER opens it, with
+    the checkpoint backstops suppressed on BOTH devices. Both edits survive on
+    both disks — proving the CRDT merge rides the vault-channel fan-out, not the
+    pull/coldReceive backstop.
+
+    New test — does NOT weaken test_concurrent_edits_both_survive (which permits
+    a backstop to converge); this is the strictly-fan-out variant.
+    """
+    path = "E2E/Crdt/FanoutMerge.md"
+    await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "shared base\n", "shared base")
+    await _confirm_room_free(cdp_a, path)
+    await _confirm_room_free(cdp_b, path)
+    try:
+        await cdp_a.suppress_fanout_backstops()
+        await cdp_b.suppress_fanout_backstops()
+
+        # Independent edits, close together so neither has seen the other's yet.
+        # Each side SENDS via handleModify/pushFile (untouched by suppression) and
+        # RECEIVES the other's over the fan-out (applyPushedNoteUpdate merges the
+        # remote delta after capturing local disk drift — both edits survive).
+        write_note(vault_a, path, "shared base\nFROM_A\n")
+        write_note(vault_b, path, "shared base\nFROM_B\n")
+
+        a_final = wait_for_content(vault_a, path, "FROM_B", timeout=CRDT_TIMEOUT)
+        b_final = wait_for_content(vault_b, path, "FROM_A", timeout=CRDT_TIMEOUT)
+        assert "FROM_A" in a_final and "FROM_B" in a_final, f"A lost an edit: {a_final!r}"
+        assert "FROM_A" in b_final and "FROM_B" in b_final, f"B lost an edit: {b_final!r}"
+    finally:
+        await cdp_a.restore_fanout_backstops()
+        await cdp_b.restore_fanout_backstops()
+
+
+@pytest.mark.asyncio
+async def test_cold_send_over_fanout_opens_no_room(vault_a, vault_b, cdp_a, cdp_b, api_sync):
+    """[P1] B edits a CLOSED note → A receives it via the fan-out, and B does NOT
+    STEP1-enroll a CRDT room for the note it cold-sent.
+
+    An idle SEND ships its edit channel-up / as a durable /updates entry and is
+    never required to enroll (sync.ts isCrdtManagedOffline: "Enrollment (STEP1)
+    is only the down-sync pull, never required to SEND"). We suppress backstops
+    on BOTH devices: on A so its receipt can ONLY be the fan-out, and on B so its
+    own checkpoint `note_changed` echo can't drive a RECEIVE-side enroll — the
+    enrolled-set assertion then isolates the SEND path. The negative signal is a
+    direct read of B's CrdtEnrollment.enrolled set (deterministic, no log-flush
+    timing dependency).
+    """
+    path = "E2E/Crdt/FanoutColdSend.md"
+    await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "origin\n", "origin")
+    note_id_b = await _confirm_room_free(cdp_b, path)
+    await _confirm_room_free(cdp_a, path)
+    try:
+        await cdp_a.suppress_fanout_backstops()
+        await cdp_b.suppress_fanout_backstops()
+
+        # B edits the CLOSED note (never opened in the editor).
+        write_note(vault_b, path, "origin\nCOLD_SEND_FROM_B\n")
+
+        a_final = wait_for_content(vault_a, path, "COLD_SEND_FROM_B", timeout=CRDT_TIMEOUT)
+        assert "origin" in a_final, f"base lost on A: {a_final!r}"
+
+        enrolled = await cdp_b.get_enrolled_note_ids()
+        assert note_id_b not in enrolled, (
+            f"B STEP1-enrolled a room for a cold SEND (note_id={note_id_b}); "
+            f"an idle send must stay room-free. enrolled={enrolled}"
+        )
+    finally:
+        await cdp_a.restore_fanout_backstops()
+        await cdp_b.restore_fanout_backstops()
+
+
+@pytest.mark.asyncio
+async def test_fanout_receive_after_hibernate_rehydrates(vault_a, vault_b, cdp_a, cdp_b, api_sync):
+    """[P1] A fan-out apply frees B's Y.Doc (applyPushedNoteUpdate →
+    hibernateIfIdle → closeDoc). A SECOND edit must still converge, proving the
+    apply-after-free path re-opens the doc from IndexedDB and merges correctly —
+    end to end, no process restart.
+    """
+    path = "E2E/Crdt/FanoutHibernate.md"
+    await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "base\n", "base")
+    note_id = await _confirm_room_free(cdp_b, path)
+    try:
+        await cdp_b.suppress_fanout_backstops()
+
+        # First remote edit converges via the fan-out, which then hibernates the
+        # idle doc after durably recording the head.
+        write_note(vault_a, path, "base\nEDIT_ONE\n")
+        wait_for_content(vault_b, path, "EDIT_ONE", timeout=CRDT_TIMEOUT)
+        await cdp_b.wait_for_crdt_doc_freed(note_id, timeout=CRDT_TIMEOUT)
+
+        # Second edit AFTER the doc was freed — must rehydrate from IndexedDB and
+        # merge, preserving the prior state.
+        write_note(vault_a, path, "base\nEDIT_ONE\nEDIT_TWO\n")
+        b_final = wait_for_content(vault_b, path, "EDIT_TWO", timeout=CRDT_TIMEOUT)
+        assert "EDIT_ONE" in b_final and "base" in b_final, (
+            f"rehydrated apply lost prior state: {b_final!r}"
+        )
+    finally:
+        await cdp_b.restore_fanout_backstops()
