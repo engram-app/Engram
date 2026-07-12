@@ -878,7 +878,7 @@ defmodule Engram.Notes do
   # CRDT (Yjs) is the only content-sync path: merge_plaintext in do_update_note
   # IS the conflict resolution. A stale client_version never 409s — the diverging
   # write is merged convergently into crdt_state (no legacy conflict-copy flow).
-  defp do_update_note(existing, base_attrs, user, sanitized_path, folder, _tags, opts \\ []) do
+  defp do_update_note(existing, base_attrs, user, sanitized_path, folder, _tags, opts) do
     base_hash = Keyword.get(opts, :base_hash)
 
     cond do
@@ -924,7 +924,7 @@ defmodule Engram.Notes do
     {:ok, {existing.content_hash, existing, base_attrs.content, existing.content_hash}}
   end
 
-  defp do_rewrite_note(existing, base_attrs, user, sanitized_path, folder, opts \\ []) do
+  defp do_rewrite_note(existing, base_attrs, user, sanitized_path, folder, opts) do
     # db_opts carries `mode: :savepoint` on the batch path so a failed SQL
     # statement here (next_seq!'s UPDATE, or the Repo.update) rolls back to a
     # per-statement savepoint instead of poisoning the shared batch tx into
