@@ -109,11 +109,17 @@ defmodule Engram.Notes.CrdtBridgeTest do
       assert CrdtBridge.text_of(doc) == original
     end
 
-    test "a marker-colliding map keeps its sibling keys" do
+    test "a marker-colliding map keeps its sibling keys (canonicalized, not dropped)" do
       doc = CrdtBridge.new_doc()
       original = "---\ndate:\n  __engram_raw__: x\n  y: 1\n---\nbody\n"
       :ok = CrdtBridge.ingest_plaintext(doc, original)
-      assert CrdtBridge.text_of(doc) == original
+      # This is a normal ENCODABLE value (a map that merely contains the old
+      # marker key), so it round-trips CANONICALLY through Ymlr, not verbatim:
+      # both sibling keys survive as data (emit never treats it as a marker).
+      # Byte-identity is only promised for DEGRADED keys (raw passthrough).
+      {_order, values} = CrdtBridge.frontmatter_of(doc)
+      assert Jason.decode!(values["date"]) == %{"__engram_raw__" => "x", "y" => 1}
+      assert CrdtBridge.body_of(doc) == "body\n"
     end
 
     test "pathologically long single-line degraded value round-trips byte-identical (reason snippet is bounded, raw span is not)" do
@@ -144,6 +150,26 @@ defmodule Engram.Notes.CrdtBridgeTest do
       doc = CrdtBridge.new_doc()
       :ok = CrdtBridge.ingest_plaintext(doc, "no frontmatter\n")
       assert CrdtBridge.project_doc(doc) == "no frontmatter\n"
+    end
+
+    test "a client-written value shaped like the old raw marker is NOT dropped on projection" do
+      # A hostile/buggy client can write this value straight into the Y.Map,
+      # bypassing the ingest guard. With out-of-band raws, projection must treat
+      # it as a normal value (emit canonically), never as a passthrough marker.
+      doc = CrdtBridge.new_doc()
+      map = Yex.Doc.get_map(doc, "frontmatter")
+      Yex.Map.set(map, "mykey", ~s({"__engram_raw__":"hello"}))
+      arr = Yex.Doc.get_array(doc, "frontmatter_order")
+      Yex.Array.insert_list(arr, 0, ["mykey"])
+
+      text = CrdtBridge.project_doc(doc)
+      assert text =~ "mykey"
+
+      # And it round-trips: re-ingesting yields the same value under the key.
+      doc2 = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(doc2, text)
+      {_order, values} = CrdtBridge.frontmatter_of(doc2)
+      assert Jason.decode!(values["mykey"]) == %{"__engram_raw__" => "hello"}
     end
   end
 
@@ -236,6 +262,26 @@ defmodule Engram.Notes.CrdtBridgeTest do
       first = {CrdtBridge.frontmatter_of(doc), CrdtBridge.body_of(doc)}
       assert :ok = CrdtBridge.normalize_doc(doc)
       assert {CrdtBridge.frontmatter_of(doc), CrdtBridge.body_of(doc)} == first
+    end
+
+    test "lifts a DEGRADED leading-fence key losslessly (does not drop it)" do
+      # A legacy doc whose body begins with a fence containing an unencodable
+      # key (nested non-binary key). normalize must lift it via the out-of-band
+      # raw store, NOT strip-and-drop it. The key's data survives byte-for-byte.
+      original = "---\ntags:\n  - a\ndate: {[a, b]: 1}\n---\nbody\n"
+      doc = CrdtBridge.new_doc() |> seed_body(original)
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert CrdtBridge.text_of(doc) == original
+    end
+
+    test "leaves the doc untouched when a degraded key cannot be captured losslessly" do
+      # Non-binary top-level key: no column-0 span, parse_for_ingest -> :error.
+      # normalize must NOT strip the fence (that would lose the block).
+      original = "---\n{[a, b]: 1}: {[c, d]: 2}\n---\nbody\n"
+      doc = CrdtBridge.new_doc() |> seed_body(original)
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert CrdtBridge.frontmatter_of(doc) == {[], %{}}
+      assert CrdtBridge.body_of(doc) == original
     end
 
     test "strips an empty frontmatter fence and terminates" do

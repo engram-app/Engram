@@ -83,7 +83,9 @@ defmodule Engram.Notes.FrontmatterTest do
       assert {:ok, order, values, degraded} = Frontmatter.parse(block)
       assert "tags" in order
       assert values["tags"] == ~s(["a"])
-      assert [%{key: "date", snippet: "date: {[a, b]: 1}", line: 3}] = degraded
+      # snippet is redacted to the KEY only (never the value): parse_reason is
+      # stored PLAINTEXT and echoed on /sync/changes, content is encrypted.
+      assert [%{key: "date", snippet: "date:", line: 3}] = degraded
       refute Map.has_key?(values, "date")
     end
 
@@ -104,24 +106,27 @@ defmodule Engram.Notes.FrontmatterTest do
       assert {:ok, [], %{}, []} = Frontmatter.parse("")
     end
 
-    test "degraded key snippet is bounded to 200 chars even for a pathologically long source line" do
+    test "degraded key snippet is REDACTED (key only), never the value, even for a long value" do
       padding = String.duplicate("x", 500)
       block = "tags:\n  - a\ndate: {[#{padding}]: 1}\n"
 
       assert {:ok, _order, _values, degraded} = Frontmatter.parse(block)
       assert [%{key: "date", line: 3, snippet: snippet}] = degraded
-      assert String.length(snippet) == 200
+      # No fragment of the value (the padding) appears in the diagnostic.
+      assert snippet == "date:"
+      refute snippet =~ "x"
 
       reason = Frontmatter.reason_for(degraded)
-      assert String.length(reason["detail"]["snippet"]) == 200
+      assert reason["detail"]["snippet"] == "date:"
     end
   end
 
   describe "invalid_yaml_reason/1" do
-    test "bounds the snippet to 200 chars for a pathologically long first line" do
-      long_line = String.duplicate("y", 500)
-      reason = Frontmatter.invalid_yaml_reason(long_line <> "\nmore\n")
-      assert String.length(reason["detail"]["snippet"]) == 200
+    test "redacts the block to a generic marker (never the raw block text)" do
+      secret = "apikey: sk-super-secret-value"
+      reason = Frontmatter.invalid_yaml_reason(secret <> "\n: : :\n")
+      assert reason["detail"]["snippet"] == "<frontmatter>"
+      refute reason["detail"]["snippet"] =~ "secret"
     end
   end
 
@@ -172,57 +177,54 @@ defmodule Engram.Notes.FrontmatterTest do
       assert out =~ "k:"
     end
 
-    test "emit renders a raw-passthrough marker verbatim" do
+    test "emit renders an out-of-band raw passthrough verbatim" do
       order = ["tags", "date"]
-      values = %{"tags" => ~s(["a"]), "date" => Frontmatter.raw_marker("date: {[a, b]: 1}")}
+      values = %{"tags" => ~s(["a"])}
+      raws = %{"date" => "date: {[a, b]: 1}"}
       # Good key emits canonically (Ymlr 2-space list indent); the degraded
       # key's raw source is re-rendered byte-for-byte (never via Ymlr).
-      assert Frontmatter.emit(order, values) == "tags:\n  - a\ndate: {[a, b]: 1}\n"
+      assert Frontmatter.emit(order, values, raws) == "tags:\n  - a\ndate: {[a, b]: 1}\n"
     end
 
-    test "emit renders a MULTI-LINE raw-passthrough marker verbatim" do
-      order = ["date"]
-      values = %{"date" => Frontmatter.raw_marker("date:\n  [a, b]: 1")}
-      assert Frontmatter.emit(order, values) == "date:\n  [a, b]: 1\n"
-    end
-  end
-
-  describe "raw marker helpers" do
-    test "raw_marker/raw_from_marker round-trip (incl. multi-line)" do
-      m = Frontmatter.raw_marker("date:\n  [a, b]: 1")
-      assert Frontmatter.raw_from_marker(m) == {:ok, "date:\n  [a, b]: 1"}
+    test "emit renders a MULTI-LINE out-of-band raw passthrough verbatim" do
+      raws = %{"date" => "date:\n  [a, b]: 1"}
+      assert Frontmatter.emit(["date"], %{}, raws) == "date:\n  [a, b]: 1\n"
     end
 
-    test "raw_from_marker rejects non-markers" do
-      assert Frontmatter.raw_from_marker("not json") == :error
-      assert Frontmatter.raw_from_marker(~s({"other":"x"})) == :error
-      assert Frontmatter.raw_from_marker(~s(["a"])) == :error
+    test "emit does NOT interpret a normal value shaped like the old marker" do
+      # A real value (a map that merely contains the old marker key) must emit
+      # as canonical YAML, not be dropped: raws is the ONLY passthrough source.
+      values = %{"mykey" => ~s({"__engram_raw__":"hello"})}
+      out = Frontmatter.emit(["mykey"], values)
+      assert out =~ "mykey:"
+      assert {:ok, ["mykey"], ^values, []} = Frontmatter.parse(out)
     end
   end
 
   describe "parse_for_ingest/1" do
-    test "empty block yields empty order and values" do
-      assert Frontmatter.parse_for_ingest("") == {:ok, [], %{}}
+    test "empty block yields empty order, values, and raws" do
+      assert Frontmatter.parse_for_ingest("") == {:ok, [], %{}, %{}}
     end
 
-    test "good-only block behaves like the structured parse path" do
+    test "good-only block behaves like the structured parse path (no raws)" do
       assert Frontmatter.parse_for_ingest("title: Hi\ntags:\n  - a\n") ==
-               {:ok, ["title", "tags"], %{"title" => "\"Hi\"", "tags" => "[\"a\"]"}}
+               {:ok, ["title", "tags"], %{"title" => "\"Hi\"", "tags" => "[\"a\"]"}, %{}}
     end
 
-    test "a degraded key is stored as a raw-passthrough marker at its source position" do
-      assert {:ok, ["tags", "date"], values} =
+    test "a degraded key is stored out of band (raws) at its source position" do
+      assert {:ok, ["tags", "date"], values, raws} =
                Frontmatter.parse_for_ingest("tags:\n  - a\ndate: {[a, b]: 1}\n")
 
       assert values["tags"] == ~s(["a"])
-      assert Frontmatter.raw_from_marker(values["date"]) == {:ok, "date: {[a, b]: 1}"}
+      refute Map.has_key?(values, "date")
+      assert raws["date"] == "date: {[a, b]: 1}"
     end
 
-    test "a MULTI-LINE degraded value captures its full source span" do
-      assert {:ok, ["tags", "date"], values} =
+    test "a MULTI-LINE degraded value captures its full source span out of band" do
+      assert {:ok, ["tags", "date"], _values, raws} =
                Frontmatter.parse_for_ingest("tags:\n  - a\ndate:\n  [a, b]: 1\n")
 
-      assert Frontmatter.raw_from_marker(values["date"]) == {:ok, "date:\n  [a, b]: 1"}
+      assert raws["date"] == "date:\n  [a, b]: 1"
     end
 
     test "returns :error (caller falls back to body) when a degraded key cannot be located" do

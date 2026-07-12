@@ -633,7 +633,8 @@ defmodule Engram.NotesTest do
       assert note.parse_reason["code"] == "frontmatter_unparseable_key"
       assert note.parse_reason["detail"]["key"] == "date"
       assert note.parse_reason["detail"]["line"] == 1
-      assert note.parse_reason["detail"]["snippet"] == "date: {[a, b]: 1}"
+      # snippet is redacted to the KEY only (parse_reason is stored plaintext).
+      assert note.parse_reason["detail"]["snippet"] == "date:"
     end
 
     test "a marker-colliding but encodable value stays parse_status ok (not a Task 3 passthrough concern)",

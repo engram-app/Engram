@@ -3935,6 +3935,11 @@ defmodule Engram.Notes do
   # A clean re-write of a previously degraded note must reset both fields —
   # every call site re-derives from scratch rather than patching prior state,
   # so a fix silently self-heals on the next ingest.
+  # ponytail: re-runs Frontmatter.split + parse on `content` that
+  # inject_okf_fields/4 -> OkfFields.extract already parsed. Deliberately NOT
+  # threaded: the block is tiny (microsecond parse) and threading would couple
+  # OKF extraction to parse-status by changing extract/1's return contract and
+  # this pipe's shape. Thread it only if this ever shows up on a profile.
   defp put_parse_status(attrs, content) do
     case Frontmatter.split(content) do
       {nil, _body} ->

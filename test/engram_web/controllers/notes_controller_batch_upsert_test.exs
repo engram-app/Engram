@@ -78,7 +78,9 @@ defmodule EngramWeb.NotesControllerBatchUpsertTest do
 
       assert degraded["parse_status"] == "degraded"
       assert degraded["parse_reason"]["code"] == "frontmatter_invalid_yaml"
-      assert degraded["parse_reason"]["detail"]["snippet"] == "date:YYYY-MM-DD"
+      # whole-block invalid YAML: snippet is a generic redacted marker, never
+      # the raw block text (parse_reason is stored plaintext + echoed on feed).
+      assert degraded["parse_reason"]["detail"]["snippet"] == "<frontmatter>"
     end
 
     test "oversized note becomes a per-note error without failing the batch", %{conn: conn} do

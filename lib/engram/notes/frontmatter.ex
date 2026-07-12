@@ -12,10 +12,6 @@ defmodule Engram.Notes.Frontmatter do
   # A column-0 `key:` line. Same shape top_level_key_order/2 keys on.
   @top_key_pattern ~r/^([^\s:][^:]*):/
 
-  # Marker envelope for a degraded key's raw source, preserved verbatim so
-  # emit re-renders it byte-for-byte instead of dropping it.
-  @raw_key "__engram_raw__"
-
   @doc """
   Split a note into its frontmatter YAML block (text between the fences, without
   the `---` lines) and its body. Returns `{nil, full_text}` when there is no
@@ -119,40 +115,29 @@ defmodule Engram.Notes.Frontmatter do
           String.t() => String.t() | %{String.t() => String.t() | pos_integer() | nil}
         }
   def invalid_yaml_reason(block) when is_binary(block) do
-    first_line = block |> String.split("\n", parts: 2) |> hd()
+    # Content-safe: never echo the raw block text. Frontmatter values are
+    # encrypted at rest and this reason is persisted PLAINTEXT + shipped on
+    # /sync/changes, so a secret in a malformed value must not leak here.
+    _ = block
 
     %{
       "code" => "frontmatter_invalid_yaml",
       "message" => "The note's frontmatter is not valid YAML.",
-      "detail" => %{"key" => nil, "line" => 1, "snippet" => truncate_snippet(first_line)}
+      "detail" => %{"key" => nil, "line" => 1, "snippet" => "<frontmatter>"}
     }
   end
-
-  @doc "Wrap a degraded key's raw source so emit/2 re-renders it verbatim."
-  @spec raw_marker(String.t()) :: String.t()
-  def raw_marker(raw) when is_binary(raw), do: Jason.encode!(%{@raw_key => raw})
-
-  @doc """
-  Unwrap a raw-passthrough marker. `{:ok, raw}` for a marker produced by
-  `raw_marker/1`; `:error` for any other string (a normal JSON value).
-  """
-  @spec raw_from_marker(String.t()) :: {:ok, String.t()} | :error
-  def raw_from_marker(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, %{@raw_key => raw}} when is_binary(raw) -> {:ok, raw}
-      _ -> :error
-    end
-  end
-
-  def raw_from_marker(_), do: :error
 
   @doc """
   Parse a frontmatter block for CRDT ingest, preserving degraded keys as raw
   passthrough so nothing is lost when the Y.Map re-emits the note.
 
-  Returns `{:ok, order, values}` where `order` is the full source order of all
-  top-level keys and `values` maps each key to either its JSON-encoded value
-  (good keys) or a `raw_marker/1` of its verbatim source span (degraded keys).
+  Returns `{:ok, order, values, raws}` where `order` is the full source order
+  of all top-level keys, `values` maps each GOOD key to its JSON-encoded value,
+  and `raws` maps each DEGRADED key to its verbatim source span (stored out of
+  band from `values`). A key appears in exactly one of `values`/`raws`. Storing
+  raws out of band means `emit/3` never has to guess whether a `values` entry
+  is a real value or a passthrough marker, so a normal value shaped like the old
+  in-band marker can never be mis-rendered.
 
   Returns `:error` when the block is not a YAML map, OR when a degraded key's
   raw source span cannot be captured losslessly (its column-0 line-tiling is
@@ -161,28 +146,20 @@ defmodule Engram.Notes.Frontmatter do
   falls back to storing the whole text as body, which is also lossless.
   """
   @spec parse_for_ingest(String.t()) ::
-          {:ok, [String.t()], %{String.t() => String.t()}} | :error
-  def parse_for_ingest(""), do: {:ok, [], %{}}
+          {:ok, [String.t()], %{String.t() => String.t()}, %{String.t() => String.t()}}
+          | :error
+  def parse_for_ingest(""), do: {:ok, [], %{}, %{}}
 
   def parse_for_ingest(block) when is_binary(block) do
     case YamlElixir.read_from_string(block) do
       {:ok, map} when is_map(map) ->
         {values, bad_keys} = encode_values(map)
 
-        # A GOOD value can encode to JSON that raw_from_marker/1 mistakes for a
-        # passthrough marker (a map merely containing @raw_key). emit/2 would
-        # then render its inner raw and DROP the key. Route those through the
-        # same verbatim span-passthrough so they round-trip exactly. No marker
-        # format can disambiguate the exact single-key collision, so this is
-        # the robust fix, not tightening the pattern.
-        colliding = for {k, v} <- values, match?({:ok, _}, raw_from_marker(v)), do: k
-        passthrough_keys = bad_keys ++ colliding
-
-        if passthrough_keys == [] do
-          # No degraded/colliding keys: keep the existing structured behaviour.
-          {:ok, top_level_key_order(block, map), values}
+        if bad_keys == [] do
+          # No degraded keys: fully structured, no raw passthrough needed.
+          {:ok, top_level_key_order(block, map), values, %{}}
         else
-          ingest_with_passthrough(block, map, values, passthrough_keys)
+          ingest_with_passthrough(block, map, values, bad_keys)
         end
 
       _ ->
@@ -190,26 +167,20 @@ defmodule Engram.Notes.Frontmatter do
     end
   end
 
-  # Passthrough keys present (degraded and/or marker-colliding): require an
-  # exact column-0 line-tiling of the block so each key's raw source span is
-  # captured byte-for-byte, then store each as a verbatim raw marker.
+  # Degraded keys present: require an exact column-0 line-tiling of the block so
+  # each key's raw source span is captured byte-for-byte, then store each in the
+  # out-of-band `raws` map so emit/3 re-renders it verbatim.
   defp ingest_with_passthrough(block, map, values, passthrough_keys) do
     case raw_spans(block, map) do
       {:ok, order, spans} ->
-        merged =
-          Enum.reduce(passthrough_keys, values, fn key, acc ->
-            case Map.fetch(spans, key) do
-              {:ok, raw} -> Map.put(acc, key, raw_marker(raw))
-              :error -> acc
-            end
-          end)
-
-        # Every passthrough key must have a captured span, else it would vanish
-        # (degraded) or stay a false-marker good value (colliding). Either way
-        # fall back to the lossless whole-text-as-body path.
-        if Enum.all?(passthrough_keys, &match?({:ok, _}, Map.fetch(spans, &1))),
-          do: {:ok, order, merged},
-          else: :error
+        # Every degraded key must have a captured span, else it would vanish.
+        # Fall back to the lossless whole-text-as-body path when any is missing.
+        if Enum.all?(passthrough_keys, &Map.has_key?(spans, &1)) do
+          raws = Map.new(passthrough_keys, fn key -> {key, Map.fetch!(spans, key)} end)
+          {:ok, order, values, raws}
+        else
+          :error
+        end
 
       :error ->
         :error
@@ -270,9 +241,12 @@ defmodule Engram.Notes.Frontmatter do
       MapSet.new(col0_keys) == MapSet.new(Map.keys(map))
   end
 
-  # Best-effort source location + raw slice for a top-level key that failed
-  # to encode. Falls back to the bare key when the source line can't be
-  # found (e.g. a key that only exists after YAML alias/anchor expansion).
+  # Best-effort source LOCATION for a top-level key that failed to encode.
+  # `snippet` carries ONLY the key name, never the value: this entry feeds the
+  # PLAINTEXT `parse_reason` column that is echoed on /sync/changes, and note
+  # content is encrypted at rest, so a secret in a malformed value must not
+  # leak. The verbatim raw span used for lossless passthrough is captured
+  # separately (raw_spans/2), not from this diagnostic entry.
   # A top-level YAML key can itself be a non-binary (flow-style complex key
   # like `[a, b]:`). Regex.escape/1 only accepts binaries, so guard first to
   # keep parse/1 total: report the inspected key, no source line.
@@ -283,23 +257,13 @@ defmodule Engram.Notes.Frontmatter do
   defp degraded_entry(key, block) do
     lines = String.split(block, "\n")
     idx = Enum.find_index(lines, fn l -> Regex.match?(~r/^#{Regex.escape(key)}\s*:/, l) end)
-
-    {line, snippet} =
-      case idx do
-        nil -> {nil, key}
-        i -> {i + 1, Enum.at(lines, i)}
-      end
-
-    %{key: key, line: line, snippet: truncate_snippet(snippet)}
+    line = if idx, do: idx + 1, else: nil
+    %{key: key, line: line, snippet: truncate_snippet(key <> ":")}
   end
 
-  # `snippet` is a raw frontmatter source line for a diagnostic reason
-  # (`parse_reason`), re-echoed on every /sync/changes fetch for the note. A
-  # pathologically long single-line value must not balloon that jsonb column
-  # or the feed payload. This ONLY bounds the diagnostic copy: the verbatim
-  # raw span used for lossless passthrough (raw_marker/raw_spans, Task 3)
-  # is a separate value built from the same source line, not from this
-  # truncated one, so round-trip fidelity is unaffected.
+  # Bound the redacted `snippet` (a key name) so a pathologically long key
+  # can't balloon the plaintext `parse_reason` jsonb column or the /sync/changes
+  # feed payload. Never carries a frontmatter value (see degraded_entry/2).
   @snippet_max_length 200
   defp truncate_snippet(snippet), do: String.slice(snippet, 0, @snippet_max_length)
 
@@ -371,36 +335,39 @@ defmodule Engram.Notes.Frontmatter do
   and REST write projects through emit, so a single unserializable value would
   otherwise brick the note.
   """
-  @spec emit([String.t()], %{String.t() => term()}) :: String.t()
-  def emit([], _values), do: ""
+  @spec emit([String.t()], %{String.t() => term()}, %{String.t() => String.t()}) :: String.t()
+  def emit(order, values, raws \\ %{})
 
-  def emit(order, values) when is_list(order) and is_map(values) do
+  def emit([], _values, _raws), do: ""
+
+  def emit(order, values, raws)
+      when is_list(order) and is_map(values) and is_map(raws) do
     order
-    |> Enum.filter(&Map.has_key?(values, &1))
-    |> Enum.map_join("", fn key -> emit_key(key, values[key]) end)
+    |> Enum.filter(fn k -> Map.has_key?(raws, k) or Map.has_key?(values, k) end)
+    |> Enum.map_join("", fn key ->
+      case Map.fetch(raws, key) do
+        # A degraded key is re-rendered from its verbatim out-of-band source
+        # span (never via Ymlr, which would canonicalize/lose it).
+        {:ok, raw} -> ensure_trailing_newline(raw)
+        :error -> emit_key(key, values[key])
+      end
+    end)
     |> ensure_trailing_newline()
   end
 
-  # A degraded key is re-rendered from its verbatim source span (never via
-  # Ymlr, which would canonicalize/lose it); a good key is decoded then emitted
-  # as canonical YAML. ensure_trailing_newline/1 normalizes the final newline
-  # for both so a marker with or without a trailing newline round-trips.
+  # A good key is decoded then emitted as canonical YAML. Raw passthrough is
+  # handled out of band in emit/3 (the `raws` map), so a normal value here is
+  # NEVER mistaken for a marker: this path only ever sees real values.
   defp emit_key(key, value) do
-    case raw_from_marker(value) do
-      {:ok, raw} ->
-        ensure_trailing_newline(raw)
+    decoded = decode_value(value)
 
-      :error ->
-        decoded = decode_value(value)
-
-        try do
-          Ymlr.document!(%{key => decoded}, sort_maps: false)
-          |> String.replace_prefix("---\n", "")
-        rescue
-          # Last resort for values Ymlr cannot serialize (e.g. Yex container
-          # refs): degrade to the inspected form rather than bricking the note.
-          _ -> "#{key}: #{inspect(decoded)}\n"
-        end
+    try do
+      Ymlr.document!(%{key => decoded}, sort_maps: false)
+      |> String.replace_prefix("---\n", "")
+    rescue
+      # Last resort for values Ymlr cannot serialize (e.g. Yex container
+      # refs): degrade to the inspected form rather than bricking the note.
+      _ -> "#{key}: #{inspect(decoded)}\n"
     end
   end
 
@@ -423,12 +390,19 @@ defmodule Engram.Notes.Frontmatter do
     if String.ends_with?(s, "\n"), do: s, else: s <> "\n"
   end
 
-  @doc "Assemble full note plaintext from frontmatter parts and body."
-  @spec project([String.t()], %{String.t() => String.t()}, String.t()) :: String.t()
-  def project([], _values, body), do: body
+  @doc """
+  Assemble full note plaintext from frontmatter parts and body. `raws` (the
+  out-of-band degraded-key source spans) defaults to empty for good-only docs.
+  """
+  @spec project([String.t()], %{String.t() => String.t()}, String.t(), %{
+          String.t() => String.t()
+        }) :: String.t()
+  def project(order, values, body, raws \\ %{})
 
-  def project(order, values, body) when is_binary(body) do
-    case emit(order, values) do
+  def project([], _values, body, _raws), do: body
+
+  def project(order, values, body, raws) when is_binary(body) do
+    case emit(order, values, raws) do
       "" -> body
       block -> "---\n" <> block <> "---\n" <> body
     end

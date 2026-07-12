@@ -313,7 +313,8 @@ defmodule EngramWeb.NotesControllerTest do
       body = json_response(conn, 200)
       assert body["parse_status"] == "degraded"
       assert body["parse_reason"]["code"] == "frontmatter_invalid_yaml"
-      assert body["parse_reason"]["detail"]["snippet"] == "date:YYYY-MM-DD"
+      # redacted marker, never the raw frontmatter source (plaintext column).
+      assert body["parse_reason"]["detail"]["snippet"] == "<frontmatter>"
     end
 
     test "returns 404 for deleted note", %{conn: conn} do
