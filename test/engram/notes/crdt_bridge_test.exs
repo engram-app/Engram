@@ -102,6 +102,20 @@ defmodule Engram.Notes.CrdtBridgeTest do
       assert CrdtBridge.text_of(doc) == original
     end
 
+    test "a GOOD value that looks like a raw marker still round-trips (no false passthrough)" do
+      doc = CrdtBridge.new_doc()
+      original = "---\ndate:\n  __engram_raw__: x\n---\nbody\n"
+      :ok = CrdtBridge.ingest_plaintext(doc, original)
+      assert CrdtBridge.text_of(doc) == original
+    end
+
+    test "a marker-colliding map keeps its sibling keys" do
+      doc = CrdtBridge.new_doc()
+      original = "---\ndate:\n  __engram_raw__: x\n  y: 1\n---\nbody\n"
+      :ok = CrdtBridge.ingest_plaintext(doc, original)
+      assert CrdtBridge.text_of(doc) == original
+    end
+
     test "un-locatable degraded key falls back to whole-text-as-body (still lossless)" do
       doc = CrdtBridge.new_doc()
       original = "---\n{[a, b]: 1}: {[c, d]: 2}\n---\nbody text\n"

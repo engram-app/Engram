@@ -125,11 +125,20 @@ defmodule Engram.Notes.Frontmatter do
       {:ok, map} when is_map(map) ->
         {values, bad_keys} = encode_values(map)
 
-        if bad_keys == [] do
-          # No degraded keys: keep the existing structured behaviour exactly.
+        # A GOOD value can encode to JSON that raw_from_marker/1 mistakes for a
+        # passthrough marker (a map merely containing @raw_key). emit/2 would
+        # then render its inner raw and DROP the key. Route those through the
+        # same verbatim span-passthrough so they round-trip exactly. No marker
+        # format can disambiguate the exact single-key collision, so this is
+        # the robust fix, not tightening the pattern.
+        colliding = for {k, v} <- values, match?({:ok, _}, raw_from_marker(v)), do: k
+        passthrough_keys = bad_keys ++ colliding
+
+        if passthrough_keys == [] do
+          # No degraded/colliding keys: keep the existing structured behaviour.
           {:ok, top_level_key_order(block, map), values}
         else
-          ingest_with_passthrough(block, map, values, bad_keys)
+          ingest_with_passthrough(block, map, values, passthrough_keys)
         end
 
       _ ->
@@ -137,21 +146,24 @@ defmodule Engram.Notes.Frontmatter do
     end
   end
 
-  # Degraded keys present: require an exact column-0 line-tiling of the block
-  # so each degraded key's raw source span is captured byte-for-byte.
-  defp ingest_with_passthrough(block, map, values, bad_keys) do
+  # Passthrough keys present (degraded and/or marker-colliding): require an
+  # exact column-0 line-tiling of the block so each key's raw source span is
+  # captured byte-for-byte, then store each as a verbatim raw marker.
+  defp ingest_with_passthrough(block, map, values, passthrough_keys) do
     case raw_spans(block, map) do
       {:ok, order, spans} ->
         merged =
-          Enum.reduce(bad_keys, values, fn key, acc ->
+          Enum.reduce(passthrough_keys, values, fn key, acc ->
             case Map.fetch(spans, key) do
               {:ok, raw} -> Map.put(acc, key, raw_marker(raw))
               :error -> acc
             end
           end)
 
-        # Every degraded key must have a captured span, else it would vanish.
-        if Enum.all?(bad_keys, &Map.has_key?(merged, &1)),
+        # Every passthrough key must have a captured span, else it would vanish
+        # (degraded) or stay a false-marker good value (colliding). Either way
+        # fall back to the lossless whole-text-as-body path.
+        if Enum.all?(passthrough_keys, &match?({:ok, _}, Map.fetch(spans, &1))),
           do: {:ok, order, merged},
           else: :error
 
