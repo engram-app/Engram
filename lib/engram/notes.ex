@@ -18,6 +18,7 @@ defmodule Engram.Notes do
     CrdtDeliver,
     CrdtPersistence,
     Enqueue,
+    Frontmatter,
     Helpers,
     Note,
     PathSanitizer
@@ -574,6 +575,7 @@ defmodule Engram.Notes do
           phase_b =
             inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, crdt.tags)
             |> inject_okf_fields(user, note_id, crdt.merged_text)
+            |> put_parse_status(crdt.merged_text)
             |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
             |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
@@ -801,6 +803,7 @@ defmodule Engram.Notes do
             crdt.tags
           )
           |> inject_okf_fields(user, prior.id, crdt.merged_text)
+          |> put_parse_status(crdt.merged_text)
           |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
           |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
@@ -940,6 +943,7 @@ defmodule Engram.Notes do
             crdt.tags
           )
           |> inject_okf_fields(user, existing.id, crdt.merged_text)
+          |> put_parse_status(crdt.merged_text)
           |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
           |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
@@ -1751,7 +1755,9 @@ defmodule Engram.Notes do
     :description_ciphertext,
     :description_nonce,
     :resource_ciphertext,
-    :resource_nonce
+    :resource_nonce,
+    :parse_status,
+    :parse_reason
   ]
 
   @doc """
@@ -2097,6 +2103,7 @@ defmodule Engram.Notes do
         phase_b =
           inject_phase_b_fields(encrypted, user, note_id, entry.path, entry.folder, merged_tags)
           |> inject_okf_fields(user, note_id, crdt.merged_text)
+          |> put_parse_status(crdt.merged_text)
 
         changeset = Note.changeset(%Note{id: note_id}, phase_b)
 
@@ -3848,6 +3855,37 @@ defmodule Engram.Notes do
   # official public API.
   def inject_okf_fields_pub(attrs, user, note_id, content) do
     inject_okf_fields(attrs, user, note_id, content)
+  end
+
+  # Frontmatter-resilience (Task 5): stamp parse_status/parse_reason from the
+  # note's ACTUAL persisted content (the CRDT-merged text, same input
+  # inject_okf_fields/4 uses at every call site), not the raw incoming push.
+  # A clean re-write of a previously degraded note must reset both fields —
+  # every call site re-derives from scratch rather than patching prior state,
+  # so a fix silently self-heals on the next ingest.
+  defp put_parse_status(attrs, content) do
+    case Frontmatter.split(content) do
+      {nil, _body} ->
+        Map.merge(attrs, %{parse_status: "ok", parse_reason: nil})
+
+      {block, _body} ->
+        case Frontmatter.parse(block) do
+          {:ok, _order, _values, []} ->
+            Map.merge(attrs, %{parse_status: "ok", parse_reason: nil})
+
+          {:ok, _order, _values, degraded} ->
+            Map.merge(attrs, %{
+              parse_status: "degraded",
+              parse_reason: Frontmatter.reason_for(degraded)
+            })
+
+          :error ->
+            Map.merge(attrs, %{
+              parse_status: "degraded",
+              parse_reason: Frontmatter.invalid_yaml_reason(block)
+            })
+        end
+    end
   end
 
   # Returns a keyword list of Phase B field updates suitable for splicing into

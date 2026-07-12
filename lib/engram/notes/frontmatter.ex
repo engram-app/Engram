@@ -84,6 +84,48 @@ defmodule Engram.Notes.Frontmatter do
     end
   end
 
+  @doc """
+  Build the stored/echoed `parse_reason` from a degraded-keys list (`parse/1`'s
+  4th element). `nil` when the list is empty (clean parse). Reports the FIRST
+  degraded key's detail; a note with several bad keys still needs only one
+  actionable pointer. Reason shape is pinned (string keys, jsonb-storable):
+  `%{"code", "message", "detail" => %{"key", "line", "snippet"}}`.
+  """
+  @spec reason_for([map()]) :: map() | nil
+  def reason_for([]), do: nil
+
+  def reason_for([%{key: key, line: line, snippet: snippet} | _] = degraded) do
+    %{
+      "code" => "frontmatter_unparseable_key",
+      "message" => degraded_key_message(degraded),
+      "detail" => %{"key" => key, "line" => line, "snippet" => snippet}
+    }
+  end
+
+  defp degraded_key_message([_]), do: "A frontmatter key could not be parsed as YAML."
+
+  defp degraded_key_message(degraded) do
+    "#{length(degraded)} frontmatter keys could not be parsed as YAML."
+  end
+
+  @doc """
+  Build the `parse_reason` for the whole-block `parse/1` `:error` case (the
+  block isn't YAML-map-shaped at all, e.g. `date:YYYY-MM-DD` with no space).
+  Distinct code from `reason_for/1`'s per-key case: there is no single bad
+  key to point at, so `detail.key` is nil and the snippet is the block's
+  first line.
+  """
+  @spec invalid_yaml_reason(String.t()) :: map()
+  def invalid_yaml_reason(block) when is_binary(block) do
+    first_line = block |> String.split("\n", parts: 2) |> hd()
+
+    %{
+      "code" => "frontmatter_invalid_yaml",
+      "message" => "The note's frontmatter is not valid YAML.",
+      "detail" => %{"key" => nil, "line" => 1, "snippet" => first_line}
+    }
+  end
+
   @doc "Wrap a degraded key's raw source so emit/2 re-renders it verbatim."
   @spec raw_marker(String.t()) :: String.t()
   def raw_marker(raw) when is_binary(raw), do: Jason.encode!(%{@raw_key => raw})

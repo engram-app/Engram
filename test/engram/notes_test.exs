@@ -499,6 +499,101 @@ defmodule Engram.NotesTest do
   end
 
   # ---------------------------------------------------------------------------
+  # upsert_note/3 — parse_status/parse_reason stamping (Task 5)
+  # ---------------------------------------------------------------------------
+
+  describe "upsert_note/3 — parse_status stamping" do
+    test "a clean note is stamped parse_status ok with no reason", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Clean.md",
+          "content" => "---\ntags: [a]\n---\nx\n",
+          "mtime" => 1.0
+        })
+
+      assert note.parse_status == "ok"
+      assert note.parse_reason == nil
+    end
+
+    test "a note with no frontmatter at all is parse_status ok", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "NoFrontmatter.md",
+          "content" => "just a body\n",
+          "mtime" => 1.0
+        })
+
+      assert note.parse_status == "ok"
+      assert note.parse_reason == nil
+    end
+
+    test "a whole-block malformed frontmatter (date:YYYY-MM-DD, no space) stores frontmatter_invalid_yaml",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "InvalidYaml.md",
+          "content" => "---\ndate:YYYY-MM-DD\n---\nx\n",
+          "mtime" => 1.0
+        })
+
+      assert note.parse_status == "degraded"
+      assert note.parse_reason["code"] == "frontmatter_invalid_yaml"
+      assert is_binary(note.parse_reason["message"])
+    end
+
+    test "a single unparseable key (non-binary map key) stores frontmatter_unparseable_key with the key's detail",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "UnparseableKey.md",
+          "content" => "---\ndate: {[a, b]: 1}\n---\nx\n",
+          "mtime" => 1.0
+        })
+
+      assert note.parse_status == "degraded"
+      assert note.parse_reason["code"] == "frontmatter_unparseable_key"
+      assert note.parse_reason["detail"]["key"] == "date"
+      assert note.parse_reason["detail"]["line"] == 1
+      assert note.parse_reason["detail"]["snippet"] == "date: {[a, b]: 1}"
+    end
+
+    test "a marker-colliding but encodable value stays parse_status ok (not a Task 3 passthrough concern)",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Colliding.md",
+          "content" => "---\ndate:\n  __engram_raw__: x\n  y: 1\n---\nbody\n",
+          "mtime" => 1.0
+        })
+
+      assert note.parse_status == "ok"
+      assert note.parse_reason == nil
+    end
+
+    test "rewriting a degraded note with clean frontmatter resets parse_status to ok",
+         %{user: user, vault: vault} do
+      {:ok, degraded} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Fixable.md",
+          "content" => "---\ndate:YYYY-MM-DD\n---\nx\n",
+          "mtime" => 1.0
+        })
+
+      assert degraded.parse_status == "degraded"
+
+      {:ok, fixed} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Fixable.md",
+          "content" => "---\ntitle: Fixed\n---\nx\n",
+          "mtime" => 2.0
+        })
+
+      assert fixed.parse_status == "ok"
+      assert fixed.parse_reason == nil
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Note.changeset/2 defense-in-depth
   # ---------------------------------------------------------------------------
 
