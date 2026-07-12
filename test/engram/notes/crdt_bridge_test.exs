@@ -116,6 +116,14 @@ defmodule Engram.Notes.CrdtBridgeTest do
       assert CrdtBridge.text_of(doc) == original
     end
 
+    test "pathologically long single-line degraded value round-trips byte-identical (reason snippet is bounded, raw span is not)" do
+      doc = CrdtBridge.new_doc()
+      padding = String.duplicate("x", 500)
+      original = "---\ntags:\n  - a\ndate: {[#{padding}]: 1}\n---\nbody text\n"
+      :ok = CrdtBridge.ingest_plaintext(doc, original)
+      assert CrdtBridge.text_of(doc) == original
+    end
+
     test "un-locatable degraded key falls back to whole-text-as-body (still lossless)" do
       doc = CrdtBridge.new_doc()
       original = "---\n{[a, b]: 1}: {[c, d]: 2}\n---\nbody text\n"

@@ -103,6 +103,26 @@ defmodule Engram.Notes.FrontmatterTest do
     test "parse/1 empty block" do
       assert {:ok, [], %{}, []} = Frontmatter.parse("")
     end
+
+    test "degraded key snippet is bounded to 200 chars even for a pathologically long source line" do
+      padding = String.duplicate("x", 500)
+      block = "tags:\n  - a\ndate: {[#{padding}]: 1}\n"
+
+      assert {:ok, _order, _values, degraded} = Frontmatter.parse(block)
+      assert [%{key: "date", line: 3, snippet: snippet}] = degraded
+      assert String.length(snippet) == 200
+
+      reason = Frontmatter.reason_for(degraded)
+      assert String.length(reason["detail"]["snippet"]) == 200
+    end
+  end
+
+  describe "invalid_yaml_reason/1" do
+    test "bounds the snippet to 200 chars for a pathologically long first line" do
+      long_line = String.duplicate("y", 500)
+      reason = Frontmatter.invalid_yaml_reason(long_line <> "\nmore\n")
+      assert String.length(reason["detail"]["snippet"]) == 200
+    end
   end
 
   describe "emit/2 and self-idempotency" do

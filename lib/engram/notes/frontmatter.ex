@@ -124,7 +124,7 @@ defmodule Engram.Notes.Frontmatter do
     %{
       "code" => "frontmatter_invalid_yaml",
       "message" => "The note's frontmatter is not valid YAML.",
-      "detail" => %{"key" => nil, "line" => 1, "snippet" => first_line}
+      "detail" => %{"key" => nil, "line" => 1, "snippet" => truncate_snippet(first_line)}
     }
   end
 
@@ -277,7 +277,7 @@ defmodule Engram.Notes.Frontmatter do
   # like `[a, b]:`). Regex.escape/1 only accepts binaries, so guard first to
   # keep parse/1 total: report the inspected key, no source line.
   defp degraded_entry(key, _block) when not is_binary(key) do
-    %{key: inspect(key), line: nil, snippet: inspect(key)}
+    %{key: inspect(key), line: nil, snippet: truncate_snippet(inspect(key))}
   end
 
   defp degraded_entry(key, block) do
@@ -290,8 +290,18 @@ defmodule Engram.Notes.Frontmatter do
         i -> {i + 1, Enum.at(lines, i)}
       end
 
-    %{key: key, line: line, snippet: snippet}
+    %{key: key, line: line, snippet: truncate_snippet(snippet)}
   end
+
+  # `snippet` is a raw frontmatter source line for a diagnostic reason
+  # (`parse_reason`), re-echoed on every /sync/changes fetch for the note. A
+  # pathologically long single-line value must not balloon that jsonb column
+  # or the feed payload. This ONLY bounds the diagnostic copy: the verbatim
+  # raw span used for lossless passthrough (raw_marker/raw_spans, Task 3)
+  # is a separate value built from the same source line, not from this
+  # truncated one, so round-trip fidelity is unaffected.
+  @snippet_max_length 200
+  defp truncate_snippet(snippet), do: String.slice(snippet, 0, @snippet_max_length)
 
   # Encode each key's value to a JSON string. Total: a value (or exotic key inside
   # a nested map) that Jason cannot encode is COLLECTED into bad_keys instead of
