@@ -1,7 +1,7 @@
 defmodule Engram.Repo.Migrations.AddParseStatusToNotesExpand do
   use Ecto.Migration
 
-  # phase/expand — parse-status columns for frontmatter-resilience (Task 4).
+  # phase/expand: parse-status columns for frontmatter-resilience (Task 4).
   #
   # `parse_status` records whether the last ingest parsed this note's
   # frontmatter cleanly ("ok") or fell back ("degraded" etc, stamped by
