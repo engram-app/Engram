@@ -2023,32 +2023,72 @@ defmodule Engram.Notes do
   end
 
   defp process_batch_entry(%{result: nil} = entry, existing_by_hmac, user, vault, now, rows) do
-    case Map.get(existing_by_hmac, entry.path_hmac) do
-      nil ->
-        case build_batch_insert_row(entry, user, vault, now) do
-          {:ok, id, row, merged_text, content_hash} ->
-            info = %{
-              id: id,
-              version: 1,
-              prev_hash: nil,
-              updated_at: now,
-              content: merged_text,
-              content_hash: content_hash
-            }
+    process_batch_entry_rescued(entry, rows, fn ->
+      case Map.get(existing_by_hmac, entry.path_hmac) do
+        nil ->
+          case build_batch_insert_row(entry, user, vault, now) do
+            {:ok, id, row, merged_text, content_hash} ->
+              info = %{
+                id: id,
+                version: 1,
+                prev_hash: nil,
+                updated_at: now,
+                content: merged_text,
+                content_hash: content_hash
+              }
 
-            {%{entry | result: {:ok, info}}, [row | rows]}
+              {%{entry | result: {:ok, info}}, [row | rows]}
 
-          {:error, errors} ->
-            {%{entry | result: {:error, errors}}, rows}
-        end
+            {:error, errors} ->
+              {%{entry | result: {:error, errors}}, rows}
+          end
 
-      existing ->
-        {%{entry | result: update_batch_entry(entry, existing, user)}, rows}
-    end
+        existing ->
+          {%{entry | result: update_batch_entry(entry, existing, user)}, rows}
+      end
+    end)
   end
 
   defp process_batch_entry(entry, _existing_by_hmac, _user, _vault, _now, rows),
     do: {entry, rows}
+
+  # Defense in depth (#task-6): the known raise this guards (frontmatter
+  # parsing) was already made impossible by the total codec in Frontmatter
+  # (Task 1) — this exists for whatever future parser/crypto/CRDT call in
+  # `fun` raises next. Isolates that ONE entry to a per-note error result
+  # instead of the raise propagating out of Repo.with_tenant and rolling
+  # back every sibling in the batch. `fun` is a thunk so this stays testable
+  # without a real reachable raise: pass a fn that raises on demand.
+  @doc false
+  @spec process_batch_entry_rescued(map(), list(), (-> {map(), list()})) :: {map(), list()}
+  def process_batch_entry_rescued(entry, rows, fun) do
+    fun.()
+  rescue
+    e ->
+      # Path goes in the message, not just metadata: the console formatter's
+      # metadata allowlist (config.exs) doesn't include `:path`/`:error`, so
+      # a path-only-in-metadata line renders invisibly outside prod's
+      # metadata: :all JSON formatter. Interpolating keeps it Sentry-visible
+      # AND directly greppable/testable in the plain-text console/CI logs.
+      Logger.error(
+        "batch entry raised, degrading note: #{entry.path}",
+        Metadata.with_category(:error, :sync,
+          path: entry.path,
+          error: Exception.message(e)
+        )
+      )
+
+      {%{
+         entry
+         | result:
+             {:error,
+              %{
+                "code" => "note_processing_failed",
+                "message" => "This note could not be processed and was skipped.",
+                "detail" => %{}
+              }}
+       }, rows}
+  end
 
   defp update_batch_entry(entry, existing, user) do
     base_attrs = batch_base_attrs(entry, user)

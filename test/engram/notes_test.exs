@@ -103,6 +103,83 @@ defmodule Engram.NotesTest do
   end
 
   # ---------------------------------------------------------------------------
+  # batch_upsert_notes/3 — per-entry raise isolation (Task 6, defense in depth)
+  # ---------------------------------------------------------------------------
+
+  describe "batch_upsert_notes/3 — per-entry raise isolation" do
+    import ExUnit.CaptureLog
+
+    test "a historically-poisonous note commits degraded, sibling commits too", %{
+      user: user,
+      vault: vault
+    } do
+      assert {:ok, %{results: results}} =
+               Notes.batch_upsert_notes(user, vault, [
+                 %{"path" => "good.md", "content" => "---\ntags: [a]\n---\nok\n", "mtime" => 1.0},
+                 %{
+                   "path" => "poison.md",
+                   "content" => "---\ndate:YYYY-MM-DD\n---\nx\n",
+                   "mtime" => 1.0
+                 }
+               ])
+
+      # Total parser (Task 1): the poison note commits degraded, not error.
+      assert Enum.all?(results, &(&1.status == :ok))
+      assert Enum.find(results, &(&1.path == "good.md"))
+      assert Enum.find(results, &(&1.path == "poison.md"))
+    end
+
+    test "process_batch_entry_rescued/3 catches a raise and degrades to a per-note error" do
+      entry = %{path: "poison.md", input_path: "poison.md", result: nil}
+
+      log =
+        capture_log(fn ->
+          assert {degraded, [:untouched_row]} =
+                   Notes.process_batch_entry_rescued(entry, [:untouched_row], fn ->
+                     raise "boom"
+                   end)
+
+          assert %{result: {:error, error}} = degraded
+          assert error["code"] == "note_processing_failed"
+          assert is_binary(error["message"])
+        end)
+
+      assert log =~ "batch entry raised"
+      assert log =~ "poison.md"
+    end
+
+    test "process_batch_entry_rescued/3 passes through a non-raising fn untouched" do
+      entry = %{path: "good.md", input_path: "good.md", result: nil}
+
+      assert {%{result: {:ok, :done}}, [:new_row]} =
+               Notes.process_batch_entry_rescued(entry, [], fn ->
+                 {%{entry | result: {:ok, :done}}, [:new_row]}
+               end)
+    end
+
+    test "a raising entry doesn't corrupt a sibling entry's already-accumulated row/result" do
+      good_entry = %{path: "good.md", input_path: "good.md", result: nil}
+      poison_entry = %{path: "poison.md", input_path: "poison.md", result: nil}
+
+      {good_out, rows_after_good} =
+        Notes.process_batch_entry_rescued(good_entry, [], fn ->
+          {%{good_entry | result: {:ok, :info}}, [:good_row]}
+        end)
+
+      {poison_out, rows_after_poison} =
+        Notes.process_batch_entry_rescued(poison_entry, rows_after_good, fn ->
+          raise "boom"
+        end)
+
+      assert good_out.result == {:ok, :info}
+      assert rows_after_good == [:good_row]
+      assert %{result: {:error, %{"code" => "note_processing_failed"}}} = poison_out
+      # The poison entry contributes no row of its own; the sibling's row survives.
+      assert rows_after_poison == rows_after_good
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # upsert_note/3
   # ---------------------------------------------------------------------------
 
