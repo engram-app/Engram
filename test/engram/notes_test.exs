@@ -179,6 +179,66 @@ defmodule Engram.NotesTest do
       # The poison entry contributes no row of its own; the sibling's row survives.
       assert rows_after_poison == rows_after_good
     end
+
+    # Task 4: a plain `raise` (above) never poisons the shared tx — but a
+    # FAILED SQL STATEMENT does (Postgres flips the whole tx into 25P02
+    # in_failed_sql_transaction, so every subsequent statement in the SAME tx
+    # fails too). Driven end-to-end through the real batch path: one entry's
+    # UPDATE-branch next_seq! hits a genuine failed statement (bigint overflow,
+    # SQLSTATE 22003) while a sibling entry commits and the batch returns real
+    # partial success. Before the fix (db_mode: :savepoint on the UPDATE-branch
+    # writes) the overflow poisons the shared tx and the whole batch blows up
+    # at COMMIT; the savepoint rolls the failed statement back to just that
+    # entry.
+    test "a failed SQL statement in one entry's UPDATE branch is isolated; sibling commits", %{
+      user: user,
+      vault: vault
+    } do
+      # Seed two notes with plain (no-frontmatter) bodies via the real batch.
+      assert {:ok, %{results: seed}} =
+               Notes.batch_upsert_notes(user, vault, [
+                 %{"path" => "keep.md", "content" => "keep body", "mtime" => 1.0},
+                 %{"path" => "poison.md", "content" => "poison v1", "mtime" => 1.0}
+               ])
+
+      assert Enum.all?(seed, &(&1.status == :ok))
+
+      # Prime the next per-entry next_seq! UPDATE to overflow: change_seq is a
+      # bigint; `change_seq + 1` at MAX raises SQLSTATE 22003 — a real failed
+      # SQL statement mid-transaction, not a bare raise.
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          Engram.Repo.query!(
+            "UPDATE vaults SET change_seq = $1 WHERE id = $2",
+            [9_223_372_036_854_775_807, Ecto.UUID.dump!(vault.id)]
+          )
+        end)
+
+      log =
+        capture_log(fn ->
+          # keep.md is a byte-identical re-push (idempotent_repush — no
+          # next_seq!, commits as a no-op :ok). poison.md changes content, so
+          # its UPDATE branch calls next_seq! → overflow. Neither is a new
+          # insert, so the post-loop insert_all (its own next_seq!) is skipped.
+          assert {:ok, %{results: results}} =
+                   Notes.batch_upsert_notes(user, vault, [
+                     %{"path" => "keep.md", "content" => "keep body", "mtime" => 2.0},
+                     %{"path" => "poison.md", "content" => "poison v2 CHANGED", "mtime" => 2.0}
+                   ])
+
+          keep = Enum.find(results, &(&1.path == "keep.md"))
+          poison = Enum.find(results, &(&1.path == "poison.md"))
+
+          # Real partial success: the sibling committed, the failed-SQL entry
+          # degraded to a per-note error, and the batch tx COMMITTED (returned
+          # {:ok, _} rather than raising 25P02 at COMMIT).
+          assert keep.status == :ok
+          assert poison.status == :error
+        end)
+
+      assert log =~ "batch entry raised"
+      assert log =~ "poison.md"
+    end
   end
 
   # ---------------------------------------------------------------------------

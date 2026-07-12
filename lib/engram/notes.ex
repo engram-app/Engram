@@ -896,7 +896,9 @@ defmodule Engram.Notes do
         {:stale_base, existing}
 
       true ->
-        do_rewrite_note(existing, base_attrs, user, sanitized_path, folder)
+        do_rewrite_note(existing, base_attrs, user, sanitized_path, folder,
+          db_mode: Keyword.get(opts, :db_mode)
+        )
     end
   end
 
@@ -922,7 +924,19 @@ defmodule Engram.Notes do
     {:ok, {existing.content_hash, existing, base_attrs.content, existing.content_hash}}
   end
 
-  defp do_rewrite_note(existing, base_attrs, user, sanitized_path, folder) do
+  defp do_rewrite_note(existing, base_attrs, user, sanitized_path, folder, opts \\ []) do
+    # db_opts carries `mode: :savepoint` on the batch path so a failed SQL
+    # statement here (next_seq!'s UPDATE, or the Repo.update) rolls back to a
+    # per-statement savepoint instead of poisoning the shared batch tx into
+    # 25P02 and falsely failing sibling entries. Empty (default) on the
+    # single-note path, which owns its whole tx — no siblings to protect, no
+    # savepoint round-trip to pay for.
+    db_opts =
+      case Keyword.get(opts, :db_mode) do
+        nil -> []
+        mode -> [mode: mode]
+      end
+
     with {:ok, crdt} <- maybe_merge_crdt(existing, base_attrs.content, user, existing.id) do
       merged_title = Helpers.extract_title(crdt.merged_text, sanitized_path)
 
@@ -949,12 +963,12 @@ defmodule Engram.Notes do
           |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
           |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
-        seq = Engram.Vaults.next_seq!(existing.vault_id)
+        seq = Engram.Vaults.next_seq!(existing.vault_id, db_opts)
 
         existing
         |> Note.changeset(Map.put(phase_b, :version, existing.version + 1))
         |> Ecto.Changeset.put_change(:seq, seq)
-        |> Repo.update()
+        |> Repo.update(db_opts)
         |> case do
           # Thread crdt.content_hash (HMAC of projection) alongside merged_text
           # so callers can include the stored hash in broadcast digests without
@@ -2056,33 +2070,41 @@ defmodule Engram.Notes do
   defp process_batch_entry(entry, _existing_by_hmac, _user, _vault, _now, rows),
     do: {entry, rows}
 
-  # Defense in depth (#task-6): the known raise this guards (frontmatter
-  # parsing) was already made impossible by the total codec in Frontmatter
-  # (Task 1). This exists for whatever future parser/crypto/CRDT call in
-  # `fun` raises next, and it cleanly isolates a raise to that ONE entry
-  # (per-note error result, siblings commit) for every raise reachable via
-  # public input TODAY:
+  # Defense in depth (#task-6/#task-4): the known raise this guards
+  # (frontmatter parsing) was already made impossible by the total codec in
+  # Frontmatter (Task 1). This exists for whatever future parser/crypto/CRDT
+  # call in `fun` raises next, and it cleanly isolates that raise to ONE entry
+  # (per-note error result, siblings commit) — including a raise that came
+  # from a FAILED SQL STATEMENT, which a bare try/rescue could not contain.
+  #
+  # The batch runs each entry inside the SHARED Repo.with_tenant tx. Per-entry
+  # SAVEPOINT isolation makes that total across both branches:
   #
   #   - CREATE branch (build_batch_insert_row): does zero per-entry DB
-  #     writes (the insert_all runs AFTER the loop), so any raise here is
-  #     airtight-isolated.
-  #   - UPDATE branch (update_batch_entry): next_seq!'s only raise-shaped
-  #     hazard is a badmatch on an already-SUCCESSFUL query roundtrip, and
-  #     the realistic path-unique race is caught by unique_constraint, not a
-  #     raise. So no raise reachable today runs a FAILED SQL statement here.
+  #     writes (the insert_all runs AFTER the loop), so a raise here never
+  #     touched the tx state at all.
+  #   - UPDATE branch (update_batch_entry): next_seq! (UPDATE ... RETURNING)
+  #     and Repo.update() run synchronously inside `fun`. If one of those SQL
+  #     statements fails mid-tx, Postgres flips the whole tx into 25P02
+  #     (in_failed_sql_transaction) and every SUBSEQUENT statement fails too.
+  #     The batch UPDATE path runs both writes with `mode: :savepoint`
+  #     (threaded via `db_mode: :savepoint` through do_update_note ->
+  #     do_rewrite_note -> next_seq!/Repo.update), so a failed statement rolls
+  #     back to its OWN savepoint and the outer tx stays healthy. query!/update
+  #     still raise on failure, so this rescue degrades only THIS entry while
+  #     siblings (and previously-succeeded entries) commit. No raise reachable
+  #     via public input triggers this today (next_seq! only badmatches after a
+  #     SUCCESSFUL roundtrip; the realistic path-unique race is caught by
+  #     unique_constraint), but the guarantee no longer depends on that.
   #
-  # SCOPE CEILING: this is NOT a blanket "any raise, siblings always commit"
-  # guarantee. next_seq! (UPDATE ... RETURNING) and Repo.update() run
-  # synchronously inside `fun` in the UPDATE branch. If a FUTURE change made
-  # one of those SQL statements actually fail mid-transaction, Postgres would
-  # put the shared tx into 25P02 (in_failed_sql_transaction); we'd catch the
-  # raise here but every SUBSEQUENT entry's statement would then fail too and
-  # be falsely marked note_processing_failed. Isolating a failed-SQL raise
-  # would need per-entry SAVEPOINTs or deferring the UPDATE writes past the
-  # loop. Deliberately NOT built — unreachable today (see above).
+  # NOTE: a bare nested `Repo.transaction` does NOT isolate a failed RAW query
+  # (`Repo.query!`) — DBConnection breaks the connection and disconnects. Only
+  # `mode: :savepoint` on the failing operation recovers cleanly, which is why
+  # the isolation lives on the DB writes, not around `fun`.
   #
   # `fun` is a thunk so this stays testable without a real reachable raise:
-  # pass a fn that raises on demand.
+  # pass a fn that runs a real failing Repo query (a plain `raise` will NOT
+  # exercise the savepoint, since it never enters 25P02).
   @doc false
   @spec process_batch_entry_rescued(map(), list(), (-> {map(), list()})) :: {map(), list()}
   def process_batch_entry_rescued(entry, rows, fun) do
@@ -2119,7 +2141,12 @@ defmodule Engram.Notes do
   defp update_batch_entry(entry, existing, user) do
     base_attrs = batch_base_attrs(entry, user)
 
-    case do_update_note(existing, base_attrs, user, entry.path, entry.folder, entry.tags) do
+    # db_mode: :savepoint isolates this entry's UPDATE-branch DB writes so a
+    # failed SQL statement rolls back to a per-statement savepoint, leaving the
+    # shared batch tx healthy for sibling entries (see process_batch_entry_rescued).
+    case do_update_note(existing, base_attrs, user, entry.path, entry.folder, entry.tags,
+           db_mode: :savepoint
+         ) do
       {:ok, {prev_hash, updated, merged_text, content_hash}} ->
         {:ok,
          %{
