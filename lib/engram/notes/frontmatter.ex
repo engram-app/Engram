@@ -48,29 +48,49 @@ defmodule Engram.Notes.Frontmatter do
   end
 
   @doc """
-  Parse a frontmatter YAML block into `{:ok, order, values}` where `values` maps
-  each top-level key to the JSON-encoded string of its parsed value, and `order` is
-  the source key order. Returns `:error` on malformed YAML or if any value cannot
-  be JSON-encoded.
+  Parse a frontmatter YAML block into `{:ok, order, values, degraded}`.
+  `values` maps each encodable top-level key to the JSON-encoded string of its
+  parsed value; `order` is the source order of those good keys. Keys whose
+  value cannot be JSON-encoded are dropped from `order`/`values` and reported
+  in `degraded` (a list of `%{key, line, snippet}`) instead.
+
+  Returns `:error` only when the block is not YAML-map-shaped at all (whole
+  block failure), never for a single bad key.
   """
-  @spec parse(String.t()) :: {:ok, [String.t()], %{String.t() => String.t()}} | :error
-  def parse(""), do: {:ok, [], %{}}
+  @spec parse(String.t()) ::
+          {:ok, [String.t()], %{String.t() => String.t()}, [map()]} | :error
+  def parse(""), do: {:ok, [], %{}, []}
 
   def parse(block) when is_binary(block) do
     case YamlElixir.read_from_string(block) do
       {:ok, map} when is_map(map) ->
         order = top_level_key_order(block, map)
-
-        # Task 2 will rewrite parse/1 to surface bad_keys. For now keep the
-        # existing {:ok, ...} | :error contract: any bad key means :error.
-        case encode_values(map) do
-          {values, []} -> {:ok, order, values}
-          {_values, _bad} -> :error
-        end
+        {values, bad_keys} = encode_values(map)
+        degraded = Enum.map(bad_keys, &degraded_entry(&1, block))
+        # Good keys keep source order; bad keys are dropped from `values`/
+        # `order` but preserved via `degraded` (raw passthrough is Task 3).
+        good_order = Enum.filter(order, &Map.has_key?(values, &1))
+        {:ok, good_order, values, degraded}
 
       _ ->
         :error
     end
+  end
+
+  # Best-effort source location + raw slice for a top-level key that failed
+  # to encode. Falls back to the bare key when the source line can't be
+  # found (e.g. a key that only exists after YAML alias/anchor expansion).
+  defp degraded_entry(key, block) do
+    lines = String.split(block, "\n")
+    idx = Enum.find_index(lines, fn l -> Regex.match?(~r/^#{Regex.escape(key)}\s*:/, l) end)
+
+    {line, snippet} =
+      case idx do
+        nil -> {nil, key}
+        i -> {i + 1, Enum.at(lines, i)}
+      end
+
+    %{key: key, line: line, snippet: snippet}
   end
 
   # Encode each key's value to a JSON string. Total: a value (or exotic key inside

@@ -40,11 +40,11 @@ defmodule Engram.Notes.FrontmatterTest do
   describe "parse/1" do
     test "returns ordered keys and JSON-encoded values" do
       assert Frontmatter.parse("title: Hi\ntags:\n  - a\n  - b\n") ==
-               {:ok, ["title", "tags"], %{"title" => "\"Hi\"", "tags" => "[\"a\",\"b\"]"}}
+               {:ok, ["title", "tags"], %{"title" => "\"Hi\"", "tags" => "[\"a\",\"b\"]"}, []}
     end
 
     test "empty block yields empty order and values" do
-      assert Frontmatter.parse("") == {:ok, [], %{}}
+      assert Frontmatter.parse("") == {:ok, [], %{}, []}
     end
 
     test "malformed yaml returns :error" do
@@ -53,26 +53,46 @@ defmodule Engram.Notes.FrontmatterTest do
 
     test "nested map value encodes to JSON, nested keys do not appear in order" do
       result = Frontmatter.parse("meta:\n  author: Todd\n")
-      assert result == {:ok, ["meta"], %{"meta" => "{\"author\":\"Todd\"}"}}
+      assert result == {:ok, ["meta"], %{"meta" => "{\"author\":\"Todd\"}"}, []}
     end
 
     test "nested map value uses recursively sorted keys (canonical JSON, matches plugin)" do
       result = Frontmatter.parse("meta:\n  b: 2\n  a: 1\n")
-      assert result == {:ok, ["meta"], %{"meta" => "{\"a\":1,\"b\":2}"}}
+      assert result == {:ok, ["meta"], %{"meta" => "{\"a\":1,\"b\":2}"}, []}
     end
 
     test "deeply nested map value uses recursively sorted keys at all levels" do
       result = Frontmatter.parse("outer:\n  z:\n    y: 1\n    x: 2\n")
-      assert result == {:ok, ["outer"], %{"outer" => "{\"z\":{\"x\":2,\"y\":1}}"}}
+      assert result == {:ok, ["outer"], %{"outer" => "{\"z\":{\"x\":2,\"y\":1}}"}, []}
     end
 
     test "inline colon in value extracts key correctly" do
       result = Frontmatter.parse("url: https://example.com\n")
-      assert result == {:ok, ["url"], %{"url" => "\"https://example.com\""}}
+      assert result == {:ok, ["url"], %{"url" => "\"https://example.com\""}, []}
     end
 
     test "bare list (not a map) returns :error" do
       assert Frontmatter.parse("- a\n- b\n") == :error
+    end
+
+    test "parse/1 reports degraded keys with snippet + line, keeps good keys" do
+      # `date`'s value is a nested map with a non-binary (list) key, which
+      # YAML supports (flow complex-key syntax) but JSON cannot express, so
+      # encode_values/1 collects it into bad_keys instead of raising.
+      block = "tags:\n  - a\ndate: {[a, b]: 1}\n"
+      assert {:ok, order, values, degraded} = Frontmatter.parse(block)
+      assert "tags" in order
+      assert values["tags"] == ~s(["a"])
+      assert [%{key: "date", snippet: "date: {[a, b]: 1}", line: 3}] = degraded
+      refute Map.has_key?(values, "date")
+    end
+
+    test "parse/1 returns :error only for non-map YAML" do
+      assert :error = Frontmatter.parse("just a scalar\n")
+    end
+
+    test "parse/1 empty block" do
+      assert {:ok, [], %{}, []} = Frontmatter.parse("")
     end
   end
 
@@ -81,7 +101,7 @@ defmodule Engram.Notes.FrontmatterTest do
       order = ["title", "tags"]
       values = %{"title" => "\"Hi\"", "tags" => "[\"a\",\"b\"]"}
       block = Frontmatter.emit(order, values)
-      assert {:ok, ^order, ^values} = Frontmatter.parse(block)
+      assert {:ok, ^order, ^values, []} = Frontmatter.parse(block)
     end
 
     test "empty inputs emit an empty string" do
@@ -92,14 +112,14 @@ defmodule Engram.Notes.FrontmatterTest do
       order = ["title", "missing_key"]
       values = %{"title" => "\"Hello\""}
       block = Frontmatter.emit(order, values)
-      assert {:ok, ["title"], %{"title" => "\"Hello\""}} = Frontmatter.parse(block)
+      assert {:ok, ["title"], %{"title" => "\"Hello\""}, []} = Frontmatter.parse(block)
     end
 
     test "nested map value round-trips" do
       order = ["meta"]
       values = %{"meta" => "{\"author\":\"Todd\"}"}
       block = Frontmatter.emit(order, values)
-      assert {:ok, ^order, ^values} = Frontmatter.parse(block)
+      assert {:ok, ^order, ^values, []} = Frontmatter.parse(block)
     end
 
     test "emit tolerates a non-JSON string value (degrades to raw string)" do
@@ -109,7 +129,7 @@ defmodule Engram.Notes.FrontmatterTest do
 
     test "degraded non-JSON string round-trips stably" do
       out = Frontmatter.emit(["k"], %{"k" => "not json"})
-      {:ok, order, values} = Frontmatter.parse(out)
+      {:ok, order, values, []} = Frontmatter.parse(out)
       assert Frontmatter.emit(order, values) == out
     end
 

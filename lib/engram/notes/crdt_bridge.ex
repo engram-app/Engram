@@ -241,7 +241,7 @@ defmodule Engram.Notes.CrdtBridge do
 
     {order, values, body} =
       case fm_block && Frontmatter.parse(fm_block) do
-        {:ok, order, values} -> {order, values, body}
+        {:ok, order, values, _degraded} -> {order, values, body}
         # nil (no frontmatter) or :error (malformed) -> whole text is body
         _ -> {[], %{}, plaintext}
       end
@@ -271,7 +271,7 @@ defmodule Engram.Notes.CrdtBridge do
 
       {fm_block, rest} ->
         case Frontmatter.parse(fm_block) do
-          {:ok, order, values} ->
+          {:ok, order, values, _degraded} ->
             map = Yex.Doc.get_map(doc, @frontmatter_name)
             arr = Yex.Doc.get_array(doc, @order_name)
             existing = Yex.Map.to_map(map)
