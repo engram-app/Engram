@@ -115,7 +115,9 @@ defmodule Engram.Notes.Frontmatter do
   key to point at, so `detail.key` is nil and the snippet is the block's
   first line.
   """
-  @spec invalid_yaml_reason(String.t()) :: map()
+  @spec invalid_yaml_reason(String.t()) :: %{
+          String.t() => String.t() | %{String.t() => String.t() | pos_integer() | nil}
+        }
   def invalid_yaml_reason(block) when is_binary(block) do
     first_line = block |> String.split("\n", parts: 2) |> hd()
 
