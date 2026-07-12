@@ -91,6 +91,15 @@ defmodule Engram.Notes.FrontmatterTest do
       assert :error = Frontmatter.parse("just a scalar\n")
     end
 
+    test "parse/1 stays total when a top-level KEY is itself non-binary" do
+      # Flow-style complex mapping key: a valid YAML map whose top-level key is
+      # a list, not a string. It cannot be JSON-encoded, so it must degrade
+      # (not raise) even though degraded_entry can't regex-match a non-binary.
+      assert {:ok, _order, values, degraded} = Frontmatter.parse("{[a, b]: 1}: {[c, d]: 2}\n")
+      assert values == %{}
+      assert [%{key: _, line: nil, snippet: _}] = degraded
+    end
+
     test "parse/1 empty block" do
       assert {:ok, [], %{}, []} = Frontmatter.parse("")
     end

@@ -80,6 +80,13 @@ defmodule Engram.Notes.Frontmatter do
   # Best-effort source location + raw slice for a top-level key that failed
   # to encode. Falls back to the bare key when the source line can't be
   # found (e.g. a key that only exists after YAML alias/anchor expansion).
+  # A top-level YAML key can itself be a non-binary (flow-style complex key
+  # like `[a, b]:`). Regex.escape/1 only accepts binaries, so guard first to
+  # keep parse/1 total: report the inspected key, no source line.
+  defp degraded_entry(key, _block) when not is_binary(key) do
+    %{key: inspect(key), line: nil, snippet: inspect(key)}
+  end
+
   defp degraded_entry(key, block) do
     lines = String.split(block, "\n")
     idx = Enum.find_index(lines, fn l -> Regex.match?(~r/^#{Regex.escape(key)}\s*:/, l) end)
