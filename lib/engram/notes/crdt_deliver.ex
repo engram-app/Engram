@@ -62,16 +62,18 @@ defmodule Engram.Notes.CrdtDeliver do
     # the user's next real edit as an echo — silently dropping the write. Those
     # files sync via the legacy push path, so only deliver/announce for `.md`.
     if String.ends_with?(path, ".md") do
-      # A live room applies the committed state, and its `update_v1` already fans
-      # the resulting delta out over the SAME per-vault `sync:` channel. So the
-      # full-state `fanout_idle` is only needed when NO room exists (the
-      # first-delivery leg the room fan-out cannot cover) — running it alongside a
-      # live room would re-broadcast (and re-decrypt) the same note redundantly.
-      case push_to_live_room(user_id, note_id, content) do
-        :no_room -> fanout_idle(user_id, vault_id, note_id)
-        :room -> :ok
-      end
-
+      push_to_live_room(user_id, note_id, content)
+      # fanout_idle ALWAYS runs, even when a live room exists. It is NOT redundant
+      # with the room's `update_v1`: `update_v1` broadcasts a DELTA (converges a
+      # device that already holds the note, via gap-heal), while `fanout_idle`
+      # broadcasts FULL STATE — the only thing that makes a device which has NEVER
+      # seen the note history-FULL. Gating this off when a room exists left a
+      # first-delivery device history-LESS (delta into an empty doc), so a
+      # concurrent edit resolved to keep-both instead of a clean CRDT merge
+      # (e2e test_concurrent_edits_both_survive). The two broadcasts serve
+      # different device populations; the double-delivery for a device that has
+      # both is an idempotent Yjs re-apply.
+      fanout_idle(user_id, vault_id, note_id)
       announce(user_id, vault_id, note_id)
     end
 
@@ -144,13 +146,10 @@ defmodule Engram.Notes.CrdtDeliver do
   # the doubling corruption this module exists to prevent, and the announce
   # (step 2) still fires so enrolled clients re-pull. Every skip is logged at
   # :error (Sentry-visible) — a sustained fallback rate must be loud.
-  # Returns `:no_room` when no live room exists (the caller then runs the
-  # full-state `fanout_idle`), or `:room` when a room was found — its `update_v1`
-  # fans the delta out, so the caller skips the redundant idle fan-out.
   defp push_to_live_room(user_id, note_id, content) do
     case CrdtRegistry.lookup(note_id) do
       nil ->
-        :no_room
+        :ok
 
       room ->
         case load_merged_state(user_id, note_id) do
@@ -201,8 +200,6 @@ defmodule Engram.Notes.CrdtDeliver do
             # and the room must not survive: see quarantine_room/3.
             quarantine_room(room, note_id, reason)
         end
-
-        :room
     end
   end
 

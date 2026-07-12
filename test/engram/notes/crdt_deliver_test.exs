@@ -241,23 +241,31 @@ defmodule Engram.Notes.CrdtDeliverTest do
       assert_receive %Phoenix.Socket.Broadcast{event: "crdt_doc_ready"}, 1000
     end
 
-    test "does NOT fan out the redundant note_yjs_update when a live room exists",
+    test "STILL fans out full state even when a live room exists (first-delivery coverage)",
          %{user: user, vault: vault} do
-      # A live room's own update_v1 fans the delta out over the SAME per-vault
-      # sync topic, so the full-state fanout_idle is gated off — else the same
-      # write re-broadcasts (and re-decrypts) the note. (The bare test room has no
-      # persistence, so update_v1 doesn't fire here; the point is only that the
-      # redundant fanout_idle does not.)
+      # fanout_idle is NOT gated off when a room exists: update_v1 only ships a
+      # DELTA, which converges a device that already holds the note, whereas the
+      # full-state fan-out is the only thing that makes a NEVER-SEEN device
+      # history-full. Suppressing it left first-delivery devices history-less and
+      # a concurrent edit resolved to keep-both instead of a clean merge (e2e
+      # test_concurrent_edits_both_survive). The double-delivery for a device that
+      # has both is an idempotent Yjs re-apply.
       {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "body"})
       _room = start_bare_room(note.id, "")
 
-      # Subscribe AFTER upsert so the upsert's own (room-less) fan-out is not
-      # counted — we only measure this direct deliver_out, which has a live room.
+      # Subscribe AFTER upsert so only this direct deliver_out (with a live room)
+      # is measured.
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
       assert :ok = CrdtDeliver.deliver_out(user.id, vault.id, "r.md", note.id, "body")
 
-      refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "note_yjs_update",
+                       payload: %{"note_id" => note_id}
+                     },
+                     1000
+
+      assert note_id == note.id
     end
   end
 
