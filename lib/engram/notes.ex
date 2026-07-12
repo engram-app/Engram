@@ -929,8 +929,8 @@ defmodule Engram.Notes do
     # statement here (next_seq!'s UPDATE, or the Repo.update) rolls back to a
     # per-statement savepoint instead of poisoning the shared batch tx into
     # 25P02 and falsely failing sibling entries. Empty (default) on the
-    # single-note path, which owns its whole tx — no siblings to protect, no
-    # savepoint round-trip to pay for.
+    # single-note path, which owns its whole tx (no siblings to protect, no
+    # savepoint round-trip to pay for).
     db_opts =
       case Keyword.get(opts, :db_mode) do
         nil -> []
@@ -2074,7 +2074,7 @@ defmodule Engram.Notes do
   # (frontmatter parsing) was already made impossible by the total codec in
   # Frontmatter (Task 1). This exists for whatever future parser/crypto/CRDT
   # call in `fun` raises next, and it cleanly isolates that raise to ONE entry
-  # (per-note error result, siblings commit) — including a raise that came
+  # (per-note error result, siblings commit), including a raise that came
   # from a FAILED SQL STATEMENT, which a bare try/rescue could not contain.
   #
   # The batch runs each entry inside the SHARED Repo.with_tenant tx. Per-entry
@@ -2098,7 +2098,7 @@ defmodule Engram.Notes do
   #     unique_constraint), but the guarantee no longer depends on that.
   #
   # NOTE: a bare nested `Repo.transaction` does NOT isolate a failed RAW query
-  # (`Repo.query!`) — DBConnection breaks the connection and disconnects. Only
+  # (`Repo.query!`): DBConnection breaks the connection and disconnects. Only
   # `mode: :savepoint` on the failing operation recovers cleanly, which is why
   # the isolation lives on the DB writes, not around `fun`.
   #

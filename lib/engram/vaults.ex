@@ -110,7 +110,7 @@ defmodule Engram.Vaults do
   write it stamps (and inherits RLS tenant context). The row-level lock on
   the vault row serializes seq assignment per vault.
 
-  `opts` is passed straight to `Repo.query!/3` — the batch upsert path passes
+  `opts` is passed straight to `Repo.query!/3`. The batch upsert path passes
   `mode: :savepoint` so a failed bump (e.g. bigint overflow) rolls back to a
   per-statement savepoint instead of poisoning the shared batch transaction.
   """

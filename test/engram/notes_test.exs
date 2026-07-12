@@ -180,7 +180,7 @@ defmodule Engram.NotesTest do
       assert rows_after_poison == rows_after_good
     end
 
-    # Task 4: a plain `raise` (above) never poisons the shared tx — but a
+    # Task 4: a plain `raise` (above) never poisons the shared tx, but a
     # FAILED SQL STATEMENT does (Postgres flips the whole tx into 25P02
     # in_failed_sql_transaction, so every subsequent statement in the SAME tx
     # fails too). Driven end-to-end through the real batch path: one entry's
@@ -204,7 +204,7 @@ defmodule Engram.NotesTest do
       assert Enum.all?(seed, &(&1.status == :ok))
 
       # Prime the next per-entry next_seq! UPDATE to overflow: change_seq is a
-      # bigint; `change_seq + 1` at MAX raises SQLSTATE 22003 — a real failed
+      # bigint; `change_seq + 1` at MAX raises SQLSTATE 22003, a real failed
       # SQL statement mid-transaction, not a bare raise.
       {:ok, _} =
         Engram.Repo.with_tenant(user.id, fn ->
@@ -216,7 +216,7 @@ defmodule Engram.NotesTest do
 
       log =
         capture_log(fn ->
-          # keep.md is a byte-identical re-push (idempotent_repush — no
+          # keep.md is a byte-identical re-push (idempotent_repush, no
           # next_seq!, commits as a no-op :ok). poison.md changes content, so
           # its UPDATE branch calls next_seq! → overflow. Neither is a new
           # insert, so the post-loop insert_all (its own next_seq!) is skipped.
