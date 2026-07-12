@@ -52,6 +52,45 @@ defmodule Engram.Notes.CrdtDeliverTest do
     end
   end
 
+  describe "deliver_out — vault-channel fan-out (idle first-delivery)" do
+    test "a REST write broadcasts note_yjs_update carrying the committed state on the sync topic",
+         %{user: user, vault: vault} do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "fan.md",
+          "content" => "# Fan\n\nfanout body"
+        })
+
+      # note_changed fires first (maps + confirms the id on the client); the
+      # fan-out note_yjs_update follows on the SAME topic (ordered), carrying the
+      # full committed Yjs state so an idle device converges room-free.
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_yjs_update",
+        payload: %{"note_id" => note_id, "b64" => b64}
+      }
+
+      assert note_id == note.id
+      state = Base.decode64!(b64)
+      assert byte_size(state) > 0
+      {:ok, doc} = CrdtBridge.doc_from_state(state)
+      text = doc |> Yex.Doc.get_text(CrdtBridge.text_name()) |> Yex.Text.to_string()
+      assert text =~ "fanout body"
+    end
+
+    test "does NOT fan out for a non-.md note", %{user: user, vault: vault} do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      note_id = Ecto.UUID.generate()
+
+      assert :ok = CrdtDeliver.deliver_out(user.id, vault.id, "board.canvas", note_id, "x")
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 100
+    end
+  end
+
   describe "announce_ready/4 — discovery-only (checkpoint path)" do
     test "announces crdt_doc_ready for a .md note without touching any room",
          %{user: user, vault: vault} do
