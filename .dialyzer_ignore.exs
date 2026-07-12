@@ -29,5 +29,5 @@
   # bricked note (emit/2 must stay total). Verified by deleting the clause —
   # it breaks "emit degrades an unserializable value instead of raising" and
   # "emit tolerates a non-binary value" in frontmatter_test.exs.
-  {"lib/engram/notes/frontmatter.ex", :pattern_match_cov, {408, 8}}
+  {"lib/engram/notes/frontmatter.ex", :pattern_match_cov, {418, 8}}
 ]
