@@ -240,9 +240,12 @@ defmodule Engram.Notes.CrdtBridge do
     {fm_block, body} = Frontmatter.split(plaintext)
 
     {order, values, body} =
-      case fm_block && Frontmatter.parse(fm_block) do
-        {:ok, order, values, _degraded} -> {order, values, body}
-        # nil (no frontmatter) or :error (malformed) -> whole text is body
+      case fm_block && Frontmatter.parse_for_ingest(fm_block) do
+        # Degraded keys are stored as raw-passthrough markers so emit re-renders
+        # them verbatim (nothing lost). :error means no frontmatter, malformed,
+        # or a degraded key whose raw span can't be captured losslessly -> keep
+        # the whole text as body, which is also lossless.
+        {:ok, order, values} -> {order, values, body}
         _ -> {[], %{}, plaintext}
       end
 

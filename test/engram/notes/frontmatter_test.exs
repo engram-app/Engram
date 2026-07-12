@@ -151,6 +151,69 @@ defmodule Engram.Notes.FrontmatterTest do
       out = Frontmatter.emit(["k"], %{"k" => 42})
       assert out =~ "k:"
     end
+
+    test "emit renders a raw-passthrough marker verbatim" do
+      order = ["tags", "date"]
+      values = %{"tags" => ~s(["a"]), "date" => Frontmatter.raw_marker("date: {[a, b]: 1}")}
+      # Good key emits canonically (Ymlr 2-space list indent); the degraded
+      # key's raw source is re-rendered byte-for-byte (never via Ymlr).
+      assert Frontmatter.emit(order, values) == "tags:\n  - a\ndate: {[a, b]: 1}\n"
+    end
+
+    test "emit renders a MULTI-LINE raw-passthrough marker verbatim" do
+      order = ["date"]
+      values = %{"date" => Frontmatter.raw_marker("date:\n  [a, b]: 1")}
+      assert Frontmatter.emit(order, values) == "date:\n  [a, b]: 1\n"
+    end
+  end
+
+  describe "raw marker helpers" do
+    test "raw_marker/raw_from_marker round-trip (incl. multi-line)" do
+      m = Frontmatter.raw_marker("date:\n  [a, b]: 1")
+      assert Frontmatter.raw_from_marker(m) == {:ok, "date:\n  [a, b]: 1"}
+    end
+
+    test "raw_from_marker rejects non-markers" do
+      assert Frontmatter.raw_from_marker("not json") == :error
+      assert Frontmatter.raw_from_marker(~s({"other":"x"})) == :error
+      assert Frontmatter.raw_from_marker(~s(["a"])) == :error
+    end
+  end
+
+  describe "parse_for_ingest/1" do
+    test "empty block yields empty order and values" do
+      assert Frontmatter.parse_for_ingest("") == {:ok, [], %{}}
+    end
+
+    test "good-only block behaves like the structured parse path" do
+      assert Frontmatter.parse_for_ingest("title: Hi\ntags:\n  - a\n") ==
+               {:ok, ["title", "tags"], %{"title" => "\"Hi\"", "tags" => "[\"a\"]"}}
+    end
+
+    test "a degraded key is stored as a raw-passthrough marker at its source position" do
+      assert {:ok, ["tags", "date"], values} =
+               Frontmatter.parse_for_ingest("tags:\n  - a\ndate: {[a, b]: 1}\n")
+
+      assert values["tags"] == ~s(["a"])
+      assert Frontmatter.raw_from_marker(values["date"]) == {:ok, "date: {[a, b]: 1}"}
+    end
+
+    test "a MULTI-LINE degraded value captures its full source span" do
+      assert {:ok, ["tags", "date"], values} =
+               Frontmatter.parse_for_ingest("tags:\n  - a\ndate:\n  [a, b]: 1\n")
+
+      assert Frontmatter.raw_from_marker(values["date"]) == {:ok, "date:\n  [a, b]: 1"}
+    end
+
+    test "returns :error (caller falls back to body) when a degraded key cannot be located" do
+      # Non-binary top-level key: valid YAML map, but the degraded key has no
+      # column-0 source line, so an exact raw span cannot be guaranteed.
+      assert Frontmatter.parse_for_ingest("{[a, b]: 1}: {[c, d]: 2}\n") == :error
+    end
+
+    test "non-map YAML returns :error" do
+      assert Frontmatter.parse_for_ingest("just a scalar\n") == :error
+    end
   end
 
   describe "encode_values/1 leniency" do

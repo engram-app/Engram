@@ -87,6 +87,30 @@ defmodule Engram.Notes.CrdtBridgeTest do
     end
   end
 
+  describe "degraded frontmatter key raw passthrough (lossless round-trip)" do
+    test "single-line degraded value round-trips byte-identical" do
+      doc = CrdtBridge.new_doc()
+      original = "---\ntags:\n  - a\ndate: {[a, b]: 1}\n---\nbody text\n"
+      :ok = CrdtBridge.ingest_plaintext(doc, original)
+      assert CrdtBridge.text_of(doc) == original
+    end
+
+    test "multi-line degraded value round-trips byte-identical" do
+      doc = CrdtBridge.new_doc()
+      original = "---\ntags:\n  - a\ndate:\n  [a, b]: 1\n---\nbody text\n"
+      :ok = CrdtBridge.ingest_plaintext(doc, original)
+      assert CrdtBridge.text_of(doc) == original
+    end
+
+    test "un-locatable degraded key falls back to whole-text-as-body (still lossless)" do
+      doc = CrdtBridge.new_doc()
+      original = "---\n{[a, b]: 1}: {[c, d]: 2}\n---\nbody text\n"
+      :ok = CrdtBridge.ingest_plaintext(doc, original)
+      assert CrdtBridge.frontmatter_of(doc) == {[], %{}}
+      assert CrdtBridge.text_of(doc) == original
+    end
+  end
+
   describe "project_doc/1" do
     test "round-trips ingest then project back to equivalent plaintext" do
       doc = CrdtBridge.new_doc()

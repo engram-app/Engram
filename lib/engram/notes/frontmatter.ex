@@ -9,6 +9,13 @@ defmodule Engram.Notes.Frontmatter do
   @fence_line_pattern ~r/\n---[ \t]*\r?\n/
   @fence_eof_pattern ~r/\n---[ \t]*\r?$/
 
+  # A column-0 `key:` line. Same shape top_level_key_order/2 keys on.
+  @top_key_pattern ~r/^([^\s:][^:]*):/
+
+  # Marker envelope for a degraded key's raw source, preserved verbatim so
+  # emit re-renders it byte-for-byte instead of dropping it.
+  @raw_key "__engram_raw__"
+
   @doc """
   Split a note into its frontmatter YAML block (text between the fences, without
   the `---` lines) and its body. Returns `{nil, full_text}` when there is no
@@ -75,6 +82,136 @@ defmodule Engram.Notes.Frontmatter do
       _ ->
         :error
     end
+  end
+
+  @doc "Wrap a degraded key's raw source so emit/2 re-renders it verbatim."
+  @spec raw_marker(String.t()) :: String.t()
+  def raw_marker(raw) when is_binary(raw), do: Jason.encode!(%{@raw_key => raw})
+
+  @doc """
+  Unwrap a raw-passthrough marker. `{:ok, raw}` for a marker produced by
+  `raw_marker/1`; `:error` for any other string (a normal JSON value).
+  """
+  @spec raw_from_marker(String.t()) :: {:ok, String.t()} | :error
+  def raw_from_marker(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, %{@raw_key => raw}} when is_binary(raw) -> {:ok, raw}
+      _ -> :error
+    end
+  end
+
+  def raw_from_marker(_), do: :error
+
+  @doc """
+  Parse a frontmatter block for CRDT ingest, preserving degraded keys as raw
+  passthrough so nothing is lost when the Y.Map re-emits the note.
+
+  Returns `{:ok, order, values}` where `order` is the full source order of all
+  top-level keys and `values` maps each key to either its JSON-encoded value
+  (good keys) or a `raw_marker/1` of its verbatim source span (degraded keys).
+
+  Returns `:error` when the block is not a YAML map, OR when a degraded key's
+  raw source span cannot be captured losslessly (its column-0 line-tiling is
+  ambiguous with the parsed key set, e.g. a non-binary top-level key or a
+  multi-line flow value with an unindented continuation). The caller then
+  falls back to storing the whole text as body, which is also lossless.
+  """
+  @spec parse_for_ingest(String.t()) ::
+          {:ok, [String.t()], %{String.t() => String.t()}} | :error
+  def parse_for_ingest(""), do: {:ok, [], %{}}
+
+  def parse_for_ingest(block) when is_binary(block) do
+    case YamlElixir.read_from_string(block) do
+      {:ok, map} when is_map(map) ->
+        {values, bad_keys} = encode_values(map)
+
+        if bad_keys == [] do
+          # No degraded keys: keep the existing structured behaviour exactly.
+          {:ok, top_level_key_order(block, map), values}
+        else
+          ingest_with_passthrough(block, map, values, bad_keys)
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  # Degraded keys present: require an exact column-0 line-tiling of the block
+  # so each degraded key's raw source span is captured byte-for-byte.
+  defp ingest_with_passthrough(block, map, values, bad_keys) do
+    case raw_spans(block, map) do
+      {:ok, order, spans} ->
+        merged =
+          Enum.reduce(bad_keys, values, fn key, acc ->
+            case Map.fetch(spans, key) do
+              {:ok, raw} -> Map.put(acc, key, raw_marker(raw))
+              :error -> acc
+            end
+          end)
+
+        # Every degraded key must have a captured span, else it would vanish.
+        if Enum.all?(bad_keys, &Map.has_key?(merged, &1)),
+          do: {:ok, order, merged},
+          else: :error
+
+      :error ->
+        :error
+    end
+  end
+
+  # Tile the block by its column-0 `key:` lines. Returns `{:ok, order, spans}`
+  # only when that tiling is a bijection with the parsed map's keys (source
+  # order preserved), so each key owns exactly the lines from its own line up
+  # to the next key's line: a lossless span. Any ambiguity returns :error.
+  defp raw_spans(block, map) do
+    lines = String.split(block, "\n")
+
+    keyed =
+      lines
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {line, i} ->
+        case Regex.run(@top_key_pattern, line) do
+          [_, key] -> [{i, key}]
+          _ -> []
+        end
+      end)
+
+    col0_keys = Enum.map(keyed, fn {_i, k} -> k end)
+
+    if tileable?(keyed, col0_keys, map) do
+      idxs = Enum.map(keyed, fn {i, _k} -> i end)
+      bounds = Enum.zip(keyed, tl(idxs) ++ [length(lines)])
+
+      spans =
+        Map.new(bounds, fn {{i, key}, next} ->
+          # Strip only the single structural newline the trailing "" split
+          # element added, so an intentional blank line inside the value
+          # survives. emit/2 re-adds exactly one via ensure_trailing_newline/1.
+          raw =
+            lines
+            |> Enum.slice(i, next - i)
+            |> Enum.join("\n")
+            |> String.replace_suffix("\n", "")
+
+          {key, raw}
+        end)
+
+      {:ok, col0_keys, spans}
+    else
+      :error
+    end
+  end
+
+  # Exact tiling: first line is a key, no duplicate column-0 keys, and the
+  # column-0 key set is exactly the parsed map's key set (so no map key lives
+  # only in an alias/anchor, and no value's continuation masquerades as a key).
+  defp tileable?(keyed, col0_keys, map) do
+    keyed != [] and
+      elem(hd(keyed), 0) == 0 and
+      length(Enum.uniq(col0_keys)) == length(col0_keys) and
+      length(col0_keys) == map_size(map) and
+      MapSet.new(col0_keys) == MapSet.new(Map.keys(map))
   end
 
   # Best-effort source location + raw slice for a top-level key that failed
@@ -174,19 +311,31 @@ defmodule Engram.Notes.Frontmatter do
   def emit(order, values) when is_list(order) and is_map(values) do
     order
     |> Enum.filter(&Map.has_key?(values, &1))
-    |> Enum.map_join("", fn key ->
-      decoded = decode_value(values[key])
-
-      try do
-        Ymlr.document!(%{key => decoded}, sort_maps: false)
-        |> String.replace_prefix("---\n", "")
-      rescue
-        # Last resort for values Ymlr cannot serialize (e.g. Yex container
-        # refs): degrade to the inspected form rather than bricking the note.
-        _ -> "#{key}: #{inspect(decoded)}\n"
-      end
-    end)
+    |> Enum.map_join("", fn key -> emit_key(key, values[key]) end)
     |> ensure_trailing_newline()
+  end
+
+  # A degraded key is re-rendered from its verbatim source span (never via
+  # Ymlr, which would canonicalize/lose it); a good key is decoded then emitted
+  # as canonical YAML. ensure_trailing_newline/1 normalizes the final newline
+  # for both so a marker with or without a trailing newline round-trips.
+  defp emit_key(key, value) do
+    case raw_from_marker(value) do
+      {:ok, raw} ->
+        ensure_trailing_newline(raw)
+
+      :error ->
+        decoded = decode_value(value)
+
+        try do
+          Ymlr.document!(%{key => decoded}, sort_maps: false)
+          |> String.replace_prefix("---\n", "")
+        rescue
+          # Last resort for values Ymlr cannot serialize (e.g. Yex container
+          # refs): degrade to the inspected form rather than bricking the note.
+          _ -> "#{key}: #{inspect(decoded)}\n"
+        end
+    end
   end
 
   # Y.Map values are client-controlled: a buggy or hostile peer can store a
