@@ -89,6 +89,61 @@ defmodule Engram.Notes.CrdtDeliverTest do
 
       refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 100
     end
+
+    test "a state-less (legacy/lazy) row does NOT fan out note_yjs_update but still announces",
+         %{user: user, vault: vault} do
+      # load_merged_state returns {:ok, nil} for a row with no persisted CRDT
+      # state; the `with {:ok, state} when is_binary(state)` guard skips the
+      # broadcast (nothing to fan out), and the announce still lets enrolled
+      # clients re-pull. Locks the "never crash / graceful skip" fallback.
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "leg.md", "content" => "x"})
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.update_all(from(n in Note, where: n.id == ^note.id),
+            set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+          )
+        end)
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+
+      assert :ok = CrdtDeliver.deliver_out(user.id, vault.id, "leg.md", note.id, "x")
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200
+      assert_receive %Phoenix.Socket.Broadcast{event: "crdt_doc_ready"}, 1000
+    end
+
+    test "a doc_from_state failure still broadcasts the state with head: nil (no raise)",
+         %{user: user, vault: vault} do
+      # Deep-corruption fallback: load_merged_state returns a binary that
+      # doc_from_state cannot parse (a shouldn't-happen state). fanout_idle must
+      # not raise the caller — it broadcasts the state with head: nil, and the
+      # client, unable to advance its watermark, re-pulls via coldReceive.
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "g.md", "content" => "x"})
+
+      {:ok, {ct, nonce}} = Engram.Crypto.encrypt_crdt_state("not a yjs update", user, note.id)
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.update_all(from(n in Note, where: n.id == ^note.id),
+            set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+          )
+        end)
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert :ok = CrdtDeliver.deliver_out(user.id, vault.id, "g.md", note.id, "x")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "note_yjs_update",
+                       payload: %{"note_id" => note_id, "head" => head}
+                     },
+                     1000
+
+      assert note_id == note.id
+      assert head == nil
+    end
   end
 
   describe "announce_ready/4 — discovery-only (checkpoint path)" do
@@ -184,6 +239,25 @@ defmodule Engram.Notes.CrdtDeliverTest do
       # ...but the announce always fires (twice total).
       assert_receive %Phoenix.Socket.Broadcast{event: "crdt_doc_ready"}, 1000
       assert_receive %Phoenix.Socket.Broadcast{event: "crdt_doc_ready"}, 1000
+    end
+
+    test "does NOT fan out the redundant note_yjs_update when a live room exists",
+         %{user: user, vault: vault} do
+      # A live room's own update_v1 fans the delta out over the SAME per-vault
+      # sync topic, so the full-state fanout_idle is gated off — else the same
+      # write re-broadcasts (and re-decrypts) the note. (The bare test room has no
+      # persistence, so update_v1 doesn't fire here; the point is only that the
+      # redundant fanout_idle does not.)
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "body"})
+      _room = start_bare_room(note.id, "")
+
+      # Subscribe AFTER upsert so the upsert's own (room-less) fan-out is not
+      # counted — we only measure this direct deliver_out, which has a live room.
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert :ok = CrdtDeliver.deliver_out(user.id, vault.id, "r.md", note.id, "body")
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200
     end
   end
 

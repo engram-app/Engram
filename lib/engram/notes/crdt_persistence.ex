@@ -133,6 +133,17 @@ defmodule Engram.Notes.CrdtPersistence do
         # the client advance its per-note watermark without a REST round-trip.
         # Self-echo is harmless: the client applies with REMOTE_ORIGIN (no
         # re-broadcast) and Yjs re-apply is a no-op.
+        #
+        # NOTE — `b64` here is the DELTA (this single update), paired with the
+        # FULL post-apply `head`. `CrdtDeliver.fanout_idle` sends FULL state under
+        # the same contract. A device behind the delta's causal deps (it never
+        # STEP1-enrolled and missed an earlier update) PENDS the delta in Yjs, so
+        # it does NOT actually reach `head`. The client MUST NOT blind-trust `head`
+        # in that case: `applyPushedNoteUpdate` checks `hasPendingGap` post-apply
+        # and, on a gap, pulls the full delta from its real state vector and
+        # advances the watermark only to the head it truly reached (plugin
+        # `e2304ed`). Without that client guard, the cheap cold-reconcile hash gate
+        # would skip a silently-partial note.
         Broadcast.emit(
           "sync:#{user_id}:#{vault_id}",
           "note_yjs_update",
