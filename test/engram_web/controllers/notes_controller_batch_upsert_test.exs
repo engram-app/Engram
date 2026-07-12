@@ -60,6 +60,27 @@ defmodule EngramWeb.NotesControllerBatchUpsertTest do
       |> json_response(400)
     end
 
+    test "echoes parse_status + parse_reason per note (ok and degraded)", %{conn: conn} do
+      notes = [
+        %{path: "clean.md", content: "---\ntags: [a]\n---\nx\n", mtime: 1.0},
+        %{path: "degraded.md", content: "---\ndate:YYYY-MM-DD\n---\nx\n", mtime: 1.0}
+      ]
+
+      body =
+        conn
+        |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
+        |> post(~p"/api/notes/batch", %{notes: notes})
+        |> json_response(200)
+
+      assert [clean, degraded] = body["results"]
+      assert clean["parse_status"] == "ok"
+      assert clean["parse_reason"] == nil
+
+      assert degraded["parse_status"] == "degraded"
+      assert degraded["parse_reason"]["code"] == "frontmatter_invalid_yaml"
+      assert degraded["parse_reason"]["detail"]["snippet"] == "date:YYYY-MM-DD"
+    end
+
     test "oversized note becomes a per-note error without failing the batch", %{conn: conn} do
       big = String.duplicate("a", 10 * 1024 * 1024 + 1)
 

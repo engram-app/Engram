@@ -517,7 +517,9 @@ defmodule EngramWeb.NotesController do
       id: result.id,
       version: result.version,
       content_hash: result.content_hash,
-      server_path: result.server_path
+      server_path: result.server_path,
+      parse_status: result.parse_status,
+      parse_reason: result.parse_reason
     }
   end
 
@@ -690,7 +692,9 @@ defmodule EngramWeb.NotesController do
       description: note.description,
       resource: note.resource,
       fm_timestamp: note.fm_timestamp,
-      fm_created: note.fm_created
+      fm_created: note.fm_created,
+      parse_status: note.parse_status,
+      parse_reason: note.parse_reason
     }
   end
 
@@ -705,7 +709,9 @@ defmodule EngramWeb.NotesController do
       mtime: change.mtime,
       content_hash: change.content_hash,
       deleted: change.deleted,
-      updated_at: change.updated_at
+      updated_at: change.updated_at,
+      parse_status: change.parse_status,
+      parse_reason: change.parse_reason
     }
   end
 

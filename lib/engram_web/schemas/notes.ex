@@ -178,7 +178,18 @@ defmodule EngramWeb.Schemas.BatchUpsertResult do
       content_hash: %Schema{type: :string, nullable: true},
       server_path: %Schema{type: :string, nullable: true},
       errors: %Schema{type: :object, nullable: true},
-      server_note: %Schema{oneOf: [EngramWeb.Schemas.Note], nullable: true}
+      server_note: %Schema{oneOf: [EngramWeb.Schemas.Note], nullable: true},
+      parse_status: %Schema{
+        type: :string,
+        enum: ["ok", "degraded"],
+        nullable: true,
+        description: "Frontmatter parse outcome"
+      },
+      parse_reason: %Schema{
+        type: :object,
+        nullable: true,
+        description: "Present when parse_status is \"degraded\": {code, message, detail}"
+      }
     }
   })
 end

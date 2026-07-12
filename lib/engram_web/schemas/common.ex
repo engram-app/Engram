@@ -43,6 +43,17 @@ defmodule EngramWeb.Schemas.Note do
         format: :"date-time",
         nullable: true,
         description: "OKF frontmatter `created`/`date` field"
+      },
+      parse_status: %Schema{
+        type: :string,
+        enum: ["ok", "degraded"],
+        nullable: true,
+        description: "Frontmatter parse outcome"
+      },
+      parse_reason: %Schema{
+        type: :object,
+        nullable: true,
+        description: "Present when parse_status is \"degraded\": {code, message, detail}"
       }
     },
     required: [:path]
@@ -66,7 +77,18 @@ defmodule EngramWeb.Schemas.NoteMeta do
       version: %Schema{type: :integer, nullable: true},
       content_hash: %Schema{type: :string, nullable: true},
       mtime: %Schema{type: :number, format: :float},
-      updated_at: %Schema{type: :string, format: :"date-time", nullable: true}
+      updated_at: %Schema{type: :string, format: :"date-time", nullable: true},
+      parse_status: %Schema{
+        type: :string,
+        enum: ["ok", "degraded"],
+        nullable: true,
+        description: "Frontmatter parse outcome"
+      },
+      parse_reason: %Schema{
+        type: :object,
+        nullable: true,
+        description: "Present when parse_status is \"degraded\": {code, message, detail}"
+      }
     },
     required: [:path]
   })

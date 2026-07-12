@@ -279,6 +279,43 @@ defmodule EngramWeb.NotesControllerTest do
       assert json_response(conn, 404)
     end
 
+    test "includes parse_status ok + nil reason for a clean note", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _note} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "Clean.md",
+          "content" => "---\ntags: [a]\n---\nx\n",
+          "mtime" => 1.0
+        })
+
+      conn = get(conn, "/api/notes/Clean.md")
+      body = json_response(conn, 200)
+      assert body["parse_status"] == "ok"
+      assert body["parse_reason"] == nil
+    end
+
+    test "includes parse_status degraded + reason detail for a note with bad frontmatter", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _note} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "Degraded.md",
+          "content" => "---\ndate:YYYY-MM-DD\n---\nx\n",
+          "mtime" => 1.0
+        })
+
+      conn = get(conn, "/api/notes/Degraded.md")
+      body = json_response(conn, 200)
+      assert body["parse_status"] == "degraded"
+      assert body["parse_reason"]["code"] == "frontmatter_invalid_yaml"
+      assert body["parse_reason"]["detail"]["snippet"] == "date:YYYY-MM-DD"
+    end
+
     test "returns 404 for deleted note", %{conn: conn} do
       post(conn, "/api/notes", %{path: "Test/Gone.md", content: "# Gone", mtime: 1_000.0})
       delete(conn, "/api/notes/Test/Gone.md")

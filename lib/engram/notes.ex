@@ -62,7 +62,9 @@ defmodule Engram.Notes do
     :user_id,
     :vault_id,
     :created_at,
-    :updated_at
+    :updated_at,
+    :parse_status,
+    :parse_reason
   ]
 
   # Delete-wins window: an identical re-push at a path deleted within this many
@@ -2034,7 +2036,9 @@ defmodule Engram.Notes do
                 prev_hash: nil,
                 updated_at: now,
                 content: merged_text,
-                content_hash: content_hash
+                content_hash: content_hash,
+                parse_status: row.parse_status,
+                parse_reason: row.parse_reason
               }
 
               {%{entry | result: {:ok, info}}, [row | rows]}
@@ -2124,7 +2128,9 @@ defmodule Engram.Notes do
            prev_hash: prev_hash,
            updated_at: updated.updated_at,
            content: merged_text,
-           content_hash: content_hash
+           content_hash: content_hash,
+           parse_status: updated.parse_status,
+           parse_reason: updated.parse_reason
          }}
 
       {:error, changeset} ->
@@ -2332,7 +2338,9 @@ defmodule Engram.Notes do
             content_hash: info.content_hash,
             # Canonical (sanitized) path — differs from `path` when the
             # sanitizer rewrote the input; clients rename local files to it.
-            server_path: entry.path
+            server_path: entry.path,
+            parse_status: info.parse_status,
+            parse_reason: info.parse_reason
           }
 
         {:conflict, existing} ->
@@ -2581,7 +2589,9 @@ defmodule Engram.Notes do
       content: note.content,
       content_hash: note.content_hash,
       deleted: not is_nil(note.deleted_at),
-      updated_at: note.updated_at
+      updated_at: note.updated_at,
+      parse_status: note.parse_status,
+      parse_reason: note.parse_reason
     }
   end
 
