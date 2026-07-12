@@ -109,6 +109,8 @@ defmodule Engram.NotesTest do
   describe "batch_upsert_notes/3 — per-entry raise isolation" do
     import ExUnit.CaptureLog
 
+    # Task 5 regression check (not raise-isolation): parse is now total, so
+    # the historically-500ing poison note commits degraded end-to-end.
     test "a historically-poisonous note commits degraded, sibling commits too", %{
       user: user,
       vault: vault

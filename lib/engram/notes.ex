@@ -2054,24 +2054,46 @@ defmodule Engram.Notes do
 
   # Defense in depth (#task-6): the known raise this guards (frontmatter
   # parsing) was already made impossible by the total codec in Frontmatter
-  # (Task 1) — this exists for whatever future parser/crypto/CRDT call in
-  # `fun` raises next. Isolates that ONE entry to a per-note error result
-  # instead of the raise propagating out of Repo.with_tenant and rolling
-  # back every sibling in the batch. `fun` is a thunk so this stays testable
-  # without a real reachable raise: pass a fn that raises on demand.
+  # (Task 1). This exists for whatever future parser/crypto/CRDT call in
+  # `fun` raises next, and it cleanly isolates a raise to that ONE entry
+  # (per-note error result, siblings commit) for every raise reachable via
+  # public input TODAY:
+  #
+  #   - CREATE branch (build_batch_insert_row): does zero per-entry DB
+  #     writes (the insert_all runs AFTER the loop), so any raise here is
+  #     airtight-isolated.
+  #   - UPDATE branch (update_batch_entry): next_seq!'s only raise-shaped
+  #     hazard is a badmatch on an already-SUCCESSFUL query roundtrip, and
+  #     the realistic path-unique race is caught by unique_constraint, not a
+  #     raise. So no raise reachable today runs a FAILED SQL statement here.
+  #
+  # SCOPE CEILING: this is NOT a blanket "any raise, siblings always commit"
+  # guarantee. next_seq! (UPDATE ... RETURNING) and Repo.update() run
+  # synchronously inside `fun` in the UPDATE branch. If a FUTURE change made
+  # one of those SQL statements actually fail mid-transaction, Postgres would
+  # put the shared tx into 25P02 (in_failed_sql_transaction); we'd catch the
+  # raise here but every SUBSEQUENT entry's statement would then fail too and
+  # be falsely marked note_processing_failed. Isolating a failed-SQL raise
+  # would need per-entry SAVEPOINTs or deferring the UPDATE writes past the
+  # loop. Deliberately NOT built — unreachable today (see above).
+  #
+  # `fun` is a thunk so this stays testable without a real reachable raise:
+  # pass a fn that raises on demand.
   @doc false
   @spec process_batch_entry_rescued(map(), list(), (-> {map(), list()})) :: {map(), list()}
   def process_batch_entry_rescued(entry, rows, fun) do
     fun.()
   rescue
     e ->
-      # Path goes in the message, not just metadata: the console formatter's
-      # metadata allowlist (config.exs) doesn't include `:path`/`:error`, so
-      # a path-only-in-metadata line renders invisibly outside prod's
-      # metadata: :all JSON formatter. Interpolating keeps it Sentry-visible
-      # AND directly greppable/testable in the plain-text console/CI logs.
+      # Path AND exception reason go in the message string, not metadata
+      # alone: neither `:path` nor `:error` is in the Sentry LoggerHandler
+      # metadata allowlist (application.ex), and the console formatter's
+      # allowlist (config.exs) drops them too. Interpolating keeps both
+      # Sentry-visible (on-call sees WHY it raised) AND greppable/testable
+      # in the plain-text console/CI logs. Metadata copies kept for prod's
+      # metadata: :all JSON formatter (Loki structured fields).
       Logger.error(
-        "batch entry raised, degrading note: #{entry.path}",
+        "batch entry raised, degrading note: #{entry.path} (#{Exception.message(e)})",
         Metadata.with_category(:error, :sync,
           path: entry.path,
           error: Exception.message(e)
