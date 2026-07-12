@@ -61,9 +61,11 @@ defmodule Engram.Notes.Frontmatter do
       {:ok, map} when is_map(map) ->
         order = top_level_key_order(block, map)
 
+        # Task 2 will rewrite parse/1 to surface bad_keys. For now keep the
+        # existing {:ok, ...} | :error contract: any bad key means :error.
         case encode_values(map) do
-          {:ok, values} -> {:ok, order, values}
-          :error -> :error
+          {values, []} -> {:ok, order, values}
+          {_values, _bad} -> :error
         end
 
       _ ->
@@ -71,31 +73,49 @@ defmodule Engram.Notes.Frontmatter do
     end
   end
 
-  # Encode all map values to JSON strings. Returns {:ok, values_map} on success,
-  # :error if any value cannot be encoded (unencodable exotic types like tuples).
+  # Encode each key's value to a JSON string. Total: a value (or exotic key inside
+  # a nested map) that Jason cannot encode is COLLECTED into bad_keys instead of
+  # raising or aborting. Returns {values, bad_keys}.
   # Values are deep-sorted before encoding so nested-map keys are canonical
   # (lexicographic, matching JS JSON.stringify with sorted keys in the plugin).
   @doc false
   def encode_values(map) do
-    result =
-      Enum.reduce_while(map, %{}, fn {k, v}, acc ->
-        case Jason.encode(deep_sort(v)) do
-          {:ok, json_str} -> {:cont, Map.put(acc, k, json_str)}
-          {:error, _} -> {:halt, :error}
-        end
-      end)
+    Enum.reduce(map, {%{}, []}, fn {k, v}, {values, bad} ->
+      case safe_encode(v) do
+        {:ok, json_str} -> {Map.put(values, k, json_str), bad}
+        :error -> {values, [k | bad]}
+      end
+    end)
+    |> then(fn {values, bad} -> {values, Enum.reverse(bad)} end)
+  end
 
-    case result do
-      :error -> :error
-      values_map -> {:ok, values_map}
+  # Deep-sort then JSON-encode a value. Jason.encode/1 returns {:error,_} for
+  # some terms but RAISES for others (e.g. a charlist/tuple map KEY ->
+  # List.to_string/Protocol.UndefinedError); deep_sort/1 also raises on a
+  # non-binary map key. deep_sort MUST run inside this rescue so its raise is
+  # trapped too, keeping the codec total.
+  defp safe_encode(term) do
+    case Jason.encode(deep_sort(term)) do
+      {:ok, s} -> {:ok, s}
+      {:error, _} -> :error
     end
+  rescue
+    _ -> :error
   end
 
   # Recursively sort map keys for canonical JSON encoding. Arrays keep their
   # order. Scalars (string, number, bool, nil) are returned as-is. Unencodable
   # values (e.g. tuples) pass through unchanged so Jason.encode still returns
-  # {:error, _} on them, preserving the :halt/:error path in encode_values/1.
+  # {:error, _} on them, routing the key into bad_keys via safe_encode/1.
   defp deep_sort(value) when is_map(value) do
+    # A non-binary map key (e.g. a charlist from exotic YAML like
+    # `date:YYYY-MM-DD`) is not a valid JSON object key. Jason.OrderedObject
+    # would silently coerce it to a string, hiding the bad term. Raise instead
+    # so safe_encode/1 traps it and collects the key into bad_keys.
+    unless Enum.all?(value, fn {k, _} -> is_binary(k) end) do
+      raise ArgumentError, "non-binary map key is not JSON-encodable"
+    end
+
     Jason.OrderedObject.new(
       value
       |> Enum.sort_by(fn {k, _} -> k end)

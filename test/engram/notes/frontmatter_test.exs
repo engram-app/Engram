@@ -124,18 +124,26 @@ defmodule Engram.Notes.FrontmatterTest do
     end
   end
 
-  describe "encode_values/1" do
-    # Route: YamlElixir special floats (.nan/.inf) are parsed to atoms, which
-    # Jason encodes as strings, so they do NOT trigger an encode error. The
-    # encode-failure branch is tested directly via a map containing a tuple
-    # value, which is unencodable by the Jason.Encoder protocol.
-    test "returns :error when a value is unencodable (e.g. a tuple)" do
-      assert Frontmatter.encode_values(%{"key" => {:not, :encodable}}) == :error
+  describe "encode_values/1 leniency" do
+    test "keeps encodable keys and collects the unencodable ones without raising" do
+      map = %{"tags" => ["a", "b"], "weird" => {:a, :tuple}}
+      assert {values, bad_keys} = Frontmatter.encode_values(map)
+      assert values["tags"] == ~s(["a","b"])
+      refute Map.has_key?(values, "weird")
+      assert bad_keys == ["weird"]
     end
 
-    test "returns {:ok, values_map} when all values are encodable" do
-      assert Frontmatter.encode_values(%{"a" => 1, "b" => "hello"}) ==
-               {:ok, %{"a" => "1", "b" => "\"hello\""}}
+    test "an exotic (charlist/tuple) KEY in a nested map is collected, not raised" do
+      # mirrors the yamerl output that 500'd prod (date:YYYY-MM-DD)
+      map = %{"date" => %{~c"tag:yaml.org,2002:str" => "x"}}
+      assert {values, bad_keys} = Frontmatter.encode_values(map)
+      assert bad_keys == ["date"]
+      assert values == %{}
+    end
+
+    test "all-good map returns empty bad_keys" do
+      assert {values, []} = Frontmatter.encode_values(%{"a" => 1, "b" => "s"})
+      assert values == %{"a" => "1", "b" => ~s("s")}
     end
   end
 
