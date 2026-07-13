@@ -1196,9 +1196,11 @@ jobs:
       - name: "Run Obsidian E2E tests"
         if: always()
         working-directory: e2e
-        # -n 2 --dist=loadfile: two xdist workers, each owns whole test files
-        # (preserves intra-file ordering for test_31 restart + test_50 smoke).
-        # E2E_WORKERS defaults to 2 but can be overridden to 1 for rollback.
+        # -n 1 --dist=loadfile: SINGLE worker. Two concurrent workers each drive
+        # their own Obsidian instance doing live Clerk auth + CRDT joins, which
+        # races identity-rebind / auth timing and tips a rotating clerk flake
+        # (#355 — e.g. test_84 crdtJoinFailedReason=unauthorized). Serializing the
+        # suite is the stability lever; set E2E_WORKERS=2 to restore parallelism.
         run: |
           # tests/crdt/ is the CRDT-only suite (spec §12a). It opts the plugin
           # into CRDT and uses eventually-consistent assertions, so it must NOT
@@ -1211,7 +1213,7 @@ jobs:
           K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
           python3 -m pytest tests/ --ignore=tests/api_only/ --ignore=tests/crdt/ \
             "${K_ARGS[@]}" \
-            -n "${E2E_WORKERS:-2}" --dist=loadfile \
+            -n "${E2E_WORKERS:-1}" --dist=loadfile \
             -v --timeout=300 -p no:cacheprovider --no-header
         env:
           E2E_PATTERN: ${{ needs.fingerprint.outputs.e2e-target-pattern }}
