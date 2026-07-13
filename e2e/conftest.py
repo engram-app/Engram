@@ -241,7 +241,11 @@ def resumed_user(ts, auth_provider):
 
     Returns: (email, provider_user_id, api_key)
     """
-    email = f"e2e-resumed-{ts}+clerk_test@example.com"
+    # Short prefix on purpose: `ts` already runs ~44 chars, and the email
+    # local part must stay <= 64 (RFC 5321) or Clerk create_user 422s. With
+    # "+clerk_test" that budgets ~9 chars for the prefix (e2e-sync-/e2e-iso-
+    # sit right at the ceiling); "e2e-rsm-" keeps us at 63.
+    email = f"e2e-rsm-{ts}+clerk_test@example.com"
     password = secrets.token_urlsafe(32)
     provider_user_id, api_key = auth_provider.provision_user(email, password)
     grant_test_plan(email)
