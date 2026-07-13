@@ -18,6 +18,7 @@ defmodule Engram.Notes do
     CrdtDeliver,
     CrdtPersistence,
     Enqueue,
+    Frontmatter,
     Helpers,
     Note,
     PathSanitizer
@@ -61,7 +62,9 @@ defmodule Engram.Notes do
     :user_id,
     :vault_id,
     :created_at,
-    :updated_at
+    :updated_at,
+    :parse_status,
+    :parse_reason
   ]
 
   # Delete-wins window: an identical re-push at a path deleted within this many
@@ -574,6 +577,7 @@ defmodule Engram.Notes do
           phase_b =
             inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, crdt.tags)
             |> inject_okf_fields(user, note_id, crdt.merged_text)
+            |> put_parse_status(crdt.merged_text)
             |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
             |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
@@ -801,6 +805,7 @@ defmodule Engram.Notes do
             crdt.tags
           )
           |> inject_okf_fields(user, prior.id, crdt.merged_text)
+          |> put_parse_status(crdt.merged_text)
           |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
           |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
@@ -873,7 +878,7 @@ defmodule Engram.Notes do
   # CRDT (Yjs) is the only content-sync path: merge_plaintext in do_update_note
   # IS the conflict resolution. A stale client_version never 409s — the diverging
   # write is merged convergently into crdt_state (no legacy conflict-copy flow).
-  defp do_update_note(existing, base_attrs, user, sanitized_path, folder, _tags, opts \\ []) do
+  defp do_update_note(existing, base_attrs, user, sanitized_path, folder, _tags, opts) do
     base_hash = Keyword.get(opts, :base_hash)
 
     cond do
@@ -891,7 +896,9 @@ defmodule Engram.Notes do
         {:stale_base, existing}
 
       true ->
-        do_rewrite_note(existing, base_attrs, user, sanitized_path, folder)
+        do_rewrite_note(existing, base_attrs, user, sanitized_path, folder,
+          db_mode: Keyword.get(opts, :db_mode)
+        )
     end
   end
 
@@ -917,7 +924,19 @@ defmodule Engram.Notes do
     {:ok, {existing.content_hash, existing, base_attrs.content, existing.content_hash}}
   end
 
-  defp do_rewrite_note(existing, base_attrs, user, sanitized_path, folder) do
+  defp do_rewrite_note(existing, base_attrs, user, sanitized_path, folder, opts) do
+    # db_opts carries `mode: :savepoint` on the batch path so a failed SQL
+    # statement here (next_seq!'s UPDATE, or the Repo.update) rolls back to a
+    # per-statement savepoint instead of poisoning the shared batch tx into
+    # 25P02 and falsely failing sibling entries. Empty (default) on the
+    # single-note path, which owns its whole tx (no siblings to protect, no
+    # savepoint round-trip to pay for).
+    db_opts =
+      case Keyword.get(opts, :db_mode) do
+        nil -> []
+        mode -> [mode: mode]
+      end
+
     with {:ok, crdt} <- maybe_merge_crdt(existing, base_attrs.content, user, existing.id) do
       merged_title = Helpers.extract_title(crdt.merged_text, sanitized_path)
 
@@ -940,15 +959,16 @@ defmodule Engram.Notes do
             crdt.tags
           )
           |> inject_okf_fields(user, existing.id, crdt.merged_text)
+          |> put_parse_status(crdt.merged_text)
           |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
           |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
-        seq = Engram.Vaults.next_seq!(existing.vault_id)
+        seq = Engram.Vaults.next_seq!(existing.vault_id, db_opts)
 
         existing
         |> Note.changeset(Map.put(phase_b, :version, existing.version + 1))
         |> Ecto.Changeset.put_change(:seq, seq)
-        |> Repo.update()
+        |> Repo.update(db_opts)
         |> case do
           # Thread crdt.content_hash (HMAC of projection) alongside merged_text
           # so callers can include the stored hash in broadcast digests without
@@ -1751,7 +1771,9 @@ defmodule Engram.Notes do
     :description_ciphertext,
     :description_nonce,
     :resource_ciphertext,
-    :resource_nonce
+    :resource_nonce,
+    :parse_status,
+    :parse_reason
   ]
 
   @doc """
@@ -2017,37 +2039,114 @@ defmodule Engram.Notes do
   end
 
   defp process_batch_entry(%{result: nil} = entry, existing_by_hmac, user, vault, now, rows) do
-    case Map.get(existing_by_hmac, entry.path_hmac) do
-      nil ->
-        case build_batch_insert_row(entry, user, vault, now) do
-          {:ok, id, row, merged_text, content_hash} ->
-            info = %{
-              id: id,
-              version: 1,
-              prev_hash: nil,
-              updated_at: now,
-              content: merged_text,
-              content_hash: content_hash
-            }
+    process_batch_entry_rescued(entry, rows, fn ->
+      case Map.get(existing_by_hmac, entry.path_hmac) do
+        nil ->
+          case build_batch_insert_row(entry, user, vault, now) do
+            {:ok, id, row, merged_text, content_hash} ->
+              info = %{
+                id: id,
+                version: 1,
+                prev_hash: nil,
+                updated_at: now,
+                content: merged_text,
+                content_hash: content_hash,
+                parse_status: row.parse_status,
+                parse_reason: row.parse_reason
+              }
 
-            {%{entry | result: {:ok, info}}, [row | rows]}
+              {%{entry | result: {:ok, info}}, [row | rows]}
 
-          {:error, errors} ->
-            {%{entry | result: {:error, errors}}, rows}
-        end
+            {:error, errors} ->
+              {%{entry | result: {:error, errors}}, rows}
+          end
 
-      existing ->
-        {%{entry | result: update_batch_entry(entry, existing, user)}, rows}
-    end
+        existing ->
+          {%{entry | result: update_batch_entry(entry, existing, user)}, rows}
+      end
+    end)
   end
 
   defp process_batch_entry(entry, _existing_by_hmac, _user, _vault, _now, rows),
     do: {entry, rows}
 
+  # Defense in depth (#task-6/#task-4): the known raise this guards
+  # (frontmatter parsing) was already made impossible by the total codec in
+  # Frontmatter (Task 1). This exists for whatever future parser/crypto/CRDT
+  # call in `fun` raises next, and it cleanly isolates that raise to ONE entry
+  # (per-note error result, siblings commit), including a raise that came
+  # from a FAILED SQL STATEMENT, which a bare try/rescue could not contain.
+  #
+  # The batch runs each entry inside the SHARED Repo.with_tenant tx. Per-entry
+  # SAVEPOINT isolation makes that total across both branches:
+  #
+  #   - CREATE branch (build_batch_insert_row): does zero per-entry DB
+  #     writes (the insert_all runs AFTER the loop), so a raise here never
+  #     touched the tx state at all.
+  #   - UPDATE branch (update_batch_entry): next_seq! (UPDATE ... RETURNING)
+  #     and Repo.update() run synchronously inside `fun`. If one of those SQL
+  #     statements fails mid-tx, Postgres flips the whole tx into 25P02
+  #     (in_failed_sql_transaction) and every SUBSEQUENT statement fails too.
+  #     The batch UPDATE path runs both writes with `mode: :savepoint`
+  #     (threaded via `db_mode: :savepoint` through do_update_note ->
+  #     do_rewrite_note -> next_seq!/Repo.update), so a failed statement rolls
+  #     back to its OWN savepoint and the outer tx stays healthy. query!/update
+  #     still raise on failure, so this rescue degrades only THIS entry while
+  #     siblings (and previously-succeeded entries) commit. No raise reachable
+  #     via public input triggers this today (next_seq! only badmatches after a
+  #     SUCCESSFUL roundtrip; the realistic path-unique race is caught by
+  #     unique_constraint), but the guarantee no longer depends on that.
+  #
+  # NOTE: a bare nested `Repo.transaction` does NOT isolate a failed RAW query
+  # (`Repo.query!`): DBConnection breaks the connection and disconnects. Only
+  # `mode: :savepoint` on the failing operation recovers cleanly, which is why
+  # the isolation lives on the DB writes, not around `fun`.
+  #
+  # `fun` is a thunk so this stays testable without a real reachable raise:
+  # pass a fn that runs a real failing Repo query (a plain `raise` will NOT
+  # exercise the savepoint, since it never enters 25P02).
+  @doc false
+  @spec process_batch_entry_rescued(map(), list(), (-> {map(), list()})) :: {map(), list()}
+  def process_batch_entry_rescued(entry, rows, fun) do
+    fun.()
+  rescue
+    e ->
+      # Path AND exception reason go in the message string, not metadata
+      # alone: neither `:path` nor `:error` is in the Sentry LoggerHandler
+      # metadata allowlist (application.ex), and the console formatter's
+      # allowlist (config.exs) drops them too. Interpolating keeps both
+      # Sentry-visible (on-call sees WHY it raised) AND greppable/testable
+      # in the plain-text console/CI logs. Metadata copies kept for prod's
+      # metadata: :all JSON formatter (Loki structured fields).
+      Logger.error(
+        "batch entry raised, degrading note: #{entry.path} (#{Exception.message(e)})",
+        Metadata.with_category(:error, :sync,
+          path: entry.path,
+          error: Exception.message(e)
+        )
+      )
+
+      {%{
+         entry
+         | result:
+             {:error,
+              %{
+                "code" => "note_processing_failed",
+                "message" => "This note could not be processed and was skipped.",
+                "detail" => %{}
+              }}
+       }, rows}
+  end
+
   defp update_batch_entry(entry, existing, user) do
     base_attrs = batch_base_attrs(entry, user)
 
-    case do_update_note(existing, base_attrs, user, entry.path, entry.folder, entry.tags) do
+    # db_mode: :savepoint isolates this entry's UPDATE-branch DB writes so a
+    # failed SQL statement rolls back to a per-statement savepoint, leaving the
+    # shared batch tx healthy for sibling entries (see process_batch_entry_rescued).
+    case do_update_note(existing, base_attrs, user, entry.path, entry.folder, entry.tags,
+           db_mode: :savepoint
+         ) do
       {:ok, {prev_hash, updated, merged_text, content_hash}} ->
         {:ok,
          %{
@@ -2056,7 +2155,9 @@ defmodule Engram.Notes do
            prev_hash: prev_hash,
            updated_at: updated.updated_at,
            content: merged_text,
-           content_hash: content_hash
+           content_hash: content_hash,
+           parse_status: updated.parse_status,
+           parse_reason: updated.parse_reason
          }}
 
       {:error, changeset} ->
@@ -2097,6 +2198,7 @@ defmodule Engram.Notes do
         phase_b =
           inject_phase_b_fields(encrypted, user, note_id, entry.path, entry.folder, merged_tags)
           |> inject_okf_fields(user, note_id, crdt.merged_text)
+          |> put_parse_status(crdt.merged_text)
 
         changeset = Note.changeset(%Note{id: note_id}, phase_b)
 
@@ -2263,7 +2365,9 @@ defmodule Engram.Notes do
             content_hash: info.content_hash,
             # Canonical (sanitized) path — differs from `path` when the
             # sanitizer rewrote the input; clients rename local files to it.
-            server_path: entry.path
+            server_path: entry.path,
+            parse_status: info.parse_status,
+            parse_reason: info.parse_reason
           }
 
         {:conflict, existing} ->
@@ -2512,7 +2616,9 @@ defmodule Engram.Notes do
       content: note.content,
       content_hash: note.content_hash,
       deleted: not is_nil(note.deleted_at),
-      updated_at: note.updated_at
+      updated_at: note.updated_at,
+      parse_status: note.parse_status,
+      parse_reason: note.parse_reason
     }
   end
 
@@ -3848,6 +3954,42 @@ defmodule Engram.Notes do
   # official public API.
   def inject_okf_fields_pub(attrs, user, note_id, content) do
     inject_okf_fields(attrs, user, note_id, content)
+  end
+
+  # Frontmatter-resilience (Task 5): stamp parse_status/parse_reason from the
+  # note's ACTUAL persisted content (the CRDT-merged text, same input
+  # inject_okf_fields/4 uses at every call site), not the raw incoming push.
+  # A clean re-write of a previously degraded note must reset both fields —
+  # every call site re-derives from scratch rather than patching prior state,
+  # so a fix silently self-heals on the next ingest.
+  # ponytail: re-runs Frontmatter.split + parse on `content` that
+  # inject_okf_fields/4 -> OkfFields.extract already parsed. Deliberately NOT
+  # threaded: the block is tiny (microsecond parse) and threading would couple
+  # OKF extraction to parse-status by changing extract/1's return contract and
+  # this pipe's shape. Thread it only if this ever shows up on a profile.
+  defp put_parse_status(attrs, content) do
+    case Frontmatter.split(content) do
+      {nil, _body} ->
+        Map.merge(attrs, %{parse_status: "ok", parse_reason: nil})
+
+      {block, _body} ->
+        case Frontmatter.parse(block) do
+          {:ok, _order, _values, []} ->
+            Map.merge(attrs, %{parse_status: "ok", parse_reason: nil})
+
+          {:ok, _order, _values, degraded} ->
+            Map.merge(attrs, %{
+              parse_status: "degraded",
+              parse_reason: Frontmatter.reason_for(degraded)
+            })
+
+          :error ->
+            Map.merge(attrs, %{
+              parse_status: "degraded",
+              parse_reason: Frontmatter.invalid_yaml_reason(block)
+            })
+        end
+    end
   end
 
   # Returns a keyword list of Phase B field updates suitable for splicing into

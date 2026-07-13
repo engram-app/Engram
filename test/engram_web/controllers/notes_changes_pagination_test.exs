@@ -86,6 +86,60 @@ defmodule EngramWeb.NotesChangesPaginationTest do
       assert change["path"] == "n1.md"
     end
 
+    test "each entry includes parse_status + parse_reason (default fields)", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _clean} =
+        Engram.Notes.upsert_note(user, vault, %{
+          path: "clean.md",
+          content: "---\ntags: [a]\n---\nx\n",
+          mtime: 1.0
+        })
+
+      {:ok, _degraded} =
+        Engram.Notes.upsert_note(user, vault, %{
+          path: "degraded.md",
+          content: "---\ndate:YYYY-MM-DD\n---\nx\n",
+          mtime: 2.0
+        })
+
+      body =
+        conn
+        |> get(~p"/api/notes/changes?since=2020-01-01T00:00:00Z")
+        |> json_response(200)
+
+      changes = Map.new(body["changes"], &{&1["path"], &1})
+
+      assert changes["clean.md"]["parse_status"] == "ok"
+      assert changes["clean.md"]["parse_reason"] == nil
+      assert changes["degraded.md"]["parse_status"] == "degraded"
+      assert changes["degraded.md"]["parse_reason"]["code"] == "frontmatter_invalid_yaml"
+    end
+
+    test "each entry includes parse_status + parse_reason (fields=meta)", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _degraded} =
+        Engram.Notes.upsert_note(user, vault, %{
+          path: "degraded.md",
+          content: "---\ndate:YYYY-MM-DD\n---\nx\n",
+          mtime: 1.0
+        })
+
+      body =
+        conn
+        |> get(~p"/api/notes/changes?since=2020-01-01T00:00:00Z&fields=meta")
+        |> json_response(200)
+
+      assert [change] = body["changes"]
+      assert change["parse_status"] == "degraded"
+      assert change["parse_reason"]["code"] == "frontmatter_invalid_yaml"
+    end
+
     test "has_more responses anchor server_time at the last returned change (legacy convergence)",
          %{conn: conn, user: user, vault: vault} do
       seed(user, vault, 3)

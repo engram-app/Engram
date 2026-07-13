@@ -19,6 +19,12 @@ defmodule Engram.Notes.CrdtBridge do
 
   @text_name "content"
   @frontmatter_name "frontmatter"
+  # Out-of-band store for degraded frontmatter keys' verbatim source spans,
+  # keyed by frontmatter key. Kept separate from @frontmatter_name so a NORMAL
+  # client-written value is never mis-read as a raw-passthrough marker on
+  # projection (a real value shaped like the old in-band marker would otherwise
+  # be dropped). emit/3 consults this map for verbatim re-render.
+  @raw_frontmatter_name "frontmatter_raw"
   @order_name "frontmatter_order"
   @doc_schema_version 2
   @flatten_bytes 500_000
@@ -46,6 +52,15 @@ defmodule Engram.Notes.CrdtBridge do
     order = doc |> Yex.Doc.get_array(@order_name) |> Yex.Array.to_list()
     values = doc |> Yex.Doc.get_map(@frontmatter_name) |> Yex.Map.to_map()
     {order, values}
+  end
+
+  @doc """
+  Out-of-band raw-passthrough map of a doc: degraded frontmatter keys mapped to
+  their verbatim source spans. Empty for a doc with no degraded keys.
+  """
+  @spec raw_frontmatter_of(Yex.Doc.t()) :: %{String.t() => String.t()}
+  def raw_frontmatter_of(%Yex.Doc{} = doc) do
+    doc |> Yex.Doc.get_map(@raw_frontmatter_name) |> Yex.Map.to_map()
   end
 
   @doc """
@@ -88,7 +103,7 @@ defmodule Engram.Notes.CrdtBridge do
   @spec project_doc(Yex.Doc.t()) :: String.t()
   def project_doc(%Yex.Doc{} = doc) do
     {order, values} = frontmatter_of(doc)
-    Frontmatter.project(order, values, body_of(doc))
+    Frontmatter.project(order, values, body_of(doc), raw_frontmatter_of(doc))
   end
 
   @doc "Full projected note plaintext (frontmatter + body)."
@@ -239,14 +254,17 @@ defmodule Engram.Notes.CrdtBridge do
   def ingest_plaintext(%Yex.Doc{} = doc, plaintext) when is_binary(plaintext) do
     {fm_block, body} = Frontmatter.split(plaintext)
 
-    {order, values, body} =
-      case fm_block && Frontmatter.parse(fm_block) do
-        {:ok, order, values} -> {order, values, body}
-        # nil (no frontmatter) or :error (malformed) -> whole text is body
-        _ -> {[], %{}, plaintext}
+    {order, values, raws, body} =
+      case fm_block && Frontmatter.parse_for_ingest(fm_block) do
+        # Degraded keys are stored out of band (raws) so emit re-renders them
+        # verbatim (nothing lost). :error means no frontmatter, malformed, or a
+        # degraded key whose raw span can't be captured losslessly -> keep the
+        # whole text as body, which is also lossless.
+        {:ok, order, values, raws} -> {order, values, raws, body}
+        _ -> {[], %{}, %{}, plaintext}
       end
 
-    apply_frontmatter(doc, order, values)
+    apply_frontmatter(doc, order, values, raws)
     text = Yex.Doc.get_text(doc, @text_name)
     :ok = diff_into_text(text, body)
     :ok
@@ -270,16 +288,33 @@ defmodule Engram.Notes.CrdtBridge do
         :ok
 
       {fm_block, rest} ->
-        case Frontmatter.parse(fm_block) do
-          {:ok, order, values} ->
+        # Route through the SAME lossless machinery as ingest so a degraded key
+        # (e.g. a nested non-binary key) is lifted into the out-of-band raw map
+        # rather than dropped. :error (non-map YAML, or a degraded span that
+        # can't be captured losslessly) leaves the doc untouched -> no strip,
+        # no data loss.
+        case Frontmatter.parse_for_ingest(fm_block) do
+          {:ok, order, values, raws} ->
             map = Yex.Doc.get_map(doc, @frontmatter_name)
+            raw_map = Yex.Doc.get_map(doc, @raw_frontmatter_name)
             arr = Yex.Doc.get_array(doc, @order_name)
             existing = Yex.Map.to_map(map)
+            existing_raw = Yex.Map.to_map(raw_map)
             existing_order = Yex.Array.to_list(arr)
 
-            # Y.Map wins: only lift keys not already present.
-            new_keys = Enum.filter(order, fn k -> not Map.has_key?(existing, k) end)
-            Enum.each(new_keys, fn k -> Yex.Map.set(map, k, Map.fetch!(values, k)) end)
+            # Y.Map wins: only lift keys not already present (in either store).
+            new_keys =
+              Enum.reject(order, fn k ->
+                Map.has_key?(existing, k) or Map.has_key?(existing_raw, k)
+              end)
+
+            Enum.each(new_keys, fn k ->
+              cond do
+                Map.has_key?(values, k) -> Yex.Map.set(map, k, Map.fetch!(values, k))
+                Map.has_key?(raws, k) -> Yex.Map.set(raw_map, k, Map.fetch!(raws, k))
+                true -> :ok
+              end
+            end)
 
             to_append = Enum.reject(new_keys, fn k -> k in existing_order end)
 
@@ -301,25 +336,31 @@ defmodule Engram.Notes.CrdtBridge do
     end
   end
 
-  defp apply_frontmatter(doc, order, values) do
-    map = Yex.Doc.get_map(doc, @frontmatter_name)
-    current = Yex.Map.to_map(map)
-
-    # Upsert changed keys.
-    Enum.each(values, fn {k, v} ->
-      if Map.get(current, k) != v, do: Yex.Map.set(map, k, v)
-    end)
-
-    # Delete keys no longer present.
-    Enum.each(Map.keys(current), fn k ->
-      unless Map.has_key?(values, k), do: Yex.Map.delete(map, k)
-    end)
+  defp apply_frontmatter(doc, order, values, raws) do
+    upsert_map(Yex.Doc.get_map(doc, @frontmatter_name), values)
+    upsert_map(Yex.Doc.get_map(doc, @raw_frontmatter_name), raws)
 
     # Replace the order array wholesale (small list; simplest correct form).
     arr = Yex.Doc.get_array(doc, @order_name)
     len = arr |> Yex.Array.to_list() |> length()
     if len > 0, do: Yex.Array.delete_range(arr, 0, len)
     if order != [], do: Yex.Array.insert_list(arr, 0, order)
+    :ok
+  end
+
+  # Converge a Y.Map to `desired`: upsert changed keys, delete keys no longer
+  # present. Used for both the good-value map and the out-of-band raw map.
+  defp upsert_map(map, desired) do
+    current = Yex.Map.to_map(map)
+
+    Enum.each(desired, fn {k, v} ->
+      if Map.get(current, k) != v, do: Yex.Map.set(map, k, v)
+    end)
+
+    Enum.each(Map.keys(current), fn k ->
+      unless Map.has_key?(desired, k), do: Yex.Map.delete(map, k)
+    end)
+
     :ok
   end
 

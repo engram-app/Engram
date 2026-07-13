@@ -86,6 +86,13 @@ defmodule Engram.Notes.Note do
     field :resource_ciphertext, :binary
     field :resource_nonce, :binary
 
+    # Frontmatter-resilience (Task 4): stamped by ingest (Task 5) when a
+    # note's frontmatter couldn't be parsed cleanly, so the fallback is
+    # visible instead of silent. Plaintext: describes parser behavior, not
+    # note content.
+    field :parse_status, :string, default: "ok"
+    field :parse_reason, :map
+
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault
     has_many :chunks, Engram.Notes.Chunk
@@ -139,7 +146,9 @@ defmodule Engram.Notes.Note do
         :deleted_at,
         :kind,
         :fm_timestamp,
-        :fm_created
+        :fm_created,
+        :parse_status,
+        :parse_reason
       ] ++ @encryption_fields,
       empty_values: []
     )

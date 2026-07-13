@@ -485,4 +485,62 @@ defmodule Engram.NotesBatchUpsertTest do
              "row content must equal the doc projection, byte for byte"
     end
   end
+
+  describe "batch_upsert_notes/3 — parse_status stamping (Task 5)" do
+    test "batch insert of a clean note is parse_status ok", %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.batch_upsert_notes(user, vault, [
+          %{"path" => "batch-clean.md", "content" => "---\ntags: [a]\n---\nx\n"}
+        ])
+
+      {:ok, note} = Notes.get_note(user, vault, "batch-clean.md")
+      assert note.parse_status == "ok"
+      assert note.parse_reason == nil
+    end
+
+    test "batch insert of a whole-block malformed frontmatter stores frontmatter_invalid_yaml",
+         %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.batch_upsert_notes(user, vault, [
+          %{"path" => "batch-invalid.md", "content" => "---\ndate:YYYY-MM-DD\n---\nx\n"}
+        ])
+
+      {:ok, note} = Notes.get_note(user, vault, "batch-invalid.md")
+      assert note.parse_status == "degraded"
+      assert note.parse_reason["code"] == "frontmatter_invalid_yaml"
+    end
+
+    test "batch insert of a single unparseable key stores frontmatter_unparseable_key with detail",
+         %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.batch_upsert_notes(user, vault, [
+          %{"path" => "batch-badkey.md", "content" => "---\ndate: {[a, b]: 1}\n---\nx\n"}
+        ])
+
+      {:ok, note} = Notes.get_note(user, vault, "batch-badkey.md")
+      assert note.parse_status == "degraded"
+      assert note.parse_reason["code"] == "frontmatter_unparseable_key"
+      assert note.parse_reason["detail"]["key"] == "date"
+    end
+
+    test "batch update of an existing degraded note with clean frontmatter resets to ok",
+         %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.batch_upsert_notes(user, vault, [
+          %{"path" => "batch-fix.md", "content" => "---\ndate:YYYY-MM-DD\n---\nx\n"}
+        ])
+
+      {:ok, degraded} = Notes.get_note(user, vault, "batch-fix.md")
+      assert degraded.parse_status == "degraded"
+
+      {:ok, _} =
+        Notes.batch_upsert_notes(user, vault, [
+          %{"path" => "batch-fix.md", "content" => "---\ntitle: Fixed\n---\nx\n"}
+        ])
+
+      {:ok, fixed} = Notes.get_note(user, vault, "batch-fix.md")
+      assert fixed.parse_status == "ok"
+      assert fixed.parse_reason == nil
+    end
+  end
 end
