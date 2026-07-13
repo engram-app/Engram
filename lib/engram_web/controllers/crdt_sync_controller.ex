@@ -69,10 +69,17 @@ defmodule EngramWeb.CrdtSyncController do
 
   defp decode_since(nil), do: {:ok, nil}
 
+  # Accept BOTH base64 alphabets. The plugin encodes `since` with standard
+  # base64 (btoa -> +///), but this query-param path previously decoded only the
+  # url-safe alphabet, so every non-genesis cold-receive delta pull 400'd (empty
+  # "AA==" vectors have no +// and masked it). Try url-safe first (future-proof),
+  # fall back to standard (what deployed clients send) so all clients converge.
   defp decode_since(sv) when is_binary(sv) do
-    case Base.url_decode64(sv, padding: false) do
+    with :error <- Base.url_decode64(sv, padding: false),
+         :error <- Base.decode64(sv, padding: false) do
+      {:error, :bad_since}
+    else
       {:ok, bin} -> {:ok, bin}
-      :error -> {:error, :bad_since}
     end
   end
 
