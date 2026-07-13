@@ -18,6 +18,12 @@ export default defineConfig({
 	expect: { timeout: 10_000 },
 	fullyParallel: false,
 	forbidOnly: isCI,
+	// One worker in CI. Each spec drives two browser contexts (tabs A+B) doing
+	// live CRDT, so running spec files in parallel piles context onto the shared
+	// self-hosted runner and starves the SPA's lazy note/editor load past the
+	// wait budgets (the note-live-update / tree-ops / note-properties flakes,
+	// issue #547). Locally, leave Playwright to pick worker count.
+	workers: isCI ? 1 : undefined,
 	retries: isCI ? 1 : 0,
 	reporter: isCI ? "github" : "html",
 	globalSetup: "./e2e/global-setup.ts",

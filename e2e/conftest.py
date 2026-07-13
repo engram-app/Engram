@@ -227,6 +227,31 @@ def isolation_user(ts, auth_provider):
     return email, provider_user_id, api_key
 
 
+@pytest.fixture(scope="session")
+def resumed_user(ts, auth_provider):
+    """Dedicated user for the resumed-device pair (fresh_instance_pair).
+
+    Kept OFF sync_user's shared vault on purpose: that vault accumulates
+    every note the suite creates (~1000 by the end of a full run), and
+    joining it late floods the resumed devices with a full-vault genesis
+    fan-out that starves the seed-note delivery inside the 30s Phase-1
+    budget (the test_82 timeout flake, Engram#977/#945). A private user +
+    vault keeps the resumed pair's genesis pull near-empty, so what the
+    test measures is resumed-device sync, not suite churn.
+
+    Returns: (email, provider_user_id, api_key)
+    """
+    # Short prefix on purpose: `ts` already runs ~44 chars, and the email
+    # local part must stay <= 64 (RFC 5321) or Clerk create_user 422s. With
+    # "+clerk_test" that budgets ~9 chars for the prefix (e2e-sync-/e2e-iso-
+    # sit right at the ceiling); "e2e-rsm-" keeps us at 63.
+    email = f"e2e-rsm-{ts}+clerk_test@example.com"
+    password = secrets.token_urlsafe(32)
+    provider_user_id, api_key = auth_provider.provision_user(email, password)
+    grant_test_plan(email)
+    return email, provider_user_id, api_key
+
+
 # ---------------------------------------------------------------------------
 # Obsidian instances
 # ---------------------------------------------------------------------------
@@ -246,6 +271,17 @@ def iso_client_id(ts):
     max_vaults limit (which would fire if we created two distinct vaults).
     """
     return f"e2e-iso-pair-{ts}"
+
+
+@pytest.fixture(scope="session")
+def resumed_client_id(ts):
+    """Shared client_id for the resumed-device pair's single private vault.
+
+    ResumedA + ResumedB share it so /vaults/register upserts ONE vault
+    (idempotent by client_id) — the two-device shape under test — while
+    staying isolated from sync_user's accumulator vault.
+    """
+    return f"e2e-resumed-pair-{ts}"
 
 
 @pytest.fixture(scope="session")
@@ -399,10 +435,13 @@ def _oauth_ws_warm(cdp_a, clerk_client):
 #
 # A stop/mutate-data.json/restart cycle must never touch the session-scoped
 # A/B/C fixtures the rest of the suite depends on, so this is its own pair on
-# its own ports/displays. It shares sync_user/sync_client_id with session A/B
-# so it lands on the SAME server vault api_sync polls (client_id upsert is
-# idempotent — four "devices" on one vault is exactly the multi-device shape
-# under test).
+# its own ports/displays. It runs on a PRIVATE user+vault (resumed_user /
+# resumed_client_id), NOT sync_user's shared vault: that vault accumulates
+# ~1000 notes over a full run, and joining it late floods the resumed devices
+# with a full-vault genesis fan-out that starves the seed delivery inside the
+# 30s Phase-1 budget (Engram#977/#945). ResumedA + ResumedB still share one
+# client_id, so they land on ONE (near-empty) vault — the two-device shape
+# under test, minus the suite churn.
 # ---------------------------------------------------------------------------
 
 RESUMED_CDP_PORT_A = _worker_port("E2E_CDP_PORT_RESUMED_A", "9350")
@@ -414,10 +453,13 @@ assert RESUMED_DISPLAY_BASE - 1 >= 1, (
 
 
 @pytest.fixture
-def fresh_instance_pair(sync_user, sync_client_id):
+def fresh_instance_pair(resumed_user, resumed_client_id, resumed_api):
     """Dedicated A/B-shaped instance pair for tests that stop/restart a device.
 
     Function-scoped so a mid-test restart can't poison the session fixtures.
+    Runs on resumed_user's private vault (resumed_api pre-registers it) to
+    stay off the suite's shared accumulator vault — see the block comment
+    above and Engram#977/#945.
     """
     inst_a = ObsidianInstance(
         name="ResumedA",
@@ -425,10 +467,10 @@ def fresh_instance_pair(sync_user, sync_client_id):
         cdp_port=RESUMED_CDP_PORT_A,
         display=f":{RESUMED_DISPLAY_BASE}",
         api_url=API_URL,
-        api_key=sync_user[2],
+        api_key=resumed_user[2],
         plugin_src=PLUGIN_SRC,
         obsidian_bin=OBSIDIAN_BIN,
-        client_id=sync_client_id,
+        client_id=resumed_client_id,
         config_dir=Path(f"{CONFIG_PREFIX}-resumed-a"),
     )
     inst_b = ObsidianInstance(
@@ -437,10 +479,10 @@ def fresh_instance_pair(sync_user, sync_client_id):
         cdp_port=RESUMED_CDP_PORT_B,
         display=f":{RESUMED_DISPLAY_BASE - 1}",
         api_url=API_URL,
-        api_key=sync_user[2],
+        api_key=resumed_user[2],
         plugin_src=PLUGIN_SRC,
         obsidian_bin=OBSIDIAN_BIN,
-        client_id=sync_client_id,
+        client_id=resumed_client_id,
         config_dir=Path(f"{CONFIG_PREFIX}-resumed-b"),
     )
     inst_a.start()
@@ -512,6 +554,23 @@ def api_iso(isolation_user, iso_client_id):
     api = ApiClient(API_URL, isolation_user[2])
     try:
         api.register_vault(f"e2e-iso-vault-w{_WORKER}", iso_client_id)
+    except Exception:
+        pass
+    return api
+
+
+@pytest.fixture(scope="session")
+def resumed_api(resumed_user, resumed_client_id):
+    """API client for the resumed-device user's private vault.
+
+    test_82 verifies resumed B's PUSH landed server-side via this client,
+    so it must target the SAME (private) vault the resumed pair joins —
+    not sync_user's shared accumulator vault. Pre-registers the vault so
+    the plugin's own register is a no-op and vault-scoped polls don't 404.
+    """
+    api = ApiClient(API_URL, resumed_user[2])
+    try:
+        api.register_vault(f"e2e-resumed-vault-w{_WORKER}", resumed_client_id)
     except Exception:
         pass
     return api
