@@ -65,7 +65,7 @@ async def _wait_for_persisted_cursor(cdp, inst, timeout: float = 60, interval: f
 
 
 async def test_resumed_device_with_stale_idmap_syncs_both_ways(
-    fresh_instance_pair, api_sync
+    fresh_instance_pair, resumed_api
 ):
     inst_a, inst_b, cdp_a, cdp_b = fresh_instance_pair
 
@@ -113,7 +113,7 @@ async def test_resumed_device_with_stale_idmap_syncs_both_ways(
     # note (its id is exactly what the wiped map no longer knows) and the
     # server must get it.
     write_note(inst_b.vault_path, "E2E/Resumed-push-seed.md", "# PushSeed\nedited on resumed B")
-    note = api_sync.wait_for_note_content(
+    note = resumed_api.wait_for_note_content(
         "E2E/Resumed-push-seed.md", "edited on resumed B", timeout=30
     )
     assert note is not None, "resumed B's push never reached the server"
