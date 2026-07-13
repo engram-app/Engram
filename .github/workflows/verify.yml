@@ -1220,7 +1220,7 @@ jobs:
           K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
           python3 -m pytest tests/ --ignore=tests/api_only/ --ignore=tests/crdt/ \
             "${K_ARGS[@]}" \
-            -n "${E2E_WORKERS:-1}" --dist=loadfile \
+            -n "${E2E_WORKERS:-2}" --dist=loadfile \
             -v --timeout=300 -p no:cacheprovider --no-header
         env:
           E2E_PATTERN: ${{ needs.fingerprint.outputs.e2e-target-pattern }}
