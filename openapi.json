@@ -99,6 +99,24 @@
             "x-struct": null,
             "x-validate": null
           },
+          "parse_reason": {
+            "description": "Present when parse_status is \"degraded\": {code, message, detail}",
+            "nullable": true,
+            "type": "object",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "parse_status": {
+            "description": "Frontmatter parse outcome",
+            "enum": [
+              "ok",
+              "degraded"
+            ],
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "path": {
             "example": "Projects/engram.md",
             "type": "string",
@@ -236,6 +254,24 @@
           },
           "id": {
             "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "parse_reason": {
+            "description": "Present when parse_status is \"degraded\": {code, message, detail}",
+            "nullable": true,
+            "type": "object",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "parse_status": {
+            "description": "Frontmatter parse outcome",
+            "enum": [
+              "ok",
+              "degraded"
+            ],
             "nullable": true,
             "type": "string",
             "x-struct": null,
@@ -2055,6 +2091,24 @@
           "mtime": {
             "format": "float",
             "type": "number",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "parse_reason": {
+            "description": "Present when parse_status is \"degraded\": {code, message, detail}",
+            "nullable": true,
+            "type": "object",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "parse_status": {
+            "description": "Frontmatter parse outcome",
+            "enum": [
+              "ok",
+              "degraded"
+            ],
+            "nullable": true,
+            "type": "string",
             "x-struct": null,
             "x-validate": null
           },
