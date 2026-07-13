@@ -299,6 +299,44 @@ case Engram.RuntimeConfig.pre_auth_rate_limit_override(&System.get_env/1) do
     :ok
 end
 
+# CRDT channel per-message + handshake rate-limit overrides for CI/E2E stacks
+# only, gated on CI=true. The release image runs EngramWeb.CrdtChannel at its
+# prod @msg_limit/@hs_limit; the e2e harness's compressed CRDT workload (rapid
+# edits, resumed-device room rejoins across the suite) legitimately exceeds a
+# per-account budget a real single user wouldn't, and there is otherwise no
+# runtime lever in the release build. Gating on CI=true keeps prod limits intact.
+case Engram.RuntimeConfig.crdt_msg_rate_limit_override(&System.get_env/1) do
+  {:ok, limit} ->
+    config :engram, :crdt_msg_rate_limit_override, limit
+
+  {:ignored, raw} ->
+    require Logger
+
+    Logger.warning(
+      "CRDT_MSG_RATE_LIMIT_OVERRIDE=#{raw} ignored: the CRDT channel rate-limit " <>
+        "override is only honored when CI=true."
+    )
+
+  :none ->
+    :ok
+end
+
+case Engram.RuntimeConfig.crdt_hs_rate_limit_override(&System.get_env/1) do
+  {:ok, limit} ->
+    config :engram, :crdt_hs_rate_limit_override, limit
+
+  {:ignored, raw} ->
+    require Logger
+
+    Logger.warning(
+      "CRDT_HS_RATE_LIMIT_OVERRIDE=#{raw} ignored: the CRDT channel rate-limit " <>
+        "override is only honored when CI=true."
+    )
+
+  :none ->
+    :ok
+end
+
 # Clerk auth (only required when AUTH_PROVIDER=clerk)
 # Note: use local variable, not Application.get_env — runtime.exs config
 # is accumulated and not yet applied, so get_env reads stale config.

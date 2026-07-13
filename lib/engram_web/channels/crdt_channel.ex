@@ -36,8 +36,9 @@ defmodule EngramWeb.CrdtChannel do
 
   # 240 frames / 10 s ≈ 24 msg/s sustained — well above human typing speed with
   # a 2 s client debounce, and low enough to stop scripted floods.
-  # In test builds the limit is reduced via :crdt_msg_rate_limit_override (see
-  # per-describe setup in crdt_channel_test.exs) so tests don't push 241 frames.
+  # Overridable via :crdt_msg_rate_limit_override (unit tests put_env it; CI/E2E
+  # set it from a CI-gated env in runtime.exs). See effective_msg_limit/0 below;
+  # prod never sets it and uses @msg_limit.
   @msg_limit 240
   @msg_scale_ms 10_000
 
@@ -406,21 +407,18 @@ defmodule EngramWeb.CrdtChannel do
   # ops can lower it live via Application.put_env under abuse, no redeploy.
   defp max_rooms, do: Application.get_env(:engram, :max_rooms_per_socket, @default_max_rooms)
 
-  # Test builds allow overriding the crdt_msg rate limit via
-  # Application.put_env(:engram, :crdt_msg_rate_limit_override, n) so tests
-  # do not need to push 241 frames to hit the limit. Prod always uses @msg_limit.
-  # compile-time branch — the override key is structurally impossible to read in
-  # non-test builds (the else clause is the only definition compiled in prod).
-  if Application.compile_env(:engram, :env, :prod) == :test do
-    defp effective_msg_limit do
-      Application.get_env(:engram, :crdt_msg_rate_limit_override) || @msg_limit
-    end
+  # Both limits are overridable via app env (a cached ETS read, so per-message
+  # cheap). Two writers set it, never prod:
+  #   - unit tests: Application.put_env(:engram, :crdt_msg_rate_limit_override, n)
+  #     (crdt_channel_test.exs) so a test need not push 241 frames.
+  #   - CI/E2E release stacks: config/runtime.exs sets it from the CI-gated
+  #     CRDT_MSG_RATE_LIMIT_OVERRIDE env (Engram.RuntimeConfig), because the
+  #     harness's compressed workload legitimately exceeds the per-account budget.
+  # Prod never sets either (CI != true, no put_env), so effective_* falls back to
+  # the @constant there — the limiter stays un-weakenable in production.
+  defp effective_msg_limit,
+    do: Application.get_env(:engram, :crdt_msg_rate_limit_override) || @msg_limit
 
-    defp effective_hs_limit do
-      Application.get_env(:engram, :crdt_hs_rate_limit_override) || @hs_limit
-    end
-  else
-    defp effective_msg_limit, do: @msg_limit
-    defp effective_hs_limit, do: @hs_limit
-  end
+  defp effective_hs_limit,
+    do: Application.get_env(:engram, :crdt_hs_rate_limit_override) || @hs_limit
 end

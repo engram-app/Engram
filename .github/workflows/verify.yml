@@ -819,6 +819,13 @@ jobs:
 
   e2e-clerk:
     needs: [fingerprint, prebuild-ci-image]
+    # Serialize the two heavy full-Obsidian suites (this + e2e-crdt) via a shared
+    # per-ref concurrency group so they don't co-tenant the runner pool and starve
+    # each other's timing budgets (the #355 rotating-victim flake). Queue, never
+    # cancel — we want both signals, just not simultaneously.
+    concurrency:
+      group: e2e-obsidian-${{ github.ref }}
+      cancel-in-progress: false
     # e2e-clerk is the plugin↔backend contract test. Skip when:
     #   - the exact (backend, plugin) pair has already passed (cache hit), OR
     #   - this is a Dependabot PR (needs Clerk + App secrets that GitHub doesn't
@@ -1586,13 +1593,18 @@ jobs:
     # Obsidian/Xvfb/CDP machinery, but: local auth (no Clerk), CRDT_ENABLED=true
     # stack, the ci/compose.local.yml overlay, and it runs ONLY tests/crdt/.
     #
-    # Runs CONCURRENTLY with e2e-clerk (no `needs: e2e-clerk`). Every shared
-    # resource is already isolated from e2e-clerk: stack name (engram-ci-crdt-),
-    # Qdrant collection (ci_crdt_), temp dirs, and dynamic ports. The one
-    # remaining collision, the per-run Xvfb display window, is avoided by a
-    # separate display band below (+150 vs e2e-clerk's +50): clerk spans
-    # displays ~45-134, crdt ~145-234.
+    # All named resources are isolated from e2e-clerk: stack name
+    # (engram-ci-crdt-), Qdrant collection (ci_crdt_), temp dirs, dynamic ports,
+    # and a separate Xvfb display band below (+150 vs e2e-clerk's +50): clerk
+    # spans displays ~45-134, crdt ~145-234. The one remaining shared resource is
+    # runner-pool CPU: running two full Obsidian suites at once stretches every
+    # timing budget (the #355 rotating-victim flake), so the shared per-ref
+    # `concurrency` group below SERIALIZES this suite with e2e-clerk (queue, not
+    # cancel) rather than running them simultaneously.
     needs: [fingerprint, prebuild-ci-image]
+    concurrency:
+      group: e2e-obsidian-${{ github.ref }}
+      cancel-in-progress: false
     # Per-job skip (skip-e2e-crdt): same group as e2e-clerk; forced false on full runs.
     if: needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt')
     runs-on: [self-hosted, linux, x64, isolated]
