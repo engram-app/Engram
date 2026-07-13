@@ -83,8 +83,8 @@ defmodule EngramWeb.CrdtSyncControllerTest do
       note = seed_note(user, vault, "T/K.md", "# K\n\nhello")
 
       # <<1, 1, 63>> is a valid 1-client state vector (id=1, clock=63) whose
-      # STANDARD base64 is "AQE/" — it contains '/', which the url-safe alphabet
-      # lacks. The plugin encodes `since` with standard base64 (btoa), so every
+      # STANDARD base64 is "AQE/", which contains '/'; the url-safe alphabet
+      # lacks it. The plugin encodes `since` with standard base64 (btoa), so every
       # non-genesis cold-receive delta pull 400'd here; empty "AA==" vectors have
       # no +// and masked it. Regression guard for the e2e-clerk test_85
       # missed-delivery convergence failure (cold-receive was 100% broken for
