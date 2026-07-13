@@ -77,6 +77,28 @@ defmodule EngramWeb.CrdtSyncControllerTest do
       conn = get(conn, "/api/notes/#{note.id}/updates?since=#{since}")
       assert json_response(conn, 400)
     end
+
+    test "accepts a STANDARD-base64 since vector (plugin encodes with btoa, not url-safe)",
+         %{conn: conn, user: user, vault: vault} do
+      note = seed_note(user, vault, "T/K.md", "# K\n\nhello")
+
+      # <<1, 1, 63>> is a valid 1-client state vector (id=1, clock=63) whose
+      # STANDARD base64 is "AQE/", which contains '/'; the url-safe alphabet
+      # lacks it. The plugin encodes `since` with standard base64 (btoa), so every
+      # non-genesis cold-receive delta pull 400'd here; empty "AA==" vectors have
+      # no +// and masked it. Regression guard for the e2e-clerk test_85
+      # missed-delivery convergence failure (cold-receive was 100% broken for
+      # non-empty state vectors).
+      since = Base.encode64(<<1, 1, 63>>)
+      assert String.contains?(since, "/")
+
+      resp =
+        conn
+        |> get("/api/notes/#{note.id}/updates?since=#{URI.encode_www_form(since)}")
+        |> json_response(200)
+
+      assert %{"update" => _} = resp
+    end
   end
 
   describe "POST /api/notes/:id/updates" do
