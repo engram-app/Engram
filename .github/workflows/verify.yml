@@ -818,7 +818,14 @@ jobs:
           echo "Version bumped: $MAIN_VERSION → $BRANCH_VERSION"
 
   e2e-clerk:
-    needs: [fingerprint, prebuild-ci-image]
+    # Also gate on the heavy non-e2e jobs (unit-tests ~6min, n1-compat ~3min).
+    # They saturate the shared runner VM's CPU, and when they run concurrently
+    # with e2e they starve its 30s live-delivery budgets — a rotating-victim
+    # flake (#355) that within-suite serialization alone can't fix (e.g. test_34
+    # materialized=no, test_edit_after_discovery). e2e needs a quiet VM, so it
+    # waits for the heavy jobs to finish. crdt gates on the same set; api/local/
+    # browser inherit the wait by chaining off clerk+crdt.
+    needs: [fingerprint, prebuild-ci-image, unit-tests, n1-compat]
     # Serialize the two heavy full-Obsidian suites (this + e2e-crdt) via a shared
     # per-ref concurrency group so they don't co-tenant the runner pool and starve
     # each other's timing budgets (the #355 rotating-victim flake). Queue, never
@@ -1606,8 +1613,10 @@ jobs:
     # runner-pool CPU: running two full Obsidian suites at once stretches every
     # timing budget (the #355 rotating-victim flake), so the shared per-ref
     # `concurrency` group below SERIALIZES this suite with e2e-clerk (queue, not
-    # cancel) rather than running them simultaneously.
-    needs: [fingerprint, prebuild-ci-image]
+    # cancel) rather than running them simultaneously. Also gate on the heavy
+    # non-e2e jobs (unit-tests, n1-compat) so e2e runs on a quiet VM — see the
+    # e2e-clerk needs comment (#355).
+    needs: [fingerprint, prebuild-ci-image, unit-tests, n1-compat]
     concurrency:
       group: e2e-obsidian-${{ github.ref }}
       cancel-in-progress: false
