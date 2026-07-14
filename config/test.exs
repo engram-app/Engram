@@ -25,6 +25,11 @@ config :engram, :boot_canary_enabled, false
 # not materialize. Tests that exercise the overflow path set this to 0 locally.
 config :engram, :checkpoint_inline_limit, 1000
 
+# Pacing OFF by default in tests so fan-out delivery stays synchronous and
+# existing broadcast/e2e timing assertions are unaffected. The pacer's own
+# test flips it on per-test.
+config :engram, :fanout_pacing_enabled, false
+
 # #619 — bootstrap admin advisory lock disabled in tests. It's a global
 # pg_advisory_xact_lock; under the SQL sandbox (one transaction per test) it's
 # held for the whole test and deadlocks once enough user-creating tests run
