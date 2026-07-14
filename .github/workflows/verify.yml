@@ -3054,14 +3054,19 @@ jobs:
           git worktree prune
 
   frontend-lint:
-    name: frontend lint
+    name: frontend lint+types+unit
     # Skip on cross-repo plugin dispatch — the plugin cannot regress the SPA.
     if: github.event_name != 'repository_dispatch'
     runs-on: [self-hosted, linux, x64, isolated]
-    # Biome lint + format check (`bun run ci` → `biome ci .`) with
-    # --error-on-warnings, so every enabled rule and any format drift fails
-    # the PR. The ruleset is curated max-strict with a ratchet backlog of
-    # temporarily-disabled rules (see frontend/biome.json + tracking issue).
+    # The full SPA PR gate, one bun install:
+    #   - Biome lint + format check (`bun run ci` → `biome ci .`) with
+    #     --error-on-warnings, so every enabled rule and any format drift
+    #     fails the PR. The ruleset is curated max-strict with a ratchet
+    #     backlog of temporarily-disabled rules (see frontend/biome.json).
+    #   - tsc --noEmit: before this gate, type errors only surfaced inside
+    #     build:saas at deploy-frontend time, i.e. AFTER merge.
+    #   - vitest run: the SPA unit suite (~790 tests, ~2 min) previously ran
+    #     in no CI job at all.
     # Path-gated to frontend/ so backend-only pushes skip it.
     steps:
       - uses: actions/checkout@v7
@@ -3101,6 +3106,21 @@ jobs:
         if: steps.guard.outputs.skip != 'true'
         working-directory: frontend
         run: bun run ci
+
+      # `bun run tsc` (not bunx, not a bare ./node_modules/.bin/tsc): bunx
+      # can resolve a registry package instead of the local install, and the
+      # raw bin's `#!/usr/bin/env node` shebang assumes system node, which
+      # these runners don't have — bun run executes the local bin under bun,
+      # the same mechanism deploy-frontend's build:saas already relies on.
+      - name: Typecheck (tsc --noEmit)
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: frontend
+        run: bun run tsc --noEmit
+
+      - name: Unit tests (vitest run)
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: frontend
+        run: bun run test
 
   e2e-browser:
     # Runs in parallel with the Obsidian suites on a `heavy` runner (max 2
