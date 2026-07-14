@@ -97,7 +97,7 @@ jobs:
   fingerprint:
     # Runs on every trigger (push, repository_dispatch, workflow_dispatch).
     # Emits TWO hashes:
-    #   - backend-hash: pure backend tree. Gates unit-tests/lint/e2e-local/e2e-browser/deploy.
+    #   - backend-hash: pure backend tree. Gates unit-tests/lint/e2e-browser/deploy.
     #   - e2e-hash:     backend-hash + plugin SHA. Gates e2e-clerk only (the plugin↔backend contract).
     # This lets a plugin-only change (same backend, different plugin SHA) miss the
     # e2e cache and re-run integration, while still hitting the backend cache so
@@ -115,7 +115,6 @@ jobs:
       skip-storage-database: ${{ steps.skips.outputs.skip-storage-database }}
       skip-e2e-clerk: ${{ steps.skips.outputs.skip-e2e-clerk }}
       skip-e2e-crdt: ${{ steps.skips.outputs.skip-e2e-crdt }}
-      skip-e2e-local: ${{ steps.skips.outputs.skip-e2e-local }}
       skip-e2e-browser: ${{ steps.skips.outputs.skip-e2e-browser }}
       skip-n1-compat: ${{ steps.skips.outputs.skip-n1-compat }}
       skip-build-and-publish-image: ${{ steps.skips.outputs.skip-build-and-publish-image }}
@@ -126,7 +125,6 @@ jobs:
       hash-storage-database: ${{ steps.skips.outputs.hash-storage-database }}
       hash-e2e-clerk: ${{ steps.skips.outputs.hash-e2e-clerk }}
       hash-e2e-crdt: ${{ steps.skips.outputs.hash-e2e-crdt }}
-      hash-e2e-local: ${{ steps.skips.outputs.hash-e2e-local }}
       hash-e2e-browser: ${{ steps.skips.outputs.hash-e2e-browser }}
       hash-n1-compat: ${{ steps.skips.outputs.hash-n1-compat }}
       hash-build-and-publish-image: ${{ steps.skips.outputs.hash-build-and-publish-image }}
@@ -418,7 +416,7 @@ jobs:
   prebuild-ci-image:
     needs: fingerprint
     # Image consumed by e2e-clerk (any trigger, gated on e2e-cache-hit) and
-    # e2e-local (push/workflow_dispatch only, gated on backend-cache-hit).
+    # the other e2e stacks (push/workflow_dispatch only, gated on backend-cache-hit).
     # Build whenever at least one consumer will run.
     #
     # is-full forces a build on full runs (main / [ci-full] / force_full). The
@@ -823,8 +821,8 @@ jobs:
     # with e2e they starve its 30s live-delivery budgets — a rotating-victim
     # flake (#355) that within-suite serialization alone can't fix (e.g. test_34
     # materialized=no, test_edit_after_discovery). e2e needs a quiet VM, so it
-    # waits for the heavy jobs to finish. crdt gates on the same set; api/local/
-    # browser inherit the wait by chaining off clerk+crdt.
+    # waits for the heavy jobs to finish. crdt gates on the same set; api/browser
+    # inherit the wait by chaining off clerk+crdt.
     needs: [fingerprint, prebuild-ci-image, unit-tests, n1-compat]
     # Serialize the two heavy full-Obsidian suites (this + e2e-crdt) via a shared
     # per-ref concurrency group so they don't co-tenant the runner pool and starve
@@ -1211,7 +1209,7 @@ jobs:
         run: |
           # tests/crdt/ is the CRDT-only suite (spec §12a). It opts the plugin
           # into CRDT and uses eventually-consistent assertions, so it must NOT
-          # run on this REST-path job — it has its own (CRDT_ENABLED) job. Ignore
+          # run on this Clerk-auth job — it has its own local-auth job (e2e-crdt). Ignore
           # it here so it isn't even collected as skips.
           # Phase 4: inject `-k <pattern>` when [e2e: clerk/<pattern>] targeted; empty => full.
           # E2E_PATTERN arrives via env: (charset-restricted at source), never
@@ -1577,9 +1575,14 @@ jobs:
           find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
   e2e-crdt:
-    # CRDT-only E2E suite (spec §12a). Faithful clone of e2e-clerk's
-    # Obsidian/Xvfb/CDP machinery, but: local auth (no Clerk), CRDT_ENABLED=true
-    # stack, the ci/compose.local.yml overlay, and it runs ONLY tests/crdt/.
+    # Local-auth E2E suite: tests/crdt/ (spec §12a, Obsidian/Xvfb/CDP machinery
+    # cloned from e2e-clerk) PLUS tests/api_only/ (absorbed from the deleted
+    # e2e-local job — same local-auth stack, so one bring-up instead of two;
+    # the api_only step runs right after stack health, hidden behind the
+    # plugin-build + Playwright background installs). Backend CRDT is
+    # unconditional (no code path reads a CRDT flag), so there is no separate
+    # "CRDT stack" — the only stack axis left is auth (Clerk vs local), via
+    # the ci/compose.local.yml overlay.
     #
     # All named resources are isolated from e2e-clerk: stack name
     # (engram-ci-crdt-), Qdrant collection (ci_crdt_), temp dirs, dynamic ports,
@@ -1596,7 +1599,9 @@ jobs:
       group: e2e-obsidian-${{ github.ref }}
       cancel-in-progress: false
     # Per-job skip (skip-e2e-crdt): same group as e2e-clerk; forced false on full runs.
-    if: needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt')
+    # Accepts BOTH the `crdt` and `local` targeted-e2e suites — each targets one
+    # of this job's two pytest steps; the non-targeted step skips.
+    if: needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local')
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1783,9 +1788,9 @@ jobs:
             # ENGRAM_CI_IMAGE pins ci/compose.yml's `image:` to that
             # exact tag. `--no-build` keeps startup honest — never a silent
             # rebuild; the image must already exist (now pulled above).
-            # ci/compose.local.yml overlays local auth; CRDT_ENABLED=true opts
-            # the engram service into CRDT (compose.yml reads ${CRDT_ENABLED}).
-            CRDT_ENABLED=true docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" up -d --no-build --wait
+            # ci/compose.local.yml overlays local auth. (Backend CRDT is
+            # unconditional — the old CRDT_ENABLED opt-in was dead config.)
+            docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" up -d --no-build --wait
 
             # Quick verification — compose --wait already confirmed healthcheck,
             # this just confirms the port mapping is reachable from the host
@@ -1879,7 +1884,11 @@ jobs:
       # ------------------------------------------------------------------
       # Wait for all background tasks
       # ------------------------------------------------------------------
-      - name: Wait for CI stack + plugin + Playwright + Ollama + Qdrant
+      # Split wait: the api_only step below needs only stack + Qdrant + Ollama,
+      # so it runs while the plugin build + Playwright install (needed only by
+      # the Obsidian-driven tests/crdt/ suite) finish in the background — the
+      # absorbed e2e-local suite costs ~0 extra wall-clock on this job.
+      - name: Wait for CI stack + Ollama + Qdrant
         run: |
           echo "Waiting for CI stack..."
           for i in $(seq 1 300); do
@@ -1891,27 +1900,6 @@ jobs:
           done
           if [ ! -f "${MARKER_PREFIX}-stack.marker" ]; then
             echo "CI stack timed out (5 min). Logs:"; cat "${MARKER_PREFIX}-stack.log"; exit 1
-          fi
-
-          echo "Waiting for plugin build..."
-          for i in $(seq 1 300); do
-            if [ -f "${MARKER_PREFIX}-plugin.marker" ]; then echo "Plugin ready"; break; fi
-            if [ -f "${MARKER_PREFIX}-plugin-failed.marker" ]; then
-              echo "Plugin build failed. Logs:"; cat "${MARKER_PREFIX}-plugin.log"; exit 1
-            fi
-            sleep 1
-          done
-          if [ ! -f "${MARKER_PREFIX}-plugin.marker" ]; then
-            echo "Plugin build timed out. Logs:"; cat "${MARKER_PREFIX}-plugin.log"; exit 1
-          fi
-
-          echo "Waiting for Playwright..."
-          for i in $(seq 1 300); do
-            if [ -f "${MARKER_PREFIX}-playwright.marker" ]; then echo "Playwright ready"; break; fi
-            sleep 1
-          done
-          if [ ! -f "${MARKER_PREFIX}-playwright.marker" ]; then
-            echo "Playwright install timed out. Logs:"; cat "${MARKER_PREFIX}-playwright.log"; exit 1
           fi
 
           echo "Waiting for Ollama check..."
@@ -1941,22 +1929,74 @@ jobs:
             echo "ERROR: Qdrant check timed out. Logs:"; cat "${MARKER_PREFIX}-qdrant.log" 2>/dev/null || true; exit 1
           fi
 
+      # ------------------------------------------------------------------
+      # Local-auth API tests (absorbed from the deleted e2e-local job).
+      # Needs only the stack — runs before the Obsidian machinery is ready.
+      # Skipped on plugin dispatch (plugin uses Clerk JWTs in production, so
+      # the local-auth API path is backend-internal) and on [e2e: crdt/...].
+      # ------------------------------------------------------------------
+      - name: "Run local-auth API tests"
+        if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.e2e-target-suite != 'crdt'
+        working-directory: e2e
+        env:
+          ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
+          AUTH_PROVIDER: local
+          CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
+          CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
+          QDRANT_URL: http://10.0.20.201:6333
+          QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
+          OLLAMA_URL: http://10.0.20.214:11434
+          E2E_PATTERN: ${{ needs.fingerprint.outputs.e2e-target-pattern }}
+        run: |
+          # Phase 4: inject `-k <pattern>` when [e2e: local/<pattern>] targeted; empty => full.
+          # E2E_PATTERN arrives via env: (charset-restricted at source), never
+          # template-interpolated into this script — no command-injection surface.
+          E2E_K="${E2E_PATTERN:-}"
+          K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
+          python3 -m pytest tests/api_only/ "${K_ARGS[@]}" -v --timeout=180 -p no:cacheprovider --no-header
+
+      # always(): a local-auth API failure above must not mask the CRDT suite's
+      # signal (the job still fails on the failed step).
+      - name: Wait for plugin + Playwright
+        if: always()
+        run: |
+          echo "Waiting for plugin build..."
+          for i in $(seq 1 300); do
+            if [ -f "${MARKER_PREFIX}-plugin.marker" ]; then echo "Plugin ready"; break; fi
+            if [ -f "${MARKER_PREFIX}-plugin-failed.marker" ]; then
+              echo "Plugin build failed. Logs:"; cat "${MARKER_PREFIX}-plugin.log"; exit 1
+            fi
+            sleep 1
+          done
+          if [ ! -f "${MARKER_PREFIX}-plugin.marker" ]; then
+            echo "Plugin build timed out. Logs:"; cat "${MARKER_PREFIX}-plugin.log"; exit 1
+          fi
+
+          echo "Waiting for Playwright..."
+          for i in $(seq 1 300); do
+            if [ -f "${MARKER_PREFIX}-playwright.marker" ]; then echo "Playwright ready"; break; fi
+            sleep 1
+          done
+          if [ ! -f "${MARKER_PREFIX}-playwright.marker" ]; then
+            echo "Playwright install timed out. Logs:"; cat "${MARKER_PREFIX}-playwright.log"; exit 1
+          fi
+
           # Add bun to PATH for E2E tests (already installed by plugin build)
           echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
 
       # ------------------------------------------------------------------
-      # CRDT E2E tests (local auth, CRDT_ENABLED stack)
+      # CRDT E2E tests (local auth stack)
       # ------------------------------------------------------------------
       - name: "Run CRDT E2E tests"
-        if: always()
+        if: always() && needs.fingerprint.outputs.e2e-target-suite != 'local'
         working-directory: e2e
         # -n 2 --dist=loadfile: two xdist workers, each owns whole test files
         # (preserves intra-file ordering). E2E_WORKERS defaults to 2 but can be
         # overridden to 1 for rollback.
         run: |
           # tests/crdt/ is the CRDT-only suite (spec §12a). It opts the plugin
-          # into CRDT (E2E_ENABLE_CRDT=true) against a CRDT_ENABLED backend and
-          # uses eventually-consistent assertions.
+          # into CRDT (E2E_ENABLE_CRDT=true) and uses eventually-consistent
+          # assertions.
           # Phase 4: inject `-k <pattern>` when [e2e: crdt/<pattern>] targeted; empty => full.
           # E2E_PATTERN arrives via env: (charset-restricted at source), never
           # template-interpolated into this script — no command-injection surface.
@@ -2052,7 +2092,7 @@ jobs:
     # skip=false on main, so unit-tests ALWAYS executes on main and can never
     # silently stop. On a PR it skips only when this exact
     # elixir-src+test+migrations content already passed full on main.
-    # (Phase 3 will further narrow PR runs to `mix test --stale`.)
+    # (PR runs are further narrowed to `mix test --stale` in the run step below.)
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-unit-tests != 'true'
     runs-on: [self-hosted, linux, x64, isolated]
 
@@ -3251,140 +3291,10 @@ jobs:
         working-directory: frontend
         run: bun run ci
 
-  e2e-local:
-    # Serialized after e2e-api (see #355 / e2e-api). `!cancelled()` preserves
-    # this suite's signal when a predecessor in the chain fails.
-    needs: [fingerprint, prebuild-ci-image, e2e-api]
-    # Skip on cross-repo plugin dispatch — plugin uses Clerk JWTs in production,
-    # so the local-auth API path is backend-internal.
-    # Also skip via the per-job fingerprint (skip-e2e-local =
-    # docker-image+elixir-src+e2e-harness+frontend; forced false on full runs), or
-    # on a Dependabot PR (Phoenix webServer boot needs secrets Dependabot can't
-    # access; unit-tests + lint cover the meaningful surface).
-    if: ${{ !cancelled() && github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-e2e-local != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
-    runs-on: [self-hosted, linux, x64, isolated]
-
-    env:
-      CI_PROJECT: engram-ci-local-${{ github.run_id }}
-      QDRANT_COLLECTION: ci_local_${{ github.run_id }}
-      ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image }}
-
-    steps:
-      - name: Reset sparse-checkout leaked from cross-repo jobs
-        run: |
-          # See comment in e2e-clerk's "Pre-cleanup stale resources" step.
-          # `git sparse-checkout disable` does not clear stale skip-worktree
-          # bits on the index, so we nuke .git on detected leak to force a
-          # fresh clone via the next actions/checkout step.
-          if [ -d .git ] && { [ -f .git/info/sparse-checkout ] || [ "$(git config --get core.sparseCheckout 2>/dev/null)" = "true" ]; }; then
-            echo "::warning::Sparse-checkout leak detected — removing .git for fresh clone"
-            rm -rf .git
-          fi
-
-      - uses: actions/checkout@v7
-        with:
-          clean: false
-
-      - name: Allocate dynamic ports
-        id: ports
-        run: |
-          get_free_port() {
-            python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()"
-          }
-          ENGRAM_PORT=$(get_free_port)
-          PG_PORT=$(get_free_port)
-          for var in ENGRAM_PORT PG_PORT; do
-            if [ -z "${!var}" ]; then
-              echo "::error::Port allocation failed for $var"
-              exit 1
-            fi
-          done
-          echo "engram_port=$ENGRAM_PORT" >> "$GITHUB_OUTPUT"
-          echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
-          echo "Ports: engram=$ENGRAM_PORT pg=$PG_PORT"
-
-      - name: Start CI stack (local auth)
-        env:
-          CI_ENGRAM_PORT: ${{ steps.ports.outputs.engram_port }}
-          CI_PG_PORT: ${{ steps.ports.outputs.pg_port }}
-          QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
-        run: |
-          docker compose -f ci/compose.yml -f ci/compose.local.yml \
-            -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
-
-          # Clean up stale Qdrant collection
-          curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
-
-          # Pull the prebuilt image from the FastRaid registry — this runner
-          # may differ from the host that built it (see prebuild-ci-image).
-          docker pull "$ENGRAM_CI_IMAGE"
-          # ENGRAM_CI_IMAGE pins ci/compose.yml's `image:` to that tag;
-          # --no-build keeps startup honest (no silent rebuild) now that the
-          # image is guaranteed present via the pull above.
-          docker compose -f ci/compose.yml -f ci/compose.local.yml \
-            -p "$CI_PROJECT" up -d --no-build --wait
-
-          # Wait for health
-          for i in $(seq 1 60); do
-            if curl -sf "http://localhost:${CI_ENGRAM_PORT}/api/health" > /dev/null 2>&1; then
-              echo "Local auth stack healthy on port ${CI_ENGRAM_PORT}"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "::error::Local auth stack failed to start"
-          docker compose -f ci/compose.yml -f ci/compose.local.yml \
-            -p "$CI_PROJECT" logs
-          exit 1
-
-      - name: Run local auth API tests
-        working-directory: e2e
-        env:
-          ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
-          AUTH_PROVIDER: local
-          CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
-          CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
-          QDRANT_URL: http://10.0.20.201:6333
-          QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
-          OLLAMA_URL: http://10.0.20.214:11434
-          E2E_PATTERN: ${{ needs.fingerprint.outputs.e2e-target-pattern }}
-        run: |
-          # Phase 4: inject `-k <pattern>` when [e2e: local/<pattern>] targeted; empty => full.
-          # E2E_PATTERN arrives via env: (charset-restricted at source), never
-          # template-interpolated into this script — no command-injection surface.
-          E2E_K="${E2E_PATTERN:-}"
-          K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
-          python3 -m pytest tests/api_only/ "${K_ARGS[@]}" -v --timeout=180 -p no:cacheprovider --no-header
-
-      - name: Collect failure logs
-        if: failure()
-        run: |
-          mkdir -p ci-artifacts-local
-          docker compose -f ci/compose.yml -f ci/compose.local.yml \
-            -p "$CI_PROJECT" logs > ci-artifacts-local/docker-compose.log 2>&1
-
-      - name: Upload failure artifacts
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ci-local-auth-debug-${{ github.sha }}
-          path: ci-artifacts-local/
-          retention-days: 7
-
-      - name: Tear down
-        if: always()
-        run: |
-          curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
-          docker compose -f ci/compose.yml -f ci/compose.local.yml \
-            -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
-          docker image prune -f 2>/dev/null || true
-          rm -rf ci-artifacts-local/
-          find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
-
   e2e-browser:
-    # Serialized last in the e2e chain, after e2e-local (see #355 / e2e-api).
+    # Serialized last in the e2e chain, after e2e-api (see #355 / e2e-api).
     # `!cancelled()` preserves this suite's signal when a predecessor fails.
-    needs: [fingerprint, prebuild-mix, e2e-local]
+    needs: [fingerprint, prebuild-mix, e2e-api]
     # Skip on cross-repo plugin dispatch — Playwright targets backend's React
     # frontend, which the plugin (separate repo) cannot affect.
     # Also skip via the per-job fingerprint (skip-e2e-browser =
@@ -3536,7 +3446,7 @@ jobs:
           # env. Without an override, :rate_limit_auth defaults to 10 req/60s
           # and the local-auth + dark-mode + mobile suites collectively burst
           # past it on /api/auth/register → 429s. Matches the value already
-          # set in ci/compose.local.yml for the e2e-local job.
+          # set in ci/compose.local.yml for the local-auth e2e stack.
           RATE_LIMIT_AUTH_OVERRIDE: "1000"
           # Same for PreAuthRateLimit (vault pipeline, default 600 req/60s):
           # browser suites that create notes burst /api/notes past it → 429s.
@@ -3544,7 +3454,7 @@ jobs:
           PRE_AUTH_RATE_LIMIT_OVERRIDE: "100000"
           # Production self-host default is invite_only; pin "open" so the
           # Playwright fixtures (which register multiple users) don't 403 with
-          # invite_required. Matches ci/compose.local.yml for e2e-local.
+          # invite_required. Matches ci/compose.local.yml (local-auth e2e stack).
           ENGRAM_DEFAULT_REGISTRATION_MODE: open
           PW_LOCAL_BACKEND_PORT: ${{ steps.ports.outputs.pw_local_backend_port }}
           PW_LOCAL_VITE_PORT: ${{ steps.ports.outputs.pw_local_vite_port }}
@@ -3637,7 +3547,7 @@ jobs:
     # and a real e2e/unit failure there is never gated. Mirrors the per-job +
     # prebuild is-full forcing so main is genuinely the full safety net.
     if: always() && (needs.fingerprint.outputs.is-full == 'true' || needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
-    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-api, e2e-crdt, e2e-local, e2e-browser, n1-compat, legal-cross-repo]
+    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-api, e2e-crdt, e2e-browser, n1-compat, legal-cross-repo]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
@@ -3650,7 +3560,6 @@ jobs:
           EC="${{ needs.e2e-clerk.result }}"
           EA="${{ needs.e2e-api.result }}"
           ED="${{ needs.e2e-crdt.result }}"
-          EL="${{ needs.e2e-local.result }}"
           EB="${{ needs.e2e-browser.result }}"
           LG="${{ needs.legal-cross-repo.result }}"
 
@@ -3686,9 +3595,9 @@ jobs:
           fi
 
           # On cross-repo plugin dispatch (plugin-e2e-trigger), unit-tests / lint /
-          # e2e-local / e2e-browser are intentionally skipped — plugin cannot regress
+          # e2e-browser are intentionally skipped — plugin cannot regress
           # backend internals. Only assert success when those jobs actually ran.
-          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "e2e-crdt=$ED" "e2e-local=$EL" "e2e-browser=$EB" "legal-cross-repo=$LG"; do
+          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "e2e-crdt=$ED" "e2e-browser=$EB" "legal-cross-repo=$LG"; do
             name="${pair%=*}"; result="${pair#*=}"
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "::error::$name failed: $result"
@@ -3698,7 +3607,7 @@ jobs:
 
   # Cache BOTH green-CI fingerprints so the next run with the same content
   # (typically the squash-merge to main) can skip the relevant slice.
-  #   - backend-hash cache:  unit-tests / lint / e2e-local / e2e-browser
+  #   - backend-hash cache:  unit-tests / lint / e2e-browser
   #   - e2e-hash cache:      e2e-clerk (the (backend, plugin) pairing)
   # On plugin dispatch, ONLY e2e-clerk ran — skip backend marker save in
   # that case to avoid recording a green for jobs that didn't execute.
@@ -3772,7 +3681,7 @@ jobs:
     # green WITHOUT running the migration rollforward. Recording a marker off
     # those would let a later identical-content PR skip the real check. It is a
     # cheap branch-only job, so it simply always runs (never marker-skipped).
-    needs: [fingerprint, lint, unit-tests, storage-database, e2e-clerk, e2e-crdt, e2e-local, e2e-browser]
+    needs: [fingerprint, lint, unit-tests, storage-database, e2e-clerk, e2e-crdt, e2e-browser]
     runs-on: [self-hosted, linux, x64, isolated]
     env:
       LINT_RESULT: ${{ needs.lint.result }}
@@ -3780,14 +3689,12 @@ jobs:
       STORAGE_DATABASE_RESULT: ${{ needs.storage-database.result }}
       E2E_CLERK_RESULT: ${{ needs.e2e-clerk.result }}
       E2E_CRDT_RESULT: ${{ needs.e2e-crdt.result }}
-      E2E_LOCAL_RESULT: ${{ needs.e2e-local.result }}
       E2E_BROWSER_RESULT: ${{ needs.e2e-browser.result }}
       HASH_LINT: ${{ needs.fingerprint.outputs.hash-lint }}
       HASH_UNIT_TESTS: ${{ needs.fingerprint.outputs.hash-unit-tests }}
       HASH_STORAGE_DATABASE: ${{ needs.fingerprint.outputs.hash-storage-database }}
       HASH_E2E_CLERK: ${{ needs.fingerprint.outputs.hash-e2e-clerk }}
       HASH_E2E_CRDT: ${{ needs.fingerprint.outputs.hash-e2e-crdt }}
-      HASH_E2E_LOCAL: ${{ needs.fingerprint.outputs.hash-e2e-local }}
       HASH_E2E_BROWSER: ${{ needs.fingerprint.outputs.hash-e2e-browser }}
     steps:
       - uses: actions/checkout@v7
@@ -3813,7 +3720,6 @@ jobs:
           record storage-database "$STORAGE_DATABASE_RESULT" "$HASH_STORAGE_DATABASE"
           record e2e-clerk        "$E2E_CLERK_RESULT"        "$HASH_E2E_CLERK"
           record e2e-crdt         "$E2E_CRDT_RESULT"         "$HASH_E2E_CRDT"
-          record e2e-local        "$E2E_LOCAL_RESULT"        "$HASH_E2E_LOCAL"
           record e2e-browser      "$E2E_BROWSER_RESULT"      "$HASH_E2E_BROWSER"
 
   # Single source of truth for the backend/e2e commit status on plugin PRs.
@@ -3830,7 +3736,7 @@ jobs:
   # runners don't ship gh on PATH.
   report-e2e-to-plugin:
     if: always() && github.event_name == 'repository_dispatch'
-    needs: [e2e-api, e2e-clerk, e2e-crdt, e2e-local, e2e-browser]
+    needs: [e2e-api, e2e-clerk, e2e-crdt, e2e-browser]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Generate App token
@@ -3846,7 +3752,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SHORT_SHA: ${{ github.event.client_payload.plugin_ref }}
-          RESULTS: "${{ needs.e2e-api.result }} ${{ needs.e2e-clerk.result }} ${{ needs.e2e-crdt.result }} ${{ needs.e2e-local.result }} ${{ needs.e2e-browser.result }}"
+          RESULTS: "${{ needs.e2e-api.result }} ${{ needs.e2e-clerk.result }} ${{ needs.e2e-crdt.result }} ${{ needs.e2e-browser.result }}"
         run: |
           if [ -z "$SHORT_SHA" ]; then
             echo "No plugin_ref in payload, skipping status report"
