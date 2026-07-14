@@ -25,6 +25,8 @@ defmodule Engram.Notes.FanoutPacer do
 
   alias Engram.Sync.Broadcast
 
+  require Logger
+
   @table :fanout_hot
 
   @default_pacing_enabled true
@@ -32,6 +34,7 @@ defmodule Engram.Notes.FanoutPacer do
   @default_drain_batch 20
   @default_drain_interval_ms 100
   @default_sweep_interval_ms 30_000
+  @default_queue_warn_depth 2_000
 
   # Client -----------------------------------------------------------------
 
@@ -112,6 +115,22 @@ defmodule Engram.Notes.FanoutPacer do
       |> Enum.reject(fn {_topic, q} -> :queue.is_empty(q) end)
       |> Map.new()
 
+    depths = Enum.map(queues, fn {_topic, q} -> :queue.len(q) end)
+    total = Enum.sum(depths)
+    max_depth = Enum.max([0 | depths])
+
+    :telemetry.execute(
+      [:engram, :fanout_pacer, :drain],
+      %{queued: total, max_topic_depth: max_depth, topics: map_size(queues)},
+      %{}
+    )
+
+    if max_depth >= queue_warn_depth() do
+      Logger.warning(
+        "fanout pacer queue deep max_topic_depth=#{max_depth} total=#{total} topics=#{map_size(queues)}"
+      )
+    end
+
     if map_size(queues) > 0 do
       _ = Process.send_after(self(), :drain, drain_interval_ms())
       {:noreply, %{state | queues: queues, draining: true}}
@@ -160,6 +179,7 @@ defmodule Engram.Notes.FanoutPacer do
   defp drain_batch, do: pos_env(:fanout_drain_batch, @default_drain_batch)
   defp drain_interval_ms, do: pos_env(:fanout_drain_interval_ms, @default_drain_interval_ms)
   defp sweep_interval_ms, do: pos_env(:fanout_sweep_interval_ms, @default_sweep_interval_ms)
+  defp queue_warn_depth, do: pos_env(:fanout_queue_warn_depth, @default_queue_warn_depth)
 
   defp pos_env(key, default) do
     case Application.get_env(:engram, key, default) do

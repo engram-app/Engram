@@ -429,6 +429,13 @@ if extras = System.get_env("ATTACHMENT_MIME_ALLOWLIST_EXTRA") do
   if list != [], do: config(:engram, :attachment_mime_allowlist_extra, list)
 end
 
+# Vault-channel CRDT fan-out pacer (engram-app/Engram#1002) rollback knob.
+# Default is pacing ON; set to "false" to fall back to unpaced inline
+# broadcast for every note if the pacer ever needs to be disabled in prod.
+if pacing = System.get_env("FANOUT_PACING_ENABLED") do
+  config :engram, :fanout_pacing_enabled, pacing == "true"
+end
+
 # Paddle billing (Merchant-of-Record). Secret/server keys are required only
 # when actually calling the Paddle API; the public client_token + price_ids
 # are required for the frontend overlay. PADDLE_ENV chooses sandbox vs prod.
