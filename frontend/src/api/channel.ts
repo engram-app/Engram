@@ -146,7 +146,8 @@ function flushBatch(batch: PendingBatch): void {
 // Failure-only push beacon (web.crdt.push): OK pushes are per-keystroke
 // volume and would blow the 60/min beacon rate limit; the failures are the
 // signal. No-ops entirely (resolveTransport returns null) when tracing is off.
-function pushFailureBeacon(docId: string, startUs: number, reason: string): void {
+// Exported as a test seam (same pattern as __getServerJitterMs).
+export function pushFailureBeacon(docId: string, startUs: number, reason: string): void {
 	if (!tracingEnabled()) {
 		return;
 	}

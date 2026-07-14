@@ -136,4 +136,25 @@ defmodule Engram.Observability.BeaconSanitizerTest do
              "engram.reason" => "timeout"
            }
   end
+
+  test "drops oversized engram.route / engram.reason values (the frontend slices by chars, the cap is bytes)" do
+    entry =
+      put_in(base()["attributes"], %{
+        "engram.route" => String.duplicate("r", 65),
+        "engram.reason" => String.duplicate("x", 65)
+      })
+
+    assert {:ok, out} = S.sanitize(entry, @now_us)
+    assert out.attributes == %{}
+  end
+
+  test "drops an UPPERCASE UUID in engram.note_id (clients emit lowercase; anything else is untrusted)" do
+    entry =
+      put_in(base()["attributes"], %{
+        "engram.note_id" => "019F45C5-7818-771B-9242-9AE8C7FD214F"
+      })
+
+    assert {:ok, out} = S.sanitize(entry, @now_us)
+    refute Map.has_key?(out.attributes, "engram.note_id")
+  end
 end

@@ -100,6 +100,16 @@ defmodule Engram.Observability.TraceSamplerTest do
       assert decision == :record_and_sample
     end
 
+    test "non-binary span names fall through to the ratio sampler (deliberate: never raise on the hot path)",
+         %{config: config} do
+      for name <- [:some_atom, ~c"engram.repo.query:oban_jobs"] do
+        {decision, _attrs, _tracestate} =
+          TraceSampler.should_sample(%{}, 123, [], name, :client, %{}, config)
+
+        assert decision == :record_and_sample
+      end
+    end
+
     test "delegate honours ratio 0.0 (drops real paths too)" do
       config = TraceSampler.setup(%{ratio: 0.0})
 

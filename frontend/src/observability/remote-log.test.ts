@@ -65,17 +65,21 @@ describe("RemoteLogBuffer", () => {
 		expect(calls).toHaveLength(0);
 	});
 
-	it("bounds the queue: oldest lines drop when transport is wedged", async () => {
+	it("bounds the queue at 200 with drop-oldest when the transport is wedged", async () => {
+		// Wedge the auto-flush (no token → flush drops nothing from the queue?
+		// No: flush SPLICES the batch then drops it on the floor when there is
+		// no token — so to accumulate past MAX_BATCH we must stop flush itself).
 		const buf = new RemoteLogBuffer(async () => ({ ...transport, token: null }));
+		const flushSpy = vi.spyOn(buf, "flush").mockResolvedValue(undefined);
 		for (let i = 0; i < 260; i++) {
 			buf.log("info", "crdt", `line ${i}`);
 		}
-		// Un-wedge and flush: only the newest MAX_QUEUE(200) minus already
-		// attempted flushes remain — assert the cap held, not an exact count.
-		const sent: number[] = [];
-		const buf2 = buf as unknown as { queue: unknown[] };
-		expect(buf2.queue.length).toBeLessThanOrEqual(200);
-		expect(sent).toHaveLength(0);
+		const queue = (buf as unknown as { queue: Array<{ message: string }> }).queue;
+		expect(queue.length).toBe(200);
+		// Drop-oldest: the newest breadcrumbs survive, the earliest are gone.
+		expect(queue[0]?.message).toBe("line 60");
+		expect(queue[199]?.message).toBe("line 259");
+		flushSpy.mockRestore();
 	});
 
 	it("truncates oversized messages", async () => {
