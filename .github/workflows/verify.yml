@@ -1240,36 +1240,11 @@ jobs:
           E2E_CDP_PORT_C_W1: ${{ steps.ports.outputs.cdp_port_c_w1 }}
           E2E_DISPLAY_BASE: ${{ steps.ports.outputs.display_base }}
 
-      # ------------------------------------------------------------------
-      # Report E2E status back to the plugin repo (dispatch only)
-      # ------------------------------------------------------------------
-      - name: Report E2E status to plugin repo
-        if: always() && github.event_name == 'repository_dispatch'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          SHORT_SHA="${{ github.event.client_payload.plugin_ref }}"
-          if [ -z "$SHORT_SHA" ]; then
-            echo "No plugin_ref in payload, skipping status report"
-            exit 0
-          fi
-          # curl (not gh CLI) — engram-isolated runners don't ship gh on PATH.
-          API="https://api.github.com/repos/engram-app/Engram-obsidian"
-          AUTH=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
-          # Resolve to full 40-char SHA (short SHAs from manual dispatches won't work)
-          PLUGIN_SHA=$(curl -fsS --retry 3 --retry-all-errors --retry-delay 2 "${AUTH[@]}" "${API}/commits/${SHORT_SHA}" | jq -r '.sha')
-          # Determine overall E2E result from prior steps
-          if [ "${{ job.status }}" = "success" ]; then
-            STATE="success"
-            DESC="E2E tests passed"
-          else
-            STATE="failure"
-            DESC="E2E tests failed"
-          fi
-          curl -fsS -X POST --retry 3 --retry-all-errors --retry-delay 2 "${AUTH[@]}" "${API}/statuses/${PLUGIN_SHA}" \
-            -d "$(jq -nc --arg state "$STATE" --arg context "backend/e2e" --arg description "$DESC" --arg target_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-                  '{state:$state, context:$context, description:$description, target_url:$target_url}')"
+      # Note: the backend/e2e commit status for plugin PRs is posted by the
+      # dedicated `report-e2e-to-plugin` job (needs all e2e suites, always runs
+      # on a plugin dispatch), NOT from inside this job — e2e-clerk is skippable
+      # (Clerk-quota/targeting), so an in-job reporter here left the plugin PR
+      # with no status whenever this suite was skipped.
 
       # ------------------------------------------------------------------
       # Cleanup — MUST kill everything, even on cancel/failure
@@ -3841,13 +3816,21 @@ jobs:
           record e2e-local        "$E2E_LOCAL_RESULT"        "$HASH_E2E_LOCAL"
           record e2e-browser      "$E2E_BROWSER_RESULT"      "$HASH_E2E_BROWSER"
 
-  # When plugin dispatch arrives and the (backend, plugin) pair is already
-  # cached green, e2e-clerk is skipped — its in-job "Report E2E status to
-  # plugin repo" step therefore does NOT run, leaving the plugin PR with no
-  # commit status. This job posts that success directly from the cached pass.
-  report-cached-pass-to-plugin:
-    if: github.event_name == 'repository_dispatch' && needs.fingerprint.outputs.e2e-cache-hit == 'true'
-    needs: fingerprint
+  # Single source of truth for the backend/e2e commit status on plugin PRs.
+  # Runs on EVERY plugin dispatch (always()), needs all e2e suites, and posts
+  # one aggregate status. Supersedes two brittle mechanisms that left plugin
+  # PRs hung with no status:
+  #   * the e2e-clerk in-job reporter — e2e-clerk is skippable
+  #     (Clerk-quota / suite targeting), so it went silent when skipped;
+  #   * report-cached-pass-to-plugin — fired only on a FULL e2e cache-hit,
+  #     which is unreachable because e2e-api always runs, so a plugin-only
+  #     change (every full suite cached, e2e-api running) posted nothing.
+  # A skipped suite is a cached pass, not a failure — only a real
+  # failure/cancellation reds the check. curl (not gh CLI): engram-isolated
+  # runners don't ship gh on PATH.
+  report-e2e-to-plugin:
+    if: always() && github.event_name == 'repository_dispatch'
+    needs: [e2e-api, e2e-clerk, e2e-crdt, e2e-local, e2e-browser]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Generate App token
@@ -3859,21 +3842,33 @@ jobs:
           owner: engram-app
           repositories: Engram-obsidian
 
-      - name: Report cached e2e pass to plugin repo
+      - name: Report backend/e2e status to plugin repo
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SHORT_SHA: ${{ github.event.client_payload.plugin_ref }}
+          RESULTS: "${{ needs.e2e-api.result }} ${{ needs.e2e-clerk.result }} ${{ needs.e2e-crdt.result }} ${{ needs.e2e-local.result }} ${{ needs.e2e-browser.result }}"
         run: |
           if [ -z "$SHORT_SHA" ]; then
             echo "No plugin_ref in payload, skipping status report"
             exit 0
           fi
-          PLUGIN_SHA=$(gh api "repos/engram-app/Engram-obsidian/commits/${SHORT_SHA}" --jq '.sha')
-          gh api "repos/engram-app/Engram-obsidian/statuses/${PLUGIN_SHA}" \
-            -f state="success" \
-            -f context="backend/e2e" \
-            -f description="E2E tests passed (cached fingerprint match)" \
-            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          # Fail only on a genuine failure/cancellation; success/skipped are green.
+          STATE="success"
+          DESC="E2E passed (skipped suites = cached pass)"
+          for r in $RESULTS; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              STATE="failure"
+              DESC="E2E failed (a suite reported $r)"
+            fi
+          done
+          echo "Suite results: $RESULTS -> $STATE"
+          API="https://api.github.com/repos/engram-app/Engram-obsidian"
+          AUTH=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
+          # Resolve to full 40-char SHA (short SHAs from manual dispatches won't work)
+          PLUGIN_SHA=$(curl -fsS --retry 3 --retry-all-errors --retry-delay 2 "${AUTH[@]}" "${API}/commits/${SHORT_SHA}" | jq -r '.sha')
+          curl -fsS -X POST --retry 3 --retry-all-errors --retry-delay 2 "${AUTH[@]}" "${API}/statuses/${PLUGIN_SHA}" \
+            -d "$(jq -nc --arg state "$STATE" --arg context "backend/e2e" --arg description "$DESC" --arg target_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+                  '{state:$state, context:$context, description:$description, target_url:$target_url}')"
 
   # Build + push the release image to GHCR (staging-fastraid) AND ECR
   # (prod ECS Fargate) in a single buildx invocation. Layers build once,
