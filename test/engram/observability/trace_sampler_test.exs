@@ -75,6 +75,41 @@ defmodule Engram.Observability.TraceSamplerTest do
       assert decision == :record_and_sample
     end
 
+    test "drops orphan repo.query root spans (Oban poller noise)", %{config: config} do
+      # Request-bound Ecto spans always have a parent (the Bandit server span),
+      # so a repo.query arriving here as a ROOT is background-poller noise:
+      # Oban's staging poll emits engram.repo.query:oban_jobs / oban_peers and
+      # source-less begin/commit roots every second, drowning Tempo (the
+      # 2026-07-14 hunt paged through screens of them).
+      for name <- [
+            "engram.repo.query:oban_jobs",
+            "engram.repo.query:oban_peers",
+            "engram.repo.query"
+          ] do
+        {decision, _attrs, _tracestate} =
+          TraceSampler.should_sample(%{}, 123, [], name, :client, %{}, config)
+
+        assert decision == :drop, "expected root #{name} to be dropped"
+      end
+    end
+
+    test "keeps non-query root spans with no url.path (background jobs)", %{config: config} do
+      {decision, _attrs, _tracestate} =
+        TraceSampler.should_sample(%{}, 123, [], "checkpoint_note", :internal, %{}, config)
+
+      assert decision == :record_and_sample
+    end
+
+    test "non-binary span names fall through to the ratio sampler (deliberate: never raise on the hot path)",
+         %{config: config} do
+      for name <- [:some_atom, ~c"engram.repo.query:oban_jobs"] do
+        {decision, _attrs, _tracestate} =
+          TraceSampler.should_sample(%{}, 123, [], name, :client, %{}, config)
+
+        assert decision == :record_and_sample
+      end
+    end
+
     test "delegate honours ratio 0.0 (drops real paths too)" do
       config = TraceSampler.setup(%{ratio: 0.0})
 

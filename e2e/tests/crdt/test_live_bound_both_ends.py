@@ -12,9 +12,13 @@ already-bound Y.Doc, so it diverges, the bounded retry exhausts, and the edit
 never lands until a full restart. This test opens the note in Obsidian's
 editor BEFORE the remote edit, which is the missing coverage.
 
-Marked xfail(strict=False): the bug is intermittent ("works after restart,
-degrades otherwise"), so this documents it without breaking CI. Flip to a hard
-assertion when #224 is fixed.
+Hard-gated since plugin #242 (the live-bound REST-converge fix for the
+2026-07-14 deaf-note incident). test_deaf_live_bound_note_converges_via_rest_catchup
+below stages the previously-intermittent wedge DETERMINISTICALLY: room killed
+server-side + handshake budget zeroed, so the old channel-heal path cannot
+succeed and only the REST catch-up can converge the note. It fails on
+pre-#242 plugins (which faked convergence after 3 re-handshakes) and passes
+with the fix.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ import os
 
 import pytest
 
+from helpers.backend_rpc import backend_rpc
 from helpers.vault import wait_for_content
 
 pytestmark = pytest.mark.skipif(
@@ -42,11 +47,6 @@ def _note_id(api_sync, path: str) -> str:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    reason="p0 engram-app/Engram-obsidian#224: live-bound receiver does not "
-    "converge on a remote edit without a restart",
-    strict=False,
-)
 async def test_remote_edit_converges_while_note_is_live_bound_in_obsidian(
     web, vault_b, cdp_b, api_sync, sync_vault_id
 ):
@@ -83,3 +83,75 @@ async def test_remote_edit_converges_while_note_is_live_bound_in_obsidian(
     # out (live-bound re-handshake never merges) until a hard restart.
     final = wait_for_content(vault_b, path, "EDIT-WHILE-B-LIVE-BOUND", timeout=CRDT_TIMEOUT)
     assert "base line" in final, f"base content lost on B: {final!r}"
+
+
+@pytest.mark.asyncio
+async def test_deaf_live_bound_note_converges_via_rest_catchup(
+    web, vault_b, cdp_b, api_sync, sync_vault_id
+):
+    """Deterministic regression stage for the 2026-07-14 deaf-note incident.
+
+    Production wedge: a note open in Obsidian's editor (live-bound) whose CRDT
+    room observation silently died. The plugin discards vault fan-out frames
+    for live-bound notes (the room "owns" them), its re-handshake could not
+    get through, and the old catch-up FAKED convergence after 3 attempts --
+    the note went one-way deaf until an Obsidian restart.
+
+    Deterministic stage: kill the note's room out from under B (B's client
+    keeps believing it is enrolled -- exactly the prod state) AND zero the
+    crdt handshake budget so a STEP1 re-handshake cannot heal the channel
+    path. The ONLY way B can converge is the plugin's REST delta catch-up
+    (plugin #242). Pre-#242 plugins time out here deterministically.
+    """
+    path = "E2E/Crdt/DeafLiveBound.md"
+
+    api_sync.create_note(path, "# Deaf Live Bound\nbase line.\n")
+    await cdp_b.trigger_full_sync()
+    wait_for_content(vault_b, path, "base line", timeout=CRDT_TIMEOUT)
+
+    # Live-bind the note in B's editor BEFORE the wedge, so B's Y.Doc owns it.
+    opened = await cdp_b.evaluate(
+        """
+        (async () => {
+          const f = app.vault.getAbstractFileByPath(%r);
+          if (!f) return "no-file";
+          await app.workspace.getLeaf(false).openFile(f);
+          return app.workspace.activeEditor?.file?.path ?? "no-active";
+        })()
+        """
+        % path,
+        await_promise=True,
+    )
+    assert opened == path, f"failed to live-bind note in Obsidian editor: {opened!r}"
+
+    note_id = _note_id(api_sync, path)
+    await web.open_note(note_id, sync_vault_id)
+
+    # Stage the deafness: the room dies (B is silently no longer an observer;
+    # the web's own next keystroke recreates it and re-observes only the web),
+    # and the handshake budget goes to zero (every STEP1 -> rate_limited), so
+    # the channel path cannot self-heal. put_env is node-local; the CI stack
+    # is single-node.
+    backend_rpc(f'Engram.Notes.CrdtRegistry.terminate_room("{note_id}")')
+    # Capture the pre-test override (the CI stack deliberately raises it, #999)
+    # so the finally-restore puts back the configured value, not a bare default.
+    prior = backend_rpc(
+        "IO.puts(inspect(Application.get_env(:engram, :crdt_hs_rate_limit_override)))"
+    ).strip()
+    backend_rpc("Application.put_env(:engram, :crdt_hs_rate_limit_override, 0)")
+    try:
+        await web.append("\nEDIT-WHILE-B-DEAF\n")
+
+        # Wait for the server row to materialize the edit (checkpoint debounce)
+        # so B's pull sees the diverged content_hash, then run B's sync. The
+        # pull IS the path under test: applyChange's live-bound branch must
+        # converge via the REST delta, not via the (blocked) re-handshake.
+        api_sync.wait_for_note_content(path, "EDIT-WHILE-B-DEAF", timeout=CRDT_TIMEOUT)
+        await cdp_b.trigger_full_sync()
+
+        final = wait_for_content(vault_b, path, "EDIT-WHILE-B-DEAF", timeout=CRDT_TIMEOUT)
+        assert "base line" in final, f"base content lost on B: {final!r}"
+    finally:
+        backend_rpc(
+            f"Application.put_env(:engram, :crdt_hs_rate_limit_override, {prior})"
+        )

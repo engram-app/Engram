@@ -1,5 +1,6 @@
 import { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
+import { rlog } from "../observability/remote-log";
 import { CrdtChannel } from "./channel";
 import { CrdtEnrollment } from "./enrollment";
 import { CrdtManager } from "./manager";
@@ -214,6 +215,7 @@ export function scheduleRehandshake(docId: string, delayMs: number): void {
 	if (rehandshakeTimers.has(docId)) {
 		return;
 	}
+	rlog().info("crdt", `re-handshake scheduled note=${docId} delayMs=${delayMs}`);
 	rehandshakeTimers.set(
 		docId,
 		setTimeout(() => {
@@ -245,7 +247,11 @@ export function resyncOpenDocs(): void {
 	if (!session) {
 		return;
 	}
-	for (const id of session.awareness.keys()) {
+	const ids = [...session.awareness.keys()];
+	if (ids.length > 0) {
+		rlog().info("crdt", `reconnect resync: re-enrolling ${ids.length} open doc(s)`);
+	}
+	for (const id of ids) {
 		session.enrollment.reset(id); // clears enrolled set + CrdtChannel.initiated guard
 		session.enrollment.enroll(id); // re-sends STEP1 (idempotent; reset re-armed it)
 	}

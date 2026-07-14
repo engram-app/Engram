@@ -158,6 +158,19 @@ defmodule EngramWeb.CrdtChannelTest do
       assert CrdtBridge.text_of(client) == "base"
     end
 
+    test "a successfully routed crdt_msg is ACKED with :ok", %{socket: socket, doc_id: doc_id} do
+      # Without an ack, a client that attaches a reply/timeout handler treats
+      # every successful push as a timeout: the web SPA re-handshook every open
+      # note every ~3.5s forever (2026-07-14). The ack is the delivery signal.
+      client = CrdtBridge.new_doc()
+      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+      {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+
+      ref = push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(frame)})
+
+      assert_reply ref, :ok, %{}, 3000
+    end
+
     # ---------------------------------------------------------------------
     # doc_id IS the note_id — ownership validation, not path_hmac lookup
     # ---------------------------------------------------------------------
