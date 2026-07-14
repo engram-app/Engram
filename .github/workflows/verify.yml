@@ -823,20 +823,14 @@ jobs:
     # installs, mirroring e2e-crdt's local-auth fold).
     #
     # Also gate on the heavy non-e2e jobs (unit-tests ~6min, n1-compat ~3min).
-    # They saturate the shared runner VM's CPU, and when they run concurrently
-    # with e2e they starve its 30s live-delivery budgets — a rotating-victim
-    # flake (#355) that within-suite serialization alone can't fix (e.g. test_34
-    # materialized=no, test_edit_after_discovery). e2e needs a quiet VM, so it
-    # waits for the heavy jobs to finish. crdt gates on the same set; browser
-    # inherits the wait by chaining off clerk+crdt.
+    # They saturate a runner VM's CPU, and when they run concurrently with e2e
+    # on the same VM they starve its 30s live-delivery budgets — a
+    # rotating-victim flake (#355) that within-suite serialization alone can't
+    # fix (e.g. test_34 materialized=no, test_edit_after_discovery). They run
+    # on generic (non-heavy) runners, so the `heavy` placement below can't
+    # keep them off this suite's VM — wait for them instead. crdt gates on
+    # the same set.
     needs: [fingerprint, prebuild-ci-image, unit-tests, n1-compat]
-    # Serialize the two heavy full-Obsidian suites (this + e2e-crdt) via a shared
-    # per-ref concurrency group so they don't co-tenant the runner pool and starve
-    # each other's timing budgets (the #355 rotating-victim flake). Queue, never
-    # cancel — we want both signals, just not simultaneously.
-    concurrency:
-      group: e2e-obsidian-${{ github.ref }}
-      cancel-in-progress: false
     # e2e-clerk is the plugin↔backend contract test. Skip when:
     #   - the exact (backend, plugin) pair has already passed (cache hit), OR
     #   - this is a Dependabot PR (needs Clerk + App secrets that GitHub doesn't
@@ -852,7 +846,12 @@ jobs:
     # is branch-only, so every main push (and every plugin dispatch, where
     # unit-tests skips) silently lost the Obsidian e2e suites (#355 fallout).
     if: ${{ !cancelled() && needs.fingerprint.outputs.skip-e2e-clerk != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'clerk') }}
-    runs-on: [self-hosted, linux, x64, isolated]
+    # `heavy` restricts placement to the 2 heavy-labeled runners per VM
+    # (fastraid-1/2, slowraid runner-1/2): at most two heavy e2e suites can
+    # co-tenant a 14-core VM, which is within budget — the #355 starvation
+    # needed ~5 concurrent heavies. This hardware cap replaces the per-ref
+    # concurrency group that used to serialize this suite with e2e-crdt.
+    runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     env:
       CI_PROJECT: engram-ci-${{ github.run_id }}-obsidian
@@ -1384,24 +1383,20 @@ jobs:
     # All named resources are isolated from e2e-clerk: stack name
     # (engram-ci-crdt-), Qdrant collection (ci_crdt_), temp dirs, dynamic ports,
     # and a separate Xvfb display band below (+150 vs e2e-clerk's +50): clerk
-    # spans displays ~45-134, crdt ~145-234. The one remaining shared resource is
-    # runner-pool CPU: running two full Obsidian suites at once stretches every
-    # timing budget (the #355 rotating-victim flake), so the shared per-ref
-    # `concurrency` group below SERIALIZES this suite with e2e-clerk (queue, not
-    # cancel) rather than running them simultaneously. Also gate on the heavy
+    # spans displays ~45-134, crdt ~145-234. Runner-pool CPU is handled by the
+    # `heavy` label below (max 2 heavy suites per VM — see the e2e-clerk
+    # runs-on comment), which replaced the per-ref concurrency group that used
+    # to serialize this suite with e2e-clerk (#355). Also gate on the heavy
     # non-e2e jobs (unit-tests, n1-compat) so e2e runs on a quiet VM — see the
     # e2e-clerk needs comment (#355).
     needs: [fingerprint, prebuild-ci-image, unit-tests, n1-compat]
-    concurrency:
-      group: e2e-obsidian-${{ github.ref }}
-      cancel-in-progress: false
     # Per-job skip (skip-e2e-crdt): same group as e2e-clerk; forced false on full runs.
     # Accepts BOTH the `crdt` and `local` targeted-e2e suites — each targets one
     # of this job's two pytest steps; the non-targeted step skips.
     # !cancelled(): same quiet-VM-wait rationale as e2e-clerk — without it the
     # branch-only n1-compat need (skipped on main/dispatch) skips this job.
     if: ${{ !cancelled() && needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
-    runs-on: [self-hosted, linux, x64, isolated]
+    runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     env:
       # Distinct project name so containers/volumes never collide with
@@ -3093,17 +3088,20 @@ jobs:
         run: bun run ci
 
   e2e-browser:
-    # Serialized last in the e2e chain, after the clerk+crdt group (see #355;
-    # e2e-api was folded into e2e-clerk). `!cancelled()` preserves this
-    # suite's signal when a predecessor fails.
-    needs: [fingerprint, prebuild-mix, e2e-clerk, e2e-crdt]
+    # Runs in parallel with the Obsidian suites on a `heavy` runner (max 2
+    # heavy suites per VM — see the e2e-clerk runs-on comment). The old
+    # needs-chain serialization behind clerk+crdt (#355) is retired: with two
+    # runner VMs there are enough heavy slots for all three suites at once,
+    # and this one starts right after prebuild-mix while clerk/crdt still
+    # wait on unit-tests, so the slots naturally stagger.
+    needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — Playwright targets backend's React
     # frontend, which the plugin (separate repo) cannot affect.
     # Also skip via the per-job fingerprint (skip-e2e-browser =
     # docker-image+elixir-src+e2e-harness+frontend; forced false on full runs), or
     # on Dependabot PRs (Phoenix webServer needs Clerk secrets Dependabot can't access).
-    if: ${{ !cancelled() && github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-e2e-browser != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'browser') }}
-    runs-on: [self-hosted, linux, x64, isolated]
+    if: ${{ github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-e2e-browser != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'browser') }}
+    runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     env:
       PG_CONTAINER: engram-e2e-browser-${{ github.run_id }}
