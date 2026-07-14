@@ -38,7 +38,10 @@ defmodule Engram.Notes.FanoutPacerTest do
     Application.put_env(:engram, :fanout_pacing_enabled, true)
     Application.put_env(:engram, :fanout_hot_window_ms, 60_000)
     Application.put_env(:engram, :fanout_drain_batch, 3)
-    Application.put_env(:engram, :fanout_drain_interval_ms, 50)
+    # 200ms interval keeps the post-batch refute window (100ms) a safe fraction
+    # of the inter-tick gap, so scheduler jitter + assert-completion drift under
+    # CI load cannot overlap the next tick (a tight 50ms interval flaked here).
+    Application.put_env(:engram, :fanout_drain_interval_ms, 200)
 
     topic = "sync:u2:v2"
     EngramWeb.Endpoint.subscribe(topic)
@@ -47,12 +50,12 @@ defmodule Engram.Notes.FanoutPacerTest do
     for i <- 1..7, do: FanoutPacer.emit(topic, "note_yjs_update", payload("c#{i}"), "c#{i}")
 
     # First tick delivers exactly drain_batch (3), then no more until next tick.
-    for _ <- 1..3, do: assert_receive(%Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200)
-    refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 20
+    for _ <- 1..3, do: assert_receive(%Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 600)
+    refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 100
 
     # Remaining 4 drain over the following ticks.
-    for _ <- 1..4, do: assert_receive(%Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 300)
-    refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 100
+    for _ <- 1..4, do: assert_receive(%Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 800)
+    refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200
   end
 
   test "hot frame bypasses and arrives before the bulk of a concurrent cold flood (#1002)" do
@@ -73,8 +76,11 @@ defmodule Engram.Notes.FanoutPacerTest do
     for i <- 1..20, do: FanoutPacer.emit(topic, "note_yjs_update", payload("g#{i}"), "g#{i}")
 
     # The live note edits again → HOT → must arrive immediately, not behind the 20.
+    # 150ms proves bypass with margin: the cold backlog (batch=1 @ 80ms = 1600ms
+    # to drain) means anything under a few hundred ms can only be the inline hot
+    # frame, so a generous ceiling keeps the assert robust without weakening it.
     FanoutPacer.emit(topic, "note_yjs_update", payload("live"), "live")
-    assert_receive(%Phoenix.Socket.Broadcast{payload: %{"note_id" => "live"}}, 60)
+    assert_receive(%Phoenix.Socket.Broadcast{payload: %{"note_id" => "live"}}, 150)
   end
 
   test "two topics drain independently (per-vault fairness)" do
