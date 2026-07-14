@@ -841,7 +841,11 @@ jobs:
     # Per-job fingerprint skip (skip-e2e-clerk) replaces the coarse e2e-cache-hit:
     # skips only when this exact (docker-image+elixir-src+e2e-harness+plugin)
     # content already passed full on main; forced false on full runs.
-    if: needs.fingerprint.outputs.skip-e2e-clerk != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'clerk')
+    # !cancelled(): the unit-tests/n1-compat needs are a QUIET-VM WAIT, not a
+    # success gate. Without it, a SKIPPED need skips this job too — n1-compat
+    # is branch-only, so every main push (and every plugin dispatch, where
+    # unit-tests skips) silently lost the Obsidian e2e suites (#355 fallout).
+    if: ${{ !cancelled() && needs.fingerprint.outputs.skip-e2e-clerk != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'clerk') }}
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1601,7 +1605,9 @@ jobs:
     # Per-job skip (skip-e2e-crdt): same group as e2e-clerk; forced false on full runs.
     # Accepts BOTH the `crdt` and `local` targeted-e2e suites — each targets one
     # of this job's two pytest steps; the non-targeted step skips.
-    if: needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local')
+    # !cancelled(): same quiet-VM-wait rationale as e2e-clerk — without it the
+    # branch-only n1-compat need (skipped on main/dispatch) skips this job.
+    if: ${{ !cancelled() && needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
