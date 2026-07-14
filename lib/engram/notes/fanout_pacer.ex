@@ -26,6 +26,8 @@ defmodule Engram.Notes.FanoutPacer do
 
   @default_pacing_enabled true
   @default_hot_window_ms 2_000
+  @default_drain_batch 20
+  @default_drain_interval_ms 100
 
   # Client -----------------------------------------------------------------
 
@@ -89,17 +91,59 @@ defmodule Engram.Notes.FanoutPacer do
     {:reply, :ok, %{state | queues: %{}, draining: false}}
   end
 
+  @impl true
+  def handle_cast({:enqueue, topic, event, payload}, %{queues: queues} = state) do
+    q = Map.get(queues, topic, :queue.new())
+    queues = Map.put(queues, topic, :queue.in({event, payload}, q))
+    {:noreply, ensure_draining(%{state | queues: queues})}
+  end
+
+  @impl true
+  def handle_info(:drain, state) do
+    queues =
+      state.queues
+      |> Enum.map(fn {topic, q} -> {topic, drain_topic(topic, q, drain_batch())} end)
+      |> Enum.reject(fn {_topic, q} -> :queue.is_empty(q) end)
+      |> Map.new()
+
+    if map_size(queues) > 0 do
+      Process.send_after(self(), :drain, drain_interval_ms())
+      {:noreply, %{state | queues: queues, draining: true}}
+    else
+      {:noreply, %{state | queues: %{}, draining: false}}
+    end
+  end
+
+  # Pop up to `n` frames off `q` and broadcast each on `topic` (per-vault FIFO).
+  defp drain_topic(topic, q, n) when n > 0 do
+    case :queue.out(q) do
+      {{:value, {event, payload}}, q2} ->
+        Broadcast.emit(topic, event, payload)
+        drain_topic(topic, q2, n - 1)
+
+      {:empty, q2} ->
+        q2
+    end
+  end
+
+  defp drain_topic(_topic, q, _n), do: q
+
+  # Arm the drain timer exactly once; subsequent enqueues ride the running loop.
+  defp ensure_draining(%{draining: true} = state), do: state
+
+  defp ensure_draining(state) do
+    Process.send_after(self(), :drain, drain_interval_ms())
+    %{state | draining: true}
+  end
+
   # Config readers (evaluated at call time so tests can put_env) ------------
 
   defp pacing_enabled?,
     do: Application.get_env(:engram, :fanout_pacing_enabled, @default_pacing_enabled) == true
 
   defp hot_window_ms, do: pos_env(:fanout_hot_window_ms, @default_hot_window_ms)
-
-  # ponytail: drain_batch/0 and drain_interval_ms/0 land in Task 2 alongside
-  # the handle_cast/handle_info that call them — an unused private function is
-  # a compile warning (this repo's CI runs --warnings-as-errors), so Task 1
-  # keeps only the config readers it actually calls.
+  defp drain_batch, do: pos_env(:fanout_drain_batch, @default_drain_batch)
+  defp drain_interval_ms, do: pos_env(:fanout_drain_interval_ms, @default_drain_interval_ms)
 
   defp pos_env(key, default) do
     case Application.get_env(:engram, key, default) do
