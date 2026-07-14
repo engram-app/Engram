@@ -214,8 +214,17 @@ async function waitUntilEmailResolvable(
 // Python E2E job which may be running in parallel on the same Clerk account.
 const E2E_PREFIXES = ["e2e-browser-"];
 
+// Only delete users older than this. Without an age gate, TWO CONCURRENT
+// e2e-browser jobs delete each other's freshly-minted users (hit 2x on
+// 2026-07-14: every [clerk] test failed "No user found with email" whenever
+// a second run's globalSetup fired mid-run — impossible in the old
+// single-runner world, routine with a multi-runner pool). Same 1h belt the
+// hourly reaper (e2e/scripts/cleanup_clerk_users.py --older-than 1h) wears.
+const CLEANUP_MIN_AGE_MS = 60 * 60 * 1000;
+
 async function cleanupOrphanedClerkUsers(secretKey: string) {
 	const headers = { Authorization: `Bearer ${secretKey}` };
+	const cutoff = Date.now() - CLEANUP_MIN_AGE_MS;
 	let deleted = 0;
 
 	for (let offset = 0; ; offset += 100) {
@@ -233,6 +242,12 @@ async function cleanupOrphanedClerkUsers(secretKey: string) {
 		for (const user of users) {
 			const emails: string[] =
 				user.email_addresses?.map((ea: { email_address: string }) => ea.email_address) ?? [];
+			// created_at is unix-millis (Clerk Backend API). Skip anything
+			// younger than the age gate — it may belong to a LIVE run.
+			const createdAt = typeof user.created_at === "number" ? user.created_at : 0;
+			if (createdAt >= cutoff) {
+				continue;
+			}
 			if (emails.some((e: string) => E2E_PREFIXES.some((p) => e.startsWith(p)))) {
 				const del = await fetch(`${CLERK_API}/users/${user.id}`, { method: "DELETE", headers });
 				if (del.ok) {
