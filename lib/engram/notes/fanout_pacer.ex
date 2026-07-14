@@ -78,15 +78,16 @@ defmodule Engram.Notes.FanoutPacer do
 
   @impl true
   def init(:ok) do
-    :ets.new(@table, [
-      :named_table,
-      :public,
-      :set,
-      read_concurrency: true,
-      write_concurrency: true
-    ])
+    _ =
+      :ets.new(@table, [
+        :named_table,
+        :public,
+        :set,
+        read_concurrency: true,
+        write_concurrency: true
+      ])
 
-    Process.send_after(self(), :sweep, sweep_interval_ms())
+    _ = Process.send_after(self(), :sweep, sweep_interval_ms())
     {:ok, %{queues: %{}, draining: false}}
   end
 
@@ -112,7 +113,7 @@ defmodule Engram.Notes.FanoutPacer do
       |> Map.new()
 
     if map_size(queues) > 0 do
-      Process.send_after(self(), :drain, drain_interval_ms())
+      _ = Process.send_after(self(), :drain, drain_interval_ms())
       {:noreply, %{state | queues: queues, draining: true}}
     else
       {:noreply, %{state | queues: %{}, draining: false}}
@@ -124,7 +125,7 @@ defmodule Engram.Notes.FanoutPacer do
     cutoff = System.monotonic_time(:millisecond) - hot_window_ms()
     # Delete every note whose last-seen time is at/older than the cutoff.
     :ets.select_delete(@table, [{{:_, :"$1"}, [{:"=<", :"$1", cutoff}], [true]}])
-    Process.send_after(self(), :sweep, sweep_interval_ms())
+    _ = Process.send_after(self(), :sweep, sweep_interval_ms())
     {:noreply, state}
   end
 
@@ -146,7 +147,7 @@ defmodule Engram.Notes.FanoutPacer do
   defp ensure_draining(%{draining: true} = state), do: state
 
   defp ensure_draining(state) do
-    Process.send_after(self(), :drain, drain_interval_ms())
+    _ = Process.send_after(self(), :drain, drain_interval_ms())
     %{state | draining: true}
   end
 
