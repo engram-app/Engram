@@ -816,13 +816,19 @@ jobs:
           echo "Version bumped: $MAIN_VERSION → $BRANCH_VERSION"
 
   e2e-clerk:
+    # Clerk-auth E2E suite: the Obsidian plugin↔backend contract tests PLUS
+    # tests/api_only/ (absorbed from the deleted e2e-api job — same Clerk
+    # stack, one bring-up instead of two; the api_only step runs right after
+    # stack health, hidden behind the plugin-build + Playwright background
+    # installs, mirroring e2e-crdt's local-auth fold).
+    #
     # Also gate on the heavy non-e2e jobs (unit-tests ~6min, n1-compat ~3min).
     # They saturate the shared runner VM's CPU, and when they run concurrently
     # with e2e they starve its 30s live-delivery budgets — a rotating-victim
     # flake (#355) that within-suite serialization alone can't fix (e.g. test_34
     # materialized=no, test_edit_after_discovery). e2e needs a quiet VM, so it
-    # waits for the heavy jobs to finish. crdt gates on the same set; api/browser
-    # inherit the wait by chaining off clerk+crdt.
+    # waits for the heavy jobs to finish. crdt gates on the same set; browser
+    # inherits the wait by chaining off clerk+crdt.
     needs: [fingerprint, prebuild-ci-image, unit-tests, n1-compat]
     # Serialize the two heavy full-Obsidian suites (this + e2e-crdt) via a shared
     # per-ref concurrency group so they don't co-tenant the runner pool and starve
@@ -1127,7 +1133,11 @@ jobs:
       # ------------------------------------------------------------------
       # Wait for all background tasks
       # ------------------------------------------------------------------
-      - name: Wait for CI stack + plugin + Playwright + Ollama + Qdrant
+      # Split wait: the api_only step below needs only stack + Qdrant + Ollama,
+      # so it runs while the plugin build + Playwright install (needed only by
+      # the Obsidian suite) finish in the background — the absorbed e2e-api
+      # suite costs ~0 extra wall-clock on this job (same pattern as e2e-crdt).
+      - name: Wait for CI stack + Ollama + Qdrant
         run: |
           echo "Waiting for CI stack..."
           for i in $(seq 1 300); do
@@ -1139,27 +1149,6 @@ jobs:
           done
           if [ ! -f "${MARKER_PREFIX}-stack.marker" ]; then
             echo "CI stack timed out (5 min). Logs:"; cat "${MARKER_PREFIX}-stack.log"; exit 1
-          fi
-
-          echo "Waiting for plugin build..."
-          for i in $(seq 1 300); do
-            if [ -f "${MARKER_PREFIX}-plugin.marker" ]; then echo "Plugin ready"; break; fi
-            if [ -f "${MARKER_PREFIX}-plugin-failed.marker" ]; then
-              echo "Plugin build failed. Logs:"; cat "${MARKER_PREFIX}-plugin.log"; exit 1
-            fi
-            sleep 1
-          done
-          if [ ! -f "${MARKER_PREFIX}-plugin.marker" ]; then
-            echo "Plugin build timed out. Logs:"; cat "${MARKER_PREFIX}-plugin.log"; exit 1
-          fi
-
-          echo "Waiting for Playwright..."
-          for i in $(seq 1 300); do
-            if [ -f "${MARKER_PREFIX}-playwright.marker" ]; then echo "Playwright ready"; break; fi
-            sleep 1
-          done
-          if [ ! -f "${MARKER_PREFIX}-playwright.marker" ]; then
-            echo "Playwright install timed out. Logs:"; cat "${MARKER_PREFIX}-playwright.log"; exit 1
           fi
 
           echo "Waiting for Ollama check..."
@@ -1189,13 +1178,63 @@ jobs:
             echo "ERROR: Qdrant check timed out. Logs:"; cat "${MARKER_PREFIX}-qdrant.log" 2>/dev/null || true; exit 1
           fi
 
+      # ------------------------------------------------------------------
+      # API-only tests (absorbed from the deleted e2e-api job). Same Clerk
+      # stack; needs only stack health, so it runs before the Obsidian
+      # machinery is ready. Full suite always (the old e2e-api never took a
+      # -k pattern, even on [e2e: clerk/...] targeted runs).
+      # ------------------------------------------------------------------
+      - name: "Run API-only tests"
+        working-directory: e2e
+        run: |
+          python3 -m pytest tests/api_only/ --ignore=tests/api_only/local \
+            -n "${E2E_API_WORKERS:-2}" --dist=loadfile \
+            -v --timeout=180 -p no:cacheprovider --no-header
+        env:
+          ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
+          E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
+          AUTH_PROVIDER: clerk
+          CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
+          CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
+          QDRANT_URL: http://10.0.20.201:6333
+          QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
+          OLLAMA_URL: http://10.0.20.214:11434
+
+      # always(): an api_only failure above must not mask the Obsidian suite's
+      # signal (the job still fails on the failed step).
+      - name: Wait for plugin + Playwright
+        if: always()
+        run: |
+          echo "Waiting for plugin build..."
+          for i in $(seq 1 300); do
+            if [ -f "${MARKER_PREFIX}-plugin.marker" ]; then echo "Plugin ready"; break; fi
+            if [ -f "${MARKER_PREFIX}-plugin-failed.marker" ]; then
+              echo "Plugin build failed. Logs:"; cat "${MARKER_PREFIX}-plugin.log"; exit 1
+            fi
+            sleep 1
+          done
+          if [ ! -f "${MARKER_PREFIX}-plugin.marker" ]; then
+            echo "Plugin build timed out. Logs:"; cat "${MARKER_PREFIX}-plugin.log"; exit 1
+          fi
+
+          echo "Waiting for Playwright..."
+          for i in $(seq 1 300); do
+            if [ -f "${MARKER_PREFIX}-playwright.marker" ]; then echo "Playwright ready"; break; fi
+            sleep 1
+          done
+          if [ ! -f "${MARKER_PREFIX}-playwright.marker" ]; then
+            echo "Playwright install timed out. Logs:"; cat "${MARKER_PREFIX}-playwright.log"; exit 1
+          fi
+
           # Add bun to PATH for E2E tests (already installed by plugin build)
           echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
 
       # Harness unit tests (stack-free): e2e/unit has its own pytest rootdir
       # so e2e/conftest.py (Obsidian/auth session fixtures) never loads.
       # Guards helper logic like the Clerk session-create retry budget (#869).
+      # always(): keep this guard's signal even if the api step failed.
       - name: "Harness unit tests"
+        if: always()
         working-directory: e2e/unit
         run: python3 -m pytest . -v --no-header -p no:cacheprovider
 
@@ -1327,254 +1366,6 @@ jobs:
             --filter "reference=engram-ci:*" --filter "reference=*/engram-ci:*" \
             | tail -n +4 | xargs -r docker rmi 2>/dev/null || true
           # Clean up ci-artifacts and stale Bun native cache files
-          rm -rf ci-artifacts/
-          find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
-
-  e2e-api:
-    # Serialized after the clerk+crdt group (see #355): the self-hosted runner
-    # can't run >1 heavy e2e suite at once without starving tight delivery
-    # budgets, and a concurrency group tops out at 2 jobs, so the remaining
-    # suites chain via `needs`. `!cancelled()` keeps this suite's signal even
-    # when a predecessor fails (a failed `needs` would otherwise skip it).
-    needs: [fingerprint, prebuild-ci-image, e2e-clerk, e2e-crdt]
-    # Runs the api_only pytest suite in its own isolated job.
-    # Same skip conditions as e2e-clerk (no Dependabot; cache-hit skip).
-    if: ${{ !cancelled() && needs.fingerprint.outputs.skip-e2e-clerk != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'clerk') }}
-    runs-on: [self-hosted, linux, x64, isolated]
-
-    env:
-      CI_PROJECT: engram-ci-${{ github.run_id }}-api
-      QDRANT_COLLECTION: ci_test_${{ github.run_id }}_api
-      MARKER_PREFIX: /tmp/ci-${{ github.run_id }}-api
-      E2E_VAULT_PREFIX: /tmp/e2e-vault-${{ github.run_id }}-api
-      E2E_CONFIG_PREFIX: /tmp/e2e-obsidian-config-${{ github.run_id }}-api
-      ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image }}
-
-    steps:
-      - name: Generate App token
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ vars.ENGRAM_CI_CLIENT_ID }}
-          private-key: ${{ secrets.ENGRAM_CI_APP_PRIVATE_KEY }}
-          owner: engram-app
-          repositories: Engram-obsidian
-
-      # ------------------------------------------------------------------
-      # Cleanup + checkout
-      # ------------------------------------------------------------------
-      - name: Pre-cleanup stale resources
-        run: |
-          docker compose -f ci/compose.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
-          pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
-          sleep 1
-          rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
-          if [ -d .git ] && { [ -f .git/info/sparse-checkout ] || [ "$(git config --get core.sparseCheckout 2>/dev/null)" = "true" ]; }; then
-            echo "::warning::Sparse-checkout leak detected — removing .git for fresh clone"
-            rm -rf .git
-          fi
-
-      - uses: actions/checkout@v7
-        with:
-          clean: false  # Preserve _build/ and deps/ for incremental compilation
-
-      # ------------------------------------------------------------------
-      # Launch long-running prep in parallel (background)
-      # ------------------------------------------------------------------
-      - name: Allocate dynamic ports
-        id: ports
-        run: |
-          get_free_port() {
-            python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()"
-          }
-          ENGRAM_PORT=$(get_free_port)
-          PG_PORT=$(get_free_port)
-
-          for var in ENGRAM_PORT PG_PORT; do
-            if [ -z "${!var}" ]; then
-              echo "::error::Port allocation failed for $var"
-              exit 1
-            fi
-          done
-
-          {
-            echo "engram_port=$ENGRAM_PORT"
-            echo "pg_port=$PG_PORT"
-          } >> "$GITHUB_OUTPUT"
-          echo "Ports: engram=$ENGRAM_PORT pg=$PG_PORT"
-
-      - name: "Background: CI stack + Ollama + Qdrant"
-        env:
-          CLERK_JWKS_URL: ${{ secrets.CLERK_JWKS_URL }}
-          CLERK_ISSUER: ${{ secrets.CLERK_ISSUER }}
-          CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
-          CI_ENGRAM_PORT: ${{ steps.ports.outputs.engram_port }}
-          CI_PG_PORT: ${{ steps.ports.outputs.pg_port }}
-          QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
-        run: |
-          # --- CI stack build + start (background) ---
-          (
-            docker builder prune --all --keep-storage=2gb -f 2>/dev/null || true
-
-            curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
-
-            docker pull "$ENGRAM_CI_IMAGE"
-            docker compose -f ci/compose.yml -p "$CI_PROJECT" up -d --no-build --wait
-
-            for i in $(seq 1 15); do
-              if curl -sf "http://localhost:${CI_ENGRAM_PORT}/api/health" > /dev/null 2>&1; then
-                echo "CI stack healthy on port ${CI_ENGRAM_PORT}"
-                touch "${MARKER_PREFIX}-stack.marker"
-                break
-              fi
-              sleep 1
-            done
-            if [ ! -f "${MARKER_PREFIX}-stack.marker" ]; then
-              echo "ERROR: CI stack failed to start" >&2
-              touch "${MARKER_PREFIX}-stack-failed.marker"
-            fi
-          ) > "${MARKER_PREFIX}-stack.log" 2>&1 &
-          echo "CI stack build started (PID $!)"
-
-          # --- Ollama reachability check (background) ---
-          (
-            if curl -sf http://10.0.20.214:11434/api/tags > /dev/null 2>&1; then
-              echo "Ollama OK"
-              touch "${MARKER_PREFIX}-ollama.marker"
-            else
-              echo "WARNING: Ollama on FastRaid not reachable — embedding tests may fail"
-              touch "${MARKER_PREFIX}-ollama-warn.marker"
-            fi
-          ) > "${MARKER_PREFIX}-ollama.log" 2>&1 &
-          echo "Ollama check started (PID $!)"
-
-          # --- Qdrant reachability check (background) ---
-          (
-            ok=false
-            for attempt in $(seq 1 6); do
-              if curl -sf --max-time 5 http://10.0.20.201:6333/healthz > /dev/null 2>&1; then
-                echo "Qdrant OK (SlowRaid AVX2) — attempt ${attempt}"
-                ok=true
-                break
-              fi
-              echo "attempt ${attempt}: Qdrant probe failed; retrying in 5s…"
-              sleep 5
-            done
-            if $ok; then
-              touch "${MARKER_PREFIX}-qdrant.marker"
-            else
-              echo "ERROR: Qdrant on SlowRaid not reachable after 6 attempts — binary quantization tests will fail"
-              touch "${MARKER_PREFIX}-qdrant-failed.marker"
-            fi
-          ) > "${MARKER_PREFIX}-qdrant.log" 2>&1 &
-          echo "Qdrant check started (PID $!)"
-
-      # ------------------------------------------------------------------
-      # Wait for all background tasks
-      # ------------------------------------------------------------------
-      - name: Wait for CI stack + Ollama + Qdrant
-        run: |
-          echo "Waiting for CI stack..."
-          for i in $(seq 1 300); do
-            if [ -f "${MARKER_PREFIX}-stack.marker" ]; then echo "CI stack ready"; break; fi
-            if [ -f "${MARKER_PREFIX}-stack-failed.marker" ]; then
-              echo "CI stack failed to start. Logs:"; cat "${MARKER_PREFIX}-stack.log"; exit 1
-            fi
-            sleep 1
-          done
-          if [ ! -f "${MARKER_PREFIX}-stack.marker" ]; then
-            echo "CI stack timed out (5 min). Logs:"; cat "${MARKER_PREFIX}-stack.log"; exit 1
-          fi
-
-          echo "Waiting for Ollama check..."
-          for i in $(seq 1 30); do
-            if [ -f "${MARKER_PREFIX}-ollama.marker" ] || [ -f "${MARKER_PREFIX}-ollama-warn.marker" ]; then break; fi
-            sleep 1
-          done
-          if [ -f "${MARKER_PREFIX}-ollama-warn.marker" ]; then
-            cat "${MARKER_PREFIX}-ollama.log"
-          elif [ -f "${MARKER_PREFIX}-ollama.marker" ]; then
-            echo "Ollama OK"
-          else
-            echo "WARNING: Ollama check timed out. Logs:"; cat "${MARKER_PREFIX}-ollama.log" 2>/dev/null || true
-          fi
-
-          echo "Waiting for Qdrant check..."
-          for i in $(seq 1 15); do
-            if [ -f "${MARKER_PREFIX}-qdrant.marker" ]; then echo "Qdrant OK"; break; fi
-            if [ -f "${MARKER_PREFIX}-qdrant-failed.marker" ]; then
-              echo "ERROR: Qdrant on SlowRaid (10.0.20.201) not reachable. Logs:"
-              cat "${MARKER_PREFIX}-qdrant.log"
-              exit 1
-            fi
-            sleep 1
-          done
-          if [ ! -f "${MARKER_PREFIX}-qdrant.marker" ] && [ ! -f "${MARKER_PREFIX}-qdrant-failed.marker" ]; then
-            echo "ERROR: Qdrant check timed out. Logs:"; cat "${MARKER_PREFIX}-qdrant.log" 2>/dev/null || true; exit 1
-          fi
-
-      # ------------------------------------------------------------------
-      # API-only tests
-      # ------------------------------------------------------------------
-      - name: "Run API-only tests"
-        working-directory: e2e
-        run: |
-          python3 -m pytest tests/api_only/ --ignore=tests/api_only/local \
-            -n "${E2E_API_WORKERS:-2}" --dist=loadfile \
-            -v --timeout=180 -p no:cacheprovider --no-header
-        env:
-          ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
-          E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
-          AUTH_PROVIDER: clerk
-          CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
-          CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
-          QDRANT_URL: http://10.0.20.201:6333
-          QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
-          OLLAMA_URL: http://10.0.20.214:11434
-
-      # ------------------------------------------------------------------
-      # Cleanup — MUST kill everything, even on cancel/failure
-      # ------------------------------------------------------------------
-      - name: Reap stale Clerk orphans (>1h)
-        if: always()
-        env:
-          E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
-        run: |
-          if [ -z "${E2E_CLERK_SECRET_KEY}" ]; then
-            echo "E2E_CLERK_SECRET_KEY not set — skipping orphan reap." >&2
-            exit 0
-          fi
-          python3 e2e/scripts/cleanup_clerk_users.py --older-than 1h || true
-
-      - name: Collect failure logs
-        if: failure()
-        run: |
-          mkdir -p ci-artifacts
-          docker compose -f ci/compose.yml -p "$CI_PROJECT" logs > ci-artifacts/docker-compose.log 2>&1
-          cp ${MARKER_PREFIX}-*.log ci-artifacts/ 2>/dev/null || true
-          cp e2e/pytest-e2e.log ci-artifacts/ 2>/dev/null || true
-
-      - name: Upload failure artifacts
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ci-debug-api-${{ github.sha }}
-          path: ci-artifacts/
-          retention-days: 7
-
-      - name: Tear down
-        if: always()
-        run: |
-          curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
-          pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
-          sleep 1
-          rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
-          docker compose -f ci/compose.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
-          docker image prune -f 2>/dev/null || true
-          docker volume prune -f 2>/dev/null || true
-          docker images --format '{{.Repository}}:{{.Tag}}' \
-            --filter "reference=engram-ci:*" --filter "reference=*/engram-ci:*" \
-            | tail -n +4 | xargs -r docker rmi 2>/dev/null || true
           rm -rf ci-artifacts/
           find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
@@ -3298,9 +3089,10 @@ jobs:
         run: bun run ci
 
   e2e-browser:
-    # Serialized last in the e2e chain, after e2e-api (see #355 / e2e-api).
-    # `!cancelled()` preserves this suite's signal when a predecessor fails.
-    needs: [fingerprint, prebuild-mix, e2e-api]
+    # Serialized last in the e2e chain, after the clerk+crdt group (see #355;
+    # e2e-api was folded into e2e-clerk). `!cancelled()` preserves this
+    # suite's signal when a predecessor fails.
+    needs: [fingerprint, prebuild-mix, e2e-clerk, e2e-crdt]
     # Skip on cross-repo plugin dispatch — Playwright targets backend's React
     # frontend, which the plugin (separate repo) cannot affect.
     # Also skip via the per-job fingerprint (skip-e2e-browser =
@@ -3553,7 +3345,7 @@ jobs:
     # and a real e2e/unit failure there is never gated. Mirrors the per-job +
     # prebuild is-full forcing so main is genuinely the full safety net.
     if: always() && (needs.fingerprint.outputs.is-full == 'true' || needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
-    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-api, e2e-crdt, e2e-browser, n1-compat, legal-cross-repo]
+    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, n1-compat, legal-cross-repo]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
@@ -3564,7 +3356,6 @@ jobs:
           FL="${{ needs.frontend-lint.result }}"
           SD="${{ needs.storage-database.result }}"
           EC="${{ needs.e2e-clerk.result }}"
-          EA="${{ needs.e2e-api.result }}"
           ED="${{ needs.e2e-crdt.result }}"
           EB="${{ needs.e2e-browser.result }}"
           LG="${{ needs.legal-cross-repo.result }}"
@@ -3590,13 +3381,6 @@ jobs:
           # to main, which is the path of record anyway.
           if [ "$EC" != "success" ] && [ "$EC" != "skipped" ]; then
             echo "::error::e2e-clerk failed: $EC"
-            exit 1
-          fi
-
-          # e2e-api carries the api_only contract slice; same Dependabot-skip
-          # tolerance as e2e-clerk (no Clerk/App secrets on Dependabot PRs).
-          if [ "$EA" != "success" ] && [ "$EA" != "skipped" ]; then
-            echo "::error::e2e-api failed: $EA"
             exit 1
           fi
 
@@ -3735,14 +3519,15 @@ jobs:
   #   * the e2e-clerk in-job reporter — e2e-clerk is skippable
   #     (Clerk-quota / suite targeting), so it went silent when skipped;
   #   * report-cached-pass-to-plugin — fired only on a FULL e2e cache-hit,
-  #     which is unreachable because e2e-api always runs, so a plugin-only
-  #     change (every full suite cached, e2e-api running) posted nothing.
+  #     which was unreachable because the api_only slice (then its own
+  #     e2e-api job, since folded into e2e-clerk) always ran, so a
+  #     plugin-only change posted nothing.
   # A skipped suite is a cached pass, not a failure — only a real
   # failure/cancellation reds the check. curl (not gh CLI): engram-isolated
   # runners don't ship gh on PATH.
   report-e2e-to-plugin:
     if: always() && github.event_name == 'repository_dispatch'
-    needs: [e2e-api, e2e-clerk, e2e-crdt, e2e-browser]
+    needs: [e2e-clerk, e2e-crdt, e2e-browser]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Generate App token
@@ -3758,7 +3543,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SHORT_SHA: ${{ github.event.client_payload.plugin_ref }}
-          RESULTS: "${{ needs.e2e-api.result }} ${{ needs.e2e-clerk.result }} ${{ needs.e2e-crdt.result }} ${{ needs.e2e-browser.result }}"
+          RESULTS: "${{ needs.e2e-clerk.result }} ${{ needs.e2e-crdt.result }} ${{ needs.e2e-browser.result }}"
         run: |
           if [ -z "$SHORT_SHA" ]; then
             echo "No plugin_ref in payload, skipping status report"
