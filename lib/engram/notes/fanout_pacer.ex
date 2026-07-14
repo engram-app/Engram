@@ -82,6 +82,7 @@ defmodule Engram.Notes.FanoutPacer do
       write_concurrency: true
     ])
 
+    Process.send_after(self(), :sweep, sweep_interval_ms())
     {:ok, %{queues: %{}, draining: false}}
   end
 
@@ -114,6 +115,15 @@ defmodule Engram.Notes.FanoutPacer do
     end
   end
 
+  @impl true
+  def handle_info(:sweep, state) do
+    cutoff = System.monotonic_time(:millisecond) - hot_window_ms()
+    # Delete every note whose last-seen time is at/older than the cutoff.
+    :ets.select_delete(@table, [{{:_, :"$1"}, [{:"=<", :"$1", cutoff}], [true]}])
+    Process.send_after(self(), :sweep, sweep_interval_ms())
+    {:noreply, state}
+  end
+
   # Pop up to `n` frames off `q` and broadcast each on `topic` (per-vault FIFO).
   defp drain_topic(topic, q, n) when n > 0 do
     case :queue.out(q) do
@@ -144,6 +154,7 @@ defmodule Engram.Notes.FanoutPacer do
   defp hot_window_ms, do: pos_env(:fanout_hot_window_ms, @default_hot_window_ms)
   defp drain_batch, do: pos_env(:fanout_drain_batch, @default_drain_batch)
   defp drain_interval_ms, do: pos_env(:fanout_drain_interval_ms, @default_drain_interval_ms)
+  defp sweep_interval_ms, do: pos_env(:fanout_sweep_interval_ms, 30_000)
 
   defp pos_env(key, default) do
     case Application.get_env(:engram, key, default) do

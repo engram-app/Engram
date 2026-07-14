@@ -54,4 +54,45 @@ defmodule Engram.Notes.FanoutPacerTest do
     for _ <- 1..4, do: assert_receive(%Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 300)
     refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 100
   end
+
+  test "hot frame bypasses and arrives before the bulk of a concurrent cold flood (#1002)" do
+    Application.put_env(:engram, :fanout_pacing_enabled, true)
+    Application.put_env(:engram, :fanout_hot_window_ms, 60_000)
+    Application.put_env(:engram, :fanout_drain_batch, 1)
+    Application.put_env(:engram, :fanout_drain_interval_ms, 80)
+
+    topic = "sync:u3:v3"
+    EngramWeb.Endpoint.subscribe(topic)
+
+    # Warm note "live" so it is HOT (seen within the window). This first frame is
+    # cold (paced), so drain it before asserting the bypass on the SECOND frame.
+    FanoutPacer.emit(topic, "note_yjs_update", payload("live"), "live")
+    assert_receive(%Phoenix.Socket.Broadcast{payload: %{"note_id" => "live"}}, 300)
+
+    # A big genesis flood of distinct COLD notes.
+    for i <- 1..20, do: FanoutPacer.emit(topic, "note_yjs_update", payload("g#{i}"), "g#{i}")
+
+    # The live note edits again → HOT → must arrive immediately, not behind the 20.
+    FanoutPacer.emit(topic, "note_yjs_update", payload("live"), "live")
+    assert_receive(%Phoenix.Socket.Broadcast{payload: %{"note_id" => "live"}}, 60)
+  end
+
+  test "two topics drain independently (per-vault fairness)" do
+    Application.put_env(:engram, :fanout_pacing_enabled, true)
+    Application.put_env(:engram, :fanout_hot_window_ms, 60_000)
+    Application.put_env(:engram, :fanout_drain_batch, 1)
+    Application.put_env(:engram, :fanout_drain_interval_ms, 50)
+
+    ta = "sync:u4:va"
+    tb = "sync:u4:vb"
+    EngramWeb.Endpoint.subscribe(ta)
+    EngramWeb.Endpoint.subscribe(tb)
+
+    FanoutPacer.emit(ta, "note_yjs_update", payload("a1"), "a1")
+    FanoutPacer.emit(tb, "note_yjs_update", payload("b1"), "b1")
+
+    # Both topics get a frame within the first tick (not serialized behind each other).
+    assert_receive(%Phoenix.Socket.Broadcast{topic: ^ta}, 200)
+    assert_receive(%Phoenix.Socket.Broadcast{topic: ^tb}, 200)
+  end
 end
