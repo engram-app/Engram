@@ -2366,12 +2366,33 @@ jobs:
   # protection-rule semantic. Promote to required by adding to the
   # aggregator + updating ruleset 16309248.
 
-  todo-drift:
-    name: TODO drift
+  static-checks:
+    name: static checks
+    # One runner slot for the small independent gates that used to be five
+    # separate jobs (todo-drift, claude-md-staleness, migrations-immutable,
+    # frontend-audit, legal-cross-repo): same checks, one checks-list row,
+    # 4 fewer runner slots claimed at run start. Steps carry their own
+    # guards where the old jobs had them:
+    #   - bun audit keeps its lockfile path-filter (audit-guard step)
+    #   - legal steps skip for Dependabot (App-token secrets unavailable
+    #     there; create-github-app-token ERRORS rather than skips, and
+    #     Dependabot never touches legal docs)
     if: github.event_name != 'repository_dispatch'
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
+      - name: Reset sparse-checkout leaked from cross-repo jobs
+        run: |
+          if [ -d .git ] && { [ -f .git/info/sparse-checkout ] || [ "$(git config --get core.sparseCheckout 2>/dev/null)" = "true" ]; }; then
+            echo "::warning::Sparse-checkout leak detected — removing .git for fresh clone"
+            rm -rf .git
+          fi
+
       - uses: actions/checkout@v7
+        with:
+          # Need history to diff against origin/main (migrations-immutable
+          # check + the audit path-filter guard). depth=50 is plenty for
+          # PR-sized diffs and avoids the full clone cost.
+          fetch-depth: 50
 
       - name: Forbid TODO*.md files
         run: |
@@ -2407,13 +2428,6 @@ jobs:
             exit 1
           fi
           echo "OK — no checkbox-as-TODO in root markdown."
-
-  claude-md-staleness:
-    name: CLAUDE.md staleness
-    if: github.event_name != 'repository_dispatch'
-    runs-on: [self-hosted, linux, x64, isolated]
-    steps:
-      - uses: actions/checkout@v7
 
       - name: Scan CLAUDE.md / AGENTS.md files for known-stale facts
         run: |
@@ -2464,23 +2478,12 @@ jobs:
           fi
           echo "OK — no known-stale facts in CLAUDE.md files."
 
-  migrations-immutable:
-    name: migrations immutable
-    if: github.event_name != 'repository_dispatch'
-    runs-on: [self-hosted, linux, x64, isolated]
-    # Block in-place edits to already-applied migrations. Triggering incident:
-    # 2026-05-30 PR #368 edited migration 20260530000002 in place from :inet
-    # to :text after FastRaid prod had already run the :inet version, leaving
-    # prod's oauth_clients.first_ip column as inet while CI's fresh DB
-    # provisioned text — DCR endpoint crashed with Postgrex.EncodeError on
-    # every register. Spec: workspace docs/superpowers/specs/2026-05-30-deploy-guardrails-design.md
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # Need history to diff against origin/main. depth=50 is plenty for
-          # PR-sized diffs and avoids the full clone cost.
-          fetch-depth: 50
-
+      # Block in-place edits to already-applied migrations. Triggering incident:
+      # 2026-05-30 PR #368 edited migration 20260530000002 in place from :inet
+      # to :text after FastRaid prod had already run the :inet version, leaving
+      # prod's oauth_clients.first_ip column as inet while CI's fresh DB
+      # provisioned text — DCR endpoint crashed with Postgrex.EncodeError on
+      # every register. Spec: workspace docs/superpowers/specs/2026-05-30-deploy-guardrails-design.md
       - name: Check migrations are not modified in place
         env:
           PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
@@ -2538,6 +2541,91 @@ jobs:
             echo "OK — no applied migrations modified in place."
           fi
           exit $failed
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Run `bun audit` against frontend/ on every CI trigger. Fail when any
+      # critical or high advisory affects a PRODUCTION dependency path. The
+      # --prod flag scopes to non-dev paths so a vuln deep under, say,
+      # pngquant-bin (build-time image tool) doesn't block PRs.
+      #
+      # Note: `bun audit --prod` (as of bun 1.3.11) still prints the full
+      # advisory header — including some parent paths that aren't production —
+      # because it groups by advisory rather than by resolved path. The jq
+      # filter below relies on the `severity` field, not the path list, so
+      # false-positive parents in the printout don't affect the gate.
+      - name: Audit path-filter early-exit
+        id: audit-guard
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            echo "On main — running audit unconditionally."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Ensure base ref is available for the diff. Tolerate failure —
+          # if fetch fails, the diff will surface the error explicitly.
+          git fetch origin main --depth=50 >/dev/null 2>&1 || true
+          if git diff --quiet origin/main HEAD -- \
+                frontend/package.json frontend/bun.lock 2>/dev/null; then
+            echo "Skipped — no changes to frontend/package.json or frontend/bun.lock vs main."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Lockfile changed — running audit."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: bun audit --prod
+        if: steps.audit-guard.outputs.skip != 'true'
+        working-directory: frontend
+        run: |
+          set -uo pipefail
+          json=$(bun audit --prod --json 2>/dev/null || echo '{}')
+          echo "$json" | jq .
+
+          # Gate: any advisory with severity critical or high in --prod scope.
+          blocking=$(echo "$json" | jq '[
+            (.advisories // .vulnerabilities // [] | .. | objects | select(.severity?))
+            | select(.severity == "critical" or .severity == "high")
+          ] | length')
+
+          if [ "$blocking" -gt 0 ]; then
+            echo "::error::Found $blocking critical/high advisory in production deps."
+            echo "Run \`bun audit --prod\` locally for the full report."
+            exit 1
+          fi
+
+          echo "Prod audit clean (critical/high)."
+
+      - name: Generate engram-marketing App installation token
+        if: github.actor != 'dependabot[bot]'
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: engram-app
+          repositories: engram-marketing
+
+      - name: Checkout engram-marketing legal docs
+        if: github.actor != 'dependabot[bot]'
+        uses: actions/checkout@v7
+        with:
+          repository: engram-app/engram-marketing
+          token: ${{ steps.app-token.outputs.token }}
+          ref: main
+          path: _marketing
+          persist-credentials: false
+
+      - name: Compare backend + frontend manifests against marketing markdown
+        if: github.actor != 'dependabot[bot]'
+        run: |
+          bun frontend/scripts/check-cross-repo-legal.ts \
+            backend=priv/legal/legal-manifest.json \
+            frontend=frontend/src/legal/versions/legal-manifest.json \
+            marketing-md=_marketing/src/legal
 
   phase-label-required:
     # A migration PR must declare its expand/contract phase via a label.
@@ -2965,79 +3053,6 @@ jobs:
           rm -rf "$PREV_DIR"
           git worktree prune
 
-  frontend-audit:
-    name: frontend audit
-    if: github.event_name != 'repository_dispatch'
-    runs-on: [self-hosted, linux, x64, isolated]
-    # Run `bun audit` against frontend/ on every CI trigger. Fail when any
-    # critical or high advisory affects a PRODUCTION dependency path. The
-    # --prod flag scopes to non-dev paths so a vuln deep under, say,
-    # pngquant-bin (build-time image tool) doesn't block PRs.
-    #
-    # Note: `bun audit --prod` (as of bun 1.3.11) still prints the full
-    # advisory header — including some parent paths that aren't production —
-    # because it groups by advisory rather than by resolved path. The jq
-    # filter below relies on the `severity` field, not the path list, so
-    # false-positive parents in the printout don't affect the gate.
-    #
-    # Path filter (from pre-fold frontend-audit.yml) is preserved via the
-    # guard step below: skip when neither frontend/package.json nor
-    # frontend/bun.lock changed vs origin/main. On main itself, run
-    # unconditionally (audits the just-merged state).
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # Need history to diff against origin/main in the guard step.
-          fetch-depth: 50
-
-      - name: Path-filter early-exit
-        id: guard
-        run: |
-          set -euo pipefail
-          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
-            echo "On main — running audit unconditionally."
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Ensure base ref is available for the diff. Tolerate failure —
-          # if fetch fails, the diff will surface the error explicitly.
-          git fetch origin main --depth=50 >/dev/null 2>&1 || true
-          if git diff --quiet origin/main HEAD -- \
-                frontend/package.json frontend/bun.lock 2>/dev/null; then
-            echo "Skipped — no changes to frontend/package.json or frontend/bun.lock vs main."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Lockfile changed — running audit."
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: oven-sh/setup-bun@v2
-        if: steps.guard.outputs.skip != 'true'
-        with:
-          bun-version: latest
-
-      - name: bun audit --prod
-        if: steps.guard.outputs.skip != 'true'
-        working-directory: frontend
-        run: |
-          set -uo pipefail
-          json=$(bun audit --prod --json 2>/dev/null || echo '{}')
-          echo "$json" | jq .
-
-          # Gate: any advisory with severity critical or high in --prod scope.
-          blocking=$(echo "$json" | jq '[
-            (.advisories // .vulnerabilities // [] | .. | objects | select(.severity?))
-            | select(.severity == "critical" or .severity == "high")
-          ] | length')
-
-          if [ "$blocking" -gt 0 ]; then
-            echo "::error::Found $blocking critical/high advisory in production deps."
-            echo "Run \`bun audit --prod\` locally for the full report."
-            exit 1
-          fi
-
-          echo "Prod audit clean (critical/high)."
-
   frontend-lint:
     name: frontend lint
     # Skip on cross-repo plugin dispatch — the plugin cannot regress the SPA.
@@ -3292,62 +3307,13 @@ jobs:
   # one-sided legal bump fails here instead of 409-ing every signup in prod
   # (the automated backstop for the manual #667 launch gate). Marketing CI runs
   # the mirror check so a marketing-only bump is caught there too.
-  legal-cross-repo:
-    name: legal cross-repo hash check
-    # Skipped on Dependabot PRs: this job mints a GH App token to read the
-    # marketing repo, but Dependabot runs with the Dependabot secret scope
-    # so create-github-app-token fails ("private-key must be non-empty") and
-    # the job errors rather than skips — which the `ci` aggregate treats as
-    # fatal, permanently blocking dep bumps. Dependabot never touches legal
-    # docs, so skip it (mirrors how e2e-clerk is skipped for Dependabot).
-    if: github.event_name != 'repository_dispatch' && github.actor != 'dependabot[bot]'
-    runs-on: [self-hosted, linux, x64, isolated]
-    steps:
-      - name: Reset sparse-checkout leaked from cross-repo jobs
-        run: |
-          if [ -d .git ] && { [ -f .git/info/sparse-checkout ] || [ "$(git config --get core.sparseCheckout 2>/dev/null)" = "true" ]; }; then
-            echo "::warning::Sparse-checkout leak detected — removing .git for fresh clone"
-            rm -rf .git
-          fi
-
-      - uses: actions/checkout@v7
-
-      - name: Generate engram-marketing App installation token
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ vars.GH_APP_CLIENT_ID }}
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          owner: engram-app
-          repositories: engram-marketing
-
-      - name: Checkout engram-marketing legal docs
-        uses: actions/checkout@v7
-        with:
-          repository: engram-app/engram-marketing
-          token: ${{ steps.app-token.outputs.token }}
-          ref: main
-          path: _marketing
-          persist-credentials: false
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Compare backend + frontend manifests against marketing markdown
-        run: |
-          bun frontend/scripts/check-cross-repo-legal.ts \
-            backend=priv/legal/legal-manifest.json \
-            frontend=frontend/src/legal/versions/legal-manifest.json \
-            marketing-md=_marketing/src/legal
-
   ci:
     # is-full keeps the aggregate gate alive on full runs (main / [ci-full] /
     # force_full) even when the coarse cache hit — otherwise ci skips on main
     # and a real e2e/unit failure there is never gated. Mirrors the per-job +
     # prebuild is-full forcing so main is genuinely the full safety net.
     if: always() && (needs.fingerprint.outputs.is-full == 'true' || needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
-    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, n1-compat, legal-cross-repo]
+    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, n1-compat, static-checks]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
@@ -3360,7 +3326,7 @@ jobs:
           EC="${{ needs.e2e-clerk.result }}"
           ED="${{ needs.e2e-crdt.result }}"
           EB="${{ needs.e2e-browser.result }}"
-          LG="${{ needs.legal-cross-repo.result }}"
+          SC="${{ needs.static-checks.result }}"
 
           # Phase 4: a targeted e2e run ([e2e: suite/pattern]) is NEVER mergeable —
           # only one suite ran (with -k), so the full integration matrix is unproven.
@@ -3389,7 +3355,7 @@ jobs:
           # On cross-repo plugin dispatch (plugin-e2e-trigger), unit-tests / lint /
           # e2e-browser are intentionally skipped — plugin cannot regress
           # backend internals. Only assert success when those jobs actually ran.
-          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "e2e-crdt=$ED" "e2e-browser=$EB" "legal-cross-repo=$LG"; do
+          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "e2e-crdt=$ED" "e2e-browser=$EB" "static-checks=$SC"; do
             name="${pair%=*}"; result="${pair#*=}"
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "::error::$name failed: $result"
