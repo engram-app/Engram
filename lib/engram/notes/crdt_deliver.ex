@@ -40,7 +40,6 @@ defmodule Engram.Notes.CrdtDeliver do
   alias Engram.{Accounts, Crypto, Repo}
   alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtTransport, Note}
-  alias Engram.Sync.Broadcast
   alias Yex.Sync.SharedDoc
 
   require Logger
@@ -105,14 +104,15 @@ defmodule Engram.Notes.CrdtDeliver do
             _ -> nil
           end
 
-        Broadcast.emit(
+        Engram.Notes.FanoutPacer.emit(
           "sync:#{user_id}:#{vault_id}",
           "note_yjs_update",
           %{
             "note_id" => note_id,
             "b64" => Base.encode64(state),
             "head" => head
-          }
+          },
+          note_id
         )
       end
 

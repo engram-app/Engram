@@ -19,7 +19,6 @@ defmodule Engram.Notes.CrdtPersistence do
   import Ecto.Query
   alias Engram.{Accounts, Crypto, Repo}
   alias Engram.Logger.Metadata
-  alias Engram.Sync.Broadcast
 
   alias Engram.Notes.{
     CheckpointGate,
@@ -144,14 +143,15 @@ defmodule Engram.Notes.CrdtPersistence do
         # advances the watermark only to the head it truly reached (plugin
         # `e2304ed`). Without that client guard, the cheap cold-reconcile hash gate
         # would skip a silently-partial note.
-        Broadcast.emit(
+        Engram.Notes.FanoutPacer.emit(
           "sync:#{user_id}:#{vault_id}",
           "note_yjs_update",
           %{
             "note_id" => note_id,
             "b64" => Base.encode64(update),
             "head" => CrdtTransport.head_marker(doc)
-          }
+          },
+          note_id
         )
 
       {:error, reason} ->
