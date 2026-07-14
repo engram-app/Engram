@@ -1226,6 +1226,7 @@ jobs:
           ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
           CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
+          CI_ENGRAM_CONTAINER: ${{ env.CI_PROJECT }}-engram-1
           E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
           AUTH_PROVIDER: clerk
           E2E_VAULT_PREFIX: ${{ env.E2E_VAULT_PREFIX }}
@@ -1524,6 +1525,7 @@ jobs:
           AUTH_PROVIDER: clerk
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
           CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
+          CI_ENGRAM_CONTAINER: ${{ env.CI_PROJECT }}-engram-1
           QDRANT_URL: http://10.0.20.201:6333
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
           OLLAMA_URL: http://10.0.20.214:11434
@@ -1943,6 +1945,7 @@ jobs:
           AUTH_PROVIDER: local
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
           CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
+          CI_ENGRAM_CONTAINER: ${{ env.CI_PROJECT }}-engram-1
           QDRANT_URL: http://10.0.20.201:6333
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
           OLLAMA_URL: http://10.0.20.214:11434
@@ -2009,6 +2012,7 @@ jobs:
           ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
           CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
+          CI_ENGRAM_CONTAINER: ${{ env.CI_PROJECT }}-engram-1
           AUTH_PROVIDER: local
           E2E_ENABLE_CRDT: "true"
           E2E_VAULT_PREFIX: ${{ env.E2E_VAULT_PREFIX }}

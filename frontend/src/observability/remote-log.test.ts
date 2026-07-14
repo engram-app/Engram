@@ -74,7 +74,7 @@ describe("RemoteLogBuffer", () => {
 		for (let i = 0; i < 260; i++) {
 			buf.log("info", "crdt", `line ${i}`);
 		}
-		const queue = (buf as unknown as { queue: Array<{ message: string }> }).queue;
+		const { queue } = buf as unknown as { queue: Array<{ message: string }> };
 		expect(queue.length).toBe(200);
 		// Drop-oldest: the newest breadcrumbs survive, the earliest are gone.
 		expect(queue[0]?.message).toBe("line 60");
