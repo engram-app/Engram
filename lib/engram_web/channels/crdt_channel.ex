@@ -132,7 +132,12 @@ defmodule EngramWeb.CrdtChannel do
          :ok <- guard_frame(frame),
          {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id) do
       SharedDoc.send_yjs_message(room, frame)
-      {:noreply, socket}
+      # ACK the push. Clients attach reply handlers to distinguish delivery
+      # from loss; with no ack every successful push "times out" client-side —
+      # the web SPA re-handshook every open note every ~3.5s forever
+      # (2026-07-14). Routed-to-room is the honest ack point: the frame is in
+      # the owner process's mailbox and the room's update_v1 path persists it.
+      {:reply, {:ok, %{}}, socket}
     else
       {:error, :rate_limited} ->
         {:reply, {:error, %{reason: "rate_limited"}}, socket}

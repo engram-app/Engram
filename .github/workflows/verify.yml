@@ -4453,6 +4453,11 @@ jobs:
           # by design (ships in the browser), so a variable not a secret.
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY_PROD }}
           VITE_GIT_SHA: ${{ github.sha }}
+          # Light up browser->Tempo traces (traceparent header on authFetch +
+          # client span beacons via POST /api/telemetry/spans). Dark-launched
+          # until 2026-07-14: the deaf-note incident needed a CDP sniffer
+          # because the browser emitted no telemetry at all.
+          VITE_TRACING_ENABLED: 'true'
 
       - name: Deploy (wrangler)
         if: steps.guard.outputs.skip != 'true'

@@ -10,7 +10,8 @@ import {
 	startCrdtSession,
 	stopCrdtSession,
 } from "../crdt/session";
-import { beacon, parseTraceparent, tracingEnabled } from "../observability/trace";
+import { rlog } from "../observability/remote-log";
+import { beacon, newTraceContext, parseTraceparent, tracingEnabled } from "../observability/trace";
 import { getWsBase, joinWsUrl } from "./base";
 import { ROOT_FOLDER_ID } from "./queries";
 
@@ -140,6 +141,29 @@ function flushBatch(batch: PendingBatch): void {
 			refetchType: "all",
 		});
 	}
+}
+
+// Failure-only push beacon (web.crdt.push): OK pushes are per-keystroke
+// volume and would blow the 60/min beacon rate limit; the failures are the
+// signal. No-ops entirely (resolveTransport returns null) when tracing is off.
+function pushFailureBeacon(docId: string, startUs: number, reason: string): void {
+	if (!tracingEnabled()) {
+		return;
+	}
+	const ctx = newTraceContext();
+	beacon.enqueue({
+		trace_id: ctx.traceId,
+		parent_span_id: ctx.spanId,
+		name: "web.crdt.push",
+		start_us: startUs,
+		end_us: Date.now() * 1000,
+		attributes: {
+			"engram.surface": "web",
+			"engram.event_type": "push_failed",
+			"engram.note_id": docId,
+			"engram.reason": reason.slice(0, 64),
+		},
+	});
 }
 
 export const RECONNECT_JITTER_DEFAULT_MS = 5000;
@@ -399,9 +423,15 @@ export async function connectChannel({
 	startCrdtSession({
 		vaultId,
 		push: (docId, b64) => {
+			const startUs = Date.now() * 1000;
 			crdtChannel
 				?.push("crdt_msg", { doc_id: docId, b64 })
 				.receive("error", (resp: { reason?: string }) => {
+					rlog().warn(
+						"crdt",
+						`crdt_msg push rejected note=${docId} reason=${resp?.reason ?? "unknown"}`,
+					);
+					pushFailureBeacon(docId, startUs, resp?.reason ?? "error");
 					if (resp?.reason === "frame_too_large") {
 						// Retrying would re-send the same oversized diff and loop.
 						console.error(`CRDT frame rejected (frame_too_large) for ${docId} — edit not synced`);
@@ -411,7 +441,14 @@ export async function connectChannel({
 					// backoff re-derives whatever the server missed.
 					scheduleCrdtRehandshake(docId, resp?.reason === "rate_limited" ? 2000 : 1000);
 				})
-				.receive("timeout", () => scheduleCrdtRehandshake(docId, 1000));
+				.receive("timeout", () => {
+					// The server acks every routed crdt_msg (backend 2026-07-14), so a
+					// timeout is REAL non-delivery now, not the old always-fires noise
+					// that re-handshook every open note every ~3.5s forever.
+					rlog().warn("crdt", `crdt_msg push timeout note=${docId} — scheduling re-handshake`);
+					pushFailureBeacon(docId, startUs, "timeout");
+					scheduleCrdtRehandshake(docId, 1000);
+				});
 		},
 	});
 	const crdtTopic = `crdt:${userId}:${vaultId}`;
@@ -429,9 +466,11 @@ export async function connectChannel({
 	crdtChannel
 		.join()
 		.receive("ok", () => {
+			rlog().info("crdt", "crdt channel joined — live note sync active");
 			notifyCrdtChannelJoined();
 		})
 		.receive("error", (resp) => {
+			rlog().error("crdt", `crdt channel join FAILED: ${JSON.stringify(resp).slice(0, 200)}`);
 			notifyCrdtChannelError();
 			console.error("CRDT channel join failed", resp);
 		});

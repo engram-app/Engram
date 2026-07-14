@@ -53,9 +53,16 @@ defmodule Engram.Observability.TraceSampler do
   @impl :otel_sampler
   def description(_config), do: <<"EngramTraceSampler">>
 
+  # A repo.query as a ROOT span is background-poller noise: request-bound Ecto
+  # spans always hang off the Bandit server span, so the only orphan query
+  # roots are Oban's ~1s staging poll (engram.repo.query:oban_jobs/oban_peers)
+  # and its source-less begin/commit siblings. They dominated Tempo volume and
+  # buried real traces (2026-07-14). Prefix match keeps every :source variant.
+  @repo_query_prefix "engram.repo.query"
+
   @impl :otel_sampler
   def should_sample(ctx, trace_id, links, span_name, span_kind, attributes, config) do
-    if drop?(attributes) do
+    if drop?(attributes) or orphan_query?(span_name) do
       {:drop, [], :otel_span.tracestate(:otel_tracer.current_span_ctx(ctx))}
     else
       :otel_sampler_trace_id_ratio_based.should_sample(
@@ -85,4 +92,11 @@ defmodule Engram.Observability.TraceSampler do
 
   defp lookup_path(attributes) when is_map(attributes), do: Map.get(attributes, @path_key)
   defp lookup_path(_), do: nil
+
+  defp orphan_query?(span_name) when is_binary(span_name),
+    do: String.starts_with?(span_name, @repo_query_prefix)
+
+  # opentelemetry passes span names as atoms or iodata in some paths — treat
+  # anything non-binary as not-a-query rather than raising on the hot path.
+  defp orphan_query?(_), do: false
 end

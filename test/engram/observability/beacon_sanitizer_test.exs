@@ -100,4 +100,40 @@ defmodule Engram.Observability.BeaconSanitizerTest do
              "engram.event_type" => "upsert"
            }
   end
+
+  test "accepts the web CRDT span names (browser live-sync observability)" do
+    for name <- ["web.crdt.push", "web.crdt.apply", "web.crdt.handshake"] do
+      assert {:ok, out} = S.sanitize(put_in(base()["name"], name), @now_us)
+      assert out.name == name
+    end
+  end
+
+  test "keeps engram.note_id only when it is a UUID (cardinality + PII guard)" do
+    ok =
+      put_in(base()["attributes"], %{
+        "engram.note_id" => "019f45c5-7818-771b-9242-9ae8c7fd214f"
+      })
+
+    assert {:ok, out} = S.sanitize(ok, @now_us)
+    assert out.attributes["engram.note_id"] == "019f45c5-7818-771b-9242-9ae8c7fd214f"
+
+    bad = put_in(base()["attributes"], %{"engram.note_id" => "Secret Note Title.md"})
+    assert {:ok, out} = S.sanitize(bad, @now_us)
+    refute Map.has_key?(out.attributes, "engram.note_id")
+  end
+
+  test "keeps engram.route and engram.reason short strings" do
+    entry =
+      put_in(base()["attributes"], %{
+        "engram.route" => "/notes/:id/updates",
+        "engram.reason" => "timeout"
+      })
+
+    assert {:ok, out} = S.sanitize(entry, @now_us)
+
+    assert out.attributes == %{
+             "engram.route" => "/notes/:id/updates",
+             "engram.reason" => "timeout"
+           }
+  end
 end
