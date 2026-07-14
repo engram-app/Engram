@@ -14,6 +14,9 @@ defmodule Engram.Notes.FanoutPacer do
     * COLD — first touch / stale (bulk enrollment) → enqueued and drained per-vault
              at a bounded rate, room-free and never dropped.
 
+  The `:fanout_hot` ETS table is periodically swept to evict stale entries and
+  keep its size bounded.
+
   ponytail: single pacer process + one ETS table. Shard by vault (a Registry of
   per-vault pacers) only if fan-out throughput on one node ever measurably
   saturates this process; at launch scale one process is ample.
@@ -28,6 +31,7 @@ defmodule Engram.Notes.FanoutPacer do
   @default_hot_window_ms 2_000
   @default_drain_batch 20
   @default_drain_interval_ms 100
+  @default_sweep_interval_ms 30_000
 
   # Client -----------------------------------------------------------------
 
@@ -154,7 +158,7 @@ defmodule Engram.Notes.FanoutPacer do
   defp hot_window_ms, do: pos_env(:fanout_hot_window_ms, @default_hot_window_ms)
   defp drain_batch, do: pos_env(:fanout_drain_batch, @default_drain_batch)
   defp drain_interval_ms, do: pos_env(:fanout_drain_interval_ms, @default_drain_interval_ms)
-  defp sweep_interval_ms, do: pos_env(:fanout_sweep_interval_ms, 30_000)
+  defp sweep_interval_ms, do: pos_env(:fanout_sweep_interval_ms, @default_sweep_interval_ms)
 
   defp pos_env(key, default) do
     case Application.get_env(:engram, key, default) do
