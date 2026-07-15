@@ -259,4 +259,36 @@ defmodule Engram.MCP.HandlersTest do
     test "registered as a tool",
       do: assert({:ok, %{name: "delete_folder"}} = Engram.MCP.Tools.get("delete_folder"))
   end
+
+  describe "list_folder attachment visibility" do
+    test "lists attachments alongside notes", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "Docs/p.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      assert {:ok, body} = Handlers.handle("list_folder", user, vault, %{"folder" => "Docs"})
+
+      assert body =~ "Docs/a.md"
+      assert body =~ "Docs/p.png"
+      assert body =~ "(attachment)"
+    end
+
+    test "attachment listing is non-recursive", %{user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "Docs/Sub/deep.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      assert {:ok, body} = Handlers.handle("list_folder", user, vault, %{"folder" => "Docs"})
+      refute body =~ "deep.png"
+    end
+  end
 end

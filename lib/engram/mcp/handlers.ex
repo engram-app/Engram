@@ -106,28 +106,31 @@ defmodule Engram.MCP.Handlers do
   def handle("list_folder", user, vault, args) do
     folder = args["folder"] || ""
     {:ok, notes} = Notes.list_notes_in_folder(user, vault, folder)
+    {:ok, atts} = Engram.Attachments.list_in_folder(user, vault, folder)
+    folder_label = if folder == "", do: "(root)", else: folder
 
-    if notes == [] do
-      folder_label = if folder == "", do: "(root)", else: folder
+    if notes == [] and atts == [] do
       {:ok, "No notes found in folder: #{folder_label}"}
     else
-      folder_label = if folder == "", do: "(root)", else: folder
-
-      lines = [
+      header = [
         "**Folder:** #{folder_label}",
         "",
         "| Title | Path | Tags |",
         "|-------|------|------|"
       ]
 
-      lines =
-        lines ++
-          Enum.map(notes, fn n ->
-            tags = if n.tags && n.tags != [], do: Enum.join(n.tags, ", "), else: ""
-            "| #{n.title} | #{n.path} | #{tags} |"
-          end)
+      note_rows =
+        Enum.map(notes, fn n ->
+          tags = if n.tags && n.tags != [], do: Enum.join(n.tags, ", "), else: ""
+          "| #{n.title} | #{n.path} | #{tags} |"
+        end)
 
-      {:ok, Enum.join(lines, "\n")}
+      att_rows =
+        Enum.map(atts, fn a ->
+          "| #{Path.basename(a.path)} | #{a.path} | (attachment) |"
+        end)
+
+      {:ok, Enum.join(header ++ note_rows ++ att_rows, "\n")}
     end
   end
 
