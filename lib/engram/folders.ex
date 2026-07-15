@@ -95,21 +95,32 @@ defmodule Engram.Folders do
           {:ok, counts()} | {:error, {:not_empty, counts()} | term()}
   def delete(user, vault, folder, opts \\ []) do
     recursive = Keyword.get(opts, :recursive, false)
-    notes = Notes.count_folder_notes(user, vault, folder)
-    {:ok, atts} = count_folder_attachments(user, vault, folder)
+    folder = String.trim_trailing(folder, "/")
 
-    # ponytail: the empty-check scans notes+attachments, then the cascade
-    # re-scans both. Fine for an AI-triggered folder delete (low frequency);
-    # fold the count into the delete pass if this ever shows up hot.
-    if notes + atts > 0 and not recursive do
-      {:error, {:not_empty, %{notes: notes, attachments: atts}}}
+    if folder == "" do
+      {:error, :root_delete_refused}
     else
+      # The empty-check counts and the cascade both run INSIDE the same
+      # transaction (was: counted before `atomic/1`, cascaded inside it, a
+      # TOCTOU gap where content created between the two could be deleted
+      # without `recursive: true`). `count_folder_attachments` is `with`-chained
+      # (not hard-matched) so a non-ok tenant-unwrap tuple propagates as an
+      # error instead of MatchError-ing.
       atomic(fn ->
-        with {:ok, %{deleted: _}} <- Notes.delete_folder(user, vault, folder),
-             {:ok, a} <- Attachments.delete_folder(user, vault, folder) do
-          # Notes.delete_folder's `deleted` includes folder markers; report the
-          # content-note count we already computed so the caller sees notes, not markers.
-          {:ok, %{notes: notes, attachments: a}}
+        notes = Notes.count_folder_notes(user, vault, folder)
+
+        with {:ok, atts} <- count_folder_attachments(user, vault, folder) do
+          if notes + atts > 0 and not recursive do
+            {:error, {:not_empty, %{notes: notes, attachments: atts}}}
+          else
+            with {:ok, %{deleted: _}} <- Notes.delete_folder(user, vault, folder),
+                 {:ok, a} <- Attachments.delete_folder(user, vault, folder) do
+              # Notes.delete_folder's `deleted` includes folder markers; report
+              # the content-note count already computed so the caller sees
+              # notes, not markers.
+              {:ok, %{notes: notes, attachments: a}}
+            end
+          end
         end
       end)
     end

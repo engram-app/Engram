@@ -343,5 +343,24 @@ defmodule Engram.FoldersTest do
     test "deleting a non-existent folder is a no-op success", %{user: user, vault: vault} do
       assert {:ok, %{notes: 0, attachments: 0}} = Folders.delete(user, vault, "Ghost")
     end
+
+    test "trailing slash normalizes to the same non-empty refusal as no-slash (Fix #3)", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+
+      assert {:error, {:not_empty, %{notes: 1, attachments: 0}}} =
+               Folders.delete(user, vault, "Docs/")
+
+      assert {:ok, _} = Notes.get_note(user, vault, "Docs/a.md")
+    end
+
+    test "refuses to delete the vault root (Fix #4)", %{user: user, vault: vault} do
+      assert {:error, :root_delete_refused} = Folders.delete(user, vault, "")
+    end
   end
 end
