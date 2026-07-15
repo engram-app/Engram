@@ -213,6 +213,15 @@ defmodule Engram.MCP.HandlersTest do
       assert msg =~ "max 20"
     end
 
+    test "rejects a non-string path element", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      assert {:error, msg} =
+               Handlers.handle("get_notes", user, vault, %{"paths" => ["ok.md", 123]})
+
+      assert msg =~ "must be a string"
+    end
+
     test "registered as a tool",
       do: assert({:ok, %{name: "get_notes"}} = Tools.get("get_notes"))
   end

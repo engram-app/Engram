@@ -105,32 +105,36 @@ defmodule Engram.MCP.Handlers do
 
   def handle("list_folder", user, vault, args) do
     folder = args["folder"] || ""
-    {:ok, notes} = Notes.list_notes_in_folder(user, vault, folder)
-    {:ok, atts} = Engram.Attachments.list_in_folder(user, vault, folder)
-    folder_label = if folder == "", do: "(root)", else: folder
 
-    if notes == [] and atts == [] do
-      {:ok, "No notes found in folder: #{folder_label}"}
+    with {:ok, notes} <- Notes.list_notes_in_folder(user, vault, folder),
+         {:ok, atts} <- Engram.Attachments.list_in_folder(user, vault, folder) do
+      folder_label = if folder == "", do: "(root)", else: folder
+
+      if notes == [] and atts == [] do
+        {:ok, "No notes found in folder: #{folder_label}"}
+      else
+        header = [
+          "**Folder:** #{folder_label}",
+          "",
+          "| Title | Path | Tags |",
+          "|-------|------|------|"
+        ]
+
+        note_rows =
+          Enum.map(notes, fn n ->
+            tags = if n.tags && n.tags != [], do: Enum.join(n.tags, ", "), else: ""
+            "| #{n.title} | #{n.path} | #{tags} |"
+          end)
+
+        att_rows =
+          Enum.map(atts, fn a ->
+            "| #{Path.basename(a.path)} | #{a.path} | (attachment) |"
+          end)
+
+        {:ok, Enum.join(header ++ note_rows ++ att_rows, "\n")}
+      end
     else
-      header = [
-        "**Folder:** #{folder_label}",
-        "",
-        "| Title | Path | Tags |",
-        "|-------|------|------|"
-      ]
-
-      note_rows =
-        Enum.map(notes, fn n ->
-          tags = if n.tags && n.tags != [], do: Enum.join(n.tags, ", "), else: ""
-          "| #{n.title} | #{n.path} | #{tags} |"
-        end)
-
-      att_rows =
-        Enum.map(atts, fn a ->
-          "| #{Path.basename(a.path)} | #{a.path} | (attachment) |"
-        end)
-
-      {:ok, Enum.join(header ++ note_rows ++ att_rows, "\n")}
+      {:error, reason} -> {:ok, "Could not list folder #{folder}: #{inspect(reason)}"}
     end
   end
 
@@ -217,6 +221,9 @@ defmodule Engram.MCP.Handlers do
 
       length(paths) > 20 ->
         {:error, "Too many paths (max 20). Split into multiple calls."}
+
+      not Enum.all?(paths, &is_binary/1) ->
+        {:error, "every path must be a string"}
 
       true ->
         body =

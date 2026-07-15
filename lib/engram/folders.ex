@@ -103,9 +103,15 @@ defmodule Engram.Folders do
       # The empty-check counts and the cascade both run INSIDE the same
       # transaction (was: counted before `atomic/1`, cascaded inside it, a
       # TOCTOU gap where content created between the two could be deleted
-      # without `recursive: true`). `count_folder_attachments` is `with`-chained
-      # (not hard-matched) so a non-ok tenant-unwrap tuple propagates as an
-      # error instead of MatchError-ing.
+      # without `recursive: true`). This NARROWS the window rather than
+      # closing it: under Postgres READ COMMITTED each statement takes its
+      # own snapshot, so a row a concurrent same-user txn commits in the gap
+      # between the count and the cascade is still visible to the delete but
+      # not the count. Fully closing it would need REPEATABLE READ or an
+      # inline delete-guard; not worth it for this single-user, RLS-scoped,
+      # AI-paced surface. `count_folder_attachments` is `with`-chained (not
+      # hard-matched) so a non-ok tenant-unwrap tuple propagates as an error
+      # instead of MatchError-ing.
       atomic(fn ->
         notes = Notes.count_folder_notes(user, vault, folder)
 
