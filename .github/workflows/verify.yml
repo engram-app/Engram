@@ -102,7 +102,7 @@ jobs:
     # This lets a plugin-only change (same backend, different plugin SHA) miss the
     # e2e cache and re-run integration, while still hitting the backend cache so
     # pure backend jobs skip.
-    runs-on: [self-hosted, linux, x64, isolated]
+    runs-on: [self-hosted, linux, x64, isolated, light]  # cheap: pin to FastRaid (bringup #15)
     outputs:
       backend-hash: ${{ steps.compute.outputs.backend-hash }}
       e2e-hash: ${{ steps.compute.outputs.e2e-hash }}
@@ -528,7 +528,7 @@ jobs:
     # (they're fast + cheap to recompile), and they hard-`needs` this job, so
     # a skipped prebuild would drag them into skip. e2e-browser stays gated.
     if: github.event_name != 'repository_dispatch'
-    runs-on: [self-hosted, linux, x64, isolated]
+    runs-on: [self-hosted, linux, x64, isolated, heavy]  # CPU-heavy: prefer SlowRaid (bringup #15)
     env:
       # Same builder image the release Dockerfile pins (ELIXIR_VERSION/OTP_VERSION
       # ARGs). `mix deps.get`/`mix compile` run INSIDE this image, bind-mounted
@@ -771,7 +771,7 @@ jobs:
     # aggregate already treats `skipped` as OK for version-check.
     needs: fingerprint
     if: github.event_name == 'push' && github.ref != 'refs/heads/main' && github.actor != 'dependabot[bot]'
-    runs-on: [self-hosted, linux, x64, isolated]
+    runs-on: [self-hosted, linux, x64, isolated, light]  # cheap: pin to FastRaid (bringup #15)
     steps:
       - uses: actions/checkout@v7
         with:
@@ -3067,7 +3067,7 @@ jobs:
     name: frontend lint+types+unit
     # Skip on cross-repo plugin dispatch — the plugin cannot regress the SPA.
     if: github.event_name != 'repository_dispatch'
-    runs-on: [self-hosted, linux, x64, isolated]
+    runs-on: [self-hosted, linux, x64, isolated, light]  # cheap: pin to FastRaid (bringup #15)
     # The full SPA PR gate, one bun install:
     #   - Biome lint + format check (`bun run ci` → `biome ci .`) with
     #     --error-on-warnings, so every enabled rule and any format drift
@@ -3602,7 +3602,7 @@ jobs:
       && github.event_name == 'push'
       && (needs.ci.result == 'success' || (needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true'))
     needs: [fingerprint, ci]
-    runs-on: [self-hosted, linux, x64, isolated]
+    runs-on: [self-hosted, linux, x64, isolated, heavy]  # CPU/IO-heavy build+publish: prefer SlowRaid (bringup #15)
     # Inherited from the pre-fold build-ecr.yml (workflow-level there;
     # job-level here): don't cancel an in-flight push — every main commit
     # gets its own `sha-` tag in ECR + (when bumped) its own semver in
