@@ -681,7 +681,6 @@ defmodule EngramWeb.NotesController do
       folder: note.folder || "",
       tags: note.tags || [],
       version: note.version,
-      content: note.content || "",
       # Protocol rev — clients store the server hash per path so hash-only
       # broadcasts / fields=meta pages can be compared without refetching.
       # The hash is keyed server-side (HMAC); clients treat it as opaque.
@@ -696,7 +695,20 @@ defmodule EngramWeb.NotesController do
       parse_status: note.parse_status,
       parse_reason: note.parse_reason
     }
+    |> put_content(note.content)
   end
+
+  # Boundary guard, same rule as Notes.broadcast_change (e2e test_34 class):
+  # nil content means a meta-projected struct leaked here (body exists, never
+  # loaded) — omit the key so clients fall back to fetching the body, instead
+  # of fabricating "" beside the REAL content_hash and seeding 0-byte files
+  # as converged forever. Genuinely empty notes are "" (is_binary) and keep
+  # serializing as "". nil is unreachable through today's callers (all
+  # full-load + decrypt); this pins the boundary for future projections.
+  # Public for the regression test only.
+  @doc false
+  def put_content(map, content) when is_binary(content), do: Map.put(map, :content, content)
+  def put_content(map, nil), do: map
 
   defp change_json(change, :meta) do
     %{
@@ -718,7 +730,7 @@ defmodule EngramWeb.NotesController do
   defp change_json(change, :all) do
     change
     |> change_json(:meta)
-    |> Map.put(:content, change.content || "")
+    |> put_content(change.content)
   end
 
   defp format_errors(changeset), do: EngramWeb.format_errors(changeset)

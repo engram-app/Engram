@@ -432,6 +432,38 @@ defmodule EngramWeb.NotesControllerTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Serializer nil-content boundary (same class as the broadcast_change fix,
+  # e2e test_34): a meta-projected struct whose content was never loaded must
+  # OMIT the content key, never fabricate "" beside a real content_hash.
+  # nil cannot reach note_json/change_json through today's callers (all of
+  # them full-load + decrypt), so this pins the boundary directly: a future
+  # projection leak fails as a missing key (the plugin fetches on absence)
+  # instead of a silent 0-byte file seeded as converged forever.
+  describe "serializer nil-content guard" do
+    test "put_content omits the key for nil and keeps genuinely empty content" do
+      refute Map.has_key?(EngramWeb.NotesController.put_content(%{}, nil), :content)
+      assert EngramWeb.NotesController.put_content(%{}, "") == %{content: ""}
+      assert EngramWeb.NotesController.put_content(%{}, "# X") == %{content: "# X"}
+    end
+
+    test "genuinely empty note keeps content == \"\" on GET and changes pages", %{
+      conn: conn
+    } do
+      post(conn, "/api/notes", %{path: "Test/Empty.md", content: "", mtime: 1_000.0})
+
+      body = conn |> get("/api/notes/Test/Empty.md") |> json_response(200)
+      assert body["content"] == ""
+
+      %{"changes" => changes} =
+        conn
+        |> get("/api/notes/changes?since=2020-01-01T00:00:00Z")
+        |> json_response(200)
+
+      change = Enum.find(changes, &(&1["path"] == "Test/Empty.md"))
+      assert change["content"] == ""
+    end
+  end
+
   # GET /notes/changes
   # ---------------------------------------------------------------------------
 
