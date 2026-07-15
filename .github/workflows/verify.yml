@@ -831,13 +831,15 @@ jobs:
     # stack health, hidden behind the plugin-build + Playwright background
     # installs, mirroring e2e-crdt's local-auth fold).
     #
-    # Needs = fingerprint (skip decisions) + the two prebuilds. Only the
-    # docker image is consumed here; prebuild-mix is in the set so the
-    # needs-set stays IDENTICAL across e2e-clerk / e2e-crdt / e2e-browser /
-    # storage-database — the run-graph UI stacks jobs with the same
-    # dependency set into one cluster, rendering the e2e family as one
-    # visual group. prebuild-mix finishes in ~1-2 min, so the grouping
-    # costs ~90s of start delay vs image-only needs.
+    # Needs = fingerprint (skip decisions) + the docker image. This suite
+    # consumes ONLY prebuild-ci-image.outputs.image — no prebuild-mix output.
+    # prebuild-mix used to be in the set purely so the e2e family shared an
+    # IDENTICAL needs-set and the run-graph UI grouped them visually, on the
+    # assumption prebuild-mix finished in ~1-2 min (~90s cost). Since heavy-
+    # label placement moved prebuild-mix onto the loaded runners it now takes
+    # 6+ min, so an image-only suite was blocked on an Elixir compile it never
+    # reads. Dropped: this job starts as soon as the image is built. (e2e-
+    # browser keeps prebuild-mix — it restores the _build cache from its keys.)
     # (History: this used to also wait on unit-tests/n1-compat as a #355
     # quiet-VM hack — on the old single 14-core VM, unit-tests saturating the
     # CPU next to an e2e suite starved its 30s live-delivery budgets. With
@@ -845,7 +847,7 @@ jobs:
     # suites per VM, the wait was dropped. If rotating-victim timing flakes
     # return, fix it at the pool level — e2e-dedicated runner capacity in the
     # homelab runner_vm role — do NOT re-add scheduling needs here.)
-    needs: [fingerprint, prebuild-ci-image, prebuild-mix]
+    needs: [fingerprint, prebuild-ci-image]
     # e2e-clerk is the plugin↔backend contract test. Skip when:
     #   - the exact (backend, plugin) pair has already passed (cache hit), OR
     #   - this is a Dependabot PR (needs Clerk + App secrets that GitHub doesn't
@@ -1401,10 +1403,10 @@ jobs:
     # spans displays ~45-134, crdt ~145-234. Runner-pool CPU is handled by the
     # `heavy` label below (max 2 heavy suites per VM — see the e2e-clerk
     # runs-on comment), which replaced the per-ref concurrency group that used
-    # to serialize this suite with e2e-clerk (#355). Needs-set matches
-    # e2e-clerk (see its needs comment: shared set = one run-graph cluster
-    # of the e2e family; prebuild-mix unconsumed here).
-    needs: [fingerprint, prebuild-ci-image, prebuild-mix]
+    # to serialize this suite with e2e-clerk (#355). Image-only, like e2e-clerk:
+    # consumes only prebuild-ci-image.outputs.image, so prebuild-mix is dropped
+    # from needs (see e2e-clerk's comment for the why).
+    needs: [fingerprint, prebuild-ci-image]
     # Per-job skip (skip-e2e-crdt): same group as e2e-clerk; forced false on full runs.
     # Accepts BOTH the `crdt` and `local` targeted-e2e suites — each targets one
     # of this job's two pytest steps; the non-targeted step skips.
@@ -2121,11 +2123,11 @@ jobs:
         run: find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
   storage-database:
-    # Needs-set matches the e2e suites (identical set = one run-graph
-    # cluster of the e2e family; prebuild-mix unconsumed here). No
-    # !cancelled(): on repository_dispatch prebuild-mix skips and the
-    # auto-skip matches this job's own dispatch skip.
-    needs: [fingerprint, prebuild-ci-image, prebuild-mix]
+    # Image-only, like the e2e suites: consumes only
+    # prebuild-ci-image.outputs.image, so prebuild-mix is dropped from needs
+    # (see e2e-clerk's comment). No !cancelled() needed — nothing here gates
+    # on a skipped prebuild-mix now.
+    needs: [fingerprint, prebuild-ci-image]
     # Minified self-host path (#297): boot the release with STORAGE_BACKEND=database
     # (Postgres bytea, no MinIO) and round-trip attachment bytes through the
     # storage adapter via `bin/engram rpc`. This is the only job that exercises
