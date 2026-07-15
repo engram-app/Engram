@@ -644,16 +644,14 @@ jobs:
           echo "build-test=$TEST_KEY" >> "$GITHUB_OUTPUT"
 
       # runs-on/cache (SHA-pinned fork of actions/cache) stores the Elixir
-      # deps/ + _build caches on the FastRaid MinIO over LAN, not GitHub's
-      # Azure Blob backend. Self-hosted runners upload to GitHub's cache at
-      # ~0.2 MB/s (a ~240 MB _build took ~23 min/run); the LAN S3 path runs at
-      # 200+ MB/s. The runner injects the S3 config (RUNS_ON_S3_BUCKET_CACHE,
-      # endpoint, creds) via its environment, so no secret lives in this repo;
-      # if that env is absent (e.g. a GitHub-hosted runner) the action falls
-      # back transparently to the default GitHub cache. EVERY deps/_build/PLT
-      # save + restore below must stay on runs-on/cache — a save on S3 paired
-      # with a restore on GitHub is a guaranteed miss. (buildx cache stays on
-      # actions/cache; it is a separate, Docker-layer concern.)
+      # deps/ + _build caches on the FastRaid MinIO over LAN, not GitHub's Azure
+      # Blob backend. Self-hosted runners upload to GitHub's cache at ~0.2 MB/s (a
+      # ~240 MB _build took ~23 min/run); the LAN S3 path runs at 200+ MB/s. The
+      # runner injects the S3 config via its environment, so no secret lives here;
+      # absent that env the action falls back to the default GitHub cache. EVERY
+      # deps/_build/PLT save + restore must stay on runs-on/cache (an S3 save paired
+      # with a GitHub restore is a guaranteed miss). buildx cache stays on
+      # actions/cache (separate Docker-layer concern).
       - name: Cache deps/
         id: cache-deps
         uses: runs-on/cache@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
@@ -833,21 +831,21 @@ jobs:
     # stack health, hidden behind the plugin-build + Playwright background
     # installs, mirroring e2e-crdt's local-auth fold).
     #
-    # Also gate on the heavy non-e2e jobs (unit-tests ~6min, n1-compat ~3min).
-    # They saturate the shared runner VM's CPU, and when they run concurrently
-    # with e2e they starve its 30s live-delivery budgets — a rotating-victim
-    # flake (#355) that within-suite serialization alone can't fix (e.g. test_34
-    # materialized=no, test_edit_after_discovery). e2e needs a quiet VM, so it
-    # waits for the heavy jobs to finish. crdt gates on the same set; browser
-    # inherits the wait by chaining off clerk+crdt.
-    needs: [fingerprint, prebuild-ci-image, unit-tests, n1-compat]
-    # Serialize the two heavy full-Obsidian suites (this + e2e-crdt) via a shared
-    # per-ref concurrency group so they don't co-tenant the runner pool and starve
-    # each other's timing budgets (the #355 rotating-victim flake). Queue, never
-    # cancel — we want both signals, just not simultaneously.
-    concurrency:
-      group: e2e-obsidian-${{ github.ref }}
-      cancel-in-progress: false
+    # Needs = fingerprint (skip decisions) + the two prebuilds. Only the
+    # docker image is consumed here; prebuild-mix is in the set so the
+    # needs-set stays IDENTICAL across e2e-clerk / e2e-crdt / e2e-browser /
+    # storage-database — the run-graph UI stacks jobs with the same
+    # dependency set into one cluster, rendering the e2e family as one
+    # visual group. prebuild-mix finishes in ~1-2 min, so the grouping
+    # costs ~90s of start delay vs image-only needs.
+    # (History: this used to also wait on unit-tests/n1-compat as a #355
+    # quiet-VM hack — on the old single 14-core VM, unit-tests saturating the
+    # CPU next to an e2e suite starved its 30s live-delivery budgets. With
+    # two runner VMs and heavy-label placement capping co-tenancy at 2 heavy
+    # suites per VM, the wait was dropped. If rotating-victim timing flakes
+    # return, fix it at the pool level — e2e-dedicated runner capacity in the
+    # homelab runner_vm role — do NOT re-add scheduling needs here.)
+    needs: [fingerprint, prebuild-ci-image, prebuild-mix]
     # e2e-clerk is the plugin↔backend contract test. Skip when:
     #   - the exact (backend, plugin) pair has already passed (cache hit), OR
     #   - this is a Dependabot PR (needs Clerk + App secrets that GitHub doesn't
@@ -858,12 +856,17 @@ jobs:
     # Per-job fingerprint skip (skip-e2e-clerk) replaces the coarse e2e-cache-hit:
     # skips only when this exact (docker-image+elixir-src+e2e-harness+plugin)
     # content already passed full on main; forced false on full runs.
-    # !cancelled(): the unit-tests/n1-compat needs are a QUIET-VM WAIT, not a
-    # success gate. Without it, a SKIPPED need skips this job too — n1-compat
-    # is branch-only, so every main push (and every plugin dispatch, where
-    # unit-tests skips) silently lost the Obsidian e2e suites (#355 fallout).
+    # !cancelled(): prebuild-mix SKIPS on repository_dispatch (the plugin e2e
+    # trigger — the one event that MUST run this suite), and a skipped need
+    # would otherwise auto-skip this job. Trade-off: a failed prebuild no
+    # longer auto-skips this job either; it fails at image pull instead.
     if: ${{ !cancelled() && needs.fingerprint.outputs.skip-e2e-clerk != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'clerk') }}
-    runs-on: [self-hosted, linux, x64, isolated]
+    # `heavy` restricts placement to the 2 heavy-labeled runners per VM
+    # (fastraid-1/2, slowraid runner-1/2): at most two heavy e2e suites can
+    # co-tenant a 14-core VM, which is within budget — the #355 starvation
+    # needed ~5 concurrent heavies. This hardware cap replaces the per-ref
+    # concurrency group that used to serialize this suite with e2e-crdt.
+    runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     env:
       CI_PROJECT: engram-ci-${{ github.run_id }}-obsidian
@@ -1395,24 +1398,20 @@ jobs:
     # All named resources are isolated from e2e-clerk: stack name
     # (engram-ci-crdt-), Qdrant collection (ci_crdt_), temp dirs, dynamic ports,
     # and a separate Xvfb display band below (+150 vs e2e-clerk's +50): clerk
-    # spans displays ~45-134, crdt ~145-234. The one remaining shared resource is
-    # runner-pool CPU: running two full Obsidian suites at once stretches every
-    # timing budget (the #355 rotating-victim flake), so the shared per-ref
-    # `concurrency` group below SERIALIZES this suite with e2e-clerk (queue, not
-    # cancel) rather than running them simultaneously. Also gate on the heavy
-    # non-e2e jobs (unit-tests, n1-compat) so e2e runs on a quiet VM — see the
-    # e2e-clerk needs comment (#355).
-    needs: [fingerprint, prebuild-ci-image, unit-tests, n1-compat]
-    concurrency:
-      group: e2e-obsidian-${{ github.ref }}
-      cancel-in-progress: false
+    # spans displays ~45-134, crdt ~145-234. Runner-pool CPU is handled by the
+    # `heavy` label below (max 2 heavy suites per VM — see the e2e-clerk
+    # runs-on comment), which replaced the per-ref concurrency group that used
+    # to serialize this suite with e2e-clerk (#355). Needs-set matches
+    # e2e-clerk (see its needs comment: shared set = one run-graph cluster
+    # of the e2e family; prebuild-mix unconsumed here).
+    needs: [fingerprint, prebuild-ci-image, prebuild-mix]
     # Per-job skip (skip-e2e-crdt): same group as e2e-clerk; forced false on full runs.
     # Accepts BOTH the `crdt` and `local` targeted-e2e suites — each targets one
     # of this job's two pytest steps; the non-targeted step skips.
-    # !cancelled(): same quiet-VM-wait rationale as e2e-clerk — without it the
-    # branch-only n1-compat need (skipped on main/dispatch) skips this job.
+    # !cancelled(): same repository_dispatch rationale as e2e-clerk —
+    # prebuild-mix skips there and must not auto-skip this suite.
     if: ${{ !cancelled() && needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
-    runs-on: [self-hosted, linux, x64, isolated]
+    runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     env:
       # Distinct project name so containers/volumes never collide with
@@ -1906,7 +1905,14 @@ jobs:
     # elixir-src+test+migrations content already passed full on main.
     # (PR runs are further narrowed to `mix test --stale` in the run step below.)
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-unit-tests != 'true'
-    runs-on: [self-hosted, linux, x64, isolated]
+    # `heavy` (2 runners per VM): this job saturates a VM's CPU for minutes.
+    # On a generic runner it can land NEXT TO two heavy e2e suites and starve
+    # their 30s delivery budgets (#355; observed again 2026-07-15: unit-tests
+    # 12.8min vs ~4, dialyzer BEAM crash, test_34/test_edit_after_discovery
+    # timeouts — all in one fully-parallel run). Pinning every CPU hog to the
+    # heavy slots caps co-tenancy at 2 hogs per VM in hardware; excess jobs
+    # queue for a free slot instead of degrading a busy VM.
+    runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     env:
       PG_CONTAINER: engram-unit-test-${{ github.run_id }}
@@ -2115,7 +2121,11 @@ jobs:
         run: find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
   storage-database:
-    needs: [fingerprint, prebuild-ci-image]
+    # Needs-set matches the e2e suites (identical set = one run-graph
+    # cluster of the e2e family; prebuild-mix unconsumed here). No
+    # !cancelled(): on repository_dispatch prebuild-mix skips and the
+    # auto-skip matches this job's own dispatch skip.
+    needs: [fingerprint, prebuild-ci-image, prebuild-mix]
     # Minified self-host path (#297): boot the release with STORAGE_BACKEND=database
     # (Postgres bytea, no MinIO) and round-trip attachment bytes through the
     # storage adapter via `bin/engram rpc`. This is the only job that exercises
@@ -2205,7 +2215,9 @@ jobs:
     # elixir-src+test+lint-config content (incl. .credo.exs/.sobelow-conf/.formatter.exs)
     # already passed full on main.
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-lint != 'true'
-    runs-on: [self-hosted, linux, x64, isolated]
+    # `heavy`: dialyzer is CPU+memory hungry (it crashed the BEAM outright in
+    # the 2026-07-15 fully-parallel run). Same rationale as unit-tests.
+    runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     steps:
       - name: Reset sparse-checkout leaked from cross-repo jobs
@@ -2382,12 +2394,33 @@ jobs:
   # protection-rule semantic. Promote to required by adding to the
   # aggregator + updating ruleset 16309248.
 
-  todo-drift:
-    name: TODO drift
+  static-checks:
+    name: static checks
+    # One runner slot for the small independent gates that used to be five
+    # separate jobs (todo-drift, claude-md-staleness, migrations-immutable,
+    # frontend-audit, legal-cross-repo): same checks, one checks-list row,
+    # 4 fewer runner slots claimed at run start. Steps carry their own
+    # guards where the old jobs had them:
+    #   - bun audit keeps its lockfile path-filter (audit-guard step)
+    #   - legal steps skip for Dependabot (App-token secrets unavailable
+    #     there; create-github-app-token ERRORS rather than skips, and
+    #     Dependabot never touches legal docs)
     if: github.event_name != 'repository_dispatch'
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
+      - name: Reset sparse-checkout leaked from cross-repo jobs
+        run: |
+          if [ -d .git ] && { [ -f .git/info/sparse-checkout ] || [ "$(git config --get core.sparseCheckout 2>/dev/null)" = "true" ]; }; then
+            echo "::warning::Sparse-checkout leak detected — removing .git for fresh clone"
+            rm -rf .git
+          fi
+
       - uses: actions/checkout@v7
+        with:
+          # Need history to diff against origin/main (migrations-immutable
+          # check + the audit path-filter guard). depth=50 is plenty for
+          # PR-sized diffs and avoids the full clone cost.
+          fetch-depth: 50
 
       - name: Forbid TODO*.md files
         run: |
@@ -2423,13 +2456,6 @@ jobs:
             exit 1
           fi
           echo "OK — no checkbox-as-TODO in root markdown."
-
-  claude-md-staleness:
-    name: CLAUDE.md staleness
-    if: github.event_name != 'repository_dispatch'
-    runs-on: [self-hosted, linux, x64, isolated]
-    steps:
-      - uses: actions/checkout@v7
 
       - name: Scan CLAUDE.md / AGENTS.md files for known-stale facts
         run: |
@@ -2480,23 +2506,12 @@ jobs:
           fi
           echo "OK — no known-stale facts in CLAUDE.md files."
 
-  migrations-immutable:
-    name: migrations immutable
-    if: github.event_name != 'repository_dispatch'
-    runs-on: [self-hosted, linux, x64, isolated]
-    # Block in-place edits to already-applied migrations. Triggering incident:
-    # 2026-05-30 PR #368 edited migration 20260530000002 in place from :inet
-    # to :text after FastRaid prod had already run the :inet version, leaving
-    # prod's oauth_clients.first_ip column as inet while CI's fresh DB
-    # provisioned text — DCR endpoint crashed with Postgrex.EncodeError on
-    # every register. Spec: workspace docs/superpowers/specs/2026-05-30-deploy-guardrails-design.md
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # Need history to diff against origin/main. depth=50 is plenty for
-          # PR-sized diffs and avoids the full clone cost.
-          fetch-depth: 50
-
+      # Block in-place edits to already-applied migrations. Triggering incident:
+      # 2026-05-30 PR #368 edited migration 20260530000002 in place from :inet
+      # to :text after FastRaid prod had already run the :inet version, leaving
+      # prod's oauth_clients.first_ip column as inet while CI's fresh DB
+      # provisioned text — DCR endpoint crashed with Postgrex.EncodeError on
+      # every register. Spec: workspace docs/superpowers/specs/2026-05-30-deploy-guardrails-design.md
       - name: Check migrations are not modified in place
         env:
           PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
@@ -2555,24 +2570,127 @@ jobs:
           fi
           exit $failed
 
-  phase-label-required:
-    # A migration PR must declare its expand/contract phase via a label.
-    # This is what enforces the two-deploy fence (expand in release N,
-    # contract in release N+1, never both in the same image). Self-hosters
-    # do not see the label; it's a CI-time check only.
-    #
-    # Labels (exactly one required):
-    #   phase/expand        - additive, forward-compatible with current main
-    #   phase/migrate-data  - backfills, dual-writes, read switches
-    #   phase/contract      - drops old columns/tables (gated by
-    #                         contract-phase-references job)
-    #   phase/single-shot   - expand+contract in one release; accept downtime
-    #                         even on SaaS. Use sparingly.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Run `bun audit` against frontend/ on every CI trigger. Fail when any
+      # critical or high advisory affects a PRODUCTION dependency path. The
+      # --prod flag scopes to non-dev paths so a vuln deep under, say,
+      # pngquant-bin (build-time image tool) doesn't block PRs.
+      #
+      # Note: `bun audit --prod` (as of bun 1.3.11) still prints the full
+      # advisory header — including some parent paths that aren't production —
+      # because it groups by advisory rather than by resolved path. The jq
+      # filter below relies on the `severity` field, not the path list, so
+      # false-positive parents in the printout don't affect the gate.
+      - name: Audit path-filter early-exit
+        id: audit-guard
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            echo "On main — running audit unconditionally."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Ensure base ref is available for the diff. Tolerate failure —
+          # if fetch fails, the diff will surface the error explicitly.
+          git fetch origin main --depth=50 >/dev/null 2>&1 || true
+          if git diff --quiet origin/main HEAD -- \
+                frontend/package.json frontend/bun.lock 2>/dev/null; then
+            echo "Skipped — no changes to frontend/package.json or frontend/bun.lock vs main."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Lockfile changed — running audit."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: bun audit --prod
+        if: steps.audit-guard.outputs.skip != 'true'
+        working-directory: frontend
+        run: |
+          set -uo pipefail
+          json=$(bun audit --prod --json 2>/dev/null || echo '{}')
+          echo "$json" | jq .
+
+          # Gate: any advisory with severity critical or high in --prod scope.
+          blocking=$(echo "$json" | jq '[
+            (.advisories // .vulnerabilities // [] | .. | objects | select(.severity?))
+            | select(.severity == "critical" or .severity == "high")
+          ] | length')
+
+          if [ "$blocking" -gt 0 ]; then
+            echo "::error::Found $blocking critical/high advisory in production deps."
+            echo "Run \`bun audit --prod\` locally for the full report."
+            exit 1
+          fi
+
+          echo "Prod audit clean (critical/high)."
+
+      - name: Generate engram-marketing App installation token
+        if: github.actor != 'dependabot[bot]'
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: engram-app
+          repositories: engram-marketing
+
+      - name: Checkout engram-marketing legal docs
+        if: github.actor != 'dependabot[bot]'
+        uses: actions/checkout@v7
+        with:
+          repository: engram-app/engram-marketing
+          token: ${{ steps.app-token.outputs.token }}
+          ref: main
+          path: _marketing
+          persist-credentials: false
+
+      - name: Compare backend + frontend manifests against marketing markdown
+        if: github.actor != 'dependabot[bot]'
+        run: |
+          bun frontend/scripts/check-cross-repo-legal.ts \
+            backend=priv/legal/legal-manifest.json \
+            frontend=frontend/src/legal/versions/legal-manifest.json \
+            marketing-md=_marketing/src/legal
+
+  migration-gates:
+    name: migration gates
+    # The three phase/* migration gates folded into ONE job (they share the
+    # branch-push trigger, the open-PR label lookups, and the prebuild-mix
+    # caches), in step order:
+    #   1. phase-label-required — a PR that touches migrations must carry
+    #      exactly one phase/* label. This is what enforces the two-deploy
+    #      fence (expand in release N, contract in release N+1, never both
+    #      in the same image). Labels: phase/expand (additive),
+    #      phase/migrate-data (backfills), phase/contract (drops — gated by
+    #      step 2), phase/single-shot (accept downtime; use sparingly).
+    #   2. contract-phase-references — on phase/contract PRs, extract what
+    #      the new migrations DROP and prove no lib/ code still references
+    #      the dropped columns/tables.
+    #   3. n1-compat — on phase/expand PRs, prove the new migrations apply
+    #      cleanly on top of the previous release-v* tag's schema.
+    # Deliberately NOT marker-skipped (the old skip-n1-compat wiring is
+    # dropped): every gate's outcome depends on the open PR's labels —
+    # runtime state outside any content hash — so a marker seeded from an
+    # early-exit green could silently skip the real check later. Cheap when
+    # nothing fires (~20s); ~3min on a labeled expand PR.
+    # Enforced by the `ci` aggregate — the three standalone predecessor
+    # jobs' results were never actually checked anywhere.
     if: github.event_name == 'push' && github.ref != 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, isolated]
+    needs: [fingerprint, prebuild-mix]
     permissions:
       contents: read
       pull-requests: read
+    env:
+      PG_CONTAINER: engram-n1-compat-${{ github.run_id }}
+      # Run-scoped path (matches PG_CONTAINER above), NOT a fixed /tmp path.
+      # Concurrent runs share the host /tmp, so a fixed /tmp/prev-release let
+      # one job's `rm -rf` yank another's worktree mid-run. (runner.temp
+      # would auto-reap but isn't available in a job-level env: block.)
+      PREV_DIR: /tmp/prev-release-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -2629,27 +2747,14 @@ jobs:
           fi
           echo "OK — PR #$pr_number carries phase label: $phase_labels"
 
-  contract-phase-references:
-    # On phase/contract PRs only: extract the columns and tables dropped
-    # by each new migration and verify NO lib/ code still references them.
-    # Enforces the expand/contract two-deploy fence: code that uses a
-    # column must be removed in an earlier release before the column itself
-    # is dropped in a later release.
-    if: |
-      github.event_name == 'push' &&
-      github.ref != 'refs/heads/main' &&
-      needs.fingerprint.outputs.backend-cache-hit != 'true'
-    runs-on: [self-hosted, linux, x64, isolated]
-    needs: [fingerprint, phase-label-required, prebuild-mix]
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
+      # ── contract-phase-references ── on phase/contract PRs only: extract
+      # the columns and tables dropped by each new migration and verify NO
+      # lib/ code still references them. Code that uses a column must be
+      # removed in an earlier release before the column itself is dropped.
+      # backend-cache-hit guard preserved from the standalone job.
       - name: Check phase/contract label on open PR
         id: gate
+        if: needs.fingerprint.outputs.backend-cache-hit != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -2791,46 +2896,17 @@ jobs:
           fi
           echo "OK — no surviving lib/ references to dropped identifiers."
 
-  n1-compat:
-    # On phase/expand PRs only: prove the new migrations cleanly apply on
-    # top of the previous release-v* tag's schema. This catches malformed
-    # expand-phase migrations (NOT NULL without default, incompatible
-    # type changes, etc.) that Squawk's per-statement scan can miss in
-    # the catalog-level view.
-    #
-    # Simpler than the original plan: applies migrations, doesn't run
-    # the prev release's full mix test (brittle across versions). The
-    # "migrate applies cleanly" check is the load-bearing invariant.
-    # Per-job skip (skip-n1-compat = elixir-src+migrations; forced false on full
-    # runs). n1-compat is branch-only (never runs on main), so its marker only
-    # seeds via a [ci-full]/force_full branch run — in practice it nearly always
-    # runs, which is fine (it's a cheap expand-phase migration apply check).
-    if: |
-      github.event_name == 'push' &&
-      github.ref != 'refs/heads/main' &&
-      needs.fingerprint.outputs.skip-n1-compat != 'true'
-    runs-on: [self-hosted, linux, x64, isolated]
-    needs: [fingerprint, prebuild-mix]
-    permissions:
-      contents: read
-    env:
-      PG_CONTAINER: engram-n1-compat-${{ github.run_id }}
-      # Run-scoped path (matches PG_CONTAINER above), NOT a fixed /tmp path.
-      # Concurrent n1-compat jobs from different runs share the host /tmp, so a
-      # fixed /tmp/prev-release let one job's `rm -rf` yank another's worktree
-      # mid-run (misleading "working directory ... No such file" in the deps
-      # step). run_id is unique per run; the leading `rm -rf` still clears a
-      # same-run stale dir. (runner.temp would auto-reap but isn't available in
-      # a job-level env: block — the runner context is step-only.)
-      PREV_DIR: /tmp/prev-release-${{ github.run_id }}
-      MIX_ENV: test
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
+      # ── n1-compat ── on phase/expand PRs only: prove the new migrations
+      # cleanly apply on top of the previous release-v* tag's schema. This
+      # catches malformed expand-phase migrations (NOT NULL without default,
+      # incompatible type changes, etc.) that Squawk's per-statement scan can
+      # miss in the catalog-level view. Applies migrations only, doesn't run
+      # the prev release's full mix test (brittle across versions) — the
+      # "migrate applies cleanly" check is the load-bearing invariant.
+      # MIX_ENV=test is set per-step below (NOT job-level: the contract
+      # steps above compile via the _build/dev cache).
       - name: Check phase/expand label on open PR
-        id: gate
+        id: n1-gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -2851,7 +2927,7 @@ jobs:
           fi
 
       - name: Resolve previous release tag
-        if: steps.gate.outputs.proceed == 'true'
+        if: steps.n1-gate.outputs.proceed == 'true'
         id: prev
         run: |
           # Most-recent release-v* tag in the repo, excluding any tag that
@@ -2868,7 +2944,7 @@ jobs:
           echo "Previous release: $prev"
 
       - name: Check out previous release in a sibling worktree
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         run: |
           # Clean any stale worktree from a previous run on this runner.
           rm -rf "$PREV_DIR"
@@ -2876,7 +2952,7 @@ jobs:
           git worktree add "$PREV_DIR" "${{ steps.prev.outputs.tag }}"
 
       - name: Start ephemeral postgres
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         id: pg
         run: |
           docker rm -f "$PG_CONTAINER" 2>/dev/null || true
@@ -2898,27 +2974,32 @@ jobs:
           echo "Postgres on port $PG_PORT (container: $PG_CONTAINER)"
 
       - uses: runs-on/cache/restore@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
-        id: cache-deps
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        id: n1-cache-deps
         with:
           path: ${{ env.PREV_DIR }}/deps
           key: ${{ needs.prebuild-mix.outputs.deps-key }}
           restore-keys: mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Install deps for prev release
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true' && steps.cache-deps.outputs.cache-hit != 'true'
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true' && steps.n1-cache-deps.outputs.cache-hit != 'true'
         working-directory: ${{ env.PREV_DIR }}
+        env:
+          MIX_ENV: test
         run: mix deps.get
 
       - name: Compile prev release
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         working-directory: ${{ env.PREV_DIR }}
+        env:
+          MIX_ENV: test
         run: mix compile
 
       - name: Set up DB at prev release schema
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         working-directory: ${{ env.PREV_DIR }}
         env:
+          MIX_ENV: test
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
         run: |
           mix ecto.create
@@ -2931,8 +3012,9 @@ jobs:
           echo "DB now at prev release schema."
 
       - name: Apply this branch's new migrations on top of prev's schema
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         env:
+          MIX_ENV: test
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
         working-directory: ${{ env.PREV_DIR }}
         run: |
@@ -2960,7 +3042,7 @@ jobs:
           mix ecto.migrate
 
       - name: Smoke-query the migrated DB
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         env:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
         run: |
@@ -2972,97 +3054,29 @@ jobs:
           echo "OK — migrated DB has $table_count public tables."
 
       - name: Stop ephemeral postgres
-        if: always() && steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: always() && steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         run: docker rm -fv "$PG_CONTAINER" 2>/dev/null || true
 
       - name: Clean up prev-release worktree
-        if: always() && steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: always() && steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         run: |
           rm -rf "$PREV_DIR"
           git worktree prune
 
-  frontend-audit:
-    name: frontend audit
-    if: github.event_name != 'repository_dispatch'
-    runs-on: [self-hosted, linux, x64, isolated]
-    # Run `bun audit` against frontend/ on every CI trigger. Fail when any
-    # critical or high advisory affects a PRODUCTION dependency path. The
-    # --prod flag scopes to non-dev paths so a vuln deep under, say,
-    # pngquant-bin (build-time image tool) doesn't block PRs.
-    #
-    # Note: `bun audit --prod` (as of bun 1.3.11) still prints the full
-    # advisory header — including some parent paths that aren't production —
-    # because it groups by advisory rather than by resolved path. The jq
-    # filter below relies on the `severity` field, not the path list, so
-    # false-positive parents in the printout don't affect the gate.
-    #
-    # Path filter (from pre-fold frontend-audit.yml) is preserved via the
-    # guard step below: skip when neither frontend/package.json nor
-    # frontend/bun.lock changed vs origin/main. On main itself, run
-    # unconditionally (audits the just-merged state).
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # Need history to diff against origin/main in the guard step.
-          fetch-depth: 50
-
-      - name: Path-filter early-exit
-        id: guard
-        run: |
-          set -euo pipefail
-          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
-            echo "On main — running audit unconditionally."
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Ensure base ref is available for the diff. Tolerate failure —
-          # if fetch fails, the diff will surface the error explicitly.
-          git fetch origin main --depth=50 >/dev/null 2>&1 || true
-          if git diff --quiet origin/main HEAD -- \
-                frontend/package.json frontend/bun.lock 2>/dev/null; then
-            echo "Skipped — no changes to frontend/package.json or frontend/bun.lock vs main."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Lockfile changed — running audit."
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: oven-sh/setup-bun@v2
-        if: steps.guard.outputs.skip != 'true'
-        with:
-          bun-version: latest
-
-      - name: bun audit --prod
-        if: steps.guard.outputs.skip != 'true'
-        working-directory: frontend
-        run: |
-          set -uo pipefail
-          json=$(bun audit --prod --json 2>/dev/null || echo '{}')
-          echo "$json" | jq .
-
-          # Gate: any advisory with severity critical or high in --prod scope.
-          blocking=$(echo "$json" | jq '[
-            (.advisories // .vulnerabilities // [] | .. | objects | select(.severity?))
-            | select(.severity == "critical" or .severity == "high")
-          ] | length')
-
-          if [ "$blocking" -gt 0 ]; then
-            echo "::error::Found $blocking critical/high advisory in production deps."
-            echo "Run \`bun audit --prod\` locally for the full report."
-            exit 1
-          fi
-
-          echo "Prod audit clean (critical/high)."
-
   frontend-lint:
-    name: frontend lint
+    name: frontend lint+types+unit
     # Skip on cross-repo plugin dispatch — the plugin cannot regress the SPA.
     if: github.event_name != 'repository_dispatch'
     runs-on: [self-hosted, linux, x64, isolated]
-    # Biome lint + format check (`bun run ci` → `biome ci .`) with
-    # --error-on-warnings, so every enabled rule and any format drift fails
-    # the PR. The ruleset is curated max-strict with a ratchet backlog of
-    # temporarily-disabled rules (see frontend/biome.json + tracking issue).
+    # The full SPA PR gate, one bun install:
+    #   - Biome lint + format check (`bun run ci` → `biome ci .`) with
+    #     --error-on-warnings, so every enabled rule and any format drift
+    #     fails the PR. The ruleset is curated max-strict with a ratchet
+    #     backlog of temporarily-disabled rules (see frontend/biome.json).
+    #   - tsc --noEmit: before this gate, type errors only surfaced inside
+    #     build:saas at deploy-frontend time, i.e. AFTER merge.
+    #   - vitest run: the SPA unit suite (~790 tests, ~2 min) previously ran
+    #     in no CI job at all.
     # Path-gated to frontend/ so backend-only pushes skip it.
     steps:
       - uses: actions/checkout@v7
@@ -3103,18 +3117,39 @@ jobs:
         working-directory: frontend
         run: bun run ci
 
+      # `bun run tsc` (not bunx, not a bare ./node_modules/.bin/tsc): bunx
+      # can resolve a registry package instead of the local install, and the
+      # raw bin's `#!/usr/bin/env node` shebang assumes system node, which
+      # these runners don't have — bun run executes the local bin under bun,
+      # the same mechanism deploy-frontend's build:saas already relies on.
+      - name: Typecheck (tsc --noEmit)
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: frontend
+        run: bun run tsc --noEmit
+
+      - name: Unit tests (vitest run)
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: frontend
+        run: bun run test
+
   e2e-browser:
-    # Serialized last in the e2e chain, after the clerk+crdt group (see #355;
-    # e2e-api was folded into e2e-clerk). `!cancelled()` preserves this
-    # suite's signal when a predecessor fails.
-    needs: [fingerprint, prebuild-mix, e2e-clerk, e2e-crdt]
+    # Runs in parallel with the Obsidian suites on a `heavy` runner (max 2
+    # heavy suites per VM — see the e2e-clerk runs-on comment). The old
+    # needs-chain serialization behind clerk+crdt (#355) is retired: with two
+    # runner VMs there are enough heavy slots for all three suites at once.
+    # Needs-set matches e2e-clerk (see its needs comment: shared set = one
+    # run-graph cluster of the e2e family). This suite consumes prebuild-mix
+    # (boots Phoenix from _build); prebuild-ci-image is unconsumed here.
+    # No !cancelled(): on repository_dispatch prebuild-mix skips and the
+    # resulting auto-skip is exactly what this suite wants there.
+    needs: [fingerprint, prebuild-ci-image, prebuild-mix]
     # Skip on cross-repo plugin dispatch — Playwright targets backend's React
     # frontend, which the plugin (separate repo) cannot affect.
     # Also skip via the per-job fingerprint (skip-e2e-browser =
     # docker-image+elixir-src+e2e-harness+frontend; forced false on full runs), or
     # on Dependabot PRs (Phoenix webServer needs Clerk secrets Dependabot can't access).
-    if: ${{ !cancelled() && github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-e2e-browser != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'browser') }}
-    runs-on: [self-hosted, linux, x64, isolated]
+    if: ${{ github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-e2e-browser != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'browser') }}
+    runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     env:
       PG_CONTAINER: engram-e2e-browser-${{ github.run_id }}
@@ -3305,62 +3340,13 @@ jobs:
   # one-sided legal bump fails here instead of 409-ing every signup in prod
   # (the automated backstop for the manual #667 launch gate). Marketing CI runs
   # the mirror check so a marketing-only bump is caught there too.
-  legal-cross-repo:
-    name: legal cross-repo hash check
-    # Skipped on Dependabot PRs: this job mints a GH App token to read the
-    # marketing repo, but Dependabot runs with the Dependabot secret scope
-    # so create-github-app-token fails ("private-key must be non-empty") and
-    # the job errors rather than skips — which the `ci` aggregate treats as
-    # fatal, permanently blocking dep bumps. Dependabot never touches legal
-    # docs, so skip it (mirrors how e2e-clerk is skipped for Dependabot).
-    if: github.event_name != 'repository_dispatch' && github.actor != 'dependabot[bot]'
-    runs-on: [self-hosted, linux, x64, isolated]
-    steps:
-      - name: Reset sparse-checkout leaked from cross-repo jobs
-        run: |
-          if [ -d .git ] && { [ -f .git/info/sparse-checkout ] || [ "$(git config --get core.sparseCheckout 2>/dev/null)" = "true" ]; }; then
-            echo "::warning::Sparse-checkout leak detected — removing .git for fresh clone"
-            rm -rf .git
-          fi
-
-      - uses: actions/checkout@v7
-
-      - name: Generate engram-marketing App installation token
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ vars.GH_APP_CLIENT_ID }}
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          owner: engram-app
-          repositories: engram-marketing
-
-      - name: Checkout engram-marketing legal docs
-        uses: actions/checkout@v7
-        with:
-          repository: engram-app/engram-marketing
-          token: ${{ steps.app-token.outputs.token }}
-          ref: main
-          path: _marketing
-          persist-credentials: false
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Compare backend + frontend manifests against marketing markdown
-        run: |
-          bun frontend/scripts/check-cross-repo-legal.ts \
-            backend=priv/legal/legal-manifest.json \
-            frontend=frontend/src/legal/versions/legal-manifest.json \
-            marketing-md=_marketing/src/legal
-
   ci:
     # is-full keeps the aggregate gate alive on full runs (main / [ci-full] /
     # force_full) even when the coarse cache hit — otherwise ci skips on main
     # and a real e2e/unit failure there is never gated. Mirrors the per-job +
     # prebuild is-full forcing so main is genuinely the full safety net.
     if: always() && (needs.fingerprint.outputs.is-full == 'true' || needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
-    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, n1-compat, legal-cross-repo]
+    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, migration-gates, static-checks]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
@@ -3373,7 +3359,8 @@ jobs:
           EC="${{ needs.e2e-clerk.result }}"
           ED="${{ needs.e2e-crdt.result }}"
           EB="${{ needs.e2e-browser.result }}"
-          LG="${{ needs.legal-cross-repo.result }}"
+          SC="${{ needs.static-checks.result }}"
+          MG="${{ needs.migration-gates.result }}"
 
           # Phase 4: a targeted e2e run ([e2e: suite/pattern]) is NEVER mergeable —
           # only one suite ran (with -k), so the full integration matrix is unproven.
@@ -3402,7 +3389,7 @@ jobs:
           # On cross-repo plugin dispatch (plugin-e2e-trigger), unit-tests / lint /
           # e2e-browser are intentionally skipped — plugin cannot regress
           # backend internals. Only assert success when those jobs actually ran.
-          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "e2e-crdt=$ED" "e2e-browser=$EB" "legal-cross-repo=$LG"; do
+          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "e2e-crdt=$ED" "e2e-browser=$EB" "static-checks=$SC" "migration-gates=$MG"; do
             name="${pair%=*}"; result="${pair#*=}"
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "::error::$name failed: $result"
@@ -3481,7 +3468,7 @@ jobs:
   # hash a later run looks up — no recompute, no BEAM-on-recorder-host dependency.
   record-job-markers:
     if: always() && needs.fingerprint.outputs.is-full == 'true'
-    # n1-compat is intentionally EXCLUDED: it has several early `exit 0` success
+    # migration-gates is intentionally EXCLUDED: it has several early `exit 0` success
     # paths (no open PR, no phase/expand label, no new migrations) that return
     # green WITHOUT running the migration rollforward. Recording a marker off
     # those would let a later identical-content PR skip the real check. It is a
