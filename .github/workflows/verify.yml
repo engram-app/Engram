@@ -822,21 +822,22 @@ jobs:
     # stack health, hidden behind the plugin-build + Playwright background
     # installs, mirroring e2e-crdt's local-auth fold).
     #
-    # Also gate on the heavy non-e2e jobs (unit-tests ~6min, n1-compat ~3min).
-    # They saturate a runner VM's CPU, and when they run concurrently with e2e
-    # on the same VM they starve its 30s live-delivery budgets — a
-    # rotating-victim flake (#355) that within-suite serialization alone can't
-    # fix (e.g. test_34 materialized=no, test_edit_after_discovery). They run
-    # on generic (non-heavy) runners, so the `heavy` placement below can't
-    # keep them off this suite's VM — wait for them instead.
+    # Needs are REAL dependencies only: the fingerprint skip decisions and
+    # the CI docker image. The suite starts as soon as the image exists.
+    # (History: this used to also wait on unit-tests/n1-compat as a #355
+    # quiet-VM hack — on the old single 14-core VM, unit-tests saturating the
+    # CPU next to an e2e suite starved its 30s live-delivery budgets. With
+    # two runner VMs and heavy-label placement capping co-tenancy at 2 heavy
+    # suites per VM, the wait was dropped. If rotating-victim timing flakes
+    # return, fix it at the pool level — e2e-dedicated runner capacity in the
+    # homelab runner_vm role — do NOT re-add scheduling needs here.)
     #
-    # The needs-set is IDENTICAL across e2e-clerk / e2e-crdt / e2e-browser /
+    # The needs-set is IDENTICAL across e2e-clerk / e2e-crdt /
     # storage-database on purpose: the run-graph UI stacks jobs with the same
-    # dependency set into one card cluster, so the shared set renders the
-    # whole CI-stack family as one visual group. prebuild-mix is not consumed
-    # here — it is in the shared set for e2e-browser's sake; it finishes long
-    # before unit-tests, so it never delays this job.
-    needs: [fingerprint, prebuild-ci-image, prebuild-mix, unit-tests, n1-compat]
+    # dependency set into one card cluster, so the image consumers render as
+    # one visual group. (e2e-browser clusters with the prebuild-mix
+    # consumers — its real dependency.)
+    needs: [fingerprint, prebuild-ci-image]
     # e2e-clerk is the plugin↔backend contract test. Skip when:
     #   - the exact (backend, plugin) pair has already passed (cache hit), OR
     #   - this is a Dependabot PR (needs Clerk + App secrets that GitHub doesn't
@@ -847,11 +848,9 @@ jobs:
     # Per-job fingerprint skip (skip-e2e-clerk) replaces the coarse e2e-cache-hit:
     # skips only when this exact (docker-image+elixir-src+e2e-harness+plugin)
     # content already passed full on main; forced false on full runs.
-    # !cancelled(): the unit-tests/n1-compat needs are a QUIET-VM WAIT, not a
-    # success gate. Without it, a SKIPPED need skips this job too — n1-compat
-    # is branch-only, so every main push (and every plugin dispatch, where
-    # unit-tests skips) silently lost the Obsidian e2e suites (#355 fallout).
-    if: ${{ !cancelled() && needs.fingerprint.outputs.skip-e2e-clerk != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'clerk') }}
+    # (No !cancelled() needed: both needs are hard dependencies that run on
+    # every trigger this job runs on, so default skip-propagation is correct.)
+    if: ${{ needs.fingerprint.outputs.skip-e2e-clerk != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'clerk') }}
     # `heavy` restricts placement to the 2 heavy-labeled runners per VM
     # (fastraid-1/2, slowraid runner-1/2): at most two heavy e2e suites can
     # co-tenant a 14-core VM, which is within budget — the #355 starvation
@@ -1392,16 +1391,14 @@ jobs:
     # spans displays ~45-134, crdt ~145-234. Runner-pool CPU is handled by the
     # `heavy` label below (max 2 heavy suites per VM — see the e2e-clerk
     # runs-on comment), which replaced the per-ref concurrency group that used
-    # to serialize this suite with e2e-clerk (#355). Also gate on the heavy
-    # non-e2e jobs (unit-tests, n1-compat) so e2e runs on a quiet VM — see the
-    # e2e-clerk needs comment (#355; shared needs-set = one run-graph cluster).
-    needs: [fingerprint, prebuild-ci-image, prebuild-mix, unit-tests, n1-compat]
+    # to serialize this suite with e2e-clerk (#355). Needs are real
+    # dependencies only — see the e2e-clerk needs comment (shared needs-set =
+    # one run-graph cluster with e2e-clerk + storage-database).
+    needs: [fingerprint, prebuild-ci-image]
     # Per-job skip (skip-e2e-crdt): same group as e2e-clerk; forced false on full runs.
     # Accepts BOTH the `crdt` and `local` targeted-e2e suites — each targets one
     # of this job's two pytest steps; the non-targeted step skips.
-    # !cancelled(): same quiet-VM-wait rationale as e2e-clerk — without it the
-    # branch-only n1-compat need (skipped on main/dispatch) skips this job.
-    if: ${{ !cancelled() && needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
+    if: ${{ needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
     runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     env:
@@ -2105,11 +2102,9 @@ jobs:
         run: find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
   storage-database:
-    # Needs-set matches the e2e suites (see the e2e-clerk needs comment) so
-    # the run graph stacks all CI-stack consumers into one cluster; only
-    # fingerprint + prebuild-ci-image are actually consumed. The extra waits
-    # cost nothing wall-clock — the ci gate waits on the e2e suites anyway.
-    needs: [fingerprint, prebuild-ci-image, prebuild-mix, unit-tests, n1-compat]
+    # Needs-set matches e2e-clerk/e2e-crdt (identical set = one run-graph
+    # cluster of the docker-image consumers).
+    needs: [fingerprint, prebuild-ci-image]
     # Minified self-host path (#297): boot the release with STORAGE_BACKEND=database
     # (Postgres bytea, no MinIO) and round-trip attachment bytes through the
     # storage adapter via `bin/engram rpc`. This is the only job that exercises
@@ -2117,10 +2112,7 @@ jobs:
     # cross-repo plugin dispatch (can't regress backend) and via the per-job
     # fingerprint skip (skip-storage-database = elixir-src+migrations+docker-image;
     # forced false on full runs).
-    # !cancelled(): the unit-tests/n1-compat needs are a quiet-VM/grouping
-    # WAIT, not a success gate — n1-compat is branch-only and skips on main;
-    # without !cancelled() this job would silently skip there.
-    if: ${{ !cancelled() && github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-storage-database != 'true' }}
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-storage-database != 'true'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -3140,20 +3132,17 @@ jobs:
     # heavy suites per VM — see the e2e-clerk runs-on comment). The old
     # needs-chain serialization behind clerk+crdt (#355) is retired: with two
     # runner VMs there are enough heavy slots for all three suites at once.
-    # The needs-set matches the other e2e suites (see the e2e-clerk needs
-    # comment): prebuild-ci-image is not consumed here — shared-set grouping
-    # only — while unit-tests/n1-compat give this suite the same quiet-VM
-    # wait the Obsidian suites use (Playwright budgets benefit too).
-    needs: [fingerprint, prebuild-ci-image, prebuild-mix, unit-tests, n1-compat]
+    # Needs are real dependencies only — this suite boots Phoenix from the
+    # prebuild-mix _build, not the docker image, so it clusters with the
+    # other prebuild-mix consumers (unit-tests / lint / n1-compat) in the
+    # run graph rather than the image consumers.
+    needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — Playwright targets backend's React
     # frontend, which the plugin (separate repo) cannot affect.
     # Also skip via the per-job fingerprint (skip-e2e-browser =
     # docker-image+elixir-src+e2e-harness+frontend; forced false on full runs), or
     # on Dependabot PRs (Phoenix webServer needs Clerk secrets Dependabot can't access).
-    # !cancelled(): the unit-tests/n1-compat needs are a quiet-VM WAIT, not a
-    # success gate — n1-compat is branch-only and skips on main; without
-    # !cancelled() this job would silently skip there.
-    if: ${{ !cancelled() && github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-e2e-browser != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'browser') }}
+    if: ${{ github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-e2e-browser != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'browser') }}
     runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     env:
