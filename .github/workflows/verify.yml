@@ -643,9 +643,18 @@ jobs:
           echo "build-dev=$DEV_KEY" >> "$GITHUB_OUTPUT"
           echo "build-test=$TEST_KEY" >> "$GITHUB_OUTPUT"
 
+      # runs-on/cache (SHA-pinned fork of actions/cache) stores the Elixir
+      # deps/ + _build caches on the FastRaid MinIO over LAN, not GitHub's Azure
+      # Blob backend. Self-hosted runners upload to GitHub's cache at ~0.2 MB/s (a
+      # ~240 MB _build took ~23 min/run); the LAN S3 path runs at 200+ MB/s. The
+      # runner injects the S3 config via its environment, so no secret lives here;
+      # absent that env the action falls back to the default GitHub cache. EVERY
+      # deps/_build/PLT save + restore must stay on runs-on/cache (an S3 save paired
+      # with a GitHub restore is a guaranteed miss). buildx cache stays on
+      # actions/cache (separate Docker-layer concern).
       - name: Cache deps/
         id: cache-deps
-        uses: actions/cache@v6
+        uses: runs-on/cache@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
         with:
           path: deps
           key: ${{ steps.keys.outputs.deps }}
@@ -653,7 +662,7 @@ jobs:
 
       - name: Cache _build/dev
         id: cache-build-dev
-        uses: actions/cache@v6
+        uses: runs-on/cache@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
         with:
           path: _build/dev
           # No restore-keys: the key is mix.lock-scoped, so a restore-key prefix
@@ -665,7 +674,7 @@ jobs:
 
       - name: Cache _build/test
         id: cache-build-test
-        uses: actions/cache@v6
+        uses: runs-on/cache@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
         with:
           path: _build/test
           # No restore-keys: see the _build/dev cache above. A restore-key hit
@@ -1973,7 +1982,7 @@ jobs:
       # BEAM files instead of recompiling.
       - name: Restore deps cache
         id: cache-deps
-        uses: actions/cache/restore@v6
+        uses: runs-on/cache/restore@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
         with:
           path: deps
           key: ${{ needs.prebuild-mix.outputs.deps-key }}
@@ -1981,7 +1990,7 @@ jobs:
             mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Restore _build/test cache
-        uses: actions/cache/restore@v6
+        uses: runs-on/cache/restore@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
         with:
           path: _build/test
           key: ${{ needs.prebuild-mix.outputs.build-test-key }}
@@ -2228,7 +2237,7 @@ jobs:
       # re-validation (no --force; cache was built warnings-clean).
       - name: Restore deps cache
         id: cache-deps
-        uses: actions/cache/restore@v6
+        uses: runs-on/cache/restore@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
         with:
           path: deps
           key: ${{ needs.prebuild-mix.outputs.deps-key }}
@@ -2236,7 +2245,7 @@ jobs:
             mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Restore _build/dev cache
-        uses: actions/cache/restore@v6
+        uses: runs-on/cache/restore@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
         with:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
@@ -2253,7 +2262,7 @@ jobs:
         run: mix deps.get
 
       - name: Cache Dialyzer PLT
-        uses: actions/cache@v6
+        uses: runs-on/cache@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
         with:
           path: priv/plts
           key: ${{ runner.os }}-dialyzer-${{ needs.prebuild-mix.outputs.beam-tag }}-${{ hashFiles('mix.lock') }}
@@ -2774,7 +2783,7 @@ jobs:
       - name: Restore deps cache
         if: steps.gate.outputs.proceed == 'true'
         id: cache-deps
-        uses: actions/cache/restore@v6
+        uses: runs-on/cache/restore@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
         with:
           path: deps
           key: ${{ needs.prebuild-mix.outputs.deps-key }}
@@ -2783,7 +2792,7 @@ jobs:
 
       - name: Restore _build/dev cache
         if: steps.gate.outputs.proceed == 'true'
-        uses: actions/cache/restore@v6
+        uses: runs-on/cache/restore@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
         with:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
@@ -2964,7 +2973,7 @@ jobs:
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
           echo "Postgres on port $PG_PORT (container: $PG_CONTAINER)"
 
-      - uses: actions/cache/restore@v6
+      - uses: runs-on/cache/restore@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
         if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         id: n1-cache-deps
         with:
@@ -3166,7 +3175,7 @@ jobs:
       # instead of recompiling at boot.
       - name: Restore deps cache
         id: cache-deps
-        uses: actions/cache/restore@v6
+        uses: runs-on/cache/restore@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
         with:
           path: deps
           key: ${{ needs.prebuild-mix.outputs.deps-key }}
@@ -3174,7 +3183,7 @@ jobs:
             mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Restore _build/dev cache
-        uses: actions/cache/restore@v6
+        uses: runs-on/cache/restore@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
         with:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
