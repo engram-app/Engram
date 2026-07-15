@@ -2637,24 +2637,42 @@ jobs:
             frontend=frontend/src/legal/versions/legal-manifest.json \
             marketing-md=_marketing/src/legal
 
-  phase-label-required:
-    # A migration PR must declare its expand/contract phase via a label.
-    # This is what enforces the two-deploy fence (expand in release N,
-    # contract in release N+1, never both in the same image). Self-hosters
-    # do not see the label; it's a CI-time check only.
-    #
-    # Labels (exactly one required):
-    #   phase/expand        - additive, forward-compatible with current main
-    #   phase/migrate-data  - backfills, dual-writes, read switches
-    #   phase/contract      - drops old columns/tables (gated by
-    #                         contract-phase-references job)
-    #   phase/single-shot   - expand+contract in one release; accept downtime
-    #                         even on SaaS. Use sparingly.
+  migration-gates:
+    name: migration gates
+    # The three phase/* migration gates folded into ONE job (they share the
+    # branch-push trigger, the open-PR label lookups, and the prebuild-mix
+    # caches), in step order:
+    #   1. phase-label-required — a PR that touches migrations must carry
+    #      exactly one phase/* label. This is what enforces the two-deploy
+    #      fence (expand in release N, contract in release N+1, never both
+    #      in the same image). Labels: phase/expand (additive),
+    #      phase/migrate-data (backfills), phase/contract (drops — gated by
+    #      step 2), phase/single-shot (accept downtime; use sparingly).
+    #   2. contract-phase-references — on phase/contract PRs, extract what
+    #      the new migrations DROP and prove no lib/ code still references
+    #      the dropped columns/tables.
+    #   3. n1-compat — on phase/expand PRs, prove the new migrations apply
+    #      cleanly on top of the previous release-v* tag's schema.
+    # Deliberately NOT marker-skipped (the old skip-n1-compat wiring is
+    # dropped): every gate's outcome depends on the open PR's labels —
+    # runtime state outside any content hash — so a marker seeded from an
+    # early-exit green could silently skip the real check later. Cheap when
+    # nothing fires (~20s); ~3min on a labeled expand PR.
+    # Enforced by the `ci` aggregate — the three standalone predecessor
+    # jobs' results were never actually checked anywhere.
     if: github.event_name == 'push' && github.ref != 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, isolated]
+    needs: [fingerprint, prebuild-mix]
     permissions:
       contents: read
       pull-requests: read
+    env:
+      PG_CONTAINER: engram-n1-compat-${{ github.run_id }}
+      # Run-scoped path (matches PG_CONTAINER above), NOT a fixed /tmp path.
+      # Concurrent runs share the host /tmp, so a fixed /tmp/prev-release let
+      # one job's `rm -rf` yank another's worktree mid-run. (runner.temp
+      # would auto-reap but isn't available in a job-level env: block.)
+      PREV_DIR: /tmp/prev-release-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -2711,27 +2729,14 @@ jobs:
           fi
           echo "OK — PR #$pr_number carries phase label: $phase_labels"
 
-  contract-phase-references:
-    # On phase/contract PRs only: extract the columns and tables dropped
-    # by each new migration and verify NO lib/ code still references them.
-    # Enforces the expand/contract two-deploy fence: code that uses a
-    # column must be removed in an earlier release before the column itself
-    # is dropped in a later release.
-    if: |
-      github.event_name == 'push' &&
-      github.ref != 'refs/heads/main' &&
-      needs.fingerprint.outputs.backend-cache-hit != 'true'
-    runs-on: [self-hosted, linux, x64, isolated]
-    needs: [fingerprint, phase-label-required, prebuild-mix]
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
+      # ── contract-phase-references ── on phase/contract PRs only: extract
+      # the columns and tables dropped by each new migration and verify NO
+      # lib/ code still references them. Code that uses a column must be
+      # removed in an earlier release before the column itself is dropped.
+      # backend-cache-hit guard preserved from the standalone job.
       - name: Check phase/contract label on open PR
         id: gate
+        if: needs.fingerprint.outputs.backend-cache-hit != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -2873,46 +2878,17 @@ jobs:
           fi
           echo "OK — no surviving lib/ references to dropped identifiers."
 
-  n1-compat:
-    # On phase/expand PRs only: prove the new migrations cleanly apply on
-    # top of the previous release-v* tag's schema. This catches malformed
-    # expand-phase migrations (NOT NULL without default, incompatible
-    # type changes, etc.) that Squawk's per-statement scan can miss in
-    # the catalog-level view.
-    #
-    # Simpler than the original plan: applies migrations, doesn't run
-    # the prev release's full mix test (brittle across versions). The
-    # "migrate applies cleanly" check is the load-bearing invariant.
-    # Per-job skip (skip-n1-compat = elixir-src+migrations; forced false on full
-    # runs). n1-compat is branch-only (never runs on main), so its marker only
-    # seeds via a [ci-full]/force_full branch run — in practice it nearly always
-    # runs, which is fine (it's a cheap expand-phase migration apply check).
-    if: |
-      github.event_name == 'push' &&
-      github.ref != 'refs/heads/main' &&
-      needs.fingerprint.outputs.skip-n1-compat != 'true'
-    runs-on: [self-hosted, linux, x64, isolated]
-    needs: [fingerprint, prebuild-mix]
-    permissions:
-      contents: read
-    env:
-      PG_CONTAINER: engram-n1-compat-${{ github.run_id }}
-      # Run-scoped path (matches PG_CONTAINER above), NOT a fixed /tmp path.
-      # Concurrent n1-compat jobs from different runs share the host /tmp, so a
-      # fixed /tmp/prev-release let one job's `rm -rf` yank another's worktree
-      # mid-run (misleading "working directory ... No such file" in the deps
-      # step). run_id is unique per run; the leading `rm -rf` still clears a
-      # same-run stale dir. (runner.temp would auto-reap but isn't available in
-      # a job-level env: block — the runner context is step-only.)
-      PREV_DIR: /tmp/prev-release-${{ github.run_id }}
-      MIX_ENV: test
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
+      # ── n1-compat ── on phase/expand PRs only: prove the new migrations
+      # cleanly apply on top of the previous release-v* tag's schema. This
+      # catches malformed expand-phase migrations (NOT NULL without default,
+      # incompatible type changes, etc.) that Squawk's per-statement scan can
+      # miss in the catalog-level view. Applies migrations only, doesn't run
+      # the prev release's full mix test (brittle across versions) — the
+      # "migrate applies cleanly" check is the load-bearing invariant.
+      # MIX_ENV=test is set per-step below (NOT job-level: the contract
+      # steps above compile via the _build/dev cache).
       - name: Check phase/expand label on open PR
-        id: gate
+        id: n1-gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -2933,7 +2909,7 @@ jobs:
           fi
 
       - name: Resolve previous release tag
-        if: steps.gate.outputs.proceed == 'true'
+        if: steps.n1-gate.outputs.proceed == 'true'
         id: prev
         run: |
           # Most-recent release-v* tag in the repo, excluding any tag that
@@ -2950,7 +2926,7 @@ jobs:
           echo "Previous release: $prev"
 
       - name: Check out previous release in a sibling worktree
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         run: |
           # Clean any stale worktree from a previous run on this runner.
           rm -rf "$PREV_DIR"
@@ -2958,7 +2934,7 @@ jobs:
           git worktree add "$PREV_DIR" "${{ steps.prev.outputs.tag }}"
 
       - name: Start ephemeral postgres
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         id: pg
         run: |
           docker rm -f "$PG_CONTAINER" 2>/dev/null || true
@@ -2980,27 +2956,32 @@ jobs:
           echo "Postgres on port $PG_PORT (container: $PG_CONTAINER)"
 
       - uses: actions/cache/restore@v6
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
-        id: cache-deps
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        id: n1-cache-deps
         with:
           path: ${{ env.PREV_DIR }}/deps
           key: ${{ needs.prebuild-mix.outputs.deps-key }}
           restore-keys: mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Install deps for prev release
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true' && steps.cache-deps.outputs.cache-hit != 'true'
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true' && steps.n1-cache-deps.outputs.cache-hit != 'true'
         working-directory: ${{ env.PREV_DIR }}
+        env:
+          MIX_ENV: test
         run: mix deps.get
 
       - name: Compile prev release
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         working-directory: ${{ env.PREV_DIR }}
+        env:
+          MIX_ENV: test
         run: mix compile
 
       - name: Set up DB at prev release schema
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         working-directory: ${{ env.PREV_DIR }}
         env:
+          MIX_ENV: test
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
         run: |
           mix ecto.create
@@ -3013,8 +2994,9 @@ jobs:
           echo "DB now at prev release schema."
 
       - name: Apply this branch's new migrations on top of prev's schema
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         env:
+          MIX_ENV: test
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
         working-directory: ${{ env.PREV_DIR }}
         run: |
@@ -3042,7 +3024,7 @@ jobs:
           mix ecto.migrate
 
       - name: Smoke-query the migrated DB
-        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         env:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
         run: |
@@ -3054,11 +3036,11 @@ jobs:
           echo "OK — migrated DB has $table_count public tables."
 
       - name: Stop ephemeral postgres
-        if: always() && steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: always() && steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         run: docker rm -fv "$PG_CONTAINER" 2>/dev/null || true
 
       - name: Clean up prev-release worktree
-        if: always() && steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        if: always() && steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         run: |
           rm -rf "$PREV_DIR"
           git worktree prune
@@ -3346,7 +3328,7 @@ jobs:
     # and a real e2e/unit failure there is never gated. Mirrors the per-job +
     # prebuild is-full forcing so main is genuinely the full safety net.
     if: always() && (needs.fingerprint.outputs.is-full == 'true' || needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
-    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, n1-compat, static-checks]
+    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, migration-gates, static-checks]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
@@ -3360,6 +3342,7 @@ jobs:
           ED="${{ needs.e2e-crdt.result }}"
           EB="${{ needs.e2e-browser.result }}"
           SC="${{ needs.static-checks.result }}"
+          MG="${{ needs.migration-gates.result }}"
 
           # Phase 4: a targeted e2e run ([e2e: suite/pattern]) is NEVER mergeable —
           # only one suite ran (with -k), so the full integration matrix is unproven.
@@ -3388,7 +3371,7 @@ jobs:
           # On cross-repo plugin dispatch (plugin-e2e-trigger), unit-tests / lint /
           # e2e-browser are intentionally skipped — plugin cannot regress
           # backend internals. Only assert success when those jobs actually ran.
-          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "e2e-crdt=$ED" "e2e-browser=$EB" "static-checks=$SC"; do
+          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "e2e-crdt=$ED" "e2e-browser=$EB" "static-checks=$SC" "migration-gates=$MG"; do
             name="${pair%=*}"; result="${pair#*=}"
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "::error::$name failed: $result"
@@ -3467,7 +3450,7 @@ jobs:
   # hash a later run looks up — no recompute, no BEAM-on-recorder-host dependency.
   record-job-markers:
     if: always() && needs.fingerprint.outputs.is-full == 'true'
-    # n1-compat is intentionally EXCLUDED: it has several early `exit 0` success
+    # migration-gates is intentionally EXCLUDED: it has several early `exit 0` success
     # paths (no open PR, no phase/expand label, no new migrations) that return
     # green WITHOUT running the migration rollforward. Recording a marker off
     # those would let a later identical-content PR skip the real check. It is a
