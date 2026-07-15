@@ -3,6 +3,7 @@ defmodule Engram.MCP.HandlersTest do
 
   alias Engram.Attachments
   alias Engram.MCP.Handlers
+  alias Engram.MCP.Tools
   alias Engram.Notes
 
   setup do
@@ -127,7 +128,7 @@ defmodule Engram.MCP.HandlersTest do
     end
 
     test "move_attachment registered as a tool" do
-      assert {:ok, %{name: "move_attachment"}} = Engram.MCP.Tools.get("move_attachment")
+      assert {:ok, %{name: "move_attachment"}} = Tools.get("move_attachment")
     end
 
     test "an unexpected crypto error returns a clean message, not a crash", %{
@@ -213,7 +214,7 @@ defmodule Engram.MCP.HandlersTest do
     end
 
     test "registered as a tool",
-      do: assert({:ok, %{name: "get_notes"}} = Engram.MCP.Tools.get("get_notes"))
+      do: assert({:ok, %{name: "get_notes"}} = Tools.get("get_notes"))
   end
 
   describe "delete_folder handler" do
@@ -257,7 +258,7 @@ defmodule Engram.MCP.HandlersTest do
     end
 
     test "registered as a tool",
-      do: assert({:ok, %{name: "delete_folder"}} = Engram.MCP.Tools.get("delete_folder"))
+      do: assert({:ok, %{name: "delete_folder"}} = Tools.get("delete_folder"))
   end
 
   describe "list_folder attachment visibility" do
@@ -289,6 +290,20 @@ defmodule Engram.MCP.HandlersTest do
 
       assert {:ok, body} = Handlers.handle("list_folder", user, vault, %{"folder" => "Docs"})
       refute body =~ "deep.png"
+    end
+
+    test "renders an attachments-only folder (no notes)", %{user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "Docs/p.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      assert {:ok, body} = Handlers.handle("list_folder", user, vault, %{"folder" => "Docs"})
+
+      assert body =~ "Docs/p.png"
+      assert body =~ "(attachment)"
+      refute body =~ "No notes found"
     end
   end
 end

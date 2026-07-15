@@ -220,14 +220,12 @@ defmodule Engram.MCP.Handlers do
 
       true ->
         body =
-          paths
-          |> Enum.map(fn path ->
+          Enum.map_join(paths, "\n\n---\n\n", fn path ->
             case Notes.get_note(user, vault, path) do
               {:ok, note} -> format_get_note(note)
               {:error, :not_found} -> "Note not found: #{path}"
             end
           end)
-          |> Enum.join("\n\n---\n\n")
 
         {:ok, body}
     end
