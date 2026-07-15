@@ -64,6 +64,10 @@ host-exposed; everything else stays on the private Docker network.
 | MCP setup            | <https://engram.page/docs/mcp/> |
 | HTTP API             | <https://engram.page/docs/api/> |
 
+## Community
+
+Questions, ideas, or bug reports? Join us on [Discord](https://discord.gg/NKWcU2mm7N).
+
 ## Contributing
 
 Local dev setup, tests, and PR rules: see [CONTRIBUTING.md](./CONTRIBUTING.md).

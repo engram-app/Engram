@@ -1,4 +1,5 @@
 import { AppearanceSection } from "./account/appearance-section";
+import { CommunitySection } from "./account/community-section";
 import { ConnectedAccountsSection } from "./account/connected-accounts-section";
 import { DangerZoneSection } from "./account/danger-zone-section";
 import { EmailSection } from "./account/email-section";
@@ -24,6 +25,7 @@ export default function AccountPage() {
 			<EmailSection />
 			<PasswordSection />
 			<ConnectedAccountsSection providers={[...OAUTH_PROVIDERS]} />
+			<CommunitySection />
 			<SessionsSection />
 			<DangerZoneSection />
 		</article>
