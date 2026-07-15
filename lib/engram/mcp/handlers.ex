@@ -205,6 +205,31 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
+  def handle("get_notes", user, vault, args) do
+    paths = args["paths"] || []
+
+    cond do
+      not is_list(paths) or paths == [] ->
+        {:error, "paths must be a non-empty array"}
+
+      length(paths) > 20 ->
+        {:error, "Too many paths (max 20). Split into multiple calls."}
+
+      true ->
+        body =
+          paths
+          |> Enum.map(fn path ->
+            case Notes.get_note(user, vault, path) do
+              {:ok, note} -> format_get_note(note)
+              {:error, :not_found} -> "Note not found: #{path}"
+            end
+          end)
+          |> Enum.join("\n\n---\n\n")
+
+        {:ok, body}
+    end
+  end
+
   # -- Write tools --
 
   def handle("create_note", user, vault, args) do

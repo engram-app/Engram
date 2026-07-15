@@ -3,6 +3,7 @@ defmodule Engram.MCP.HandlersTest do
 
   alias Engram.Attachments
   alias Engram.MCP.Handlers
+  alias Engram.Notes
 
   setup do
     prev = Application.get_env(:engram, :storage)
@@ -169,5 +170,49 @@ defmodule Engram.MCP.HandlersTest do
 
       assert handler =~ "Could not rename folder"
     end
+  end
+
+  describe "get_notes handler" do
+    test "batch-reads multiple notes in one call", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "alpha", "mtime" => 1.0})
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "beta", "mtime" => 1.0})
+
+      assert {:ok, body} =
+               Handlers.handle("get_notes", user, vault, %{"paths" => ["A.md", "B.md"]})
+
+      assert body =~ "alpha"
+      assert body =~ "beta"
+    end
+
+    test "reports a missing path inline without failing the batch", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "alpha", "mtime" => 1.0})
+
+      assert {:ok, body} =
+               Handlers.handle("get_notes", user, vault, %{"paths" => ["A.md", "gone.md"]})
+
+      assert body =~ "alpha"
+      assert body =~ "Note not found: gone.md"
+    end
+
+    test "rejects an empty paths list", %{user: user, vault: vault} do
+      assert {:error, _} = Handlers.handle("get_notes", user, vault, %{"paths" => []})
+    end
+
+    test "rejects more than 20 paths", %{user: user, vault: vault} do
+      paths = for i <- 1..21, do: "n#{i}.md"
+      assert {:error, msg} = Handlers.handle("get_notes", user, vault, %{"paths" => paths})
+      assert msg =~ "max 20"
+    end
+
+    test "registered as a tool",
+      do: assert({:ok, %{name: "get_notes"}} = Engram.MCP.Tools.get("get_notes"))
   end
 end

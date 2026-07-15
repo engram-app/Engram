@@ -41,6 +41,7 @@ defmodule Engram.MCP.Tools do
       create_folder_def(),
       suggest_folder_def(),
       get_note_def(),
+      get_notes_def(),
       create_note_def(),
       write_note_def(),
       append_to_note_def(),
@@ -287,6 +288,29 @@ defmodule Engram.MCP.Tools do
         "required" => ["source_path"]
       },
       handler: &Handlers.handle("get_note", &1, &2, &3)
+    }
+  end
+
+  defp get_notes_def do
+    %{
+      name: "get_notes",
+      description:
+        "Retrieve the full content of multiple notes in one call (1-20 paths). " <>
+          "Use to inventory a folder (list_folder then get_notes) or to read a batch " <>
+          "of search results without N round-trips. Missing paths are reported inline.",
+      inputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "paths" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" =>
+              "Note paths to read (max 20), e.g. [\"Health/A.md\", \"Health/B.md\"]"
+          }
+        },
+        "required" => ["paths"]
+      },
+      handler: &Handlers.handle("get_notes", &1, &2, &3)
     }
   end
 
