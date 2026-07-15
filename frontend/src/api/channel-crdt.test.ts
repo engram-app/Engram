@@ -39,6 +39,7 @@ vi.mock("phoenix", () => ({
 		connect() {}
 		disconnect() {}
 		onOpen(_cb: () => void) {}
+		onError(_cb: () => void) {}
 		channel(topic: string, params?: any) {
 			return mkChannel(topic, params);
 		}

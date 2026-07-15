@@ -10,6 +10,7 @@ const { socketCtor } = vi.hoisted(() => {
 		Object.assign(this, {
 			connect: vi.fn(),
 			disconnect: vi.fn(),
+			onError: vi.fn(),
 			onOpen: vi.fn(),
 			channel: vi.fn(() => ({
 				on: vi.fn(),

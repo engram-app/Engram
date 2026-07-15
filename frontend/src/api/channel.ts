@@ -54,6 +54,36 @@ let connectGeneration = 0;
 // then pick up whatever's current.
 let latestToken: string | null = null;
 
+// Clerk session tokens live 60s, so ANY phoenix-initiated reconnect >60s after
+// the last explicit connect replays an expired token — and the wake triggers
+// (focus/online/visibility) demonstrably don't fire on an unattended tab (prod
+// 2026-07-15: one tab replayed a single frozen token for 8h at ~7s cadence).
+// socket.onError fires on every failed attempt, so the token refreshes THERE:
+// the next retry (phoenix backoff caps at 5s) reads params() and self-heals.
+let latestGetToken: (() => Promise<string | null>) | null = null;
+let tokenRefreshInFlight = false;
+
+async function refreshTokenForRetry(): Promise<void> {
+	if (!latestGetToken || tokenRefreshInFlight) {
+		return;
+	}
+	tokenRefreshInFlight = true;
+	const gen = connectGeneration;
+	try {
+		const token = await latestGetToken();
+		// A teardown/vault switch landed mid-fetch, or Clerk returned nothing —
+		// keep the previous token; the next onError attempts another refresh.
+		if (gen === connectGeneration && token) {
+			latestToken = token;
+		}
+	} catch {
+		// Clerk can't mint right now (session refresh failing, network down).
+		// Nothing to write; the retry loop keeps probing via onError.
+	} finally {
+		tokenRefreshInFlight = false;
+	}
+}
+
 interface ConnectOptions {
 	userId: string;
 	vaultId: string;
@@ -376,9 +406,18 @@ export async function connectChannel({
 	}
 
 	latestToken = token ?? "";
+	latestGetToken = getToken;
 	socket = new Socket(joinWsUrl(getWsBase(), "/socket"), {
 		params: () => ({ token: latestToken ?? "" }),
 		reconnectAfterMs: (tries: number) => computeReconnectMs(tries, serverJitterMs),
+	});
+
+	// Fires on every failed (re)connect attempt — incl. an auth 403 on an
+	// expired token. Refresh before the next backoff step retries; clerk-js
+	// caches tokens ~60s so per-attempt refresh is cheap.
+	socket.onError(() => {
+		// Never rejects (catches internally) — safe as a floating call.
+		refreshTokenForRetry();
 	});
 
 	socket.connect();
@@ -598,6 +637,7 @@ export function installSocketHealthTriggers(
 
 export function disconnectChannel() {
 	connectGeneration++;
+	latestGetToken = null;
 	__resetNoteChangeBatch();
 	if (crdtChannel) {
 		crdtChannel.leave();

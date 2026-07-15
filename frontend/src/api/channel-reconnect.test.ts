@@ -13,6 +13,7 @@ interface MockSocket {
 	disconnect: ReturnType<typeof vi.fn>;
 	isConnected: ReturnType<typeof vi.fn>;
 	onOpen: ReturnType<typeof vi.fn>;
+	onError: ReturnType<typeof vi.fn>;
 	channel: ReturnType<typeof vi.fn>;
 }
 
@@ -25,6 +26,7 @@ const { socketCtor, sockets } = vi.hoisted(() => {
 		this.disconnect = vi.fn((cb?: () => void) => cb?.());
 		this.isConnected = vi.fn(() => true);
 		this.onOpen = vi.fn();
+		this.onError = vi.fn();
 		this.channel = vi.fn(() => ({
 			on: vi.fn(),
 			join: vi.fn(() => ({ receive: () => ({ receive: () => {} }) })),

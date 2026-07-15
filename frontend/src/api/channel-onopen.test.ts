@@ -16,6 +16,7 @@ const {
 		Object.assign(this, {
 			connect: vi.fn(),
 			disconnect: vi.fn(),
+			onError: vi.fn(),
 			onOpen,
 			channel: vi.fn(() => ({ on: channelOn, join, leave: vi.fn() })),
 		});
