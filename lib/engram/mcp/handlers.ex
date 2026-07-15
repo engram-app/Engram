@@ -446,6 +446,31 @@ defmodule Engram.MCP.Handlers do
     {:ok, "Note deleted: #{path}"}
   end
 
+  def handle("delete_folder", user, vault, args) do
+    folder = args["folder"] || ""
+    recursive = args["recursive"] == true
+
+    if folder == "" do
+      {:ok, "Refusing to delete the vault root."}
+    else
+      case Engram.Folders.delete(user, vault, folder, recursive: recursive) do
+        {:ok, %{notes: 0, attachments: 0}} ->
+          {:ok, "Folder deleted: #{folder}"}
+
+        {:ok, %{notes: n, attachments: a}} ->
+          {:ok, "Folder deleted: #{folder} (#{n} notes, #{a} attachments removed)"}
+
+        {:error, {:not_empty, %{notes: n, attachments: a}}} ->
+          {:ok,
+           "Folder #{folder} contains #{n} notes and #{a} attachments. " <>
+             "Pass recursive: true to delete them."}
+
+        {:error, reason} ->
+          {:ok, "Could not delete folder #{folder}: #{inspect(reason)}"}
+      end
+    end
+  end
+
   def handle("move_attachment", user, vault, args) do
     old_path = args["old_path"] || ""
     new_path = args["new_path"] || ""

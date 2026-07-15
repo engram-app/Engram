@@ -50,6 +50,7 @@ defmodule Engram.MCP.Tools do
       rename_note_def(),
       rename_folder_def(),
       delete_note_def(),
+      delete_folder_def(),
       move_attachment_def()
     ]
     |> Enum.map(&with_vault_id/1)
@@ -477,6 +478,32 @@ defmodule Engram.MCP.Tools do
         "required" => ["path"]
       },
       handler: &Handlers.handle("delete_note", &1, &2, &3)
+    }
+  end
+
+  defp delete_folder_def do
+    %{
+      name: "delete_folder",
+      description:
+        "Delete a folder. Empty-only by default: if the folder contains notes or " <>
+          "attachments, the call is refused and reports the counts. Pass recursive: true " <>
+          "to delete the folder and everything under it. Syncs to all connected devices.",
+      inputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "folder" => %{
+            "type" => "string",
+            "description" => "Folder path to delete, e.g. \"Projects/Old\""
+          },
+          "recursive" => %{
+            "type" => "boolean",
+            "description" => "Delete all notes and attachments under the folder (default false)",
+            "default" => false
+          }
+        },
+        "required" => ["folder"]
+      },
+      handler: &Handlers.handle("delete_folder", &1, &2, &3)
     }
   end
 

@@ -80,6 +80,49 @@ defmodule Engram.Folders do
     end)
   end
 
+  @doc """
+  Deletes a folder and, when `recursive: true`, everything under it.
+
+  Empty-only by default: if the folder holds any live notes or attachments
+  (recursively), returns `{:error, {:not_empty, %{notes: n, attachments: a}}}`
+  so an AI caller must explicitly opt into destruction. Nested empty folder
+  markers are not content — they are cleared along with the target marker.
+
+  Returns `{:ok, %{notes: n, attachments: a}}` where n/a are the content rows
+  removed (0/0 when only a marker was cleared, or the folder did not exist).
+  """
+  @spec delete(map(), map(), String.t(), keyword()) ::
+          {:ok, counts()} | {:error, {:not_empty, counts()} | term()}
+  def delete(user, vault, folder, opts \\ []) do
+    recursive = Keyword.get(opts, :recursive, false)
+    notes = Notes.count_folder_notes(user, vault, folder)
+    {:ok, atts} = count_folder_attachments(user, vault, folder)
+
+    # ponytail: the empty-check scans notes+attachments, then the cascade
+    # re-scans both. Fine for an AI-triggered folder delete (low frequency);
+    # fold the count into the delete pass if this ever shows up hot.
+    if notes + atts > 0 and not recursive do
+      {:error, {:not_empty, %{notes: notes, attachments: atts}}}
+    else
+      atomic(fn ->
+        with {:ok, %{deleted: _}} <- Notes.delete_folder(user, vault, folder),
+             {:ok, a} <- Attachments.delete_folder(user, vault, folder) do
+          # Notes.delete_folder's `deleted` includes folder markers; report the
+          # content-note count we already computed so the caller sees notes, not markers.
+          {:ok, %{notes: notes, attachments: a}}
+        end
+      end)
+    end
+  end
+
+  defp count_folder_attachments(user, vault, folder) do
+    prefix = folder_prefix(folder)
+
+    with {:ok, metas} <- Attachments.list_attachments(user, vault) do
+      {:ok, Enum.count(metas, &String.starts_with?(&1.path, prefix))}
+    end
+  end
+
   @spec batch_delete(map(), map(), [String.t()]) :: {:ok, counts()} | {:error, term()}
   def batch_delete(_user, _vault, []), do: {:ok, %{notes: 0, attachments: 0}}
 

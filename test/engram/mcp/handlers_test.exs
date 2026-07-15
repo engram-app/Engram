@@ -215,4 +215,48 @@ defmodule Engram.MCP.HandlersTest do
     test "registered as a tool",
       do: assert({:ok, %{name: "get_notes"}} = Engram.MCP.Tools.get("get_notes"))
   end
+
+  describe "delete_folder handler" do
+    test "deletes an empty folder", %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Empty")
+
+      assert {:ok, msg} = Handlers.handle("delete_folder", user, vault, %{"folder" => "Empty"})
+      assert msg =~ "Folder deleted: Empty"
+    end
+
+    test "refuses a non-empty folder and reports counts", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+
+      assert {:ok, msg} = Handlers.handle("delete_folder", user, vault, %{"folder" => "Docs"})
+      assert msg =~ "recursive: true"
+      assert msg =~ "1 notes"
+    end
+
+    test "recursive deletes contents", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+
+      assert {:ok, msg} =
+               Handlers.handle("delete_folder", user, vault, %{
+                 "folder" => "Docs",
+                 "recursive" => true
+               })
+
+      assert msg =~ "Folder deleted: Docs"
+      assert {:error, :not_found} = Notes.get_note(user, vault, "Docs/a.md")
+    end
+
+    test "refuses to delete the vault root", %{user: user, vault: vault} do
+      assert {:ok, msg} = Handlers.handle("delete_folder", user, vault, %{"folder" => ""})
+      assert msg =~ "root"
+    end
+
+    test "registered as a tool",
+      do: assert({:ok, %{name: "delete_folder"}} = Engram.MCP.Tools.get("delete_folder"))
+  end
 end
