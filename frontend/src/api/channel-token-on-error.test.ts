@@ -76,8 +76,8 @@ describe("token refresh on socket error", () => {
 			vaultId: "v1",
 			getToken: async () => {
 				if (fail) {
-				throw new Error("clerk down");
-			}
+					throw new Error("clerk down");
+				}
 				return "tok-A";
 			},
 			queryClient,
@@ -120,5 +120,44 @@ describe("token refresh on socket error", () => {
 		release("tok-STALE");
 		await flush();
 		expect(sockets[1]!.opts.params()).toEqual({ token: "tok-NEW" });
+	});
+});
+
+describe("stuck refresh flag (review 2026-07-15)", () => {
+	it("a getToken hung across a teardown does not block the next connection's refresh", async () => {
+		let hang = false;
+		await connectChannel({
+			userId: "u1",
+			vaultId: "v1",
+			getToken: () => (hang ? new Promise<string>(() => {}) : Promise.resolve("tok-A")),
+			queryClient,
+		});
+		hang = true;
+		(sockets[0]!.onError.mock.calls[0]![0] as () => void)(); // refresh now hangs forever
+
+		disconnectChannel();
+		await connectChannel({
+			userId: "u1",
+			vaultId: "v2",
+			getToken: async () => "tok-NEW",
+			queryClient,
+		});
+		let current = "tok-NEW";
+		// Swap the getToken result and fire an error on the new socket: without
+		// the teardown reset, tokenRefreshInFlight is still true and this
+		// refresh is silently skipped — the frozen-token loop all over again.
+		current = "tok-NEWER";
+		await connectChannel({
+			userId: "u1",
+			vaultId: "v2",
+			getToken: async () => current,
+			queryClient,
+		});
+		(sockets[2]!.onError.mock.calls[0]![0] as () => void)();
+		current = "tok-FINAL";
+		(sockets[2]!.onError.mock.calls[0]![0] as () => void)();
+		await flush();
+		expect(sockets[2]!.opts.params().token).not.toBe("tok-A");
+		expect(["tok-NEWER", "tok-FINAL"]).toContain(sockets[2]!.opts.params().token);
 	});
 });

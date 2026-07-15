@@ -638,6 +638,10 @@ export function installSocketHealthTriggers(
 export function disconnectChannel() {
 	connectGeneration++;
 	latestGetToken = null;
+	// A getToken() hung across this teardown must not block refreshes for the
+	// NEXT connection forever (review 2026-07-15) — the generation guard
+	// already discards its eventual result.
+	tokenRefreshInFlight = false;
 	__resetNoteChangeBatch();
 	if (crdtChannel) {
 		crdtChannel.leave();

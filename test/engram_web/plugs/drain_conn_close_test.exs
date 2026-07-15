@@ -6,6 +6,8 @@ defmodule EngramWeb.Plugs.DrainConnCloseTest do
   alias EngramWeb.Plugs.DrainConnClose
 
   setup do
+    # Belt-and-braces: clear any flag leaked by an earlier test file too.
+    Engram.Drainer.reset_draining_for_test()
     on_exit(&Engram.Drainer.reset_draining_for_test/0)
   end
 
