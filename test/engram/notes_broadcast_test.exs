@@ -142,6 +142,38 @@ defmodule Engram.NotesBroadcastTest do
       assert payload["path"] == "New/Child.md"
     end
 
+    # e2e test_34 "received=yes materialized=no": the cascade broadcasts
+    # meta-projected rows (content never decrypted), and the upsert payload
+    # fabricated `"content" => ""` next to the REAL content_hash. Receivers
+    # took the empty body as authoritative and materialized 0-byte files,
+    # then read as converged forever (hash("") seeded against the real
+    # serverHash). The key must be ABSENT when content is unloaded — the
+    # plugin's hash-only branch fetches the body on absence.
+    test "cascade upsert omits the content key (never fabricates empty)", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, child} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old/Child.md",
+          "content" => "# Child",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert {:ok, 1} = Notes.rename_folder(user, vault, "Old", "New")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "upsert"} = payload
+      }
+
+      refute Map.has_key?(payload, "content")
+      assert payload["content_hash"] == child.content_hash
+      assert is_binary(payload["content_hash"])
+    end
+
     # #976: the old-path delete leg used to broadcast without the note id,
     # forcing receivers to resolve by path mid-relocation — the ambiguity
     # window the folder-rename resurrection bug lived in. The note still

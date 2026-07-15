@@ -3797,21 +3797,28 @@ defmodule Engram.Notes do
     # scrub below is the last line of defense (#738): a caller that reaches this
     # site with unscrubbed content (a direct DB or CRDT write) would otherwise
     # ship invalid bytes that crash the V2 JSON serializer and take down PubSub.
-    payload =
-      Helpers.scrub_broadcast_payload(%{
-        "event_type" => "upsert",
-        "id" => note.id,
-        "path" => path,
-        "vault_id" => vault_id,
-        "content" => note.content || "",
-        "content_hash" => note.content_hash,
-        "title" => note.title || "",
-        "folder" => note.folder || "",
-        "tags" => note.tags || [],
-        "mtime" => note.mtime,
-        "updated_at" => note.updated_at,
-        "version" => note.version
-      })
+    # `content: nil` means the row is meta-projected (the folder-rename
+    # cascade reads meta columns only, #863) — the body exists but was never
+    # loaded. Fabricating `""` here shipped an empty body next to the REAL
+    # content_hash, and receivers materialized 0-byte files that then read
+    # as converged forever (e2e test_34). Omit the key instead: the plugin's
+    # hash-only branch fetches the body when `content` is absent.
+    base = %{
+      "event_type" => "upsert",
+      "id" => note.id,
+      "path" => path,
+      "vault_id" => vault_id,
+      "content_hash" => note.content_hash,
+      "title" => note.title || "",
+      "folder" => note.folder || "",
+      "tags" => note.tags || [],
+      "mtime" => note.mtime,
+      "updated_at" => note.updated_at,
+      "version" => note.version
+    }
+
+    base = if is_binary(note.content), do: Map.put(base, "content", note.content), else: base
+    payload = Helpers.scrub_broadcast_payload(base)
 
     topic = "sync:#{user_id}:#{vault_id}"
 
