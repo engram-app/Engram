@@ -12,7 +12,6 @@ Skipped automatically if E2E_CLERK_SECRET_KEY is not set.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import secrets
@@ -23,6 +22,7 @@ import pytest
 import requests
 
 from helpers.device_flow import start_device_flow, poll_for_tokens
+from helpers.oauth import restore_auth, swap_to_oauth
 from helpers.vault import write_note
 
 logger = logging.getLogger(__name__)
@@ -35,9 +35,6 @@ pytestmark = pytest.mark.skipif(
     not CLERK_SECRET,
     reason="E2E_CLERK_SECRET_KEY not set — skipping device flow tests",
 )
-
-# CDP plugin path shorthand
-_P = "app.plugins.plugins['engram-vault-sync']"
 
 
 @pytest.fixture
@@ -111,16 +108,15 @@ async def test_full_device_flow(
         logger.info("Tokens received: vault_id=%s", tokens["vault_id"])
 
         # ── 6. Reconfigure Obsidian A to use OAuth ────────────────
-        original_settings = await cdp_a.evaluate(
-            f"JSON.stringify({{apiKey: {_P}.settings.apiKey, "
-            f"refreshToken: {_P}.settings.refreshToken, "
-            f"vaultId: {_P}.settings.vaultId, "
-            f"userEmail: {_P}.settings.userEmail, "
-            f"authMethod: {_P}.settings.authMethod || 'apikey'}})"
-        )
+        # Shared helper, NOT a local copy: this test's private
+        # _swap_to_oauth/_restore_auth duplicated the pre-#229 ordering
+        # (saveSettings before provider wiring), freezing the channel topic
+        # under the OLD userId and leaving the session-scoped instance
+        # cross-bound — every later test needing A's live stream then died
+        # with crdtJoinFailedReason=unauthorized (test_84's 7-failure class).
+        original_settings = await swap_to_oauth(cdp_a, tokens)
 
         try:
-            await _swap_to_oauth(cdp_a, tokens)
 
             # Write a test note and sync
             path = "E2E/OAuthDeviceFlowTest.md"
@@ -149,86 +145,12 @@ async def test_full_device_flow(
 
         finally:
             # ── 7. Restore original API key auth ──────────────────
-            await _restore_auth(cdp_a, original_settings)
+            # Shared restore also VERIFIES the stream reconnects as the
+            # restored identity, failing loudly here instead of poisoning
+            # downstream tests.
+            await restore_auth(cdp_a, original_settings)
 
     finally:
         # ── 8. Cleanup: delete Clerk user ─────────────────────────
         clerk_client.delete_user(clerk_user_id)
         logger.info("Clerk user cleaned up: %s", test_email)
-
-
-# ── Private helpers ───────────────────────────────────────────────
-
-
-async def _swap_to_oauth(cdp, tokens: dict) -> None:
-    """Reconfigure Obsidian plugin to use OAuth auth via CDP.
-
-    Re-accepts the sync gate after the swap because the fingerprint
-    rotates with the auth/vault change — without the accept,
-    syncBlocked stays true and the post-swap fullSync silently no-ops.
-    """
-    refresh_token = json.dumps(tokens["refresh_token"])
-    vault_id = json.dumps(str(tokens["vault_id"]))
-    user_email = json.dumps(tokens.get("user_email", ""))
-
-    # IMPORTANT: do NOT blank apiKey. createAuthProvider() at main.ts:541
-    # picks refreshToken first, so setting refreshToken is enough — keeping
-    # apiKey populated leaves a safety net on disk if restore_auth crashes
-    # mid-flight. (Without this, a single restore failure cascades 401s
-    # through every later test on the same worker.)
-    js = f"""
-    (async function() {{
-        const plugin = {_P};
-        plugin.settings.refreshToken = {refresh_token};
-        plugin.settings.vaultId = {vault_id};
-        plugin.settings.userEmail = {user_email};
-        plugin.settings.authMethod = 'oauth';
-        await plugin.saveSettings();
-        plugin.authProvider = plugin.createAuthProvider();
-        if (plugin.authProvider) {{
-            plugin.api.setAuthProvider(plugin.authProvider);
-            if (plugin.noteStream) {{
-                plugin.noteStream.setAuthProvider(plugin.authProvider);
-            }}
-        }}
-        await plugin.markSyncGateAccepted();
-        return 'oauth configured';
-    }})()
-    """
-    result = await cdp.evaluate(js, await_promise=True)
-    logger.info("Plugin reconfigured to OAuth: %s", result)
-    await cdp.wait_for_plugin_ready(timeout=15)
-
-
-async def _restore_auth(cdp, original_settings_json: str) -> None:
-    """Restore Obsidian plugin to original auth settings via CDP."""
-    settings = json.loads(original_settings_json)
-    api_key = json.dumps(settings.get("apiKey", ""))
-    refresh_token = json.dumps(settings.get("refreshToken", ""))
-    vault_id = json.dumps(settings.get("vaultId", ""))
-    user_email = json.dumps(settings.get("userEmail", ""))
-    auth_method = json.dumps(settings.get("authMethod", "apikey"))
-
-    js = f"""
-    (async function() {{
-        const plugin = {_P};
-        plugin.settings.apiKey = {api_key};
-        plugin.settings.refreshToken = {refresh_token};
-        plugin.settings.vaultId = {vault_id};
-        plugin.settings.userEmail = {user_email};
-        plugin.settings.authMethod = {auth_method};
-        await plugin.saveSettings();
-        plugin.authProvider = plugin.createAuthProvider();
-        if (plugin.authProvider) {{
-            plugin.api.setAuthProvider(plugin.authProvider);
-            if (plugin.noteStream) {{
-                plugin.noteStream.setAuthProvider(plugin.authProvider);
-            }}
-        }}
-        await plugin.markSyncGateAccepted();
-        return 'auth restored';
-    }})()
-    """
-    result = await cdp.evaluate(js, await_promise=True)
-    logger.info("Plugin auth restored: %s", result)
-    await cdp.wait_for_plugin_ready(timeout=15)
