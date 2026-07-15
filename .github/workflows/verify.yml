@@ -1896,7 +1896,14 @@ jobs:
     # elixir-src+test+migrations content already passed full on main.
     # (PR runs are further narrowed to `mix test --stale` in the run step below.)
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-unit-tests != 'true'
-    runs-on: [self-hosted, linux, x64, isolated]
+    # `heavy` (2 runners per VM): this job saturates a VM's CPU for minutes.
+    # On a generic runner it can land NEXT TO two heavy e2e suites and starve
+    # their 30s delivery budgets (#355; observed again 2026-07-15: unit-tests
+    # 12.8min vs ~4, dialyzer BEAM crash, test_34/test_edit_after_discovery
+    # timeouts — all in one fully-parallel run). Pinning every CPU hog to the
+    # heavy slots caps co-tenancy at 2 hogs per VM in hardware; excess jobs
+    # queue for a free slot instead of degrading a busy VM.
+    runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     env:
       PG_CONTAINER: engram-unit-test-${{ github.run_id }}
@@ -2199,7 +2206,9 @@ jobs:
     # elixir-src+test+lint-config content (incl. .credo.exs/.sobelow-conf/.formatter.exs)
     # already passed full on main.
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-lint != 'true'
-    runs-on: [self-hosted, linux, x64, isolated]
+    # `heavy`: dialyzer is CPU+memory hungry (it crashed the BEAM outright in
+    # the 2026-07-15 fully-parallel run). Same rationale as unit-tests.
+    runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     steps:
       - name: Reset sparse-checkout leaked from cross-repo jobs
