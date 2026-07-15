@@ -3602,7 +3602,7 @@ jobs:
       && github.event_name == 'push'
       && (needs.ci.result == 'success' || (needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true'))
     needs: [fingerprint, ci]
-    runs-on: [self-hosted, linux, x64, isolated]
+    runs-on: [self-hosted, linux, x64, isolated, heavy]  # CPU/IO-heavy build+publish: prefer SlowRaid (bringup #15)
     # Inherited from the pre-fold build-ecr.yml (workflow-level there;
     # job-level here): don't cancel an in-flight push — every main commit
     # gets its own `sha-` tag in ECR + (when bumped) its own semver in
