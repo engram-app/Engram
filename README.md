@@ -15,7 +15,7 @@ MCP-native · semantic + keyword search · real-time sync · self-hostable · so
 [![Sponsor](https://img.shields.io/github/sponsors/engram-app?label=Sponsor&logo=GitHub&color=ea4aaa)](https://github.com/sponsors/engram-app)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Buy_a_coffee-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/engrams_sync)
 
-[Quickstart](#self-host-docker-compose) · [Self-host](https://engram.page/docs/self-host/) · [MCP](https://engram.page/docs/mcp/) · [API](https://engram.page/docs/api/) · [Architecture](https://engram.page/docs/self-host/architecture/) · [Plugin](https://github.com/engram-app/Engram-obsidian)
+[Quickstart](#self-host-docker-compose) · [Self-host](https://engram.page/docs/self-host/) · [MCP](https://engram.page/docs/mcp/) · [API](https://engram.page/docs/api/) · [Architecture](https://engram.page/docs/self-host/architecture/) · [Plugin](https://github.com/engram-app/Engram-obsidian) · [Discord](https://discord.gg/NKWcU2mm7N)
 
 </div>
 
