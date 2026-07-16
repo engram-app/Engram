@@ -160,7 +160,7 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   describe "crdt_catchup_heads" do
-    test "returns a head marker per live note in the vault", %{
+    test "returns a decrypted path + head marker per live note in the vault", %{
       socket: socket,
       user: user,
       vault: vault
@@ -171,8 +171,8 @@ defmodule EngramWeb.CrdtChannelTest do
       ref = push(socket, "crdt_catchup_heads", %{})
       assert_reply ref, :ok, %{heads: heads}
       assert is_map(heads)
-      assert Map.has_key?(heads, note.id)
-      assert is_binary(heads[note.id])
+      assert %{path: "Notes/h.md", head: head} = heads[note.id]
+      assert is_binary(head) and byte_size(head) > 0
     end
   end
 
