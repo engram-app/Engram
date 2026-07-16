@@ -4,7 +4,6 @@
     ".": {
       "release-type": "simple",
       "include-component-in-tag": false,
-      "skip-github-release": true,
       "extra-files": [
         { "type": "generic", "path": "mix.exs" }
       ]

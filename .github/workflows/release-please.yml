@@ -58,22 +58,19 @@ jobs:
           CUR=$(gh pr view "$PR" --json body -q .body)
           gh pr edit "$PR" --body "$(printf '%s\n\n%s' "$IMPACT" "$CUR")"
 
-      - name: Push release-v* tag when mix.exs version was bumped
-        # `skip-github-release: true` makes release_created / tag_name unreliable,
-        # so trigger on a CONTENT signal instead: did mix.exs's version change vs
-        # the latest release-v* tag? On a release-please Release-PR merge it did.
-        # Ungated (no release_created/pr check) — runs on every main push and
-        # self-skips below when the version is unchanged.
+      - name: Delete redundant Release + push release-v* (on release-please cut)
+        if: steps.rp.outputs.release_created == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG_NAME: ${{ steps.rp.outputs.tag_name }}
         run: |
           set -euo pipefail
-          VERSION=$(grep -oP 'version:\s*"\K[0-9]+\.[0-9]+\.[0-9]+' mix.exs | head -1)
-          LAST=$(git tag -l 'release-v*' --sort=-v:refname | head -1 | sed 's/^release-v//')
-          if [ "$VERSION" = "$LAST" ]; then
-            echo "mix.exs version $VERSION unchanged vs last release-v$LAST — no release cut."
-            exit 0
-          fi
-          git tag "release-v${VERSION}" HEAD
-          git push origin "release-v${VERSION}"
-          echo "Pushed release-v${VERSION} (previous: release-v${LAST:-none})"
+          # release-please created the X.Y.Z Release + tag; deploy-prod owns the
+          # user-facing release-v* Release. Delete the redundant Release (KEEP the
+          # X.Y.Z tag — release-please uses it for version tracking), then push
+          # release-v<version> so deploy-prod fires. App token so the tag triggers
+          # deploy-prod (GITHUB_TOKEN would not, per GitHub's anti-recursion rule).
+          gh release delete "$TAG_NAME" --yes
+          git tag "release-v${TAG_NAME}" "$TAG_NAME"
+          git push origin "release-v${TAG_NAME}"
+          echo "Deleted redundant $TAG_NAME Release; pushed release-v${TAG_NAME}"
