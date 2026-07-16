@@ -652,7 +652,7 @@ defmodule Engram.Notes do
 
              case classify_by_id(vault, canonical_id) do
                {:live, %Note{} = live} ->
-                 if live.path == sanitized_path,
+                 if same_path?(live, user, sanitized_path),
                    do: {:ok, decrypt_or_raise!(live, user)},
                    else: {:error, :id_conflict, decrypt_or_raise!(live, user)}
 
@@ -697,6 +697,19 @@ defmodule Engram.Notes do
       nil -> :none
       %Note{deleted_at: nil} = live -> {:live, live}
       %Note{} = tombstone -> {:tombstone, tombstone}
+    end
+  end
+
+  # `note.path` is a virtual field (real path lives encrypted in
+  # path_ciphertext, indexed via path_hmac) — it's unset on a row fetched by
+  # id that hasn't been through decrypt_or_raise!/2 yet, so a raw `==` against
+  # it silently always mismatches. Compare path_hmac instead, same pattern as
+  # recent_same_path_tombstone?/3. Best-effort: a filter-key error falls back
+  # to false (never treat a crypto hiccup as a path match).
+  defp same_path?(%Note{} = note, user, sanitized_path) do
+    case Crypto.dek_filter_key(user) do
+      {:ok, filter_key} -> note.path_hmac == Crypto.hmac_field(filter_key, sanitized_path)
+      _ -> false
     end
   end
 
