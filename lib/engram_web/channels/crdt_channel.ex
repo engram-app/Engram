@@ -217,9 +217,6 @@ defmodule EngramWeb.CrdtChannel do
           # onto a path already owned by a different live note) as well as
           # any other changeset validation failure — a clean reply either way.
           {:reply, {:error, %{reason: "create_failed"}}, socket}
-
-        {:error, _} ->
-          {:reply, {:error, %{reason: "create_failed"}}, socket}
       end
     else
       {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
