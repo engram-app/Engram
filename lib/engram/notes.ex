@@ -688,8 +688,11 @@ defmodule Engram.Notes do
           :ok = CrdtDeliver.announce_ready(user.id, vault.id, note.path, note.id)
           {:ok, note}
 
-        {:ok, inner} -> inner
-        {:error, _} = err -> err
+        {:ok, inner} ->
+          inner
+
+        {:error, _} = err ->
+          err
       end
     else
       :error -> {:error, :invalid_id}
@@ -830,8 +833,7 @@ defmodule Engram.Notes do
                 {:error, :version_conflict, decrypt_or_raise!(existing, user)}
 
               nil ->
-                {:error,
-                 Ecto.Changeset.add_error(changeset, :path, "insert raced and vanished")}
+                {:error, Ecto.Changeset.add_error(changeset, :path, "insert raced and vanished")}
             end
 
           {:error, changeset} ->

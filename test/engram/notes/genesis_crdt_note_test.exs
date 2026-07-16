@@ -20,30 +20,47 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
   end
 
   test "a malformed id is rejected, no note created", %{user: user, vault: vault} do
-    assert {:error, :invalid_id} = Notes.genesis_crdt_note(user, vault, "not-a-uuid", "Notes/bad.md")
+    assert {:error, :invalid_id} =
+             Notes.genesis_crdt_note(user, vault, "not-a-uuid", "Notes/bad.md")
+
     assert {:error, :not_found} = Notes.get_note(user, vault, "Notes/bad.md")
   end
 
-  test "id already live at the requested path is an idempotent no-op, content untouched", %{user: user, vault: vault} do
+  test "id already live at the requested path is an idempotent no-op, content untouched", %{
+    user: user,
+    vault: vault
+  } do
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/a.md", "content" => "hello"})
     assert {:ok, got} = Notes.genesis_crdt_note(user, vault, note.id, "Notes/a.md")
     assert got.id == note.id
-    assert got.content == "hello"                       # content preserved
+    # content preserved
+    assert got.content == "hello"
   end
 
-  test "path owned by a live note under a different id adopts that id, content untouched", %{user: user, vault: vault} do
+  test "path owned by a live note under a different id adopts that id, content untouched", %{
+    user: user,
+    vault: vault
+  } do
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/b.md", "content" => "world"})
     other = Ecto.UUID.generate()
     assert {:ok, got} = Notes.genesis_crdt_note(user, vault, other, "Notes/b.md")
-    assert got.id == note.id                            # adopted the server's id
+    # adopted the server's id
+    assert got.id == note.id
     refute Notes.note_in_vault?(user, vault.id, other)
     {:ok, still} = Notes.get_note(user, vault, "Notes/b.md")
-    assert still.content == "world"                     # untouched
+    # untouched
+    assert still.content == "world"
   end
 
-  test "id live at a different path is an id_conflict, neither note changes", %{user: user, vault: vault} do
+  test "id live at a different path is an id_conflict, neither note changes", %{
+    user: user,
+    vault: vault
+  } do
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/c.md", "content" => "keep"})
-    assert {:error, :id_conflict, live} = Notes.genesis_crdt_note(user, vault, note.id, "Notes/elsewhere.md")
+
+    assert {:error, :id_conflict, live} =
+             Notes.genesis_crdt_note(user, vault, note.id, "Notes/elsewhere.md")
+
     assert live.id == note.id
     {:ok, still} = Notes.get_note(user, vault, "Notes/c.md")
     assert still.content == "keep"
@@ -54,7 +71,9 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     user: user,
     vault: vault
   } do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/gone.md", "content" => "IMPORTANT"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "Notes/gone.md", "content" => "IMPORTANT"})
+
     :ok = Notes.delete_note_by_id(user, vault, note.id)
     refute Notes.note_in_vault?(user, vault.id, note.id)
 
