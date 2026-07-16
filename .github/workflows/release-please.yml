@@ -1,0 +1,79 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: [self-hosted, linux, x64, isolated]
+    steps:
+      - name: Mint App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ steps.app-token.outputs.token }}
+
+      # Ungated: on a Release-PR MERGE push steps.rp.outputs.pr is EMPTY (the
+      # `pr` output only fires when release-please opens/updates a PR, not on
+      # merge), but the version-diff push step below must still run on every
+      # main push. Both that step and the SCHEMA-IMPACT step need the repo +
+      # full tag history, so checkout happens once here, ungated.
+      #
+      # token MUST be the App token, not the default GITHUB_TOKEN: pushes
+      # authored by the default token never trigger other workflows (GitHub's
+      # anti-recursion rule), which would silently break deploy-prod.yml's
+      # `push: tags: ['release-v*']` trigger below. Same pattern as the
+      # engram-infra checkout further down this file.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Prepend deterministic SCHEMA-IMPACT to the Release PR body
+        if: steps.rp.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          # No AI. Just surface the machine-generated migration-impact block so
+          # self-hosters see it; the human writes the narrative notes in the PR / CHANGELOG.
+          PR=$(echo '${{ steps.rp.outputs.pr }}' | jq -r '.number')
+          BASE=$(git tag -l 'release-v*' --sort=-v:refname | head -1)
+          [ -n "$BASE" ] || BASE=$(git rev-list --max-parents=0 HEAD | head -1)
+          IMPACT=$(bash scripts/generate_schema_impact_notes.sh "$BASE" HEAD || true)
+          [ -n "$IMPACT" ] || { echo "no schema impact"; exit 0; }
+          CUR=$(gh pr view "$PR" --json body -q .body)
+          gh pr edit "$PR" --body "$(printf '%s\n\n%s' "$IMPACT" "$CUR")"
+
+      - name: Push release-v* tag when mix.exs version was bumped
+        # `skip-github-release: true` makes release_created / tag_name unreliable,
+        # so trigger on a CONTENT signal instead: did mix.exs's version change vs
+        # the latest release-v* tag? On a release-please Release-PR merge it did.
+        # Ungated (no release_created/pr check) — runs on every main push and
+        # self-skips below when the version is unchanged.
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -oP 'version:\s*"\K[0-9]+\.[0-9]+\.[0-9]+' mix.exs | head -1)
+          LAST=$(git tag -l 'release-v*' --sort=-v:refname | head -1 | sed 's/^release-v//')
+          if [ "$VERSION" = "$LAST" ]; then
+            echo "mix.exs version $VERSION unchanged vs last release-v$LAST — no release cut."
+            exit 0
+          fi
+          git tag "release-v${VERSION}" HEAD
+          git push origin "release-v${VERSION}"
+          echo "Pushed release-v${VERSION} (previous: release-v${LAST:-none})"
