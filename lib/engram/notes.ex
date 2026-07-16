@@ -517,6 +517,80 @@ defmodule Engram.Notes do
     end
   end
 
+  @doc """
+  Insert-only note genesis for a client-minted id — used by `crdt_create`
+  (`EngramWeb.CrdtChannel`). NEVER modifies an existing row: `upsert_note/4`
+  is path-first, so calling it for a create-or-adopt would UPDATE (and
+  CRDT-diff empty content against) a live note that already exists at
+  `path` under a different id, wiping it. This function only ever INSERTs
+  a fresh, empty-content row.
+
+  Callers are expected to have already checked (best-effort — see the
+  `{:error, :exists, note}` race outcome below) that neither `id` nor
+  `path` names a live note. Reuses `insert_new_note/7`'s ON CONFLICT DO
+  NOTHING + re-fetch race handling, so a losing concurrent genesis (same id
+  or same path) is reported rather than silently clobbering the winner.
+  """
+  @spec genesis_note(map(), map(), String.t(), String.t()) ::
+          {:ok, Note.t()}
+          | {:error, :exists, Note.t()}
+          | {:error, Ecto.Changeset.t()}
+          | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
+          | {:error, :recently_deleted}
+  def genesis_note(user, vault, id, path) do
+    content = ""
+
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, path} <- validate_path(path),
+         {:ok, hash} <- content_hash(user, content) do
+      sanitized_path = PathSanitizer.sanitize(path)
+      title = Helpers.extract_title(content, sanitized_path)
+      folder = Helpers.extract_folder(sanitized_path)
+      now = DateTime.utc_now()
+
+      base_attrs = %{
+        kind: "note",
+        content: content,
+        title: title,
+        tags: [],
+        content_hash: hash,
+        mtime: nil,
+        user_id: user.id,
+        vault_id: vault.id,
+        created_at: now,
+        updated_at: now
+      }
+
+      {:ok, lookup_query} = note_by_path_query(user, vault, sanitized_path)
+
+      {:ok, result} =
+        Repo.with_tenant(user.id, fn ->
+          insert_new_note(base_attrs, user, sanitized_path, folder, [], id, lookup_query)
+        end)
+
+      case result do
+        {:ok, {nil, note, _merged_text, _content_hash}} ->
+          note = decrypt_or_raise!(note, user)
+          maybe_broadcast_vault_populated(user, vault)
+
+          :ok =
+            PostHog.capture(PostHog.distinct_id_for(user), "note_created", %{vault_id: vault.id})
+
+          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, [])
+          {:ok, note}
+
+        {:conflict, existing} ->
+          {:error, :exists, decrypt_or_raise!(existing, user)}
+
+        {:error, changeset} ->
+          {:error, changeset}
+
+        other ->
+          other
+      end
+    end
+  end
+
   defp insert_new_note(base_attrs, user, sanitized_path, folder, _tags, client_id, lookup_query) do
     # Pricing v2 §G — server-side notes_cap enforcement. Free tier defaults
     # to 10k notes; Starter to 50k; Pro unlimited. Resolver returns nil for
@@ -1134,14 +1208,18 @@ defmodule Engram.Notes do
 
   # Shared shell for by-id fetches; `fields: :meta` skips the content column
   # and its decrypt for callers that only need path/folder/tags (#863) —
-  # same projection pattern the changes feeds use.
+  # same projection pattern the changes feeds use. `kind == "note"` excludes
+  # folder-marker rows (they share the id space but aren't fetchable/
+  # deletable through the by-id note API — CrdtTransport.load_doc and
+  # delete_note_by_id both route through here, so neither can target a
+  # folder marker).
   defp fetch_note_by_id(user, vault, id, fields) when is_binary(id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
       base =
         from(n in Note,
           where:
             n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
-              is_nil(n.deleted_at)
+              is_nil(n.deleted_at) and n.kind == "note"
         )
 
       query =

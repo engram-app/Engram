@@ -179,54 +179,85 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  # These four frames carry no b64 payload, so frame_class_b64 doesn't apply —
+  # they ride the :handshake lane (see check_rate/2 below). All four are
+  # connect/catchup-time operations (one create/delete per note mutation, one
+  # catchup call per note during enrollment), the exact shape @hs_limit was
+  # sized for, and NOT the continuous edit stream @msg_limit protects — so
+  # sharing that lane is intentional, not accidental reuse. They are still
+  # bounded (not exempt): the 2400/10s ceiling applies same as real STEP1s.
   @impl true
   def handle_in("crdt_create", %{"doc_id" => doc_id, "path" => path}, socket) do
-    case Ecto.UUID.cast(doc_id) do
-      {:ok, note_id} ->
-        user = socket.assigns.current_user
-        vault = socket.assigns.vault
+    with :ok <- check_rate(socket, :handshake),
+         {:ok, note_id} <- cast_doc_id(doc_id) do
+      user = socket.assigns.current_user
+      vault = socket.assigns.vault
 
-        case Notes.upsert_note(user, vault, %{"id" => note_id, "path" => path, "content" => ""}) do
-          {:ok, _note} ->
-            {:reply, {:ok, %{doc_id: note_id}}, socket}
+      if Notes.note_in_vault?(user, vault.id, note_id) do
+        # Idempotent re-create of an id we already hold — no write.
+        {:reply, {:ok, %{doc_id: note_id}}, socket}
+      else
+        case Notes.get_note(user, vault, path) do
+          {:ok, existing} ->
+            # A live note already owns this path under a DIFFERENT id —
+            # adopt the server's id. Never touch the existing content.
+            {:reply, {:ok, %{doc_id: existing.id}}, socket}
 
-          {:error, _changeset} ->
-            {:reply, {:error, %{reason: "create_failed"}}, socket}
+          {:error, :not_found} ->
+            case Notes.genesis_note(user, vault, note_id, path) do
+              {:ok, note} ->
+                {:reply, {:ok, %{doc_id: note.id}}, socket}
+
+              {:error, :exists, existing} ->
+                # Lost a concurrent-genesis race — adopt the winner's id.
+                {:reply, {:ok, %{doc_id: existing.id}}, socket}
+
+              {:error, _reason} ->
+                {:reply, {:error, %{reason: "create_failed"}}, socket}
+            end
         end
-
-      :error ->
-        # Never echo a non-UUID doc_id — it may be a cleartext path.
-        {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
+      end
+    else
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
+      # Never echo a non-UUID doc_id — it may be a cleartext path.
+      {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
     end
   end
 
   @impl true
   def handle_in("crdt_delete", %{"doc_id" => doc_id}, socket) do
-    case cast_doc_id(doc_id) do
-      {:ok, note_id} ->
-        user = socket.assigns.current_user
-        vault = socket.assigns.vault
-        # Idempotent: a :not_found means the row is already gone — the desired
-        # end state — so we still reply :ok.
-        _ = Notes.delete_note_by_id(user, vault, note_id)
-        {:reply, {:ok, %{doc_id: note_id}}, socket}
-
-      {:error, :bad_doc_id} ->
-        {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
+    with :ok <- check_rate(socket, :handshake),
+         {:ok, note_id} <- cast_doc_id(doc_id) do
+      user = socket.assigns.current_user
+      vault = socket.assigns.vault
+      # Idempotent: a :not_found means the row is already gone — the desired
+      # end state — so we still reply :ok.
+      _ = Notes.delete_note_by_id(user, vault, note_id)
+      {:reply, {:ok, %{doc_id: note_id}}, socket}
+    else
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
+      {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
     end
   end
 
   @impl true
   def handle_in("crdt_catchup_heads", _payload, socket) do
-    user = socket.assigns.current_user
-    vault = socket.assigns.vault
-    heads = CrdtTransport.vault_heads(user, vault)
-    {:reply, {:ok, %{heads: heads}}, socket}
+    case check_rate(socket, :handshake) do
+      :ok ->
+        user = socket.assigns.current_user
+        vault = socket.assigns.vault
+        heads = CrdtTransport.vault_heads(user, vault)
+        {:reply, {:ok, %{heads: heads}}, socket}
+
+      {:error, :rate_limited} ->
+        {:reply, {:error, %{reason: "rate_limited"}}, socket}
+    end
   end
 
   @impl true
   def handle_in("crdt_catchup_delta", %{"doc_id" => doc_id} = payload, socket) do
-    with {:ok, note_id} <- cast_doc_id(doc_id),
+    with :ok <- check_rate(socket, :handshake),
+         {:ok, note_id} <- cast_doc_id(doc_id),
          {:ok, since_sv} <- decode_sv(Map.get(payload, "sv")),
          {:ok, %{update: update, head: head}} <-
            CrdtTransport.read_delta(
@@ -237,6 +268,7 @@ defmodule EngramWeb.CrdtChannel do
            ) do
       {:reply, {:ok, %{doc_id: note_id, b64: Base.encode64(update), head: head}}, socket}
     else
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
       {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
       {:error, :bad_sv} -> {:reply, {:error, %{reason: "bad_sv"}}, socket}
       {:error, :bad_since} -> {:reply, {:error, %{reason: "bad_sv"}}, socket}
@@ -253,6 +285,10 @@ defmodule EngramWeb.CrdtChannel do
       :error -> {:error, :bad_sv}
     end
   end
+
+  # A non-nil, non-string sv (e.g. a JSON number or list slipping past the
+  # client) would otherwise raise FunctionClauseError and crash the channel.
+  defp decode_sv(_), do: {:error, :bad_sv}
 
   defp cast_doc_id(doc_id) do
     case Ecto.UUID.cast(doc_id) do

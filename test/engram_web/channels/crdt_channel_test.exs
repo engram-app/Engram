@@ -67,6 +67,35 @@ defmodule EngramWeb.CrdtChannelTest do
       ref = push(socket, "crdt_create", %{"doc_id" => "../etc/passwd", "path" => "x.md"})
       assert_reply ref, :error, %{reason: "bad_doc_id"}
     end
+
+    test "re-creating an existing id is idempotent — no content change", %{
+      socket: socket,
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      ref = push(socket, "crdt_create", %{"doc_id" => note.id, "path" => note.path})
+      assert_reply ref, :ok, %{doc_id: doc_id}
+      assert doc_id == note.id
+
+      {:ok, still} = Notes.get_note(user, vault, note.path)
+      assert still.id == note.id
+      assert still.content == "base"
+    end
+
+    test "creating at a path already owned by a different id adopts the existing id, content untouched",
+         %{socket: socket, user: user, vault: vault, note: note} do
+      other_id = Ecto.UUID.generate()
+      ref = push(socket, "crdt_create", %{"doc_id" => other_id, "path" => note.path})
+      assert_reply ref, :ok, %{doc_id: adopted_id}
+
+      assert adopted_id == note.id
+      refute Notes.note_in_vault?(user, vault.id, other_id)
+
+      {:ok, still} = Notes.get_note(user, vault, note.path)
+      assert still.id == note.id
+      assert still.content == "base"
+    end
   end
 
   describe "crdt_delete" do
@@ -116,6 +145,38 @@ defmodule EngramWeb.CrdtChannelTest do
       {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/d2.md", "content" => "b"})
       ref = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => "!!!not-base64!!!"})
       assert_reply ref, :error, %{reason: "bad_sv"}
+    end
+
+    test "unknown doc_id replies not_found", %{socket: socket} do
+      unknown_id = Ecto.UUID.generate()
+      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => unknown_id, "sv" => nil})
+      assert_reply ref, :error, %{reason: "not_found"}
+    end
+
+    test "another tenant's doc_id replies not_found (cross-tenant scoping)", %{
+      socket: socket,
+      other_user: other_user
+    } do
+      insert(:user_limit_override, user: other_user, key: "vaults_cap", value: %{"v" => -1})
+      {:ok, other_vault} = Vaults.create_vault(other_user, %{name: "OtherVault"})
+
+      {:ok, other_note} =
+        Notes.upsert_note(other_user, other_vault, %{"path" => "x.md", "content" => "x"})
+
+      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => other_note.id, "sv" => nil})
+      assert_reply ref, :error, %{reason: "not_found"}
+    end
+
+    test "a non-string sv (e.g. a JSON number) replies bad_sv instead of crashing the channel",
+         %{socket: socket, user: user, vault: vault} do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/d3.md", "content" => "b"})
+      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => 123})
+      assert_reply ref, :error, %{reason: "bad_sv"}
+
+      # The channel process must still be alive / usable after the bad input.
+      ref2 = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => nil})
+      assert_reply ref2, :ok, %{doc_id: got_id}
+      assert got_id == note.id
     end
   end
 
@@ -596,6 +657,19 @@ defmodule EngramWeb.CrdtChannelTest do
       push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => step1_b64})
       push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => step1_b64})
       ref = push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => step1_b64})
+
+      assert_reply ref, :error, %{reason: "rate_limited"}, 3000
+    end
+
+    @tag capture_log: true
+    test "crdt_catchup_heads shares the handshake budget and is rejected once exhausted",
+         %{socket: socket} do
+      Application.put_env(:engram, :crdt_hs_rate_limit_override, 2)
+      on_exit(fn -> Application.delete_env(:engram, :crdt_hs_rate_limit_override) end)
+
+      push(socket, "crdt_catchup_heads", %{})
+      push(socket, "crdt_catchup_heads", %{})
+      ref = push(socket, "crdt_catchup_heads", %{})
 
       assert_reply ref, :error, %{reason: "rate_limited"}, 3000
     end
