@@ -1,0 +1,58 @@
+# Rollback procedure: wrangler versions deploy <previous-version-id>@100% --yes
+# (No rebuild required — instant rollback by shifting traffic back to a prior version.)
+
+name: Frontend Promote
+
+on:
+  repository_dispatch:
+    types: [frontend-promote]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-promote-prod
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: [self-hosted, linux, x64, isolated]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.client_payload.sha }}
+      - name: Resolve version for this commit
+        id: v
+        working-directory: frontend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -euo pipefail
+          SHORT=${SHA::7}
+          # Find the version uploaded by Task 1 for this commit (tag = sha-<7>).
+          VID=$(bunx wrangler versions list --json | jq -r \
+            --arg t "sha-$SHORT" '[.[] | select(.annotations["workers/tag"]==$t)][0].id')
+          if [ -z "$VID" ] || [ "$VID" = "null" ]; then
+            echo "::error::No uploaded frontend version for sha-$SHORT — did nightly upload run?"; exit 1
+          fi
+          echo "vid=$VID" >> "$GITHUB_OUTPUT"
+      - name: Promote to 100% production
+        working-directory: frontend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bunx wrangler versions deploy "${{ steps.v.outputs.vid }}@100%" --yes
+      - name: Announce release complete (#releases)
+        if: env.WEBHOOK != ''
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
+          TAG: ${{ github.event.client_payload.release_tag }}
+          NOTES: ${{ github.event.client_payload.notes }}
+        run: |
+          CONTENT=$(printf '**Engram Cloud %s** is live.\n\n%s' "$TAG" "$NOTES")
+          # Non-blocking, but loud on failure.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --max-time 5 \
+            --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" "$WEBHOOK")
+          case "$code" in 2*) echo "Discord announced ($code)";; *) echo "::warning::Discord announce failed (HTTP $code)";; esac
