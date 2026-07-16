@@ -1134,14 +1134,18 @@ defmodule Engram.Notes do
 
   # Shared shell for by-id fetches; `fields: :meta` skips the content column
   # and its decrypt for callers that only need path/folder/tags (#863) —
-  # same projection pattern the changes feeds use.
+  # same projection pattern the changes feeds use. `kind == "note"` excludes
+  # folder-marker rows (they share the id space but aren't fetchable/
+  # deletable through the by-id note API — CrdtTransport.load_doc and
+  # delete_note_by_id both route through here, so neither can target a
+  # folder marker).
   defp fetch_note_by_id(user, vault, id, fields) when is_binary(id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
       base =
         from(n in Note,
           where:
             n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
-              is_nil(n.deleted_at)
+              is_nil(n.deleted_at) and n.kind == "note"
         )
 
       query =

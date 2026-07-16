@@ -179,6 +179,95 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  # These three frames carry no b64 payload, so frame_class_b64 doesn't apply —
+  # they ride the :handshake lane (see check_rate/2 below). All three are
+  # connect/catchup-time operations (one delete per note mutation, one catchup
+  # call per note during enrollment), the exact shape @hs_limit was sized for,
+  # and NOT the continuous edit stream @msg_limit protects — so sharing that
+  # lane is intentional, not accidental reuse. They are still bounded (not
+  # exempt): the 2400/10s ceiling applies same as real STEP1s.
+  #
+  # NOTE: socket-native note CREATE (crdt_create) is deliberately NOT here yet.
+  # Genesis of an empty-content row fights the REST write machinery's content
+  # merge/broadcast at every branch (do_update_note, move_note, broadcast_change);
+  # it needs a purpose-built bare-row create+resurrect op, designed and tested
+  # end-to-end alongside the plugin that will call it (Plan B1). Until then the
+  # plugin creates rows over REST, as it does today.
+  @impl true
+  def handle_in("crdt_delete", %{"doc_id" => doc_id}, socket) do
+    with :ok <- check_rate(socket, :handshake),
+         {:ok, note_id} <- cast_doc_id(doc_id) do
+      user = socket.assigns.current_user
+      vault = socket.assigns.vault
+      device_id = socket.assigns[:device_id]
+      # Idempotent: a :not_found means the row is already gone — the desired
+      # end state — so we still reply :ok. origin_device_id (#970) lets THIS
+      # device drop its own note_changed echo of the delete.
+      _ = Notes.delete_note_by_id(user, vault, note_id, origin_device_id: device_id)
+      {:reply, {:ok, %{doc_id: note_id}}, socket}
+    else
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
+      {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
+    end
+  end
+
+  @impl true
+  def handle_in("crdt_catchup_heads", _payload, socket) do
+    case check_rate(socket, :handshake) do
+      :ok ->
+        user = socket.assigns.current_user
+        vault = socket.assigns.vault
+        heads = CrdtTransport.vault_heads(user, vault)
+        {:reply, {:ok, %{heads: heads}}, socket}
+
+      {:error, :rate_limited} ->
+        {:reply, {:error, %{reason: "rate_limited"}}, socket}
+    end
+  end
+
+  @impl true
+  def handle_in("crdt_catchup_delta", %{"doc_id" => doc_id} = payload, socket) do
+    with :ok <- check_rate(socket, :handshake),
+         {:ok, note_id} <- cast_doc_id(doc_id),
+         {:ok, since_sv} <- decode_sv(Map.get(payload, "sv")),
+         {:ok, %{update: update, head: head}} <-
+           CrdtTransport.read_delta(
+             socket.assigns.current_user,
+             socket.assigns.vault,
+             note_id,
+             since_sv
+           ) do
+      {:reply, {:ok, %{doc_id: note_id, b64: Base.encode64(update), head: head}}, socket}
+    else
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
+      {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
+      {:error, :bad_sv} -> {:reply, {:error, %{reason: "bad_sv"}}, socket}
+      {:error, :bad_since} -> {:reply, {:error, %{reason: "bad_sv"}}, socket}
+      {:error, :not_found} -> {:reply, {:error, %{reason: "not_found"}}, socket}
+    end
+  end
+
+  # nil / missing sv → full state; a present sv must be valid base64.
+  defp decode_sv(nil), do: {:ok, nil}
+
+  defp decode_sv(b64) when is_binary(b64) do
+    case Base.decode64(b64) do
+      {:ok, bytes} -> {:ok, bytes}
+      :error -> {:error, :bad_sv}
+    end
+  end
+
+  # A non-nil, non-string sv (e.g. a JSON number or list slipping past the
+  # client) would otherwise raise FunctionClauseError and crash the channel.
+  defp decode_sv(_), do: {:error, :bad_sv}
+
+  defp cast_doc_id(doc_id) do
+    case Ecto.UUID.cast(doc_id) do
+      {:ok, id} -> {:ok, id}
+      :error -> {:error, :bad_doc_id}
+    end
+  end
+
   @impl true
   def terminate(reason, socket) do
     Logger.info(
