@@ -19,6 +19,11 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     assert {:ok, ^id} = fetch_id_by_path(user, vault, "Notes/new.md")
   end
 
+  test "a malformed id is rejected, no note created", %{user: user, vault: vault} do
+    assert {:error, :invalid_id} = Notes.genesis_crdt_note(user, vault, "not-a-uuid", "Notes/bad.md")
+    assert {:error, :not_found} = Notes.get_note(user, vault, "Notes/bad.md")
+  end
+
   defp fetch_id_by_path(user, vault, path) do
     case Notes.get_note(user, vault, path) do
       {:ok, n} -> {:ok, n.id}

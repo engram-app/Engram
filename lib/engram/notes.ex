@@ -633,11 +633,14 @@ defmodule Engram.Notes do
   """
   @spec genesis_crdt_note(map(), map(), String.t(), String.t()) ::
           {:ok, Note.t()}
+          | {:error, :invalid_id}
           | {:error, :id_conflict, Note.t()}
+          | {:error, :version_conflict, Note.t()}
           | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
           | {:error, Ecto.Changeset.t()}
   def genesis_crdt_note(user, vault, id, path) do
-    with {:ok, user} <- Crypto.ensure_user_dek(user),
+    with {:ok, canonical_id} <- Ecto.UUID.cast(id),
+         {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, path} <- validate_path(path) do
       sanitized_path = PathSanitizer.sanitize(path)
       folder = Helpers.extract_folder(sanitized_path)
@@ -647,7 +650,7 @@ defmodule Engram.Notes do
       case Repo.with_tenant(user.id, fn ->
              {:ok, lookup_query} = note_by_path_query(user, vault, sanitized_path)
 
-             case classify_by_id(vault, id) do
+             case classify_by_id(vault, canonical_id) do
                {:live, %Note{} = live} ->
                  if live.path == sanitized_path,
                    do: {:ok, decrypt_or_raise!(live, user)},
@@ -658,14 +661,27 @@ defmodule Engram.Notes do
 
                :none ->
                  case Repo.one(lookup_query) do
-                   %Note{} = live -> {:ok, decrypt_or_raise!(live, user)}
-                   nil -> genesis_insert_bare(user, vault, id, sanitized_path, folder, lookup_query)
+                   %Note{} = live ->
+                     {:ok, decrypt_or_raise!(live, user)}
+
+                   nil ->
+                     genesis_insert_bare(
+                       user,
+                       vault,
+                       canonical_id,
+                       sanitized_path,
+                       folder,
+                       lookup_query
+                     )
                  end
              end
            end) do
         {:ok, inner} -> inner
         {:error, _} = err -> err
       end
+    else
+      :error -> {:error, :invalid_id}
+      {:error, _} = err -> err
     end
   end
 
@@ -700,7 +716,11 @@ defmodule Engram.Notes do
   # carries no content to be stale, so the guard has nothing to protect).
   # The Billing.check_limit notes_cap gate is kept — a genesis row still
   # counts against the tenant's note cap like any other insert.
-  defp genesis_insert_bare(user, vault, client_id, sanitized_path, folder, lookup_query) do
+  #
+  # `id` is guaranteed a valid, cast UUID string by genesis_crdt_note/4's
+  # single up-front validation point — unlike insert_new_note/7's optional
+  # client_id, this id is REQUIRED, so there is no mint_id() fallback here.
+  defp genesis_insert_bare(user, vault, id, sanitized_path, folder, lookup_query) do
     now = DateTime.utc_now()
 
     base_attrs = %{
@@ -722,11 +742,7 @@ defmodule Engram.Notes do
       limit = Billing.effective_limit(user, :notes_cap)
       {:error, {:notes_cap_reached, limit, current_count}}
     else
-      note_id =
-        case client_id && Ecto.UUID.cast(client_id) do
-          {:ok, valid_uuid} -> valid_uuid
-          _ -> mint_id()
-        end
+      note_id = id
 
       with {:ok, crdt} <- maybe_merge_crdt(nil, base_attrs.content, user, note_id),
            merged_attrs = %{
