@@ -713,11 +713,38 @@ defmodule Engram.Notes do
     end
   end
 
-  # Task 2 completes the resurrect-by-id leg (tombstone found by client id).
-  # Left raising rather than silently misbehaving — Task 1 only exercises the
-  # :none/bare-insert leg (see genesis_crdt_note_test.exs).
-  defp genesis_resurrect(_prior, _user, _sanitized_path, _folder) do
-    raise "genesis_resurrect/4 not yet implemented (Task 2 — crdt-create genesis resurrect leg)"
+  # Resurrects a tombstone found by client id: reuses move_note's re-path +
+  # deleted_at-clear + version/seq-bump pipeline, but feeds it the tombstone's
+  # OWN decrypted content as the "incoming" content. move_note's crdt merge
+  # (maybe_merge_crdt) diffs incoming content against the prior CRDT snapshot
+  # — incoming == prior's own content is therefore a content-against-itself
+  # identity merge (no-op diff), never the empty-string wipe that bit earlier
+  # crdt_create attempts (feeding "" as incoming merges empty over the note).
+  #
+  # base_attrs must carry `title`/`tags`/`content_hash` keys (not just
+  # `content`) because move_note rebuilds merged_attrs via the `%{base_attrs |
+  # ...}` update syntax, which requires every replaced key to already exist —
+  # sourcing them from `prior` also preserves them in case the merge is ever
+  # a genuine no-op (mtime included for the same reason: don't regress it to
+  # nil on resurrect).
+  defp genesis_resurrect(prior, user, sanitized_path, folder) do
+    prior = decrypt_or_raise!(prior, user)
+
+    base_attrs = %{
+      content: prior.content,
+      title: prior.title,
+      tags: prior.tags,
+      content_hash: prior.content_hash,
+      mtime: prior.mtime
+    }
+
+    case move_note(prior, base_attrs, user, sanitized_path, folder) do
+      {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
+        {:ok, decrypt_or_raise!(updated, user)}
+
+      {:error, _} = err ->
+        err
+    end
   end
 
   # Bare-insert leg of genesis_crdt_note/4: a brand-new id at a brand-new

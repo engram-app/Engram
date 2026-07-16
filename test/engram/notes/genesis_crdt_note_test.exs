@@ -50,6 +50,30 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     assert {:error, :not_found} = Notes.get_note(user, vault, "Notes/elsewhere.md")
   end
 
+  test "resurrecting a tombstoned id restores it with its content intact (no wipe)", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/gone.md", "content" => "IMPORTANT"})
+    :ok = Notes.delete_note_by_id(user, vault, note.id)
+    refute Notes.note_in_vault?(user, vault.id, note.id)
+
+    assert {:ok, back} = Notes.genesis_crdt_note(user, vault, note.id, "Notes/gone.md")
+    assert back.id == note.id
+    assert Notes.note_in_vault?(user, vault.id, note.id)
+    assert back.content == "IMPORTANT"
+  end
+
+  test "resurrecting to a different path re-paths but keeps content", %{user: user, vault: vault} do
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/old.md", "content" => "BODY"})
+    :ok = Notes.delete_note_by_id(user, vault, note.id)
+
+    assert {:ok, back} = Notes.genesis_crdt_note(user, vault, note.id, "Notes/renamed.md")
+    assert back.content == "BODY"
+    {:ok, at_new} = Notes.get_note(user, vault, "Notes/renamed.md")
+    assert at_new.id == note.id
+  end
+
   defp fetch_id_by_path(user, vault, path) do
     case Notes.get_note(user, vault, path) do
       {:ok, n} -> {:ok, n.id}
