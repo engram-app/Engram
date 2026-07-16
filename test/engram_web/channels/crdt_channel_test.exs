@@ -48,8 +48,37 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Socket-native frames: delete / catchup
+  # Socket-native frames: create / delete / catchup
   # ---------------------------------------------------------------------------
+
+  describe "crdt_create" do
+    test "creates a bare row for a client-minted id", %{socket: socket, user: user, vault: vault} do
+      id = Ecto.UUID.generate()
+      ref = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/n.md"})
+      assert_reply ref, :ok, %{doc_id: ^id}
+      assert Notes.note_in_vault?(user, vault.id, id)
+    end
+
+    test "id live at a different path replies id_conflict", %{socket: socket, note: note} do
+      ref = push(socket, "crdt_create", %{"doc_id" => note.id, "path" => "Notes/other.md"})
+      assert_reply ref, :error, %{reason: "id_conflict", doc_id: got}
+      assert got == note.id
+    end
+
+    test "nil path replies bad_path without crashing the channel", %{socket: socket} do
+      ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => nil})
+      assert_reply ref, :error, %{reason: "bad_path"}
+      ref2 = push(socket, "crdt_catchup_heads", %{})
+      assert_reply ref2, :ok, %{heads: _}
+    end
+
+    test "non-UUID doc_id replies bad_doc_id without crashing the channel", %{socket: socket} do
+      ref = push(socket, "crdt_create", %{"doc_id" => "not-a-uuid", "path" => "Notes/x.md"})
+      assert_reply ref, :error, %{reason: "bad_doc_id"}
+      ref2 = push(socket, "crdt_catchup_heads", %{})
+      assert_reply ref2, :ok, %{heads: _}
+    end
+  end
 
   describe "crdt_delete" do
     test "soft-deletes a note by id and is idempotent", %{
