@@ -685,9 +685,29 @@ defmodule Engram.Notes do
                  # genuine conflict, {:error, _} a clean crypto error (→
                  # create_failed) — never a fabricated conflict.
                  case same_path?(live, user, sanitized_path) do
-                   {:ok, true} -> {:ok, decrypt_or_raise!(live, user)}
-                   {:ok, false} -> {:error, :id_conflict, decrypt_or_raise!(live, user)}
-                   {:error, _} = err -> err
+                   {:ok, true} ->
+                     {:ok, decrypt_or_raise!(live, user)}
+
+                   {:ok, false} ->
+                     # Same greppable Loki tripwire as REST's upsert_note
+                     # {:id_collision, live} arm (notes.ex ~line 493) — a
+                     # client-minted id reused at a different path is the
+                     # 2026-07-06 wrong-mint corruption signature, and the
+                     # socket path must not be blind to it.
+                     Logger.warning(
+                       "note_id_collision_rejected",
+                       Metadata.with_category(:warning, :sync,
+                         user_id: user.id,
+                         vault_id: vault.id,
+                         note_id: live.id,
+                         server_version: live.version
+                       )
+                     )
+
+                     {:error, :id_conflict, decrypt_or_raise!(live, user)}
+
+                   {:error, _} = err ->
+                     err
                  end
 
                {:tombstone, %Note{} = prior} ->
@@ -801,53 +821,72 @@ defmodule Engram.Notes do
   # sourcing them from `prior` also preserves them in case the merge is ever
   # a genuine no-op (mtime included for the same reason: don't regress it to
   # nil on resurrect).
+  #
+  # No notes_cap gate here (round-2 review, reverting round-1 FIX 4): REST's
+  # resurrect path (upsert_pathless -> move_note) has no cap check either —
+  # resurrecting your OWN tombstone is self-recovery, not new creation. Only
+  # the genuinely-new-row leg (genesis_insert_bare) caps.
+  #
+  # Uses the non-raising Crypto.maybe_decrypt_note_fields/2 (not
+  # decrypt_or_raise!/2): a DEK/KMS decrypt failure on the tombstone's
+  # ciphertext must surface as a clean {:error, _} that the channel replies
+  # create_failed for, not a raise that crashes/drops the socket.
   defp genesis_resurrect(prior, user, sanitized_path, folder) do
-    prior = decrypt_or_raise!(prior, user)
+    case Crypto.maybe_decrypt_note_fields(prior, user) do
+      {:ok, prior} ->
+        genesis_resurrect_decrypted(prior, user, sanitized_path, folder)
 
-    cond do
-      # FIX 1 — delete-wins (#970): a tombstone re-created at its OWN path within
-      # the delete window is a stale device un-deleting a note another device
-      # deleted. Mirror the REST upsert_pathless guard EXACTLY — refuse so the
-      # delete stands; the client trashes its local copy on `recently_deleted`.
-      # A rename (different path) lands outside this guard and resurrects below.
-      recent_same_path_tombstone?(prior, sanitized_path, user) ->
-        {:error, :recently_deleted}
-
-      # FIX 4 — a resurrect re-enters the live note count (move_note's
-      # was_tombstoned branch re-increments the counter), so it must pass the
-      # same notes_cap gate genesis_insert_bare / insert_new_note apply. Without
-      # it, a capped tenant could grow past the cap by delete+resurrect.
-      match?(
-        {:error, :limit_reached},
-        Billing.check_limit(user, :notes_cap, UsageMeters.notes_count(user.id))
-      ) ->
-        current_count = UsageMeters.notes_count(user.id)
-        limit = Billing.effective_limit(user, :notes_cap)
-        {:error, {:notes_cap_reached, limit, current_count}}
-
-      true ->
-        # FIX 7 — did the path change? A rename restore must broadcast the
-        # new-path upsert so peers converge; a same-path resurrect is covered by
-        # announce_ready discovery alone. Decide by the decrypted prior path.
-        renamed? = prior.path != sanitized_path
-
-        base_attrs = %{
-          content: prior.content,
-          title: prior.title,
-          tags: prior.tags,
-          content_hash: prior.content_hash,
-          mtime: prior.mtime
-        }
-
-        case move_note(prior, base_attrs, user, sanitized_path, folder) do
-          {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
-            tag = if renamed?, do: :announce_moved, else: :announce
-            {:ok, decrypt_or_raise!(updated, user), tag}
-
-          {:error, _} = err ->
-            err
-        end
+      {:error, reason} ->
+        log_resurrect_decrypt_failure(reason, user, prior)
+        {:error, reason}
     end
+  end
+
+  defp genesis_resurrect_decrypted(prior, user, sanitized_path, folder) do
+    # FIX 1 — delete-wins (#970): a tombstone re-created at its OWN path within
+    # the delete window is a stale device un-deleting a note another device
+    # deleted. Mirror the REST upsert_pathless guard EXACTLY — refuse so the
+    # delete stands; the client trashes its local copy on `recently_deleted`.
+    # A rename (different path) lands outside this guard and resurrects below.
+    if recent_same_path_tombstone?(prior, sanitized_path, user) do
+      {:error, :recently_deleted}
+    else
+      # FIX 7 — did the path change? A rename restore must broadcast the
+      # new-path upsert so peers converge; a same-path resurrect is covered by
+      # announce_ready discovery alone. Decide by the decrypted prior path.
+      renamed? = prior.path != sanitized_path
+
+      base_attrs = %{
+        content: prior.content,
+        title: prior.title,
+        tags: prior.tags,
+        content_hash: prior.content_hash,
+        mtime: prior.mtime
+      }
+
+      case move_note(prior, base_attrs, user, sanitized_path, folder) do
+        {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
+          case Crypto.maybe_decrypt_note_fields(updated, user) do
+            {:ok, decrypted} ->
+              tag = if renamed?, do: :announce_moved, else: :announce
+              {:ok, decrypted, tag}
+
+            {:error, reason} ->
+              log_resurrect_decrypt_failure(reason, user, updated)
+              {:error, reason}
+          end
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
+  # Same operator-triage signal decrypt_or_raise!/2 emits, minus the raise —
+  # genesis_resurrect must reply the client a clean create_failed, never crash
+  # the channel over a corrupt/undecryptable row.
+  defp log_resurrect_decrypt_failure(reason, user, %Note{} = note) do
+    DecryptFailure.log("decrypt_failed", reason, user_id: user.id, note_id: note.id)
   end
 
   # Bare-insert leg of genesis_crdt_note/4: a brand-new id at a brand-new

@@ -213,11 +213,6 @@ defmodule EngramWeb.CrdtChannel do
           # copy on this reply instead of wedging on a resurrect forever.
           {:reply, {:error, %{reason: "recently_deleted"}}, socket}
 
-        {:error, :invalid_id} ->
-          # Defense-in-depth: cast_doc_id/1 above already rejects a bad
-          # doc_id before genesis_crdt_note/4 is ever called.
-          {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
-
         {:error, %Ecto.Changeset{}} ->
           # Covers the unique-constraint case (resurrecting a tombstoned id
           # onto a path already owned by a different live note) as well as
@@ -299,9 +294,16 @@ defmodule EngramWeb.CrdtChannel do
   # missing one (e.g. crdt_create with no "path") would otherwise raise
   # FunctionClauseError and crash the whole channel. Reply so the client learns
   # the frame was malformed instead of silently losing the socket.
+  #
+  # Gated on the same :handshake rate budget as every real frame above — an
+  # unguarded fallback let malformed/unknown frames flood the channel outside
+  # any budget.
   @impl true
   def handle_in(_event, _payload, socket) do
-    {:reply, {:error, %{reason: "bad_frame"}}, socket}
+    case check_rate(socket, :handshake) do
+      :ok -> {:reply, {:error, %{reason: "bad_frame"}}, socket}
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
+    end
   end
 
   # nil / missing sv → full state; a present sv must be valid base64.

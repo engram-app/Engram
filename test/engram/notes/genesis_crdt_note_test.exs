@@ -97,24 +97,26 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     assert at_new.id == note.id
   end
 
-  test "a rename resurrect over the notes_cap is refused, note stays tombstoned", %{
+  test "a rename resurrect over the notes_cap still succeeds (matches REST self-recovery)", %{
     user: user,
     vault: vault
   } do
-    # FIX 4 — resurrect re-enters the live count, so it must pass the notes_cap
-    # gate. cap = 1: create A (fills cap), delete A, create B (fills cap again),
-    # then resurrect A's id at a DIFFERENT path (rename, so delete-wins doesn't
-    # trip) — count would go to 2 > 1, so it must be refused.
+    # H1 (round-2 review, reverting round-1 FIX 4) — REST's resurrect path
+    # (upsert_pathless -> move_note) has no notes_cap gate: un-deleting your OWN
+    # note is self-recovery, not new creation. cap = 1: create A (fills cap),
+    # delete A, create B (fills cap again), then resurrect A's id at a
+    # DIFFERENT path (rename, so delete-wins doesn't trip) — this must SUCCEED
+    # even though live count goes to 2 > 1.
     insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => 1})
 
     {:ok, a} = Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "a"})
     :ok = Notes.delete_note_by_id(user, vault, a.id)
     {:ok, _b} = Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "b"})
 
-    assert {:error, {:notes_cap_reached, 1, 1}} =
-             Notes.genesis_crdt_note(user, vault, a.id, "A-renamed.md")
-
-    refute Notes.note_in_vault?(user, vault.id, a.id)
+    assert {:ok, note} = Notes.genesis_crdt_note(user, vault, a.id, "A-renamed.md")
+    assert note.id == a.id
+    assert note.content == "a"
+    assert Notes.note_in_vault?(user, vault.id, a.id)
   end
 
   test "a rename resurrect broadcasts the new-path upsert so peers converge (FIX 7)", %{
@@ -139,6 +141,35 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     }
 
     assert id == note.id
+  end
+
+  test "resurrect with corrupt tombstone ciphertext returns a clean error, does not raise", %{
+    user: user,
+    vault: vault
+  } do
+    # H2 — genesis_resurrect must use the non-raising decrypt so a corrupt/
+    # undecryptable tombstone replies create_failed to the client instead of
+    # raising out through the channel and dropping the socket.
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "Notes/corrupt.md", "content" => "SECRET"})
+
+    :ok = Notes.delete_note_by_id(user, vault, note.id)
+
+    raw = Engram.Fixtures.raw_note_row!(user, note.id)
+    <<first, rest::binary>> = raw.content_ciphertext
+    tampered_ct = <<Bitwise.bxor(first, 1), rest::binary>>
+
+    {:ok, _} =
+      Engram.Repo.with_tenant(user.id, fn ->
+        raw
+        |> Ecto.Changeset.change(content_ciphertext: tampered_ct)
+        |> Engram.Repo.update()
+      end)
+
+    Crypto.DekCache.invalidate(user.id)
+
+    assert {:error, _reason} =
+             Notes.genesis_crdt_note(user, vault, note.id, "Notes/corrupt-renamed.md")
   end
 
   test "a fresh genesis announces crdt_doc_ready and does NOT deliver content", %{
