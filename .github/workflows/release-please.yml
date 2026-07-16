@@ -47,11 +47,15 @@ jobs:
         if: steps.rp.outputs.pr != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # PR is the release-please PR object JSON — its fields (title/body)
+          # come from commit messages, so it's untrusted. Pass via env, never
+          # interpolate `${{ }}` directly into `run:` (script-injection risk).
+          RP_PR: ${{ steps.rp.outputs.pr }}
         run: |
           set -euo pipefail
           # No AI. Just surface the machine-generated migration-impact block so
           # self-hosters see it; the human writes the narrative notes in the PR / CHANGELOG.
-          PR=$(echo '${{ steps.rp.outputs.pr }}' | jq -r '.number')
+          PR=$(jq -r '.number' <<<"$RP_PR")
           BASE=$(git tag -l 'release-v*' --sort=-v:refname | head -1)
           [ -n "$BASE" ] || BASE=$(git rev-list --max-parents=0 HEAD | head -1)
           IMPACT=$(bash scripts/generate_schema_impact_notes.sh "$BASE" HEAD || true)
@@ -73,7 +77,15 @@ jobs:
           # per GitHub's anti-recursion rule). Then best-effort delete the
           # redundant Release (KEEP the X.Y.Z tag — release-please uses it for
           # version tracking); a cleanup failure must not abort the deploy.
-          git tag "release-v${TAG_NAME}" "$TAG_NAME"
-          git push origin "release-v${TAG_NAME}"
+          #
+          # Idempotent: a manual rerun of this job (e.g. after the delete
+          # step below failed) must not fail re-creating a tag that already
+          # exists locally or on origin.
+          if ! git rev-parse -q --verify "refs/tags/release-v${TAG_NAME}" >/dev/null; then
+            git tag "release-v${TAG_NAME}" "$TAG_NAME"
+            git push origin "release-v${TAG_NAME}"
+          else
+            echo "release-v${TAG_NAME} already exists — skipping tag+push."
+          fi
           gh release delete "$TAG_NAME" --yes || echo "::warning::redundant $TAG_NAME release already gone"
           echo "Pushed release-v${TAG_NAME}; cleaned up redundant $TAG_NAME release"

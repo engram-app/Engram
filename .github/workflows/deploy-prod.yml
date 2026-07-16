@@ -333,7 +333,13 @@ jobs:
             printf '**Full Changelog:** https://github.com/%s/compare/%s...%s\n' \
               "${{ github.repository }}" "${{ steps.range.outputs.prev_tag }}" "${{ github.ref_name }}"
           } > "$notes_file"
-          gh release create "${{ github.ref_name }}" \
-            --title "${{ github.ref_name }}" \
-            --notes-file "$notes_file" \
-            --target "${{ github.sha }}"
+          # Idempotent: a manual rerun (e.g. after a later step in this job
+          # failed) must not 422 on a Release that already exists.
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            echo "Release ${{ github.ref_name }} already exists — skipping create."
+          else
+            gh release create "${{ github.ref_name }}" \
+              --title "${{ github.ref_name }}" \
+              --notes-file "$notes_file" \
+              --target "${{ github.sha }}"
+          fi

@@ -51,8 +51,27 @@ jobs:
           TAG: ${{ github.event.client_payload.release_tag }}
           NOTES: ${{ github.event.client_payload.notes }}
         run: |
-          CONTENT=$(printf '**Engram Cloud %s** is live.\n\n%s' "$TAG" "$NOTES")
+          RELEASE_URL="https://github.com/engram-app/Engram/releases/tag/$TAG"
+          # Discord's content cap is 2000 chars. NOTES is the full release
+          # body and can blow past that on substantial releases — truncate
+          # and always link the full notes so the announce never 400s.
+          TRUNCATED="${NOTES:0:1600}"
+          if [ "${#NOTES}" -gt 1600 ]; then
+            TRUNCATED="$TRUNCATED …"
+          fi
+          CONTENT=$(printf '**Engram Cloud %s** is live.\n\n%s\n\nFull notes: %s' "$TAG" "$TRUNCATED" "$RELEASE_URL")
           # Non-blocking, but loud on failure.
           code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --max-time 5 \
             --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" "$WEBHOOK")
           case "$code" in 2*) echo "Discord announced ($code)";; *) echo "::warning::Discord announce failed (HTTP $code)";; esac
+      - name: Announce promote failure (#releases)
+        if: failure() && env.WEBHOOK != ''
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
+          TAG: ${{ github.event.client_payload.release_tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          CONTENT=$(printf ':warning: frontend promote FAILED for `%s` — see %s' "$TAG" "$RUN_URL")
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --max-time 5 \
+            --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" "$WEBHOOK")
+          case "$code" in 2*) echo "Discord failure notice sent ($code)";; *) echo "::warning::Discord failure notice failed (HTTP $code)";; esac
