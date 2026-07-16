@@ -676,6 +676,18 @@ defmodule Engram.Notes do
                  end
              end
            end) do
+        # Only genesis_resurrect/genesis_insert_bare tag their success with
+        # :announce (a REAL create/resurrect). The idempotent same-path and
+        # adopt-existing-live-note branches change nothing, so they return a
+        # plain {:ok, note} and fall through to the catch-all below — no
+        # announce. Fired post-commit (outside the transaction fn, after
+        # Repo.with_tenant returns) so a client that pulls on crdt_doc_ready
+        # never races the row's own commit — same discipline as the other
+        # CrdtDeliver call sites in this module.
+        {:ok, {:ok, note, :announce}} ->
+          :ok = CrdtDeliver.announce_ready(user.id, vault.id, note.path, note.id)
+          {:ok, note}
+
         {:ok, inner} -> inner
         {:error, _} = err -> err
       end
@@ -740,7 +752,7 @@ defmodule Engram.Notes do
 
     case move_note(prior, base_attrs, user, sanitized_path, folder) do
       {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
-        {:ok, decrypt_or_raise!(updated, user)}
+        {:ok, decrypt_or_raise!(updated, user), :announce}
 
       {:error, _} = err ->
         err
@@ -812,7 +824,7 @@ defmodule Engram.Notes do
             case Repo.one(lookup_query) do
               %Note{id: ^note_id} = inserted ->
                 :ok = UsageMeters.inc_notes_count(user.id, 1)
-                {:ok, decrypt_or_raise!(inserted, user)}
+                {:ok, decrypt_or_raise!(inserted, user), :announce}
 
               %Note{} = existing ->
                 {:error, :version_conflict, decrypt_or_raise!(existing, user)}

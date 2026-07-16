@@ -74,6 +74,19 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     assert at_new.id == note.id
   end
 
+  test "a fresh genesis announces crdt_doc_ready and does NOT deliver content", %{
+    user: user,
+    vault: vault
+  } do
+    EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+    EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+    id = Ecto.UUID.generate()
+    {:ok, _} = Notes.genesis_crdt_note(user, vault, id, "Notes/announce.md")
+
+    assert_receive %Phoenix.Socket.Broadcast{event: "crdt_doc_ready", payload: %{"doc_id" => ^id}}
+    refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200
+  end
+
   defp fetch_id_by_path(user, vault, path) do
     case Notes.get_note(user, vault, path) do
       {:ok, n} -> {:ok, n.id}
