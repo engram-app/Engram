@@ -4289,10 +4289,14 @@ jobs:
           # because the browser emitted no telemetry at all.
           VITE_TRACING_ENABLED: 'true'
 
-      - name: Deploy (wrangler)
+      - name: Upload frontend version (nightly, zero-traffic)
         if: steps.guard.outputs.skip != 'true'
         working-directory: frontend
-        run: bunx wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          # `versions upload` publishes code WITHOUT shifting production traffic.
+          # --tag ties the version to the commit so the promote step can find it.
+          bunx wrangler versions upload --tag "sha-${GITHUB_SHA::7}"
