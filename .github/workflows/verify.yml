@@ -774,55 +774,21 @@ jobs:
     runs-on: [self-hosted, linux, x64, isolated, light]  # cheap: pin to FastRaid (bringup #15)
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
-      - name: Require version bump vs main (unless content already shipped)
-        env:
-          # Gate on the SAME signal build-and-publish-image uses to decide
-          # build-vs-skip, so the two can never disagree. When BOTH fingerprints
-          # are green, the backend tree (BACKEND_HASH = lib/priv/config/test/
-          # frontend/Dockerfile/entrypoint.sh/.dockerignore/mix.lock + non-version
-          # mix.exs) and the e2e contract are byte-identical to an already-shipped
-          # build: no new image is produced and nothing deploys, so no version
-          # bump is required. Pure CI/docs/infra changes (.github/, ci/, docs/,
-          # *.md) fall outside BACKEND_HASH -> cache-hit -> no bump. A deployable
-          # change misses the cache -> bump required, which also matches
-          # build-and-publish (it errors on an unbumped version-exists collision
-          # when NOT cache-hit). Sharing the signal avoids that class of error.
-          CACHE_HIT_BOTH: ${{ needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true' }}
+      - name: Assert mix.exs version is valid semver
+        # release-please now owns version bumps (mix.exs bumped by its Release
+        # PR, merge triggers release-please.yml's release-v* push) — a per-PR
+        # "must differ from main" bump is no longer required. Only assert the
+        # version string itself is well-formed, so a malformed edit still fails
+        # fast instead of silently breaking release-please's `generic`
+        # extra-files updater.
         run: |
-          if [ "$CACHE_HIT_BOTH" = "true" ]; then
-            echo "Backend + e2e content already shipped (fingerprint cache-hit): no new image will build, version bump not required."
-            exit 0
-          fi
-          # Path-aware bump gate. The CACHE_HIT_BOTH signal above is NOT a reliable
-          # "is this deployable?" test: verify.yml is deliberately inside BACKEND_HASH
-          # (so a CI-logic change forces a full re-run), which means a CI-only branch
-          # MISSES the fingerprint cache yet builds NO new image. Decouple the deploy
-          # question from the CI-fingerprint by diffing the actual runtime paths against
-          # main; require a bump only when one of them moved. A real lib/priv/config/
-          # frontend/Dockerfile/mix.* change still demands a bump (and build-and-publish
-          # still errors on a version-exists collision), so this only relaxes the gate
-          # for non-deployable (CI/docs/test/lint-config) branches.
-          # rel/ is baked into the release image (Dockerfile `COPY rel rel`:
-          # env.sh.eex cluster gate + RELEASE_NODE), so a rel change IS deployable
-          # and must require a bump. (Keep this list in sync with groups.sh's
-          # deployable groups — elixir-src+priv+frontend+docker-image.)
-          DEPLOYABLE=$(git diff --name-only origin/main...HEAD -- \
-            lib priv config frontend Dockerfile entrypoint.sh .dockerignore rel mix.exs mix.lock)
-          if [ -z "$DEPLOYABLE" ]; then
-            echo "No deployable paths changed vs main (CI/docs/test/lint-config only) — version bump not required."
-            exit 0
-          fi
-          echo "::group::Deployable paths changed vs main"; echo "$DEPLOYABLE"; echo "::endgroup::"
           BRANCH_VERSION=$(grep 'version:' mix.exs | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          MAIN_VERSION=$(git show origin/main:mix.exs | grep 'version:' | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          if [ "$BRANCH_VERSION" = "$MAIN_VERSION" ]; then
-            echo "::error::Deployable content changed but mix.exs version ($BRANCH_VERSION) was not bumped from main. Bump it before merging."
+          if ! echo "$BRANCH_VERSION" | grep -qP '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::mix.exs version ($BRANCH_VERSION) is not valid semver (X.Y.Z)."
             exit 1
           fi
-          echo "Version bumped: $MAIN_VERSION → $BRANCH_VERSION"
+          echo "mix.exs version $BRANCH_VERSION is valid semver — release-please owns bumps, no per-PR bump required."
 
   e2e-clerk:
     # Clerk-auth E2E suite: the Obsidian plugin↔backend contract tests PLUS
