@@ -26,10 +26,30 @@ defmodule Engram.Drainer do
 
   @default_grace_ms 5_000
 
+  @draining_key {__MODULE__, :draining}
+
+  @doc """
+  True once drain/1 has started. Read per-request by
+  `EngramWeb.Plugs.DrainConnClose` so responses carry `connection: close`
+  during the drain window and clients stop reusing keep-alive connections
+  that are about to go half-open (the wedged-request class, plugin #244).
+  """
+  @spec draining?() :: boolean()
+  def draining?, do: :persistent_term.get(@draining_key, false)
+
+  @doc false
+  @spec reset_draining_for_test() :: :ok
+  def reset_draining_for_test do
+    :persistent_term.erase(@draining_key)
+    :ok
+  end
+
   @spec drain(keyword()) :: :ok
   def drain(opts \\ []) do
     pause_oban = Keyword.get(opts, :pause_oban, &default_pause_oban/0)
     grace_ms = Keyword.get(opts, :grace_ms, @default_grace_ms)
+
+    :persistent_term.put(@draining_key, true)
 
     Logger.info(
       "drain: starting graceful shutdown",

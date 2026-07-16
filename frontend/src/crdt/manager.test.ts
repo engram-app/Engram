@@ -96,6 +96,10 @@ describe("CrdtManager", () => {
 		expect(m.hasDoc("notes/x.md")).toBe(false); // must NOT have been resurrected
 	});
 
+	// Builds a deliberately bloated Y.Doc, so this test is multi-second CPU
+	// work even solo (~4s); under shared-runner contention the 30s default
+	// flakes (job 87493354565: env setup alone took 368s). Timeout sized to
+	// measured cost x ~20 contention, asserts untouched.
 	it("flattenIfBloated preserves frontmatter maps (#814)", async () => {
 		const m = new CrdtManager({ onUpdate: () => {} });
 		const path = "notes/fm.md";
@@ -126,5 +130,5 @@ describe("CrdtManager", () => {
 		expect(after.values.get("type")).toBe(JSON.stringify("Playbook"));
 		expect(after.order.toArray()).toEqual(["type"]);
 		expect(after.types.get("type")).toBe("text");
-	}, 30_000);
+	}, 90_000);
 });
