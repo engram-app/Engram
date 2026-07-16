@@ -48,6 +48,78 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Socket-native frames: create / delete / catchup
+  # ---------------------------------------------------------------------------
+
+  describe "crdt_create" do
+    test "creates a note row for a client-minted id and binds the path", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      doc_id = Ecto.UUID.generate()
+      ref = push(socket, "crdt_create", %{"doc_id" => doc_id, "path" => "Notes/new.md"})
+      assert_reply ref, :ok, %{doc_id: ^doc_id}
+      assert Notes.note_in_vault?(user, vault.id, doc_id)
+    end
+
+    test "rejects a non-UUID doc_id without echoing it", %{socket: socket} do
+      ref = push(socket, "crdt_create", %{"doc_id" => "../etc/passwd", "path" => "x.md"})
+      assert_reply ref, :error, %{reason: "bad_doc_id"}
+    end
+  end
+
+  describe "crdt_delete" do
+    test "soft-deletes a note by id and is idempotent", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/del.md", "content" => "x"})
+      ref = push(socket, "crdt_delete", %{"doc_id" => note.id})
+      assert_reply ref, :ok, %{doc_id: _}
+      refute Notes.note_in_vault?(user, vault.id, note.id)
+
+      ref2 = push(socket, "crdt_delete", %{"doc_id" => note.id})
+      assert_reply ref2, :ok, %{doc_id: _}
+    end
+  end
+
+  describe "crdt_catchup_heads" do
+    test "returns a head marker per live note in the vault", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/h.md", "content" => "hello"})
+
+      ref = push(socket, "crdt_catchup_heads", %{})
+      assert_reply ref, :ok, %{heads: heads}
+      assert is_map(heads)
+      assert Map.has_key?(heads, note.id)
+      assert is_binary(heads[note.id])
+    end
+  end
+
+  describe "crdt_catchup_delta" do
+    test "returns full state when sv is null", %{socket: socket, user: user, vault: vault} do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/d.md", "content" => "body"})
+      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => nil})
+      assert_reply ref, :ok, %{doc_id: got_id, b64: b64, head: head}
+      assert got_id == note.id
+      assert is_binary(b64) and byte_size(b64) > 0
+      assert is_binary(head)
+    end
+
+    test "rejects malformed base64 sv", %{socket: socket, user: user, vault: vault} do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/d2.md", "content" => "b"})
+      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => "!!!not-base64!!!"})
+      assert_reply ref, :error, %{reason: "bad_sv"}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Auth / join
   # ---------------------------------------------------------------------------
 

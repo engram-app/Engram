@@ -180,6 +180,88 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   @impl true
+  def handle_in("crdt_create", %{"doc_id" => doc_id, "path" => path}, socket) do
+    case Ecto.UUID.cast(doc_id) do
+      {:ok, note_id} ->
+        user = socket.assigns.current_user
+        vault = socket.assigns.vault
+
+        case Notes.upsert_note(user, vault, %{"id" => note_id, "path" => path, "content" => ""}) do
+          {:ok, _note} ->
+            {:reply, {:ok, %{doc_id: note_id}}, socket}
+
+          {:error, _changeset} ->
+            {:reply, {:error, %{reason: "create_failed"}}, socket}
+        end
+
+      :error ->
+        # Never echo a non-UUID doc_id — it may be a cleartext path.
+        {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
+    end
+  end
+
+  @impl true
+  def handle_in("crdt_delete", %{"doc_id" => doc_id}, socket) do
+    case cast_doc_id(doc_id) do
+      {:ok, note_id} ->
+        user = socket.assigns.current_user
+        vault = socket.assigns.vault
+        # Idempotent: a :not_found means the row is already gone — the desired
+        # end state — so we still reply :ok.
+        _ = Notes.delete_note_by_id(user, vault, note_id)
+        {:reply, {:ok, %{doc_id: note_id}}, socket}
+
+      {:error, :bad_doc_id} ->
+        {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
+    end
+  end
+
+  @impl true
+  def handle_in("crdt_catchup_heads", _payload, socket) do
+    user = socket.assigns.current_user
+    vault = socket.assigns.vault
+    heads = CrdtTransport.vault_heads(user, vault)
+    {:reply, {:ok, %{heads: heads}}, socket}
+  end
+
+  @impl true
+  def handle_in("crdt_catchup_delta", %{"doc_id" => doc_id} = payload, socket) do
+    with {:ok, note_id} <- cast_doc_id(doc_id),
+         {:ok, since_sv} <- decode_sv(Map.get(payload, "sv")),
+         {:ok, %{update: update, head: head}} <-
+           CrdtTransport.read_delta(
+             socket.assigns.current_user,
+             socket.assigns.vault,
+             note_id,
+             since_sv
+           ) do
+      {:reply, {:ok, %{doc_id: note_id, b64: Base.encode64(update), head: head}}, socket}
+    else
+      {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
+      {:error, :bad_sv} -> {:reply, {:error, %{reason: "bad_sv"}}, socket}
+      {:error, :bad_since} -> {:reply, {:error, %{reason: "bad_sv"}}, socket}
+      {:error, :not_found} -> {:reply, {:error, %{reason: "not_found"}}, socket}
+    end
+  end
+
+  # nil / missing sv → full state; a present sv must be valid base64.
+  defp decode_sv(nil), do: {:ok, nil}
+
+  defp decode_sv(b64) when is_binary(b64) do
+    case Base.decode64(b64) do
+      {:ok, bytes} -> {:ok, bytes}
+      :error -> {:error, :bad_sv}
+    end
+  end
+
+  defp cast_doc_id(doc_id) do
+    case Ecto.UUID.cast(doc_id) do
+      {:ok, id} -> {:ok, id}
+      :error -> {:error, :bad_doc_id}
+    end
+  end
+
+  @impl true
   def terminate(reason, socket) do
     Logger.info(
       "crdt leave",
