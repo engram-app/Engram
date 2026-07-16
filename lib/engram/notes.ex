@@ -329,6 +329,14 @@ defmodule Engram.Notes do
       `Endpoint.broadcast_from/4` so the given subscriber (the pushing
       channel process) is excluded. Channel pushes pass `self()`; HTTP
       pushes have no socket to exclude and use plain broadcast.
+    * `create_only: true` — genesis mode (`crdt_create`). If a LIVE note
+      already exists at `path`, return it UNCHANGED instead of CRDT-diffing
+      `attrs["content"]` against it — a genesis push always carries empty
+      content (the real body arrives later over the CRDT room), and diffing
+      "" against real content would wipe it. Every other branch (pathless
+      insert, tombstone resurrect, id-collision, notes_cap) is untouched, so
+      a create still correctly resurrects/conflicts/caps exactly like a
+      normal upsert.
   """
   @spec upsert_note(map(), map(), map(), keyword()) ::
           {:ok, Note.t()}
@@ -513,80 +521,6 @@ defmodule Engram.Notes do
 
         {:error, _} = err ->
           err
-      end
-    end
-  end
-
-  @doc """
-  Insert-only note genesis for a client-minted id — used by `crdt_create`
-  (`EngramWeb.CrdtChannel`). NEVER modifies an existing row: `upsert_note/4`
-  is path-first, so calling it for a create-or-adopt would UPDATE (and
-  CRDT-diff empty content against) a live note that already exists at
-  `path` under a different id, wiping it. This function only ever INSERTs
-  a fresh, empty-content row.
-
-  Callers are expected to have already checked (best-effort — see the
-  `{:error, :exists, note}` race outcome below) that neither `id` nor
-  `path` names a live note. Reuses `insert_new_note/7`'s ON CONFLICT DO
-  NOTHING + re-fetch race handling, so a losing concurrent genesis (same id
-  or same path) is reported rather than silently clobbering the winner.
-  """
-  @spec genesis_note(map(), map(), String.t(), String.t()) ::
-          {:ok, Note.t()}
-          | {:error, :exists, Note.t()}
-          | {:error, Ecto.Changeset.t()}
-          | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
-          | {:error, :recently_deleted}
-  def genesis_note(user, vault, id, path) do
-    content = ""
-
-    with {:ok, user} <- Crypto.ensure_user_dek(user),
-         {:ok, path} <- validate_path(path),
-         {:ok, hash} <- content_hash(user, content) do
-      sanitized_path = PathSanitizer.sanitize(path)
-      title = Helpers.extract_title(content, sanitized_path)
-      folder = Helpers.extract_folder(sanitized_path)
-      now = DateTime.utc_now()
-
-      base_attrs = %{
-        kind: "note",
-        content: content,
-        title: title,
-        tags: [],
-        content_hash: hash,
-        mtime: nil,
-        user_id: user.id,
-        vault_id: vault.id,
-        created_at: now,
-        updated_at: now
-      }
-
-      {:ok, lookup_query} = note_by_path_query(user, vault, sanitized_path)
-
-      {:ok, result} =
-        Repo.with_tenant(user.id, fn ->
-          insert_new_note(base_attrs, user, sanitized_path, folder, [], id, lookup_query)
-        end)
-
-      case result do
-        {:ok, {nil, note, _merged_text, _content_hash}} ->
-          note = decrypt_or_raise!(note, user)
-          maybe_broadcast_vault_populated(user, vault)
-
-          :ok =
-            PostHog.capture(PostHog.distinct_id_for(user), "note_created", %{vault_id: vault.id})
-
-          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, [])
-          {:ok, note}
-
-        {:conflict, existing} ->
-          {:error, :exists, decrypt_or_raise!(existing, user)}
-
-        {:error, changeset} ->
-          {:error, changeset}
-
-        other ->
-          other
       end
     end
   end
@@ -956,6 +890,13 @@ defmodule Engram.Notes do
     base_hash = Keyword.get(opts, :base_hash)
 
     cond do
+      Keyword.get(opts, :create_only, false) ->
+        # Genesis push landed on a path a live note already owns (under
+        # whatever id). Reuse idempotent_repush's no-op shape: no CRDT diff,
+        # no re-encrypt, no write, no broadcast — the caller just wants that
+        # note's id back, and its content must never be touched.
+        idempotent_repush(existing, base_attrs)
+
       is_binary(existing.content_hash) and
         existing.content_hash == base_attrs.content_hash and
           not Keyword.get(opts, :force, false) ->

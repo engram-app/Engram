@@ -189,38 +189,47 @@ defmodule EngramWeb.CrdtChannel do
   @impl true
   def handle_in("crdt_create", %{"doc_id" => doc_id, "path" => path}, socket) do
     with :ok <- check_rate(socket, :handshake),
-         {:ok, note_id} <- cast_doc_id(doc_id) do
+         {:ok, note_id} <- cast_doc_id(doc_id),
+         :ok <- validate_create_path(path) do
       user = socket.assigns.current_user
       vault = socket.assigns.vault
+      device_id = socket.assigns[:device_id]
 
-      if Notes.note_in_vault?(user, vault.id, note_id) do
-        # Idempotent re-create of an id we already hold — no write.
-        {:reply, {:ok, %{doc_id: note_id}}, socket}
-      else
-        case Notes.get_note(user, vault, path) do
-          {:ok, existing} ->
-            # A live note already owns this path under a DIFFERENT id —
-            # adopt the server's id. Never touch the existing content.
-            {:reply, {:ok, %{doc_id: existing.id}}, socket}
+      attrs = %{"id" => note_id, "path" => path, "content" => ""}
 
-          {:error, :not_found} ->
-            case Notes.genesis_note(user, vault, note_id, path) do
-              {:ok, note} ->
-                {:reply, {:ok, %{doc_id: note.id}}, socket}
+      # Genesis always routes through upsert_note's normal create/resurrect/
+      # move lifecycle (create_only: true keeps it from CRDT-diffing this
+      # empty content against a live note that already owns `path` — see
+      # upsert_note's moduledoc). That reuses the SAME id-collision, tombstone-
+      # resurrect, notes_cap, and origin-device-echo-exclusion machinery every
+      # other write path gets, instead of crdt_create's old bespoke
+      # insert-only genesis_note (deleted — it had none of those guards).
+      case Notes.upsert_note(user, vault, attrs, create_only: true, origin_device_id: device_id) do
+        {:ok, note} ->
+          {:reply, {:ok, %{doc_id: note.id}}, socket}
 
-              {:error, :exists, existing} ->
-                # Lost a concurrent-genesis race — adopt the winner's id.
-                {:reply, {:ok, %{doc_id: existing.id}}, socket}
+        {:error, :version_conflict, note} ->
+          # note_id already names a LIVE note at a different path — a real
+          # id-collision, not adoptable. Client re-mints / reconciles.
+          {:reply, {:error, %{reason: "id_conflict", doc_id: note.id}}, socket}
 
-              {:error, _reason} ->
-                {:reply, {:error, %{reason: "create_failed"}}, socket}
-            end
-        end
+        {:error, {:notes_cap_reached, limit, _count}} ->
+          {:reply, {:error, %{reason: "notes_cap_reached", limit: limit}}, socket}
+
+        {:error, :recently_deleted} ->
+          # Delete-wins (#970): a create at a path tombstoned seconds ago,
+          # same lifecycle the REST create path shares — surfaced distinctly
+          # rather than special-cased here.
+          {:reply, {:error, %{reason: "recently_deleted"}}, socket}
+
+        {:error, _reason} ->
+          {:reply, {:error, %{reason: "create_failed"}}, socket}
       end
     else
       {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
       # Never echo a non-UUID doc_id — it may be a cleartext path.
       {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
+      {:error, :bad_path} -> {:reply, {:error, %{reason: "bad_path"}}, socket}
     end
   end
 
@@ -230,9 +239,11 @@ defmodule EngramWeb.CrdtChannel do
          {:ok, note_id} <- cast_doc_id(doc_id) do
       user = socket.assigns.current_user
       vault = socket.assigns.vault
+      device_id = socket.assigns[:device_id]
       # Idempotent: a :not_found means the row is already gone — the desired
-      # end state — so we still reply :ok.
-      _ = Notes.delete_note_by_id(user, vault, note_id)
+      # end state — so we still reply :ok. origin_device_id (#970) lets THIS
+      # device drop its own note_changed echo of the delete.
+      _ = Notes.delete_note_by_id(user, vault, note_id, origin_device_id: device_id)
       {:reply, {:ok, %{doc_id: note_id}}, socket}
     else
       {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
@@ -296,6 +307,17 @@ defmodule EngramWeb.CrdtChannel do
       :error -> {:error, :bad_doc_id}
     end
   end
+
+  # A nil/number path isn't caught by Notes.upsert_note's own validate_path
+  # (nil/"" only — any other value, including a non-binary, falls through as
+  # {:ok, path}) and would crash PathSanitizer.sanitize/1 downstream. Guard
+  # here, at the boundary, before it reaches Notes at all. Never echo the raw
+  # value back — mirrors cast_doc_id/decode_sv's crash-guard shape.
+  defp validate_create_path(path) when is_binary(path) do
+    if String.trim(path) == "", do: {:error, :bad_path}, else: :ok
+  end
+
+  defp validate_create_path(_), do: {:error, :bad_path}
 
   @impl true
   def terminate(reason, socket) do

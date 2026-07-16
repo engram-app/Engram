@@ -96,6 +96,41 @@ defmodule EngramWeb.CrdtChannelTest do
       assert still.id == note.id
       assert still.content == "base"
     end
+
+    test "creating under a previously-deleted tombstone id resurrects it", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/gone.md", "content" => "x"})
+      :ok = Notes.delete_note_by_id(user, vault, note.id)
+      refute Notes.note_in_vault?(user, vault.id, note.id)
+
+      ref = push(socket, "crdt_create", %{"doc_id" => note.id, "path" => "Notes/gone-again.md"})
+      assert_reply ref, :ok, %{doc_id: doc_id}
+
+      assert doc_id == note.id
+      assert Notes.note_in_vault?(user, vault.id, note.id)
+    end
+
+    test "creating with a doc_id that is LIVE at a different path is an id_conflict", %{
+      socket: socket,
+      note: note
+    } do
+      ref = push(socket, "crdt_create", %{"doc_id" => note.id, "path" => "Notes/elsewhere.md"})
+      assert_reply ref, :error, %{reason: "id_conflict", doc_id: doc_id}
+      assert doc_id == note.id
+    end
+
+    test "a nil path replies bad_path without crashing the channel", %{socket: socket} do
+      doc_id = Ecto.UUID.generate()
+      ref = push(socket, "crdt_create", %{"doc_id" => doc_id, "path" => nil})
+      assert_reply ref, :error, %{reason: "bad_path"}
+
+      # The channel process must still be alive and servicing frames.
+      ref2 = push(socket, "crdt_catchup_heads", %{})
+      assert_reply ref2, :ok, %{heads: _}
+    end
   end
 
   describe "crdt_delete" do
@@ -111,6 +146,42 @@ defmodule EngramWeb.CrdtChannelTest do
 
       ref2 = push(socket, "crdt_delete", %{"doc_id" => note.id})
       assert_reply ref2, :ok, %{doc_id: _}
+    end
+
+    test "delete broadcast carries the deleting socket's device_id (#970)", %{
+      user: user,
+      vault: vault
+    } do
+      device_id = Ecto.UUID.generate()
+
+      {:ok, _, device_socket} =
+        subscribe_and_join(
+          socket(EngramWeb.UserSocket, "user_#{user.id}", %{
+            current_user: user,
+            current_api_key: nil,
+            device_id: device_id
+          }),
+          EngramWeb.CrdtChannel,
+          "crdt:#{user.id}:#{vault.id}",
+          %{"crdt_proto" => 2}
+        )
+
+      Sandbox.allow(Repo, self(), device_socket.channel_pid)
+
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/dev.md", "content" => "x"})
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      ref = push(device_socket, "crdt_delete", %{"doc_id" => note.id})
+      assert_reply ref, :ok, %{doc_id: _}
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "id" => id} = payload
+      }
+
+      assert id == note.id
+      assert payload["device_id"] == device_id
     end
   end
 
