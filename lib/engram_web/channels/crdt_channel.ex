@@ -207,6 +207,12 @@ defmodule EngramWeb.CrdtChannel do
         {:error, {:notes_cap_reached, limit, _count}} ->
           {:reply, {:error, %{reason: "notes_cap_reached", limit: limit}}, socket}
 
+        {:error, :recently_deleted} ->
+          # Delete-wins (#970): a stale device tried to un-delete a note within
+          # the delete window. The delete stands; the client trashes its local
+          # copy on this reply instead of wedging on a resurrect forever.
+          {:reply, {:error, %{reason: "recently_deleted"}}, socket}
+
         {:error, :invalid_id} ->
           # Defense-in-depth: cast_doc_id/1 above already rejects a bad
           # doc_id before genesis_crdt_note/4 is ever called.
@@ -216,6 +222,15 @@ defmodule EngramWeb.CrdtChannel do
           # Covers the unique-constraint case (resurrecting a tombstoned id
           # onto a path already owned by a different live note) as well as
           # any other changeset validation failure — a clean reply either way.
+          {:reply, {:error, %{reason: "create_failed"}}, socket}
+
+        {:error, _reason} ->
+          # Catch-all for the crypto/KMS error class (a first-write user whose
+          # DEK wrap fails, an encrypt or filter-key error): genesis_crdt_note/4
+          # can return a bare {:error, term} that matches none of the arms above.
+          # Without this the case raised CaseClauseError and crashed the channel.
+          # {:error, term()} is in genesis_crdt_note/4's @spec, so dialyzer sees
+          # this arm as reachable (it was wrongly removed before on a lying spec).
           {:reply, {:error, %{reason: "create_failed"}}, socket}
       end
     else
@@ -277,6 +292,16 @@ defmodule EngramWeb.CrdtChannel do
       {:error, :bad_since} -> {:reply, {:error, %{reason: "bad_sv"}}, socket}
       {:error, :not_found} -> {:reply, {:error, %{reason: "not_found"}}, socket}
     end
+  end
+
+  # Channel-wide fallback (MUST stay last — Elixir matches handle_in top-down).
+  # Every crdt_* frame above pattern-matches its required keys, so a frame
+  # missing one (e.g. crdt_create with no "path") would otherwise raise
+  # FunctionClauseError and crash the whole channel. Reply so the client learns
+  # the frame was malformed instead of silently losing the socket.
+  @impl true
+  def handle_in(_event, _payload, socket) do
+    {:reply, {:error, %{reason: "bad_frame"}}, socket}
   end
 
   # nil / missing sv → full state; a present sv must be valid base64.

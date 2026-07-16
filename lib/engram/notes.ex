@@ -565,63 +565,86 @@ defmodule Engram.Notes do
             _ -> mint_id()
           end
 
-        with {:ok, crdt} <- maybe_merge_crdt(nil, base_attrs.content, user, note_id),
-             merged_attrs = %{
-               base_attrs
-               | content: crdt.merged_text,
-                 title: Helpers.extract_title(crdt.merged_text, sanitized_path),
-                 tags: crdt.tags,
-                 content_hash: crdt.content_hash
-             },
-             {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, note_id) do
-          phase_b =
-            inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, crdt.tags)
-            |> inject_okf_fields(user, note_id, crdt.merged_text)
-            |> put_parse_status(crdt.merged_text)
-            |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
-            |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
+        case do_bare_insert(base_attrs, user, sanitized_path, folder, note_id, lookup_query) do
+          {:inserted, inserted, crdt} ->
+            {:ok, {nil, inserted, crdt.merged_text, crdt.content_hash}}
 
-          changeset = Note.changeset(%Note{id: note_id}, phase_b)
+          {:raced, existing} ->
+            # Concurrent create won; report a version conflict (→ 409) the client
+            # reconciles, exactly like a stale-version write.
+            {:conflict, existing}
 
-          seq = Engram.Vaults.next_seq!(base_attrs.vault_id)
-          changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
-
-          # INSERT ... ON CONFLICT DO NOTHING on the live-note partial unique
-          # index. A concurrent upsert of the same new path raced us — both saw
-          # `nil` on the lookup above, so both reach here. A bare insert would
-          # raise a `notes_user_vault_path_v2` unique violation that aborts the
-          # whole tenant transaction (its trailing role-reset query then 25P02s
-          # → controller 500), and the plugin's offline-queue flush treats a 500
-          # as fatal (breaks the drain, flips offline) — the test_24 replay
-          # flake. ON CONFLICT DO NOTHING no-ops the loser's insert at the SQL
-          # level instead, leaving the transaction healthy. We then re-fetch and
-          # compare ids to tell winner (we inserted our row) from loser (someone
-          # else's row now occupies the path). No conflict_target — the only
-          # unique index a kind="note" row can violate is notes_user_vault_path_v2;
-          # a bare DO NOTHING (matching the insert_all sites elsewhere in this
-          # module) sidesteps the partial-index conflict_target fragment-matching
-          # footgun.
-          case Repo.insert(changeset, on_conflict: :nothing) do
-            {:ok, _} ->
-              case Repo.one(lookup_query) do
-                %Note{id: ^note_id} = inserted ->
-                  :ok = UsageMeters.inc_notes_count(user.id, 1)
-                  {:ok, {nil, inserted, crdt.merged_text, crdt.content_hash}}
-
-                %Note{} = existing ->
-                  # Concurrent create won; report a version conflict (→ 409) the
-                  # client reconciles, exactly like a stale-version write.
-                  {:conflict, existing}
-
-                nil ->
-                  {:error,
-                   Ecto.Changeset.add_error(changeset, :path, "insert raced and vanished")}
-              end
-
-            {:error, changeset} ->
-              {:error, changeset}
-          end
+          {:error, _} = err ->
+            err
         end
+    end
+  end
+
+  # Shared create leg for a brand-new note row at a brand-new path, used by both
+  # insert_new_note/7 (REST/MCP/web) and genesis_insert_bare/6 (crdt_create).
+  # crdt merge → encrypt → phase_b/okf/parse_status → seq → INSERT ON CONFLICT
+  # DO NOTHING → re-fetch. The two callers differ ONLY in what they map the
+  # neutral result to (REST returns a raw 4-tuple + {:conflict, _}; genesis
+  # decrypts inline + tags :announce / :version_conflict), so this returns a
+  # caller-agnostic result and each maps it to its own contract:
+  #   {:inserted, %Note{}, crdt_map} — our row won; counter already bumped
+  #   {:raced, %Note{}}              — a concurrent create won the path
+  #   {:error, Changeset.t()}        — validation/insert error (or a bare
+  #                                     {:error, term} from merge/encrypt)
+  #
+  # INSERT ... ON CONFLICT DO NOTHING on the live-note partial unique index: a
+  # concurrent upsert of the same new path raced us — both saw `nil` on the
+  # lookup, so both reach here. A bare insert would raise a
+  # notes_user_vault_path_v2 unique violation that aborts the whole tenant
+  # transaction (its trailing role-reset query then 25P02s → controller 500),
+  # and the plugin's offline-queue flush treats a 500 as fatal (breaks the
+  # drain, flips offline) — the test_24 replay flake. ON CONFLICT DO NOTHING
+  # no-ops the loser's insert at the SQL level instead, leaving the transaction
+  # healthy. We then re-fetch and compare ids to tell winner (we inserted our
+  # row) from loser (someone else's row now occupies the path). No
+  # conflict_target — the only unique index a kind="note" row can violate is
+  # notes_user_vault_path_v2; a bare DO NOTHING (matching the insert_all sites
+  # elsewhere in this module) sidesteps the partial-index conflict_target
+  # fragment-matching footgun.
+  defp do_bare_insert(base_attrs, user, sanitized_path, folder, note_id, lookup_query) do
+    with {:ok, crdt} <- maybe_merge_crdt(nil, base_attrs.content, user, note_id),
+         merged_attrs = %{
+           base_attrs
+           | content: crdt.merged_text,
+             title: Helpers.extract_title(crdt.merged_text, sanitized_path),
+             tags: crdt.tags,
+             content_hash: crdt.content_hash
+         },
+         {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, note_id) do
+      phase_b =
+        inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, crdt.tags)
+        |> inject_okf_fields(user, note_id, crdt.merged_text)
+        |> put_parse_status(crdt.merged_text)
+        |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
+        |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
+
+      changeset = Note.changeset(%Note{id: note_id}, phase_b)
+
+      seq = Engram.Vaults.next_seq!(base_attrs.vault_id)
+      changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
+
+      case Repo.insert(changeset, on_conflict: :nothing) do
+        {:ok, _} ->
+          case Repo.one(lookup_query) do
+            %Note{id: ^note_id} = inserted ->
+              :ok = UsageMeters.inc_notes_count(user.id, 1)
+              {:inserted, inserted, crdt}
+
+            %Note{} = existing ->
+              {:raced, existing}
+
+            nil ->
+              {:error, Ecto.Changeset.add_error(changeset, :path, "insert raced and vanished")}
+          end
+
+        {:error, changeset} ->
+          {:error, changeset}
+      end
     end
   end
 
@@ -634,10 +657,16 @@ defmodule Engram.Notes do
   @spec genesis_crdt_note(map(), map(), String.t(), String.t()) ::
           {:ok, Note.t()}
           | {:error, :invalid_id}
+          | {:error, :recently_deleted}
           | {:error, :id_conflict, Note.t()}
           | {:error, :version_conflict, Note.t()}
           | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
           | {:error, Ecto.Changeset.t()}
+          # Crypto/KMS failure class (Crypto.ensure_user_dek / encrypt_note_fields
+          # / maybe_merge_crdt / dek_filter_key can each return a bare
+          # {:error, term}). Kept in the spec so the channel's create_failed
+          # catch-all is reachable, not flagged unreachable by dialyzer.
+          | {:error, term()}
   def genesis_crdt_note(user, vault, id, path) do
     with {:ok, canonical_id} <- Ecto.UUID.cast(id),
          {:ok, user} <- Crypto.ensure_user_dek(user),
@@ -648,32 +677,24 @@ defmodule Engram.Notes do
       # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
       # Unwrap once so the public contract matches the @spec above.
       case Repo.with_tenant(user.id, fn ->
-             {:ok, lookup_query} = note_by_path_query(user, vault, sanitized_path)
-
              case classify_by_id(vault, canonical_id) do
                {:live, %Note{} = live} ->
-                 if same_path?(live, user, sanitized_path),
-                   do: {:ok, decrypt_or_raise!(live, user)},
-                   else: {:error, :id_conflict, decrypt_or_raise!(live, user)}
+                 # A dek_filter_key failure here must NOT masquerade as a definite
+                 # id_conflict (a transient crypto hiccup would permanently reject
+                 # an idempotent retry): {:ok, true} idempotent, {:ok, false}
+                 # genuine conflict, {:error, _} a clean crypto error (→
+                 # create_failed) — never a fabricated conflict.
+                 case same_path?(live, user, sanitized_path) do
+                   {:ok, true} -> {:ok, decrypt_or_raise!(live, user)}
+                   {:ok, false} -> {:error, :id_conflict, decrypt_or_raise!(live, user)}
+                   {:error, _} = err -> err
+                 end
 
                {:tombstone, %Note{} = prior} ->
                  genesis_resurrect(prior, user, sanitized_path, folder)
 
                :none ->
-                 case Repo.one(lookup_query) do
-                   %Note{} = live ->
-                     {:ok, decrypt_or_raise!(live, user)}
-
-                   nil ->
-                     genesis_insert_bare(
-                       user,
-                       vault,
-                       canonical_id,
-                       sanitized_path,
-                       folder,
-                       lookup_query
-                     )
-                 end
+                 genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder)
              end
            end) do
         # Only genesis_resurrect/genesis_insert_bare tag their success with
@@ -688,6 +709,18 @@ defmodule Engram.Notes do
           :ok = CrdtDeliver.announce_ready(user.id, vault.id, note.path, note.id)
           {:ok, note}
 
+        {:ok, {:ok, note, :announce_moved}} ->
+          # A resurrect that RE-PATHED the note (rename restore) must fan the
+          # new-path upsert to peers, exactly like the REST move_note :moved leg
+          # (upsert_note). announce_ready alone carries only the id — peers would
+          # see the old-path delete but never the new-path upsert, so the note
+          # vanishes on them until their next pull. broadcast_change's "upsert"
+          # clause also deliver_outs the CRDT state (which announces the doc), so
+          # no separate announce_ready is needed. Fired post-commit, same as the
+          # :announce leg above.
+          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, [])
+          {:ok, note}
+
         {:ok, inner} ->
           inner
 
@@ -697,6 +730,29 @@ defmodule Engram.Notes do
     else
       :error -> {:error, :invalid_id}
       {:error, _} = err -> err
+    end
+  end
+
+  # :none-branch of genesis_crdt_note/4: no row by client id, so route by PATH.
+  # note_by_path_query is computed HERE (its only consumer), not at the top of
+  # the txn — the :live / :tombstone branches never touch it, so hoisting it
+  # wasted a dek_filter_key + hmac on every call AND hard-matched {:ok, _} = ...,
+  # so a filter-key error crashed the channel with a MatchError. Handling the
+  # error cleanly turns it into a create_failed reply (via the channel catch-all).
+  # Runs inside the caller's Repo.with_tenant txn (tenant-scoped reads/writes).
+  defp genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder) do
+    case note_by_path_query(user, vault, sanitized_path) do
+      {:ok, lookup_query} ->
+        case Repo.one(lookup_query) do
+          %Note{} = live ->
+            {:ok, decrypt_or_raise!(live, user)}
+
+          nil ->
+            genesis_insert_bare(user, vault, canonical_id, sanitized_path, folder, lookup_query)
+        end
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -719,12 +775,15 @@ defmodule Engram.Notes do
   # path_ciphertext, indexed via path_hmac) — it's unset on a row fetched by
   # id that hasn't been through decrypt_or_raise!/2 yet, so a raw `==` against
   # it silently always mismatches. Compare path_hmac instead, same pattern as
-  # recent_same_path_tombstone?/3. Best-effort: a filter-key error falls back
-  # to false (never treat a crypto hiccup as a path match).
+  # recent_same_path_tombstone?/3. Returns {:ok, boolean} on a clean compare and
+  # {:error, reason} when the filter key can't be derived — so the caller can
+  # tell "definitely a different path" ({:ok, false} → id_conflict) apart from
+  # "couldn't tell" ({:error, _} → create_failed). Collapsing a crypto error to
+  # `false` here permanently rejected an idempotent retry as a spurious conflict.
   defp same_path?(%Note{} = note, user, sanitized_path) do
     case Crypto.dek_filter_key(user) do
-      {:ok, filter_key} -> note.path_hmac == Crypto.hmac_field(filter_key, sanitized_path)
-      _ -> false
+      {:ok, filter_key} -> {:ok, note.path_hmac == Crypto.hmac_field(filter_key, sanitized_path)}
+      {:error, _} = err -> err
     end
   end
 
@@ -745,28 +804,57 @@ defmodule Engram.Notes do
   defp genesis_resurrect(prior, user, sanitized_path, folder) do
     prior = decrypt_or_raise!(prior, user)
 
-    base_attrs = %{
-      content: prior.content,
-      title: prior.title,
-      tags: prior.tags,
-      content_hash: prior.content_hash,
-      mtime: prior.mtime
-    }
+    cond do
+      # FIX 1 — delete-wins (#970): a tombstone re-created at its OWN path within
+      # the delete window is a stale device un-deleting a note another device
+      # deleted. Mirror the REST upsert_pathless guard EXACTLY — refuse so the
+      # delete stands; the client trashes its local copy on `recently_deleted`.
+      # A rename (different path) lands outside this guard and resurrects below.
+      recent_same_path_tombstone?(prior, sanitized_path, user) ->
+        {:error, :recently_deleted}
 
-    case move_note(prior, base_attrs, user, sanitized_path, folder) do
-      {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
-        {:ok, decrypt_or_raise!(updated, user), :announce}
+      # FIX 4 — a resurrect re-enters the live note count (move_note's
+      # was_tombstoned branch re-increments the counter), so it must pass the
+      # same notes_cap gate genesis_insert_bare / insert_new_note apply. Without
+      # it, a capped tenant could grow past the cap by delete+resurrect.
+      match?(
+        {:error, :limit_reached},
+        Billing.check_limit(user, :notes_cap, UsageMeters.notes_count(user.id))
+      ) ->
+        current_count = UsageMeters.notes_count(user.id)
+        limit = Billing.effective_limit(user, :notes_cap)
+        {:error, {:notes_cap_reached, limit, current_count}}
 
-      {:error, _} = err ->
-        err
+      true ->
+        # FIX 7 — did the path change? A rename restore must broadcast the
+        # new-path upsert so peers converge; a same-path resurrect is covered by
+        # announce_ready discovery alone. Decide by the decrypted prior path.
+        renamed? = prior.path != sanitized_path
+
+        base_attrs = %{
+          content: prior.content,
+          title: prior.title,
+          tags: prior.tags,
+          content_hash: prior.content_hash,
+          mtime: prior.mtime
+        }
+
+        case move_note(prior, base_attrs, user, sanitized_path, folder) do
+          {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
+            tag = if renamed?, do: :announce_moved, else: :announce
+            {:ok, decrypt_or_raise!(updated, user), tag}
+
+          {:error, _} = err ->
+            err
+        end
     end
   end
 
   # Bare-insert leg of genesis_crdt_note/4: a brand-new id at a brand-new
-  # path. Mirrors insert_new_note/7's `true ->` branch (the create leg) with
-  # two differences: content is hardcoded "" (CRDT room owns real content,
-  # delivered later via crdt_msg — never merge/broadcast content here), and
-  # the recently_deleted_twin? guard is dropped entirely (that guard exists
+  # path. Shares the insert body with insert_new_note/7 via do_bare_insert/6,
+  # differing only in two ways: content is hardcoded "" (CRDT room owns real
+  # content, delivered later via crdt_msg — never merge/broadcast content here),
+  # and the recently_deleted_twin? guard is dropped entirely (that guard exists
   # to refuse a stale full-content re-push racing a delete; a genesis row
   # carries no content to be stale, so the guard has nothing to protect).
   # The Billing.check_limit notes_cap gate is kept — a genesis row still
@@ -797,48 +885,18 @@ defmodule Engram.Notes do
       limit = Billing.effective_limit(user, :notes_cap)
       {:error, {:notes_cap_reached, limit, current_count}}
     else
-      note_id = id
+      # Shared create leg with insert_new_note/7 (do_bare_insert/6) — genesis
+      # decrypts inline and tags :announce (a real create), a version_conflict
+      # on a concurrent-create race.
+      case do_bare_insert(base_attrs, user, sanitized_path, folder, id, lookup_query) do
+        {:inserted, inserted, _crdt} ->
+          {:ok, decrypt_or_raise!(inserted, user), :announce}
 
-      with {:ok, crdt} <- maybe_merge_crdt(nil, base_attrs.content, user, note_id),
-           merged_attrs = %{
-             base_attrs
-             | content: crdt.merged_text,
-               title: Helpers.extract_title(crdt.merged_text, sanitized_path),
-               tags: crdt.tags,
-               content_hash: crdt.content_hash
-           },
-           {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, note_id) do
-        phase_b =
-          inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, crdt.tags)
-          |> inject_okf_fields(user, note_id, crdt.merged_text)
-          |> put_parse_status(crdt.merged_text)
-          |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
-          |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
+        {:raced, existing} ->
+          {:error, :version_conflict, decrypt_or_raise!(existing, user)}
 
-        changeset = Note.changeset(%Note{id: note_id}, phase_b)
-
-        seq = Engram.Vaults.next_seq!(vault.id)
-        changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
-
-        # Same ON CONFLICT DO NOTHING race-handling as insert_new_note/7 — see
-        # the comment there for the full rationale.
-        case Repo.insert(changeset, on_conflict: :nothing) do
-          {:ok, _} ->
-            case Repo.one(lookup_query) do
-              %Note{id: ^note_id} = inserted ->
-                :ok = UsageMeters.inc_notes_count(user.id, 1)
-                {:ok, decrypt_or_raise!(inserted, user), :announce}
-
-              %Note{} = existing ->
-                {:error, :version_conflict, decrypt_or_raise!(existing, user)}
-
-              nil ->
-                {:error, Ecto.Changeset.add_error(changeset, :path, "insert raced and vanished")}
-            end
-
-          {:error, changeset} ->
-            {:error, changeset}
-        end
+        {:error, _} = err ->
+          err
       end
     end
   end

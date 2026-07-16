@@ -78,6 +78,33 @@ defmodule EngramWeb.CrdtChannelTest do
       ref2 = push(socket, "crdt_catchup_heads", %{})
       assert_reply ref2, :ok, %{heads: _}
     end
+
+    test "same-path resurrect within the delete window replies recently_deleted (delete-wins)", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/dw.md", "content" => "keep"})
+
+      :ok = Notes.delete_note_by_id(user, vault, note.id)
+
+      ref = push(socket, "crdt_create", %{"doc_id" => note.id, "path" => "Notes/dw.md"})
+      assert_reply ref, :error, %{reason: "recently_deleted"}
+      refute Notes.note_in_vault?(user, vault.id, note.id)
+    end
+
+    test "a frame missing a required key replies bad_frame without crashing the channel", %{
+      socket: socket
+    } do
+      # crdt_create with no "path" key matches no handle_in clause but the
+      # channel-wide fallback; the channel must survive.
+      ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate()})
+      assert_reply ref, :error, %{reason: "bad_frame"}
+
+      ref2 = push(socket, "crdt_catchup_heads", %{})
+      assert_reply ref2, :ok, %{heads: _}
+    end
   end
 
   describe "crdt_delete" do

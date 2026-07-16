@@ -67,20 +67,24 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     assert {:error, :not_found} = Notes.get_note(user, vault, "Notes/elsewhere.md")
   end
 
-  test "resurrecting a tombstoned id restores it with its content intact (no wipe)", %{
+  test "same-path resurrect within the delete window is refused (delete-wins #970)", %{
     user: user,
     vault: vault
   } do
+    # FIX 1 — a stale device re-creating a note at its OWN path within the
+    # delete window must NOT un-delete it; the delete wins (mirrors the REST
+    # upsert_pathless guard). The note stays tombstoned. A legitimate restore is
+    # a rename (different path) — see the "keeps content" test below.
     {:ok, note} =
       Notes.upsert_note(user, vault, %{"path" => "Notes/gone.md", "content" => "IMPORTANT"})
 
     :ok = Notes.delete_note_by_id(user, vault, note.id)
     refute Notes.note_in_vault?(user, vault.id, note.id)
 
-    assert {:ok, back} = Notes.genesis_crdt_note(user, vault, note.id, "Notes/gone.md")
-    assert back.id == note.id
-    assert Notes.note_in_vault?(user, vault.id, note.id)
-    assert back.content == "IMPORTANT"
+    assert {:error, :recently_deleted} =
+             Notes.genesis_crdt_note(user, vault, note.id, "Notes/gone.md")
+
+    refute Notes.note_in_vault?(user, vault.id, note.id)
   end
 
   test "resurrecting to a different path re-paths but keeps content", %{user: user, vault: vault} do
@@ -91,6 +95,50 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     assert back.content == "BODY"
     {:ok, at_new} = Notes.get_note(user, vault, "Notes/renamed.md")
     assert at_new.id == note.id
+  end
+
+  test "a rename resurrect over the notes_cap is refused, note stays tombstoned", %{
+    user: user,
+    vault: vault
+  } do
+    # FIX 4 — resurrect re-enters the live count, so it must pass the notes_cap
+    # gate. cap = 1: create A (fills cap), delete A, create B (fills cap again),
+    # then resurrect A's id at a DIFFERENT path (rename, so delete-wins doesn't
+    # trip) — count would go to 2 > 1, so it must be refused.
+    insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => 1})
+
+    {:ok, a} = Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "a"})
+    :ok = Notes.delete_note_by_id(user, vault, a.id)
+    {:ok, _b} = Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "b"})
+
+    assert {:error, {:notes_cap_reached, 1, 1}} =
+             Notes.genesis_crdt_note(user, vault, a.id, "A-renamed.md")
+
+    refute Notes.note_in_vault?(user, vault.id, a.id)
+  end
+
+  test "a rename resurrect broadcasts the new-path upsert so peers converge (FIX 7)", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "Notes/from.md", "content" => "MOVE"})
+
+    :ok = Notes.delete_note_by_id(user, vault, note.id)
+
+    EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+    assert {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Notes/to.md")
+
+    # A pure announce_ready carries only the id — a rename must fan the new-path
+    # upsert (note_changed) so peers see it materialize at the new path instead
+    # of just the old-path delete.
+    assert_receive %Phoenix.Socket.Broadcast{
+      event: "note_changed",
+      payload: %{"event_type" => "upsert", "path" => "Notes/to.md", "id" => id}
+    }
+
+    assert id == note.id
   end
 
   test "a fresh genesis announces crdt_doc_ready and does NOT deliver content", %{
