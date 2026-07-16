@@ -28,9 +28,10 @@ jobs:
 
       # Ungated: on a Release-PR MERGE push steps.rp.outputs.pr is EMPTY (the
       # `pr` output only fires when release-please opens/updates a PR, not on
-      # merge), but the version-diff push step below must still run on every
-      # main push. Both that step and the SCHEMA-IMPACT step need the repo +
-      # full tag history, so checkout happens once here, ungated.
+      # merge), but the release_created-gated delete+push step below must
+      # still be able to run on that merge push. Both that step and the
+      # SCHEMA-IMPACT step need the repo + full tag history, so checkout
+      # happens once here, ungated.
       #
       # token MUST be the App token, not the default GITHUB_TOKEN: pushes
       # authored by the default token never trigger other workflows (GitHub's
@@ -66,11 +67,13 @@ jobs:
         run: |
           set -euo pipefail
           # release-please created the X.Y.Z Release + tag; deploy-prod owns the
-          # user-facing release-v* Release. Delete the redundant Release (KEEP the
-          # X.Y.Z tag — release-please uses it for version tracking), then push
-          # release-v<version> so deploy-prod fires. App token so the tag triggers
-          # deploy-prod (GITHUB_TOKEN would not, per GitHub's anti-recursion rule).
-          gh release delete "$TAG_NAME" --yes
+          # user-facing release-v* Release. Push release-v<version> FIRST so
+          # deploy-prod fires even if the redundant-Release cleanup below fails
+          # — App token so the tag triggers deploy-prod (GITHUB_TOKEN would not,
+          # per GitHub's anti-recursion rule). Then best-effort delete the
+          # redundant Release (KEEP the X.Y.Z tag — release-please uses it for
+          # version tracking); a cleanup failure must not abort the deploy.
           git tag "release-v${TAG_NAME}" "$TAG_NAME"
           git push origin "release-v${TAG_NAME}"
-          echo "Deleted redundant $TAG_NAME Release; pushed release-v${TAG_NAME}"
+          gh release delete "$TAG_NAME" --yes || echo "::warning::redundant $TAG_NAME release already gone"
+          echo "Pushed release-v${TAG_NAME}; cleaned up redundant $TAG_NAME release"

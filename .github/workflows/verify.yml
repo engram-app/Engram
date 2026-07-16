@@ -3375,7 +3375,7 @@ jobs:
 
           # version-check is skipped on main (only runs on branches) — that's expected.
           if [ "$VC" != "success" ] && [ "$VC" != "skipped" ]; then
-            echo "::error::version-check failed — bump mix.exs version before merging"
+            echo "::error::version-check failed — mix.exs version is not valid semver"
             exit 1
           fi
 
@@ -3667,9 +3667,7 @@ jobs:
           # Check whether this version already exists in GHCR.
           #
           # Policy:
-          #   first-attempt + exists + NOT cache-hit → ERROR (developer forgot
-          #                                            to bump version)
-          #   first-attempt + exists + cache-hit     → SKIP build, jump to
+          #   exists + cache-hit                     → SKIP build, jump to
           #                                            deploy (TF-driven push
           #                                            to .github/** or any
           #                                            file outside the
@@ -3686,6 +3684,20 @@ jobs:
           #                                            IP-allowlist NAT
           #                                            issue, transient daemon
           #                                            outage)
+          #   first-attempt + exists + NOT cache-hit
+          #     + deployable changed                 → BUILD + PUSH anyway,
+          #                                            keyed on sha-<7>.
+          #                                            Under release-please,
+          #                                            mix.exs is STICKY
+          #                                            between release cuts
+          #                                            (only release-please
+          #                                            bumps it), so a
+          #                                            deployable merge
+          #                                            landing on an
+          #                                            already-published
+          #                                            :VERSION is now
+          #                                            NORMAL, not a
+          #                                            forgotten-bump error.
           #   first or rerun + missing               → BUILD + PUSH + DEPLOY
           #                                            as normal
           #
@@ -3694,29 +3706,29 @@ jobs:
           # `sha-` tag already serves the prod GitOps chain.
           #
           # github.run_attempt is 1 on the first push-triggered run, 2+ on
-          # any `gh run rerun` invocation. Cleanly distinguishes "operator
-          # didn't bump" from "operator is retrying a known-good build".
-          # Path-aware collision guard. The "version exists but not cache-hit"
-          # ERROR is meant to catch a developer who changed deployable code but
-          # forgot to bump. But verify.yml / ci/ live INSIDE BACKEND_HASH, so a
-          # CI-only merge misses the coarse cache (cache_hit_both=false) while
-          # leaving the image byte-identical — the existing tag IS correct and a
-          # bump would be a no-op. So only ERROR when a DEPLOYABLE path actually
-          # changed in this merge (same path set version-check uses). HEAD~1..HEAD
-          # = the squash-merge just landed on main (checkout is fetch-depth: 0).
+          # any `gh run rerun` invocation. Cleanly distinguishes "operator is
+          # retrying a known-good build" from a fresh attempt.
+          # Path-aware guard, informational only. verify.yml / ci/ live INSIDE
+          # BACKEND_HASH, so a CI-only merge misses the coarse cache
+          # (cache_hit_both=false) while leaving the image byte-identical —
+          # the existing tag IS correct and rebuilding would be a no-op, so
+          # we still skip in that case. We only note (not error) when a
+          # DEPLOYABLE path actually changed in this merge (same path set
+          # version-check uses); HEAD~1..HEAD = the squash-merge just landed
+          # on main (checkout is fetch-depth: 0).
           DEPLOYABLE=$(git diff --name-only HEAD~1 HEAD -- \
             lib priv config frontend Dockerfile entrypoint.sh .dockerignore rel mix.exs mix.lock)
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin > /dev/null
           IMAGE_EXISTS=false
           if docker manifest inspect "${GHCR_IMAGE}:${VERSION}" > /dev/null 2>&1; then
             if [ "${{ github.run_attempt }}" = "1" ] && [ "$CACHE_HIT_BOTH" != "true" ] && [ -n "$DEPLOYABLE" ]; then
-              echo "ERROR: Version ${VERSION} already exists in GHCR and deployable paths changed in this merge. Bump the version in mix.exs before merging." >&2
+              echo "::notice::Version ${VERSION} already exists in GHCR and deployable paths changed in this merge. mix.exs versions are sticky between release-please cuts (only release-please bumps it), so this is expected — building anyway, keyed on sha-${SHA_SHORT}."
               echo "::group::Deployable paths changed (HEAD~1..HEAD)"; echo "$DEPLOYABLE"; echo "::endgroup::"
-              exit 1
+            else
+              DEP_NOTE=$([ -n "$DEPLOYABLE" ] && echo "deployable changed" || echo "CI/docs-only, image unchanged")
+              echo "::notice::Image ${GHCR_IMAGE}:${VERSION} already in GHCR (run_attempt=${{ github.run_attempt }}, cache_hit_both=${CACHE_HIT_BOTH}, ${DEP_NOTE}); skipping build, jumping to deploy."
+              IMAGE_EXISTS=true
             fi
-            DEP_NOTE=$([ -n "$DEPLOYABLE" ] && echo "deployable changed" || echo "CI/docs-only, image unchanged")
-            echo "::notice::Image ${GHCR_IMAGE}:${VERSION} already in GHCR (run_attempt=${{ github.run_attempt }}, cache_hit_both=${CACHE_HIT_BOTH}, ${DEP_NOTE}); skipping build, jumping to deploy."
-            IMAGE_EXISTS=true
           fi
 
           # Emit a newline-separated tag list spanning both registries for
