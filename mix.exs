@@ -4,7 +4,9 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.688",  # x-release-please-version
+      # x-release-please-start-version
+      version: "0.5.688",
+      # x-release-please-end-version
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
