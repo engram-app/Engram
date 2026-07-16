@@ -1,0 +1,32 @@
+name: Require Release Notes
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  require-notes:
+    if: startsWith(github.head_ref, 'release-please--')
+    runs-on: [self-hosted, linux, x64, isolated]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Assert CHANGELOG has notes for this version
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -oP 'version:\s*"\K[0-9]+\.[0-9]+\.[0-9]+' mix.exs | head -1)
+          # Literal (non-regex) prefix match with a closing boundary, so a
+          # version like 1.12.2 never matches a "## [1.12.20]" header.
+          SECTION=$(awk -v v="$VERSION" '
+            substr($0,1,length("## [" v "]")) == "## [" v "]" {grab=1; next}
+            substr($0,1,length("## " v " ")) == "## " v " "  {grab=1; next}
+            /^## / {grab=0}
+            grab {print}
+          ' CHANGELOG.md)
+          if [ -z "$(echo "$SECTION" | grep -v '^[[:space:]]*$' || true)" ]; then
+            echo "::error::CHANGELOG.md has no notes under ## $VERSION — write release notes before merging."
+            exit 1
+          fi
+          echo "Release notes present for $VERSION."
