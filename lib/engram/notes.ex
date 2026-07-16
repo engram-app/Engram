@@ -329,14 +329,6 @@ defmodule Engram.Notes do
       `Endpoint.broadcast_from/4` so the given subscriber (the pushing
       channel process) is excluded. Channel pushes pass `self()`; HTTP
       pushes have no socket to exclude and use plain broadcast.
-    * `create_only: true` — genesis mode (`crdt_create`). If a LIVE note
-      already exists at `path`, return it UNCHANGED instead of CRDT-diffing
-      `attrs["content"]` against it — a genesis push always carries empty
-      content (the real body arrives later over the CRDT room), and diffing
-      "" against real content would wipe it. Every other branch (pathless
-      insert, tombstone resurrect, id-collision, notes_cap) is untouched, so
-      a create still correctly resurrects/conflicts/caps exactly like a
-      normal upsert.
   """
   @spec upsert_note(map(), map(), map(), keyword()) ::
           {:ok, Note.t()}
@@ -890,13 +882,6 @@ defmodule Engram.Notes do
     base_hash = Keyword.get(opts, :base_hash)
 
     cond do
-      Keyword.get(opts, :create_only, false) ->
-        # Genesis push landed on a path a live note already owns (under
-        # whatever id). Reuse idempotent_repush's no-op shape: no CRDT diff,
-        # no re-encrypt, no write, no broadcast — the caller just wants that
-        # note's id back, and its content must never be touched.
-        idempotent_repush(existing, base_attrs)
-
       is_binary(existing.content_hash) and
         existing.content_hash == base_attrs.content_hash and
           not Keyword.get(opts, :force, false) ->

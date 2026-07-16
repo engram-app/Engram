@@ -179,60 +179,20 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  # These four frames carry no b64 payload, so frame_class_b64 doesn't apply —
-  # they ride the :handshake lane (see check_rate/2 below). All four are
-  # connect/catchup-time operations (one create/delete per note mutation, one
-  # catchup call per note during enrollment), the exact shape @hs_limit was
-  # sized for, and NOT the continuous edit stream @msg_limit protects — so
-  # sharing that lane is intentional, not accidental reuse. They are still
-  # bounded (not exempt): the 2400/10s ceiling applies same as real STEP1s.
-  @impl true
-  def handle_in("crdt_create", %{"doc_id" => doc_id, "path" => path}, socket) do
-    with :ok <- check_rate(socket, :handshake),
-         {:ok, note_id} <- cast_doc_id(doc_id),
-         :ok <- validate_create_path(path) do
-      user = socket.assigns.current_user
-      vault = socket.assigns.vault
-      device_id = socket.assigns[:device_id]
-
-      attrs = %{"id" => note_id, "path" => path, "content" => ""}
-
-      # Genesis always routes through upsert_note's normal create/resurrect/
-      # move lifecycle (create_only: true keeps it from CRDT-diffing this
-      # empty content against a live note that already owns `path` — see
-      # upsert_note's moduledoc). That reuses the SAME id-collision, tombstone-
-      # resurrect, notes_cap, and origin-device-echo-exclusion machinery every
-      # other write path gets, instead of crdt_create's old bespoke
-      # insert-only genesis_note (deleted — it had none of those guards).
-      case Notes.upsert_note(user, vault, attrs, create_only: true, origin_device_id: device_id) do
-        {:ok, note} ->
-          {:reply, {:ok, %{doc_id: note.id}}, socket}
-
-        {:error, :version_conflict, note} ->
-          # note_id already names a LIVE note at a different path — a real
-          # id-collision, not adoptable. Client re-mints / reconciles.
-          {:reply, {:error, %{reason: "id_conflict", doc_id: note.id}}, socket}
-
-        {:error, {:notes_cap_reached, limit, _count}} ->
-          {:reply, {:error, %{reason: "notes_cap_reached", limit: limit}}, socket}
-
-        {:error, :recently_deleted} ->
-          # Delete-wins (#970): a create at a path tombstoned seconds ago,
-          # same lifecycle the REST create path shares — surfaced distinctly
-          # rather than special-cased here.
-          {:reply, {:error, %{reason: "recently_deleted"}}, socket}
-
-        {:error, _reason} ->
-          {:reply, {:error, %{reason: "create_failed"}}, socket}
-      end
-    else
-      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
-      # Never echo a non-UUID doc_id — it may be a cleartext path.
-      {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
-      {:error, :bad_path} -> {:reply, {:error, %{reason: "bad_path"}}, socket}
-    end
-  end
-
+  # These three frames carry no b64 payload, so frame_class_b64 doesn't apply —
+  # they ride the :handshake lane (see check_rate/2 below). All three are
+  # connect/catchup-time operations (one delete per note mutation, one catchup
+  # call per note during enrollment), the exact shape @hs_limit was sized for,
+  # and NOT the continuous edit stream @msg_limit protects — so sharing that
+  # lane is intentional, not accidental reuse. They are still bounded (not
+  # exempt): the 2400/10s ceiling applies same as real STEP1s.
+  #
+  # NOTE: socket-native note CREATE (crdt_create) is deliberately NOT here yet.
+  # Genesis of an empty-content row fights the REST write machinery's content
+  # merge/broadcast at every branch (do_update_note, move_note, broadcast_change);
+  # it needs a purpose-built bare-row create+resurrect op, designed and tested
+  # end-to-end alongside the plugin that will call it (Plan B1). Until then the
+  # plugin creates rows over REST, as it does today.
   @impl true
   def handle_in("crdt_delete", %{"doc_id" => doc_id}, socket) do
     with :ok <- check_rate(socket, :handshake),
@@ -307,17 +267,6 @@ defmodule EngramWeb.CrdtChannel do
       :error -> {:error, :bad_doc_id}
     end
   end
-
-  # A nil/number path isn't caught by Notes.upsert_note's own validate_path
-  # (nil/"" only — any other value, including a non-binary, falls through as
-  # {:ok, path}) and would crash PathSanitizer.sanitize/1 downstream. Guard
-  # here, at the boundary, before it reaches Notes at all. Never echo the raw
-  # value back — mirrors cast_doc_id/decode_sv's crash-guard shape.
-  defp validate_create_path(path) when is_binary(path) do
-    if String.trim(path) == "", do: {:error, :bad_path}, else: :ok
-  end
-
-  defp validate_create_path(_), do: {:error, :bad_path}
 
   @impl true
   def terminate(reason, socket) do
