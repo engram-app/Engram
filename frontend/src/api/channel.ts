@@ -5,6 +5,7 @@ import { buildGenesisFrame } from "../crdt/genesis";
 import { CrdtOpQueueController } from "../crdt/op-queue-controller";
 import { createIndexedDbPersister } from "../crdt/op-queue-persist";
 import {
+	clearRehandshakeBackoff as clearCrdtRehandshakeBackoff,
 	enrollIfLive as crdtEnrollIfLive,
 	handleFrame as crdtHandleFrame,
 	getCrdtSyncStatus,
@@ -504,6 +505,12 @@ export async function connectChannel({ userId, vaultId, getToken, queryClient }:
 			const startUs = Date.now() * 1000;
 			crdtChannel
 				?.push("crdt_msg", { doc_id: docId, b64 })
+				.receive("ok", () => {
+					// Successful ack: the channel is healthy for this note. Clear its
+					// re-handshake backoff so the breaker re-arms and the next genuine
+					// failure starts from the base delay (not a stale escalated one).
+					clearCrdtRehandshakeBackoff(docId);
+				})
 				.receive("error", (resp: { reason?: string }) => {
 					rlog().warn(
 						"crdt",
