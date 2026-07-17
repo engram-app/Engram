@@ -14,7 +14,7 @@ defmodule Engram.Notes.CrdtTransport do
   import Bitwise
   import Ecto.Query
 
-  alias Engram.{Crypto, Notes, Repo}
+  alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtRegistry, CrdtUpdateLog, Note}
   alias Yex.Sync.SharedDoc
@@ -244,14 +244,65 @@ defmodule Engram.Notes.CrdtTransport do
   zero writes) → empty map, same short-circuit `/manifest` uses.
   """
   @spec vault_heads(map(), map()) :: %{String.t() => %{path: String.t(), head: String.t()}}
-  def vault_heads(user, vault) do
+  def vault_heads(user, vault), do: vault_heads(user, vault, nil)
+
+  @doc """
+  Catch-up bundle for a reconnecting client: surviving-note `heads`, the
+  cross-device `deleted` tombstones since the client's cursor, and the current
+  vault watermark `seq`.
+
+  A delete is an ABSENCE from `heads`, and absence is ambiguous (never synced vs
+  deleted-elsewhere), so a client that was offline while another device deleted a
+  note can't tell it should trash that note. This closes the gap.
+
+  Snapshots the vault `change_seq` FIRST, then bounds BOTH the heads read and the
+  tombstone read by that same `seq`, so a change committed between the two reads
+  is neither lost nor double-counted (a new write stamps a `seq` > snapshot and
+  is picked up on the next poll). `deleted_since` is the last per-vault seq the
+  client fully reconciled; `deleted` is the note_ids tombstoned in
+  (`deleted_since`, `seq`]. `nil` (fresh client) → `deleted: []` (nothing local
+  to trash) but still returns the current `seq` so the client seeds its cursor.
+  """
+  @spec vault_catchup(map(), map(), integer() | nil) ::
+          {%{String.t() => %{path: String.t(), head: String.t()}}, [String.t()], integer()}
+  def vault_catchup(user, vault, deleted_since) do
+    seq = Vaults.current_seq(user.id, vault.id)
+    heads = vault_heads(user, vault, seq)
+    deleted = deleted_note_ids(user, vault, deleted_since, seq)
+    {heads, deleted, seq}
+  end
+
+  # max_seq == nil ⇒ unbounded (the public vault_heads/2 shape). vault_catchup
+  # passes the snapshotted watermark so the heads and tombstone reads agree.
+  defp vault_heads(user, vault, max_seq) do
     case Crypto.get_dek(user) do
-      {:ok, dek} -> vault_heads_with_dek(user, vault, dek)
+      {:ok, dek} -> vault_heads_with_dek(user, vault, dek, max_seq)
       {:error, :no_dek} -> %{}
     end
   end
 
-  defp vault_heads_with_dek(user, vault, dek) do
+  # Tombstoned note_ids (`kind == "note"`, `deleted_at` set) in (since, max_seq].
+  # since == nil (fresh client) has nothing local to trash → []. Legacy rows with
+  # a NULL seq predate the change-log and can never fall in an open window.
+  defp deleted_note_ids(_user, _vault, nil, _max_seq), do: []
+
+  defp deleted_note_ids(user, vault, since, max_seq) do
+    {:ok, ids} =
+      Repo.with_tenant(user.id, fn ->
+        Note
+        |> where(
+          [n],
+          n.vault_id == ^vault.id and n.user_id == ^user.id and n.kind == "note" and
+            not is_nil(n.deleted_at) and n.seq > ^since and n.seq <= ^max_seq
+        )
+        |> select([n], n.id)
+        |> Repo.all()
+      end)
+
+    ids
+  end
+
+  defp vault_heads_with_dek(user, vault, dek, max_seq) do
     {:ok, rows} =
       Repo.with_tenant(user.id, fn ->
         Note
@@ -260,6 +311,7 @@ defmodule Engram.Notes.CrdtTransport do
           n.vault_id == ^vault.id and n.user_id == ^user.id and is_nil(n.deleted_at) and
             n.kind == "note"
         )
+        |> bound_by_seq(max_seq)
         |> select([n], {n.id, n.crdt_head, n.dek_version, n.path_ciphertext, n.path_nonce})
         |> Repo.all()
       end)
@@ -276,6 +328,14 @@ defmodule Engram.Notes.CrdtTransport do
       end
     end)
   end
+
+  # Bound the surviving-heads read by the snapshotted watermark so it agrees with
+  # the tombstone read (nil ⇒ unbounded, the public vault_heads/2 shape). Legacy
+  # rows with a NULL seq predate the change-log and are always in-window.
+  defp bound_by_seq(query, nil), do: query
+
+  defp bound_by_seq(query, max_seq),
+    do: where(query, [n], n.seq <= ^max_seq or is_nil(n.seq))
 
   # A warmed head passes through; a NULL is self-healed once (a deleted-note
   # race returns :not_found → drop it from the map).

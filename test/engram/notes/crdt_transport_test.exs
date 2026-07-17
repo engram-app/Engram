@@ -3,7 +3,7 @@ defmodule Engram.Notes.CrdtTransportTest do
   # module on the shared-mode sandbox so room-spawning and read tests coexist.
   use Engram.DataCase, async: false
 
-  alias Engram.Notes
+  alias Engram.{Notes, Vaults}
   alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtTransport, CrdtUpdateLog, Note}
 
   setup do
@@ -244,6 +244,76 @@ defmodule Engram.Notes.CrdtTransportTest do
 
       assert %{path: "H/good.md"} = heads[good.id], "healthy notes still resolve"
       refute Map.has_key?(heads, bad.id), "the corrupt-path note is skipped"
+    end
+  end
+
+  describe "vault_catchup/3 (deleted_since tombstone cursor)" do
+    test "a note deleted with seq in (since, current] appears in deleted",
+         %{user: user, vault: vault} do
+      {:ok, gone} = Notes.upsert_note(user, vault, %{path: "D/gone.md", content: "x", mtime: 1.0})
+      # Cursor snapshotted BEFORE the delete, so the delete's seq is > since.
+      since = Vaults.current_seq(user.id, vault.id)
+      :ok = Notes.delete_note(user, vault, "D/gone.md")
+
+      {heads, deleted, seq} = CrdtTransport.vault_catchup(user, vault, since)
+
+      assert gone.id in deleted
+      refute Map.has_key?(heads, gone.id), "a tombstoned note is absent from heads"
+      assert seq > since
+    end
+
+    test "a note deleted at seq <= since does NOT appear (already reconciled)",
+         %{user: user, vault: vault} do
+      {:ok, old} = Notes.upsert_note(user, vault, %{path: "D/old.md", content: "x", mtime: 1.0})
+      :ok = Notes.delete_note(user, vault, "D/old.md")
+      # Cursor snapshotted AFTER the delete: the client already reconciled it.
+      since = Vaults.current_seq(user.id, vault.id)
+
+      {_heads, deleted, _seq} = CrdtTransport.vault_catchup(user, vault, since)
+
+      refute old.id in deleted
+    end
+
+    test "a surviving note never appears in deleted", %{user: user, vault: vault} do
+      {:ok, live} = Notes.upsert_note(user, vault, %{path: "D/live.md", content: "x", mtime: 1.0})
+      since = Vaults.current_seq(user.id, vault.id)
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "D/live.md", content: "y", mtime: 2.0})
+
+      {heads, deleted, _seq} = CrdtTransport.vault_catchup(user, vault, since)
+
+      refute live.id in deleted
+      assert Map.has_key?(heads, live.id)
+    end
+
+    test "deleted_since: nil returns deleted: [] and a non-nil seq (fresh client)",
+         %{user: user, vault: vault} do
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "D/a.md", content: "x", mtime: 1.0})
+      :ok = Notes.delete_note(user, vault, "D/a.md")
+
+      {heads, deleted, seq} = CrdtTransport.vault_catchup(user, vault, nil)
+
+      assert deleted == [], "a fresh client has nothing local to trash"
+      assert is_integer(seq) and seq > 0, "still seeds the client's cursor"
+      assert is_map(heads)
+    end
+
+    test "the reply seq equals the snapshot and covers every head's row seq",
+         %{user: user, vault: vault} do
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "D/h.md", content: "x", mtime: 1.0})
+
+      snapshot = Vaults.current_seq(user.id, vault.id)
+      {heads, _deleted, seq} = CrdtTransport.vault_catchup(user, vault, nil)
+      assert seq == snapshot, "no write happened between the two reads, so seq is stable"
+
+      # Every surviving head was stamped with a seq at or below the watermark.
+      ids = Map.keys(heads)
+
+      {:ok, max_head_seq} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.one(from n in Note, where: n.id in ^ids, select: max(n.seq))
+        end)
+
+      assert max_head_seq <= seq
     end
   end
 

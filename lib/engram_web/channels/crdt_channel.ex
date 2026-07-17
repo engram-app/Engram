@@ -254,13 +254,16 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   @impl true
-  def handle_in("crdt_catchup_heads", _payload, socket) do
+  def handle_in("crdt_catchup_heads", payload, socket) do
     case check_rate(socket, :handshake) do
       :ok ->
         user = socket.assigns.current_user
         vault = socket.assigns.vault
-        heads = CrdtTransport.vault_heads(user, vault)
-        {:reply, {:ok, %{heads: heads}}, socket}
+        # deleted_since = the last per-vault seq the client fully reconciled;
+        # nil/absent/non-integer ⇒ fresh client (gets deleted: [] + the cursor).
+        deleted_since = cast_deleted_since(Map.get(payload, "deleted_since"))
+        {heads, deleted, seq} = CrdtTransport.vault_catchup(user, vault, deleted_since)
+        {:reply, {:ok, %{heads: heads, deleted: deleted, seq: seq}}, socket}
 
       {:error, :rate_limited} ->
         {:reply, {:error, %{reason: "rate_limited"}}, socket}
@@ -326,6 +329,11 @@ defmodule EngramWeb.CrdtChannel do
       :error -> {:error, :bad_doc_id}
     end
   end
+
+  # The client's tombstone cursor: the last per-vault seq it fully reconciled.
+  # Anything not a non-negative integer (absent, nil, junk) ⇒ fresh client.
+  defp cast_deleted_since(seq) when is_integer(seq) and seq >= 0, do: seq
+  defp cast_deleted_since(_), do: nil
 
   # nil / non-binary / blank-after-trim path is rejected before it ever
   # reaches genesis_crdt_note/4 — path may be cleartext, so the reply never

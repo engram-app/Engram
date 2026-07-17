@@ -169,10 +169,30 @@ defmodule EngramWeb.CrdtChannelTest do
         Notes.upsert_note(user, vault, %{"path" => "Notes/h.md", "content" => "hello"})
 
       ref = push(socket, "crdt_catchup_heads", %{})
-      assert_reply ref, :ok, %{heads: heads}
+      assert_reply ref, :ok, %{heads: heads, deleted: [], seq: seq}
       assert is_map(heads)
+      assert is_integer(seq) and seq > 0
       assert %{path: "Notes/h.md", head: head} = heads[note.id]
       assert is_binary(head) and byte_size(head) > 0
+    end
+
+    test "deleted_since surfaces a cross-device delete since the client's cursor", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, gone} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/gone.md", "content" => "bye"})
+
+      # Cursor snapshotted BEFORE the delete → the delete's seq is in-window.
+      since = Vaults.current_seq(user.id, vault.id)
+      :ok = Notes.delete_note(user, vault, "Notes/gone.md")
+
+      ref = push(socket, "crdt_catchup_heads", %{"deleted_since" => since})
+      assert_reply ref, :ok, %{heads: heads, deleted: deleted, seq: seq}
+      assert gone.id in deleted
+      refute Map.has_key?(heads, gone.id)
+      assert seq > since
     end
   end
 
