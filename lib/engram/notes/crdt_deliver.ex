@@ -73,7 +73,7 @@ defmodule Engram.Notes.CrdtDeliver do
       # different device populations; the double-delivery for a device that has
       # both is an idempotent Yjs re-apply.
       fanout_idle(user_id, vault_id, note_id)
-      announce(user_id, vault_id, note_id)
+      announce(user_id, vault_id, path, note_id)
     end
 
     :ok
@@ -130,7 +130,7 @@ defmodule Engram.Notes.CrdtDeliver do
   """
   @spec announce_ready(String.t(), String.t(), String.t(), String.t()) :: :ok
   def announce_ready(user_id, vault_id, path, note_id) do
-    if String.ends_with?(path, ".md"), do: announce(user_id, vault_id, note_id)
+    if String.ends_with?(path, ".md"), do: announce(user_id, vault_id, path, note_id)
     :ok
   end
 
@@ -337,12 +337,19 @@ defmodule Engram.Notes.CrdtDeliver do
   # Step 2 — discovery announce. Mirrors the channel's own `crdt_doc_ready`
   # event (CrdtChannel.ensure_room/2); the plugin handles both identically.
   # doc_id is the note_id (a UUID), matching the channel's doc_id keying.
-  defp announce(user_id, vault_id, note_id) do
+  #
+  # Carries the note's `path` too: an EMPTY note (genesis create) integrates
+  # zero Y.Doc ops, so no `note_yjs_update` fan-out ever fires — this announce
+  # is the ONLY live signal a not-yet-enrolled receiver gets, and without the
+  # path it holds an id it cannot materialize until the ~30s pull (e2e
+  # test_27). The path is metadata, not content, so this respects genesis's
+  # bare-row "never content-broadcasts" rule.
+  defp announce(user_id, vault_id, path, note_id) do
     _ =
       EngramWeb.Endpoint.broadcast(
         "crdt:#{user_id}:#{vault_id}",
         "crdt_doc_ready",
-        %{"doc_id" => note_id}
+        %{"doc_id" => note_id, "path" => path}
       )
 
     :ok

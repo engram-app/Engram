@@ -543,7 +543,17 @@ defmodule EngramWeb.CrdtChannel do
       # room is now active for doc_id. Recipients send a sync-step-1 (state
       # vector) which the server answers with step-2 (the diff they're
       # missing), so any device that doesn't yet have this note gets it.
-      broadcast_from!(socket, "crdt_doc_ready", %{"doc_id" => doc_id})
+      # Carry the note's path (best-effort) so a receiver can materialize an
+      # empty note live rather than waiting for the pull — matches the
+      # CrdtDeliver announce contract; the plugin treats "path" as optional, so
+      # a failed lookup just omits it (never crash the room-open).
+      payload =
+        case Notes.get_note_by_id(user, vault, note_id) do
+          {:ok, %{path: path}} when is_binary(path) -> %{"doc_id" => doc_id, "path" => path}
+          _ -> %{"doc_id" => doc_id}
+        end
+
+      broadcast_from!(socket, "crdt_doc_ready", payload)
 
       {:ok, socket, entry}
     end
