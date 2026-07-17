@@ -654,7 +654,7 @@ jobs:
       # actions/cache (separate Docker-layer concern).
       - name: Cache deps/
         id: cache-deps
-        uses: runs-on/cache@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
+        uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
           path: deps
           key: ${{ steps.keys.outputs.deps }}
@@ -662,7 +662,7 @@ jobs:
 
       - name: Cache _build/dev
         id: cache-build-dev
-        uses: runs-on/cache@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
+        uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
           path: _build/dev
           # No restore-keys: the key is mix.lock-scoped, so a restore-key prefix
@@ -674,7 +674,7 @@ jobs:
 
       - name: Cache _build/test
         id: cache-build-test
-        uses: runs-on/cache@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
+        uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
           path: _build/test
           # No restore-keys: see the _build/dev cache above. A restore-key hit
@@ -2264,7 +2264,7 @@ jobs:
         run: mix deps.get
 
       - name: Cache Dialyzer PLT
-        uses: runs-on/cache@eb4bb3ee6c5e2e1b25ef2e5ed39e028539016208 # v5.0.7
+        uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
           path: priv/plts
           key: ${{ runner.os }}-dialyzer-${{ needs.prebuild-mix.outputs.beam-tag }}-${{ hashFiles('mix.lock') }}
