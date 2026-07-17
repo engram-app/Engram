@@ -3463,18 +3463,22 @@ defmodule Engram.Notes do
           n.dek_version != Crypto.row_version_aad_bound(),
           do: n.id
 
-    if v1_ids == [] do
-      %{}
-    else
-      {:ok, rows} =
-        Repo.with_tenant(user.id, fn ->
-          Repo.all(from(n in Note, where: n.id in ^v1_ids))
-        end)
+    fetch_note_contents(user, v1_ids)
+  end
 
-      rows
-      |> decrypt_or_raise!(user)
-      |> Map.new(fn n -> {n.id, n.content || ""} end)
-    end
+  # Fetch + decrypt the plaintext content for the given note ids.
+  # Returns %{note_id => plaintext content}; empty for an empty id list.
+  defp fetch_note_contents(_user, []), do: %{}
+
+  defp fetch_note_contents(user, ids) do
+    {:ok, rows} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(from(n in Note, where: n.id in ^ids))
+      end)
+
+    rows
+    |> decrypt_or_raise!(user)
+    |> Map.new(fn n -> {n.id, n.content || ""} end)
   end
 
   defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder) do
@@ -3651,6 +3655,18 @@ defmodule Engram.Notes do
           seq
         end)
 
+      # Content for the upsert broadcast (e2e test_34 "received=yes
+      # materialized=no"): the cascade scans meta columns only (#863), so the
+      # `note` struct carries content: nil. Broadcasting that omits the inline
+      # body, forcing receivers to wait ~30-60s for a pull to materialize the
+      # renamed path. Decrypt each renamed note's body once here so the upsert
+      # ships it inline, exactly like do_rename_note. Content is unchanged by a
+      # rename, so the stored content_hash stays consistent with this body.
+      # ponytail: decrypts every renamed note — a very large folder rename pays
+      # O(content) here; accepted vs the pull-latency correctness bug.
+      broadcast_contents =
+        fetch_note_contents(user, Enum.map(real_note_updates, fn {n, _, _, _, _} -> n.id end))
+
       # Side effects outside the transaction — broadcast + reindex.
       # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
       # Marker rows have no path / no embedding, skip the broadcast+enqueue.
@@ -3685,7 +3701,12 @@ defmodule Engram.Notes do
             vault.id,
             "upsert",
             new_path,
-            %{note | path: new_path, folder: new_note_folder},
+            %{
+              note
+              | path: new_path,
+                folder: new_note_folder,
+                content: Map.get(broadcast_contents, note.id)
+            },
             []
           )
 

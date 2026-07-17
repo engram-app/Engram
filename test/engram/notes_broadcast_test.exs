@@ -169,14 +169,14 @@ defmodule Engram.NotesBroadcastTest do
       assert second["event_type"] == "delete"
     end
 
-    # e2e test_34 "received=yes materialized=no": the cascade broadcasts
-    # meta-projected rows (content never decrypted), and the upsert payload
-    # fabricated `"content" => ""` next to the REAL content_hash. Receivers
-    # took the empty body as authoritative and materialized 0-byte files,
-    # then read as converged forever (hash("") seeded against the real
-    # serverHash). The key must be ABSENT when content is unloaded — the
-    # plugin's hash-only branch fetches the body on absence.
-    test "cascade upsert omits the content key (never fabricates empty)", %{
+    # e2e test_34 "received=yes materialized=no": the cascade used to
+    # broadcast meta-projected rows (content never decrypted), so the upsert
+    # carried NO inline body and receivers waited ~30-60s for a pull to
+    # materialize the renamed path. Fix: decrypt each renamed note's body and
+    # ship it inline, exactly like the single-note rename. The body MUST be
+    # the note's REAL content (matching content_hash) — never fabricated `""`
+    # (that shipped a 0-byte file that read as converged forever, #863).
+    test "cascade upsert carries the renamed note's real content inline", %{
       user: user,
       vault: vault
     } do
@@ -196,7 +196,7 @@ defmodule Engram.NotesBroadcastTest do
         payload: %{"event_type" => "upsert"} = payload
       }
 
-      refute Map.has_key?(payload, "content")
+      assert payload["content"] == "# Child"
       assert payload["content_hash"] == child.content_hash
       assert is_binary(payload["content_hash"])
     end
