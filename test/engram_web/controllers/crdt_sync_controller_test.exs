@@ -178,8 +178,9 @@ defmodule EngramWeb.CrdtSyncControllerTest do
       b = seed_note(user, vault, "H/B.md", "# B")
 
       heads = conn |> get("/api/vault/heads") |> json_response(200) |> Map.fetch!("heads")
-      assert Map.has_key?(heads, a.id)
-      assert Map.has_key?(heads, b.id)
+      assert %{"path" => "H/A.md", "head" => ha} = heads[a.id]
+      assert %{"path" => "H/B.md", "head" => hb} = heads[b.id]
+      assert is_binary(ha) and is_binary(hb)
     end
   end
 end

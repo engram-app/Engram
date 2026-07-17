@@ -206,8 +206,44 @@ defmodule Engram.Notes.CrdtTransportTest do
         Notes.upsert_note(user, vault, %{path: "H/A.md", content: "# A edited", mtime: 2_000.0})
 
       heads1 = CrdtTransport.vault_heads(user, vault)
-      assert heads1[a.id] != heads0[a.id], "edited note's head must advance"
-      assert heads1[b.id] == heads0[b.id], "untouched note's head must be stable"
+      assert heads1[a.id].head != heads0[a.id].head, "edited note's head must advance"
+      assert heads1[b.id].head == heads0[b.id].head, "untouched note's head must be stable"
+    end
+
+    test "each entry carries the note's DECRYPTED path alongside its head",
+         %{user: user, vault: vault} do
+      {:ok, a} =
+        Notes.upsert_note(user, vault, %{path: "H/nested/A.md", content: "# A", mtime: 1_000.0})
+
+      {:ok, b} = Notes.upsert_note(user, vault, %{path: "H/B.md", content: "# B", mtime: 1_000.0})
+
+      heads = CrdtTransport.vault_heads(user, vault)
+
+      assert %{path: "H/nested/A.md", head: ha} = heads[a.id]
+      assert %{path: "H/B.md", head: hb} = heads[b.id]
+      assert is_binary(ha) and byte_size(ha) > 0
+      assert is_binary(hb) and byte_size(hb) > 0
+    end
+
+    test "a note with an undecryptable path is skipped, not fatal for the vault",
+         %{user: user, vault: vault} do
+      {:ok, good} =
+        Notes.upsert_note(user, vault, %{path: "H/good.md", content: "# G", mtime: 1_000.0})
+
+      {:ok, bad} =
+        Notes.upsert_note(user, vault, %{path: "H/bad.md", content: "# B", mtime: 1_000.0})
+
+      # Corrupt only the bad note's path ciphertext so its decrypt fails.
+      {:ok, {1, nil}} =
+        Repo.with_tenant(user.id, fn ->
+          from(n in Note, where: n.id == ^bad.id)
+          |> Repo.update_all(set: [path_ciphertext: <<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>>])
+        end)
+
+      heads = CrdtTransport.vault_heads(user, vault)
+
+      assert %{path: "H/good.md"} = heads[good.id], "healthy notes still resolve"
+      refute Map.has_key?(heads, bad.id), "the corrupt-path note is skipped"
     end
   end
 
@@ -240,7 +276,7 @@ defmodule Engram.Notes.CrdtTransportTest do
 
       # ...and vault_heads self-heals to the authoritative post-edit head.
       heads = CrdtTransport.vault_heads(user, vault)
-      assert heads[note.id] == head
+      assert heads[note.id].head == head
     end
 
     test "vault_heads self-heals a NULL crdt_head and persists it for cheap re-reads",
@@ -254,10 +290,10 @@ defmodule Engram.Notes.CrdtTransportTest do
       assert is_nil(a0.crdt_head)
 
       heads = CrdtTransport.vault_heads(user, vault)
-      assert is_binary(heads[a.id])
+      assert is_binary(heads[a.id].head)
 
       {:ok, a1} = Notes.get_note_by_id(user, vault, a.id)
-      assert a1.crdt_head == heads[a.id], "self-heal must persist the column"
+      assert a1.crdt_head == heads[a.id].head, "self-heal must persist the column"
     end
 
     test "vault_heads head equals read_delta's head for the same note",
@@ -267,7 +303,7 @@ defmodule Engram.Notes.CrdtTransportTest do
 
       {:ok, %{head: rd_head}} = CrdtTransport.read_delta(user, vault, note.id, nil)
       heads = CrdtTransport.vault_heads(user, vault)
-      assert heads[note.id] == rd_head
+      assert heads[note.id].head == rd_head
     end
 
     test "a REST edit invalidates the head so vault_heads reflects the new state",
@@ -276,7 +312,7 @@ defmodule Engram.Notes.CrdtTransportTest do
         Notes.upsert_note(user, vault, %{path: "MH/D.md", content: "# D\n\none", mtime: 1_000.0})
 
       heads0 = CrdtTransport.vault_heads(user, vault)
-      h0 = heads0[note.id]
+      h0 = heads0[note.id].head
       assert is_binary(h0)
 
       # A REST update rewrites crdt_state via maybe_merge_crdt; the trigger
@@ -292,7 +328,7 @@ defmodule Engram.Notes.CrdtTransportTest do
       assert is_nil(mid.crdt_head), "trigger must invalidate crdt_head on a crdt_state change"
 
       heads1 = CrdtTransport.vault_heads(user, vault)
-      assert heads1[note.id] != h0, "head must advance after a REST edit"
+      assert heads1[note.id].head != h0, "head must advance after a REST edit"
     end
 
     test "backfill_head computes, persists, and returns a head matching read_delta",
