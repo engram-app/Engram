@@ -964,7 +964,9 @@ class CdpClient:
             can STEP1-enroll the note's CRDT room (sync.ts:3246); an open room's
             ``crdt_msg`` stream would then deliver the body independently.
 
-        This stubs ``pull()``, ``coldReceive()`` and ``handleStreamEvent`` to
+        This stubs ``pull()``, the cold-apply backstop (``coldReceive()``
+        pre-rewire / ``catchupViaSocket()`` post-authoritative-rewire — stubs
+        whichever the paired plugin build exposes) and ``handleStreamEvent`` to
         no-ops (saving originals). The fan-out is a SEPARATE channel dispatch:
         ``channel.ts`` routes ``note_yjs_update`` straight to ``onNoteYjsUpdate``
         → ``applyPushedNoteUpdate`` and never touches any stubbed method, so it
@@ -978,12 +980,16 @@ class CdpClient:
             const se = {ENGINE_PATH};
             if (se.__fanoutIsolated) return 'already-isolated';
             se.__fanoutIsolated = true;
-            se.__origPull = se.pull.bind(se);
-            se.__origColdReceive = se.coldReceive.bind(se);
-            se.__origHandleStreamEvent = se.handleStreamEvent.bind(se);
-            se.pull = async () => 0;
-            se.coldReceive = async () => 0;
-            se.handleStreamEvent = async () => {{}};
+            // The cold-note apply backstop was renamed coldReceive ->
+            // catchupViaSocket in the authoritative-sync rewire. backend-main
+            // e2e pairs against EITHER plugin branch, so stub whichever method
+            // exists and never .bind() an absent one (guards future renames).
+            for (const m of ['pull', 'coldReceive', 'catchupViaSocket', 'handleStreamEvent']) {{
+                if (typeof se[m] === 'function') {{
+                    se['__orig_' + m] = se[m].bind(se);
+                    se[m] = m === 'handleStreamEvent' ? async () => {{}} : async () => 0;
+                }}
+            }}
             return 'isolated';
         }})()
         """
@@ -997,12 +1003,10 @@ class CdpClient:
         (function() {{
             const se = {ENGINE_PATH};
             if (!se.__fanoutIsolated) return 'not-isolated';
-            if (se.__origPull) se.pull = se.__origPull;
-            if (se.__origColdReceive) se.coldReceive = se.__origColdReceive;
-            if (se.__origHandleStreamEvent) se.handleStreamEvent = se.__origHandleStreamEvent;
-            delete se.__origPull;
-            delete se.__origColdReceive;
-            delete se.__origHandleStreamEvent;
+            for (const m of ['pull', 'coldReceive', 'catchupViaSocket', 'handleStreamEvent']) {{
+                const orig = se['__orig_' + m];
+                if (orig) {{ se[m] = orig; delete se['__orig_' + m]; }}
+            }}
             delete se.__fanoutIsolated;
             return 'restored';
         }})()
