@@ -259,8 +259,12 @@ defmodule EngramWeb.CrdtChannel do
       :ok ->
         user = socket.assigns.current_user
         vault = socket.assigns.vault
-        heads = CrdtTransport.vault_heads(user, vault)
-        {:reply, {:ok, %{heads: heads}}, socket}
+        # `complete` is the completeness contract (see CrdtTransport.vault_heads):
+        # true only when `heads` is provably the FULL live-note set. The plugin's
+        # destructive offline-delete reconcile gates on it; non-destructive
+        # consumers ignore it. `heads` shape is unchanged.
+        {heads, complete} = CrdtTransport.vault_heads(user, vault)
+        {:reply, {:ok, %{heads: heads, complete: complete}}, socket}
 
       {:error, :rate_limited} ->
         {:reply, {:error, %{reason: "rate_limited"}}, socket}

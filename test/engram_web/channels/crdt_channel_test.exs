@@ -169,10 +169,12 @@ defmodule EngramWeb.CrdtChannelTest do
         Notes.upsert_note(user, vault, %{"path" => "Notes/h.md", "content" => "hello"})
 
       ref = push(socket, "crdt_catchup_heads", %{})
-      assert_reply ref, :ok, %{heads: heads}
+      assert_reply ref, :ok, %{heads: heads, complete: complete}
       assert is_map(heads)
       assert %{path: "Notes/h.md", head: head} = heads[note.id]
       assert is_binary(head) and byte_size(head) > 0
+      # Completeness contract: a clean, fully-resolved vault reports complete.
+      assert complete == true
     end
   end
 
