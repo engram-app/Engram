@@ -142,6 +142,33 @@ defmodule Engram.NotesBroadcastTest do
       assert payload["path"] == "New/Child.md"
     end
 
+    # Receivers relocate the note's id to the new path (upsert) BEFORE they
+    # see the old-path delete, so the delete reads as a relocation leg (id
+    # lives elsewhere) instead of tearing the note's CRDT room down by id.
+    # Patterns here do NOT discriminate on event_type, so the two
+    # assert_receives capture mailbox order and enforce upsert-before-delete.
+    test "cascade broadcasts the new-path upsert before the old-path delete", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _child} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old/Child.md",
+          "content" => "# Child",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert {:ok, 1} = Notes.rename_folder(user, vault, "Old", "New")
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: first}
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: second}
+
+      assert first["event_type"] == "upsert"
+      assert second["event_type"] == "delete"
+    end
+
     # e2e test_34 "received=yes materialized=no": the cascade broadcasts
     # meta-projected rows (content never decrypted), and the upsert payload
     # fabricated `"content" => ""` next to the REAL content_hash. Receivers
@@ -230,6 +257,32 @@ defmodule Engram.NotesBroadcastTest do
       }
 
       assert payload["id"] == note.id
+    end
+
+    # Same relocation ordering as the folder-rename cascade: the receiver
+    # must relocate the note's id to the new path (upsert) BEFORE the
+    # old-path delete, or the delete tears the note's CRDT room down by id
+    # before the new path can materialize from it.
+    test "broadcasts the new-path upsert before the old-path delete", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old.md",
+          "content" => "# Old",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      {:ok, _} = Notes.rename_note(user, vault, "Old.md", "New.md")
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: first}
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: second}
+
+      assert first["event_type"] == "upsert"
+      assert second["event_type"] == "delete"
     end
   end
 

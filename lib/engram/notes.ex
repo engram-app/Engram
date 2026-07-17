@@ -1655,10 +1655,14 @@ defmodule Engram.Notes do
 
         # #976 (same invariant as the folder-rename cascade): the note still
         # exists under the new path, so the old-path delete leg carries its id
-        # for delete+upsert relocation correlation on receivers.
-        :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
+        # for delete+upsert relocation correlation on receivers. Emit the
+        # new-path upsert BEFORE the old-path delete: the receiver must
+        # relocate the note's id to the new path first, so it recognizes the
+        # delete as a relocation leg (id now lives elsewhere) instead of
+        # tearing the note's CRDT room down by id before it can materialize.
         decrypted = decrypt_or_raise!(note, user)
         :ok = broadcast_change(user.id, vault.id, "upsert", note.path, decrypted, [])
+        :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
         {:ok, decrypted}
 
       {:ok, {:no_change, note}} ->
@@ -3663,8 +3667,13 @@ defmodule Engram.Notes do
         # still exists (same id, new path, upsert leg below), so receivers can
         # correlate the delete+upsert pair by id instead of resolving by path
         # mid-relocation — the ambiguity window the resurrection bug lived in.
-        :ok = broadcast_change(user.id, vault.id, "delete", old_note_path, note.id, [])
-
+        #
+        # Emit the new-path upsert BEFORE the old-path delete: the receiver
+        # must relocate the note's id to the new path first, so the delete
+        # reads as a relocation leg (id now lives elsewhere) instead of
+        # tearing the note's CRDT room down by id before the new path can
+        # materialize from it (e2e test_34 "received=yes materialized=no").
+        #
         # Root cause of a dropped CRDT rebind on cross-tab folder rename: the
         # 4-arity clause below carries no `id`, so a client's id-keyed
         # `useNote(id)` cache never invalidates and its editor stays bound to
@@ -3679,6 +3688,8 @@ defmodule Engram.Notes do
             %{note | path: new_path, folder: new_note_folder},
             []
           )
+
+        :ok = broadcast_change(user.id, vault.id, "delete", old_note_path, note.id, [])
       end)
 
       {:ok, length(notes)}
