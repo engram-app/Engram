@@ -179,20 +179,62 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  # These three frames carry no b64 payload, so frame_class_b64 doesn't apply —
-  # they ride the :handshake lane (see check_rate/2 below). All three are
-  # connect/catchup-time operations (one delete per note mutation, one catchup
-  # call per note during enrollment), the exact shape @hs_limit was sized for,
-  # and NOT the continuous edit stream @msg_limit protects — so sharing that
-  # lane is intentional, not accidental reuse. They are still bounded (not
-  # exempt): the 2400/10s ceiling applies same as real STEP1s.
-  #
-  # NOTE: socket-native note CREATE (crdt_create) is deliberately NOT here yet.
-  # Genesis of an empty-content row fights the REST write machinery's content
-  # merge/broadcast at every branch (do_update_note, move_note, broadcast_change);
-  # it needs a purpose-built bare-row create+resurrect op, designed and tested
-  # end-to-end alongside the plugin that will call it (Plan B1). Until then the
-  # plugin creates rows over REST, as it does today.
+  # These four frames carry no b64 payload, so frame_class_b64 doesn't apply —
+  # they ride the :handshake lane (see check_rate/2 below). All four are
+  # connect/catchup-time operations (one create/delete per note mutation, one
+  # catchup call per note during enrollment), the exact shape @hs_limit was
+  # sized for, and NOT the continuous edit stream @msg_limit protects — so
+  # sharing that lane is intentional, not accidental reuse. They are still
+  # bounded (not exempt): the 2400/10s ceiling applies same as real STEP1s.
+  @impl true
+  def handle_in("crdt_create", %{"doc_id" => doc_id, "path" => path}, socket) do
+    with :ok <- check_rate(socket, :handshake),
+         {:ok, note_id} <- cast_doc_id(doc_id),
+         :ok <- validate_create_path(path) do
+      user = socket.assigns.current_user
+      vault = socket.assigns.vault
+
+      case Notes.genesis_crdt_note(user, vault, note_id, path) do
+        {:ok, note} ->
+          {:reply, {:ok, %{doc_id: note.id}}, socket}
+
+        {:error, :id_conflict, note} ->
+          {:reply, {:error, %{reason: "id_conflict", doc_id: note.id}}, socket}
+
+        {:error, :version_conflict, note} ->
+          {:reply, {:error, %{reason: "version_conflict", doc_id: note.id}}, socket}
+
+        {:error, {:notes_cap_reached, limit, _count}} ->
+          {:reply, {:error, %{reason: "notes_cap_reached", limit: limit}}, socket}
+
+        {:error, :recently_deleted} ->
+          # Delete-wins (#970): a stale device tried to un-delete a note within
+          # the delete window. The delete stands; the client trashes its local
+          # copy on this reply instead of wedging on a resurrect forever.
+          {:reply, {:error, %{reason: "recently_deleted"}}, socket}
+
+        {:error, %Ecto.Changeset{}} ->
+          # Covers the unique-constraint case (resurrecting a tombstoned id
+          # onto a path already owned by a different live note) as well as
+          # any other changeset validation failure — a clean reply either way.
+          {:reply, {:error, %{reason: "create_failed"}}, socket}
+
+        {:error, _reason} ->
+          # Catch-all for the crypto/KMS error class (a first-write user whose
+          # DEK wrap fails, an encrypt or filter-key error): genesis_crdt_note/4
+          # can return a bare {:error, term} that matches none of the arms above.
+          # Without this the case raised CaseClauseError and crashed the channel.
+          # {:error, term()} is in genesis_crdt_note/4's @spec, so dialyzer sees
+          # this arm as reachable (it was wrongly removed before on a lying spec).
+          {:reply, {:error, %{reason: "create_failed"}}, socket}
+      end
+    else
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
+      {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
+      {:error, :bad_path} -> {:reply, {:error, %{reason: "bad_path"}}, socket}
+    end
+  end
+
   @impl true
   def handle_in("crdt_delete", %{"doc_id" => doc_id}, socket) do
     with :ok <- check_rate(socket, :handshake),
@@ -247,6 +289,23 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  # Channel-wide fallback (MUST stay last — Elixir matches handle_in top-down).
+  # Every crdt_* frame above pattern-matches its required keys, so a frame
+  # missing one (e.g. crdt_create with no "path") would otherwise raise
+  # FunctionClauseError and crash the whole channel. Reply so the client learns
+  # the frame was malformed instead of silently losing the socket.
+  #
+  # Gated on the same :handshake rate budget as every real frame above — an
+  # unguarded fallback let malformed/unknown frames flood the channel outside
+  # any budget.
+  @impl true
+  def handle_in(_event, _payload, socket) do
+    case check_rate(socket, :handshake) do
+      :ok -> {:reply, {:error, %{reason: "bad_frame"}}, socket}
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
+    end
+  end
+
   # nil / missing sv → full state; a present sv must be valid base64.
   defp decode_sv(nil), do: {:ok, nil}
 
@@ -267,6 +326,15 @@ defmodule EngramWeb.CrdtChannel do
       :error -> {:error, :bad_doc_id}
     end
   end
+
+  # nil / non-binary / blank-after-trim path is rejected before it ever
+  # reaches genesis_crdt_note/4 — path may be cleartext, so the reply never
+  # echoes the raw value back.
+  defp validate_create_path(p) when is_binary(p) do
+    if String.trim(p) == "", do: {:error, :bad_path}, else: :ok
+  end
+
+  defp validate_create_path(_), do: {:error, :bad_path}
 
   @impl true
   def terminate(reason, socket) do
