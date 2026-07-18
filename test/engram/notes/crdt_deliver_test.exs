@@ -28,9 +28,12 @@ defmodule Engram.Notes.CrdtDeliverTest do
 
       assert :ok = CrdtDeliver.deliver_out(user.id, vault.id, "a.md", note_id, "# A")
 
+      # The announce carries the note's PATH so a receiver that has never seen
+      # this id (e.g. an empty genesis note with no Y.Doc ops to fan out) can
+      # materialize the file live instead of waiting for the ~30s pull.
       assert_receive %Phoenix.Socket.Broadcast{
         event: "crdt_doc_ready",
-        payload: %{"doc_id" => doc_id}
+        payload: %{"doc_id" => doc_id, "path" => "a.md"}
       }
 
       assert doc_id == note_id
@@ -156,7 +159,7 @@ defmodule Engram.Notes.CrdtDeliverTest do
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "crdt_doc_ready",
-        payload: %{"doc_id" => ^note_id}
+        payload: %{"doc_id" => ^note_id, "path" => "a.md"}
       }
     end
 

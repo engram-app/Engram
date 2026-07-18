@@ -169,10 +169,12 @@ defmodule EngramWeb.CrdtChannelTest do
         Notes.upsert_note(user, vault, %{"path" => "Notes/h.md", "content" => "hello"})
 
       ref = push(socket, "crdt_catchup_heads", %{})
-      assert_reply ref, :ok, %{heads: heads}
+      assert_reply ref, :ok, %{heads: heads, complete: complete}
       assert is_map(heads)
       assert %{path: "Notes/h.md", head: head} = heads[note.id]
       assert is_binary(head) and byte_size(head) > 0
+      # Completeness contract: a clean, fully-resolved vault reports complete.
+      assert complete == true
     end
   end
 
@@ -222,6 +224,72 @@ defmodule EngramWeb.CrdtChannelTest do
       ref2 = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => nil})
       assert_reply ref2, :ok, %{doc_id: got_id}
       assert got_id == note.id
+    end
+  end
+
+  # Single-path catch-up (Phase B): replay the seq-ordered op-log over the
+  # socket. Each op carries FULL content (not an SV-diff), so it is causally
+  # complete and can never pend — the e2e test_85 deaf-note fix.
+  describe "crdt_catchup_since" do
+    test "replays seq-ordered notes with full content after cursor 0", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "Notes/a.md", "content" => "aaa"})
+      {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "Notes/b.md", "content" => "bbb"})
+
+      ref = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
+      assert_reply ref, :ok, %{changes: changes, has_more: has_more, next_seq: _next}
+
+      a = Enum.find(changes, &(&1.id == n1.id))
+      b = Enum.find(changes, &(&1.id == n2.id))
+      assert a.type == :note
+      assert a.path == "Notes/a.md" and a.content == "aaa" and a.deleted == false
+      assert b.path == "Notes/b.md" and b.content == "bbb"
+      assert is_integer(a.seq)
+
+      # Seq-ordered ascending (deterministic apply order).
+      seqs = Enum.map(changes, & &1.seq)
+      assert seqs == Enum.sort(seqs)
+      assert has_more == false
+    end
+
+    test "includes tombstones so deletes replay as ops", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, n} = Notes.upsert_note(user, vault, %{"path" => "Notes/del.md", "content" => "x"})
+      :ok = Notes.delete_note(user, vault, "Notes/del.md")
+
+      ref = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
+      assert_reply ref, :ok, %{changes: changes}
+
+      tomb = Enum.find(changes, &(&1.id == n.id))
+      assert tomb != nil and tomb.deleted == true
+    end
+
+    test "only returns changes with seq > cursor", %{socket: socket, user: user, vault: vault} do
+      {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "Notes/c1.md", "content" => "1"})
+      {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "Notes/c2.md", "content" => "2"})
+
+      # Cursor at n1's seq → n1 excluded, n2 included.
+      ref = push(socket, "crdt_catchup_since", %{"cursor_seq" => n1.seq})
+      assert_reply ref, :ok, %{changes: changes}
+      ids = Enum.map(changes, & &1.id)
+      refute n1.id in ids
+      assert n2.id in ids
+    end
+
+    test "a non-integer cursor_seq replies bad_cursor instead of crashing the channel", %{
+      socket: socket
+    } do
+      ref = push(socket, "crdt_catchup_since", %{"cursor_seq" => "nope"})
+      assert_reply ref, :error, %{reason: "bad_cursor"}
+
+      ref2 = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
+      assert_reply ref2, :ok, %{changes: _}
     end
   end
 

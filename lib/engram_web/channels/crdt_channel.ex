@@ -259,8 +259,12 @@ defmodule EngramWeb.CrdtChannel do
       :ok ->
         user = socket.assigns.current_user
         vault = socket.assigns.vault
-        heads = CrdtTransport.vault_heads(user, vault)
-        {:reply, {:ok, %{heads: heads}}, socket}
+        # `complete` is the completeness contract (see CrdtTransport.vault_heads):
+        # true only when `heads` is provably the FULL live-note set. The plugin's
+        # destructive offline-delete reconcile gates on it; non-destructive
+        # consumers ignore it. `heads` shape is unchanged.
+        {heads, complete} = CrdtTransport.vault_heads(user, vault)
+        {:reply, {:ok, %{heads: heads, complete: complete}}, socket}
 
       {:error, :rate_limited} ->
         {:reply, {:error, %{reason: "rate_limited"}}, socket}
@@ -286,6 +290,49 @@ defmodule EngramWeb.CrdtChannel do
       {:error, :bad_sv} -> {:reply, {:error, %{reason: "bad_sv"}}, socket}
       {:error, :bad_since} -> {:reply, {:error, %{reason: "bad_sv"}}, socket}
       {:error, :not_found} -> {:reply, {:error, %{reason: "not_found"}}, socket}
+    end
+  end
+
+  # Single-path catch-up (Phase B): replay the seq-ordered op-log over the
+  # socket from a client cursor. Reuses `list_changes_by_seq` — the same
+  # seq-ordered, all-or-fails-on-decrypt feed `/sync/changes` serves — so each
+  # op carries FULL content (not an SV-diff) and is causally complete: it can
+  # never pend the way `crdt_catchup_delta` did (the e2e test_85 deaf-note bug).
+  # Tombstones ride the same feed (deletes replay as ops). Paginated: the client
+  # advances its cursor by `next_seq` and re-requests until `has_more` is false.
+  @impl true
+  def handle_in("crdt_catchup_since", payload, socket) do
+    with :ok <- check_rate(socket, :handshake),
+         {:ok, cursor} <- cast_cursor(Map.get(payload, "cursor_seq", 0)) do
+      opts =
+        case Map.get(payload, "limit") do
+          n when is_integer(n) and n > 0 -> [limit: n]
+          _ -> []
+        end
+
+      {:ok, %{changes: changes, has_more: has_more, next: next}} =
+        Notes.list_changes_by_seq(
+          socket.assigns.current_user,
+          socket.assigns.vault,
+          cursor,
+          opts
+        )
+
+      # Tag each op with the SyncNoteChange discriminator so the client applies
+      # it through the existing applySyncChange path (this feed is notes-only —
+      # list_changes_by_seq excludes folders and never yields attachments).
+      changes = Enum.map(changes, &Map.put(&1, :type, :note))
+
+      next_seq =
+        case next do
+          {seq, _id} -> seq
+          _ -> nil
+        end
+
+      {:reply, {:ok, %{changes: changes, has_more: has_more, next_seq: next_seq}}, socket}
+    else
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
+      {:error, :bad_cursor} -> {:reply, {:error, %{reason: "bad_cursor"}}, socket}
     end
   end
 
@@ -319,6 +366,12 @@ defmodule EngramWeb.CrdtChannel do
   # A non-nil, non-string sv (e.g. a JSON number or list slipping past the
   # client) would otherwise raise FunctionClauseError and crash the channel.
   defp decode_sv(_), do: {:error, :bad_sv}
+
+  # A cursor is a non-negative seq. A malformed one (string, float, negative)
+  # replies bad_cursor rather than raising into a FunctionClauseError that would
+  # crash the whole channel — same defensive contract as decode_sv/cast_doc_id.
+  defp cast_cursor(n) when is_integer(n) and n >= 0, do: {:ok, n}
+  defp cast_cursor(_), do: {:error, :bad_cursor}
 
   defp cast_doc_id(doc_id) do
     case Ecto.UUID.cast(doc_id) do
@@ -543,7 +596,17 @@ defmodule EngramWeb.CrdtChannel do
       # room is now active for doc_id. Recipients send a sync-step-1 (state
       # vector) which the server answers with step-2 (the diff they're
       # missing), so any device that doesn't yet have this note gets it.
-      broadcast_from!(socket, "crdt_doc_ready", %{"doc_id" => doc_id})
+      # Carry the note's path (best-effort) so a receiver can materialize an
+      # empty note live rather than waiting for the pull — matches the
+      # CrdtDeliver announce contract; the plugin treats "path" as optional, so
+      # a failed lookup just omits it (never crash the room-open).
+      payload =
+        case Notes.get_note_by_id(user, vault, note_id) do
+          {:ok, %{path: path}} when is_binary(path) -> %{"doc_id" => doc_id, "path" => path}
+          _ -> %{"doc_id" => doc_id}
+        end
+
+      broadcast_from!(socket, "crdt_doc_ready", payload)
 
       {:ok, socket, entry}
     end
