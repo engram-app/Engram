@@ -92,38 +92,13 @@ defmodule EngramWeb.SyncController do
     if after_seq < Engram.Sync.retention_floor(vault) do
       conn |> put_status(410) |> json(%{error: "history_expired"})
     else
-      # Fetch limit+1 from EACH table so the merged page can still fill
-      # `limit` even if one feed is entirely consumed within the window.
-      {:ok, %{changes: notes, has_more: notes_more}} =
-        Engram.Notes.list_changes_by_seq(user, vault, after_seq,
-          after_id: after_id,
-          limit: limit + 1,
-          fields: fields
-        )
-
-      # Attachments carry no note content, so the `fields` projection is n/a here.
-      {:ok, %{changes: atts, has_more: atts_more}} =
-        Engram.Attachments.list_changes_by_seq(user, vault, after_seq,
-          after_id: after_id,
-          limit: limit + 1
-        )
-
-      merged =
-        (Enum.map(notes, &Map.put(&1, :type, "note")) ++
-           Enum.map(atts, &Map.put(&1, :type, "attachment")))
-        |> Enum.sort_by(&{&1.seq, &1.id})
-
-      {page, has_more} =
-        if length(merged) > limit do
-          {Enum.take(merged, limit), true}
-        else
-          {merged, notes_more or atts_more}
-        end
+      %{page: page, has_more: has_more, next: next} =
+        Engram.Sync.merged_changes_page(user, vault, after_seq, after_id, limit, fields)
 
       next_cursor =
-        if has_more do
-          last = List.last(page)
-          Engram.Sync.encode_cursor(last.seq, last.id)
+        case next do
+          {seq, id} -> Engram.Sync.encode_cursor(seq, id)
+          _ -> nil
         end
 
       # The cursor the client *sent* is what it has durably applied; record

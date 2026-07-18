@@ -4,7 +4,7 @@ defmodule EngramWeb.CrdtChannelTest do
   import ExUnit.CaptureLog
 
   alias Ecto.Adapters.SQL.Sandbox
-  alias Engram.{Crypto, Fixtures, Notes, Vaults}
+  alias Engram.{Attachments, Crypto, Fixtures, Notes, Vaults}
   alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog}
   alias Engram.Repo
   alias Yex.Sync.SharedDoc
@@ -222,6 +222,36 @@ defmodule EngramWeb.CrdtChannelTest do
 
       ref2 = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
       assert_reply ref2, :ok, %{changes: _}
+    end
+
+    test "the seq feed merges attachments alongside notes in seq order", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, n} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/n.md", "content" => "note-body"})
+
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img.png",
+          "content_base64" => Base.encode64("attachment-bytes"),
+          "mime_type" => "image/png"
+        })
+
+      ref = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
+      assert_reply ref, :ok, %{changes: changes}
+
+      note_row = Enum.find(changes, &(&1.id == n.id))
+      att_row = Enum.find(changes, &(&1.id == att.id))
+
+      assert note_row.type == :note
+      assert att_row != nil and att_row.type == :attachment and att_row.path == "img.png"
+
+      # Merged feed is a single seq-ordered stream (seq is vault-global, so a
+      # note and an attachment never collide → an integer cursor paginates both).
+      seqs = Enum.map(changes, & &1.seq)
+      assert seqs == Enum.sort(seqs)
     end
   end
 

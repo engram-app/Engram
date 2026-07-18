@@ -64,6 +64,10 @@ defmodule EngramWeb.CrdtChannel do
   # limiter). 10 ≈ "up to ten busy devices per account" before the ceiling bites.
   @account_multiplier 10
 
+  # Default page size for crdt_catchup_since when the client sends no `limit`.
+  # Matches the seq feeds' internal 500-row cap (larger values clamp to it).
+  @catchup_page_limit 500
+
   @impl true
   def join("crdt:" <> ids, params, socket) do
     proto = Map.get(params, "crdt_proto", 1)
@@ -264,24 +268,27 @@ defmodule EngramWeb.CrdtChannel do
   def handle_in("crdt_catchup_since", payload, socket) do
     with :ok <- check_rate(socket, :handshake),
          {:ok, cursor} <- cast_cursor(Map.get(payload, "cursor_seq", 0)) do
-      opts =
+      limit =
         case Map.get(payload, "limit") do
-          n when is_integer(n) and n > 0 -> [limit: n]
-          _ -> []
+          n when is_integer(n) and n > 0 -> n
+          # Match the feed page cap when the client sends no limit (prior
+          # behaviour: opts = [] → list_changes_by_seq defaulted to its max).
+          _ -> @catchup_page_limit
         end
 
-      {:ok, %{changes: changes, has_more: has_more, next: next}} =
-        Notes.list_changes_by_seq(
+      # Merged notes + attachments seq feed (each row carries its real
+      # `:note`/`:attachment` type). seq is vault-global so the integer cursor
+      # paginates both feeds as one ordered stream. The client's applySyncChange
+      # already dispatches per type → attachments apply through the same path.
+      %{page: changes, has_more: has_more, next: next} =
+        Engram.Sync.merged_changes_page(
           socket.assigns.current_user,
           socket.assigns.vault,
           cursor,
-          opts
+          nil,
+          limit,
+          :all
         )
-
-      # Tag each op with the SyncNoteChange discriminator so the client applies
-      # it through the existing applySyncChange path (this feed is notes-only —
-      # list_changes_by_seq excludes folders and never yields attachments).
-      changes = Enum.map(changes, &Map.put(&1, :type, :note))
 
       next_seq =
         case next do
