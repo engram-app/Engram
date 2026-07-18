@@ -152,7 +152,14 @@ export default function NotePage() {
 				<div className="min-h-0 flex-1 overflow-hidden" data-tour="note-editor">
 					<Suspense fallback={<p className="py-5 text-muted-foreground">Loading editor…</p>}>
 						{handle ? (
-							<NoteEditor ytext={handle.ytext} awareness={handle.awareness} />
+							<NoteEditor
+								ytext={handle.ytext}
+								awareness={handle.awareness}
+								// ponytail: mode is fixed "rendered" until the mode-toggle UI (a later
+								// task) wires real state; resolveWikiLink mirrors NoteView's hrefTemplate.
+								mode="rendered"
+								resolveWikiLink={(permalink) => `/notes/${encodeURI(permalink)}`}
+							/>
 						) : (
 							<p className="py-5 text-muted-foreground">Connecting…</p>
 						)}
