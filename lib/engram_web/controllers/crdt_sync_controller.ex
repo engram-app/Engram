@@ -48,9 +48,9 @@ defmodule EngramWeb.CrdtSyncController do
   def vault_heads(conn, _params) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
-    # This REST feed is non-destructive discovery; it ignores the completeness
-    # flag (a dropped row is caught next poll) and keeps its byte-identical shape.
-    {heads, _complete} = CrdtTransport.vault_heads(user, vault)
+    # Non-destructive discovery feed: a dropped (undecryptable) row is caught
+    # next poll. Byte-identical `%{heads: ...}` shape.
+    heads = CrdtTransport.vault_heads(user, vault)
     json(conn, %{heads: heads})
   end
 

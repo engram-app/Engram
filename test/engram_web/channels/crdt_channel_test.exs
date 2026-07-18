@@ -68,15 +68,15 @@ defmodule EngramWeb.CrdtChannelTest do
     test "nil path replies bad_path without crashing the channel", %{socket: socket} do
       ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => nil})
       assert_reply ref, :error, %{reason: "bad_path"}
-      ref2 = push(socket, "crdt_catchup_heads", %{})
-      assert_reply ref2, :ok, %{heads: _}
+      ref2 = push(socket, "crdt_catchup_since", %{})
+      assert_reply ref2, :ok, %{changes: _}
     end
 
     test "non-UUID doc_id replies bad_doc_id without crashing the channel", %{socket: socket} do
       ref = push(socket, "crdt_create", %{"doc_id" => "not-a-uuid", "path" => "Notes/x.md"})
       assert_reply ref, :error, %{reason: "bad_doc_id"}
-      ref2 = push(socket, "crdt_catchup_heads", %{})
-      assert_reply ref2, :ok, %{heads: _}
+      ref2 = push(socket, "crdt_catchup_since", %{})
+      assert_reply ref2, :ok, %{changes: _}
     end
 
     test "same-path resurrect within the delete window replies recently_deleted (delete-wins)", %{
@@ -102,8 +102,8 @@ defmodule EngramWeb.CrdtChannelTest do
       ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate()})
       assert_reply ref, :error, %{reason: "bad_frame"}
 
-      ref2 = push(socket, "crdt_catchup_heads", %{})
-      assert_reply ref2, :ok, %{heads: _}
+      ref2 = push(socket, "crdt_catchup_since", %{})
+      assert_reply ref2, :ok, %{changes: _}
     end
   end
 
@@ -156,74 +156,6 @@ defmodule EngramWeb.CrdtChannelTest do
 
       assert id == note.id
       assert payload["device_id"] == device_id
-    end
-  end
-
-  describe "crdt_catchup_heads" do
-    test "returns a decrypted path + head marker per live note in the vault", %{
-      socket: socket,
-      user: user,
-      vault: vault
-    } do
-      {:ok, note} =
-        Notes.upsert_note(user, vault, %{"path" => "Notes/h.md", "content" => "hello"})
-
-      ref = push(socket, "crdt_catchup_heads", %{})
-      assert_reply ref, :ok, %{heads: heads, complete: complete}
-      assert is_map(heads)
-      assert %{path: "Notes/h.md", head: head} = heads[note.id]
-      assert is_binary(head) and byte_size(head) > 0
-      # Completeness contract: a clean, fully-resolved vault reports complete.
-      assert complete == true
-    end
-  end
-
-  describe "crdt_catchup_delta" do
-    test "returns full state when sv is null", %{socket: socket, user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/d.md", "content" => "body"})
-      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => nil})
-      assert_reply ref, :ok, %{doc_id: got_id, b64: b64, head: head}
-      assert got_id == note.id
-      assert is_binary(b64) and byte_size(b64) > 0
-      assert is_binary(head)
-    end
-
-    test "rejects malformed base64 sv", %{socket: socket, user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/d2.md", "content" => "b"})
-      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => "!!!not-base64!!!"})
-      assert_reply ref, :error, %{reason: "bad_sv"}
-    end
-
-    test "unknown doc_id replies not_found", %{socket: socket} do
-      unknown_id = Ecto.UUID.generate()
-      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => unknown_id, "sv" => nil})
-      assert_reply ref, :error, %{reason: "not_found"}
-    end
-
-    test "another tenant's doc_id replies not_found (cross-tenant scoping)", %{
-      socket: socket,
-      other_user: other_user
-    } do
-      insert(:user_limit_override, user: other_user, key: "vaults_cap", value: %{"v" => -1})
-      {:ok, other_vault} = Vaults.create_vault(other_user, %{name: "OtherVault"})
-
-      {:ok, other_note} =
-        Notes.upsert_note(other_user, other_vault, %{"path" => "x.md", "content" => "x"})
-
-      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => other_note.id, "sv" => nil})
-      assert_reply ref, :error, %{reason: "not_found"}
-    end
-
-    test "a non-string sv (e.g. a JSON number) replies bad_sv instead of crashing the channel",
-         %{socket: socket, user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/d3.md", "content" => "b"})
-      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => 123})
-      assert_reply ref, :error, %{reason: "bad_sv"}
-
-      # The channel process must still be alive / usable after the bad input.
-      ref2 = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => nil})
-      assert_reply ref2, :ok, %{doc_id: got_id}
-      assert got_id == note.id
     end
   end
 
@@ -775,14 +707,14 @@ defmodule EngramWeb.CrdtChannelTest do
     end
 
     @tag capture_log: true
-    test "crdt_catchup_heads shares the handshake budget and is rejected once exhausted",
+    test "crdt_catchup_since shares the handshake budget and is rejected once exhausted",
          %{socket: socket} do
       Application.put_env(:engram, :crdt_hs_rate_limit_override, 2)
       on_exit(fn -> Application.delete_env(:engram, :crdt_hs_rate_limit_override) end)
 
-      push(socket, "crdt_catchup_heads", %{})
-      push(socket, "crdt_catchup_heads", %{})
-      ref = push(socket, "crdt_catchup_heads", %{})
+      push(socket, "crdt_catchup_since", %{})
+      push(socket, "crdt_catchup_since", %{})
+      ref = push(socket, "crdt_catchup_since", %{})
 
       assert_reply ref, :error, %{reason: "rate_limited"}, 3000
     end
