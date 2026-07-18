@@ -1,6 +1,6 @@
 import type * as Y from "yjs";
-import { emitFrontmatter } from "./frontmatter-codec";
 import { coerceValue, type PropertyType } from "../viewer/property-types";
+import { emitFrontmatter } from "./frontmatter-codec";
 
 const EMPTY_DEFAULT: Record<PropertyType, unknown> = {
 	text: "",
@@ -172,17 +172,23 @@ export function applyParsedFrontmatter(
 	doc.transact(() => {
 		for (const key of Object.keys(parsed.values)) {
 			const next = parsed.values[key]!;
-			if (values.get(key) !== next) values.set(key, next);
+			if (values.get(key) !== next) {
+				values.set(key, next);
+			}
 		}
 		for (const key of [...values.keys()]) {
-			if (!(key in parsed.values) && !raws.has(key)) values.delete(key);
+			if (!(key in parsed.values || raws.has(key))) {
+				values.delete(key);
+			}
 		}
 		const current = order.toArray();
 		const changed =
 			current.length !== parsed.order.length || current.some((k, i) => k !== parsed.order[i]);
 		if (changed) {
 			order.delete(0, order.length);
-			if (parsed.order.length > 0) order.insert(0, parsed.order);
+			if (parsed.order.length > 0) {
+				order.insert(0, parsed.order);
+			}
 		}
 	});
 }

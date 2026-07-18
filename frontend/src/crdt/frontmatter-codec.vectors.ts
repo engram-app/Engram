@@ -27,7 +27,8 @@ export const VECTORS: Vector[] = [
 	},
 	{
 		name: "string, list, number, bool, date",
-		markdown: '---\ntitle: Hi\ntags:\n  - a\n  - b\ncount: 3\ndone: true\ncreated: 2026-07-17\n---\nbody text\n',
+		markdown:
+			"---\ntitle: Hi\ntags:\n  - a\n  - b\ncount: 3\ndone: true\ncreated: 2026-07-17\n---\nbody text\n",
 		order: ["title", "tags", "count", "done", "created"],
 		values: {
 			title: JSON.stringify("Hi"),

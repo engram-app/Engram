@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { emitFrontmatter, parseFrontmatter, projectNote, splitFrontmatter } from "./frontmatter-codec";
+import {
+	emitFrontmatter,
+	parseFrontmatter,
+	projectNote,
+	splitFrontmatter,
+} from "./frontmatter-codec";
 import { VECTORS } from "./frontmatter-codec.vectors";
 
 describe("frontmatter-codec vectors", () => {
@@ -20,7 +25,8 @@ describe("frontmatter-codec vectors", () => {
 			const projected = projectNote(parsed!.order, parsed!.values, body);
 			// Re-splitting the projection yields the same structured form (idempotent).
 			const again = splitFrontmatter(projected);
-			const reparsed = again.fmBlock === null ? { order: [], values: {} } : parseFrontmatter(again.fmBlock);
+			const reparsed =
+				again.fmBlock === null ? { order: [], values: {} } : parseFrontmatter(again.fmBlock);
 			expect(reparsed?.order).toEqual(v.order);
 			expect(reparsed?.values).toEqual(v.values);
 			expect(again.body).toBe(v.body);
@@ -28,7 +34,11 @@ describe("frontmatter-codec vectors", () => {
 	}
 
 	test("emitFrontmatter re-renders a degraded key verbatim from raws", () => {
-		const out = emitFrontmatter(["good", "bad"], { good: JSON.stringify("x") }, { bad: "bad: [unclosed\n" });
+		const out = emitFrontmatter(
+			["good", "bad"],
+			{ good: JSON.stringify("x") },
+			{ bad: "bad: [unclosed\n" },
+		);
 		expect(out).toContain("bad: [unclosed\n");
 		expect(out).toContain("good:");
 	});

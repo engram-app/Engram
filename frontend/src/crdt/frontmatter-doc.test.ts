@@ -141,7 +141,9 @@ describe("frontmatter apply-diff", () => {
 		const { values } = frontmatterMaps(doc);
 		const touched: string[] = [];
 		values.observe((e) => {
-			for (const k of e.keys.keys()) touched.push(k);
+			for (const k of e.keys.keys()) {
+				touched.push(k);
+			}
 		});
 		applyParsedFrontmatter(doc, {
 			order: ["title", "tags"],
