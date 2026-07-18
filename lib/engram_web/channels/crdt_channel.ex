@@ -253,46 +253,6 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  @impl true
-  def handle_in("crdt_catchup_heads", _payload, socket) do
-    case check_rate(socket, :handshake) do
-      :ok ->
-        user = socket.assigns.current_user
-        vault = socket.assigns.vault
-        # `complete` is the completeness contract (see CrdtTransport.vault_heads):
-        # true only when `heads` is provably the FULL live-note set. The plugin's
-        # destructive offline-delete reconcile gates on it; non-destructive
-        # consumers ignore it. `heads` shape is unchanged.
-        {heads, complete} = CrdtTransport.vault_heads(user, vault)
-        {:reply, {:ok, %{heads: heads, complete: complete}}, socket}
-
-      {:error, :rate_limited} ->
-        {:reply, {:error, %{reason: "rate_limited"}}, socket}
-    end
-  end
-
-  @impl true
-  def handle_in("crdt_catchup_delta", %{"doc_id" => doc_id} = payload, socket) do
-    with :ok <- check_rate(socket, :handshake),
-         {:ok, note_id} <- cast_doc_id(doc_id),
-         {:ok, since_sv} <- decode_sv(Map.get(payload, "sv")),
-         {:ok, %{update: update, head: head}} <-
-           CrdtTransport.read_delta(
-             socket.assigns.current_user,
-             socket.assigns.vault,
-             note_id,
-             since_sv
-           ) do
-      {:reply, {:ok, %{doc_id: note_id, b64: Base.encode64(update), head: head}}, socket}
-    else
-      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
-      {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
-      {:error, :bad_sv} -> {:reply, {:error, %{reason: "bad_sv"}}, socket}
-      {:error, :bad_since} -> {:reply, {:error, %{reason: "bad_sv"}}, socket}
-      {:error, :not_found} -> {:reply, {:error, %{reason: "not_found"}}, socket}
-    end
-  end
-
   # Single-path catch-up (Phase B): replay the seq-ordered op-log over the
   # socket from a client cursor. Reuses `list_changes_by_seq` — the same
   # seq-ordered, all-or-fails-on-decrypt feed `/sync/changes` serves — so each
@@ -353,23 +313,9 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  # nil / missing sv → full state; a present sv must be valid base64.
-  defp decode_sv(nil), do: {:ok, nil}
-
-  defp decode_sv(b64) when is_binary(b64) do
-    case Base.decode64(b64) do
-      {:ok, bytes} -> {:ok, bytes}
-      :error -> {:error, :bad_sv}
-    end
-  end
-
-  # A non-nil, non-string sv (e.g. a JSON number or list slipping past the
-  # client) would otherwise raise FunctionClauseError and crash the channel.
-  defp decode_sv(_), do: {:error, :bad_sv}
-
   # A cursor is a non-negative seq. A malformed one (string, float, negative)
   # replies bad_cursor rather than raising into a FunctionClauseError that would
-  # crash the whole channel — same defensive contract as decode_sv/cast_doc_id.
+  # crash the whole channel — same defensive contract as cast_doc_id.
   defp cast_cursor(n) when is_integer(n) and n >= 0, do: {:ok, n}
   defp cast_cursor(_), do: {:error, :bad_cursor}
 
