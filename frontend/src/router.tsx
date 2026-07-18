@@ -73,6 +73,14 @@ function suspendedScreen(el: ReactNode) {
 // the modal via the module-level handler. Wrapping `RouterProvider` from
 // `main.tsx` would not give the provider router context.
 function RootLayout() {
+	// Dev-only route-level crash trigger — the twin of main.tsx's `?boom` (which
+	// throws ABOVE the router to hit RootErrorBoundary). This throws INSIDE the
+	// router, so it exercises the route errorElement (RouteErrorBoundary) — the
+	// path a real route crash like the note editor takes. Visit `?routeboom`.
+	// Stripped from prod by the import.meta.env.DEV gate.
+	if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("routeboom")) {
+		throw new Error("Intentional crash (?routeboom) — testing the route error boundary");
+	}
 	return (
 		<UpgradeDialogProvider>
 			<Outlet />

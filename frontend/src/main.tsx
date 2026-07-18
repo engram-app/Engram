@@ -121,8 +121,9 @@ function AppShell({ config }: { config: EngramConfig }) {
 	// Dev-only crash trigger for eyeballing ErrorFallback. Throws HERE, above
 	// RouterProvider, on purpose: a throwing *route* would be caught by React
 	// Router's own error boundary, not the outer RootErrorBoundary we're
-	// styling. Visit `?boom` to see the real crash page. Stripped from prod
-	// builds by the import.meta.env.DEV gate.
+	// styling. Visit `?boom` to see the real crash page; use `?routeboom`
+	// (router.tsx) for the route-level twin. Stripped from prod builds by the
+	// import.meta.env.DEV gate.
 	if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("boom")) {
 		throw new Error("Intentional crash (?boom) — testing ErrorFallback");
 	}
