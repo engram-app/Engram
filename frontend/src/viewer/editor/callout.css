@@ -1,0 +1,21 @@
+.cm-callout {
+	border-left: 3px solid var(--color-border, #888);
+	background: var(--color-callout-bg, rgba(128, 128, 128, 0.08));
+	padding-left: 0.5em;
+}
+
+.cm-callout-note {
+	border-left-color: #448aff;
+}
+
+.cm-callout-warning {
+	border-left-color: #e6a700;
+}
+
+.cm-callout-tip {
+	border-left-color: #00bfa5;
+}
+
+.cm-callout-danger {
+	border-left-color: #ff5252;
+}

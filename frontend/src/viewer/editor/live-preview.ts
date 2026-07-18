@@ -11,6 +11,8 @@ import {
 import "@atomic-editor/editor/styles.css";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import type { Extension } from "@codemirror/state";
+import { calloutDecoration } from "./callout-decoration";
+import { katexDecoration } from "./katex-decoration";
 
 export interface LivePreviewOpts {
 	resolveWikiLink: (name: string) => string;
@@ -22,8 +24,8 @@ export interface LivePreviewOpts {
  * Y.Text binding (see note-editor.tsx) is untouched. Wire wikilinks to our SPA
  * routes; the click-to-open navigation is a hard `window.location` nav, matching
  * the plain `<a href>` wikilinks already rendered in Reading mode (note-view.tsx
- * hrefTemplate) rather than a router push. Callouts/KaTeX are added in Task 6 as
- * sibling extensions.
+ * hrefTemplate) rather than a router push. Callouts/KaTeX are sibling view-only
+ * decoration extensions (see callout-decoration.ts, katex-decoration.ts).
  */
 export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 	return [
@@ -47,5 +49,7 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 				window.location.assign(opts.resolveWikiLink(target));
 			},
 		}),
+		calloutDecoration,
+		katexDecoration,
 	];
 }
