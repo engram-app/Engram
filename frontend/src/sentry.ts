@@ -58,10 +58,19 @@ export const sentryReady: Promise<SentrySdk | null> | null = sentryDsn
 	: null;
 
 /**
- * Report a crash and resolve to the Sentry eventId, or `undefined` when
- * reporting is disabled (no DSN) or the SDK chunk failed to load. Callers derive
- * an honest `reported` flag from a defined return — never claim "reported" with
- * no transport behind it.
+ * Report a crash and resolve to the Sentry eventId, or `undefined` when the
+ * event was NOT delivered — reporting disabled (no DSN), SDK chunk failed to
+ * load, capture threw, or the envelope never reached the ingest host. Callers
+ * derive an honest `reported` flag from a defined return.
+ *
+ * captureException/captureReactException mint the eventId locally and return it
+ * BEFORE the network round-trip, so an id alone is not proof of delivery — the
+ * envelope POST to *.ingest.sentry.io is fire-and-forget and is routinely
+ * dropped (uBlock/EasyPrivacy block sentry.io, offline, ratelimit) even though
+ * the same-origin SDK chunk loaded fine. So we gate the returned id on
+ * flush() actually delivering: the UI must never say "reported" for an event
+ * that never left the browser. Never throws — the whole point is that the
+ * crash-reporting path can't itself become an unhandled rejection.
  *
  * Pass `errorInfo` for React render crashes (a class boundary's componentDidCatch
  * has it) to attach the component stack via captureReactException — the same call
@@ -76,7 +85,15 @@ export async function captureError(
 	if (!Sentry) {
 		return;
 	}
-	return errorInfo
-		? Sentry.captureReactException(error, errorInfo)
-		: Sentry.captureException(error);
+	try {
+		const eventId = errorInfo
+			? Sentry.captureReactException(error, errorInfo)
+			: Sentry.captureException(error);
+		// flush resolves true only if all queued envelopes were sent within the
+		// timeout; false on drop/timeout. Gate the id on real delivery.
+		const delivered = await Sentry.flush(2000);
+		return delivered ? eventId : undefined;
+	} catch (e) {
+		console.warn("[sentry] capture failed:", e);
+	}
 }

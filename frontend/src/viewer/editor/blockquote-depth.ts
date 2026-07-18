@@ -52,7 +52,10 @@ export const blockquoteDepthPlugin = ViewPlugin.fromClass(
 			this.decorations = buildBlockquoteDecorations(view);
 		}
 		update(u: ViewUpdate) {
-			if (u.docChanged || u.viewportChanged) {
+			// Whole-doc scan → whole-doc line decorations: no viewport dependency,
+			// so only a doc change can alter the output. (Offscreen line decos are
+			// already in the RangeSet and render as lines scroll into view.)
+			if (u.docChanged) {
 				this.decorations = buildBlockquoteDecorations(u.view);
 			}
 		}

@@ -16,9 +16,16 @@ export default function RouteErrorBoundary() {
 	});
 
 	useEffect(() => {
-		// isRouteErrorResponse => an expected HTTP-shaped throw (404 / redirect
-		// Response), not a crash. Show the page but don't page Sentry for it.
-		if (isRouteErrorResponse(error)) {
+		// New route error → clear any prior error's eventId/reported. RR updates
+		// useRouteError in place (the errorElement instance persists across
+		// sequential route errors), so without this a later crash could briefly
+		// show the previous crash's reference id.
+		setReport({ reported: false });
+		// isRouteErrorResponse => an expected HTTP-shaped throw. Skip Sentry for
+		// CLIENT errors (404 / redirect); a SERVER error (5xx) is a real failure,
+		// so let it fall through and report. (Latent until a data loader throws a
+		// Response — element routes don't today.)
+		if (isRouteErrorResponse(error) && error.status < 500) {
 			return;
 		}
 		let alive = true;
