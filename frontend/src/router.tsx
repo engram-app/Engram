@@ -8,6 +8,7 @@ import WaitlistPage from "./auth/waitlist";
 import { UpgradeDialogProvider } from "./billing/upgrade-dialog-provider";
 import type { EngramConfig } from "./config";
 import LoadingScreen from "./layout/loading-screen";
+import RouteErrorBoundary from "./route-error-boundary";
 import { ROUTES } from "./routes";
 import LoadingPane from "./viewer/loading-pane";
 
@@ -113,6 +114,11 @@ export function createAppRouter(config: EngramConfig): AppRouter {
 	return createBrowserRouter([
 		{
 			element: <RootLayout />,
+			// Global route error boundary. RR bubbles any descendant route throw to
+			// the nearest errorElement; this is the only one, so every route crash
+			// (incl. lazy-chunk load failures past the vite:preloadError guard)
+			// renders the app's ErrorFallback instead of RR's default page.
+			errorElement: <RouteErrorBoundary />,
 			children: [
 				// Public routes
 				{ path: ROUTES.SIGN_IN, element: <SignInPage /> },

@@ -9,14 +9,15 @@ import { ConfigProvider } from "./config-context";
 import ErrorFallback from "./error-fallback";
 import LoadingScreen from "./layout/loading-screen";
 import { createAppRouter, installAppRouter } from "./router";
+import { captureError } from "./sentry";
 import { ThemeProvider } from "./theme/theme-provider";
 import "./main.css";
 
 // Stale-deploy self-heal. Every lazy() below (app shell, Clerk provider,
 // Toaster, upgrade dialog, …) is a hashed chunk that a deploy can rotate out
 // from under an open tab; without this, the next lazy render 404s and the
-// throw lands on React Router's default error page (no route defines
-// errorElement). Vite fires `vite:preloadError` for failed dynamic-import
+// throw lands on the route error boundary (router.tsx errorElement). Vite
+// fires `vite:preloadError` for failed dynamic-import
 // loads — reload once to pick up the fresh index.html + hashes.
 // preventDefault() suppresses the rethrow for the reload we handle; the
 // 30s guard means a genuinely broken asset host degrades back to the error
@@ -32,60 +33,10 @@ window.addEventListener("vite:preloadError", (event) => {
 	window.location.reload();
 });
 
-// Sentry — opt-in via VITE_SENTRY_DSN at build time. No-op (zero
-// network calls) when the env var is unset, so dev / self-host
-// builds are unaffected. Tracing + replay stay off in Tier 1;
-// OpenTelemetry → Tempo lands in Tier 2 with explicit sampling.
-//
-// Dynamically imported (like posthog below) so the SDK stays out of the eager
-// bundle that gates the sign-in page. The pre-init gap is bridged by the
-// early-error queue below: window error/unhandledrejection events that fire
-// before the chunk lands are buffered and flushed into captureException once
-// init runs, so bootstrap-window crashes still report. Resolves to null when
-// the chunk itself fails to load (ad-blockers match "sentry" in asset URLs;
-// stale-tab 404s) — callers must tolerate that, and it must NOT surface as an
-// unhandled rejection.
-const sentryDsn = import.meta.env.VITE_SENTRY_DSN;
-
-type SentrySdk = typeof import("@sentry/react");
-
-const earlyErrors: unknown[] = [];
-const onEarlyError = (e: ErrorEvent) => earlyErrors.push(e.error ?? e.message);
-const onEarlyRejection = (e: PromiseRejectionEvent) => earlyErrors.push(e.reason);
-if (sentryDsn) {
-	window.addEventListener("error", onEarlyError);
-	window.addEventListener("unhandledrejection", onEarlyRejection);
-}
-
-const sentryReady: Promise<SentrySdk | null> | null = sentryDsn
-	? import("@sentry/react")
-			.then((Sentry) => {
-				Sentry.init({
-					dsn: sentryDsn,
-					environment: import.meta.env.MODE,
-					release: import.meta.env.VITE_GIT_SHA,
-					integrations: [],
-					// sendDefaultPii=false (SDK default) keeps cookies + the
-					// Authorization header out of breadcrumbs even if the SDK's
-					// own scrubbing misses something. Restated for documentation.
-					sendDefaultPii: false,
-				});
-				// The SDK's own global handlers are live from here; hand it the
-				// backlog and retire the temporary listeners.
-				window.removeEventListener("error", onEarlyError);
-				window.removeEventListener("unhandledrejection", onEarlyRejection);
-				for (const err of earlyErrors.splice(0)) {
-					Sentry.captureException(err);
-				}
-				return Sentry as SentrySdk;
-			})
-			.catch((err) => {
-				window.removeEventListener("error", onEarlyError);
-				window.removeEventListener("unhandledrejection", onEarlyRejection);
-				console.warn("[sentry] SDK failed to load — crash reporting disabled:", err);
-				return null;
-			})
-	: null;
+// Sentry lazy singleton + `captureError` reporter moved to ./sentry so the
+// route boundary (router.tsx) can report through the same SDK instance without
+// a cycle back into this entry module. Opt-in via VITE_SENTRY_DSN; no-op when
+// unset. See sentry.ts for the lazy-load + early-error-queue rationale.
 
 // Cloudflare Web Analytics — cookieless RUM beacon. Opt-in via
 // VITE_CF_BEACON_TOKEN at build time; no-op when unset so dev /
@@ -237,14 +188,13 @@ class RootErrorBoundary extends Component<{ children: ReactNode }, RootErrorBoun
 	}
 
 	componentDidCatch(error: unknown, errorInfo: React.ErrorInfo) {
-		// captureReactException is what Sentry.ErrorBoundary itself uses — it
-		// attaches the React componentStack, which plain captureException drops.
-		sentryReady?.then((Sentry) => {
-			if (!Sentry) {
-				return;
+		// captureError passes errorInfo through to captureReactException (attaches
+		// the React componentStack), and resolves to an eventId only once the lazy
+		// SDK actually dispatched — so `reported` is never claimed falsely.
+		captureError(error, errorInfo).then((eventId) => {
+			if (eventId) {
+				this.setState({ eventId, reported: true });
 			}
-			const eventId = Sentry.captureReactException(error, errorInfo);
-			this.setState({ eventId, reported: true });
 		});
 	}
 
