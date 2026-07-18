@@ -37,6 +37,7 @@
 		"@clerk/themes": "^2.4.57",
 		"@codemirror/commands": "^6.7.0",
 		"@codemirror/lang-markdown": "^6.5.0",
+		"@codemirror/lang-yaml": "^6.1.0",
 		"@codemirror/state": "^6.6.0",
 		"@codemirror/view": "^6.43.0",
 		"@fontsource-variable/geist": "^5.2.9",
