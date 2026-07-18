@@ -181,7 +181,15 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     id = Ecto.UUID.generate()
     {:ok, _} = Notes.genesis_crdt_note(user, vault, id, "Notes/announce.md")
 
-    assert_receive %Phoenix.Socket.Broadcast{event: "crdt_doc_ready", payload: %{"doc_id" => ^id}}
+    # An EMPTY genesis note integrates zero Y.Doc ops, so no note_yjs_update
+    # fan-out ever fires — the announce is the ONLY signal the receiver gets.
+    # It must carry the path so the receiver can materialize the file live
+    # (test_27) instead of discovering it ~30s later via the pull.
+    assert_receive %Phoenix.Socket.Broadcast{
+      event: "crdt_doc_ready",
+      payload: %{"doc_id" => ^id, "path" => "Notes/announce.md"}
+    }
+
     refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200
   end
 

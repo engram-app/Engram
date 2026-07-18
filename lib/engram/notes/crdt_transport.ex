@@ -242,12 +242,26 @@ defmodule Engram.Notes.CrdtTransport do
   A note whose path is missing/undecryptable is SKIPPED (logged), never fatal —
   one bad row must not sink the whole vault head map. No DEK (brand-new user,
   zero writes) → empty map, same short-circuit `/manifest` uses.
+
+  Returns `{heads_map, complete}`. `complete` is a COMPLETENESS CONTRACT: it is
+  `true` only when the map is provably the FULL set of live notes, and `false`
+  whenever the map might be missing one — no DEK (empty map), or ANY row dropped
+  during path-decrypt / head-resolve. A destructive consumer (e.g. an
+  offline-delete reconcile that trashes local files absent from the heads set)
+  MUST refuse to act unless `complete == true`; a dropped row is a LIVE note and
+  is indistinguishable from a real deletion. Non-destructive consumers
+  (convergence/discovery) ignore `complete` — a dropped row is just caught next
+  round.
   """
-  @spec vault_heads(map(), map()) :: %{String.t() => %{path: String.t(), head: String.t()}}
+  @spec vault_heads(map(), map()) ::
+          {%{String.t() => %{path: String.t(), head: String.t()}}, boolean()}
   def vault_heads(user, vault) do
     case Crypto.get_dek(user) do
       {:ok, dek} -> vault_heads_with_dek(user, vault, dek)
-      {:error, :no_dek} -> %{}
+      # No DEK → empty map, but NOT complete: the vault may hold live notes we
+      # simply can't resolve, so a destructive consumer must not treat "" as "all
+      # deleted".
+      {:error, :no_dek} -> {%{}, false}
     end
   end
 
@@ -264,15 +278,17 @@ defmodule Engram.Notes.CrdtTransport do
         |> Repo.all()
       end)
 
-    Enum.reduce(rows, %{}, fn {note_id, crdt_head, dek_version, path_ct, path_nonce}, acc ->
+    Enum.reduce(rows, {%{}, true}, fn {note_id, crdt_head, dek_version, path_ct, path_nonce},
+                                      {acc, complete} ->
       # Path first: it's the cheap guarded decrypt, and a bad path skips the note
       # BEFORE the expensive head self-heal (whose load_doc would itself raise on
-      # the same corrupt row). One bad row is dropped, the vault map survives.
+      # the same corrupt row). One bad row is dropped, the vault map survives —
+      # but the drop flips `complete` to false so a destructive consumer refuses.
       with {:ok, path} <- decrypt_row_path(note_id, dek_version, path_ct, path_nonce, dek),
            {:ok, head} <- resolve_head(user, vault, note_id, crdt_head) do
-        Map.put(acc, note_id, %{path: path, head: head})
+        {Map.put(acc, note_id, %{path: path, head: head}), complete}
       else
-        _ -> acc
+        _ -> {acc, false}
       end
     end)
   end

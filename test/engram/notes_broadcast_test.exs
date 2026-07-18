@@ -142,14 +142,41 @@ defmodule Engram.NotesBroadcastTest do
       assert payload["path"] == "New/Child.md"
     end
 
-    # e2e test_34 "received=yes materialized=no": the cascade broadcasts
-    # meta-projected rows (content never decrypted), and the upsert payload
-    # fabricated `"content" => ""` next to the REAL content_hash. Receivers
-    # took the empty body as authoritative and materialized 0-byte files,
-    # then read as converged forever (hash("") seeded against the real
-    # serverHash). The key must be ABSENT when content is unloaded — the
-    # plugin's hash-only branch fetches the body on absence.
-    test "cascade upsert omits the content key (never fabricates empty)", %{
+    # Receivers relocate the note's id to the new path (upsert) BEFORE they
+    # see the old-path delete, so the delete reads as a relocation leg (id
+    # lives elsewhere) instead of tearing the note's CRDT room down by id.
+    # Patterns here do NOT discriminate on event_type, so the two
+    # assert_receives capture mailbox order and enforce upsert-before-delete.
+    test "cascade broadcasts the new-path upsert before the old-path delete", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _child} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old/Child.md",
+          "content" => "# Child",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert {:ok, 1} = Notes.rename_folder(user, vault, "Old", "New")
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: first}
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: second}
+
+      assert first["event_type"] == "upsert"
+      assert second["event_type"] == "delete"
+    end
+
+    # e2e test_34 "received=yes materialized=no": the cascade used to
+    # broadcast meta-projected rows (content never decrypted), so the upsert
+    # carried NO inline body and receivers waited ~30-60s for a pull to
+    # materialize the renamed path. Fix: decrypt each renamed note's body and
+    # ship it inline, exactly like the single-note rename. The body MUST be
+    # the note's REAL content (matching content_hash) — never fabricated `""`
+    # (that shipped a 0-byte file that read as converged forever, #863).
+    test "cascade upsert carries the renamed note's real content inline", %{
       user: user,
       vault: vault
     } do
@@ -169,7 +196,7 @@ defmodule Engram.NotesBroadcastTest do
         payload: %{"event_type" => "upsert"} = payload
       }
 
-      refute Map.has_key?(payload, "content")
+      assert payload["content"] == "# Child"
       assert payload["content_hash"] == child.content_hash
       assert is_binary(payload["content_hash"])
     end
@@ -230,6 +257,32 @@ defmodule Engram.NotesBroadcastTest do
       }
 
       assert payload["id"] == note.id
+    end
+
+    # Same relocation ordering as the folder-rename cascade: the receiver
+    # must relocate the note's id to the new path (upsert) BEFORE the
+    # old-path delete, or the delete tears the note's CRDT room down by id
+    # before the new path can materialize from it.
+    test "broadcasts the new-path upsert before the old-path delete", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old.md",
+          "content" => "# Old",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      {:ok, _} = Notes.rename_note(user, vault, "Old.md", "New.md")
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: first}
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: second}
+
+      assert first["event_type"] == "upsert"
+      assert second["event_type"] == "delete"
     end
   end
 
