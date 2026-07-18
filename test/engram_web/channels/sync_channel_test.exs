@@ -339,14 +339,14 @@ defmodule EngramWeb.SyncChannelTest do
   # ---------------------------------------------------------------------------
 
   describe "pull_changes (removed op)" do
-    # The op never shipped in any plugin release or the SPA (HTTP cursor sync
-    # at GET /api/sync/changes is the catch-up path). The handler was
+    # The op never shipped in any plugin release or the SPA (catch-up now runs
+    # over the socket seq-replay op-log via crdt_catchup_since). The handler was
     # unbounded: it loaded + decrypted the entire vault change set into one
     # channel frame. A stub reply keeps a stray legacy caller from crashing
     # the channel.
-    test "replies gone with the HTTP replacement", %{socket: socket} do
+    test "replies gone with the socket catch-up replacement", %{socket: socket} do
       ref = push(socket, "pull_changes", %{"since" => "2020-01-01T00:00:00Z"})
-      assert_reply ref, :error, %{"reason" => "gone", "use" => "GET /api/sync/changes"}
+      assert_reply ref, :error, %{"reason" => "gone", "use" => "crdt_catchup_since"}
     end
   end
 

@@ -38,52 +38,6 @@ defmodule EngramWeb.Schemas.ManifestResponse do
   })
 end
 
-defmodule EngramWeb.Schemas.SyncChange do
-  @moduledoc "One entry in the unified note+attachment change feed."
-  alias OpenApiSpex.Schema
-  require OpenApiSpex
-
-  OpenApiSpex.schema(%{
-    title: "SyncChange",
-    type: :object,
-    properties: %{
-      type: %Schema{type: :string, enum: ["note", "attachment"]},
-      path: %Schema{type: :string},
-      seq: %Schema{type: :integer, description: "Per-vault ordering key."},
-      id: %Schema{type: :string, format: :uuid, nullable: true},
-      content_hash: %Schema{type: :string, nullable: true},
-      content: %Schema{
-        type: :string,
-        nullable: true,
-        description: "Note body — present only when fields=all."
-      },
-      deleted: %Schema{type: :boolean, nullable: true}
-    },
-    required: [:type, :seq]
-  })
-end
-
-defmodule EngramWeb.Schemas.SyncChangesResponse do
-  @moduledoc false
-  alias OpenApiSpex.Schema
-  require OpenApiSpex
-
-  OpenApiSpex.schema(%{
-    title: "SyncChangesResponse",
-    type: :object,
-    properties: %{
-      changes: %Schema{type: :array, items: EngramWeb.Schemas.SyncChange},
-      next_cursor: %Schema{
-        type: :string,
-        nullable: true,
-        description: "Opaque keyset cursor; null on the last page."
-      },
-      has_more: %Schema{type: :boolean}
-    },
-    required: [:changes, :has_more]
-  })
-end
-
 defmodule EngramWeb.Schemas.EmbedStatusResponse do
   @moduledoc "Embedding/index progress counts for the user's notes."
   alias OpenApiSpex.Schema

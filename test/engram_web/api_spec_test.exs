@@ -286,11 +286,6 @@ defmodule EngramWeb.ApiSpecTest do
       assert Map.has_key?(op.responses, 200)
     end
 
-    test "GET /api/sync/changes documents 200/400/410", %{spec: spec} do
-      op = spec.paths["/api/sync/changes"].get
-      assert Enum.sort(Map.keys(op.responses)) == [200, 400, 410]
-    end
-
     test "GET /api/embed-status documents 200", %{spec: spec} do
       op = spec.paths["/api/embed-status"].get
       assert op.tags == ["Embedding"]
