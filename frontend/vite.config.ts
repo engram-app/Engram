@@ -119,6 +119,13 @@ export default defineConfig({
 		globals: true,
 		setupFiles: ["./src/test-setup.ts"],
 		exclude: ["**/node_modules/**", "**/dist/**", "**/e2e/**"],
+		// @atomic-editor/editor's compiled dist/*.js uses extensionless relative
+		// imports (e.g. `from './AtomicCodeMirrorEditor'`), which is invalid under
+		// Node's native ESM resolver. Vitest externalizes node_modules deps to
+		// Node's loader by default; `inline` routes it through Vite's own
+		// (extension-tolerant) transform instead. Bundlers (esbuild/Vite build)
+		// already tolerate this without any config — only Vitest's SSR path needs it.
+		server: { deps: { inline: ["@atomic-editor/editor"] } },
 	},
 	// Tailwind v4 loads the typography plugin via `@plugin` in main.css —
 	// the vite plugin's `plugins` option is ignored in this version.

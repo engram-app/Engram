@@ -109,8 +109,8 @@ describe("NotePage (CRDT)", () => {
 		// Wait for openDoc to resolve and handle to be set
 		await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-1"));
 
-		// Switch to reading view
-		fireEvent.click(screen.getByRole("button", { name: /reading view/i }));
+		// Switch to reading mode
+		fireEvent.click(screen.getByRole("button", { name: "Reading" }));
 
 		// NoteView is mocked — assert on the content prop it receives.
 		// The live Y.Text content should be passed, not the stale REST "# hi".
@@ -123,7 +123,7 @@ describe("NotePage (CRDT)", () => {
 		expect(screen.getByTestId("note-view")).not.toHaveTextContent("# hi");
 	});
 
-	it("renders the properties widget with frontmatter keys in both modes", async () => {
+	it("renders the properties widget with frontmatter keys in the default rendered mode", async () => {
 		const doc = new Y.Doc();
 		doc.getMap("frontmatter").set("status", JSON.stringify("draft"));
 		doc.getArray("frontmatter_order").insert(0, ["status"]);
@@ -135,7 +135,44 @@ describe("NotePage (CRDT)", () => {
 
 		render(<NotePage />);
 
-		// Widget should appear in the default live mode
+		// Widget should appear in the default rendered mode
 		await waitFor(() => expect(screen.getByText("status")).toBeInTheDocument());
+	});
+
+	it("swaps the frontmatter surface across rendered/raw/reading modes", async () => {
+		const doc = new Y.Doc();
+		doc.getMap("frontmatter").set("status", JSON.stringify("draft"));
+		doc.getArray("frontmatter_order").insert(0, ["status"]);
+		openDoc.mockResolvedValue({
+			ytext: doc.getText("content"),
+			awareness: new Awareness(doc),
+			doc,
+		});
+
+		render(<NotePage />);
+
+		// Default "rendered" mode: pills visible, editor visible, no raw YAML region.
+		await waitFor(() => expect(screen.getByText("status")).toBeInTheDocument());
+		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
+		expect(screen.queryByLabelText(/Frontmatter \(raw YAML\)/i)).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Rendered" })).toHaveAttribute(
+			"aria-pressed",
+			"true",
+		);
+
+		// Switch to "raw": raw YAML region visible, pills hidden.
+		fireEvent.click(screen.getByRole("button", { name: "Raw" }));
+		await waitFor(() =>
+			expect(screen.getByLabelText(/Frontmatter \(raw YAML\)/i)).toBeInTheDocument(),
+		);
+		expect(screen.queryByText("status")).not.toBeInTheDocument();
+		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
+
+		// Switch to "reading": NoteView visible, neither frontmatter surface shown.
+		fireEvent.click(screen.getByRole("button", { name: "Reading" }));
+		await waitFor(() => expect(screen.getByTestId("note-view")).toBeInTheDocument());
+		expect(screen.queryByLabelText(/Frontmatter \(raw YAML\)/i)).not.toBeInTheDocument();
+		expect(screen.queryByText("status")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("note-editor")).not.toBeInTheDocument();
 	});
 });

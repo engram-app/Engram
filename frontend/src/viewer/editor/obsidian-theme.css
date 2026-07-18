@@ -1,0 +1,37 @@
+/*
+ * Obsidian-default color palette for the live-preview editor.
+ *
+ * Atomic Editor is fully CSS-variable driven; its built-in fallbacks are
+ * dark-theme values (e.g. --atomic-editor-fg defaults to #dcddde), so in light
+ * mode headings/body render washed-out. We set the vars per theme to match
+ * Obsidian's default light/dark palette. Token-driven, no !important.
+ *
+ * Scope: light values on .cm-editor; dark values under `.dark .cm-editor`
+ * (the app adds a `.dark` class to <html> — see theme/resolve.ts).
+ */
+
+.cm-editor {
+	/* Obsidian default (light) */
+	--atomic-editor-fg: #222222; /* --text-normal */
+	--atomic-editor-fg-muted: #6e6e6e; /* --text-muted (syntax markers, bullets) */
+	--atomic-editor-fg-faint: #a0a0a0; /* --text-faint (hidden markers, blockquote) */
+	--atomic-editor-link: #6b4ce6; /* accent purple, darkened for light-bg contrast */
+	--atomic-editor-link-hover: #5738c4;
+	--atomic-editor-accent: #7c5cff; /* --interactive-accent */
+	--atomic-editor-border: #e2e2e4;
+	--atomic-editor-code-bg: rgba(0, 0, 0, 0.045);
+	--atomic-editor-code-rail: rgba(124, 92, 255, 0.35);
+}
+
+.dark .cm-editor {
+	/* Obsidian default (dark) */
+	--atomic-editor-fg: #dcddde; /* --text-normal */
+	--atomic-editor-fg-muted: #999999; /* --text-muted */
+	--atomic-editor-fg-faint: #666666; /* --text-faint */
+	--atomic-editor-link: #8b6cef; /* accent purple (hsl 254 80% 68%) */
+	--atomic-editor-link-hover: #a78bfa;
+	--atomic-editor-accent: #8b6cef;
+	--atomic-editor-border: #333333;
+	--atomic-editor-code-bg: rgba(255, 255, 255, 0.06);
+	--atomic-editor-code-rail: rgba(139, 108, 239, 0.5);
+}
