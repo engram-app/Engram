@@ -2,7 +2,7 @@ import { defaultKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { Compartment, EditorState, Prec } from "@codemirror/state";
-import { oneDark } from "@codemirror/theme-one-dark";
+import { oneDarkTheme } from "@codemirror/theme-one-dark";
 import { drawSelection, EditorView, keymap } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
@@ -99,9 +99,14 @@ export function buildEditorState(
 			// compartment) so raw mode is highlighted too; harmless in rendered mode
 			// since atomicMarkdownSyntax layers its own token colors on top.
 			syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-			...(dark ? [oneDark] : []),
+			// oneDarkTheme = the dark editor chrome ONLY (caret, selection, gutters).
+			// We deliberately do NOT use the bundled `oneDark`, which also ships
+			// oneDarkHighlightStyle and colors headings/tokens with One Dark's palette
+			// (e.g. headings #e06c75 red) -- that overrode the Obsidian text color.
+			// atomicMarkdownSyntax + the --atomic-editor-* vars own token colors now.
+			...(dark ? [oneDarkTheme] : []),
 			// Prec.highest so the transparent background + layout beat any theme's
-			// own surface color (oneDark sets its own background otherwise).
+			// own surface color (the dark theme sets its own background otherwise).
 			Prec.highest(editorTheme),
 			// The ONLY source of the markdown language: swapping this compartment is
 			// what toggles Rendered vs Raw mode. See decorationsFor above.

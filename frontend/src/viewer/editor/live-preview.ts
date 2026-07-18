@@ -9,8 +9,15 @@ import {
 } from "@atomic-editor/editor";
 // Atomic ships decoration CSS separately; import once so widgets render.
 import "@atomic-editor/editor/styles.css";
+// Obsidian-default palette: set Atomic's CSS vars per theme (must come AFTER
+// the Atomic stylesheet so our values win the cascade).
+import "./obsidian-theme.css";
+// Nested-blockquote depth rendering (Atomic renders `>` flat). Load after
+// Atomic's stylesheet so the depth-aware rules win the cascade.
+import "./blockquote-depth.css";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import type { Extension } from "@codemirror/state";
+import { blockquoteDepthPlugin } from "./blockquote-depth";
 import { calloutDecoration } from "./callout-decoration";
 import { katexDecoration } from "./katex-decoration";
 
@@ -51,5 +58,6 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		}),
 		calloutDecoration,
 		katexDecoration,
+		blockquoteDepthPlugin,
 	];
 }
