@@ -1,12 +1,5 @@
-import { type Range, RangeSetBuilder } from "@codemirror/state";
-import {
-	Decoration,
-	type DecorationSet,
-	type EditorView,
-	ViewPlugin,
-	type ViewUpdate,
-	WidgetType,
-} from "@codemirror/view";
+import { type EditorState, type Range, RangeSetBuilder, StateField } from "@codemirror/state";
+import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 
@@ -21,17 +14,17 @@ class MathWidget extends WidgetType {
 		return other.tex === this.tex && other.block === this.block;
 	}
 	toDOM() {
-		const span = document.createElement("span");
-		span.className = "cm-katex-widget";
+		const el = document.createElement(this.block ? "div" : "span");
+		el.className = "cm-katex-widget";
 		try {
-			span.innerHTML = katex.renderToString(this.tex, {
+			el.innerHTML = katex.renderToString(this.tex, {
 				displayMode: this.block,
 				throwOnError: false,
 			});
 		} catch {
-			span.textContent = this.block ? `$$${this.tex}$$` : `$${this.tex}$`;
+			el.textContent = this.block ? `$$${this.tex}$$` : `$${this.tex}$`;
 		}
-		return span;
+		return el;
 	}
 	ignoreEvent() {
 		return false;
@@ -42,14 +35,10 @@ class MathWidget extends WidgetType {
 // a full TeX tokenizer — matches Obsidian's pragmatic $ delimiters.
 const MATH_RE = /\$\$(?<block>[^$]+)\$\$|\$(?<inline>[^$\n]+)\$/g;
 
-function buildMath(view: EditorView): DecorationSet {
+function buildMath(state: EditorState): DecorationSet {
 	const ranges: Range<Decoration>[] = [];
-	const { selection: sel } = view.state;
-	// ponytail: whole-doc scan; fine for typical note sizes. view.visibleRanges
-	// is empty under happy-dom (no layout in tests) and unreliable pre-first-measure
-	// in general, so we mirror Atomic's own ensureSyntaxTree whole-doc walk instead
-	// of CM6's usual viewport-only decoration pattern.
-	const text = view.state.sliceDoc(0);
+	const sel = state.selection;
+	const text = state.sliceDoc(0);
 	for (const m of text.matchAll(MATH_RE)) {
 		const start = m.index ?? 0;
 		const end = start + m[0].length;
@@ -59,9 +48,20 @@ function buildMath(view: EditorView): DecorationSet {
 			continue;
 		}
 		const { block: blockTex, inline: inlineTex } = m.groups ?? {};
-		const block = blockTex !== undefined;
 		const tex = (blockTex ?? inlineTex ?? "").trim();
-		ranges.push(Decoration.replace({ widget: new MathWidget(tex, block) }).range(start, end));
+		// A `$$…$$` match is display math ONLY when it occupies whole lines (its own
+		// paragraph). Then it becomes a block widget — the one decoration shape that
+		// MUST live in a StateField, never a ViewPlugin (CM6 rejects line-break-
+		// spanning / block decorations from plugins). Mid-line `$$x$$` stays an
+		// inline replace so we never emit an invalid block decoration.
+		const wholeLine =
+			blockTex !== undefined &&
+			state.doc.lineAt(start).from === start &&
+			state.doc.lineAt(end).to === end;
+		const spec = wholeLine
+			? { widget: new MathWidget(tex, true), block: true }
+			: { widget: new MathWidget(tex, false) };
+		ranges.push(Decoration.replace(spec).range(start, end));
 	}
 	const builder = new RangeSetBuilder<Decoration>();
 	for (const r of ranges.sort((a, b) => a.from - b.from)) {
@@ -70,17 +70,16 @@ function buildMath(view: EditorView): DecorationSet {
 	return builder.finish();
 }
 
-export const katexDecoration = ViewPlugin.fromClass(
-	class {
-		decorations: DecorationSet;
-		constructor(view: EditorView) {
-			this.decorations = buildMath(view);
+// StateField (not ViewPlugin): block math replaces line breaks, which CM6 only
+// permits from the decorations facet fed by a state field. Rebuild on any doc or
+// selection change so the reveal-on-cursor behaviour still works.
+export const katexDecoration = StateField.define<DecorationSet>({
+	create: (state) => buildMath(state),
+	update(value, tr) {
+		if (tr.docChanged || tr.selection) {
+			return buildMath(tr.state);
 		}
-		update(u: ViewUpdate) {
-			if (u.docChanged || u.selectionSet || u.viewportChanged) {
-				this.decorations = buildMath(u.view);
-			}
-		}
+		return value;
 	},
-	{ decorations: (v) => v.decorations },
-);
+	provide: (f) => EditorView.decorations.from(f),
+});

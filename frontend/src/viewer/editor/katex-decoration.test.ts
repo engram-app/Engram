@@ -28,6 +28,22 @@ describe("katexDecoration", () => {
 		expect(view.dom.querySelector(".cm-katex-widget")).not.toBeNull();
 	});
 
+	test("renders multi-line block math ($$\\n...\\n$$) without throwing", () => {
+		// Regression: a ViewPlugin may not emit a replace decoration that spans a
+		// line break — CM6 throws "Decorations that replace line breaks may not be
+		// specified via plugins" on update. This multi-line block must render via a
+		// StateField block widget. A single-line $$...$$ never exercised the rule.
+		const doc = "before\n\n$$\n\\int_0^\\infty e^{-x}\\,dx = 1\n$$\n\nafter\n";
+		view = new EditorView({
+			state: EditorState.create({ doc, extensions: [katexDecoration] }),
+			parent: document.body,
+		});
+		// Force an update cycle — the restriction is enforced at view-update time.
+		view.dispatch({ changes: { from: 0, insert: "x" } });
+		expect(view.state.doc.toString().endsWith("after\n")).toBe(true);
+		expect(view.dom.querySelector(".cm-katex-widget")).not.toBeNull();
+	});
+
 	test("reveals raw source when the cursor is inside the math span", () => {
 		const doc = "$E=mc^2$\n";
 		view = new EditorView({
