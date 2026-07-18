@@ -873,6 +873,13 @@ if key = System.get_env("POSTHOG_API_KEY") do
     posthog_host: System.get_env("POSTHOG_HOST", "https://us.i.posthog.com")
 end
 
+# Discord webhook for new issue reports (Engram.Notifications.Discord).
+# No-op when DISCORD_WEBHOOK_URL is unset, so dev/test/self-host post
+# nothing and the notifier short-circuits before any network call.
+if url = System.get_env("DISCORD_WEBHOOK_URL") do
+  config :engram, :discord_webhook_url, url
+end
+
 # Pyroscope continuous CPU profiling. Same opt-in shape as Sentry/PostHog:
 # the worker's child_spec/1 returns :ignore when any of the three required
 # env vars is missing, so dev/test/self-host emit no profiling traffic and

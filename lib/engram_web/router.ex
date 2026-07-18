@@ -306,6 +306,11 @@ defmodule EngramWeb.Router do
     # SPA emits render/sync spans from the very first screen), so it lives in
     # this scope rather than the vault-scoped/RequireOnboarding pipeline.
     post "/telemetry/spans", TelemetryController, :create
+
+    # User-submitted issue reports. Must work for onboarding/billing-blocked
+    # users too (they are exactly who most needs to report a problem), so
+    # this lives here rather than the vault-scoped/RequireOnboarding pipeline.
+    post "/reports", ReportController, :create
   end
 
   # Self-host admin scope. 404 under Clerk (RequireAdmin gates on local auth);
