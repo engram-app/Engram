@@ -8,6 +8,7 @@ import WaitlistPage from "./auth/waitlist";
 import { UpgradeDialogProvider } from "./billing/upgrade-dialog-provider";
 import type { EngramConfig } from "./config";
 import LoadingScreen from "./layout/loading-screen";
+import RouteErrorBoundary from "./route-error-boundary";
 import { ROUTES } from "./routes";
 import LoadingPane from "./viewer/loading-pane";
 
@@ -72,6 +73,14 @@ function suspendedScreen(el: ReactNode) {
 // the modal via the module-level handler. Wrapping `RouterProvider` from
 // `main.tsx` would not give the provider router context.
 function RootLayout() {
+	// Dev-only route-level crash trigger — the twin of main.tsx's `?boom` (which
+	// throws ABOVE the router to hit RootErrorBoundary). This throws INSIDE the
+	// router, so it exercises the route errorElement (RouteErrorBoundary) — the
+	// path a real route crash like the note editor takes. Visit `?routeboom`.
+	// Stripped from prod by the import.meta.env.DEV gate.
+	if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("routeboom")) {
+		throw new Error("Intentional crash (?routeboom) — testing the route error boundary");
+	}
 	return (
 		<UpgradeDialogProvider>
 			<Outlet />
@@ -113,6 +122,11 @@ export function createAppRouter(config: EngramConfig): AppRouter {
 	return createBrowserRouter([
 		{
 			element: <RootLayout />,
+			// Global route error boundary. RR bubbles any descendant route throw to
+			// the nearest errorElement; this is the only one, so every route crash
+			// (incl. lazy-chunk load failures past the vite:preloadError guard)
+			// renders the app's ErrorFallback instead of RR's default page.
+			errorElement: <RouteErrorBoundary />,
 			children: [
 				// Public routes
 				{ path: ROUTES.SIGN_IN, element: <SignInPage /> },

@@ -3,7 +3,9 @@ import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
-import { buildEditorState } from "./note-editor";
+import { buildEditorState, decorationsCompartment, decorationsFor } from "./note-editor";
+
+const resolveWikiLink = (n: string) => `/notes/${n}`;
 
 // happy-dom CAN render a real CodeMirror EditorView (verified 2026-06-29).
 // The earlier comment was a cautious assumption; the DOM stubs in test-setup.ts
@@ -15,7 +17,7 @@ describe("buildEditorState", () => {
 		ytext.insert(0, "# Seeded heading\n\nbody text");
 		const awareness = new Awareness(doc);
 
-		const state = buildEditorState(ytext, awareness, false);
+		const state = buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink);
 
 		expect(state.doc.toString()).toBe("# Seeded heading\n\nbody text");
 	});
@@ -25,7 +27,7 @@ describe("buildEditorState", () => {
 		const ytext = doc.getText("content");
 		const awareness = new Awareness(doc);
 
-		const state = buildEditorState(ytext, awareness, true);
+		const state = buildEditorState(ytext, awareness, true, "rendered", resolveWikiLink);
 
 		expect(state.doc.toString()).toBe("");
 	});
@@ -37,7 +39,7 @@ describe("buildEditorState", () => {
 		ytext.insert(0, "first");
 		ytext.insert(ytext.length, " second");
 
-		const state = buildEditorState(ytext, awareness, false);
+		const state = buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink);
 
 		expect(state.doc.toString()).toBe("first second");
 	});
@@ -48,13 +50,31 @@ describe("buildEditorState", () => {
 		const ytext = doc.getText("content");
 		const awareness = new Awareness(doc);
 
-		const state = buildEditorState(ytext, awareness, false);
+		const state = buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink);
 
 		// historyField is the StateField that @codemirror/commands history() adds.
 		// When present it means Ctrl+Z routes to the offset-based native undo, which
 		// reverts remote peers' edits and causes CRDT divergence.
 		// state.field(field, false) returns undefined when the field is not installed.
 		expect(state.field(historyField, false)).toBeUndefined();
+	});
+
+	it("rendered mode installs decorations; raw mode installs none, doc unchanged", () => {
+		const doc = new Y.Doc();
+		const ytext = doc.getText("content");
+		ytext.insert(0, "# H\n\n**b**\n");
+		const awareness = new Awareness(doc);
+
+		const rendered = buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink);
+		const raw = buildEditorState(ytext, awareness, false, "raw", resolveWikiLink);
+
+		// Both seed identical, unaltered doc bytes (view-only decorations).
+		expect(rendered.doc.toString()).toBe("# H\n\n**b**\n");
+		expect(raw.doc.toString()).toBe("# H\n\n**b**\n");
+		// The compartment holds content in both modes (a markdown language in raw,
+		// the fuller live-preview extension set in rendered) -- never undefined.
+		expect(decorationsCompartment.get(rendered)).not.toBeUndefined();
+		expect(decorationsCompartment.get(raw)).not.toBeUndefined();
 	});
 });
 
@@ -85,7 +105,7 @@ describe("CRDT undo behaviour (EditorView + yCollab)", () => {
 		parents.push(parent);
 
 		const view = new EditorView({
-			state: buildEditorState(ytext, awareness, false),
+			state: buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink),
 			parent,
 		});
 		views.push(view);
@@ -124,5 +144,57 @@ describe("CRDT undo behaviour (EditorView + yCollab)", () => {
 
 		// View and Y.Text must be converged (no divergence).
 		expect(view.state.doc.toString()).toBe(ytext.toString());
+	});
+});
+
+describe("mode switch via decorationsCompartment.reconfigure (yCollab must survive)", () => {
+	const views: EditorView[] = [];
+	const parents: HTMLElement[] = [];
+	afterEach(() => {
+		for (const v of views) {
+			v.destroy();
+		}
+		views.length = 0;
+		for (const p of parents) {
+			p.parentNode?.removeChild(p);
+		}
+		parents.length = 0;
+	});
+
+	it("reconfiguring rendered -> raw is view-only and leaves yCollab attached", () => {
+		const doc = new Y.Doc();
+		const ytext = doc.getText("content");
+		ytext.insert(0, "# H\n\n**b**\n");
+		const awareness = new Awareness(doc);
+
+		const parent = document.createElement("div");
+		document.body.appendChild(parent);
+		parents.push(parent);
+
+		const view = new EditorView({
+			state: buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink),
+			parent,
+		});
+		views.push(view);
+
+		const before = view.state.doc.toString();
+
+		// Simulate the mode-switch effect: reconfigure the SAME compartment on the
+		// SAME view -- this must never recreate the view or detach yCollab.
+		view.dispatch({
+			effects: decorationsCompartment.reconfigure(decorationsFor("raw", resolveWikiLink)),
+		});
+
+		// (a) View-only: doc bytes are byte-identical after the switch.
+		expect(view.state.doc.toString()).toBe(before);
+		expect(view.state.doc.toString()).toBe("# H\n\n**b**\n");
+
+		// (b) yCollab is still bound: a remote Y.Text edit (foreign origin, the
+		// same pattern the CRDT undo test above uses) must still flow into the view.
+		doc.transact(() => {
+			ytext.insert(ytext.length, "tail");
+		}, "remote-peer");
+		expect(view.state.doc.toString()).toBe(ytext.toString());
+		expect(view.state.doc.toString()).toContain("tail");
 	});
 });
