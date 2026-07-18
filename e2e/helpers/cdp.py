@@ -747,6 +747,41 @@ class CdpClient:
         result = await self.evaluate(f"{PLUGIN_PATH}.isLiveConnected()")
         return result is True
 
+    async def _stream_diag(self) -> str:
+        """Best-effort snapshot of the live channel's internal state.
+
+        CI does not capture plugin-runtime logs, so a bare "Stream not
+        connected" timeout gives no clue WHICH stuck state the channel was in.
+        Read the observable channel fields (ws readyState, connected,
+        crdtJoined, crdtJoinFailedReason, pending reconnect) so a recurrence is
+        diagnosable from the assertion message alone.
+        """
+        try:
+            raw = await self.evaluate(
+                f"""
+                (() => {{
+                    const p = {PLUGIN_PATH};
+                    const ns = p && p.noteStream;
+                    if (!ns) return JSON.stringify({{error: 'no noteStream'}});
+                    return JSON.stringify({{
+                        isLiveConnected: typeof p.isLiveConnected === 'function' ? p.isLiveConnected() : null,
+                        wsReadyState: ns.ws ? ns.ws.readyState : null,
+                        connected: typeof ns.isConnected === 'function' ? ns.isConnected() : null,
+                        crdtJoined: typeof ns.isCrdtConnected === 'function' ? ns.isCrdtConnected() : null,
+                        crdtJoinFailedReason: ns.crdtJoinFailedReason ?? null,
+                        reconnectPending: ns.reconnectTimer != null,
+                        connId: typeof ns.getConnId === 'function' ? ns.getConnId() : null
+                    }});
+                }})()
+                """
+            )
+            return raw if isinstance(raw, str) else json.dumps(raw)
+        except Exception as e:  # noqa: BLE001
+            # Instrumentation must never mask the TimeoutError it annotates: a
+            # CDP evaluate can itself fail mid-teardown. Degrade to a reason
+            # string; the real timeout is still raised by the caller.
+            return f"<stream diag unavailable: {e!r}>"
+
     async def wait_for_stream_connected(self, timeout: float = 10) -> None:
         """Poll until the WebSocket channel reports connected.
 
@@ -759,8 +794,9 @@ class CdpClient:
             if await self.check_stream_connected():
                 return
             await asyncio.sleep(0.5)
+        diag = await self._stream_diag()
         raise TimeoutError(
-            f"Stream not connected after {timeout}s on CDP port {self.port}"
+            f"Stream not connected after {timeout}s on CDP port {self.port} — channel={diag}"
         )
 
 
@@ -904,6 +940,118 @@ class CdpClient:
         """
         result = await self.evaluate(js)
         logger.info("Incoming sync resumed on CDP port %d: %s", self.port, result)
+
+    # ------------------------------------------------------------------
+    # Vault-channel fan-out isolation (crdt/test_crdt_sync.py)
+    # ------------------------------------------------------------------
+
+    async def suppress_fanout_backstops(self) -> str:
+        """Neutralize every idle-note convergence path EXCEPT the vault-channel
+        fan-out, so a disk-convergence assert on this instance becomes a TRUE
+        fan-out proof.
+
+        Under the vault-channel model an IDLE note (not open in the editor)
+        converges via the server's ``note_yjs_update`` broadcast → the plugin's
+        ``applyPushedNoteUpdate`` (sync.ts). TWO other paths also converge a cold
+        note off the ~5s checkpoint ``note_changed`` and would mask a broken
+        fan-out — every existing crdt test still passes at checkpoint latency
+        even if the fan-out is dead:
+
+          * ``pull()`` — its cursor-feed backfill (``flushFromCrdt`` on a
+            content_hash divergence) AND ``coldReceive()``, which ``pull()`` is
+            the sole caller of (invoked at its tail, sync.ts:2707).
+          * ``handleStreamEvent`` — the ``note_changed``/upsert handler, which
+            can STEP1-enroll the note's CRDT room (sync.ts:3246); an open room's
+            ``crdt_msg`` stream would then deliver the body independently.
+
+        This stubs ``pull()``, the cold-apply backstop (``coldReceive()``
+        pre-rewire / ``catchupViaSocket()`` post-authoritative-rewire — stubs
+        whichever the paired plugin build exposes) and ``handleStreamEvent`` to
+        no-ops (saving originals). The fan-out is a SEPARATE channel dispatch:
+        ``channel.ts`` routes ``note_yjs_update`` straight to ``onNoteYjsUpdate``
+        → ``applyPushedNoteUpdate`` and never touches any stubbed method, so it
+        stays fully live. Idempotent.
+
+        Instances are SESSION-scoped and shared across tests, so every caller
+        MUST pair this with ``restore_fanout_backstops`` in a ``finally``.
+        """
+        js = f"""
+        (function() {{
+            const se = {ENGINE_PATH};
+            if (se.__fanoutIsolated) return 'already-isolated';
+            se.__fanoutIsolated = true;
+            // The cold-note apply backstop was renamed coldReceive ->
+            // catchupViaSocket in the authoritative-sync rewire. backend-main
+            // e2e pairs against EITHER plugin branch, so stub whichever method
+            // exists and never .bind() an absent one (guards future renames).
+            for (const m of ['pull', 'coldReceive', 'catchupViaSocket', 'handleStreamEvent']) {{
+                if (typeof se[m] === 'function') {{
+                    se['__orig_' + m] = se[m].bind(se);
+                    se[m] = m === 'handleStreamEvent' ? async () => {{}} : async () => 0;
+                }}
+            }}
+            return 'isolated';
+        }})()
+        """
+        result = await self.evaluate(js)
+        logger.info("Fan-out backstops suppressed on CDP port %d: %s", self.port, result)
+        return result if isinstance(result, str) else "isolated"
+
+    async def restore_fanout_backstops(self) -> None:
+        """Restore the methods stubbed by suppress_fanout_backstops()."""
+        js = f"""
+        (function() {{
+            const se = {ENGINE_PATH};
+            if (!se.__fanoutIsolated) return 'not-isolated';
+            for (const m of ['pull', 'coldReceive', 'catchupViaSocket', 'handleStreamEvent']) {{
+                const orig = se['__orig_' + m];
+                if (orig) {{ se[m] = orig; delete se['__orig_' + m]; }}
+            }}
+            delete se.__fanoutIsolated;
+            return 'restored';
+        }})()
+        """
+        result = await self.evaluate(js)
+        logger.info("Fan-out backstops restored on CDP port %d: %s", self.port, result)
+
+    async def get_note_id_for_path(self, path: str) -> str | None:
+        """Resolve the CRDT note_id the plugin has mapped for a vault path."""
+        return await self.evaluate(
+            f"{ENGINE_PATH}.noteIdMap "
+            f"? ({ENGINE_PATH}.noteIdMap.get({json.dumps(path)}) ?? null) : null"
+        )
+
+    async def get_enrolled_note_ids(self) -> list[str]:
+        """Snapshot CrdtEnrollment.enrolled — the note_ids this device has
+        STEP1-enrolled (opened a CRDT room for) this session."""
+        result = await self.evaluate(
+            f"{ENGINE_PATH}.crdtEnrollment "
+            f"? Array.from({ENGINE_PATH}.crdtEnrollment.enrolled) : []"
+        )
+        return result if isinstance(result, list) else []
+
+    async def is_crdt_doc_resident(self, note_id: str) -> bool:
+        """True when a Y.Doc for note_id is currently open in the CrdtManager.
+
+        The manager keys ``docs`` by the bare note_id (docId(noteId) === noteId,
+        manager.ts:198). ``closeDoc`` deletes the entry — so this going False is
+        the observable signal that ``hibernateIfIdle`` freed the doc.
+        """
+        return await self.evaluate(
+            f"Boolean({ENGINE_PATH}.crdt && {ENGINE_PATH}.crdt.docs && "
+            f"{ENGINE_PATH}.crdt.docs.has({json.dumps(note_id)}))"
+        ) is True
+
+    async def wait_for_crdt_doc_freed(self, note_id: str, timeout: float = 5) -> None:
+        """Poll until the CrdtManager no longer holds an open doc for note_id."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not await self.is_crdt_doc_resident(note_id):
+                return
+            await asyncio.sleep(0.2)
+        raise TimeoutError(
+            f"CRDT doc {note_id} still resident after {timeout}s on CDP port {self.port}"
+        )
 
     async def rename_file(self, old_path: str, new_path: str) -> None:
         """Rename a file through Obsidian's vault API (triggers handleRename)."""

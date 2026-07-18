@@ -25,6 +25,36 @@ logger = logging.getLogger(__name__)
 _P = "app.plugins.plugins['engram-vault-sync']"
 
 
+def _assert_owns_vault(api_url: str, access_token: str, vault_id: str, *, label: str) -> None:
+    """Fail fast if a freshly-minted OAuth vault_id isn't actually owned by
+    this token's identity.
+
+    Cheap GET /vaults check, done once at provisioning time. Without this,
+    a cross-account vaultId (this identity's token, someone else's vault)
+    joins `user:` fine but the `sync:` channel refuses it server-side with
+    no client-visible error — nothing retries, and the caller just hangs
+    on wait_for_stream's 120s timeout instead of failing loudly at the
+    point the bad state was created. See
+    docs/context/oauth-e2e-pairing-and-token-binding.md.
+    """
+    resp = requests.get(
+        f"{api_url}/vaults",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=10,
+    )
+    assert resp.status_code == 200, (
+        f"[{label}] vault-ownership check: GET /vaults failed: "
+        f"{resp.status_code} {resp.text[:300]}"
+    )
+    owned_ids = {str(v["id"]) for v in resp.json().get("vaults", [])}
+    assert str(vault_id) in owned_ids, (
+        f"[{label}] resolved vault_id={vault_id} is NOT owned by this identity's "
+        f"token (owned vaults: {owned_ids or 'none'}) — cross-account vaultId "
+        "would silently fail the sync: channel join and hang wait_for_stream "
+        "for up to 120s instead of failing here"
+    )
+
+
 async def provision_oauth_tokens(
     clerk_client, api_url: str, *, label: str = "test"
 ) -> tuple[str, dict]:
@@ -72,6 +102,7 @@ async def provision_oauth_tokens(
 
     tokens = poll_for_tokens(api_url, flow["device_code"], timeout=30)
     assert "access_token" in tokens
+    _assert_owns_vault(api_url, tokens["access_token"], tokens["vault_id"], label=label)
     return clerk_user_id, tokens
 
 
@@ -119,6 +150,7 @@ async def provision_oauth_for_existing_user(
 
     tokens = poll_for_tokens(api_url, flow["device_code"], timeout=30)
     assert "access_token" in tokens
+    _assert_owns_vault(api_url, tokens["access_token"], vault_id, label=label)
     return tokens
 
 
@@ -155,11 +187,29 @@ async def swap_to_oauth(cdp, tokens: dict) -> str:
     js = f"""
     (async function() {{
         const plugin = {_P};
+        // Clear vault-scoped state from whatever identity is currently
+        // loaded BEFORE adopting the new one. A stale settings.vaultId (or
+        // an accessToken cached+bound to a prior account's vault via
+        // accessTokenVaultId) surviving into this swap can silently join
+        // the wrong sync: topic — the backend refuses that join
+        // server-side with no client-visible error, and nothing retries
+        // (docs/context/oauth-e2e-pairing-and-token-binding.md).
+        plugin.settings.vaultId = null;
+        plugin.settings.accessToken = undefined;
+        plugin.settings.accessTokenExpiresAt = undefined;
+        plugin.settings.accessTokenVaultId = undefined;
+        // Re-resolve for the new identity from freshly-minted, server-verified tokens.
         plugin.settings.refreshToken = {refresh_token};
         plugin.settings.vaultId = {vault_id};
         plugin.settings.userEmail = {user_email};
         plugin.settings.authMethod = 'oauth';
-        await plugin.saveSettings();
+        // Wire the new auth provider onto plugin.api BEFORE saveSettings(): it
+        // rebuilds the note channel (setupNoteStream -> connectChannel), which
+        // freezes the channel's topic userId from api.getMe() at construction.
+        // With the OLD provider still active, getMe() resolves the old user and
+        // the channel is minted crdt:<oldUser>:<newVault> while the socket auths
+        // as the new user -> join rejected "unauthorized". Mirrors the prod fix
+        // in main.ts saveOAuthTokens (Engram-obsidian#229).
         plugin.authProvider = plugin.createAuthProvider();
         if (plugin.authProvider) {{
             plugin.api.setAuthProvider(plugin.authProvider);
@@ -167,6 +217,7 @@ async def swap_to_oauth(cdp, tokens: dict) -> str:
                 plugin.noteStream.setAuthProvider(plugin.authProvider);
             }}
         }}
+        await plugin.saveSettings();
         plugin.setupNoteStream();
         if (typeof plugin.markSyncGateAccepted === 'function') {{
             await plugin.markSyncGateAccepted();
@@ -179,11 +230,20 @@ async def swap_to_oauth(cdp, tokens: dict) -> str:
     return original
 
 
-async def restore_auth(cdp, original_settings_json: str) -> None:
+async def restore_auth(cdp, original_settings_json: str, verify_timeout: float = 60) -> None:
     """Restore Obsidian plugin to its original auth settings via CDP.
 
     Like swap_to_oauth, this rotates the sync fingerprint back, so the
     gate must be re-accepted to keep the engine sync-active.
+
+    Verifies the restore rebound the channel (stream reconnects as the restored
+    identity) and raises TimeoutError if not — a cross-bind must fail here, not
+    silently poison every later test that reuses this session-scoped device.
+
+    verify_timeout defaults to 60s, not 30: under 2-worker load the OAuth
+    reconnect chain (getMe → socket connect → crdt join) intermittently takes
+    ~35s — flake #643 established 60 as the floor. A tighter budget here would
+    turn a legit-but-slow reconnect into a hard failure at the restore site.
     """
     settings = json.loads(original_settings_json)
     api_key = json.dumps(settings.get("apiKey", ""))
@@ -195,12 +255,21 @@ async def restore_auth(cdp, original_settings_json: str) -> None:
     js = f"""
     (async function() {{
         const plugin = {_P};
+        // Same staleness concern as swap_to_oauth: drop any accessToken
+        // cached+bound (via accessTokenVaultId) to the OAuth vault we're
+        // walking away from before restoring the original identity.
+        plugin.settings.accessToken = undefined;
+        plugin.settings.accessTokenExpiresAt = undefined;
+        plugin.settings.accessTokenVaultId = undefined;
         plugin.settings.apiKey = {api_key};
         plugin.settings.refreshToken = {refresh_token};
         plugin.settings.vaultId = {vault_id};
         plugin.settings.userEmail = {user_email};
         plugin.settings.authMethod = {auth_method};
-        await plugin.saveSettings();
+        // Provider before saveSettings — same ordering invariant as swap_to_oauth
+        // (see the comment there): the channel-rebuilding saveSettings() must see
+        // the restored provider so getMe() freezes the RESTORED user's id into the
+        // topic, matching the restored token.
         plugin.authProvider = plugin.createAuthProvider();
         if (plugin.authProvider) {{
             plugin.api.setAuthProvider(plugin.authProvider);
@@ -208,6 +277,7 @@ async def restore_auth(cdp, original_settings_json: str) -> None:
                 plugin.noteStream.setAuthProvider(plugin.authProvider);
             }}
         }}
+        await plugin.saveSettings();
         plugin.setupNoteStream();
         if (typeof plugin.markSyncGateAccepted === 'function') {{
             await plugin.markSyncGateAccepted();
@@ -218,15 +288,29 @@ async def restore_auth(cdp, original_settings_json: str) -> None:
     result = await cdp.evaluate(js, await_promise=True)
     logger.info("Plugin auth restored: %s", result)
 
+    # VERIFY the restore actually rebound: the channel must reconnect as the
+    # restored identity. A silent cross-bind (vaultId restored but token/userId
+    # not, or vice versa) leaves the session-scoped device joining the wrong
+    # `crdt:` topic — the backend rejects it "unauthorized" with no client error,
+    # and (before this check) nothing caught it, so every LATER test that reuses
+    # this device failed with a misleading "Stream not connected" (test_84/85).
+    # Fail loudly HERE, at the restore site, instead of 40 tests downstream. The
+    # timeout message carries the channel diagnostic (crdtJoinFailedReason etc).
+    await cdp.wait_for_stream_connected(timeout=verify_timeout)
 
-async def wait_for_stream(cdp, timeout: float = 30) -> None:
+
+async def wait_for_stream(cdp, timeout: float = 60) -> None:
     """Poll until WebSocket channel is connected after auth change.
 
-    30s (was 15s) matches the sibling RT_TIMEOUT that #643 bumped 10s->30s for
-    the same reason: under e2e-clerk load (2-worker xdist + Clerk latency) the
-    OAuth connect chain — token refresh + getMe (with 2s/4s retry backoff) + WS
-    phx_join — legitimately exceeds 15s. #643 raised the propagation wait but
-    missed this connect gate (different file).
+    60s (was 30s, which was 15s before #643): under full-suite e2e-clerk load
+    (2-worker xdist + Clerk latency + a SECOND Obsidian instance booting) the
+    OAuth connect chain — token refresh + getMe (2s/4s retry backoff) + WS
+    phx_join — intermittently exceeded 30s (test_47/test_48). reruns=0
+    (test-confidence-wave) exposed this: reruns had been silently doubling
+    the effective wait. This is a budget bump only — plugin-obsidian#186
+    diagnoses a SEPARATE post-connect delivery race (never-seen CRDT note
+    lost between `crdt:` join and the `crdt_doc_ready` announce) that this
+    gate does not touch; that fix is tracked there, not here.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

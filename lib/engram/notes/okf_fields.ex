@@ -27,7 +27,7 @@ defmodule Engram.Notes.OkfFields do
   @spec extract(String.t()) :: t()
   def extract(content) when is_binary(content) do
     with {block, _body} when is_binary(block) <- Frontmatter.split(content),
-         {:ok, _order, values} <- Frontmatter.parse(block) do
+         {:ok, _order, values, _degraded} <- Frontmatter.parse(block) do
       decoded = decode_values(values)
 
       %{

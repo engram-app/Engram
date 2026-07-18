@@ -1,6 +1,7 @@
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
 import * as syncProtocol from "y-protocols/sync";
+import { rlog } from "../observability/remote-log";
 import { type CrdtManager, REMOTE_ORIGIN } from "./manager";
 
 /** Outer y-protocols message-type tag — we only speak `messageSync`. */
@@ -64,6 +65,7 @@ export class CrdtChannel {
 			bytes = fromB64(b64);
 		} catch (err) {
 			console.warn("CRDT handleFrame: malformed base64 frame (dropped)", err);
+			rlog().warn("crdt", `handleFrame: malformed base64 frame dropped note=${path}`);
 			return;
 		}
 		const doc = await this.mgr.getDoc(path);
@@ -84,6 +86,7 @@ export class CrdtChannel {
 			}
 		} catch (err) {
 			console.warn("CRDT handleFrame: bad frame content (dropped)", err);
+			rlog().warn("crdt", `handleFrame: bad frame content dropped note=${path}`);
 		}
 	}
 }

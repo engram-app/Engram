@@ -74,6 +74,33 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
             await_promise=True,
         )
 
+    # Wait for Obsidian's vault index to pick up the externally-seeded
+    # node_modules/ folder BEFORE opening the Advanced tab. The scanner runs
+    # exactly ONCE, synchronously, at tab render (renderIgnoreWarnings calls
+    # app.vault.getFolderByPath) and never re-scans — so if the folder is not
+    # in the vault cache at render time, the warning row can NEVER appear no
+    # matter how long the DOM is polled afterwards. That is why bumping the
+    # DOM wait 5s -> 20s did not help (run 28919928915 failed the 20s window
+    # too): the failure is state-at-render-time, not render latency. Under
+    # full-suite CI load the inotify -> vault-index tick for an external
+    # mkdir can lag well past the moment we open the tab.
+    indexed = False
+    deadline = asyncio.get_event_loop().time() + 30
+    while asyncio.get_event_loop().time() < deadline:
+        indexed = await cdp_a.evaluate(
+            "Boolean(app.vault.getFolderByPath('node_modules'))"
+        )
+        if indexed:
+            break
+        await asyncio.sleep(0.2)
+    assert indexed, (
+        "Obsidian's vault index never picked up the externally-seeded "
+        "node_modules/ folder within 30 s — the scanner's precondition "
+        "failed, not the warning-row render. Check the vault file watcher "
+        "(inotify) in this environment before suspecting "
+        "renderIgnoreWarnings()."
+    )
+
     try:
         # Open the Obsidian settings modal and navigate to the plugin + Advanced tab.
         await cdp_a.evaluate(
@@ -123,11 +150,13 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
 
         # Wait for the .engram-status-warning row to appear
         # (renderIgnoreWarnings detects the vault folder and renders the
-        # warning on tab render). The scanner is synchronous render — if
-        # it didn't fire within 5 s it's broken. No redisplay retries:
-        # those masked real regressions previously.
+        # warning on tab render). The scanner is synchronous render, but
+        # under full-suite CI load the render tick itself can be delayed —
+        # 5 s flaked intermittently (passed in the previous run). Widened
+        # to 20 s; this is still a poll, not a retry-with-redisplay (those
+        # masked real regressions previously).
         warning_visible = False
-        deadline = asyncio.get_event_loop().time() + 5
+        deadline = asyncio.get_event_loop().time() + 20
         while asyncio.get_event_loop().time() < deadline:
             warning_visible = await cdp_a.evaluate(
                 "Boolean(document.querySelector('.engram-status-warning'))"
@@ -137,7 +166,7 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
             await asyncio.sleep(0.2)
         assert warning_visible, (
             "node_modules/ warning row (.engram-status-warning) did not "
-            "appear within 5 s of opening the Advanced tab. Either the "
+            "appear within 20 s of opening the Advanced tab. Either the "
             "problem-dir scanner stopped detecting node_modules/, or "
             "renderIgnoreWarnings no longer emits .engram-status-warning. "
             "Inspect settings.ts renderIgnoreWarnings() against current source."

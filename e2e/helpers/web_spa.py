@@ -19,6 +19,7 @@ Requires Playwright + Chromium (already in the e2e requirements + CI image).
 from __future__ import annotations
 
 import logging
+import os
 import re
 
 from playwright.async_api import async_playwright
@@ -41,8 +42,14 @@ class WebSpaPeer:
     async def start(self) -> None:
         self._pw = await async_playwright().start()
         # --no-sandbox: headless Chromium under CI/container users; harmless locally.
+        # E2E_WEB_HEADED=1 launches headed (point DISPLAY at an Xvfb): on some
+        # dev hosts headless Chromium never produces compositor frames, so
+        # requestAnimationFrame stalls and every Playwright actionability wait
+        # (visible/enabled/STABLE needs two consecutive frames) times out at
+        # the sign-in click. CI runners tick fine headless; this is local-only.
+        headed = os.environ.get("E2E_WEB_HEADED") == "1"
         self._browser = await self._pw.chromium.launch(
-            headless=True, args=["--no-sandbox", "--disable-gpu"]
+            headless=not headed, args=["--no-sandbox", "--disable-gpu"]
         )
         self._ctx = await self._browser.new_context(base_url=self.base_url)
         self._page = await self._ctx.new_page()
@@ -73,6 +80,10 @@ class WebSpaPeer:
 
     def _editor(self):
         return self._page.locator(".cm-content")
+
+    def editor_locator(self):
+        """Public CM6 content locator, for auto-retrying `expect(...)` asserts."""
+        return self._editor()
 
     async def append(self, text: str) -> None:
         """Append `text` at end-of-doc as one atomic CM6 transaction (one CRDT op)."""

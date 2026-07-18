@@ -109,12 +109,17 @@ defmodule Engram.Vaults do
   transaction so the bump participates in the same atomic unit as the row
   write it stamps (and inherits RLS tenant context). The row-level lock on
   the vault row serializes seq assignment per vault.
+
+  `opts` is passed straight to `Repo.query!/3`. The batch upsert path passes
+  `mode: :savepoint` so a failed bump (e.g. bigint overflow) rolls back to a
+  per-statement savepoint instead of poisoning the shared batch transaction.
   """
-  def next_seq!(vault_id) do
+  def next_seq!(vault_id, opts \\ []) do
     %{rows: [[seq]]} =
       Repo.query!(
         "UPDATE vaults SET change_seq = change_seq + 1 WHERE id = $1 RETURNING change_seq",
-        [Ecto.UUID.dump!(vault_id)]
+        [Ecto.UUID.dump!(vault_id)],
+        opts
       )
 
     seq
@@ -506,10 +511,17 @@ defmodule Engram.Vaults do
     end)
     |> unwrap_transaction()
     |> tap(fn
-      # Deleting the last vault can flip the onboarding gate back to
-      # failing — drop the cached pass verdict so it re-derives.
-      {:ok, _} -> Engram.Onboarding.GateCache.evict(user.id)
-      _ -> :ok
+      {:ok, deleted} ->
+        # Rooms must not outlive the vault (#954): orphaned rooms kept ticking
+        # checkpoints against rows being purged (2026-07-07 error storms).
+        # Post-commit on purpose — a rolled-back delete must not kill rooms.
+        _ = Engram.Notes.kill_live_rooms_for_vault(deleted.user_id, deleted.id)
+        # Deleting the last vault can flip the onboarding gate back to
+        # failing — drop the cached pass verdict so it re-derives.
+        Engram.Onboarding.GateCache.evict(user.id)
+
+      _ ->
+        :ok
     end)
   end
 
@@ -593,23 +605,30 @@ defmodule Engram.Vaults do
 
   Returns `:ok` or `:forbidden`.
   """
-  def check_api_key_access(nil, _vault), do: :ok
-
   def check_api_key_access(api_key, vault) do
-    # Schemaless query: Ecto/Postgrex can't infer column types so we declare
-    # them explicitly. Both columns are `uuid` (Phase B of PG18+UUIDv7 rework).
-    restricted_vault_ids =
+    case accessible_vault_ids(api_key) do
+      :all -> :ok
+      ids -> if vault.id in ids, do: :ok, else: :forbidden
+    end
+  end
+
+  @doc """
+  Returns an API key's vault-restriction set: `:all` for an unrestricted key
+  (or `nil`, i.e. non-API-key auth), or the explicit list of permitted vault
+  ids. One query — lets callers filter a vault list in memory instead of one
+  `check_api_key_access/2` round-trip per vault.
+  """
+  def accessible_vault_ids(nil), do: :all
+
+  def accessible_vault_ids(api_key) do
+    ids =
       from(akv in "api_key_vaults",
         where: akv.api_key_id == type(^api_key.id, Ecto.UUID),
         select: type(akv.vault_id, Ecto.UUID)
       )
       |> Repo.all(skip_tenant_check: true)
 
-    cond do
-      restricted_vault_ids == [] -> :ok
-      vault.id in restricted_vault_ids -> :ok
-      true -> :forbidden
-    end
+    if ids == [], do: :all, else: ids
   end
 
   # ── Private helpers ─────────────────────────────────────────────────────────

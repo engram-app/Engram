@@ -23,6 +23,13 @@ defmodule EngramWeb.Schemas.UpsertNoteRequest do
       content: %Schema{type: :string},
       mtime: %Schema{type: :number, format: :float},
       version: %Schema{type: :integer, nullable: true},
+      base_hash: %Schema{
+        type: :string,
+        nullable: true,
+        description:
+          "Compare-and-swap guard: the content_hash you last read for this note. " <>
+            "If the note changed since, the write returns 409 instead of merging."
+      },
       title: %Schema{type: :string, nullable: true},
       folder: %Schema{type: :string, nullable: true},
       tags: %Schema{type: :array, items: %Schema{type: :string}}
@@ -171,7 +178,18 @@ defmodule EngramWeb.Schemas.BatchUpsertResult do
       content_hash: %Schema{type: :string, nullable: true},
       server_path: %Schema{type: :string, nullable: true},
       errors: %Schema{type: :object, nullable: true},
-      server_note: %Schema{oneOf: [EngramWeb.Schemas.Note], nullable: true}
+      server_note: %Schema{oneOf: [EngramWeb.Schemas.Note], nullable: true},
+      parse_status: %Schema{
+        type: :string,
+        enum: ["ok", "degraded"],
+        nullable: true,
+        description: "Frontmatter parse outcome"
+      },
+      parse_reason: %Schema{
+        type: :object,
+        nullable: true,
+        description: "Present when parse_status is \"degraded\": {code, message, detail}"
+      }
     }
   })
 end

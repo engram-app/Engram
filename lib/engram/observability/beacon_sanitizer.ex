@@ -8,8 +8,24 @@ defmodule Engram.Observability.BeaconSanitizer do
   security core.
   """
 
-  @allowed_attributes ["engram.surface", "engram.event_type", "engram.duration_ms"]
-  @allowed_names ["obsidian.push", "browser.live_sync.render"]
+  @allowed_attributes [
+    "engram.surface",
+    "engram.event_type",
+    "engram.duration_ms",
+    # Which note (UUID-validated below) and which route/reason — the
+    # 2026-07-14 deaf-note hunt stalled on beacons that carried none of these.
+    "engram.note_id",
+    "engram.route",
+    "engram.reason"
+  ]
+  @allowed_names [
+    "obsidian.push",
+    "browser.live_sync.render",
+    "web.crdt.push",
+    "web.crdt.apply",
+    "web.crdt.handshake"
+  ]
+  @uuid_re ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/
   @max_duration_us 30_000_000
   @max_skew_us 300_000_000
 
@@ -62,7 +78,12 @@ defmodule Engram.Observability.BeaconSanitizer do
   defp attributes(attrs) when is_map(attrs) do
     attrs
     |> Map.take(@allowed_attributes)
-    |> Enum.filter(fn {_k, v} -> safe_attr_value?(v) end)
+    |> Enum.filter(fn
+      # note_id must LOOK like a note id: anything else (a title, a path) is
+      # both a PII leak and an unbounded-cardinality label. Drop, don't reject.
+      {"engram.note_id", v} -> is_binary(v) and Regex.match?(@uuid_re, v)
+      {_k, v} -> safe_attr_value?(v)
+    end)
     |> Map.new()
   end
 

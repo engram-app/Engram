@@ -16,6 +16,7 @@ files triggers the plugin's file watcher, causing unexpected sync events.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import secrets
@@ -30,6 +31,7 @@ from helpers.billing import grant_test_plan
 from helpers.cdp import CdpClient
 from helpers.cleanup import cleanup_minio_bucket, cleanup_test_data, cleanup_vaults
 from helpers.obsidian import ObsidianInstance
+from helpers.oauth import provision_oauth_tokens, swap_to_oauth, restore_auth, wait_for_stream
 
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -225,6 +227,31 @@ def isolation_user(ts, auth_provider):
     return email, provider_user_id, api_key
 
 
+@pytest.fixture(scope="session")
+def resumed_user(ts, auth_provider):
+    """Dedicated user for the resumed-device pair (fresh_instance_pair).
+
+    Kept OFF sync_user's shared vault on purpose: that vault accumulates
+    every note the suite creates (~1000 by the end of a full run), and
+    joining it late floods the resumed devices with a full-vault genesis
+    fan-out that starves the seed-note delivery inside the 30s Phase-1
+    budget (the test_82 timeout flake, Engram#977/#945). A private user +
+    vault keeps the resumed pair's genesis pull near-empty, so what the
+    test measures is resumed-device sync, not suite churn.
+
+    Returns: (email, provider_user_id, api_key)
+    """
+    # Short prefix on purpose: `ts` already runs ~44 chars, and the email
+    # local part must stay <= 64 (RFC 5321) or Clerk create_user 422s. With
+    # "+clerk_test" that budgets ~9 chars for the prefix (e2e-sync-/e2e-iso-
+    # sit right at the ceiling); "e2e-rsm-" keeps us at 63.
+    email = f"e2e-rsm-{ts}+clerk_test@example.com"
+    password = secrets.token_urlsafe(32)
+    provider_user_id, api_key = auth_provider.provision_user(email, password)
+    grant_test_plan(email)
+    return email, provider_user_id, api_key
+
+
 # ---------------------------------------------------------------------------
 # Obsidian instances
 # ---------------------------------------------------------------------------
@@ -244,6 +271,17 @@ def iso_client_id(ts):
     max_vaults limit (which would fire if we created two distinct vaults).
     """
     return f"e2e-iso-pair-{ts}"
+
+
+@pytest.fixture(scope="session")
+def resumed_client_id(ts):
+    """Shared client_id for the resumed-device pair's single private vault.
+
+    ResumedA + ResumedB share it so /vaults/register upserts ONE vault
+    (idempotent by client_id) — the two-device shape under test — while
+    staying isolated from sync_user's accumulator vault.
+    """
+    return f"e2e-resumed-pair-{ts}"
 
 
 @pytest.fixture(scope="session")
@@ -327,6 +365,137 @@ def cdp_c(obsidian_c):
     return CdpClient(port=obsidian_c.cdp_port)
 
 
+@pytest.fixture(scope="session")
+def _oauth_ws_warm(cdp_a, clerk_client):
+    """Absorb the OAuth WebSocket cold-boot cost once, out of any test's
+    timed connect gate.
+
+    Evidence (CI, e2e-clerk, full suite): test_47's first OAuth test alone
+    ate the whole >60s cold-boot (token refresh + getMe backoff + WS
+    phx_join, under 2-worker xdist load + a second Obsidian instance
+    booting) inside its own RT_TIMEOUT-bounded assertion; the very next
+    OAuth test then passed in ~2s once the path was warm. Doing one
+    throwaway swap/wait/restore cycle here, in fixture setup with a
+    generous 120s boot budget, moves that cost out of the timed window.
+    Session-scoped: runs once total, whichever of test_47/48/49 executes
+    first (all three swap cdp_a to OAuth and gate on wait_for_stream).
+    """
+    if clerk_client is None:
+        return  # local-auth run: no OAuth test will request this fixture either
+
+    async def _warm():
+        clerk_user_id, tokens = await provision_oauth_tokens(clerk_client, API_URL, label="warm")
+        try:
+            original = await swap_to_oauth(cdp_a, tokens)
+            # From here on cdp_a wears the throwaway OAuth identity, whose Clerk
+            # user the outer finally deletes. restore_auth MUST run and MUST
+            # rebind cdp_a back to its original identity on every exit path, or
+            # the session-scoped cdp_a serves the rest of the suite cross-bound
+            # (or as a deleted user) and one warm-up hiccup cascades into dozens
+            # of misleading "Stream not connected" failures downstream.
+            warm_err: TimeoutError | None = None
+            try:
+                await wait_for_stream(cdp_a, timeout=120)
+            except TimeoutError as e:
+                warm_err = e
+                # Log now: if the restore below ALSO raises, it propagates as
+                # primary and the re-raise at line ~374 never runs, so this
+                # would otherwise be the only trace of the warm-up timeout.
+                logging.getLogger(__name__).warning(
+                    "OAuth WS warm-up timed out (restoring anyway): %s", e
+                )
+
+            # Always restore, warm-up success or not. restore_auth now VERIFIES
+            # the rebind and raises on a cross-bind. We do NOT swallow that: a
+            # cross-bound session-scoped device poisons every later test, which
+            # is strictly worse than losing the warm-up error — so a restore
+            # failure is surfaced as primary (it names the real, session-level
+            # problem). A generous timeout covers the cold reconnect.
+            await restore_auth(cdp_a, original, verify_timeout=120)
+
+            if warm_err is not None:
+                raise TimeoutError(
+                    "OAuth WS cold-boot warm-up (fixture _oauth_ws_warm) timed "
+                    f"out: {warm_err}. This is one-time suite setup absorbing the "
+                    "first-connect cost, not the behavior under test -- check "
+                    "backend/Clerk health before assuming a real regression."
+                ) from warm_err
+        finally:
+            clerk_client.delete_user(clerk_user_id)
+
+    # NOTE: a temporary event loop on purpose (session fixture, sync context).
+    # It leaves CdpClient._ws bound to the closed loop; the first real test's
+    # _ensure_connected ping fails and reconnects -- relied-upon self-healing,
+    # not an accident. Don't "fix" the first-ping failure you see in logs.
+    asyncio.run(_warm())
+
+
+# ---------------------------------------------------------------------------
+# Resumed-device fixture (dedicated instance pair, function-scoped)
+#
+# A stop/mutate-data.json/restart cycle must never touch the session-scoped
+# A/B/C fixtures the rest of the suite depends on, so this is its own pair on
+# its own ports/displays. It runs on a PRIVATE user+vault (resumed_user /
+# resumed_client_id), NOT sync_user's shared vault: that vault accumulates
+# ~1000 notes over a full run, and joining it late floods the resumed devices
+# with a full-vault genesis fan-out that starves the seed delivery inside the
+# 30s Phase-1 budget (Engram#977/#945). ResumedA + ResumedB still share one
+# client_id, so they land on ONE (near-empty) vault — the two-device shape
+# under test, minus the suite churn.
+# ---------------------------------------------------------------------------
+
+RESUMED_CDP_PORT_A = _worker_port("E2E_CDP_PORT_RESUMED_A", "9350")
+RESUMED_CDP_PORT_B = _worker_port("E2E_CDP_PORT_RESUMED_B", "9351")
+RESUMED_DISPLAY_BASE = int(os.environ.get("E2E_DISPLAY_BASE_RESUMED") or "150") - _WORKER * 2
+assert RESUMED_DISPLAY_BASE - 1 >= 1, (
+    f"RESUMED_DISPLAY_BASE={RESUMED_DISPLAY_BASE} too low for worker {_WORKER}"
+)
+
+
+@pytest.fixture
+def fresh_instance_pair(resumed_user, resumed_client_id, resumed_api):
+    """Dedicated A/B-shaped instance pair for tests that stop/restart a device.
+
+    Function-scoped so a mid-test restart can't poison the session fixtures.
+    Runs on resumed_user's private vault (resumed_api pre-registers it) to
+    stay off the suite's shared accumulator vault — see the block comment
+    above and Engram#977/#945.
+    """
+    inst_a = ObsidianInstance(
+        name="ResumedA",
+        vault_path=Path(f"{VAULT_PREFIX}-resumed-a"),
+        cdp_port=RESUMED_CDP_PORT_A,
+        display=f":{RESUMED_DISPLAY_BASE}",
+        api_url=API_URL,
+        api_key=resumed_user[2],
+        plugin_src=PLUGIN_SRC,
+        obsidian_bin=OBSIDIAN_BIN,
+        client_id=resumed_client_id,
+        config_dir=Path(f"{CONFIG_PREFIX}-resumed-a"),
+    )
+    inst_b = ObsidianInstance(
+        name="ResumedB",
+        vault_path=Path(f"{VAULT_PREFIX}-resumed-b"),
+        cdp_port=RESUMED_CDP_PORT_B,
+        display=f":{RESUMED_DISPLAY_BASE - 1}",
+        api_url=API_URL,
+        api_key=resumed_user[2],
+        plugin_src=PLUGIN_SRC,
+        obsidian_bin=OBSIDIAN_BIN,
+        client_id=resumed_client_id,
+        config_dir=Path(f"{CONFIG_PREFIX}-resumed-b"),
+    )
+    inst_a.start()
+    inst_b.start()
+    cdp_a = CdpClient(port=inst_a.cdp_port)
+    cdp_b = CdpClient(port=inst_b.cdp_port)
+    try:
+        yield inst_a, inst_b, cdp_a, cdp_b
+    finally:
+        inst_a.stop()
+        inst_b.stop()
+
+
 # ---------------------------------------------------------------------------
 # API clients (always use API key — works with any auth provider)
 # ---------------------------------------------------------------------------
@@ -385,6 +554,23 @@ def api_iso(isolation_user, iso_client_id):
     api = ApiClient(API_URL, isolation_user[2])
     try:
         api.register_vault(f"e2e-iso-vault-w{_WORKER}", iso_client_id)
+    except Exception:
+        pass
+    return api
+
+
+@pytest.fixture(scope="session")
+def resumed_api(resumed_user, resumed_client_id):
+    """API client for the resumed-device user's private vault.
+
+    test_82 verifies resumed B's PUSH landed server-side via this client,
+    so it must target the SAME (private) vault the resumed pair joins —
+    not sync_user's shared accumulator vault. Pre-registers the vault so
+    the plugin's own register is a no-op and vault-scoped polls don't 404.
+    """
+    api = ApiClient(API_URL, resumed_user[2])
+    try:
+        api.register_vault(f"e2e-resumed-vault-w{_WORKER}", resumed_client_id)
     except Exception:
         pass
     return api

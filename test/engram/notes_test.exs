@@ -103,10 +103,224 @@ defmodule Engram.NotesTest do
   end
 
   # ---------------------------------------------------------------------------
+  # batch_upsert_notes/3 — per-entry raise isolation (Task 6, defense in depth)
+  # ---------------------------------------------------------------------------
+
+  describe "batch_upsert_notes/3 — per-entry raise isolation" do
+    import ExUnit.CaptureLog
+
+    # Task 5 regression check (not raise-isolation): parse is now total, so
+    # the historically-500ing poison note commits degraded end-to-end.
+    test "a historically-poisonous note commits degraded, sibling commits too", %{
+      user: user,
+      vault: vault
+    } do
+      assert {:ok, %{results: results}} =
+               Notes.batch_upsert_notes(user, vault, [
+                 %{"path" => "good.md", "content" => "---\ntags: [a]\n---\nok\n", "mtime" => 1.0},
+                 %{
+                   "path" => "poison.md",
+                   "content" => "---\ndate:YYYY-MM-DD\n---\nx\n",
+                   "mtime" => 1.0
+                 }
+               ])
+
+      # Total parser (Task 1): the poison note commits degraded, not error.
+      assert Enum.all?(results, &(&1.status == :ok))
+      assert Enum.find(results, &(&1.path == "good.md"))
+      assert Enum.find(results, &(&1.path == "poison.md"))
+    end
+
+    test "process_batch_entry_rescued/3 catches a raise and degrades to a per-note error" do
+      entry = %{path: "poison.md", input_path: "poison.md", result: nil}
+
+      log =
+        capture_log(fn ->
+          assert {degraded, [:untouched_row]} =
+                   Notes.process_batch_entry_rescued(entry, [:untouched_row], fn ->
+                     raise "boom"
+                   end)
+
+          assert %{result: {:error, error}} = degraded
+          assert error["code"] == "note_processing_failed"
+          assert is_binary(error["message"])
+        end)
+
+      assert log =~ "batch entry raised"
+      assert log =~ "poison.md"
+    end
+
+    test "process_batch_entry_rescued/3 passes through a non-raising fn untouched" do
+      entry = %{path: "good.md", input_path: "good.md", result: nil}
+
+      assert {%{result: {:ok, :done}}, [:new_row]} =
+               Notes.process_batch_entry_rescued(entry, [], fn ->
+                 {%{entry | result: {:ok, :done}}, [:new_row]}
+               end)
+    end
+
+    test "a raising entry doesn't corrupt a sibling entry's already-accumulated row/result" do
+      good_entry = %{path: "good.md", input_path: "good.md", result: nil}
+      poison_entry = %{path: "poison.md", input_path: "poison.md", result: nil}
+
+      {good_out, rows_after_good} =
+        Notes.process_batch_entry_rescued(good_entry, [], fn ->
+          {%{good_entry | result: {:ok, :info}}, [:good_row]}
+        end)
+
+      {poison_out, rows_after_poison} =
+        Notes.process_batch_entry_rescued(poison_entry, rows_after_good, fn ->
+          raise "boom"
+        end)
+
+      assert good_out.result == {:ok, :info}
+      assert rows_after_good == [:good_row]
+      assert %{result: {:error, %{"code" => "note_processing_failed"}}} = poison_out
+      # The poison entry contributes no row of its own; the sibling's row survives.
+      assert rows_after_poison == rows_after_good
+    end
+
+    # Task 4: a plain `raise` (above) never poisons the shared tx, but a
+    # FAILED SQL STATEMENT does (Postgres flips the whole tx into 25P02
+    # in_failed_sql_transaction, so every subsequent statement in the SAME tx
+    # fails too). Driven end-to-end through the real batch path: one entry's
+    # UPDATE-branch next_seq! hits a genuine failed statement (bigint overflow,
+    # SQLSTATE 22003) while a sibling entry commits and the batch returns real
+    # partial success. Before the fix (db_mode: :savepoint on the UPDATE-branch
+    # writes) the overflow poisons the shared tx and the whole batch blows up
+    # at COMMIT; the savepoint rolls the failed statement back to just that
+    # entry.
+    test "a failed SQL statement in one entry's UPDATE branch is isolated; sibling commits", %{
+      user: user,
+      vault: vault
+    } do
+      # Seed two notes with plain (no-frontmatter) bodies via the real batch.
+      assert {:ok, %{results: seed}} =
+               Notes.batch_upsert_notes(user, vault, [
+                 %{"path" => "keep.md", "content" => "keep body", "mtime" => 1.0},
+                 %{"path" => "poison.md", "content" => "poison v1", "mtime" => 1.0}
+               ])
+
+      assert Enum.all?(seed, &(&1.status == :ok))
+
+      # Prime the next per-entry next_seq! UPDATE to overflow: change_seq is a
+      # bigint; `change_seq + 1` at MAX raises SQLSTATE 22003, a real failed
+      # SQL statement mid-transaction, not a bare raise.
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          Engram.Repo.query!(
+            "UPDATE vaults SET change_seq = $1 WHERE id = $2",
+            [9_223_372_036_854_775_807, Ecto.UUID.dump!(vault.id)]
+          )
+        end)
+
+      log =
+        capture_log(fn ->
+          # keep.md is a byte-identical re-push (idempotent_repush, no
+          # next_seq!, commits as a no-op :ok). poison.md changes content, so
+          # its UPDATE branch calls next_seq! → overflow. Neither is a new
+          # insert, so the post-loop insert_all (its own next_seq!) is skipped.
+          assert {:ok, %{results: results}} =
+                   Notes.batch_upsert_notes(user, vault, [
+                     %{"path" => "keep.md", "content" => "keep body", "mtime" => 2.0},
+                     %{"path" => "poison.md", "content" => "poison v2 CHANGED", "mtime" => 2.0}
+                   ])
+
+          keep = Enum.find(results, &(&1.path == "keep.md"))
+          poison = Enum.find(results, &(&1.path == "poison.md"))
+
+          # Real partial success: the sibling committed, the failed-SQL entry
+          # degraded to a per-note error, and the batch tx COMMITTED (returned
+          # {:ok, _} rather than raising 25P02 at COMMIT).
+          assert keep.status == :ok
+          assert poison.status == :error
+        end)
+
+      assert log =~ "batch entry raised"
+      assert log =~ "poison.md"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # upsert_note/3
   # ---------------------------------------------------------------------------
 
   describe "upsert_note/3" do
+    # Phase 0 (identity-as-CRDT): the documented-but-missing stale-base gate.
+    # The three-way CRDT merge diffs incoming FULL content against the stored
+    # snapshot — a stale client's push whose diff says "these paragraphs don't
+    # exist" thereby deletes newer content "convergently" (prod incident
+    # 2026-07-07, plugin reconnect clobber). A writer that declares the base it
+    # read (`base_hash` = the row's content_hash at read time) must 409 when
+    # the row has moved, so the client re-reads/merges instead of clobbering.
+    test "base_hash mismatch returns version_conflict instead of merging a stale write",
+         %{user: user, vault: vault} do
+      {:ok, v1} =
+        Notes.upsert_note(user, vault, %{"path" => "cas.md", "content" => "one", "mtime" => 1.0})
+
+      stale_base = v1.content_hash
+
+      # The row moves (someone else's write).
+      {:ok, v2} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "cas.md",
+          "content" => "one\ntwo",
+          "mtime" => 2.0
+        })
+
+      # A write declaring the OLD base must be refused with the server note.
+      assert {:error, :version_conflict, server_note} =
+               Notes.upsert_note(user, vault, %{
+                 "path" => "cas.md",
+                 "content" => "one\nstale rewrite",
+                 "mtime" => 3.0,
+                 "base_hash" => stale_base
+               })
+
+      assert server_note.id == v2.id
+
+      # Nothing was merged — the newer content is intact.
+      {:ok, fresh} = Notes.get_note(user, vault, "cas.md")
+      assert fresh.content == "one\ntwo"
+    end
+
+    test "base_hash matching the current row proceeds normally", %{user: user, vault: vault} do
+      {:ok, v1} =
+        Notes.upsert_note(user, vault, %{"path" => "cas2.md", "content" => "one", "mtime" => 1.0})
+
+      assert {:ok, updated} =
+               Notes.upsert_note(user, vault, %{
+                 "path" => "cas2.md",
+                 "content" => "one\ntwo",
+                 "mtime" => 2.0,
+                 "base_hash" => v1.content_hash
+               })
+
+      assert updated.content == "one\ntwo"
+    end
+
+    test "absent base_hash keeps the merge behavior (legacy clients)", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "cas3.md", "content" => "one", "mtime" => 1.0})
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "cas3.md",
+          "content" => "one\ntwo",
+          "mtime" => 2.0
+        })
+
+      assert {:ok, _} =
+               Notes.upsert_note(user, vault, %{
+                 "path" => "cas3.md",
+                 "content" => "one\nthree",
+                 "mtime" => 3.0
+               })
+    end
+
     test "creates a new note", %{user: user, vault: vault} do
       assert {:ok, note} =
                Notes.upsert_note(user, vault, %{
@@ -420,6 +634,102 @@ defmodule Engram.NotesTest do
 
       {:ok, folders} = Notes.list_folders_with_counts(user, vault)
       assert Enum.any?(folders, &(&1.folder == "Both"))
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # upsert_note/3 — parse_status/parse_reason stamping (Task 5)
+  # ---------------------------------------------------------------------------
+
+  describe "upsert_note/3 — parse_status stamping" do
+    test "a clean note is stamped parse_status ok with no reason", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Clean.md",
+          "content" => "---\ntags: [a]\n---\nx\n",
+          "mtime" => 1.0
+        })
+
+      assert note.parse_status == "ok"
+      assert note.parse_reason == nil
+    end
+
+    test "a note with no frontmatter at all is parse_status ok", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "NoFrontmatter.md",
+          "content" => "just a body\n",
+          "mtime" => 1.0
+        })
+
+      assert note.parse_status == "ok"
+      assert note.parse_reason == nil
+    end
+
+    test "a whole-block malformed frontmatter (date:YYYY-MM-DD, no space) stores frontmatter_invalid_yaml",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "InvalidYaml.md",
+          "content" => "---\ndate:YYYY-MM-DD\n---\nx\n",
+          "mtime" => 1.0
+        })
+
+      assert note.parse_status == "degraded"
+      assert note.parse_reason["code"] == "frontmatter_invalid_yaml"
+      assert is_binary(note.parse_reason["message"])
+    end
+
+    test "a single unparseable key (non-binary map key) stores frontmatter_unparseable_key with the key's detail",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "UnparseableKey.md",
+          "content" => "---\ndate: {[a, b]: 1}\n---\nx\n",
+          "mtime" => 1.0
+        })
+
+      assert note.parse_status == "degraded"
+      assert note.parse_reason["code"] == "frontmatter_unparseable_key"
+      assert note.parse_reason["detail"]["key"] == "date"
+      assert note.parse_reason["detail"]["line"] == 1
+      # snippet is redacted to the KEY only (parse_reason is stored plaintext).
+      assert note.parse_reason["detail"]["snippet"] == "date:"
+    end
+
+    test "a marker-colliding but encodable value stays parse_status ok (not a Task 3 passthrough concern)",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Colliding.md",
+          "content" => "---\ndate:\n  __engram_raw__: x\n  y: 1\n---\nbody\n",
+          "mtime" => 1.0
+        })
+
+      assert note.parse_status == "ok"
+      assert note.parse_reason == nil
+    end
+
+    test "rewriting a degraded note with clean frontmatter resets parse_status to ok",
+         %{user: user, vault: vault} do
+      {:ok, degraded} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Fixable.md",
+          "content" => "---\ndate:YYYY-MM-DD\n---\nx\n",
+          "mtime" => 1.0
+        })
+
+      assert degraded.parse_status == "degraded"
+
+      {:ok, fixed} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Fixable.md",
+          "content" => "---\ntitle: Fixed\n---\nx\n",
+          "mtime" => 2.0
+        })
+
+      assert fixed.parse_status == "ok"
+      assert fixed.parse_reason == nil
     end
   end
 

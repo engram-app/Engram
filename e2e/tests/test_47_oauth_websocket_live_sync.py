@@ -47,7 +47,7 @@ def _log_latency(label: str, t0: float) -> float:
 
 
 @pytest.mark.asyncio
-async def test_oauth_client_receives_api_create(vault_a, cdp_a, clerk_client):
+async def test_oauth_client_receives_api_create(vault_a, cdp_a, clerk_client, _oauth_ws_warm):
     """OAuth-authenticated plugin receives real-time broadcast when API creates a note.
 
     This is the core regression test: before the fix, OAuth clients never joined
@@ -91,7 +91,7 @@ async def test_oauth_client_receives_api_create(vault_a, cdp_a, clerk_client):
 
 
 @pytest.mark.asyncio
-async def test_oauth_client_receives_api_update(vault_a, cdp_a, clerk_client):
+async def test_oauth_client_receives_api_update(vault_a, cdp_a, clerk_client, _oauth_ws_warm):
     """OAuth client receives updated content via WebSocket when API upserts a note."""
     clerk_user_id, tokens = await provision_oauth_tokens(clerk_client, API_URL, label="ws")
     original_settings = None
@@ -138,7 +138,7 @@ async def test_oauth_client_receives_api_update(vault_a, cdp_a, clerk_client):
 
 
 @pytest.mark.asyncio
-async def test_oauth_client_receives_api_delete(vault_a, cdp_a, clerk_client):
+async def test_oauth_client_receives_api_delete(vault_a, cdp_a, clerk_client, _oauth_ws_warm):
     """OAuth client removes file from vault when API deletes a note via WebSocket."""
     clerk_user_id, tokens = await provision_oauth_tokens(clerk_client, API_URL, label="ws")
     original_settings = None

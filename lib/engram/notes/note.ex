@@ -68,6 +68,16 @@ defmodule Engram.Notes.Note do
     field :crdt_state_ciphertext, :binary
     field :crdt_state_nonce, :binary
 
+    # Head marker of the canonical CRDT doc: sha256(state_vector) url-b64 (see
+    # CrdtTransport.head_marker/1). INVALIDATE-and-self-heal, not maintained: it
+    # is NULLed on every CRDT-state change (update_v1 on a tail append; a DB
+    # trigger on any crdt_state_ciphertext write), and vault_heads self-heals a
+    # NULL by rebuilding the doc once and storing the result — so a non-NULL
+    # value is a lazily-cached head, refreshed on the next poll after any edit.
+    # BackfillCrdtHead warms existing NULLs. Not encrypted: a hash of clock
+    # counts carries no note content.
+    field :crdt_head, :string
+
     field :type_ciphertext, :binary
     field :type_nonce, :binary
     field :type_hmac, :binary
@@ -75,6 +85,13 @@ defmodule Engram.Notes.Note do
     field :description_nonce, :binary
     field :resource_ciphertext, :binary
     field :resource_nonce, :binary
+
+    # Frontmatter-resilience (Task 4): stamped by ingest (Task 5) when a
+    # note's frontmatter couldn't be parsed cleanly, so the fallback is
+    # visible instead of silent. Plaintext: describes parser behavior, not
+    # note content.
+    field :parse_status, :string, default: "ok"
+    field :parse_reason, :map
 
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault
@@ -129,7 +146,9 @@ defmodule Engram.Notes.Note do
         :deleted_at,
         :kind,
         :fm_timestamp,
-        :fm_created
+        :fm_created,
+        :parse_status,
+        :parse_reason
       ] ++ @encryption_fields,
       empty_values: []
     )

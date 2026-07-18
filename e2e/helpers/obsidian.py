@@ -106,6 +106,28 @@ class ObsidianInstance:
         if self.config_dir.exists():
             shutil.rmtree(self.config_dir, ignore_errors=True)
 
+    def read_data_json(self) -> dict:
+        """Read the plugin's persisted data.json without mutating it.
+
+        Companion to mutate_data_json — used by tests that need to poll
+        persisted state (e.g. waiting for syncCursor to appear) rather than
+        rewrite it.
+        """
+        p = self.vault_path / ".obsidian" / "plugins" / "engram-vault-sync" / "data.json"
+        return json.loads(p.read_text(encoding="utf-8"))
+
+    def mutate_data_json(self, mutator) -> None:
+        """Stop-state helper: rewrite the plugin's persisted data.json.
+
+        Call only while the instance is stopped. `mutator` receives the parsed
+        dict and mutates in place (e.g. wipe noteIds, keep syncCursor) so tests
+        can construct RESUMED-device states no fresh boot produces.
+        """
+        p = self.vault_path / ".obsidian" / "plugins" / "engram-vault-sync" / "data.json"
+        data = json.loads(p.read_text(encoding="utf-8"))
+        mutator(data)
+        p.write_text(json.dumps(data), encoding="utf-8")
+
     def _prepare_vault(self) -> None:
         """Create vault directory with plugin files and pre-configured settings."""
         if self.vault_path.exists():
@@ -143,9 +165,10 @@ class ObsidianInstance:
         }
         # Explicitly pin the file-level CRDT sync path (spec §12a) for the
         # dedicated CRDT job. NOTE: since plugin #148 enableCrdt DEFAULTS to
-        # true, so even without this key the general suite runs CRDT whenever
-        # the backend advertises the `crdt:` topic (CRDT_ENABLED=true) —
-        # omitting it does NOT pin the legacy REST path.
+        # true, so even without this key the general suite runs CRDT — the
+        # backend always advertises the `crdt:` topic (CRDT is unconditional;
+        # the old CRDT_ENABLED stack flag was dead config). Omitting this key
+        # does NOT pin the legacy REST path.
         if os.environ.get("E2E_ENABLE_CRDT") == "true":
             settings["enableCrdt"] = True
         if self.client_id:

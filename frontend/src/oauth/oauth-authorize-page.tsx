@@ -27,17 +27,23 @@ const REQUIRED_PARAMS = [
 	"code_challenge",
 	"code_challenge_method",
 	"state",
-	"scope",
 ] as const;
+
+// `scope` is OPTIONAL in an authorization request (RFC 6749 §4.1.1) and the
+// backend already defaults an absent scope to "mcp" (Engram.OAuth.
+// validate_authorization_request). Requiring it here rejected legal
+// scope-less requests — Claude Code's MCP (re)connect flow omits it — with a
+// dead-end "Invalid authorization request" page. Mirror the backend default.
+const DEFAULT_SCOPE = "mcp";
 
 type RequiredParam = (typeof REQUIRED_PARAMS)[number];
 
 function readParams(search: URLSearchParams): {
-	values: Record<RequiredParam, string>;
+	values: Record<RequiredParam, string> & { scope: string };
 	resource: string | null;
 	missing: RequiredParam[];
 } {
-	const values = {} as Record<RequiredParam, string>;
+	const values = {} as Record<RequiredParam, string> & { scope: string };
 	const missing: RequiredParam[] = [];
 
 	for (const key of REQUIRED_PARAMS) {
@@ -48,6 +54,7 @@ function readParams(search: URLSearchParams): {
 			missing.push(key);
 		}
 	}
+	values.scope = search.get("scope") || DEFAULT_SCOPE;
 
 	return { values, resource: search.get("resource"), missing };
 }

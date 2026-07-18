@@ -62,6 +62,14 @@ defmodule Engram.Notes.OkfFieldsTest do
              @empty
   end
 
+  test "extracts a good OKF key even when a sibling frontmatter key is degraded" do
+    # Resilience improvement (Task 5): a single unencodable sibling key
+    # (nested non-binary key) no longer forces the whole block to @empty.
+    # The good `created` key still populates fm_created.
+    content = "---\ncreated: 2026-01-05\nbadkey: {[a, b]: 1}\n---\nbody\n"
+    assert OkfFields.extract(content).fm_created == ~U[2026-01-05 00:00:00Z]
+  end
+
   test "normalize_type is NFKC + lowercase" do
     assert OkfFields.normalize_type("Playbook") == "playbook"
     assert OkfFields.normalize_type("ＮＯＴＥ") == "note"

@@ -1,21 +1,20 @@
 """Test 34: Folder rename propagates — notes appear at new paths on B.
 
 A creates notes in a folder. Server-side folder rename moves all notes
-(in-place path update + soft-deleted tombstone for old path). B syncs
-and sees notes under the new folder path. Old paths are cleaned up via
-the tombstone delete signals in the changes feed.
+(in-place path update + soft-deleted tombstone for old path). B receives
+the new paths live and sees old paths cleaned up via the tombstone delete
+signals — no manual pull backstop.
 """
-
-import time
 
 import pytest
 
-from helpers.vault import wait_for_file, wait_for_file_gone, write_note
+from helpers.log_oracle import wait_for_delivery
+from helpers.vault import wait_for_file_gone, write_note
 
 
 @pytest.mark.asyncio
 async def test_folder_rename_new_paths(vault_a, vault_b, cdp_a, cdp_b, api_sync):
-    """Renaming a folder makes notes appear at new paths for B."""
+    """Renaming a folder makes notes appear at new paths for B, live."""
     old_folder = "E2E/RenameFolder34"
     new_folder = "E2E/RenamedFolder34"
     note1 = f"{old_folder}/Note1.md"
@@ -27,10 +26,9 @@ async def test_folder_rename_new_paths(vault_a, vault_b, cdp_a, cdp_b, api_sync)
     api_sync.wait_for_note(note1, timeout=10)
     api_sync.wait_for_note(note2, timeout=10)
 
-    # B syncs to establish state
-    await cdp_b.trigger_full_sync()
-    assert (vault_b / note1).exists(), "B should have Note1 before rename"
-    assert (vault_b / note2).exists(), "B should have Note2 before rename"
+    # B receives both live to establish state before rename
+    wait_for_delivery(vault_b, note1, api_sync, timeout=30)
+    wait_for_delivery(vault_b, note2, api_sync, timeout=30)
 
     # Rename folder via API
     status = api_sync.rename_folder(old_folder, new_folder)
@@ -42,28 +40,25 @@ async def test_folder_rename_new_paths(vault_a, vault_b, cdp_a, cdp_b, api_sync)
     api_sync.wait_for_note(new_note1, timeout=10)
     api_sync.wait_for_note(new_note2, timeout=10)
 
-    # B syncs — should see new paths
-    await cdp_b.trigger_full_sync()
-    wait_for_file(vault_b, new_note1, timeout=15)
-    wait_for_file(vault_b, new_note2, timeout=15)
+    # B receives the new paths live — no manual pull
+    wait_for_delivery(vault_b, new_note1, api_sync, timeout=30)
+    wait_for_delivery(vault_b, new_note2, api_sync, timeout=30)
 
 
 @pytest.mark.asyncio
 async def test_folder_rename_old_paths_cleaned(vault_a, vault_b, cdp_a, cdp_b, api_sync):
-    """After folder rename, old paths should be removed from B's vault."""
+    """After folder rename, old paths should be removed from B's vault live."""
     old_folder = "E2E/RenameCleanup34"
     new_folder = "E2E/RenamedCleanup34"
     note = f"{old_folder}/Cleanup.md"
 
     write_note(vault_a, note, "# Cleanup Test\nShould be removed at old path")
     api_sync.wait_for_note(note, timeout=10)
-    await cdp_b.trigger_full_sync()
-    assert (vault_b / note).exists(), "B should have note before rename"
+    wait_for_delivery(vault_b, note, api_sync, timeout=30)
 
     # Rename folder
     api_sync.rename_folder(old_folder, new_folder)
     api_sync.wait_for_note(f"{new_folder}/Cleanup.md", timeout=10)
 
-    # B syncs — tombstone delete signal should remove old path
-    await cdp_b.trigger_full_sync()
-    wait_for_file_gone(vault_b, note, timeout=15)
+    # B removes the old path live — tombstone delete signal, no manual pull
+    wait_for_file_gone(vault_b, note, timeout=30)

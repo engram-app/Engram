@@ -45,7 +45,7 @@ def _log_latency(label: str, t0: float) -> float:
 
 
 @pytest.mark.asyncio
-async def test_oauth_reconnect_catches_up(vault_a, cdp_a, clerk_client):
+async def test_oauth_reconnect_catches_up(vault_a, cdp_a, clerk_client, _oauth_ws_warm):
     """OAuth channel drops, API creates note, channel reconnects, client gets note.
 
     Proves that OAuth token re-auth + channel re-join works after disconnect,
@@ -97,7 +97,7 @@ async def test_oauth_reconnect_catches_up(vault_a, cdp_a, clerk_client):
 
 
 @pytest.mark.asyncio
-async def test_oauth_reconnect_receives_update(vault_a, cdp_a, clerk_client):
+async def test_oauth_reconnect_receives_update(vault_a, cdp_a, clerk_client, _oauth_ws_warm):
     """OAuth channel drops, API updates existing note, reconnect delivers update.
 
     Edge case: file already exists locally, content changes while disconnected.

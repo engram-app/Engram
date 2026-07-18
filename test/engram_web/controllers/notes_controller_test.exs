@@ -218,6 +218,25 @@ defmodule EngramWeb.NotesControllerTest do
       assert resp["note"]["content"] =~ "stuff"
     end
 
+    test "returns 409 (not 500) when append re-creates at a just-deleted path with identical content",
+         %{conn: conn} do
+      # append-create derives content = "# <basename>\n\n<text>". Seed a tombstone
+      # with that exact content so the delete-wins guard (identical content_hash,
+      # same path, within window) fires on the append-create branch — which must
+      # return a clean 409, not crash format_errors/1 on the :recently_deleted atom.
+      post(conn, "/api/notes", %{
+        path: "AppendZombie.md",
+        content: "# AppendZombie\n\nseed",
+        mtime: 1_000.0
+      })
+
+      assert conn |> delete("/api/notes/AppendZombie.md") |> json_response(200)
+
+      conn = post(conn, "/api/notes/append", %{path: "AppendZombie.md", text: "seed"})
+
+      assert json_response(conn, 409) == %{"conflict" => true, "reason" => "recently_deleted"}
+    end
+
     test "returns 401 without auth", %{conn: conn} do
       conn =
         conn
@@ -258,6 +277,44 @@ defmodule EngramWeb.NotesControllerTest do
     test "returns 404 for missing note", %{conn: conn} do
       conn = get(conn, "/api/notes/Nope/Missing.md")
       assert json_response(conn, 404)
+    end
+
+    test "includes parse_status ok + nil reason for a clean note", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _note} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "Clean.md",
+          "content" => "---\ntags: [a]\n---\nx\n",
+          "mtime" => 1.0
+        })
+
+      conn = get(conn, "/api/notes/Clean.md")
+      body = json_response(conn, 200)
+      assert body["parse_status"] == "ok"
+      assert body["parse_reason"] == nil
+    end
+
+    test "includes parse_status degraded + reason detail for a note with bad frontmatter", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _note} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "Degraded.md",
+          "content" => "---\ndate:YYYY-MM-DD\n---\nx\n",
+          "mtime" => 1.0
+        })
+
+      conn = get(conn, "/api/notes/Degraded.md")
+      body = json_response(conn, 200)
+      assert body["parse_status"] == "degraded"
+      assert body["parse_reason"]["code"] == "frontmatter_invalid_yaml"
+      # redacted marker, never the raw frontmatter source (plaintext column).
+      assert body["parse_reason"]["detail"]["snippet"] == "<frontmatter>"
     end
 
     test "returns 404 for deleted note", %{conn: conn} do
@@ -333,9 +390,80 @@ defmodule EngramWeb.NotesControllerTest do
       conn = delete(conn, "/api/notes/Fake/Note.md")
       assert %{"deleted" => true} = json_response(conn, 200)
     end
+
+    test "stamps the X-Device-Id header into the delete broadcast", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      post(conn, "/api/notes", %{path: "Test/Stamped.md", content: "# S", mtime: 1_000.0})
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      device_id = Ecto.UUID.generate()
+
+      conn
+      |> put_req_header("x-device-id", device_id)
+      |> delete("/api/notes/Test/Stamped.md")
+      |> json_response(200)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "Test/Stamped.md"} = payload
+      }
+
+      assert payload["device_id"] == device_id
+    end
+
+    test "ignores an oversized X-Device-Id header", %{conn: conn, user: user, vault: vault} do
+      post(conn, "/api/notes", %{path: "Test/BigId.md", content: "# S", mtime: 1_000.0})
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      conn
+      |> put_req_header("x-device-id", String.duplicate("a", 65))
+      |> delete("/api/notes/Test/BigId.md")
+      |> json_response(200)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "Test/BigId.md"} = payload
+      }
+
+      refute Map.has_key?(payload, "device_id")
+    end
   end
 
   # ---------------------------------------------------------------------------
+  # Serializer nil-content boundary (same class as the broadcast_change fix,
+  # e2e test_34): a meta-projected struct whose content was never loaded must
+  # OMIT the content key, never fabricate "" beside a real content_hash.
+  # nil cannot reach note_json/change_json through today's callers (all of
+  # them full-load + decrypt), so this pins the boundary directly: a future
+  # projection leak fails as a missing key (the plugin fetches on absence)
+  # instead of a silent 0-byte file seeded as converged forever.
+  describe "serializer nil-content guard" do
+    test "put_content omits the key for nil and keeps genuinely empty content" do
+      refute Map.has_key?(EngramWeb.NotesController.put_content(%{}, nil), :content)
+      assert EngramWeb.NotesController.put_content(%{}, "") == %{content: ""}
+      assert EngramWeb.NotesController.put_content(%{}, "# X") == %{content: "# X"}
+    end
+
+    test "genuinely empty note keeps content == \"\" on GET and changes pages", %{
+      conn: conn
+    } do
+      post(conn, "/api/notes", %{path: "Test/Empty.md", content: "", mtime: 1_000.0})
+
+      body = conn |> get("/api/notes/Test/Empty.md") |> json_response(200)
+      assert body["content"] == ""
+
+      %{"changes" => changes} =
+        conn
+        |> get("/api/notes/changes?since=2020-01-01T00:00:00Z")
+        |> json_response(200)
+
+      change = Enum.find(changes, &(&1["path"] == "Test/Empty.md"))
+      assert change["content"] == ""
+    end
+  end
+
   # GET /notes/changes
   # ---------------------------------------------------------------------------
 

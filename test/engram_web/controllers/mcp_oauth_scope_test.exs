@@ -106,12 +106,46 @@ defmodule EngramWeb.McpOAuthScopeTest do
     assert response_text <> error_msg =~ "bound to vault"
   end
 
-  test "unscoped internal JWT (no vault_id claim) keeps existing behavior", %{
+  test "OAuth-bound token cannot confirm a vault outside its binding via set_vault (#729)", %{
     conn: conn,
-    user: user
+    user: user,
+    vault_a: vault_a,
+    vault_b: vault_b
   } do
-    conn = conn |> unscoped_jwt(user) |> call_tool("list_folders", %{})
+    conn =
+      conn
+      |> oauth_authed(user, vault_a.id)
+      |> call_tool("set_vault", %{"vault_id" => vault_b.id})
+
     body = json_response(conn, 200)
-    refute Map.has_key?(body, "error")
+    text = body["result"]["content"] |> Kernel.||([]) |> Enum.map_join(" ", & &1["text"])
+
+    # Must be refused and must NOT echo vault B as valid — it was scoped away.
+    assert body["result"]["isError"] == true
+    refute text =~ "is valid"
+  end
+
+  test "all-vaults grant (no vault_id claim) with multiple vaults must specify a vault", %{
+    conn: conn,
+    user: user,
+    vault_a: vault_a
+  } do
+    # A vault:* / unscoped token over 2 vaults is ambiguous — fail loud instead
+    # of silently defaulting (#985), and succeed once a vault is named.
+    ambiguous =
+      conn |> unscoped_jwt(user) |> call_tool("list_folders", %{}) |> json_response(200)
+
+    text = ambiguous["result"]["content"] |> Kernel.||([]) |> Enum.map_join(" ", & &1["text"])
+    assert ambiguous["result"]["isError"] == true
+    assert text =~ "multiple vaults"
+
+    named =
+      build_conn()
+      |> unscoped_jwt(user)
+      |> call_tool("list_folders", %{"vault_id" => vault_a.id})
+      |> json_response(200)
+
+    refute Map.has_key?(named, "error")
+    refute named["result"]["isError"] == true
   end
 end

@@ -82,6 +82,36 @@ defmodule Engram.NotesBroadcastTest do
     end
   end
 
+  describe "rapid successive upserts broadcast (Engram#944)" do
+    test "two upserts to the same path with different content each broadcast a note_changed upsert",
+         %{user: user, vault: vault} do
+      {:ok, _base} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "canvas.canvas",
+          "content" => "base",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      # Fire the second upsert immediately after the first — no artificial
+      # delay — to mirror the e2e repro's back-to-back rapid writes.
+      {:ok, modified} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "canvas.canvas",
+          "content" => "modified",
+          "mtime" => 1.001
+        })
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "upsert", "content_hash" => hash}
+      }
+
+      assert hash == modified.content_hash
+    end
+  end
+
   describe "rename_folder/4 cascade broadcast" do
     test "upsert broadcast for a renamed child carries the note id and new path", %{
       user: user,
@@ -110,6 +140,149 @@ defmodule Engram.NotesBroadcastTest do
 
       assert payload["id"] == child.id
       assert payload["path"] == "New/Child.md"
+    end
+
+    # Receivers relocate the note's id to the new path (upsert) BEFORE they
+    # see the old-path delete, so the delete reads as a relocation leg (id
+    # lives elsewhere) instead of tearing the note's CRDT room down by id.
+    # Patterns here do NOT discriminate on event_type, so the two
+    # assert_receives capture mailbox order and enforce upsert-before-delete.
+    test "cascade broadcasts the new-path upsert before the old-path delete", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _child} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old/Child.md",
+          "content" => "# Child",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert {:ok, 1} = Notes.rename_folder(user, vault, "Old", "New")
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: first}
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: second}
+
+      assert first["event_type"] == "upsert"
+      assert second["event_type"] == "delete"
+    end
+
+    # e2e test_34 "received=yes materialized=no": the cascade used to
+    # broadcast meta-projected rows (content never decrypted), so the upsert
+    # carried NO inline body and receivers waited ~30-60s for a pull to
+    # materialize the renamed path. Fix: decrypt each renamed note's body and
+    # ship it inline, exactly like the single-note rename. The body MUST be
+    # the note's REAL content (matching content_hash) — never fabricated `""`
+    # (that shipped a 0-byte file that read as converged forever, #863).
+    test "cascade upsert carries the renamed note's real content inline", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, child} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old/Child.md",
+          "content" => "# Child",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert {:ok, 1} = Notes.rename_folder(user, vault, "Old", "New")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "upsert"} = payload
+      }
+
+      assert payload["content"] == "# Child"
+      assert payload["content_hash"] == child.content_hash
+      assert is_binary(payload["content_hash"])
+    end
+
+    # #976: the old-path delete leg used to broadcast without the note id,
+    # forcing receivers to resolve by path mid-relocation — the ambiguity
+    # window the folder-rename resurrection bug lived in. The note still
+    # exists (same id, new path), so receivers can correlate delete+upsert
+    # by id and treat the pair as a relocation.
+    test "delete broadcast for the old path carries the moved note's id", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, child} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old/Child.md",
+          "content" => "# Child",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert {:ok, 1} = Notes.rename_folder(user, vault, "Old", "New")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "Old/Child.md"} = payload
+      }
+
+      assert payload["id"] == child.id
+    end
+  end
+
+  describe "rename_note/4 delete-leg broadcast (#976)" do
+    # Sibling of the folder-rename cascade leg: the single-note rename's
+    # old-path delete broadcast must also carry the moved note's id so
+    # receivers correlate the delete+upsert pair as a relocation instead of
+    # resolving by path mid-move. Without this assertion the :1320 leg could
+    # silently regress to nil and stay green.
+    test "delete broadcast for the old path carries the moved note's id", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old.md",
+          "content" => "# Old",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      {:ok, _} = Notes.rename_note(user, vault, "Old.md", "New.md")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "Old.md"} = payload
+      }
+
+      assert payload["id"] == note.id
+    end
+
+    # Same relocation ordering as the folder-rename cascade: the receiver
+    # must relocate the note's id to the new path (upsert) BEFORE the
+    # old-path delete, or the delete tears the note's CRDT room down by id
+    # before the new path can materialize from it.
+    test "broadcasts the new-path upsert before the old-path delete", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old.md",
+          "content" => "# Old",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      {:ok, _} = Notes.rename_note(user, vault, "Old.md", "New.md")
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: first}
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: second}
+
+      assert first["event_type"] == "upsert"
+      assert second["event_type"] == "delete"
     end
   end
 
@@ -165,6 +338,58 @@ defmodule Engram.NotesBroadcastTest do
         event: "note_changed",
         payload: %{"event_type" => "upsert", "path" => "B.md", "id" => ^id}
       }
+    end
+  end
+
+  describe "note_changed delete broadcast (self-echo attribution — 2026-07-08 wipe)" do
+    test "no-op delete of an unknown path emits NO broadcast (#971)", %{
+      user: user,
+      vault: vault
+    } do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert :ok = Notes.delete_note(user, vault, "Ghost/Never Existed.md")
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}, 100
+    end
+
+    test "delete broadcast carries the caller's origin device_id (#970)", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "del.md", "content" => "# D", "mtime" => 1.0})
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      device_id = Ecto.UUID.generate()
+
+      assert :ok = Notes.delete_note(user, vault, "del.md", origin_device_id: device_id)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "del.md"} = payload
+      }
+
+      assert payload["device_id"] == device_id
+    end
+
+    test "delete broadcast omits device_id when the caller has none", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "del2.md", "content" => "# D", "mtime" => 1.0})
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert :ok = Notes.delete_note(user, vault, "del2.md")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "del2.md"} = payload
+      }
+
+      refute Map.has_key?(payload, "device_id")
     end
   end
 end

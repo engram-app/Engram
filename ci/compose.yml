@@ -33,7 +33,7 @@ services:
         # ${LOCAL_REGISTRY} treats the proxy as a registry mirror, which it is
         # not, and BuildKit fails with "unexpected media type / not found".
         NODE_IMAGE: node:20-slim
-        BUILDER_IMAGE: hexpm/elixir:1.17.3-erlang-27.1.2-debian-bookworm-20241202-slim
+        BUILDER_IMAGE: hexpm/elixir:1.17.3-erlang-27.3.4.14-debian-bookworm-20260623-slim
         RUNNER_IMAGE: debian:bookworm-20241202-slim
         # LAN Hex pull-through (set by CI env; empty for local dev = upstream).
         HEX_MIRROR: ${HEX_MIRROR:-}
@@ -44,10 +44,6 @@ services:
       DATABASE_URL: postgresql://engram:engram@postgres:5432/engram
       JWT_SECRET: ci-test-secret-not-for-production
       PHX_SERVER: "true"
-      # Advertise the file-level CRDT `crdt:` channel when the e2e-crdt job opts
-      # in (CRDT_ENABLED=true). Default off so the legacy e2e jobs run the REST
-      # push/pull path; a non-opted-in plugin never joins `crdt:` either way.
-      CRDT_ENABLED: ${CRDT_ENABLED:-false}
       OLLAMA_URL: http://10.0.20.214:11434
       QDRANT_URL: http://10.0.20.201:6333
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-ci_test_notes}
@@ -97,6 +93,13 @@ services:
       # bulk-sync ~1000 notes, test_78 hash-update) burst past it → flaky 429s.
       # Same CI=true gating as the auth override (runtime.exs).
       PRE_AUTH_RATE_LIMIT_OVERRIDE: "100000"
+      # CrdtChannel per-message (@msg_limit 240/10s) + handshake (@hs_limit 2400)
+      # budgets are sized for a real single user. The compressed e2e workload
+      # (rapid edits + resumed-device room rejoins across the suite) exceeds them
+      # and fires channel-join/per-message "rate_limited", stalling delivery.
+      # Same CI=true gating (runtime.exs) keeps prod limits un-weakenable.
+      CRDT_MSG_RATE_LIMIT_OVERRIDE: "100000"
+      CRDT_HS_RATE_LIMIT_OVERRIDE: "100000"
       # Free-tier launch test_72_cancel_to_free_overlimit signs a synthetic
       # subscription.canceled webhook with this fixed secret so the e2e
       # exercises the real verify_signature → upsert_from_paddle_event path

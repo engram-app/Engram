@@ -220,6 +220,26 @@ class ApiClient:
         )
         return resp.status_code
 
+    def create_folder(self, folder: str) -> int:
+        """POST /folders — create an explicit empty-folder marker. Returns status."""
+        resp = self.session.post(
+            f"{self.base_url}/folders",
+            json={"folder": folder},
+            timeout=10,
+        )
+        return resp.status_code
+
+    def delete_folder(self, folder: str) -> int:
+        """DELETE /folders/*path — delete a folder marker. Returns status.
+
+        The route is a path splat, so slashes stay literal (safe='/'); only
+        spaces / reserved chars in each segment are percent-encoded.
+        """
+        resp = self.session.delete(
+            f"{self.base_url}/folders/{quote(folder, safe='/')}", timeout=10
+        )
+        return resp.status_code
+
     # -- Vault endpoints --------------------------------------------------
 
     def list_vaults(self) -> list[dict]:

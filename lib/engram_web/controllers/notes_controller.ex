@@ -11,9 +11,12 @@ defmodule EngramWeb.NotesController do
     operation_id: "notes-upsert",
     summary: "Create or update a note",
     description:
-      "Creates a note or updates the existing one at the same path. Concurrent edits are guarded " <>
-        "by mtime — a stale write returns 409 with the current server note. Notes over 10MB are " <>
-        "rejected with 413, and exceeding the plan's note cap returns 402.",
+      "Creates a note or updates the existing one at the same path. Updates are merged " <>
+        "convergently (CRDT) with the stored content. Optionally pass `base_hash` — the " <>
+        "`content_hash` you last read — for compare-and-swap semantics: if the note changed " <>
+        "since that read, the write returns 409 with the current server note instead of " <>
+        "merging. Notes over 10MB are rejected with 413, and exceeding the plan's note cap " <>
+        "returns 402.",
     tags: ["Notes"],
     request_body:
       {"Note to upsert", "application/json", Schemas.UpsertNoteRequest, required: true},
@@ -59,6 +62,12 @@ defmodule EngramWeb.NotesController do
             limit,
             current
           )
+
+        {:error, :recently_deleted} ->
+          # Delete-wins: a create at a path deleted seconds ago, identical
+          # content — a stale re-push racing an explicit delete. Refuse so the
+          # delete stands; the client converges by dropping its local copy.
+          conn |> put_status(409) |> json(%{conflict: true, reason: "recently_deleted"})
 
         {:error, reason} ->
           require Logger
@@ -131,6 +140,12 @@ defmodule EngramWeb.NotesController do
              }) do
           {:ok, note} ->
             json(conn, %{created: true, path: path, note: note_json(note)})
+
+          {:error, :recently_deleted} ->
+            # Delete-wins: append-as-create races an explicit delete of the same
+            # path. Refuse cleanly (409) — never fall through to format_errors/1,
+            # which crashes on the :recently_deleted atom (it expects a changeset).
+            conn |> put_status(409) |> json(%{conflict: true, reason: "recently_deleted"})
 
           {:error, changeset} ->
             conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
@@ -212,7 +227,9 @@ defmodule EngramWeb.NotesController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
     path = Enum.join(List.wrap(path_parts), "/")
-    Notes.delete_note(user, vault, path)
+
+    Notes.delete_note(user, vault, path, origin_device_id: EngramWeb.OriginDevice.from_conn(conn))
+
     json(conn, %{deleted: true})
   end
 
@@ -264,7 +281,10 @@ defmodule EngramWeb.NotesController do
     vault = conn.assigns.current_vault
 
     with {:ok, id} <- Ecto.UUID.cast(id_str),
-         :ok <- Notes.delete_note_by_id(user, vault, id) do
+         :ok <-
+           Notes.delete_note_by_id(user, vault, id,
+             origin_device_id: EngramWeb.OriginDevice.from_conn(conn)
+           ) do
       json(conn, %{deleted: true})
     else
       :error -> conn |> put_status(400) |> json(%{error: "invalid id"})
@@ -497,7 +517,9 @@ defmodule EngramWeb.NotesController do
       id: result.id,
       version: result.version,
       content_hash: result.content_hash,
-      server_path: result.server_path
+      server_path: result.server_path,
+      parse_status: result.parse_status,
+      parse_reason: result.parse_reason
     }
   end
 
@@ -659,7 +681,6 @@ defmodule EngramWeb.NotesController do
       folder: note.folder || "",
       tags: note.tags || [],
       version: note.version,
-      content: note.content || "",
       # Protocol rev — clients store the server hash per path so hash-only
       # broadcasts / fields=meta pages can be compared without refetching.
       # The hash is keyed server-side (HMAC); clients treat it as opaque.
@@ -670,9 +691,24 @@ defmodule EngramWeb.NotesController do
       description: note.description,
       resource: note.resource,
       fm_timestamp: note.fm_timestamp,
-      fm_created: note.fm_created
+      fm_created: note.fm_created,
+      parse_status: note.parse_status,
+      parse_reason: note.parse_reason
     }
+    |> put_content(note.content)
   end
+
+  # Boundary guard, same rule as Notes.broadcast_change (e2e test_34 class):
+  # nil content means a meta-projected struct leaked here (body exists, never
+  # loaded) — omit the key so clients fall back to fetching the body, instead
+  # of fabricating "" beside the REAL content_hash and seeding 0-byte files
+  # as converged forever. Genuinely empty notes are "" (is_binary) and keep
+  # serializing as "". nil is unreachable through today's callers (all
+  # full-load + decrypt); this pins the boundary for future projections.
+  # Public for the regression test only.
+  @doc false
+  def put_content(map, content) when is_binary(content), do: Map.put(map, :content, content)
+  def put_content(map, nil), do: map
 
   defp change_json(change, :meta) do
     %{
@@ -685,14 +721,16 @@ defmodule EngramWeb.NotesController do
       mtime: change.mtime,
       content_hash: change.content_hash,
       deleted: change.deleted,
-      updated_at: change.updated_at
+      updated_at: change.updated_at,
+      parse_status: change.parse_status,
+      parse_reason: change.parse_reason
     }
   end
 
   defp change_json(change, :all) do
     change
     |> change_json(:meta)
-    |> Map.put(:content, change.content || "")
+    |> put_content(change.content)
   end
 
   defp format_errors(changeset), do: EngramWeb.format_errors(changeset)

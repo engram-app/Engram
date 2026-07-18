@@ -299,6 +299,44 @@ case Engram.RuntimeConfig.pre_auth_rate_limit_override(&System.get_env/1) do
     :ok
 end
 
+# CRDT channel per-message + handshake rate-limit overrides for CI/E2E stacks
+# only, gated on CI=true. The release image runs EngramWeb.CrdtChannel at its
+# prod @msg_limit/@hs_limit; the e2e harness's compressed CRDT workload (rapid
+# edits, resumed-device room rejoins across the suite) legitimately exceeds a
+# per-account budget a real single user wouldn't, and there is otherwise no
+# runtime lever in the release build. Gating on CI=true keeps prod limits intact.
+case Engram.RuntimeConfig.crdt_msg_rate_limit_override(&System.get_env/1) do
+  {:ok, limit} ->
+    config :engram, :crdt_msg_rate_limit_override, limit
+
+  {:ignored, raw} ->
+    require Logger
+
+    Logger.warning(
+      "CRDT_MSG_RATE_LIMIT_OVERRIDE=#{raw} ignored: the CRDT channel rate-limit " <>
+        "override is only honored when CI=true."
+    )
+
+  :none ->
+    :ok
+end
+
+case Engram.RuntimeConfig.crdt_hs_rate_limit_override(&System.get_env/1) do
+  {:ok, limit} ->
+    config :engram, :crdt_hs_rate_limit_override, limit
+
+  {:ignored, raw} ->
+    require Logger
+
+    Logger.warning(
+      "CRDT_HS_RATE_LIMIT_OVERRIDE=#{raw} ignored: the CRDT channel rate-limit " <>
+        "override is only honored when CI=true."
+    )
+
+  :none ->
+    :ok
+end
+
 # Clerk auth (only required when AUTH_PROVIDER=clerk)
 # Note: use local variable, not Application.get_env — runtime.exs config
 # is accumulated and not yet applied, so get_env reads stale config.
@@ -389,6 +427,13 @@ if extras = System.get_env("ATTACHMENT_MIME_ALLOWLIST_EXTRA") do
     |> Enum.reject(&(&1 == ""))
 
   if list != [], do: config(:engram, :attachment_mime_allowlist_extra, list)
+end
+
+# Vault-channel CRDT fan-out pacer (engram-app/Engram#1002) rollback knob.
+# Default is pacing ON; set to "false" to fall back to unpaced inline
+# broadcast for every note if the pacer ever needs to be disabled in prod.
+if pacing = System.get_env("FANOUT_PACING_ENABLED") do
+  config :engram, :fanout_pacing_enabled, pacing == "true"
 end
 
 # Paddle billing (Merchant-of-Record). Secret/server keys are required only
@@ -875,13 +920,18 @@ end
 # unless the OTLP endpoint is set (prod points it at the Alloy sidecar
 # on loopback; Alloy forwards to Tempo). ENGRAM_OTEL_SAMPLE_RATIO tunes
 # head sampling without a code deploy (1.0 = every trace).
+#
+# The root sampler drops health-check / scrape traffic outright (~96% of
+# span volume — see Engram.Observability.TraceSampler), then delegates the
+# rest to the ratio sampler. Under :parent_based a root :drop cascades, so
+# probe traces never build child spans or hit Tempo.
 if otlp_endpoint = System.get_env("OTEL_EXPORTER_OTLP_ENDPOINT") do
   ratio = Engram.Observability.Otel.sample_ratio(System.get_env("ENGRAM_OTEL_SAMPLE_RATIO"), 1.0)
 
   config :opentelemetry,
     span_processor: :batch,
     traces_exporter: :otlp,
-    sampler: {:parent_based, %{root: {:trace_id_ratio_based, ratio}}},
+    sampler: {:parent_based, %{root: {Engram.Observability.TraceSampler, %{ratio: ratio}}}},
     resource: [
       service: [name: "engram-backend"],
       deployment: [environment: to_string(config_env())]

@@ -62,6 +62,38 @@ defmodule Engram.RuntimeConfigTest do
     end
   end
 
+  describe "crdt_msg_rate_limit_override/1" do
+    test "applies the override only when CI=true" do
+      env = getenv(%{"CRDT_MSG_RATE_LIMIT_OVERRIDE" => "100000", "CI" => "true"})
+      assert RuntimeConfig.crdt_msg_rate_limit_override(env) == {:ok, 100_000}
+    end
+
+    test "ignores the override when CI is not true (e.g. a stray prod env var)" do
+      env = getenv(%{"CRDT_MSG_RATE_LIMIT_OVERRIDE" => "100000"})
+      assert RuntimeConfig.crdt_msg_rate_limit_override(env) == {:ignored, "100000"}
+    end
+
+    test "returns :none when the override is absent" do
+      assert RuntimeConfig.crdt_msg_rate_limit_override(getenv(%{"CI" => "true"})) == :none
+    end
+  end
+
+  describe "crdt_hs_rate_limit_override/1" do
+    test "applies the override only when CI=true" do
+      env = getenv(%{"CRDT_HS_RATE_LIMIT_OVERRIDE" => "100000", "CI" => "true"})
+      assert RuntimeConfig.crdt_hs_rate_limit_override(env) == {:ok, 100_000}
+    end
+
+    test "ignores the override when CI is not true (e.g. a stray prod env var)" do
+      env = getenv(%{"CRDT_HS_RATE_LIMIT_OVERRIDE" => "100000"})
+      assert RuntimeConfig.crdt_hs_rate_limit_override(env) == {:ignored, "100000"}
+    end
+
+    test "returns :none when the override is absent" do
+      assert RuntimeConfig.crdt_hs_rate_limit_override(getenv(%{"CI" => "true"})) == :none
+    end
+  end
+
   describe "validate_saas_origins!/3" do
     test "raises when a Clerk (saas) deploy has no PHX_HOST and is not CI" do
       assert_raise RuntimeError, ~r/PHX_HOST/, fn ->

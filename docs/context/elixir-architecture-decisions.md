@@ -1,5 +1,7 @@
 # Context Doc: Elixir Architecture Decisions
 
+_Last verified: 2026-06-22_
+
 _Original audit: 2026-04-02. Reconciled with shipped reality: 2026-06-18._
 
 > **PARTIALLY SUPERSEDED — read the inline corrections.**

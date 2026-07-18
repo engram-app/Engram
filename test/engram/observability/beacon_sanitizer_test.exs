@@ -100,4 +100,61 @@ defmodule Engram.Observability.BeaconSanitizerTest do
              "engram.event_type" => "upsert"
            }
   end
+
+  test "accepts the web CRDT span names (browser live-sync observability)" do
+    for name <- ["web.crdt.push", "web.crdt.apply", "web.crdt.handshake"] do
+      assert {:ok, out} = S.sanitize(put_in(base()["name"], name), @now_us)
+      assert out.name == name
+    end
+  end
+
+  test "keeps engram.note_id only when it is a UUID (cardinality + PII guard)" do
+    ok =
+      put_in(base()["attributes"], %{
+        "engram.note_id" => "019f45c5-7818-771b-9242-9ae8c7fd214f"
+      })
+
+    assert {:ok, out} = S.sanitize(ok, @now_us)
+    assert out.attributes["engram.note_id"] == "019f45c5-7818-771b-9242-9ae8c7fd214f"
+
+    bad = put_in(base()["attributes"], %{"engram.note_id" => "Secret Note Title.md"})
+    assert {:ok, out} = S.sanitize(bad, @now_us)
+    refute Map.has_key?(out.attributes, "engram.note_id")
+  end
+
+  test "keeps engram.route and engram.reason short strings" do
+    entry =
+      put_in(base()["attributes"], %{
+        "engram.route" => "/notes/:id/updates",
+        "engram.reason" => "timeout"
+      })
+
+    assert {:ok, out} = S.sanitize(entry, @now_us)
+
+    assert out.attributes == %{
+             "engram.route" => "/notes/:id/updates",
+             "engram.reason" => "timeout"
+           }
+  end
+
+  test "drops oversized engram.route / engram.reason values (the frontend slices by chars, the cap is bytes)" do
+    entry =
+      put_in(base()["attributes"], %{
+        "engram.route" => String.duplicate("r", 65),
+        "engram.reason" => String.duplicate("x", 65)
+      })
+
+    assert {:ok, out} = S.sanitize(entry, @now_us)
+    assert out.attributes == %{}
+  end
+
+  test "drops an UPPERCASE UUID in engram.note_id (clients emit lowercase; anything else is untrusted)" do
+    entry =
+      put_in(base()["attributes"], %{
+        "engram.note_id" => "019F45C5-7818-771B-9242-9AE8C7FD214F"
+      })
+
+    assert {:ok, out} = S.sanitize(entry, @now_us)
+    refute Map.has_key?(out.attributes, "engram.note_id")
+  end
 end

@@ -13,6 +13,22 @@ defmodule Engram.MCP.Tools do
           handler: (map(), map(), map() -> {:ok, String.t()} | {:error, String.t()})
         }
 
+  # Tools that do NOT operate on a single vault's contents, so they take no
+  # `vault_id`: `list_vaults` spans all of them, `set_vault` has its own.
+  @vault_scoping_exempt ~w(list_vaults set_vault)
+
+  # MCP is stateless HTTP JSON-RPC: there is no session to hold an "active vault"
+  # between tool calls, so every vault-scoped tool advertises an optional
+  # `vault_id`. Injected here (not hand-written per tool) so new tools inherit it.
+  @vault_id_property %{
+    "type" => "string",
+    "format" => "uuid",
+    "description" =>
+      "Target vault UUID (call list_vaults to discover IDs). REQUIRED when you own " <>
+        "more than one vault — the server keeps no active-vault state between calls, so " <>
+        "it must be passed on every vault-scoped call. Omit only if you have a single vault."
+  }
+
   @spec list() :: [tool_def()]
   def list do
     [
@@ -35,7 +51,25 @@ defmodule Engram.MCP.Tools do
       delete_note_def(),
       move_attachment_def()
     ]
+    |> Enum.map(&with_vault_id/1)
   end
+
+  defp with_vault_id(%{name: name} = tool) when name in @vault_scoping_exempt, do: tool
+
+  # search_notes spans all vaults by default, so vault_id is an optional narrower
+  # there — not the "required when multi-vault" contract the other tools carry.
+  defp with_vault_id(%{name: "search_notes"} = tool) do
+    put_in(tool, [:inputSchema, "properties", "vault_id"], %{
+      "type" => "string",
+      "format" => "uuid",
+      "description" =>
+        "Optional: limit the search to a single vault (UUID). Omit to search across " <>
+          "ALL your vaults. Call list_vaults to see IDs."
+    })
+  end
+
+  defp with_vault_id(tool),
+    do: put_in(tool, [:inputSchema, "properties", "vault_id"], @vault_id_property)
 
   @spec get(String.t()) :: {:ok, tool_def()} | :error
   def get(name) do
@@ -60,8 +94,9 @@ defmodule Engram.MCP.Tools do
     %{
       name: "set_vault",
       description:
-        "Set the active vault context. Without vault_id, resets to default. " <>
-          "Call list_vaults first to see available vaults.",
+        "Validate and echo a vault by ID. NOTE: this does NOT persist an active " <>
+          "vault — MCP keeps no state between calls. To read or write a specific " <>
+          "vault, pass its vault_id on each tool call. Use list_vaults to discover IDs.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -80,9 +115,9 @@ defmodule Engram.MCP.Tools do
     %{
       name: "search_notes",
       description:
-        "Search your personal knowledge base. Finds relevant notes from your " <>
-          "Obsidian vault using semantic search. Use when the user asks about their " <>
-          "notes, vault, knowledge, or memory.",
+        "Search your personal knowledge base. Finds relevant notes using semantic " <>
+          "search. Searches across ALL your vaults by default; pass vault_id to limit " <>
+          "to one. Use when the user asks about their notes, vault, knowledge, or memory.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{

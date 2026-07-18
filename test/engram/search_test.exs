@@ -590,6 +590,29 @@ defmodule Engram.SearchTest do
                Search.search(user, vault, "query", cross_vault: true)
     end
 
+    test "allow_cross_vault bypasses the billing gate for a free-plan user (MCP path)", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      # The MCP server makes cross-vault the default on every tier, so it passes
+      # allow_cross_vault: true — a free user must get PAST the gate the web path
+      # still enforces (see the test above).
+      assert user.plan_id == nil
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": []}))
+      end)
+
+      result = Search.search(user, vault, "query", cross_vault: true, allow_cross_vault: true)
+      refute result == {:error, :feature_not_available}
+    end
+
     test "cross-vault search proceeds past billing gate when feature enabled (pro plan)", %{
       bypass: bypass,
       vault: vault

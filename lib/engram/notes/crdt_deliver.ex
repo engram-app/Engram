@@ -39,7 +39,7 @@ defmodule Engram.Notes.CrdtDeliver do
 
   alias Engram.{Accounts, Crypto, Repo}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtRegistry, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtTransport, Note}
   alias Yex.Sync.SharedDoc
 
   require Logger
@@ -62,8 +62,59 @@ defmodule Engram.Notes.CrdtDeliver do
     # files sync via the legacy push path, so only deliver/announce for `.md`.
     if String.ends_with?(path, ".md") do
       push_to_live_room(user_id, note_id, content)
-      announce(user_id, vault_id, note_id)
+      # fanout_idle ALWAYS runs, even when a live room exists. It is NOT redundant
+      # with the room's `update_v1`: `update_v1` broadcasts a DELTA (converges a
+      # device that already holds the note, via gap-heal), while `fanout_idle`
+      # broadcasts FULL STATE — the only thing that makes a device which has NEVER
+      # seen the note history-FULL. Gating this off when a room exists left a
+      # first-delivery device history-LESS (delta into an empty doc), so a
+      # concurrent edit resolved to keep-both instead of a clean CRDT merge
+      # (e2e test_concurrent_edits_both_survive). The two broadcasts serve
+      # different device populations; the double-delivery for a device that has
+      # both is an idempotent Yjs re-apply.
+      fanout_idle(user_id, vault_id, note_id)
+      announce(user_id, vault_id, path, note_id)
     end
+
+    :ok
+  end
+
+  # Vault-channel fan-out for a NON-CRDT-origin write (REST / MCP / web / cascade):
+  # broadcast the note's just-committed Yjs state over the per-vault `sync:` topic
+  # so an IDLE device (one with no open room for this note) converges room-free by
+  # applying these bytes (`applyPushedNoteUpdate` on the client). This is the
+  # FIRST-DELIVERY leg the room's `update_v1` fan-out cannot cover: a REST/MCP/web
+  # create+update never enters a live room, so without this an idle device only
+  # ever learns the note through slow pull discovery (the announce enrolls it, but
+  # the plugin now leaves idle notes room-free under the fan-out model).
+  #
+  # Broadcasts the FULL committed state (not a delta) so a device that has never
+  # seen the note converges from an empty doc; the client skips it while the note
+  # is live-bound (its own room owns it). Emitted AFTER the `note_changed` upsert
+  # broadcast, on the SAME `sync:` topic (ordered delivery), so the client has
+  # already mapped + confirmed the note_id before these bytes arrive. Best-effort
+  # and post-commit like the rest of deliver-out: a state-less (legacy/lazy) row
+  # or a load failure simply skips — the announce still fires for enrolled clients.
+  defp fanout_idle(user_id, vault_id, note_id) do
+    _ =
+      with {:ok, state} when is_binary(state) <- load_merged_state(user_id, note_id) do
+        head =
+          case CrdtBridge.doc_from_state(state) do
+            {:ok, doc} -> CrdtTransport.head_marker(doc)
+            _ -> nil
+          end
+
+        Engram.Notes.FanoutPacer.emit(
+          "sync:#{user_id}:#{vault_id}",
+          "note_yjs_update",
+          %{
+            "note_id" => note_id,
+            "b64" => Base.encode64(state),
+            "head" => head
+          },
+          note_id
+        )
+      end
 
     :ok
   end
@@ -79,7 +130,7 @@ defmodule Engram.Notes.CrdtDeliver do
   """
   @spec announce_ready(String.t(), String.t(), String.t(), String.t()) :: :ok
   def announce_ready(user_id, vault_id, path, note_id) do
-    if String.ends_with?(path, ".md"), do: announce(user_id, vault_id, note_id)
+    if String.ends_with?(path, ".md"), do: announce(user_id, vault_id, path, note_id)
     :ok
   end
 
@@ -103,7 +154,31 @@ defmodule Engram.Notes.CrdtDeliver do
       room ->
         case load_merged_state(user_id, note_id) do
           {:ok, state} when is_binary(state) ->
-            room_apply(room, note_id, fn doc -> apply_state(doc, state, note_id) end)
+            # The apply runs inside the room process (update_doc discards the
+            # fun's return), so failure is signalled back by message. The
+            # message is tagged with a per-call ref: if update_doc TIMES OUT,
+            # the room may run the fun later and send the signal after our
+            # receive already returned — an untagged message would then linger
+            # in this (possibly long-lived channel) process's mailbox and be
+            # consumed by the NEXT deliver for the same note, false-quarantining
+            # a healthy room (#953 retro-review F4). A stale ref never matches.
+            parent = self()
+            ref = make_ref()
+
+            room_apply(room, note_id, fn doc ->
+              if apply_state(doc, state, note_id) == :apply_failed do
+                send(parent, {ref, :crdt_deliver_apply_failed})
+              end
+
+              :ok
+            end)
+
+            receive do
+              {^ref, :crdt_deliver_apply_failed} ->
+                quarantine_room(room, note_id, :apply_update_failed)
+            after
+              0 -> :ok
+            end
 
           {:ok, nil} when content == "" ->
             # Empty content on a room with NO persisted CRDT state is ambiguous:
@@ -120,11 +195,34 @@ defmodule Engram.Notes.CrdtDeliver do
           {:ok, nil} ->
             room_apply(room, note_id, fn doc -> CrdtBridge.ingest_plaintext(doc, content) end)
 
-          {:error, _reason} ->
-            # Already logged in load_merged_state. Deliberately no ingest.
-            :ok
+          {:error, reason} ->
+            # Already logged in load_merged_state. Deliberately no ingest —
+            # and the room must not survive: see quarantine_room/3.
+            quarantine_room(room, note_id, reason)
         end
     end
+  end
+
+  # Phase 0 (identity-as-CRDT): a live room we could not converge onto the
+  # committed state is a poisoned cache. Left alive, it (a) serves its stale
+  # doc to every client the announce triggers to re-pull — blocking delivery
+  # of the committed write indefinitely — and (b) would checkpoint that stale
+  # doc on exit. Unregister the name first (so lookups stop resolving to the
+  # dying pid), then kill BRUTALLY: `:kill` is untrappable and skips
+  # terminate/2 → unbind → checkpoint, which must not run for a doc we could
+  # not converge. Nothing is lost: every room update was already appended to
+  # the durable tail-log by update_v1, and the next join re-binds a fresh room
+  # hydrated from the row's merged state + tail replay.
+  defp quarantine_room(_room, note_id, reason) do
+    Logger.error(
+      "crdt deliver quarantined stale room — killed for rebind from row",
+      Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
+    )
+
+    # terminate_room unregisters the INNER :global term before the kill —
+    # the previous inline version passed global_name/1's {:global, …} wrapper
+    # to unregister_name, a silent no-op (#953 retro-review F2).
+    CrdtRegistry.terminate_room(note_id)
   end
 
   # `:global.whereis_name` can hand back a room that is mid auto-exit, so the
@@ -164,14 +262,14 @@ defmodule Engram.Notes.CrdtDeliver do
         # The just-committed state failed to apply — the doc or the state is
         # already suspect, so plaintext-diffing into that same doc would be
         # the worst possible response (foreign-lineage re-encode on top of a
-        # broken doc). Skip; observers converge via the announce → step-1
-        # re-pull against a fresh room.
+        # broken doc). Report failure; the caller quarantines the room so the
+        # announce → re-pull lands on a FRESH room hydrated from the row.
         Logger.error(
           "crdt deliver apply_update failed — skipping push",
           Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
         )
 
-        :ok
+        :apply_failed
     end
   end
 
@@ -239,12 +337,19 @@ defmodule Engram.Notes.CrdtDeliver do
   # Step 2 — discovery announce. Mirrors the channel's own `crdt_doc_ready`
   # event (CrdtChannel.ensure_room/2); the plugin handles both identically.
   # doc_id is the note_id (a UUID), matching the channel's doc_id keying.
-  defp announce(user_id, vault_id, note_id) do
+  #
+  # Carries the note's `path` too: an EMPTY note (genesis create) integrates
+  # zero Y.Doc ops, so no `note_yjs_update` fan-out ever fires — this announce
+  # is the ONLY live signal a not-yet-enrolled receiver gets, and without the
+  # path it holds an id it cannot materialize until the ~30s pull (e2e
+  # test_27). The path is metadata, not content, so this respects genesis's
+  # bare-row "never content-broadcasts" rule.
+  defp announce(user_id, vault_id, path, note_id) do
     _ =
       EngramWeb.Endpoint.broadcast(
         "crdt:#{user_id}:#{vault_id}",
         "crdt_doc_ready",
-        %{"doc_id" => note_id}
+        %{"doc_id" => note_id, "path" => path}
       )
 
     :ok

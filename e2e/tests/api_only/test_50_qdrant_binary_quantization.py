@@ -30,15 +30,26 @@ def _collection_info():
     return resp.json()["result"]
 
 
-def _wait_for_collection(timeout=30):
-    """Poll until the Qdrant collection exists (created on first indexing)."""
+def _wait_for_collection(timeout=120):
+    """Poll until the Qdrant collection exists (created on first indexing).
+
+    120s (was 30s): collection creation depends on the embed queue's first
+    Oban job reaching ensure_collection — Ollama cold model load on LAN plus
+    CI queue contention pushed this past 30s. reruns=0 (test-confidence-wave)
+    exposed this: main run 28907196463 RERUN-rescued this exact fixture,
+    which silently doubled the effective wait to 60s.
+    """
     deadline = time.monotonic() + timeout
+    start = time.monotonic()
     while time.monotonic() < deadline:
         try:
             return _collection_info()
         except (requests.HTTPError, requests.ConnectionError, KeyError):
             time.sleep(2)
-    raise TimeoutError(f"Collection {QDRANT_COLLECTION} not created within {timeout}s")
+    elapsed = time.monotonic() - start
+    raise TimeoutError(
+        f"Collection {QDRANT_COLLECTION} not created within {timeout}s (waited {elapsed:.1f}s)"
+    )
 
 
 @pytest.fixture(scope="module")

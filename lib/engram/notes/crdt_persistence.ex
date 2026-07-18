@@ -19,7 +19,16 @@ defmodule Engram.Notes.CrdtPersistence do
   import Ecto.Query
   alias Engram.{Accounts, Crypto, Repo}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpointTimer, CrdtUpdateLog, Note}
+
+  alias Engram.Notes.{
+    CheckpointGate,
+    CrdtBridge,
+    CrdtCheckpointTimer,
+    CrdtTransport,
+    CrdtUpdateLog,
+    Enqueue,
+    Note
+  }
 
   require Logger
 
@@ -84,7 +93,7 @@ defmodule Engram.Notes.CrdtPersistence do
         %{user_id: user_id, vault_id: vault_id, note_id: note_id} = state,
         update,
         _name,
-        _doc
+        doc
       ) do
     user = state[:user] || Accounts.get_user!(user_id)
 
@@ -100,7 +109,50 @@ defmodule Engram.Notes.CrdtPersistence do
             update_nonce: nonce
           })
           |> Repo.insert!()
+
+          # Invalidate the cached head in the SAME txn as the tail append: this
+          # update advanced the doc, so any stored crdt_head is now stale.
+          # vault_heads self-heals the NULL by rebuilding once (snapshot + full
+          # tail = authoritative), so we never trust an off-by-one head. Guard on
+          # not-nil so an already-invalidated hot note skips the write. Sets ONLY
+          # crdt_head — no updated_at/version/seq churn (checkpoint owns those).
+          from(n in Note,
+            where: n.id == ^note_id and n.kind == "note" and not is_nil(n.crdt_head)
+          )
+          |> Repo.update_all(set: [crdt_head: nil])
         end)
+
+        # Fan out the update to every device on this vault over the single
+        # per-vault sync channel (Relay's `document.updated` model). This is
+        # what lets an IDLE note (one the client never STEP1-enrolled) converge
+        # without opening its own CRDT room: the client applies these pushed
+        # bytes straight to the note's Y.Doc. Fires on EVERY update source
+        # (channel, REST /updates, deliver-out) because they all funnel here.
+        # base64 because the JSON serializer can't carry raw binary; `head` lets
+        # the client advance its per-note watermark without a REST round-trip.
+        # Self-echo is harmless: the client applies with REMOTE_ORIGIN (no
+        # re-broadcast) and Yjs re-apply is a no-op.
+        #
+        # NOTE — `b64` here is the DELTA (this single update), paired with the
+        # FULL post-apply `head`. `CrdtDeliver.fanout_idle` sends FULL state under
+        # the same contract. A device behind the delta's causal deps (it never
+        # STEP1-enrolled and missed an earlier update) PENDS the delta in Yjs, so
+        # it does NOT actually reach `head`. The client MUST NOT blind-trust `head`
+        # in that case: `applyPushedNoteUpdate` checks `hasPendingGap` post-apply
+        # and, on a gap, pulls the full delta from its real state vector and
+        # advances the watermark only to the head it truly reached (plugin
+        # `e2304ed`). Without that client guard, the cheap cold-reconcile hash gate
+        # would skip a silently-partial note.
+        Engram.Notes.FanoutPacer.emit(
+          "sync:#{user_id}:#{vault_id}",
+          "note_yjs_update",
+          %{
+            "note_id" => note_id,
+            "b64" => Base.encode64(update),
+            "head" => CrdtTransport.head_marker(doc)
+          },
+          note_id
+        )
 
       {:error, reason} ->
         Logger.error(
@@ -120,15 +172,41 @@ defmodule Engram.Notes.CrdtPersistence do
     state
   end
 
-  # Runs on graceful room terminate (SharedDoc `auto_exit: true`). Delegates to
-  # CrdtCheckpoint.checkpoint/5, which runs synchronously: it materializes
+  # Runs on graceful room terminate (SharedDoc `auto_exit: true`). Materializes
   # content/content_hash/seq into the notes row and enqueues a debounced embed.
   # When text is unchanged, checkpoint degrades to a snapshot-compaction write
-  # with no version/seq churn (the content_hash no-op guard). Any raise inside
-  # checkpoint is caught and logged there, so unbind always returns :ok.
+  # with no version/seq churn (the content_hash no-op guard).
+  #
+  # Concurrency-bounded (2026-07-09 pool-exhaustion fix): a socket drop with
+  # `auto_exit: true` terminates ALL of that client's rooms at once, so up to
+  # N synchronous checkpoints would fight the 10-connection pool and time out
+  # (`DBConnection.ConnectionError`). CheckpointGate caps inline checkpoints;
+  # under the cap we checkpoint synchronously as before (preserving
+  # materialization timing for the common single-note-close case), and beyond
+  # it we overflow to the durable, bounded `crdt_checkpoint` Oban queue so the
+  # storm drains without exhausting the pool. Loss-free either way: the tail-WAL
+  # is pruned only on a successful checkpoint. Any raise inside checkpoint is
+  # caught and logged there, so unbind always returns :ok.
   @impl true
   def unbind(%{user_id: user_id, vault_id: vault_id, note_id: note_id}, _doc_name, doc) do
-    Engram.Notes.CrdtCheckpoint.checkpoint(user_id, vault_id, note_id, doc)
+    _ =
+      if CheckpointGate.acquire() do
+        try do
+          Engram.Notes.CrdtCheckpoint.checkpoint(user_id, vault_id, note_id, doc)
+        after
+          CheckpointGate.release()
+        end
+      else
+        Enqueue.enqueue(
+          Engram.Workers.CheckpointNote.new(%{
+            user_id: user_id,
+            vault_id: vault_id,
+            note_id: note_id
+          }),
+          "crdt_checkpoint"
+        )
+      end
+
     :ok
   end
 

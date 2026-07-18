@@ -10,7 +10,8 @@ import {
 	startCrdtSession,
 	stopCrdtSession,
 } from "../crdt/session";
-import { beacon, parseTraceparent, tracingEnabled } from "../observability/trace";
+import { rlog } from "../observability/remote-log";
+import { beacon, newTraceContext, parseTraceparent, tracingEnabled } from "../observability/trace";
 import { getWsBase, joinWsUrl } from "./base";
 import { ROOT_FOLDER_ID } from "./queries";
 
@@ -52,6 +53,36 @@ let connectGeneration = 0;
 // updates this before reconnecting; phoenix's own heartbeat/visibility reconnects
 // then pick up whatever's current.
 let latestToken: string | null = null;
+
+// Clerk session tokens live 60s, so ANY phoenix-initiated reconnect >60s after
+// the last explicit connect replays an expired token — and the wake triggers
+// (focus/online/visibility) demonstrably don't fire on an unattended tab (prod
+// 2026-07-15: one tab replayed a single frozen token for 8h at ~7s cadence).
+// socket.onError fires on every failed attempt, so the token refreshes THERE:
+// the next retry (phoenix backoff caps at 5s) reads params() and self-heals.
+let latestGetToken: (() => Promise<string | null>) | null = null;
+let tokenRefreshInFlight = false;
+
+async function refreshTokenForRetry(): Promise<void> {
+	if (!latestGetToken || tokenRefreshInFlight) {
+		return;
+	}
+	tokenRefreshInFlight = true;
+	const gen = connectGeneration;
+	try {
+		const token = await latestGetToken();
+		// A teardown/vault switch landed mid-fetch, or Clerk returned nothing —
+		// keep the previous token; the next onError attempts another refresh.
+		if (gen === connectGeneration && token) {
+			latestToken = token;
+		}
+	} catch {
+		// Clerk can't mint right now (session refresh failing, network down).
+		// Nothing to write; the retry loop keeps probing via onError.
+	} finally {
+		tokenRefreshInFlight = false;
+	}
+}
 
 interface ConnectOptions {
 	userId: string;
@@ -140,6 +171,30 @@ function flushBatch(batch: PendingBatch): void {
 			refetchType: "all",
 		});
 	}
+}
+
+// Failure-only push beacon (web.crdt.push): OK pushes are per-keystroke
+// volume and would blow the 60/min beacon rate limit; the failures are the
+// signal. No-ops entirely (resolveTransport returns null) when tracing is off.
+// Exported as a test seam (same pattern as __getServerJitterMs).
+export function pushFailureBeacon(docId: string, startUs: number, reason: string): void {
+	if (!tracingEnabled()) {
+		return;
+	}
+	const ctx = newTraceContext();
+	beacon.enqueue({
+		trace_id: ctx.traceId,
+		parent_span_id: ctx.spanId,
+		name: "web.crdt.push",
+		start_us: startUs,
+		end_us: Date.now() * 1000,
+		attributes: {
+			"engram.surface": "web",
+			"engram.event_type": "push_failed",
+			"engram.note_id": docId,
+			"engram.reason": reason.slice(0, 64),
+		},
+	});
 }
 
 export const RECONNECT_JITTER_DEFAULT_MS = 5000;
@@ -318,6 +373,19 @@ export function handleNotesBatch(
 	}
 }
 
+/** A folder marker was created/deleted/moved on the server (from the web app or
+ *  the plugin). The tree renders from the ["folders", vaultId] query, so a
+ *  single invalidation refetches it — the created folder appears, the deleted
+ *  one drops — instead of waiting for a full reload. The event is already
+ *  vault-scoped by the sync topic, so the payload carries no vault_id to check. */
+export function handleFoldersBatch(
+	_payload: { op?: string; folder?: string },
+	queryClient: QueryClient,
+	vaultId: string,
+): void {
+	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
+}
+
 export async function connectChannel({
 	userId,
 	vaultId,
@@ -338,9 +406,18 @@ export async function connectChannel({
 	}
 
 	latestToken = token ?? "";
+	latestGetToken = getToken;
 	socket = new Socket(joinWsUrl(getWsBase(), "/socket"), {
 		params: () => ({ token: latestToken ?? "" }),
 		reconnectAfterMs: (tries: number) => computeReconnectMs(tries, serverJitterMs),
+	});
+
+	// Fires on every failed (re)connect attempt — incl. an auth 403 on an
+	// expired token. Refresh before the next backoff step retries; clerk-js
+	// caches tokens ~60s so per-attempt refresh is cheap.
+	socket.onError(() => {
+		// Never rejects (catches internally) — safe as a floating call.
+		refreshTokenForRetry();
 	});
 
 	socket.connect();
@@ -349,8 +426,13 @@ export async function connectChannel({
 	// trigger. The socket can drop events while disconnected (no replay), so a
 	// reconnect kicks a cursor pull to backfill the gap.
 	// Also re-arms CRDT handshakes on reconnect so the session re-syncs state.
+	// Folder markers no longer ride that feed (backend #976 excludes kind=="folder"),
+	// so an empty-folder delete missed while offline carries no note rows to pull.
+	// Reconcile the folder snapshot directly on (re)connect — snapshot-diff, like
+	// the plugin — so a reconnecting tab drops folders deleted in the gap.
 	socket.onOpen(() => {
 		resyncOpenDocs();
+		queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 		onSocketOpen?.();
 	});
 
@@ -365,6 +447,10 @@ export async function connectChannel({
 		handleNotesBatch(payload, queryClient, vaultId);
 	});
 
+	channel.on("folders.batch", (payload: { op?: string; folder?: string }) => {
+		handleFoldersBatch(payload, queryClient, vaultId);
+	});
+
 	channel
 		.join()
 		.receive("ok", (resp) => {
@@ -377,9 +463,15 @@ export async function connectChannel({
 	startCrdtSession({
 		vaultId,
 		push: (docId, b64) => {
+			const startUs = Date.now() * 1000;
 			crdtChannel
 				?.push("crdt_msg", { doc_id: docId, b64 })
 				.receive("error", (resp: { reason?: string }) => {
+					rlog().warn(
+						"crdt",
+						`crdt_msg push rejected note=${docId} reason=${resp?.reason ?? "unknown"}`,
+					);
+					pushFailureBeacon(docId, startUs, resp?.reason ?? "error");
 					if (resp?.reason === "frame_too_large") {
 						// Retrying would re-send the same oversized diff and loop.
 						console.error(`CRDT frame rejected (frame_too_large) for ${docId} — edit not synced`);
@@ -389,7 +481,14 @@ export async function connectChannel({
 					// backoff re-derives whatever the server missed.
 					scheduleCrdtRehandshake(docId, resp?.reason === "rate_limited" ? 2000 : 1000);
 				})
-				.receive("timeout", () => scheduleCrdtRehandshake(docId, 1000));
+				.receive("timeout", () => {
+					// The server acks every routed crdt_msg (backend 2026-07-14), so a
+					// timeout is REAL non-delivery now, not the old always-fires noise
+					// that re-handshook every open note every ~3.5s forever.
+					rlog().warn("crdt", `crdt_msg push timeout note=${docId} — scheduling re-handshake`);
+					pushFailureBeacon(docId, startUs, "timeout");
+					scheduleCrdtRehandshake(docId, 1000);
+				});
 		},
 	});
 	const crdtTopic = `crdt:${userId}:${vaultId}`;
@@ -407,9 +506,11 @@ export async function connectChannel({
 	crdtChannel
 		.join()
 		.receive("ok", () => {
+			rlog().info("crdt", "crdt channel joined — live note sync active");
 			notifyCrdtChannelJoined();
 		})
 		.receive("error", (resp) => {
+			rlog().error("crdt", `crdt channel join FAILED: ${JSON.stringify(resp).slice(0, 200)}`);
 			notifyCrdtChannelError();
 			console.error("CRDT channel join failed", resp);
 		});
@@ -536,6 +637,11 @@ export function installSocketHealthTriggers(
 
 export function disconnectChannel() {
 	connectGeneration++;
+	latestGetToken = null;
+	// A getToken() hung across this teardown must not block refreshes for the
+	// NEXT connection forever (review 2026-07-15) — the generation guard
+	// already discards its eventual result.
+	tokenRefreshInFlight = false;
 	__resetNoteChangeBatch();
 	if (crdtChannel) {
 		crdtChannel.leave();

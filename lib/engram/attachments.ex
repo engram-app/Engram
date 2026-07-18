@@ -71,45 +71,59 @@ defmodule Engram.Attachments do
         # advisory lock; if the locked re-read reveals a different winning
         # id, we re-encrypt + re-PUT under the lock (rare race path only).
         # The lock auto-releases on commit/rollback.
-        Repo.transaction(fn ->
-          :ok = acquire_path_lock(user.id, path_hmac)
+        result =
+          Repo.transaction(fn ->
+            :ok = acquire_path_lock(user.id, path_hmac)
 
-          existing = fetch_existing(user, vault.id, path_hmac)
+            existing = fetch_existing(user, vault.id, path_hmac)
 
-          rebind =
-            case existing do
-              %Attachment{id: id} when id != att_id0 ->
-                with {:ok, rebind_key, attrs1, ciphertext1} <-
-                       prepare_upload(
-                         user,
-                         vault,
-                         id,
-                         path,
-                         path_hmac,
-                         plaintext,
-                         mtime,
-                         explicit_mime
-                       ),
-                     :ok <- store_external(rebind_key, ciphertext1, attrs1.mime_type) do
-                  {:ok, attrs1}
-                end
+            rebind =
+              case existing do
+                %Attachment{id: id} when id != att_id0 ->
+                  with {:ok, rebind_key, attrs1, ciphertext1} <-
+                         prepare_upload(
+                           user,
+                           vault,
+                           id,
+                           path,
+                           path_hmac,
+                           plaintext,
+                           mtime,
+                           explicit_mime
+                         ),
+                       :ok <- store_external(rebind_key, ciphertext1, attrs1.mime_type) do
+                    {:ok, attrs1}
+                  end
 
-              _ ->
-                {:ok, attrs0}
+                _ ->
+                  {:ok, attrs0}
+              end
+
+            with {:ok, changeset_attrs} <- rebind,
+                 {:ok, att} <- write_row(user, existing, att_id0, changeset_attrs) do
+              # Phase B.3: path is virtual — splice the plaintext we already
+              # have onto the returned struct so callers can read att.path
+              # without a second decrypt round-trip.
+              {:ok, %{att | path: path}}
             end
+            |> case do
+              {:ok, att} -> att
+              {:error, reason} -> Repo.rollback(reason)
+            end
+          end)
 
-          with {:ok, changeset_attrs} <- rebind,
-               {:ok, att} <- write_row(user, existing, att_id0, changeset_attrs) do
-            # Phase B.3: path is virtual — splice the plaintext we already
-            # have onto the returned struct so callers can read att.path
-            # without a second decrypt round-trip.
-            {:ok, %{att | path: path}}
-          end
-          |> case do
-            {:ok, att} -> att
-            {:error, reason} -> Repo.rollback(reason)
-          end
-        end)
+        # Real-time notification (Engram#942) — create/upload previously had NO
+        # live signal at all (only delete and move broadcast), so peers only
+        # ever saw a new/changed attachment via the next manual pull. Mirrors
+        # the "upsert" leg of move_attachment/4's broadcast_attachment/5 below
+        # — the plugin's WebSocket handler already fetches + materializes any
+        # attachment "upsert" event (it's the same code path move's new-path
+        # leg drives), so no plugin change is needed.
+        with {:ok, %Attachment{} = att} <- result do
+          broadcast_attachment(user.id, vault.id, "upsert", path, att)
+        end
+
+        result
       end
     end
   end
@@ -254,8 +268,8 @@ defmodule Engram.Attachments do
   If the blob delete fails, the row stays deleted and we log a warning — a zombie blob
   wastes storage but doesn't cause data loss, unlike the reverse (ghost row pointing to nothing).
   """
-  def delete_attachment(user, vault, path) do
-    _ = do_delete_attachment(fresh_user(user), vault, path)
+  def delete_attachment(user, vault, path, opts \\ []) do
+    _ = do_delete_attachment(fresh_user(user), vault, path, opts)
     :ok
   end
 
@@ -263,7 +277,9 @@ defmodule Engram.Attachments do
   # transitioned to deleted (`false` for an absent/already-deleted path).
   # Broadcasts + best-effort blob cleanup happen here so both the single-delete
   # API and `batch_delete/3` share one implementation and count truthfully.
-  defp do_delete_attachment(user, vault, path) do
+  # opts[:origin_device_id] is stamped into the delete broadcast (#970) so the
+  # originating device can drop its own fanout echo.
+  defp do_delete_attachment(user, vault, path, opts \\ []) do
     path = PathSanitizer.sanitize(path)
     now = DateTime.utc_now(:second)
 
@@ -317,12 +333,22 @@ defmodule Engram.Attachments do
         # trash are sent.
         _ =
           if deleted? do
-            Engram.Sync.Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", %{
+            payload = %{
               "event_type" => "delete",
               "kind" => "attachment",
               "path" => path,
               "vault_id" => vault.id
-            })
+            }
+
+            # Origin attribution (#970) — same contract as the notes delete
+            # broadcast: lets the originating device drop its own fanout echo.
+            payload =
+              case Keyword.get(opts, :origin_device_id) do
+                device_id when is_binary(device_id) -> Map.put(payload, "device_id", device_id)
+                _ -> payload
+              end
+
+            Engram.Sync.Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", payload)
           end
 
         deleted?

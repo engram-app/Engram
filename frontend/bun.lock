@@ -86,6 +86,11 @@
       },
     },
   },
+  "trustedDependencies": [
+    "esbuild",
+    "msw",
+    "workerd",
+  ],
   "packages": {
     "@adobe/css-tools": ["@adobe/css-tools@4.5.0", "http://10.0.20.214:4873/@adobe/css-tools/-/css-tools-4.5.0.tgz", {}, "sha512-6OzddxPio9UiWTCemp4N8cYLV2ZN1ncRnV1cVGtve7dhPOtRkleRyx32GQCYSwDYgaHU3USMm84tNsvKzRCa1Q=="],
 

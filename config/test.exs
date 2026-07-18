@@ -17,6 +17,19 @@ config :engram, :pre_auth_rate_limit_override, 10_000
 # cover BootCanary directly via Engram.Crypto.BootCanaryTest.
 config :engram, :boot_canary_enabled, false
 
+# CheckpointGate inline limit raised out of the way for tests: the gate is a
+# process-global counter shared by the whole (partly async) suite, and many
+# tests spin real CRDT rooms whose unbind checkpoints acquire it. A low limit
+# would let one test's room fill the gate and make an UNRELATED room's unbind
+# overflow to the manual test Oban (which never runs the job), so its edit would
+# not materialize. Tests that exercise the overflow path set this to 0 locally.
+config :engram, :checkpoint_inline_limit, 1000
+
+# Pacing OFF by default in tests so fan-out delivery stays synchronous and
+# existing broadcast/e2e timing assertions are unaffected. The pacer's own
+# test flips it on per-test.
+config :engram, :fanout_pacing_enabled, false
+
 # #619 — bootstrap admin advisory lock disabled in tests. It's a global
 # pg_advisory_xact_lock; under the SQL sandbox (one transaction per test) it's
 # held for the whole test and deadlocks once enough user-creating tests run

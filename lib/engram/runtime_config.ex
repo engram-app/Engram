@@ -51,6 +51,33 @@ defmodule Engram.RuntimeConfig do
     ci_gated_int_override(getenv, "PRE_AUTH_RATE_LIMIT_OVERRIDE")
   end
 
+  @doc """
+  CRDT channel per-message rate-limit override for CI/E2E stacks only.
+
+  The release image runs `EngramWeb.CrdtChannel` at its prod `@msg_limit`; the
+  e2e harness's compressed CRDT workload (rapid edits, resumed-device room
+  rejoins across the suite) legitimately exceeds a per-account budget a real
+  single user wouldn't. Gated on `CI=true` so a stray `CRDT_MSG_RATE_LIMIT_
+  OVERRIDE` in a prod task def can never weaken the channel limiter. Same
+  `{:ok, int} | {:ignored, raw} | :none` contract as the other overrides.
+  """
+  @spec crdt_msg_rate_limit_override((String.t() -> String.t() | nil)) ::
+          {:ok, integer()} | {:ignored, String.t()} | :none
+  def crdt_msg_rate_limit_override(getenv) when is_function(getenv, 1) do
+    ci_gated_int_override(getenv, "CRDT_MSG_RATE_LIMIT_OVERRIDE")
+  end
+
+  @doc """
+  CRDT channel handshake (STEP1/STEP2) rate-limit override for CI/E2E stacks
+  only. Companion to `crdt_msg_rate_limit_override/1` for the connect-time
+  handshake budget (`@hs_limit`); same `CI=true` gate and return contract.
+  """
+  @spec crdt_hs_rate_limit_override((String.t() -> String.t() | nil)) ::
+          {:ok, integer()} | {:ignored, String.t()} | :none
+  def crdt_hs_rate_limit_override(getenv) when is_function(getenv, 1) do
+    ci_gated_int_override(getenv, "CRDT_HS_RATE_LIMIT_OVERRIDE")
+  end
+
   # Shared rule: an integer override env var is honored only when `CI=true`,
   # so a stray copy into a prod task def is inert. Returns {:ok, int} in CI,
   # {:ignored, raw} when present outside CI, or :none when absent/blank.

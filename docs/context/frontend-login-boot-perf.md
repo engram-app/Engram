@@ -1,5 +1,7 @@
 # Frontend login boot performance — architecture, measurement, guardrails
 
+_Last verified: 2026-07-02_
+
 Context for anyone touching SPA boot / sign-in latency. Established in PR #842
 (2026-07-02), which cut the eager entry from 894 KB (274 KB gz) to 447 KB
 (142 KB gz) and removed two round trips from the cold sign-in path.

@@ -27,12 +27,13 @@ is why the legacy tests must NOT run with CRDT enabled.
 
 ## Running locally
 
-Requires the CI stack with `CRDT_ENABLED=true` and the plugin opted in via
+Requires the CI stack (backend CRDT is unconditional — the old
+`CRDT_ENABLED` stack flag was dead config) and the plugin opted in via
 `E2E_ENABLE_CRDT=true`:
 
 ```bash
-# Bring up the stack with the crdt: channel advertised
-CRDT_ENABLED=true docker compose -f ci/compose.yml -f ci/compose.local.yml -p engram-crdt up -d --build --wait
+# Bring up the local-auth stack (the crdt: channel is always advertised)
+docker compose -f ci/compose.yml -f ci/compose.local.yml -p engram-crdt up -d --build --wait
 
 cd e2e
 E2E_ENABLE_CRDT=true \
@@ -47,9 +48,7 @@ skipif), so it is a no-op in the legacy e2e jobs.
 
 ## CI
 
-`tests/crdt/` needs a dedicated job (CRDT is a per-session mode, since the
-Obsidian fixtures are session-scoped): copy the `e2e-clerk` job in
-`.github/workflows/verify.yml` to `e2e-crdt`, set `AUTH_PROVIDER=local`, add
-`CRDT_ENABLED=true` (stack) + `E2E_ENABLE_CRDT=true` (pytest env), and run
-`pytest tests/crdt/` instead of the full suite. Keep it out of the required `ci`
-aggregate until it has a few green runs.
+`tests/crdt/` runs in the `e2e-crdt` job in `.github/workflows/verify.yml`
+(`AUTH_PROVIDER=local` + `E2E_ENABLE_CRDT=true`), which also runs
+`tests/api_only/` on the same local-auth stack (absorbed from the old
+`e2e-local` job).
