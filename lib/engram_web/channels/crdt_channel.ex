@@ -293,6 +293,49 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  # Single-path catch-up (Phase B): replay the seq-ordered op-log over the
+  # socket from a client cursor. Reuses `list_changes_by_seq` — the same
+  # seq-ordered, all-or-fails-on-decrypt feed `/sync/changes` serves — so each
+  # op carries FULL content (not an SV-diff) and is causally complete: it can
+  # never pend the way `crdt_catchup_delta` did (the e2e test_85 deaf-note bug).
+  # Tombstones ride the same feed (deletes replay as ops). Paginated: the client
+  # advances its cursor by `next_seq` and re-requests until `has_more` is false.
+  @impl true
+  def handle_in("crdt_catchup_since", payload, socket) do
+    with :ok <- check_rate(socket, :handshake),
+         {:ok, cursor} <- cast_cursor(Map.get(payload, "cursor_seq", 0)) do
+      opts =
+        case Map.get(payload, "limit") do
+          n when is_integer(n) and n > 0 -> [limit: n]
+          _ -> []
+        end
+
+      {:ok, %{changes: changes, has_more: has_more, next: next}} =
+        Notes.list_changes_by_seq(
+          socket.assigns.current_user,
+          socket.assigns.vault,
+          cursor,
+          opts
+        )
+
+      # Tag each op with the SyncNoteChange discriminator so the client applies
+      # it through the existing applySyncChange path (this feed is notes-only —
+      # list_changes_by_seq excludes folders and never yields attachments).
+      changes = Enum.map(changes, &Map.put(&1, :type, :note))
+
+      next_seq =
+        case next do
+          {seq, _id} -> seq
+          _ -> nil
+        end
+
+      {:reply, {:ok, %{changes: changes, has_more: has_more, next_seq: next_seq}}, socket}
+    else
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
+      {:error, :bad_cursor} -> {:reply, {:error, %{reason: "bad_cursor"}}, socket}
+    end
+  end
+
   # Channel-wide fallback (MUST stay last — Elixir matches handle_in top-down).
   # Every crdt_* frame above pattern-matches its required keys, so a frame
   # missing one (e.g. crdt_create with no "path") would otherwise raise
@@ -323,6 +366,12 @@ defmodule EngramWeb.CrdtChannel do
   # A non-nil, non-string sv (e.g. a JSON number or list slipping past the
   # client) would otherwise raise FunctionClauseError and crash the channel.
   defp decode_sv(_), do: {:error, :bad_sv}
+
+  # A cursor is a non-negative seq. A malformed one (string, float, negative)
+  # replies bad_cursor rather than raising into a FunctionClauseError that would
+  # crash the whole channel — same defensive contract as decode_sv/cast_doc_id.
+  defp cast_cursor(n) when is_integer(n) and n >= 0, do: {:ok, n}
+  defp cast_cursor(_), do: {:error, :bad_cursor}
 
   defp cast_doc_id(doc_id) do
     case Ecto.UUID.cast(doc_id) do
