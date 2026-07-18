@@ -10,7 +10,8 @@ defmodule Engram.Notifications.Discord do
     case Application.get_env(:engram, :discord_webhook_url) do
       url when is_binary(url) and url != "" ->
         payload = build_report_payload(report, user_email)
-        Task.start(fn -> post(url, payload) end)
+        # Fire-and-forget: discard the {:ok, pid} (matches :unmatched_returns).
+        _ = Task.start(fn -> post(url, payload) end)
         :ok
 
       _ ->
