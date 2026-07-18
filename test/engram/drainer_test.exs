@@ -5,6 +5,15 @@ defmodule Engram.DrainerTest do
 
   setup :verify_on_exit!
 
+  # drain/1 sets a NODE-GLOBAL :persistent_term draining flag; without this
+  # reset it leaks into every test that runs after this file (review
+  # 2026-07-15: DrainConnCloseTest went deterministically red and every later
+  # ConnCase response got connection: close stamped).
+  setup do
+    on_exit(fn -> Engram.Drainer.reset_draining_for_test() end)
+    :ok
+  end
+
   test "drain/1 pauses oban and does NOT disconnect peers (fan-out must survive the socket drain)" do
     test_pid = self()
 

@@ -48,6 +48,252 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Socket-native frames: create / delete / catchup
+  # ---------------------------------------------------------------------------
+
+  describe "crdt_create" do
+    test "creates a bare row for a client-minted id", %{socket: socket, user: user, vault: vault} do
+      id = Ecto.UUID.generate()
+      ref = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/n.md"})
+      assert_reply ref, :ok, %{doc_id: ^id}
+      assert Notes.note_in_vault?(user, vault.id, id)
+    end
+
+    test "id live at a different path replies id_conflict", %{socket: socket, note: note} do
+      ref = push(socket, "crdt_create", %{"doc_id" => note.id, "path" => "Notes/other.md"})
+      assert_reply ref, :error, %{reason: "id_conflict", doc_id: got}
+      assert got == note.id
+    end
+
+    test "nil path replies bad_path without crashing the channel", %{socket: socket} do
+      ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => nil})
+      assert_reply ref, :error, %{reason: "bad_path"}
+      ref2 = push(socket, "crdt_catchup_heads", %{})
+      assert_reply ref2, :ok, %{heads: _}
+    end
+
+    test "non-UUID doc_id replies bad_doc_id without crashing the channel", %{socket: socket} do
+      ref = push(socket, "crdt_create", %{"doc_id" => "not-a-uuid", "path" => "Notes/x.md"})
+      assert_reply ref, :error, %{reason: "bad_doc_id"}
+      ref2 = push(socket, "crdt_catchup_heads", %{})
+      assert_reply ref2, :ok, %{heads: _}
+    end
+
+    test "same-path resurrect within the delete window replies recently_deleted (delete-wins)", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/dw.md", "content" => "keep"})
+
+      :ok = Notes.delete_note_by_id(user, vault, note.id)
+
+      ref = push(socket, "crdt_create", %{"doc_id" => note.id, "path" => "Notes/dw.md"})
+      assert_reply ref, :error, %{reason: "recently_deleted"}
+      refute Notes.note_in_vault?(user, vault.id, note.id)
+    end
+
+    test "a frame missing a required key replies bad_frame without crashing the channel", %{
+      socket: socket
+    } do
+      # crdt_create with no "path" key matches no handle_in clause but the
+      # channel-wide fallback; the channel must survive.
+      ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate()})
+      assert_reply ref, :error, %{reason: "bad_frame"}
+
+      ref2 = push(socket, "crdt_catchup_heads", %{})
+      assert_reply ref2, :ok, %{heads: _}
+    end
+  end
+
+  describe "crdt_delete" do
+    test "soft-deletes a note by id and is idempotent", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/del.md", "content" => "x"})
+      ref = push(socket, "crdt_delete", %{"doc_id" => note.id})
+      assert_reply ref, :ok, %{doc_id: _}
+      refute Notes.note_in_vault?(user, vault.id, note.id)
+
+      ref2 = push(socket, "crdt_delete", %{"doc_id" => note.id})
+      assert_reply ref2, :ok, %{doc_id: _}
+    end
+
+    test "delete broadcast carries the deleting socket's device_id (#970)", %{
+      user: user,
+      vault: vault
+    } do
+      device_id = Ecto.UUID.generate()
+
+      {:ok, _, device_socket} =
+        subscribe_and_join(
+          socket(EngramWeb.UserSocket, "user_#{user.id}", %{
+            current_user: user,
+            current_api_key: nil,
+            device_id: device_id
+          }),
+          EngramWeb.CrdtChannel,
+          "crdt:#{user.id}:#{vault.id}",
+          %{"crdt_proto" => 2}
+        )
+
+      Sandbox.allow(Repo, self(), device_socket.channel_pid)
+
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/dev.md", "content" => "x"})
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      ref = push(device_socket, "crdt_delete", %{"doc_id" => note.id})
+      assert_reply ref, :ok, %{doc_id: _}
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "id" => id} = payload
+      }
+
+      assert id == note.id
+      assert payload["device_id"] == device_id
+    end
+  end
+
+  describe "crdt_catchup_heads" do
+    test "returns a decrypted path + head marker per live note in the vault", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/h.md", "content" => "hello"})
+
+      ref = push(socket, "crdt_catchup_heads", %{})
+      assert_reply ref, :ok, %{heads: heads, complete: complete}
+      assert is_map(heads)
+      assert %{path: "Notes/h.md", head: head} = heads[note.id]
+      assert is_binary(head) and byte_size(head) > 0
+      # Completeness contract: a clean, fully-resolved vault reports complete.
+      assert complete == true
+    end
+  end
+
+  describe "crdt_catchup_delta" do
+    test "returns full state when sv is null", %{socket: socket, user: user, vault: vault} do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/d.md", "content" => "body"})
+      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => nil})
+      assert_reply ref, :ok, %{doc_id: got_id, b64: b64, head: head}
+      assert got_id == note.id
+      assert is_binary(b64) and byte_size(b64) > 0
+      assert is_binary(head)
+    end
+
+    test "rejects malformed base64 sv", %{socket: socket, user: user, vault: vault} do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/d2.md", "content" => "b"})
+      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => "!!!not-base64!!!"})
+      assert_reply ref, :error, %{reason: "bad_sv"}
+    end
+
+    test "unknown doc_id replies not_found", %{socket: socket} do
+      unknown_id = Ecto.UUID.generate()
+      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => unknown_id, "sv" => nil})
+      assert_reply ref, :error, %{reason: "not_found"}
+    end
+
+    test "another tenant's doc_id replies not_found (cross-tenant scoping)", %{
+      socket: socket,
+      other_user: other_user
+    } do
+      insert(:user_limit_override, user: other_user, key: "vaults_cap", value: %{"v" => -1})
+      {:ok, other_vault} = Vaults.create_vault(other_user, %{name: "OtherVault"})
+
+      {:ok, other_note} =
+        Notes.upsert_note(other_user, other_vault, %{"path" => "x.md", "content" => "x"})
+
+      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => other_note.id, "sv" => nil})
+      assert_reply ref, :error, %{reason: "not_found"}
+    end
+
+    test "a non-string sv (e.g. a JSON number) replies bad_sv instead of crashing the channel",
+         %{socket: socket, user: user, vault: vault} do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/d3.md", "content" => "b"})
+      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => 123})
+      assert_reply ref, :error, %{reason: "bad_sv"}
+
+      # The channel process must still be alive / usable after the bad input.
+      ref2 = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => nil})
+      assert_reply ref2, :ok, %{doc_id: got_id}
+      assert got_id == note.id
+    end
+  end
+
+  # Single-path catch-up (Phase B): replay the seq-ordered op-log over the
+  # socket. Each op carries FULL content (not an SV-diff), so it is causally
+  # complete and can never pend — the e2e test_85 deaf-note fix.
+  describe "crdt_catchup_since" do
+    test "replays seq-ordered notes with full content after cursor 0", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "Notes/a.md", "content" => "aaa"})
+      {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "Notes/b.md", "content" => "bbb"})
+
+      ref = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
+      assert_reply ref, :ok, %{changes: changes, has_more: has_more, next_seq: _next}
+
+      a = Enum.find(changes, &(&1.id == n1.id))
+      b = Enum.find(changes, &(&1.id == n2.id))
+      assert a.type == :note
+      assert a.path == "Notes/a.md" and a.content == "aaa" and a.deleted == false
+      assert b.path == "Notes/b.md" and b.content == "bbb"
+      assert is_integer(a.seq)
+
+      # Seq-ordered ascending (deterministic apply order).
+      seqs = Enum.map(changes, & &1.seq)
+      assert seqs == Enum.sort(seqs)
+      assert has_more == false
+    end
+
+    test "includes tombstones so deletes replay as ops", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, n} = Notes.upsert_note(user, vault, %{"path" => "Notes/del.md", "content" => "x"})
+      :ok = Notes.delete_note(user, vault, "Notes/del.md")
+
+      ref = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
+      assert_reply ref, :ok, %{changes: changes}
+
+      tomb = Enum.find(changes, &(&1.id == n.id))
+      assert tomb != nil and tomb.deleted == true
+    end
+
+    test "only returns changes with seq > cursor", %{socket: socket, user: user, vault: vault} do
+      {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "Notes/c1.md", "content" => "1"})
+      {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "Notes/c2.md", "content" => "2"})
+
+      # Cursor at n1's seq → n1 excluded, n2 included.
+      ref = push(socket, "crdt_catchup_since", %{"cursor_seq" => n1.seq})
+      assert_reply ref, :ok, %{changes: changes}
+      ids = Enum.map(changes, & &1.id)
+      refute n1.id in ids
+      assert n2.id in ids
+    end
+
+    test "a non-integer cursor_seq replies bad_cursor instead of crashing the channel", %{
+      socket: socket
+    } do
+      ref = push(socket, "crdt_catchup_since", %{"cursor_seq" => "nope"})
+      assert_reply ref, :error, %{reason: "bad_cursor"}
+
+      ref2 = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
+      assert_reply ref2, :ok, %{changes: _}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Auth / join
   # ---------------------------------------------------------------------------
 
@@ -524,6 +770,19 @@ defmodule EngramWeb.CrdtChannelTest do
       push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => step1_b64})
       push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => step1_b64})
       ref = push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => step1_b64})
+
+      assert_reply ref, :error, %{reason: "rate_limited"}, 3000
+    end
+
+    @tag capture_log: true
+    test "crdt_catchup_heads shares the handshake budget and is rejected once exhausted",
+         %{socket: socket} do
+      Application.put_env(:engram, :crdt_hs_rate_limit_override, 2)
+      on_exit(fn -> Application.delete_env(:engram, :crdt_hs_rate_limit_override) end)
+
+      push(socket, "crdt_catchup_heads", %{})
+      push(socket, "crdt_catchup_heads", %{})
+      ref = push(socket, "crdt_catchup_heads", %{})
 
       assert_reply ref, :error, %{reason: "rate_limited"}, 3000
     end

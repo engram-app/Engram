@@ -222,18 +222,50 @@ defmodule Engram.Notes.CrdtTransport do
   end
 
   @doc """
-  Map every note in the vault to its head marker so a client can diff against
-  its local per-note heads and learn which cold notes advanced.
+  Map every note in the vault to its decrypted `path` and head marker so a
+  client can (a) diff against its local per-note heads to learn which cold
+  notes advanced AND (b) DISCOVER + place a never-seen note from the head map
+  alone — no `/manifest` or `note_changed` round-trip needed for discovery.
 
-  Reads the persisted `crdt_head` column — O(notes) cheap row reads, NO doc
-  rebuilds. The column is NULLed on every CRDT-state change (`update_v1` on a
+  Reads the persisted `crdt_head` column (O(notes) cheap row reads, NO doc
+  rebuilds) and DECRYPTS each note's Phase-B `path_ciphertext` server-side with
+  the caller's DEK — the same per-path AES-GCM decrypt `/manifest` pays. Path
+  payloads decrypt in ~µs each; the added cost is bounded per-vault and matches
+  the manifest's, so this is no longer a pure column read.
+
+  The `crdt_head` column is NULLed on every CRDT-state change (`update_v1` on a
   tail append; a `crdt_state_ciphertext` trigger on any snapshot write), and a
   NULL is self-healed once here via `backfill_head/3`; the `BackfillCrdtHead`
   worker warms NULLs in the background so a live poll rarely pays that cost. So
-  steady-state cost is O(notes changed since the last poll), not O(vault).
+  steady-state head cost is O(notes changed since the last poll), not O(vault).
+
+  A note whose path is missing/undecryptable is SKIPPED (logged), never fatal —
+  one bad row must not sink the whole vault head map. No DEK (brand-new user,
+  zero writes) → empty map, same short-circuit `/manifest` uses.
+
+  Returns `{heads_map, complete}`. `complete` is a COMPLETENESS CONTRACT: it is
+  `true` only when the map is provably the FULL set of live notes, and `false`
+  whenever the map might be missing one — no DEK (empty map), or ANY row dropped
+  during path-decrypt / head-resolve. A destructive consumer (e.g. an
+  offline-delete reconcile that trashes local files absent from the heads set)
+  MUST refuse to act unless `complete == true`; a dropped row is a LIVE note and
+  is indistinguishable from a real deletion. Non-destructive consumers
+  (convergence/discovery) ignore `complete` — a dropped row is just caught next
+  round.
   """
-  @spec vault_heads(map(), map()) :: %{String.t() => String.t()}
+  @spec vault_heads(map(), map()) ::
+          {%{String.t() => %{path: String.t(), head: String.t()}}, boolean()}
   def vault_heads(user, vault) do
+    case Crypto.get_dek(user) do
+      {:ok, dek} -> vault_heads_with_dek(user, vault, dek)
+      # No DEK → empty map, but NOT complete: the vault may hold live notes we
+      # simply can't resolve, so a destructive consumer must not treat "" as "all
+      # deleted".
+      {:error, :no_dek} -> {%{}, false}
+    end
+  end
+
+  defp vault_heads_with_dek(user, vault, dek) do
     {:ok, rows} =
       Repo.with_tenant(user.id, fn ->
         Note
@@ -242,21 +274,73 @@ defmodule Engram.Notes.CrdtTransport do
           n.vault_id == ^vault.id and n.user_id == ^user.id and is_nil(n.deleted_at) and
             n.kind == "note"
         )
-        |> select([n], {n.id, n.crdt_head})
+        |> select([n], {n.id, n.crdt_head, n.dek_version, n.path_ciphertext, n.path_nonce})
         |> Repo.all()
       end)
 
-    Enum.reduce(rows, %{}, fn
-      {note_id, nil}, acc ->
-        case backfill_head(user, vault, note_id) do
-          {:ok, head} -> Map.put(acc, note_id, head)
-          {:error, :not_found} -> acc
-        end
-
-      {note_id, head}, acc ->
-        Map.put(acc, note_id, head)
+    Enum.reduce(rows, {%{}, true}, fn {note_id, crdt_head, dek_version, path_ct, path_nonce},
+                                      {acc, complete} ->
+      # Path first: it's the cheap guarded decrypt, and a bad path skips the note
+      # BEFORE the expensive head self-heal (whose load_doc would itself raise on
+      # the same corrupt row). One bad row is dropped, the vault map survives —
+      # but the drop flips `complete` to false so a destructive consumer refuses.
+      with {:ok, path} <- decrypt_row_path(note_id, dek_version, path_ct, path_nonce, dek),
+           {:ok, head} <- resolve_head(user, vault, note_id, crdt_head) do
+        {Map.put(acc, note_id, %{path: path, head: head}), complete}
+      else
+        _ -> {acc, false}
+      end
     end)
   end
+
+  # A warmed head passes through; a NULL is self-healed once (a deleted-note
+  # race returns :not_found → drop it from the map).
+  defp resolve_head(_user, _vault, _note_id, head) when is_binary(head), do: {:ok, head}
+
+  defp resolve_head(user, vault, note_id, nil) do
+    case backfill_head(user, vault, note_id) do
+      {:ok, head} -> {:ok, head}
+      {:error, :not_found} -> :skip
+    end
+  end
+
+  # Decrypt one note's path with the same AAD scheme /manifest uses (v ≥ 2 rows
+  # are AAD-bound to "notes:path:<id>"; legacy v = 1 rows decrypt with empty
+  # AAD). Unlike /manifest this NEVER raises: a missing/undecryptable path is
+  # logged and the note is skipped from the head map, so one corrupt row can't
+  # sink the whole vault's discovery feed.
+  defp decrypt_row_path(note_id, _dek_version, nil, _nonce, _dek) do
+    Logger.warning(
+      "vault_heads: note has no path ciphertext, skipping",
+      Metadata.with_category(:warn, :sync, note_id: note_id)
+    )
+
+    :error
+  end
+
+  defp decrypt_row_path(note_id, dek_version, path_ct, path_nonce, dek) do
+    aad = path_aad(note_id, dek_version)
+
+    case Crypto.Envelope.decrypt(path_ct, path_nonce, dek, aad) do
+      {:ok, path} ->
+        {:ok, path}
+
+      :error ->
+        Logger.warning(
+          "vault_heads: note path decrypt failed, skipping",
+          Metadata.with_category(:warn, :sync, note_id: note_id)
+        )
+
+        :error
+    end
+  end
+
+  # v ≥ 2 rows are AAD-bound to "notes:path:<id>"; legacy v = 1 rows used empty
+  # AAD. Mirrors SyncController.manifest's path_aad/3.
+  defp path_aad(note_id, dek_version) when is_integer(dek_version) and dek_version >= 2,
+    do: Crypto.aad_for_row(:notes, :path, note_id)
+
+  defp path_aad(_note_id, _dek_version), do: <<>>
 
   @doc """
   Rebuild a note's doc once, compute its head marker, persist it to the

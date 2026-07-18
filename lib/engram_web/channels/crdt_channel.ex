@@ -179,6 +179,216 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  # These four frames carry no b64 payload, so frame_class_b64 doesn't apply —
+  # they ride the :handshake lane (see check_rate/2 below). All four are
+  # connect/catchup-time operations (one create/delete per note mutation, one
+  # catchup call per note during enrollment), the exact shape @hs_limit was
+  # sized for, and NOT the continuous edit stream @msg_limit protects — so
+  # sharing that lane is intentional, not accidental reuse. They are still
+  # bounded (not exempt): the 2400/10s ceiling applies same as real STEP1s.
+  @impl true
+  def handle_in("crdt_create", %{"doc_id" => doc_id, "path" => path}, socket) do
+    with :ok <- check_rate(socket, :handshake),
+         {:ok, note_id} <- cast_doc_id(doc_id),
+         :ok <- validate_create_path(path) do
+      user = socket.assigns.current_user
+      vault = socket.assigns.vault
+
+      case Notes.genesis_crdt_note(user, vault, note_id, path) do
+        {:ok, note} ->
+          {:reply, {:ok, %{doc_id: note.id}}, socket}
+
+        {:error, :id_conflict, note} ->
+          {:reply, {:error, %{reason: "id_conflict", doc_id: note.id}}, socket}
+
+        {:error, :version_conflict, note} ->
+          {:reply, {:error, %{reason: "version_conflict", doc_id: note.id}}, socket}
+
+        {:error, {:notes_cap_reached, limit, _count}} ->
+          {:reply, {:error, %{reason: "notes_cap_reached", limit: limit}}, socket}
+
+        {:error, :recently_deleted} ->
+          # Delete-wins (#970): a stale device tried to un-delete a note within
+          # the delete window. The delete stands; the client trashes its local
+          # copy on this reply instead of wedging on a resurrect forever.
+          {:reply, {:error, %{reason: "recently_deleted"}}, socket}
+
+        {:error, %Ecto.Changeset{}} ->
+          # Covers the unique-constraint case (resurrecting a tombstoned id
+          # onto a path already owned by a different live note) as well as
+          # any other changeset validation failure — a clean reply either way.
+          {:reply, {:error, %{reason: "create_failed"}}, socket}
+
+        {:error, _reason} ->
+          # Catch-all for the crypto/KMS error class (a first-write user whose
+          # DEK wrap fails, an encrypt or filter-key error): genesis_crdt_note/4
+          # can return a bare {:error, term} that matches none of the arms above.
+          # Without this the case raised CaseClauseError and crashed the channel.
+          # {:error, term()} is in genesis_crdt_note/4's @spec, so dialyzer sees
+          # this arm as reachable (it was wrongly removed before on a lying spec).
+          {:reply, {:error, %{reason: "create_failed"}}, socket}
+      end
+    else
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
+      {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
+      {:error, :bad_path} -> {:reply, {:error, %{reason: "bad_path"}}, socket}
+    end
+  end
+
+  @impl true
+  def handle_in("crdt_delete", %{"doc_id" => doc_id}, socket) do
+    with :ok <- check_rate(socket, :handshake),
+         {:ok, note_id} <- cast_doc_id(doc_id) do
+      user = socket.assigns.current_user
+      vault = socket.assigns.vault
+      device_id = socket.assigns[:device_id]
+      # Idempotent: a :not_found means the row is already gone — the desired
+      # end state — so we still reply :ok. origin_device_id (#970) lets THIS
+      # device drop its own note_changed echo of the delete.
+      _ = Notes.delete_note_by_id(user, vault, note_id, origin_device_id: device_id)
+      {:reply, {:ok, %{doc_id: note_id}}, socket}
+    else
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
+      {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
+    end
+  end
+
+  @impl true
+  def handle_in("crdt_catchup_heads", _payload, socket) do
+    case check_rate(socket, :handshake) do
+      :ok ->
+        user = socket.assigns.current_user
+        vault = socket.assigns.vault
+        # `complete` is the completeness contract (see CrdtTransport.vault_heads):
+        # true only when `heads` is provably the FULL live-note set. The plugin's
+        # destructive offline-delete reconcile gates on it; non-destructive
+        # consumers ignore it. `heads` shape is unchanged.
+        {heads, complete} = CrdtTransport.vault_heads(user, vault)
+        {:reply, {:ok, %{heads: heads, complete: complete}}, socket}
+
+      {:error, :rate_limited} ->
+        {:reply, {:error, %{reason: "rate_limited"}}, socket}
+    end
+  end
+
+  @impl true
+  def handle_in("crdt_catchup_delta", %{"doc_id" => doc_id} = payload, socket) do
+    with :ok <- check_rate(socket, :handshake),
+         {:ok, note_id} <- cast_doc_id(doc_id),
+         {:ok, since_sv} <- decode_sv(Map.get(payload, "sv")),
+         {:ok, %{update: update, head: head}} <-
+           CrdtTransport.read_delta(
+             socket.assigns.current_user,
+             socket.assigns.vault,
+             note_id,
+             since_sv
+           ) do
+      {:reply, {:ok, %{doc_id: note_id, b64: Base.encode64(update), head: head}}, socket}
+    else
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
+      {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
+      {:error, :bad_sv} -> {:reply, {:error, %{reason: "bad_sv"}}, socket}
+      {:error, :bad_since} -> {:reply, {:error, %{reason: "bad_sv"}}, socket}
+      {:error, :not_found} -> {:reply, {:error, %{reason: "not_found"}}, socket}
+    end
+  end
+
+  # Single-path catch-up (Phase B): replay the seq-ordered op-log over the
+  # socket from a client cursor. Reuses `list_changes_by_seq` — the same
+  # seq-ordered, all-or-fails-on-decrypt feed `/sync/changes` serves — so each
+  # op carries FULL content (not an SV-diff) and is causally complete: it can
+  # never pend the way `crdt_catchup_delta` did (the e2e test_85 deaf-note bug).
+  # Tombstones ride the same feed (deletes replay as ops). Paginated: the client
+  # advances its cursor by `next_seq` and re-requests until `has_more` is false.
+  @impl true
+  def handle_in("crdt_catchup_since", payload, socket) do
+    with :ok <- check_rate(socket, :handshake),
+         {:ok, cursor} <- cast_cursor(Map.get(payload, "cursor_seq", 0)) do
+      opts =
+        case Map.get(payload, "limit") do
+          n when is_integer(n) and n > 0 -> [limit: n]
+          _ -> []
+        end
+
+      {:ok, %{changes: changes, has_more: has_more, next: next}} =
+        Notes.list_changes_by_seq(
+          socket.assigns.current_user,
+          socket.assigns.vault,
+          cursor,
+          opts
+        )
+
+      # Tag each op with the SyncNoteChange discriminator so the client applies
+      # it through the existing applySyncChange path (this feed is notes-only —
+      # list_changes_by_seq excludes folders and never yields attachments).
+      changes = Enum.map(changes, &Map.put(&1, :type, :note))
+
+      next_seq =
+        case next do
+          {seq, _id} -> seq
+          _ -> nil
+        end
+
+      {:reply, {:ok, %{changes: changes, has_more: has_more, next_seq: next_seq}}, socket}
+    else
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
+      {:error, :bad_cursor} -> {:reply, {:error, %{reason: "bad_cursor"}}, socket}
+    end
+  end
+
+  # Channel-wide fallback (MUST stay last — Elixir matches handle_in top-down).
+  # Every crdt_* frame above pattern-matches its required keys, so a frame
+  # missing one (e.g. crdt_create with no "path") would otherwise raise
+  # FunctionClauseError and crash the whole channel. Reply so the client learns
+  # the frame was malformed instead of silently losing the socket.
+  #
+  # Gated on the same :handshake rate budget as every real frame above — an
+  # unguarded fallback let malformed/unknown frames flood the channel outside
+  # any budget.
+  @impl true
+  def handle_in(_event, _payload, socket) do
+    case check_rate(socket, :handshake) do
+      :ok -> {:reply, {:error, %{reason: "bad_frame"}}, socket}
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
+    end
+  end
+
+  # nil / missing sv → full state; a present sv must be valid base64.
+  defp decode_sv(nil), do: {:ok, nil}
+
+  defp decode_sv(b64) when is_binary(b64) do
+    case Base.decode64(b64) do
+      {:ok, bytes} -> {:ok, bytes}
+      :error -> {:error, :bad_sv}
+    end
+  end
+
+  # A non-nil, non-string sv (e.g. a JSON number or list slipping past the
+  # client) would otherwise raise FunctionClauseError and crash the channel.
+  defp decode_sv(_), do: {:error, :bad_sv}
+
+  # A cursor is a non-negative seq. A malformed one (string, float, negative)
+  # replies bad_cursor rather than raising into a FunctionClauseError that would
+  # crash the whole channel — same defensive contract as decode_sv/cast_doc_id.
+  defp cast_cursor(n) when is_integer(n) and n >= 0, do: {:ok, n}
+  defp cast_cursor(_), do: {:error, :bad_cursor}
+
+  defp cast_doc_id(doc_id) do
+    case Ecto.UUID.cast(doc_id) do
+      {:ok, id} -> {:ok, id}
+      :error -> {:error, :bad_doc_id}
+    end
+  end
+
+  # nil / non-binary / blank-after-trim path is rejected before it ever
+  # reaches genesis_crdt_note/4 — path may be cleartext, so the reply never
+  # echoes the raw value back.
+  defp validate_create_path(p) when is_binary(p) do
+    if String.trim(p) == "", do: {:error, :bad_path}, else: :ok
+  end
+
+  defp validate_create_path(_), do: {:error, :bad_path}
+
   @impl true
   def terminate(reason, socket) do
     Logger.info(
@@ -386,7 +596,17 @@ defmodule EngramWeb.CrdtChannel do
       # room is now active for doc_id. Recipients send a sync-step-1 (state
       # vector) which the server answers with step-2 (the diff they're
       # missing), so any device that doesn't yet have this note gets it.
-      broadcast_from!(socket, "crdt_doc_ready", %{"doc_id" => doc_id})
+      # Carry the note's path (best-effort) so a receiver can materialize an
+      # empty note live rather than waiting for the pull — matches the
+      # CrdtDeliver announce contract; the plugin treats "path" as optional, so
+      # a failed lookup just omits it (never crash the room-open).
+      payload =
+        case Notes.get_note_by_id(user, vault, note_id) do
+          {:ok, %{path: path}} when is_binary(path) -> %{"doc_id" => doc_id, "path" => path}
+          _ -> %{"doc_id" => doc_id}
+        end
+
+      broadcast_from!(socket, "crdt_doc_ready", payload)
 
       {:ok, socket, entry}
     end
