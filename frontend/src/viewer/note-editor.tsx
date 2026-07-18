@@ -9,6 +9,7 @@ import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { useTheme } from "../theme/theme-provider";
+import { indentKeymap } from "./editor/format-commands";
 import { livePreviewExtensions } from "./editor/live-preview";
 
 // Fill the parent so the editor spans the full pane height. 16px on .cm-content
@@ -41,6 +42,8 @@ export interface NoteEditorProps {
 	awareness: Awareness;
 	mode: EditorMode;
 	resolveWikiLink: (name: string) => string;
+	/** Reaches the live EditorView out to a caller (e.g. the formatting toolbar). */
+	onView?: (view: EditorView | null) => void;
 }
 
 // One shared compartment instance: reconfiguring it swaps the decoration layer
@@ -89,6 +92,9 @@ export function buildEditorState(
 			EditorView.lineWrapping,
 			Prec.highest(keymap.of(yUndoManagerKeymap)),
 			keymap.of(defaultKeymap),
+			// Tab/Shift-Tab indent-dedent (Obsidian parity). Base, not the mode
+			// compartment, so it works in both rendered and raw mode.
+			indentKeymap,
 			// Highlight style for the markdown grammar tags -- kept in base (not the
 			// compartment) so raw mode is highlighted too; harmless in rendered mode
 			// since atomicMarkdownSyntax layers its own token colors on top.
@@ -114,16 +120,31 @@ export function buildEditorState(
 // doc replace whenever its `value` prop differs from the editor content, which
 // fights yCollab and clobbers concurrent edits. A directly-managed view sidesteps
 // that entirely.
-export default function NoteEditor({ ytext, awareness, mode, resolveWikiLink }: NoteEditorProps) {
+export default function NoteEditor({
+	ytext,
+	awareness,
+	mode,
+	resolveWikiLink,
+	onView,
+}: NoteEditorProps) {
 	const { resolved } = useTheme();
 	const hostRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView | null>(null);
+	// Ref-style callback: always holds the latest onView without being an effect
+	// dependency, so a caller re-rendering with a new onView identity never
+	// recreates the view.
+	const onViewRef = useRef(onView);
+	onViewRef.current = onView;
 
 	// Create the view only when the bound doc or theme changes (NOT on mode).
 	// mode/resolveWikiLink intentionally excluded: a mode switch must reconfigure
 	// the decorationsCompartment on the existing view (below), never recreate it
 	// -- recreating here would detach yCollab and re-seed the doc on every toggle.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: mode/resolveWikiLink are handled by the reconfigure effect below; including them here would tear down and recreate the view (yCollab-detach hazard) on every mode toggle.
+	// onView intentionally excluded too (read via onViewRef): it's an escape
+	// hatch for the toolbar, not a doc/theme dependency -- including it would
+	// tear down and recreate the view (yCollab-detach hazard) whenever the
+	// caller passes a differently-identitied callback.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: mode/resolveWikiLink/onView are intentionally excluded, see comment above.
 	useEffect(() => {
 		const parent = hostRef.current;
 		if (!parent) {
@@ -134,9 +155,11 @@ export default function NoteEditor({ ytext, awareness, mode, resolveWikiLink }: 
 			parent,
 		});
 		viewRef.current = view;
+		onViewRef.current?.(view);
 		return () => {
 			view.destroy();
 			viewRef.current = null;
+			onViewRef.current?.(null);
 		};
 	}, [ytext, awareness, resolved]);
 
