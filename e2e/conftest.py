@@ -132,6 +132,13 @@ _RUN_ID = os.environ.get("GITHUB_RUN_ID", "local")
 # mid-suite Clerk session minter). "localjob" outside CI.
 _JOB_ID = os.environ.get("GITHUB_JOB", "localjob")
 
+# Age floor for worker-0's in-suite Clerk sweep. A concurrently-starting
+# sibling xdist worker's just-provisioned user is age ~0s and must survive;
+# a prior attempt's leftover (only reaped on a re-run) is minutes old. 120s
+# sits comfortably between the two. See cleanup_all_e2e_clerk_users (#160/#869
+# lineage + the worker-level race in run 29670308705).
+_SWEEP_MIN_AGE_SECONDS = 120
+
 
 # ---------------------------------------------------------------------------
 # Unique timestamp for this test run
@@ -168,7 +175,15 @@ def auth_provider():
         # Scope sweep to THIS run+job namespace — never touch sibling runs'
         # OR sibling jobs' users (issues #160, #869). Orphans from crashed
         # runs are reaped out-of-band by .github/workflows/clerk-orphans.yml.
-        provider.cleanup_all_e2e_users(run_id=_RUN_ID, job_id=_JOB_ID)
+        #
+        # min_age_seconds guards the worker-level race (run 29670308705): the
+        # run+job marker matches every worker, so without an age floor worker
+        # 0's session-start sweep deletes worker 1's just-provisioned live
+        # user. 120s >> worker-start skew (seconds) yet << job duration, so a
+        # prior attempt's leftovers (reaped on a re-run) are always older.
+        provider.cleanup_all_e2e_users(
+            run_id=_RUN_ID, job_id=_JOB_ID, min_age_seconds=_SWEEP_MIN_AGE_SECONDS
+        )
     return provider
 
 
