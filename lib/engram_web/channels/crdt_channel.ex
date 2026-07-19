@@ -68,6 +68,13 @@ defmodule EngramWeb.CrdtChannel do
   # Matches the seq feeds' internal 500-row cap (larger values clamp to it).
   @catchup_page_limit 500
 
+  # Trust-boundary cap on crdt_create_batch's `creates` list. Without this,
+  # check_rate(:handshake) is spent once per BATCH regardless of its size, so
+  # one oversized message amplifies past the per-note handshake budget.
+  # Matches the client's own ≤100 chunk constraint and the REST batch-upsert
+  # convention (notes_controller.ex @batch_upsert_max).
+  @max_batch_creates 100
+
   @impl true
   def join("crdt:" <> ids, params, socket) do
     proto = Map.get(params, "crdt_proto", 1)
@@ -237,6 +244,85 @@ defmodule EngramWeb.CrdtChannel do
       {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
       {:error, :bad_path} -> {:reply, {:error, %{reason: "bad_path"}}, socket}
     end
+  end
+
+  # Bulk genesis-with-content (single-push-path, Task 1). One frame creates N
+  # brand-new notes AND seeds each note's initial content in one round trip:
+  # each entry carries a `sync_update` Y-frame that the room applies + persists,
+  # so a fresh vault push no longer needs a create call plus a separate edit
+  # frame per note. Rides the :handshake lane (connect-time enrollment shape,
+  # NOT the continuous edit stream). Partial failure is per-entry: one bad entry
+  # returns an error result but the batch reply is still :ok so the good entries
+  # commit — the client reconciles per doc_id, never re-pushing the whole batch.
+  @impl true
+  def handle_in("crdt_create_batch", %{"creates" => creates}, socket) when is_list(creates) do
+    if length(creates) > @max_batch_creates do
+      {:reply, {:error, %{reason: "too_many_creates", max: @max_batch_creates}}, socket}
+    else
+      case check_rate(socket, :handshake) do
+        :ok ->
+          user = socket.assigns.current_user
+          vault = socket.assigns.vault
+
+          {results, socket} =
+            Enum.map_reduce(creates, socket, fn entry, sock ->
+              create_one(entry, user, vault, sock)
+            end)
+
+          {:reply, {:ok, %{results: results}}, socket}
+
+        {:error, :rate_limited} ->
+          {:reply, {:error, %{reason: "rate_limited"}}, socket}
+      end
+    end
+  end
+
+  defp create_one(%{"doc_id" => doc_id, "path" => path, "b64" => b64}, user, vault, socket) do
+    with {:ok, note_id} <- cast_doc_id(doc_id),
+         :ok <- validate_create_path(path),
+         {:ok, frame} <- decode_frame(b64),
+         :ok <- guard_frame(frame),
+         {:ok, _note} <- Notes.genesis_crdt_note(user, vault, note_id, path),
+         {:ok, socket, %{room: room}} <- ensure_room(socket, note_id) do
+      SharedDoc.send_yjs_message(room, frame)
+      {%{doc_id: note_id, status: "ok"}, socket}
+    else
+      {:error, :id_conflict, note} ->
+        {%{doc_id: note.id, status: "error", reason: "id_conflict"}, socket}
+
+      {:error, :version_conflict, note} ->
+        {%{doc_id: note.id, status: "error", reason: "version_conflict"}, socket}
+
+      {:error, :room_limit} ->
+        {%{doc_id: doc_id, status: "error", reason: "room_limit"}, socket}
+
+      {:error, :recently_deleted} ->
+        {%{doc_id: doc_id, status: "error", reason: "recently_deleted"}, socket}
+
+      {:error, {:notes_cap_reached, limit, _}} ->
+        {%{doc_id: doc_id, status: "error", reason: "notes_cap_reached", limit: limit}, socket}
+
+      {:error, :bad_doc_id} ->
+        {%{doc_id: doc_id, status: "error", reason: "bad_doc_id"}, socket}
+
+      {:error, :bad_path} ->
+        {%{doc_id: doc_id, status: "error", reason: "bad_path"}, socket}
+
+      {:error, :implausible_state_vector} ->
+        {%{doc_id: doc_id, status: "error", reason: "implausible_state_vector"}, socket}
+
+      {:error, :frame_too_large} ->
+        {%{doc_id: doc_id, status: "error", reason: "frame_too_large"}, socket}
+
+      _ ->
+        {%{doc_id: doc_id, status: "error", reason: "create_failed"}, socket}
+    end
+  end
+
+  # Malformed entry (missing a required key) — never crash the batch.
+  defp create_one(entry, _user, _vault, socket) do
+    doc_id = if is_map(entry), do: Map.get(entry, "doc_id"), else: nil
+    {%{doc_id: doc_id, status: "error", reason: "bad_frame"}, socket}
   end
 
   @impl true

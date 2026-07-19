@@ -256,6 +256,64 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   # ---------------------------------------------------------------------------
+  # crdt_create_batch — bulk genesis-with-content (Task 1, single-push-path)
+  # ---------------------------------------------------------------------------
+
+  describe "crdt_create_batch" do
+    test "creates every note with content and allocates seqs", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      id1 = Ecto.UUID.generate()
+      id2 = Ecto.UUID.generate()
+
+      creates = [
+        %{"doc_id" => id1, "path" => "A.md", "b64" => frame_for_content("alpha")},
+        %{"doc_id" => id2, "path" => "B.md", "b64" => frame_for_content("beta")}
+      ]
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :ok, %{results: results}
+      assert Enum.all?(results, &(&1.status == "ok"))
+      assert Enum.map(results, & &1.doc_id) |> Enum.sort() == Enum.sort([id1, id2])
+
+      assert_note_content_eventually(user, vault, id1, "alpha")
+      assert_note_content_eventually(user, vault, id2, "beta")
+    end
+
+    test "one bad entry does not fail the batch", %{socket: socket, user: user, vault: vault} do
+      good = Ecto.UUID.generate()
+
+      creates = [
+        %{"doc_id" => good, "path" => "Good.md", "b64" => frame_for_content("ok")},
+        %{"doc_id" => "not-a-uuid", "path" => "Bad.md", "b64" => frame_for_content("x")}
+      ]
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :ok, %{results: results}
+      by_id = Map.new(results, &{&1.doc_id, &1.status})
+      assert by_id[good] == "ok"
+      assert by_id["not-a-uuid"] == "error"
+
+      assert_note_content_eventually(user, vault, good, "ok")
+    end
+
+    test "rejects an oversized creates list", %{socket: socket} do
+      creates =
+        for _ <- 1..101,
+            do: %{
+              "doc_id" => Ecto.UUID.generate(),
+              "path" => "X.md",
+              "b64" => frame_for_content("x")
+            }
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :error, %{reason: "too_many_creates", max: 100}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Auth / join
   # ---------------------------------------------------------------------------
 
@@ -915,6 +973,27 @@ defmodule EngramWeb.CrdtChannelTest do
       end)
 
     n
+  end
+
+  # A base64 Yjs update that, applied to a fresh empty doc, ingests `content`
+  # as full note plaintext — i.e. the frame a client sends as the initial
+  # crdt_create_batch payload for a brand-new note.
+  defp frame_for_content(content) do
+    doc = CrdtBridge.new_doc()
+    :ok = CrdtBridge.ingest_plaintext(doc, content)
+    {:ok, update} = Yex.encode_state_as_update(doc)
+    {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_update, update}})
+    Base.encode64(frame)
+  end
+
+  # Poll get_note_by_id until the row's decrypted content matches (or flunk).
+  defp assert_note_content_eventually(user, vault, note_id, content) do
+    wait_until(fn ->
+      case Notes.get_note_by_id(user, vault, note_id) do
+        {:ok, note} -> note.content == content
+        _ -> false
+      end
+    end)
   end
 
   defp wait_until(condition, deadline \\ nil) do
