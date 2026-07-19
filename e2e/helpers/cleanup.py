@@ -7,11 +7,29 @@ import os
 import re
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 from helpers.clerk_constants import is_e2e_clerk_email
 
 logger = logging.getLogger(__name__)
+
+# The per-run timestamp embedded at the front of every e2e email's ts segment
+# (conftest `ts` fixture: datetime.now().strftime("%Y%m%d%H%M%S%f") → 20 digits,
+# immediately followed by "r{run_id}"). Used to age-gate the in-suite sweep.
+_EMAIL_TS_RE = re.compile(r"(\d{20})r")
+
+
+def _email_age_seconds(email: str) -> float | None:
+    """Seconds since the e2e email's embedded timestamp, or None if absent/unparseable."""
+    m = _EMAIL_TS_RE.search(email)
+    if not m:
+        return None
+    try:
+        created = datetime.strptime(m.group(1), "%Y%m%d%H%M%S%f")
+    except ValueError:
+        return None
+    return (datetime.now() - created).total_seconds()
 
 VAULT_PATHS = [
     Path("/tmp/e2e-vault-a"),
@@ -95,13 +113,16 @@ def cleanup_clerk_users(clerk_client, clerk_user_ids: list[str]) -> None:
 
 
 def cleanup_all_e2e_clerk_users(
-    clerk_client, run_id: str | None = None, job_id: str | None = None
+    clerk_client,
+    run_id: str | None = None,
+    job_id: str | None = None,
+    min_age_seconds: float = 0,
 ) -> int:
     """Find and delete e2e-* users in the Clerk instance.
 
     By default scopes the sweep to ``run_id`` + ``job_id`` — only emails
     containing ``r{run_id}j{job_id}w`` are deleted. Weaker scoping caused
-    two cascades:
+    three cascades:
 
     - issue #160: no scoping — a run's worker-0 fixture nuked every e2e-*
       user, including sibling RUNS' active users (401 storms).
@@ -109,9 +130,20 @@ def cleanup_all_e2e_clerk_users(
       by all parallel JOBS of one workflow run, so the e2e-api job's setup
       sweep deleted the e2e-clerk job's live users mid-suite (POST
       /sessions 404 in test_49; every e2e-clerk teardown delete already 404).
+    - run 29670308705 (2026-07-19): run+job scoping is still WORKER-blind.
+      The marker anchors on the trailing ``w``, so ``r{run}j{job}w`` matches
+      every worker (``w0``, ``w1``). Under ``-n 2 --dist=loadfile`` only
+      worker 0 runs this sweep, but at session start it raced worker 1's
+      provisioning and deleted worker 1's freshly created live user →
+      worker 1's ``create_session`` 404'd until the retry budget exhausted.
 
-    ``job_id`` distinguishes sibling jobs; a job re-run (same run id, same
-    job id) still reaps its own previous attempt's leftovers.
+    ``job_id`` distinguishes sibling jobs. ``min_age_seconds`` distinguishes
+    a prior *attempt*'s leftovers (minutes old on a re-run — safe to reap)
+    from the *current* attempt's concurrently-provisioned users (age ~0s —
+    a live sibling worker; must survive). Users younger than the floor, or
+    whose embedded timestamp can't be parsed, are skipped (fail-safe: never
+    risk a live user; the hourly clerk-orphans reaper catches true stragglers).
+    Same ``--older-than`` discipline the standalone reaper already applies.
 
     Passing ``run_id=None`` restores the legacy nuclear behavior — useful
     only from the standalone reaper script (``scripts/cleanup_clerk_users.py``)
@@ -120,6 +152,7 @@ def cleanup_all_e2e_clerk_users(
     Returns the number of users deleted.
     """
     deleted = 0
+    skipped_recent = 0
     offset = 0
     # Anchor on the trailing ``w`` so that run id "123" never substring-matches
     # into another run's "r12345w0" segment. Worker suffix is always present.
@@ -143,6 +176,14 @@ def cleanup_all_e2e_clerk_users(
                 continue
             if run_marker is not None and not any(run_marker in e for e in emails):
                 continue
+            if min_age_seconds > 0:
+                # Age-gate on the youngest e2e email: a concurrently-starting
+                # sibling worker's just-provisioned user must not be reaped.
+                ages = [_email_age_seconds(e) for e in emails if is_e2e_clerk_email(e)]
+                parseable = [a for a in ages if a is not None]
+                if not parseable or min(parseable) < min_age_seconds:
+                    skipped_recent += 1
+                    continue
             try:
                 clerk_client.delete_user(user["id"])
                 deleted += 1
@@ -159,6 +200,12 @@ def cleanup_all_e2e_clerk_users(
         else:
             scope = "ALL runs"
         logger.info("Cleaned up %d orphaned e2e Clerk users (%s)", deleted, scope)
+    if skipped_recent:
+        logger.info(
+            "Sweep kept %d recent/unverifiable e2e user(s) younger than %.0fs "
+            "(live sibling-worker protection)",
+            skipped_recent, min_age_seconds,
+        )
     return deleted
 
 

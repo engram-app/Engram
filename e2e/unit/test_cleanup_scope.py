@@ -11,7 +11,15 @@ must be scoped to run AND job.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from helpers.cleanup import cleanup_all_e2e_clerk_users
+
+
+def _aged_email(age_seconds: float, run: str = "777", job: str = "e2e-clerk", worker: int = 0) -> str:
+    """Build an e2e email whose embedded 20-digit timestamp is `age_seconds` old."""
+    ts = (datetime.now() - timedelta(seconds=age_seconds)).strftime("%Y%m%d%H%M%S%f")
+    return f"e2e-sync-{ts}r{run}j{job}w{worker}+clerk_test@example.com"
 
 
 class _FakeClerkClient:
@@ -79,3 +87,63 @@ def test_nuclear_sweep_still_deletes_all_e2e_users() -> None:
 
     assert client.deleted == ["u_a", "u_b"]
     assert deleted == 2
+
+
+def test_min_age_protects_current_attempt_users() -> None:
+    """Regression lock for the THIRD #869 incarnation (worker-level race).
+
+    ``-n 2 --dist=loadfile`` runs 2 xdist workers. Only worker 0 runs the
+    in-suite sweep, but its marker ``r{run}j{job}w`` matches EVERY worker's
+    email (worker id comes after the ``w`` anchor). With no timing guard,
+    worker 0's session-start sweep deletes worker 1's freshly provisioned
+    live user → worker 1's ``create_session`` 404s until the retry budget
+    exhausts (observed run 29670308705). ``min_age_seconds`` protects any
+    user created within the window (a concurrently-starting worker) while
+    still reaping a prior attempt's leftovers (minutes old on a re-run).
+    """
+    client = _FakeClerkClient(
+        [
+            # Another worker's user, just created — MUST survive the sweep.
+            _user("u_live_sibling_worker", _aged_email(age_seconds=3, worker=1)),
+            # A prior attempt's leftover (same run+job, minutes old) — reap.
+            _user("u_prior_attempt", _aged_email(age_seconds=600, worker=0)),
+        ]
+    )
+
+    deleted = cleanup_all_e2e_clerk_users(
+        client, run_id="777", job_id="e2e-clerk", min_age_seconds=120
+    )
+
+    assert client.deleted == ["u_prior_attempt"]
+    assert deleted == 1
+
+
+def test_min_age_default_ignores_timestamp() -> None:
+    """Default min_age_seconds=0 preserves legacy behavior (delete on marker)."""
+    client = _FakeClerkClient(
+        [_user("u_fresh", _aged_email(age_seconds=1, worker=1))]
+    )
+
+    deleted = cleanup_all_e2e_clerk_users(client, run_id="777", job_id="e2e-clerk")
+
+    assert client.deleted == ["u_fresh"]
+    assert deleted == 1
+
+
+def test_min_age_skips_users_with_unparseable_timestamp() -> None:
+    """Fail-safe: when age can't be verified, don't delete (never risk a live user).
+
+    An out-of-band reaper (clerk-orphans.yml) still catches genuinely stale
+    orphans, so skipping an unparseable-timestamp user in-suite is the safe
+    choice — the alternative (delete anyway) reintroduces the race this guards.
+    """
+    client = _FakeClerkClient(
+        [_user("u_no_ts", "e2e-sync-123r777je2e-clerkw0+clerk_test@example.com")]
+    )
+
+    deleted = cleanup_all_e2e_clerk_users(
+        client, run_id="777", job_id="e2e-clerk", min_age_seconds=120
+    )
+
+    assert client.deleted == []
+    assert deleted == 0
