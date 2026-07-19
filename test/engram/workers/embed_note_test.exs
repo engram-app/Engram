@@ -376,6 +376,45 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert DateTime.compare(updated.embed_retry_after, DateTime.utc_now()) == :gt
     end
 
+    test "a transient transport failure gets a SHORT cooldown, not the 6h poison",
+         %{bypass: bypass, note: note} do
+      # "Qdrant/Ollama not reachable" recovers on its own — a 6h park stranded
+      # notes through the 2026-07-19 Qdrant outage. Transport errors get a short
+      # cooldown so the note re-embeds on the next reconcile.
+      stub_qdrant(bypass)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts ->
+        {:error, %Req.TransportError{reason: :econnrefused}}
+      end)
+
+      assert {:error, %Req.TransportError{}} =
+               perform_job(EmbedNote, %{note_id: note.id}, attempt: 5, max_attempts: 5)
+
+      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      cooldown = DateTime.diff(updated.embed_retry_after, DateTime.utc_now())
+
+      assert 60 <= cooldown and cooldown <= 900,
+             "transient cooldown was #{cooldown}s, expected ~300s (not the 6h poison)"
+    end
+
+    test "a persistent content (4xx) failure keeps the long 6h poison cooldown",
+         %{bypass: bypass, note: note} do
+      # A 4xx (bad request / unembeddable content) won't fix itself on retry —
+      # keep the long cooldown so ReconcileEmbeddings stops re-enqueuing it.
+      stub_qdrant(bypass)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts -> {:error, {400, %{"detail" => "unembeddable"}}} end)
+
+      assert {:error, {400, _}} =
+               perform_job(EmbedNote, %{note_id: note.id}, attempt: 5, max_attempts: 5)
+
+      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      cooldown = DateTime.diff(updated.embed_retry_after, DateTime.utc_now())
+      assert cooldown > 20_000, "persistent cooldown was #{cooldown}s, expected ~21600s (6h)"
+    end
+
     test "parks a nil-content_hash note on the final attempt (id-only match)",
          %{bypass: bypass, note: note} do
       # A nil content_hash must still park — otherwise the optimistic
