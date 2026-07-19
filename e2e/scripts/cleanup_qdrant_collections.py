@@ -49,18 +49,22 @@ def run_id_of(name: str) -> str | None:
 
 
 def orphaned_ci_collections(names: list[str], active_run_ids: set[str]) -> list[str]:
-    """CI collections whose owning run is not active.
+    """CI collections tied to a run that is no longer active. Non-CI collections
+    are never returned.
 
-    A CI name with no parseable run id (e.g. the `ci_test_notes` compose
-    default) is always orphaned — no active run owns it. Non-CI collections are
-    never returned.
+    A ci_ name with NO parseable run id (the `ci_test_notes` compose default) is
+    deliberately left alone: it is never created on the shared SlowRaid Qdrant
+    (every SlowRaid e2e job sets QDRANT_COLLECTION to the run-id form), and
+    reaping an unattributable name could delete a mis-configured job's LIVE
+    collection with no active-run guard to protect it. At most one such
+    fixed-name collection can ever exist, so skipping it can't cause sprawl.
     """
     orphans = []
     for name in names:
         if not is_ci_collection(name):
             continue
         rid = run_id_of(name)
-        if rid is None or rid not in active_run_ids:
+        if rid is not None and rid not in active_run_ids:
             orphans.append(name)
     return orphans
 
@@ -79,7 +83,10 @@ def fetch_active_run_ids(session: requests.Session, repo: str, token: str) -> se
     """
     ids: set[str] = set()
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
-    for status in ("in_progress", "queued"):
+    # All non-terminal statuses — a collection whose run is in ANY of these must
+    # be preserved. `waiting`/`requested`/`pending` matter if a future e2e job
+    # ever adopts environment gating and sits mid-run with its collection created.
+    for status in ("in_progress", "queued", "waiting", "requested", "pending"):
         url = f"https://api.github.com/repos/{repo}/actions/runs?status={status}&per_page=100"
         while url:
             resp = session.get(url, headers=headers, timeout=15)
@@ -138,10 +145,15 @@ def main() -> int:
         if args.dry_run:
             logger.info("[dry-run] would delete %s", name)
             continue
-        if delete_collection(session, qdrant_url, name):
-            deleted += 1
-        else:
-            logger.warning("failed to delete collection %s", name)
+        # One flaky delete (timeout, reset) must not abort the whole sweep —
+        # log it and keep reaping. The collection reappears next run as an orphan.
+        try:
+            if delete_collection(session, qdrant_url, name):
+                deleted += 1
+            else:
+                logger.warning("failed to delete collection %s", name)
+        except Exception as e:
+            logger.warning("error deleting collection %s: %s", name, e)
 
     logger.info(
         "Reaped %d/%d orphan CI collections%s",

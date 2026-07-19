@@ -40,16 +40,18 @@ def test_orphans_exclude_active_runs_and_real_collections():
         "ci_crdt_111",            # active → keep
         "ci_test_222_obsidian",   # inactive → reap
         "ci_crdt_333",            # inactive → reap
-        "ci_test_notes",          # no run id → reap
+        "ci_test_notes",          # no run id → keep (unattributable, never on SlowRaid)
         "obsidian_notes",         # real → never
         "obsidian_notes_selfhost",  # real → never
     ]
     orphans = reaper.orphaned_ci_collections(names, active_run_ids={"111"})
 
-    assert set(orphans) == {"ci_test_222_obsidian", "ci_crdt_333", "ci_test_notes"}
-    # The active run's collections and all real vaults are preserved.
+    assert set(orphans) == {"ci_test_222_obsidian", "ci_crdt_333"}
+    # The active run's collections, all real vaults, and the unattributable
+    # ci_test_notes default are preserved.
     assert "ci_test_111_obsidian" not in orphans
     assert "ci_crdt_111" not in orphans
+    assert "ci_test_notes" not in orphans
     assert "obsidian_notes" not in orphans
     assert "obsidian_notes_selfhost" not in orphans
 
