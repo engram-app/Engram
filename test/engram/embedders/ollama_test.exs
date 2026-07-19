@@ -50,4 +50,18 @@ defmodule Engram.Embedders.OllamaTest do
       assert Agent.get(counter, & &1) == 4
     end
   end
+
+  describe "retry_fast_transient?/2" do
+    test "retries fast failures but NOT a receive_timeout (no 120s amplification)" do
+      # A hang-to-timeout must not be retried, else max_retries multiplies the
+      # 120s receive_timeout into a multi-minute stall.
+      refute Ollama.retry_fast_transient?(nil, %Req.TransportError{reason: :timeout})
+      # Connection-level blips and 5xx fail fast → cheap to retry.
+      assert Ollama.retry_fast_transient?(nil, %Req.TransportError{reason: :econnrefused})
+      assert Ollama.retry_fast_transient?(nil, %Req.Response{status: 503})
+      # 4xx / success are not transient.
+      refute Ollama.retry_fast_transient?(nil, %Req.Response{status: 422})
+      refute Ollama.retry_fast_transient?(nil, %Req.Response{status: 200})
+    end
+  end
 end

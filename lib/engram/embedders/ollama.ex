@@ -11,12 +11,24 @@ defmodule Engram.Embedders.Ollama do
   @default_model "nomic-embed-text"
 
   # Index embeds run in Oban workers against an often-remote Ollama endpoint
-  # (e.g. FastRaid over the LAN). A single Req.TransportError otherwise fails
-  # the whole Oban attempt and waits out the job backoff (~30s), which can miss
-  # a downstream index probe (e2e test_32 flake). Mirror the Voyage index
-  # defaults: retry transient transport errors + 5xx a few times within the
-  # call. Explicit caller opts win (tests pass a `plug`/`retry_delay: 0`).
-  @request_defaults [receive_timeout: 120_000, retry: :transient, max_retries: 3]
+  # (e.g. FastRaid over the LAN). A single connection-level blip otherwise fails
+  # the whole Oban attempt and waits out the job backoff (~30s). Retry the FAST
+  # transient failures in-call so a bounced container / momentary 5xx doesn't
+  # burn an attempt. Explicit caller opts win (tests pass a `plug`/`retry_delay`).
+  defp request_defaults,
+    do: [receive_timeout: 120_000, retry: &__MODULE__.retry_fast_transient?/2, max_retries: 3]
+
+  # Retry only failures that fail FAST. A receive_timeout means Ollama accepted
+  # the connection but is hanging; retrying it up to max_retries would multiply
+  # the 120s timeout into a multi-minute stall — and a sustained outage is
+  # already covered by the outer Oban attempt + ReconcileEmbeddings. Connection
+  # blips (econnrefused/closed) and 5xx return immediately, so retrying THEM is
+  # cheap. Public (not private) only so it can be captured here and unit-tested.
+  @doc false
+  def retry_fast_transient?(_req, %Req.TransportError{reason: :timeout}), do: false
+  def retry_fast_transient?(_req, %Req.TransportError{}), do: true
+  def retry_fast_transient?(_req, %{status: status}) when status in [500, 502, 503, 504], do: true
+  def retry_fast_transient?(_req, _), do: false
 
   @impl true
   def model_info do
@@ -40,7 +52,7 @@ defmodule Engram.Embedders.Ollama do
     result =
       Req.post(
         "#{url}/api/embed",
-        [json: %{model: model, input: texts}] ++ Keyword.merge(@request_defaults, req_opts)
+        [json: %{model: model, input: texts}] ++ Keyword.merge(request_defaults(), req_opts)
       )
 
     case result do
