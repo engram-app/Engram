@@ -27,12 +27,16 @@ async def test_concurrent_push_different_notes(vault_a, vault_b, cdp_a, cdp_b, a
         cdp_b.trigger_full_sync(),
     )
 
-    # Both notes should be on server
-    api_sync.wait_for_note(path_a, timeout=15)
-    api_sync.wait_for_note(path_b, timeout=15)
-
-    note_a = api_sync.get_note(path_a)
-    note_b = api_sync.get_note(path_b)
+    # Both notes should be on server WITH content. Genesis now flows through
+    # crdt_create_batch: the batch reply confirms the row exists, but the note's
+    # body is applied to the CRDT room and persisted to the notes.content column
+    # by the room's async eager checkpoint (~250 ms later), not synchronously
+    # with the reply. A single read at t=0 races that checkpoint (reads the bare
+    # genesis row, content ""), so poll for content convergence instead. This
+    # asserts the same invariant — the server holds each note's content — with a
+    # bound that spans the checkpoint window.
+    note_a = api_sync.wait_for_note_content(path_a, "From A", timeout=15)
+    note_b = api_sync.wait_for_note_content(path_b, "From B", timeout=15)
     assert "From A" in note_a["content"], "Server should have A's note"
     assert "From B" in note_b["content"], "Server should have B's note"
 
