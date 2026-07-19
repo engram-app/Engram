@@ -10,6 +10,14 @@ defmodule Engram.Embedders.Ollama do
   @default_url "http://localhost:11434"
   @default_model "nomic-embed-text"
 
+  # Index embeds run in Oban workers against an often-remote Ollama endpoint
+  # (e.g. FastRaid over the LAN). A single Req.TransportError otherwise fails
+  # the whole Oban attempt and waits out the job backoff (~30s), which can miss
+  # a downstream index probe (e2e test_32 flake). Mirror the Voyage index
+  # defaults: retry transient transport errors + 5xx a few times within the
+  # call. Explicit caller opts win (tests pass a `plug`/`retry_delay: 0`).
+  @request_defaults [receive_timeout: 120_000, retry: :transient, max_retries: 3]
+
   @impl true
   def model_info do
     %{
@@ -19,17 +27,20 @@ defmodule Engram.Embedders.Ollama do
   end
 
   @impl true
-  def embed_texts(texts, _opts) when is_list(texts), do: embed_texts(texts)
+  def embed_texts(texts) when is_list(texts), do: embed_texts(texts, [])
 
   @impl true
-  def embed_texts(texts) when is_list(texts) do
+  def embed_texts(texts, opts) when is_list(texts) do
     url = System.get_env("OLLAMA_URL", @default_url)
     model = Application.get_env(:engram, :embed_model, @default_model)
 
+    {req_opts, _} =
+      Keyword.split(opts, [:retry, :max_retries, :retry_delay, :receive_timeout, :plug])
+
     result =
-      Req.post("#{url}/api/embed",
-        json: %{model: model, input: texts},
-        receive_timeout: 120_000
+      Req.post(
+        "#{url}/api/embed",
+        [json: %{model: model, input: texts}] ++ Keyword.merge(@request_defaults, req_opts)
       )
 
     case result do
