@@ -190,9 +190,29 @@ defmodule Engram.Workers.EmbedNote do
   # genuinely-broken note re-bills Voyage ~4×/day instead of ~96×/day, while a
   # transient provider outage self-heals within hours (vs a hard give-up that
   # would strand the whole vault until manual reset).
-  defp poison_cooldown_seconds do
-    Application.get_env(:engram, :embed_poison_cooldown_seconds, 21_600)
+  # Classify the failure so a transient/infra outage isn't parked for the full
+  # persistent-failure cooldown. On 2026-07-19 a Qdrant outage made embeds fail
+  # with Req.TransportError; the flat 6h poison then stranded every affected
+  # note for 6h even after Qdrant recovered. "Upstream unreachable / temporarily
+  # unavailable" recovers on its own, so park briefly and let ReconcileEmbeddings
+  # re-embed on its next pass; keep the long cooldown only for failures that
+  # won't fix themselves on retry (4xx / unembeddable content / unknown).
+  defp poison_cooldown_seconds(reason) do
+    if transient_embed_error?(reason) do
+      Application.get_env(:engram, :embed_transient_cooldown_seconds, 300)
+    else
+      Application.get_env(:engram, :embed_poison_cooldown_seconds, 21_600)
+    end
   end
+
+  # Transient = the embed/index upstream (Ollama, Voyage, Qdrant) was unreachable
+  # or temporarily unavailable. A transport error is "not reachable"; 5xx is
+  # "reachable but unhappy". (429 is already handled earlier as a snooze and
+  # never reaches here.) Everything else — 4xx, decrypt failures, unknown — is
+  # treated as persistent.
+  defp transient_embed_error?(%Req.TransportError{}), do: true
+  defp transient_embed_error?({status, _body}) when status in [500, 502, 503, 504], do: true
+  defp transient_embed_error?(_), do: false
 
   # Final-attempt failure: park the note for a cooldown so ReconcileEmbeddings
   # stops re-enqueuing (and re-billing) it every 15 minutes. Only fires on the
@@ -203,7 +223,7 @@ defmodule Engram.Workers.EmbedNote do
   # the exact loop this guards against running), so fall back to an id-only match.
   defp maybe_mark_poison(note, {:error, reason}, %Oban.Job{attempt: attempt, max_attempts: max})
        when attempt >= max do
-    cooldown = poison_cooldown_seconds()
+    cooldown = poison_cooldown_seconds(reason)
     retry_after = DateTime.add(DateTime.utc_now(), cooldown, :second)
 
     park_query =
