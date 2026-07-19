@@ -654,7 +654,7 @@ jobs:
       # actions/cache (separate Docker-layer concern).
       - name: Cache deps/
         id: cache-deps
-        uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+        uses: ./.github/actions/runs-on-cache # vendored runs-on/cache v5.0.7 (88d9064)
         with:
           path: deps
           key: ${{ steps.keys.outputs.deps }}
@@ -662,7 +662,7 @@ jobs:
 
       - name: Cache _build/dev
         id: cache-build-dev
-        uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+        uses: ./.github/actions/runs-on-cache # vendored runs-on/cache v5.0.7 (88d9064)
         with:
           path: _build/dev
           # No restore-keys: the key is mix.lock-scoped, so a restore-key prefix
@@ -674,7 +674,7 @@ jobs:
 
       - name: Cache _build/test
         id: cache-build-test
-        uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+        uses: ./.github/actions/runs-on-cache # vendored runs-on/cache v5.0.7 (88d9064)
         with:
           path: _build/test
           # No restore-keys: see the _build/dev cache above. A restore-key hit
@@ -1984,7 +1984,7 @@ jobs:
       # BEAM files instead of recompiling.
       - name: Restore deps cache
         id: cache-deps
-        uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+        uses: ./.github/actions/runs-on-cache/restore # vendored runs-on/cache v5.0.7 (88d9064)
         with:
           path: deps
           key: ${{ needs.prebuild-mix.outputs.deps-key }}
@@ -1992,7 +1992,7 @@ jobs:
             mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Restore _build/test cache
-        uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+        uses: ./.github/actions/runs-on-cache/restore # vendored runs-on/cache v5.0.7 (88d9064)
         with:
           path: _build/test
           key: ${{ needs.prebuild-mix.outputs.build-test-key }}
@@ -2239,7 +2239,7 @@ jobs:
       # re-validation (no --force; cache was built warnings-clean).
       - name: Restore deps cache
         id: cache-deps
-        uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+        uses: ./.github/actions/runs-on-cache/restore # vendored runs-on/cache v5.0.7 (88d9064)
         with:
           path: deps
           key: ${{ needs.prebuild-mix.outputs.deps-key }}
@@ -2247,7 +2247,7 @@ jobs:
             mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Restore _build/dev cache
-        uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+        uses: ./.github/actions/runs-on-cache/restore # vendored runs-on/cache v5.0.7 (88d9064)
         with:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
@@ -2264,7 +2264,7 @@ jobs:
         run: mix deps.get
 
       - name: Cache Dialyzer PLT
-        uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+        uses: ./.github/actions/runs-on-cache # vendored runs-on/cache v5.0.7 (88d9064)
         with:
           path: priv/plts
           key: ${{ runner.os }}-dialyzer-${{ needs.prebuild-mix.outputs.beam-tag }}-${{ hashFiles('mix.lock') }}
@@ -2785,7 +2785,7 @@ jobs:
       - name: Restore deps cache
         if: steps.gate.outputs.proceed == 'true'
         id: cache-deps
-        uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+        uses: ./.github/actions/runs-on-cache/restore # vendored runs-on/cache v5.0.7 (88d9064)
         with:
           path: deps
           key: ${{ needs.prebuild-mix.outputs.deps-key }}
@@ -2794,7 +2794,7 @@ jobs:
 
       - name: Restore _build/dev cache
         if: steps.gate.outputs.proceed == 'true'
-        uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+        uses: ./.github/actions/runs-on-cache/restore # vendored runs-on/cache v5.0.7 (88d9064)
         with:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
@@ -2975,7 +2975,7 @@ jobs:
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
           echo "Postgres on port $PG_PORT (container: $PG_CONTAINER)"
 
-      - uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+      - uses: ./.github/actions/runs-on-cache/restore # vendored runs-on/cache v5.0.7 (88d9064)
         if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         id: n1-cache-deps
         with:
@@ -3177,7 +3177,7 @@ jobs:
       # instead of recompiling at boot.
       - name: Restore deps cache
         id: cache-deps
-        uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+        uses: ./.github/actions/runs-on-cache/restore # vendored runs-on/cache v5.0.7 (88d9064)
         with:
           path: deps
           key: ${{ needs.prebuild-mix.outputs.deps-key }}
@@ -3185,7 +3185,7 @@ jobs:
             mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Restore _build/dev cache
-        uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+        uses: ./.github/actions/runs-on-cache/restore # vendored runs-on/cache v5.0.7 (88d9064)
         with:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
