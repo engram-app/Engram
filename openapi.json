@@ -638,38 +638,6 @@
         "x-struct": "Elixir.EngramWeb.Schemas.SearchRequest",
         "x-validate": null
       },
-      "SyncChangesResponse": {
-        "properties": {
-          "changes": {
-            "items": {
-              "$ref": "#/components/schemas/SyncChange"
-            },
-            "type": "array",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "has_more": {
-            "type": "boolean",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "next_cursor": {
-            "description": "Opaque keyset cursor; null on the last page.",
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          }
-        },
-        "required": [
-          "changes",
-          "has_more"
-        ],
-        "title": "SyncChangesResponse",
-        "type": "object",
-        "x-struct": "Elixir.EngramWeb.Schemas.SyncChangesResponse",
-        "x-validate": null
-      },
       "RegisterVaultRequest": {
         "example": {
           "client_id": "obsidian-9f1b2c3d4e5f",
@@ -1060,64 +1028,6 @@
         "title": "AttachmentChange",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.AttachmentChange",
-        "x-validate": null
-      },
-      "SyncChange": {
-        "properties": {
-          "content": {
-            "description": "Note body — present only when fields=all.",
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "content_hash": {
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "deleted": {
-            "nullable": true,
-            "type": "boolean",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "id": {
-            "format": "uuid",
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "path": {
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "seq": {
-            "description": "Per-vault ordering key.",
-            "type": "integer",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "type": {
-            "enum": [
-              "note",
-              "attachment"
-            ],
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          }
-        },
-        "required": [
-          "type",
-          "seq"
-        ],
-        "title": "SyncChange",
-        "type": "object",
-        "x-struct": "Elixir.EngramWeb.Schemas.SyncChange",
         "x-validate": null
       },
       "UpdateVaultRequest": {
@@ -3697,84 +3607,6 @@
         "summary": "Update the current user's profile",
         "tags": [
           "Account"
-        ]
-      }
-    },
-    "/api/sync/changes": {
-      "get": {
-        "callbacks": {},
-        "description": "Pulls one ordered page of the merged note and attachment change feed, each entry tagged with its `type`, using keyset pagination via an opaque `cursor` (`has_more` + `next_cursor`). `fields=meta` strips note content; `limit` is capped at 500. The cursor the client sends is recorded as its durably-applied device watermark, and a cursor older than the retention window returns 410.",
-        "operationId": "sync-changes",
-        "parameters": [
-          {
-            "description": "Max rows (≤500)",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "x-struct": null,
-              "x-validate": null
-            }
-          },
-          {
-            "description": "\"meta\" or \"all\"",
-            "in": "query",
-            "name": "fields",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "x-struct": null,
-              "x-validate": null
-            }
-          },
-          {
-            "description": "Opaque keyset cursor",
-            "in": "query",
-            "name": "cursor",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "x-struct": null,
-              "x-validate": null
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SyncChangesResponse"
-                }
-              }
-            },
-            "description": "Changes page"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MessageError"
-                }
-              }
-            },
-            "description": "Invalid cursor"
-          },
-          "410": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MessageError"
-                }
-              }
-            },
-            "description": "Cursor older than retention window"
-          }
-        },
-        "summary": "Pull the unified note + attachment change feed",
-        "tags": [
-          "Sync"
         ]
       }
     },

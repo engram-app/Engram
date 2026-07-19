@@ -297,11 +297,11 @@ async def setup_conflict_for_a(
         })()
         """
     )
-    # No await_promise — dispatch pull() and return immediately so the seed
-    # can poll for the modal that pull() is about to surface.
+    # No await_promise — dispatch catchUp() and return immediately so the seed
+    # can poll for the modal that the catch-up is about to surface.
     await cdp_a.evaluate(
         "void app.plugins.plugins['engram-vault-sync']"
-        ".syncEngine.pull(); 'dispatched'"
+        ".syncEngine.catchUp(); 'dispatched'"
     )
     snapshots.append(("step6b_after_pull_dispatched", await _snapshot(cdp_a, path)))
 

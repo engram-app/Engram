@@ -1,10 +1,11 @@
 """Test 82: RESUMED device (cursor set, stale/empty noteIdMap) still syncs live.
 
 Regression for plugin #180→#187 (stale noteIdMap broke BOTH directions while
-status showed "live"). Every other e2e device boots fresh (genesis pull →
+status showed "live"). Every other e2e device boots fresh (genesis catch-up →
 fully populated map); this is the one test that constructs the resumed state:
-stop a device, wipe its persisted noteIds while keeping its syncCursor, then
-restart and prove both pull and push still work.
+stop a device, wipe its persisted noteIds while keeping its catchupSeq
+(the socket op-log catch-up watermark), then restart and prove both pull and
+push still work.
 
 Both phases below edit a note that already exists (seeded in Phase 1, known
 to the server, then FORGOTTEN by the wipe) rather than create a brand-new
@@ -20,11 +21,11 @@ harness — traced noteIdMap.toJSON() against GET /sync/manifest at each
 checkpoint and confirmed B's in-memory map is already fully and CORRECTLY
 repopulated (matching the server's real ids) within a few seconds of
 restart, even without reconcileNoteIdMapFromManifest existing in that build.
-Some other mechanism in this harness (client catch-up pull on reconnect,
-and/or backend /sync/changes semantics) re-teaches ids faster/more broadly
+Some other mechanism in this harness (client seq-replay catch-up on reconnect,
+and/or manifest-reconcile id-relearning) re-teaches ids faster/more broadly
 here than the original prod incident implies, so this test currently proves
-the BEHAVIOR (resumed device with a wiped map + preserved cursor still syncs
-both directions) rather than discriminating pre/post #187. Left as a
+the BEHAVIOR (resumed device with a wiped map + preserved catchupSeq still
+syncs both directions) rather than discriminating pre/post #187. Left as a
 regression guard for that behavior; see task-A2-report.md for the full
 investigation (churn-note variant, in-memory map dumps, routing-log traces).
 """
@@ -39,26 +40,29 @@ from helpers.vault import wait_for_content, write_note
 pytestmark = pytest.mark.asyncio
 
 
-async def _wait_for_persisted_cursor(cdp, inst, timeout: float = 60, interval: float = 1.0) -> dict:
-    """Poll persist+read until data.json has earned a non-empty syncCursor.
+async def _wait_for_persisted_catchup_seq(
+    cdp, inst, timeout: float = 60, interval: float = 1.0
+) -> dict:
+    """Poll until data.json has earned a non-zero catchupSeq (the socket op-log
+    catch-up watermark).
 
-    The plugin only earns syncCursor from its first /sync/changes cycle.
-    Phase 1's wait_for_content proves the CONTENT arrived, but under CI load
-    that cycle's cursor write can still be in flight a moment later — a
-    single persist_plugin_data() call can race it and snapshot a cursor-less
-    data.json (CI-only failure: setup precondition, not the mutate-under-
-    test behavior). Poll instead of asserting on one persist.
+    Post REST-purge, the watermark is `catchupSeq`, advanced ONLY by an explicit
+    seq-replay catch-up — live fan-out delivers content but never bumps it. So
+    drive a catch-up each iteration until the watermark lands, then persist+read
+    (a single persist can race the async catchupSeq write under CI load; poll
+    instead of asserting on one persist).
     """
     deadline = time.monotonic() + timeout
     last: dict = {}
     while time.monotonic() < deadline:
+        await cdp.trigger_catch_up()
         await cdp.persist_plugin_data()
         last = inst.read_data_json()
-        if last.get("syncCursor"):
+        if last.get("catchupSeq"):
             return last
         await asyncio.sleep(interval)
     raise TimeoutError(
-        f"data.json never earned a syncCursor within {timeout}s "
+        f"data.json never earned a catchupSeq within {timeout}s "
         f"(test_82 setup precondition, not the behavior under test); "
         f"last snapshot had keys={sorted(last)}"
     )
@@ -87,12 +91,15 @@ async def test_resumed_device_with_stale_idmap_syncs_both_ways(
     wait_for_content(inst_b.vault_path, "E2E/Resumed-pull-seed.md", "original", timeout=30)
     wait_for_content(inst_b.vault_path, "E2E/Resumed-push-seed.md", "original", timeout=30)
 
-    # Phase 2: flush B's state, stop it, wipe the id map but KEEP the cursor.
-    await _wait_for_persisted_cursor(cdp_b, inst_b)
+    # Phase 2: flush B's state, stop it, wipe the id map but KEEP the catch-up
+    # watermark. _wait_for_persisted_catchup_seq drives an explicit catch-up so
+    # catchupSeq advances past the seed notes (live fan-out delivered them but
+    # doesn't move the watermark).
+    await _wait_for_persisted_catchup_seq(cdp_b, inst_b)
     inst_b.stop()
 
     def wipe_map(data):
-        assert data.get("syncCursor"), "precondition: cursor must be set"
+        assert data.get("catchupSeq"), "precondition: catch-up watermark must be set"
         data["noteIds"] = {}
 
     inst_b.mutate_data_json(wipe_map)

@@ -684,10 +684,11 @@ class CdpClient:
         )
         return bool(result)
 
-    async def trigger_pull(self) -> int:
-        """Call syncEngine.pull() and return count of pulled notes."""
+    async def trigger_catch_up(self) -> int:
+        """Call syncEngine.catchUp() (socket seq-replay + manifest reconcile) and
+        return the count of applied ops. Replaces the deleted REST pull()."""
         result = await self.evaluate(
-            f"{ENGINE_PATH}.pull().then(r => r)", await_promise=True
+            f"{ENGINE_PATH}.catchUp().then(r => r)", await_promise=True
         )
         return result if isinstance(result, int) else 0
 
@@ -704,9 +705,10 @@ class CdpClient:
         """Read the lastSync timestamp string."""
         return await self.evaluate(f"{ENGINE_PATH}.lastSync")
 
-    async def get_sync_cursor(self) -> str | None:
-        """Read the opaque sync cursor (B2 ordered-pull watermark)."""
-        return await self.evaluate(f"{ENGINE_PATH}.getSyncCursor()")
+    async def get_catchup_seq(self) -> int:
+        """Read the socket op-log catch-up watermark (seq)."""
+        result = await self.evaluate(f"{ENGINE_PATH}.getCatchupSeq()")
+        return result if isinstance(result, int) else 0
 
     async def accelerate_echo_expiry(self, path: str, ms: int = 200) -> None:
         """Replace the pending recentlyPushed timer for ``path`` with a short one.
