@@ -140,6 +140,13 @@ if config_env() != :test do
     config :engram, :embed_poison_cooldown_seconds, String.to_integer(secs)
   end
 
+  # Shorter cooldown for TRANSIENT embed failures (upstream unreachable / 5xx) so
+  # a provider blip doesn't strand notes for the full poison window. Default 300s;
+  # effective recovery is bounded below by the ~15min ReconcileEmbeddings sweep.
+  if secs = System.get_env("EMBED_TRANSIENT_COOLDOWN_SECONDS") do
+    config :engram, :embed_transient_cooldown_seconds, String.to_integer(secs)
+  end
+
   # Preemptive cooldown (seconds) ReconcileEmbeddings stamps on every note it
   # enqueues (#897). Makes the backoff crash-independent: an OOM/node kill that
   # bypasses the graceful poison stamp still can't cause immediate re-enqueue.

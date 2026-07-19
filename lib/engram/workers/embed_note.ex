@@ -197,6 +197,10 @@ defmodule Engram.Workers.EmbedNote do
   # unavailable" recovers on its own, so park briefly and let ReconcileEmbeddings
   # re-embed on its next pass; keep the long cooldown only for failures that
   # won't fix themselves on retry (4xx / unembeddable content / unknown).
+  # NOTE: the transient default (300s) is a floor, not the real recovery time —
+  # ReconcileEmbeddings only sweeps every ~15 min, so a parked note re-embeds on
+  # the first sweep after the cooldown lapses. Dropping it below ~900s buys
+  # nothing; raise it only to back off harder on a sustained outage.
   defp poison_cooldown_seconds(reason) do
     if transient_embed_error?(reason) do
       Application.get_env(:engram, :embed_transient_cooldown_seconds, 300)
@@ -206,12 +210,13 @@ defmodule Engram.Workers.EmbedNote do
   end
 
   # Transient = the embed/index upstream (Ollama, Voyage, Qdrant) was unreachable
-  # or temporarily unavailable. A transport error is "not reachable"; 5xx is
-  # "reachable but unhappy". (429 is already handled earlier as a snooze and
-  # never reaches here.) Everything else — 4xx, decrypt failures, unknown — is
-  # treated as persistent.
+  # or temporarily unavailable. A transport error is "not reachable"; any 5xx is
+  # "reachable but unhappy" — status >= 500 (not a fixed 500/502/503/504 list) so
+  # CDN-injected 52x (Cloudflare), 507, 529 in front of a provider also count.
+  # (429 is already handled earlier as a snooze and never reaches here.)
+  # Everything else — 4xx, decrypt failures, unknown — is treated as persistent.
   defp transient_embed_error?(%Req.TransportError{}), do: true
-  defp transient_embed_error?({status, _body}) when status in [500, 502, 503, 504], do: true
+  defp transient_embed_error?({status, _body}) when is_integer(status) and status >= 500, do: true
   defp transient_embed_error?(_), do: false
 
   # Final-attempt failure: park the note for a cooldown so ReconcileEmbeddings

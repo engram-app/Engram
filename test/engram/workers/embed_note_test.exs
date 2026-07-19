@@ -412,7 +412,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       updated = Repo.get!(Note, note.id, skip_tenant_check: true)
       cooldown = DateTime.diff(updated.embed_retry_after, DateTime.utc_now())
-      assert cooldown > 3600, "persistent cooldown was #{cooldown}s, expected ~21600s (6h)"
+      assert cooldown > 20_000, "persistent cooldown was #{cooldown}s, expected ~21600s (6h)"
     end
 
     test "parks a nil-content_hash note on the final attempt (id-only match)",
