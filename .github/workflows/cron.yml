@@ -18,7 +18,7 @@ name: cron
 
 on:
   schedule:
-    - cron: '30 * * * *'    # clerk-orphans            (hourly, :30)
+    - cron: '30 * * * *'    # e2e-orphans (clerk + qdrant)  (hourly, :30)
     - cron: '0 3 * * 0'     # runner-cleanup           (Sun 03:00 UTC)
     - cron: '0 4 * * 1'     # obsidian-update          (Mon 04:00 UTC)
     - cron: '17 13 * * 1'   # frontend-major-updates   (Mon 13:17 UTC)
@@ -31,7 +31,7 @@ on:
         type: choice
         required: true
         options:
-          - clerk-orphans
+          - e2e-orphans
           - runner-cleanup
           - obsidian-update
           - plan-triage
@@ -47,37 +47,41 @@ on:
 permissions: {}
 
 jobs:
-  # ── Out-of-band cleanup for stale e2e-* Clerk users left behind by crashed
-  # CI runs. The pytest fixture now scopes its sweep to the current run id
-  # (issue #160), so users from a run cancelled / OOM-killed before its
-  # session_cleanup fired would otherwise accumulate forever. This cron
-  # mops them up — with a 1h age filter to avoid racing in-flight runs.
+  # ── Out-of-band cleanup for orphaned e2e resources left behind by crashed CI
+  # runs: stale e2e-* Clerk users AND leaked CI Qdrant collections. Both leak
+  # the same way — a run cancelled / OOM-killed before its teardown fired never
+  # cleans up. Bundled into ONE hourly job (was two would-be schedules).
   # Hourly (:30): the Clerk dev instance caps at 100 users, and a heavy-CI
   # burst (release day, an e2e-rerun storm) can mint 100+ e2e-* users within
   # a few hours — faster than a once-daily sweep clears them, exhausting the
   # quota and 403'ing every Clerk-auth e2e run (2026-06-13). Hourly bounds the
   # standing orphan count to ~1-2h of churn; the 1h age filter still protects
   # in-flight runs. (Was once-daily 2026-06-02..06-13 — too sparse for bursts.)
-  clerk-orphans:
+  # The Qdrant reap rides this same job but self-gates to once a day (see its
+  # step) — no separate schedule — and is protected against live runs by an
+  # active-run guard instead of a time filter.
+  e2e-orphans:
     if: |
       github.event.schedule == '30 * * * *'
-      || github.event.inputs.task == 'clerk-orphans'
+      || github.event.inputs.task == 'e2e-orphans'
     runs-on: [self-hosted, linux, x64, isolated]
     permissions:
       contents: read
+      actions: read   # qdrant reaper lists active workflow runs to protect them
     concurrency:
-      group: clerk-orphans
+      group: e2e-orphans
       cancel-in-progress: false
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
-          # The script imports `helpers.clerk_constants` (the shared e2e-email
-          # predicate, added for #558), so the helpers package must be checked
-          # out too — sparse-checkout omitting it crashed the reaper with
-          # ModuleNotFoundError, leaving the quota to fill (#558).
+          # cleanup_clerk_users imports `helpers.clerk_constants` (the shared
+          # e2e-email predicate, #558), so the helpers package must be checked
+          # out too — omitting it crashed the reaper with ModuleNotFoundError,
+          # leaving the quota to fill (#558). The qdrant script is self-contained.
           sparse-checkout: |
             e2e/scripts/cleanup_clerk_users.py
+            e2e/scripts/cleanup_qdrant_collections.py
             e2e/helpers/__init__.py
             e2e/helpers/clerk_constants.py
 
@@ -96,6 +100,30 @@ jobs:
             exit 0
           fi
           python3 e2e/scripts/cleanup_clerk_users.py --older-than 1h
+
+      # Reaps orphaned CI Qdrant collections on the shared SlowRaid Qdrant. Each
+      # e2e job creates a per-run collection (ci_test_<run>_obsidian /
+      # ci_crdt_<run>) and deletes it on teardown, but that DELETE is best-effort
+      # (`curl ... || true`) — a cancelled job or an unreachable Qdrant leaks it.
+      # They reached 297 orphans by 2026-07-19, at which point Qdrant ENOMEM-
+      # panicked loading every shard on boot → crash loop → CI-wide "Qdrant not
+      # reachable" outage. Reaps every ci_* collection whose run is no longer
+      # active; real vaults never match the ci_ prefix.
+      #
+      # Unlike the Clerk sweep (hourly — 100-user cap), Qdrant collections
+      # accumulate slowly (crash threshold ~300, dozens/day), so this reaps ONCE
+      # A DAY. It rides the hourly job but self-gates to the 03:xx firing rather
+      # than adding a second schedule. Manual dispatch always runs it.
+      - name: Reap orphaned CI Qdrant collections (daily)
+        env:
+          QDRANT_URL: http://10.0.20.201:6333
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ] && [ "$(date -u +%H)" != "03" ]; then
+            echo "Skipping Qdrant reap — runs daily ~03:30 UTC (current hour: $(date -u +%H) UTC)."
+            exit 0
+          fi
+          python3 e2e/scripts/cleanup_qdrant_collections.py
 
   # ── Weekly Docker + /tmp prune on the self-hosted runner. Keeps disk
   # usage bounded so long-running runner VMs don't fill up.
