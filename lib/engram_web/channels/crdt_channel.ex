@@ -71,8 +71,7 @@ defmodule EngramWeb.CrdtChannel do
   # Trust-boundary cap on crdt_create_batch's `creates` list. Without this,
   # check_rate(:handshake) is spent once per BATCH regardless of its size, so
   # one oversized message amplifies past the per-note handshake budget.
-  # Matches the client's own ≤100 chunk constraint and the REST batch-upsert
-  # convention (notes_controller.ex @batch_upsert_max).
+  # Matches the client's own ≤100 chunk constraint.
   @max_batch_creates 100
 
   @impl true
@@ -277,54 +276,6 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  defp create_one(%{"doc_id" => doc_id, "path" => path, "b64" => b64}, user, vault, socket) do
-    with {:ok, note_id} <- cast_doc_id(doc_id),
-         :ok <- validate_create_path(path),
-         {:ok, frame} <- decode_frame(b64),
-         :ok <- guard_frame(frame),
-         {:ok, _note} <- Notes.genesis_crdt_note(user, vault, note_id, path),
-         {:ok, socket, %{room: room}} <- ensure_room(socket, note_id) do
-      SharedDoc.send_yjs_message(room, frame)
-      {%{doc_id: note_id, status: "ok"}, socket}
-    else
-      {:error, :id_conflict, note} ->
-        {%{doc_id: note.id, status: "error", reason: "id_conflict"}, socket}
-
-      {:error, :version_conflict, note} ->
-        {%{doc_id: note.id, status: "error", reason: "version_conflict"}, socket}
-
-      {:error, :room_limit} ->
-        {%{doc_id: doc_id, status: "error", reason: "room_limit"}, socket}
-
-      {:error, :recently_deleted} ->
-        {%{doc_id: doc_id, status: "error", reason: "recently_deleted"}, socket}
-
-      {:error, {:notes_cap_reached, limit, _}} ->
-        {%{doc_id: doc_id, status: "error", reason: "notes_cap_reached", limit: limit}, socket}
-
-      {:error, :bad_doc_id} ->
-        {%{doc_id: doc_id, status: "error", reason: "bad_doc_id"}, socket}
-
-      {:error, :bad_path} ->
-        {%{doc_id: doc_id, status: "error", reason: "bad_path"}, socket}
-
-      {:error, :implausible_state_vector} ->
-        {%{doc_id: doc_id, status: "error", reason: "implausible_state_vector"}, socket}
-
-      {:error, :frame_too_large} ->
-        {%{doc_id: doc_id, status: "error", reason: "frame_too_large"}, socket}
-
-      _ ->
-        {%{doc_id: doc_id, status: "error", reason: "create_failed"}, socket}
-    end
-  end
-
-  # Malformed entry (missing a required key) — never crash the batch.
-  defp create_one(entry, _user, _vault, socket) do
-    doc_id = if is_map(entry), do: Map.get(entry, "doc_id"), else: nil
-    {%{doc_id: doc_id, status: "error", reason: "bad_frame"}, socket}
-  end
-
   @impl true
   def handle_in("crdt_delete", %{"doc_id" => doc_id}, socket) do
     with :ok <- check_rate(socket, :handshake),
@@ -404,6 +355,57 @@ defmodule EngramWeb.CrdtChannel do
       :ok -> {:reply, {:error, %{reason: "bad_frame"}}, socket}
       {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
     end
+  end
+
+  # Per-entry helper for crdt_create_batch (handle_in above). Kept out of the
+  # handle_in clause group so all `def handle_in(...)` clauses stay consecutive
+  # (Elixir warns on grouping when a differently-named def/defp interrupts them).
+  defp create_one(%{"doc_id" => doc_id, "path" => path, "b64" => b64}, user, vault, socket) do
+    with {:ok, note_id} <- cast_doc_id(doc_id),
+         :ok <- validate_create_path(path),
+         {:ok, frame} <- decode_frame(b64),
+         :ok <- guard_frame(frame),
+         {:ok, _note} <- Notes.genesis_crdt_note(user, vault, note_id, path),
+         {:ok, socket, %{room: room}} <- ensure_room(socket, note_id) do
+      SharedDoc.send_yjs_message(room, frame)
+      {%{doc_id: note_id, status: "ok"}, socket}
+    else
+      {:error, :id_conflict, note} ->
+        {%{doc_id: note.id, status: "error", reason: "id_conflict"}, socket}
+
+      {:error, :version_conflict, note} ->
+        {%{doc_id: note.id, status: "error", reason: "version_conflict"}, socket}
+
+      {:error, :room_limit} ->
+        {%{doc_id: doc_id, status: "error", reason: "room_limit"}, socket}
+
+      {:error, :recently_deleted} ->
+        {%{doc_id: doc_id, status: "error", reason: "recently_deleted"}, socket}
+
+      {:error, {:notes_cap_reached, limit, _}} ->
+        {%{doc_id: doc_id, status: "error", reason: "notes_cap_reached", limit: limit}, socket}
+
+      {:error, :bad_doc_id} ->
+        {%{doc_id: doc_id, status: "error", reason: "bad_doc_id"}, socket}
+
+      {:error, :bad_path} ->
+        {%{doc_id: doc_id, status: "error", reason: "bad_path"}, socket}
+
+      {:error, :implausible_state_vector} ->
+        {%{doc_id: doc_id, status: "error", reason: "implausible_state_vector"}, socket}
+
+      {:error, :frame_too_large} ->
+        {%{doc_id: doc_id, status: "error", reason: "frame_too_large"}, socket}
+
+      _ ->
+        {%{doc_id: doc_id, status: "error", reason: "create_failed"}, socket}
+    end
+  end
+
+  # Malformed entry (missing a required key) — never crash the batch.
+  defp create_one(entry, _user, _vault, socket) do
+    doc_id = if is_map(entry), do: Map.get(entry, "doc_id"), else: nil
+    {%{doc_id: doc_id, status: "error", reason: "bad_frame"}, socket}
   end
 
   # A cursor is a non-negative seq. A malformed one (string, float, negative)
