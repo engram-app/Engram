@@ -21,7 +21,14 @@ _EMAIL_TS_RE = re.compile(r"(\d{20})r")
 
 
 def _email_age_seconds(email: str) -> float | None:
-    """Seconds since the e2e email's embedded timestamp, or None if absent/unparseable."""
+    """Seconds since the e2e email's embedded timestamp, or None if absent/unparseable.
+
+    Load-bearing assumption: the ts is minted (conftest `ts` fixture) and this
+    sweep runs on the SAME host clock — naive-local `datetime.now()` on both
+    sides. That holds because xdist workers are subprocesses of one CI runner.
+    If the sweep ever moves to a different container/host than the minting
+    worker, ages break silently (and the fail-safe would mask it as "keep all").
+    """
     m = _EMAIL_TS_RE.search(email)
     if not m:
         return None
