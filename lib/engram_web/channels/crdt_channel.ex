@@ -369,32 +369,30 @@ defmodule EngramWeb.CrdtChannel do
          :ok <- guard_frame(frame),
          {:ok, _note} <- Notes.genesis_crdt_note(user, vault, note_id, path),
          {:ok, socket, %{room: room}} <- ensure_room(socket, note_id) do
-      # Genesis seeds an EMPTY note, so apply the client's full-state frame ONLY
-      # to a room doc that has no content yet. A crdt_create_batch is NOT
-      # idempotent otherwise: a second create for the same note (a client
-      # retry/re-push — observed ~9s apart in e2e test_82) re-applies the frame
-      # on top of the already-materialized body. The create-time checkpoint
-      # FLATTENS the doc to a fresh single-client server lineage, so the frame's
-      # ORIGINAL client lineage no longer merges as a no-op — Yjs appends it and
-      # the body DOUBLES (#846; test_82 saw a deterministic 38B = 19B "original"
-      # twice, which then blocked the peer's real edit from converging). Once a
-      # note has content, every edit flows through the live room / seq-replay
+      # Genesis seeds an EMPTY note. Apply the client's full-state frame ONLY when
+      # the room doc has no content yet, and do the check + apply ATOMICALLY inside
+      # the room process (seed_genesis_if_empty/3) so two concurrent creates of the
+      # same note can't both observe an empty doc and both apply. A second create
+      # for an already-seeded note (a client retry/re-push — observed ~9s apart in
+      # e2e test_82) must NOT re-apply: the create-time checkpoint FLATTENS the doc
+      # to a fresh server lineage, so the frame's original client lineage no longer
+      # merges as a no-op — Yjs appends it and the body DOUBLES (#846; test_82 saw
+      # a deterministic 38B = 19B "original" twice, blocking the peer's real edit
+      # from converging). Post-genesis edits flow through the live room / seq-replay
       # op-log, never a re-sent create, so skipping a non-empty doc loses nothing.
-      if CrdtBridge.text_of(SharedDoc.get_doc(room)) == "" do
-        SharedDoc.send_yjs_message(room, frame)
-
+      if seed_genesis_if_empty(room, note_id, frame) == :seeded do
         # Materialize the genesis content to notes.content SYNCHRONOUSLY so the
         # seq-ordered catch-up feed (the single convergence path) carries it the
         # instant the row is visible, instead of waiting ~250ms for the room's
         # checkpoint timer. Before this, a seq-replay catch-up racing that timer
         # read content="" and 0-byte-materialized the note (e2e test_03/09/10/86
         # regressed under load once the plugin routed convergence through
-        # crdt_catchup_since). Reads the room's doc — get_doc is a GenServer.call,
-        # FIFO-ordered after the send_yjs_message above from this same process, so
-        # it observes the applied frame (the plugin's lineage → no #846 divergence).
-        # Runs the ONE checkpoint materializer, so it is idempotent with the timer's
-        # later checkpoint (equal content_hash hits the "Text unchanged" no-op
-        # branch). Best-effort: a materialize failure leaves the timer as the
+        # crdt_catchup_since). Runs ONLY for the create that actually seeded — a
+        # :skipped create must not re-checkpoint, or the checkpoint's
+        # union_with_row_state would re-merge the divergent lineage and re-double
+        # notes.content. Runs the ONE checkpoint materializer, idempotent with the
+        # timer's later checkpoint (equal content_hash hits the "Text unchanged"
+        # no-op branch). Best-effort: a materialize failure leaves the timer as the
         # backstop, so a raise here must never fail the create.
         try do
           doc = SharedDoc.get_doc(room)
@@ -447,6 +445,64 @@ defmodule EngramWeb.CrdtChannel do
   defp create_one(entry, _user, _vault, socket) do
     doc_id = if is_map(entry), do: Map.get(entry, "doc_id"), else: nil
     {%{doc_id: doc_id, status: "error", reason: "bad_frame"}, socket}
+  end
+
+  # Apply the client's genesis frame to the room's doc ONLY if the doc is still
+  # empty, doing the check-and-apply ATOMICALLY inside the room GenServer. A plain
+  # `get_doc` check followed by `send_yjs_message` is a read-then-write across two
+  # separate room messages: two concurrent first-creates of the same note could
+  # both read empty and both apply, doubling the body (#846). `SharedDoc.update_doc`
+  # runs the fun in-room, serialized against every other message, so the second
+  # create's fun observes the first's applied content and skips. The doc's
+  # `monitor_update_v1` fires on `apply_update`, so the tail-log append + the
+  # `note_yjs_update` fan-out are unchanged — the same in-room raw-apply idiom as
+  # `CrdtTransport.apply_in_room` (the REST write path). Returns `:seeded` when THIS
+  # call applied the frame, `:skipped` when the doc was already non-empty, `:error`
+  # when the room is gone/malformed. `update_doc` is a synchronous call, so the
+  # `{ref, result}` message is in our mailbox by the time it returns (`after 0`).
+  # A frame that is not a plain `sync_update` (never sent for a genesis create)
+  # falls back to the guarded sync path.
+  defp seed_genesis_if_empty(room, note_id, frame) do
+    case Yex.Sync.message_decode(frame) do
+      {:ok, {:sync, {:sync_update, update}}} ->
+        parent = self()
+        ref = make_ref()
+
+        SharedDoc.update_doc(room, fn doc ->
+          result =
+            if CrdtBridge.text_of(doc) == "" do
+              _ = Yex.apply_update(doc, update)
+              :seeded
+            else
+              :skipped
+            end
+
+          send(parent, {ref, result})
+          :ok
+        end)
+
+        receive do
+          {^ref, result} -> result
+        after
+          0 -> :error
+        end
+
+      _ ->
+        if CrdtBridge.text_of(SharedDoc.get_doc(room)) == "" do
+          SharedDoc.send_yjs_message(room, frame)
+          :seeded
+        else
+          :skipped
+        end
+    end
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "crdt genesis seed room apply exited",
+        Metadata.with_category(:warning, :sync, note_id: note_id, reason: inspect(reason))
+      )
+
+      :error
   end
 
   # A cursor is a non-negative seq. A malformed one (string, float, negative)
