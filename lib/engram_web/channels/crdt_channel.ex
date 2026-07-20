@@ -16,6 +16,7 @@ defmodule EngramWeb.CrdtChannel do
   alias Engram.Crypto.HMAC
   alias Engram.Logger.Metadata
   alias Engram.{Notes, Vaults}
+  alias Engram.Notes.CrdtCheckpoint
   alias Engram.Notes.CrdtRegistry
   alias Engram.Notes.CrdtTransport
   alias Yex.Sync.SharedDoc
@@ -368,6 +369,31 @@ defmodule EngramWeb.CrdtChannel do
          {:ok, _note} <- Notes.genesis_crdt_note(user, vault, note_id, path),
          {:ok, socket, %{room: room}} <- ensure_room(socket, note_id) do
       SharedDoc.send_yjs_message(room, frame)
+      # Materialize the genesis content to notes.content SYNCHRONOUSLY so the
+      # seq-ordered catch-up feed (the single convergence path) carries it the
+      # instant the row is visible, instead of waiting ~250ms for the room's
+      # checkpoint timer. Before this, a seq-replay catch-up racing that timer
+      # read content="" and 0-byte-materialized the note (e2e test_03/09/10/86
+      # regressed under load once the plugin routed convergence through
+      # crdt_catchup_since). Reads the room's doc — get_doc is a GenServer.call,
+      # FIFO-ordered after the send_yjs_message above from this same process, so
+      # it observes the applied frame (the plugin's lineage → no #846 divergence).
+      # Runs the ONE checkpoint materializer, so it is idempotent with the timer's
+      # later checkpoint (equal content_hash hits the "Text unchanged" no-op
+      # branch). Best-effort: a materialize failure leaves the timer as the
+      # backstop, so a raise here must never fail the create.
+      try do
+        doc = SharedDoc.get_doc(room)
+        captured_version = CrdtCheckpoint.current_version(user.id, note_id)
+
+        _ =
+          CrdtCheckpoint.checkpoint(user.id, vault.id, note_id, doc,
+            captured_version: captured_version
+          )
+      rescue
+        _ -> :ok
+      end
+
       {%{doc_id: note_id, status: "ok"}, socket}
     else
       {:error, :id_conflict, note} ->

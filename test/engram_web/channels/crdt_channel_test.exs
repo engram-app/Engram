@@ -282,6 +282,27 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_note_content_eventually(user, vault, id2, "beta")
     end
 
+    test "materializes content SYNCHRONOUSLY so the seq feed carries it immediately", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # A genesis create must persist notes.content the instant the reply lands,
+      # NOT ~250ms later via the room's checkpoint timer. The seq-ordered catch-up
+      # feed (the single convergence path) reads durable notes.content, so a
+      # seq-replay racing the timer would read content="" and 0-byte-materialize
+      # the note (e2e test_03/09/10/86 under load). NO wait_until here — that is
+      # the whole point: the content is already there.
+      id = Ecto.UUID.generate()
+      creates = [%{"doc_id" => id, "path" => "Sync.md", "b64" => frame_for_content("sync-body")}]
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :ok, %{results: [%{status: "ok"}]}
+
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == "sync-body"
+    end
+
     test "one bad entry does not fail the batch", %{socket: socket, user: user, vault: vault} do
       good = Ecto.UUID.generate()
 
