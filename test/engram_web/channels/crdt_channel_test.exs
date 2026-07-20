@@ -303,6 +303,34 @@ defmodule EngramWeb.CrdtChannelTest do
       assert note.content == "sync-body"
     end
 
+    test "a duplicate create for the same note does not double the body", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # A create is idempotent: a second crdt_create_batch for the SAME note (a
+      # client retry, or a create racing a live-seed of the same note) must NOT
+      # concatenate a second copy of the body. Each frame_for_content mints a
+      # FRESH Y.Doc, so the two frames carry identical text on DIVERGENT lineages
+      # — re-applying the second onto the first's room doc makes Yjs append it
+      # (#846; e2e test_82 saw a deterministic 19B "original" -> 38B doubled,
+      # which then blocked the peer's real edit from converging). The genesis
+      # frame seeds only an EMPTY note, so the second create is a no-op.
+      id = Ecto.UUID.generate()
+
+      create = %{"doc_id" => id, "path" => "Dup.md", "b64" => frame_for_content("dup-body")}
+      ref1 = push(socket, "crdt_create_batch", %{"creates" => [create]})
+      assert_reply ref1, :ok, %{results: [%{status: "ok"}]}
+
+      # Fresh frame => a different lineage carrying the same text.
+      redo = %{"doc_id" => id, "path" => "Dup.md", "b64" => frame_for_content("dup-body")}
+      ref2 = push(socket, "crdt_create_batch", %{"creates" => [redo]})
+      assert_reply ref2, :ok, %{results: [%{status: "ok"}]}
+
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == "dup-body"
+    end
+
     test "one bad entry does not fail the batch", %{socket: socket, user: user, vault: vault} do
       good = Ecto.UUID.generate()
 
