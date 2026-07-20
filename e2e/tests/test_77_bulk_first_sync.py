@@ -1,7 +1,8 @@
-"""Test 77: 1k-note bulk first sync lands via the batch endpoint in bounded time.
+"""Test 77: 1k-note bulk first sync lands via crdt_create_batch in bounded time.
 
-Protocol rev: pushAll sends notes through POST /notes/batch in chunks of
-100 — a 1,000-note first sync is ~10 HTTP round-trips instead of 1,000.
+CRDT single-push-path migration: pushGenesisBatch sends notes through the
+WS `crdt_create_batch` op in chunks, not POST /notes/batch (removed) — a
+1,000-note first sync is a handful of socket round-trips instead of 1,000.
 The duration bound is deliberately generous for CI noise but far below
 what the per-note path costs (1,000 paced requests), so a silent fallback
 to per-note pushes fails this test.

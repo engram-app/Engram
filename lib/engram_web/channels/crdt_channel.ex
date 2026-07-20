@@ -16,6 +16,8 @@ defmodule EngramWeb.CrdtChannel do
   alias Engram.Crypto.HMAC
   alias Engram.Logger.Metadata
   alias Engram.{Notes, Vaults}
+  alias Engram.Notes.CrdtBridge
+  alias Engram.Notes.CrdtCheckpoint
   alias Engram.Notes.CrdtRegistry
   alias Engram.Notes.CrdtTransport
   alias Yex.Sync.SharedDoc
@@ -67,6 +69,12 @@ defmodule EngramWeb.CrdtChannel do
   # Default page size for crdt_catchup_since when the client sends no `limit`.
   # Matches the seq feeds' internal 500-row cap (larger values clamp to it).
   @catchup_page_limit 500
+
+  # Trust-boundary cap on crdt_create_batch's `creates` list. Without this,
+  # check_rate(:handshake) is spent once per BATCH regardless of its size, so
+  # one oversized message amplifies past the per-note handshake budget.
+  # Matches the client's own ≤100 chunk constraint.
+  @max_batch_creates 100
 
   @impl true
   def join("crdt:" <> ids, params, socket) do
@@ -239,6 +247,37 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  # Bulk genesis-with-content (single-push-path, Task 1). One frame creates N
+  # brand-new notes AND seeds each note's initial content in one round trip:
+  # each entry carries a `sync_update` Y-frame that the room applies + persists,
+  # so a fresh vault push no longer needs a create call plus a separate edit
+  # frame per note. Rides the :handshake lane (connect-time enrollment shape,
+  # NOT the continuous edit stream). Partial failure is per-entry: one bad entry
+  # returns an error result but the batch reply is still :ok so the good entries
+  # commit — the client reconciles per doc_id, never re-pushing the whole batch.
+  @impl true
+  def handle_in("crdt_create_batch", %{"creates" => creates}, socket) when is_list(creates) do
+    if length(creates) > @max_batch_creates do
+      {:reply, {:error, %{reason: "too_many_creates", max: @max_batch_creates}}, socket}
+    else
+      case check_rate(socket, :handshake) do
+        :ok ->
+          user = socket.assigns.current_user
+          vault = socket.assigns.vault
+
+          {results, socket} =
+            Enum.map_reduce(creates, socket, fn entry, sock ->
+              create_one(entry, user, vault, sock)
+            end)
+
+          {:reply, {:ok, %{results: results}}, socket}
+
+        {:error, :rate_limited} ->
+          {:reply, {:error, %{reason: "rate_limited"}}, socket}
+      end
+    end
+  end
+
   @impl true
   def handle_in("crdt_delete", %{"doc_id" => doc_id}, socket) do
     with :ok <- check_rate(socket, :handshake),
@@ -318,6 +357,152 @@ defmodule EngramWeb.CrdtChannel do
       :ok -> {:reply, {:error, %{reason: "bad_frame"}}, socket}
       {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
     end
+  end
+
+  # Per-entry helper for crdt_create_batch (handle_in above). Kept out of the
+  # handle_in clause group so all `def handle_in(...)` clauses stay consecutive
+  # (Elixir warns on grouping when a differently-named def/defp interrupts them).
+  defp create_one(%{"doc_id" => doc_id, "path" => path, "b64" => b64}, user, vault, socket) do
+    with {:ok, note_id} <- cast_doc_id(doc_id),
+         :ok <- validate_create_path(path),
+         {:ok, frame} <- decode_frame(b64),
+         :ok <- guard_frame(frame),
+         {:ok, _note} <- Notes.genesis_crdt_note(user, vault, note_id, path),
+         {:ok, socket, %{room: room}} <- ensure_room(socket, note_id) do
+      # Genesis seeds an EMPTY note. Apply the client's full-state frame ONLY when
+      # the room doc has no content yet, and do the check + apply ATOMICALLY inside
+      # the room process (seed_genesis_if_empty/3) so two concurrent creates of the
+      # same note can't both observe an empty doc and both apply. A second create
+      # for an already-seeded note (a client retry/re-push — observed ~9s apart in
+      # e2e test_82) must NOT re-apply: the create-time checkpoint FLATTENS the doc
+      # to a fresh server lineage, so the frame's original client lineage no longer
+      # merges as a no-op — Yjs appends it and the body DOUBLES (#846; test_82 saw
+      # a deterministic 38B = 19B "original" twice, blocking the peer's real edit
+      # from converging). Post-genesis edits flow through the live room / seq-replay
+      # op-log, never a re-sent create, so skipping a non-empty doc loses nothing.
+      if seed_genesis_if_empty(room, note_id, frame) == :seeded do
+        # Materialize the genesis content to notes.content SYNCHRONOUSLY so the
+        # seq-ordered catch-up feed (the single convergence path) carries it the
+        # instant the row is visible, instead of waiting ~250ms for the room's
+        # checkpoint timer. Before this, a seq-replay catch-up racing that timer
+        # read content="" and 0-byte-materialized the note (e2e test_03/09/10/86
+        # regressed under load once the plugin routed convergence through
+        # crdt_catchup_since). Runs ONLY for the create that actually seeded — a
+        # :skipped create must not re-checkpoint, or the checkpoint's
+        # union_with_row_state would re-merge the divergent lineage and re-double
+        # notes.content. Runs the ONE checkpoint materializer, idempotent with the
+        # timer's later checkpoint (equal content_hash hits the "Text unchanged"
+        # no-op branch). Best-effort: a materialize failure leaves the timer as the
+        # backstop, so a raise here must never fail the create.
+        try do
+          doc = SharedDoc.get_doc(room)
+          captured_version = CrdtCheckpoint.current_version(user.id, note_id)
+
+          _ =
+            CrdtCheckpoint.checkpoint(user.id, vault.id, note_id, doc,
+              captured_version: captured_version
+            )
+        rescue
+          _ -> :ok
+        end
+      end
+
+      {%{doc_id: note_id, status: "ok"}, socket}
+    else
+      {:error, :id_conflict, note} ->
+        {%{doc_id: note.id, status: "error", reason: "id_conflict"}, socket}
+
+      {:error, :version_conflict, note} ->
+        {%{doc_id: note.id, status: "error", reason: "version_conflict"}, socket}
+
+      {:error, :room_limit} ->
+        {%{doc_id: doc_id, status: "error", reason: "room_limit"}, socket}
+
+      {:error, :recently_deleted} ->
+        {%{doc_id: doc_id, status: "error", reason: "recently_deleted"}, socket}
+
+      {:error, {:notes_cap_reached, limit, _}} ->
+        {%{doc_id: doc_id, status: "error", reason: "notes_cap_reached", limit: limit}, socket}
+
+      {:error, :bad_doc_id} ->
+        {%{doc_id: doc_id, status: "error", reason: "bad_doc_id"}, socket}
+
+      {:error, :bad_path} ->
+        {%{doc_id: doc_id, status: "error", reason: "bad_path"}, socket}
+
+      {:error, :implausible_state_vector} ->
+        {%{doc_id: doc_id, status: "error", reason: "implausible_state_vector"}, socket}
+
+      {:error, :frame_too_large} ->
+        {%{doc_id: doc_id, status: "error", reason: "frame_too_large"}, socket}
+
+      _ ->
+        {%{doc_id: doc_id, status: "error", reason: "create_failed"}, socket}
+    end
+  end
+
+  # Malformed entry (missing a required key) — never crash the batch.
+  defp create_one(entry, _user, _vault, socket) do
+    doc_id = if is_map(entry), do: Map.get(entry, "doc_id"), else: nil
+    {%{doc_id: doc_id, status: "error", reason: "bad_frame"}, socket}
+  end
+
+  # Apply the client's genesis frame to the room's doc ONLY if the doc is still
+  # empty, doing the check-and-apply ATOMICALLY inside the room GenServer. A plain
+  # `get_doc` check followed by `send_yjs_message` is a read-then-write across two
+  # separate room messages: two concurrent first-creates of the same note could
+  # both read empty and both apply, doubling the body (#846). `SharedDoc.update_doc`
+  # runs the fun in-room, serialized against every other message, so the second
+  # create's fun observes the first's applied content and skips. The doc's
+  # `monitor_update_v1` fires on `apply_update`, so the tail-log append + the
+  # `note_yjs_update` fan-out are unchanged — the same in-room raw-apply idiom as
+  # `CrdtTransport.apply_in_room` (the REST write path). Returns `:seeded` when THIS
+  # call applied the frame, `:skipped` when the doc was already non-empty, `:error`
+  # when the room is gone/malformed. `update_doc` is a synchronous call, so the
+  # `{ref, result}` message is in our mailbox by the time it returns (`after 0`).
+  # A frame that is not a plain `sync_update` (never sent for a genesis create)
+  # falls back to the guarded sync path.
+  defp seed_genesis_if_empty(room, note_id, frame) do
+    case Yex.Sync.message_decode(frame) do
+      {:ok, {:sync, {:sync_update, update}}} ->
+        parent = self()
+        ref = make_ref()
+
+        SharedDoc.update_doc(room, fn doc ->
+          result =
+            if CrdtBridge.text_of(doc) == "" do
+              _ = Yex.apply_update(doc, update)
+              :seeded
+            else
+              :skipped
+            end
+
+          send(parent, {ref, result})
+          :ok
+        end)
+
+        receive do
+          {^ref, result} -> result
+        after
+          0 -> :error
+        end
+
+      _ ->
+        if CrdtBridge.text_of(SharedDoc.get_doc(room)) == "" do
+          SharedDoc.send_yjs_message(room, frame)
+          :seeded
+        else
+          :skipped
+        end
+    end
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "crdt genesis seed room apply exited",
+        Metadata.with_category(:warning, :sync, note_id: note_id, reason: inspect(reason))
+      )
+
+      :error
   end
 
   # A cursor is a non-negative seq. A malformed one (string, float, negative)

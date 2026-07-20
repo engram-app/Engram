@@ -256,6 +256,113 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   # ---------------------------------------------------------------------------
+  # crdt_create_batch — bulk genesis-with-content (Task 1, single-push-path)
+  # ---------------------------------------------------------------------------
+
+  describe "crdt_create_batch" do
+    test "creates every note with content and allocates seqs", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      id1 = Ecto.UUID.generate()
+      id2 = Ecto.UUID.generate()
+
+      creates = [
+        %{"doc_id" => id1, "path" => "A.md", "b64" => frame_for_content("alpha")},
+        %{"doc_id" => id2, "path" => "B.md", "b64" => frame_for_content("beta")}
+      ]
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :ok, %{results: results}
+      assert Enum.all?(results, &(&1.status == "ok"))
+      assert Enum.map(results, & &1.doc_id) |> Enum.sort() == Enum.sort([id1, id2])
+
+      assert_note_content_eventually(user, vault, id1, "alpha")
+      assert_note_content_eventually(user, vault, id2, "beta")
+    end
+
+    test "materializes content SYNCHRONOUSLY so the seq feed carries it immediately", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # A genesis create must persist notes.content the instant the reply lands,
+      # NOT ~250ms later via the room's checkpoint timer. The seq-ordered catch-up
+      # feed (the single convergence path) reads durable notes.content, so a
+      # seq-replay racing the timer would read content="" and 0-byte-materialize
+      # the note (e2e test_03/09/10/86 under load). NO wait_until here — that is
+      # the whole point: the content is already there.
+      id = Ecto.UUID.generate()
+      creates = [%{"doc_id" => id, "path" => "Sync.md", "b64" => frame_for_content("sync-body")}]
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :ok, %{results: [%{status: "ok"}]}
+
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == "sync-body"
+    end
+
+    test "a duplicate create for the same note does not double the body", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # A create is idempotent: a second crdt_create_batch for the SAME note (a
+      # client retry, or a create racing a live-seed of the same note) must NOT
+      # concatenate a second copy of the body. Each frame_for_content mints a
+      # FRESH Y.Doc, so the two frames carry identical text on DIVERGENT lineages
+      # — re-applying the second onto the first's room doc makes Yjs append it
+      # (#846; e2e test_82 saw a deterministic 19B "original" -> 38B doubled,
+      # which then blocked the peer's real edit from converging). The genesis
+      # frame seeds only an EMPTY note, so the second create is a no-op.
+      id = Ecto.UUID.generate()
+
+      create = %{"doc_id" => id, "path" => "Dup.md", "b64" => frame_for_content("dup-body")}
+      ref1 = push(socket, "crdt_create_batch", %{"creates" => [create]})
+      assert_reply ref1, :ok, %{results: [%{status: "ok"}]}
+
+      # Fresh frame => a different lineage carrying the same text.
+      redo = %{"doc_id" => id, "path" => "Dup.md", "b64" => frame_for_content("dup-body")}
+      ref2 = push(socket, "crdt_create_batch", %{"creates" => [redo]})
+      assert_reply ref2, :ok, %{results: [%{status: "ok"}]}
+
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == "dup-body"
+    end
+
+    test "one bad entry does not fail the batch", %{socket: socket, user: user, vault: vault} do
+      good = Ecto.UUID.generate()
+
+      creates = [
+        %{"doc_id" => good, "path" => "Good.md", "b64" => frame_for_content("ok")},
+        %{"doc_id" => "not-a-uuid", "path" => "Bad.md", "b64" => frame_for_content("x")}
+      ]
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :ok, %{results: results}
+      by_id = Map.new(results, &{&1.doc_id, &1.status})
+      assert by_id[good] == "ok"
+      assert by_id["not-a-uuid"] == "error"
+
+      assert_note_content_eventually(user, vault, good, "ok")
+    end
+
+    test "rejects an oversized creates list", %{socket: socket} do
+      creates =
+        for _ <- 1..101,
+            do: %{
+              "doc_id" => Ecto.UUID.generate(),
+              "path" => "X.md",
+              "b64" => frame_for_content("x")
+            }
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :error, %{reason: "too_many_creates", max: 100}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Auth / join
   # ---------------------------------------------------------------------------
 
@@ -915,6 +1022,27 @@ defmodule EngramWeb.CrdtChannelTest do
       end)
 
     n
+  end
+
+  # A base64 Yjs update that, applied to a fresh empty doc, ingests `content`
+  # as full note plaintext — i.e. the frame a client sends as the initial
+  # crdt_create_batch payload for a brand-new note.
+  defp frame_for_content(content) do
+    doc = CrdtBridge.new_doc()
+    :ok = CrdtBridge.ingest_plaintext(doc, content)
+    {:ok, update} = Yex.encode_state_as_update(doc)
+    {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_update, update}})
+    Base.encode64(frame)
+  end
+
+  # Poll get_note_by_id until the row's decrypted content matches (or flunk).
+  defp assert_note_content_eventually(user, vault, note_id, content) do
+    wait_until(fn ->
+      case Notes.get_note_by_id(user, vault, note_id) do
+        {:ok, note} -> note.content == content
+        _ -> false
+      end
+    end)
   end
 
   defp wait_until(condition, deadline \\ nil) do

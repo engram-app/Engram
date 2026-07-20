@@ -49,18 +49,6 @@ import pytest
 
 from helpers.vault import read_note, wait_for_content, wait_for_file, wait_for_file_gone
 
-
-# SKIPPED pending engram-app/Engram#1031 (P0). The four advanced sync choices
-# are implemented over the REST pull()/pushAll/wipeRemote machinery, whose
-# delivery is timing-racy — a note converges via the slow REST pull, often right
-# at the 30s boundary — so these tests flake (green/red on identical code).
-# The feature is KEPT (first-connect reconciliation is genuinely useful) but is
-# being reworked onto the single CRDT op-log path (bulk applyOp / op-emit), where
-# the operation completes on a definite event instead of a 30s race. #1031 re-
-# enables this module as a deterministic op-replay test once that lands. This is
-# a parked flake of a feature under active rework, not a suppressed real bug.
-pytestmark = pytest.mark.skip(reason="advanced-sync-choices flaky over REST pull; rework tracked in #1031")
-
 SETTLE_S = 8
 
 
@@ -197,10 +185,21 @@ async def test_push_all_delete_remote_preserves_local(vault_a, cdp_a, vault_b, c
     try:
         await _run_choice(cdp_a, "push-all-delete-remote")
 
-        # Remote extra is gone; local files were uploaded.
+        # Remote extra is gone; local files were uploaded. The server state
+        # is authoritative the moment runSyncFromChoice resolves (op-log
+        # apply, not a REST-pull race), so these are bounded sanity checks,
+        # not a 30s convergence wait.
         api_sync.wait_for_note_gone(s.remote_only, timeout=30)
         api_sync.wait_for_note(s.local_only, timeout=30)
         api_sync.wait_for_note(s.synced, timeout=30)
+
+        # Drive B's catch-up (the actual receiver) instead of waiting on its
+        # passive live-socket announce, then assert its disk converged too —
+        # proves the full delivery chain, not just server-side REST state.
+        await cdp_b.trigger_full_sync()
+        wait_for_file_gone(vault_b, s.remote_only, timeout=10)
+        wait_for_file(vault_b, s.local_only, timeout=10)
+        wait_for_file(vault_b, s.synced, timeout=10)
 
         # THE incident invariant: replacing remote must not touch local files.
         assert read_note(vault_a, s.local_only) == s.local_content, (
@@ -236,8 +235,13 @@ async def test_pull_all_keep_local(vault_a, cdp_a, api_sync):
     try:
         await _run_choice(cdp_a, "pull-all-keep-local")
 
+        # catchupViaSeqReplay already applied the ops inside runSyncFromChoice
+        # (definite event, not a REST-pull race); drive a catch-up nudge to
+        # flush any deferred materialization, then assert with a short bound.
+        await cdp_a.trigger_full_sync()
+
         # Remote-only note arrived locally.
-        wait_for_content(vault_a, s.remote_only, f"RemoteOnly {s.unique}", timeout=30)
+        wait_for_content(vault_a, s.remote_only, f"RemoteOnly {s.unique}", timeout=10)
 
         # Local extra survived a keep-local pull.
         assert read_note(vault_a, s.local_only) == s.local_content, (
@@ -261,10 +265,15 @@ async def test_pull_all_delete_local_preserves_remote(vault_a, cdp_a, api_sync):
     try:
         await _run_choice(cdp_a, "pull-all-delete-local")
 
+        # Drive a catch-up nudge (same rationale as pull-all-keep-local) so
+        # the local wipe + replay-from-0 materialization is flushed before we
+        # assert, instead of racing a passive 30s window.
+        await cdp_a.trigger_full_sync()
+
         # Local matches remote: extra wiped, remote notes present.
-        wait_for_file_gone(vault_a, s.local_only, timeout=30)
-        wait_for_content(vault_a, s.remote_only, f"RemoteOnly {s.unique}", timeout=30)
-        wait_for_file(vault_a, s.synced, timeout=30)
+        wait_for_file_gone(vault_a, s.local_only, timeout=10)
+        wait_for_content(vault_a, s.remote_only, f"RemoteOnly {s.unique}", timeout=10)
+        wait_for_file(vault_a, s.synced, timeout=10)
 
         # Mirror invariant of the incident: the local wipe must not echo-push
         # deletions up to the server (suppressed vault delete events).
