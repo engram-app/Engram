@@ -97,7 +97,7 @@ defmodule Engram.Notes.CrdtDeliver do
   # or a load failure simply skips — the announce still fires for enrolled clients.
   defp fanout_idle(user_id, vault_id, note_id) do
     _ =
-      with {:ok, state} when is_binary(state) <- load_merged_state(user_id, note_id) do
+      with {:ok, state, seq} when is_binary(state) <- load_merged_state(user_id, note_id) do
         head =
           case CrdtBridge.doc_from_state(state) do
             {:ok, doc} -> CrdtTransport.head_marker(doc)
@@ -111,7 +111,7 @@ defmodule Engram.Notes.CrdtDeliver do
             "note_id" => note_id,
             "b64" => Base.encode64(state),
             "head" => head,
-            "seq" => load_note_seq(user_id, note_id)
+            "seq" => seq
           },
           note_id
         )
@@ -154,7 +154,7 @@ defmodule Engram.Notes.CrdtDeliver do
 
       room ->
         case load_merged_state(user_id, note_id) do
-          {:ok, state} when is_binary(state) ->
+          {:ok, state, _seq} when is_binary(state) ->
             # The apply runs inside the room process (update_doc discards the
             # fun's return), so failure is signalled back by message. The
             # message is tagged with a per-call ref: if update_doc TIMES OUT,
@@ -181,7 +181,7 @@ defmodule Engram.Notes.CrdtDeliver do
               0 -> :ok
             end
 
-          {:ok, nil} when content == "" ->
+          {:ok, nil, _seq} when content == "" ->
             # Empty content on a room with NO persisted CRDT state is ambiguous:
             # either a genuinely empty note (ingesting "" is a no-op anyway) or a
             # caller that reached deliver-out with UNLOADED content. The
@@ -193,7 +193,7 @@ defmodule Engram.Notes.CrdtDeliver do
             # arrives as a CRDT edit, never through this deliver-out fallback.
             :ok
 
-          {:ok, nil} ->
+          {:ok, nil, _seq} ->
             room_apply(room, note_id, fn doc -> CrdtBridge.ingest_plaintext(doc, content) end)
 
           {:error, reason} ->
@@ -274,15 +274,21 @@ defmodule Engram.Notes.CrdtDeliver do
     end
   end
 
-  # Loads + decrypts the note's committed CRDT snapshot. Runs post-commit in
-  # the writer process, so the row read here is the state the write just
+  # Loads + decrypts the note's committed CRDT snapshot AND its current
+  # vault-global change seq (Vaults.next_seq!-assigned, the same field
+  # `list_changes_by_seq` orders by — carried on the fan-out payload for
+  # gap-heal, spec §3 Phase D2) in a SINGLE row read. Runs post-commit in the
+  # writer process, so the row read here is the state the write just
   # persisted. Returns:
-  #   {:ok, binary} — the merged state to apply (shared lineage)
-  #   {:ok, nil}    — the row has NO CRDT state (legacy/lazy row); plaintext
-  #                   ingest is the only delivery available and is safe
-  #   {:error, r}   — the state exists but could not be read (decrypt/KMS/
-  #                   missing row/raise) — logged here at :error; the caller
-  #                   must NOT fall back to a plaintext re-encode
+  #   {:ok, binary, seq} — the merged state to apply (shared lineage) + seq
+  #   {:ok, nil, seq}    — the row has NO CRDT state (legacy/lazy row);
+  #                        plaintext ingest is the only delivery available
+  #                        and is safe
+  #   {:error, r}        — the state exists but could not be read
+  #                        (decrypt/KMS/missing row/raise) — logged here at
+  #                        :error; the caller must NOT fall back to a
+  #                        plaintext re-encode. No seq: the fan-out is
+  #                        skipped entirely in this case (see fanout_idle).
   # Never raises/exits/throws (delivery must not fail the write).
   defp load_merged_state(user_id, note_id) do
     user = Accounts.get_user!(user_id)
@@ -293,13 +299,13 @@ defmodule Engram.Notes.CrdtDeliver do
           nil ->
             {:error, :missing_row}
 
-          %Note{crdt_state_ciphertext: nil} ->
-            {:ok, nil}
+          %Note{crdt_state_ciphertext: nil, seq: seq} ->
+            {:ok, nil, seq}
 
-          %Note{} = note ->
+          %Note{seq: seq} = note ->
             case Crypto.decrypt_crdt_state(note, user) do
-              {:ok, state} when is_binary(state) -> {:ok, state}
-              {:ok, nil} -> {:ok, nil}
+              {:ok, state} when is_binary(state) -> {:ok, state, seq}
+              {:ok, nil} -> {:ok, nil, seq}
               {:error, reason} -> {:error, reason}
             end
         end
@@ -307,8 +313,8 @@ defmodule Engram.Notes.CrdtDeliver do
 
     # with_tenant wraps the fun's return in {:ok, _} (Ecto transaction).
     case result do
-      {:ok, {:ok, state_or_nil}} ->
-        {:ok, state_or_nil}
+      {:ok, {:ok, state_or_nil, seq}} ->
+        {:ok, state_or_nil, seq}
 
       {:ok, {:error, reason}} ->
         log_state_load_failure(note_id, reason)
@@ -326,20 +332,6 @@ defmodule Engram.Notes.CrdtDeliver do
     kind, reason ->
       log_state_load_failure(note_id, {kind, reason})
       {:error, :caught}
-  end
-
-  # Reads the note's current vault-global change seq (Vaults.next_seq!-assigned,
-  # the same field `list_changes_by_seq` orders by) for the gap-heal `seq` key
-  # on the live fan-out payload (spec §3 Phase D2). Best-effort like the rest
-  # of deliver-out: a missing row (deleted mid-flight) or any failure yields
-  # nil rather than raising — a delivery must not fail the write.
-  defp load_note_seq(user_id, note_id) do
-    case Repo.with_tenant(user_id, fn -> Repo.get(Note, note_id) end) do
-      {:ok, %Note{seq: seq}} -> seq
-      _ -> nil
-    end
-  rescue
-    _ -> nil
   end
 
   defp log_state_load_failure(note_id, reason) do
