@@ -62,6 +62,68 @@ def pytest_configure(config):
             returncode=1,
         )
 
+# ---------------------------------------------------------------------------
+# Infra circuit breaker — stop the suite when the stack is provably dead
+# ---------------------------------------------------------------------------
+# 2026-07-21 triage: in 3 of 24 failed runs, 245 of 311 failure lines were
+# ConnectionError noise — the backend (or an Obsidian instance) died and every
+# remaining test still burned its full retry/timeout budget against a dead
+# endpoint. A refused connection is terminal, not a flake: probe the backend
+# once and stop the run instead of grinding out dozens of guaranteed failures.
+# Under xdist each worker trips independently (globals are per-process); with
+# the backend down, every worker trips on its next test.
+
+_CONN_REFUSED_MARKERS = ("Connection refused", "ConnectionRefusedError", "NewConnectionError")
+_OBSIDIAN_DEAD_THRESHOLD = 3
+_consecutive_conn_failures = 0
+
+
+def _backend_alive() -> bool:
+    import requests
+
+    try:
+        requests.get(f"{API_URL}/health", timeout=3)
+        return True
+    except requests.exceptions.ConnectionError:
+        return False
+    except Exception:
+        # Any HTTP-level answer (or timeout) means the socket is accepting;
+        # only a refused/unreachable connection counts as dead.
+        return True
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    global _consecutive_conn_failures
+    if rep.when == "call" and rep.passed:
+        _consecutive_conn_failures = 0
+        return
+    if not rep.failed:
+        return
+    text = repr(call.excinfo.value) if call.excinfo else str(rep.longrepr)
+    if not any(m in text for m in _CONN_REFUSED_MARKERS):
+        _consecutive_conn_failures = 0
+        return
+    if not _backend_alive():
+        item.session.shouldstop = (
+            f"INFRA DEAD: backend {API_URL} refuses connections "
+            f"(first seen in {item.nodeid}) — aborting the suite; every "
+            "remaining test would fail the same way. Check stack/compose logs."
+        )
+        logging.getLogger("conftest").error(item.session.shouldstop)
+        return
+    _consecutive_conn_failures += 1
+    if _consecutive_conn_failures >= _OBSIDIAN_DEAD_THRESHOLD:
+        item.session.shouldstop = (
+            f"INFRA DEAD: {_consecutive_conn_failures} consecutive "
+            f"connection-refused failures while the backend is healthy — an "
+            f"Obsidian/CDP instance is gone (last: {item.nodeid}). Aborting."
+        )
+        logging.getLogger("conftest").error(item.session.shouldstop)
+
+
 def _worker_index() -> int:
     """xdist worker number (0 for master / serial runs)."""
     worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
