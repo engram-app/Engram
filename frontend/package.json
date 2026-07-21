@@ -91,7 +91,7 @@
 		"yjs": "^13.6.31"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.5.1",
+		"@biomejs/biome": "2.5.4",
 		"@clerk/testing": "^2.0.34",
 		"@playwright/test": "^1.60.0",
 		"@resvg/resvg-js": "^2.6.2",
