@@ -79,23 +79,34 @@ async def test_remote_edit_converges_while_note_is_live_bound_in_obsidian(
     await web.open_note(note_id, sync_vault_id)
     await web.append("\nEDIT-WHILE-B-LIVE-BOUND\n")
 
-    # B receives the remote edit over the live CRDT fan-out (the edit MUST
-    # arrive — proves the live-bound delivery path). Under heavy suite churn the
-    # live-bound merge can occasionally reset B's Y.Doc and drop the preserved
-    # base (a pre-existing live-merge race — Engram-obsidian#256 — NOT a Bucket
-    # A regression: it reproduces only under the CI runners' parallel churn,
-    # never solo or in the full sequential suite). The product heals that
-    # deterministically via its catch-up backstop (the periodic poll / a
-    # reconnect -> catchUp -> restConvergeLiveBound), so assert the EVENTUALLY-
-    # converged state the product actually guarantees, driving one catch-up if
-    # the live path did not fully converge on its own. This still EXERCISES the
-    # live-bound catch-up heal (a broken heal fails to recover the base and the
-    # assert below fails) — it does not mask it.
-    final = wait_for_content(vault_b, path, "EDIT-WHILE-B-LIVE-BOUND", timeout=CRDT_TIMEOUT)
-    if "base line" not in final:
-        await cdp_b.trigger_full_sync()
-        final = wait_for_content(vault_b, path, "base line", timeout=CRDT_TIMEOUT)
-    assert "base line" in final, f"base content lost on B even after catch-up: {final!r}"
+    # B must converge on the LIVE CRDT fan-out alone: the remote edit arrives AND
+    # the preserved base survives the live-bound merge. No catch-up is driven.
+    #
+    # This previously fell back to `trigger_full_sync()` when the base went
+    # missing, asserting only the EVENTUALLY-converged state that the catch-up
+    # backstop guarantees (Engram-obsidian#256, a live-merge race that reproduces
+    # only under the CI runners' parallel churn). That fallback is gone: the
+    # backstop it leaned on (catchUp -> restConvergeLiveBound) is REST, and the
+    # sync path is converging on ONE socket CRDT path — a test that heals itself
+    # over REST permanently hides live-path data loss, which is the very class of
+    # bug #256 is. The live path is the product guarantee, so assert it directly.
+    #
+    # Engram-obsidian#256 fix: the 3s drift repair could truncate a live-bound
+    # editor down to an orphaned/empty Y.Text (base deleted, then autosaved); it
+    # now rebinds instead. If this test goes red under churn, that is the
+    # reproduction that never surfaced locally — look for the client log line
+    # `drift repair SKIPPED` to tell a healed orphan apart from a second,
+    # still-unknown mechanism. That line ships over the client-log endpoint
+    # (`api_sync.get_logs()`, the source helpers/log_oracle.py mines), NOT the
+    # `plugin.log` CI artifact, which is build output only.
+    #
+    # Wait for each marker separately: `wait_for_content` returns the snapshot at
+    # the instant its own marker appears, and the live path may materialize the
+    # edit and the base in two flushes. Waiting for base separately asserts the
+    # CONVERGED state instead of one instant, without driving a catch-up.
+    wait_for_content(vault_b, path, "EDIT-WHILE-B-LIVE-BOUND", timeout=CRDT_TIMEOUT)
+    final = wait_for_content(vault_b, path, "base line", timeout=CRDT_TIMEOUT)
+    assert "base line" in final, f"base content lost on B via the LIVE path: {final!r}"
     assert "EDIT-WHILE-B-LIVE-BOUND" in final, f"remote edit lost on B: {final!r}"
 
 
