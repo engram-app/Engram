@@ -41,6 +41,7 @@ defmodule Engram.MCP.Tools do
       create_folder_def(),
       suggest_folder_def(),
       get_note_def(),
+      get_notes_def(),
       create_note_def(),
       write_note_def(),
       append_to_note_def(),
@@ -49,6 +50,7 @@ defmodule Engram.MCP.Tools do
       rename_note_def(),
       rename_folder_def(),
       delete_note_def(),
+      delete_folder_def(),
       move_attachment_def()
     ]
     |> Enum.map(&with_vault_id/1)
@@ -290,6 +292,29 @@ defmodule Engram.MCP.Tools do
     }
   end
 
+  defp get_notes_def do
+    %{
+      name: "get_notes",
+      description:
+        "Retrieve the full content of multiple notes in one call (1-20 paths). " <>
+          "Use to inventory a folder (list_folder then get_notes) or to read a batch " <>
+          "of search results without N round-trips. Missing paths are reported inline.",
+      inputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "paths" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" =>
+              "Note paths to read (max 20), e.g. [\"Health/A.md\", \"Health/B.md\"]"
+          }
+        },
+        "required" => ["paths"]
+      },
+      handler: &Handlers.handle("get_notes", &1, &2, &3)
+    }
+  end
+
   defp create_note_def do
     %{
       name: "create_note",
@@ -453,6 +478,32 @@ defmodule Engram.MCP.Tools do
         "required" => ["path"]
       },
       handler: &Handlers.handle("delete_note", &1, &2, &3)
+    }
+  end
+
+  defp delete_folder_def do
+    %{
+      name: "delete_folder",
+      description:
+        "Delete a folder. Empty-only by default: if the folder contains notes or " <>
+          "attachments, the call is refused and reports the counts. Pass recursive: true " <>
+          "to delete the folder and everything under it. Syncs to all connected devices.",
+      inputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "folder" => %{
+            "type" => "string",
+            "description" => "Folder path to delete, e.g. \"Projects/Old\""
+          },
+          "recursive" => %{
+            "type" => "boolean",
+            "description" => "Delete all notes and attachments under the folder (default false)",
+            "default" => false
+          }
+        },
+        "required" => ["folder"]
+      },
+      handler: &Handlers.handle("delete_folder", &1, &2, &3)
     }
   end
 

@@ -3265,6 +3265,29 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Counts live `kind == "note"` rows under `folder` (the folder itself and any
+  nested subfolder), for the empty-folder gate in `Engram.Folders.delete/4`.
+  Folder markers and attachments are NOT counted. Returns 0 when the user has
+  no DEK yet (nothing encrypted, so nothing to count).
+  """
+  @spec count_folder_notes(map(), map(), String.t()) :: non_neg_integer()
+  def count_folder_notes(user, vault, folder) do
+    case Crypto.get_dek(user) do
+      {:ok, _dek} ->
+        prefix = folder <> "/"
+
+        fetch_decrypted_live_rows(user, vault)
+        |> Enum.count(fn r ->
+          f = r.folder || ""
+          r.kind == "note" and (f == folder or String.starts_with?(f, prefix))
+        end)
+
+      _ ->
+        0
+    end
+  end
+
+  @doc """
   Returns all non-deleted notes in a specific folder for a user.
   Pass "" for root-level notes.
   """
