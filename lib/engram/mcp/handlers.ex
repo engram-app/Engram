@@ -105,29 +105,36 @@ defmodule Engram.MCP.Handlers do
 
   def handle("list_folder", user, vault, args) do
     folder = args["folder"] || ""
-    {:ok, notes} = Notes.list_notes_in_folder(user, vault, folder)
 
-    if notes == [] do
-      folder_label = if folder == "", do: "(root)", else: folder
-      {:ok, "No notes found in folder: #{folder_label}"}
-    else
+    with {:ok, notes} <- Notes.list_notes_in_folder(user, vault, folder),
+         {:ok, atts} <- Engram.Attachments.list_in_folder(user, vault, folder) do
       folder_label = if folder == "", do: "(root)", else: folder
 
-      lines = [
-        "**Folder:** #{folder_label}",
-        "",
-        "| Title | Path | Tags |",
-        "|-------|------|------|"
-      ]
+      if notes == [] and atts == [] do
+        {:ok, "No notes found in folder: #{folder_label}"}
+      else
+        header = [
+          "**Folder:** #{folder_label}",
+          "",
+          "| Title | Path | Tags |",
+          "|-------|------|------|"
+        ]
 
-      lines =
-        lines ++
+        note_rows =
           Enum.map(notes, fn n ->
             tags = if n.tags && n.tags != [], do: Enum.join(n.tags, ", "), else: ""
             "| #{n.title} | #{n.path} | #{tags} |"
           end)
 
-      {:ok, Enum.join(lines, "\n")}
+        att_rows =
+          Enum.map(atts, fn a ->
+            "| #{Path.basename(a.path)} | #{a.path} | (attachment) |"
+          end)
+
+        {:ok, Enum.join(header ++ note_rows ++ att_rows, "\n")}
+      end
+    else
+      {:error, reason} -> {:ok, "Could not list folder #{folder}: #{inspect(reason)}"}
     end
   end
 
@@ -202,6 +209,32 @@ defmodule Engram.MCP.Handlers do
 
       {:error, :not_found} ->
         {:ok, "Note not found: #{source_path}"}
+    end
+  end
+
+  def handle("get_notes", user, vault, args) do
+    paths = args["paths"] || []
+
+    cond do
+      not is_list(paths) or paths == [] ->
+        {:error, "paths must be a non-empty array"}
+
+      length(paths) > 20 ->
+        {:error, "Too many paths (max 20). Split into multiple calls."}
+
+      not Enum.all?(paths, &is_binary/1) ->
+        {:error, "every path must be a string"}
+
+      true ->
+        body =
+          Enum.map_join(paths, "\n\n---\n\n", fn path ->
+            case Notes.get_note(user, vault, path) do
+              {:ok, note} -> format_get_note(note)
+              {:error, :not_found} -> "Note not found: #{path}"
+            end
+          end)
+
+        {:ok, body}
     end
   end
 
@@ -419,6 +452,31 @@ defmodule Engram.MCP.Handlers do
     path = args["path"] || ""
     Notes.delete_note(user, vault, path)
     {:ok, "Note deleted: #{path}"}
+  end
+
+  def handle("delete_folder", user, vault, args) do
+    folder = args["folder"] || ""
+    recursive = args["recursive"] == true
+
+    if folder == "" do
+      {:ok, "Refusing to delete the vault root."}
+    else
+      case Engram.Folders.delete(user, vault, folder, recursive: recursive) do
+        {:ok, %{notes: 0, attachments: 0}} ->
+          {:ok, "Folder deleted: #{folder}"}
+
+        {:ok, %{notes: n, attachments: a}} ->
+          {:ok, "Folder deleted: #{folder} (#{n} notes, #{a} attachments removed)"}
+
+        {:error, {:not_empty, %{notes: n, attachments: a}}} ->
+          {:ok,
+           "Folder #{folder} contains #{n} notes and #{a} attachments. " <>
+             "Pass recursive: true to delete them."}
+
+        {:error, reason} ->
+          {:ok, "Could not delete folder #{folder}: #{inspect(reason)}"}
+      end
+    end
   end
 
   def handle("move_attachment", user, vault, args) do
