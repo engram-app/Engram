@@ -948,10 +948,14 @@ jobs:
           PLUGIN_SHA: ${{ needs.fingerprint.outputs.plugin-sha }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          # Branch is used only to scope the fetch; the final checkout pins
-          # the exact PLUGIN_SHA resolved by the `fingerprint` job. This
-          # guarantees the tested commit matches the e2e cache key even if
-          # the upstream branch moves between fingerprint and this step.
+          # Fetch by the exact PLUGIN_SHA resolved by the `fingerprint` job,
+          # never by branch name: the paired plugin branch can be squash-merged
+          # and auto-deleted between fingerprint and this step (fatal: Remote
+          # branch not found — run 29867992884), and a branch-scoped fetch can
+          # also miss a stale SHA after the branch moves (fatal: reference is
+          # not a tree). GitHub serves any recently-pushed commit to a SHA
+          # fetch, so the resolved SHA outlives its branch. BRANCH survives
+          # only as the local branch name + the pairing diagnostic log line.
           # curl (not gh CLI) — engram-isolated runners don't ship gh on PATH.
           if [ -n "$EXPLICIT_BRANCH" ] && [ "$EXPLICIT_BRANCH" != "main" ]; then
             BRANCH="$EXPLICIT_BRANCH"
@@ -969,14 +973,16 @@ jobs:
             cd plugin-src
             git checkout -- .
             git clean -fd
-            git fetch origin "$BRANCH"
-            git checkout -B "$BRANCH" "$PLUGIN_SHA"
           else
-            git clone --branch "$BRANCH" --single-branch \
-              "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git" plugin-src
+            git init -q plugin-src
             cd plugin-src
-            git checkout "$PLUGIN_SHA"
           fi
+          # Re-point origin every run: the embedded app token is single-run.
+          git remote remove origin 2>/dev/null || true
+          git remote add origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
+          git fetch origin "$PLUGIN_SHA"
+          git checkout -B "$BRANCH" "$PLUGIN_SHA"
 
       # ------------------------------------------------------------------
       # Launch ALL long-running prep in parallel (background)
@@ -1495,10 +1501,14 @@ jobs:
           PLUGIN_SHA: ${{ needs.fingerprint.outputs.plugin-sha }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          # Branch is used only to scope the fetch; the final checkout pins
-          # the exact PLUGIN_SHA resolved by the `fingerprint` job. This
-          # guarantees the tested commit matches the e2e cache key even if
-          # the upstream branch moves between fingerprint and this step.
+          # Fetch by the exact PLUGIN_SHA resolved by the `fingerprint` job,
+          # never by branch name: the paired plugin branch can be squash-merged
+          # and auto-deleted between fingerprint and this step (fatal: Remote
+          # branch not found — run 29867992884), and a branch-scoped fetch can
+          # also miss a stale SHA after the branch moves (fatal: reference is
+          # not a tree). GitHub serves any recently-pushed commit to a SHA
+          # fetch, so the resolved SHA outlives its branch. BRANCH survives
+          # only as the local branch name + the pairing diagnostic log line.
           # curl (not gh CLI) — engram-isolated runners don't ship gh on PATH.
           if [ -n "$EXPLICIT_BRANCH" ] && [ "$EXPLICIT_BRANCH" != "main" ]; then
             BRANCH="$EXPLICIT_BRANCH"
@@ -1516,14 +1526,16 @@ jobs:
             cd plugin-src
             git checkout -- .
             git clean -fd
-            git fetch origin "$BRANCH"
-            git checkout -B "$BRANCH" "$PLUGIN_SHA"
           else
-            git clone --branch "$BRANCH" --single-branch \
-              "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git" plugin-src
+            git init -q plugin-src
             cd plugin-src
-            git checkout "$PLUGIN_SHA"
           fi
+          # Re-point origin every run: the embedded app token is single-run.
+          git remote remove origin 2>/dev/null || true
+          git remote add origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
+          git fetch origin "$PLUGIN_SHA"
+          git checkout -B "$BRANCH" "$PLUGIN_SHA"
 
       # ------------------------------------------------------------------
       # Launch ALL long-running prep in parallel (background)
