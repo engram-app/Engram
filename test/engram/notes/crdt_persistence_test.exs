@@ -210,13 +210,17 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert_receive %Phoenix.Socket.Broadcast{
       topic: ^topic,
       event: "note_yjs_update",
-      payload: %{"note_id" => note_id, "b64" => b64, "head" => head}
+      payload: %{"note_id" => note_id, "b64" => b64, "head" => head, "seq" => seq}
     }
 
     assert note_id == note.id
     assert {:ok, ^upd} = Base.decode64(b64)
     assert is_binary(head) and head != ""
     assert head == Engram.Notes.CrdtTransport.head_marker(doc)
+    # gap-heal (Phase D2): carries the note's current vault-global change
+    # seq (the same field `list_changes_by_seq` orders by) so a device can
+    # detect a missed/reordered live op and self-heal via catch-up.
+    assert seq == note.seq
   end
 
   test "update_v1/4 with cached user does not hit Accounts.get_user!", ctx do

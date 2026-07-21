@@ -110,7 +110,8 @@ defmodule Engram.Notes.CrdtDeliver do
           %{
             "note_id" => note_id,
             "b64" => Base.encode64(state),
-            "head" => head
+            "head" => head,
+            "seq" => load_note_seq(user_id, note_id)
           },
           note_id
         )
@@ -325,6 +326,20 @@ defmodule Engram.Notes.CrdtDeliver do
     kind, reason ->
       log_state_load_failure(note_id, {kind, reason})
       {:error, :caught}
+  end
+
+  # Reads the note's current vault-global change seq (Vaults.next_seq!-assigned,
+  # the same field `list_changes_by_seq` orders by) for the gap-heal `seq` key
+  # on the live fan-out payload (spec §3 Phase D2). Best-effort like the rest
+  # of deliver-out: a missing row (deleted mid-flight) or any failure yields
+  # nil rather than raising — a delivery must not fail the write.
+  defp load_note_seq(user_id, note_id) do
+    case Repo.with_tenant(user_id, fn -> Repo.get(Note, note_id) end) do
+      {:ok, %Note{seq: seq}} -> seq
+      _ -> nil
+    end
+  rescue
+    _ -> nil
   end
 
   defp log_state_load_failure(note_id, reason) do
