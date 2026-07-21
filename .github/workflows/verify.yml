@@ -2687,6 +2687,19 @@ jobs:
       contents: read
       pull-requests: read
     env:
+      # `gh` resolves the target repo from `git remote -v` when no repo is
+      # given. Our self-hosted runners set a system-wide
+      #   url.<lan-git-cache>/engram-app/.insteadOf https://github.com/engram-app/
+      # to spare the GitHub rate limit, and `git remote -v` DISPLAYS the
+      # rewritten URL — so what actions/checkout wrote as github.com reads back
+      # as a LAN host, and every unqualified gh call fails with "none of the git
+      # remotes configured for this repository point to a known GitHub host".
+      # The `gh pr list` calls below would then yield an empty pr_number and
+      # report "no open PR found" on a PR that plainly exists, i.e. this gate
+      # would fail closed for the wrong reason. This broke the Engram-obsidian
+      # release job for real (assets never uploaded). GH_REPO makes resolution
+      # explicit and remote-independent; an explicit --repo flag still wins.
+      GH_REPO: ${{ github.repository }}
       PG_CONTAINER: engram-n1-compat-${{ github.run_id }}
       # Run-scoped path (matches PG_CONTAINER above), NOT a fixed /tmp path.
       # Concurrent runs share the host /tmp, so a fixed /tmp/prev-release let
