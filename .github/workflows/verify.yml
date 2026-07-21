@@ -3109,6 +3109,28 @@ jobs:
         with:
           bun-version: latest
 
+      # A lockfile resolved on a machine with a global `registry=` bakes that
+      # LAN host into every tarball URL, which works for us and is unusable
+      # for anyone else. This repo is PUBLIC. The same defect flooded the
+      # Obsidian plugin's public listing with ~3000 bogus no-unsafe-* findings
+      # because the scanner's sandbox could not install at all.
+      #
+      # Note the --registry flag below is NOT a substitute: bun honours the
+      # URL baked in the lockfile over .npmrc, bunfig.toml, env and the flag
+      # (oven-sh/bun#18411). It only takes effect while the lockfile stays
+      # portable, which is exactly what this step enforces.
+      - name: No private-registry URLs in bun.lock
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          if grep -nE '(10|127)\.[0-9]+\.[0-9]+\.[0-9]+|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.' bun.lock; then
+            echo "::error::bun.lock references a private host and is unusable outside our LAN."
+            echo "Regenerate it with no global registry configured: rm bun.lock && bun install"
+            exit 1
+          fi
+          echo "OK - bun.lock has no private-registry URLs."
+
       - name: Install frontend deps
         if: steps.guard.outputs.skip != 'true'
         working-directory: frontend
