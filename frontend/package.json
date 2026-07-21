@@ -59,7 +59,7 @@
 		"github-slugger": "^2.0.0",
 		"gray-matter": "^4.0.3",
 		"highlight.js": "^11.11.1",
-		"katex": "^0.16.47",
+		"katex": "^0.17.0",
 		"lib0": "^0.2.117",
 		"lucide-react": "^1.17.0",
 		"mermaid": "^11.15.0",
