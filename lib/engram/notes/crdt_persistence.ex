@@ -99,28 +99,61 @@ defmodule Engram.Notes.CrdtPersistence do
 
     case Crypto.encrypt_crdt_state(update, user, note_id) do
       {:ok, {ct, nonce}} ->
-        Repo.with_tenant(user_id, fn ->
-          %CrdtUpdateLog{}
-          |> CrdtUpdateLog.changeset(%{
-            note_id: note_id,
-            user_id: user_id,
-            vault_id: vault_id,
-            update_ciphertext: ct,
-            update_nonce: nonce
-          })
-          |> Repo.insert!()
+        {:ok, seq} =
+          Repo.with_tenant(user_id, fn ->
+            %CrdtUpdateLog{}
+            |> CrdtUpdateLog.changeset(%{
+              note_id: note_id,
+              user_id: user_id,
+              vault_id: vault_id,
+              update_ciphertext: ct,
+              update_nonce: nonce
+            })
+            |> Repo.insert!()
 
-          # Invalidate the cached head in the SAME txn as the tail append: this
-          # update advanced the doc, so any stored crdt_head is now stale.
-          # vault_heads self-heals the NULL by rebuilding once (snapshot + full
-          # tail = authoritative), so we never trust an off-by-one head. Guard on
-          # not-nil so an already-invalidated hot note skips the write. Sets ONLY
-          # crdt_head — no updated_at/version/seq churn (checkpoint owns those).
-          from(n in Note,
-            where: n.id == ^note_id and n.kind == "note" and not is_nil(n.crdt_head)
-          )
-          |> Repo.update_all(set: [crdt_head: nil])
-        end)
+            # Invalidate the cached head in the SAME txn as the tail append: this
+            # update advanced the doc, so any stored crdt_head is now stale.
+            # vault_heads self-heals the NULL by rebuilding once (snapshot + full
+            # tail = authoritative), so we never trust an off-by-one head. Guard on
+            # not-nil so an already-invalidated hot note skips the write. Sets ONLY
+            # crdt_head — no updated_at/version/seq churn (checkpoint owns those).
+            #
+            # The note's current vault-global change seq (Vaults.next_seq!-
+            # assigned at the last write/checkpoint, the same field
+            # `list_changes_by_seq` orders by), carried on the fan-out payload
+            # below for gap-heal (spec §3 Phase D2), rides this SAME update_all
+            # via a `select` on the query (update_all/delete_all have no
+            # `:returning` option — Ecto only returns a second element when the
+            # query itself carries a `select`) — this is the hot per-delta path
+            # (moduledoc: "cheap, frequent... O(append)", prior pool-exhaustion
+            # incident history), so a second unconditional Repo.get here would
+            # double the query cost of every keystroke. The guard skips rows
+            # whose crdt_head is already nil, so `rows` is empty in that case
+            # and we fall back to a plain read. KNOWN COST: crdt_head starts
+            # nil and is only repopulated by another device's head-read, so a
+            # SOLO typing burst takes the fallback on every delta — one extra
+            # PK point-SELECT inside the already-open transaction. Accepted:
+            # seq is heal-trigger-only (staleness fine), and avoiding it would
+            # need per-room seq caching or a no-op UPDATE (MVCC/WAL churn),
+            # both worse than the read.
+            {_count, rows} =
+              from(n in Note,
+                where: n.id == ^note_id and n.kind == "note" and not is_nil(n.crdt_head),
+                select: n.seq
+              )
+              |> Repo.update_all(set: [crdt_head: nil])
+
+            case rows do
+              [seq | _] ->
+                seq
+
+              [] ->
+                case Repo.get(Note, note_id) do
+                  %Note{seq: seq} -> seq
+                  nil -> nil
+                end
+            end
+          end)
 
         # Fan out the update to every device on this vault over the single
         # per-vault sync channel (Relay's `document.updated` model). This is
@@ -149,7 +182,8 @@ defmodule Engram.Notes.CrdtPersistence do
           %{
             "note_id" => note_id,
             "b64" => Base.encode64(update),
-            "head" => CrdtTransport.head_marker(doc)
+            "head" => CrdtTransport.head_marker(doc),
+            "seq" => seq
           },
           note_id
         )

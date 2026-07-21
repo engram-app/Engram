@@ -210,13 +210,83 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert_receive %Phoenix.Socket.Broadcast{
       topic: ^topic,
       event: "note_yjs_update",
-      payload: %{"note_id" => note_id, "b64" => b64, "head" => head}
+      payload: %{"note_id" => note_id, "b64" => b64, "head" => head, "seq" => seq}
     }
 
     assert note_id == note.id
     assert {:ok, ^upd} = Base.decode64(b64)
     assert is_binary(head) and head != ""
     assert head == Engram.Notes.CrdtTransport.head_marker(doc)
+    # gap-heal (Phase D2): carries the note's current vault-global change
+    # seq (the same field `list_changes_by_seq` orders by) so a device can
+    # detect a missed/reordered live op and self-heal via catch-up.
+    assert seq == note.seq
+  end
+
+  test "update_v1/4 fans out the correct seq when crdt_head is already nil (returning: 0-rows fallback)",
+       ctx do
+    %{user: user, note: note} = ctx
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
+
+    # A freshly-created note's crdt_head is nil (only ever set later by the
+    # transport self-heal read path), so the seq-fetching update_all's
+    # `not is_nil(n.crdt_head)` guard matches ZERO rows here and update_v1
+    # must fall back to a plain Repo.get to still surface the seq.
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get(Note, note.id) end)
+    assert raw_note.crdt_head == nil
+
+    {:ok, %{state: upd}} = CrdtBridge.merge_plaintext(nil, "zero rows fallback")
+    doc = CrdtBridge.new_doc()
+    :ok = Yex.apply_update(doc, upd)
+
+    topic = "sync:#{user.id}:#{note.vault_id}"
+    EngramWeb.Endpoint.subscribe(topic)
+
+    _st2 = CrdtPersistence.update_v1(st, upd, note.id, doc)
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      topic: ^topic,
+      event: "note_yjs_update",
+      payload: %{"seq" => seq}
+    }
+
+    assert seq == note.seq
+  end
+
+  test "update_v1/4 fans out the correct seq via update_all returning: when crdt_head is set (non-empty rows)",
+       ctx do
+    %{user: user, note: note} = ctx
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
+
+    # Simulate a note whose crdt_head cache is populated (set by the transport
+    # self-heal read path) BEFORE this live delta arrives — the common hot-path
+    # shape the `returning: [:seq]` clause targets: the update_all both
+    # invalidates crdt_head AND returns the row's seq in one query.
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id), set: [crdt_head: "stale-head"])
+      end)
+
+    {:ok, %{state: upd}} = CrdtBridge.merge_plaintext(nil, "returning path")
+    doc = CrdtBridge.new_doc()
+    :ok = Yex.apply_update(doc, upd)
+
+    topic = "sync:#{user.id}:#{note.vault_id}"
+    EngramWeb.Endpoint.subscribe(topic)
+
+    _st2 = CrdtPersistence.update_v1(st, upd, note.id, doc)
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      topic: ^topic,
+      event: "note_yjs_update",
+      payload: %{"seq" => seq}
+    }
+
+    assert seq == note.seq
+
+    # The stale head cache was invalidated by the same update_all.
+    {:ok, updated} = Repo.with_tenant(user.id, fn -> Repo.get(Note, note.id) end)
+    assert updated.crdt_head == nil
   end
 
   test "update_v1/4 with cached user does not hit Accounts.get_user!", ctx do
