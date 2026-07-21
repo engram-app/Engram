@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import type { EditorView } from "@codemirror/view";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
@@ -15,6 +16,8 @@ import {
 } from "../crdt/session";
 import { useRightSidebar } from "../layout/right-sidebar-context";
 import { noteName } from "../lib/note-name";
+import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
+import { EditorToolbar } from "./editor/toolbar";
 import LoadingPane from "./loading-pane";
 import NoteToc from "./note-toc";
 import NoteView from "./note-view";
@@ -23,7 +26,12 @@ import { useLiveContent } from "./use-live-content";
 
 const NoteEditor = lazy(() => import("./note-editor"));
 
-type Mode = "live" | "reading";
+type Mode = "rendered" | "raw" | "reading";
+const MODES: ReadonlyArray<{ value: Mode; label: string }> = [
+	{ value: "rendered", label: "Rendered" },
+	{ value: "raw", label: "Raw" },
+	{ value: "reading", label: "Reading" },
+];
 interface DocHandle {
 	ytext: Y.Text;
 	awareness: Awareness;
@@ -38,9 +46,14 @@ export default function NotePage() {
 	const { data: note, isLoading, error } = useNote(validId);
 	const { setContent: setRightContent } = useRightSidebar();
 
-	const [mode, setMode] = useState<Mode>("live");
+	const [mode, setMode] = useState<Mode>("rendered");
 	const [handle, setHandle] = useState<DocHandle | null>(null);
 	const [syncStatus, setSyncStatus] = useState<CrdtSyncStatus>(getCrdtSyncStatus);
+	const editorViewRef = useRef<EditorView | null>(null);
+	// Mirrors NoteView's remark-wiki-link hrefTemplate. useCallback keeps a
+	// stable identity so passing it to NoteEditor doesn't re-fire the
+	// decorationsCompartment reconfigure effect on every render.
+	const resolveWikiLink = useCallback((permalink: string) => `/notes/${encodeURI(permalink)}`, []);
 
 	const path = note?.path ?? null;
 	const noteId = note?.id ?? null;
@@ -130,17 +143,24 @@ export default function NotePage() {
 					)}
 					<span className="min-w-0 truncate font-medium">{name}</span>
 				</h2>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="shrink-0"
-					onClick={() => setMode((m) => (m === "live" ? "reading" : "live"))}
-				>
-					{mode === "live" ? "↗ Reading view" : "✎ Edit"}
-				</Button>
+				<fieldset className="m-0 flex shrink-0 gap-1 border-0 p-0">
+					<legend className="sr-only">View mode</legend>
+					{MODES.map(({ value, label }) => (
+						<Button
+							key={value}
+							variant={mode === value ? "secondary" : "ghost"}
+							size="sm"
+							aria-pressed={mode === value}
+							onClick={() => setMode(value)}
+						>
+							{label}
+						</Button>
+					))}
+				</fieldset>
 			</div>
 
-			{handle ? <PropertiesWidget doc={handle.doc} /> : null}
+			{handle && mode === "rendered" ? <PropertiesWidget doc={handle.doc} /> : null}
+			{handle && mode === "raw" ? <RawFrontmatterEditor doc={handle.doc} /> : null}
 
 			{mode === "reading" ? (
 				<ScrollArea className="min-h-0 flex-1">
@@ -152,7 +172,18 @@ export default function NotePage() {
 				<div className="min-h-0 flex-1 overflow-hidden" data-tour="note-editor">
 					<Suspense fallback={<p className="py-5 text-muted-foreground">Loading editor…</p>}>
 						{handle ? (
-							<NoteEditor ytext={handle.ytext} awareness={handle.awareness} />
+							<>
+								<EditorToolbar getView={() => editorViewRef.current} />
+								<NoteEditor
+									ytext={handle.ytext}
+									awareness={handle.awareness}
+									mode={mode === "raw" ? "raw" : "rendered"}
+									resolveWikiLink={resolveWikiLink}
+									onView={(v) => {
+										editorViewRef.current = v;
+									}}
+								/>
+							</>
 						) : (
 							<p className="py-5 text-muted-foreground">Connecting…</p>
 						)}

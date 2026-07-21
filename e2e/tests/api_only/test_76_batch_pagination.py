@@ -1,9 +1,10 @@
-"""Test 76: Sync protocol rev — POST /notes/batch + paginated /notes/changes.
+"""Test 76: paginated /notes/changes (keyset pagination).
 
-Contract tests for the bulk-push endpoint and keyset pagination:
+POST /notes/batch was removed with the CRDT single-push-path migration
+(writes now ride the WS crdt_create_batch op, not a bulk REST endpoint), so
+this suite seeds its fixture data via single-note POST /notes instead. The
+pagination contract under test is unchanged:
 
-  * POST /notes/batch upserts up to 100 notes per request behind an
-    idempotency key, returning a per-note results array.
   * GET /notes/changes caps every response at 500 rows and exposes
     has_more/next_cursor; a cursor loop covers the full delta with no
     loss and no duplicates.
@@ -29,17 +30,6 @@ EPOCH = "2020-01-01T00:00:00Z"
 PREFIX = "BatchPage"
 
 
-def _batch_push(api, notes: list[dict]) -> dict:
-    resp = api.session.post(
-        f"{API_URL}/notes/batch",
-        json={"notes": notes},
-        headers={"X-Idempotency-Key": str(uuid.uuid4())},
-        timeout=30,
-    )
-    assert resp.status_code == 200, f"batch push failed: {resp.status_code} {resp.text}"
-    return resp.json()
-
-
 def _get_changes(api, since: str, **params) -> dict:
     resp = api.session.get(
         f"{API_URL}/notes/changes",
@@ -52,23 +42,13 @@ def _get_changes(api, since: str, **params) -> dict:
 
 @pytest.fixture(scope="module")
 def seeded(api_sync):
-    """Seed SEED_COUNT notes via the batch endpoint; batch-delete on teardown."""
-    ids: list[str] = []
-    for start in range(0, SEED_COUNT, 100):
-        notes = [
-            {
-                "path": f"{PREFIX}/n{i:04d}.md",
-                "content": f"# Note {i}\n\nbatch-seeded",
-                "mtime": time.time(),
-            }
-            for i in range(start, min(start + 100, SEED_COUNT))
-        ]
-        body = _batch_push(api_sync, notes)
-        results = body["results"]
-        assert len(results) == len(notes)
-        for r in results:
-            assert r["status"] == "ok", f"unexpected result: {r}"
-            ids.append(r["id"])
+    """Seed SEED_COUNT notes via single-note POST /notes; batch-delete on teardown."""
+    ids: list[str] = [
+        api_sync.create_note(
+            f"{PREFIX}/n{i:04d}.md", f"# Note {i}\n\nbatch-seeded", time.time()
+        )["note"]["id"]
+        for i in range(SEED_COUNT)
+    ]
 
     yield ids
 
@@ -80,35 +60,6 @@ def seeded(api_sync):
         timeout=60,
     )
     assert resp.status_code == 200, f"cleanup failed: {resp.status_code} {resp.text}"
-
-
-class TestBatchUpsert:
-    def test_batch_results_carry_id_version_and_hash(self, api_sync, seeded):
-        """Spot-check the per-note result contract on a fresh small batch."""
-        body = _batch_push(
-            api_sync,
-            [{"path": f"{PREFIX}/contract-check.md", "content": "# C", "mtime": time.time()}],
-        )
-        (result,) = body["results"]
-        assert result["status"] == "ok"
-        assert result["version"] == 1
-        assert result["server_path"] == f"{PREFIX}/contract-check.md"
-        assert isinstance(result["content_hash"], str) and result["content_hash"]
-        # Idempotent re-push of identical content short-circuits: no version
-        # bump, same hash (matches the single-note endpoint). A changed body
-        # is what bumps the version.
-        body2 = _batch_push(
-            api_sync,
-            [{"path": f"{PREFIX}/contract-check.md", "content": "# C", "mtime": time.time()}],
-        )
-        assert body2["results"][0]["version"] == 1
-        assert body2["results"][0]["content_hash"] == result["content_hash"]
-        body3 = _batch_push(
-            api_sync,
-            [{"path": f"{PREFIX}/contract-check.md", "content": "# C changed", "mtime": time.time()}],
-        )
-        assert body3["results"][0]["version"] == 2
-        api_sync.delete_note(f"{PREFIX}/contract-check.md")
 
 
 class TestPaginationConvergence:

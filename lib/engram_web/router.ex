@@ -375,7 +375,6 @@ defmodule EngramWeb.Router do
     # The plug halts with the cached response BEFORE the action runs.
     scope "/" do
       pipe_through EngramWeb.Plugs.IdempotencyKey
-      post "/notes/batch", NotesController, :batch_upsert
       post "/notes/batch-delete", NotesController, :batch_delete
       post "/notes/batch-move", NotesController, :batch_move
       post "/folders/batch-delete", FoldersController, :batch_delete
@@ -399,7 +398,6 @@ defmodule EngramWeb.Router do
 
     # Sync
     get "/sync/manifest", SyncController, :manifest
-    get "/sync/changes", SyncController, :changes
 
     # Attachments
     post "/attachments", AttachmentsController, :upload

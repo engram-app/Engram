@@ -20,8 +20,8 @@ async def test_conflict_skip(vault_a, vault_b, cdp_a, cdp_b, api_sync):
         # Override B's handler to skip
         await cdp_b.override_conflict_handler("skip")
 
-        # B pulls — conflict detected, resolved as skip → no changes
-        await cdp_b.trigger_pull()
+        # B catches up — conflict detected, resolved as skip → no changes
+        await cdp_b.trigger_catch_up()
 
         # B should still have B's local content (skip doesn't overwrite)
         b_content = read_note(vault_b, path)

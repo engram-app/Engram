@@ -4,7 +4,7 @@ defmodule EngramWeb.CrdtChannelTest do
   import ExUnit.CaptureLog
 
   alias Ecto.Adapters.SQL.Sandbox
-  alias Engram.{Crypto, Fixtures, Notes, Vaults}
+  alias Engram.{Attachments, Crypto, Fixtures, Notes, Vaults}
   alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog}
   alias Engram.Repo
   alias Yex.Sync.SharedDoc
@@ -68,15 +68,15 @@ defmodule EngramWeb.CrdtChannelTest do
     test "nil path replies bad_path without crashing the channel", %{socket: socket} do
       ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => nil})
       assert_reply ref, :error, %{reason: "bad_path"}
-      ref2 = push(socket, "crdt_catchup_heads", %{})
-      assert_reply ref2, :ok, %{heads: _}
+      ref2 = push(socket, "crdt_catchup_since", %{})
+      assert_reply ref2, :ok, %{changes: _}
     end
 
     test "non-UUID doc_id replies bad_doc_id without crashing the channel", %{socket: socket} do
       ref = push(socket, "crdt_create", %{"doc_id" => "not-a-uuid", "path" => "Notes/x.md"})
       assert_reply ref, :error, %{reason: "bad_doc_id"}
-      ref2 = push(socket, "crdt_catchup_heads", %{})
-      assert_reply ref2, :ok, %{heads: _}
+      ref2 = push(socket, "crdt_catchup_since", %{})
+      assert_reply ref2, :ok, %{changes: _}
     end
 
     test "same-path resurrect within the delete window replies recently_deleted (delete-wins)", %{
@@ -102,8 +102,8 @@ defmodule EngramWeb.CrdtChannelTest do
       ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate()})
       assert_reply ref, :error, %{reason: "bad_frame"}
 
-      ref2 = push(socket, "crdt_catchup_heads", %{})
-      assert_reply ref2, :ok, %{heads: _}
+      ref2 = push(socket, "crdt_catchup_since", %{})
+      assert_reply ref2, :ok, %{changes: _}
     end
   end
 
@@ -156,74 +156,6 @@ defmodule EngramWeb.CrdtChannelTest do
 
       assert id == note.id
       assert payload["device_id"] == device_id
-    end
-  end
-
-  describe "crdt_catchup_heads" do
-    test "returns a decrypted path + head marker per live note in the vault", %{
-      socket: socket,
-      user: user,
-      vault: vault
-    } do
-      {:ok, note} =
-        Notes.upsert_note(user, vault, %{"path" => "Notes/h.md", "content" => "hello"})
-
-      ref = push(socket, "crdt_catchup_heads", %{})
-      assert_reply ref, :ok, %{heads: heads, complete: complete}
-      assert is_map(heads)
-      assert %{path: "Notes/h.md", head: head} = heads[note.id]
-      assert is_binary(head) and byte_size(head) > 0
-      # Completeness contract: a clean, fully-resolved vault reports complete.
-      assert complete == true
-    end
-  end
-
-  describe "crdt_catchup_delta" do
-    test "returns full state when sv is null", %{socket: socket, user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/d.md", "content" => "body"})
-      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => nil})
-      assert_reply ref, :ok, %{doc_id: got_id, b64: b64, head: head}
-      assert got_id == note.id
-      assert is_binary(b64) and byte_size(b64) > 0
-      assert is_binary(head)
-    end
-
-    test "rejects malformed base64 sv", %{socket: socket, user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/d2.md", "content" => "b"})
-      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => "!!!not-base64!!!"})
-      assert_reply ref, :error, %{reason: "bad_sv"}
-    end
-
-    test "unknown doc_id replies not_found", %{socket: socket} do
-      unknown_id = Ecto.UUID.generate()
-      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => unknown_id, "sv" => nil})
-      assert_reply ref, :error, %{reason: "not_found"}
-    end
-
-    test "another tenant's doc_id replies not_found (cross-tenant scoping)", %{
-      socket: socket,
-      other_user: other_user
-    } do
-      insert(:user_limit_override, user: other_user, key: "vaults_cap", value: %{"v" => -1})
-      {:ok, other_vault} = Vaults.create_vault(other_user, %{name: "OtherVault"})
-
-      {:ok, other_note} =
-        Notes.upsert_note(other_user, other_vault, %{"path" => "x.md", "content" => "x"})
-
-      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => other_note.id, "sv" => nil})
-      assert_reply ref, :error, %{reason: "not_found"}
-    end
-
-    test "a non-string sv (e.g. a JSON number) replies bad_sv instead of crashing the channel",
-         %{socket: socket, user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/d3.md", "content" => "b"})
-      ref = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => 123})
-      assert_reply ref, :error, %{reason: "bad_sv"}
-
-      # The channel process must still be alive / usable after the bad input.
-      ref2 = push(socket, "crdt_catchup_delta", %{"doc_id" => note.id, "sv" => nil})
-      assert_reply ref2, :ok, %{doc_id: got_id}
-      assert got_id == note.id
     end
   end
 
@@ -290,6 +222,143 @@ defmodule EngramWeb.CrdtChannelTest do
 
       ref2 = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
       assert_reply ref2, :ok, %{changes: _}
+    end
+
+    test "the seq feed merges attachments alongside notes in seq order", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, n} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/n.md", "content" => "note-body"})
+
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img.png",
+          "content_base64" => Base.encode64("attachment-bytes"),
+          "mime_type" => "image/png"
+        })
+
+      ref = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
+      assert_reply ref, :ok, %{changes: changes}
+
+      note_row = Enum.find(changes, &(&1.id == n.id))
+      att_row = Enum.find(changes, &(&1.id == att.id))
+
+      assert note_row.type == :note
+      assert att_row != nil and att_row.type == :attachment and att_row.path == "img.png"
+
+      # Merged feed is a single seq-ordered stream (seq is vault-global, so a
+      # note and an attachment never collide → an integer cursor paginates both).
+      seqs = Enum.map(changes, & &1.seq)
+      assert seqs == Enum.sort(seqs)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # crdt_create_batch — bulk genesis-with-content (Task 1, single-push-path)
+  # ---------------------------------------------------------------------------
+
+  describe "crdt_create_batch" do
+    test "creates every note with content and allocates seqs", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      id1 = Ecto.UUID.generate()
+      id2 = Ecto.UUID.generate()
+
+      creates = [
+        %{"doc_id" => id1, "path" => "A.md", "b64" => frame_for_content("alpha")},
+        %{"doc_id" => id2, "path" => "B.md", "b64" => frame_for_content("beta")}
+      ]
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :ok, %{results: results}
+      assert Enum.all?(results, &(&1.status == "ok"))
+      assert Enum.map(results, & &1.doc_id) |> Enum.sort() == Enum.sort([id1, id2])
+
+      assert_note_content_eventually(user, vault, id1, "alpha")
+      assert_note_content_eventually(user, vault, id2, "beta")
+    end
+
+    test "materializes content SYNCHRONOUSLY so the seq feed carries it immediately", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # A genesis create must persist notes.content the instant the reply lands,
+      # NOT ~250ms later via the room's checkpoint timer. The seq-ordered catch-up
+      # feed (the single convergence path) reads durable notes.content, so a
+      # seq-replay racing the timer would read content="" and 0-byte-materialize
+      # the note (e2e test_03/09/10/86 under load). NO wait_until here — that is
+      # the whole point: the content is already there.
+      id = Ecto.UUID.generate()
+      creates = [%{"doc_id" => id, "path" => "Sync.md", "b64" => frame_for_content("sync-body")}]
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :ok, %{results: [%{status: "ok"}]}
+
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == "sync-body"
+    end
+
+    test "a duplicate create for the same note does not double the body", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # A create is idempotent: a second crdt_create_batch for the SAME note (a
+      # client retry, or a create racing a live-seed of the same note) must NOT
+      # concatenate a second copy of the body. Each frame_for_content mints a
+      # FRESH Y.Doc, so the two frames carry identical text on DIVERGENT lineages
+      # — re-applying the second onto the first's room doc makes Yjs append it
+      # (#846; e2e test_82 saw a deterministic 19B "original" -> 38B doubled,
+      # which then blocked the peer's real edit from converging). The genesis
+      # frame seeds only an EMPTY note, so the second create is a no-op.
+      id = Ecto.UUID.generate()
+
+      create = %{"doc_id" => id, "path" => "Dup.md", "b64" => frame_for_content("dup-body")}
+      ref1 = push(socket, "crdt_create_batch", %{"creates" => [create]})
+      assert_reply ref1, :ok, %{results: [%{status: "ok"}]}
+
+      # Fresh frame => a different lineage carrying the same text.
+      redo = %{"doc_id" => id, "path" => "Dup.md", "b64" => frame_for_content("dup-body")}
+      ref2 = push(socket, "crdt_create_batch", %{"creates" => [redo]})
+      assert_reply ref2, :ok, %{results: [%{status: "ok"}]}
+
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == "dup-body"
+    end
+
+    test "one bad entry does not fail the batch", %{socket: socket, user: user, vault: vault} do
+      good = Ecto.UUID.generate()
+
+      creates = [
+        %{"doc_id" => good, "path" => "Good.md", "b64" => frame_for_content("ok")},
+        %{"doc_id" => "not-a-uuid", "path" => "Bad.md", "b64" => frame_for_content("x")}
+      ]
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :ok, %{results: results}
+      by_id = Map.new(results, &{&1.doc_id, &1.status})
+      assert by_id[good] == "ok"
+      assert by_id["not-a-uuid"] == "error"
+
+      assert_note_content_eventually(user, vault, good, "ok")
+    end
+
+    test "rejects an oversized creates list", %{socket: socket} do
+      creates =
+        for _ <- 1..101,
+            do: %{
+              "doc_id" => Ecto.UUID.generate(),
+              "path" => "X.md",
+              "b64" => frame_for_content("x")
+            }
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :error, %{reason: "too_many_creates", max: 100}
     end
   end
 
@@ -775,14 +844,14 @@ defmodule EngramWeb.CrdtChannelTest do
     end
 
     @tag capture_log: true
-    test "crdt_catchup_heads shares the handshake budget and is rejected once exhausted",
+    test "crdt_catchup_since shares the handshake budget and is rejected once exhausted",
          %{socket: socket} do
       Application.put_env(:engram, :crdt_hs_rate_limit_override, 2)
       on_exit(fn -> Application.delete_env(:engram, :crdt_hs_rate_limit_override) end)
 
-      push(socket, "crdt_catchup_heads", %{})
-      push(socket, "crdt_catchup_heads", %{})
-      ref = push(socket, "crdt_catchup_heads", %{})
+      push(socket, "crdt_catchup_since", %{})
+      push(socket, "crdt_catchup_since", %{})
+      ref = push(socket, "crdt_catchup_since", %{})
 
       assert_reply ref, :error, %{reason: "rate_limited"}, 3000
     end
@@ -953,6 +1022,27 @@ defmodule EngramWeb.CrdtChannelTest do
       end)
 
     n
+  end
+
+  # A base64 Yjs update that, applied to a fresh empty doc, ingests `content`
+  # as full note plaintext — i.e. the frame a client sends as the initial
+  # crdt_create_batch payload for a brand-new note.
+  defp frame_for_content(content) do
+    doc = CrdtBridge.new_doc()
+    :ok = CrdtBridge.ingest_plaintext(doc, content)
+    {:ok, update} = Yex.encode_state_as_update(doc)
+    {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_update, update}})
+    Base.encode64(frame)
+  end
+
+  # Poll get_note_by_id until the row's decrypted content matches (or flunk).
+  defp assert_note_content_eventually(user, vault, note_id, content) do
+    wait_until(fn ->
+      case Notes.get_note_by_id(user, vault, note_id) do
+        {:ok, note} -> note.content == content
+        _ -> false
+      end
+    end)
   end
 
   defp wait_until(condition, deadline \\ nil) do

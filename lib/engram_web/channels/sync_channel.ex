@@ -173,12 +173,12 @@ defmodule EngramWeb.SyncChannel do
 
   # Removed op (#862): the handler was unbounded — it loaded + decrypted the
   # entire vault change set (Pro = uncapped) into ONE channel frame. No client
-  # ever shipped calling it (plugin + SPA use the keyset-paginated HTTP feed
-  # at GET /api/sync/changes), so it goes away rather than growing pagination.
-  # The stub keeps a stray legacy caller from crashing the channel.
+  # ever shipped calling it (catch-up now runs over the socket seq-replay op-log
+  # via the crdt channel's `crdt_catchup_since`), so it goes away rather than
+  # growing pagination. The stub keeps a stray legacy caller from crashing.
   @impl true
   def handle_in("pull_changes", _params, socket) do
-    {:reply, {:error, %{"reason" => "gone", "use" => "GET /api/sync/changes"}}, socket}
+    {:reply, {:error, %{"reason" => "gone", "use" => "crdt_catchup_since"}}, socket}
   end
 
   # ---------------------------------------------------------------------------

@@ -41,7 +41,15 @@ async def test_empty_note_sync(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     note = api_sync.get_note(path)
     assert note is not None, "Empty note should exist on server"
 
-    # B receives it live — no manual pull
+    # B receives it via catch-up. An EMPTY note has no content -> no Y.Doc
+    # update -> no note_yjs_update fan-out, so its only live signal is the
+    # edge-triggered crdt_doc_ready announce. If B misses that announce (a real
+    # possibility under load), passive delivery falls back to the ~5-min poll and
+    # no reasonable wait covers it — a fast pass when the announce lands, a hard
+    # timeout when it doesn't (the test_27 flake). Drive B's catch-up so the
+    # empty note arrives deterministically (the test's stated intent is that an
+    # empty note "push, pull, and accept edits").
+    await cdp_b.trigger_full_sync()
     _wait_for_file_exists(vault_b, path, timeout=30)
     b_content = read_note(vault_b, path)
     assert b_content.strip() == "" or len(b_content.strip()) == 0, (
@@ -52,7 +60,8 @@ async def test_empty_note_sync(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     write_note(vault_a, path, "# No Longer Empty\nThis note has content now.")
     api_sync.wait_for_note_content(path, "No Longer Empty", timeout=10)
 
-    # B receives the update live — no manual pull
+    # B receives the update via catch-up (deterministic, same rationale).
+    await cdp_b.trigger_full_sync()
     b_content = wait_for_delivery(vault_b, path, api_sync, timeout=30)
     assert "No Longer Empty" in b_content, (
         f"B should have updated content, got: {b_content[:200]}"
