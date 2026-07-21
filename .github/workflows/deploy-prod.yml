@@ -269,6 +269,15 @@ jobs:
     runs-on: [self-hosted, linux, x64, isolated]
     permissions:
       contents: write
+    env:
+      # `gh release create` below is unqualified, and `gh` resolves the repo
+      # from `git remote -v`. The runners rewrite github.com/engram-app/ to the
+      # LAN git cache via a system-wide url.*.insteadOf, which `git remote -v`
+      # displays, so gh sees an unknown host and fails. This step only runs when
+      # the release range carries phase/* labels, which is why it has not bitten
+      # yet: it is skipped on most releases. Same failure took out an
+      # Engram-obsidian release. See the matching note in verify.yml.
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v7
         with:
