@@ -60,10 +60,21 @@ class CdpClient:
                 pass
             self._ws = None
 
-    async def evaluate(self, expr: str, await_promise: bool = False) -> Any:
+    async def evaluate(
+        self, expr: str, await_promise: bool = False, timeout: float = 120
+    ) -> Any:
         """Evaluate JS expression in Obsidian's renderer process.
 
         Uses a persistent WebSocket connection, reconnecting on failure.
+
+        Bounded: an awaited promise that never settles (e.g. a plugin
+        fullSync wedged on a stalled requestUrl — the test_57 300s
+        pytest-timeout hangs) raises CdpError after `timeout` instead of
+        holding the xdist worker hostage until pytest-timeout's SIGALRM.
+        120s sits above every legitimate long promise (bulk first sync,
+        plugin reload) and well under the 300s cap, so the worker is freed
+        with a NAMED failure. On timeout the socket is dropped so a late
+        reply for this msg id cannot be consumed by the next evaluate.
         """
         self._msg_id += 1
         msg_id = self._msg_id
@@ -95,14 +106,27 @@ class CdpClient:
 
         await self._ensure_connected()
         try:
-            return await _send_recv()
+            return await asyncio.wait_for(_send_recv(), timeout)
+        except asyncio.TimeoutError:
+            await self._close()
+            raise CdpError(
+                f"CDP evaluate timed out after {timeout}s "
+                f"(awaitPromise={await_promise}) on port {self.port}: {expr[:200]}"
+            ) from None
         except CdpError:
             raise
         except Exception:
             # Reconnect once and retry on connection-level failures
             await self._close()
             await self._ensure_connected()
-            return await _send_recv()
+            try:
+                return await asyncio.wait_for(_send_recv(), timeout)
+            except asyncio.TimeoutError:
+                await self._close()
+                raise CdpError(
+                    f"CDP evaluate timed out after {timeout}s on retry "
+                    f"(awaitPromise={await_promise}) on port {self.port}: {expr[:200]}"
+                ) from None
 
     async def wait_for_plugin_ready(self, timeout: float = 30) -> None:
         """Poll until the engram-vault-sync plugin's SyncEngine reports ready."""
