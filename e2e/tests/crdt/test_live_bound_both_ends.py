@@ -112,16 +112,16 @@ async def test_remote_edit_converges_while_note_is_live_bound_in_obsidian(
     assert "EDIT-WHILE-B-LIVE-BOUND" in final, f"remote edit lost on B: {final!r}"
 
 
-def _wait_for_log(api_sync, needle: str, timeout: float) -> None:
-    """Poll client logs until any line contains `needle` (id-agnostic: the
-    gap-heal fire line is throttle-coalesced and may name another note)."""
+def _wait_for_log(api_sync, *needles: str, timeout: float) -> None:
+    """Poll client logs until one line contains ALL `needles`. Logs aggregate
+    across BOTH devices; scope with a path needle where device matters."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         logs = api_sync.get_logs(limit=1000).get("logs", [])
-        if any(needle in log.get("message", "") for log in logs):
+        if any(all(n in log.get("message", "") for n in needles) for log in logs):
             return
         time.sleep(1)
-    raise TimeoutError(f"no {needle!r} client log within {timeout}s")
+    raise TimeoutError(f"no client log containing {needles!r} within {timeout}s")
 
 
 @pytest.mark.asyncio
@@ -136,14 +136,16 @@ async def test_deaf_live_bound_note_converges_via_socket_replay(vault_b, cdp_b, 
     sees; a trigger edit to Y delivers a later seq, B detects it is behind,
     and the seq replay's live-bound leg re-handshakes (STEP1 recreates the
     room, STEP2 delivers the missing ops). Convergence may also ride a later
-    idle full-state fan-out for X (not dropped; also socket) — the gate's
-    oracle is REST-ABSENCE, not which socket carrier won.
+    idle full-state fan-out for X (also socket, also armed-dropped above) —
+    the gate's oracle is split: presence of a socket-converge line for X, and
+    absence of the live-bound REST backstop's line for X specifically (the
+    aggregated logs legitimately carry an unrelated REST catch-up line for
+    A's cold copy of X, which is not this backstop and must not trip the gate).
 
-    Replaces test_deaf_live_bound_note_converges_via_rest_catchup: the REST
-    backstop (restConvergeLiveBound) is DELETED in the paired plugin PR, so
-    the handshake budget is NOT zeroed here — STEP1 is the heal path. A
-    pre-D3 plugin fails the REST-absence oracle; a post-D3 plugin with a
-    broken handshake path times out on content.
+    A pre-D3 plugin (still leaning on the REST backstop) never logs "socket
+    converge" for X and fails the presence oracle, and would also trip the
+    live-bound-backstop absence line; a post-D3 plugin with a broken
+    handshake path times out on content.
     """
     path_x = "E2E/Crdt/DeafLiveBound.md"
     path_y = "E2E/Crdt/DeafLiveTrigger.md"
@@ -172,7 +174,8 @@ async def test_deaf_live_bound_note_converges_via_socket_replay(vault_b, cdp_b, 
     note_id_x = _note_id(api_sync, path_x)
     # Stage the deafness: room dead (B silently unobserved) + next fan-out lost.
     backend_rpc(f'Engram.Notes.CrdtRegistry.terminate_room("{note_id_x}")')
-    backend_rpc(f'Engram.Notes.FanoutPacer.test_drop_next("{note_id_x}", 1)')
+    # 2: the delta emit AND a possible idle full-state re-emit — only the socket heal may deliver X
+    backend_rpc(f'Engram.Notes.FanoutPacer.test_drop_next("{note_id_x}", 2)')
 
     api_sync.append_note(path_x, "\nEDIT-WHILE-B-DEAF\n")
     api_sync.wait_for_note_content(path_x, "EDIT-WHILE-B-DEAF", timeout=CRDT_TIMEOUT)
@@ -184,12 +187,20 @@ async def test_deaf_live_bound_note_converges_via_socket_replay(vault_b, cdp_b, 
     assert "base line" in final, f"base content lost on B: {final!r}"
     wait_for_content(vault_b, path_y, "TRIGGER-EDIT-Y", timeout=CRDT_TIMEOUT)
 
-    # Mechanism oracles: a heal fired, and NO REST converge line touched X.
+    # Mechanism oracles. get_logs aggregates BOTH devices, and the user's other
+    # device (A) legitimately heals its cold (not-live-bound) copy of X via the
+    # REST catch-up leg until Phase E deletes it — so the absence assert targets
+    # the LIVE-BOUND REST backstop's line specifically (deleted in the paired
+    # plugin PR; only a regression can re-emit it), and the presence assert pins
+    # B's heal to the socket primitive (only a live-bound diverged note logs
+    # "socket converge", and only B has X bound).
     _wait_for_log(api_sync, "gap-heal fired", timeout=CRDT_TIMEOUT)
+    _wait_for_log(api_sync, "socket converge", path_x, timeout=CRDT_TIMEOUT)
     logs = api_sync.get_logs(limit=1000).get("logs", [])
     rest_lines = [
         log["message"]
         for log in logs
-        if "REST converge" in log.get("message", "") and path_x in log.get("message", "")
+        if "REST converge: live-bound" in log.get("message", "")
+        and path_x in log.get("message", "")
     ]
-    assert not rest_lines, f"REST converge ran for {path_x}: {rest_lines}"
+    assert not rest_lines, f"live-bound REST backstop ran for {path_x}: {rest_lines}"
