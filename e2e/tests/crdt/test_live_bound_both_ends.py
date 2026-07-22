@@ -326,8 +326,15 @@ async def test_deaf_note_survives_handshake_rate_limit_and_heals_on_restore(
         api_sync.wait_for_note_content(path_x, "POST-RESTORE-X", timeout=CRDT_TIMEOUT)
         api_sync.append_note(path_y, "\nTRIGGER-EDIT-Y-2\n")
 
+        # 2x CRDT_TIMEOUT, deliberately: recovery's DESIGNED latency floor is
+        # the plugin's heal cooldown (healCooldownMs=15s) — the zero-budget
+        # phase legitimately stamps a fire, so the post-restore heal may be a
+        # trailing-coalesce fire up to 15s later, plus STEP2 + editor flush.
+        # A 30s window sits barely above that floor and flakes under CI churn
+        # (run 29907885751); 60s asserts the same exact content with real
+        # margin over the intended latency, not a loosened oracle.
         final = wait_for_content(
-            vault_b, path_x, "EDIT-WHILE-B-DEAF-RATE-LIMITED", timeout=CRDT_TIMEOUT
+            vault_b, path_x, "EDIT-WHILE-B-DEAF-RATE-LIMITED", timeout=2 * CRDT_TIMEOUT
         )
         assert "base line" in final, f"base content lost on B: {final!r}"
         wait_for_content(vault_b, path_y, "TRIGGER-EDIT-Y-2", timeout=CRDT_TIMEOUT)
