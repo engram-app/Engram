@@ -591,6 +591,13 @@
             "x-struct": null,
             "x-validate": null
           },
+          "crdt_head": {
+            "description": "CRDT head fingerprint (notes only) — equality with the client's recorded head proves a live-bound doc is converged without content transfer.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "id": {
             "description": "Stable note/attachment id — lets a client reconcile its path↔id map.",
             "format": "uuid",
@@ -600,6 +607,13 @@
           },
           "path": {
             "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "seq": {
+            "description": "Vault-global change sequence of the row's last write — integer-diff validation hook (a client whose recorded seq is lower is behind).",
+            "nullable": true,
+            "type": "integer",
             "x-struct": null,
             "x-validate": null
           }
@@ -2196,13 +2210,16 @@
             "type": "integer",
             "x-struct": null,
             "x-validate": null
+          },
+          "unchanged": {
+            "description": "Present (true) only when `since_seq` equals the current watermark — the manifest body is omitted because nothing changed.",
+            "nullable": true,
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
           }
         },
         "required": [
-          "notes",
-          "attachments",
-          "total_notes",
-          "total_attachments",
           "change_seq"
         ],
         "title": "ManifestResponse",
@@ -2759,9 +2776,22 @@
     "/api/sync/manifest": {
       "get": {
         "callbacks": {},
-        "description": "Every live note + attachment path and content hash, for sync reconciliation.",
+        "description": "Every live note + attachment path, content hash, and change seq, for sync reconciliation. Pass `since_seq` (the `change_seq` of a previous manifest) to short-circuit: when nothing has changed the response is just `{unchanged: true, change_seq}` with the body omitted.",
         "operationId": "sync-manifest",
-        "parameters": [],
+        "parameters": [
+          {
+            "description": "Watermark from a prior manifest's `change_seq`; invalid values are ignored.",
+            "example": "1042",
+            "in": "query",
+            "name": "since_seq",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {

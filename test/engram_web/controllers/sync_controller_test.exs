@@ -149,4 +149,51 @@ defmodule EngramWeb.SyncControllerTest do
       assert paths == ["Real.md"]
     end
   end
+
+  describe "GET /sync/manifest — seq-diff validator (Phase E1, #1065)" do
+    test "note rows carry seq + crdt_head; attachment rows carry seq", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "Test/A.md", content: "# Alpha", mtime: 1_000.0})
+
+      body = conn |> get("/api/sync/manifest") |> json_response(200)
+      [note] = body["notes"]
+
+      assert is_integer(note["seq"]) and note["seq"] > 0
+      assert Map.has_key?(note, "crdt_head")
+    end
+
+    test "since_seq equal to the watermark short-circuits to unchanged", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "Test/A.md", content: "# Alpha", mtime: 1_000.0})
+      %{"change_seq" => seq} = conn |> get("/api/sync/manifest") |> json_response(200)
+
+      body = conn |> get("/api/sync/manifest?since_seq=#{seq}") |> json_response(200)
+
+      assert body["unchanged"] == true
+      assert body["change_seq"] == seq
+      refute Map.has_key?(body, "notes")
+    end
+
+    test "stale since_seq returns the full manifest", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "Test/A.md", content: "# Alpha", mtime: 1_000.0})
+
+      body = conn |> get("/api/sync/manifest?since_seq=0") |> json_response(200)
+
+      assert is_list(body["notes"])
+      refute body["unchanged"]
+    end
+
+    test "garbage since_seq is ignored (full manifest, no 500)", %{conn: conn} do
+      body = conn |> get("/api/sync/manifest?since_seq=abc") |> json_response(200)
+
+      assert is_list(body["notes"])
+    end
+
+    test "zero-write vault with since_seq=0 short-circuits (floor is the watermark)", %{
+      conn: conn
+    } do
+      body = conn |> get("/api/sync/manifest?since_seq=0") |> json_response(200)
+
+      assert body["unchanged"] == true
+      assert body["change_seq"] == 0
+    end
+  end
 end
