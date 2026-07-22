@@ -48,10 +48,14 @@ defmodule Engram.Notes.FanoutPacer do
   """
   @spec emit(String.t(), String.t(), map(), String.t()) :: :ok
   def emit(topic, event, payload, note_id) do
-    if pacing_enabled?() and cold?(note_id) do
-      GenServer.cast(__MODULE__, {:enqueue, topic, event, payload})
+    if test_dropped?(note_id) do
+      :ok
     else
-      Broadcast.emit(topic, event, payload)
+      if pacing_enabled?() and cold?(note_id) do
+        GenServer.cast(__MODULE__, {:enqueue, topic, event, payload})
+      else
+        Broadcast.emit(topic, event, payload)
+      end
     end
 
     :ok
@@ -60,6 +64,37 @@ defmodule Engram.Notes.FanoutPacer do
   @doc "Test helper: drop all queues and clear the hot table."
   @spec reset() :: :ok
   def reset, do: GenServer.call(__MODULE__, :reset)
+
+  @doc """
+  Test-only: silently drop the next `n` fan-out emits for `note_id`.
+
+  Simulates a lost live broadcast for the e2e seq-gap-heal proof: the client
+  misses this op, the NEXT delivered op for the vault carries a later `seq`,
+  and the client must detect it is behind and self-heal via
+  `crdt_catchup_since`. Armed via the e2e harness `backend_rpc`; a no-op in
+  normal operation (an unset `:persistent_term` read on the emit path).
+  """
+  @spec test_drop_next(String.t(), pos_integer()) :: :ok
+  def test_drop_next(note_id, n \\ 1)
+      when is_binary(note_id) and is_integer(n) and n > 0 do
+    :persistent_term.put({__MODULE__, :drop, note_id}, n)
+  end
+
+  defp test_dropped?(note_id) do
+    key = {__MODULE__, :drop, note_id}
+
+    case :persistent_term.get(key, 0) do
+      n when is_integer(n) and n > 0 ->
+        if n == 1, do: :persistent_term.erase(key), else: :persistent_term.put(key, n - 1)
+
+        Logger.warning("fanout pacer TEST-DROP note_id=#{note_id} (#{n - 1} more armed)")
+
+        true
+
+      _ ->
+        false
+    end
+  end
 
   # Marks `note_id` seen now and returns whether it was COLD (not seen within the
   # hot window). Benign lookup/insert race across concurrent emits for one note

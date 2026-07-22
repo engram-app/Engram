@@ -73,10 +73,14 @@ defmodule Engram.Notes.CrdtDeliverTest do
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "note_yjs_update",
-        payload: %{"note_id" => note_id, "b64" => b64}
+        payload: %{"note_id" => note_id, "b64" => b64, "seq" => seq}
       }
 
       assert note_id == note.id
+      # gap-heal (Phase D2): the fan-out carries the note's vault-global
+      # change seq (the same value list_changes_by_seq orders by) so a
+      # client can detect a missed/reordered live op and self-heal.
+      assert seq == note.seq
       state = Base.decode64!(b64)
       assert byte_size(state) > 0
       {:ok, doc} = CrdtBridge.doc_from_state(state)
