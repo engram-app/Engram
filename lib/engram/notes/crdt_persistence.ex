@@ -62,16 +62,16 @@ defmodule Engram.Notes.CrdtPersistence do
                   false
               end
 
-            tail_count = replay_tail(doc, user, note_id)
+            applied = replay_tail(doc, user, note_id)
 
-            # Fresh room: no snapshot AND no tail-log updates means this note has
-            # never been CRDT-edited, so the only source of truth is the plaintext
-            # `notes.content`. Seed the doc from it so a device that has never
-            # opened the note (discovery via the crdt_doc_ready announce or a
+            # Fresh room: no snapshot AND no tail-log updates applied means this
+            # note has never been CRDT-edited, so the only source of truth is the
+            # plaintext `notes.content`. Seed the doc from it so a device that has
+            # never opened the note (discovery via the crdt_doc_ready announce or a
             # /changes pull) still receives the body over the y-protocols
             # handshake. The client's `seedOnce` guard (skips when an LCA exists)
             # prevents a double-seed once the server is authoritative.
-            if not from_snapshot? and tail_count == 0 do
+            if not from_snapshot? and applied == [] do
               seed_from_content(doc, note, user)
             end
 
@@ -255,15 +255,23 @@ defmodule Engram.Notes.CrdtPersistence do
     :ok
   end
 
-  # Replays the encrypted tail-log onto `doc` and returns the number of rows
-  # found (whether or not each decrypted) so bind/3 can tell a fresh room (0
-  # rows) from one that already carries CRDT history.
+  # Replays the encrypted tail-log onto `doc` and returns the ids of the rows
+  # that were ACTUALLY applied (decrypted successfully), in insertion order. A
+  # caller that persists `doc` can then prune EXACTLY those rows — never a row
+  # it did not fold in (a later concurrent append) and never a row that failed
+  # to decrypt (which stays in the log for a future successful replay). `[]`
+  # means nothing applied, which bind/3 reads as "fresh room".
+  #
+  # Returning applied ids (not a count) is the #285 fix substrate: an
+  # `inserted_at`/id RANGE watermark can tie or reorder within a clock tick and
+  # prune an unfolded row; an exact-id prune cannot.
   #
   # Public so `maybe_merge_crdt/4` in `Engram.Notes` can reuse this function
   # when building the REST merge base: snapshot + tail ≡ bind/3's recipe.
   # Must be called inside the caller's `Repo.with_tenant` transaction — it
   # queries `CrdtUpdateLog` which is tenant-scoped by RLS.
   @doc false
+  @spec replay_tail(Yex.Doc.t(), map(), String.t()) :: [Ecto.UUID.t()]
   def replay_tail(doc, user, note_id) do
     rows =
       CrdtUpdateLog
@@ -271,7 +279,8 @@ defmodule Engram.Notes.CrdtPersistence do
       |> order_by([l], asc: l.inserted_at)
       |> Repo.all()
 
-    Enum.each(rows, fn row ->
+    rows
+    |> Enum.reduce([], fn row, applied ->
       shaped = %Note{
         id: note_id,
         dek_version: Crypto.row_version_aad_bound(),
@@ -281,13 +290,16 @@ defmodule Engram.Notes.CrdtPersistence do
 
       case Crypto.decrypt_crdt_state(shaped, user) do
         {:ok, upd} when is_binary(upd) ->
-          Yex.apply_update(doc, upd)
+          _ = Yex.apply_update(doc, upd)
+          [row.id | applied]
 
         {:error, reason} ->
           Logger.warning(
             "crdt replay_tail decrypt failed note_id=#{note_id} reason=#{inspect(reason)}",
             Metadata.with_category(:warning, :sync, note_id: note_id, reason: inspect(reason))
           )
+
+          applied
 
         unexpected ->
           Logger.warning(
@@ -297,10 +309,11 @@ defmodule Engram.Notes.CrdtPersistence do
               reason: "unexpected_shape"
             )
           )
+
+          applied
       end
     end)
-
-    length(rows)
+    |> Enum.reverse()
   end
 
   # Seeds a fresh doc from the note's plaintext content via the frontmatter
