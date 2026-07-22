@@ -3551,12 +3551,18 @@ jobs:
 
           # Trailing-14-night flake rate per suite, from whatever ledger state
           # is on disk right now (the just-appended local copy either way).
+          # Dedup on (workflow_run_id, suite) before windowing: a manual re-run
+          # of a scheduled run appends a second line for the same night, which
+          # would double-count that night and push an older night out of the
+          # trailing-14 sample. The raw JSONL stays append-only; only this
+          # report's read is deduped.
           {
             echo "### Nightly e2e flake rate (trailing 14 nights)"
             echo
             echo "| suite | nights red | rate |"
             echo "|---|---|---|"
             jq -s -r '
+              unique_by([.workflow_run_id, .suite]) |
               group_by(.suite)[] |
               (sort_by(.date) | .[-14:]) as $recent |
               ($recent | length) as $n |
@@ -3573,7 +3579,7 @@ jobs:
   # On plugin dispatch, ONLY e2e-clerk ran — skip backend marker save in
   # that case to avoid recording a green for jobs that didn't execute.
   record-pass:
-    if: always() && needs.ci.result == 'success'
+    if: always() && needs.ci.result == 'success' && github.event_name != 'schedule'
     needs: [fingerprint, ci]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
@@ -3636,7 +3642,7 @@ jobs:
   # from the fingerprint job (MARKER_HASH) so a recorded tag always matches the
   # hash a later run looks up — no recompute, no BEAM-on-recorder-host dependency.
   record-job-markers:
-    if: always() && needs.fingerprint.outputs.is-full == 'true'
+    if: always() && needs.fingerprint.outputs.is-full == 'true' && github.event_name != 'schedule'
     # migration-gates is intentionally EXCLUDED: it has several early `exit 0` success
     # paths (no open PR, no phase/expand label, no new migrations) that return
     # green WITHOUT running the migration rollforward. Recording a marker off
