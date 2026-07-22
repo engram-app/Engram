@@ -77,22 +77,38 @@ defmodule Engram.Notes.FanoutPacer do
   @spec test_drop_next(String.t(), pos_integer()) :: :ok
   def test_drop_next(note_id, n \\ 1)
       when is_binary(note_id) and is_integer(n) and n > 0 do
-    :persistent_term.put({__MODULE__, :drop, note_id}, n)
+    # An :atomics counter, not a bare integer: concurrent emits for the armed
+    # note decrement atomically, so exactly n frames drop even under races
+    # (review 2026-07-22 finding 4 — a read/put pair could drop n±1).
+    ref = :atomics.new(1, signed: true)
+    :atomics.put(ref, 1, n)
+    :persistent_term.put({__MODULE__, :drop, note_id}, ref)
   end
 
   defp test_dropped?(note_id) do
     key = {__MODULE__, :drop, note_id}
 
-    case :persistent_term.get(key, 0) do
-      n when is_integer(n) and n > 0 ->
-        if n == 1, do: :persistent_term.erase(key), else: :persistent_term.put(key, n - 1)
-
-        Logger.warning("fanout pacer TEST-DROP note_id=#{note_id} (#{n - 1} more armed)")
-
-        true
-
-      _ ->
+    case :persistent_term.get(key, nil) do
+      nil ->
         false
+
+      ref ->
+        left = :atomics.sub_get(ref, 1, 1)
+
+        cond do
+          left > 0 ->
+            Logger.warning("fanout pacer TEST-DROP note_id=#{note_id} (#{left} more armed)")
+            true
+
+          left == 0 ->
+            :persistent_term.erase(key)
+            Logger.warning("fanout pacer TEST-DROP note_id=#{note_id} (0 more armed)")
+            true
+
+          true ->
+            # Exhausted by a concurrent emit that will (or did) erase the key.
+            false
+        end
     end
   end
 

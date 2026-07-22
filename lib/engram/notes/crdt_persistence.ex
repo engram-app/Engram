@@ -177,15 +177,25 @@ defmodule Engram.Notes.CrdtPersistence do
         # advances the watermark only to the head it truly reached (plugin
         # `e2304ed`). Without that client guard, the cheap cold-reconcile hash gate
         # would skip a silently-partial note.
+        # GUARANTEE BOUNDARY (review 2026-07-22): this seq does not advance per
+        # socket delta (checkpoint owns it), so a same-note burst of live deltas
+        # shares ONE seq — the plugin's behind-detector cannot see a loss WITHIN
+        # such a burst; those heal via checkpoint/announce instead. Seq gap-heal
+        # covers seq-BUMPING edits (REST/MCP/checkpoint-driven). And a nil seq
+        # (row deleted concurrently, the Repo.get fallback) is no signal at all:
+        # omit the key rather than ship "seq" => nil to the behind-detector.
+        payload = %{
+          "note_id" => note_id,
+          "b64" => Base.encode64(update),
+          "head" => CrdtTransport.head_marker(doc)
+        }
+
+        payload = if is_integer(seq), do: Map.put(payload, "seq", seq), else: payload
+
         Engram.Notes.FanoutPacer.emit(
           "sync:#{user_id}:#{vault_id}",
           "note_yjs_update",
-          %{
-            "note_id" => note_id,
-            "b64" => Base.encode64(update),
-            "head" => CrdtTransport.head_marker(doc),
-            "seq" => seq
-          },
+          payload,
           note_id
         )
 

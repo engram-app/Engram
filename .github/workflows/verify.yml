@@ -940,6 +940,9 @@ jobs:
             git checkout -- .
             git clean -fd
           else
+            # A plugin-src left WITHOUT .git by an interrupted run would make
+            # the later checkout die on untracked-file collisions — start clean.
+            rm -rf plugin-src
             git init -q plugin-src
             cd plugin-src
           fi
@@ -1493,6 +1496,9 @@ jobs:
             git checkout -- .
             git clean -fd
           else
+            # A plugin-src left WITHOUT .git by an interrupted run would make
+            # the later checkout die on untracked-file collisions — start clean.
+            rm -rf plugin-src
             git init -q plugin-src
             cd plugin-src
           fi
