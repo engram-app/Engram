@@ -107,7 +107,7 @@ async def _seed(cdp, api_sync) -> _Seed:
 
     # 1. Synced.md lands on both sides through a normal live push.
     await _vault_create(cdp, s.synced, s.synced_content)
-    api_sync.wait_for_note(s.synced, timeout=30)
+    api_sync.wait_for_note(s.synced)
 
     # 2. Block the gate FIRST so neither of the divergent seeds crosses over
     #    (a live WS event would otherwise pull RemoteOnly.md into the vault).
@@ -156,7 +156,7 @@ async def test_push_all_keep_remote(vault_a, cdp_a, api_sync):
         await _run_choice(cdp_a, "push-all-keep-remote")
 
         # Local files reached the server.
-        api_sync.wait_for_note(s.local_only, timeout=30)
+        api_sync.wait_for_note(s.local_only)
         assert api_sync.get_note(s.synced) is not None
 
         # Remote extra survived a keep-remote push.
@@ -189,17 +189,17 @@ async def test_push_all_delete_remote_preserves_local(vault_a, cdp_a, vault_b, c
         # is authoritative the moment runSyncFromChoice resolves (op-log
         # apply, not a REST-pull race), so these are bounded sanity checks,
         # not a 30s convergence wait.
-        api_sync.wait_for_note_gone(s.remote_only, timeout=30)
-        api_sync.wait_for_note(s.local_only, timeout=30)
-        api_sync.wait_for_note(s.synced, timeout=30)
+        api_sync.wait_for_note_gone(s.remote_only)
+        api_sync.wait_for_note(s.local_only)
+        api_sync.wait_for_note(s.synced)
 
         # Drive B's catch-up (the actual receiver) instead of waiting on its
         # passive live-socket announce, then assert its disk converged too —
         # proves the full delivery chain, not just server-side REST state.
         await cdp_b.trigger_full_sync()
-        wait_for_file_gone(vault_b, s.remote_only, timeout=10)
-        wait_for_file(vault_b, s.local_only, timeout=10)
-        wait_for_file(vault_b, s.synced, timeout=10)
+        wait_for_file_gone(vault_b, s.remote_only)
+        wait_for_file(vault_b, s.local_only)
+        wait_for_file(vault_b, s.synced)
 
         # THE incident invariant: replacing remote must not touch local files.
         assert read_note(vault_a, s.local_only) == s.local_content, (
@@ -241,7 +241,7 @@ async def test_pull_all_keep_local(vault_a, cdp_a, api_sync):
         await cdp_a.trigger_full_sync()
 
         # Remote-only note arrived locally.
-        wait_for_content(vault_a, s.remote_only, f"RemoteOnly {s.unique}", timeout=10)
+        wait_for_content(vault_a, s.remote_only, f"RemoteOnly {s.unique}")
 
         # Local extra survived a keep-local pull.
         assert read_note(vault_a, s.local_only) == s.local_content, (
@@ -271,9 +271,9 @@ async def test_pull_all_delete_local_preserves_remote(vault_a, cdp_a, api_sync):
         await cdp_a.trigger_full_sync()
 
         # Local matches remote: extra wiped, remote notes present.
-        wait_for_file_gone(vault_a, s.local_only, timeout=10)
-        wait_for_content(vault_a, s.remote_only, f"RemoteOnly {s.unique}", timeout=10)
-        wait_for_file(vault_a, s.synced, timeout=10)
+        wait_for_file_gone(vault_a, s.local_only)
+        wait_for_content(vault_a, s.remote_only, f"RemoteOnly {s.unique}")
+        wait_for_file(vault_a, s.synced)
 
         # Mirror invariant of the incident: the local wipe must not echo-push
         # deletions up to the server (suppressed vault delete events).

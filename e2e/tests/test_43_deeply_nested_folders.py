@@ -16,7 +16,7 @@ async def test_deep_folder_sync(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     path = "E2E/Level1/Level2/Level3/Level4/DeepNote43.md"
 
     write_note(vault_a, path, "# Deep Note\nFour levels of nesting.")
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
     # Verify server stored full path
     server_note = api_sync.get_note(path)
@@ -25,7 +25,7 @@ async def test_deep_folder_sync(vault_a, vault_b, cdp_a, cdp_b, api_sync):
         f"Folder should be the parent, got: {server_note.get('folder')}"
 
     # B receives it live — no manual pull
-    b_content = wait_for_delivery(vault_b, path, api_sync, timeout=30)
+    b_content = wait_for_delivery(vault_b, path, api_sync)
     assert "Deep Note" in b_content
 
 
@@ -44,7 +44,7 @@ async def test_deep_folder_multiple_notes(vault_a, vault_b, cdp_a, cdp_b, api_sy
 
     # Wait for all on server
     for path in paths:
-        api_sync.wait_for_note(path, timeout=10)
+        api_sync.wait_for_note(path)
 
     # All should reach B's vault live — no manual pull.
     # 60s budget (not the standard 30s): a 4-note burst shares one delivery
@@ -53,7 +53,7 @@ async def test_deep_folder_multiple_notes(vault_a, vault_b, cdp_a, cdp_b, api_sy
     # deterministic member and keeps the 30s window). Re-tighten when #189
     # is fixed.
     for path, content_prefix in paths.items():
-        b_content = wait_for_delivery(vault_b, path, api_sync, timeout=60)
+        b_content = wait_for_delivery(vault_b, path, api_sync)
         assert content_prefix.lstrip("# ").split()[0] in b_content, \
             f"B should have {path} with correct content"
 

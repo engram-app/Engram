@@ -19,7 +19,7 @@ async def test_live_sync(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     write_note(vault_a, path, content)
 
     # Wait for A's push to land on server
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
     # B should receive via channel — poll until the FULL body arrives (no manual pull!)
-    wait_for_exact_content(vault_b, path, content, timeout=15)
+    wait_for_exact_content(vault_b, path, content)

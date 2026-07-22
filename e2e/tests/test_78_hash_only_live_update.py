@@ -35,23 +35,23 @@ async def test_hash_only_live_update(vault_b, cdp_b, api_sync):
     api_sync.delete_note(PATH)
 
     # Explicit precondition: B's channel must be up before we broadcast.
-    await cdp_b.wait_for_stream_connected(timeout=20)
+    await cdp_b.wait_for_stream_connected()
 
     # 1. Create via API → B receives the broadcast and materializes the file.
     api_sync.create_note(PATH, "# HashLive v1\n\noriginal body")
-    content = wait_for_delivery(vault_b, PATH, api_sync, timeout=30)
+    content = wait_for_delivery(vault_b, PATH, api_sync)
     assert "HashLive v1" in content
 
     # 2. Update via API → differing content_hash → B applies the new body.
     api_sync.create_note(PATH, "# HashLive v2\n\nupdated body")
-    wait_for_content(vault_b, PATH, "HashLive v2", timeout=30)
+    wait_for_content(vault_b, PATH, "HashLive v2")
 
     # 3. Re-push the IDENTICAL content (server bumps version, hash unchanged).
     #    B's hash compare must treat the broadcast as a no-op: same content,
     #    no conflict copy spawned.
     before_mtime = (vault_b / PATH).stat().st_mtime
     api_sync.create_note(PATH, "# HashLive v2\n\nupdated body")
-    api_sync.wait_for_note_content(PATH, "updated body", timeout=15)
+    api_sync.wait_for_note_content(PATH, "updated body")
 
     # Give the broadcast time to arrive and (correctly) be ignored.
     time.sleep(5)

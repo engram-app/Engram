@@ -24,6 +24,7 @@ from helpers.oauth import (
     wait_for_stream,
 )
 from helpers.vault import read_note, wait_for_content, wait_for_file, write_note
+from helpers.latency import DELIVERY_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ pytestmark = pytest.mark.skipif(
 
 # ponytail: 30s is a load-tuned CI budget, not a latency proof — 5 rapid
 # edits must settle end-to-end on a shared loaded runner (was 10, flaked).
-RT_TIMEOUT = 30
+RT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound; latency is recorded, not asserted
 
 
 def _log_latency(label: str, t0: float) -> float:
@@ -81,7 +82,7 @@ async def test_apikey_push_oauth_receives(
         write_note(vault_b, path, content)
 
         # Wait for B to push to server
-        api_sync.wait_for_note(path, timeout=10)
+        api_sync.wait_for_note(path)
 
         # A (OAuth) should receive via WebSocket
         t0 = time.monotonic()

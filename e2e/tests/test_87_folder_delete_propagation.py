@@ -27,8 +27,8 @@ async def test_empty_folder_create_propagates(vault_a, vault_b, cdp_a, cdp_b, ap
     assert status in (200, 201), f"create_folder should succeed, got {status}"
 
     # Both clients materialize the empty directory live (no manual pull).
-    wait_for_folder(vault_a, folder, timeout=30)
-    wait_for_folder(vault_b, folder, timeout=30)
+    wait_for_folder(vault_a, folder)
+    wait_for_folder(vault_b, folder)
 
 
 @pytest.mark.asyncio
@@ -44,12 +44,12 @@ async def test_empty_folder_delete_propagates(vault_a, vault_b, cdp_a, cdp_b, ap
 
     # Create + confirm both clients have the empty folder before deleting.
     assert api_sync.create_folder(folder) in (200, 201)
-    wait_for_folder(vault_a, folder, timeout=30)
-    wait_for_folder(vault_b, folder, timeout=30)
+    wait_for_folder(vault_a, folder)
+    wait_for_folder(vault_b, folder)
 
     # Delete it server-side (stands in for a web-app folder delete).
     assert api_sync.delete_folder(folder) == 204
 
     # Both clients trash the now-empty folder live — no manual pull backstop.
-    wait_for_folder_gone(vault_a, folder, timeout=30)
-    wait_for_folder_gone(vault_b, folder, timeout=30)
+    wait_for_folder_gone(vault_a, folder)
+    wait_for_folder_gone(vault_b, folder)

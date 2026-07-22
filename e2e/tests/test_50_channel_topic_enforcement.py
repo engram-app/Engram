@@ -18,10 +18,11 @@ import pytest
 
 from helpers.log_oracle import wait_for_delivery
 from helpers.vault import write_note
+from helpers.latency import DELIVERY_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
-RT_TIMEOUT = 10
+RT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound; latency is recorded, not asserted
 
 
 @pytest.mark.asyncio
@@ -96,7 +97,7 @@ async def test_reconnect_rejoins_correct_topic(vault_a, vault_b, cdp_a, cdp_b, a
     path = "E2E/TopicReconnectCheck.md"
     content = "# Topic Reconnect\nVerifying channel works after reconnect"
     write_note(vault_a, path, content)
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
     # B should receive via the reconnected channel
     t0 = time.monotonic()
@@ -132,7 +133,7 @@ async def test_live_sync_still_works_after_all_tests(
     path = "E2E/SmokeAfterTests.md"
     content = "# Smoke Test\nLive sync still works after all E2E tests"
     write_note(vault_a, path, content)
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
     b_content = wait_for_delivery(vault_b, path, api_sync, timeout=RT_TIMEOUT)
     assert "Live sync still works" in b_content

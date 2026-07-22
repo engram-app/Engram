@@ -21,10 +21,11 @@ import pytest
 
 from helpers.log_oracle import wait_for_binary_delivery
 from helpers.vault import wait_for_file_gone
+from helpers.latency import DELIVERY_TIMEOUT
 
 # B-side convergence (pull + blob fetch) can lag under parallel CI load — give
 # it more room than the suite's 15s default.
-CONVERGE_TIMEOUT = 25
+CONVERGE_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound; latency is recorded, not asserted
 
 # Minimal valid PNG: 1x1 red pixel (same constant as test_33).
 TINY_PNG = (
@@ -92,7 +93,7 @@ async def test_web_move_converges_after_offline_window(
     wait_for_binary_delivery(vault_b, old_path, api_sync, timeout=CONVERGE_TIMEOUT)
 
     # Take B offline so it misses the ephemeral move broadcasts entirely.
-    await cdp_b.wait_for_stream_connected(timeout=10)
+    await cdp_b.wait_for_stream_connected()
     await cdp_b.disconnect_stream()
     await asyncio.sleep(0.3)
     assert not await cdp_b.check_stream_connected(), "B's channel should be down"

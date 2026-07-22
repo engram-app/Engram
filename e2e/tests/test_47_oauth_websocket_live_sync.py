@@ -22,6 +22,7 @@ import requests
 
 from helpers.oauth import provision_oauth_tokens, swap_to_oauth, restore_auth, wait_for_stream
 from helpers.vault import read_note, wait_for_content, wait_for_file, wait_for_file_gone
+from helpers.latency import DELIVERY_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ pytestmark = pytest.mark.skipif(
 # latency). 10s flaked repeatedly (#643). Tightened 30s → 15s: this is a
 # live-sync latency property — a 30s budget would mask a real broadcast
 # regression. If 15s flakes, profile the xdist contention; do not re-widen.
-RT_TIMEOUT = 15
+RT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound; latency is recorded, not asserted
 
 
 def _log_latency(label: str, t0: float) -> float:

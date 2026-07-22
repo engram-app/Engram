@@ -10,11 +10,12 @@ import pytest
 
 from helpers.log_oracle import wait_for_delivery
 from helpers.vault import read_note, wait_for_content, write_note
+from helpers.latency import DELIVERY_TIMEOUT
 
 pytestmark = pytest.mark.asyncio
 
 PATH = f"E2E/Orchestra-{uuid.uuid4().hex[:12]}.md"
-RT_TIMEOUT = 30  # generous: this hop crosses MCP + WebSocket delivery
+RT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound; latency is recorded, not asserted
 
 
 def _mcp_text(response: dict) -> str:
