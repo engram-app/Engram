@@ -59,8 +59,29 @@ defmodule EngramWeb.CrdtChannelTest do
       assert Notes.note_in_vault?(user, vault.id, id)
     end
 
-    test "id live at a different path replies id_conflict", %{socket: socket, note: note} do
+    test "id live at a different FREE path relocates the note (Phase E2 rename-as-move)", %{
+      socket: socket,
+      user: user,
+      vault: vault,
+      note: note
+    } do
       ref = push(socket, "crdt_create", %{"doc_id" => note.id, "path" => "Notes/other.md"})
+      assert_reply ref, :ok, %{doc_id: got}
+      assert got == note.id
+      {:ok, moved} = Notes.get_note(user, vault, "Notes/other.md")
+      assert moved.id == note.id
+    end
+
+    test "id live at a different path with an OCCUPIED target replies id_conflict", %{
+      socket: socket,
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      {:ok, _other} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/occupied.md", "content" => "x"})
+
+      ref = push(socket, "crdt_create", %{"doc_id" => note.id, "path" => "Notes/occupied.md"})
       assert_reply ref, :error, %{reason: "id_conflict", doc_id: got}
       assert got == note.id
     end

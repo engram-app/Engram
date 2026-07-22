@@ -689,22 +689,14 @@ defmodule Engram.Notes do
                      {:ok, decrypt_or_raise!(live, user)}
 
                    {:ok, false} ->
-                     # Same greppable Loki tripwire as REST's upsert_note
-                     # {:id_collision, live} arm (notes.ex ~line 493) — a
-                     # client-minted id reused at a different path is the
-                     # 2026-07-06 wrong-mint corruption signature, and the
-                     # socket path must not be blind to it.
-                     Logger.warning(
-                       "note_id_collision_rejected",
-                       Metadata.with_category(:warning, :sync,
-                         user_id: user.id,
-                         vault_id: vault.id,
-                         note_id: live.id,
-                         server_version: live.version
-                       )
-                     )
-
-                     {:error, :id_conflict, decrypt_or_raise!(live, user)}
+                     # Phase E2 (rename-as-move): a crdt_create for a KNOWN live
+                     # id at a new, FREE path is a rename — relocate the row in
+                     # place (same move_note pipeline the tombstone-resurrect
+                     # rename leg uses), no tombstone-first dance, which also
+                     # removes the #970 delete-wins window from renames entirely.
+                     # A target path OCCUPIED by a DIFFERENT live note stays a
+                     # genuine conflict (the pre-E2 behavior).
+                     genesis_relocate_live(live, user, vault, sanitized_path, folder)
 
                    {:error, _} = err ->
                      err
@@ -831,6 +823,69 @@ defmodule Engram.Notes do
   # decrypt_or_raise!/2): a DEK/KMS decrypt failure on the tombstone's
   # ciphertext must surface as a clean {:error, _} that the channel replies
   # create_failed for, not a raise that crashes/drops the socket.
+  # Phase E2 (rename-as-move): relocate a LIVE note to a new FREE path when its
+  # own id arrives via crdt_create at that path — the socket-native rename.
+  # Mirrors genesis_resurrect_decrypted's move leg (identity content merge via
+  # move_note: re-path + version/seq bump + :announce_moved fan-out) minus the
+  # tombstone concerns. An occupied target keeps the pre-E2 id_conflict reply,
+  # with the same greppable Loki tripwire as REST's upsert {:id_collision, live}
+  # arm (a client-minted id reused at another OCCUPIED path is still the
+  # 2026-07-06 wrong-mint corruption signature).
+  defp genesis_relocate_live(live, user, vault, sanitized_path, folder) do
+    with {:ok, query} <- note_by_path_query(user, vault, sanitized_path) do
+      case Repo.one(query) do
+        nil ->
+          decrypted = decrypt_or_raise!(live, user)
+
+          base_attrs = %{
+            content: decrypted.content,
+            title: decrypted.title,
+            tags: decrypted.tags,
+            content_hash: decrypted.content_hash,
+            mtime: decrypted.mtime
+          }
+
+          case move_note(decrypted, base_attrs, user, sanitized_path, folder) do
+            {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
+              case Crypto.maybe_decrypt_note_fields(updated, user) do
+                {:ok, moved} ->
+                  Logger.info(
+                    "note_id_relocated",
+                    Metadata.with_category(:info, :sync,
+                      user_id: user.id,
+                      vault_id: vault.id,
+                      note_id: moved.id,
+                      server_version: moved.version
+                    )
+                  )
+
+                  {:ok, moved, :announce_moved}
+
+                {:error, reason} ->
+                  log_resurrect_decrypt_failure(reason, user, updated)
+                  {:error, reason}
+              end
+
+            {:error, _} = err ->
+              err
+          end
+
+        %Note{} = _occupant ->
+          Logger.warning(
+            "note_id_collision_rejected",
+            Metadata.with_category(:warning, :sync,
+              user_id: user.id,
+              vault_id: vault.id,
+              note_id: live.id,
+              server_version: live.version
+            )
+          )
+
+          {:error, :id_conflict, decrypt_or_raise!(live, user)}
+      end
+    end
+  end
+
   defp genesis_resurrect(prior, user, sanitized_path, folder) do
     case Crypto.maybe_decrypt_note_fields(prior, user) do
       {:ok, prior} ->
