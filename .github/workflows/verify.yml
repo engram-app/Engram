@@ -18,6 +18,9 @@ on:
       - "perf/**"
       - "refactor/**"
       - "release/**"
+      # release-please's own PR branch — without this the release PR gets no CI,
+      # required checks never report, and the release can never merge (#1057).
+      - "release-please--**"
       - "revert/**"
       - "security/**"
       - "test/**"
