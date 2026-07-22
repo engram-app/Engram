@@ -3400,20 +3400,30 @@ jobs:
             exit 1
           fi
 
-          # e2e-clerk is the only job that exercises the plugin↔backend contract,
-          # so it must succeed regardless of trigger — EXCEPT on Dependabot PRs
-          # where it's skipped (GitHub doesn't share Clerk + App secrets with
-          # Dependabot). The contract test runs unskipped when we squash-merge
-          # to main, which is the path of record anyway.
+          # Full-Obsidian e2e (e2e-clerk / e2e-crdt / e2e-browser) is REPORT-ONLY
+          # as of the testing-architecture migration: it is structurally
+          # nondeterministic (real Obsidian + Xvfb + shared runners), and a ~50%
+          # flaky gate stopped nothing while blocking correct, unit-proven work.
+          # Convergence is now gated deterministically (unit-tests incl. the CRDT
+          # head-consistency property + the plugin sim tier's differential gate);
+          # the full Obsidian suite still RUNS here and posts its own PR checks,
+          # and remains the gate on main/nightly + the release-v* gate — it just
+          # no longer blocks a PR. The deterministic jobs below stay hard-required.
           if [ "$EC" != "success" ] && [ "$EC" != "skipped" ]; then
-            echo "::error::e2e-clerk failed: $EC"
-            exit 1
+            echo "::warning::e2e-clerk failed: $EC (report-only — not gating; see docs/context/testing-architecture-migration.md)"
+          fi
+          if [ "$ED" != "success" ] && [ "$ED" != "skipped" ]; then
+            echo "::warning::e2e-crdt failed: $ED (report-only — not gating)"
+          fi
+          if [ "$EB" != "success" ] && [ "$EB" != "skipped" ]; then
+            echo "::warning::e2e-browser failed: $EB (report-only — not gating)"
           fi
 
-          # On cross-repo plugin dispatch (plugin-e2e-trigger), unit-tests / lint /
-          # e2e-browser are intentionally skipped — plugin cannot regress
-          # backend internals. Only assert success when those jobs actually ran.
-          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "e2e-crdt=$ED" "e2e-browser=$EB" "static-checks=$SC" "migration-gates=$MG"; do
+          # On cross-repo plugin dispatch (plugin-e2e-trigger), unit-tests / lint
+          # are intentionally skipped — plugin cannot regress backend internals.
+          # Only assert success when those jobs actually ran. (e2e-* moved to the
+          # report-only warnings above; deterministic jobs remain the merge gate.)
+          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "static-checks=$SC" "migration-gates=$MG"; do
             name="${pair%=*}"; result="${pair#*=}"
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "::error::$name failed: $result"
