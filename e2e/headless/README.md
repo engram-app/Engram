@@ -75,6 +75,33 @@ GREEN gate (must pass — proven green + deterministic on current main, each < 1
 4. **reconnect catch-up** — B goes offline, A creates a note, B reconnects and
    converges (server → reconnecting replica).
 
+### What the green gate proves (do NOT over-read it)
+
+All four green scenarios exercise **catch-up delivery (server → replica) + server
+persistence** over the real CRDT protocol. The gate does **NOT** prove **live
+real-time A→B fan-out** — that path is deliberately not gated (see below). A
+green run means "the server persists and a replica converges on catch-up", not
+"a live edit on A reached B in real time".
+
+### Deferred scenarios
+
+Not yet in the gate. Disclosed with the same discipline as the `#282`/`#285`
+payloads below so a reader does not assume they're covered:
+
+- **`edit → deliver`** — achievable via catch-up WITHOUT `#282` (it's the same
+  server→replica convergence path as create). Deferred; good next addition.
+- **`offline-queue flush`** — likewise achievable via catch-up without `#282`.
+  Deferred; good next addition.
+- **`rename both-paths`** (old path cleaned + new path delivered) — deferred.
+- **live A→B fan-out** — **NOT gated.** Blocked by the open plugin `#282` (fence
+  v≤v collision masks heal) that this tier already *reproduces* deterministically
+  (the `HEADLESS_REPRO_282=1` scenario, reported known-red). A live
+  `note_yjs_update` to an idle receiver is exactly the path `#282` breaks, so a
+  live fan-out scenario cannot be a green gate until `#282` lands. This is why
+  the green gate above is catch-up-only.
+- **stale-head `#285` regression** — TODO; needs the `#285` server fix (`#1073`)
+  in the image. See the payload note below.
+
 ## Known payloads (the reason this tier exists)
 
 Two protocol/server bugs the sim tier cannot catch:

@@ -16,6 +16,18 @@
 // or setup failed. The #282 repro (see below) is reported but NEVER fails the
 // process — it documents an OPEN main bug, like the #285 TODO.
 //
+// GATE COVERAGE (do NOT over-read): the 4 green scenarios prove catch-up
+// delivery (server -> replica) + server persistence. They do NOT prove live
+// real-time A->B fan-out — that path is NOT gated (blocked by plugin #282 that
+// this tier reproduces below). See e2e/headless/README.md "Deferred scenarios".
+//
+// DEFERRED (not yet in the gate, disclosed like the payloads below):
+//   - edit->deliver, offline-queue flush — achievable via catch-up WITHOUT
+//     #282; good next additions.
+//   - rename both-paths — deferred.
+//   - live A->B fan-out — NOT gated; blocked by plugin #282.
+//   - stale-head #285 regression — TODO, needs #1073 in the image.
+//
 // ---------------------------------------------------------------------------
 // TWO deferred/known payloads this tier exists to pin (both are protocol/server
 // bugs the client-only sim tier cannot see by construction):
