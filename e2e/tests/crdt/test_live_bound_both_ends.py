@@ -314,8 +314,16 @@ async def test_deaf_note_survives_handshake_rate_limit_and_heals_on_restore(
             f"Application.put_env(:engram, :crdt_hs_rate_limit_override, {prior})"
         )
 
-        # Budget restored: the next heal poke (a second trigger edit to Y, a
-        # new seq) must converge X — no trigger_full_sync, no Obsidian restart.
+        # Budget restored: stage a fresh X row (its fan-out is still swallowed
+        # by the armed drops) plus a delivered Y trigger carrying the later
+        # seq — the gap-heal replay then re-serves X and the live-bound leg's
+        # STEP1 must converge it over the socket. Y alone is NOT enough: X's
+        # original row was consumed (rate-limited) during the zero-budget
+        # phase and the cursor advanced past it, so a replay without a fresh
+        # X row never re-runs X's converge leg within the window (the only
+        # other retry path is the periodic manifest heal — nondeterministic).
+        api_sync.append_note(path_x, "\nPOST-RESTORE-X\n")
+        api_sync.wait_for_note_content(path_x, "POST-RESTORE-X", timeout=CRDT_TIMEOUT)
         api_sync.append_note(path_y, "\nTRIGGER-EDIT-Y-2\n")
 
         final = wait_for_content(
