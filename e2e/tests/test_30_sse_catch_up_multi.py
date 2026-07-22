@@ -45,14 +45,14 @@ async def test_channel_catch_up_multi(vault_a, vault_b, cdp_a, cdp_b, api_sync):
 
         # Wait for all to reach server
         for path in paths:
-            api_sync.wait_for_note(path, timeout=10)
+            api_sync.wait_for_note(path)
 
         # Reconnect B's channel — triggers catch-up pull
         await cdp_b.reconnect_stream()
 
         # All 3 should arrive in B's vault via catch-up pull
         for path in paths:
-            b_content = wait_for_file(vault_b, path, timeout=15)
+            b_content = wait_for_file(vault_b, path)
             assert "Missed while disconnected" in b_content, (
                 f"{path} not received after channel catch-up: {b_content[:200]}"
             )

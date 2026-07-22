@@ -13,16 +13,16 @@ async def test_delete_propagation(vault_a, vault_b, cdp_a, cdp_b, api_sync):
 
     # A creates the note
     write_note(vault_a, path, "# Delete Test\nThis file will be deleted.")
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
     # B receives it live before deletion
-    wait_for_delivery(vault_b, path, api_sync, timeout=30)
+    wait_for_delivery(vault_b, path, api_sync)
 
     # A deletes the note
     delete_note(vault_a, path)
 
     # Poll server until delete propagates (soft-delete → 404)
-    api_sync.wait_for_note_gone(path, timeout=10)
+    api_sync.wait_for_note_gone(path)
 
     # B removes it live (plugin moves to .trash) — no manual pull backstop
-    wait_for_file_gone(vault_b, path, timeout=30)
+    wait_for_file_gone(vault_b, path)

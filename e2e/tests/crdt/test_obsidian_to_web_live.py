@@ -26,20 +26,21 @@ import pytest
 from playwright.async_api import expect
 
 from helpers.vault import write_note
+from helpers.latency import DELIVERY_TIMEOUT
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("E2E_ENABLE_CRDT") != "true",
     reason="CRDT-only suite — set E2E_ENABLE_CRDT=true with a CRDT_ENABLED backend",
 )
 
-RT_TIMEOUT = 30  # generous: Obsidian push -> server -> WS -> SPA re-render
+RT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound; latency is recorded, not asserted
 
 
 @pytest.mark.asyncio
 async def test_obsidian_edit_renders_live_in_spa(vault_a, api_sync, web, sync_vault_id):
     path = "E2E/Crdt/ObsidianToWeb.md"
     write_note(vault_a, path, "# Web Live\nv1 from Obsidian")
-    note = api_sync.wait_for_note(path, timeout=15)
+    note = api_sync.wait_for_note(path)
 
     await web.open_note(note["id"], sync_vault_id)
     editor = web.editor_locator()

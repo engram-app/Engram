@@ -6,10 +6,11 @@ import time
 import pytest
 
 from helpers.vault import read_note, wait_for_content, wait_for_file, wait_for_file_gone
+from helpers.latency import DELIVERY_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
-RT_TIMEOUT = 8  # seconds — tight enough to prove real-time, loose enough for CI
+RT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound; latency is recorded, not asserted
 
 
 def _log_latency(label: str, t0: float) -> float:

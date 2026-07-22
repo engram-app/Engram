@@ -17,9 +17,9 @@ async def test_spaces_in_path(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     content = "# Spaced Path\nContent with spaces in filename."
 
     write_note(vault_a, path, content)
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
-    received = wait_for_delivery(vault_b, path, api_sync, timeout=30)
+    received = wait_for_delivery(vault_b, path, api_sync)
     assert content in received
 
 
@@ -30,9 +30,9 @@ async def test_unicode_in_path(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     content = "# Café Notes\nAccented characters in filename."
 
     write_note(vault_a, path, content)
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
-    received = wait_for_delivery(vault_b, path, api_sync, timeout=30)
+    received = wait_for_delivery(vault_b, path, api_sync)
     assert content in received
 
 
@@ -43,9 +43,9 @@ async def test_emoji_in_path(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     content = "# Daily Log\nEmoji filename test."
 
     write_note(vault_a, path, content)
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
-    received = wait_for_delivery(vault_b, path, api_sync, timeout=30)
+    received = wait_for_delivery(vault_b, path, api_sync)
     assert content in received
 
 
@@ -56,7 +56,7 @@ async def test_special_chars_combined(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     content = "# Mixed Special Chars\nBrackets, em-dash, parens."
 
     write_note(vault_a, path, content)
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
-    received = wait_for_delivery(vault_b, path, api_sync, timeout=30)
+    received = wait_for_delivery(vault_b, path, api_sync)
     assert content in received

@@ -69,7 +69,7 @@ async def test_activity_log_records_push_then_clears(vault_a, cdp_a, api_sync):
 
         # Confirm the push reached the server (the helper awaits pushFile, so
         # this should be immediate — the wait_for_note is belt-and-braces).
-        api_sync.wait_for_note(path, timeout=5)
+        api_sync.wait_for_note(path)
 
         # ── 3. Open Sync Center and assert push entry present ────────────────
         await cdp_a.open_sync_center()

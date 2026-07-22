@@ -46,7 +46,7 @@ async def test_create_race_adopts_winner_and_receives(vault_a, vault_b, cdp_a, c
     for cdp in (cdp_a, cdp_b):
         if not await cdp.check_stream_connected():
             await cdp.reconnect_stream()
-        await cdp.wait_for_stream_connected(timeout=20)
+        await cdp.wait_for_stream_connected()
 
     # The race: an API writer (the MCP/web stand-in) and plugin A create the
     # same path concurrently. push_file_now drives the real pushFile path —
@@ -61,9 +61,9 @@ async def test_create_race_adopts_winner_and_receives(vault_a, vault_b, cdp_a, c
     )
 
     # One live identity for the path, and a bystander device materializes it.
-    note = api_sync.wait_for_note(path, timeout=15)
+    note = api_sync.wait_for_note(path)
     assert note is not None
-    wait_for_delivery(vault_b, path, api_sync, timeout=30)
+    wait_for_delivery(vault_b, path, api_sync)
 
     # THE incident pin: A's receive path must be alive after the race. Before
     # plugin #197 the loser kept its dead local mint, so this API edit would
@@ -71,10 +71,10 @@ async def test_create_race_adopts_winner_and_receives(vault_a, vault_b, cdp_a, c
     # latency masked it until a full pull; the live window stayed silent).
     followup = f"followup-edit-{unique}"
     api_sync.create_note(path, f"# Raced\n\n{followup}\n")
-    api_sync.wait_for_note_content(path, followup, timeout=15)
+    api_sync.wait_for_note_content(path, followup)
 
-    a_content = wait_for_content(vault_a, path, followup, timeout=30)
-    b_content = wait_for_content(vault_b, path, followup, timeout=30)
+    a_content = wait_for_content(vault_a, path, followup)
+    b_content = wait_for_content(vault_b, path, followup)
     assert followup in a_content and followup in b_content, (
         "a raced device is cross-wired: the post-race API edit did not arrive "
         f"(a={a_content[:200]!r}, b={b_content[:200]!r})"

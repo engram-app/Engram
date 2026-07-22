@@ -11,6 +11,8 @@ from typing import Any
 import requests
 import websockets
 
+from helpers.latency import DELIVERY_TIMEOUT, record
+
 logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "engram-vault-sync"
@@ -815,16 +817,19 @@ class CdpClient:
             # string; the real timeout is still raised by the caller.
             return f"<stream diag unavailable: {e!r}>"
 
-    async def wait_for_stream_connected(self, timeout: float = 10) -> None:
+    async def wait_for_stream_connected(self, timeout: float = DELIVERY_TIMEOUT) -> None:
         """Poll until the WebSocket channel reports connected.
 
         Use at the top of tests that rely on live propagation — the channel
         can take a beat to (re)connect after fixture setup or after a
-        preceding test reset state.
+        preceding test reset state. Shares the central delivery budget
+        (helpers.latency); connect latency is recorded, not asserted.
         """
-        deadline = time.monotonic() + timeout
+        start = time.monotonic()
+        deadline = start + timeout
         while time.monotonic() < deadline:
             if await self.check_stream_connected():
+                record("stream_connected", f"cdp:{self.port}", time.monotonic() - start)
                 return
             await asyncio.sleep(0.5)
         diag = await self._stream_diag()

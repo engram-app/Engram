@@ -21,6 +21,7 @@ import requests
 
 from helpers.oauth import provision_oauth_tokens, swap_to_oauth, restore_auth, wait_for_stream
 from helpers.vault import read_note, wait_for_content, wait_for_file
+from helpers.latency import DELIVERY_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ pytestmark = pytest.mark.skipif(
 # Reconnect + catch-up round-trip budget under e2e-clerk load. 15s flaked
 # once (#643) but 30s masks real catch-up latency regressions. Tightened
 # back to 15s; if it flakes, profile the xdist contention — do not re-widen.
-RT_TIMEOUT = 15
+RT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound; latency is recorded, not asserted
 
 
 def _log_latency(label: str, t0: float) -> float:

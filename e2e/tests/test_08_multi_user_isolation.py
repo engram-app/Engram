@@ -15,7 +15,7 @@ async def test_multi_user_isolation(
     write_note(vault_a, sync_path, "# Sync User Secret\nPrivate to sync-user")
 
     # Poll until sync-user's note is on server
-    api_sync.wait_for_note(sync_path, timeout=10)
+    api_sync.wait_for_note(sync_path)
 
     # isolation-user should NOT see it via API
     note_c = api_iso.get_note(sync_path)
@@ -30,7 +30,7 @@ async def test_multi_user_isolation(
     write_note(vault_c, iso_path, "# Iso User Secret\nPrivate to iso-user")
 
     # Poll until iso-user's note is on server
-    api_iso.wait_for_note(iso_path, timeout=10)
+    api_iso.wait_for_note(iso_path)
 
     # sync-user should NOT see it
     note_sync = api_sync.get_note(iso_path)

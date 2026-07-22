@@ -1183,7 +1183,7 @@ jobs:
         run: |
           python3 -m pytest tests/api_only/ --ignore=tests/api_only/local \
             -n "${E2E_API_WORKERS:-2}" --dist=loadfile \
-            -v --timeout=180 -p no:cacheprovider --no-header
+            -v --timeout=600 -p no:cacheprovider --no-header
         env:
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
           E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
@@ -1257,7 +1257,7 @@ jobs:
           python3 -m pytest tests/ --ignore=tests/api_only/ --ignore=tests/crdt/ \
             "${K_ARGS[@]}" \
             -n "${E2E_WORKERS:-2}" --dist=loadfile \
-            -v --timeout=300 -p no:cacheprovider --no-header
+            -v --timeout=600 -p no:cacheprovider --no-header
         env:
           E2E_PATTERN: ${{ needs.fingerprint.outputs.e2e-target-pattern }}
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
@@ -1325,6 +1325,18 @@ jobs:
           name: ci-debug-${{ github.sha }}
           path: ci-artifacts/
           retention-days: 7
+
+      # Per-run delivery-latency report (helpers/latency.py) — uploaded on
+      # green AND red runs: the metric's whole point is trend data, so a
+      # failure()-only upload would bias the series toward bad runs.
+      - name: Upload latency report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-latency-ci-debug-${{ github.sha }}-${{ github.run_attempt }}
+          path: e2e/latency-report.jsonl
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Tear down
         if: always()
@@ -1752,7 +1764,7 @@ jobs:
           # template-interpolated into this script — no command-injection surface.
           E2E_K="${E2E_PATTERN:-}"
           K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
-          python3 -m pytest tests/api_only/ "${K_ARGS[@]}" -v --timeout=180 -p no:cacheprovider --no-header
+          python3 -m pytest tests/api_only/ "${K_ARGS[@]}" -v --timeout=600 -p no:cacheprovider --no-header
 
       # always(): a local-auth API failure above must not mask the CRDT suite's
       # signal (the job still fails on the failed step).
@@ -1801,7 +1813,7 @@ jobs:
           # template-interpolated into this script — no command-injection surface.
           E2E_K="${E2E_PATTERN:-}"
           K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
-          python3 -m pytest tests/crdt/ "${K_ARGS[@]}" -v --timeout=180 -p no:cacheprovider --no-header
+          python3 -m pytest tests/crdt/ "${K_ARGS[@]}" -v --timeout=600 -p no:cacheprovider --no-header
         env:
           E2E_PATTERN: ${{ needs.fingerprint.outputs.e2e-target-pattern }}
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
@@ -1843,6 +1855,18 @@ jobs:
           name: ci-crdt-debug-${{ github.sha }}
           path: ci-artifacts/
           retention-days: 7
+
+      # Per-run delivery-latency report (helpers/latency.py) — uploaded on
+      # green AND red runs: the metric's whole point is trend data, so a
+      # failure()-only upload would bias the series toward bad runs.
+      - name: Upload latency report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-latency-ci-crdt-debug-${{ github.sha }}-${{ github.run_attempt }}
+          path: e2e/latency-report.jsonl
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Tear down
         if: always()

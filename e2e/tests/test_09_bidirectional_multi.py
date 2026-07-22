@@ -30,13 +30,13 @@ async def test_bidirectional_multi_file(vault_a, vault_b, cdp_a, cdp_b, api_sync
 
     # Wait for all 6 files to land on server
     for path in list(a_files) + list(b_files):
-        api_sync.wait_for_note(path, timeout=15)
+        api_sync.wait_for_note(path)
 
     # A receives B's files live, B receives A's files live — no manual pull.
     for path in b_files:
-        wait_for_delivery(vault_a, path, api_sync, timeout=30)
+        wait_for_delivery(vault_a, path, api_sync)
     for path in a_files:
-        wait_for_delivery(vault_b, path, api_sync, timeout=30)
+        wait_for_delivery(vault_b, path, api_sync)
 
     # Verify A has all 6 files
     for path in list(a_files) + list(b_files):

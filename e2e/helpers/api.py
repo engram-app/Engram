@@ -9,6 +9,8 @@ from urllib.parse import quote
 
 import requests
 
+from helpers.latency import DELIVERY_TIMEOUT, record
+
 logger = logging.getLogger(__name__)
 
 
@@ -87,31 +89,34 @@ class ApiClient:
         return resp.json()
 
     def wait_for_note(
-        self, path: str, timeout: float = 30, poll: float = 0.5
+        self, path: str, timeout: float = DELIVERY_TIMEOUT, poll: float = 0.5
     ) -> dict:
         """Poll until note exists on server. Returns the note dict.
 
-        Default 30s (was 10s) matches the load-tuned delivery budgets
-        (RT_TIMEOUT, wait_for_stream): under e2e-clerk 2-worker load the
-        plugin's push can legitimately exceed 10s. Callsites that still pass an
-        explicit timeout=10 keep the tighter budget until swept separately.
+        Shares the central delivery budget (helpers.latency): the timeout is a
+        true-breakage bound, and each successful wait records its elapsed time
+        to the per-run latency report.
         """
-        deadline = time.monotonic() + timeout
+        start = time.monotonic()
+        deadline = start + timeout
         while time.monotonic() < deadline:
             note = self.get_note(path)
             if note is not None:
+                record("server_note", path, time.monotonic() - start)
                 return note
             time.sleep(poll)
         raise TimeoutError(f"Note {path} not on server after {timeout}s")
 
     def wait_for_note_content(
-        self, path: str, expected: str, timeout: float = 10, poll: float = 0.5
+        self, path: str, expected: str, timeout: float = DELIVERY_TIMEOUT, poll: float = 0.5
     ) -> dict:
         """Poll until note on server contains expected substring."""
-        deadline = time.monotonic() + timeout
+        start = time.monotonic()
+        deadline = start + timeout
         while time.monotonic() < deadline:
             note = self.get_note(path)
             if note is not None and expected in note.get("content", ""):
+                record("server_note_content", path, time.monotonic() - start)
                 return note
             time.sleep(poll)
         raise TimeoutError(
@@ -119,35 +124,41 @@ class ApiClient:
         )
 
     def wait_for_note_gone(
-        self, path: str, timeout: float = 10, poll: float = 0.5
+        self, path: str, timeout: float = DELIVERY_TIMEOUT, poll: float = 0.5
     ) -> None:
         """Poll until note returns 404 on server."""
-        deadline = time.monotonic() + timeout
+        start = time.monotonic()
+        deadline = start + timeout
         while time.monotonic() < deadline:
             note = self.get_note(path)
             if note is None:
+                record("server_note_gone", path, time.monotonic() - start)
                 return
             time.sleep(poll)
         raise TimeoutError(f"Note {path} still on server after {timeout}s")
 
     def wait_for_attachment(
-        self, path: str, timeout: float = 15, poll: float = 0.5
+        self, path: str, timeout: float = DELIVERY_TIMEOUT, poll: float = 0.5
     ) -> None:
         """Poll until attachment is reachable on server (2xx)."""
-        deadline = time.monotonic() + timeout
+        start = time.monotonic()
+        deadline = start + timeout
         while time.monotonic() < deadline:
             if self.get_attachment(path).status_code == 200:
+                record("server_attachment", path, time.monotonic() - start)
                 return
             time.sleep(poll)
         raise TimeoutError(f"Attachment {path} not on server after {timeout}s")
 
     def wait_for_attachment_gone(
-        self, path: str, timeout: float = 15, poll: float = 0.5
+        self, path: str, timeout: float = DELIVERY_TIMEOUT, poll: float = 0.5
     ) -> None:
         """Poll until attachment returns 404 on server."""
-        deadline = time.monotonic() + timeout
+        start = time.monotonic()
+        deadline = start + timeout
         while time.monotonic() < deadline:
             if self.get_attachment(path).status_code == 404:
+                record("server_attachment_gone", path, time.monotonic() - start)
                 return
             time.sleep(poll)
         raise TimeoutError(f"Attachment {path} still on server after {timeout}s")

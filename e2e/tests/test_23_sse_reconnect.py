@@ -18,7 +18,7 @@ async def test_channel_reconnect_catches_up(vault_a, vault_b, cdp_a, cdp_b, api_
     path = "E2E/ChannelReconnect.md"
 
     # Wait for channel to be connected on B (may take a moment after prior tests)
-    await cdp_b.wait_for_stream_connected(timeout=10)
+    await cdp_b.wait_for_stream_connected()
 
     # Disconnect B's channel
     await cdp_b.disconnect_stream()
@@ -27,13 +27,13 @@ async def test_channel_reconnect_catches_up(vault_a, vault_b, cdp_a, cdp_b, api_
 
     # A creates a note while B's channel is down
     write_note(vault_a, path, "# Channel Reconnect Test\nCreated while B was disconnected")
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
     # Reconnect B's channel — triggers catch-up pull
     await cdp_b.reconnect_stream()
 
     # Wait for catch-up pull to deliver the note
-    b_content = wait_for_file(vault_b, path, timeout=15)
+    b_content = wait_for_file(vault_b, path)
     assert "Created while B was disconnected" in b_content, (
         f"B should have received the note via catch-up pull, got: {b_content[:200]}"
     )

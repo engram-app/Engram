@@ -21,6 +21,7 @@ import pytest
 
 from helpers.log_oracle import wait_for_delivery
 from helpers.vault import delete_note, wait_for_content, wait_for_file_gone, write_note
+from helpers.latency import DELIVERY_TIMEOUT
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("E2E_ENABLE_CRDT") != "true",
@@ -28,7 +29,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 # CRDT delivery = server checkpoint debounce (~5s) + handshake; be generous.
-CRDT_TIMEOUT = 30
+CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound; latency is recorded, not asserted
 
 
 async def _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, body, marker):

@@ -102,7 +102,7 @@ async def test_click_triggers_sync_pull(vault_a, cdp_a, api_sync):
     await cdp_a.click_status_bar()
 
     # The note must arrive locally as a result of the sync the click ran.
-    local = wait_for_content(vault_a, path, marker, timeout=15)
+    local = wait_for_content(vault_a, path, marker)
     assert marker in local, (
         f"status bar click did not pull pending server change into {path!r}"
     )

@@ -35,7 +35,7 @@ async def test_ignore_patterns(vault_a, cdp_a, api_sync):
         write_note(vault_a, normal_path, "# Control\nThis SHOULD sync.")
 
         # Wait for the normal file to appear on server (proves push is working)
-        api_sync.wait_for_note(normal_path, timeout=10)
+        api_sync.wait_for_note(normal_path)
 
         # Negative assertion: prove the ignored file did NOT sync.
         # A sleep is appropriate here — there's nothing to poll for, and the control

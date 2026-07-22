@@ -27,6 +27,7 @@ import time
 import pytest
 
 from helpers.vault import wait_for_content
+from helpers.latency import DELIVERY_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ pytestmark = pytest.mark.skipif(
     reason="CRDT-only suite — set E2E_ENABLE_CRDT=true with a CRDT_ENABLED backend",
 )
 
-CRDT_TIMEOUT = 30
+CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound; latency is recorded, not asserted
 
 
 def _note_id(api_sync, path: str) -> str:

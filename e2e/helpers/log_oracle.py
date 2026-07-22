@@ -34,6 +34,8 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from helpers.latency import DELIVERY_TIMEOUT, record
+
 _RECEIVE_CATEGORIES = ("channel", "ws")
 _MATERIALIZE_CATEGORY = "pull"
 # Receiver-side "wrote it to disk" signatures, per plugin src (2026-07-04).
@@ -95,7 +97,7 @@ def _timeout_error(
 
 
 def wait_for_delivery(
-    vault_path, rel_path: str, api_sync, timeout: float = 30, poll: float = 0.3
+    vault_path, rel_path: str, api_sync, timeout: float = DELIVERY_TIMEOUT, poll: float = 0.3
 ) -> str:
     """Poll until ``rel_path`` materializes in ``vault_path``, return its text.
 
@@ -103,7 +105,8 @@ def wait_for_delivery(
     mined from ``api_sync.get_logs()``.
     """
     full = Path(vault_path) / rel_path
-    deadline = time.monotonic() + timeout
+    start = time.monotonic()
+    deadline = start + timeout
     while time.monotonic() < deadline:
         # Non-empty guard matches wait_for_binary_delivery: sync creates the
         # file then writes the body, so a bare exists() check can return "" in
@@ -112,13 +115,14 @@ def wait_for_delivery(
         # diagnostic ever firing — so wait past the empty window like the
         # binary variant does.
         if full.exists() and full.stat().st_size > 0:
+            record("delivery", rel_path, time.monotonic() - start)
             return full.read_text(encoding="utf-8")
         time.sleep(poll)
     raise _timeout_error(rel_path, api_sync, timeout, _NOTE_MATERIALIZE)
 
 
 def wait_for_binary_delivery(
-    vault_path, rel_path: str, api_sync, timeout: float = 30, poll: float = 0.3
+    vault_path, rel_path: str, api_sync, timeout: float = DELIVERY_TIMEOUT, poll: float = 0.3
 ) -> bytes:
     """Attachment variant of ``wait_for_delivery``.
 
@@ -127,9 +131,11 @@ def wait_for_binary_delivery(
     attachment materialize signatures ("Attachment applied/created:").
     """
     full = Path(vault_path) / rel_path
-    deadline = time.monotonic() + timeout
+    start = time.monotonic()
+    deadline = start + timeout
     while time.monotonic() < deadline:
         if full.exists() and full.stat().st_size > 0:
+            record("binary_delivery", rel_path, time.monotonic() - start)
             return full.read_bytes()
         time.sleep(poll)
     raise _timeout_error(rel_path, api_sync, timeout, _ATTACHMENT_MATERIALIZE)

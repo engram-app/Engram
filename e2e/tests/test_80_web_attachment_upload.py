@@ -16,10 +16,11 @@ covers the web-origin contract end to end.
 import pytest
 
 from helpers.log_oracle import wait_for_binary_delivery
+from helpers.latency import DELIVERY_TIMEOUT
 
 # B-side convergence (pull + blob fetch) can lag under parallel CI load — give
 # it more room than the suite's 15s default. Matches test_79.
-CONVERGE_TIMEOUT = 25
+CONVERGE_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound; latency is recorded, not asserted
 
 # Minimal valid PNG: 1x1 red pixel (same constant as test_79 / test_33).
 TINY_PNG = (
