@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -180,7 +180,19 @@ async def test_deaf_live_bound_note_converges_via_socket_replay(vault_b, cdp_b, 
     # Baseline AFTER staging, BEFORE the X append: scopes the presence oracles
     # below to post-wedge lines (see docstring — live-binding X above already
     # logged its own pre-wedge "socket converge" line).
-    post_wedge = datetime.now(timezone.utc).isoformat()
+    #
+    # Stored client-log ts is TRUNCATED to whole seconds (Logs.parse_ts) and
+    # the /logs?since= filter is strictly-greater, so a heal line stamped in
+    # the SAME second as a microsecond baseline gets floored below it and
+    # silently dropped (run 29900728387: heal at :25.522 stored as :25 failed
+    # `> :25.3`, oracle timed out with the line present). Separate the epochs
+    # by 2s, then floor the baseline and back off one whole second: pre-wedge
+    # lines are now strictly older than the baseline second, post-wedge lines
+    # strictly newer.
+    time.sleep(2)
+    post_wedge = (
+        datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=1)
+    ).isoformat()
 
     api_sync.append_note(path_x, "\nEDIT-WHILE-B-DEAF\n")
     api_sync.wait_for_note_content(path_x, "EDIT-WHILE-B-DEAF", timeout=CRDT_TIMEOUT)
