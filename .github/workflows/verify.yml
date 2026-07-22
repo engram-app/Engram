@@ -1883,17 +1883,18 @@ jobs:
           rm -rf ci-artifacts/
           find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
-  # REPORT-ONLY (intentionally NOT in the required `ci` aggregate gate below).
-  # This job is a cross-repo-dependent tier: it imports the plugin's sim adapters
-  # (tests/sim/{obsidian-shim,vault-fs}.ts + tests/__mocks__/obsidian.ts), which
-  # do not exist on plugin `main` until plugin #294 (feat/convergence-sim-tier)
-  # merges. Until then the "Checkout plugin" step (plugin main by default) yields
-  # a job that fails the import — so gating on it would block EVERY backend CRDT
-  # PR. Keep it report-only; its result is still visible as its own PR check.
-  # Flipping it to REQUIRED (add back to `ci`.needs + the pass/fail loop) is a
-  # tracked follow-up, gated on the sim adapters being stable on plugin `main`.
-  # This is the migration's T5 trap: a job that depends on the other repo must
-  # not gate the merge until its dependency has landed on that repo's main.
+  # REQUIRED (in the `ci` aggregate gate below). This tier is the deterministic
+  # replacement for the demoted plugin<->backend contract e2e: it boots the REAL
+  # plugin SyncEngine against the REAL backend over real WebSockets with event
+  # barriers (no wall-clock sleeps), so it is deterministic — burned in 5/5 green
+  # locally before promotion (see PR #1074).
+  #
+  # It imports the plugin's sim adapters (tests/sim/{obsidian-shim,vault-fs}.ts +
+  # tests/__mocks__/obsidian.ts), which landed on plugin `main` via plugin #294.
+  # The live-fanout + #285 scenarios depend on plugin #296 (equal-seq fence) and
+  # backend #1073 (stale-head-after-recreate), both on main. The `ci` loop treats
+  # `skipped` as pass, so a fingerprint short-circuit or a cross-repo plugin
+  # dispatch (where this job's `if:` is false) never blocks the merge.
   headless-protocol:
     # Headless PROTOCOL tier (e2e/headless/): real plugin SyncEngine vs the real
     # backend over real WebSockets, event barriers, no wall-clock waits. Mirrors
@@ -1996,6 +1997,7 @@ jobs:
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
           ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
+          CI_ENGRAM_CONTAINER: ${{ env.CI_PROJECT }}-engram-1
           AUTH_PROVIDER: local
         run: |
           export PATH="$HOME/.bun/bin:$PATH"
@@ -3495,7 +3497,7 @@ jobs:
     # and a real e2e/unit failure there is never gated. Mirrors the per-job +
     # prebuild is-full forcing so main is genuinely the full safety net.
     if: always() && (needs.fingerprint.outputs.is-full == 'true' || needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
-    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, migration-gates, static-checks]
+    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, migration-gates, static-checks, headless-protocol]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
@@ -3510,6 +3512,7 @@ jobs:
           EB="${{ needs.e2e-browser.result }}"
           SC="${{ needs.static-checks.result }}"
           MG="${{ needs.migration-gates.result }}"
+          HP="${{ needs.headless-protocol.result }}"
 
           # Phase 4: a targeted e2e run ([e2e: suite/pattern]) is NEVER mergeable —
           # only one suite ran (with -k), so the full integration matrix is unproven.
@@ -3548,7 +3551,7 @@ jobs:
           # are intentionally skipped — plugin cannot regress backend internals.
           # Only assert success when those jobs actually ran. (e2e-* moved to the
           # report-only warnings above; deterministic jobs remain the merge gate.)
-          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "static-checks=$SC" "migration-gates=$MG"; do
+          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "static-checks=$SC" "migration-gates=$MG" "headless-protocol=$HP"; do
             name="${pair%=*}"; result="${pair#*=}"
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "::error::$name failed: $result"

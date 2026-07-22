@@ -13,42 +13,24 @@
 //         bun --preload ./e2e/headless/preload.ts ./e2e/headless/run.ts
 //
 // Exit 0 = all GREEN gate scenarios passed; exit 1 = any GREEN scenario failed
-// or setup failed. The #282 repro (see below) is reported but NEVER fails the
-// process — it documents an OPEN main bug, like the #285 TODO.
+// or setup failed. Every scenario here is a GREEN gate — this tier is the
+// deterministic replacement for the demoted plugin<->backend contract e2e.
 //
-// GATE COVERAGE (do NOT over-read): the 4 green scenarios prove catch-up
-// delivery (server -> replica) + server persistence. They do NOT prove live
-// real-time A->B fan-out — that path is NOT gated (blocked by plugin #282 that
-// this tier reproduces below). See e2e/headless/README.md "Deferred scenarios".
+// GATE COVERAGE: catch-up delivery (server -> replica, late-join + reconnect) +
+// server persistence + LIVE real-time A->B fan-out (both replicas enrolled, no
+// reconnect) + the #285 stale-head-after-room-recreate regression.
 //
-// DEFERRED (not yet in the gate, disclosed like the payloads below):
-//   - edit->deliver, offline-queue flush — achievable via catch-up WITHOUT
-//     #282; good next additions.
-//   - rename both-paths — deferred.
-//   - live A->B fan-out — NOT gated; blocked by plugin #282.
-//   - stale-head #285 regression — TODO, needs #1073 in the image.
+// Two protocol/server payloads the client-only sim tier cannot see, now BOTH
+// gated green because their fixes landed on main:
 //
-// ---------------------------------------------------------------------------
-// TWO deferred/known payloads this tier exists to pin (both are protocol/server
-// bugs the client-only sim tier cannot see by construction):
+//   - live A->B fan-out — was RED pre-plugin-#282 (an equal-seq fence collision
+//     masked the heal so the note stuck empty). Fixed by the content-hash-aware
+//     equal-seq fence (plugin #296 / #282). Now gated: `live A->B fan-out`.
 //
-// TODO(headless): stale-head #285 regression — terminate_room via the
-//   backend_rpc HTTP seam, edit via REST, reconnect a replica, MUST converge
-//   (the #285 e2e-equivalent, deterministic in minutes not dice). Needs the
-//   #285 server fix in the image (unmerged PR #1073). Add once #1073 merges.
-//
-// #282 (fence v<=v collision masks heal) — REPRODUCED HERE, deterministically,
-//   by the `HEADLESS_REPRO_282` scenario below. A LIVE note_yjs_update to an
-//   idle (never-live-bound) receiver routes through adoptHistoryLessNote ->
-//   REST getUpdates; that pull loses a commit race (404) so the content never
-//   applies, but the op's seq still stamps the per-path fence (syncState.seq).
-//   The follow-up seq-replay then sees the content op at `seq <= fence` and
-//   SKIPS it as history — the note is stuck empty forever. Confirmed against
-//   the running 0.6.0 image: the SAME note converges cleanly for a late-joiner
-//   / a reconnecting replica (no live op ever stamped the fence), so the server
-//   delivery path is sound; the bug is purely the client fence collision. This
-//   scenario is the tier's live payload — it is RED on main and gated OFF the
-//   green exit code until plugin #282 lands.
+//   - stale head after room recreate — was RED pre-backend-#1073 (a room
+//     recreated by a post-terminate edit could serve a stale head to a
+//     reconnecting replica). Fixed by #1073. Gated deterministically via the
+//     backend_rpc `terminate_room` seam: `stale head after room recreate (#285)`.
 // ---------------------------------------------------------------------------
 
 import { execFileSync } from "node:child_process";
@@ -62,6 +44,20 @@ const PLUGIN_SRC = requireEnv("ENGRAM_PLUGIN_SRC");
 const API_URL = (process.env.ENGRAM_API_URL ?? "http://localhost:8100/api").replace(/\/+$/, "");
 // Postgres container for the plan-override grant (mirrors e2e/helpers/billing.py).
 const CI_POSTGRES_CONTAINER = process.env.CI_POSTGRES_CONTAINER ?? "engram-crdt-postgres-1";
+// Engram release container for backend_rpc (mirrors e2e/helpers/backend_rpc.py) —
+// used to stage a server-side state a client API can't reach (terminate_room).
+const CI_ENGRAM_CONTAINER = process.env.CI_ENGRAM_CONTAINER ?? "engram-crdt-engram-1";
+
+/** Evaluate an Elixir expr on the running backend node via the release's rpc,
+ *  same docker-exec seam as e2e/helpers/backend_rpc.py. Throws on non-zero exit
+ *  so a mis-staged scenario fails loudly at the stage step, not later. */
+function backendRpc(expr: string): string {
+	return execFileSync(
+		"docker",
+		["exec", "-i", CI_ENGRAM_CONTAINER, "/app/bin/engram", "rpc", expr],
+		{ timeout: 20_000, encoding: "utf8" },
+	).trim();
+}
 
 function requireEnv(name: string): string {
 	const v = process.env[name];
@@ -156,6 +152,16 @@ function grantTestPlan(email: string): void {
 		["exec", "-i", CI_POSTGRES_CONTAINER, "psql", "-U", "engram", "-d", "engram", "-tA", "-c", sql],
 		{ timeout: 10_000 },
 	);
+}
+
+/** Resolve a note's server id from its path (GET /notes/*path -> flat `{id}`). */
+async function getNoteId(token: string, vaultId: string, notePath: string): Promise<string> {
+	const url = `${API_URL}/notes/${encodeURIComponent(notePath)}`;
+	const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, "X-Vault-ID": vaultId } });
+	if (res.status !== 200) throw new Error(`getNoteId: GET ${notePath} -> ${res.status}`);
+	const body = (await res.json()) as { id?: string };
+	if (!body.id) throw new Error(`getNoteId: no id in response for ${notePath}`);
+	return body.id;
 }
 
 async function setupSession(): Promise<Session> {
@@ -448,9 +454,11 @@ class Replica {
 }
 
 // ---------------------------------------------------------------------------
-// Scenarios. GREEN gate = must pass (exit 1 on failure). All prove real
-// protocol behavior against current main: A's write persists server-side, and a
-// receiver converges via clean catch-up (late-join + reconnect). Each < 30s.
+// Scenarios. Every one is a GREEN gate = must pass (exit 1 on failure). They
+// prove real protocol behavior against current main: A's write persists
+// server-side, a receiver converges via clean catch-up (late-join + reconnect),
+// live A->B fan-out delivers over the socket, and a recreated room serves a
+// consistent head (#285). Each < 30s.
 // ---------------------------------------------------------------------------
 async function main(): Promise<void> {
 	const obs = await import("obsidian");
@@ -462,16 +470,16 @@ async function main(): Promise<void> {
 	const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "headless-tier-"));
 	console.log(`[headless] api=${API_URL} vault=${session.vaultId} root=${rootDir}`);
 
-	const results: { name: string; ok: boolean; ms: number; err?: string; gate: boolean }[] = [];
-	async function scenario(name: string, gate: boolean, run: () => Promise<void>): Promise<void> {
+	const results: { name: string; ok: boolean; ms: number; err?: string }[] = [];
+	async function scenario(name: string, run: () => Promise<void>): Promise<void> {
 		const t0 = Date.now();
 		try {
 			await run();
-			results.push({ name, ok: true, ms: Date.now() - t0, gate });
+			results.push({ name, ok: true, ms: Date.now() - t0 });
 			console.log(`[headless] PASS  ${name}  (${Date.now() - t0}ms)`);
 		} catch (e) {
-			results.push({ name, ok: false, ms: Date.now() - t0, err: (e as Error).message, gate });
-			console.error(`[headless] ${gate ? "FAIL" : "known-red"}  ${name}  (${Date.now() - t0}ms)`);
+			results.push({ name, ok: false, ms: Date.now() - t0, err: (e as Error).message });
+			console.error(`[headless] FAIL  ${name}  (${Date.now() - t0}ms)`);
 			console.error(`        ${(e as Error).message}`);
 		}
 	}
@@ -481,14 +489,14 @@ async function main(): Promise<void> {
 	// GREEN 1 — handshake: two devices join the crdt room + complete catch-up.
 	const a = await Replica.boot(session, "A", rootDir);
 	const b = await Replica.boot(session, "B", rootDir);
-	await scenario("handshake: A+B join + complete catch-up", true, async () => {
+	await scenario("handshake: A+B join + complete catch-up", async () => {
 		await Promise.all([barrier.synced(a), barrier.synced(b)]);
 	});
 
 	// GREEN 2 — A's create persists server-side over the real CRDT protocol.
 	const persistPath = "Headless/Persist.md";
 	const persistBody = `# Persist\n\nA -> server ${Date.now()}`;
-	await scenario("create -> server persists content (A -> server)", true, async () => {
+	await scenario("create -> server persists content (A -> server)", async () => {
 		await a.createNote(persistPath, persistBody);
 		await serverHas(persistPath, barrier.sha256(persistBody));
 	});
@@ -497,7 +505,7 @@ async function main(): Promise<void> {
 	// exists converges via its initial catch-up (server -> new replica).
 	const latePath = "Headless/Late.md";
 	const lateBody = `# Late\n\nlate-join content ${Date.now()}`;
-	await scenario("late-joiner catch-up delivery (server -> fresh replica)", true, async () => {
+	await scenario("late-joiner catch-up delivery (server -> fresh replica)", async () => {
 		await a.createNote(latePath, lateBody);
 		await serverHas(latePath, barrier.sha256(lateBody)); // durable before the joiner catches up
 		const c = await Replica.boot(session, "C", rootDir);
@@ -509,7 +517,7 @@ async function main(): Promise<void> {
 	// GREEN 4 — reconnect catch-up: B offline, A creates, B reconnects + converges.
 	const reconPath = "Headless/Reconnect.md";
 	const reconBody = `# Reconnect\n\ncreated while B offline ${Date.now()}`;
-	await scenario("reconnect catch-up (B offline, A creates, B reconnects)", true, async () => {
+	await scenario("reconnect catch-up (B offline, A creates, B reconnects)", async () => {
 		const before = b.catchupCount;
 		await b.goOffline();
 		await a.createNote(reconPath, reconBody);
@@ -520,32 +528,56 @@ async function main(): Promise<void> {
 		await barrier.noteVisible(b, reconPath, barrier.sha256(reconBody));
 	});
 
-	// KNOWN-RED payload — LIVE delivery to an already-present idle receiver.
-	// Reproduces plugin #282 (fence v<=v collision masks heal, see file header).
-	// Gated OFF the exit code: RED on main by design until #282 lands.
-	if (process.env.HEADLESS_REPRO_282) {
-		const livePath = "Headless/Live282.md";
-		const liveBody = `# Live\n\nlive delivery ${Date.now()}`;
-		await scenario("live create -> deliver to idle B [#282 repro, known-red]", false, async () => {
-			await a.createNote(livePath, liveBody);
-			await barrier.noteVisible(b, livePath, barrier.sha256(liveBody));
-		});
-	}
+	// GREEN 5 — LIVE A->B fan-out: both replicas enrolled/live (B never
+	// reconnects here), A creates then live-edits, B converges via the live
+	// socket push (note_yjs_update fan-out), NOT a catch-up. This is the path
+	// that was RED pre-plugin-#282 (an equal-seq fence collision masked the heal
+	// so the note stuck empty); the content-hash-aware fence (#296) converges it.
+	const fanoutPath = "Headless/Fanout.md";
+	const fanoutCreate = `# Fanout\n\ncreated live ${Date.now()}`;
+	const fanoutEdit = `${fanoutCreate}\n\nlive edit fanned out.`;
+	await scenario("live A->B fan-out (create + live edit, no reconnect)", async () => {
+		await a.createNote(fanoutPath, fanoutCreate);
+		await barrier.noteVisible(b, fanoutPath, barrier.sha256(fanoutCreate)); // create fans out live
+		await a.editNote(fanoutPath, fanoutEdit);
+		await barrier.noteVisible(b, fanoutPath, barrier.sha256(fanoutEdit)); // live delta fans out
+	});
+
+	// GREEN 6 — stale head after room recreate (#285). Kill the note's CRDT room
+	// via the backend_rpc terminate_room seam; a subsequent edit recreates the
+	// room with a NEW head; a replica that reconnects MUST read that new head,
+	// not the stale pre-terminate one. RED pre-backend-#1073; deterministic here
+	// (the terminate is a staged server state, not a timing dice-roll).
+	const stalePath = "Headless/Stale285.md";
+	const staleBase = `# Stale\n\nbase ${Date.now()}`;
+	const staleEdit = `${staleBase}\n\nedit after room recreate.`;
+	await scenario("stale head after room recreate (#285)", async () => {
+		await a.createNote(stalePath, staleBase);
+		await serverHas(stalePath, barrier.sha256(staleBase)); // durable head before terminate
+		const noteId = await getNoteId(session.token, session.vaultId, stalePath);
+		backendRpc(`Engram.Notes.CrdtRegistry.terminate_room("${noteId}")`);
+		// B offline -> it MUST converge via a reconnect catch-up that reads the
+		// head the recreate leaves behind (the exact leg #285 broke).
+		const before = b.catchupCount;
+		await b.goOffline();
+		await a.editNote(stalePath, staleEdit); // A's live edit recreates the terminated room
+		await serverHas(stalePath, barrier.sha256(staleEdit)); // durable new head
+		const synced = barrier.synced(b, before); // arm BEFORE reconnect
+		await b.goOnline();
+		await synced;
+		await barrier.noteVisible(b, stalePath, barrier.sha256(staleEdit));
+	});
 
 	a.disconnect();
 	b.disconnect();
 	fs.rmSync(rootDir, { recursive: true, force: true });
 
-	const gateFails = results.filter((r) => r.gate && !r.ok);
-	const knownRed = results.filter((r) => !r.gate && !r.ok);
-	if (knownRed.length > 0) {
-		console.log(`[headless] ${knownRed.length} known-red repro(s) failed as expected (not fatal)`);
-	}
-	if (gateFails.length > 0) {
-		console.error(`[headless] ${gateFails.length} GREEN gate scenario(s) FAILED`);
+	const fails = results.filter((r) => !r.ok);
+	if (fails.length > 0) {
+		console.error(`[headless] ${fails.length} gate scenario(s) FAILED`);
 		process.exit(1);
 	}
-	console.log(`[headless] all ${results.filter((r) => r.gate).length} GREEN gate scenarios PASSED`);
+	console.log(`[headless] all ${results.length} gate scenarios PASSED`);
 	process.exit(0);
 }
 

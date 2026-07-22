@@ -65,7 +65,8 @@ Event-driven, never sleep-then-assert:
 
 ## Scenarios
 
-GREEN gate (must pass — proven green + deterministic on current main, each < 1 s):
+GREEN gate (every scenario must pass — proven green + deterministic on current
+main, burned in 5/5 locally before the job was promoted to required; each < 3 s):
 
 1. **handshake** — two devices join the `crdt:` room + complete catch-up.
 2. **create → server persists** — A creates a note; the server durably holds the
@@ -74,56 +75,47 @@ GREEN gate (must pass — proven green + deterministic on current main, each < 1
    converges via its initial catch-up (server → new replica).
 4. **reconnect catch-up** — B goes offline, A creates a note, B reconnects and
    converges (server → reconnecting replica).
+5. **live A→B fan-out** — both replicas stay enrolled/live; A creates then
+   live-edits a note; B converges via the live socket push (`note_yjs_update`
+   fan-out), NOT a reconnect catch-up. This is the path that was RED pre-plugin
+   `#282`; see the payload note below.
+6. **stale head after room recreate (`#285`)** — the room is killed out from
+   under the live devices via the `backend_rpc` `terminate_room` seam, an edit
+   recreates it with a new head, and a reconnecting replica MUST read the new
+   head — not the stale pre-terminate one. RED pre-backend `#1073`.
 
-### What the green gate proves (do NOT over-read it)
+### What the green gate proves
 
-All four green scenarios exercise **catch-up delivery (server → replica) + server
-persistence** over the real CRDT protocol. The gate does **NOT** prove **live
-real-time A→B fan-out** — that path is deliberately not gated (see below). A
-green run means "the server persists and a replica converges on catch-up", not
-"a live edit on A reached B in real time".
+The catch-up scenarios (1–4) exercise **catch-up delivery (server → replica) +
+server persistence**. Scenario 5 adds **live real-time A→B fan-out**, and
+scenario 6 the **stale-head-after-recreate** protocol invariant. Together they
+are the deterministic replacement for the demoted plugin↔backend contract e2e.
 
 ### Deferred scenarios
 
-Not yet in the gate. Disclosed with the same discipline as the `#282`/`#285`
-payloads below so a reader does not assume they're covered:
+Not yet in the gate, disclosed so a reader does not assume they're covered:
 
-- **`edit → deliver`** — achievable via catch-up WITHOUT `#282` (it's the same
-  server→replica convergence path as create). Deferred; good next addition.
-- **`offline-queue flush`** — likewise achievable via catch-up without `#282`.
-  Deferred; good next addition.
+- **`offline-queue flush`** — achievable via catch-up; good next addition.
 - **`rename both-paths`** (old path cleaned + new path delivered) — deferred.
-- **live A→B fan-out** — **NOT gated.** Blocked by the open plugin `#282` (fence
-  v≤v collision masks heal) that this tier already *reproduces* deterministically
-  (the `HEADLESS_REPRO_282=1` scenario, reported known-red). A live
-  `note_yjs_update` to an idle receiver is exactly the path `#282` breaks, so a
-  live fan-out scenario cannot be a green gate until `#282` lands. This is why
-  the green gate above is catch-up-only.
-- **stale-head `#285` regression** — TODO; needs the `#285` server fix (`#1073`)
-  in the image. See the payload note below.
 
 ## Known payloads (the reason this tier exists)
 
-Two protocol/server bugs the sim tier cannot catch:
+Two protocol/server bugs the sim tier cannot catch — both fixed on main and now
+gated **green** (they were RED before their fixes; this tier is what proves the
+fix and would catch a regression):
 
-- **`#282` (fence v≤v collision masks heal)** — REPRODUCED here deterministically
-  by the `HEADLESS_REPRO_282=1` scenario (LIVE delivery to an idle, never
-  live-bound receiver). A live `note_yjs_update` to such a receiver routes
-  through `adoptHistoryLessNote` → REST `getUpdates`; that pull loses a commit
-  race (404) so the content never applies, but the op's seq still stamps the
-  per-path fence (`syncState.seq`). The follow-up seq-replay then sees the
-  content op at `seq ≤ fence` and SKIPS it as history — the note is stuck empty.
-  Confirmed against the running image: the SAME note converges cleanly for a
-  late-joiner / reconnecting replica (no live op ever stamped the fence), so the
-  server delivery path is sound; the bug is purely the client fence collision.
-  This scenario is **RED on main by design** and gated OFF the green exit code
-  (reported as "known-red", not fatal) until plugin `#282` lands.
+- **`#282` (equal-seq fence collision masks heal)** — a live `note_yjs_update` to
+  an idle receiver could stamp the per-path fence (`syncState.seq`) with a seq
+  whose content never applied, so the follow-up seq-replay saw the content op at
+  `seq ≤ fence` and SKIPPED it as history — the note stuck empty. Fixed by the
+  content-hash-aware equal-seq fence (plugin `#296`): an equal-seq row carrying
+  new content is no longer dropped. Gated by scenario 5 (**live A→B fan-out**).
 
-- **`TODO(headless)`: stale-head `#285` regression** — terminate_room via the
-  backend_rpc HTTP seam, edit via REST, reconnect a replica, MUST converge (the
-  `#285` e2e-equivalent, deterministic in minutes not dice). This is the tier's
-  real headline payload. It needs the `#285` server fix in the image (unmerged
-  PR `#1073`). Add once `#1073` merges (or base a follow-up on that branch).
+- **stale head after room recreate (`#285`)** — a room recreated by a post-
+  `terminate_room` edit could serve a **stale head** to a reconnecting replica.
+  Fixed by backend `#1073` (stale-head-after-recreate + head-consistency
+  property). Gated deterministically by scenario 6 via the `backend_rpc`
+  `terminate_room` seam (`e2e/helpers/backend_rpc.py` equivalent, in `run.ts`).
 
 ## File map
 
