@@ -11,6 +11,13 @@ permissions:
 jobs:
   release-please:
     runs-on: [self-hosted, linux, x64, isolated]
+    # Our runner VMs rewrite github.com/engram-app/ remotes to the LAN git
+    # cache (insteadOf), so `gh` cannot infer the repo from `git remote -v`
+    # ("none of the git remotes ... point to a known GitHub host") — every gh
+    # call needs the repo pinned explicitly. Same class as #1052; see
+    # docs/context/gh-cli-runner-url-rewrite-and-release-repair.md (workspace).
+    env:
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Mint App token
         id: app-token
