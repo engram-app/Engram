@@ -1883,18 +1883,20 @@ jobs:
           rm -rf ci-artifacts/
           find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
-  # REQUIRED (in the `ci` aggregate gate below). This tier is the deterministic
-  # replacement for the demoted plugin<->backend contract e2e: it boots the REAL
-  # plugin SyncEngine against the REAL backend over real WebSockets with event
-  # barriers (no wall-clock sleeps), so it is deterministic — burned in 5/5 green
-  # locally before promotion (see PR #1074).
-  #
-  # It imports the plugin's sim adapters (tests/sim/{obsidian-shim,vault-fs}.ts +
+  # REPORT-ONLY (intentionally NOT in the required `ci` aggregate gate below).
+  # This tier boots the REAL plugin SyncEngine against the REAL backend over
+  # real WebSockets with event barriers (no wall-clock sleeps) — deterministic
+  # by construction, and burned in 5/5 green locally (see PR #1074). It imports
+  # the plugin's sim adapters (tests/sim/{obsidian-shim,vault-fs}.ts +
   # tests/__mocks__/obsidian.ts), which landed on plugin `main` via plugin #294.
   # The live-fanout + #285 scenarios depend on plugin #296 (equal-seq fence) and
-  # backend #1073 (stale-head-after-recreate), both on main. The `ci` loop treats
-  # `skipped` as pass, so a fingerprint short-circuit or a cross-repo plugin
-  # dispatch (where this job's `if:` is false) never blocks the merge.
+  # backend #1073 (stale-head-after-recreate), both on main.
+  #
+  # Flip to required (add to `ci`.needs + the pass/fail loop) after ~10
+  # consecutive infra-clean green CI runs — the nightly convergence run
+  # (#1078) runs this job on schedule, so its flake rate is measurable in the
+  # ci-ledger. Flip only once green with zero infra-only reds (docker --wait /
+  # docker pull / bun install --frozen-lockfile).
   headless-protocol:
     # Headless PROTOCOL tier (e2e/headless/): real plugin SyncEngine vs the real
     # backend over real WebSockets, event barriers, no wall-clock waits. Mirrors
@@ -3497,7 +3499,7 @@ jobs:
     # and a real e2e/unit failure there is never gated. Mirrors the per-job +
     # prebuild is-full forcing so main is genuinely the full safety net.
     if: always() && (needs.fingerprint.outputs.is-full == 'true' || needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
-    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, migration-gates, static-checks, headless-protocol]
+    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, migration-gates, static-checks]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
@@ -3512,7 +3514,6 @@ jobs:
           EB="${{ needs.e2e-browser.result }}"
           SC="${{ needs.static-checks.result }}"
           MG="${{ needs.migration-gates.result }}"
-          HP="${{ needs.headless-protocol.result }}"
 
           # Phase 4: a targeted e2e run ([e2e: suite/pattern]) is NEVER mergeable —
           # only one suite ran (with -k), so the full integration matrix is unproven.
@@ -3551,7 +3552,7 @@ jobs:
           # are intentionally skipped — plugin cannot regress backend internals.
           # Only assert success when those jobs actually ran. (e2e-* moved to the
           # report-only warnings above; deterministic jobs remain the merge gate.)
-          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "static-checks=$SC" "migration-gates=$MG" "headless-protocol=$HP"; do
+          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "static-checks=$SC" "migration-gates=$MG"; do
             name="${pair%=*}"; result="${pair#*=}"
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "::error::$name failed: $result"

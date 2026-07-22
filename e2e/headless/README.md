@@ -38,12 +38,14 @@ true-breakage bound), `CI_POSTGRES_CONTAINER` (for the plan-override grant).
 
 This tier imports the plugin's `tests/sim/obsidian-shim.ts`, `tests/sim/vault-fs.ts`,
 and `tests/__mocks__/obsidian.ts` from `ENGRAM_PLUGIN_SRC`. Those sim adapters
-currently live on the plugin branch `feat/convergence-sim-tier` (P1). The
-`headless-protocol` CI job checks the plugin out at the paired `PLUGIN_SHA`, so
-it goes green only once that branch is on plugin `main` (or when this backend PR
-is paired with the plugin branch via the `plugin_branch` dispatch input). Until
-then the job's import step will fail against plugin `main` — expected, and it
-resolves when the sim tier merges.
+landed on plugin `main` via plugin #294, so the `headless-protocol` CI job
+imports them from the plugin `main` checkout (no branch pairing required for
+this dependency).
+
+The job is currently **report-only** (not in the required `ci` gate) pending
+a CI burn-in period: the nightly convergence run (#1078) runs it on schedule
+so its flake rate is measurable before it gates every PR. See the job comment
+in `.github/workflows/verify.yml` for the flip criterion.
 
 ## Barriers (`barriers.ts`)
 
