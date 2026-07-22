@@ -204,13 +204,11 @@ async def test_deaf_live_bound_note_converges_via_socket_replay(vault_b, cdp_b, 
     assert "base line" in final, f"base content lost on B: {final!r}"
     wait_for_content(vault_b, path_y, "TRIGGER-EDIT-Y", timeout=CRDT_TIMEOUT)
 
-    # Mechanism oracles. get_logs aggregates BOTH devices, and the user's other
-    # device (A) legitimately heals its cold (not-live-bound) copy of X via the
-    # REST catch-up leg until Phase E deletes it — so the absence assert targets
-    # the LIVE-BOUND REST backstop's line specifically (deleted in the paired
-    # plugin PR; only a regression can re-emit it), and the presence asserts pin
-    # B's heal to the socket primitive (only a live-bound diverged note logs
-    # "socket converge", and only B has X bound). All three are scoped to
+    # Mechanism oracles. get_logs aggregates BOTH devices — and with Phase E3
+    # the COLD REST catch-up leg is deleted too, so the absence assert broadens
+    # to EVERY "REST converge" line from ANY device on ANY leg (a pre-E3
+    # plugin, or a regression re-adding any REST delta pull, fails it). The
+    # presence asserts pin B's heal to the socket primitive. All are scoped to
     # `post_wedge` so the live-bind step's own pre-wedge open-heal line can't
     # satisfy them.
     wait_for_client_log(api_sync, "gap-heal fired", timeout=CRDT_TIMEOUT, after=post_wedge)
@@ -226,12 +224,9 @@ async def test_deaf_live_bound_note_converges_via_socket_replay(vault_b, cdp_b, 
     )
     logs = api_sync.get_logs(limit=1000).get("logs", [])
     rest_lines = [
-        log["message"]
-        for log in logs
-        if "REST converge: live-bound" in log.get("message", "")
-        and path_x in log.get("message", "")
+        log["message"] for log in logs if "REST converge" in log.get("message", "")
     ]
-    assert not rest_lines, f"live-bound REST backstop ran for {path_x}: {rest_lines}"
+    assert not rest_lines, f"REST converge ran on some device/leg (Phase E3): {rest_lines}"
 
 
 @pytest.mark.asyncio
