@@ -24,11 +24,11 @@ deliberately does not (and cannot) cover that case via seq.
 from __future__ import annotations
 
 import os
-import time
 
 import pytest
 
 from helpers.backend_rpc import backend_rpc
+from helpers.log_oracle import wait_for_client_log
 from helpers.vault import wait_for_content
 
 pytestmark = pytest.mark.skipif(
@@ -45,25 +45,6 @@ def _note_id(api_sync, path: str) -> str:
     nid = inner.get("id") or inner.get("note_id") or inner.get("uuid")
     assert nid, f"no note id in GET /notes/{path}: {note}"
     return str(nid)
-
-
-def _wait_for_heal_log(api_sync, timeout: float) -> None:
-    """Poll client logs for ANY gap-heal fire line.
-
-    Deliberately does NOT match a note id: the heal is throttled with a
-    trailing coalesce (plugin scheduleSeqHeal), so the fire line names
-    whichever op ARMED the window — under suite churn that is often another
-    note entirely. The MECHANISM proof is the content assertion (a DROPPED
-    fan-out can only reach B via the seq-replay); this log check just pins
-    that a heal fired in the window at all.
-    """
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        logs = api_sync.get_logs(limit=500).get("logs", [])
-        if any("gap-heal fired" in log.get("message", "") for log in logs):
-            return
-        time.sleep(1)
-    raise TimeoutError(f"no 'gap-heal fired' client log within {timeout}s")
 
 
 @pytest.mark.asyncio
@@ -99,6 +80,8 @@ async def test_dropped_fanout_heals_via_seq_replay(vault_b, cdp_b, api_sync):
     final_y = wait_for_content(vault_b, path_y, "TRIGGER-EDIT-Y", timeout=CRDT_TIMEOUT)
     assert "base line" in final_y, f"base lost on B for {path_y}: {final_y!r}"
 
-    # Confirm a heal fired in the window (any note id — see helper docstring;
-    # the content assertions above are the mechanism proof).
-    _wait_for_heal_log(api_sync, timeout=CRDT_TIMEOUT)
+    # Confirm a heal fired in the window (id-agnostic: the heal is throttled
+    # with a trailing coalesce, so the fire line names whichever op ARMED the
+    # window, often another note under suite churn; the content assertions
+    # above are the mechanism proof, this just pins that a heal fired at all).
+    wait_for_client_log(api_sync, "gap-heal fired", timeout=CRDT_TIMEOUT)

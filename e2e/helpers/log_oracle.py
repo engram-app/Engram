@@ -133,3 +133,30 @@ def wait_for_binary_delivery(
             return full.read_bytes()
         time.sleep(poll)
     raise _timeout_error(rel_path, api_sync, timeout, _ATTACHMENT_MATERIALIZE)
+
+
+def wait_for_client_log(
+    api_sync, *needles: str, timeout: float, after: str | None = None
+) -> None:
+    """Poll client logs until one line contains ALL ``needles``.
+
+    Shared by CRDT mechanism-oracle tests (previously duplicated as a local
+    ``_wait_for_log``/``_wait_for_heal_log`` in each test file). Logs
+    aggregate across every device sharing the harness's client_id, so scope
+    with a path needle where only one device's line is valid.
+
+    ``after`` is an ISO 8601 timestamp, forwarded to ``GET /logs?since=``
+    (``LogsController``/``Logs.list_logs`` filter on the log's client-supplied
+    ``ts``, strictly greater-than). Pass a baseline captured right after
+    staging a wedge so a line logged BEFORE the wedge — e.g. an unrelated
+    open-heal that happens to match the same needles — can't satisfy the
+    wait. Omit it for an id-agnostic, window-agnostic wait (matches any line
+    ever logged).
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        logs = api_sync.get_logs(since=after or "", limit=1000).get("logs", [])
+        if any(all(n in log.get("message", "") for n in needles) for log in logs):
+            return
+        time.sleep(1)
+    raise TimeoutError(f"no client log containing {needles!r} within {timeout}s")

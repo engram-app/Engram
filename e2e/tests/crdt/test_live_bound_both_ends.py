@@ -26,11 +26,13 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import datetime, timezone
 
 import pytest
 
 from helpers.backend_rpc import backend_rpc
-from helpers.vault import wait_for_content
+from helpers.log_oracle import wait_for_client_log
+from helpers.vault import read_note, wait_for_content
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("E2E_ENABLE_CRDT") != "true",
@@ -112,39 +114,35 @@ async def test_remote_edit_converges_while_note_is_live_bound_in_obsidian(
     assert "EDIT-WHILE-B-LIVE-BOUND" in final, f"remote edit lost on B: {final!r}"
 
 
-def _wait_for_log(api_sync, *needles: str, timeout: float) -> None:
-    """Poll client logs until one line contains ALL `needles`. Logs aggregate
-    across BOTH devices; scope with a path needle where device matters."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        logs = api_sync.get_logs(limit=1000).get("logs", [])
-        if any(all(n in log.get("message", "") for n in needles) for log in logs):
-            return
-        time.sleep(1)
-    raise TimeoutError(f"no client log containing {needles!r} within {timeout}s")
-
-
 @pytest.mark.asyncio
 async def test_deaf_live_bound_note_converges_via_socket_replay(vault_b, cdp_b, api_sync):
     """D3 gate (single-path CRDT): the 2026-07-14 deaf-note class heals over
     the SOCKET alone — no REST converge, no full sync.
 
     Stage: X live-bound in B's editor; X's server room killed (B silently no
-    longer an observer — the prod deafness) AND X's next vault fan-out
-    swallowed (FanoutPacer.test_drop_next — the lost-broadcast class). A REST
-    edit to X then materializes server-side with a bumped vault seq B never
-    sees; a trigger edit to Y delivers a later seq, B detects it is behind,
-    and the seq replay's live-bound leg re-handshakes (STEP1 recreates the
-    room, STEP2 delivers the missing ops). Convergence may also ride a later
-    idle full-state fan-out for X (also socket, also armed-dropped above) —
-    the gate's oracle is split: presence of a socket-converge line for X, and
-    absence of the live-bound REST backstop's line for X specifically (the
-    aggregated logs legitimately carry an unrelated REST catch-up line for
-    A's cold copy of X, which is not this backstop and must not trip the gate).
+    longer an observer — the prod deafness) AND every vault fan-out for X in
+    the window swallowed (FanoutPacer.test_drop_next — the lost-broadcast
+    class). A REST edit to X then materializes server-side with a bumped
+    vault seq B never sees; a trigger edit to Y delivers a later seq, B
+    detects it is behind, and the seq replay's live-bound leg re-handshakes
+    (STEP1 recreates the room, STEP2 commits the missing ops — logged
+    "socket converge: STEP2 committed <path>"). Convergence may also ride a
+    later idle full-state fan-out for X (also socket, also swallowed by the
+    generous drop count above) — the gate's oracle is split: presence of a
+    socket-converge line for X, and absence of the live-bound REST backstop's
+    line for X specifically (the aggregated logs legitimately carry an
+    unrelated REST catch-up line for A's cold copy of X, which is not this
+    backstop and must not trip the gate).
+
+    Presence assertions are scoped to a baseline captured right AFTER staging
+    the wedge (before X's append): live-binding X above fires its own
+    healNoteOnOpen "socket converge" line for X BEFORE the wedge even exists,
+    which would otherwise satisfy the presence oracle without the replay leg
+    ever running.
 
     A pre-D3 plugin (still leaning on the REST backstop) never logs "socket
-    converge" for X and fails the presence oracle, and would also trip the
-    live-bound-backstop absence line; a post-D3 plugin with a broken
+    converge" for X post-wedge and fails the presence oracle, and would also
+    trip the live-bound-backstop absence line; a post-D3 plugin with a broken
     handshake path times out on content.
     """
     path_x = "E2E/Crdt/DeafLiveBound.md"
@@ -174,8 +172,15 @@ async def test_deaf_live_bound_note_converges_via_socket_replay(vault_b, cdp_b, 
     note_id_x = _note_id(api_sync, path_x)
     # Stage the deafness: room dead (B silently unobserved) + next fan-out lost.
     backend_rpc(f'Engram.Notes.CrdtRegistry.terminate_room("{note_id_x}")')
-    # 2: the delta emit AND a possible idle full-state re-emit — only the socket heal may deliver X
-    backend_rpc(f'Engram.Notes.FanoutPacer.test_drop_next("{note_id_x}", 2)')
+    # generous: swallow EVERY fan-out for X in the window — emit-count drift must
+    # not leak a seq-bearing frame (fence-mask class); replay rows are not
+    # fan-outs and are unaffected
+    backend_rpc(f'Engram.Notes.FanoutPacer.test_drop_next("{note_id_x}", 10)')
+
+    # Baseline AFTER staging, BEFORE the X append: scopes the presence oracles
+    # below to post-wedge lines (see docstring — live-binding X above already
+    # logged its own pre-wedge "socket converge" line).
+    post_wedge = datetime.now(timezone.utc).isoformat()
 
     api_sync.append_note(path_x, "\nEDIT-WHILE-B-DEAF\n")
     api_sync.wait_for_note_content(path_x, "EDIT-WHILE-B-DEAF", timeout=CRDT_TIMEOUT)
@@ -191,11 +196,22 @@ async def test_deaf_live_bound_note_converges_via_socket_replay(vault_b, cdp_b, 
     # device (A) legitimately heals its cold (not-live-bound) copy of X via the
     # REST catch-up leg until Phase E deletes it — so the absence assert targets
     # the LIVE-BOUND REST backstop's line specifically (deleted in the paired
-    # plugin PR; only a regression can re-emit it), and the presence assert pins
+    # plugin PR; only a regression can re-emit it), and the presence asserts pin
     # B's heal to the socket primitive (only a live-bound diverged note logs
-    # "socket converge", and only B has X bound).
-    _wait_for_log(api_sync, "gap-heal fired", timeout=CRDT_TIMEOUT)
-    _wait_for_log(api_sync, "socket converge", path_x, timeout=CRDT_TIMEOUT)
+    # "socket converge", and only B has X bound). All three are scoped to
+    # `post_wedge` so the live-bind step's own pre-wedge open-heal line can't
+    # satisfy them.
+    wait_for_client_log(api_sync, "gap-heal fired", timeout=CRDT_TIMEOUT, after=post_wedge)
+    wait_for_client_log(
+        api_sync, "socket converge", path_x, timeout=CRDT_TIMEOUT, after=post_wedge
+    )
+    wait_for_client_log(
+        api_sync,
+        "socket converge: STEP2 committed",
+        path_x,
+        timeout=CRDT_TIMEOUT,
+        after=post_wedge,
+    )
     logs = api_sync.get_logs(limit=1000).get("logs", [])
     rest_lines = [
         log["message"]
@@ -204,3 +220,100 @@ async def test_deaf_live_bound_note_converges_via_socket_replay(vault_b, cdp_b, 
         and path_x in log.get("message", "")
     ]
     assert not rest_lines, f"live-bound REST backstop ran for {path_x}: {rest_lines}"
+
+
+@pytest.mark.asyncio
+async def test_deaf_note_survives_handshake_rate_limit_and_heals_on_restore(
+    vault_b, cdp_b, api_sync
+):
+    """Graceful degradation + recovery, socket-only design (E1).
+
+    The deleted REST backstop (restConvergeLiveBound) used to guarantee a
+    deaf live-bound note converged even when every channel-heal attempt was
+    rate-limited. With the backstop gone, that class of coverage — bounded
+    behavior under rate limiting, heal on budget restore — has to be pinned
+    directly: this test proves a deaf note does NOT falsely converge while
+    the handshake budget is zero (no silent data loss, no fake success), and
+    then converges on the very next heal poke once the budget is restored.
+    No trigger_full_sync, no Obsidian restart, ever.
+    """
+    path_x = "E2E/Crdt/DeafLiveBoundRateLimited.md"
+    path_y = "E2E/Crdt/DeafLiveBoundRateLimitedTrigger.md"
+
+    api_sync.create_note(path_x, "# Deaf Live Bound Rate Limited\nbase line.\n")
+    api_sync.create_note(path_y, "# Deaf Live Bound Rate Limited Trigger\nbase line.\n")
+    await cdp_b.trigger_full_sync()
+    wait_for_content(vault_b, path_x, "base line", timeout=CRDT_TIMEOUT)
+    wait_for_content(vault_b, path_y, "base line", timeout=CRDT_TIMEOUT)
+
+    # Live-bind X in B's editor BEFORE the wedge, so B's Y.Doc owns it.
+    opened = await cdp_b.evaluate(
+        """
+        (async () => {
+          const f = app.vault.getAbstractFileByPath(%r);
+          if (!f) return "no-file";
+          await app.workspace.getLeaf(false).openFile(f);
+          return app.workspace.activeEditor?.file?.path ?? "no-active";
+        })()
+        """
+        % path_x,
+        await_promise=True,
+    )
+    assert opened == path_x, f"failed to live-bind note in Obsidian editor: {opened!r}"
+
+    note_id_x = _note_id(api_sync, path_x)
+    # Stage the deafness: room dead (B silently unobserved) + next fan-out lost.
+    backend_rpc(f'Engram.Notes.CrdtRegistry.terminate_room("{note_id_x}")')
+    # generous: swallow EVERY fan-out for X in the window — emit-count drift must
+    # not leak a seq-bearing frame (fence-mask class); replay rows are not
+    # fan-outs and are unaffected
+    backend_rpc(f'Engram.Notes.FanoutPacer.test_drop_next("{note_id_x}", 10)')
+
+    # Zero the handshake budget so every STEP1 re-handshake is rate-limited —
+    # the channel-heal path cannot self-heal until the budget is restored.
+    # Capture the pre-test override (the CI stack deliberately raises it,
+    # #999) so the restore puts back the configured value, not a bare default.
+    prior = backend_rpc(
+        "IO.puts(inspect(Application.get_env(:engram, :crdt_hs_rate_limit_override)))"
+    ).strip()
+    backend_rpc("Application.put_env(:engram, :crdt_hs_rate_limit_override, 0)")
+    try:
+        api_sync.append_note(path_x, "\nEDIT-WHILE-B-DEAF-RATE-LIMITED\n")
+        api_sync.wait_for_note_content(
+            path_x, "EDIT-WHILE-B-DEAF-RATE-LIMITED", timeout=CRDT_TIMEOUT
+        )
+        # Trigger: Y's fan-out delivers a later seq, B detects it is behind and
+        # attempts a heal — which must be rejected while the budget is zero.
+        api_sync.append_note(path_y, "\nTRIGGER-EDIT-Y-1\n")
+        wait_for_content(vault_b, path_y, "TRIGGER-EDIT-Y-1", timeout=CRDT_TIMEOUT)
+
+        # Bounded behavior: give the (blocked) heal attempt a full window, then
+        # assert X did NOT converge — the deafness is real while the budget is
+        # zero, not a false "eventually consistent" success.
+        time.sleep(8)
+        stuck = read_note(vault_b, path_x)
+        assert "EDIT-WHILE-B-DEAF-RATE-LIMITED" not in stuck, (
+            f"X converged despite a zeroed handshake budget (false success): {stuck!r}"
+        )
+
+        # Recovery: restore the budget explicitly (not deferred to `finally`)
+        # — what follows is under test, not cleanup.
+        backend_rpc(
+            f"Application.put_env(:engram, :crdt_hs_rate_limit_override, {prior})"
+        )
+
+        # Budget restored: the next heal poke (a second trigger edit to Y, a
+        # new seq) must converge X — no trigger_full_sync, no Obsidian restart.
+        api_sync.append_note(path_y, "\nTRIGGER-EDIT-Y-2\n")
+
+        final = wait_for_content(
+            vault_b, path_x, "EDIT-WHILE-B-DEAF-RATE-LIMITED", timeout=CRDT_TIMEOUT
+        )
+        assert "base line" in final, f"base content lost on B: {final!r}"
+        wait_for_content(vault_b, path_y, "TRIGGER-EDIT-Y-2", timeout=CRDT_TIMEOUT)
+    finally:
+        # Safety net: if anything above raised before the explicit restore
+        # ran, the budget must not leak zeroed into later tests.
+        backend_rpc(
+            f"Application.put_env(:engram, :crdt_hs_rate_limit_override, {prior})"
+        )
