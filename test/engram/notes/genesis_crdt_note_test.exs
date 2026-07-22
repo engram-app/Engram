@@ -52,19 +52,59 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     assert still.content == "world"
   end
 
-  test "id live at a different path is an id_conflict, neither note changes", %{
+  test "id live at a different FREE path relocates the note — rename is one op (Phase E2)", %{
     user: user,
     vault: vault
   } do
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/c.md", "content" => "keep"})
 
-    assert {:error, :id_conflict, live} =
-             Notes.genesis_crdt_note(user, vault, note.id, "Notes/elsewhere.md")
+    assert {:ok, moved} = Notes.genesis_crdt_note(user, vault, note.id, "Notes/elsewhere.md")
 
-    assert live.id == note.id
-    {:ok, still} = Notes.get_note(user, vault, "Notes/c.md")
-    assert still.content == "keep"
-    assert {:error, :not_found} = Notes.get_note(user, vault, "Notes/elsewhere.md")
+    assert moved.id == note.id
+    assert moved.content == "keep"
+    assert {:error, :not_found} = Notes.get_note(user, vault, "Notes/c.md")
+    {:ok, at_new} = Notes.get_note(user, vault, "Notes/elsewhere.md")
+    assert at_new.id == note.id
+    assert moved.seq > note.seq
+  end
+
+  test "a live relocation broadcasts the new-path upsert so peers converge (Phase E2)", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "Notes/live-from.md", "content" => "MOVE"})
+
+    EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+    assert {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Notes/live-to.md")
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      event: "note_changed",
+      payload: %{"event_type" => "upsert", "path" => "Notes/live-to.md", "id" => id}
+    }
+
+    assert id == note.id
+  end
+
+  test "id live at a different path whose target is OCCUPIED by another live note stays id_conflict",
+       %{
+         user: user,
+         vault: vault
+       } do
+    {:ok, a} = Notes.upsert_note(user, vault, %{"path" => "Notes/occ-a.md", "content" => "keep"})
+
+    {:ok, _b} =
+      Notes.upsert_note(user, vault, %{"path" => "Notes/occ-b.md", "content" => "other"})
+
+    assert {:error, :id_conflict, live} =
+             Notes.genesis_crdt_note(user, vault, a.id, "Notes/occ-b.md")
+
+    assert live.id == a.id
+    {:ok, still_a} = Notes.get_note(user, vault, "Notes/occ-a.md")
+    assert still_a.content == "keep"
+    {:ok, still_b} = Notes.get_note(user, vault, "Notes/occ-b.md")
+    assert still_b.content == "other"
   end
 
   test "same-path resurrect within the delete window is refused (delete-wins #970)", %{
