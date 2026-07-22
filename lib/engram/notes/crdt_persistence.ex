@@ -129,13 +129,17 @@ defmodule Engram.Notes.CrdtPersistence do
             # incident history), so a second unconditional Repo.get here would
             # double the query cost of every keystroke. The guard skips rows
             # whose crdt_head is already nil, so `rows` is empty in that case
-            # and we fall back to a plain read. KNOWN COST: crdt_head starts
-            # nil and is only repopulated by another device's head-read, so a
-            # SOLO typing burst takes the fallback on every delta — one extra
-            # PK point-SELECT inside the already-open transaction. Accepted:
-            # seq is heal-trigger-only (staleness fine), and avoiding it would
-            # need per-room seq caching or a no-op UPDATE (MVCC/WAL churn),
-            # both worse than the read.
+            # and we fall back to a select-only read. KNOWN COST: crdt_head
+            # starts nil and is only repopulated by another device's
+            # head-read, so a SOLO typing burst takes the fallback on every
+            # delta — a seq-only point-SELECT inside the already-open
+            # transaction (NOT a full Note load — the Note row carries
+            # crdt_state_ciphertext, the encrypted CRDT snapshot, KBs-MBs,
+            # which a per-keystroke fallback must not drag across the
+            # connection). Accepted: seq is heal-trigger-only (staleness
+            # fine), and avoiding the read entirely would need per-room seq
+            # caching or a no-op UPDATE (MVCC/WAL churn), both worse than a
+            # select-only read.
             {_count, rows} =
               from(n in Note,
                 where: n.id == ^note_id and n.kind == "note" and not is_nil(n.crdt_head),
@@ -148,10 +152,7 @@ defmodule Engram.Notes.CrdtPersistence do
                 seq
 
               [] ->
-                case Repo.get(Note, note_id) do
-                  %Note{seq: seq} -> seq
-                  nil -> nil
-                end
+                Repo.one(from(n in Note, where: n.id == ^note_id, select: n.seq))
             end
           end)
 
