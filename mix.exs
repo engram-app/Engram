@@ -5,7 +5,7 @@ defmodule Engram.MixProject do
     [
       app: :engram,
       # x-release-please-start-version
-      version: "0.6.0",
+      version: "0.7.0",
       # x-release-please-end-version
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -176,6 +176,7 @@ defmodule Engram.MixProject do
       {:ex_machina, "~> 2.8", only: :test},
       {:mox, "~> 1.1", only: :test},
       {:bypass, "~> 2.1", only: :test},
+      {:stream_data, "~> 1.1", only: [:test, :dev]},
 
       # Quality tooling (dev/test only — never loaded in prod release)
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
