@@ -202,35 +202,6 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Notify Discord on success. "Deploy initiated" — not "deploy
-      # complete" — since the actual ECS rollout happens later in
-      # engram-infra's `terraform (prod)` apply (~3-5 min after the
-      # bot PR auto-merges). Complete-rollout notify is a future
-      # observability item (Tier 3); this catches the operator's
-      # "did the tag push do anything?" question. Silently no-ops
-      # when DISCORD_DEPLOY_WEBHOOK_URL is unset.
-      - name: Notify Discord (deploy initiated)
-        if: success() && env.WEBHOOK != ''
-        env:
-          WEBHOOK: ${{ secrets.DISCORD_DEPLOY_WEBHOOK_URL }}
-          RELEASE: ${{ steps.tags.outputs.release }}
-          IMAGE: ${{ steps.tags.outputs.image_tag }}
-          PR_NUMBER: ${{ steps.open-pr.outputs.pull-request-number }}
-          PR_URL: ${{ steps.open-pr.outputs.pull-request-url }}
-          ACTOR: ${{ github.actor }}
-        run: |
-          if [ -n "$PR_NUMBER" ]; then
-            CONTENT="[DEPLOY-INITIATED] \`${RELEASE}\` → \`${IMAGE}\`
-          engram-infra PR: ${PR_URL}
-          Tagged by: ${ACTOR}"
-          else
-            CONTENT="[DEPLOY-NOOP] \`${RELEASE}\` → \`${IMAGE}\` (image already at this tag; no PR opened)
-          Tagged by: ${ACTOR}"
-          fi
-          curl -sS -X POST -H 'Content-Type: application/json' \
-            --max-time 5 \
-            --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" \
-            "$WEBHOOK"
 
       # No Grafana annotation here. This step only opens the image-bump PR
       # in engram-infra — prod hasn't moved yet (the ECS rollout happens
@@ -247,7 +218,7 @@ jobs:
       - name: Notify Discord (deploy failed)
         if: failure() && env.WEBHOOK != ''
         env:
-          WEBHOOK: ${{ secrets.DISCORD_DEPLOY_WEBHOOK_URL }}
+          WEBHOOK: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
           RELEASE: ${{ steps.tags.outputs.release || github.ref_name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ACTOR: ${{ github.actor }}
@@ -261,11 +232,13 @@ jobs:
             "$WEBHOOK"
 
   create-release-notes:
-    # Auto-create a GitHub Release for the release-v* tag with a
-    # SCHEMA-IMPACT prepend when any merged PR in the release range
-    # carries a phase/* label. Self-hosters read this on the release
-    # page before pulling the new image. When no phase/* labels exist
-    # in the range, no Release is created (empty notes are not useful).
+    # Always create the release-v* GitHub Release — this is the single
+    # user-facing release. Body = optional SCHEMA-IMPACT prepend (when any
+    # merged PR in the release range carries a phase/* label) + the
+    # hand-written CHANGELOG.md section for this version + compare link.
+    # release-please's own bare X.Y.Z Release is deleted immediately by the
+    # release-please workflow, so this job never gates on either block being
+    # non-empty — notes are best-effort, the Release itself always ships.
     runs-on: [self-hosted, linux, x64, isolated]
     permissions:
       contents: write
@@ -304,38 +277,69 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Optional prepend, not a gate — empty output just means no
+          # phase/* labels in range, which is a normal release.
           notes=$(bash scripts/generate_schema_impact_notes.sh \
             "${{ steps.range.outputs.base_sha }}" \
             "${{ steps.range.outputs.head_sha }}")
-          if [ -z "$notes" ]; then
-            echo "has_impact=false" >> "$GITHUB_OUTPUT"
-            echo "No phase/* labels in release range — skipping release-notes creation."
-            exit 0
-          fi
-          echo "has_impact=true" >> "$GITHUB_OUTPUT"
-          # Stash notes for the next step (multiline outputs need EOF delimiter).
           {
-            echo "notes<<NOTES_EOF"
+            echo "notes<<IMPACT_EOF"
             echo "$notes"
-            echo ""
-            echo "---"
-            echo ""
-            echo "**Full Changelog:** https://github.com/${{ github.repository }}/compare/${{ steps.range.outputs.prev_tag }}...${{ github.ref_name }}"
-            echo "NOTES_EOF"
+            echo "IMPACT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Extract CHANGELOG notes for this version
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME#release-v}"
+          section=""
+          if [ -f CHANGELOG.md ]; then
+            # Literal substr prefix match (not regex) so "0.5.2" never
+            # matches "## [0.5.20]".
+            section=$(awk -v v="$VERSION" '
+              substr($0,1,length("## [" v "]")) == "## [" v "]" {grab=1; next}
+              substr($0,1,length("## " v " ")) == "## " v " "  {grab=1; next}
+              /^## / {grab=0}
+              grab {print}
+            ' CHANGELOG.md)
+          fi
+          if [ -z "$(echo "$section" | tr -d '[:space:]')" ]; then
+            # Missing CHANGELOG.md or no matching section — never fail the
+            # release over notes, fall back to a minimal body.
+            section="Release ${GITHUB_REF_NAME}."
+          fi
+          {
+            echo "section<<CHANGELOG_EOF"
+            echo "$section"
+            echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        if: steps.impact.outputs.has_impact == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NOTES: ${{ steps.impact.outputs.notes }}
+          IMPACT: ${{ steps.impact.outputs.notes }}
+          CHANGELOG_SECTION: ${{ steps.changelog.outputs.section }}
         run: |
-          # Pass notes via env var to avoid bash arg-parsing issues with
-          # double quotes in PR titles. --notes-file is the canonical form.
+          # Pass notes via env vars (not inline args) to avoid bash
+          # arg-parsing issues with quotes/special chars in notes.
+          # --notes-file is the canonical form.
           notes_file=$(mktemp)
           trap 'rm -f "$notes_file"' EXIT
-          printf '%s' "$NOTES" > "$notes_file"
-          gh release create "${{ github.ref_name }}" \
-            --title "${{ github.ref_name }}" \
-            --notes-file "$notes_file" \
-            --target "${{ github.sha }}"
+          {
+            if [ -n "$(echo "$IMPACT" | tr -d '[:space:]')" ]; then
+              printf '%s\n\n---\n\n' "$IMPACT"
+            fi
+            printf '%s\n\n---\n\n' "$CHANGELOG_SECTION"
+            printf '**Full Changelog:** https://github.com/%s/compare/%s...%s\n' \
+              "${{ github.repository }}" "${{ steps.range.outputs.prev_tag }}" "${{ github.ref_name }}"
+          } > "$notes_file"
+          # Idempotent: a manual rerun (e.g. after a later step in this job
+          # failed) must not 422 on a Release that already exists.
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            echo "Release ${{ github.ref_name }} already exists — skipping create."
+          else
+            gh release create "${{ github.ref_name }}" \
+              --title "${{ github.ref_name }}" \
+              --notes-file "$notes_file" \
+              --target "${{ github.sha }}"
+          fi

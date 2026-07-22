@@ -1,0 +1,91 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: [self-hosted, linux, x64, isolated]
+    steps:
+      - name: Mint App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ steps.app-token.outputs.token }}
+
+      # Ungated: on a Release-PR MERGE push steps.rp.outputs.pr is EMPTY (the
+      # `pr` output only fires when release-please opens/updates a PR, not on
+      # merge), but the release_created-gated delete+push step below must
+      # still be able to run on that merge push. Both that step and the
+      # SCHEMA-IMPACT step need the repo + full tag history, so checkout
+      # happens once here, ungated.
+      #
+      # token MUST be the App token, not the default GITHUB_TOKEN: pushes
+      # authored by the default token never trigger other workflows (GitHub's
+      # anti-recursion rule), which would silently break deploy-prod.yml's
+      # `push: tags: ['release-v*']` trigger below. Same pattern as the
+      # engram-infra checkout further down this file.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Prepend deterministic SCHEMA-IMPACT to the Release PR body
+        if: steps.rp.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # PR is the release-please PR object JSON — its fields (title/body)
+          # come from commit messages, so it's untrusted. Pass via env, never
+          # interpolate `${{ }}` directly into `run:` (script-injection risk).
+          RP_PR: ${{ steps.rp.outputs.pr }}
+        run: |
+          set -euo pipefail
+          # No AI. Just surface the machine-generated migration-impact block so
+          # self-hosters see it; the human writes the narrative notes in the PR / CHANGELOG.
+          PR=$(jq -r '.number' <<<"$RP_PR")
+          BASE=$(git tag -l 'release-v*' --sort=-v:refname | head -1)
+          [ -n "$BASE" ] || BASE=$(git rev-list --max-parents=0 HEAD | head -1)
+          IMPACT=$(bash scripts/generate_schema_impact_notes.sh "$BASE" HEAD || true)
+          [ -n "$IMPACT" ] || { echo "no schema impact"; exit 0; }
+          CUR=$(gh pr view "$PR" --json body -q .body)
+          gh pr edit "$PR" --body "$(printf '%s\n\n%s' "$IMPACT" "$CUR")"
+
+      - name: Delete redundant Release + push release-v* (on release-please cut)
+        if: steps.rp.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG_NAME: ${{ steps.rp.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          # release-please created the X.Y.Z Release + tag; deploy-prod owns the
+          # user-facing release-v* Release. Push release-v<version> FIRST so
+          # deploy-prod fires even if the redundant-Release cleanup below fails
+          # — App token so the tag triggers deploy-prod (GITHUB_TOKEN would not,
+          # per GitHub's anti-recursion rule). Then best-effort delete the
+          # redundant Release (KEEP the X.Y.Z tag — release-please uses it for
+          # version tracking); a cleanup failure must not abort the deploy.
+          #
+          # Idempotent: a manual rerun of this job (e.g. after the delete
+          # step below failed) must not fail re-creating a tag that already
+          # exists locally or on origin.
+          if ! git rev-parse -q --verify "refs/tags/release-v${TAG_NAME}" >/dev/null; then
+            git tag "release-v${TAG_NAME}" "$TAG_NAME"
+            git push origin "release-v${TAG_NAME}"
+          else
+            echo "release-v${TAG_NAME} already exists — skipping tag+push."
+          fi
+          gh release delete "$TAG_NAME" --yes || echo "::warning::redundant $TAG_NAME release already gone"
+          echo "Pushed release-v${TAG_NAME}; cleaned up redundant $TAG_NAME release"
