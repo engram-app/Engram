@@ -223,7 +223,7 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert seq == note.seq
   end
 
-  test "update_v1/4 fans out the correct seq when crdt_head is already nil (returning: 0-rows fallback)",
+  test "update_v1/4 fans out the correct seq when crdt_head is already nil (select: 0-rows fallback)",
        ctx do
     %{user: user, note: note} = ctx
     st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
@@ -231,7 +231,7 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # A freshly-created note's crdt_head is nil (only ever set later by the
     # transport self-heal read path), so the seq-fetching update_all's
     # `not is_nil(n.crdt_head)` guard matches ZERO rows here and update_v1
-    # must fall back to a plain Repo.get to still surface the seq.
+    # must fall back to a select-only query to still surface the seq.
     {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get(Note, note.id) end)
     assert raw_note.crdt_head == nil
 
@@ -253,14 +253,14 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert seq == note.seq
   end
 
-  test "update_v1/4 fans out the correct seq via update_all returning: when crdt_head is set (non-empty rows)",
+  test "update_v1/4 fans out the correct seq via update_all select: when crdt_head is set (non-empty rows)",
        ctx do
     %{user: user, note: note} = ctx
     st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
 
     # Simulate a note whose crdt_head cache is populated (set by the transport
     # self-heal read path) BEFORE this live delta arrives — the common hot-path
-    # shape the `returning: [:seq]` clause targets: the update_all both
+    # shape the `select: n.seq` clause targets: the update_all both
     # invalidates crdt_head AND returns the row's seq in one query.
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
