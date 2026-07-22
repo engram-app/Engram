@@ -34,10 +34,9 @@ pytestmark = pytest.mark.skipif(
     reason="E2E_CLERK_SECRET_KEY not set — skipping OAuth WebSocket tests",
 )
 
-# WS round-trip budget under e2e-clerk load (2-worker xdist + Clerk-auth
-# latency). 10s flaked repeatedly (#643). Tightened 30s → 15s: this is a
-# live-sync latency property — a 30s budget would mask a real broadcast
-# regression. If 15s flakes, profile the xdist contention; do not re-widen.
+# Determinism decision 2026-07-22: the wait proves delivery, never promptness
+# — a broadcast latency regression shows up in the recorded latency trend
+# (helpers.latency + _log_latency below), not as a per-test failure.
 RT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound; latency is recorded, not asserted
 
 

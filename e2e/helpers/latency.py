@@ -28,8 +28,9 @@ def record(kind: str, rel_path: str, elapsed: float) -> None:
     """Append one latency record. Diagnostic-only; must never fail a test."""
     entry = {
         "t": round(time.time(), 3),
-        # pytest sets PYTEST_CURRENT_TEST to "<nodeid> (<stage>)"
-        "test": os.environ.get("PYTEST_CURRENT_TEST", "").split(" ")[0],
+        # pytest sets PYTEST_CURRENT_TEST to "<nodeid> (<stage>)"; rsplit
+        # keeps parametrized nodeids containing spaces intact
+        "test": os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0],
         "kind": kind,
         "path": rel_path,
         "elapsed": round(elapsed, 3),
