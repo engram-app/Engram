@@ -32,7 +32,175 @@ permissions:
   contents: read
 
 jobs:
+  # Real-app proof gate. Before prod moves, run the FULL Obsidian e2e suite
+  # (e2e-clerk / e2e-crdt / e2e-browser) against the EXACT commit this
+  # release-v* tag points at, and BLOCK the deploy if any of them fail.
+  #
+  # Why dispatch verify.yml instead of a workflow_call or a copy of the
+  # bring-up steps:
+  #   - verify.yml already owns the ~600-line Obsidian/Xvfb/CDP bring-up.
+  #     Copying it here would rot; a workflow_call refactor would have to
+  #     thread `force_full` through verify.yml's fingerprint gating (dozens
+  #     of `if:` conditions) and is a big change to the shared merge-gate
+  #     file. This job touches ONLY deploy-prod.yml — maximally conservative.
+  #   - verify.yml IGNORES release-v* tags (`tags-ignore`) and its `ci`
+  #     aggregate treats the full-Obsidian e2e as REPORT-ONLY (#1076), so a
+  #     tag push alone runs nothing and the run conclusion would be green even
+  #     on a red e2e. This gate therefore (a) dispatches verify.yml with
+  #     `force_full=true` on the tag ref so the fingerprint is bypassed and
+  #     every e2e job actually runs, and (b) reads the INDIVIDUAL e2e-* job
+  #     conclusions (not the run/ci conclusion) to decide pass/fail.
+  #   - GITHUB_TOKEN is an explicit exception to Actions' recursion guard for
+  #     workflow_dispatch, so `actions: write` lets us kick verify.yml.
+  #
+  # Emergency override (GATED by default): a hotfix or a known-flake can be
+  # shipped by putting `[skip-release-e2e]` in the ANNOTATED tag's message:
+  #   git tag -a release-v0.5.999 -m "[skip-release-e2e] hotfix: <reason>" <sha>
+  #   git push origin release-v0.5.999
+  # The bypass is explicit and LOGGED (::warning::). A plain lightweight tag
+  # (the normal recipe) has no message, so it can never accidentally bypass.
+  release-e2e-gate:
+    runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: read
+      actions: write   # dispatch verify.yml + read its run/job conclusions
+    env:
+      # gh resolves the repo from `git remote -v`, which the runners rewrite to
+      # the LAN git cache (unknown host) — pin GH_REPO + pass --repo explicitly.
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.ref_name }}
+      HEAD_SHA: ${{ github.sha }}
+    steps:
+      - name: Check for emergency override in tag annotation
+        id: override
+        run: |
+          set -euo pipefail
+          # Read the annotated-tag message via the API (no dependence on local
+          # fetch depth). A lightweight tag resolves to a commit object with no
+          # message → no override → gated (the safe default).
+          msg=""
+          obj_type=$(gh api "repos/${GH_REPO}/git/ref/tags/${TAG}" -q '.object.type' 2>/dev/null || echo "")
+          obj_sha=$(gh api "repos/${GH_REPO}/git/ref/tags/${TAG}" -q '.object.sha' 2>/dev/null || echo "")
+          if [ "$obj_type" = "tag" ] && [ -n "$obj_sha" ]; then
+            msg=$(gh api "repos/${GH_REPO}/git/tags/${obj_sha}" -q '.message' 2>/dev/null || echo "")
+          fi
+          if printf '%s' "$msg" | grep -qiF '[skip-release-e2e]'; then
+            echo "::warning::[skip-release-e2e] found in tag ${TAG} annotation — BYPASSING the full-Obsidian e2e gate. Deploy proceeds WITHOUT real-app proof."
+            echo "bypass=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "bypass=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch verify.yml (force_full) on the tagged commit
+        if: steps.override.outputs.bypass != 'true'
+        id: dispatch
+        run: |
+          set -euo pipefail
+          echo "Dispatching verify.yml with force_full=true on ${TAG} (${HEAD_SHA})"
+          # Timestamp BEFORE dispatch. On the rollback recipe the tag re-points a
+          # PREVIOUSLY-released SHA that already has a completed workflow_dispatch
+          # run on this exact headSha; without this fence an early poll would match
+          # that STALE run and gate on last release's e2e. Only accept a run
+          # created after we dispatched.
+          START_EPOCH=$(date -u +%s)
+          gh workflow run verify.yml --repo "$GH_REPO" --ref "$TAG" -f force_full=true
+
+          # workflow_dispatch returns no run id; discover the run whose headSha
+          # is this tag's commit AND was created after dispatch (unique per
+          # release). Retry — the run takes a few seconds to register.
+          run_id=""
+          for i in $(seq 1 40); do
+            sleep 6
+            run_id=$(gh run list --repo "$GH_REPO" --workflow=verify.yml \
+              --event=workflow_dispatch --json databaseId,headSha,createdAt \
+              -q "[.[] | select(.headSha==\"${HEAD_SHA}\") | select((.createdAt|fromdateiso8601) > ${START_EPOCH})] | sort_by(.createdAt) | last | .databaseId" \
+              2>/dev/null || echo "")
+            if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
+              break
+            fi
+          done
+          if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+            echo "::error::Could not find the dispatched verify.yml run for ${HEAD_SHA} — refusing to deploy blind."
+            exit 1
+          fi
+          echo "Dispatched verify.yml run: $run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the e2e run to complete
+        if: steps.override.outputs.bypass != 'true'
+        env:
+          RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for verify.yml run ${RUN_ID} (full Obsidian e2e)…"
+          # Poll rather than `gh run watch` so a transient watch drop doesn't
+          # kill the gate. The suite runs ~20-40 min.
+          for i in $(seq 1 120); do  # 120 * 45s = 90 min ceiling
+            status=$(gh run view "$RUN_ID" --repo "$GH_REPO" --json status -q '.status' 2>/dev/null || echo "")
+            if [ "$status" = "completed" ]; then
+              echo "Run ${RUN_ID} completed."
+              exit 0
+            fi
+            echo "  status=${status:-unknown} (poll $i)"
+            sleep 45
+          done
+          echo "::error::verify.yml run ${RUN_ID} did not complete within the gate window — refusing to deploy blind."
+          exit 1
+
+      - name: Gate on the full-Obsidian e2e job conclusions
+        if: steps.override.outputs.bypass != 'true'
+        env:
+          RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          run_url="${{ github.server_url }}/${GH_REPO}/actions/runs/${RUN_ID}"
+          gh run view "$RUN_ID" --repo "$GH_REPO" --json jobs > jobs.json
+
+          # The `ci` aggregate in verify.yml treats these three as report-only,
+          # so we read their INDIVIDUAL conclusions here. force_full=true made
+          # the fingerprint run them all, so a wholesale skip is itself a bug.
+          echo "::group::e2e job conclusions"
+          jq -r '.jobs[] | select(.name|test("^e2e-(clerk|crdt|browser)$")) | "\(.name)=\(.conclusion)"' jobs.json
+          echo "::endgroup::"
+
+          # force_full=true ran all three, so each MUST be present and == success.
+          # A SKIP (or absence) of any e2e job on a release is by definition a bug,
+          # so assert success explicitly rather than merely "not failed".
+          for job in e2e-clerk e2e-crdt e2e-browser; do
+            concl=$(jq -r --arg j "$job" \
+              '[.jobs[] | select(.name==$j)] | (first | .conclusion) // "absent"' jobs.json)
+            if [ "$concl" != "success" ]; then
+              echo "::error::Release e2e gate: ${job} did not pass (conclusion=${concl}) — refusing to deploy ${TAG}. See ${run_url}"
+              exit 1
+            fi
+          done
+          echo "Full-Obsidian e2e green for ${TAG} — deploy may proceed. Proof: ${run_url}"
+
+      # Gate-block is otherwise silent (open-infra-pr is skipped, so its
+      # failure() Discord notice never fires). Mirror that notice here.
+      - name: Notify Discord (release e2e gate blocked)
+        if: failure() && env.WEBHOOK != ''
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
+          RELEASE: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          CONTENT="[DEPLOY-BLOCKED] \`${RELEASE}\` — release e2e gate FAILED (real-app proof red; prod not moving)
+          Run: ${RUN_URL}
+          Tagged by: ${ACTOR}"
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --max-time 5 \
+            --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" \
+            "$WEBHOOK"
+
   open-infra-pr:
+    # BLOCKED on the real-app proof gate: a red full-Obsidian e2e (or a failed
+    # dispatch/wait) fails release-e2e-gate → this job is skipped → prod never
+    # moves. On the override path the gate SUCCEEDS (with a ::warning::) so the
+    # happy path below is byte-for-byte what it was before the gate existed.
+    needs: release-e2e-gate
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Checkout engram (tagged commit)
@@ -232,6 +400,11 @@ jobs:
             "$WEBHOOK"
 
   create-release-notes:
+    # BLOCKED on the real-app proof gate: a red full-Obsidian e2e fails
+    # release-e2e-gate → this job is skipped → no orphaned Release ships for a
+    # build that never reached prod. The override path still publishes (the gate
+    # SUCCEEDS with a ::warning:: on [skip-release-e2e], satisfying needs).
+    needs: release-e2e-gate
     # Always create the release-v* GitHub Release — this is the single
     # user-facing release. Body = optional SCHEMA-IMPACT prepend (when any
     # merged PR in the release range carries a phase/* label) + the
