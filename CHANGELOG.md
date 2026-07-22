@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/engram-app/Engram/compare/0.6.0...0.7.0) (2026-07-22)
+
+
+### Features
+
+* **crdt:** delete the REST /notes/:id/updates transport (Phase E3) ([#1072](https://github.com/engram-app/Engram/issues/1072)) ([778875e](https://github.com/engram-app/Engram/commit/778875e897bc87dd3ec9d788b0698f25ff19dbc5))
+* **crdt:** genesis relocates a live id to a new path — rename is one op (Phase E2) ([#1071](https://github.com/engram-app/Engram/issues/1071)) ([fede7fa](https://github.com/engram-app/Engram/commit/fede7fa63f5b4ef1eab19c22e3744d55d375dc35))
+* **sync:** manifest rows carry seq + crdt_head; since_seq unchanged short-circuit (Phase E1) ([#1069](https://github.com/engram-app/Engram/issues/1069)) ([51db60e](https://github.com/engram-app/Engram/commit/51db60e012d23378d7c5afe311d05ae15d82ae43))
+
+
+### Bug Fixes
+
+* **crdt:** stale head after room recreate + head-consistency property ([#1073](https://github.com/engram-app/Engram/issues/1073)) ([4da55ac](https://github.com/engram-app/Engram/commit/4da55ac8de0924975b587d5a5b578c3abce04c6e))
+
 ## [0.6.0](https://github.com/engram-app/Engram/compare/0.5.688...0.6.0) (2026-07-22)
 
 
