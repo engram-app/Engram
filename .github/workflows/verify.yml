@@ -1883,6 +1883,120 @@ jobs:
           rm -rf ci-artifacts/
           find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
+  headless-protocol:
+    # Headless PROTOCOL tier (e2e/headless/): real plugin SyncEngine vs the real
+    # backend over real WebSockets, event barriers, no wall-clock waits. Mirrors
+    # e2e-crdt's local-auth stack bring-up MINUS Xvfb/Obsidian/CDP/Playwright —
+    # it never launches Obsidian, only imports the plugin's src (via
+    # ENGRAM_PLUGIN_SRC) into a bun process. Same local-auth stack, so it rides
+    # the skip-e2e-crdt fingerprint signal. Minutes-bounded (each scenario < 1s).
+    needs: [fingerprint, prebuild-ci-image]
+    if: ${{ !cancelled() && needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
+    runs-on: [self-hosted, linux, x64, isolated]
+    timeout-minutes: 8
+    env:
+      CI_PROJECT: engram-ci-headless-${{ github.run_id }}
+      QDRANT_COLLECTION: ci_headless_${{ github.run_id }}
+      ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image }}
+    steps:
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ENGRAM_CI_CLIENT_ID }}
+          private-key: ${{ secrets.ENGRAM_CI_APP_PRIVATE_KEY }}
+          owner: engram-app
+          repositories: Engram-obsidian
+
+      - name: Pre-cleanup stale stack
+        run: |
+          docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
+
+      - uses: actions/checkout@v7
+        with:
+          clean: false
+
+      - name: Checkout plugin
+        env:
+          EXPLICIT_BRANCH: ${{ inputs.plugin_branch || github.event.client_payload.plugin_branch || '' }}
+          CURRENT_BRANCH: ${{ github.head_ref || github.ref_name }}
+          PLUGIN_SHA: ${{ needs.fingerprint.outputs.plugin-sha }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          # Fetch by exact PLUGIN_SHA (never branch name) — same rationale as
+          # e2e-crdt's checkout: the paired branch can move/vanish between jobs.
+          if [ -n "$EXPLICIT_BRANCH" ] && [ "$EXPLICIT_BRANCH" != "main" ]; then
+            BRANCH="$EXPLICIT_BRANCH"
+          elif curl -fsS -o /dev/null \
+                 -H "Authorization: Bearer ${GH_TOKEN}" \
+                 -H "Accept: application/vnd.github+json" \
+                 "https://api.github.com/repos/engram-app/Engram-obsidian/branches/$CURRENT_BRANCH" 2>/dev/null; then
+            BRANCH="$CURRENT_BRANCH"
+          else
+            BRANCH="main"
+          fi
+          echo "Plugin: $BRANCH @ $PLUGIN_SHA"
+          if [ -d plugin-src/.git ]; then
+            cd plugin-src; git checkout -- .; git clean -fd
+          else
+            rm -rf plugin-src; git init -q plugin-src; cd plugin-src
+          fi
+          git remote remove origin 2>/dev/null || true
+          git remote add origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
+          git fetch origin "$PLUGIN_SHA"
+          git checkout -B "$BRANCH" "$PLUGIN_SHA"
+
+      - name: Allocate dynamic ports
+        id: ports
+        run: |
+          get_free_port() { python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()"; }
+          ENGRAM_PORT=$(get_free_port); PG_PORT=$(get_free_port)
+          for v in ENGRAM_PORT PG_PORT; do
+            [ -z "${!v}" ] && { echo "::error::Port allocation failed for $v"; exit 1; }
+          done
+          { echo "engram_port=$ENGRAM_PORT"; echo "pg_port=$PG_PORT"; } >> "$GITHUB_OUTPUT"
+          echo "Ports: engram=$ENGRAM_PORT pg=$PG_PORT"
+
+      - name: Bring up CI stack (local auth) + install plugin deps
+        env:
+          CI_ENGRAM_PORT: ${{ steps.ports.outputs.engram_port }}
+          CI_PG_PORT: ${{ steps.ports.outputs.pg_port }}
+        run: |
+          docker pull "$ENGRAM_CI_IMAGE"
+          docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" up -d --no-build --wait
+          ok=false
+          for i in $(seq 1 30); do
+            if curl -sf "http://localhost:${CI_ENGRAM_PORT}/api/health" > /dev/null 2>&1; then
+              echo "CI stack healthy on port ${CI_ENGRAM_PORT}"; ok=true; break
+            fi
+            sleep 1
+          done
+          $ok || { echo "::error::CI stack failed to become healthy"; \
+            docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" logs; exit 1; }
+          # bun + plugin deps: the tier imports the plugin's src (yjs, y-indexeddb,
+          # fake-indexeddb, ...) — no plugin BUILD, just node_modules.
+          if [ ! -x "$HOME/.bun/bin/bun" ]; then curl -fsSL https://bun.sh/install | bash; fi
+          export PATH="$HOME/.bun/bin:$PATH"
+          cd plugin-src && bun install --frozen-lockfile --registry http://10.0.20.214:4873
+
+      - name: Run headless protocol tier
+        env:
+          ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
+          ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
+          CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
+          AUTH_PROVIDER: local
+        run: |
+          export PATH="$HOME/.bun/bin:$PATH"
+          bun --preload ./e2e/headless/preload.ts ./e2e/headless/run.ts
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
+          docker image prune -f 2>/dev/null || true
+          docker volume prune -f 2>/dev/null || true
+
   unit-tests:
     needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — plugin can't regress backend ExUnit.
@@ -3370,7 +3484,7 @@ jobs:
     # and a real e2e/unit failure there is never gated. Mirrors the per-job +
     # prebuild is-full forcing so main is genuinely the full safety net.
     if: always() && (needs.fingerprint.outputs.is-full == 'true' || needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
-    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, migration-gates, static-checks]
+    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, headless-protocol, migration-gates, static-checks]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
@@ -3383,6 +3497,7 @@ jobs:
           EC="${{ needs.e2e-clerk.result }}"
           ED="${{ needs.e2e-crdt.result }}"
           EB="${{ needs.e2e-browser.result }}"
+          HP="${{ needs.headless-protocol.result }}"
           SC="${{ needs.static-checks.result }}"
           MG="${{ needs.migration-gates.result }}"
 
@@ -3413,7 +3528,7 @@ jobs:
           # On cross-repo plugin dispatch (plugin-e2e-trigger), unit-tests / lint /
           # e2e-browser are intentionally skipped — plugin cannot regress
           # backend internals. Only assert success when those jobs actually ran.
-          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "e2e-crdt=$ED" "e2e-browser=$EB" "static-checks=$SC" "migration-gates=$MG"; do
+          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "e2e-crdt=$ED" "e2e-browser=$EB" "headless-protocol=$HP" "static-checks=$SC" "migration-gates=$MG"; do
             name="${pair%=*}"; result="${pair#*=}"
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "::error::$name failed: $result"
