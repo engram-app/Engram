@@ -104,6 +104,11 @@ class CdpClient:
                 raise CdpError(f"JS error: {result.get('description', result)}")
             return result
 
+        # `timeout` is a TOTAL budget across the initial attempt and the one
+        # connection-level retry: a late first-attempt failure must not double
+        # the ceiling to 2x and eat the margin under pytest-timeout's 300s
+        # (review: 240s worst case left only 60s).
+        deadline = time.monotonic() + timeout
         await self._ensure_connected()
         try:
             return await asyncio.wait_for(_send_recv(), timeout)
@@ -119,13 +124,15 @@ class CdpClient:
             # Reconnect once and retry on connection-level failures
             await self._close()
             await self._ensure_connected()
+            remaining = max(1.0, deadline - time.monotonic())
             try:
-                return await asyncio.wait_for(_send_recv(), timeout)
+                return await asyncio.wait_for(_send_recv(), remaining)
             except asyncio.TimeoutError:
                 await self._close()
                 raise CdpError(
-                    f"CDP evaluate timed out after {timeout}s on retry "
-                    f"(awaitPromise={await_promise}) on port {self.port}: {expr[:200]}"
+                    f"CDP evaluate timed out after {timeout}s total (retry window "
+                    f"{remaining:.0f}s, awaitPromise={await_promise}) on port "
+                    f"{self.port}: {expr[:200]}"
                 ) from None
 
     async def wait_for_plugin_ready(self, timeout: float = 30) -> None:

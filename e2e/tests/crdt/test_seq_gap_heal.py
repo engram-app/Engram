@@ -12,6 +12,13 @@ fans out normally with a later seq; B is behind, heals, and the replay
 carries X's missed edit. No `trigger_full_sync` after the drop — the heal
 IS the assertion, and the client-log check pins the mechanism (a pre-D2
 plugin converges neither and logs no heal).
+
+GUARANTEE BOUNDARY (review 2026-07-22): both edits here are REST writes,
+which BUMP the vault seq. That is the class seq gap-heal covers. A burst
+of pure socket deltas on one note shares a single seq (checkpoint owns
+seq advancement), so a loss WITHIN such a burst is invisible to the
+behind-detector and heals via checkpoint/announce instead — this test
+deliberately does not (and cannot) cover that case via seq.
 """
 
 from __future__ import annotations

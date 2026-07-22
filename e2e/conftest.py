@@ -82,7 +82,11 @@ def _backend_alive() -> bool:
     import requests
 
     try:
-        requests.get(f"{API_URL}/health", timeout=3)
+        # Bypass any HTTP(S)_PROXY: a reachable proxy fronting a dead backend
+        # would answer 502 and score "alive", masking the immediate abort.
+        requests.get(
+            f"{API_URL}/health", timeout=3, proxies={"http": None, "https": None}
+        )
         return True
     except requests.exceptions.ConnectionError:
         return False
@@ -113,6 +117,11 @@ def pytest_runtest_makereport(item, call):
             "remaining test would fail the same way. Check stack/compose logs."
         )
         logging.getLogger("conftest").error(item.session.shouldstop)
+        return
+    if rep.when == "teardown":
+        # A refused teardown after a refused call is the SAME event — counting
+        # both would trip the threshold after ~1.5 tests instead of 3 (review).
+        # The backend-dead probe above still runs for teardown failures.
         return
     _consecutive_conn_failures += 1
     if _consecutive_conn_failures >= _OBSIDIAN_DEAD_THRESHOLD:
