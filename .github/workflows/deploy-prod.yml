@@ -98,17 +98,23 @@ jobs:
         run: |
           set -euo pipefail
           echo "Dispatching verify.yml with force_full=true on ${TAG} (${HEAD_SHA})"
+          # Timestamp BEFORE dispatch. On the rollback recipe the tag re-points a
+          # PREVIOUSLY-released SHA that already has a completed workflow_dispatch
+          # run on this exact headSha; without this fence an early poll would match
+          # that STALE run and gate on last release's e2e. Only accept a run
+          # created after we dispatched.
+          START_EPOCH=$(date -u +%s)
           gh workflow run verify.yml --repo "$GH_REPO" --ref "$TAG" -f force_full=true
 
           # workflow_dispatch returns no run id; discover the run whose headSha
-          # is this tag's commit (unique per release). Retry — the run takes a
-          # few seconds to register.
+          # is this tag's commit AND was created after dispatch (unique per
+          # release). Retry — the run takes a few seconds to register.
           run_id=""
           for i in $(seq 1 40); do
             sleep 6
             run_id=$(gh run list --repo "$GH_REPO" --workflow=verify.yml \
               --event=workflow_dispatch --json databaseId,headSha,createdAt \
-              -q "[.[] | select(.headSha==\"${HEAD_SHA}\")] | sort_by(.createdAt) | last | .databaseId" \
+              -q "[.[] | select(.headSha==\"${HEAD_SHA}\") | select((.createdAt|fromdateiso8601) > ${START_EPOCH})] | sort_by(.createdAt) | last | .databaseId" \
               2>/dev/null || echo "")
             if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
               break
@@ -158,24 +164,36 @@ jobs:
           jq -r '.jobs[] | select(.name|test("^e2e-(clerk|crdt|browser)$")) | "\(.name)=\(.conclusion)"' jobs.json
           echo "::endgroup::"
 
-          failed=$(jq -r '.jobs[]
-            | select(.name|test("^e2e-(clerk|crdt|browser)$"))
-            | select(.conclusion!="success" and .conclusion!="skipped")
-            | "\(.name)=\(.conclusion)"' jobs.json)
-
-          # Guard against a total no-op: e2e-clerk (the plugin↔backend contract)
-          # MUST have actually run and passed on a release.
-          clerk=$(jq -r '.jobs[] | select(.name=="e2e-clerk") | .conclusion' jobs.json)
-
-          if [ -n "$failed" ]; then
-            echo "::error::Release e2e gate FAILED — not deploying ${TAG}. Red jobs: ${failed}. See ${run_url}"
-            exit 1
-          fi
-          if [ "$clerk" != "success" ]; then
-            echo "::error::Release e2e gate: e2e-clerk did not pass (conclusion=${clerk:-absent}) — refusing to deploy ${TAG}. See ${run_url}"
-            exit 1
-          fi
+          # force_full=true ran all three, so each MUST be present and == success.
+          # A SKIP (or absence) of any e2e job on a release is by definition a bug,
+          # so assert success explicitly rather than merely "not failed".
+          for job in e2e-clerk e2e-crdt e2e-browser; do
+            concl=$(jq -r --arg j "$job" \
+              '[.jobs[] | select(.name==$j)] | (first | .conclusion) // "absent"' jobs.json)
+            if [ "$concl" != "success" ]; then
+              echo "::error::Release e2e gate: ${job} did not pass (conclusion=${concl}) — refusing to deploy ${TAG}. See ${run_url}"
+              exit 1
+            fi
+          done
           echo "Full-Obsidian e2e green for ${TAG} — deploy may proceed. Proof: ${run_url}"
+
+      # Gate-block is otherwise silent (open-infra-pr is skipped, so its
+      # failure() Discord notice never fires). Mirror that notice here.
+      - name: Notify Discord (release e2e gate blocked)
+        if: failure() && env.WEBHOOK != ''
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
+          RELEASE: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          CONTENT="[DEPLOY-BLOCKED] \`${RELEASE}\` — release e2e gate FAILED (real-app proof red; prod not moving)
+          Run: ${RUN_URL}
+          Tagged by: ${ACTOR}"
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --max-time 5 \
+            --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" \
+            "$WEBHOOK"
 
   open-infra-pr:
     # BLOCKED on the real-app proof gate: a red full-Obsidian e2e (or a failed
@@ -382,6 +400,11 @@ jobs:
             "$WEBHOOK"
 
   create-release-notes:
+    # BLOCKED on the real-app proof gate: a red full-Obsidian e2e fails
+    # release-e2e-gate → this job is skipped → no orphaned Release ships for a
+    # build that never reached prod. The override path still publishes (the gate
+    # SUCCEEDS with a ::warning:: on [skip-release-e2e], satisfying needs).
+    needs: release-e2e-gate
     # Always create the release-v* GitHub Release — this is the single
     # user-facing release. Body = optional SCHEMA-IMPACT prepend (when any
     # merged PR in the release range carries a phase/* label) + the
