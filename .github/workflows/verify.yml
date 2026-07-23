@@ -32,6 +32,15 @@ on:
     tags-ignore: ["v*", "release-v*"]
   repository_dispatch:
     types: [plugin-e2e-trigger]
+  # Nightly full-e2e convergence run + flake ledger (measurement, non-gating —
+  # the ci aggregate already treats e2e-* as report-only, see #1076). GitHub
+  # always fires `schedule` against the default branch (main), so `is-full`
+  # below is already true via its existing `github.ref == refs/heads/main`
+  # check — the explicit `github.event_name == 'schedule'` clauses added
+  # alongside it are belt-and-suspenders, documenting the nightly's intent
+  # in place rather than relying on that side effect.
+  schedule:
+    - cron: '0 6 * * *'  # 06:00 UTC
   workflow_dispatch:
     inputs:
       plugin_branch:
@@ -346,8 +355,12 @@ jobs:
           ERTS=$(erl -eval 'io:format("~s",[erlang:system_info(version)]),halt()' -noshell)
           ELX=$(elixir --short-version)
           export BEAM_TAG="otp${OTP}-erts${ERTS}-elx${ELX}"
-          # is-full: main pushes and [ci-full]/force_full runs validate everything (no skips).
-          if [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
+          # is-full: main pushes, [ci-full]/force_full runs, and the nightly
+          # schedule validate everything (no skips). The schedule clause is
+          # belt-and-suspenders — GitHub always fires `schedule` against the
+          # default branch, so github.ref already reads refs/heads/main — but
+          # it documents intent and survives a future default-branch change.
+          if [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
             echo "is-full=true" >> "$GITHUB_OUTPUT"
             export IS_FULL_RUN=true
           else
@@ -3560,6 +3573,134 @@ jobs:
             fi
           done
 
+  # Nightly convergence ledger. MEASUREMENT ONLY — never gates anything (the
+  # `ci` aggregate above already treats e2e-* as report-only per #1076) and is
+  # deliberately NOT in `ci`'s `needs:`. Runs only on the 06:00 UTC schedule,
+  # where `is-full` forces e2e-clerk/e2e-crdt/e2e-browser to actually execute
+  # instead of cache-skipping (see the fingerprint job's `is-full` check).
+  # Appends one JSONL line per suite to the `ci-ledger` orphan branch — a
+  # branch, not a workflow artifact, because artifacts expire and this record
+  # needs to survive to answer "how flaky is e2e-crdt this month". Also
+  # renders a trailing-14-night flake rate per suite to the step summary.
+  ledger-append:
+    if: always() && github.event_name == 'schedule'
+    needs: [e2e-clerk, e2e-crdt, e2e-browser]
+    runs-on: [self-hosted, linux, x64, isolated, light]
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}  # gh CLI can't infer repo from the LAN insteadOf-rewritten origin, see docs/context/gh-cli-runner-url-rewrite-and-release-repair.md
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Append nightly results + trailing-14-night flake report
+        env:
+          EC: ${{ needs.e2e-clerk.result }}
+          ED: ${{ needs.e2e-crdt.result }}
+          EB: ${{ needs.e2e-browser.result }}
+        run: |
+          set -eu
+          DATE=$(date -u +%F)
+          RUN_ID="${GITHUB_RUN_ID}"
+          SHA="${GITHUB_SHA}"
+
+          # result must be one of success/failure/skipped for the ledger schema;
+          # anything else (cancelled, timed_out, ...) folds into failure — it's
+          # a red night either way.
+          norm_result() {
+            case "$1" in
+              success|skipped) echo "$1" ;;
+              *) echo "failure" ;;
+            esac
+          }
+
+          # Per-suite job duration from the Actions API (not exposed to a
+          # downstream job otherwise). One list call for all three suites —
+          # well under the default 30-per-page, no pagination needed.
+          JOBS_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs") || JOBS_JSON='{"jobs":[]}'
+
+          LINES=$(mktemp)
+          for pair in "e2e-clerk:$EC" "e2e-crdt:$ED" "e2e-browser:$EB"; do
+            suite="${pair%%:*}"
+            result=$(norm_result "${pair#*:}")
+            dur=$(printf '%s' "$JOBS_JSON" | jq -r --arg n "$suite" '
+              [.jobs[] | select(.name==$n)][0] |
+              if .started_at and .completed_at then
+                (((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601)) | floor)
+              else 0 end') || dur=0
+            jq -nc --arg date "$DATE" --arg sha "$SHA" --arg run_id "$RUN_ID" \
+                   --arg suite "$suite" --arg result "$result" --argjson duration_s "${dur:-0}" \
+              '{date:$date, sha:$sha, workflow_run_id:$run_id, suite:$suite, result:$result, duration_s:$duration_s}' \
+              >> "$LINES"
+          done
+          echo "::group::Nightly ledger lines"; cat "$LINES"; echo "::endgroup::"
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # Bootstrap the orphan branch on first-ever run, else fast-forward it.
+          # Build + commit ONCE (an orphan branch can't be re-created if a
+          # retry finds it already exists locally); only the push is retried.
+          if git ls-remote --exit-code --heads origin ci-ledger >/dev/null 2>&1; then
+            git fetch origin ci-ledger
+            git checkout -B ci-ledger origin/ci-ledger
+          else
+            git checkout --orphan ci-ledger
+            git rm -rf . >/dev/null 2>&1 || true
+            echo "One JSONL line per nightly e2e suite result. Schema: {date, sha, workflow_run_id, suite, result, duration_s}. Written by the ledger-append job in verify.yml." > README.md
+            git add README.md
+          fi
+          cat "$LINES" >> flake-ledger.jsonl
+          git add flake-ledger.jsonl
+          git commit -m "chore(ledger): nightly e2e results for ${SHA:0:7} (run ${RUN_ID})"
+
+          # Retry a few times so a transient push race (near-impossible — this
+          # is a single nightly schedule — but defensive) never fails the
+          # workflow; this job is measurement, not a gate. A failed push means
+          # someone else moved ci-ledger since our fetch — rebase onto the new
+          # tip and retry.
+          pushed=false
+          for attempt in 1 2 3; do
+            if git push origin ci-ledger; then
+              pushed=true
+              break
+            fi
+            echo "::warning::ci-ledger push attempt ${attempt} failed — retrying"
+            sleep 3
+            git fetch origin ci-ledger
+            git rebase origin/ci-ledger || { git rebase --abort; break; }
+          done
+          if [ "$pushed" != true ]; then
+            echo "::warning::ci-ledger push failed after 3 attempts — nightly results NOT recorded this run (non-fatal, measurement only)"
+          fi
+
+          # Trailing-14-night flake rate per suite, from whatever ledger state
+          # is on disk right now (the just-appended local copy either way).
+          # Dedup on (workflow_run_id, suite) before windowing: a manual re-run
+          # of a scheduled run appends a second line for the same night, which
+          # would double-count that night and push an older night out of the
+          # trailing-14 sample. The raw JSONL stays append-only; only this
+          # report's read is deduped.
+          {
+            echo "### Nightly e2e flake rate (trailing 14 nights)"
+            echo
+            echo "| suite | nights red | rate |"
+            echo "|---|---|---|"
+            jq -s -r '
+              unique_by([.workflow_run_id, .suite]) |
+              group_by(.suite)[] |
+              (sort_by(.date) | .[-14:]) as $recent |
+              ($recent | length) as $n |
+              ([$recent[] | select(.result=="failure")] | length) as $red |
+              (if $n > 0 then (($red * 100 / $n) | floor) else 0 end) as $pct |
+              "| \(.[0].suite) | \($red)/\($n) | \($pct)% |"
+            ' flake-ledger.jsonl
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Cache BOTH green-CI fingerprints so the next run with the same content
   # (typically the squash-merge to main) can skip the relevant slice.
   #   - backend-hash cache:  unit-tests / lint / e2e-browser
@@ -3567,7 +3708,7 @@ jobs:
   # On plugin dispatch, ONLY e2e-clerk ran — skip backend marker save in
   # that case to avoid recording a green for jobs that didn't execute.
   record-pass:
-    if: always() && needs.ci.result == 'success'
+    if: always() && needs.ci.result == 'success' && github.event_name != 'schedule'
     needs: [fingerprint, ci]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
@@ -3630,7 +3771,7 @@ jobs:
   # from the fingerprint job (MARKER_HASH) so a recorded tag always matches the
   # hash a later run looks up — no recompute, no BEAM-on-recorder-host dependency.
   record-job-markers:
-    if: always() && needs.fingerprint.outputs.is-full == 'true'
+    if: always() && needs.fingerprint.outputs.is-full == 'true' && github.event_name != 'schedule'
     # migration-gates is intentionally EXCLUDED: it has several early `exit 0` success
     # paths (no open PR, no phase/expand label, no new migrations) that return
     # green WITHOUT running the migration rollforward. Recording a marker off
