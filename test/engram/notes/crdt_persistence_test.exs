@@ -241,6 +241,36 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     refute text =~ "STALE"
   end
 
+  test "bind/3 seeds when the snapshot carries ONLY frontmatter (empty body) and content has a body",
+       ctx do
+    %{user: user, vault: vault} = ctx
+    # Frontmatter-only snapshot: text_of projects non-empty ("---\n...") but the
+    # BODY is empty — the seed discriminator must be body-emptiness, or this
+    # shape keeps serving a bodyless STEP2 while the row holds the body.
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{
+        "path" => "fm-only.md",
+        "content" => "---\ntitle: x\n---\nreal body"
+      })
+
+    {:ok, %{state: fm_only}} = CrdtBridge.merge_plaintext(nil, "---\ntitle: x\n---\n")
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(fm_only, user, note2.id)
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note2.id),
+          set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+        )
+      end)
+
+    st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
+    doc = CrdtBridge.new_doc()
+    _returned = CrdtPersistence.bind(st, note2.id, doc)
+
+    assert CrdtBridge.text_of(doc) =~ "real body"
+  end
+
   # ── update_v1/4 writes encrypted log row ──────────────────────────────────
 
   test "update_v1/4 appends an encrypted, decryptable log row", ctx do

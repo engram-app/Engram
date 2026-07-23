@@ -1416,22 +1416,38 @@ defmodule Engram.Notes do
           end
 
         true ->
-          # Two independent docs from the same snapshot:
-          # - snapshot_doc: the shared ancestor; the incoming diff is applied here to
-          #   capture the minimal Yjs operations that encode the incoming change.
-          # - tail_doc: snapshot + replayed tail; the captured incoming operations are
-          #   applied here so Yjs merges them convergently with the tail operations.
-          with {:ok, snapshot_doc} <- CrdtBridge.doc_from_state(prior_state),
-               {:ok, tail_doc} <- CrdtBridge.doc_from_state(prior_state) do
-            # Fold in updates logged since the last checkpoint. Runs inside the
-            # caller's with_tenant txn — no nested tenant context needed.
-            _count = CrdtPersistence.replay_tail(tail_doc, user, note_id)
+          with {:ok, snapshot_doc} <- CrdtBridge.doc_from_state(prior_state) do
+            if CrdtBridge.body_of(snapshot_doc) == "" do
+              # #1087 sibling of bind/3's seed guard: the ancestor check is
+              # projected-BODY-emptiness, not snapshot-absence. A genesis row
+              # stores an EMPTY-doc snapshot — three-way against that ancestor
+              # turns the incoming diff into insert-everything, which unions
+              # with a bind-time tail seed into a DOUBLED body. An
+              # empty-projecting ancestor takes the same tail-inclusive
+              # two-way path as a nil snapshot (reusing the hydrated doc keeps
+              # the empty snapshot's lineage continuity).
+              _count = CrdtPersistence.replay_tail(snapshot_doc, user, note_id)
+              CrdtBridge.merge_plaintext_into_doc(snapshot_doc, incoming_content)
+            else
+              # Two independent docs from the same snapshot:
+              # - snapshot_doc: the shared ancestor; the incoming diff is applied
+              #   here to capture the minimal Yjs operations that encode the
+              #   incoming change.
+              # - tail_doc: snapshot + replayed tail; the captured incoming
+              #   operations are applied here so Yjs merges them convergently
+              #   with the tail operations.
+              with {:ok, tail_doc} <- CrdtBridge.doc_from_state(prior_state) do
+                # Fold in updates logged since the last checkpoint. Runs inside
+                # the caller's with_tenant txn — no nested tenant context needed.
+                _count = CrdtPersistence.replay_tail(tail_doc, user, note_id)
 
-            CrdtBridge.merge_plaintext_relative_to_snapshot(
-              snapshot_doc,
-              tail_doc,
-              incoming_content
-            )
+                CrdtBridge.merge_plaintext_relative_to_snapshot(
+                  snapshot_doc,
+                  tail_doc,
+                  incoming_content
+                )
+              end
+            end
           end
       end
 

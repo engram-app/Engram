@@ -80,7 +80,12 @@ defmodule Engram.Notes.CrdtPersistence do
             # no-ops on empty content). The client's `seedOnce` guard (skips
             # when an LCA exists) prevents a double-seed once the server is
             # authoritative.
-            if applied == [] and CrdtBridge.text_of(doc) == "" do
+            # body_of (not text_of): a frontmatter-only snapshot projects
+            # non-empty text while the BODY is empty — that shape must still
+            # seed, or STEP2 serves a bodyless doc while the row has the body.
+            # ingest_plaintext upserts frontmatter keys idempotently, so
+            # seeding over existing frontmatter is safe.
+            if applied == [] and CrdtBridge.body_of(doc) == "" do
               seed_from_content(doc, note, user)
             end
 
