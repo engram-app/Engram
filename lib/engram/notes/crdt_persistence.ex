@@ -52,15 +52,15 @@ defmodule Engram.Notes.CrdtPersistence do
       Repo.with_tenant(user_id, fn ->
         case Repo.get(Note, note_id) do
           %Note{} = note ->
-            from_snapshot? =
-              case Crypto.decrypt_crdt_state(note, user) do
-                {:ok, snapshot} when is_binary(snapshot) ->
-                  :ok = Yex.apply_update(doc, snapshot)
-                  true
+            # Hydrate the snapshot when present. Whether one existed no longer
+            # gates the seed below — projected-body-emptiness does (#1087).
+            case Crypto.decrypt_crdt_state(note, user) do
+              {:ok, snapshot} when is_binary(snapshot) ->
+                :ok = Yex.apply_update(doc, snapshot)
 
-                _ ->
-                  false
-              end
+              _ ->
+                :ok
+            end
 
             applied = replay_tail(doc, user, note_id)
 
