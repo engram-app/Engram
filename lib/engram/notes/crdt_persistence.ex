@@ -64,14 +64,23 @@ defmodule Engram.Notes.CrdtPersistence do
 
             applied = replay_tail(doc, user, note_id)
 
-            # Fresh room: no snapshot AND no tail-log updates applied means this
-            # note has never been CRDT-edited, so the only source of truth is the
-            # plaintext `notes.content`. Seed the doc from it so a device that has
-            # never opened the note (discovery via the crdt_doc_ready announce or a
+            # Empty room after hydration: no tail-log applied AND the doc
+            # projects to empty text means this note carries no CRDT-edited
+            # content, so the only source of truth is the plaintext
+            # `notes.content`. Seed the doc from it so a device that has never
+            # opened the note (discovery via the crdt_doc_ready announce or a
             # /changes pull) still receives the body over the y-protocols
-            # handshake. The client's `seedOnce` guard (skips when an LCA exists)
-            # prevents a double-seed once the server is authoritative.
-            if not from_snapshot? and applied == [] do
+            # handshake. NOTE (#1087): the guard is projected-emptiness, not
+            # snapshot-absence — a genesis row stores an EMPTY-doc snapshot, so
+            # `from_snapshot?` alone let a room bind empty while the row held
+            # content (empty STEP2s vs REST getNote — the plugin's race-closer
+            # class). A legit cleared note can't be misread here: a real clear
+            # either rides the tail (`applied != []` blocks the seed) or a
+            # checkpoint that also wrote `content: ""` (seed_from_content
+            # no-ops on empty content). The client's `seedOnce` guard (skips
+            # when an LCA exists) prevents a double-seed once the server is
+            # authoritative.
+            if applied == [] and CrdtBridge.text_of(doc) == "" do
               seed_from_content(doc, note, user)
             end
 

@@ -156,6 +156,91 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert CrdtBridge.text_of(doc) == ""
   end
 
+  test "bind/3 seeds when the snapshot exists but projects to EMPTY text and content is non-empty (#1087 empty-snapshot class)",
+       ctx do
+    %{user: user, vault: vault} = ctx
+    # The genesis crdt_create row shape after a REST content write whose merge
+    # never reached the state column: crdt_state holds an EMPTY-doc snapshot
+    # while notes.content is non-empty. from_snapshot? alone must not defeat
+    # the seed — an empty-projecting doc with no tail has exactly one source
+    # of truth, the plaintext row content. (Pre-fix: STEP2 served empty while
+    # REST getNote returned the body — the plugin's race-closer class.)
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{"path" => "empty-snap.md", "content" => "real body"})
+
+    {:ok, empty_state} = Yex.encode_state_as_update(CrdtBridge.new_doc())
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(empty_state, user, note2.id)
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note2.id),
+          set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+        )
+      end)
+
+    st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
+    doc = CrdtBridge.new_doc()
+    _returned = CrdtPersistence.bind(st, note2.id, doc)
+
+    assert CrdtBridge.text_of(doc) == "real body"
+  end
+
+  test "bind/3 does NOT seed when the snapshot projects empty AND content is empty (bare genesis row)",
+       ctx do
+    %{user: user, vault: vault} = ctx
+    {:ok, note2} = Notes.upsert_note(user, vault, %{"path" => "bare-genesis.md", "content" => ""})
+
+    {:ok, empty_state} = Yex.encode_state_as_update(CrdtBridge.new_doc())
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(empty_state, user, note2.id)
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note2.id),
+          set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+        )
+      end)
+
+    st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
+    doc = CrdtBridge.new_doc()
+    _returned = CrdtPersistence.bind(st, note2.id, doc)
+
+    assert CrdtBridge.text_of(doc) == ""
+  end
+
+  test "bind/3 does NOT seed over a snapshot whose tail carries a legit clear (delete-all survives)",
+       ctx do
+    %{user: user, vault: vault} = ctx
+    # A tail row that cleared the text: doc projects empty AFTER hydration, but
+    # applied != [] — the clear is CRDT history, not a missing seed. Content
+    # must NOT resurrect.
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{"path" => "cleared.md", "content" => "STALE"})
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note2.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+    st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
+
+    # Tail: insert then delete-all on ONE lineage → projects empty.
+    {:ok, %{state: with_text}} = CrdtBridge.merge_plaintext(nil, "TO CLEAR")
+    {:ok, %{state: tail_update}} = CrdtBridge.merge_plaintext(with_text, "")
+    seed_doc = CrdtBridge.new_doc()
+    _ = CrdtPersistence.update_v1(st, tail_update, note2.id, seed_doc)
+
+    doc = CrdtBridge.new_doc()
+    _returned = CrdtPersistence.bind(st, note2.id, doc)
+
+    text = CrdtBridge.text_of(doc)
+    refute text =~ "STALE"
+  end
+
   # ── update_v1/4 writes encrypted log row ──────────────────────────────────
 
   test "update_v1/4 appends an encrypted, decryptable log row", ctx do
