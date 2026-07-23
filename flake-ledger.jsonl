@@ -1,0 +1,4 @@
+{"date":"2026-07-23","sha":"f7b5a8748235d317525eae9e4258f1956325b4c3","workflow_run_id":"29990231950","suite":"e2e-clerk","result":"failure","duration_s":458}
+{"date":"2026-07-23","sha":"f7b5a8748235d317525eae9e4258f1956325b4c3","workflow_run_id":"29990231950","suite":"e2e-crdt","result":"success","duration_s":440}
+{"date":"2026-07-23","sha":"f7b5a8748235d317525eae9e4258f1956325b4c3","workflow_run_id":"29990231950","suite":"e2e-browser","result":"success","duration_s":246}
+{"date":"2026-07-23","sha":"f7b5a8748235d317525eae9e4258f1956325b4c3","workflow_run_id":"29990231950","suite":"headless-protocol","result":"success","duration_s":43}
