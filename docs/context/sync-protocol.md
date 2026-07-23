@@ -38,7 +38,7 @@ Composite PK `(vault_id, device_id)`, `last_seq`, `last_seen_at`. It is the **GC
 Full snapshot for first-sync + drift reconciliation: projects ONLY path-ciphertext + nonce + `content_hash` (not `content_ciphertext` — a 10k-note vault would OOM BEAM otherwise), decrypts paths server-side, sorts. A user with no DEK (zero writes) short-circuits to an empty manifest.
 
 ## Realtime channel (`EngramWeb.SyncChannel`)
-Topic `sync:{user_id}:{vault_id}` (join asserts the user owns both). Client→Server: `push_note`, `delete_note`, `rename_note`, `pull_changes`. Server→Client: `note_changed` (via `broadcast_from` — excludes the pushing socket to halve its bandwidth on bulk sync). Presence tracked. Writes during a DEK rotation are gated by `RotationGate`. **The channel is a live nudge, not the source of truth — catch-up always goes through the seq-ordered pull.** See `channel-event-contract.md` for the event payloads.
+Topic `sync:{user_id}:{vault_id}` (join asserts the user owns both). Client→Server: none — all writes ride the `crdt:` channel; unknown frames get a `"gone"` error reply. Server→Client: `note_changed` (via `broadcast_from` — excludes the pushing socket to halve its bandwidth on bulk sync). Presence tracked. **The channel is a live nudge, not the source of truth — catch-up always goes through the seq-ordered pull.** See `channel-event-contract.md` for the event payloads.
 
 ## Key modules
 - `lib/engram/sync.ex` — cursor codec + `record_cursor` + `retention_floor`
