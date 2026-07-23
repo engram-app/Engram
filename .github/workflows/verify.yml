@@ -2588,6 +2588,12 @@ jobs:
           fi
           echo "OK — no checkbox-as-TODO in root markdown."
 
+      - name: Flake-ledger rate logic self-check
+        # Guards scripts/flake_ledger_rates.jq (dedup + trailing-14 window +
+        # rate math). The ledger-append job that uses it is schedule-only, so
+        # without this a broken filter would hide until the next nightly.
+        run: bash scripts/flake_ledger_rates_test.sh
+
       - name: Scan CLAUDE.md / AGENTS.md files for known-stale facts
         run: |
           set -euo pipefail
@@ -3716,37 +3722,45 @@ jobs:
           set +e
           gh label create flaky-suite --color d73a4a \
             --description "Nightly e2e suite over the flake threshold" >/dev/null 2>&1 || true
-          OPEN_ISSUES="$(gh issue list --label flaky-suite --state open --json number,title 2>/dev/null || echo '[]')"
-          printf '%s\n' "$RATES" | jq -c '.' | while IFS= read -r row; do
-            suite=$(printf '%s' "$row" | jq -r '.suite')
-            pct=$(printf '%s'   "$row" | jq -r '.pct')
-            red=$(printf '%s'   "$row" | jq -r '.red')
-            n=$(printf '%s'     "$row" | jq -r '.n')
-            title="Flaky suite: ${suite} (nightly e2e)"
-            num=$(printf '%s' "$OPEN_ISSUES" | jq -r --arg t "$title" '.[] | select(.title==$t) | .number' | head -n1)
+          # A successful query returns at least "[]"; an empty string means the
+          # `gh` call failed. Do NOT treat failure as "no open issues" — that
+          # would look un-tracked and file a DUPLICATE issue for every
+          # over-threshold suite on a transient blip. Skip; retry tomorrow.
+          OPEN_ISSUES="$(gh issue list --label flaky-suite --state open --json number,title 2>/dev/null)"
+          if [ -z "$OPEN_ISSUES" ]; then
+            echo "::warning::flaky-suite: could not list open issues — skipping alert pass this run"
+          else
+            printf '%s\n' "$RATES" | jq -c '.' | while IFS= read -r row; do
+              suite=$(printf '%s' "$row" | jq -r '.suite')
+              pct=$(printf '%s'   "$row" | jq -r '.pct')
+              red=$(printf '%s'   "$row" | jq -r '.red')
+              n=$(printf '%s'     "$row" | jq -r '.n')
+              title="Flaky suite: ${suite} (nightly e2e)"
+              num=$(printf '%s' "$OPEN_ISSUES" | jq -r --arg t "$title" '.[] | select(.title==$t) | .number' | head -n1)
 
-            if [ "$n" -ge "$MIN_NIGHTS" ] && [ "$pct" -ge "$THRESHOLD_PCT" ]; then
-              if [ -n "$num" ]; then
-                gh issue comment "$num" --body "Still over threshold on ${DATE}: **${pct}%** (${red}/${n} nights red, trailing 14)." \
-                  || echo "::warning::flaky-suite: comment on #$num failed"
-              else
-                # Build the body with printf (not a column-0 multiline string,
-                # which would terminate this YAML block scalar).
-                body=$(printf '%s\n' \
-                  "Suite \`${suite}\` is failing the nightly full-e2e run **${pct}%** of the trailing 14 nights (${red}/${n} red)." \
-                  "" \
-                  "Threshold: ${THRESHOLD_PCT}% over >=${MIN_NIGHTS} nights of data. Full per-night history is on the \`ci-ledger\` branch; rationale for report-only e2e is in \`docs/context/testing-architecture-migration.md\`." \
-                  "" \
-                  "Auto-filed by the \`ledger-append\` job in \`.github/workflows/verify.yml\`; auto-closes when the rate drops back under ${THRESHOLD_PCT}%.")
-                gh issue create --title "$title" --label flaky-suite --body "$body" \
-                  || echo "::warning::flaky-suite: create for ${suite} failed"
+              if [ "$n" -ge "$MIN_NIGHTS" ] && [ "$pct" -ge "$THRESHOLD_PCT" ]; then
+                if [ -n "$num" ]; then
+                  gh issue comment "$num" --body "Still over threshold on ${DATE}: **${pct}%** (${red}/${n} nights red, trailing 14)." \
+                    || echo "::warning::flaky-suite: comment on #$num failed"
+                else
+                  # Build the body with printf (not a column-0 multiline string,
+                  # which would terminate this YAML block scalar).
+                  body=$(printf '%s\n' \
+                    "Suite \`${suite}\` is failing the nightly full-e2e run **${pct}%** of the trailing 14 nights (${red}/${n} red)." \
+                    "" \
+                    "Threshold: ${THRESHOLD_PCT}% over >=${MIN_NIGHTS} nights of data. Full per-night history is on the \`ci-ledger\` branch; rationale for report-only e2e is in \`docs/context/testing-architecture-migration.md\`." \
+                    "" \
+                    "Auto-filed by the \`ledger-append\` job in \`.github/workflows/verify.yml\`; auto-closes when the rate drops back under ${THRESHOLD_PCT}%.")
+                  gh issue create --title "$title" --label flaky-suite --body "$body" \
+                    || echo "::warning::flaky-suite: create for ${suite} failed"
+                fi
+              elif [ -n "$num" ]; then
+                gh issue comment "$num" --body "Recovered on ${DATE}: **${pct}%** (${red}/${n}) — back under ${THRESHOLD_PCT}%. Closing." \
+                  && gh issue close "$num" \
+                  || echo "::warning::flaky-suite: close of #$num failed"
               fi
-            elif [ -n "$num" ]; then
-              gh issue comment "$num" --body "Recovered on ${DATE}: **${pct}%** (${red}/${n}) — back under ${THRESHOLD_PCT}%. Closing." \
-                && gh issue close "$num" \
-                || echo "::warning::flaky-suite: close of #$num failed"
-            fi
-          done
+            done
+          fi
           set -e
 
   # Cache BOTH green-CI fingerprints so the next run with the same content
