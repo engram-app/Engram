@@ -1,5 +1,6 @@
 defmodule EngramWeb.CrdtChannelTest do
   use EngramWeb.ChannelCase, async: false
+  import Ecto.Query, only: [from: 2]
 
   import ExUnit.CaptureLog
 
@@ -492,6 +493,48 @@ defmodule EngramWeb.CrdtChannelTest do
       {:ok, {:sync, {:sync_step2, update}}} = Yex.Sync.message_decode(Base.decode64!(b64))
       :ok = Yex.apply_update(client, update)
       assert CrdtBridge.text_of(client) == "base"
+    end
+
+    test "#1087: genesis row + later REST content write → STEP2 hydrates the content (no empty room)",
+         %{socket: socket, user: user, vault: vault} do
+      # The e2e test_38/43 shape, in-process: crdt_create makes a bare genesis
+      # row (empty content, EMPTY-doc snapshot); a REST write then lands
+      # content while NO room is live. The next STEP1 must open a room whose
+      # bind seeds from the row — pre-fix, from_snapshot? (the empty genesis
+      # snapshot) defeated the seed and STEP2 served empty forever.
+      genesis_id = Ecto.UUID.generate()
+      ref = push(socket, "crdt_create", %{"doc_id" => genesis_id, "path" => "Notes/g.md"})
+      assert_reply ref, :ok, %{doc_id: created_id}
+
+      # Kill the genesis room so the REST write below lands with no live room
+      # (deliver_out's live-room push must not be what heals this).
+      Engram.Notes.CrdtRegistry.terminate_room(created_id)
+
+      # REST content write; wipe the state columns back to the EMPTY genesis
+      # snapshot shape (simulating the merge-never-reached-state window).
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "Notes/g.md", "content" => "late body"})
+
+      {:ok, empty_state} = Yex.encode_state_as_update(CrdtBridge.new_doc())
+      {:ok, {ct, nonce}} = Engram.Crypto.encrypt_crdt_state(empty_state, user, created_id)
+
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          Engram.Repo.update_all(
+            from(n in Engram.Notes.Note, where: n.id == ^created_id),
+            set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+          )
+        end)
+
+      client = CrdtBridge.new_doc()
+      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+      {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+      push(socket, "crdt_msg", %{"doc_id" => created_id, "b64" => Base.encode64(frame)})
+
+      assert_push "crdt_msg", %{"doc_id" => ^created_id, "b64" => b64}, 3000
+      {:ok, {:sync, {:sync_step2, update}}} = Yex.Sync.message_decode(Base.decode64!(b64))
+      :ok = Yex.apply_update(client, update)
+      assert CrdtBridge.text_of(client) == "late body"
     end
 
     test "a successfully routed crdt_msg is ACKED with :ok", %{socket: socket, doc_id: doc_id} do

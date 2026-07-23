@@ -52,26 +52,40 @@ defmodule Engram.Notes.CrdtPersistence do
       Repo.with_tenant(user_id, fn ->
         case Repo.get(Note, note_id) do
           %Note{} = note ->
-            from_snapshot? =
-              case Crypto.decrypt_crdt_state(note, user) do
-                {:ok, snapshot} when is_binary(snapshot) ->
-                  :ok = Yex.apply_update(doc, snapshot)
-                  true
+            # Hydrate the snapshot when present. Whether one existed no longer
+            # gates the seed below — projected-body-emptiness does (#1087).
+            case Crypto.decrypt_crdt_state(note, user) do
+              {:ok, snapshot} when is_binary(snapshot) ->
+                :ok = Yex.apply_update(doc, snapshot)
 
-                _ ->
-                  false
-              end
+              _ ->
+                :ok
+            end
 
             applied = replay_tail(doc, user, note_id)
 
-            # Fresh room: no snapshot AND no tail-log updates applied means this
-            # note has never been CRDT-edited, so the only source of truth is the
-            # plaintext `notes.content`. Seed the doc from it so a device that has
-            # never opened the note (discovery via the crdt_doc_ready announce or a
+            # Empty room after hydration: no tail-log applied AND the doc
+            # projects to empty text means this note carries no CRDT-edited
+            # content, so the only source of truth is the plaintext
+            # `notes.content`. Seed the doc from it so a device that has never
+            # opened the note (discovery via the crdt_doc_ready announce or a
             # /changes pull) still receives the body over the y-protocols
-            # handshake. The client's `seedOnce` guard (skips when an LCA exists)
-            # prevents a double-seed once the server is authoritative.
-            if not from_snapshot? and applied == [] do
+            # handshake. NOTE (#1087): the guard is projected-emptiness, not
+            # snapshot-absence — a genesis row stores an EMPTY-doc snapshot, so
+            # `from_snapshot?` alone let a room bind empty while the row held
+            # content (empty STEP2s vs REST getNote — the plugin's race-closer
+            # class). A legit cleared note can't be misread here: a real clear
+            # either rides the tail (`applied != []` blocks the seed) or a
+            # checkpoint that also wrote `content: ""` (seed_from_content
+            # no-ops on empty content). The client's `seedOnce` guard (skips
+            # when an LCA exists) prevents a double-seed once the server is
+            # authoritative.
+            # body_of (not text_of): a frontmatter-only snapshot projects
+            # non-empty text while the BODY is empty — that shape must still
+            # seed, or STEP2 serves a bodyless doc while the row has the body.
+            # ingest_plaintext upserts frontmatter keys idempotently, so
+            # seeding over existing frontmatter is safe.
+            if applied == [] and CrdtBridge.body_of(doc) == "" do
               seed_from_content(doc, note, user)
             end
 
