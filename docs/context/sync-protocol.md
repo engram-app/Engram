@@ -57,7 +57,6 @@ Topic `sync:{user_id}:{vault_id}` (join asserts the user owns both). Client→Se
 
 ## References
 - `channel-event-contract.md` — WS event payloads
-- `b2-cursor-pull-e2e-triage.md` — the cursor-pull e2e bring-up triage
 - `../engram-workspace/docs/api-contract.md` — REST/WS endpoint contract
 - plugin `docs/internals.md` — the client side (`syncCursor`/`syncState`, `getSyncChanges`, manifest bootstrap)
 - code: `lib/engram/sync.ex`, `sync_controller.ex`, `sync_channel.ex`, `vaults.ex:113`
