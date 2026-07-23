@@ -1154,4 +1154,70 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_reply ref, :error, %{reason: "room_limit"}, 3000
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Rotation gate (T3.7, #1092) — DEK rotation must block the socket write path
+  # ---------------------------------------------------------------------------
+
+  describe "rotation gate" do
+    test "join is refused while a DEK rotation holds the user lock", %{
+      user: user,
+      vault: vault
+    } do
+      # Build the socket from the ORIGINAL unlocked struct (its
+      # dek_rotation_locked_at is nil), THEN lock the DB row. Refusal here
+      # proves RotationGate.check/1 re-reads the row — a stale-struct check
+      # (check_user on socket.assigns) would wrongly allow this join, which is
+      # the exact long-lived-socket case #1092 is about.
+      socket = user_socket(user)
+
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      assert {:error, %{reason: "rotation_in_progress"}} =
+               subscribe_and_join(
+                 socket,
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+    end
+
+    test "join is allowed again once the lock clears", %{user: user, vault: vault} do
+      # Lock, confirm refusal, then clear — a fresh join must succeed, proving
+      # the gate is not sticky.
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      assert {:error, %{reason: "rotation_in_progress"}} =
+               subscribe_and_join(
+                 user_socket(user),
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: nil]],
+        skip_tenant_check: true
+      )
+
+      assert {:ok, _, joined} =
+               subscribe_and_join(
+                 user_socket(user),
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+
+      Sandbox.allow(Repo, self(), joined.channel_pid)
+    end
+  end
 end

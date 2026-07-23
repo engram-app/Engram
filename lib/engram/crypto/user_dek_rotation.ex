@@ -32,6 +32,7 @@ defmodule Engram.Crypto.UserDekRotation do
   import Ecto.Query, only: [from: 2]
 
   alias Engram.Accounts.User
+  alias Engram.Auth.SessionInvalidator
   alias Engram.Crypto
   alias Engram.Crypto.{DekCache, Envelope, RotationLock}
   alias Engram.Crypto.KeyProvider.Resolver
@@ -75,6 +76,12 @@ defmodule Engram.Crypto.UserDekRotation do
   defp do_rotate(user_id) do
     with {:ok, user} <- load_user(user_id),
          {:ok, _locked_at} <- RotationLock.acquire(user_id) do
+      # T3.7 (#1092): with the lock held, no new crdt: socket can join
+      # (RotationGate on join). Drain the ones already open so live WS clients
+      # stop writing/encrypting mid-rotation — they reconnect and hit the join
+      # gate. Same force-disconnect the entitlement/auth paths already use.
+      SessionInvalidator.disconnect_user(user_id)
+
       new_dek_version = (user.dek_version || 1) + 1
 
       # B5: full try/rescue/catch so that :exit (pool exhaustion, SIGTERM) and

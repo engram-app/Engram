@@ -14,6 +14,7 @@ defmodule EngramWeb.CrdtChannel do
   use Phoenix.Channel
 
   alias Engram.Crypto.HMAC
+  alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
   alias Engram.{Notes, Vaults}
   alias Engram.Notes.CrdtBridge
@@ -92,6 +93,19 @@ defmodule EngramWeb.CrdtChannel do
 
     user_id_str = to_string(user.id)
 
+    # T3.7 (#1092): the crdt: channel is the live write path — refuse to open it
+    # while a DEK rotation holds the user's lock. check/1 re-reads the row so a
+    # reconnect mid-rotation is caught even if the socket's user struct predates
+    # the lock. In-flight sockets are drained separately (UserDekRotation).
+    case RotationGate.check(user.id) do
+      {:error, :rotation_in_progress} -> {:error, %{reason: "rotation_in_progress"}}
+      # :ok, or {:error, :user_not_found} — let the vault-auth path decide
+      # (a missing user falls through to "unauthorized", not a rotation reason).
+      _ -> join_vault("crdt:" <> ids, user, user_id_str, socket)
+    end
+  end
+
+  defp join_vault("crdt:" <> ids, user, user_id_str, socket) do
     case String.split(ids, ":") do
       [^user_id_str, vid_str] ->
         case Ecto.UUID.cast(vid_str) do
