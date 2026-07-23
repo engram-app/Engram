@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.0](https://github.com/engram-app/Engram/compare/0.7.0...0.8.0) (2026-07-23)
+
+
+### Features
+
+* **ci:** nightly full-e2e run + flake ledger on ci-ledger branch ([#1078](https://github.com/engram-app/Engram/issues/1078)) ([4533811](https://github.com/engram-app/Engram/commit/4533811d3f81f286b20cdf6621b9508a81dcd51d))
+* **deploy:** gate release-v* deploy on the full Obsidian e2e (real-app proof before ship) ([#1077](https://github.com/engram-app/Engram/issues/1077)) ([cbf02f9](https://github.com/engram-app/Engram/commit/cbf02f9d950ce3fc9fede836bb051a11af79e778))
+* **e2e:** headless protocol tier — real engine vs real backend, event barriers ([#1074](https://github.com/engram-app/Engram/issues/1074)) ([6ebf615](https://github.com/engram-app/Engram/commit/6ebf6150fa872d2a613a5857cc081995c895eb4f))
+
 ## [0.7.0](https://github.com/engram-app/Engram/compare/0.6.0...0.7.0) (2026-07-22)
 
 
