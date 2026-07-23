@@ -330,7 +330,11 @@ defmodule EngramWeb.CrdtChannel do
 
       limit =
         case Map.get(payload, "limit") do
-          n when is_integer(n) and n > 0 -> n
+          # Clamp to the feed cap: merged_changes_page warns callers to bound
+          # limit to @catchup_page_limit or rows past the cap silently drop
+          # (SyncController does the same). An unclamped client `limit` was a
+          # pre-existing silent-loss path.
+          n when is_integer(n) and n > 0 -> min(n, @catchup_page_limit)
           # Match the feed page cap when the client sends no limit (prior
           # behaviour: opts = [] → list_changes_by_seq defaulted to its max).
           _ -> @catchup_page_limit
