@@ -321,6 +321,13 @@ defmodule EngramWeb.CrdtChannel do
   def handle_in("crdt_catchup_since", payload, socket) do
     with :ok <- check_rate(socket, :handshake),
          {:ok, cursor} <- cast_cursor(Map.get(payload, "cursor_seq", 0)) do
+      # Composite keyset cursor: `cursor_id` pairs with `cursor_seq` so the next
+      # page continues at `(seq, id) > (cursor_seq, cursor_id)` instead of the
+      # seq-only `seq > cursor_seq`. An attachment move writes two rows at ONE
+      # seq (#614); a seq-only cursor paging between them skips the second (#312).
+      # Invalid/absent cursor_id degrades to seq-only (nil) rather than rejecting.
+      cursor_id = cast_cursor_id(Map.get(payload, "cursor_id"))
+
       limit =
         case Map.get(payload, "limit") do
           n when is_integer(n) and n > 0 -> n
@@ -338,18 +345,20 @@ defmodule EngramWeb.CrdtChannel do
           socket.assigns.current_user,
           socket.assigns.vault,
           cursor,
-          nil,
+          cursor_id,
           limit,
           :all
         )
 
-      next_seq =
+      {next_seq, next_id} =
         case next do
-          {seq, _id} -> seq
-          _ -> nil
+          {seq, id} -> {seq, id}
+          _ -> {nil, nil}
         end
 
-      {:reply, {:ok, %{changes: changes, has_more: has_more, next_seq: next_seq}}, socket}
+      {:reply,
+       {:ok, %{changes: changes, has_more: has_more, next_seq: next_seq, next_id: next_id}},
+       socket}
     else
       {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
       {:error, :bad_cursor} -> {:reply, {:error, %{reason: "bad_cursor"}}, socket}
@@ -524,6 +533,18 @@ defmodule EngramWeb.CrdtChannel do
   # crash the whole channel — same defensive contract as cast_doc_id.
   defp cast_cursor(n) when is_integer(n) and n >= 0, do: {:ok, n}
   defp cast_cursor(_), do: {:error, :bad_cursor}
+
+  # Untrusted composite-cursor id from the client. Only a valid UUID pairs with
+  # the seq for the keyset; anything else (absent, garbage) degrades to seq-only
+  # (nil) rather than rejecting — the id is a pagination refinement, not auth.
+  defp cast_cursor_id(id) when is_binary(id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, uuid} -> uuid
+      :error -> nil
+    end
+  end
+
+  defp cast_cursor_id(_), do: nil
 
   defp cast_doc_id(doc_id) do
     case Ecto.UUID.cast(doc_id) do
