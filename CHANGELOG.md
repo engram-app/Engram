@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.0](https://github.com/engram-app/Engram/compare/0.8.0...0.9.0) (2026-07-23)
+
+
+### Features
+
+* **ci:** auto-alert on chronically flaky e2e suites ([#1085](https://github.com/engram-app/Engram/issues/1085)) ([12db097](https://github.com/engram-app/Engram/commit/12db0971086b17100fa12ff6cf37561dc661b285))
+* composite {seq,id} cursor for crdt_catchup_since ([#312](https://github.com/engram-app/Engram/issues/312)) ([#1097](https://github.com/engram-app/Engram/issues/1097)) ([644d140](https://github.com/engram-app/Engram/commit/644d1406688e12e70456d036b7add453d504726b))
+
+
+### Bug Fixes
+
+* **ci:** dispatch release-PR CI, drop dup e2e ([#1090](https://github.com/engram-app/Engram/issues/1090)) ([f7b5a87](https://github.com/engram-app/Engram/commit/f7b5a8748235d317525eae9e4258f1956325b4c3))
+* **frontend:** self-healing frontend-promote + shared build config ([#1098](https://github.com/engram-app/Engram/issues/1098)) ([10dc1d9](https://github.com/engram-app/Engram/commit/10dc1d974196952ae3e91766420b55c42163704a))
+* gate crdt: channel writes on DEK rotation (T3.7, [#1092](https://github.com/engram-app/Engram/issues/1092)) ([#1095](https://github.com/engram-app/Engram/issues/1095)) ([34d36c8](https://github.com/engram-app/Engram/commit/34d36c892f93528f8d97b08fc9349ae0dbcb82a3))
+* seed the room whenever the doc projects an empty body (closes [#1087](https://github.com/engram-app/Engram/issues/1087)) ([#1094](https://github.com/engram-app/Engram/issues/1094)) ([9c7d4b5](https://github.com/engram-app/Engram/commit/9c7d4b53916ec4b54f8e7329054784ad6a82711c))
+
 ## [0.8.0](https://github.com/engram-app/Engram/compare/0.7.0...0.8.0) (2026-07-23)
 
 
