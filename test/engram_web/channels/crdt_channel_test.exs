@@ -275,6 +275,72 @@ defmodule EngramWeb.CrdtChannelTest do
       seqs = Enum.map(changes, & &1.seq)
       assert seqs == Enum.sort(seqs)
     end
+
+    test "a non-UUID cursor_id degrades to seq-only instead of crashing", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "Notes/g1.md", "content" => "1"})
+      {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "Notes/g2.md", "content" => "2"})
+
+      # Garbage cursor_id must not reject or 500 — it's a pagination refinement,
+      # so it falls back to the seq-only cursor (seq > n1.seq → n2 only).
+      ref =
+        push(socket, "crdt_catchup_since", %{"cursor_seq" => n1.seq, "cursor_id" => "not-a-uuid"})
+
+      assert_reply ref, :ok, %{changes: changes}
+      ids = Enum.map(changes, & &1.id)
+      refute n1.id in ids
+      assert n2.id in ids
+    end
+
+    test "an equal-seq move pair is not dropped when the composite cursor splits it",
+         %{socket: socket, user: user, vault: vault} do
+      # move_attachment writes TWO rows at ONE seq (#614): the repoint at the
+      # new path + the old-path tombstone. Walking the feed one row per page
+      # (limit 1) forces a boundary BETWEEN them; a seq-only cursor (seq > seq)
+      # would skip the second — a ghost old path survives (#312). The composite
+      # cursor {seq, id} continues past the exact row and keeps both.
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "old.png",
+          "content_base64" => Base.encode64("bytes"),
+          "mime_type" => "image/png"
+        })
+
+      {:ok, _} = Attachments.move_attachment(user, vault, "old.png", "new.png")
+
+      rows = catchup_all(socket, 1)
+      att_paths = for r <- rows, r.type == :attachment, into: MapSet.new(), do: r.path
+
+      # Both halves of the seq-S pair survive the paged walk.
+      assert "new.png" in att_paths
+      assert "old.png" in att_paths
+      # And every row appears exactly once (no duplicate from a >= overlap).
+      ids = Enum.map(rows, & &1.id)
+      assert ids == Enum.uniq(ids)
+    end
+  end
+
+  # Paginate the whole crdt_catchup_since feed one page at a time, threading the
+  # composite {cursor_seq, cursor_id} cursor exactly as the plugin does.
+  defp catchup_all(socket, limit) do
+    Stream.unfold({0, nil}, fn
+      :done ->
+        nil
+
+      {cursor_seq, cursor_id} ->
+        payload =
+          %{"cursor_seq" => cursor_seq, "limit" => limit}
+          |> then(&if cursor_id, do: Map.put(&1, "cursor_id", cursor_id), else: &1)
+
+        ref = push(socket, "crdt_catchup_since", payload)
+        assert_reply ref, :ok, %{changes: changes, has_more: has_more, next_seq: ns, next_id: ni}
+        next = if has_more, do: {ns, ni}, else: :done
+        {changes, next}
+    end)
+    |> Enum.flat_map(& &1)
   end
 
   # ---------------------------------------------------------------------------
