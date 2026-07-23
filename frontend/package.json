@@ -14,8 +14,9 @@
 	"scripts": {
 		"dev": "vite",
 		"build": "bun run build:selfhost",
-		"build:selfhost": "bun scripts/check-legal-manifest.ts && tsc --noEmit && vite build",
-		"build:saas": "bun scripts/check-legal-manifest.ts && tsc --noEmit && VITE_INLINE_BOOTSTRAP_CONFIG=1 vite build --outDir dist --emptyOutDir && bun scripts/write-config-json.ts dist/config.json",
+		"build:selfhost": "bun scripts/check-legal-manifest.ts && tsc --noEmit && vite build --mode selfhost",
+		"build:saas": "bun --env-file=.env.production run build:saas:inner",
+		"build:saas:inner": "bun scripts/check-legal-manifest.ts && tsc --noEmit && VITE_INLINE_BOOTSTRAP_CONFIG=1 vite build --outDir dist --emptyOutDir && bun scripts/write-config-json.ts dist/config.json",
 		"preview": "vite preview",
 		"test": "vitest run",
 		"test:watch": "vitest",
