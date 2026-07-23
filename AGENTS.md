@@ -329,62 +329,81 @@ every destructive change. Adding more tools is Tier 2 work; do not preempt.
 
 ## Context Docs
 
-| Doc | What |
-|-----|------|
-| `docs/context/elixir-architecture-decisions.md` | Decision audit, library deps, infra setup checklist |
-| `docs/context/async-indexing-pipeline.md` | Oban queues, dedup/debounce, retry, re-indexing |
-| `docs/context/sync-protocol.md` | **Server-side sync** — the per-vault seq-ordered change-log, opaque cursor-pull (`/sync/changes`), manifest bootstrap, device-cursor watermarks (pull-carries-ack), idempotent bulk ops, and the realtime channel. Start here for sync work |
-| `docs/context/channel-event-contract.md` | Phoenix Channel events, conflict flow, plugin integration |
-| `docs/context/database-schema-rls.md` | Full SQL schema, RLS policies, Ecto enforcement |
-| `docs/context/chunking-retrieval-strategy.md` | Chunking priorities, rejected strategies |
-| `docs/context/lingua-language-detection-memory.md` | **Lingua NIF memory** — the `low_accuracy_mode` dial (~945 MB full vs ~135 MB trigram-only, off-heap, one-time global load); caused the #891 OOM crash-loop |
-| `docs/context/ci-mix-compile-cache-runner-path.md` | Why `prebuild-mix` recompiled the whole codebase every run despite deps/`_build` cache hits — Mix embeds the absolute checkout path in its compile manifest; fixed by compiling inside a fixed-path bind-mounted container |
-| `docs/context/environment-variables.md` | All env vars by category |
-| `docs/context/testing-strategy.md` | Test layers, ExUnit tooling, CI pipeline |
-| `docs/context/deploy-prod.md` | AWS ECS deploy, backups, observability, security checklist |
-| `docs/context/docker-build-cache-pitfalls.md` | Why `_build` cache mount across RUN steps ships stale beams |
-| `docs/context/dev-iteration-loop.md` | Local dev loop, hot reload, IEx tricks |
-| `docs/context/quality-tooling-baseline.md` | Phase 1-6 lint ratchet history + threshold rationale |
-| `docs/context/encryption-operations.md` | Runbooks: master-key rotation, per-user DEK rotation (T3.7), AAD rebind, half-state recovery |
-| `docs/context/disaster-recovery.md` | Launch-minimum DR runbook: prod backup posture (RDS 7d snapshots, S3 versioning, Qdrant reindex fallback) + per-scenario recovery linking to rotation runbooks (#255) |
-| `docs/context/mcp-oauth.md` | OAuth 2.1 + DCR on `/api/mcp`: wire flow, endpoints, token model, scope grammar, schema |
-| `docs/context/paddle-integration.md` | Paddle MoR integration: webhook signature, event lifecycle, `custom_data` contract, affiliate flow |
-| `docs/context/billing-tier-frontend-contract.md` | `tier` values (default `free`, not `none`); consumers must handle every tier + gate on `!active` |
-| `docs/context/oidc-deploy-cutover.md` | OIDC pull-based deploy daemon, legacy SSH-as-root retirement |
-| `docs/context/aws-kms-provider-integration.md` | Tier-4 / Phase F roadmap for KMS provider routing |
-| `docs/context/local-supabase-audit.md` | Throwaway local Supabase stack to run Studio Security/Performance Advisors against the Engram schema (AVX2 CLI build, encrypted-seed, RLS role grant, boot-canary gotchas) |
-| `docs/context/frontend-architecture.md` | **Frontend SPA map** — the React 19 / react-router 7 / TanStack Query app in `frontend/`: bootstrap chain, config-driven dual runtime (Clerk saas vs local self-host), runtime router + code-splitting, the api/sync/realtime layer, viewer/editor, app shell, onboarding/billing/settings. Start here for web-app work |
-| `docs/context/spa-state-injection.md` | How Phoenix ships server-known state into `window.__ENGRAM_CONFIG__` so the React SPA can render first-paint-correct UI without a fetch round-trip — the recipe for adding new injected fields, dev vs prod behavior, gotchas (NOT real SSR; see #353) |
-| `docs/context/frontend-login-load-optimization.md` | saas login critical-path optimization (PR #673): kill the serial waterfall (config.json fetch → ClerkProvider → lazy sign-in → Clerk bootstrap) via preconnect + build-inlined `__ENGRAM_CONFIG__` + clerk-chunk modulepreload + deferred posthog, all gated on `VITE_INLINE_BOOTSTRAP_CONFIG=1`. **KEY GOTCHA**: under rolldown-vite a custom `manualChunks` merged react into the clerk chunk and pulled Clerk EAGER — dropped manualChunks. Includes the build-verify grep checks |
-| `docs/context/folder-tree-optimistic-rebuild.md` | How the SPA folder-tree (headless-tree) reads notes from `folder-notes-by-id` + `folderNotes` caches and what triggers `rebuildTree()` — `treeStructureKey` (id:count:parent_id) + a QueryCache subscription; the 2026-06-13 optimistic move/delete/duplicate fixes + remaining gaps |
-| `docs/context/pg18-uuidv7-prod-crashloop-2026-06-11.md` | PG18/UUIDv7 prod crash-loop root cause: in-place RDS engine bump preserved data instead of the specced taint+recreate, so the wreck-and-recreate baseline never replayed → integer PKs vs `Ecto.UUID` schemas → boot ArgumentError. Includes the guarded `reset_baseline/0` fix |
-| `docs/context/read-path-decrypt-perf.md` | Read-path decrypt perf: parallel_map economics (3.6× on 50KB content, SLOWER on path-sized payloads — keep those sequential), local test DB needs PG18 on :5433 post-uuidv7 (symptom table), why manifest needs no `(user_id, vault_id, kind)` index, decrypt_batch/dek_cache telemetry to check first |
-| `docs/context/b2-cursor-pull-e2e-triage.md` | Root-cause triage of the B2 cursor-pull paired e2e failures (test_48 vault-swap reconnect bug, test_24 coalesce-pull regression, merge sequencing) |
-| `docs/context/refresh-token-reuse-detection.md` | Refresh-token rotation (as-built): leeway/overlap window + token-family reuse detection |
-| `docs/context/connections-client-identity.md` | How `/settings/connections` + onboarding checklist identify an OAuth/MCP client (redirect-host matching, why `software_id` failed, HTTPS trust model) |
-| `docs/context/attachment-mime-whitelist.md` | Two-phase MIME/extension whitelist abuse defense (Pricing v2 §H) — stops Free storage being used as a malware/file host |
-| `docs/context/pricing-v2-server-side-enforcement-audit.md` | Pricing v2 §G audit: every `LimitKeys` key has a server-side enforcement site; encoded by `mix engram.lint.no_client_only_rate_limits` (CI) |
-| `docs/context/perf-caching-invalidation.md` | Perf caches + invalidation contracts (2026-06-12 audit wave); note: local test DB is PG18 on :5433 |
-| `docs/context/exunit-application-env-races.md` | Why `Application.put_env` in `async: true` tests is a flake source (global ETS; the SQL sandbox doesn't isolate app env) |
-| `docs/context/e2e-vault-registration-diagnostics.md` | Diagnostic ladder for `Vault not registered after 15s` E2E failures — don't just bump the timeout |
-| `docs/context/local-dev-preview-stack.md` | Preview frontend changes against a locally-running real backend |
-| `docs/context/openapi-docs-pipeline.md` | OpenAPI 3.0 spec via open_api_spex: root doc, schema modules, committed `openapi.json` artifact, drift-gate CI step, how to annotate endpoints + exclude admin actions, HostRewrite allowlist gotcha, version-recompile gotcha, alphabetical-key-order gotcha |
-| `docs/context/frontend-backend-deploy-skew-cors.md` | **Frontend/backend deploy skew** — frontend (Cloudflare Worker, merge-gated on `frontend/` touch) and backend (ECS, `release-v*` tag-gated) ship on DIFFERENT triggers, so a frontend-only deploy can push accumulated merged-but-undeployed frontend code live against an unreleased backend. 2026-06-20 incident: `x-device-id` SPA header (PR #630) reached prod via perf PR #673 before `cors.ex` allowlisted it → preflight failures. Fix PR #675 + deploy-chain gotchas (ECR plan race, no-rebase signed bot PR) |
-| `docs/context/invalid-utf8-at-rest-json-500.md` | **Invalid UTF-8 at rest → Jason 500** — note content is AES-GCM ciphertext in `bytea`, which bypasses PG's UTF-8 validation, so corrupt bytes (e.g. truncated `E2 80 93`) persist and crash `Jason.encode` at every JSON egress (MCP/web search, REST note/changes, `note_changed` Channel). Fix scrubs to U+FFFD at 3 boundaries (write `upsert_note`/`normalize_batch_entries`, read `Crypto.maybe_decrypt_note_fields/2`, search) with a `String.valid?` fast path; helper `Notes.Helpers.scrub_utf8/1` (pure) + `/2` (boundary-instrumented). Observability + backfill follow-up: `scrub_utf8/2` emits `engram_prom_ex_notes_utf8_scrub_total{boundary}` (alert on `boundary="write"` only) + a `:write`-only `:data`-category WARN; `mix engram.utf8_audit [--fix]` (`Notes.Utf8Backfill`) counts/repairs legacy corrupt rows. PR #740 (fix) + #741 (observability/backfill); #727/#738/#739 |
-| `../engram-workspace/docs/context/pricing-strategy.md` | Cross-workspace SaaS pricing model (lives in workspace repo) |
-| `docs/context/rate-limiter-architecture.md` | Rate limiter & cap architecture — Postgres + BEAM only (zero Redis), two mechanisms split by limiter character; telemetry via `Engram.PromEx.RateLimiter` |
-| `docs/context/local-backend-testing.md` | Running the backend ExUnit suite locally — fast `mix test` against a docker Postgres, no CI round-trip |
-| `docs/context/local-oauth-e2e-testing.md` | Running the OAuth/Clerk e2e tests locally (`test_47`/`test_48`) |
-| `docs/context/paddle-list-pagination-has-more.md` | Paddle list pagination: stop on `has_more`, never `next` (infinite-loop fix, PR #723) |
-| `docs/context/y-indexeddb-whensynced-destroy-hang.md` | `y-indexeddb` `whenSynced` never resolves after `destroy()` — trigger + fix |
-| `docs/context/crdt-id-collision-corruption-2026-07-06.md` | CRDT note_id-collision corruption incident (2026-07-06), the id-keying cutover day |
-| `docs/context/crdt-id-keyed-rename-resurrection.md` | CRDT id-keyed rename: old-path resurrection on the receiver (plugin #183) |
-| `docs/context/crdt-lineage-doubling.md` | CRDT lineage doubling — why the same edit must be encoded exactly once (PR #846) |
-| `docs/context/with-tenant-return-wrapping.md` | `Repo.with_tenant/2` return-wrapping gotcha — the rule that prevents it recurring |
-| `docs/context/worktree-deps-artifact-staleness.md` | Pre-push hook fails with `:expo_po_parser is not available` (or stale `y_ex` beam) in a git worktree — hardlinked `deps/`+`_build/` can omit yecc/leex-generated beams; fix: `mix deps.compile expo --force` |
-| `docs/context/frontend-login-boot-perf.md` | **SPA login boot perf** — the sign-in critical path (inline bootstrap flag in `build:saas`, app-shell barrel code split, static splash, lazy Sentry, `vite:preloadError` self-heal), the ways it regresses, selfhost non-impact, and how to measure chunk composition under rolldown hidden sourcemaps (source-map-explorer breaks; VLQ-decode instead). PR #842 |
-| `docs/context/rustler-precompiled-nif-conflict.md` | `mjml` (`rustler_precompiled ~> 0.9.0`) vs `lingua` (`~> 0.8.4`) is an unsatisfiable conflict; fix is `{:rustler_precompiled, "~> 0.9.0", override: true}` (lingua's pin is conservative, runs fine on 0.9.0). Lesson: vet new deps against the REAL full tree / prod builder image, not an isolated probe |
-| `docs/context/demo-vault-activevaultid-poisoning.md` | **Onboarding demo vault poisons `engram.activeVaultId`** → prod 404 storm on all reads/writes. Selecting the tour's demo vault persisted a `demo-vault-*` id into the real `active-vault.ts` localStorage key; after the demo deactivated it was never cleared, so every real request shipped `X-Vault-Id: demo-vault-N` → backend 404 (refresh re-read the poisoned value → no self-recovery). FIXED: `active-vault.ts` never persists `demo-vault-*` ids and exposes `resetActiveVaultToStored()`, which `demo-vault-provider.tsx` `deactivate()` calls. Follow-ups: guard mutation hooks on `demo.active`, roll back optimistic inserts. Includes the Tempo+Loki prod triage method (unredacted URL in `metadata___sentry___request_env_REQUEST_URL`) |
+Grouped index into `docs/context/`. Each entry is a trigger → doc; read the doc itself for full detail.
+
+**Architecture & Decisions**
+- Elixir decision audit, library deps, infra checklist (partially superseded — read inline corrections) → `docs/context/elixir-architecture-decisions.md`
+- Full SQL schema, RLS policies, Ecto enforcement → `docs/context/database-schema-rls.md`
+- All env vars by category → `docs/context/environment-variables.md`
+- Rate limiter & cap architecture — Postgres + BEAM only, zero Redis → `docs/context/rate-limiter-architecture.md`
+- Cross-workspace SaaS pricing model → `../engram-workspace/docs/context/pricing-strategy.md`
+
+**Sync & CRDT**
+- Server-side sync protocol — seq change-log, cursor-pull, manifest, realtime channel (start here for sync work) → `docs/context/sync-protocol.md`
+- Phoenix Channel events, conflict flow, plugin integration → `docs/context/channel-event-contract.md`
+- CRDT lineage doubling — why the same edit must be encoded exactly once (PR #846) → `docs/context/crdt-lineage-doubling.md`
+- CRDT id-keyed rename old-path resurrection race (plugin #183) → `docs/context/crdt-id-keyed-rename-resurrection.md`
+- CRDT note_id-collision corruption incident, the id-keying cutover day (2026-07-06) → `docs/context/crdt-id-collision-corruption-2026-07-06.md`
+- `Repo.with_tenant/2` funs must return bare values, not `{:ok, _}` → `docs/context/with-tenant-return-wrapping.md`
+- `y-indexeddb` `whenSynced` never resolves after `destroy()` → `docs/context/y-indexeddb-whensynced-destroy-hang.md`
+
+**Indexing & Search**
+- Oban indexing pipeline — dedup/debounce, retry, re-indexing → `docs/context/async-indexing-pipeline.md`
+- Chunking priorities, rejected strategies → `docs/context/chunking-retrieval-strategy.md`
+- Lingua NIF memory — `low_accuracy_mode` dial, the #891 OOM crash-loop → `docs/context/lingua-language-detection-memory.md`
+
+**Billing & Pricing**
+- Paddle MoR integration — webhook signature, event lifecycle, `custom_data`, affiliate flow → `docs/context/paddle-integration.md`
+- Paddle list pagination — stop on `has_more`, never `next` (PR #723 infinite-loop fix) → `docs/context/paddle-list-pagination-has-more.md`
+- `tier` values contract (default `free`, gate on `!active`) → `docs/context/billing-tier-frontend-contract.md`
+- Attachment MIME/extension whitelist abuse defense (Pricing v2 §H) → `docs/context/attachment-mime-whitelist.md`
+
+**Auth, OAuth & MCP**
+- OAuth 2.1 + DCR on `/api/mcp` — wire flow, endpoints, token model, scopes → `docs/context/mcp-oauth.md`
+- MCP vault selection design — stateless `set_vault`, fate of the default vault → `docs/context/mcp-vault-selection.md`
+- Refresh-token rotation — leeway/overlap window, token-family reuse detection → `docs/context/refresh-token-reuse-detection.md`
+- How `/settings/connections` identifies an OAuth/MCP client → `docs/context/connections-client-identity.md`
+- Onboarding demo vault poisons `activeVaultId` → prod 404 storm (fixed) → `docs/context/demo-vault-activevaultid-poisoning.md`
+
+**Frontend / SPA**
+- Frontend SPA map — bootstrap chain, runtime router, api/sync/realtime layer, viewer/editor (start here for web-app work) → `docs/context/frontend-architecture.md`
+- `window.__ENGRAM_CONFIG__` first-paint state injection pattern → `docs/context/spa-state-injection.md`
+- Login critical-path optimization (PR #673) — rolldown-vite `manualChunks` gotcha → `docs/context/frontend-login-load-optimization.md`
+- Login boot perf (PR #842) — chunk-size measurement, VLQ-decode under hidden sourcemaps → `docs/context/frontend-login-boot-perf.md`
+- Folder-tree `rebuildTree()` triggers, optimistic move/delete/duplicate → `docs/context/folder-tree-optimistic-rebuild.md`
+- Frontend/backend deploy-trigger skew (different pipelines) — 2026-06-20 incident + fix → `docs/context/frontend-backend-deploy-skew-cors.md`
+
+**Testing & CI**
+- Full test strategy, ExUnit tooling, CI pipeline → `docs/context/testing-strategy.md`
+- CI pipeline & gating — what runs vs what gates, post testing-architecture migration → `docs/context/ci-pipeline-gating.md`
+- Running the ExUnit suite locally against Docker Postgres → `docs/context/local-backend-testing.md`
+- Running OAuth/Clerk e2e tests locally (test_47/test_48) → `docs/context/local-oauth-e2e-testing.md`
+- `Vault not registered after 15s` E2E diagnostic ladder — don't just bump the timeout → `docs/context/e2e-vault-registration-diagnostics.md`
+- `Application.put_env` in `async: true` tests is a flake source → `docs/context/exunit-application-env-races.md`
+- Why `prebuild-mix` recompiled everything despite cache hits (absolute-path compile manifest) → `docs/context/ci-mix-compile-cache-runner-path.md`
+- Bun lifecycle-script trust model, `trustedDependencies`, the pngquant CI flake (#975) → `docs/context/bun-postinstall-trust.md`
+
+**Deploy & Infra**
+- AWS ECS deploy, backups, observability, security checklist → `docs/context/deploy-prod.md`
+- Launch-minimum DR runbook — RDS snapshots, S3 versioning, Qdrant reindex fallback → `docs/context/disaster-recovery.md`
+- Why `_build` cache mount across Docker RUN steps ships stale beams → `docs/context/docker-build-cache-pitfalls.md`
+- Local dev loop, hot reload, IEx tricks → `docs/context/dev-iteration-loop.md`
+- Preview frontend changes against a locally-running real backend → `docs/context/local-dev-preview-stack.md`
+- Throwaway local Supabase stack to run Studio Security/Performance Advisors against the schema → `docs/context/local-supabase-audit.md`
+- PG18/UUIDv7 prod crash-loop root cause — in-place engine bump vs specced taint+recreate; `verify_schema_baseline/0` guard → `docs/context/pg18-uuidv7-prod-crashloop-2026-06-11.md`
+- `mjml` vs `lingua` rustler_precompiled version conflict — pin override → `docs/context/rustler-precompiled-nif-conflict.md`
+- Worktree hardlinked `deps/`/`_build/` can omit yecc/leex-generated beams (pre-push failures) → `docs/context/worktree-deps-artifact-staleness.md`
+- Tier-4 / Phase F roadmap for AWS KMS provider routing → `docs/context/aws-kms-provider-integration.md`
+
+**Encryption**
+- Runbooks: master-key rotation, per-user DEK rotation (T3.7), AAD rebind, half-state recovery → `docs/context/encryption-operations.md`
+- Invalid UTF-8 at rest (bytea bypasses PG validation) → `Jason.encode` 500 at every JSON egress; fix + backfill task → `docs/context/invalid-utf8-at-rest-json-500.md`
+
+**Perf & Quality**
+- Read-path decrypt perf — parallel_map economics, when it helps vs hurts → `docs/context/read-path-decrypt-perf.md`
+- Perf caches + invalidation contracts (2026-06-12 audit wave) → `docs/context/perf-caching-invalidation.md`
+- Phase 1-6 lint ratchet history + threshold rationale → `docs/context/quality-tooling-baseline.md`
+- OpenAPI spec pipeline — schema modules, drift-gate CI, HostRewrite/version-recompile gotchas → `docs/context/openapi-docs-pipeline.md`
 
 ## Superpowers spec docs → Engram vault (overrides the skill default)
 

@@ -39,5 +39,4 @@ The FireLens `null` output blacks out app logs (see #894), so measure via a one-
 
 ## References
 - `lib/engram/keyword_index/lang_detect.ex` (the dial + moduledoc table)
-- Incident + fix plan: `docs/superpowers/plans/2026-07-02-crdt-oom-compaction-fixes.md`
 - Issues: #891 (p0 incident), #892 (this root cause)
