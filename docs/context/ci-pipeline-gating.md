@@ -30,6 +30,7 @@ Flaky is no longer blocking, but flaky is still **visible** and still hard-gates
 | `schedule` (06:00 UTC) | Nightly full run + flake measurement | ✅ forced |
 | `workflow_dispatch` `force_full=true` | Manual "run everything" | ✅ forced |
 | `repository_dispatch` | Backend runs e2e for a **plugin** PR, posts a `backend/e2e` status back | — |
+| `workflow_dispatch` on `release-please--**` | Release-PR validation — release-please.yml kicks it after updating its branch (NOT push-triggered: the RP action's two-step branch update raced push runs onto an intermediate SHA, leaving the Release PR head checkless/unmergeable). All e2e-* suites self-skip on this ref — main just hard-gated identical content, so only the deterministic gate runs | ❌ |
 | `release-v*` tag | `deploy-prod.yml` → release e2e gate → deploy | ✅ (force_full) |
 
 `is-full` (computed by the `fingerprint` job) forces the full suite to actually

@@ -7,6 +7,10 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # actions:write — the "Kick CI on the Release PR branch" step dispatches
+  # verify.yml (GITHUB_TOKEN is an explicit exception to Actions' recursion
+  # guard for workflow_dispatch — same pattern as deploy-prod's e2e gate).
+  actions: write
 
 jobs:
   release-please:
@@ -32,6 +36,24 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
           token: ${{ steps.app-token.outputs.token }}
+
+      # Verify.yml deliberately does NOT push-trigger on release-please--**:
+      # the RP action updates its branch in two steps (ref update, then the
+      # release commit), and a push-triggered run raced onto the intermediate
+      # SHA — leaving the Release PR head with no checks and the PR
+      # unmergeable (#1057's symptom back again). Dispatching here, AFTER the
+      # RP action has finished pushing, pins CI to the branch's final tip.
+      # e2e-* skips itself on release-please-- refs (see verify.yml), so this
+      # run is the cheap deterministic gate only.
+      - name: Kick CI on the Release PR branch
+        if: steps.rp.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RP_PR: ${{ steps.rp.outputs.pr }}
+        run: |
+          set -euo pipefail
+          BRANCH=$(jq -r '.headBranchName' <<<"$RP_PR")
+          gh workflow run verify.yml --ref "$BRANCH"
 
       # Ungated: on a Release-PR MERGE push steps.rp.outputs.pr is EMPTY (the
       # `pr` output only fires when release-please opens/updates a PR, not on
