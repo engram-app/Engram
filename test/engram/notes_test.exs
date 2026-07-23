@@ -1006,9 +1006,9 @@ defmodule Engram.NotesTest do
     end
 
     test "fields: :meta returns full metadata with content omitted", %{user: user, vault: vault} do
-      # The sync channel's pull_changes drops content from its reply, so it
-      # asks for the metadata-only projection — content_ciphertext (the big
-      # column) is never fetched or decrypted.
+      # Metadata-only projection consumers (e.g. the REST changes feed) omit
+      # content — content_ciphertext (the big column) is never fetched or
+      # decrypted.
       {:ok, note} =
         Notes.upsert_note(user, vault, %{
           "path" => "Meta/Sparse.md",

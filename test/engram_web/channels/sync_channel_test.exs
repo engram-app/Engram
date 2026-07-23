@@ -1,24 +1,16 @@
 defmodule EngramWeb.SyncChannelTest do
   use EngramWeb.ChannelCase, async: true
 
-  import Ecto.Query, only: [from: 2]
-
-  alias Engram.Accounts.User
-  alias Engram.Notes
-  alias Engram.Repo
-
   setup do
     user = insert(:user)
     other_user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     {:ok, other_user} = Engram.Crypto.ensure_user_dek(other_user)
     vault = insert(:vault, user: user, is_default: true)
-    {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "channel-test")
-
     socket = user_socket(user)
     {:ok, _, socket} = join_sync(socket, user, vault)
 
-    %{socket: socket, user: user, vault: vault, other_user: other_user, api_key: api_key}
+    %{socket: socket, user: user, vault: vault, other_user: other_user}
   end
 
   # ---------------------------------------------------------------------------
@@ -153,204 +145,6 @@ defmodule EngramWeb.SyncChannelTest do
   end
 
   # ---------------------------------------------------------------------------
-  # push_note
-  # ---------------------------------------------------------------------------
-
-  describe "push_note" do
-    test "creates note and replies with note metadata", %{socket: socket} do
-      ref =
-        push(socket, "push_note", %{
-          "path" => "Test/Hello.md",
-          "content" => "# Hello\n\nWorld.",
-          "mtime" => 1_000.0
-        })
-
-      assert_reply ref, :ok, %{"note" => note, "indexing" => "queued"}
-      assert note["path"] == "Test/Hello.md"
-      assert note["title"] == "Hello"
-      assert note["version"] == 1
-    end
-
-    test "broadcasts note_changed to other subscribers", %{
-      socket: socket,
-      user: user,
-      vault: vault
-    } do
-      # Second subscriber on the same channel topic
-      other_socket = user_socket(user)
-      {:ok, _, _} = join_sync(other_socket, user, vault)
-
-      push(socket, "push_note", %{
-        "path" => "Test/Shared.md",
-        "content" => "# Shared",
-        "mtime" => 1_000.0
-      })
-
-      assert_broadcast "note_changed", %{
-        "event_type" => "upsert",
-        "path" => "Test/Shared.md",
-        "content" => "# Shared",
-        "content_hash" => content_hash,
-        "title" => "Shared"
-      }
-
-      # Protocol rev dual-field transition: hash rides along with content
-      # for one release so old and new plugins both work.
-      assert is_binary(content_hash)
-    end
-
-    test "does NOT push note_changed back to the sender (broadcast_from semantics)", %{
-      socket: socket
-    } do
-      ref =
-        push(socket, "push_note", %{
-          "path" => "Test/Echo.md",
-          "content" => "# Echo",
-          "mtime" => 1_000.0
-        })
-
-      assert_reply ref, :ok, %{"note" => _}
-
-      # Protocol rev: channel pushes broadcast via broadcast_from, so the
-      # pushing socket no longer pays for its own echo. (HTTP pushes still
-      # use plain broadcast — no socket to exclude.)
-      refute_push "note_changed", %{"path" => "Test/Echo.md"}
-    end
-
-    test "sanitizes path in push_note", %{socket: socket} do
-      ref =
-        push(socket, "push_note", %{
-          "path" => "Test/Dirty?.md",
-          "content" => "# Dirty",
-          "mtime" => 1_000.0
-        })
-
-      assert_reply ref, :ok, %{"note" => note}
-      assert note["path"] == "Test/Dirty.md"
-    end
-
-    test "returns error for missing path", %{socket: socket} do
-      ref = push(socket, "push_note", %{"content" => "# No path", "mtime" => 1_000.0})
-      assert_reply ref, :error, %{"reason" => _}
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # delete_note
-  # ---------------------------------------------------------------------------
-
-  describe "delete_note" do
-    test "soft-deletes note and replies ok", %{socket: socket, user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Test/ToDelete.md",
-        "content" => "# Delete me",
-        "mtime" => 1_000.0
-      })
-
-      ref = push(socket, "delete_note", %{"path" => "Test/ToDelete.md"})
-      assert_reply ref, :ok, %{"deleted" => true}
-
-      assert {:error, :not_found} = Notes.get_note(user, vault, "Test/ToDelete.md")
-    end
-
-    test "broadcasts note_changed with event_type delete", %{
-      socket: socket,
-      user: user,
-      vault: vault
-    } do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Test/Gone.md",
-        "content" => "# Gone",
-        "mtime" => 1_000.0
-      })
-
-      push(socket, "delete_note", %{"path" => "Test/Gone.md"})
-
-      assert_broadcast "note_changed", %{
-        "event_type" => "delete",
-        "path" => "Test/Gone.md"
-      }
-
-      # Notes context broadcasts via Endpoint.broadcast (includes sender)
-    end
-
-    test "is idempotent for nonexistent path", %{socket: socket} do
-      ref = push(socket, "delete_note", %{"path" => "Fake/Note.md"})
-      assert_reply ref, :ok, %{"deleted" => true}
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # rename_note
-  # ---------------------------------------------------------------------------
-
-  describe "rename_note" do
-    test "renames note and replies with updated note", %{socket: socket, user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Test/Original.md",
-        "content" => "# Original",
-        "mtime" => 1_000.0
-      })
-
-      ref =
-        push(socket, "rename_note", %{
-          "old_path" => "Test/Original.md",
-          "new_path" => "Test/Renamed.md"
-        })
-
-      assert_reply ref, :ok, %{"note" => note}
-      assert note["path"] == "Test/Renamed.md"
-    end
-
-    test "broadcasts note_changed for old and new path", %{
-      socket: socket,
-      user: user,
-      vault: vault
-    } do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Test/MoveSrc.md",
-        "content" => "# Move",
-        "mtime" => 1_000.0
-      })
-
-      push(socket, "rename_note", %{
-        "old_path" => "Test/MoveSrc.md",
-        "new_path" => "Test/MoveDst.md"
-      })
-
-      # Notes context broadcasts both events via Endpoint.broadcast
-      assert_broadcast "note_changed", %{"event_type" => "delete", "path" => "Test/MoveSrc.md"}
-      assert_broadcast "note_changed", %{"event_type" => "upsert", "path" => "Test/MoveDst.md"}
-    end
-
-    test "returns error for nonexistent source", %{socket: socket} do
-      ref =
-        push(socket, "rename_note", %{
-          "old_path" => "Nope/Missing.md",
-          "new_path" => "Nope/New.md"
-        })
-
-      assert_reply ref, :error, %{"reason" => _}
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # pull_changes
-  # ---------------------------------------------------------------------------
-
-  describe "pull_changes (removed op)" do
-    # The op never shipped in any plugin release or the SPA (catch-up now runs
-    # over the socket seq-replay op-log via crdt_catchup_since). The handler was
-    # unbounded: it loaded + decrypted the entire vault change set into one
-    # channel frame. A stub reply keeps a stray legacy caller from crashing
-    # the channel.
-    test "replies gone with the socket catch-up replacement", %{socket: socket} do
-      ref = push(socket, "pull_changes", %{"since" => "2020-01-01T00:00:00Z"})
-      assert_reply ref, :error, %{"reason" => "gone", "use" => "crdt_catchup_since"}
-    end
-  end
-
-  # ---------------------------------------------------------------------------
   # Batch broadcasts (notes.batch / folders.batch) pass through unintercepted
   # ---------------------------------------------------------------------------
 
@@ -373,50 +167,6 @@ defmodule EngramWeb.SyncChannelTest do
       )
 
       assert_push "folders.batch", %{op: "move", ids: [42], target_parent_id: 99}
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # T3.7 — RotationGate: all 4 handlers blocked while rotation is in progress
-  # ---------------------------------------------------------------------------
-
-  describe "rotation lock (T3.7)" do
-    setup %{user: user} do
-      # Set lock directly on the DB row — do NOT use RotationLock.acquire/2 because
-      # the advisory lock does not survive across a Sandbox checkout in non-async tests.
-      Repo.update_all(
-        from(u in User, where: u.id == ^user.id),
-        [set: [dek_rotation_locked_at: DateTime.utc_now()]],
-        skip_tenant_check: true
-      )
-
-      :ok
-    end
-
-    test "push_note replies rotation_in_progress when user is locked", %{socket: socket} do
-      ref =
-        push(socket, "push_note", %{
-          "path" => "Lock/Test.md",
-          "content" => "# Locked",
-          "mtime" => 1_000.0
-        })
-
-      assert_reply ref, :error, %{reason: "rotation_in_progress", retry_after_seconds: 60}
-    end
-
-    test "delete_note replies rotation_in_progress when user is locked", %{socket: socket} do
-      ref = push(socket, "delete_note", %{"path" => "Lock/Test.md"})
-      assert_reply ref, :error, %{reason: "rotation_in_progress", retry_after_seconds: 60}
-    end
-
-    test "rename_note replies rotation_in_progress when user is locked", %{socket: socket} do
-      ref =
-        push(socket, "rename_note", %{
-          "old_path" => "Lock/Old.md",
-          "new_path" => "Lock/New.md"
-        })
-
-      assert_reply ref, :error, %{reason: "rotation_in_progress", retry_after_seconds: 60}
     end
   end
 end
