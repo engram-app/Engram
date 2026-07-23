@@ -17,9 +17,6 @@ from helpers.vault import write_note
 
 NOTE_COUNT = 1000
 PUSH_TIME_BOUND_S = 120
-# Ceiling on the residue teardown so a slow / rate-limited server can never
-# hang the suite; whatever isn't cleared drains on the next run's teardown.
-CLEANUP_TIME_BUDGET_S = 45
 
 SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
@@ -34,23 +31,33 @@ async def _cleanup_bulk_residue(vault_a, cdp_a, api_sync) -> None:
     test_66's 5s delivery budget (#1093, rerun-safety playbook §5). Deleting
     both sides (local files + server rows) keeps the session vault clean.
 
-    Best-effort and time-bounded: teardown must never fail or hang the suite.
+    Server rows go via POST /notes/batch-delete (one idempotent request over
+    the manifest's ids), not 1,000 paced DELETEs — no time budget, no
+    rate-limit starvation, deletes every note in one shot.
+
+    The whole body is guarded: teardown must never fail or hang the suite. If
+    CDP/Obsidian died (the reason the test failed), swallowing here keeps the
+    real AssertionError as the headline instead of a chained cleanup error.
     Gate closed first so the local unlink doesn't fan out 1,000 delete-pushes.
     """
-    await cdp_a.evaluate(SET_BLOCKED.format("true"))
-    shutil.rmtree(vault_a / "Bulk", ignore_errors=True)
+    try:
+        await cdp_a.evaluate(SET_BLOCKED.format("true"))
+        shutil.rmtree(vault_a / "Bulk", ignore_errors=True)
 
-    deadline = time.monotonic() + CLEANUP_TIME_BUDGET_S
-    for i in range(NOTE_COUNT):
-        if time.monotonic() > deadline:
-            break
-        try:
-            api_sync.delete_note(f"Bulk/n{i:04d}.md")
-        except Exception:  # teardown is strictly best-effort
-            pass
+        manifest = api_sync.get_manifest()
+        ids = [
+            n["id"]
+            for n in manifest.get("notes", [])
+            if n.get("id") and n.get("path", "").startswith("Bulk/")
+        ]
+        # Chunk so one oversized body can't trip a request-size limit.
+        for start in range(0, len(ids), 500):
+            api_sync.batch_delete_notes(ids[start : start + 500])
 
-    # Re-open the gate so subsequent tests sync normally.
-    await cdp_a.evaluate(SET_BLOCKED.format("false"))
+        # Re-open the gate so subsequent tests sync normally.
+        await cdp_a.evaluate(SET_BLOCKED.format("false"))
+    except Exception:  # teardown is strictly best-effort — never mask the real failure
+        pass
 
 
 @pytest.mark.asyncio
