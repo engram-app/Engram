@@ -2588,6 +2588,12 @@ jobs:
           fi
           echo "OK — no checkbox-as-TODO in root markdown."
 
+      - name: Flake-ledger rate logic self-check
+        # Guards scripts/flake_ledger_rates.jq (dedup + trailing-14 window +
+        # rate math). The ledger-append job that uses it is schedule-only, so
+        # without this a broken filter would hide until the next nightly.
+        run: bash scripts/flake_ledger_rates_test.sh
+
       - name: Scan CLAUDE.md / AGENTS.md files for known-stale facts
         run: |
           set -euo pipefail
@@ -3588,6 +3594,7 @@ jobs:
     runs-on: [self-hosted, linux, x64, isolated, light]
     permissions:
       contents: write
+      issues: write   # auto-open/close a flaky-suite issue when a suite crosses the threshold
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}  # gh CLI can't infer repo from the LAN insteadOf-rewritten origin, see docs/context/gh-cli-runner-url-rewrite-and-release-repair.md
@@ -3608,6 +3615,13 @@ jobs:
           DATE=$(date -u +%F)
           RUN_ID="${GITHUB_RUN_ID}"
           SHA="${GITHUB_SHA}"
+
+          # Read the rate filter NOW, while the working tree is still on the
+          # default branch — the append step below checks out the ci-ledger
+          # orphan branch, which does not contain scripts/, so the file would
+          # vanish. Both consumers (summary table + alert gate) use this one
+          # program, so they can never disagree on a suite's flake rate.
+          RATES_JQ="$(cat scripts/flake_ledger_rates.jq)"
 
           # result must be one of success/failure/skipped for the ledger schema;
           # anything else (cancelled, timed_out, ...) folds into failure — it's
@@ -3681,26 +3695,73 @@ jobs:
 
           # Trailing-14-night flake rate per suite, from whatever ledger state
           # is on disk right now (the just-appended local copy either way).
-          # Dedup on (workflow_run_id, suite) before windowing: a manual re-run
-          # of a scheduled run appends a second line for the same night, which
-          # would double-count that night and push an older night out of the
-          # trailing-14 sample. The raw JSONL stays append-only; only this
-          # report's read is deduped.
+          # Dedup + windowing live in scripts/flake_ledger_rates.jq (tested by
+          # scripts/flake_ledger_rates_test.sh) so the table and the alert gate
+          # below share one definition. Emits one {suite,red,n,pct} per line.
+          RATES="$(jq -s "$RATES_JQ" flake-ledger.jsonl)"
+
           {
             echo "### Nightly e2e flake rate (trailing 14 nights)"
             echo
             echo "| suite | nights red | rate |"
             echo "|---|---|---|"
-            jq -s -r '
-              unique_by([.workflow_run_id, .suite]) |
-              group_by(.suite)[] |
-              (sort_by(.date) | .[-14:]) as $recent |
-              ($recent | length) as $n |
-              ([$recent[] | select(.result=="failure")] | length) as $red |
-              (if $n > 0 then (($red * 100 / $n) | floor) else 0 end) as $pct |
-              "| \(.[0].suite) | \($red)/\($n) | \($pct)% |"
-            ' flake-ledger.jsonl
+            printf '%s\n' "$RATES" | jq -r '"| \(.suite) | \(.red)/\(.n) | \(.pct)% |"'
           } >> "$GITHUB_STEP_SUMMARY"
+
+          # Auto-alert: one open `flaky-suite` issue per suite that is red on
+          # >=40% of the trailing 14 nights, once there are >=5 nights of data
+          # (below that the sample is too small — don't scream off one bad
+          # night). Recovered suites auto-close. This is the loop-closer: it
+          # turns the ledger from a branch nobody reads into a thing that pokes
+          # us only when a suite is genuinely misbehaving.
+          #
+          # Best-effort — a gh hiccup must never fail this measurement job, so
+          # disable -e for this block (mirrors the push retry's non-fatal stance).
+          THRESHOLD_PCT=40
+          MIN_NIGHTS=5
+          set +e
+          gh label create flaky-suite --color d73a4a \
+            --description "Nightly e2e suite over the flake threshold" >/dev/null 2>&1 || true
+          # A successful query returns at least "[]"; an empty string means the
+          # `gh` call failed. Do NOT treat failure as "no open issues" — that
+          # would look un-tracked and file a DUPLICATE issue for every
+          # over-threshold suite on a transient blip. Skip; retry tomorrow.
+          OPEN_ISSUES="$(gh issue list --label flaky-suite --state open --json number,title 2>/dev/null)"
+          if [ -z "$OPEN_ISSUES" ]; then
+            echo "::warning::flaky-suite: could not list open issues — skipping alert pass this run"
+          else
+            printf '%s\n' "$RATES" | jq -c '.' | while IFS= read -r row; do
+              suite=$(printf '%s' "$row" | jq -r '.suite')
+              pct=$(printf '%s'   "$row" | jq -r '.pct')
+              red=$(printf '%s'   "$row" | jq -r '.red')
+              n=$(printf '%s'     "$row" | jq -r '.n')
+              title="Flaky suite: ${suite} (nightly e2e)"
+              num=$(printf '%s' "$OPEN_ISSUES" | jq -r --arg t "$title" '.[] | select(.title==$t) | .number' | head -n1)
+
+              if [ "$n" -ge "$MIN_NIGHTS" ] && [ "$pct" -ge "$THRESHOLD_PCT" ]; then
+                if [ -n "$num" ]; then
+                  gh issue comment "$num" --body "Still over threshold on ${DATE}: **${pct}%** (${red}/${n} nights red, trailing 14)." \
+                    || echo "::warning::flaky-suite: comment on #$num failed"
+                else
+                  # Build the body with printf (not a column-0 multiline string,
+                  # which would terminate this YAML block scalar).
+                  body=$(printf '%s\n' \
+                    "Suite \`${suite}\` is failing the nightly full-e2e run **${pct}%** of the trailing 14 nights (${red}/${n} red)." \
+                    "" \
+                    "Threshold: ${THRESHOLD_PCT}% over >=${MIN_NIGHTS} nights of data. Full per-night history is on the \`ci-ledger\` branch; rationale for report-only e2e is in \`docs/context/testing-architecture-migration.md\`." \
+                    "" \
+                    "Auto-filed by the \`ledger-append\` job in \`.github/workflows/verify.yml\`; auto-closes when the rate drops back under ${THRESHOLD_PCT}%.")
+                  gh issue create --title "$title" --label flaky-suite --body "$body" \
+                    || echo "::warning::flaky-suite: create for ${suite} failed"
+                fi
+              elif [ -n "$num" ]; then
+                gh issue comment "$num" --body "Recovered on ${DATE}: **${pct}%** (${red}/${n}) — back under ${THRESHOLD_PCT}%. Closing." \
+                  && gh issue close "$num" \
+                  || echo "::warning::flaky-suite: close of #$num failed"
+              fi
+            done
+          fi
+          set -e
 
   # Cache BOTH green-CI fingerprints so the next run with the same content
   # (typically the squash-merge to main) can skip the relevant slice.
