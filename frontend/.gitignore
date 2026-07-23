@@ -1,6 +1,9 @@
 node_modules
 dist
 .env.local
+# Committed: SaaS prod build config (single source of truth). Root .gitignore
+# ignores .env* broadly; re-include this one.
+!.env.production
 playwright-report
 test-results
 e2e/.auth-state.json

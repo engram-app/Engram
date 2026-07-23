@@ -4600,15 +4600,12 @@ jobs:
         working-directory: frontend
         run: bun run build:saas
         env:
-          VITE_AUTH_PROVIDER: clerk
-          VITE_BILLING_ENABLED: 'true'
-          VITE_CLERK_WAITLIST_MODE: 'false'
-          VITE_API_BASE: https://api.engram.page
-          VITE_WS_BASE: wss://api.engram.page
-          # VITE_INLINE_BOOTSTRAP_CONFIG=1 (inline config + Clerk preconnect +
-          # modulepreload) is set by the build:saas script itself so local saas
-          # builds produce the same artifact as CI. The plugin hard-fails the
-          # build if the VITE_* config above is missing.
+          # Non-secret VITE_* prod config (auth provider, api/ws base, billing,
+          # waitlist, tracing) lives in frontend/.env.production — the single
+          # source of truth loaded by vite's production mode, shared with the
+          # frontend-promote self-heal fallback so both builds are byte-identical.
+          # VITE_INLINE_BOOTSTRAP_CONFIG=1 is set by build:saas itself.
+          # Only the two dynamic/managed values are injected here:
           # PROD publishable key (pk_live_…). Distinct from the repo SECRET
           # `VITE_CLERK_PUBLISHABLE_KEY`, which is the pk_test the e2e CI uses
           # — baking that here would point the live app at the dev Clerk
@@ -4616,11 +4613,6 @@ jobs:
           # by design (ships in the browser), so a variable not a secret.
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY_PROD }}
           VITE_GIT_SHA: ${{ github.sha }}
-          # Light up browser->Tempo traces (traceparent header on authFetch +
-          # client span beacons via POST /api/telemetry/spans). Dark-launched
-          # until 2026-07-14: the deaf-note incident needed a CDP sniffer
-          # because the browser emitted no telemetry at all.
-          VITE_TRACING_ENABLED: 'true'
 
       - name: Upload frontend version (nightly, zero-traffic)
         working-directory: frontend
