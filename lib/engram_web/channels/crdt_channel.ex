@@ -98,8 +98,10 @@ defmodule EngramWeb.CrdtChannel do
     # reconnect mid-rotation is caught even if the socket's user struct predates
     # the lock. In-flight sockets are drained separately (UserDekRotation).
     case RotationGate.check(user.id) do
-      :ok -> join_vault("crdt:" <> ids, user, user_id_str, socket)
-      {:error, _} -> {:error, %{reason: "rotation_in_progress"}}
+      {:error, :rotation_in_progress} -> {:error, %{reason: "rotation_in_progress"}}
+      # :ok, or {:error, :user_not_found} — let the vault-auth path decide
+      # (a missing user falls through to "unauthorized", not a rotation reason).
+      _ -> join_vault("crdt:" <> ids, user, user_id_str, socket)
     end
   end
 
