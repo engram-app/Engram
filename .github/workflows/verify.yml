@@ -3584,7 +3584,7 @@ jobs:
   # renders a trailing-14-night flake rate per suite to the step summary.
   ledger-append:
     if: always() && github.event_name == 'schedule'
-    needs: [e2e-clerk, e2e-crdt, e2e-browser]
+    needs: [e2e-clerk, e2e-crdt, e2e-browser, headless-protocol]
     runs-on: [self-hosted, linux, x64, isolated, light]
     permissions:
       contents: write
@@ -3602,6 +3602,7 @@ jobs:
           EC: ${{ needs.e2e-clerk.result }}
           ED: ${{ needs.e2e-crdt.result }}
           EB: ${{ needs.e2e-browser.result }}
+          HP: ${{ needs.headless-protocol.result }}
         run: |
           set -eu
           DATE=$(date -u +%F)
@@ -3624,7 +3625,7 @@ jobs:
           JOBS_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs") || JOBS_JSON='{"jobs":[]}'
 
           LINES=$(mktemp)
-          for pair in "e2e-clerk:$EC" "e2e-crdt:$ED" "e2e-browser:$EB"; do
+          for pair in "e2e-clerk:$EC" "e2e-crdt:$ED" "e2e-browser:$EB" "headless-protocol:$HP"; do
             suite="${pair%%:*}"
             result=$(norm_result "${pair#*:}")
             dur=$(printf '%s' "$JOBS_JSON" | jq -r --arg n "$suite" '
