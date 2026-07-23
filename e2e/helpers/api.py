@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+import uuid
 from urllib.parse import quote
 
 import requests
@@ -73,6 +74,17 @@ class ApiClient:
         """DELETE /notes/{path}. Returns HTTP status code."""
         resp = self.session.delete(
             f"{self.base_url}/notes/{quote(path, safe='')}", timeout=10
+        )
+        return resp.status_code
+
+    def batch_delete_notes(self, ids: list[str]) -> int:
+        """POST /notes/batch-delete with note IDs (from the manifest). Returns
+        status. The endpoint enforces X-Idempotency-Key (any fresh UUID)."""
+        resp = self.session.post(
+            f"{self.base_url}/notes/batch-delete",
+            json={"ids": ids},
+            headers={"X-Idempotency-Key": str(uuid.uuid4())},
+            timeout=30,
         )
         return resp.status_code
 
