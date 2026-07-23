@@ -1154,4 +1154,32 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_reply ref, :error, %{reason: "room_limit"}, 3000
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Rotation gate (T3.7, #1092) — DEK rotation must block the socket write path
+  # ---------------------------------------------------------------------------
+
+  describe "rotation gate" do
+    test "join is refused while a DEK rotation holds the user lock", %{
+      user: user,
+      vault: vault
+    } do
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      # Fresh struct, as a reconnecting socket would carry (connect reloads it).
+      locked = Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
+
+      assert {:error, %{reason: "rotation_in_progress"}} =
+               subscribe_and_join(
+                 user_socket(locked),
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+    end
+  end
 end
