@@ -3834,7 +3834,7 @@ jobs:
   # runners don't ship gh on PATH.
   report-e2e-to-plugin:
     if: always() && github.event_name == 'repository_dispatch'
-    needs: [e2e-clerk, e2e-crdt, e2e-browser]
+    needs: [e2e-clerk, e2e-crdt, e2e-browser, ci]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Generate App token
@@ -3851,21 +3851,25 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SHORT_SHA: ${{ github.event.client_payload.plugin_ref }}
           RESULTS: "${{ needs.e2e-clerk.result }} ${{ needs.e2e-crdt.result }} ${{ needs.e2e-browser.result }}"
+          CI_RESULT: ${{ needs.ci.result }}
         run: |
           if [ -z "$SHORT_SHA" ]; then
             echo "No plugin_ref in payload, skipping status report"
             exit 0
           fi
-          # Fail only on a genuine failure/cancellation; success/skipped are green.
+          # #1081: this context is required by the plugin ruleset, so it must
+          # mirror the DETERMINISTIC `ci` aggregate (which already treats the
+          # full-Obsidian suites as report-only), not the raw suite results —
+          # otherwise plugin PRs stay gated on the flaky suite the
+          # testing-architecture migration de-gated on the backend itself.
+          # `ci` skipped = full cache hit = cached pass.
           STATE="success"
-          DESC="E2E passed (skipped suites = cached pass)"
-          for r in $RESULTS; do
-            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
-              STATE="failure"
-              DESC="E2E failed (a suite reported $r)"
-            fi
-          done
-          echo "Suite results: $RESULTS -> $STATE"
+          DESC="Deterministic gate passed (Obsidian e2e report-only: $RESULTS)"
+          if [ "$CI_RESULT" = "failure" ] || [ "$CI_RESULT" = "cancelled" ]; then
+            STATE="failure"
+            DESC="Deterministic gate failed (ci: $CI_RESULT)"
+          fi
+          echo "ci: $CI_RESULT, suites (advisory): $RESULTS -> $STATE"
           API="https://api.github.com/repos/engram-app/Engram-obsidian"
           AUTH=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
           # Resolve to full 40-char SHA (short SHAs from manual dispatches won't work)
