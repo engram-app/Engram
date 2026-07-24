@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type React from "react";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { ApiError } from "./client";
+import { CrdtOpError } from "./crdt-ops";
 import {
 	type Folder,
 	type Note,
@@ -58,6 +59,15 @@ const { get, post, del } = vi.hoisted(() => ({
 	post: vi.fn(),
 	del: vi.fn(),
 }));
+
+// Note create/delete now ride the CRDT channel, not REST. Mock the channel ops
+// (crdtCreateNote echoes its minted doc_id back on success — the ok reply's
+// doc_id equals the id we sent).
+const { crdtCreateNote, crdtDeleteNote } = vi.hoisted(() => ({
+	crdtCreateNote: vi.fn((docId: string, _path: string) => Promise.resolve(docId)),
+	crdtDeleteNote: vi.fn((docId: string) => Promise.resolve({ doc_id: docId })),
+}));
+vi.mock("./channel", () => ({ crdtCreateNote, crdtDeleteNote }));
 vi.mock("./client", async () => {
 	const actual = await vi.importActual<typeof import("./client")>("./client");
 	return {
@@ -73,6 +83,10 @@ beforeEach(() => {
 	get.mockReset();
 	post.mockReset();
 	del.mockReset();
+	crdtCreateNote.mockReset().mockImplementation((docId: string) => Promise.resolve(docId));
+	crdtDeleteNote
+		.mockReset()
+		.mockImplementation((docId: string) => Promise.resolve({ doc_id: docId }));
 	qc = new QueryClient();
 });
 
@@ -252,8 +266,7 @@ describe("useRenameFolder", () => {
 });
 
 describe("useDeleteNote", () => {
-	it("DELETEs /notes/by-id/:id and invalidates folders + folder list + note", async () => {
-		del.mockResolvedValue({ deleted: true });
+	it("sends crdt_delete by id and invalidates folders + folder list + note", async () => {
 		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 
 		const { result } = renderHook(() => useDeleteNote(), { wrapper });
@@ -261,9 +274,10 @@ describe("useDeleteNote", () => {
 			await result.current.mutateAsync({ id: "42", path: "foo bar/x y.md" });
 		});
 
-		// URL is keyed on the note id — server is the source of truth for
-		// path/folder lookups, so the client just supplies the id.
-		expect(del).toHaveBeenCalledWith("/notes/by-id/42");
+		// Delete rides the CRDT channel by id (parity with the plugin) — the
+		// server owns path/folder lookups, so the client just supplies the id.
+		expect(crdtDeleteNote).toHaveBeenCalledWith("42");
+		expect(del).not.toHaveBeenCalled();
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
 		// onMutate invalidates (not removes) the note's cache, keyed by id, so a
@@ -272,12 +286,12 @@ describe("useDeleteNote", () => {
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["note", "42", "42"] });
 	});
 
-	it("surfaces backend errors as ApiError", async () => {
-		del.mockRejectedValue(new ApiError(404, "not found"));
+	it("surfaces a rejected crdt_delete (e.g. disconnected) to the caller", async () => {
+		crdtDeleteNote.mockRejectedValue(new CrdtOpError("disconnected", "crdt_delete"));
 
 		const { result } = renderHook(() => useDeleteNote(), { wrapper });
 		await expect(result.current.mutateAsync({ id: "7", path: "gone.md" })).rejects.toMatchObject({
-			status: 404,
+			reason: "disconnected",
 		});
 	});
 });
@@ -515,8 +529,8 @@ describe("optimistic delete note", () => {
 		]);
 		seedFolders([{ name: "", count: 2 }]);
 
-		let resolveDel!: (v: unknown) => void;
-		del.mockReturnValue(
+		let resolveDel!: (v: { doc_id: string }) => void;
+		crdtDeleteNote.mockReturnValue(
 			new Promise((r) => {
 				resolveDel = r;
 			}),
@@ -532,7 +546,7 @@ describe("optimistic delete note", () => {
 			expect(list?.notes.map((n) => n.path)).toEqual(["stays.md"]);
 		});
 
-		resolveDel({ deleted: true });
+		resolveDel({ doc_id: "1" });
 	});
 
 	it("restores the cache when the delete fails", async () => {
@@ -542,7 +556,7 @@ describe("optimistic delete note", () => {
 		]);
 		seedFolders([{ name: "", count: 2 }]);
 
-		del.mockRejectedValue(new ApiError(500, "boom"));
+		crdtDeleteNote.mockRejectedValue(new CrdtOpError("disconnected", "crdt_delete"));
 
 		const { result } = renderHook(() => useDeleteNote(), { wrapper });
 		await act(async () => {
@@ -792,33 +806,26 @@ function seedFolderNotesById(
 }
 
 describe("useBatchDeleteNotes", () => {
-	it("POSTs ids and sends a UUID X-Idempotency-Key header", async () => {
-		post.mockResolvedValue({ deleted: 2 });
-
+	it("sends one crdt_delete per id (no batch REST call)", async () => {
 		const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper });
 		await act(async () => {
 			await result.current.mutateAsync({ ids: ["1", "2"] });
 		});
 
-		expect(post).toHaveBeenCalledWith(
-			"/notes/batch-delete",
-			{ ids: ["1", "2"] },
-			expect.objectContaining({
-				headers: expect.objectContaining({
-					"X-Idempotency-Key": expect.stringMatching(UUID_RE),
-				}),
-			}),
-		);
+		expect(crdtDeleteNote).toHaveBeenCalledWith("1");
+		expect(crdtDeleteNote).toHaveBeenCalledWith("2");
+		expect(crdtDeleteNote).toHaveBeenCalledTimes(2);
+		expect(post).not.toHaveBeenCalled();
 	});
 
 	it("optimistically removes ids from every cached folder-notes-by-id list", async () => {
 		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }, { id: "3" }]);
 		seedFolderNotesById("6", [{ id: "4" }]);
 
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
+		let resolveDeletes: () => void = () => {};
+		crdtDeleteNote.mockReturnValue(
 			new Promise((r) => {
-				resolvePost = r;
+				resolveDeletes = () => r({ doc_id: "x" });
 			}),
 		);
 
@@ -835,12 +842,12 @@ describe("useBatchDeleteNotes", () => {
 		const list6 = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "6"]);
 		expect(list6?.map((n) => n.id)).toEqual([]);
 
-		resolvePost({ deleted: 3 });
+		resolveDeletes();
 	});
 
-	it("rolls back every patched list when the server rejects", async () => {
+	it("rolls back every patched list when a delete rejects", async () => {
 		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }, { id: "3" }]);
-		post.mockRejectedValue(new ApiError(500, "boom"));
+		crdtDeleteNote.mockRejectedValue(new CrdtOpError("disconnected", "crdt_delete"));
 
 		const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper });
 		await act(async () => {
@@ -856,7 +863,6 @@ describe("useBatchDeleteNotes", () => {
 	});
 
 	it("invalidates folders + folder-notes-by-id on success", async () => {
-		post.mockResolvedValue({ deleted: 2 });
 		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 
 		const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper });
@@ -895,9 +901,9 @@ describe("useBatchDeleteNotes", () => {
 		resolvePost({ deleted: 1 });
 	});
 
-	it("rolls back the by-id root list when the server rejects", async () => {
+	it("rolls back the by-id root list when a delete rejects", async () => {
 		seedFolderNotesById("root", [{ id: "1", path: "a.md", folder: "" }]);
-		post.mockRejectedValue(new ApiError(500, "boom"));
+		crdtDeleteNote.mockRejectedValue(new CrdtOpError("disconnected", "crdt_delete"));
 
 		const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper });
 		await act(async () => {
@@ -918,11 +924,14 @@ describe("useCreateNote — optimistic placeholder", () => {
 		// Root notes share the one id-keyed cache under the 'root' sentinel.
 		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
 
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
-			new Promise((r) => {
-				resolvePost = r;
-			}),
+		// Hold crdt_create pending so the optimistic placeholder is observable,
+		// then resolve with the minted doc_id (the ok reply echoes the id we sent).
+		let resolveCreate: () => void = () => {};
+		crdtCreateNote.mockImplementation(
+			(docId: string) =>
+				new Promise<string>((r) => {
+					resolveCreate = () => r(docId);
+				}),
 		);
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
@@ -941,11 +950,17 @@ describe("useCreateNote — optimistic placeholder", () => {
 			expect(root?.[0]?.title).toBe("Untitled");
 		});
 
-		resolvePost({ note: { id: "real-1" } });
+		// A client-minted uuid7 is sent as the doc_id (not a v4/placeholder), at
+		// the collision-bumped path.
+		const [[mintedId] = []] = crdtCreateNote.mock.calls;
+		expect(crdtCreateNote).toHaveBeenCalledWith(mintedId, "Untitled.md");
+		expect(mintedId).not.toMatch(/^optimistic-/u);
+
+		resolveCreate();
 
 		await waitFor(() => {
 			const root = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "root"]);
-			expect(root?.[0]?.id).toBe("real-1");
+			expect(root?.[0]?.id).toBe(mintedId);
 		});
 	});
 
@@ -955,11 +970,12 @@ describe("useCreateNote — optimistic placeholder", () => {
 		});
 		qc.setQueryData(["folder-notes-by-id", "42", "f9"], []);
 
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
-			new Promise((r) => {
-				resolvePost = r;
-			}),
+		let resolveCreate: () => void = () => {};
+		crdtCreateNote.mockImplementation(
+			(docId: string) =>
+				new Promise<string>((r) => {
+					resolveCreate = () => r(docId);
+				}),
 		);
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
@@ -973,12 +989,42 @@ describe("useCreateNote — optimistic placeholder", () => {
 			expect(byId?.[0]?.id).toMatch(/^optimistic-/u);
 		});
 
-		resolvePost({ note: { id: "real-2" } });
+		resolveCreate();
 
 		await waitFor(() => {
 			const byId = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "f9"]);
-			expect(byId?.[0]?.id).toBe("real-2");
+			const [[mintedId] = []] = crdtCreateNote.mock.calls;
+			expect(byId?.[0]?.id).toBe(mintedId);
 		});
+	});
+
+	it("bumps the name and retries when crdt_create fails with create_failed (path owned)", async () => {
+		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
+		// First attempt: the path is already owned → create_failed. Second attempt
+		// (bumped name) succeeds by echoing its minted id.
+		crdtCreateNote
+			.mockRejectedValueOnce(new CrdtOpError("create_failed", "crdt_create"))
+			.mockImplementation((docId: string) => Promise.resolve(docId));
+
+		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync({ folder: "" });
+		});
+
+		expect(crdtCreateNote).toHaveBeenCalledTimes(2);
+		expect(crdtCreateNote.mock.calls[0]![1]).toBe("Untitled.md");
+		expect(crdtCreateNote.mock.calls[1]![1]).toBe("Untitled 1.md");
+	});
+
+	it("surfaces notes_cap_reached without retrying", async () => {
+		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("notes_cap_reached", "crdt_create"));
+
+		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		await expect(result.current.mutateAsync({ folder: "" })).rejects.toMatchObject({
+			reason: "notes_cap_reached",
+		});
+		expect(crdtCreateNote).toHaveBeenCalledTimes(1);
 	});
 });
 

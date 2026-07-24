@@ -8,6 +8,7 @@ import {
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { collideBump } from "@/lib/collide-bump";
+import { uuid7 } from "../crdt/uuid7";
 import { DEMO_VAULT_ID_PREFIX } from "../onboarding/tour/demo-vault-ids";
 import { useDemoVaultOptional } from "../onboarding/tour/demo-vault-provider";
 import {
@@ -16,7 +17,9 @@ import {
 	syntheticFolderPath,
 } from "../viewer/tree/synthesize-folders";
 import { useActiveVaultId } from "./active-vault";
+import { crdtCreateNote, crdtDeleteNote } from "./channel";
 import { ApiError, api } from "./client";
+import { CrdtOpError } from "./crdt-ops";
 
 // Encode each path segment but preserve slashes so Phoenix's splat
 // routes match. encodeURIComponent on a full path produces %2F, which
@@ -513,15 +516,20 @@ export function useCreateNote() {
 			for (let attempt = 0; attempt < MAX_RACES; attempt++) {
 				const name = collideBump(existingNames, "Untitled.md", { cap: 1000 });
 				const path = folder ? `${folder}/${name}` : name;
+				const noteId = uuid7();
 				try {
-					const { note } = await api.post<{ note: Note }>("/notes", {
-						path,
-						content: "",
-						mtime: Date.now() / 1000,
-					});
-					return { path, id: note.id };
+					// crdt_create genesis over the live channel (replaces POST /notes);
+					// the ok reply echoes our minted note_id.
+					const id = await crdtCreateNote(noteId, path);
+					return { path, id };
 				} catch (err) {
-					if (err instanceof ApiError && err.status === 409) {
+					// The path is already owned (unique-constraint create_failed) or was
+					// just deleted (delete-wins window) — bump the name and retry, the
+					// CRDT twin of the old 409 loop. Cap/rate/disconnect propagate.
+					if (
+						err instanceof CrdtOpError &&
+						(err.reason === "create_failed" || err.reason === "recently_deleted")
+					) {
 						existingNames.add(name);
 						continue;
 					}
@@ -589,10 +597,10 @@ export function useCreateNote() {
 			if (ctx) {
 				qc.setQueryData(ctx.key, ctx.snapshot);
 			}
-			if (err instanceof ApiError && err.status === 402) {
+			if (err instanceof CrdtOpError && err.reason === "notes_cap_reached") {
 				toast.error("You've hit your note limit — upgrade to add more.");
-			} else if (err instanceof ApiError && err.status === 403) {
-				toast.error("You don't have permission to create notes here.");
+			} else if (err instanceof CrdtOpError && err.reason === "disconnected") {
+				toast.error("Reconnecting — can't create notes while offline.");
 			} else {
 				toast.error("Couldn't create the note. Try again.");
 			}
@@ -1645,7 +1653,12 @@ export function useDeleteNote() {
 		{ id: string; path: string },
 		DeleteNoteContext
 	>({
-		mutationFn: ({ id }) => api.del<{ deleted: boolean }>(`/notes/by-id/${id}`),
+		// Delete over the live crdt channel (replaces DELETE /notes/by-id). The ack
+		// is idempotent — resolving means durably deleted (even if already gone).
+		mutationFn: async ({ id }) => {
+			await crdtDeleteNote(id);
+			return { deleted: true };
+		},
 		onMutate: async ({ id, path }) => {
 			const folder = folderOf(path);
 			const listKey = ["folderNotes", vaultId, folder] as const;
@@ -1919,8 +1932,15 @@ export function useBatchDeleteNotes() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<{ deleted: number }, ApiError, { ids: string[] }, BatchNotesContext>({
-		mutationFn: ({ ids }) =>
-			api.post<{ deleted: number }>("/notes/batch-delete", { ids }, idempotencyHeaders()),
+		// No batch crdt op — one crdt_delete per id, concurrently (replaces
+		// POST /notes/batch-delete). ponytail: N round trips + non-atomic — a
+		// mid-batch reject fails the whole Promise.all → onError rollback; the
+		// onSuccess invalidation reconciles server truth. Fine for typical
+		// multi-selects; add a server batch op if very large selections appear.
+		mutationFn: async ({ ids }) => {
+			await Promise.all(ids.map((id) => crdtDeleteNote(id)));
+			return { deleted: ids.length };
+		},
 		onMutate: async ({ ids }) => {
 			await qc.cancelQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			const idSet = new Set(ids);

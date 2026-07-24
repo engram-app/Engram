@@ -3,6 +3,7 @@ import { type Channel, Socket } from "phoenix";
 import {
 	enrollIfLive as crdtEnrollIfLive,
 	handleFrame as crdtHandleFrame,
+	getCrdtSyncStatus,
 	notifyCrdtChannelError,
 	notifyCrdtChannelJoined,
 	resyncOpenDocs,
@@ -13,6 +14,13 @@ import {
 import { rlog } from "../observability/remote-log";
 import { beacon, newTraceContext, parseTraceparent, tracingEnabled } from "../observability/trace";
 import { getWsBase, joinWsUrl } from "./base";
+import {
+	type CrdtCreateBatchResult,
+	type PushChannel,
+	sendCrdtCreate,
+	sendCrdtCreateBatch,
+	sendCrdtDelete,
+} from "./crdt-ops";
 import { ROOT_FOLDER_ID } from "./queries";
 
 // phoenix.js's own default reconnect steps — kept for the 2nd+ attempt. Only
@@ -62,6 +70,14 @@ let latestToken: string | null = null;
 // the next retry (phoenix backoff caps at 5s) reads params() and self-heals.
 let latestGetToken: (() => Promise<string | null>) | null = null;
 let tokenRefreshInFlight = false;
+
+// The crdt room is reliably usable only once its join succeeded (sync status
+// "synced"). A non-null-but-connecting/errored channel would accept a push that
+// silently times out ~10s later; gating on status fails fast instead — the
+// chosen offline policy (disable + surface reconnecting, no durable queue).
+function joinedCrdtChannel(): PushChannel | null {
+	return getCrdtSyncStatus() === "synced" ? (crdtChannel as unknown as PushChannel | null) : null;
+}
 
 async function refreshTokenForRetry(): Promise<void> {
 	if (!latestGetToken || tokenRefreshInFlight) {
@@ -516,6 +532,26 @@ export async function connectChannel({ userId, vaultId, getToken, queryClient }:
 			notifyCrdtChannelError();
 			console.error("CRDT channel join failed", resp);
 		});
+}
+
+/**
+ * CRDT note create/delete over the live `crdt:` channel — the socket-native
+ * replacement for REST `POST /notes` / `/notes/batch-delete` / `DELETE
+ * /notes/by-id` (web REST-purge, issue #1101). Reject fast when the room is not
+ * joined; `crdtCreateNote` returns the server's authoritative doc_id (ADOPT-safe).
+ */
+export function crdtCreateNote(docId: string, path: string): Promise<string> {
+	return sendCrdtCreate(joinedCrdtChannel(), docId, path);
+}
+
+export function crdtDeleteNote(docId: string): Promise<{ doc_id: string }> {
+	return sendCrdtDelete(joinedCrdtChannel(), docId);
+}
+
+export function crdtCreateNotesBatch(
+	creates: { doc_id: string; path: string; b64: string }[],
+): Promise<CrdtCreateBatchResult> {
+	return sendCrdtCreateBatch(joinedCrdtChannel(), creates);
 }
 
 /** True when the live-sync socket exists and Phoenix reports it OPEN. Note: a
