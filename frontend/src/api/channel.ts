@@ -574,6 +574,15 @@ export async function crdtCreateNoteWithContent(
 	if (!r || r.status === "error") {
 		throw new CrdtOpError(r?.reason ?? "create_failed", "crdt_create_batch");
 	}
+	// ADOPT guard: unlike a bare crdt_create (adopt-safe — no content to lose),
+	// a create-WITH-content that adopts a DIFFERENT note at an occupied path
+	// silently drops our genesis frame (backend skips seeding a non-empty doc,
+	// or worse seeds our content into an unrelated empty occupant). A mismatched
+	// doc_id means the path was taken — surface it as the same conflict the old
+	// POST /notes 409 produced so the caller can toast, not vanish the copy.
+	if (r.doc_id !== docId) {
+		throw new CrdtOpError("create_failed", "crdt_create_batch");
+	}
 	return r.doc_id;
 }
 
