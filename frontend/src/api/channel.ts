@@ -570,7 +570,7 @@ export async function crdtCreateNoteWithContent(
 ): Promise<string> {
 	const b64 = buildGenesisFrame(markdown);
 	const { results } = await crdtCreateNotesBatch([{ doc_id: docId, path, b64 }]);
-	const r = results[0];
+	const [r] = results;
 	if (!r || r.status === "error") {
 		throw new CrdtOpError(r?.reason ?? "create_failed", "crdt_create_batch");
 	}

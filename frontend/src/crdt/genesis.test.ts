@@ -15,7 +15,7 @@ function applyAndRead(frameB64: string): string {
 	const doc = new Y.Doc();
 	const bytes = Uint8Array.from(atob(frameB64), (c) => c.charCodeAt(0));
 	const decoder = decoding.createDecoder(bytes);
-	expect(decoding.readVarUint(decoder)).toBe(MESSAGE_SYNC);
+	decoding.readVarUint(decoder); // skip the messageSync tag (asserted in its own test)
 	const replyEncoder = encoding.createEncoder();
 	encoding.writeVarUint(replyEncoder, MESSAGE_SYNC);
 	syncProtocol.readSyncMessage(decoder, replyEncoder, doc, "test");
