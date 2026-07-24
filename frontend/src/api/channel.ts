@@ -89,7 +89,6 @@ interface ConnectOptions {
 	vaultId: string;
 	getToken: () => Promise<string | null>;
 	queryClient: QueryClient;
-	onSocketOpen?: () => void;
 }
 
 type NoteChangedListener = (payload: NoteChangedPayload) => void;
@@ -199,6 +198,20 @@ export function pushFailureBeacon(docId: string, startUs: number, reason: string
 
 export const RECONNECT_JITTER_DEFAULT_MS = 5000;
 export const RECONNECT_JITTER_MAX_MS = 60_000;
+
+/**
+ * Reconcile the structural views a backgrounded/offline tab could have missed.
+ * The socket drops events while disconnected (no replay) and the web keeps no
+ * local mirror, so "backfill" = invalidate the folder/note-list/attachment
+ * caches and let react-query refetch current state. Called on every socket
+ * (re)connect and on wake (focus/visible/online). Replaces the deleted
+ * /sync/changes cursor feed (backend #1036).
+ */
+export function backfillStructural(queryClient: QueryClient, vaultId: string): void {
+	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
+	queryClient.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
+	queryClient.invalidateQueries({ queryKey: ["attachments", vaultId] });
+}
 
 export function clampReconnectJitter(raw: unknown): number | null {
 	if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
@@ -386,13 +399,7 @@ export function handleFoldersBatch(
 	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 }
 
-export async function connectChannel({
-	userId,
-	vaultId,
-	getToken,
-	queryClient,
-	onSocketOpen,
-}: ConnectOptions) {
+export async function connectChannel({ userId, vaultId, getToken, queryClient }: ConnectOptions) {
 	disconnectChannel();
 	const gen = connectGeneration;
 
@@ -422,18 +429,13 @@ export async function connectChannel({
 
 	socket.connect();
 
-	// Fires on initial connect AND every reconnect — the durable-feed catch-up
-	// trigger. The socket can drop events while disconnected (no replay), so a
-	// reconnect kicks a cursor pull to backfill the gap.
-	// Also re-arms CRDT handshakes on reconnect so the session re-syncs state.
-	// Folder markers no longer ride that feed (backend #976 excludes kind=="folder"),
-	// so an empty-folder delete missed while offline carries no note rows to pull.
-	// Reconcile the folder snapshot directly on (re)connect — snapshot-diff, like
-	// the plugin — so a reconnecting tab drops folders deleted in the gap.
+	// Fires on initial connect AND every reconnect. The socket drops events while
+	// disconnected (no replay), so a reconnect re-arms CRDT handshakes (open docs
+	// re-sync) and reconciles the structural views a gap could have staled —
+	// snapshot-diff, like the plugin.
 	socket.onOpen(() => {
 		resyncOpenDocs();
-		queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
-		onSocketOpen?.();
+		backfillStructural(queryClient, vaultId);
 	});
 
 	const topic = `sync:${userId}:${vaultId}`;
@@ -569,7 +571,7 @@ export async function reconnectWithFreshToken(
  * Install the socket-health triggers: on tab focus / visibilitychange→visible /
  * online, either reconnect (fresh-token, session-preserving) or just backfill.
  *
- * The existing focus-only cursor-sync and CRDT-resync triggers assume the socket
+ * The CRDT-resync triggers assume the socket
  * is alive; after a long idle or laptop sleep it can be half-open with no
  * `onclose`, so nothing re-establishes it and live updates stop until a reload.
  * `reconnect` fires when the socket is dead, or when the wake signal implies it's
