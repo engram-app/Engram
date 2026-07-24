@@ -2218,7 +2218,10 @@ export function useBatchDeleteFolders() {
 			}
 			toast.error("Batch delete failed.");
 		},
-		onSuccess: () => {
+		onSettled: () => {
+			// Reconcile on both paths: a lost ack (server committed, client saw a
+			// network error) or a non-transactional partial delete would otherwise
+			// leave onError's restore showing folders the server actually dropped.
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
@@ -2376,7 +2379,10 @@ export function useBatchDeleteAttachments() {
 	return useMutation<{ deleted: number }, ApiError, { paths: string[] }>({
 		mutationFn: ({ paths }) =>
 			api.post<{ deleted: number }>("/attachments/batch-delete", { paths }, idempotencyHeaders()),
-		onSuccess: () => {
+		onSettled: () => {
+			// Reconcile on both paths: no optimistic removal here, so a lost ack
+			// (server committed, client saw a network error) would otherwise leave
+			// the deleted attachments visible until an unrelated refetch.
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 			qc.invalidateQueries({ queryKey: ["attachments", vaultId] });
