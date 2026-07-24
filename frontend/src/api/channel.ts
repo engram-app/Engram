@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { type Channel, Socket } from "phoenix";
+import { buildGenesisFrame } from "../crdt/genesis";
 import {
 	enrollIfLive as crdtEnrollIfLive,
 	handleFrame as crdtHandleFrame,
@@ -16,6 +17,7 @@ import { beacon, newTraceContext, parseTraceparent, tracingEnabled } from "../ob
 import { getWsBase, joinWsUrl } from "./base";
 import {
 	type CrdtCreateBatchResult,
+	CrdtOpError,
 	type PushChannel,
 	sendCrdtCreate,
 	sendCrdtCreateBatch,
@@ -552,6 +554,27 @@ export function crdtCreateNotesBatch(
 	creates: { doc_id: string; path: string; b64: string }[],
 ): Promise<CrdtCreateBatchResult> {
 	return sendCrdtCreateBatch(joinedCrdtChannel(), creates);
+}
+
+/**
+ * Create a note WITH content in one round trip: build a genesis frame from the
+ * markdown and send it as a single-entry crdt_create_batch. Returns the server's
+ * authoritative doc_id, or rejects with a CrdtOpError carrying the entry's
+ * reason. The socket-native replacement for `POST /notes {path, content}` (the
+ * copy-note / seed paths — issue #1101).
+ */
+export async function crdtCreateNoteWithContent(
+	docId: string,
+	path: string,
+	markdown: string,
+): Promise<string> {
+	const b64 = buildGenesisFrame(markdown);
+	const { results } = await crdtCreateNotesBatch([{ doc_id: docId, path, b64 }]);
+	const [r] = results;
+	if (!r || r.status === "error") {
+		throw new CrdtOpError(r?.reason ?? "create_failed", "crdt_create_batch");
+	}
+	return r.doc_id;
 }
 
 /** True when the live-sync socket exists and Phoenix reports it OPEN. Note: a

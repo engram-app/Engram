@@ -42,7 +42,9 @@ describe("RouteErrorBoundary", () => {
 	it("reports a plain route crash through captureError", async () => {
 		renderWithBoundary({ path: "/", element: <Boom /> });
 		await heading();
-		expect(mockCapture).toHaveBeenCalledTimes(1);
+		// captureError fires from a useEffect, which flushes AFTER the fallback
+		// heading is queryable — poll the spy rather than assert once (race).
+		await waitFor(() => expect(mockCapture).toHaveBeenCalledTimes(1));
 		expect(mockCapture).toHaveBeenCalledWith(expect.any(Error));
 	});
 
@@ -67,7 +69,7 @@ describe("RouteErrorBoundary", () => {
 			element: <p>unused</p>,
 		});
 		await heading();
-		expect(mockCapture).toHaveBeenCalledTimes(1);
+		await waitFor(() => expect(mockCapture).toHaveBeenCalledTimes(1));
 	});
 
 	it("claims 'reported' with a reference id only after delivery resolves an id", async () => {
