@@ -144,7 +144,7 @@ export default function FolderTree() {
 			parts.push(withPreservedExtension(oldLeaf, newName));
 			const new_path = parts.join("/");
 			renameNote
-				.mutateAsync({ old_path: item.path, new_path })
+				.mutateAsync({ id: item.id, old_path: item.path, new_path })
 				.catch(() => toast.error("Rename failed"));
 		} else if (p.kind === "folder") {
 			const folder = folders?.find((f) => f.id === p.id);
@@ -170,6 +170,24 @@ export default function FolderTree() {
 
 	// Drag-and-drop move — partition sources by kind, dispatch to the
 	// matching batch hook. Drop target must be a folder or the vault root.
+	// A CRDT move = crdt_create per id at its NEW path, which the mutation builds
+	// from each note's CURRENT path. Resolve those here (from the by-id cache the
+	// tree renders) BEFORE the optimistic onMutate re-paths the rows.
+	const resolveNotePaths = (ids: string[]): Record<string, string> => {
+		const all = qc
+			.getQueryCache()
+			.findAll({ queryKey: ["folder-notes-by-id", vaultId] })
+			.flatMap((q) => (q.state.data as Array<{ id: string; path: string }> | undefined) ?? []);
+		const out: Record<string, string> = {};
+		for (const id of ids) {
+			const p = all.find((n) => n.id === id)?.path;
+			if (p !== undefined) {
+				out[id] = p;
+			}
+		}
+		return out;
+	};
+
 	const onMove = (sourceIds: string[], targetItemId: string) => {
 		const target = parseItemId(targetItemId);
 		if (target.kind !== "folder" && target.kind !== "root") {
@@ -191,7 +209,11 @@ export default function FolderTree() {
 		const destFolder =
 			target.kind === "root" ? "" : (allFolders.find((f) => f.id === target.id)?.name ?? "");
 		if (noteIds.length > 0) {
-			batchMoveNotes.mutate({ ids: noteIds, target_folder: destFolder });
+			batchMoveNotes.mutate({
+				ids: noteIds,
+				target_folder: destFolder,
+				paths: resolveNotePaths(noteIds),
+			});
 		}
 		if (folderIds.length > 0) {
 			batchMoveFolders.mutate({ ids: folderIds, target_parent: destFolder });
@@ -509,7 +531,11 @@ export default function FolderTree() {
 		// Everything moves by PATH (targetFolderName is the folder path, '' = root),
 		// so a derived folder with no marker is a valid destination.
 		if (noteIds.length > 0) {
-			batchMoveNotes.mutate({ ids: noteIds, target_folder: targetFolderName });
+			batchMoveNotes.mutate({
+				ids: noteIds,
+				target_folder: targetFolderName,
+				paths: resolveNotePaths(noteIds),
+			});
 		}
 		if (folderIds.length > 0) {
 			batchMoveFolders.mutate({ ids: folderIds, target_parent: targetFolderName });
