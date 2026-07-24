@@ -229,6 +229,13 @@ export function backfillStructural(queryClient: QueryClient, vaultId: string): v
 	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 	queryClient.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 	queryClient.invalidateQueries({ queryKey: ["attachments", vaultId] });
+	// The sidebar tree renders note rows from the id-keyed family, not the
+	// name-keyed ["folderNotes"] above (that feeds the dashboard). Its expanded
+	// subfolders have no mounted observer, so a default ("active") invalidate
+	// leaves them stale-but-unfetched forever — refetchType "all" forces the
+	// refetch, exactly as flushBatch does. Without it a sleep/offline catch-up
+	// never converges tree membership until a full page reload.
+	queryClient.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId], refetchType: "all" });
 }
 
 export function clampReconnectJitter(raw: unknown): number | null {
