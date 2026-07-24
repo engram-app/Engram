@@ -364,9 +364,8 @@ defmodule EngramWeb.Router do
     get "/notes/changes", NotesController, :changes
     get "/notes/by-id/:id", NotesController, :show_by_id
     delete "/notes/by-id/:id", NotesController, :delete_by_id
-    # REST /notes/:id/updates DELETED (Phase E3) — Yjs deltas travel ONLY over
-    # the crdt: socket topic; the heads probe below is discovery, not delivery.
-    get "/vault/heads", CrdtSyncController, :vault_heads
+    # REST /notes/:id/updates + GET /vault/heads DELETED (Phase E3/#1088) — Yjs
+    # deltas AND head discovery travel ONLY over the crdt: socket topic now.
     get "/notes/*path", NotesController, :show
     delete "/notes/*path", NotesController, :delete
 
