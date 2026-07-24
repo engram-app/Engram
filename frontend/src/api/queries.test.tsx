@@ -1403,6 +1403,30 @@ describe("useBatchDeleteFolders", () => {
 		const folders = qc.getQueryData<{ folders: Folder[] }>(["folders", "42"]);
 		expect(folders?.folders.map((f) => f.id).sort()).toEqual(["7", "9"]);
 	});
+
+	it("reconciles server truth on the error path (lost ack after a committed delete)", async () => {
+		// A single atomic POST, but a network error AFTER the server commits (or a
+		// non-transactional partial delete) makes onError restore the folders while
+		// the server actually dropped them → phantom folders until an unrelated
+		// refetch. Reconciliation must run on the error path too.
+		qc.setQueryData(["folders", "42"], {
+			folders: [{ id: "7", parent_id: null, name: "top", count: 0 }],
+		});
+		post.mockRejectedValue(new ApiError(500, "boom"));
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+		const { result } = renderHook(() => useBatchDeleteFolders(), { wrapper });
+		await act(async () => {
+			try {
+				await result.current.mutateAsync({ ids: ["7"] });
+			} catch {
+				// expected
+			}
+		});
+
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
+	});
 });
 
 describe("useBatchMoveFolders", () => {
@@ -1725,6 +1749,25 @@ describe("useBatchDeleteAttachments", () => {
 		});
 
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
+	});
+
+	it("reconciles the attachments list on the error path (lost ack after a committed delete)", async () => {
+		// No optimistic removal here, so a lost ack (server committed, client saw a
+		// network error) leaves the DELETED attachments still showing until a
+		// refetch — onSuccess-only reconcile never fires. Reconcile on both paths.
+		post.mockRejectedValue(new ApiError(500, "boom"));
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+		const { result } = renderHook(() => useBatchDeleteAttachments(), { wrapper });
+		await act(async () => {
+			try {
+				await result.current.mutateAsync({ paths: ["a.png"] });
+			} catch {
+				// expected
+			}
+		});
+
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
 	});
 });
