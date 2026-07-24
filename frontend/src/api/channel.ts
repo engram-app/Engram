@@ -1,6 +1,9 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { type Channel, Socket } from "phoenix";
+import { toast } from "sonner";
 import { buildGenesisFrame } from "../crdt/genesis";
+import { CrdtOpQueueController } from "../crdt/op-queue-controller";
+import { createIndexedDbPersister } from "../crdt/op-queue-persist";
 import {
 	enrollIfLive as crdtEnrollIfLive,
 	handleFrame as crdtHandleFrame,
@@ -11,7 +14,9 @@ import {
 	scheduleRehandshake as scheduleCrdtRehandshake,
 	startCrdtSession,
 	stopCrdtSession,
+	subscribeToCrdtSyncStatus,
 } from "../crdt/session";
+import { uuid7 } from "../crdt/uuid7";
 import { rlog } from "../observability/remote-log";
 import { beacon, newTraceContext, parseTraceparent, tracingEnabled } from "../observability/trace";
 import { getWsBase, joinWsUrl } from "./base";
@@ -47,6 +52,11 @@ let serverJitterMs: number | null = null;
 let socket: Socket | null = null;
 let channel: Channel | null = null;
 let crdtChannel: Channel | null = null;
+// Durable, acked, bounded outbound queue for terminal CRDT ops (create/delete)
+// — issue #1030. Instantiated per connection; ops issued while the topic isn't
+// joined are held and delivered on reconnect instead of being dropped.
+let opQueue: CrdtOpQueueController | null = null;
+let opQueueUnsub: (() => void) | null = null;
 
 // Bumped by disconnectChannel (which connectChannel calls at entry, and which
 // also runs on effect teardown / vault switch). connectChannel captures it
@@ -75,8 +85,9 @@ let tokenRefreshInFlight = false;
 
 // The crdt room is reliably usable only once its join succeeded (sync status
 // "synced"). A non-null-but-connecting/errored channel would accept a push that
-// silently times out ~10s later; gating on status fails fast instead — the
-// chosen offline policy (disable + surface reconnecting, no durable queue).
+// silently times out ~10s later; gating on status returns null instead, which
+// the durable op queue (#1030) treats as "hold and retry" — so a send issued
+// before the room is joined is buffered, not lost.
 function joinedCrdtChannel(): PushChannel | null {
 	return getCrdtSyncStatus() === "synced" ? (crdtChannel as unknown as PushChannel | null) : null;
 }
@@ -520,6 +531,52 @@ export async function connectChannel({ userId, vaultId, getToken, queryClient }:
 	});
 	const crdtTopic = `crdt:${userId}:${vaultId}`;
 	crdtChannel = socket.channel(crdtTopic, { crdt_proto: 2 });
+
+	// Durable outbound queue (#1030): create/delete ops route through here so a
+	// send issued while the topic isn't joined is HELD and delivered on join,
+	// acked + retried with backoff, bounded + TTL'd. The caller (mutation) owns
+	// its own cache reconciliation via the settled promise, so remapId is a
+	// no-op; drops just get logged, and a plan-cap block surfaces the upgrade toast.
+	opQueue = new CrdtOpQueueController({
+		channel: () => {
+			const ch = joinedCrdtChannel();
+			return ch
+				? {
+						crdtCreate: (id, p) => sendCrdtCreate(ch, id, p),
+						crdtDelete: (id) => sendCrdtDelete(ch, id),
+					}
+				: null;
+		},
+		remapId: () => {
+			// no-op: the calling mutation swaps the optimistic id for the settled
+			// server id (adopt included) via the promise this returns.
+		},
+		onDropSurfaced: (op, reason) =>
+			rlog().warn("crdt", `crdt_${op.kind} dropped (${reason}) undelivered: ${op.docId}`),
+		onLimitSurfaced: () => toast.error("You've hit your note limit — upgrade to add more."),
+		persister: createIndexedDbPersister(userId, vaultId),
+		mintId: () => uuid7(),
+	});
+	const queue = opQueue;
+	opQueue.start().catch(() => {
+		// start() only reads persisted ops; a failure just means no restore
+	});
+	// Drive the queue's join gate off the CRDT sync status — the same source of
+	// truth joinedCrdtChannel() gates sends on. "synced" flushes held ops; any
+	// other state holds them (so a disconnect doesn't burn the retry budget).
+	const driveJoinGate = (s: string) => {
+		if (s === "synced") {
+			queue.joined().catch(() => {
+				// a flush error is transient; the 5s ticker re-drives due ops
+			});
+		} else {
+			queue.left();
+		}
+	};
+	opQueueUnsub = subscribeToCrdtSyncStatus(driveJoinGate);
+	// subscribe() doesn't fire for the current value — cover the (rare) case where
+	// the topic is already joined by the time we wired up.
+	driveJoinGate(getCrdtSyncStatus());
 	// doc_id IS the note_id on the wire (id-keyed CRDT doc_id) — no path
 	// splitting needed.
 	crdtChannel.on("crdt_msg", (p: { doc_id: string; b64: string }) => {
@@ -546,15 +603,23 @@ export async function connectChannel({ userId, vaultId, getToken, queryClient }:
 /**
  * CRDT note create/delete over the live `crdt:` channel — the socket-native
  * replacement for REST `POST /notes` / `/notes/batch-delete` / `DELETE
- * /notes/by-id` (web REST-purge, issue #1101). Reject fast when the room is not
- * joined; `crdtCreateNote` returns the server's authoritative doc_id (ADOPT-safe).
+ * /notes/by-id` (web REST-purge, issue #1101).
+ *
+ * Routed through the durable op queue (#1030): the returned promise settles on
+ * the op's FINAL outcome — resolving with the authoritative doc_id (ADOPT-safe)
+ * once the server acks, or rejecting on a terminal reason / ttl / overflow /
+ * max-attempts drop. An op issued while the topic isn't joined is HELD and
+ * delivered on reconnect, not dropped. Falls back to a direct (reject-fast) send
+ * only when no connection/queue exists.
  */
 export function crdtCreateNote(docId: string, path: string): Promise<string> {
-	return sendCrdtCreate(joinedCrdtChannel(), docId, path);
+	return opQueue
+		? opQueue.enqueueCreate(docId, path)
+		: sendCrdtCreate(joinedCrdtChannel(), docId, path);
 }
 
 export function crdtDeleteNote(docId: string): Promise<{ doc_id: string }> {
-	return sendCrdtDelete(joinedCrdtChannel(), docId);
+	return opQueue ? opQueue.enqueueDelete(docId) : sendCrdtDelete(joinedCrdtChannel(), docId);
 }
 
 export function crdtCreateNotesBatch(
@@ -720,6 +785,14 @@ export function disconnectChannel() {
 	// already discards its eventual result.
 	tokenRefreshInFlight = false;
 	__resetNoteChangeBatch();
+	if (opQueueUnsub) {
+		opQueueUnsub();
+		opQueueUnsub = null;
+	}
+	if (opQueue) {
+		opQueue.stop();
+		opQueue = null;
+	}
 	if (crdtChannel) {
 		crdtChannel.leave();
 		crdtChannel = null;
