@@ -1798,16 +1798,17 @@ export function useDeleteFolder() {
 	});
 }
 
-// Duplicate a note: read source content, then write a fresh note at a
-// caller-chosen `new_path`. The collision-free name is computed by the
-// caller (see `viewer/tree-actions/duplicate.ts#nextCopyName`) — keeping
-// this mutation a thin GET-then-POST means tests don't need to reason
-// about siblings, and the name policy stays in one place.
+// Duplicate a note: read source content over REST, then genesis-create a
+// fresh note at a caller-chosen `new_path` over the CRDT channel. The
+// collision-free name is computed by the caller (see
+// `viewer/tree-actions/duplicate.ts#nextCopyName`) — keeping this mutation a
+// thin GET-then-crdt_create means tests don't need to reason about siblings,
+// and the name policy stays in one place.
 //
 // Optimistic strategy: drop a placeholder NoteSummary into the new
-// folder's list immediately so the row appears in the tree. The GET+POST
-// happens in the background; on success the placeholder is replaced
-// (via onSettled refetch); on error the placeholder is pulled.
+// folder's list immediately so the row appears in the tree. The GET +
+// genesis-create happens in the background; on success the placeholder is
+// replaced (via onSettled refetch); on error the placeholder is pulled.
 
 export function useDuplicateNote() {
 	const qc = useQueryClient();
@@ -1830,7 +1831,7 @@ export function useDuplicateNote() {
 			const newFolder = folderOf(new_path);
 			const targetId = folderIdForPath(qc, vaultId, newFolder);
 
-			// Placeholder id — the real one arrives with the POST response.
+			// Placeholder id — the real one arrives with the crdt_create reply.
 			// `optimistic-` prefix avoids collisions with real backend uuids;
 			// onSuccess swaps it for the server-assigned id in the cached list.
 			const placeholderId = `optimistic-${crypto.randomUUID()}`;
