@@ -833,36 +833,6 @@ class CdpClient:
         )
 
 
-    async def set_conflict_resolution(self, mode: str) -> None:
-        """Set the plugin's conflictResolution setting.
-
-        Modes: 'auto' (creates conflict files) or 'modal' (calls onConflict handler).
-        """
-        js = f"{ENGINE_PATH}.settings.conflictResolution = '{mode}'"
-        await self.evaluate(js)
-        logger.info("Conflict resolution set to '%s' on CDP port %d", mode, self.port)
-
-    async def override_conflict_handler(
-        self, choice: str, merged_content: str | None = None
-    ) -> None:
-        """Override onConflict to auto-resolve with the given choice.
-
-        Valid choices: 'keep-local', 'keep-remote', 'keep-both', 'skip', 'merge'
-        """
-        if merged_content is not None:
-            escaped = json.dumps(merged_content)
-            js = (
-                f"{ENGINE_PATH}.onConflict = async (info) => "
-                f"({{choice: '{choice}', mergedContent: {escaped}}})"
-            )
-        else:
-            js = (
-                f"{ENGINE_PATH}.onConflict = async (info) => "
-                f"({{choice: '{choice}'}})"
-            )
-        await self.evaluate(js)
-        logger.info("Conflict handler overridden to '%s'", choice)
-
     async def pause_outgoing_sync(self) -> None:
         """Block plugin from pushing changes by replacing handlers with no-ops.
 
@@ -909,9 +879,8 @@ class CdpClient:
 
         Plain filesystem writes (helpers.vault.write_note) are picked up only
         when Obsidian's file watcher fires — async, racy. Code paths that need
-        the file to be in ``app.vault.getFiles()`` immediately (e.g. the
-        ``setup_conflict_for_a`` seed's step-1 trigger_full_sync) must use
-        this helper instead.
+        the file to be in ``app.vault.getFiles()`` immediately (e.g. a seed
+        step followed by trigger_full_sync) must use this helper instead.
 
         Creates parent folders as needed. Idempotent: modifies if the file
         already exists, otherwise creates.
@@ -942,11 +911,9 @@ class CdpClient:
     async def pause_incoming_sync(self) -> None:
         """Silence incoming WebSocket events by replacing handleStreamEvent.
 
-        Used by setup_conflict_for_a to guarantee that ``pull()`` is the
-        ONLY path that can detect divergence and open ConflictModal —
-        without this, B's full_sync push broadcasts an upsert event to A
-        which races against pull() under resolveConflict's single-flight
-        gate. The race produced the test_54 PerHunk flake on PR #162.
+        Lets a test guarantee that ``pull()`` is the ONLY path that can apply
+        remote content — without this, a full_sync push broadcasts an upsert
+        event that races against pull().
         """
         js = f"""
         (function() {{
@@ -1121,27 +1088,6 @@ class CdpClient:
         """
         result = await self.evaluate(js, await_promise=True)
         logger.info("Renamed %s → %s: %s", old_path, new_path, result)
-
-    async def restore_conflict_handler(self) -> None:
-        """Restore the original modal-based conflict handler.
-
-        Re-wires the handler that opens ConflictModal.
-        """
-        js = f"""
-        (function() {{
-            const plugin = {PLUGIN_PATH};
-            const ConflictModal = require('{PLUGIN_ID}').ConflictModal
-                || plugin.app.plugins.plugins['{PLUGIN_ID}'].constructor.__ConflictModal;
-            // Fallback: set to null so SyncEngine uses its default skip behavior
-            plugin.syncEngine.onConflict = null;
-        }})()
-        """
-        try:
-            await self.evaluate(js)
-        except CdpError:
-            # If we can't restore the fancy handler, null is safe (defaults to skip)
-            await self.evaluate(f"{ENGINE_PATH}.onConflict = null")
-        logger.info("Conflict handler restored")
 
     # ------------------------------------------------------------------
     # Resilience testing helpers
@@ -1462,155 +1408,6 @@ class CdpClient:
                 return
             await asyncio.sleep(0.1)
         raise TimeoutError("SearchView did not mount")
-
-    # ------------------------------------------------------------------
-    # Step 3: ConflictModal interaction helpers
-    # ------------------------------------------------------------------
-    #
-    # SELECTOR CONCERNS (see report):
-    #   - get_conflict_view_mode: plan queried '[data-view-mode]' which does
-    #     not exist in source. We query the active button inside
-    #     .engram-conflict-view-toggle instead.
-    #   - toggle_conflict_view: plan used .engram-view-toggle (missing);
-    #     corrected to .engram-conflict-view-toggle.
-    #   - click_all_local / click_all_remote: plan used .engram-all-local /
-    #     .engram-all-remote (missing); corrected to text-based button search
-    #     inside .engram-conflict-bulk.
-    #   - pick_conflict_hunk: plan used .engram-hunk (missing) and
-    #     [data-side=...] (missing); corrected to .engram-conflict-hunk and
-    #     button text "Use local" / "Use remote".
-    #   - set_merge_editor: plan used textarea.engram-merge-editor (missing);
-    #     corrected to .engram-conflict-merge-editor.
-    #   - click_conflict_accept: plan used .engram-accept (missing);
-    #     corrected to button text "Apply merge" inside .engram-conflict-actions.
-    #   - click_conflict_skip: plan used .engram-skip (missing);
-    #     corrected to button text "Skip" inside .engram-conflict-actions.
-
-    async def get_conflict_view_mode(self) -> str:
-        """Return 'unified' or 'side-by-side' based on the active toggle button.
-
-        Reads the active button text inside .engram-conflict-view-toggle.
-        Source has no data-view-mode attribute — plan selector was speculative.
-        """
-        return await self.evaluate(
-            "(() => {"
-            "const toggle = document.querySelector("
-            "'.engram-conflict-modal .engram-conflict-view-toggle');"
-            "if (!toggle) return null;"
-            "const active = toggle.querySelector('button.is-active');"
-            "if (!active) return null;"
-            "const t = active.textContent.trim().toLowerCase();"
-            "return t === 'side-by-side' ? 'side-by-side' : 'unified';"
-            "})()"
-        )
-
-    async def toggle_conflict_view(self) -> None:
-        """Click the non-active view button in .engram-conflict-view-toggle."""
-        await self.evaluate(
-            "(() => {"
-            "const toggle = document.querySelector("
-            "'.engram-conflict-modal .engram-conflict-view-toggle');"
-            "if (!toggle) return;"
-            "const inactive = Array.from(toggle.querySelectorAll('button'))"
-            ".find(b => !b.classList.contains('is-active'));"
-            "if (inactive) inactive.click();"
-            "})()"
-        )
-
-    async def click_all_local(self) -> None:
-        """Click the 'All local' bulk button inside .engram-conflict-bulk."""
-        await self.evaluate(
-            "(() => {"
-            "const bulk = document.querySelector("
-            "'.engram-conflict-modal .engram-conflict-bulk');"
-            "if (!bulk) return;"
-            "Array.from(bulk.querySelectorAll('button'))"
-            ".find(b => b.textContent.trim() === 'All local')?.click();"
-            "})()"
-        )
-
-    async def click_all_remote(self) -> None:
-        """Click the 'All remote' bulk button inside .engram-conflict-bulk."""
-        await self.evaluate(
-            "(() => {"
-            "const bulk = document.querySelector("
-            "'.engram-conflict-modal .engram-conflict-bulk');"
-            "if (!bulk) return;"
-            "Array.from(bulk.querySelectorAll('button'))"
-            ".find(b => b.textContent.trim() === 'All remote')?.click();"
-            "})()"
-        )
-
-    async def pick_conflict_hunk(self, index: int, side: str) -> None:
-        """Click 'Use local' or 'Use remote' in a hunk by index.
-
-        side ∈ {'local', 'remote'}. Source uses button text 'Use local' /
-        'Use remote' inside .engram-conflict-hunk-controls — no data-side.
-        """
-        label = "Use local" if side == "local" else "Use remote"
-        await self.evaluate(
-            f"(() => {{"
-            f"const hunk = document.querySelectorAll("
-            f"'.engram-conflict-modal .engram-conflict-hunk')[{index}];"
-            f"if (!hunk) return;"
-            f"const label = {json.dumps(label)};"
-            f"Array.from(hunk.querySelectorAll('.engram-conflict-hunk-controls button'))"
-            f".find(b => b.textContent.trim() === label)?.click();"
-            f"}})()"
-        )
-
-    async def set_merge_editor(self, content: str) -> None:
-        """Set the merge editor textarea value and fire input + change events."""
-        await self.evaluate(
-            f"(() => {{const t = document.querySelector("
-            f"'.engram-conflict-modal .engram-conflict-merge-editor'); "
-            f"t.value = {json.dumps(content)}; "
-            f"t.dispatchEvent(new Event('input', {{bubbles: true}})); "
-            f"t.dispatchEvent(new Event('change', {{bubbles: true}})); }})()"
-        )
-
-    async def click_conflict_accept(self) -> None:
-        """Click 'Apply merge' in the conflict modal actions footer."""
-        await self.evaluate(
-            "(() => {"
-            "const footer = document.querySelector("
-            "'.engram-conflict-modal .engram-conflict-actions');"
-            "if (!footer) return;"
-            "Array.from(footer.querySelectorAll('button'))"
-            ".find(b => b.textContent.trim() === 'Apply merge')?.click();"
-            "})()"
-        )
-
-    async def click_conflict_skip(self) -> None:
-        """Click 'Skip' in the conflict modal actions footer."""
-        await self.evaluate(
-            "(() => {"
-            "const footer = document.querySelector("
-            "'.engram-conflict-modal .engram-conflict-actions');"
-            "if (!footer) return;"
-            "Array.from(footer.querySelectorAll('button'))"
-            ".find(b => b.textContent.trim() === 'Skip')?.click();"
-            "})()"
-        )
-
-    async def wait_for_conflict_modal_closed(self, timeout: float = 10) -> None:
-        """Poll until .engram-conflict-modal is gone from the DOM.
-
-        Distinct from wait_for_modal_closed() which targets the sync-preview
-        modal.  Conflict resolution can involve a full-sync round-trip so the
-        default timeout is more generous (10 s vs 5 s).
-        """
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            present = await self.evaluate(
-                "Boolean(document.querySelector('.engram-conflict-modal'))"
-            )
-            if not present:
-                return
-            await asyncio.sleep(0.1)
-        raise TimeoutError(
-            f"ConflictModal still mounted after {timeout}s on CDP port {self.port}"
-        )
 
     # ------------------------------------------------------------------
     # Step 4: SyncPreviewModal destructive confirm helpers
