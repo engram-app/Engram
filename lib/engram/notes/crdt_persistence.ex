@@ -127,8 +127,9 @@ defmodule Engram.Notes.CrdtPersistence do
 
             # Invalidate the cached head in the SAME txn as the tail append: this
             # update advanced the doc, so any stored crdt_head is now stale.
-            # vault_heads self-heals the NULL by rebuilding once (snapshot + full
-            # tail = authoritative), so we never trust an off-by-one head. Guard on
+            # The BackfillCrdtHead worker re-warms the NULL by rebuilding once
+            # (snapshot + full tail = authoritative), so we never trust an
+            # off-by-one head. Guard on
             # not-nil so an already-invalidated hot note skips the write. Sets ONLY
             # crdt_head — no updated_at/version/seq churn (checkpoint owns those).
             #

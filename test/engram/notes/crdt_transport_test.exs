@@ -192,84 +192,8 @@ defmodule Engram.Notes.CrdtTransportTest do
     end
   end
 
-  describe "vault_heads/2" do
-    test "returns a marker per note and only the edited note's marker changes",
-         %{user: user, vault: vault} do
-      {:ok, a} = Notes.upsert_note(user, vault, %{path: "H/A.md", content: "# A", mtime: 1_000.0})
-      {:ok, b} = Notes.upsert_note(user, vault, %{path: "H/B.md", content: "# B", mtime: 1_000.0})
-
-      heads0 = CrdtTransport.vault_heads(user, vault)
-      assert Map.has_key?(heads0, a.id)
-      assert Map.has_key?(heads0, b.id)
-
-      {:ok, _} =
-        Notes.upsert_note(user, vault, %{path: "H/A.md", content: "# A edited", mtime: 2_000.0})
-
-      heads1 = CrdtTransport.vault_heads(user, vault)
-      assert heads1[a.id].head != heads0[a.id].head, "edited note's head must advance"
-      assert heads1[b.id].head == heads0[b.id].head, "untouched note's head must be stable"
-    end
-
-    test "each entry carries the note's DECRYPTED path alongside its head",
-         %{user: user, vault: vault} do
-      {:ok, a} =
-        Notes.upsert_note(user, vault, %{path: "H/nested/A.md", content: "# A", mtime: 1_000.0})
-
-      {:ok, b} = Notes.upsert_note(user, vault, %{path: "H/B.md", content: "# B", mtime: 1_000.0})
-
-      heads = CrdtTransport.vault_heads(user, vault)
-
-      assert %{path: "H/nested/A.md", head: ha} = heads[a.id]
-      assert %{path: "H/B.md", head: hb} = heads[b.id]
-      assert is_binary(ha) and byte_size(ha) > 0
-      assert is_binary(hb) and byte_size(hb) > 0
-    end
-
-    test "a note with an undecryptable path is skipped, not fatal for the vault",
-         %{user: user, vault: vault} do
-      {:ok, good} =
-        Notes.upsert_note(user, vault, %{path: "H/good.md", content: "# G", mtime: 1_000.0})
-
-      {:ok, bad} =
-        Notes.upsert_note(user, vault, %{path: "H/bad.md", content: "# B", mtime: 1_000.0})
-
-      # Corrupt only the bad note's path ciphertext so its decrypt fails.
-      {:ok, {1, nil}} =
-        Repo.with_tenant(user.id, fn ->
-          from(n in Note, where: n.id == ^bad.id)
-          |> Repo.update_all(set: [path_ciphertext: <<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>>])
-        end)
-
-      heads = CrdtTransport.vault_heads(user, vault)
-
-      assert %{path: "H/good.md"} = heads[good.id], "healthy notes still resolve"
-      refute Map.has_key?(heads, bad.id), "the corrupt-path note is skipped"
-    end
-
-    test "returns a marker for every live note in the vault",
-         %{user: user, vault: vault} do
-      {:ok, a} = Notes.upsert_note(user, vault, %{path: "C/A.md", content: "# A", mtime: 1_000.0})
-      {:ok, b} = Notes.upsert_note(user, vault, %{path: "C/B.md", content: "# B", mtime: 1_000.0})
-
-      heads = CrdtTransport.vault_heads(user, vault)
-      assert Map.has_key?(heads, a.id)
-      assert Map.has_key?(heads, b.id)
-      assert map_size(heads) == 2
-    end
-
-    test "returns an empty map when the DEK is unavailable, even with live notes" do
-      user = insert(:user)
-      refute user.encrypted_dek, "this user must have no DEK to exercise the no_dek branch"
-      vault = insert(:vault, user: user)
-      insert(:note, user: user, vault: vault)
-
-      heads = CrdtTransport.vault_heads(user, vault)
-      assert heads == %{}, "no DEK yields an empty head map"
-    end
-  end
-
-  describe "crdt_head maintenance + vault_heads memory hardening" do
-    test "a room edit invalidates a warmed crdt_head; vault_heads self-heals to the new head",
+  describe "crdt_head maintenance" do
+    test "a room edit invalidates a warmed crdt_head; backfill_head re-warms to the new head",
          %{user: user, vault: vault} do
       {:ok, note} =
         Notes.upsert_note(user, vault, %{path: "MH/A.md", content: "# A\n\nseed", mtime: 1_000.0})
@@ -278,7 +202,7 @@ defmodule Engram.Notes.CrdtTransportTest do
 
       # Warm the column so we can prove the edit INVALIDATES it (not just that a
       # never-set column stays NULL).
-      _ = CrdtTransport.vault_heads(user, vault)
+      _ = CrdtTransport.backfill_head(user, vault, note.id)
       {:ok, warmed} = Notes.get_note_by_id(user, vault, note.id)
       refute is_nil(warmed.crdt_head)
 
@@ -295,45 +219,17 @@ defmodule Engram.Notes.CrdtTransportTest do
       {:ok, invalidated} = Notes.get_note_by_id(user, vault, note.id)
       assert is_nil(invalidated.crdt_head), "a room edit must invalidate the cached head"
 
-      # ...and vault_heads self-heals to the authoritative post-edit head.
-      heads = CrdtTransport.vault_heads(user, vault)
-      assert heads[note.id].head == head
+      # ...and backfill_head re-warms to the authoritative post-edit head.
+      {:ok, healed} = CrdtTransport.backfill_head(user, vault, note.id)
+      assert healed == head
     end
 
-    test "vault_heads self-heals a NULL crdt_head and persists it for cheap re-reads",
-         %{user: user, vault: vault} do
-      {:ok, a} =
-        Notes.upsert_note(user, vault, %{path: "MH/B.md", content: "# B", mtime: 1_000.0})
-
-      # A freshly upserted note is INSERTed (the invalidation trigger is
-      # BEFORE UPDATE, so it doesn't fire), so crdt_head starts NULL.
-      {:ok, a0} = Notes.get_note_by_id(user, vault, a.id)
-      assert is_nil(a0.crdt_head)
-
-      heads = CrdtTransport.vault_heads(user, vault)
-      assert is_binary(heads[a.id].head)
-
-      {:ok, a1} = Notes.get_note_by_id(user, vault, a.id)
-      assert a1.crdt_head == heads[a.id].head, "self-heal must persist the column"
-    end
-
-    test "vault_heads head equals read_delta's head for the same note",
-         %{user: user, vault: vault} do
-      {:ok, note} =
-        Notes.upsert_note(user, vault, %{path: "MH/C.md", content: "# C", mtime: 1_000.0})
-
-      {:ok, %{head: rd_head}} = CrdtTransport.read_delta(user, vault, note.id, nil)
-      heads = CrdtTransport.vault_heads(user, vault)
-      assert heads[note.id].head == rd_head
-    end
-
-    test "a REST edit invalidates the head so vault_heads reflects the new state",
+    test "a REST edit invalidates the head so backfill_head reflects the new state",
          %{user: user, vault: vault} do
       {:ok, note} =
         Notes.upsert_note(user, vault, %{path: "MH/D.md", content: "# D\n\none", mtime: 1_000.0})
 
-      heads0 = CrdtTransport.vault_heads(user, vault)
-      h0 = heads0[note.id].head
+      {:ok, h0} = CrdtTransport.backfill_head(user, vault, note.id)
       assert is_binary(h0)
 
       # A REST update rewrites crdt_state via maybe_merge_crdt; the trigger
@@ -348,8 +244,8 @@ defmodule Engram.Notes.CrdtTransportTest do
       {:ok, mid} = Notes.get_note_by_id(user, vault, note.id)
       assert is_nil(mid.crdt_head), "trigger must invalidate crdt_head on a crdt_state change"
 
-      heads1 = CrdtTransport.vault_heads(user, vault)
-      assert heads1[note.id].head != h0, "head must advance after a REST edit"
+      {:ok, h1} = CrdtTransport.backfill_head(user, vault, note.id)
+      assert h1 != h0, "head must advance after a REST edit"
     end
 
     test "backfill_head computes, persists, and returns a head matching read_delta",
@@ -417,7 +313,7 @@ defmodule Engram.Notes.CrdtTransportTest do
       {:ok, note} =
         Notes.upsert_note(user, vault, %{path: "MH/TRG.md", content: "# T", mtime: 1_000.0})
 
-      _ = CrdtTransport.vault_heads(user, vault)
+      _ = CrdtTransport.backfill_head(user, vault, note.id)
       {:ok, warmed} = Notes.get_note_by_id(user, vault, note.id)
       refute is_nil(warmed.crdt_head)
 
@@ -443,7 +339,7 @@ defmodule Engram.Notes.CrdtTransportTest do
       {:ok, note} =
         Notes.upsert_note(user, vault, %{path: "MH/COL.md", content: "# C", mtime: 1_000.0})
 
-      _ = CrdtTransport.vault_heads(user, vault)
+      _ = CrdtTransport.backfill_head(user, vault, note.id)
       {:ok, warmed} = Notes.get_note_by_id(user, vault, note.id)
       head = warmed.crdt_head
       refute is_nil(head)
