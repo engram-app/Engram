@@ -1325,6 +1325,31 @@ describe("useBatchMoveNotes", () => {
 
 		resolvePost({ moved: 1 });
 	});
+
+	it("reconciles server truth even on a (partial) failure — crdt_create per id is not atomic", async () => {
+		// Promise.all over per-id crdt_create: a mid-batch reject leaves some ids
+		// moved server-side while onError restores every optimistically re-pathed
+		// row → notes shown in the OLD folder until an unrelated refetch. Reconcile
+		// must run on the failure path too.
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
+		await act(async () => {
+			try {
+				await result.current.mutateAsync({
+					ids: ["1"],
+					target_folder: "dst",
+					paths: { "1": "src/a.md" },
+				});
+			} catch {
+				// expected
+			}
+		});
+
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+	});
 });
 
 describe("useBatchDeleteFolders", () => {
@@ -1551,6 +1576,30 @@ describe("useBatchMoveFolders", () => {
 		expect(folders?.folders.find((f) => f.id === "7")?.parent_id).toBeNull();
 		expect(folders?.folders.find((f) => f.id === "8")?.name).toBe("src/sub");
 	});
+
+	it("reconciles server truth on the error path (lost ack after a committed move)", async () => {
+		// Single atomic POST, but a network error after the server commits (or a
+		// non-transactional partial move) runs onError, which restores the
+		// optimistically re-pathed folders the server actually moved → phantom
+		// state until an unrelated refetch. Reconcile on both paths.
+		qc.setQueryData(["folders", "42"], {
+			folders: [{ id: "7", parent_id: null, name: "src", count: 0 }],
+		});
+		post.mockRejectedValue(new ApiError(500, "boom"));
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+		const { result } = renderHook(() => useBatchMoveFolders(), { wrapper });
+		await act(async () => {
+			try {
+				await result.current.mutateAsync({ ids: ["7"], target_parent: "dst" });
+			} catch {
+				// expected
+			}
+		});
+
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
+	});
 });
 
 describe("useSearch", () => {
@@ -1715,6 +1764,22 @@ describe("useBatchMoveAttachments", () => {
 		});
 
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
+	});
+
+	it("reconciles the attachments list on the error path (lost ack after a committed move)", async () => {
+		post.mockRejectedValue(new ApiError(500, "boom"));
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+		const { result } = renderHook(() => useBatchMoveAttachments(), { wrapper });
+		await act(async () => {
+			try {
+				await result.current.mutateAsync({ paths: ["a.png"], target_folder: "img" });
+			} catch {
+				// expected
+			}
+		});
+
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
 	});
 });

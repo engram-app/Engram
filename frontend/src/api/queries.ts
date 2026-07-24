@@ -2160,7 +2160,10 @@ export function useBatchMoveNotes() {
 			}
 			toast.error("Batch move failed.");
 		},
-		onSuccess: () => {
+		onSettled: () => {
+			// crdt_create per id is non-atomic (Promise.all): a mid-batch reject
+			// leaves some ids moved server-side while onError restores every row,
+			// so reconcile must run on both paths.
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
@@ -2322,7 +2325,10 @@ export function useBatchMoveFolders() {
 			}
 			toast.error("Batch move failed.");
 		},
-		onSuccess: () => {
+		onSettled: () => {
+			// Reconcile on both paths: a lost ack (server committed, client saw a
+			// network error) leaves onError's restore showing folders the server
+			// actually moved until an unrelated refetch.
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
@@ -2361,7 +2367,10 @@ export function useBatchMoveAttachments() {
 				{ paths, target_folder },
 				idempotencyHeaders(),
 			),
-		onSuccess: () => {
+		onSettled: () => {
+			// Reconcile on both paths: a lost ack (server committed, client saw a
+			// network error) leaves the attachments shown at their old paths until
+			// an unrelated refetch.
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 			qc.invalidateQueries({ queryKey: ["attachments", vaultId] });
