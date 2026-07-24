@@ -207,19 +207,18 @@ describe("useNote by id", () => {
 });
 
 describe("useRenameNote", () => {
-	it("POSTs /notes/rename and invalidates folders + folder lists + old note key", async () => {
-		post.mockResolvedValue({ renamed: true, old_path: "a/x.md", new_path: "b/y.md" });
+	it("sends crdt_create with the note id at the new path (rename-as-move) + invalidates", async () => {
 		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
 		await act(async () => {
-			await result.current.mutateAsync({ old_path: "a/x.md", new_path: "b/y.md" });
+			await result.current.mutateAsync({ id: "n1", old_path: "a/x.md", new_path: "b/y.md" });
 		});
 
-		expect(post).toHaveBeenCalledWith("/notes/rename", {
-			old_path: "a/x.md",
-			new_path: "b/y.md",
-		});
+		// Rename/move = crdt_create for a KNOWN id at a new free path (backend
+		// relocates the row in place). No REST /notes/rename.
+		expect(crdtCreateNote).toHaveBeenCalledWith("n1", "b/y.md");
+		expect(post).not.toHaveBeenCalledWith("/notes/rename", expect.anything());
 		// onSettled scopes invalidation by vault — broader keys would
 		// touch other vaults' caches needlessly.
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
@@ -227,13 +226,13 @@ describe("useRenameNote", () => {
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["note", "42"] });
 	});
 
-	it("surfaces 409 as ApiError", async () => {
-		post.mockRejectedValue(new ApiError(409, "conflict"));
+	it("surfaces create_failed (target path occupied) to the caller", async () => {
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
 		await expect(
-			result.current.mutateAsync({ old_path: "a.md", new_path: "b.md" }),
-		).rejects.toMatchObject({ status: 409 });
+			result.current.mutateAsync({ id: "n1", old_path: "a.md", new_path: "b.md" }),
+		).rejects.toMatchObject({ reason: "create_failed" });
 	});
 });
 
@@ -451,17 +450,17 @@ describe("optimistic rename note", () => {
 			{ name: "b", count: 0 },
 		]);
 
-		// Hold the POST so we can inspect the optimistic state.
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
+		// Hold crdt_create so we can inspect the optimistic state.
+		let resolveRename: () => void = () => {};
+		crdtCreateNote.mockReturnValue(
 			new Promise((r) => {
-				resolvePost = r;
+				resolveRename = () => r("n1");
 			}),
 		);
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
 		act(() => {
-			result.current.mutate({ old_path: "a/x.md", new_path: "b/x.md" });
+			result.current.mutate({ id: "n1", old_path: "a/x.md", new_path: "b/x.md" });
 		});
 
 		await waitFor(() => {
@@ -484,7 +483,7 @@ describe("optimistic rename note", () => {
 		expect(folders?.folders.find((f) => f.name === "b")?.count).toBe(1);
 
 		// Settle the promise so React Query unwinds cleanly.
-		resolvePost({ renamed: true, old_path: "a/x.md", new_path: "b/x.md" });
+		resolveRename();
 	});
 
 	it("restores the pre-mutation cache snapshot when the mutation rejects", async () => {
@@ -495,12 +494,12 @@ describe("optimistic rename note", () => {
 			{ name: "b", count: 0 },
 		]);
 
-		post.mockRejectedValue(new ApiError(409, "conflict"));
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
 		await act(async () => {
 			try {
-				await result.current.mutateAsync({ old_path: "a/x.md", new_path: "b/x.md" });
+				await result.current.mutateAsync({ id: "n1", old_path: "a/x.md", new_path: "b/x.md" });
 			} catch {
 				// Expected — we want the rollback.
 			}
@@ -619,7 +618,7 @@ describe("rename note does NOT re-path the note body cache optimistically", () =
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
 		act(() => {
-			result.current.mutate({ old_path: "a/x.md", new_path: "b/y.md" });
+			result.current.mutate({ id: "n1", old_path: "a/x.md", new_path: "b/y.md" });
 		});
 
 		// The FOLDER lists flip optimistically (snappy tree)…
@@ -1029,39 +1028,51 @@ describe("useCreateNote — optimistic placeholder", () => {
 });
 
 describe("useBatchMoveNotes", () => {
-	it("POSTs ids + target_folder path with UUID idempotency header", async () => {
-		post.mockResolvedValue({ moved: 2 });
-
+	it("sends one crdt_create per id at target_folder/basename (no batch REST)", async () => {
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		await act(async () => {
-			await result.current.mutateAsync({ ids: ["1", "2"], target_folder: "dst" });
+			await result.current.mutateAsync({
+				ids: ["1", "2"],
+				target_folder: "dst",
+				paths: { "1": "a/x.md", "2": "b/y.md" },
+			});
 		});
 
-		expect(post).toHaveBeenCalledWith(
-			"/notes/batch-move",
-			{ ids: ["1", "2"], target_folder: "dst" },
-			expect.objectContaining({
-				headers: expect.objectContaining({
-					"X-Idempotency-Key": expect.stringMatching(UUID_RE),
-				}),
-			}),
-		);
+		expect(crdtCreateNote).toHaveBeenCalledWith("1", "dst/x.md");
+		expect(crdtCreateNote).toHaveBeenCalledWith("2", "dst/y.md");
+		expect(post).not.toHaveBeenCalled();
+	});
+
+	it("moves to the vault root as a bare basename", async () => {
+		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync({
+				ids: ["1"],
+				target_folder: "",
+				paths: { "1": "a/x.md" },
+			});
+		});
+		expect(crdtCreateNote).toHaveBeenCalledWith("1", "x.md");
 	});
 
 	it("optimistically strips moved notes from source lists before resolution", async () => {
 		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }, { id: "3" }]);
 		seedFolderNotesById("9", [{ id: "4" }]);
 
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
+		let resolveMove: () => void = () => {};
+		crdtCreateNote.mockReturnValue(
 			new Promise((r) => {
-				resolvePost = r;
+				resolveMove = () => r("1");
 			}),
 		);
 
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		act(() => {
-			result.current.mutate({ ids: ["1", "2"], target_folder: "dst" });
+			result.current.mutate({
+				ids: ["1", "2"],
+				target_folder: "dst",
+				paths: { "1": "x.md", "2": "y.md" },
+			});
 		});
 
 		await waitFor(() => {
@@ -1069,17 +1080,21 @@ describe("useBatchMoveNotes", () => {
 			expect(src?.map((n) => n.id)).toEqual(["3"]);
 		});
 
-		resolvePost({ moved: 2 });
+		resolveMove();
 	});
 
-	it("rolls back source list on server error (e.g. 409)", async () => {
+	it("rolls back source list when a move rejects (target occupied)", async () => {
 		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }, { id: "3" }]);
-		post.mockRejectedValue(new ApiError(409, "conflict"));
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
 
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		await act(async () => {
 			try {
-				await result.current.mutateAsync({ ids: ["1", "2"], target_folder: "dst" });
+				await result.current.mutateAsync({
+					ids: ["1", "2"],
+					target_folder: "dst",
+					paths: { "1": "x.md", "2": "y.md" },
+				});
 			} catch {
 				// expected
 			}
@@ -1129,12 +1144,16 @@ describe("useBatchMoveNotes", () => {
 			],
 		});
 		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }, { id: "3" }]);
-		post.mockRejectedValue(new ApiError(409, "conflict"));
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
 
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		await act(async () => {
 			try {
-				await result.current.mutateAsync({ ids: ["1", "2"], target_folder: "dst" });
+				await result.current.mutateAsync({
+					ids: ["1", "2"],
+					target_folder: "dst",
+					paths: { "1": "src/1.md", "2": "src/2.md" },
+				});
 			} catch {
 				// expected
 			}
@@ -1223,16 +1242,20 @@ describe("useBatchMoveNotes", () => {
 		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }]);
 		qc.setQueryData(["folder-notes-by-id", "42", "syn:Derived"], []);
 
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
+		let resolveMove: () => void = () => {};
+		crdtCreateNote.mockReturnValue(
 			new Promise((r) => {
-				resolvePost = r;
+				resolveMove = () => r("1");
 			}),
 		);
 
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		act(() => {
-			result.current.mutate({ ids: ["1"], target_folder: "Derived" });
+			result.current.mutate({
+				ids: ["1"],
+				target_folder: "Derived",
+				paths: { "1": "src/x.md" },
+			});
 		});
 
 		await waitFor(() => {
@@ -1249,13 +1272,10 @@ describe("useBatchMoveNotes", () => {
 			expect(folders?.folders.find((f) => f.name === "Derived")?.count).toBe(1);
 		});
 
-		expect(post).toHaveBeenCalledWith(
-			"/notes/batch-move",
-			{ ids: ["1"], target_folder: "Derived" },
-			expect.anything(),
-		);
+		expect(crdtCreateNote).toHaveBeenCalledWith("1", "Derived/x.md");
+		expect(post).not.toHaveBeenCalled();
 
-		resolvePost({ moved: 1 });
+		resolveMove();
 	});
 
 	it("decrements a DERIVED source folder count when moving notes OUT of it", async () => {

@@ -128,11 +128,18 @@ function updateCachedList<T>(
 
 // 409/404/etc → human-grade toast copy. Centralised so all four
 // mutations (and the standalone drop handler) speak the same dialect.
-function renameErrorToast(err: ApiError, kind: "file" | "folder") {
+// Shared by note rename (CRDT → CrdtOpError) and folder/attachment rename
+// (REST → ApiError). A note's target-occupied conflict surfaces as
+// crdt_create's `create_failed`; the REST paths use HTTP 409/404.
+function renameErrorToast(err: unknown, kind: "file" | "folder") {
 	const noun = kind === "file" ? "note" : "folder";
-	if (err.status === 409) {
+	const conflict =
+		(err instanceof ApiError && err.status === 409) ||
+		(err instanceof CrdtOpError && err.reason === "create_failed");
+	const gone = err instanceof ApiError && err.status === 404;
+	if (conflict) {
 		toast.error(`A ${noun} with that name already exists.`);
-	} else if (err.status === 404) {
+	} else if (gone) {
 		toast.error(`${noun[0]?.toUpperCase()}${noun.slice(1)} no longer exists.`);
 	} else {
 		toast.error("Rename failed.");
@@ -1367,16 +1374,19 @@ export function useRenameNote() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<
-		{ renamed: boolean; old_path: string; new_path: string; note: Note },
-		ApiError,
-		{ old_path: string; new_path: string },
+		{ renamed: boolean; old_path: string; new_path: string },
+		CrdtOpError,
+		{ id: string; old_path: string; new_path: string },
 		RenameNoteContext
 	>({
-		mutationFn: (vars) =>
-			api.post<{ renamed: boolean; old_path: string; new_path: string; note: Note }>(
-				"/notes/rename",
-				vars,
-			),
+		// Rename/move = crdt_create for a KNOWN live id at a new FREE path — the
+		// backend relocates the row in place (rename-as-move, notes.ex Phase E2),
+		// keeping the note_id + content. A path OCCUPIED by a different note comes
+		// back as create_failed. Replaces POST /notes/rename.
+		mutationFn: async ({ id, old_path, new_path }) => {
+			await crdtCreateNote(id, new_path);
+			return { renamed: true, old_path, new_path };
+		},
 		onMutate: async ({ old_path, new_path }) => {
 			const oldFolder = folderOf(old_path);
 			const newFolder = folderOf(new_path);
@@ -1998,16 +2008,30 @@ export function useBatchMoveNotes() {
 	const vaultId = useActiveVaultId();
 	return useMutation<
 		{ moved: number },
-		ApiError,
-		{ ids: string[]; target_folder: string },
+		CrdtOpError,
+		{ ids: string[]; target_folder: string; paths?: Record<string, string> },
 		BatchNotesContext
 	>({
-		mutationFn: ({ ids, target_folder }) =>
-			api.post<{ moved: number }>(
-				"/notes/batch-move",
-				{ ids, target_folder },
-				idempotencyHeaders(),
-			),
+		// Move = one crdt_create per id at `target_folder/<current basename>` (the
+		// rename-as-move relocate). `paths` (id → current path) MUST be resolved by
+		// the caller BEFORE the optimistic onMutate re-paths the cache — resolving
+		// from the cache here would read the already-moved path. No batch op —
+		// concurrent, non-atomic; a reject rolls back the whole optimistic move.
+		// Replaces POST /notes/batch-move.
+		mutationFn: async ({ ids, target_folder, paths = {} }) => {
+			await Promise.all(
+				ids.map((id) => {
+					const cur = paths[id];
+					if (cur === undefined) {
+						return Promise.resolve();
+					}
+					const leaf = cur.split("/").pop() ?? cur;
+					const newPath = target_folder ? `${target_folder}/${leaf}` : leaf;
+					return crdtCreateNote(id, newPath);
+				}),
+			);
+			return { moved: ids.length };
+		},
 		onMutate: async ({ ids, target_folder }) => {
 			await qc.cancelQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			await qc.cancelQueries({ queryKey: ["folders", vaultId] });
