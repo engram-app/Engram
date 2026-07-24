@@ -107,9 +107,9 @@ describe("crdtCreateNoteWithContent — adopt detection (occupied path)", () => 
 		h.joins.ok?.();
 		h.crdtPush.mockReturnValue(batchReply({ doc_id: "minted-new", status: "ok" }));
 
-		await expect(
-			crdtCreateNoteWithContent("minted-new", "folder/copy.md", "# copy"),
-		).resolves.toBe("minted-new");
+		await expect(crdtCreateNoteWithContent("minted-new", "folder/copy.md", "# copy")).resolves.toBe(
+			"minted-new",
+		);
 	});
 
 	it("throws create_failed when the server ADOPTS a different note (occupied path)", async () => {

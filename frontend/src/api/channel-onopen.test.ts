@@ -58,13 +58,13 @@ describe("connectChannel onOpen — structural backfill", () => {
 		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["folders", "v1"] });
 		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["folderNotes", "v1"] });
 		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["attachments", "v1"] });
-			// The sidebar tree renders note rows from the id-keyed family, and its
-			// expanded-but-observer-less subfolders only refetch under refetchType
-			// "all" (matching flushBatch). Missing this = stale tree membership after
-			// a sleep/offline catch-up until a full reload.
-			expect(invalidateQueries).toHaveBeenCalledWith({
-				queryKey: ["folder-notes-by-id", "v1"],
-				refetchType: "all",
-			});
+		// The sidebar tree renders note rows from the id-keyed family, and its
+		// expanded-but-observer-less subfolders only refetch under refetchType
+		// "all" (matching flushBatch). Missing this = stale tree membership after
+		// a sleep/offline catch-up until a full reload.
+		expect(invalidateQueries).toHaveBeenCalledWith({
+			queryKey: ["folder-notes-by-id", "v1"],
+			refetchType: "all",
+		});
 	});
 });
