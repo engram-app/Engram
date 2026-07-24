@@ -133,25 +133,10 @@ defmodule Engram.Notes.CrdtCheckpoint do
               raw_note ->
                 {:ok, note} = Crypto.maybe_decrypt_note_fields(raw_note, user)
 
-                with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
-                     text = CrdtBridge.text_of(union_doc),
-                     {:ok, raw_state} <- encode(union_doc),
-                     {_flat_doc, state} <- maybe_flatten(union_doc, raw_state, note_id),
-                     {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id),
-                     {:ok, key} <- Crypto.dek_content_hash_key(user) do
-                  content_hash = Crypto.hmac_content_hash(key, text)
-                  tags = Helpers.extract_tags(text)
-
-                  checkpoint_write(note, vault_id, note_id, prune, opts, %{
-                    text: text,
-                    tags: tags,
-                    content_hash: content_hash,
-                    ct: ct,
-                    nonce: nonce,
-                    user: user
-                  })
+                if markdown?(note.path) do
+                  do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user)
                 else
-                  err -> {:abort, err}
+                  do_structural_checkpoint(note, note_id, live_state, prune, user)
                 end
             end
           end)
@@ -211,6 +196,71 @@ defmodule Engram.Notes.CrdtCheckpoint do
       )
 
       :ok
+  end
+
+  # A CRDT room only ever holds a markdown (`.md`) doc or a structural doc
+  # (`.canvas`). Only markdown projects to/from `notes.content`. Mirrors
+  # CrdtDeliver's `.md` gate.
+  defp markdown?(path), do: is_binary(path) and String.ends_with?(path, ".md")
+
+  # Markdown checkpoint (unchanged behaviour): materialize the projected body into
+  # content/content_hash/title/tags, bump version/seq on a real change, else
+  # degrade to a snapshot-compaction write. Returns the same {prev, new, path}
+  # outcome tuple the caller's `case outcome` matches on.
+  defp do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user) do
+    with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
+         text = CrdtBridge.text_of(union_doc),
+         {:ok, raw_state} <- encode(union_doc),
+         {_flat_doc, state} <- maybe_flatten(union_doc, raw_state, note_id),
+         {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id),
+         {:ok, key} <- Crypto.dek_content_hash_key(user) do
+      content_hash = Crypto.hmac_content_hash(key, text)
+      tags = Helpers.extract_tags(text)
+
+      checkpoint_write(note, vault_id, note_id, prune, opts, %{
+        text: text,
+        tags: tags,
+        content_hash: content_hash,
+        ct: ct,
+        nonce: nonce,
+        user: user
+      })
+    else
+      err -> {:abort, err}
+    end
+  end
+
+  # Structural (non-markdown, e.g. `.canvas`) checkpoint. The doc keeps its data
+  # in Y.Maps, not the markdown content Y.Text — so `text_of` would project ""
+  # and clobber notes.content, and `maybe_flatten` would reseed via project_doc
+  # and DESTROY the structure. So persist the Yjs snapshot opaquely (union-folded
+  # for monotonicity, same as markdown), prune the tail, and leave
+  # content/title/tags/version/seq untouched: notes.content is vestigial for
+  # canvas — a new device rebuilds the board from the persisted Yjs deltas
+  # (spec 2026-07-23). Returns equal hashes so the caller skips embed + announce.
+  #
+  # ponytail: no structural flatten yet. A canvas that crosses the client-id
+  # ceiling keeps its full state vector; add a structural (nodes/edges-preserving)
+  # flatten in Phase 2 if a real board ever hits it.
+  defp do_structural_checkpoint(note, note_id, live_state, prune, user) do
+    with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
+         {:ok, raw_state} <- encode(union_doc),
+         {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(raw_state, user, note_id) do
+      {1, _} =
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note_id and n.kind == "note"),
+          set: [
+            crdt_state_ciphertext: ct,
+            crdt_state_nonce: nonce,
+            dek_version: Crypto.row_version_aad_bound()
+          ]
+        )
+
+      prune_tail(note_id, prune)
+      {note.content_hash, note.content_hash, note.path}
+    else
+      err -> {:abort, err}
+    end
   end
 
   # Folds the row's stored CRDT state with the live doc's encoded state into a

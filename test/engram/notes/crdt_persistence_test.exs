@@ -156,6 +156,33 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert CrdtBridge.text_of(doc) == ""
   end
 
+  test "bind/3 does NOT ingest a .canvas note's JSON as markdown body (structural, client-seeded)",
+       ctx do
+    %{user: user, vault: vault} = ctx
+    # A canvas note stores structural data (Y.Map nodes/edges) client-side; its
+    # notes.content is raw .canvas JSON. Seeding it through the markdown frontmatter
+    # codec would diff the whole JSON into the body Y.Text — corrupting the doc.
+    # Canvas rooms are client-seeded, so bind must NOT seed the body from content.
+    canvas_json = ~s({"nodes":[{"id":"n1","type":"text","text":"hi"}],"edges":[]})
+
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{"path" => "board.canvas", "content" => canvas_json})
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note2.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+    st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
+    doc = CrdtBridge.new_doc()
+    _returned = CrdtPersistence.bind(st, note2.id, doc)
+
+    assert CrdtBridge.body_of(doc) == ""
+  end
+
   test "bind/3 seeds when the snapshot exists but projects to EMPTY text and content is non-empty (#1087 empty-snapshot class)",
        ctx do
     %{user: user, vault: vault} = ctx

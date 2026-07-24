@@ -340,11 +340,22 @@ defmodule Engram.Notes.CrdtPersistence do
   # text JSON-safe. A nil/empty body seeds nothing (a blank note stays blank).
   defp seed_from_content(doc, %Note{} = note, user) do
     case Crypto.maybe_decrypt_note_fields(note, user) do
-      {:ok, %Note{content: content}} when is_binary(content) and content != "" ->
-        :ok = CrdtBridge.ingest_plaintext(doc, content)
+      {:ok, %Note{content: content, path: path}}
+      when is_binary(content) and content != "" ->
+        # Only MARKDOWN seeds through the frontmatter codec. A .canvas (or any
+        # non-md) note keeps its data in structural Y.Maps client-side and is
+        # client-seeded from its own file — ingesting its JSON as a markdown body
+        # would diff the whole blob into the content Y.Text and corrupt the doc.
+        if markdown?(path), do: :ok = CrdtBridge.ingest_plaintext(doc, content)
+        :ok
 
       _ ->
         :ok
     end
   end
+
+  # A CRDT room only ever holds a markdown (`.md`) doc or a structural doc
+  # (`.canvas`). Only markdown is projected to/from `notes.content` — everything
+  # else is opaque Yjs the client owns. Mirrors CrdtDeliver's `.md` gate.
+  defp markdown?(path), do: is_binary(path) and String.ends_with?(path, ".md")
 end
