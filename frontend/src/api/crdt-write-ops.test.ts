@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { connectChannel, crdtCreateNote, crdtDeleteNote, disconnectChannel } from "./channel";
+import {
+	connectChannel,
+	crdtCreateNote,
+	crdtCreateNoteWithContent,
+	crdtDeleteNote,
+	disconnectChannel,
+} from "./channel";
 
 // Phoenix mock that distinguishes the crdt channel (joined with { crdt_proto: 2 })
 // so the test can drive its join outcome and capture its push. vi.hoisted +
@@ -83,5 +89,38 @@ describe("crdtCreateNote / crdtDeleteNote — offline gate", () => {
 
 		await expect(crdtDeleteNote("n1")).rejects.toThrow(/not joined|disconnect/i);
 		expect(h.crdtPush).not.toHaveBeenCalled();
+	});
+});
+
+describe("crdtCreateNoteWithContent — adopt detection (occupied path)", () => {
+	const batchReply = (entry: { doc_id: string; status: "ok" | "error"; reason?: string }) => ({
+		receive(status: string, cb: (r?: unknown) => void) {
+			if (status === "ok") {
+				cb({ results: [entry] });
+			}
+			return this;
+		},
+	});
+
+	it("returns the doc_id when the server CREATES our note (id echoed back)", async () => {
+		await connectChannel(opts);
+		h.joins.ok?.();
+		h.crdtPush.mockReturnValue(batchReply({ doc_id: "minted-new", status: "ok" }));
+
+		await expect(crdtCreateNoteWithContent("minted-new", "folder/copy.md", "# copy")).resolves.toBe(
+			"minted-new",
+		);
+	});
+
+	it("throws create_failed when the server ADOPTS a different note (occupied path)", async () => {
+		await connectChannel(opts);
+		h.joins.ok?.();
+		// Path already held by another live note → backend genesis_adopt_or_insert
+		// returns {:ok, live} with the OCCUPANT's id, never seeding our content.
+		h.crdtPush.mockReturnValue(batchReply({ doc_id: "existing-occupant", status: "ok" }));
+
+		await expect(
+			crdtCreateNoteWithContent("minted-new", "folder/taken.md", "# copy"),
+		).rejects.toMatchObject({ reason: "create_failed" });
 	});
 });

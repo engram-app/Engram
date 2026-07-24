@@ -861,6 +861,28 @@ describe("useBatchDeleteNotes", () => {
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
 	});
 
+	it("reconciles server truth even on a (partial) failure — Promise.all is not atomic", async () => {
+		// A mid-batch reject leaves some ids already deleted server-side while
+		// onError restores EVERY optimistically-removed row (including the gone
+		// ones). Reconciliation must run on the failure path too, else the tree
+		// shows phantom notes (404 on click) until an unrelated refetch.
+		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }]);
+		crdtDeleteNote.mockRejectedValue(new CrdtOpError("rate_limited", "crdt_delete"));
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+		const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper });
+		await act(async () => {
+			try {
+				await result.current.mutateAsync({ ids: ["1", "2"] });
+			} catch {
+				// expected
+			}
+		});
+
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+	});
+
 	it("optimistically strips deleted root notes from the by-id root list", async () => {
 		// Root notes share the one id-keyed cache under the 'root' sentinel.
 		seedFolderNotesById("root", [

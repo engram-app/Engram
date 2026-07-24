@@ -229,6 +229,13 @@ export function backfillStructural(queryClient: QueryClient, vaultId: string): v
 	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 	queryClient.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 	queryClient.invalidateQueries({ queryKey: ["attachments", vaultId] });
+	// The sidebar tree renders note rows from the id-keyed family, not the
+	// name-keyed ["folderNotes"] above (that feeds the dashboard). Its expanded
+	// subfolders have no mounted observer, so a default ("active") invalidate
+	// leaves them stale-but-unfetched forever — refetchType "all" forces the
+	// refetch, exactly as flushBatch does. Without it a sleep/offline catch-up
+	// never converges tree membership until a full page reload.
+	queryClient.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId], refetchType: "all" });
 }
 
 export function clampReconnectJitter(raw: unknown): number | null {
@@ -573,6 +580,15 @@ export async function crdtCreateNoteWithContent(
 	const [r] = results;
 	if (!r || r.status === "error") {
 		throw new CrdtOpError(r?.reason ?? "create_failed", "crdt_create_batch");
+	}
+	// ADOPT guard: unlike a bare crdt_create (adopt-safe — no content to lose),
+	// a create-WITH-content that adopts a DIFFERENT note at an occupied path
+	// silently drops our genesis frame (backend skips seeding a non-empty doc,
+	// or worse seeds our content into an unrelated empty occupant). A mismatched
+	// doc_id means the path was taken — surface it as the same conflict the old
+	// POST /notes 409 produced so the caller can toast, not vanish the copy.
+	if (r.doc_id !== docId) {
+		throw new CrdtOpError("create_failed", "crdt_create_batch");
 	}
 	return r.doc_id;
 }

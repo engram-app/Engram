@@ -1935,8 +1935,10 @@ export function useBatchDeleteNotes() {
 		// No batch crdt op — one crdt_delete per id, concurrently (replaces
 		// POST /notes/batch-delete). ponytail: N round trips + non-atomic — a
 		// mid-batch reject fails the whole Promise.all → onError rollback; the
-		// onSuccess invalidation reconciles server truth. Fine for typical
-		// multi-selects; add a server batch op if very large selections appear.
+		// onSettled invalidation reconciles server truth on BOTH paths (a partial
+		// failure leaves some ids deleted while onError restores every row).
+		// Fine for typical multi-selects; add a server batch op if very large
+		// selections appear.
 		mutationFn: async ({ ids }) => {
 			await Promise.all(ids.map((id) => crdtDeleteNote(id)));
 			return { deleted: ids.length };
@@ -1985,7 +1987,9 @@ export function useBatchDeleteNotes() {
 			}
 			toast.error("Batch delete failed.");
 		},
-		onSuccess: () => {
+		onSettled: () => {
+			// Reconcile after success AND partial failure — Promise.all is not
+			// atomic, so onError's full restore can resurrect already-deleted rows.
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
