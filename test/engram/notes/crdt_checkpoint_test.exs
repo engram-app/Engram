@@ -123,6 +123,48 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert doc_id == note.id
   end
 
+  test "checkpoint on a .canvas doc persists Yjs state without clobbering content or churning seq",
+       ctx do
+    %{user: user, vault: vault} = ctx
+    # A canvas doc keeps its data in Y.Maps (nodes/edges), not the markdown content
+    # Y.Text — so text_of projects "". The checkpoint must NOT materialize that ""
+    # over notes.content (a silent wipe of the canvas JSON) nor bump seq. It DOES
+    # persist the structural Yjs snapshot: notes.content is vestigial for canvas,
+    # a new device rebuilds the board from the persisted Yjs deltas.
+    canvas_json = ~s({"nodes":[{"id":"n1","type":"text","text":"hi"}],"edges":[]})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "board.canvas", "content" => canvas_json})
+
+    # Drop the REST-era crdt_state so the checkpoint folds only the live canvas doc.
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+    # A canvas-shaped live doc: structural data in a Y.Map, content Y.Text empty.
+    doc = CrdtBridge.new_doc()
+    Yex.Map.set(Yex.Doc.get_map(doc, "nodes"), "n1", "hi")
+
+    seq0 = Vaults.current_seq(user.id, vault.id)
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    # content preserved verbatim — NOT projected to "" from the empty content Y.Text.
+    {:ok, fresh} = Notes.get_note(user, vault, "board.canvas")
+    assert fresh.content == canvas_json
+    # seq must NOT advance — structural doc, no phantom content edit.
+    assert Vaults.current_seq(user.id, vault.id) == seq0
+
+    # The structural Yjs state IS persisted (nodes map survived the checkpoint).
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, state} = Crypto.decrypt_crdt_state(raw, user)
+    {:ok, rebuilt} = CrdtBridge.doc_from_state(state)
+    assert Yex.Map.to_map(Yex.Doc.get_map(rebuilt, "nodes")) == %{"n1" => "hi"}
+  end
+
   test "checkpoint does NOT announce when text is unchanged (compaction — no re-pull spam)",
        ctx do
     %{user: user, vault: vault, note: note} = ctx
