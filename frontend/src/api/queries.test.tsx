@@ -63,11 +63,14 @@ const { get, post, del } = vi.hoisted(() => ({
 // Note create/delete now ride the CRDT channel, not REST. Mock the channel ops
 // (crdtCreateNote echoes its minted doc_id back on success — the ok reply's
 // doc_id equals the id we sent).
-const { crdtCreateNote, crdtDeleteNote } = vi.hoisted(() => ({
+const { crdtCreateNote, crdtDeleteNote, crdtCreateNoteWithContent } = vi.hoisted(() => ({
 	crdtCreateNote: vi.fn((docId: string, _path: string) => Promise.resolve(docId)),
 	crdtDeleteNote: vi.fn((docId: string) => Promise.resolve({ doc_id: docId })),
+	crdtCreateNoteWithContent: vi.fn((docId: string, _path: string, _md: string) =>
+		Promise.resolve(docId),
+	),
 }));
-vi.mock("./channel", () => ({ crdtCreateNote, crdtDeleteNote }));
+vi.mock("./channel", () => ({ crdtCreateNote, crdtDeleteNote, crdtCreateNoteWithContent }));
 vi.mock("./client", async () => {
 	const actual = await vi.importActual<typeof import("./client")>("./client");
 	return {
@@ -87,6 +90,9 @@ beforeEach(() => {
 	crdtDeleteNote
 		.mockReset()
 		.mockImplementation((docId: string) => Promise.resolve({ doc_id: docId }));
+	crdtCreateNoteWithContent
+		.mockReset()
+		.mockImplementation((docId: string) => Promise.resolve(docId));
 	qc = new QueryClient();
 });
 
@@ -296,19 +302,8 @@ describe("useDeleteNote", () => {
 });
 
 describe("useDuplicateNote", () => {
-	it("GETs source content then POSTs new note at new_path and invalidates listings", async () => {
-		get.mockResolvedValue({
-			path: "a.md",
-			title: "a",
-			folder: "",
-			tags: [],
-			version: 1,
-			mtime: "",
-			created_at: "",
-			updated_at: "",
-			content: "hello world",
-		});
-		post.mockResolvedValue({ note: { path: "a (copy).md", content: "hello world" } });
+	it("GETs source content then genesis-creates the copy at new_path (no POST /notes)", async () => {
+		get.mockResolvedValue({ path: "a.md", content: "hello world" });
 		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 
 		const { result } = renderHook(() => useDuplicateNote(), { wrapper });
@@ -317,22 +312,27 @@ describe("useDuplicateNote", () => {
 		});
 
 		expect(get).toHaveBeenCalledWith("/notes/a.md");
-		expect(post).toHaveBeenCalledWith(
-			"/notes",
-			expect.objectContaining({ path: "a (copy).md", content: "hello world" }),
+		// Copy content genesis-created over the crdt channel at the new path.
+		expect(crdtCreateNoteWithContent).toHaveBeenCalledWith(
+			expect.any(String),
+			"a (copy).md",
+			"hello world",
 		);
+		expect(post).not.toHaveBeenCalledWith("/notes", expect.anything());
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
 	});
 
-	it("surfaces 409 from POST as ApiError so callers can toast", async () => {
+	it("surfaces create_failed (target occupied) so callers can toast", async () => {
 		get.mockResolvedValue({ content: "x" });
-		post.mockRejectedValue(new ApiError(409, "conflict"));
+		crdtCreateNoteWithContent.mockRejectedValue(
+			new CrdtOpError("create_failed", "crdt_create_batch"),
+		);
 
 		const { result } = renderHook(() => useDuplicateNote(), { wrapper });
 		await expect(
 			result.current.mutateAsync({ src_path: "a.md", new_path: "a (copy).md" }),
-		).rejects.toMatchObject({ status: 409 });
+		).rejects.toMatchObject({ reason: "create_failed" });
 	});
 
 	it("mirrors the optimistic placeholder into the tree by-id list", async () => {
@@ -343,10 +343,10 @@ describe("useDuplicateNote", () => {
 		qc.setQueryData(["folderNotes", "42", "dst"], { notes: [] });
 
 		get.mockResolvedValue({ content: "x" });
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
+		let resolveCreate: () => void = () => {};
+		crdtCreateNoteWithContent.mockReturnValue(
 			new Promise((r) => {
-				resolvePost = r;
+				resolveCreate = () => r("real-dup");
 			}),
 		);
 
@@ -364,24 +364,12 @@ describe("useDuplicateNote", () => {
 			expect(byId?.some((n) => n.path === "dst/a copy.md")).toBe(true);
 		});
 
-		resolvePost({
-			note: {
-				id: "real",
-				path: "dst/a copy.md",
-				title: "a copy",
-				folder: "dst",
-				tags: [],
-				version: 1,
-				mtime: "",
-				created_at: "",
-				updated_at: "",
-			},
-		});
+		resolveCreate();
 
-		// After success the placeholder id is swapped for the server id.
+		// After success the placeholder id is swapped for the minted doc_id.
 		await waitFor(() => {
 			const byId = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "f9"]);
-			expect(byId?.some((n) => n.id === "real")).toBe(true);
+			expect(byId?.some((n) => n.id === "real-dup")).toBe(true);
 		});
 	});
 });

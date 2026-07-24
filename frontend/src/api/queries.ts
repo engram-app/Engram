@@ -17,7 +17,7 @@ import {
 	syntheticFolderPath,
 } from "../viewer/tree/synthesize-folders";
 import { useActiveVaultId } from "./active-vault";
-import { crdtCreateNote, crdtDeleteNote } from "./channel";
+import { crdtCreateNote, crdtCreateNoteWithContent, crdtDeleteNote } from "./channel";
 import { ApiError, api } from "./client";
 import { CrdtOpError } from "./crdt-ops";
 
@@ -1813,18 +1813,18 @@ export function useDuplicateNote() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<
-		{ note: Note },
-		ApiError,
+		{ id: string; path: string },
+		ApiError | CrdtOpError,
 		{ src_path: string; new_path: string },
 		DuplicateNoteContext
 	>({
+		// Read the source over REST (reads stay REST), then genesis-create the copy
+		// WITH content over the crdt channel (crdt_create_batch) — replaces the
+		// second leg's POST /notes. The ok reply echoes our minted id.
 		mutationFn: async ({ src_path, new_path }) => {
 			const src = await api.get<Note>(`/notes/${encodePathSegments(src_path)}`);
-			return api.post<{ note: Note }>("/notes", {
-				path: new_path,
-				content: src.content ?? "",
-				mtime: Date.now() / 1000,
-			});
+			const id = await crdtCreateNoteWithContent(uuid7(), new_path, src.content ?? "");
+			return { id, path: new_path };
 		},
 		onMutate: async ({ src_path, new_path }) => {
 			const newFolder = folderOf(new_path);
@@ -1876,33 +1876,23 @@ export function useDuplicateNote() {
 			return ctx;
 		},
 		onSuccess: (data, _vars, ctx) => {
-			if (!ctx?.key) {
+			if (!(ctx?.key && data.id)) {
 				return;
 			}
-			const real = data.note;
-			if (!real?.id) {
-				return;
-			}
-			// Swap the placeholder for the real server row so a tree consumer keying
-			// on `n.id` transitions smoothly. onSettled also invalidates; the swap
-			// avoids a momentary "missing note" flash.
-			patchRowInList(qc, ctx.key, ctx.placeholderId, {
-				id: real.id,
-				path: real.path,
-				title: real.title,
-				folder: real.folder,
-				tags: real.tags,
-				version: real.version,
-				mtime: real.mtime,
-				created_at: real.created_at,
-				updated_at: real.updated_at,
-			});
+			// The placeholder already carries the copied fields (title/tags/folder);
+			// only the id is provisional. Swap placeholder id → the minted id so a
+			// tree consumer keying on `n.id` transitions smoothly (onSettled also
+			// invalidates; the swap avoids a momentary "missing note" flash).
+			patchRowInList(qc, ctx.key, ctx.placeholderId, { id: data.id, path: data.path });
 		},
 		onError: (err, _vars, ctx) => {
 			if (ctx?.key && ctx.snapshot !== undefined) {
 				qc.setQueryData(ctx.key, ctx.snapshot);
 			}
-			if (err.status === 409) {
+			const conflict =
+				(err instanceof ApiError && err.status === 409) ||
+				(err instanceof CrdtOpError && err.reason === "create_failed");
+			if (conflict) {
 				toast.error("A note with that name already exists.");
 			} else {
 				toast.error("Failed to duplicate.");
