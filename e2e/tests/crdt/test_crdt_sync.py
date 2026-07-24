@@ -167,18 +167,26 @@ async def _confirm_room_free(cdp, path):
     crdt_msg room stream). Returns the note_id.
 
     trigger_full_sync() drives the idle pull-discovery path, which maps +
-    confirms the note but does NOT STEP1-enroll a not-live-bound note
-    (sync.ts:3790/3820 guards) — so the note stays room-free.
+    confirms the note but does NOT STEP1-enroll a not-live-bound note via the
+    discovery path (sync.ts isLiveBound guard). A checkpoint-driven catch-up
+    CAN, however, open a TRANSIENT heal room via the diverged-cold-note
+    re-handshake (sync.ts:5578, deliberately un-gated); the plugin releases it
+    asynchronously once convergence commits (releaseHealRoom). So wait for that
+    release rather than sampling the enrolled set the instant the sync returns —
+    a single immediate snapshot races the async release (the source of this
+    test's flakiness). A genuinely stuck room still fails via timeout.
     """
     await cdp.wait_for_stream_connected()
     await cdp.trigger_full_sync()
     note_id = await cdp.get_note_id_for_path(path)
     assert note_id, f"device never mapped a note_id for {path} — cannot prove fan-out"
-    enrolled = await cdp.get_enrolled_note_ids()
-    assert note_id not in enrolled, (
-        f"precondition violated: device holds a CRDT room for idle note {path} "
-        f"(note_id={note_id}); convergence could ride crdt_msg, not the fan-out"
-    )
+    try:
+        await cdp.wait_for_room_free(note_id, timeout=CRDT_TIMEOUT)
+    except TimeoutError as e:
+        pytest.fail(
+            f"precondition violated: device holds a CRDT room for idle note {path} "
+            f"(note_id={note_id}); convergence could ride crdt_msg, not the fan-out — {e}"
+        )
     return note_id
 
 

@@ -1086,6 +1086,27 @@ class CdpClient:
             f"CRDT doc {note_id} still resident after {timeout}s on CDP port {self.port}"
         )
 
+    async def wait_for_room_free(self, note_id: str, timeout: float = 30) -> None:
+        """Poll until note_id is absent from CrdtEnrollment.enrolled.
+
+        A checkpoint-driven catch-up can open a TRANSIENT heal room for an idle
+        cold note (the diverged-cold-note re-handshake, sync.ts:5578, which is
+        NOT isLiveBound-gated by design). The plugin releases it asynchronously
+        once convergence commits (commitCrdtConvergence -> releaseHealRoom). A
+        single immediate get_enrolled_note_ids() sample right after
+        trigger_full_sync races that release; poll for it instead. A genuinely
+        stuck room still fails via timeout, so the invariant stays enforced.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if note_id not in await self.get_enrolled_note_ids():
+                return
+            await asyncio.sleep(0.2)
+        raise TimeoutError(
+            f"CRDT heal room for {note_id} not released after {timeout}s "
+            f"on CDP port {self.port}"
+        )
+
     async def rename_file(self, old_path: str, new_path: str) -> None:
         """Rename a file through Obsidian's vault API (triggers handleRename)."""
         escaped_old = json.dumps(old_path)
