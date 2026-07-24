@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.10.0](https://github.com/engram-app/Engram/compare/0.9.0...0.10.0) (2026-07-24)
+
+
+### Features
+
+* **crdt:** skip markdown seed/projection for structural (.canvas) docs ([#1107](https://github.com/engram-app/Engram/issues/1107)) ([743b51e](https://github.com/engram-app/Engram/commit/743b51e349b1f50823a174422aaa2e794d5d28c1))
+* **web:** duplicate note via CRDT genesis (crdt_create_batch) ([#1106](https://github.com/engram-app/Engram/issues/1106)) ([30d045c](https://github.com/engram-app/Engram/commit/30d045c3b8e1fe8b6e978423978fd9afbc5fa06e))
+* **web:** migrate note create + delete from REST to CRDT ops ([#1102](https://github.com/engram-app/Engram/issues/1102)) ([78c4cc3](https://github.com/engram-app/Engram/commit/78c4cc381d742b89a2e66e283c15ad22247fab91))
+* **web:** migrate note rename + move from REST to CRDT (rename-as-move) ([#1105](https://github.com/engram-app/Engram/issues/1105)) ([4c59503](https://github.com/engram-app/Engram/commit/4c5950320789674fbf9889ee8d130b1c34df7be4))
+
+
+### Bug Fixes
+
+* **web:** 3 correctness fixes from reviewing the CRDT-migration PRs ([#1100](https://github.com/engram-app/Engram/issues/1100)/[#1102](https://github.com/engram-app/Engram/issues/1102)/[#1106](https://github.com/engram-app/Engram/issues/1106)) ([#1108](https://github.com/engram-app/Engram/issues/1108)) ([1529557](https://github.com/engram-app/Engram/commit/1529557fce62502ffd22c5846d075357e6d65efc))
+* **web:** batch-delete folders/attachments reconcile on onSettled too ([#1109](https://github.com/engram-app/Engram/issues/1109)) ([8ee18a6](https://github.com/engram-app/Engram/commit/8ee18a62fe31807c40aa213e8e00ccedeeb58031))
+* **web:** drop dead /sync/changes cursor-sync, backfill via socket onOpen ([#1100](https://github.com/engram-app/Engram/issues/1100)) ([dd2bec0](https://github.com/engram-app/Engram/commit/dd2bec0d5af093fdb045973b739e0083c3c724b7))
+
 ## [0.9.0](https://github.com/engram-app/Engram/compare/0.8.0...0.9.0) (2026-07-23)
 
 
