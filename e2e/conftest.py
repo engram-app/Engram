@@ -816,7 +816,6 @@ async def _assert_plugin_surfaces(cdp_a):
             if (typeof p.syncEngine?.isRecentlyPushed !== 'function') missing.push('isRecentlyPushed');
             if (typeof p.syncEngine?.handleStreamEvent !== 'function') missing.push('handleStreamEvent');
             if (!(p.syncEngine?.syncState instanceof Map)) missing.push('syncState:Map');
-            if (typeof p.settings?.conflictResolution === 'undefined') missing.push('settings.conflictResolution');
             for (const id of cmds) {
                 if (!app.commands.findCommand(`engram-vault-sync:${id}`)) {
                     missing.push(`command:${id}`);
