@@ -3,12 +3,12 @@ import { useAuthAdapter } from "../auth/use-auth-adapter";
 import { installCrdtResyncTriggers } from "../crdt/session";
 import { useActiveVaultId } from "./active-vault";
 import {
+	backfillStructural,
 	connectChannel,
 	disconnectChannel,
 	installSocketHealthTriggers,
 	reconnectWithFreshToken,
 } from "./channel";
-import { installCursorSyncTriggers, runCursorSync } from "./cursor-sync";
 import { useMe } from "./queries";
 import { queryClient } from "./query-client";
 
@@ -38,19 +38,15 @@ export function useChannel() {
 			return;
 		}
 
-		const connectOpts = {
+		// connectChannel's onOpen backfills the structural caches on initial
+		// connect and every reconnect (see backfillStructural). No separate
+		// mount/focus poll: the socket-health triggers below cover wake events.
+		connectChannel({
 			userId,
 			vaultId,
 			getToken: () => getTokenRef.current(),
 			queryClient,
-			// Reconnect (and initial connect) → backfill missed changes via the
-			// durable cursor feed. Single-flight dedupes against the mount run below.
-			onSocketOpen: () => runCursorSync(vaultId, queryClient),
-		};
-		connectChannel(connectOpts);
-
-		// Run on mount + on every window focus; returns a listener cleanup.
-		const removeTriggers = installCursorSyncTriggers(vaultId, queryClient);
+		});
 
 		// CRDT catch-up on tab focus/visibility: a backgrounded tab can miss live
 		// crdt_msg pushes without the socket fully reconnecting, so re-handshake
@@ -64,12 +60,11 @@ export function useChannel() {
 		// backfills — the online-event path the focus-only trigger misses.
 		const removeHealthTriggers = installSocketHealthTriggers(
 			() => reconnectWithFreshToken(() => getTokenRef.current()),
-			() => runCursorSync(vaultId, queryClient),
+			() => backfillStructural(queryClient, vaultId),
 		);
 
 		return () => {
 			disconnectChannel();
-			removeTriggers();
 			removeCrdtResync();
 			removeHealthTriggers();
 		};

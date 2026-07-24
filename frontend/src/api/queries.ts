@@ -8,6 +8,7 @@ import {
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { collideBump } from "@/lib/collide-bump";
+import { uuid7 } from "../crdt/uuid7";
 import { DEMO_VAULT_ID_PREFIX } from "../onboarding/tour/demo-vault-ids";
 import { useDemoVaultOptional } from "../onboarding/tour/demo-vault-provider";
 import {
@@ -16,7 +17,9 @@ import {
 	syntheticFolderPath,
 } from "../viewer/tree/synthesize-folders";
 import { useActiveVaultId } from "./active-vault";
+import { crdtCreateNote, crdtDeleteNote } from "./channel";
 import { ApiError, api } from "./client";
+import { CrdtOpError } from "./crdt-ops";
 
 // Encode each path segment but preserve slashes so Phoenix's splat
 // routes match. encodeURIComponent on a full path produces %2F, which
@@ -125,11 +128,18 @@ function updateCachedList<T>(
 
 // 409/404/etc → human-grade toast copy. Centralised so all four
 // mutations (and the standalone drop handler) speak the same dialect.
-function renameErrorToast(err: ApiError, kind: "file" | "folder") {
+// Shared by note rename (CRDT → CrdtOpError) and folder/attachment rename
+// (REST → ApiError). A note's target-occupied conflict surfaces as
+// crdt_create's `create_failed`; the REST paths use HTTP 409/404.
+function renameErrorToast(err: unknown, kind: "file" | "folder") {
 	const noun = kind === "file" ? "note" : "folder";
-	if (err.status === 409) {
+	const conflict =
+		(err instanceof ApiError && err.status === 409) ||
+		(err instanceof CrdtOpError && err.reason === "create_failed");
+	const gone = err instanceof ApiError && err.status === 404;
+	if (conflict) {
 		toast.error(`A ${noun} with that name already exists.`);
-	} else if (err.status === 404) {
+	} else if (gone) {
 		toast.error(`${noun[0]?.toUpperCase()}${noun.slice(1)} no longer exists.`);
 	} else {
 		toast.error("Rename failed.");
@@ -513,15 +523,20 @@ export function useCreateNote() {
 			for (let attempt = 0; attempt < MAX_RACES; attempt++) {
 				const name = collideBump(existingNames, "Untitled.md", { cap: 1000 });
 				const path = folder ? `${folder}/${name}` : name;
+				const noteId = uuid7();
 				try {
-					const { note } = await api.post<{ note: Note }>("/notes", {
-						path,
-						content: "",
-						mtime: Date.now() / 1000,
-					});
-					return { path, id: note.id };
+					// crdt_create genesis over the live channel (replaces POST /notes);
+					// the ok reply echoes our minted note_id.
+					const id = await crdtCreateNote(noteId, path);
+					return { path, id };
 				} catch (err) {
-					if (err instanceof ApiError && err.status === 409) {
+					// The path is already owned (unique-constraint create_failed) or was
+					// just deleted (delete-wins window) — bump the name and retry, the
+					// CRDT twin of the old 409 loop. Cap/rate/disconnect propagate.
+					if (
+						err instanceof CrdtOpError &&
+						(err.reason === "create_failed" || err.reason === "recently_deleted")
+					) {
 						existingNames.add(name);
 						continue;
 					}
@@ -589,10 +604,10 @@ export function useCreateNote() {
 			if (ctx) {
 				qc.setQueryData(ctx.key, ctx.snapshot);
 			}
-			if (err instanceof ApiError && err.status === 402) {
+			if (err instanceof CrdtOpError && err.reason === "notes_cap_reached") {
 				toast.error("You've hit your note limit — upgrade to add more.");
-			} else if (err instanceof ApiError && err.status === 403) {
-				toast.error("You don't have permission to create notes here.");
+			} else if (err instanceof CrdtOpError && err.reason === "disconnected") {
+				toast.error("Reconnecting — can't create notes while offline.");
 			} else {
 				toast.error("Couldn't create the note. Try again.");
 			}
@@ -1359,16 +1374,19 @@ export function useRenameNote() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<
-		{ renamed: boolean; old_path: string; new_path: string; note: Note },
-		ApiError,
-		{ old_path: string; new_path: string },
+		{ renamed: boolean; old_path: string; new_path: string },
+		CrdtOpError,
+		{ id: string; old_path: string; new_path: string },
 		RenameNoteContext
 	>({
-		mutationFn: (vars) =>
-			api.post<{ renamed: boolean; old_path: string; new_path: string; note: Note }>(
-				"/notes/rename",
-				vars,
-			),
+		// Rename/move = crdt_create for a KNOWN live id at a new FREE path — the
+		// backend relocates the row in place (rename-as-move, notes.ex Phase E2),
+		// keeping the note_id + content. A path OCCUPIED by a different note comes
+		// back as create_failed. Replaces POST /notes/rename.
+		mutationFn: async ({ id, old_path, new_path }) => {
+			await crdtCreateNote(id, new_path);
+			return { renamed: true, old_path, new_path };
+		},
 		onMutate: async ({ old_path, new_path }) => {
 			const oldFolder = folderOf(old_path);
 			const newFolder = folderOf(new_path);
@@ -1645,7 +1663,12 @@ export function useDeleteNote() {
 		{ id: string; path: string },
 		DeleteNoteContext
 	>({
-		mutationFn: ({ id }) => api.del<{ deleted: boolean }>(`/notes/by-id/${id}`),
+		// Delete over the live crdt channel (replaces DELETE /notes/by-id). The ack
+		// is idempotent — resolving means durably deleted (even if already gone).
+		mutationFn: async ({ id }) => {
+			await crdtDeleteNote(id);
+			return { deleted: true };
+		},
 		onMutate: async ({ id, path }) => {
 			const folder = folderOf(path);
 			const listKey = ["folderNotes", vaultId, folder] as const;
@@ -1919,8 +1942,15 @@ export function useBatchDeleteNotes() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<{ deleted: number }, ApiError, { ids: string[] }, BatchNotesContext>({
-		mutationFn: ({ ids }) =>
-			api.post<{ deleted: number }>("/notes/batch-delete", { ids }, idempotencyHeaders()),
+		// No batch crdt op — one crdt_delete per id, concurrently (replaces
+		// POST /notes/batch-delete). ponytail: N round trips + non-atomic — a
+		// mid-batch reject fails the whole Promise.all → onError rollback; the
+		// onSuccess invalidation reconciles server truth. Fine for typical
+		// multi-selects; add a server batch op if very large selections appear.
+		mutationFn: async ({ ids }) => {
+			await Promise.all(ids.map((id) => crdtDeleteNote(id)));
+			return { deleted: ids.length };
+		},
 		onMutate: async ({ ids }) => {
 			await qc.cancelQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			const idSet = new Set(ids);
@@ -1978,16 +2008,30 @@ export function useBatchMoveNotes() {
 	const vaultId = useActiveVaultId();
 	return useMutation<
 		{ moved: number },
-		ApiError,
-		{ ids: string[]; target_folder: string },
+		CrdtOpError,
+		{ ids: string[]; target_folder: string; paths?: Record<string, string> },
 		BatchNotesContext
 	>({
-		mutationFn: ({ ids, target_folder }) =>
-			api.post<{ moved: number }>(
-				"/notes/batch-move",
-				{ ids, target_folder },
-				idempotencyHeaders(),
-			),
+		// Move = one crdt_create per id at `target_folder/<current basename>` (the
+		// rename-as-move relocate). `paths` (id → current path) MUST be resolved by
+		// the caller BEFORE the optimistic onMutate re-paths the cache — resolving
+		// from the cache here would read the already-moved path. No batch op —
+		// concurrent, non-atomic; a reject rolls back the whole optimistic move.
+		// Replaces POST /notes/batch-move.
+		mutationFn: async ({ ids, target_folder, paths = {} }) => {
+			await Promise.all(
+				ids.map((id) => {
+					const cur = paths[id];
+					if (cur === undefined) {
+						return Promise.resolve();
+					}
+					const leaf = cur.split("/").pop() ?? cur;
+					const newPath = target_folder ? `${target_folder}/${leaf}` : leaf;
+					return crdtCreateNote(id, newPath);
+				}),
+			);
+			return { moved: ids.length };
+		},
 		onMutate: async ({ ids, target_folder }) => {
 			await qc.cancelQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			await qc.cancelQueries({ queryKey: ["folders", vaultId] });

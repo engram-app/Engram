@@ -721,16 +721,23 @@ defmodule Engram.Notes do
           :ok = CrdtDeliver.announce_ready(user.id, vault.id, note.path, note.id)
           {:ok, note}
 
-        {:ok, {:ok, note, :announce_moved}} ->
-          # A resurrect that RE-PATHED the note (rename restore) must fan the
-          # new-path upsert to peers, exactly like the REST move_note :moved leg
-          # (upsert_note). announce_ready alone carries only the id — peers would
-          # see the old-path delete but never the new-path upsert, so the note
-          # vanishes on them until their next pull. broadcast_change's "upsert"
-          # clause also deliver_outs the CRDT state (which announces the doc), so
-          # no separate announce_ready is needed. Fired post-commit, same as the
-          # :announce leg above.
+        {:ok, {:ok, note, {:announce_moved, old_path}}} ->
+          # A rename-as-move (live relocate or resurrect-rename) must fan BOTH the
+          # new-path upsert AND the old-path delete to peers — exactly like the
+          # REST rename delete leg (do_rewrite_note). broadcast_change's "upsert"
+          # also deliver_outs the CRDT state (announces the doc), so no separate
+          # announce_ready is needed. Upsert BEFORE delete: a receiver relocates
+          # the note's id to the new path first, so it treats the delete as a
+          # relocation leg (id now lives elsewhere) instead of tearing the note's
+          # CRDT room down by id. Without the old-path delete a web receiver (no
+          # local mirror) keeps the note in its old folder forever. Fired
+          # post-commit, same as the :announce leg above.
           :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, [])
+
+          if old_path != note.path do
+            :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
+          end
+
           {:ok, note}
 
         {:ok, inner} ->
@@ -859,7 +866,10 @@ defmodule Engram.Notes do
                     )
                   )
 
-                  {:ok, moved, :announce_moved}
+                  # Carry the OLD path so the post-commit handler can fan an
+                  # old-path delete to peers (a web receiver has no local mirror
+                  # to drop the note from its old folder otherwise).
+                  {:ok, moved, {:announce_moved, decrypted.path}}
 
                 {:error, reason} ->
                   log_resurrect_decrypt_failure(reason, user, updated)
@@ -923,7 +933,9 @@ defmodule Engram.Notes do
         {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
           case Crypto.maybe_decrypt_note_fields(updated, user) do
             {:ok, decrypted} ->
-              tag = if renamed?, do: :announce_moved, else: :announce
+              # A rename-restore carries the OLD (tombstone) path so peers clear
+              # it; a same-path resurrect just announces.
+              tag = if renamed?, do: {:announce_moved, prior.path}, else: :announce
               {:ok, decrypted, tag}
 
             {:error, reason} ->

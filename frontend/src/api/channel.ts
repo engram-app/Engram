@@ -3,6 +3,7 @@ import { type Channel, Socket } from "phoenix";
 import {
 	enrollIfLive as crdtEnrollIfLive,
 	handleFrame as crdtHandleFrame,
+	getCrdtSyncStatus,
 	notifyCrdtChannelError,
 	notifyCrdtChannelJoined,
 	resyncOpenDocs,
@@ -13,6 +14,13 @@ import {
 import { rlog } from "../observability/remote-log";
 import { beacon, newTraceContext, parseTraceparent, tracingEnabled } from "../observability/trace";
 import { getWsBase, joinWsUrl } from "./base";
+import {
+	type CrdtCreateBatchResult,
+	type PushChannel,
+	sendCrdtCreate,
+	sendCrdtCreateBatch,
+	sendCrdtDelete,
+} from "./crdt-ops";
 import { ROOT_FOLDER_ID } from "./queries";
 
 // phoenix.js's own default reconnect steps — kept for the 2nd+ attempt. Only
@@ -63,6 +71,14 @@ let latestToken: string | null = null;
 let latestGetToken: (() => Promise<string | null>) | null = null;
 let tokenRefreshInFlight = false;
 
+// The crdt room is reliably usable only once its join succeeded (sync status
+// "synced"). A non-null-but-connecting/errored channel would accept a push that
+// silently times out ~10s later; gating on status fails fast instead — the
+// chosen offline policy (disable + surface reconnecting, no durable queue).
+function joinedCrdtChannel(): PushChannel | null {
+	return getCrdtSyncStatus() === "synced" ? (crdtChannel as unknown as PushChannel | null) : null;
+}
+
 async function refreshTokenForRetry(): Promise<void> {
 	if (!latestGetToken || tokenRefreshInFlight) {
 		return;
@@ -89,7 +105,6 @@ interface ConnectOptions {
 	vaultId: string;
 	getToken: () => Promise<string | null>;
 	queryClient: QueryClient;
-	onSocketOpen?: () => void;
 }
 
 type NoteChangedListener = (payload: NoteChangedPayload) => void;
@@ -199,6 +214,20 @@ export function pushFailureBeacon(docId: string, startUs: number, reason: string
 
 export const RECONNECT_JITTER_DEFAULT_MS = 5000;
 export const RECONNECT_JITTER_MAX_MS = 60_000;
+
+/**
+ * Reconcile the structural views a backgrounded/offline tab could have missed.
+ * The socket drops events while disconnected (no replay) and the web keeps no
+ * local mirror, so "backfill" = invalidate the folder/note-list/attachment
+ * caches and let react-query refetch current state. Called on every socket
+ * (re)connect and on wake (focus/visible/online). Replaces the deleted
+ * /sync/changes cursor feed (backend #1036).
+ */
+export function backfillStructural(queryClient: QueryClient, vaultId: string): void {
+	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
+	queryClient.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
+	queryClient.invalidateQueries({ queryKey: ["attachments", vaultId] });
+}
 
 export function clampReconnectJitter(raw: unknown): number | null {
 	if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
@@ -386,13 +415,7 @@ export function handleFoldersBatch(
 	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 }
 
-export async function connectChannel({
-	userId,
-	vaultId,
-	getToken,
-	queryClient,
-	onSocketOpen,
-}: ConnectOptions) {
+export async function connectChannel({ userId, vaultId, getToken, queryClient }: ConnectOptions) {
 	disconnectChannel();
 	const gen = connectGeneration;
 
@@ -422,18 +445,13 @@ export async function connectChannel({
 
 	socket.connect();
 
-	// Fires on initial connect AND every reconnect — the durable-feed catch-up
-	// trigger. The socket can drop events while disconnected (no replay), so a
-	// reconnect kicks a cursor pull to backfill the gap.
-	// Also re-arms CRDT handshakes on reconnect so the session re-syncs state.
-	// Folder markers no longer ride that feed (backend #976 excludes kind=="folder"),
-	// so an empty-folder delete missed while offline carries no note rows to pull.
-	// Reconcile the folder snapshot directly on (re)connect — snapshot-diff, like
-	// the plugin — so a reconnecting tab drops folders deleted in the gap.
+	// Fires on initial connect AND every reconnect. The socket drops events while
+	// disconnected (no replay), so a reconnect re-arms CRDT handshakes (open docs
+	// re-sync) and reconciles the structural views a gap could have staled —
+	// snapshot-diff, like the plugin.
 	socket.onOpen(() => {
 		resyncOpenDocs();
-		queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
-		onSocketOpen?.();
+		backfillStructural(queryClient, vaultId);
 	});
 
 	const topic = `sync:${userId}:${vaultId}`;
@@ -516,6 +534,26 @@ export async function connectChannel({
 		});
 }
 
+/**
+ * CRDT note create/delete over the live `crdt:` channel — the socket-native
+ * replacement for REST `POST /notes` / `/notes/batch-delete` / `DELETE
+ * /notes/by-id` (web REST-purge, issue #1101). Reject fast when the room is not
+ * joined; `crdtCreateNote` returns the server's authoritative doc_id (ADOPT-safe).
+ */
+export function crdtCreateNote(docId: string, path: string): Promise<string> {
+	return sendCrdtCreate(joinedCrdtChannel(), docId, path);
+}
+
+export function crdtDeleteNote(docId: string): Promise<{ doc_id: string }> {
+	return sendCrdtDelete(joinedCrdtChannel(), docId);
+}
+
+export function crdtCreateNotesBatch(
+	creates: { doc_id: string; path: string; b64: string }[],
+): Promise<CrdtCreateBatchResult> {
+	return sendCrdtCreateBatch(joinedCrdtChannel(), creates);
+}
+
 /** True when the live-sync socket exists and Phoenix reports it OPEN. Note: a
  *  truly half-open socket (TCP dead, Phoenix hasn't seen the close) still reads
  *  OPEN here — the wake trigger's online/long-hidden signals cover that case,
@@ -569,7 +607,7 @@ export async function reconnectWithFreshToken(
  * Install the socket-health triggers: on tab focus / visibilitychange→visible /
  * online, either reconnect (fresh-token, session-preserving) or just backfill.
  *
- * The existing focus-only cursor-sync and CRDT-resync triggers assume the socket
+ * The CRDT-resync triggers assume the socket
  * is alive; after a long idle or laptop sleep it can be half-open with no
  * `onclose`, so nothing re-establishes it and live updates stop until a reload.
  * `reconnect` fires when the socket is dead, or when the wake signal implies it's
