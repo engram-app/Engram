@@ -125,6 +125,25 @@ describe("calloutDecoration", () => {
 		expect(view.dom.textContent).toContain("[!bogus]");
 	});
 
+	test("does not treat an inherited Object property as a callout type", () => {
+		// `types["__proto__"]` answers with Object.prototype on a plain object,
+		// yielding a style whose keyword/color/svg are all undefined — the empty
+		// title path then threw inside buildCallouts. CM6 catches a ViewPlugin
+		// exception and disables the plugin, so the tell is the *sibling* callout
+		// silently losing its decorations, not a visible error.
+		const doc = "> [!__proto__]\n\n> [!note]\n> body\n\ntail\n";
+		view = new EditorView({
+			state: EditorState.create({
+				doc,
+				selection: { anchor: 35 },
+				extensions: [calloutDecoration],
+			}),
+			parent: document.body,
+		});
+		expect(view.dom.querySelector(".cm-callout-title")?.textContent).toBe("Note");
+		expect(view.dom.textContent).toContain("[!__proto__]");
+	});
+
 	test("does not merge two adjacent callouts with no blank line between them", () => {
 		const doc = "before\n\n> [!note] A\n> body\n> [!warning] B\n> body2\n\nafter\n";
 		view = new EditorView({

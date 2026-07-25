@@ -29,8 +29,15 @@ interface CalloutStyle {
  * (`important: "tip"`), which is one hop to follow.
  */
 function resolveStyle(type: string): CalloutStyle | null {
-	const entry = defaultConfig.types[type];
-	const base = typeof entry === "string" ? defaultConfig.types[entry] : entry;
+	const { types } = defaultConfig;
+	// `type` is note content, so the lookup must be own-property-only: a plain
+	// object answers `types["__proto__"]` with Object.prototype, which passes a
+	// bare `typeof === "object"` check and yields an all-undefined style.
+	if (!Object.hasOwn(types, type)) {
+		return null;
+	}
+	const entry = types[type];
+	const base = typeof entry === "string" ? types[entry] : entry;
 	return base && typeof base === "object" ? (base as CalloutStyle) : null;
 }
 
