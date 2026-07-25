@@ -83,12 +83,28 @@ describe("crdtCreateNote / crdtDeleteNote — offline gate", () => {
 		expect(h.crdtPush).toHaveBeenCalledWith("crdt_create", { doc_id: "n1", path: "folder/a.md" });
 	});
 
-	it("rejects create/delete without pushing when the channel is not joined", async () => {
+	it("HOLDS a delete while not joined, then delivers it on join (durable, not dropped)", async () => {
+		// Durable op queue (#1030): a terminal op issued before the topic is joined
+		// is buffered and flushed on join — NOT rejected/dropped like the old
+		// reject-fast gate.
 		await connectChannel(opts);
 		h.joins.error?.({}); // crdt channel join failed → sync status "error"
+		h.crdtPush.mockReturnValue({
+			receive(status: string, cb: (r?: unknown) => void) {
+				if (status === "ok") {
+					cb({ doc_id: "n1" });
+				}
+				return this;
+			},
+		});
 
-		await expect(crdtDeleteNote("n1")).rejects.toThrow(/not joined|disconnect/i);
-		expect(h.crdtPush).not.toHaveBeenCalled();
+		const p = crdtDeleteNote("n1");
+		await Promise.resolve();
+		expect(h.crdtPush).not.toHaveBeenCalled(); // held — not joined
+
+		h.joins.ok?.(); // topic joins → queue flushes held ops
+		await expect(p).resolves.toEqual({ doc_id: "n1" });
+		expect(h.crdtPush).toHaveBeenCalledWith("crdt_delete", { doc_id: "n1" });
 	});
 });
 
