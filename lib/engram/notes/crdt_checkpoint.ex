@@ -67,6 +67,19 @@ defmodule Engram.Notes.CrdtCheckpoint do
       user ->
         do_checkpoint(user, user_id, vault_id, note_id, doc, opts)
     end
+  rescue
+    # The user-resolve above is the ONE DB call outside do_checkpoint's rescue.
+    # Under pool starvation Accounts.get_user raises DBConnection.ConnectionError
+    # straight out of terminate/2 (the 2026-07-09 incident frame). Swallow ANY
+    # raise here so unbind/checkpoint always degrades to :ok — the tail-WAL is
+    # untouched (nothing pruned), so the flush replays on the next room bind.
+    err ->
+      Logger.error(
+        "crdt checkpoint raised resolving user note_id=#{note_id} error=#{Exception.format(:error, err, __STACKTRACE__)}",
+        Metadata.with_category(:error, :sync, note_id: note_id)
+      )
+
+      :ok
   end
 
   defp do_checkpoint(user, user_id, vault_id, note_id, doc, opts) do
