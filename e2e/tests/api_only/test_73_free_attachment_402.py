@@ -104,7 +104,7 @@ def test_free_attachment_blocked_note_passes():
     # ── Markdown note: must succeed ──────────────────────────────────────
     note_path = "note.md"
     api_v.create_note(note_path, "# Free note\n\nNo attachments allowed.")
-    server_note = api_v.wait_for_note(note_path, timeout=10)
+    server_note = api_v.wait_for_note(note_path)
     assert server_note["path"] == note_path, (
         f"server note path mismatch: {server_note}"
     )

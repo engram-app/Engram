@@ -127,11 +127,11 @@ def vault_setup():
         # Seed notes in both vaults
         api_a = unrestricted_api.with_vault(vault_a_id)
         api_a.create_note("E2E/VaultA-Secret.md", "# Vault A Secret\nOnly for vault A")
-        api_a.wait_for_note("E2E/VaultA-Secret.md", timeout=10)
+        api_a.wait_for_note("E2E/VaultA-Secret.md")
 
         api_b = unrestricted_api.with_vault(vault_b_id)
         api_b.create_note("E2E/VaultB-Secret.md", "# Vault B Secret\nOnly for vault B")
-        api_b.wait_for_note("E2E/VaultB-Secret.md", timeout=10)
+        api_b.wait_for_note("E2E/VaultB-Secret.md")
 
         yield {
             "user_id": user_id,
@@ -328,7 +328,7 @@ def test_write_to_vault_a_does_not_appear_in_vault_b(vault_setup):
 
     path = "E2E/VaultA-WriteTest.md"
     api_a.create_note(path, "# Write Test\nWritten to vault A only")
-    api_a.wait_for_note(path, timeout=10)
+    api_a.wait_for_note(path)
 
     note_b = api_b.get_note(path)
     assert note_b is None, "ISOLATION BREACH: Write to vault A appeared in vault B!"

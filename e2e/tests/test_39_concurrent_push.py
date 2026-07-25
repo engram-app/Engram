@@ -35,8 +35,8 @@ async def test_concurrent_push_different_notes(vault_a, vault_b, cdp_a, cdp_b, a
     # genesis row, content ""), so poll for content convergence instead. This
     # asserts the same invariant — the server holds each note's content — with a
     # bound that spans the checkpoint window.
-    note_a = api_sync.wait_for_note_content(path_a, "From A", timeout=15)
-    note_b = api_sync.wait_for_note_content(path_b, "From B", timeout=15)
+    note_a = api_sync.wait_for_note_content(path_a, "From A")
+    note_b = api_sync.wait_for_note_content(path_b, "From B")
     assert "From A" in note_a["content"], "Server should have A's note"
     assert "From B" in note_b["content"], "Server should have B's note"
 
@@ -46,5 +46,5 @@ async def test_concurrent_push_different_notes(vault_a, vault_b, cdp_a, cdp_b, a
         cdp_b.trigger_full_sync(),
     )
 
-    wait_for_file(vault_a, path_b, timeout=15)
-    wait_for_file(vault_b, path_a, timeout=15)
+    wait_for_file(vault_a, path_b)
+    wait_for_file(vault_b, path_a)

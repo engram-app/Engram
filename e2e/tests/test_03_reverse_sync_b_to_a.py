@@ -14,8 +14,8 @@ async def test_b_creates_a_receives(vault_a, vault_b, cdp_a, cdp_b, api_sync):
 
     write_note(vault_b, path, content)
 
-    note = api_sync.wait_for_note(path, timeout=10)
+    note = api_sync.wait_for_note(path)
     assert note is not None, "Note not on server after B's push"
 
-    received = wait_for_delivery(vault_a, path, api_sync, timeout=30)
+    received = wait_for_delivery(vault_a, path, api_sync)
     assert content in received

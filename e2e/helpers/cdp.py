@@ -11,6 +11,8 @@ from typing import Any
 import requests
 import websockets
 
+from helpers.latency import DELIVERY_TIMEOUT
+
 logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "engram-vault-sync"
@@ -815,7 +817,7 @@ class CdpClient:
             # string; the real timeout is still raised by the caller.
             return f"<stream diag unavailable: {e!r}>"
 
-    async def wait_for_stream_connected(self, timeout: float = 10) -> None:
+    async def wait_for_stream_connected(self, timeout: float = DELIVERY_TIMEOUT) -> None:
         """Poll until the WebSocket channel reports connected.
 
         Use at the top of tests that rely on live propagation — the channel
