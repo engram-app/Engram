@@ -94,6 +94,55 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert tail_count_after == 0
   end
 
+  # ── #983 task 2: user-resolve raise must NOT escape terminate/2 ────────────
+  # `checkpoint/5` runs on the room's `terminate/2` (unbind path). Its ONE DB
+  # call outside `do_checkpoint`'s rescue is `Accounts.get_user/1`. Under pool
+  # starvation that raises `DBConnection.ConnectionError` straight out of
+  # terminate/2 (the 2026-07-09 incident stack frame). It must degrade to `:ok`
+  # like `do_checkpoint` already does. A raising `get_user` is forced here with
+  # an un-castable id (any raise from the resolve step must be swallowed, not
+  # just ConnectionError) — the fix is a blanket function-level rescue.
+  test "checkpoint returns :ok (does not raise) when get_user raises", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before AFTER")
+
+    # Seed a tail row so we can prove the degraded no-op does NOT prune it.
+    {:ok, {ct, n}} = Crypto.encrypt_crdt_state("fake_update", user, note.id)
+
+    Repo.with_tenant(user.id, fn ->
+      Repo.insert_all(CrdtUpdateLog, [
+        %{
+          id: Ecto.UUID.generate(),
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: n,
+          inserted_at: DateTime.utc_now()
+        }
+      ])
+    end)
+
+    # "not-a-uuid" makes Accounts.get_user/1 raise Ecto.Query.CastError, standing
+    # in for the prod DBConnection.ConnectionError — both must be swallowed.
+    assert :ok = CrdtCheckpoint.checkpoint("not-a-uuid", vault.id, note.id, doc)
+
+    # Degraded to a no-op: content untouched and the tail row survives (data safe).
+    {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+    assert fresh.content == "before"
+
+    {:ok, tail_after} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.aggregate(from(l in CrdtUpdateLog, where: l.note_id == ^note.id), :count)
+      end)
+
+    assert tail_after == 1
+  end
+
   # ── deliver-out gap: a web-editor edit (CRDT checkpoint) must reach clients ─
   # that are not actively enrolled in the note's room (e.g. Obsidian). REST/MCP
   # writes announce via CrdtDeliver; the checkpoint is the ONLY path that

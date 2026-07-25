@@ -1,5 +1,13 @@
 defmodule Engram.BillingTest do
-  use Engram.DataCase, async: true
+  # async: false — the "plan limit caching" tests exercise PlanCache, which lives
+  # in node-global :persistent_term, and one test calls the node-wide
+  # PlanCache.invalidate_all/0. A cache that is global and globally-invalidated is
+  # not isolatable per-test, so concurrent modules can wipe a warmed entry between
+  # a test's warm-read and its cached-read assertion (flaky `left: 99, right: 7`
+  # at "invalidate/1 reflects a runtime limit change"). This module is green in
+  # isolation; running it non-async keeps it that way. ponytail: async:false is
+  # the minimal fix; per-test PlanCache isolation would let it go async again.
+  use Engram.DataCase, async: false
 
   import Mox
 
