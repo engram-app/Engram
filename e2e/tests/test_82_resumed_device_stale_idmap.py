@@ -82,14 +82,14 @@ async def test_resumed_device_with_stale_idmap_syncs_both_ways(
     # connect regressions on the one e2e that exercises a resumed-device
     # boot (review finding on PR #979).
     for cdp in (cdp_a, cdp_b):
-        await cdp.wait_for_stream_connected(timeout=30)
+        await cdp.wait_for_stream_connected()
 
     # Phase 1: normal sync so B earns a cursor + populated map, and learns the
     # ids of two pre-existing notes (one per direction we'll test post-resume).
     write_note(inst_a.vault_path, "E2E/Resumed-pull-seed.md", "# PullSeed\noriginal")
     write_note(inst_a.vault_path, "E2E/Resumed-push-seed.md", "# PushSeed\noriginal")
-    wait_for_content(inst_b.vault_path, "E2E/Resumed-pull-seed.md", "original", timeout=30)
-    wait_for_content(inst_b.vault_path, "E2E/Resumed-push-seed.md", "original", timeout=30)
+    wait_for_content(inst_b.vault_path, "E2E/Resumed-pull-seed.md", "original")
+    wait_for_content(inst_b.vault_path, "E2E/Resumed-push-seed.md", "original")
 
     # Phase 2: flush B's state, stop it, wipe the id map but KEEP the catch-up
     # watermark. _wait_for_persisted_catchup_seq drives an explicit catch-up so
@@ -112,7 +112,7 @@ async def test_resumed_device_with_stale_idmap_syncs_both_ways(
     # non-empty guard would return the stale content on the first poll.
     write_note(inst_a.vault_path, "E2E/Resumed-pull-seed.md", "# PullSeed\nedited after B resumed")
     got = wait_for_content(
-        inst_b.vault_path, "E2E/Resumed-pull-seed.md", "edited after B resumed", timeout=30
+        inst_b.vault_path, "E2E/Resumed-pull-seed.md", "edited after B resumed"
     )
     assert "edited after B resumed" in got
 
@@ -121,6 +121,6 @@ async def test_resumed_device_with_stale_idmap_syncs_both_ways(
     # server must get it.
     write_note(inst_b.vault_path, "E2E/Resumed-push-seed.md", "# PushSeed\nedited on resumed B")
     note = resumed_api.wait_for_note_content(
-        "E2E/Resumed-push-seed.md", "edited on resumed B", timeout=30
+        "E2E/Resumed-push-seed.md", "edited on resumed B"
     )
     assert note is not None, "resumed B's push never reached the server"

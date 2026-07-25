@@ -28,7 +28,7 @@ async def test_attachment_push_and_pull(vault_a, vault_b, cdp_a, cdp_b, api_sync
     write_binary(vault_a, att_path, TINY_PNG)
     api_sync.wait_for_attachment(att_path)
 
-    b_data = wait_for_binary_delivery(vault_b, att_path, api_sync, timeout=30)
+    b_data = wait_for_binary_delivery(vault_b, att_path, api_sync)
     assert b_data == TINY_PNG, (
         f"B's attachment bytes should match. Got {len(b_data)} bytes, expected {len(TINY_PNG)}"
     )
@@ -42,7 +42,7 @@ async def test_attachment_delete_propagation(vault_a, vault_b, cdp_a, cdp_b, api
     # Setup: A creates, server receives, B receives a copy live.
     write_binary(vault_a, att_path, TINY_PNG)
     api_sync.wait_for_attachment(att_path)
-    wait_for_binary_delivery(vault_b, att_path, api_sync, timeout=30)
+    wait_for_binary_delivery(vault_b, att_path, api_sync)
 
     # A deletes — vault.delete fires handleDelete on A, which calls
     # /attachments DELETE. Server reflects the soft-delete as 404.
@@ -50,4 +50,4 @@ async def test_attachment_delete_propagation(vault_a, vault_b, cdp_a, cdp_b, api
     api_sync.wait_for_attachment_gone(att_path)
 
     # B removes it live — no manual pull backstop
-    wait_for_file_gone(vault_b, att_path, timeout=30)
+    wait_for_file_gone(vault_b, att_path)

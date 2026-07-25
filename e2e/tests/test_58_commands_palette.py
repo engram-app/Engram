@@ -63,7 +63,7 @@ async def test_sync_now_pulls_pending_change(vault_a, cdp_a, api_sync):
     await cdp_a.run_command("sync-now")
 
     # The note must arrive locally as a result of the sync the command ran.
-    local = wait_for_content(vault_a, path, marker, timeout=15)
+    local = wait_for_content(vault_a, path, marker)
     assert marker in local, (
         f"sync-now did not pull pending server change into {path!r}"
     )

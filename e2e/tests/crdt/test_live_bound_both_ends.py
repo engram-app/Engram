@@ -31,6 +31,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from helpers.backend_rpc import backend_rpc
+from helpers.latency import DELIVERY_TIMEOUT
 from helpers.log_oracle import wait_for_client_log
 from helpers.vault import read_note, wait_for_content
 
@@ -39,7 +40,7 @@ pytestmark = pytest.mark.skipif(
     reason="CRDT-only suite — set E2E_ENABLE_CRDT=true with a CRDT_ENABLED backend",
 )
 
-CRDT_TIMEOUT = 30
+CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert
 
 
 def _note_id(api_sync, path: str) -> str:

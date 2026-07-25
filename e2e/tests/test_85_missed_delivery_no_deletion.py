@@ -55,12 +55,12 @@ async def test_missed_delivery_then_local_push_no_deletion(
     for cdp in (cdp_a, cdp_b):
         if not await cdp.check_stream_connected():
             await cdp.reconnect_stream()
-        await cdp.wait_for_stream_connected(timeout=20)
+        await cdp.wait_for_stream_connected()
 
     # Seed: A creates, B receives — both devices synced on a base version.
     base = f"# Missed Delivery\n\nbase-{unique}\n"
     await cdp_a.push_file_now(path, base)
-    wait_for_delivery(vault_b, path, api_sync, timeout=30)
+    wait_for_delivery(vault_b, path, api_sync)
 
     # B goes deaf: channel down, so the next server-side change is missed.
     # cdp_b is SESSION-scoped: the reconnect must be guaranteed even when an
@@ -73,7 +73,7 @@ async def test_missed_delivery_then_local_push_no_deletion(
     try:
         # A third writer advances the server while B can't hear it.
         api_sync.create_note(path, f"{base}\n{server_marker}\n")
-        api_sync.wait_for_note_content(path, server_marker, timeout=15)
+        api_sync.wait_for_note_content(path, server_marker)
 
         # B, still ignorant of the server edit, makes and pushes its OWN edit
         # through the real plugin write path (vault.modify + pushFile) so the
