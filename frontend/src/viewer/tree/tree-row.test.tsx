@@ -239,6 +239,42 @@ describe("TreeRow", () => {
 		expect(onContextMenu).toHaveBeenCalledWith("f:1", 42, 99);
 	});
 
+	// Obsidian outlines the row whose context menu is open, so you can still tell
+	// what you right-clicked once the menu covers its neighbours.
+	describe("context-menu open state", () => {
+		const outline = /ring-2/u;
+
+		it("outlines the row whose menu is open", () => {
+			const instance = mockInstance({ data: folderItem });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} menuOpenId="f:1" />
+				</MemoryRouter>,
+			);
+			expect(screen.getByRole("treeitem").className).toMatch(outline);
+		});
+
+		it("leaves other rows alone", () => {
+			const instance = mockInstance({ data: folderItem });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} menuOpenId="f:999" />
+				</MemoryRouter>,
+			);
+			expect(screen.getByRole("treeitem").className).not.toMatch(outline);
+		});
+
+		it("outlines note rows too", () => {
+			const instance = mockInstance({ data: noteItem });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} menuOpenId="n:100" />
+				</MemoryRouter>,
+			);
+			expect(screen.getByRole("link").className).toMatch(outline);
+		});
+	});
+
 	// A synthetic folder used to get NO handler, which meant right-clicking it
 	// opened the browser's own context menu. It gets ours now — narrowed to the
 	// path-keyed actions by `actionsFor({ synthetic: true })`, not suppressed

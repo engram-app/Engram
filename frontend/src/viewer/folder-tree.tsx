@@ -85,6 +85,9 @@ export default function FolderTree() {
 
 	const scrollRef = useRef<HTMLDivElement | null>(null);
 	const [dialog, setDialog] = useState<DialogState>({ kind: "none" });
+	// Row to outline while its menu is up — the context menu on desktop, the
+	// action drawer on touch.
+	const menuOpenId = dialog.kind === "context" || dialog.kind === "drawer" ? dialog.itemId : null;
 
 	const batchDeleteNotes = useBatchDeleteNotes();
 	const batchMoveNotes = useBatchMoveNotes();
@@ -639,6 +642,7 @@ export default function FolderTree() {
 							virtualItem={v}
 							items={items}
 							activeId={selectedNoteId}
+							menuOpenId={menuOpenId}
 							onContextMenu={handleContextMenu}
 							onLongPress={handleLongPress}
 							onFolderHover={prefetchFolderNotes}

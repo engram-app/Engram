@@ -33,7 +33,10 @@ export function ContextMenu({ actions, position, onPick, onClose }: Props) {
 			data-tree-context-menu
 			role="menu"
 			style={{ top: position.y, left: position.x }}
-			className="fixed z-50 min-w-40 rounded border border-border bg-popover py-1 text-popover-foreground shadow-lg"
+			// p-1 (not py-1) insets each item, so the hover fill floats inside the
+			// menu instead of running edge to edge. Items drop to px-2 to keep the
+			// label in the same place.
+			className="fixed z-50 min-w-40 rounded border border-border bg-popover p-1 text-popover-foreground shadow-lg"
 		>
 			{actions.map((a) => {
 				const Icon = ACTION_ICONS[a.id];
@@ -46,8 +49,11 @@ export function ContextMenu({ actions, position, onPick, onClose }: Props) {
 							onPick(a.id);
 							onClose();
 						}}
-						className={`flex w-full items-center gap-2 px-3 py-1 text-left text-sm hover:bg-accent hover:text-accent-foreground ${
-							a.destructive ? "text-destructive" : ""
+						className={`flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-sm hover:bg-accent ${
+							// Destructive keeps its red on hover — recolouring it to
+							// accent-foreground would drop the one cue that this item
+							// is the dangerous one, exactly when the cursor is on it.
+							a.destructive ? "text-destructive" : "hover:text-accent-foreground"
 						}`}
 					>
 						{/* aria-hidden so the menuitem's accessible name stays the label */}

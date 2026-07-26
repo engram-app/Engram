@@ -211,6 +211,22 @@ describe("FolderTree (HT)", () => {
 		});
 	});
 
+	it("outlines the right-clicked row while its menu is open, and clears after", async () => {
+		renderTree();
+		const projects = await screen.findByRole("treeitem", { name: "Projects" });
+		expect(projects.className).not.toMatch(/ring-2/u);
+
+		fireEvent.contextMenu(projects, { clientX: 50, clientY: 60 });
+		await screen.findByRole("menu");
+		expect(screen.getByRole("treeitem", { name: "Projects" }).className).toMatch(/ring-2/u);
+
+		// Escape closes the menu; the outline goes with it. ContextMenu listens on
+		// `document`, and an event fired at `window` never reaches it.
+		fireEvent.keyDown(document, { key: "Escape" });
+		await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+		expect(screen.getByRole("treeitem", { name: "Projects" }).className).not.toMatch(/ring-2/u);
+	});
+
 	// Creation targets the RIGHT-CLICKED folder, not the toolbar's active one —
 	// that difference is the whole point of putting them on the menu.
 	it("creates a note inside the right-clicked folder", async () => {

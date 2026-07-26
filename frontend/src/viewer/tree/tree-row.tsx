@@ -17,12 +17,16 @@ interface Props {
 	// whatever was clicked last, so expanding a folder would steal the chip away
 	// from the file you're actually looking at.
 	activeId?: string | null;
+	// Item id whose context menu / action drawer is currently open. Obsidian
+	// outlines that row for as long as the menu is up, so you can still tell what
+	// you right-clicked once the menu covers its neighbours.
+	menuOpenId?: string | null;
 	onContextMenu?: (itemId: string, x: number, y: number) => void;
 	onLongPress?: (itemId: string) => void;
 	onFolderHover?: (folderId: string) => void;
 }
 
-function rowClass(instance: ItemInstance<LoaderItem>, active: boolean): string {
+function rowClass(instance: ItemInstance<LoaderItem>, active: boolean, menuOpen: boolean): string {
 	// `isDragTarget` is provided by dragAndDropFeature; guard in case the row is
 	// rendered without it (tests).
 	const dragOver = (instance as { isDragTarget?: () => boolean }).isDragTarget?.() ?? false;
@@ -38,6 +42,10 @@ function rowClass(instance: ItemInstance<LoaderItem>, active: boolean): string {
 			? "bg-tree-selected font-medium text-tree-selected-foreground"
 			: "text-foreground hover:bg-accent hover:text-accent-foreground",
 		dragOver ? "bg-primary/15 ring-1 ring-ring ring-inset" : "",
+		// Inset so the outline can't bleed into the 1px gutter and collide with the
+		// neighbouring row. `muted-foreground` rather than `border`, which is too
+		// faint against the light theme's white to read as a deliberate state.
+		menuOpen ? "ring-2 ring-muted-foreground/40 ring-inset" : "",
 	].join(" ");
 }
 
@@ -105,7 +113,14 @@ function Chevron({ open }: { open: boolean }) {
 	);
 }
 
-export function TreeRow({ instance, activeId, onContextMenu, onLongPress, onFolderHover }: Props) {
+export function TreeRow({
+	instance,
+	activeId,
+	menuOpenId,
+	onContextMenu,
+	onLongPress,
+	onFolderHover,
+}: Props) {
 	const itemId = instance.getId();
 	const longPressHandlers = useLongPress({
 		onLongPress: () => onLongPress?.(itemId),
@@ -123,6 +138,7 @@ export function TreeRow({ instance, activeId, onContextMenu, onLongPress, onFold
 	// Folders are never the "open" thing — only notes and attachments route to
 	// /note/:id — so expanding one can't move the highlight.
 	const active = item.kind !== "folder" && item.id === activeId;
+	const menuOpen = itemId === menuOpenId;
 	const depth = instance.getItemMeta()?.level ?? 0;
 	const folderPad = depth * 12 + 4;
 	const notePad = folderPad + 20; // align note label under folder name (chevron 16px + gap 4px)
@@ -183,7 +199,7 @@ export function TreeRow({ instance, activeId, onContextMenu, onLongPress, onFold
 				onFocus={hoverPrefetch}
 				aria-expanded={instance.isExpanded()}
 				aria-selected={instance.isSelected()}
-				className={rowClass(instance, active)}
+				className={rowClass(instance, active, menuOpen)}
 				style={{ paddingLeft: `${folderPad}px`, height: TREE_ROW_HEIGHT }}
 			>
 				<IndentGuides depth={depth} />
@@ -213,7 +229,7 @@ export function TreeRow({ instance, activeId, onContextMenu, onLongPress, onFold
 				onContextMenu={contextMenuHandler}
 				aria-selected={instance.isSelected()}
 				aria-current={active ? "page" : undefined}
-				className={rowClass(instance, active)}
+				className={rowClass(instance, active, menuOpen)}
 				style={{ paddingLeft: `${notePad}px`, height: TREE_ROW_HEIGHT }}
 			>
 				<IndentGuides depth={depth} />
@@ -257,7 +273,7 @@ export function TreeRow({ instance, activeId, onContextMenu, onLongPress, onFold
 			onDragStart={handleNoteDragStart}
 			aria-selected={instance.isSelected()}
 			aria-current={active ? "page" : undefined}
-			className={rowClass(instance, active)}
+			className={rowClass(instance, active, menuOpen)}
 			style={{ paddingLeft: `${notePad}px`, height: TREE_ROW_HEIGHT }}
 		>
 			<IndentGuides depth={depth} />
