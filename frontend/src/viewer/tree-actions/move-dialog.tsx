@@ -35,12 +35,10 @@ export function MoveDialog({ folders, nodes, onPick, onCancel }: Props) {
 	return (
 		<dialog
 			open
-			className="fixed inset-0 z-50 m-auto h-96 w-96 rounded-lg bg-white shadow-xl dark:bg-gray-900"
+			className="fixed inset-0 z-50 m-auto h-96 w-96 rounded-lg border border-border bg-popover text-popover-foreground shadow-xl"
 		>
 			{nodes.length > 1 && (
-				<p className="border-gray-200 border-b px-3 py-2 font-medium text-gray-800 text-sm dark:border-gray-700 dark:text-gray-100">
-					{placeholder}
-				</p>
+				<p className="border-border border-b px-3 py-2 font-medium text-sm">{placeholder}</p>
 			)}
 			<input
 				role="combobox"
@@ -67,7 +65,7 @@ export function MoveDialog({ folders, nodes, onPick, onCancel }: Props) {
 					}
 				}}
 				placeholder={placeholder}
-				className="w-full border-gray-200 border-b bg-transparent p-3 text-sm outline-none dark:border-gray-700"
+				className="w-full border-border border-b bg-transparent p-3 text-sm outline-none"
 			/>
 			<div id="move-dialog-listbox" role="listbox" className="max-h-72 overflow-y-auto py-1">
 				{candidates.map((name, i) => (
@@ -78,7 +76,7 @@ export function MoveDialog({ folders, nodes, onPick, onCancel }: Props) {
 						aria-selected={i === active}
 						onClick={() => onPick(name)}
 						className={`cursor-pointer px-3 py-1.5 text-sm ${
-							i === active ? "bg-blue-50 dark:bg-blue-950" : ""
+							i === active ? "bg-accent text-accent-foreground" : ""
 						}`}
 					>
 						{name === "" ? "/ (root)" : `${name}`}

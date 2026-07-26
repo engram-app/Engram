@@ -128,7 +128,7 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 			{Boolean(dragging) && (
 				<div
 					aria-hidden
-					className="fixed inset-0 z-50 flex items-center justify-center bg-blue-500/10 ring-2 ring-blue-400 ring-inset backdrop-blur-sm"
+					className="fixed inset-0 z-50 flex items-center justify-center bg-primary/10 ring-2 ring-ring ring-inset backdrop-blur-sm"
 				>
 					<p className="rounded-lg bg-card px-6 py-4 font-medium text-lg shadow-xl">
 						Drop files to upload

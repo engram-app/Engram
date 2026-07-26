@@ -28,6 +28,9 @@ export function TreeRowVirtualized({
 
 	return (
 		<div
+			// py-px splits the virtualizer's 2px gutter above and below the row, so
+			// neighbouring hover/selection fills never touch.
+			className="py-px"
 			style={{
 				position: "absolute",
 				top: 0,

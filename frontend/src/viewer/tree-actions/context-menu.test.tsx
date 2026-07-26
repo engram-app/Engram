@@ -15,7 +15,7 @@ describe("ContextMenu", () => {
 		);
 		expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
 		const del = screen.getByRole("menuitem", { name: "Delete" });
-		expect(del.className).toMatch(/text-red/u);
+		expect(del.className).toMatch(/text-destructive/u);
 	});
 
 	it("click on item calls onPick with action id and closes", () => {

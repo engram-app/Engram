@@ -1,3 +1,15 @@
+import { Copy, FolderInput, Link2, type LucideIcon, Pencil, Trash2 } from "lucide-react";
+
+// Keyed by id rather than carried on each Action — the three lists below repeat
+// the same ids, so one map keeps a single icon per action instead of three.
+const ACTION_ICONS: Record<ActionId, LucideIcon> = {
+	rename: Pencil,
+	move: FolderInput,
+	duplicate: Copy,
+	"copy-wikilink": Link2,
+	delete: Trash2,
+};
+
 const FILE_ACTIONS: readonly Action[] = [
 	{ id: "rename", label: "Rename" },
 	{ id: "move", label: "Move to…" },
@@ -40,3 +52,5 @@ export function actionsFor({
 	}
 	return FILE_ACTIONS;
 }
+
+export { ACTION_ICONS };

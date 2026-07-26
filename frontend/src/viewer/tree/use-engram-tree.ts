@@ -256,7 +256,10 @@ export function useEngramTree(deps: Deps) {
 	const virtualizer = useVirtualizer({
 		count: items.length,
 		getScrollElement: () => deps.scrollParentRef.current,
-		estimateSize: () => 24,
+		// 24px row + 2px gutter. The row's rounded hover/selection fill spans its
+		// whole slot, so without the gutter adjacent rows' backgrounds touch.
+		// TreeRowVirtualized insets the row by the matching 1px.
+		estimateSize: () => 26,
 		overscan: 8,
 	});
 

@@ -36,7 +36,7 @@ import { ContextMenu } from "./tree-actions/context-menu";
 import { DeleteConfirm } from "./tree-actions/delete-confirm";
 import { nextCopyName } from "./tree-actions/duplicate";
 import { MoveDialog } from "./tree-actions/move-dialog";
-import { renamePathLeaf } from "./tree-actions/rename-path";
+import { renameBaseName } from "./tree-actions/rename-path";
 
 // Row shapes that <DeleteConfirm> and <MoveDialog> accept.
 type DeleteRow =
@@ -113,7 +113,7 @@ export default function FolderTree() {
 			renameNote.mutate({
 				id: item.id,
 				old_path: item.path,
-				new_path: renamePathLeaf(item.path, newName),
+				new_path: renameBaseName(item.path, newName),
 			});
 		} else if (p.kind === "folder") {
 			const folder = folders?.find((f) => f.id === p.id);
@@ -124,7 +124,7 @@ export default function FolderTree() {
 			parts[parts.length - 1] = newName;
 			renameFolder.mutate({ old_path: folder.name, new_path: parts.join("/") });
 		} else if (p.kind === "attachment") {
-			renameAttachment.mutate({ old_path: p.path, new_path: renamePathLeaf(p.path, newName) });
+			renameAttachment.mutate({ old_path: p.path, new_path: renameBaseName(p.path, newName) });
 		}
 	};
 
@@ -509,20 +509,14 @@ export default function FolderTree() {
 
 	if (isLoading) {
 		return (
-			<p
-				data-testid="folder-tree-root"
-				className="px-3 py-2 text-gray-500 text-xs dark:text-gray-400"
-			>
+			<p data-testid="folder-tree-root" className="px-3 py-2 text-muted-foreground text-xs">
 				Loading…
 			</p>
 		);
 	}
 	if (isError) {
 		return (
-			<p
-				data-testid="folder-tree-root"
-				className="px-3 py-2 text-red-600 text-xs dark:text-red-400"
-			>
+			<p data-testid="folder-tree-root" className="px-3 py-2 text-destructive text-xs">
 				Failed to load folders.
 			</p>
 		);
@@ -532,10 +526,7 @@ export default function FolderTree() {
 	// must still render the tree — the loader stitches rootNotes under ROOT.
 	if (!folders || (allFolders.length === 0 && rootNotes.length === 0 && attachments.length === 0)) {
 		return (
-			<p
-				data-testid="folder-tree-root"
-				className="px-3 py-2 text-gray-500 text-xs dark:text-gray-400"
-			>
+			<p data-testid="folder-tree-root" className="px-3 py-2 text-muted-foreground text-xs">
 				No notes yet.
 			</p>
 		);
@@ -553,7 +544,7 @@ export default function FolderTree() {
 				data-testid="folder-tree-root"
 				data-tour="folder-tree"
 				className={`relative min-h-0 flex-1 overflow-auto py-2 text-base ${
-					rootDragOver ? "bg-blue-50/40 ring-1 ring-blue-400 ring-inset dark:bg-blue-950/30" : ""
+					rootDragOver ? "bg-primary/10 ring-1 ring-ring ring-inset" : ""
 				}`}
 			>
 				{/* minHeight ensures blank, droppable space below the rows even for a

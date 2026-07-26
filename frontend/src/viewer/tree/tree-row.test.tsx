@@ -316,7 +316,9 @@ describe("TreeRow", () => {
 		);
 		const link = screen.getByRole("link") as HTMLAnchorElement;
 		expect(link.getAttribute("href")).toBe("/note/att-1");
-		expect(screen.getByText("a.png")).toBeInTheDocument();
+		// Base name only — the extension lives in the badge beside it.
+		expect(screen.getByText("a")).toBeInTheDocument();
+		expect(screen.queryByText("a.png")).not.toBeInTheDocument();
 	});
 
 	it("shows uppercase ext badge for attachment", () => {

@@ -164,7 +164,6 @@ export default function NotePage() {
 						<RenameInput
 							initial={name}
 							kind="file"
-							selectAll
 							onCommit={commitRename}
 							onCancel={() => setRenamingFor(null)}
 						/>

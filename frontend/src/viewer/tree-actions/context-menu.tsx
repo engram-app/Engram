@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { Action, ActionId } from "./action-list";
+import { ACTION_ICONS, type Action, type ActionId } from "./action-list";
 
 interface Props {
 	actions: readonly Action[];
@@ -33,24 +33,29 @@ export function ContextMenu({ actions, position, onPick, onClose }: Props) {
 			data-tree-context-menu
 			role="menu"
 			style={{ top: position.y, left: position.x }}
-			className="fixed z-50 min-w-40 rounded border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800"
+			className="fixed z-50 min-w-40 rounded border border-border bg-popover py-1 text-popover-foreground shadow-lg"
 		>
-			{actions.map((a) => (
-				<button
-					key={a.id}
-					type="button"
-					role="menuitem"
-					onClick={() => {
-						onPick(a.id);
-						onClose();
-					}}
-					className={`flex w-full px-3 py-1 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 ${
-						a.destructive ? "text-red-600 dark:text-red-400" : "text-gray-800 dark:text-gray-100"
-					}`}
-				>
-					{a.label}
-				</button>
-			))}
+			{actions.map((a) => {
+				const Icon = ACTION_ICONS[a.id];
+				return (
+					<button
+						key={a.id}
+						type="button"
+						role="menuitem"
+						onClick={() => {
+							onPick(a.id);
+							onClose();
+						}}
+						className={`flex w-full items-center gap-2 px-3 py-1 text-left text-sm hover:bg-accent hover:text-accent-foreground ${
+							a.destructive ? "text-destructive" : ""
+						}`}
+					>
+						{/* aria-hidden so the menuitem's accessible name stays the label */}
+						<Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+						{a.label}
+					</button>
+				);
+			})}
 		</div>
 	);
 }

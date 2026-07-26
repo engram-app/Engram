@@ -2,6 +2,7 @@ import type { ItemInstance } from "@headless-tree/core";
 import { ChevronRight, File, FileText, Image } from "lucide-react";
 import type React from "react";
 import { Link } from "react-router";
+import { noteName } from "../../lib/note-name";
 import { RenameInput } from "../tree-actions/rename-input";
 import { useLongPress } from "../tree-actions/use-long-press";
 import type { LoaderItem } from "./loader";
@@ -24,18 +25,21 @@ function rowClass(instance: ItemInstance<LoaderItem>): string {
 		// shrink to content by default) — gives both the same full-width hover hit.
 		// relative anchors the absolutely-positioned indent guides.
 		"relative flex w-full items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left",
+		// Selected uses the theme's primary tint rather than the neutral `accent`
+		// that hover already owns, so the two stay distinguishable.
 		instance.isSelected()
-			? "bg-blue-50 dark:bg-blue-950 font-medium text-blue-700 dark:text-blue-300"
-			: "text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800",
-		dragOver ? "ring-1 ring-inset ring-blue-400 bg-blue-100/60 dark:bg-blue-900/40" : "",
+			? "bg-primary/10 font-medium text-primary"
+			: "text-foreground hover:bg-accent hover:text-accent-foreground",
+		dragOver ? "bg-primary/15 ring-1 ring-ring ring-inset" : "",
 	].join(" ");
 }
 
-function leafName(item: TreeItem): string {
-	if (item.kind === "folder") {
-		return item.name;
-	}
-	return item.path.split("/").pop() ?? item.path;
+// What the rename box is seeded with. Rows already display files without their
+// extension (it's rendered separately as a badge), so the box matches the row —
+// and the extension stays out of the user's hands. `noteName` handles the base
+// name for notes and attachments alike; folders have no extension to strip.
+function renameSeed(item: TreeItem): string {
+	return item.kind === "folder" ? item.name : noteName(item.path);
 }
 
 function noteLabel(item: Extract<TreeItem, { kind: "note" }>): string {
@@ -63,7 +67,7 @@ function IndentGuides({ depth }: { depth: number }) {
 			<span
 				key={`indent-${level}`}
 				aria-hidden="true"
-				className="pointer-events-none absolute inset-y-0 w-px bg-gray-200 dark:bg-gray-700"
+				className="pointer-events-none absolute inset-y-0 w-px bg-border"
 				style={{ left: `${(level + 1) * INDENT_STEP}px` }}
 			/>
 		));
@@ -76,7 +80,7 @@ function Chevron({ open }: { open: boolean }) {
 	return (
 		<ChevronRight
 			aria-hidden="true"
-			className={`h-4 w-4 shrink-0 text-gray-400 transition-transform dark:text-gray-500 ${
+			className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
 				open ? "rotate-90" : ""
 			}`}
 		/>
@@ -110,7 +114,7 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 				style={{ paddingLeft: `${item.kind === "folder" ? folderPad : notePad}px` }}
 			>
 				<RenameInput
-					initial={leafName(item)}
+					initial={renameSeed(item)}
 					kind={item.kind === "folder" ? "folder" : "file"}
 					// RenameInput owns the input value directly, so HT's own
 					// renamingValue state (normally fed by
@@ -188,15 +192,13 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 				style={{ paddingLeft: `${notePad}px` }}
 			>
 				<IndentGuides depth={depth} />
-				<Icon
-					aria-hidden="true"
-					className="h-3.5 w-3.5 shrink-0 text-gray-400 dark:text-gray-500"
-				/>
-				<span className="min-w-0 flex-1 truncate">{filename}</span>
+				<Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+				{/* Base name only — the badge beside it already carries the type,
+				    and this keeps the row consistent with note rows and with what
+				    the rename box seeds. */}
+				<span className="min-w-0 flex-1 truncate">{noteName(item.path)}</span>
 				{ext ? (
-					<span className="shrink-0 text-gray-400 text-xs dark:text-gray-500">
-						{ext.toUpperCase()}
-					</span>
+					<span className="shrink-0 text-muted-foreground text-xs">{ext.toUpperCase()}</span>
 				) : null}
 			</Link>
 		);
@@ -228,9 +230,7 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 			<IndentGuides depth={depth} />
 			<span className="min-w-0 flex-1 truncate">{noteLabel(item)}</span>
 			{item.ext && item.ext !== "md" && (
-				<span className="shrink-0 text-gray-400 text-xs uppercase dark:text-gray-500">
-					{item.ext}
-				</span>
+				<span className="shrink-0 text-muted-foreground text-xs uppercase">{item.ext}</span>
 			)}
 		</Link>
 	);
