@@ -234,7 +234,10 @@ describe("FolderTree (HT)", () => {
 		const projects = await screen.findByRole("treeitem", { name: "Projects" });
 		fireEvent.contextMenu(projects, { clientX: 50, clientY: 60 });
 		fireEvent.click(await screen.findByRole("menuitem", { name: "New note here" }));
-		expect(createNoteMutate).toHaveBeenCalledWith({ folder: "Projects" });
+		// The id is minted client-side so the optimistic row is addressable at once.
+		expect(createNoteMutate).toHaveBeenCalledWith(
+			expect.objectContaining({ folder: "Projects", id: expect.any(String) }),
+		);
 	});
 
 	it("creates a subfolder under the right-clicked folder", async () => {
@@ -317,6 +320,60 @@ describe("FolderTree (HT)", () => {
 		expect(input).toHaveValue("untitled");
 		expect(input.selectionStart).toBe(0);
 		expect(input.selectionEnd).toBe("untitled".length);
+	});
+
+	// Right-clicking empty tree space targets the vault root.
+	describe("empty-space context menu", () => {
+		const openRootMenu = async () => {
+			renderTree();
+			const tree = await screen.findByTestId("folder-tree-root");
+			fireEvent.contextMenu(tree, { clientX: 10, clientY: 200 });
+			await screen.findByRole("menu");
+		};
+
+		it("offers creation actions only", async () => {
+			await openRootMenu();
+			expect(screen.getByRole("menuitem", { name: "New note" })).toBeInTheDocument();
+			expect(screen.getByRole("menuitem", { name: "New folder" })).toBeInTheDocument();
+			// The root isn't a folder you can address.
+			for (const label of ["Rename", "Move to…", "Delete"]) {
+				expect(screen.queryByRole("menuitem", { name: label })).not.toBeInTheDocument();
+			}
+		});
+
+		it("creates a note at the vault root", async () => {
+			await openRootMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "New note" }));
+			expect(createNoteMutate).toHaveBeenCalledWith(
+				expect.objectContaining({ folder: "", id: expect.any(String) }),
+			);
+		});
+
+		it("creates a folder at the root and opens it in rename mode", async () => {
+			createdFolder.path = "untitled";
+			mock.folders = [{ id: "7", parent_id: null, name: "untitled", count: 0 }];
+			await openRootMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "New folder" }));
+			expect(createFolderMutate).toHaveBeenCalledWith({ parent: "" });
+
+			const input = (await screen.findByRole("textbox", {
+				name: "Rename folder",
+			})) as HTMLInputElement;
+			expect(input).toHaveValue("untitled");
+			expect(input.selectionEnd).toBe("untitled".length);
+			createdFolder.path = "Projects/untitled";
+		});
+
+		// A row right-click must not fall through to the container, or the row's
+		// menu would be replaced by the root one the moment it opened.
+		it("does not fire when right-clicking a row", async () => {
+			renderTree();
+			const projects = await screen.findByRole("treeitem", { name: "Projects" });
+			fireEvent.contextMenu(projects, { clientX: 50, clientY: 60 });
+			await screen.findByRole("menu");
+			expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
+			expect(screen.queryByRole("menuitem", { name: "New folder" })).not.toBeInTheDocument();
+		});
 	});
 
 	it("does not offer creation actions on a note row", async () => {

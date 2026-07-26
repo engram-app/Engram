@@ -104,11 +104,7 @@ function patchRowInList(
 // Filenames in a note list, ignoring our own optimistic placeholders (so a
 // freshly-inserted placeholder doesn't bump the name the server picks).
 function realFilenames(notes: NoteSummary[]): Set<string> {
-	return new Set(
-		notes
-			.filter((n) => !n.id.startsWith("optimistic-"))
-			.map((n) => n.path.split("/").pop() ?? n.path),
-	);
+	return new Set(notes.filter((n) => !n.pending).map((n) => n.path.split("/").pop() ?? n.path));
 }
 
 // Path → parent folder. `'a/b/c.md'` → `'a/b'`; `'a.md'` → `''`. Same
@@ -264,6 +260,10 @@ export interface Folder {
 
 export interface NoteSummary {
 	id: string;
+	// Client-only: set on an optimistic row whose create hasn't been acked yet.
+	// The row already carries its FINAL id (we mint it), so the id can no longer
+	// signal "not real yet" — this flag does.
+	pending?: boolean;
 	path: string;
 	title: string;
 	folder: string;
@@ -518,10 +518,10 @@ export function useCreateNote() {
 	return useMutation<
 		{ path: string; id: string },
 		ApiError,
-		{ folder: string },
+		{ folder: string; id: string },
 		CreateNoteContext | undefined
 	>({
-		mutationFn: async ({ folder }) => {
+		mutationFn: async ({ folder, id }) => {
 			const folderId = folderIdForPath(qc, vaultId, folder);
 			const existingNotes = folderId
 				? (qc.getQueryData<NoteSummary[]>(["folder-notes-by-id", vaultId, folderId]) ?? [])
@@ -534,11 +534,12 @@ export function useCreateNote() {
 			for (let attempt = 0; attempt < MAX_RACES; attempt++) {
 				const name = collideBump(existingNames, "Untitled.md", { cap: 1000 });
 				const path = folder ? `${folder}/${name}` : name;
-				const noteId = uuid7();
 				try {
 					// crdt_create genesis over the live channel (replaces POST /notes);
-					// the ok reply echoes our minted note_id.
-					const id = await crdtCreateNote(noteId, path);
+					// the ok reply echoes our minted note_id. The id is stable across
+					// retries — a collision rejects the PATH, never the id, and the
+					// optimistic row is already rendering under it.
+					await crdtCreateNote(id, path);
 					return { path, id };
 				} catch (err) {
 					// The path is already owned (unique-constraint create_failed) or was
@@ -559,7 +560,7 @@ export function useCreateNote() {
 		// Drop a placeholder row into the id-keyed list the tree reads so a new
 		// note shows instantly (on-disk feel), then swap it for the server row on
 		// success. Root and subfolders share one cache keyed by folder id.
-		onMutate: async ({ folder }) => {
+		onMutate: async ({ folder, id }) => {
 			const folderId = folderIdForPath(qc, vaultId, folder);
 			// Unknown non-root folder not in the cache yet — skip; surfaces on expand.
 			if (folderId === null) {
@@ -577,9 +578,12 @@ export function useCreateNote() {
 			const name = collideBump(realFilenames(snapshot), "Untitled.md", { cap: 1000 });
 			const path = folder ? `${folder}/${name}` : name;
 			const now = new Date().toISOString();
-			const placeholderId = `optimistic-${crypto.randomUUID()}`;
 			const placeholder: NoteSummary = {
-				id: placeholderId,
+				// The id we're about to send, not a throwaway: the row is addressable
+				// the moment it appears, so clicking it before the ack opens the right
+				// note instead of a dead `optimistic-…` route.
+				id,
+				pending: true,
 				path,
 				title: name.replace(/\.md$/u, ""),
 				folder,
@@ -591,16 +595,18 @@ export function useCreateNote() {
 			};
 
 			qc.setQueryData<NoteSummary[]>(key, [...snapshot, placeholder]);
-			return { key, snapshot, placeholderId };
+			return { key, snapshot, placeholderId: id };
 		},
 		onSuccess: ({ id, path }, vars, ctx) => {
 			// Swap the placeholder for the server-assigned id/path.
 			if (ctx) {
 				const filename = path.split("/").pop() ?? path;
+				// Id already matches — only the confirmed path/title and the pending
+				// flag need settling.
 				patchRowInList(qc, ctx.key, ctx.placeholderId, {
-					id,
 					path,
 					title: filename.replace(/\.md$/u, ""),
+					pending: false,
 				});
 				// Only the target folder's list changed — no need to stale the whole
 				// prefix (which would force every folder to refetch on next expand).
@@ -1903,6 +1909,9 @@ export function useDuplicateNote() {
 			const now = new Date().toISOString();
 			const placeholder: NoteSummary = {
 				id: placeholderId,
+				// Marks the row as not-yet-acked for realFilenames, which used to infer
+				// that from the `optimistic-` id prefix.
+				pending: true,
 				path: new_path,
 				title: srcRow?.title ?? "",
 				folder: newFolder,

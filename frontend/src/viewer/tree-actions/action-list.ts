@@ -47,6 +47,14 @@ const ATTACHMENT_ACTIONS: readonly Action[] = [
 	{ id: "delete", label: "Delete", destructive: true },
 ];
 
+// Right-clicking empty tree space acts on the vault root. No rename/move/delete
+// — the root isn't a folder you can address — so it's creation only, and the
+// labels drop the "here" since there's no folder being pointed at.
+const ROOT_ACTIONS: readonly Action[] = [
+	{ id: "new-note", label: "New note" },
+	{ id: "new-folder", label: "New folder" },
+];
+
 export type ActionId =
 	| "new-note"
 	| "new-folder"
@@ -70,8 +78,11 @@ export interface Action {
 export function actionsFor({
 	kind,
 }: {
-	kind: "file" | "folder" | "attachment";
+	kind: "file" | "folder" | "attachment" | "root";
 }): readonly Action[] {
+	if (kind === "root") {
+		return ROOT_ACTIONS;
+	}
 	if (kind === "folder") {
 		return FOLDER_ACTIONS;
 	}

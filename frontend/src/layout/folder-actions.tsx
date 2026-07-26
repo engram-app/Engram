@@ -12,6 +12,7 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { uuid7 } from "@/crdt/uuid7";
 import { useActiveFolder } from "@/lib/active-folder";
 import { useDemoVaultOptional } from "../onboarding/tour/demo-vault-provider";
 import { useAttachmentUpload } from "../viewer/attachment-upload/provider";
@@ -73,7 +74,7 @@ export default function FolderActions() {
 							size="icon"
 							aria-label="New note"
 							className={BUTTON}
-							onClick={() => createNote.mutate({ folder: activeFolder })}
+							onClick={() => createNote.mutate({ folder: activeFolder, id: uuid7() })}
 							disabled={createNote.isPending}
 						>
 							<FilePlus className={ICON} />

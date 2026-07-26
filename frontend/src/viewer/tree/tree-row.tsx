@@ -129,6 +129,10 @@ export function TreeRow({
 	const contextMenuHandler = onContextMenu
 		? (e: React.MouseEvent) => {
 				e.preventDefault();
+				// The row consumed this: the tree container has its own handler for
+				// empty space, and without this it would immediately replace the
+				// row's menu with the vault-root one.
+				e.stopPropagation();
 				onContextMenu(itemId, e.clientX, e.clientY);
 			}
 		: undefined;

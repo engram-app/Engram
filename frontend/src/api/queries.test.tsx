@@ -981,6 +981,10 @@ describe("useBatchDeleteNotes", () => {
 	});
 });
 
+// The caller mints the note id, so the optimistic row is addressable the moment
+// it renders — no `optimistic-` placeholder that gets swapped on ack.
+const MINTED_ID = "01920000-0000-7000-8000-000000000abc";
+
 describe("useCreateNote — optimistic placeholder", () => {
 	it('inserts a placeholder at root (by-id "root") then swaps it for the real note', async () => {
 		// Root notes share the one id-keyed cache under the 'root' sentinel.
@@ -998,7 +1002,7 @@ describe("useCreateNote — optimistic placeholder", () => {
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
 		act(() => {
-			result.current.mutate({ folder: "" });
+			result.current.mutate({ folder: "", id: MINTED_ID });
 		});
 
 		await waitFor(() => {
@@ -1008,21 +1012,25 @@ describe("useCreateNote — optimistic placeholder", () => {
 				"root",
 			]);
 			expect(root).toHaveLength(1);
-			expect(root?.[0]?.id).toMatch(/^optimistic-/u);
+			// Final id from the start — not a throwaway that gets swapped later.
+			expect(root?.[0]?.id).toBe(MINTED_ID);
 			expect(root?.[0]?.title).toBe("Untitled");
 		});
 
-		// A client-minted uuid7 is sent as the doc_id (not a v4/placeholder), at
-		// the collision-bumped path.
-		const [[mintedId] = []] = crdtCreateNote.mock.calls;
-		expect(crdtCreateNote).toHaveBeenCalledWith(mintedId, "Untitled.md");
-		expect(mintedId).not.toMatch(/^optimistic-/u);
+		// The very id the row is already rendering under goes on the wire.
+		expect(crdtCreateNote).toHaveBeenCalledWith(MINTED_ID, "Untitled.md");
 
 		resolveCreate();
 
 		await waitFor(() => {
-			const root = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "root"]);
-			expect(root?.[0]?.id).toBe(mintedId);
+			const root = qc.getQueryData<Array<{ id: string; pending?: boolean }>>([
+				"folder-notes-by-id",
+				"42",
+				"root",
+			]);
+			// Unchanged id; only `pending` settles.
+			expect(root?.[0]?.id).toBe(MINTED_ID);
+			expect(root?.[0]?.pending).toBe(false);
 		});
 	});
 
@@ -1047,7 +1055,7 @@ describe("useCreateNote — optimistic placeholder", () => {
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
 		act(() => {
-			result.current.mutate({ folder: "Media" });
+			result.current.mutate({ folder: "Media", id: MINTED_ID });
 		});
 
 		await waitFor(() => {
@@ -1058,18 +1066,18 @@ describe("useCreateNote — optimistic placeholder", () => {
 			]);
 			expect(rows).toHaveLength(1);
 			expect(rows?.[0]?.path).toBe("Media/Untitled.md");
-			expect(rows?.[0]?.id).toMatch(/^optimistic-/u);
+			expect(rows?.[0]?.id).toBe(MINTED_ID);
 		});
 
 		resolveCreate();
 
 		await waitFor(() => {
-			const rows = qc.getQueryData<Array<{ id: string }>>([
+			const rows = qc.getQueryData<Array<{ id: string; pending?: boolean }>>([
 				"folder-notes-by-id",
 				"42",
 				"syn:Media",
 			]);
-			expect(rows?.[0]?.id).not.toMatch(/^optimistic-/u);
+			expect(rows?.[0]?.pending).toBe(false);
 		});
 	});
 
@@ -1084,7 +1092,7 @@ describe("useCreateNote — optimistic placeholder", () => {
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
 		act(() => {
-			result.current.mutate({ folder: "Archive" });
+			result.current.mutate({ folder: "Archive", id: MINTED_ID });
 		});
 
 		await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -1109,21 +1117,20 @@ describe("useCreateNote — optimistic placeholder", () => {
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
 		act(() => {
-			result.current.mutate({ folder: "sub" });
+			result.current.mutate({ folder: "sub", id: MINTED_ID });
 		});
 
 		await waitFor(() => {
 			const byId = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "f9"]);
 			expect(byId).toHaveLength(1);
-			expect(byId?.[0]?.id).toMatch(/^optimistic-/u);
+			expect(byId?.[0]?.id).toBe(MINTED_ID);
 		});
 
 		resolveCreate();
 
 		await waitFor(() => {
 			const byId = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "f9"]);
-			const [[mintedId] = []] = crdtCreateNote.mock.calls;
-			expect(byId?.[0]?.id).toBe(mintedId);
+			expect(byId?.[0]?.id).toBe(MINTED_ID);
 		});
 	});
 
@@ -1137,12 +1144,16 @@ describe("useCreateNote — optimistic placeholder", () => {
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
 		await act(async () => {
-			await result.current.mutateAsync({ folder: "" });
+			await result.current.mutateAsync({ folder: "", id: MINTED_ID });
 		});
 
 		expect(crdtCreateNote).toHaveBeenCalledTimes(2);
 		expect(crdtCreateNote.mock.calls[0]![1]).toBe("Untitled.md");
 		expect(crdtCreateNote.mock.calls[1]![1]).toBe("Untitled 1.md");
+		// Only the PATH is retried — a collision rejects the path, not the id, and
+		// the optimistic row is already rendering under it.
+		expect(crdtCreateNote.mock.calls[0]![0]).toBe(MINTED_ID);
+		expect(crdtCreateNote.mock.calls[1]![0]).toBe(MINTED_ID);
 	});
 
 	it("surfaces notes_cap_reached without retrying", async () => {
@@ -1150,7 +1161,7 @@ describe("useCreateNote — optimistic placeholder", () => {
 		crdtCreateNote.mockRejectedValue(new CrdtOpError("notes_cap_reached", "crdt_create"));
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
-		await expect(result.current.mutateAsync({ folder: "" })).rejects.toMatchObject({
+		await expect(result.current.mutateAsync({ folder: "", id: MINTED_ID })).rejects.toMatchObject({
 			reason: "notes_cap_reached",
 		});
 		expect(crdtCreateNote).toHaveBeenCalledTimes(1);

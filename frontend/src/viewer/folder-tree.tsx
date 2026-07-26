@@ -27,6 +27,7 @@ import {
 	useRenameFolder,
 	useRenameNote,
 } from "../api/queries";
+import { uuid7 } from "../crdt/uuid7";
 import { useFolderTreeState } from "../layout/folder-tree-context";
 import { noteName } from "../lib/note-name";
 import {
@@ -35,7 +36,7 @@ import {
 	syntheticFolderPath,
 } from "./tree/synthesize-folders";
 import { TreeRowVirtualized } from "./tree/tree-row-virtualized";
-import { parseItemId } from "./tree/types";
+import { parseItemId, ROOT_ID } from "./tree/types";
 import { useEngramTree } from "./tree/use-engram-tree";
 import { ActionDrawer } from "./tree-actions/action-drawer";
 import { type ActionId, actionsFor } from "./tree-actions/action-list";
@@ -382,8 +383,24 @@ export default function FolderTree() {
 		return rootNotes.find((n) => n.id === id);
 	}
 
-	function kindOf(itemId: string): "file" | "folder" | "attachment" {
+	// Folder path a creation action targets: the right-clicked folder, or '' for
+	// the vault root (empty-space right-click). Null when the item is neither.
+	function targetFolderPath(itemId: string): string | null {
 		const p = parseItemId(itemId);
+		if (p.kind === "root") {
+			return "";
+		}
+		if (p.kind === "folder") {
+			return allFolders.find((f) => f.id === p.id)?.name ?? "";
+		}
+		return null;
+	}
+
+	function kindOf(itemId: string): "file" | "folder" | "attachment" | "root" {
+		const p = parseItemId(itemId);
+		if (p.kind === "root") {
+			return "root";
+		}
 		if (p.kind === "folder") {
 			return "folder";
 		}
@@ -406,7 +423,7 @@ export default function FolderTree() {
 		if (p.kind === "attachment") {
 			return p.path.split("/").pop() ?? p.path;
 		}
-		return "";
+		return "Vault root";
 	}
 
 	function openDelete(itemIds: string[]) {
@@ -433,20 +450,20 @@ export default function FolderTree() {
 			// Resolved from `allFolders` (which includes synthetic folders) so
 			// creating inside an attachment-only directory works by path.
 			case "new-note": {
-				const p = parseItemId(itemId);
-				if (p.kind !== "folder") {
+				const target = targetFolderPath(itemId);
+				if (target === null) {
 					break;
 				}
-				createNote.mutate({ folder: allFolders.find((f) => f.id === p.id)?.name ?? "" });
+				createNote.mutate({ folder: target, id: uuid7() });
 				break;
 			}
 			case "new-folder": {
-				const p = parseItemId(itemId);
-				if (p.kind !== "folder") {
+				const target = targetFolderPath(itemId);
+				if (target === null) {
 					break;
 				}
 				createFolder.mutate(
-					{ parent: allFolders.find((f) => f.id === p.id)?.name ?? "" },
+					{ parent: target },
 					{ onSuccess: ({ folder }) => requestFolderRename(folder) },
 				);
 				break;
@@ -620,6 +637,12 @@ export default function FolderTree() {
 			<nav
 				{...containerProps}
 				ref={setContainerEl}
+				onContextMenu={(e) => {
+					// Empty space only — rows stopPropagation, but a right-click can
+					// also land on the container's padding or below the last row.
+					e.preventDefault();
+					setDialog({ kind: "context", itemId: ROOT_ID, position: { x: e.clientX, y: e.clientY } });
+				}}
 				onDragOver={onContainerDragOver}
 				onDragLeave={onContainerDragLeave}
 				onDrop={onContainerDrop}
