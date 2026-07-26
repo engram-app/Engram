@@ -289,30 +289,33 @@ async def test_cold_send_over_fanout_opens_no_room(vault_a, vault_b, cdp_a, cdp_
 
 
 @pytest.mark.asyncio
-async def test_fanout_receive_after_hibernate_rehydrates(vault_a, vault_b, cdp_a, cdp_b, api_sync):
-    """[P1] A fan-out apply frees B's Y.Doc (applyPushedNoteUpdate →
-    hibernateIfIdle → closeDoc). A SECOND edit must still converge, proving the
-    apply-after-free path re-opens the doc from IndexedDB and merges correctly —
-    end to end, no process restart.
+async def test_fanout_sequential_edits_converge_preserving_prior_state(
+    vault_a, vault_b, cdp_a, cdp_b, api_sync
+):
+    """[P1] Two SEQUENTIAL remote edits to an idle note both converge on B over
+    the fan-out alone, the second preserving the first.
+
+    (Was ``test_fanout_receive_after_hibernate_rehydrates``: the Relay-model
+    persistent-doc engine NEVER frees an idle Y.Doc — ``closeDoc`` /
+    ``hibernateIfIdle`` are no-ops now, so there is no free-then-rehydrate step to
+    assert. The residual guarantee — a second fan-out apply merges onto the doc
+    the first left behind, no state lost — still matters and is what this pins.)
     """
-    path = "E2E/Crdt/FanoutHibernate.md"
+    path = "E2E/Crdt/FanoutSequential.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "base\n", "base")
-    note_id = await _confirm_room_free(cdp_b, path)
+    await _confirm_room_free(cdp_b, path)
     try:
         await cdp_b.suppress_fanout_backstops()
 
-        # First remote edit converges via the fan-out, which then hibernates the
-        # idle doc after durably recording the head.
+        # First remote edit converges via the fan-out.
         write_note(vault_a, path, "base\nEDIT_ONE\n")
         wait_for_content(vault_b, path, "EDIT_ONE", timeout=CRDT_TIMEOUT)
-        await cdp_b.wait_for_crdt_doc_freed(note_id, timeout=CRDT_TIMEOUT)
 
-        # Second edit AFTER the doc was freed — must rehydrate from IndexedDB and
-        # merge, preserving the prior state.
+        # Second edit merges onto the (still-resident) doc, preserving prior state.
         write_note(vault_a, path, "base\nEDIT_ONE\nEDIT_TWO\n")
         b_final = wait_for_content(vault_b, path, "EDIT_TWO", timeout=CRDT_TIMEOUT)
         assert "EDIT_ONE" in b_final and "base" in b_final, (
-            f"rehydrated apply lost prior state: {b_final!r}"
+            f"second fan-out apply lost prior state: {b_final!r}"
         )
     finally:
         await cdp_b.restore_fanout_backstops()
