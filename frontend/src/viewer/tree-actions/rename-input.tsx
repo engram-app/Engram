@@ -41,6 +41,7 @@ export function RenameInput({ initial, kind, error, onChange, onCommit, onCancel
 			<input
 				ref={inputRef}
 				data-testid="tree-rename-input"
+				aria-label={`Rename ${kind}`}
 				type="text"
 				value={value}
 				onChange={(e) => {

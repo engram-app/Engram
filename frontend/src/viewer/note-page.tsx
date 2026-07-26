@@ -5,7 +5,7 @@ import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { useNote } from "../api/queries";
+import { useNote, useRenameNote } from "../api/queries";
 import {
 	type CrdtSyncStatus,
 	closeDoc,
@@ -22,6 +22,8 @@ import LoadingPane from "./loading-pane";
 import NoteToc from "./note-toc";
 import NoteView from "./note-view";
 import { PropertiesWidget } from "./properties-widget";
+import { RenameInput } from "./tree-actions/rename-input";
+import { renamePathLeaf } from "./tree-actions/rename-path";
 import { useLiveContent } from "./use-live-content";
 
 const NoteEditor = lazy(() => import("./note-editor"));
@@ -47,7 +49,12 @@ export default function NotePage() {
 	const { setContent: setRightContent } = useRightSidebar();
 
 	const [mode, setMode] = useState<Mode>("rendered");
+	// Which note the rename box belongs to, not a bare boolean: navigating to
+	// another note keeps this component mounted, and an id-keyed value closes
+	// the box on its own instead of carrying over onto the newly opened note.
+	const [renamingFor, setRenamingFor] = useState<string | null>(null);
 	const [handle, setHandle] = useState<DocHandle | null>(null);
+	const renameNote = useRenameNote();
 	const [syncStatus, setSyncStatus] = useState<CrdtSyncStatus>(getCrdtSyncStatus);
 	const editorViewRef = useRef<EditorView | null>(null);
 	// Mirrors NoteView's remark-wiki-link hrefTemplate. useCallback keeps a
@@ -128,6 +135,20 @@ export default function NotePage() {
 
 	const name = noteName(note.path);
 	const titlePath = note.folder ? `${note.folder}/${name}` : name;
+	// The header displays the extension-less name, but the rename box is seeded
+	// with the real leaf (`note.md`) so it behaves exactly like the tree's
+	// rename — same caret selection, same deliberate `.md` -> `.canvas` swap.
+	const leaf = note.path.split("/").pop() ?? name;
+
+	const commitRename = (next: string) => {
+		setRenamingFor(null);
+		const new_path = renamePathLeaf(note.path, next);
+		if (new_path === note.path) {
+			return;
+		}
+		// `mutate`, not `mutateAsync` — the mutation's onError owns the toast.
+		renameNote.mutate({ id: note.id, old_path: note.path, new_path });
+	};
 
 	return (
 		<section className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]">
@@ -141,7 +162,23 @@ export default function NotePage() {
 					{Boolean(note.folder) && (
 						<span className="min-w-0 shrink truncate text-muted-foreground">{note.folder}/</span>
 					)}
-					<span className="min-w-0 truncate font-medium">{name}</span>
+					{renamingFor === note.id ? (
+						<RenameInput
+							initial={leaf}
+							kind="file"
+							onCommit={commitRename}
+							onCancel={() => setRenamingFor(null)}
+						/>
+					) : (
+						<button
+							type="button"
+							className="min-w-0 truncate rounded px-1 font-medium hover:bg-accent"
+							title="Click to rename"
+							onClick={() => setRenamingFor(note.id)}
+						>
+							{name}
+						</button>
+					)}
 				</h2>
 				<fieldset className="m-0 flex shrink-0 gap-1 border-0 p-0">
 					<legend className="sr-only">View mode</legend>

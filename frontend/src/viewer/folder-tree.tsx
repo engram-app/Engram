@@ -36,39 +36,7 @@ import { ContextMenu } from "./tree-actions/context-menu";
 import { DeleteConfirm } from "./tree-actions/delete-confirm";
 import { nextCopyName } from "./tree-actions/duplicate";
 import { MoveDialog } from "./tree-actions/move-dialog";
-
-// RenameInput's caret selection only spans the basename (up to the
-// extension dot) so a normal type-over-selection edit leaves the extension
-// intact. That's a UX convenience, not a guarantee: a select-all, paste, or
-// programmatic value replacement (e.g. Playwright's `.fill`) bypasses the
-// selection and can hand back a bare name with no extension at all, or a
-// dotted TITLE (e.g. "meeting v1.2", "Node.js guide") that isn't actually an
-// extension change. Without this guard the note/attachment gets renamed to a
-// path that doesn't end in the original extension server-side. For a note
-// that silently breaks the CRDT doc's `.endsWith(".md")` gate on next open,
-// stranding the editor on "Connecting…" forever.
-//
-// Rule: preserve the original extension unless newName ends with it already,
-// or explicitly ends with a recognized note extension (a deliberate swap,
-// e.g. .md -> .canvas). Otherwise the trailing dot(s) in newName are part of
-// the title, not an extension, so the original extension is re-appended.
-// ponytail: known ceiling, an attachment ext-swap like ("a.png","a.jpg")
-// becomes "a.jpg.png" since .jpg isn't in the recognized list. Inline rename
-// isn't the intended path for changing a file's type; add a MIME allowlist
-// only if that becomes a real complaint.
-const RECOGNIZED_NOTE_EXTENSIONS = [".md", ".canvas"];
-function withPreservedExtension(oldLeaf: string, newName: string): string {
-	const dot = oldLeaf.lastIndexOf(".");
-	const origExt = dot > 0 ? oldLeaf.slice(dot) : "";
-	const lowerNewName = newName.toLowerCase();
-	if (origExt && lowerNewName.endsWith(origExt.toLowerCase())) {
-		return newName;
-	}
-	if (RECOGNIZED_NOTE_EXTENSIONS.some((ext) => lowerNewName.endsWith(ext))) {
-		return newName;
-	}
-	return origExt ? `${newName}${origExt}` : newName;
-}
+import { renamePathLeaf } from "./tree-actions/rename-path";
 
 // Row shapes that <DeleteConfirm> and <MoveDialog> accept.
 type DeleteRow =
@@ -139,13 +107,14 @@ export default function FolderTree() {
 			if (!item) {
 				return;
 			}
-			const parts = item.path.split("/");
-			const oldLeaf = parts.pop() ?? "";
-			parts.push(withPreservedExtension(oldLeaf, newName));
-			const new_path = parts.join("/");
-			renameNote
-				.mutateAsync({ id: item.id, old_path: item.path, new_path })
-				.catch(() => toast.error("Rename failed"));
+			// `mutate` (not `mutateAsync`): the mutation's own onError already
+			// raises a specific toast, so awaiting only to re-toast a generic
+			// "Rename failed" would show the user two of them.
+			renameNote.mutate({
+				id: item.id,
+				old_path: item.path,
+				new_path: renamePathLeaf(item.path, newName),
+			});
 		} else if (p.kind === "folder") {
 			const folder = folders?.find((f) => f.id === p.id);
 			if (!folder) {
@@ -153,18 +122,9 @@ export default function FolderTree() {
 			}
 			const parts = folder.name.split("/");
 			parts[parts.length - 1] = newName;
-			const new_path = parts.join("/");
-			renameFolder
-				.mutateAsync({ old_path: folder.name, new_path })
-				.catch(() => toast.error("Rename failed"));
+			renameFolder.mutate({ old_path: folder.name, new_path: parts.join("/") });
 		} else if (p.kind === "attachment") {
-			const parts = p.path.split("/");
-			const oldLeaf = parts.pop() ?? "";
-			parts.push(withPreservedExtension(oldLeaf, newName));
-			const new_path = parts.join("/");
-			renameAttachment
-				.mutateAsync({ old_path: p.path, new_path })
-				.catch(() => toast.error("Rename failed"));
+			renameAttachment.mutate({ old_path: p.path, new_path: renamePathLeaf(p.path, newName) });
 		}
 	};
 
@@ -654,5 +614,3 @@ export default function FolderTree() {
 		</>
 	);
 }
-
-export { withPreservedExtension };

@@ -3,7 +3,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FolderTreeProvider } from "../layout/folder-tree-context";
-import FolderTree, { withPreservedExtension } from "./folder-tree";
+import FolderTree from "./folder-tree";
+import { withPreservedExtension } from "./tree-actions/rename-path";
 
 describe("withPreservedExtension", () => {
 	it("appends the original extension to a dotted title (the bug being fixed)", () => {
