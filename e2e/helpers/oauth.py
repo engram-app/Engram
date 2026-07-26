@@ -230,45 +230,6 @@ async def swap_to_oauth(cdp, tokens: dict) -> str:
     return original
 
 
-async def ensure_oauth_identity(cdp, tokens: dict) -> bool:
-    """Re-assert the OAuth identity if the shared plugin drifted off it.
-
-    `cdp_a` is session-scoped, so `plugin.settings` is shared mutable state
-    across every OAuth test. A stale restore landing inside another test's
-    window reverts the plugin to api-key auth; from that point its channel
-    rejoins the ORIGINAL vault, and any note living in the OAuth vault is not
-    in the catch-up feed at all. The symptom is a 120s content timeout that
-    looks exactly like a sync bug but is really "we are reading the wrong
-    vault" (engram#1128 — the backend log shows the crdt: topic flipping from
-    the OAuth user/vault to the api-key one mid-test).
-
-    Call this immediately before any operation that rebuilds the channel and
-    whose result you then assert on (a reconnect, a catch-up wait). Returns
-    True if a drift was detected and repaired, so callers can log it rather
-    than silently depending on the repair.
-    """
-    want_vault = str(tokens["vault_id"])
-    state = await cdp.evaluate(
-        f"JSON.stringify({{vaultId: {_P}.settings.vaultId, "
-        f"refreshLen: ({_P}.settings.refreshToken || '').length, "
-        f"method: {_P}.settings.authMethod || 'apikey'}})"
-    )
-    current = json.loads(state) if isinstance(state, str) else (state or {})
-    if current.get("vaultId") == want_vault and current.get("refreshLen", 0) > 0:
-        return False
-
-    logger.warning(
-        "OAuth identity drifted (vaultId=%s refreshLen=%s method=%s) — re-asserting for vault %s",
-        current.get("vaultId"),
-        current.get("refreshLen"),
-        current.get("method"),
-        want_vault,
-    )
-    await swap_to_oauth(cdp, tokens)
-    await wait_for_stream(cdp)
-    return True
-
-
 async def restore_auth(cdp, original_settings_json: str, verify_timeout: float = 60) -> None:
     """Restore Obsidian plugin to its original auth settings via CDP.
 
