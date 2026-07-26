@@ -6,6 +6,12 @@ interface FolderTreeContextValue {
 	collapseAll: () => void;
 	sort: SortKey;
 	setSort: (next: SortKey) => void;
+	// Path of a just-created folder that should open in rename mode. Lives here
+	// rather than in FolderTree because the creating component (the toolbar) and
+	// the component that owns rename state (the tree) are siblings.
+	pendingFolderRename: string | null;
+	requestFolderRename: (path: string) => void;
+	clearFolderRename: () => void;
 }
 
 const FolderTreeContext = createContext<FolderTreeContextValue | null>(null);
@@ -21,6 +27,7 @@ export type SortKey =
 export function FolderTreeProvider({ children }: { children: ReactNode }) {
 	const [openSet, setOpenSet] = useState<Set<string>>(() => new Set());
 	const [sort, setSort] = useState<SortKey>("name-asc");
+	const [pendingFolderRename, setPendingFolderRename] = useState<string | null>(null);
 
 	const isOpen = useCallback((path: string) => openSet.has(path), [openSet]);
 	const toggle = useCallback((path: string) => {
@@ -35,10 +42,29 @@ export function FolderTreeProvider({ children }: { children: ReactNode }) {
 		});
 	}, []);
 	const collapseAll = useCallback(() => setOpenSet(new Set()), []);
+	const requestFolderRename = useCallback((path: string) => setPendingFolderRename(path), []);
+	const clearFolderRename = useCallback(() => setPendingFolderRename(null), []);
 
 	const value = useMemo(
-		() => ({ isOpen, toggle, collapseAll, sort, setSort }),
-		[isOpen, toggle, collapseAll, sort],
+		() => ({
+			isOpen,
+			toggle,
+			collapseAll,
+			sort,
+			setSort,
+			pendingFolderRename,
+			requestFolderRename,
+			clearFolderRename,
+		}),
+		[
+			isOpen,
+			toggle,
+			collapseAll,
+			sort,
+			pendingFolderRename,
+			requestFolderRename,
+			clearFolderRename,
+		],
 	);
 	return <FolderTreeContext.Provider value={value}>{children}</FolderTreeContext.Provider>;
 }

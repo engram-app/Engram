@@ -31,7 +31,11 @@ vi.mock("../crdt/session", () => ({
 }));
 
 const useNoteMock = vi.fn();
-vi.mock("../api/queries", () => ({ useNote: (...a: unknown[]) => useNoteMock(...a) }));
+const { renameNoteMutate } = vi.hoisted(() => ({ renameNoteMutate: vi.fn() }));
+vi.mock("../api/queries", () => ({
+	useNote: (...a: unknown[]) => useNoteMock(...a),
+	useRenameNote: () => ({ mutate: renameNoteMutate, isPending: false }),
+}));
 vi.mock("react-router", () => ({ useParams: () => ({ id: "note-1" }) }));
 // Minimal stubs for the right-sidebar + lazy editor context used by the page.
 vi.mock("../layout/right-sidebar-context", () => ({
@@ -137,6 +141,75 @@ describe("NotePage (CRDT)", () => {
 
 		// Widget should appear in the default rendered mode
 		await waitFor(() => expect(screen.getByText("status")).toBeInTheDocument());
+	});
+
+	// Inline rename from the header — same semantics as the tree's rename
+	// (leaf-name edit, folder untouched, extension preserved), so the two
+	// entry points can't drift apart.
+	describe("inline rename", () => {
+		const openRename = async () => {
+			render(<NotePage />);
+			fireEvent.click(await screen.findByRole("button", { name: "note" }));
+			return screen.getByRole("textbox", { name: "Rename file" });
+		};
+
+		it("seeds the input with the display name — no extension to edit", async () => {
+			const input = await openRename();
+			expect(input).toHaveValue("note");
+			// The folder crumb stays put — only the name is editable.
+			expect(screen.getByText("folder/")).toBeInTheDocument();
+		});
+
+		it("commits on Enter, keeping the folder and the extension", async () => {
+			const input = await openRename();
+			fireEvent.change(input, { target: { value: "renamed" } });
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(renameNoteMutate).toHaveBeenCalledWith({
+				id: "note-1",
+				old_path: "folder/note.md",
+				new_path: "folder/renamed.md",
+			});
+			await waitFor(() =>
+				expect(screen.queryByRole("textbox", { name: "Rename file" })).not.toBeInTheDocument(),
+			);
+		});
+
+		it("cancels on Escape without renaming", async () => {
+			const input = await openRename();
+			fireEvent.change(input, { target: { value: "renamed" } });
+			fireEvent.keyDown(input, { key: "Escape" });
+			expect(renameNoteMutate).not.toHaveBeenCalled();
+			await waitFor(() =>
+				expect(screen.queryByRole("textbox", { name: "Rename file" })).not.toBeInTheDocument(),
+			);
+		});
+
+		it("does not fire a rename when the name is unchanged", async () => {
+			const input = await openRename();
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(renameNoteMutate).not.toHaveBeenCalled();
+		});
+
+		// The header edits the display name only — a typed extension is title
+		// text, never a file-type change. Changing .md -> .canvas would strand
+		// the note outside the CRDT markdown gate.
+		it("treats a typed extension as part of the title, not a type change", async () => {
+			const input = await openRename();
+			fireEvent.change(input, { target: { value: "board.canvas" } });
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(renameNoteMutate).toHaveBeenCalledWith(
+				expect.objectContaining({ new_path: "folder/board.canvas.md" }),
+			);
+		});
+
+		it("keeps a dotted title intact", async () => {
+			const input = await openRename();
+			fireEvent.change(input, { target: { value: "Node.js guide" } });
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(renameNoteMutate).toHaveBeenCalledWith(
+				expect.objectContaining({ new_path: "folder/Node.js guide.md" }),
+			);
+		});
 	});
 
 	it("swaps the frontmatter surface across rendered/raw/reading modes", async () => {
