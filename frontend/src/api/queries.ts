@@ -58,11 +58,18 @@ function folderIdForPath(
 	if (folder === "") {
 		return ROOT_FOLDER_ID;
 	}
-	return (
-		qc
-			.getQueryData<{ folders: Folder[] }>(["folders", vaultId])
-			?.folders.find((f) => f.name === folder)?.id ?? null
-	);
+	// getQueryData returns the RAW payload — `select: selectFolders` only shapes
+	// what components see. So a derived folder still carries `id: null` here, and
+	// it must get the same `syn:<path>` id selectFolders would have given it,
+	// otherwise this returns null for most real folders and every caller silently
+	// skips its optimistic patch.
+	const row = qc
+		.getQueryData<{ folders: Array<Folder & { id: string | null }> }>(["folders", vaultId])
+		?.folders.find((f) => f.name === folder);
+	if (!row) {
+		return null;
+	}
+	return row.id ?? syntheticFolderId(row.name);
 }
 
 // Single source for the by-id note fetch used by useNote's queryFn.
@@ -598,6 +605,14 @@ export function useCreateNote() {
 				// Only the target folder's list changed — no need to stale the whole
 				// prefix (which would force every folder to refetch on next expand).
 				qc.invalidateQueries({ queryKey: ctx.key });
+			} else {
+				// No ctx = the folder's list wasn't cached (collapsed, never opened),
+				// so there was no placeholder to swap. Still mark it stale, or the
+				// note stays invisible there until a reload.
+				const folderId = folderIdForPath(qc, vaultId, vars.folder);
+				if (folderId !== null) {
+					qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId, folderId] });
+				}
 			}
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			// Keep the path-keyed list fresh for the dashboard folder-browse view.

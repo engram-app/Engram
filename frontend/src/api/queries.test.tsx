@@ -1026,6 +1026,73 @@ describe("useCreateNote — optimistic placeholder", () => {
 		});
 	});
 
+	// `/api/folders` returns DERIVED folders (ones holding no note directly) with
+	// a null id; `selectFolders` maps those to `syn:<path>` for consumers, but the
+	// raw cache keeps the null. Resolving the target folder off the raw cache
+	// therefore yielded null for most real-world folders, so the optimistic insert
+	// was skipped entirely and the new note only appeared after a reload.
+	it("inserts a placeholder into a DERIVED folder's list (null id -> syn:)", async () => {
+		qc.setQueryData(["folders", "42"], {
+			folders: [{ id: null, parent_id: null, name: "Media", count: 0 }],
+		});
+		qc.setQueryData(["folder-notes-by-id", "42", "syn:Media"], []);
+
+		let resolveCreate: () => void = () => {};
+		crdtCreateNote.mockImplementation(
+			(docId: string) =>
+				new Promise<string>((r) => {
+					resolveCreate = () => r(docId);
+				}),
+		);
+
+		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		act(() => {
+			result.current.mutate({ folder: "Media" });
+		});
+
+		await waitFor(() => {
+			const rows = qc.getQueryData<Array<{ id: string; path: string }>>([
+				"folder-notes-by-id",
+				"42",
+				"syn:Media",
+			]);
+			expect(rows).toHaveLength(1);
+			expect(rows?.[0]?.path).toBe("Media/Untitled.md");
+			expect(rows?.[0]?.id).toMatch(/^optimistic-/u);
+		});
+
+		resolveCreate();
+
+		await waitFor(() => {
+			const rows = qc.getQueryData<Array<{ id: string }>>([
+				"folder-notes-by-id",
+				"42",
+				"syn:Media",
+			]);
+			expect(rows?.[0]?.id).not.toMatch(/^optimistic-/u);
+		});
+	});
+
+	// A collapsed folder has never fetched its notes, so there's no list to patch.
+	// The create still has to mark it stale, or the note stays invisible until a
+	// reload even after the server confirms it.
+	it("invalidates the target folder's list when it wasn't cached", async () => {
+		qc.setQueryData(["folders", "42"], {
+			folders: [{ id: "f9", parent_id: null, name: "Archive", count: 0 }],
+		});
+		const invalidate = vi.spyOn(qc, "invalidateQueries");
+
+		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		act(() => {
+			result.current.mutate({ folder: "Archive" });
+		});
+
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		expect(invalidate).toHaveBeenCalledWith(
+			expect.objectContaining({ queryKey: ["folder-notes-by-id", "42", "f9"] }),
+		);
+	});
+
 	it("inserts a placeholder into the by-id list for a subfolder", async () => {
 		qc.setQueryData(["folders", "42"], {
 			folders: [{ id: "f9", parent_id: null, name: "sub", count: 0 }],
