@@ -11,12 +11,17 @@ import type { TreeItem } from "./types";
 
 interface Props {
 	instance: ItemInstance<LoaderItem>;
+	// Id of the file currently open in the editor (the route param). The
+	// highlight is pinned to THIS, not to headless-tree's selection: HT selects
+	// whatever was clicked last, so expanding a folder would steal the chip away
+	// from the file you're actually looking at.
+	activeId?: string | null;
 	onContextMenu?: (itemId: string, x: number, y: number) => void;
 	onLongPress?: (itemId: string) => void;
 	onFolderHover?: (folderId: string) => void;
 }
 
-function rowClass(instance: ItemInstance<LoaderItem>): string {
+function rowClass(instance: ItemInstance<LoaderItem>, active: boolean): string {
 	// `isDragTarget` is provided by dragAndDropFeature; guard in case the row is
 	// rendered without it (tests).
 	const dragOver = (instance as { isDragTarget?: () => boolean }).isDragTarget?.() ?? false;
@@ -24,13 +29,11 @@ function rowClass(instance: ItemInstance<LoaderItem>): string {
 		// w-full so the folder <button> stretches like the note <a> (form controls
 		// shrink to content by default) — gives both the same full-width hover hit.
 		// relative anchors the absolutely-positioned indent guides.
-		// `group` lets the muted icon/badge inside switch to the chip's own text
-		// colour when the row is selected (see group-aria-selected: below).
-		"group relative flex w-full items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left",
+		"relative flex w-full items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left",
 		// A solid neutral chip, not a tint of the cyan primary — a tinted
-		// selection reads as "blue on blue" against this palette. Hover owns
+		// highlight reads as "blue on blue" against this palette. Hover owns
 		// `accent`, so the two states stay clearly distinct.
-		instance.isSelected()
+		active
 			? "bg-tree-selected font-medium text-tree-selected-foreground"
 			: "text-foreground hover:bg-accent hover:text-accent-foreground",
 		dragOver ? "bg-primary/15 ring-1 ring-ring ring-inset" : "",
@@ -83,14 +86,14 @@ function Chevron({ open }: { open: boolean }) {
 	return (
 		<ChevronRight
 			aria-hidden="true"
-			className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform group-aria-selected:text-current ${
+			className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
 				open ? "rotate-90" : ""
 			}`}
 		/>
 	);
 }
 
-export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }: Props) {
+export function TreeRow({ instance, activeId, onContextMenu, onLongPress, onFolderHover }: Props) {
 	const itemId = instance.getId();
 	const longPressHandlers = useLongPress({
 		onLongPress: () => onLongPress?.(itemId),
@@ -105,6 +108,9 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 
 	const data = instance.getItemData();
 	const { item } = data;
+	// Folders are never the "open" thing — only notes and attachments route to
+	// /note/:id — so expanding one can't move the highlight.
+	const active = item.kind !== "folder" && item.id === activeId;
 	const depth = instance.getItemMeta()?.level ?? 0;
 	const folderPad = depth * 12 + 4;
 	const notePad = folderPad + 20; // align note label under folder name (chevron 16px + gap 4px)
@@ -162,7 +168,7 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 				onFocus={hoverPrefetch}
 				aria-expanded={instance.isExpanded()}
 				aria-selected={instance.isSelected()}
-				className={rowClass(instance)}
+				className={rowClass(instance, active)}
 				style={{ paddingLeft: `${folderPad}px` }}
 			>
 				<IndentGuides depth={depth} />
@@ -191,20 +197,23 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 				{...longPressProps}
 				onContextMenu={contextMenuHandler}
 				aria-selected={instance.isSelected()}
-				className={rowClass(instance)}
+				aria-current={active ? "page" : undefined}
+				className={rowClass(instance, active)}
 				style={{ paddingLeft: `${notePad}px` }}
 			>
 				<IndentGuides depth={depth} />
+				{/* On the active chip, inherit its text colour — `muted-foreground`
+				    against a near-black background is unreadable. */}
 				<Icon
 					aria-hidden="true"
-					className="h-3.5 w-3.5 shrink-0 text-muted-foreground group-aria-selected:text-current"
+					className={`h-3.5 w-3.5 shrink-0 ${active ? "opacity-75" : "text-muted-foreground"}`}
 				/>
 				{/* Base name only — the badge beside it already carries the type,
 				    and this keeps the row consistent with note rows and with what
 				    the rename box seeds. */}
 				<span className="min-w-0 flex-1 truncate">{noteName(item.path)}</span>
 				{ext ? (
-					<span className="shrink-0 text-muted-foreground text-xs group-aria-selected:text-current group-aria-selected:opacity-75">
+					<span className={`shrink-0 text-xs ${active ? "opacity-75" : "text-muted-foreground"}`}>
 						{ext.toUpperCase()}
 					</span>
 				) : null}
@@ -232,13 +241,16 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 			onContextMenu={contextMenuHandler}
 			onDragStart={handleNoteDragStart}
 			aria-selected={instance.isSelected()}
-			className={rowClass(instance)}
+			aria-current={active ? "page" : undefined}
+			className={rowClass(instance, active)}
 			style={{ paddingLeft: `${notePad}px` }}
 		>
 			<IndentGuides depth={depth} />
 			<span className="min-w-0 flex-1 truncate">{noteLabel(item)}</span>
 			{item.ext && item.ext !== "md" && (
-				<span className="shrink-0 text-muted-foreground text-xs uppercase group-aria-selected:text-current group-aria-selected:opacity-75">
+				<span
+					className={`shrink-0 text-xs uppercase ${active ? "opacity-75" : "text-muted-foreground"}`}
+				>
 					{item.ext}
 				</span>
 			)}

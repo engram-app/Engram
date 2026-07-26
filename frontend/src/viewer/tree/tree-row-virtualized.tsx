@@ -7,6 +7,7 @@ interface Props {
 	virtualItem: VirtualItem;
 	items: ItemInstance<LoaderItem>[];
 	instanceFor?: (itemId: string) => ItemInstance<LoaderItem> | undefined;
+	activeId?: string | null;
 	// The virtualizer's own measuring ref. Attaching it makes each slot as tall
 	// as the row actually renders, instead of trusting `estimateSize`.
 	measureElement?: (el: HTMLElement | null) => void;
@@ -19,6 +20,7 @@ export function TreeRowVirtualized({
 	virtualItem,
 	items,
 	instanceFor,
+	activeId,
 	measureElement,
 	onContextMenu,
 	onLongPress,
@@ -52,6 +54,7 @@ export function TreeRowVirtualized({
 		>
 			<TreeRow
 				instance={instance}
+				activeId={activeId}
 				onContextMenu={onContextMenu}
 				onLongPress={onLongPress}
 				onFolderHover={onFolderHover}

@@ -146,6 +146,56 @@ describe("TreeRow", () => {
 		expect(screen.getByRole("textbox")).toBeInTheDocument();
 	});
 
+	// The highlight is pinned to the OPEN file (the route), not to whatever was
+	// clicked last. Clicking a folder expands it; it must not steal the chip.
+	describe("active highlight", () => {
+		const chip = /bg-tree-selected/u;
+
+		it("paints the note that matches the open route id", () => {
+			const instance = mockInstance({ data: noteItem });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} activeId="100" />
+				</MemoryRouter>,
+			);
+			const link = screen.getByRole("link");
+			expect(link.className).toMatch(chip);
+			expect(link).toHaveAttribute("aria-current", "page");
+		});
+
+		it("paints an open attachment too", () => {
+			const instance = mockInstance({ data: attachmentItem });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} activeId="att-1" />
+				</MemoryRouter>,
+			);
+			expect(screen.getByRole("link").className).toMatch(chip);
+		});
+
+		it("does not paint a note that is merely HT-selected but not open", () => {
+			const instance = mockInstance({ data: noteItem, isSelected: true });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} activeId="999" />
+				</MemoryRouter>,
+			);
+			const link = screen.getByRole("link");
+			expect(link.className).not.toMatch(chip);
+			expect(link).not.toHaveAttribute("aria-current");
+		});
+
+		it("never paints a folder, even when HT has it selected", () => {
+			const instance = mockInstance({ data: folderItem, isSelected: true });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} activeId="1" />
+				</MemoryRouter>,
+			);
+			expect(screen.getByRole("treeitem").className).not.toMatch(chip);
+		});
+	});
+
 	it("aria-selected reflects HT selection state on note link", () => {
 		const instance = mockInstance({ data: noteItem, isSelected: true });
 		render(
