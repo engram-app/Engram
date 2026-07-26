@@ -19,7 +19,13 @@ import time
 import pytest
 import requests
 
-from helpers.oauth import provision_oauth_tokens, swap_to_oauth, restore_auth, wait_for_stream
+from helpers.oauth import (
+    ensure_oauth_identity,
+    provision_oauth_tokens,
+    swap_to_oauth,
+    restore_auth,
+    wait_for_stream,
+)
 from helpers.vault import read_note, wait_for_content, wait_for_file
 from helpers.latency import DELIVERY_TIMEOUT
 
@@ -81,7 +87,10 @@ async def test_oauth_reconnect_catches_up(vault_a, cdp_a, clerk_client, _oauth_w
         )
         assert resp.status_code in (200, 201), f"Create failed: {resp.status_code}"
 
-        # Reconnect — should trigger catch-up pull
+        # Reconnect — should trigger catch-up pull. Re-assert our identity first:
+        # the plugin is session-scoped, and a reconnect on a drifted identity
+        # catches up against the WRONG vault, where this note has no row (#1128).
+        await ensure_oauth_identity(cdp_a, tokens)
         t0 = time.monotonic()
         await cdp_a.reconnect_stream()
 
@@ -139,7 +148,11 @@ async def test_oauth_reconnect_receives_update(vault_a, cdp_a, clerk_client, _oa
         )
         assert resp.status_code in (200, 201), f"Update failed: {resp.status_code}"
 
-        # Reconnect — catch-up should deliver update
+        # Reconnect — catch-up should deliver update. Same identity guard as the
+        # sibling test: this is the leg that was failing 4/4 on the persistent-doc
+        # branch, and the backend log showed the crdt: topic rejoining the api-key
+        # user/vault instead of the OAuth one, so the row was never in the feed.
+        await ensure_oauth_identity(cdp_a, tokens)
         t0 = time.monotonic()
         await cdp_a.reconnect_stream()
 
