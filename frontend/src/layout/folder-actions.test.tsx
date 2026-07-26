@@ -60,7 +60,7 @@ vi.mock("../api/active-vault", () => ({
 
 function renderWithProviders() {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	// Seed the active-note cache so useActiveFolder() resolves to "foo"
+	// A note in "foo" is open — the toolbar must still create at the ROOT.
 	qc.setQueryData(["note", "1", "42"], { id: "42", folder: "foo", path: "foo/bar.md" });
 	return render(
 		<MemoryRouter initialEntries={["/note/42"]}>
@@ -85,25 +85,27 @@ describe("FolderActions", () => {
 		demoActive = false;
 	});
 
-	it("creates a note in the active folder when New note is clicked", async () => {
+	// Obsidian's equivalent buttons always target the vault root; following the
+	// open note's folder made the destination unpredictable.
+	it("creates a note at the vault root, ignoring the open note's folder", async () => {
 		renderWithProviders();
 
 		fireEvent.click(screen.getByRole("button", { name: "New note" }));
 
 		await waitFor(() => {
-			expect(crdtCreateNote).toHaveBeenCalledWith(expect.any(String), "foo/Untitled.md");
+			expect(crdtCreateNote).toHaveBeenCalledWith(expect.any(String), "Untitled.md");
 		});
 		expect(post).not.toHaveBeenCalledWith("/notes", expect.anything());
 	});
 
-	it("creates a folder under the active folder when New folder is clicked", async () => {
-		post.mockResolvedValue({ folder: { name: "foo/untitled", count: 0 } });
+	it("creates a folder at the vault root, ignoring the open note's folder", async () => {
+		post.mockResolvedValue({ folder: { name: "untitled", count: 0 } });
 		renderWithProviders();
 
 		fireEvent.click(screen.getByRole("button", { name: "New folder" }));
 
 		await waitFor(() => {
-			expect(post).toHaveBeenCalledWith("/folders", { folder: "foo/untitled" });
+			expect(post).toHaveBeenCalledWith("/folders", { folder: "untitled" });
 		});
 	});
 
@@ -119,11 +121,11 @@ describe("FolderActions", () => {
 		expect(navigate).toHaveBeenCalledWith(`/note/${mintedId}`);
 	});
 
-	it("opens the upload flow targeting the active folder when Upload is clicked", () => {
+	it("opens the upload flow targeting the vault root when Upload is clicked", () => {
 		renderWithProviders();
 		fireEvent.click(screen.getByRole("button", { name: "Upload attachment" }));
 		// Seeded active note lives in folder "foo" (see renderWithProviders).
-		expect(openUpload).toHaveBeenCalledWith(undefined, "foo");
+		expect(openUpload).toHaveBeenCalledWith(undefined, "");
 	});
 
 	it("hides the Upload button on demo vaults", () => {

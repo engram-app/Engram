@@ -13,7 +13,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { uuid7 } from "@/crdt/uuid7";
-import { useActiveFolder } from "@/lib/active-folder";
 import { useDemoVaultOptional } from "../onboarding/tour/demo-vault-provider";
 import { useAttachmentUpload } from "../viewer/attachment-upload/provider";
 import { type SortKey, useFolderTreeState } from "./folder-tree-context";
@@ -52,7 +51,6 @@ const SORT_SECTIONS: readonly SortSection[] = [
 
 export default function FolderActions() {
 	const { collapseAll, sort, setSort, requestFolderRename } = useFolderTreeState();
-	const activeFolder = useActiveFolder();
 
 	const createNote = useCreateNote();
 	const createFolder = useCreateFolder();
@@ -73,7 +71,7 @@ export default function FolderActions() {
 							size="icon"
 							aria-label="New note"
 							className={BUTTON}
-							onClick={() => createNote.mutate({ folder: activeFolder, id: uuid7() })}
+							onClick={() => createNote.mutate({ folder: "", id: uuid7() })}
 							disabled={createNote.isPending}
 						>
 							<FilePlus className={ICON} />
@@ -93,7 +91,7 @@ export default function FolderActions() {
 							// accident — the tree owns the rename UI, so ask it via context.
 							onClick={() =>
 								createFolder.mutate(
-									{ parent: activeFolder },
+									{ parent: "" },
 									{ onSuccess: ({ folder }) => requestFolderRename(folder) },
 								)
 							}
@@ -113,7 +111,7 @@ export default function FolderActions() {
 								size="icon"
 								aria-label="Upload attachment"
 								className={BUTTON}
-								onClick={() => openUpload(undefined, activeFolder)}
+								onClick={() => openUpload(undefined, "")}
 							>
 								<Upload className={ICON} />
 							</Button>
