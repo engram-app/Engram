@@ -148,6 +148,10 @@ jobs:
       # Phase 4 targeted e2e ([e2e: suite/pattern] in HEAD commit). Empty = full e2e.
       e2e-target-suite: ${{ steps.skips.outputs.e2e-target-suite }}
       e2e-target-pattern: ${{ steps.skips.outputs.e2e-target-pattern }}
+      # Same tag prebuild-ci-image computes. Exposed so consumers can still
+      # pull the image when that job is SKIPPED on a cache hit (the image is
+      # already in the registry -- only the reference was lost).
+      image: ${{ steps.image-tag.outputs.image }}
     steps:
       - name: Generate App token
         id: app-token
@@ -166,6 +170,25 @@ jobs:
           repositories: Engram-obsidian
 
       - uses: actions/checkout@v7
+
+      - name: Compute CI image tag
+        id: image-tag
+        # Mirrors prebuild-ci-image's "Compute image tag" byte for byte. Kept in
+        # sync deliberately: this job always runs, so its value is the fallback
+        # when the prebuild is skipped.
+        run: |
+          HASH=$(git ls-tree -r HEAD -- \
+            Dockerfile entrypoint.sh \
+            mix.exs mix.lock \
+            config lib priv frontend \
+            | sha256sum | cut -c1-12)
+          if [ -n "${LOCAL_REGISTRY:-}" ]; then
+            IMAGE="${LOCAL_REGISTRY}/engram-ci:${HASH}"
+          else
+            IMAGE="engram-ci:${HASH}"
+          fi
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "Fallback image: $IMAGE"
 
       - name: Resolve plugin SHA
         id: plugin-sha
@@ -867,7 +890,7 @@ jobs:
       MARKER_PREFIX: /tmp/ci-${{ github.run_id }}-obsidian
       E2E_VAULT_PREFIX: /tmp/e2e-vault-${{ github.run_id }}-obsidian
       E2E_CONFIG_PREFIX: /tmp/e2e-obsidian-config-${{ github.run_id }}-obsidian
-      ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image }}
+      ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image || needs.fingerprint.outputs.image }}
 
     steps:
       - name: Generate App token
@@ -1431,7 +1454,7 @@ jobs:
       MARKER_PREFIX: /tmp/ci-crdt-${{ github.run_id }}
       E2E_VAULT_PREFIX: /tmp/e2e-crdt-vault-${{ github.run_id }}
       E2E_CONFIG_PREFIX: /tmp/e2e-crdt-obsidian-config-${{ github.run_id }}
-      ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image }}
+      ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image || needs.fingerprint.outputs.image }}
 
     steps:
       - name: Generate App token
@@ -1942,7 +1965,7 @@ jobs:
     env:
       CI_PROJECT: engram-ci-headless-${{ github.run_id }}
       QDRANT_COLLECTION: ci_headless_${{ github.run_id }}
-      ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image }}
+      ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image || needs.fingerprint.outputs.image }}
     steps:
       - name: Generate App token
         id: app-token
@@ -2287,7 +2310,7 @@ jobs:
 
     env:
       CI_PROJECT: engram-ci-db-${{ github.run_id }}
-      ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image }}
+      ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image || needs.fingerprint.outputs.image }}
 
     steps:
       - name: Reset sparse-checkout leaked from cross-repo jobs
