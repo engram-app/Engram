@@ -28,19 +28,17 @@ export function RenameInput({ initial, kind, error, onChange, onCommit, onCancel
 			return;
 		}
 		el.focus();
-		if (kind === "file") {
-			const dot = initial.lastIndexOf(".");
-			el.setSelectionRange(0, dot > 0 ? dot : initial.length);
-		} else {
-			el.setSelectionRange(0, initial.length);
-		}
-	}, [initial, kind]);
+		// Whole value: every caller seeds this with a base name, never a leaf
+		// with an extension, so a dot in "Node.js guide" is title text.
+		el.setSelectionRange(0, initial.length);
+	}, [initial]);
 
 	return (
 		<div className="flex w-full flex-col gap-0.5">
 			<input
 				ref={inputRef}
 				data-testid="tree-rename-input"
+				aria-label={`Rename ${kind}`}
 				type="text"
 				value={value}
 				onChange={(e) => {
@@ -61,10 +59,10 @@ export function RenameInput({ initial, kind, error, onChange, onCommit, onCancel
 					}
 				}}
 				onBlur={() => onCancel()}
-				className="w-full rounded border border-blue-400 bg-white px-1 py-0.5 text-gray-900 text-sm dark:bg-gray-900 dark:text-gray-100"
+				className="w-full rounded border border-ring bg-background px-1 py-0.5 text-foreground text-sm outline-none"
 			/>
 			{Boolean(error) && (
-				<span className="text-red-600 text-xs dark:text-red-400" role="alert">
+				<span className="text-destructive text-xs" role="alert">
 					{error}
 				</span>
 			)}

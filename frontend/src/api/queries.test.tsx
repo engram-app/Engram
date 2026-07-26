@@ -582,13 +582,18 @@ function seedNoteById(id: string, note: Partial<Note>) {
 	} satisfies Note);
 }
 
-describe("rename note does NOT re-path the note body cache optimistically", () => {
-	// The open editor keys its CRDT doc on `note.path`. Re-pathing `['note', id]`
-	// before the rename commits makes the editor enroll the new path early, which
-	// the CRDT channel bootstraps into a duplicate note that then 409s the rename
-	// (a stable cross-tab duplicate under load). The note cache must stay on the
-	// old path until onSettled's refetch confirms the server move.
-	it("leaves [note, vaultId, id] on the old path while the rename is in flight", async () => {
+describe("rename note re-paths the note body cache optimistically", () => {
+	// An open editor's header reads `['note', vaultId, id]`, so it has to flip
+	// the instant the user commits — waiting for onSettled's refetch reads as lag.
+	//
+	// This used to be deliberately skipped because the editor keyed its CRDT doc
+	// on `note.path`: re-pathing early made it enroll the new path before the
+	// rename committed, which the CRDT channel bootstrapped into a duplicate note
+	// that then 409'd the rename. note-page.tsx now keys the doc on `note.id`
+	// (stable across a rename) and only reads `path` for display + the `.md` gate,
+	// so the early-enroll hazard is gone and `ctx.prevNote` gives onError an exact
+	// rollback.
+	const seed = () => {
 		seedFolderNotes("a", [{ id: "42", path: "a/x.md", title: "X" }]);
 		seedFolderNotes("b", []);
 		seedFolders([
@@ -596,40 +601,88 @@ describe("rename note does NOT re-path the note body cache optimistically", () =
 			{ name: "b", count: 0 },
 		]);
 		seedNoteById("42", { id: "42", path: "a/x.md", folder: "a", title: "X", content: "# X" });
+	};
 
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
+	it("flips [note, vaultId, id] to the new path while the rename is in flight", async () => {
+		seed();
+		let resolveCreate!: (v: string) => void;
+		crdtCreateNote.mockReturnValue(
 			new Promise((r) => {
-				resolvePost = r;
+				resolveCreate = r;
 			}),
 		);
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
 		act(() => {
-			result.current.mutate({ id: "n1", old_path: "a/x.md", new_path: "b/y.md" });
+			result.current.mutate({ id: "42", old_path: "a/x.md", new_path: "b/y.md" });
 		});
 
-		// The FOLDER lists flip optimistically (snappy tree)…
 		await waitFor(() => {
-			const oldList = qc.getQueryData<{ notes: Array<{ path: string }> }>([
-				"folderNotes",
-				"42",
-				"a",
-			]);
-			expect(oldList?.notes.map((n) => n.path)).toEqual([]);
+			expect(qc.getQueryData<Note>(["note", "42", "42"])?.path).toBe("b/y.md");
 		});
-		// …but the note body cache stays on the OLD path (no early CRDT re-enroll).
+		const cached = qc.getQueryData<Note>(["note", "42", "42"]);
+		expect(cached?.folder).toBe("b");
+		// Body is untouched — only the location moves.
+		expect(cached?.content).toBe("# X");
+
+		resolveCreate("42");
+	});
+
+	// The sidebar tree renders the id-keyed lists, NOT the path-keyed
+	// `folderNotes` ones onMutate already updated — so it needs its own
+	// optimistic write or the tree row lags a refetch behind the header.
+	it("re-paths the tree's id-keyed list so the sidebar name flips too", async () => {
+		seed();
+		seedFolderNotesById("9", [{ id: "42", path: "a/x.md", folder: "a" }]);
+		let resolveCreate!: (v: string) => void;
+		crdtCreateNote.mockReturnValue(
+			new Promise((r) => {
+				resolveCreate = r;
+			}),
+		);
+
+		const { result } = renderHook(() => useRenameNote(), { wrapper });
+		act(() => {
+			result.current.mutate({ id: "42", old_path: "a/x.md", new_path: "a/y.md" });
+		});
+
+		await waitFor(() => {
+			const rows = qc.getQueryData<Array<{ path: string }>>(["folder-notes-by-id", "42", "9"]);
+			expect(rows?.[0]?.path).toBe("a/y.md");
+		});
+
+		resolveCreate("42");
+	});
+
+	it("restores the id-keyed list when the rename is refused", async () => {
+		seed();
+		seedFolderNotesById("9", [{ id: "42", path: "a/x.md", folder: "a" }]);
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
+
+		const { result } = renderHook(() => useRenameNote(), { wrapper });
+		act(() => {
+			result.current.mutate({ id: "42", old_path: "a/x.md", new_path: "a/y.md" });
+		});
+
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		const rows = qc.getQueryData<Array<{ path: string }>>(["folder-notes-by-id", "42", "9"]);
+		expect(rows?.[0]?.path).toBe("a/x.md");
+	});
+
+	it("rolls the note body cache back to the old path when the rename is refused", async () => {
+		seed();
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
+
+		const { result } = renderHook(() => useRenameNote(), { wrapper });
+		act(() => {
+			result.current.mutate({ id: "42", old_path: "a/x.md", new_path: "b/y.md" });
+		});
+
+		await waitFor(() => expect(result.current.isError).toBe(true));
 		const cached = qc.getQueryData<Note>(["note", "42", "42"]);
 		expect(cached?.path).toBe("a/x.md");
 		expect(cached?.folder).toBe("a");
 		expect(cached?.content).toBe("# X");
-
-		resolvePost({
-			renamed: true,
-			old_path: "a/x.md",
-			new_path: "b/y.md",
-			note: { id: "42", path: "b/y.md" },
-		});
 	});
 });
 
@@ -928,6 +981,10 @@ describe("useBatchDeleteNotes", () => {
 	});
 });
 
+// The caller mints the note id, so the optimistic row is addressable the moment
+// it renders — no `optimistic-` placeholder that gets swapped on ack.
+const MINTED_ID = "01920000-0000-7000-8000-000000000abc";
+
 describe("useCreateNote — optimistic placeholder", () => {
 	it('inserts a placeholder at root (by-id "root") then swaps it for the real note', async () => {
 		// Root notes share the one id-keyed cache under the 'root' sentinel.
@@ -945,7 +1002,7 @@ describe("useCreateNote — optimistic placeholder", () => {
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
 		act(() => {
-			result.current.mutate({ folder: "" });
+			result.current.mutate({ folder: "", id: MINTED_ID });
 		});
 
 		await waitFor(() => {
@@ -955,22 +1012,93 @@ describe("useCreateNote — optimistic placeholder", () => {
 				"root",
 			]);
 			expect(root).toHaveLength(1);
-			expect(root?.[0]?.id).toMatch(/^optimistic-/u);
+			// Final id from the start — not a throwaway that gets swapped later.
+			expect(root?.[0]?.id).toBe(MINTED_ID);
 			expect(root?.[0]?.title).toBe("Untitled");
 		});
 
-		// A client-minted uuid7 is sent as the doc_id (not a v4/placeholder), at
-		// the collision-bumped path.
-		const [[mintedId] = []] = crdtCreateNote.mock.calls;
-		expect(crdtCreateNote).toHaveBeenCalledWith(mintedId, "Untitled.md");
-		expect(mintedId).not.toMatch(/^optimistic-/u);
+		// The very id the row is already rendering under goes on the wire.
+		expect(crdtCreateNote).toHaveBeenCalledWith(MINTED_ID, "Untitled.md");
 
 		resolveCreate();
 
 		await waitFor(() => {
-			const root = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "root"]);
-			expect(root?.[0]?.id).toBe(mintedId);
+			const root = qc.getQueryData<Array<{ id: string; pending?: boolean }>>([
+				"folder-notes-by-id",
+				"42",
+				"root",
+			]);
+			// Unchanged id; only `pending` settles.
+			expect(root?.[0]?.id).toBe(MINTED_ID);
+			expect(root?.[0]?.pending).toBe(false);
 		});
+	});
+
+	// `/api/folders` returns DERIVED folders (ones holding no note directly) with
+	// a null id; `selectFolders` maps those to `syn:<path>` for consumers, but the
+	// raw cache keeps the null. Resolving the target folder off the raw cache
+	// therefore yielded null for most real-world folders, so the optimistic insert
+	// was skipped entirely and the new note only appeared after a reload.
+	it("inserts a placeholder into a DERIVED folder's list (null id -> syn:)", async () => {
+		qc.setQueryData(["folders", "42"], {
+			folders: [{ id: null, parent_id: null, name: "Media", count: 0 }],
+		});
+		qc.setQueryData(["folder-notes-by-id", "42", "syn:Media"], []);
+
+		let resolveCreate: () => void = () => {};
+		crdtCreateNote.mockImplementation(
+			(docId: string) =>
+				new Promise<string>((r) => {
+					resolveCreate = () => r(docId);
+				}),
+		);
+
+		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		act(() => {
+			result.current.mutate({ folder: "Media", id: MINTED_ID });
+		});
+
+		await waitFor(() => {
+			const rows = qc.getQueryData<Array<{ id: string; path: string }>>([
+				"folder-notes-by-id",
+				"42",
+				"syn:Media",
+			]);
+			expect(rows).toHaveLength(1);
+			expect(rows?.[0]?.path).toBe("Media/Untitled.md");
+			expect(rows?.[0]?.id).toBe(MINTED_ID);
+		});
+
+		resolveCreate();
+
+		await waitFor(() => {
+			const rows = qc.getQueryData<Array<{ id: string; pending?: boolean }>>([
+				"folder-notes-by-id",
+				"42",
+				"syn:Media",
+			]);
+			expect(rows?.[0]?.pending).toBe(false);
+		});
+	});
+
+	// A collapsed folder has never fetched its notes, so there's no list to patch.
+	// The create still has to mark it stale, or the note stays invisible until a
+	// reload even after the server confirms it.
+	it("invalidates the target folder's list when it wasn't cached", async () => {
+		qc.setQueryData(["folders", "42"], {
+			folders: [{ id: "f9", parent_id: null, name: "Archive", count: 0 }],
+		});
+		const invalidate = vi.spyOn(qc, "invalidateQueries");
+
+		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		act(() => {
+			result.current.mutate({ folder: "Archive", id: MINTED_ID });
+		});
+
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		expect(invalidate).toHaveBeenCalledWith(
+			expect.objectContaining({ queryKey: ["folder-notes-by-id", "42", "f9"] }),
+		);
 	});
 
 	it("inserts a placeholder into the by-id list for a subfolder", async () => {
@@ -989,21 +1117,20 @@ describe("useCreateNote — optimistic placeholder", () => {
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
 		act(() => {
-			result.current.mutate({ folder: "sub" });
+			result.current.mutate({ folder: "sub", id: MINTED_ID });
 		});
 
 		await waitFor(() => {
 			const byId = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "f9"]);
 			expect(byId).toHaveLength(1);
-			expect(byId?.[0]?.id).toMatch(/^optimistic-/u);
+			expect(byId?.[0]?.id).toBe(MINTED_ID);
 		});
 
 		resolveCreate();
 
 		await waitFor(() => {
 			const byId = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "f9"]);
-			const [[mintedId] = []] = crdtCreateNote.mock.calls;
-			expect(byId?.[0]?.id).toBe(mintedId);
+			expect(byId?.[0]?.id).toBe(MINTED_ID);
 		});
 	});
 
@@ -1017,12 +1144,16 @@ describe("useCreateNote — optimistic placeholder", () => {
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
 		await act(async () => {
-			await result.current.mutateAsync({ folder: "" });
+			await result.current.mutateAsync({ folder: "", id: MINTED_ID });
 		});
 
 		expect(crdtCreateNote).toHaveBeenCalledTimes(2);
 		expect(crdtCreateNote.mock.calls[0]![1]).toBe("Untitled.md");
 		expect(crdtCreateNote.mock.calls[1]![1]).toBe("Untitled 1.md");
+		// Only the PATH is retried — a collision rejects the path, not the id, and
+		// the optimistic row is already rendering under it.
+		expect(crdtCreateNote.mock.calls[0]![0]).toBe(MINTED_ID);
+		expect(crdtCreateNote.mock.calls[1]![0]).toBe(MINTED_ID);
 	});
 
 	it("surfaces notes_cap_reached without retrying", async () => {
@@ -1030,7 +1161,7 @@ describe("useCreateNote — optimistic placeholder", () => {
 		crdtCreateNote.mockRejectedValue(new CrdtOpError("notes_cap_reached", "crdt_create"));
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
-		await expect(result.current.mutateAsync({ folder: "" })).rejects.toMatchObject({
+		await expect(result.current.mutateAsync({ folder: "", id: MINTED_ID })).rejects.toMatchObject({
 			reason: "notes_cap_reached",
 		});
 		expect(crdtCreateNote).toHaveBeenCalledTimes(1);

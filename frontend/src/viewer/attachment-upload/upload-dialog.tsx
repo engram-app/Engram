@@ -161,7 +161,7 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 						tabIndex={0}
 						aria-activedescendant={optionId(activeIndex)}
 						onKeyDown={onFolderKeyDown}
-						className="max-h-24 overflow-y-auto rounded border border-border focus:outline-none focus:ring-2 focus:ring-blue-400"
+						className="max-h-24 overflow-y-auto rounded border border-border focus:outline-none focus:ring-2 focus:ring-ring"
 					>
 						{candidates.map((name, i) => (
 							// biome-ignore lint/a11y/useFocusableInteractive lint/a11y/useKeyWithClickEvents: option in an aria-activedescendant listbox; options are intentionally not individually focusable and keyboard activation is handled on the listbox container above
@@ -171,7 +171,7 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 								role="option"
 								aria-selected={name === folder}
 								onClick={() => setFolder(name)}
-								className={`cursor-pointer px-3 py-1 text-sm ${name === folder ? "bg-blue-50 dark:bg-blue-950" : ""}`}
+								className={`cursor-pointer px-3 py-1 text-sm ${name === folder ? "bg-accent text-accent-foreground" : ""}`}
 							>
 								{name === "" ? "/ (root)" : `${name}`}
 							</div>
@@ -189,7 +189,7 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 						<span className="truncate">{row.file.name}</span>
 						<span className="ml-2 shrink-0 text-muted-foreground text-xs">
 							{row.status === "error" ? (
-								<span className="text-red-600 dark:text-red-400">{row.error}</span>
+								<span className="text-destructive">{row.error}</span>
 							) : row.status === "uploading" ? (
 								"Uploading…"
 							) : row.status === "done" ? (

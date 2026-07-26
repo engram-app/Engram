@@ -21,6 +21,7 @@ import {
 } from "../../api/queries";
 import { resolveDropMove } from "./drop-redirect";
 import { buildLoader, type LoaderItem, type SortKey } from "./loader";
+import { TREE_SLOT_HEIGHT } from "./row-metrics";
 import { ROOT_ID } from "./types";
 
 interface Deps {
@@ -256,7 +257,9 @@ export function useEngramTree(deps: Deps) {
 	const virtualizer = useVirtualizer({
 		count: items.length,
 		getScrollElement: () => deps.scrollParentRef.current,
-		estimateSize: () => 24,
+		// Exact, not an estimate: rows are pinned to the same constant, so no
+		// measurement pass is needed. See row-metrics.ts for why we don't measure.
+		estimateSize: () => TREE_SLOT_HEIGHT,
 		overscan: 8,
 	});
 

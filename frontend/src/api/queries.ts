@@ -58,11 +58,18 @@ function folderIdForPath(
 	if (folder === "") {
 		return ROOT_FOLDER_ID;
 	}
-	return (
-		qc
-			.getQueryData<{ folders: Folder[] }>(["folders", vaultId])
-			?.folders.find((f) => f.name === folder)?.id ?? null
-	);
+	// getQueryData returns the RAW payload — `select: selectFolders` only shapes
+	// what components see. So a derived folder still carries `id: null` here, and
+	// it must get the same `syn:<path>` id selectFolders would have given it,
+	// otherwise this returns null for most real folders and every caller silently
+	// skips its optimistic patch.
+	const row = qc
+		.getQueryData<{ folders: Array<Folder & { id: string | null }> }>(["folders", vaultId])
+		?.folders.find((f) => f.name === folder);
+	if (!row) {
+		return null;
+	}
+	return row.id ?? syntheticFolderId(row.name);
 }
 
 // Single source for the by-id note fetch used by useNote's queryFn.
@@ -97,11 +104,7 @@ function patchRowInList(
 // Filenames in a note list, ignoring our own optimistic placeholders (so a
 // freshly-inserted placeholder doesn't bump the name the server picks).
 function realFilenames(notes: NoteSummary[]): Set<string> {
-	return new Set(
-		notes
-			.filter((n) => !n.id.startsWith("optimistic-"))
-			.map((n) => n.path.split("/").pop() ?? n.path),
-	);
+	return new Set(notes.filter((n) => !n.pending).map((n) => n.path.split("/").pop() ?? n.path));
 }
 
 // Path → parent folder. `'a/b/c.md'` → `'a/b'`; `'a.md'` → `''`. Same
@@ -166,6 +169,10 @@ interface RenameNoteContext {
 	// fields under the SAME cache key.
 	noteId: string | null;
 	prevNote: Note | undefined;
+	// Snapshot of every id-keyed list we re-pathed. The sidebar tree renders
+	// THESE, not the path-keyed `folderNotes` entries above, so they get their
+	// own optimistic write — and their own rollback.
+	byIdLists: Array<{ key: readonly unknown[]; rows: NoteSummary[] }>;
 }
 
 interface RenameFolderContext {
@@ -253,6 +260,10 @@ export interface Folder {
 
 export interface NoteSummary {
 	id: string;
+	// Client-only: set on an optimistic row whose create hasn't been acked yet.
+	// The row already carries its FINAL id (we mint it), so the id can no longer
+	// signal "not real yet" — this flag does.
+	pending?: boolean;
 	path: string;
 	title: string;
 	folder: string;
@@ -507,10 +518,10 @@ export function useCreateNote() {
 	return useMutation<
 		{ path: string; id: string },
 		ApiError,
-		{ folder: string },
+		{ folder: string; id: string },
 		CreateNoteContext | undefined
 	>({
-		mutationFn: async ({ folder }) => {
+		mutationFn: async ({ folder, id }) => {
 			const folderId = folderIdForPath(qc, vaultId, folder);
 			const existingNotes = folderId
 				? (qc.getQueryData<NoteSummary[]>(["folder-notes-by-id", vaultId, folderId]) ?? [])
@@ -523,11 +534,12 @@ export function useCreateNote() {
 			for (let attempt = 0; attempt < MAX_RACES; attempt++) {
 				const name = collideBump(existingNames, "Untitled.md", { cap: 1000 });
 				const path = folder ? `${folder}/${name}` : name;
-				const noteId = uuid7();
 				try {
 					// crdt_create genesis over the live channel (replaces POST /notes);
-					// the ok reply echoes our minted note_id.
-					const id = await crdtCreateNote(noteId, path);
+					// the ok reply echoes our minted note_id. The id is stable across
+					// retries — a collision rejects the PATH, never the id, and the
+					// optimistic row is already rendering under it.
+					await crdtCreateNote(id, path);
 					return { path, id };
 				} catch (err) {
 					// The path is already owned (unique-constraint create_failed) or was
@@ -548,7 +560,7 @@ export function useCreateNote() {
 		// Drop a placeholder row into the id-keyed list the tree reads so a new
 		// note shows instantly (on-disk feel), then swap it for the server row on
 		// success. Root and subfolders share one cache keyed by folder id.
-		onMutate: async ({ folder }) => {
+		onMutate: async ({ folder, id }) => {
 			const folderId = folderIdForPath(qc, vaultId, folder);
 			// Unknown non-root folder not in the cache yet — skip; surfaces on expand.
 			if (folderId === null) {
@@ -566,9 +578,12 @@ export function useCreateNote() {
 			const name = collideBump(realFilenames(snapshot), "Untitled.md", { cap: 1000 });
 			const path = folder ? `${folder}/${name}` : name;
 			const now = new Date().toISOString();
-			const placeholderId = `optimistic-${crypto.randomUUID()}`;
 			const placeholder: NoteSummary = {
-				id: placeholderId,
+				// The id we're about to send, not a throwaway: the row is addressable
+				// the moment it appears, so clicking it before the ack opens the right
+				// note instead of a dead `optimistic-…` route.
+				id,
+				pending: true,
 				path,
 				title: name.replace(/\.md$/u, ""),
 				folder,
@@ -580,20 +595,30 @@ export function useCreateNote() {
 			};
 
 			qc.setQueryData<NoteSummary[]>(key, [...snapshot, placeholder]);
-			return { key, snapshot, placeholderId };
+			return { key, snapshot, placeholderId: id };
 		},
 		onSuccess: ({ id, path }, vars, ctx) => {
 			// Swap the placeholder for the server-assigned id/path.
 			if (ctx) {
 				const filename = path.split("/").pop() ?? path;
+				// Id already matches — only the confirmed path/title and the pending
+				// flag need settling.
 				patchRowInList(qc, ctx.key, ctx.placeholderId, {
-					id,
 					path,
 					title: filename.replace(/\.md$/u, ""),
+					pending: false,
 				});
 				// Only the target folder's list changed — no need to stale the whole
 				// prefix (which would force every folder to refetch on next expand).
 				qc.invalidateQueries({ queryKey: ctx.key });
+			} else {
+				// No ctx = the folder's list wasn't cached (collapsed, never opened),
+				// so there was no placeholder to swap. Still mark it stale, or the
+				// note stays invisible there until a reload.
+				const folderId = folderIdForPath(qc, vaultId, vars.folder);
+				if (folderId !== null) {
+					qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId, folderId] });
+				}
 			}
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			// Keep the path-keyed list fresh for the dashboard folder-browse view.
@@ -635,7 +660,7 @@ export function useCreateFolder() {
 
 			const MAX_RACES = 5;
 			for (let attempt = 0; attempt < MAX_RACES; attempt++) {
-				const name = collideBump(childNames, "Untitled folder", { cap: 1000 });
+				const name = collideBump(childNames, "untitled", { cap: 1000 });
 				const folder = parent ? `${parent}/${name}` : name;
 				try {
 					await api.post<{ folder: { name: string; count: number } }>("/folders", { folder });
@@ -1423,6 +1448,26 @@ export function useRenameNote() {
 				prevNote = qc.getQueryData<Note>(["note", vaultId, noteId]);
 			}
 
+			// Re-path the note wherever the tree caches it. Matching by id when we
+			// resolved one, else by old path. A rename keeps the note in its
+			// folder (both inline-rename entry points edit the leaf only), so an
+			// in-place re-path is enough; onSettled's refetch reconciles folder
+			// membership in the theoretical slash-typed move case.
+			const matchesRow = (n: NoteSummary) =>
+				noteId === null ? n.path === old_path : n.id === noteId;
+			const byIdLists: RenameNoteContext["byIdLists"] = [];
+			for (const q of qc.getQueryCache().findAll({ queryKey: ["folder-notes-by-id", vaultId] })) {
+				const rows = q.state.data as NoteSummary[] | undefined;
+				if (!rows?.some(matchesRow)) {
+					continue;
+				}
+				byIdLists.push({ key: q.queryKey, rows });
+				qc.setQueryData<NoteSummary[]>(
+					q.queryKey,
+					rows.map((n) => (matchesRow(n) ? { ...n, path: new_path, folder: newFolder } : n)),
+				);
+			}
+
 			const ctx: RenameNoteContext = {
 				oldFolder,
 				newFolder,
@@ -1431,6 +1476,7 @@ export function useRenameNote() {
 				folders,
 				noteId,
 				prevNote,
+				byIdLists,
 			};
 
 			// Build a renamed NoteSummary either from the existing list row
@@ -1506,16 +1552,24 @@ export function useRenameNote() {
 				});
 			}
 
-			// Deliberately do NOT re-path the note-body cache (`['note', vaultId,
-			// id]`) here. An open editor (note-page.tsx) keys its CRDT doc on
-			// `note.id`, which is stable across a rename, so this no longer risks
-			// tearing down/reopening the live doc or racing the CRDT channel's
-			// bootstrap-by-path. It's skipped anyway because there's no rollback
-			// for this cache entry (see the onError note below) — flipping `path`
-			// optimistically would show an unconfirmed path if the rename POST
-			// fails. Let onSettled's refetch move the note cache to the new path
-			// AFTER the server confirms the rename, exactly as the (passing)
-			// folder-move path already does.
+			// Re-path the note-body cache too, so an open editor's header flips
+			// the moment the user commits instead of lagging until onSettled's
+			// refetch. This was once deliberately skipped: the editor keyed its
+			// CRDT doc on `note.path`, so an early re-path made it enroll the new
+			// path before the rename committed, which the channel bootstrapped
+			// into a duplicate note that then 409'd the rename. note-page.tsx now
+			// keys the doc on `note.id` (stable across a rename) and reads `path`
+			// only for display + the `.md` gate, so that hazard is gone — and
+			// `ctx.prevNote` gives onError an exact rollback if the create is
+			// refused.
+			if (noteId !== null && prevNote) {
+				qc.setQueryData<Note>(["note", vaultId, noteId], {
+					...prevNote,
+					path: new_path,
+					folder: newFolder,
+				});
+			}
+
 			return ctx;
 		},
 		onError: (err, _vars, ctx) => {
@@ -1534,7 +1588,14 @@ export function useRenameNote() {
 			if (ctx.folders !== undefined) {
 				qc.setQueryData(foldersKey, ctx.folders);
 			}
-			// No note-cache rollback: onMutate no longer re-paths `['note', id]`.
+			for (const { key, rows } of ctx.byIdLists) {
+				qc.setQueryData<NoteSummary[]>(key, rows);
+			}
+			// Undo the optimistic re-path so a refused rename can't leave the
+			// header showing a name the server never accepted.
+			if (ctx.noteId !== null && ctx.prevNote) {
+				qc.setQueryData<Note>(["note", vaultId, ctx.noteId], ctx.prevNote);
+			}
 			renameErrorToast(err, "file");
 		},
 		onSettled: () => {
@@ -1848,6 +1909,9 @@ export function useDuplicateNote() {
 			const now = new Date().toISOString();
 			const placeholder: NoteSummary = {
 				id: placeholderId,
+				// Marks the row as not-yet-acked for realFilenames, which used to infer
+				// that from the `optimistic-` id prefix.
+				pending: true,
 				path: new_path,
 				title: srcRow?.title ?? "",
 				folder: newFolder,

@@ -146,6 +146,56 @@ describe("TreeRow", () => {
 		expect(screen.getByRole("textbox")).toBeInTheDocument();
 	});
 
+	// The highlight is pinned to the OPEN file (the route), not to whatever was
+	// clicked last. Clicking a folder expands it; it must not steal the chip.
+	describe("active highlight", () => {
+		const chip = /bg-tree-selected/u;
+
+		it("paints the note that matches the open route id", () => {
+			const instance = mockInstance({ data: noteItem });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} activeId="100" />
+				</MemoryRouter>,
+			);
+			const link = screen.getByRole("link");
+			expect(link.className).toMatch(chip);
+			expect(link).toHaveAttribute("aria-current", "page");
+		});
+
+		it("paints an open attachment too", () => {
+			const instance = mockInstance({ data: attachmentItem });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} activeId="att-1" />
+				</MemoryRouter>,
+			);
+			expect(screen.getByRole("link").className).toMatch(chip);
+		});
+
+		it("does not paint a note that is merely HT-selected but not open", () => {
+			const instance = mockInstance({ data: noteItem, isSelected: true });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} activeId="999" />
+				</MemoryRouter>,
+			);
+			const link = screen.getByRole("link");
+			expect(link.className).not.toMatch(chip);
+			expect(link).not.toHaveAttribute("aria-current");
+		});
+
+		it("never paints a folder, even when HT has it selected", () => {
+			const instance = mockInstance({ data: folderItem, isSelected: true });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} activeId="1" />
+				</MemoryRouter>,
+			);
+			expect(screen.getByRole("treeitem").className).not.toMatch(chip);
+		});
+	});
+
 	it("aria-selected reflects HT selection state on note link", () => {
 		const instance = mockInstance({ data: noteItem, isSelected: true });
 		render(
@@ -189,7 +239,48 @@ describe("TreeRow", () => {
 		expect(onContextMenu).toHaveBeenCalledWith("f:1", 42, 99);
 	});
 
-	it("does not invoke onContextMenu on a synthetic (syn:) folder row", () => {
+	// Obsidian outlines the row whose context menu is open, so you can still tell
+	// what you right-clicked once the menu covers its neighbours.
+	describe("context-menu open state", () => {
+		const outline = /ring-2/u;
+
+		it("outlines the row whose menu is open", () => {
+			const instance = mockInstance({ data: folderItem });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} menuOpenId="f:1" />
+				</MemoryRouter>,
+			);
+			expect(screen.getByRole("treeitem").className).toMatch(outline);
+		});
+
+		it("leaves other rows alone", () => {
+			const instance = mockInstance({ data: folderItem });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} menuOpenId="f:999" />
+				</MemoryRouter>,
+			);
+			expect(screen.getByRole("treeitem").className).not.toMatch(outline);
+		});
+
+		it("outlines note rows too", () => {
+			const instance = mockInstance({ data: noteItem });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} menuOpenId="n:100" />
+				</MemoryRouter>,
+			);
+			expect(screen.getByRole("link").className).toMatch(outline);
+		});
+	});
+
+	// A synthetic folder used to get NO handler, which meant right-clicking it
+	// opened the browser's own context menu. It gets ours now — narrowed to the
+	// path-keyed actions by `actionsFor({ synthetic: true })`, not suppressed
+	// here. Most folders in a real vault are synthetic (`/api/folders` returns
+	// derived folders with a null id), so this was the common case.
+	it("invokes onContextMenu on a synthetic (syn:) folder row too", () => {
 		const onContextMenu = vi.fn();
 		const synthetic: TreeItem = {
 			kind: "folder",
@@ -204,8 +295,11 @@ describe("TreeRow", () => {
 				<TreeRow instance={instance} onContextMenu={onContextMenu} />
 			</MemoryRouter>,
 		);
-		fireEvent.contextMenu(screen.getByRole("treeitem"), { clientX: 42, clientY: 99 });
-		expect(onContextMenu).not.toHaveBeenCalled();
+		const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+		fireEvent(screen.getByRole("treeitem"), ev);
+		expect(onContextMenu).toHaveBeenCalledWith("f:syn:pics", 0, 0);
+		// preventDefault is what keeps the native menu from appearing.
+		expect(ev.defaultPrevented).toBe(true);
 	});
 
 	it("invokes onContextMenu with item id + clientX/Y on right-click of an attachment row", () => {
@@ -316,7 +410,9 @@ describe("TreeRow", () => {
 		);
 		const link = screen.getByRole("link") as HTMLAnchorElement;
 		expect(link.getAttribute("href")).toBe("/note/att-1");
-		expect(screen.getByText("a.png")).toBeInTheDocument();
+		// Base name only — the extension lives in the badge beside it.
+		expect(screen.getByText("a")).toBeInTheDocument();
+		expect(screen.queryByText("a.png")).not.toBeInTheDocument();
 	});
 
 	it("shows uppercase ext badge for attachment", () => {

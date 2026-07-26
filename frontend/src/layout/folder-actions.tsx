@@ -12,7 +12,7 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useActiveFolder } from "@/lib/active-folder";
+import { uuid7 } from "@/crdt/uuid7";
 import { useDemoVaultOptional } from "../onboarding/tour/demo-vault-provider";
 import { useAttachmentUpload } from "../viewer/attachment-upload/provider";
 import { type SortKey, useFolderTreeState } from "./folder-tree-context";
@@ -50,9 +50,7 @@ const SORT_SECTIONS: readonly SortSection[] = [
 ];
 
 export default function FolderActions() {
-	const { collapseAll, sort, setSort } = useFolderTreeState();
-	const activeFolder = useActiveFolder();
-	const targetLabel = activeFolder === "" ? "vault root" : `"${activeFolder}"`;
+	const { collapseAll, sort, setSort, requestFolderRename } = useFolderTreeState();
 
 	const createNote = useCreateNote();
 	const createFolder = useCreateFolder();
@@ -73,13 +71,13 @@ export default function FolderActions() {
 							size="icon"
 							aria-label="New note"
 							className={BUTTON}
-							onClick={() => createNote.mutate({ folder: activeFolder })}
+							onClick={() => createNote.mutate({ folder: "", id: uuid7() })}
 							disabled={createNote.isPending}
 						>
 							<FilePlus className={ICON} />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent>Creates in {targetLabel}</TooltipContent>
+					<TooltipContent>Create note</TooltipContent>
 				</Tooltip>
 
 				<Tooltip>
@@ -89,13 +87,20 @@ export default function FolderActions() {
 							size="icon"
 							aria-label="New folder"
 							className={BUTTON}
-							onClick={() => createFolder.mutate({ parent: activeFolder })}
+							// Straight into rename mode so the placeholder name is never kept by
+							// accident — the tree owns the rename UI, so ask it via context.
+							onClick={() =>
+								createFolder.mutate(
+									{ parent: "" },
+									{ onSuccess: ({ folder }) => requestFolderRename(folder) },
+								)
+							}
 							disabled={createFolder.isPending}
 						>
 							<FolderPlus className={ICON} />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent>Creates in {targetLabel}</TooltipContent>
+					<TooltipContent>Create folder</TooltipContent>
 				</Tooltip>
 
 				{!demoActive && (
@@ -106,7 +111,7 @@ export default function FolderActions() {
 								size="icon"
 								aria-label="Upload attachment"
 								className={BUTTON}
-								onClick={() => openUpload(undefined, activeFolder)}
+								onClick={() => openUpload(undefined, "")}
 							>
 								<Upload className={ICON} />
 							</Button>
@@ -114,45 +119,55 @@ export default function FolderActions() {
 						<TooltipContent>Upload an attachment</TooltipContent>
 					</Tooltip>
 				)}
-			</TooltipProvider>
+				<DropdownMenu>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							{/* Both triggers compose onto the one Button via asChild. */}
+							<DropdownMenuTrigger asChild>
+								<Button variant="ghost" size="icon" aria-label="Sort" className={BUTTON}>
+									<ArrowUpDown className={ICON} />
+								</Button>
+							</DropdownMenuTrigger>
+						</TooltipTrigger>
+						<TooltipContent>Sort</TooltipContent>
+					</Tooltip>
+					<DropdownMenuContent align="end" className="w-[min(95vw,20rem)]">
+						<DropdownMenuRadioGroup value={sort} onValueChange={(v) => setSort(v as SortKey)}>
+							{SORT_SECTIONS.map((section, i) => (
+								// Fragment (not <section>) so Radix's roving keyboard nav across
+								// DropdownMenuRadioItem siblings keeps working — wrapping them in
+								// a real DOM element breaks the radio group.
+								<Fragment key={section.label}>
+									{i > 0 && <DropdownMenuSeparator />}
+									<DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase tracking-wide">
+										{section.label}
+									</DropdownMenuLabel>
+									{section.options.map((opt) => (
+										<DropdownMenuRadioItem key={opt.value} value={opt.value}>
+											{opt.label}
+										</DropdownMenuRadioItem>
+									))}
+								</Fragment>
+							))}
+						</DropdownMenuRadioGroup>
+					</DropdownMenuContent>
+				</DropdownMenu>
 
-			<DropdownMenu>
-				<DropdownMenuTrigger asChild>
-					<Button variant="ghost" size="icon" aria-label="Sort" title="Sort" className={BUTTON}>
-						<ArrowUpDown className={ICON} />
-					</Button>
-				</DropdownMenuTrigger>
-				<DropdownMenuContent align="end" className="w-[min(95vw,20rem)]">
-					<DropdownMenuRadioGroup value={sort} onValueChange={(v) => setSort(v as SortKey)}>
-						{SORT_SECTIONS.map((section, i) => (
-							// Fragment (not <section>) so Radix's roving keyboard nav across
-							// DropdownMenuRadioItem siblings keeps working — wrapping them in
-							// a real DOM element breaks the radio group.
-							<Fragment key={section.label}>
-								{i > 0 && <DropdownMenuSeparator />}
-								<DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase tracking-wide">
-									{section.label}
-								</DropdownMenuLabel>
-								{section.options.map((opt) => (
-									<DropdownMenuRadioItem key={opt.value} value={opt.value}>
-										{opt.label}
-									</DropdownMenuRadioItem>
-								))}
-							</Fragment>
-						))}
-					</DropdownMenuRadioGroup>
-				</DropdownMenuContent>
-			</DropdownMenu>
-			<Button
-				variant="ghost"
-				size="icon"
-				aria-label="Collapse all folders"
-				title="Collapse all folders"
-				onClick={collapseAll}
-				className={BUTTON}
-			>
-				<FoldVertical className={ICON} />
-			</Button>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							variant="ghost"
+							size="icon"
+							aria-label="Collapse all folders"
+							onClick={collapseAll}
+							className={BUTTON}
+						>
+							<FoldVertical className={ICON} />
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent>Collapse all folders</TooltipContent>
+				</Tooltip>
+			</TooltipProvider>
 		</section>
 	);
 }

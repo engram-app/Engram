@@ -3,15 +3,24 @@ import { describe, expect, it, vi } from "vitest";
 import { RenameInput } from "./rename-input";
 
 describe("RenameInput", () => {
-	it("autofocuses with initial value and selects basename only", () => {
-		render(
-			<RenameInput initial="my-note.md" kind="file" onCommit={() => {}} onCancel={() => {}} />,
-		);
+	it("autofocuses and selects the whole name", () => {
+		render(<RenameInput initial="my-note" kind="file" onCommit={() => {}} onCancel={() => {}} />);
 		const input = screen.getByRole("textbox") as HTMLInputElement;
 		expect(input).toHaveFocus();
-		expect(input.value).toBe("my-note.md");
+		expect(input.value).toBe("my-note");
 		expect(input.selectionStart).toBe(0);
 		expect(input.selectionEnd).toBe("my-note".length);
+	});
+
+	// Callers seed this with a base name, never a leaf with an extension, so a
+	// dot is title text — selecting up to it would leave ".js guide" behind.
+	it("selects through a dot in a dotted title", () => {
+		render(
+			<RenameInput initial="Node.js guide" kind="file" onCommit={() => {}} onCancel={() => {}} />,
+		);
+		const input = screen.getByRole("textbox") as HTMLInputElement;
+		expect(input.selectionStart).toBe(0);
+		expect(input.selectionEnd).toBe("Node.js guide".length);
 	});
 
 	it("selects whole name for folder kind", () => {
