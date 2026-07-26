@@ -557,6 +557,7 @@ export default function FolderTree() {
 							key={items[v.index]?.getId() ?? v.index}
 							virtualItem={v}
 							items={items}
+							measureElement={virtualizer.measureElement}
 							onContextMenu={handleContextMenu}
 							onLongPress={handleLongPress}
 							onFolderHover={prefetchFolderNotes}

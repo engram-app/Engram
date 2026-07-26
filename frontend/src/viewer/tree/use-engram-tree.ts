@@ -256,10 +256,11 @@ export function useEngramTree(deps: Deps) {
 	const virtualizer = useVirtualizer({
 		count: items.length,
 		getScrollElement: () => deps.scrollParentRef.current,
-		// 24px row + 2px gutter. The row's rounded hover/selection fill spans its
-		// whole slot, so without the gutter adjacent rows' backgrounds touch.
-		// TreeRowVirtualized insets the row by the matching 1px.
-		estimateSize: () => 26,
+		// First-paint guess ONLY — TreeRowVirtualized attaches `measureElement`, so
+		// every slot is corrected to the row's real height (24px line-height + 4px
+		// padding + the 2px gutter) as soon as it renders. Being wrong here costs a
+		// scroll-offset correction, never an overlap.
+		estimateSize: () => 30,
 		overscan: 8,
 	});
 
