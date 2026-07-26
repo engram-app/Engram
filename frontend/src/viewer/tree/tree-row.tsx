@@ -30,7 +30,7 @@ function rowClass(instance: ItemInstance<LoaderItem>, active: boolean): string {
 		// w-full so the folder <button> stretches like the note <a> (form controls
 		// shrink to content by default) — gives both the same full-width hover hit.
 		// relative anchors the absolutely-positioned indent guides.
-		"relative flex w-full items-center gap-1 overflow-hidden rounded pl-1 pr-3 text-left",
+		"relative flex w-full items-center gap-1 rounded pl-1 pr-3 text-left",
 		// A solid neutral chip, not a tint of the cyan primary — a tinted
 		// highlight reads as "blue on blue" against this palette. Hover owns
 		// `accent`, so the two states stay clearly distinct.
@@ -55,9 +55,17 @@ function noteLabel(item: Extract<TreeItem, { kind: "note" }>): string {
 
 // Obsidian-style vertical indentation guides. A row at depth d draws one line
 // per ancestor level, each in the 4px gutter just left of that level's chevron.
-// Each line spans the full row height, so stacked rows form continuous lines
-// down a folder's children without tracking where the folder ends.
+// Each line spans its full SLOT (row height plus the gutter above and below),
+// so stacked rows form continuous lines down a folder's children without
+// tracking where the folder ends.
 const INDENT_STEP = 12;
+
+// A level-L guide should sit on the CENTRE of that ancestor's chevron, which
+// measures at `L * INDENT_STEP + INDENT_STEP` from the row's left edge. `left`
+// positions the span's left EDGE though, so without this the 1px line's centre
+// lands half a pixel right of the chevron at every level — a constant offset,
+// but one the eye reads as a growing drift once several guides stack up.
+const GUIDE_WIDTH = 1;
 
 // The guide spans for a given depth are static, so build them once per depth
 // and reuse — every visible row re-renders on rebuild/hover/selection, and the
@@ -74,8 +82,11 @@ function IndentGuides({ depth }: { depth: number }) {
 			<span
 				key={`indent-${level}`}
 				aria-hidden="true"
-				className="pointer-events-none absolute inset-y-0 w-px bg-border"
-				style={{ left: `${(level + 1) * INDENT_STEP}px` }}
+				// -inset-y-px, not inset-y-0: the row is TREE_ROW_HEIGHT inside a taller
+				// slot, so a guide bounded by the row would break at every gutter.
+				// Overshooting by the gutter's 1px each way makes the lines continuous.
+				className="pointer-events-none absolute -inset-y-px w-px bg-border"
+				style={{ left: `${(level + 1) * INDENT_STEP - GUIDE_WIDTH / 2}px` }}
 			/>
 		));
 		guideCache.set(depth, guides);
