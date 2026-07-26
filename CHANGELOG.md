@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0](https://github.com/engram-app/Engram/compare/0.10.0...0.11.0) (2026-07-26)
+
+
+### Features
+
+* **web:** file-tree overhaul — inline rename, folder actions, theming, and optimistic fixes ([#1121](https://github.com/engram-app/Engram/issues/1121)) ([f28fd03](https://github.com/engram-app/Engram/commit/f28fd032a863b12450a8591757d2c0c2ef3e909b))
+
+
+### Bug Fixes
+
+* **editor:** render Obsidian callout icons + full alias map ([#1118](https://github.com/engram-app/Engram/issues/1118)) ([1c352db](https://github.com/engram-app/Engram/commit/1c352dbb88e30e1f05408a70fe23fa0b88d76e2d))
+
 ## [0.10.0](https://github.com/engram-app/Engram/compare/0.9.0...0.10.0) (2026-07-25)
 
 
