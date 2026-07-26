@@ -30,7 +30,7 @@ Flaky is no longer blocking, but flaky is still **visible** and still hard-gates
 | `schedule` (06:00 UTC) | Nightly full run + flake measurement | ✅ forced |
 | `workflow_dispatch` `force_full=true` | Manual "run everything" | ✅ forced |
 | `repository_dispatch` | Backend runs e2e for a **plugin** PR, posts a `backend/e2e` status back | — |
-| `workflow_dispatch` on `release-please--**` | Release-PR validation — release-please.yml kicks it after updating its branch (NOT push-triggered: the RP action's two-step branch update raced push runs onto an intermediate SHA, leaving the Release PR head checkless/unmergeable). All e2e-* suites self-skip on this ref — main just hard-gated identical content, so only the deterministic gate runs | ❌ |
+| push to `release-please--**` | Release-PR validation. **Must** be push-triggered — see "Why a dispatched check does not count" below. release-please.yml also dispatches the same workflow as belt-and-braces. All e2e-* suites self-skip on this ref (the guard is on `github.ref_name`, not the event, so it holds under either trigger) — main just hard-gated identical content, so only the deterministic gate runs | ❌ |
 | `release-v*` tag | `deploy-prod.yml` → release e2e gate → deploy | ✅ (force_full) |
 
 `is-full` (computed by the `fingerprint` job) forces the full suite to actually
@@ -93,6 +93,37 @@ static-checks]`. It exits non-zero only if a **deterministic** need failed;
 
 A **skipped** required check counts as passing to GitHub rulesets, which is why
 a workflow-only or cache-skipped PR shows `ci: skipped` yet is mergeable.
+
+## Why a dispatched check does not count
+
+A `workflow_dispatch` check suite attaches its check runs to the head SHA, is
+associated with the PR, and is visible via
+`GET /commits/{sha}/check-runs` — but it **never enters the PR's status-check
+rollup**. Only `push` and `pull_request` suites do. Branch protection reads the
+rollup, so a dispatch-only required check is green everywhere except where it
+matters.
+
+This silently broke every release PR. `release-please--**` had been cut from
+verify.yml's push trigger, leaving `workflow_dispatch` as its only CI source, so
+each release PR sat at `mergeStateStatus: BLOCKED` with `lint`/`ci`/`unit-tests`
+green-but-invisible. The releases still shipped because `protect-main` grants
+`OrganizationAdmin` `bypass_mode: pull_request` — the bypass masked the defect
+for several releases (#1103, then #1119, which is where it was finally caught).
+Fixed by restoring the push trigger.
+
+Diagnosing this class: compare `gh pr checks <n>` (rollup — what protection
+sees) against `gh api repos/{o}/{r}/commits/{sha}/check-runs` (everything on the
+SHA). If the second list is much longer, look at the `event` of the runs that
+are missing:
+
+```bash
+gh api "repos/{owner}/{repo}/actions/runs?head_sha=$SHA" \
+  -q '.workflow_runs[] | "\(.name) | event=\(.event) | \(.conclusion)"'
+```
+
+A green required check whose run shows `event=workflow_dispatch` is the tell.
+Contrast with any normal `feat/**` PR, whose CI shows `event=push` and merges
+fine — that control comparison is what isolates it.
 
 ## Gate summary by context
 
