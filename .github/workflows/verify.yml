@@ -18,14 +18,21 @@ on:
       - "perf/**"
       - "refactor/**"
       - "release/**"
-      # NOTE: release-please's own PR branch (release-please--**) is
-      # deliberately NOT push-triggered. The RP action updates its branch in
-      # two steps (ref update to main tip, then the release commit), and the
-      # push-triggered run sometimes bound to the intermediate SHA — leaving
-      # the release PR's head with no checks and the PR unmergeable (the
-      # #1057 problem all over again, just racier). Instead release-please.yml
-      # explicitly workflow_dispatches this workflow on the branch AFTER the
-      # RP action finishes, so checks always attach to the real PR head.
+      # release-please's own PR branch MUST be push-triggered. It was excluded
+      # once (the RP action updates its branch in two steps — ref update to
+      # main tip, then the release commit — and a push run could bind to the
+      # intermediate SHA), with release-please.yml workflow_dispatching this
+      # workflow instead. That dispatch does attach check runs to the real PR
+      # head, but a `workflow_dispatch` check suite is NOT counted toward a
+      # PR's required status checks: only `push`/`pull_request` suites enter
+      # the rollup. So every release PR sat at mergeStateStatus=BLOCKED with
+      # lint/ci/unit-tests green-but-invisible, mergeable only by an org-admin
+      # ruleset bypass (#1119; #1103 before it). Push-triggering costs at worst
+      # one extra cheap run on the intermediate SHA — e2e-* already skips
+      # itself on release-please-- refs — and the final push (the release
+      # commit) lands a counting suite on the head the PR actually merges.
+      # The dispatch in release-please.yml stays as belt-and-braces.
+      - "release-please--**"
       - "revert/**"
       - "security/**"
       - "test/**"
