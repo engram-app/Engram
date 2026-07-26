@@ -47,12 +47,6 @@ const ATTACHMENT_ACTIONS: readonly Action[] = [
 	{ id: "delete", label: "Delete", destructive: true },
 ];
 
-// Creation is path-keyed, so it works on a folder with no backend record.
-// Rename/move/delete are id-keyed and would fail on one.
-const SYNTHETIC_FOLDER_ACTIONS: readonly Action[] = FOLDER_ACTIONS.filter(
-	(a) => a.id === "new-note" || a.id === "new-folder",
-);
-
 export type ActionId =
 	| "new-note"
 	| "new-folder"
@@ -68,18 +62,18 @@ export interface Action {
 	destructive?: boolean;
 }
 
+// Every folder gets the same menu, derived or not. A derived folder has no id
+// to send to the id-keyed batch endpoints, but rename, move and delete all have
+// path-based routes (`POST /folders/rename`, `DELETE /folders/*path`), so the
+// call site picks the right one — the user shouldn't see a lesser menu for a
+// distinction that's purely about how the backend stores the folder.
 export function actionsFor({
 	kind,
-	synthetic = false,
 }: {
 	kind: "file" | "folder" | "attachment";
-	// True for a derived folder (`syn:` id) — one `/api/folders` reported with a
-	// null id because it holds no note directly. Real folder to the user, but
-	// there's no row to address by id.
-	synthetic?: boolean;
 }): readonly Action[] {
 	if (kind === "folder") {
-		return synthetic ? SYNTHETIC_FOLDER_ACTIONS : FOLDER_ACTIONS;
+		return FOLDER_ACTIONS;
 	}
 	if (kind === "attachment") {
 		return ATTACHMENT_ACTIONS;

@@ -18,6 +18,7 @@ import {
 	useBatchMoveNotes,
 	useCreateFolder,
 	useCreateNote,
+	useDeleteFolder,
 	useDuplicateNote,
 	useFolderNotesById,
 	useFolders,
@@ -28,7 +29,11 @@ import {
 } from "../api/queries";
 import { useFolderTreeState } from "../layout/folder-tree-context";
 import { noteName } from "../lib/note-name";
-import { isSyntheticFolderId, synthesizeFolders } from "./tree/synthesize-folders";
+import {
+	isSyntheticFolderId,
+	synthesizeFolders,
+	syntheticFolderPath,
+} from "./tree/synthesize-folders";
 import { TreeRowVirtualized } from "./tree/tree-row-virtualized";
 import { parseItemId } from "./tree/types";
 import { useEngramTree } from "./tree/use-engram-tree";
@@ -90,6 +95,7 @@ export default function FolderTree() {
 	const duplicateNote = useDuplicateNote();
 	const createNote = useCreateNote();
 	const createFolder = useCreateFolder();
+	const deleteFolder = useDeleteFolder();
 	const renameAttachment = useRenameAttachment();
 	const batchMoveAttachments = useBatchMoveAttachments();
 	const batchDeleteAttachments = useBatchDeleteAttachments();
@@ -99,10 +105,6 @@ export default function FolderTree() {
 	// existing item path's folder + new leaf name.
 	const onRenameCommit = (itemId: string, newName: string) => {
 		const p = parseItemId(itemId);
-		// Synthetic folders have no backend record — nothing to rename.
-		if (p.kind === "folder" && isSyntheticFolderId(p.id)) {
-			return;
-		}
 		if (p.kind === "note") {
 			const item = qc
 				.getQueryCache()
@@ -121,7 +123,9 @@ export default function FolderTree() {
 				new_path: renameBaseName(item.path, newName),
 			});
 		} else if (p.kind === "folder") {
-			const folder = folders?.find((f) => f.id === p.id);
+			// `allFolders` (not `folders`) so derived folders resolve too — folder
+			// rename posts old_path/new_path, which needs no backend id.
+			const folder = allFolders.find((f) => f.id === p.id);
 			if (!folder) {
 				return;
 			}
@@ -339,15 +343,17 @@ export default function FolderTree() {
 				: [{ kind: "file", path: note.path }];
 		}
 		if (p.kind === "folder") {
-			const folder = folders?.find((f) => f.id === p.id);
+			// `allFolders`, not `folders`: the synthesized list is a superset that
+			// also covers attachment-only dirs and missing ancestors. Looking these
+			// up in the raw list returned [] and the dialog opened empty.
+			const folder = allFolders.find((f) => f.id === p.id);
 			if (!folder) {
 				return [];
 			}
 			const direct = folder.count;
-			const descendants =
-				folders
-					?.filter((f) => f.name.startsWith(`${folder.name}/`))
-					.reduce((sum, f) => sum + f.count, 0) ?? 0;
+			const descendants = allFolders
+				.filter((f) => f.name.startsWith(`${folder.name}/`))
+				.reduce((sum, f) => sum + f.count, 0);
 			return mode === "delete"
 				? [{ kind: "folder", path: folder.name, childCount: direct + descendants }]
 				: [{ kind: "folder", path: folder.name }];
@@ -371,13 +377,6 @@ export default function FolderTree() {
 			return cached;
 		}
 		return rootNotes.find((n) => n.id === id);
-	}
-
-	// A derived folder (`syn:` id) is a real folder to the user but has no
-	// backend row, so only the path-keyed actions apply to it.
-	function isSyntheticOf(itemId: string): boolean {
-		const p = parseItemId(itemId);
-		return p.kind === "folder" && isSyntheticFolderId(p.id);
 	}
 
 	function kindOf(itemId: string): "file" | "folder" | "attachment" {
@@ -505,38 +504,47 @@ export default function FolderTree() {
 	function partition(itemIds: string[]): {
 		noteIds: string[];
 		folderIds: string[];
+		derivedFolderPaths: string[];
 		attachmentPaths: string[];
 	} {
 		const noteIds: string[] = [];
 		const folderIds: string[] = [];
+		const derivedFolderPaths: string[] = [];
 		const attachmentPaths: string[] = [];
 		for (const id of itemIds) {
 			const p = parseItemId(id);
 			if (p.kind === "note") {
 				noteIds.push(p.id);
-			}
-			// Synthetic folders (syn:) have no backend record — never send their id
-			// to a batch mutation. Unreachable today (their rows expose no menu), but
-			// a guard here keeps any future bulk-select path from 404ing.
-			else if (p.kind === "folder" && !isSyntheticFolderId(p.id)) {
-				folderIds.push(p.id);
+			} else if (p.kind === "folder") {
+				// A derived folder has no backend id, so it can't ride the id-keyed
+				// batch endpoints. It still has a path, and delete/move both have
+				// path-based routes — so split it out rather than dropping it.
+				if (isSyntheticFolderId(p.id)) {
+					derivedFolderPaths.push(syntheticFolderPath(p.id));
+				} else {
+					folderIds.push(p.id);
+				}
 			} else if (p.kind === "attachment") {
 				attachmentPaths.push(p.path);
 			}
 		}
-		return { noteIds, folderIds, attachmentPaths };
+		return { noteIds, folderIds, derivedFolderPaths, attachmentPaths };
 	}
 
 	function commitDelete() {
 		if (dialog.kind !== "delete") {
 			return;
 		}
-		const { noteIds, folderIds, attachmentPaths } = partition(dialog.itemIds);
+		const { noteIds, folderIds, derivedFolderPaths, attachmentPaths } = partition(dialog.itemIds);
 		if (noteIds.length > 0) {
 			batchDeleteNotes.mutate({ ids: noteIds });
 		}
 		if (folderIds.length > 0) {
 			batchDeleteFolders.mutate({ ids: folderIds });
+		}
+		// No id to batch on — DELETE /folders/*path takes one folder at a time.
+		for (const path of derivedFolderPaths) {
+			deleteFolder.mutate({ path });
 		}
 		if (attachmentPaths.length > 0) {
 			batchDeleteAttachments.mutate({ paths: attachmentPaths });
@@ -549,7 +557,7 @@ export default function FolderTree() {
 		if (dialog.kind !== "move") {
 			return;
 		}
-		const { noteIds, folderIds, attachmentPaths } = partition(dialog.itemIds);
+		const { noteIds, folderIds, derivedFolderPaths, attachmentPaths } = partition(dialog.itemIds);
 		// Everything moves by PATH (targetFolderName is the folder path, '' = root),
 		// so a derived folder with no marker is a valid destination.
 		if (noteIds.length > 0) {
@@ -561,6 +569,15 @@ export default function FolderTree() {
 		}
 		if (folderIds.length > 0) {
 			batchMoveFolders.mutate({ ids: folderIds, target_parent: targetFolderName });
+		}
+		// Moving a folder is a rename into a new parent — and rename is path-based,
+		// so it's the route a derived folder can actually take.
+		for (const path of derivedFolderPaths) {
+			const leaf = path.split("/").pop() ?? path;
+			renameFolder.mutate({
+				old_path: path,
+				new_path: targetFolderName ? `${targetFolderName}/${leaf}` : leaf,
+			});
 		}
 		if (attachmentPaths.length > 0) {
 			batchMoveAttachments.mutate({ paths: attachmentPaths, target_folder: targetFolderName });
@@ -649,10 +666,7 @@ export default function FolderTree() {
 			)}
 			{dialog.kind === "context" && (
 				<ContextMenu
-					actions={actionsFor({
-						kind: kindOf(dialog.itemId),
-						synthetic: isSyntheticOf(dialog.itemId),
-					})}
+					actions={actionsFor({ kind: kindOf(dialog.itemId) })}
 					position={dialog.position}
 					onPick={(actionId) => handleActionPick(actionId, dialog.itemId)}
 					// The action itself may open another dialog (delete/move) that
@@ -664,10 +678,7 @@ export default function FolderTree() {
 			{dialog.kind === "drawer" && (
 				<ActionDrawer
 					title={titleForItem(dialog.itemId)}
-					actions={actionsFor({
-						kind: kindOf(dialog.itemId),
-						synthetic: isSyntheticOf(dialog.itemId),
-					})}
+					actions={actionsFor({ kind: kindOf(dialog.itemId) })}
 					onPick={(actionId) => handleActionPick(actionId, dialog.itemId)}
 					// Same reasoning as the context menu above.
 					onClose={() => setDialog((prev) => (prev.kind === "drawer" ? { kind: "none" } : prev))}

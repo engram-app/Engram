@@ -26,22 +26,6 @@ describe("actionsFor", () => {
 		]);
 	});
 
-	// A derived folder (one `/api/folders` returned with a null id, so it carries
-	// a `syn:` id) has no backend record. Move and delete are id-keyed and would
-	// fail, but creating inside it is path-keyed and works — so it gets a menu
-	// with just those, rather than no menu at all and the browser's instead.
-	it("synthetic folder actions: creation only", () => {
-		const ids = actionsFor({ kind: "folder", synthetic: true }).map((a) => a.id);
-		expect(ids).toEqual(["new-note", "new-folder"]);
-	});
-
-	it("synthetic folders never offer id-keyed actions", () => {
-		const ids = actionsFor({ kind: "folder", synthetic: true }).map((a) => a.id);
-		for (const idKeyed of ["move", "delete", "rename"]) {
-			expect(ids).not.toContain(idKeyed);
-		}
-	});
-
 	it("creation actions stay off files and attachments", () => {
 		for (const kind of ["file", "attachment"] as const) {
 			const ids = actionsFor({ kind }).map((a) => a.id);

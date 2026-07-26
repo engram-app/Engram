@@ -38,6 +38,7 @@ const {
 	createNoteMutate,
 	createFolderMutate,
 	createdFolder,
+	deleteFolderMutate,
 	mock,
 } = vi.hoisted(() => ({
 	batchDeleteNotesMutate: vi.fn(),
@@ -48,6 +49,7 @@ const {
 	createFolderMutate: vi.fn(),
 	// Path the mocked create resolves with, so the rename-on-create effect fires.
 	createdFolder: { path: "Projects/untitled" },
+	deleteFolderMutate: vi.fn(),
 	// Mutable per-test fixtures (folders + root notes + loading flag + attachments), set in beforeEach.
 	mock: {
 		folders: [] as unknown[],
@@ -118,6 +120,7 @@ vi.mock("../api/queries", async () => {
 			},
 			isPending: false,
 		}),
+		useDeleteFolder: () => ({ mutate: deleteFolderMutate, isPending: false }),
 		useBatchDeleteNotes: () => ({ mutate: batchDeleteNotesMutate, isPending: false }),
 		useBatchMoveNotes: () => ({ mutate: batchMoveNotesMutate, isPending: false }),
 		useBatchDeleteFolders: () => ({ mutate: batchDeleteFoldersMutate, isPending: false }),
@@ -149,6 +152,7 @@ beforeEach(() => {
 	batchMoveFoldersMutate.mockReset();
 	createNoteMutate.mockReset();
 	createFolderMutate.mockReset();
+	deleteFolderMutate.mockReset();
 	mock.folders = DEFAULT_FOLDERS.map((f) => ({ ...f }));
 	mock.rootNotes = [{ ...DEFAULT_ROOT_NOTE }];
 	mock.loading = false;
@@ -248,10 +252,35 @@ describe("FolderTree (HT)", () => {
 		// preventDefault is what stops the native menu appearing.
 		expect(ev.defaultPrevented).toBe(true);
 		expect(await screen.findByRole("menu")).toBeInTheDocument();
-		expect(screen.getByRole("menuitem", { name: "New note here" })).toBeInTheDocument();
-		// Id-keyed actions can't work without a backend row, so they're absent.
-		expect(screen.queryByRole("menuitem", { name: "Delete" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: "Move to…" })).not.toBeInTheDocument();
+		// Same menu as any other folder — rename/move/delete all have path-based
+		// routes, so a missing backend id is no reason to offer the user less.
+		for (const label of ["New note here", "New subfolder", "Rename", "Move to…", "Delete"]) {
+			expect(screen.getByRole("menuitem", { name: label })).toBeInTheDocument();
+		}
+	});
+
+	it("deletes a derived folder by path, never by its syn: id", async () => {
+		mock.folders = [];
+		mock.rootNotes = [];
+		mock.attachments = [
+			{
+				path: "Media/cover.png",
+				mime: "image/png",
+				size: 1,
+				id: "att-1",
+				updated_at: "",
+				mtime: 0,
+			},
+		];
+		renderTree();
+		const media = await screen.findByRole("treeitem", { name: "Media" });
+		fireEvent.contextMenu(media, { clientX: 5, clientY: 5 });
+		fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+		fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+		expect(deleteFolderMutate).toHaveBeenCalledWith({ path: "Media" });
+		// The id-keyed batch endpoint would 404 on a `syn:` id.
+		expect(batchDeleteFoldersMutate).not.toHaveBeenCalled();
 	});
 
 	// The placeholder name should never survive by accident: the new folder opens
