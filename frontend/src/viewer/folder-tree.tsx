@@ -16,6 +16,8 @@ import {
 	useBatchMoveAttachments,
 	useBatchMoveFolders,
 	useBatchMoveNotes,
+	useCreateFolder,
+	useCreateNote,
 	useDuplicateNote,
 	useFolderNotesById,
 	useFolders,
@@ -85,6 +87,8 @@ export default function FolderTree() {
 	const renameNote = useRenameNote();
 	const renameFolder = useRenameFolder();
 	const duplicateNote = useDuplicateNote();
+	const createNote = useCreateNote();
+	const createFolder = useCreateFolder();
 	const renameAttachment = useRenameAttachment();
 	const batchMoveAttachments = useBatchMoveAttachments();
 	const batchDeleteAttachments = useBatchDeleteAttachments();
@@ -387,6 +391,25 @@ export default function FolderTree() {
 
 	function handleActionPick(actionId: ActionId, itemId: string) {
 		switch (actionId) {
+			// Both target the RIGHT-CLICKED folder, not the toolbar's active one.
+			// Resolved from `allFolders` (which includes synthetic folders) so
+			// creating inside an attachment-only directory works by path.
+			case "new-note": {
+				const p = parseItemId(itemId);
+				if (p.kind !== "folder") {
+					break;
+				}
+				createNote.mutate({ folder: allFolders.find((f) => f.id === p.id)?.name ?? "" });
+				break;
+			}
+			case "new-folder": {
+				const p = parseItemId(itemId);
+				if (p.kind !== "folder") {
+					break;
+				}
+				createFolder.mutate({ parent: allFolders.find((f) => f.id === p.id)?.name ?? "" });
+				break;
+			}
 			case "rename": {
 				const instance = tree.getItemInstance(itemId);
 				if (instance) {

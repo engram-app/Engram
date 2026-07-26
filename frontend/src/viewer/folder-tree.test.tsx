@@ -35,12 +35,16 @@ const {
 	batchMoveNotesMutate,
 	batchDeleteFoldersMutate,
 	batchMoveFoldersMutate,
+	createNoteMutate,
+	createFolderMutate,
 	mock,
 } = vi.hoisted(() => ({
 	batchDeleteNotesMutate: vi.fn(),
 	batchMoveNotesMutate: vi.fn(),
 	batchDeleteFoldersMutate: vi.fn(),
 	batchMoveFoldersMutate: vi.fn(),
+	createNoteMutate: vi.fn(),
+	createFolderMutate: vi.fn(),
 	// Mutable per-test fixtures (folders + root notes + loading flag + attachments), set in beforeEach.
 	mock: {
 		folders: [] as unknown[],
@@ -100,6 +104,8 @@ vi.mock("../api/queries", async () => {
 			mutateAsync: vi.fn(() => Promise.resolve()),
 			isPending: false,
 		}),
+		useCreateNote: () => ({ mutate: createNoteMutate, isPending: false }),
+		useCreateFolder: () => ({ mutate: createFolderMutate, isPending: false }),
 		useBatchDeleteNotes: () => ({ mutate: batchDeleteNotesMutate, isPending: false }),
 		useBatchMoveNotes: () => ({ mutate: batchMoveNotesMutate, isPending: false }),
 		useBatchDeleteFolders: () => ({ mutate: batchDeleteFoldersMutate, isPending: false }),
@@ -129,6 +135,8 @@ beforeEach(() => {
 	batchMoveNotesMutate.mockReset();
 	batchDeleteFoldersMutate.mockReset();
 	batchMoveFoldersMutate.mockReset();
+	createNoteMutate.mockReset();
+	createFolderMutate.mockReset();
 	mock.folders = DEFAULT_FOLDERS.map((f) => ({ ...f }));
 	mock.rootNotes = [{ ...DEFAULT_ROOT_NOTE }];
 	mock.loading = false;
@@ -185,6 +193,33 @@ describe("FolderTree (HT)", () => {
 			expect(screen.getByRole("menuitem", { name: "Move to…" })).toBeInTheDocument();
 			expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
 		});
+	});
+
+	// Creation targets the RIGHT-CLICKED folder, not the toolbar's active one —
+	// that difference is the whole point of putting them on the menu.
+	it("creates a note inside the right-clicked folder", async () => {
+		renderTree();
+		const projects = await screen.findByRole("treeitem", { name: "Projects" });
+		fireEvent.contextMenu(projects, { clientX: 50, clientY: 60 });
+		fireEvent.click(await screen.findByRole("menuitem", { name: "New note here" }));
+		expect(createNoteMutate).toHaveBeenCalledWith({ folder: "Projects" });
+	});
+
+	it("creates a subfolder under the right-clicked folder", async () => {
+		renderTree();
+		const projects = await screen.findByRole("treeitem", { name: "Projects" });
+		fireEvent.contextMenu(projects, { clientX: 50, clientY: 60 });
+		fireEvent.click(await screen.findByRole("menuitem", { name: "New subfolder" }));
+		expect(createFolderMutate).toHaveBeenCalledWith({ parent: "Projects" });
+	});
+
+	it("does not offer creation actions on a note row", async () => {
+		renderTree();
+		const note = await screen.findByRole("treeitem", { name: "a" });
+		fireEvent.contextMenu(note, { clientX: 10, clientY: 10 });
+		await screen.findByRole("menu");
+		expect(screen.queryByRole("menuitem", { name: "New note here" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "New subfolder" })).not.toBeInTheDocument();
 	});
 
 	it("long-press (touch) on a row opens the ActionDrawer", async () => {
