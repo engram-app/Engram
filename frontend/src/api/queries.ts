@@ -654,7 +654,7 @@ export function useCreateFolder() {
 
 			const MAX_RACES = 5;
 			for (let attempt = 0; attempt < MAX_RACES; attempt++) {
-				const name = collideBump(childNames, "Untitled folder", { cap: 1000 });
+				const name = collideBump(childNames, "untitled", { cap: 1000 });
 				const folder = parent ? `${parent}/${name}` : name;
 				try {
 					await api.post<{ folder: { name: string; count: number } }>("/folders", { folder });

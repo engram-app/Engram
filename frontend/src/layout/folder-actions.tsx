@@ -50,7 +50,7 @@ const SORT_SECTIONS: readonly SortSection[] = [
 ];
 
 export default function FolderActions() {
-	const { collapseAll, sort, setSort } = useFolderTreeState();
+	const { collapseAll, sort, setSort, requestFolderRename } = useFolderTreeState();
 	const activeFolder = useActiveFolder();
 	const targetLabel = activeFolder === "" ? "vault root" : `"${activeFolder}"`;
 
@@ -89,7 +89,14 @@ export default function FolderActions() {
 							size="icon"
 							aria-label="New folder"
 							className={BUTTON}
-							onClick={() => createFolder.mutate({ parent: activeFolder })}
+							// Straight into rename mode so the placeholder name is never kept by
+							// accident — the tree owns the rename UI, so ask it via context.
+							onClick={() =>
+								createFolder.mutate(
+									{ parent: activeFolder },
+									{ onSuccess: ({ folder }) => requestFolderRename(folder) },
+								)
+							}
 							disabled={createFolder.isPending}
 						>
 							<FolderPlus className={ICON} />

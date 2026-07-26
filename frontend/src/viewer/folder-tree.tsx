@@ -71,7 +71,8 @@ export default function FolderTree() {
 		() => synthesizeFolders(folders ?? EMPTY_FOLDERS, attachments),
 		[folders, attachments],
 	);
-	const { sort } = useFolderTreeState();
+	const { sort, pendingFolderRename, requestFolderRename, clearFolderRename } =
+		useFolderTreeState();
 	const vaultId = useActiveVaultId();
 	const qc = useQueryClient();
 	const params = useParams();
@@ -297,6 +298,34 @@ export default function FolderTree() {
 		}
 	}, [selectedNoteId, folders, activeNote, tree]);
 
+	// A just-created folder opens straight in rename mode, so its placeholder
+	// name is never kept by accident. Runs on every render until it lands: the
+	// folder only reaches the tree after `['folders']` refetches and HT rebuilds,
+	// and its row only exists once its ancestors are expanded.
+	useEffect(() => {
+		if (pendingFolderRename === null) {
+			return;
+		}
+		const created = allFolders.find((f) => f.name === pendingFolderRename);
+		if (!created) {
+			return;
+		}
+		const segments = pendingFolderRename.split("/").slice(0, -1);
+		for (let i = 1; i <= segments.length; i++) {
+			const ancestor = allFolders.find((f) => f.name === segments.slice(0, i).join("/"));
+			const inst = ancestor ? tree.getItemInstance(`f:${ancestor.id}`) : undefined;
+			if (inst && !inst.isExpanded()) {
+				inst.expand();
+			}
+		}
+		const instance = tree.getItemInstance(`f:${created.id}`);
+		if (!instance) {
+			return;
+		}
+		instance.startRenaming();
+		clearFolderRename();
+	}, [pendingFolderRename, allFolders, tree, clearFolderRename]);
+
 	// Resolve a single item id → the row shape DeleteConfirm / MoveDialog accept.
 	function rowsFor(itemId: string, mode: "delete" | "move"): DeleteRow[] | MoveRow[] {
 		const p = parseItemId(itemId);
@@ -414,7 +443,10 @@ export default function FolderTree() {
 				if (p.kind !== "folder") {
 					break;
 				}
-				createFolder.mutate({ parent: allFolders.find((f) => f.id === p.id)?.name ?? "" });
+				createFolder.mutate(
+					{ parent: allFolders.find((f) => f.id === p.id)?.name ?? "" },
+					{ onSuccess: ({ folder }) => requestFolderRename(folder) },
+				);
 				break;
 			}
 			case "rename": {

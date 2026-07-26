@@ -97,13 +97,13 @@ describe("FolderActions", () => {
 	});
 
 	it("creates a folder under the active folder when New folder is clicked", async () => {
-		post.mockResolvedValue({ folder: { name: "foo/Untitled folder", count: 0 } });
+		post.mockResolvedValue({ folder: { name: "foo/untitled", count: 0 } });
 		renderWithProviders();
 
 		fireEvent.click(screen.getByRole("button", { name: "New folder" }));
 
 		await waitFor(() => {
-			expect(post).toHaveBeenCalledWith("/folders", { folder: "foo/Untitled folder" });
+			expect(post).toHaveBeenCalledWith("/folders", { folder: "foo/untitled" });
 		});
 	});
 

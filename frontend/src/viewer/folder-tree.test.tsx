@@ -37,6 +37,7 @@ const {
 	batchMoveFoldersMutate,
 	createNoteMutate,
 	createFolderMutate,
+	createdFolder,
 	mock,
 } = vi.hoisted(() => ({
 	batchDeleteNotesMutate: vi.fn(),
@@ -45,6 +46,8 @@ const {
 	batchMoveFoldersMutate: vi.fn(),
 	createNoteMutate: vi.fn(),
 	createFolderMutate: vi.fn(),
+	// Path the mocked create resolves with, so the rename-on-create effect fires.
+	createdFolder: { path: "Projects/untitled" },
 	// Mutable per-test fixtures (folders + root notes + loading flag + attachments), set in beforeEach.
 	mock: {
 		folders: [] as unknown[],
@@ -105,7 +108,16 @@ vi.mock("../api/queries", async () => {
 			isPending: false,
 		}),
 		useCreateNote: () => ({ mutate: createNoteMutate, isPending: false }),
-		useCreateFolder: () => ({ mutate: createFolderMutate, isPending: false }),
+		useCreateFolder: () => ({
+			mutate: (
+				vars: { parent: string },
+				opts?: { onSuccess?: (data: { folder: string }) => void },
+			) => {
+				createFolderMutate(vars);
+				opts?.onSuccess?.({ folder: createdFolder.path });
+			},
+			isPending: false,
+		}),
 		useBatchDeleteNotes: () => ({ mutate: batchDeleteNotesMutate, isPending: false }),
 		useBatchMoveNotes: () => ({ mutate: batchMoveNotesMutate, isPending: false }),
 		useBatchDeleteFolders: () => ({ mutate: batchDeleteFoldersMutate, isPending: false }),
@@ -240,6 +252,26 @@ describe("FolderTree (HT)", () => {
 		// Id-keyed actions can't work without a backend row, so they're absent.
 		expect(screen.queryByRole("menuitem", { name: "Delete" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Move to…" })).not.toBeInTheDocument();
+	});
+
+	// The placeholder name should never survive by accident: the new folder opens
+	// in rename mode with the name fully selected, so the first keystroke wins.
+	it("opens a newly created folder in rename mode, name preselected", async () => {
+		mock.folders = [
+			{ id: "1", parent_id: null, name: "Projects", count: 1 },
+			{ id: "9", parent_id: "1", name: "Projects/untitled", count: 0 },
+		];
+		renderTree();
+		const projects = await screen.findByRole("treeitem", { name: "Projects" });
+		fireEvent.contextMenu(projects, { clientX: 50, clientY: 60 });
+		fireEvent.click(await screen.findByRole("menuitem", { name: "New subfolder" }));
+
+		const input = (await screen.findByRole("textbox", {
+			name: "Rename folder",
+		})) as HTMLInputElement;
+		expect(input).toHaveValue("untitled");
+		expect(input.selectionStart).toBe(0);
+		expect(input.selectionEnd).toBe("untitled".length);
 	});
 
 	it("does not offer creation actions on a note row", async () => {
