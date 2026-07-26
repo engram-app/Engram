@@ -24,11 +24,14 @@ function rowClass(instance: ItemInstance<LoaderItem>): string {
 		// w-full so the folder <button> stretches like the note <a> (form controls
 		// shrink to content by default) — gives both the same full-width hover hit.
 		// relative anchors the absolutely-positioned indent guides.
-		"relative flex w-full items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left",
-		// Selected uses the theme's primary tint rather than the neutral `accent`
-		// that hover already owns, so the two stay distinguishable.
+		// `group` lets the muted icon/badge inside switch to the chip's own text
+		// colour when the row is selected (see group-aria-selected: below).
+		"group relative flex w-full items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left",
+		// A solid neutral chip, not a tint of the cyan primary — a tinted
+		// selection reads as "blue on blue" against this palette. Hover owns
+		// `accent`, so the two states stay clearly distinct.
 		instance.isSelected()
-			? "bg-primary/10 font-medium text-primary"
+			? "bg-tree-selected font-medium text-tree-selected-foreground"
 			: "text-foreground hover:bg-accent hover:text-accent-foreground",
 		dragOver ? "bg-primary/15 ring-1 ring-ring ring-inset" : "",
 	].join(" ");
@@ -80,7 +83,7 @@ function Chevron({ open }: { open: boolean }) {
 	return (
 		<ChevronRight
 			aria-hidden="true"
-			className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
+			className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform group-aria-selected:text-current ${
 				open ? "rotate-90" : ""
 			}`}
 		/>
@@ -192,13 +195,18 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 				style={{ paddingLeft: `${notePad}px` }}
 			>
 				<IndentGuides depth={depth} />
-				<Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+				<Icon
+					aria-hidden="true"
+					className="h-3.5 w-3.5 shrink-0 text-muted-foreground group-aria-selected:text-current"
+				/>
 				{/* Base name only — the badge beside it already carries the type,
 				    and this keeps the row consistent with note rows and with what
 				    the rename box seeds. */}
 				<span className="min-w-0 flex-1 truncate">{noteName(item.path)}</span>
 				{ext ? (
-					<span className="shrink-0 text-muted-foreground text-xs">{ext.toUpperCase()}</span>
+					<span className="shrink-0 text-muted-foreground text-xs group-aria-selected:text-current group-aria-selected:opacity-75">
+						{ext.toUpperCase()}
+					</span>
 				) : null}
 			</Link>
 		);
@@ -230,7 +238,9 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 			<IndentGuides depth={depth} />
 			<span className="min-w-0 flex-1 truncate">{noteLabel(item)}</span>
 			{item.ext && item.ext !== "md" && (
-				<span className="shrink-0 text-muted-foreground text-xs uppercase">{item.ext}</span>
+				<span className="shrink-0 text-muted-foreground text-xs uppercase group-aria-selected:text-current group-aria-selected:opacity-75">
+					{item.ext}
+				</span>
 			)}
 		</Link>
 	);
