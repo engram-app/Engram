@@ -23,7 +23,7 @@ import NoteToc from "./note-toc";
 import NoteView from "./note-view";
 import { PropertiesWidget } from "./properties-widget";
 import { RenameInput } from "./tree-actions/rename-input";
-import { renamePathLeaf } from "./tree-actions/rename-path";
+import { renameBaseName } from "./tree-actions/rename-path";
 import { useLiveContent } from "./use-live-content";
 
 const NoteEditor = lazy(() => import("./note-editor"));
@@ -135,14 +135,12 @@ export default function NotePage() {
 
 	const name = noteName(note.path);
 	const titlePath = note.folder ? `${note.folder}/${name}` : name;
-	// The header displays the extension-less name, but the rename box is seeded
-	// with the real leaf (`note.md`) so it behaves exactly like the tree's
-	// rename — same caret selection, same deliberate `.md` -> `.canvas` swap.
-	const leaf = note.path.split("/").pop() ?? name;
-
 	const commitRename = (next: string) => {
 		setRenamingFor(null);
-		const new_path = renamePathLeaf(note.path, next);
+		// Base-name rename: the header never shows the extension, so the user
+		// can't change the file type from here — the original one is always
+		// re-attached. (The tree's rename is the place to swap .md <-> .canvas.)
+		const new_path = renameBaseName(note.path, next);
 		if (new_path === note.path) {
 			return;
 		}
@@ -164,8 +162,9 @@ export default function NotePage() {
 					)}
 					{renamingFor === note.id ? (
 						<RenameInput
-							initial={leaf}
+							initial={name}
 							kind="file"
+							selectAll
 							onCommit={commitRename}
 							onCancel={() => setRenamingFor(null)}
 						/>

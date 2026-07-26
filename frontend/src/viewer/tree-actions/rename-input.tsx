@@ -16,9 +16,21 @@ interface Props {
 	onChange?: (value: string) => void;
 	onCommit: (next: string) => void;
 	onCancel: () => void;
+	// Preselect the whole value instead of stopping at the extension dot. For
+	// callers whose `initial` carries no extension (the note header edits the
+	// display name), where the dot in "Node.js guide" is title text.
+	selectAll?: boolean;
 }
 
-export function RenameInput({ initial, kind, error, onChange, onCommit, onCancel }: Props) {
+export function RenameInput({
+	initial,
+	kind,
+	error,
+	onChange,
+	onCommit,
+	onCancel,
+	selectAll = false,
+}: Props) {
 	const [value, setValue] = useState(initial);
 	const inputRef = useRef<HTMLInputElement>(null);
 
@@ -28,13 +40,9 @@ export function RenameInput({ initial, kind, error, onChange, onCommit, onCancel
 			return;
 		}
 		el.focus();
-		if (kind === "file") {
-			const dot = initial.lastIndexOf(".");
-			el.setSelectionRange(0, dot > 0 ? dot : initial.length);
-		} else {
-			el.setSelectionRange(0, initial.length);
-		}
-	}, [initial, kind]);
+		const dot = kind === "file" && !selectAll ? initial.lastIndexOf(".") : -1;
+		el.setSelectionRange(0, dot > 0 ? dot : initial.length);
+	}, [initial, kind, selectAll]);
 
 	return (
 		<div className="flex w-full flex-col gap-0.5">

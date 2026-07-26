@@ -42,3 +42,20 @@ export function renamePathLeaf(oldPath: string, newName: string): string {
 	parts.push(withPreservedExtension(oldLeaf, newName));
 	return parts.join("/");
 }
+
+/**
+ * Swap the last path segment's BASE name (leaf minus extension) for
+ * `newBaseName`, always re-attaching the original extension.
+ *
+ * For callers that edit the *display* name — which never shows an extension —
+ * so the user has no way to express a type change and a dotted title like
+ * "Node.js guide" needs no disambiguation. Unlike `renamePathLeaf`, a typed
+ * ".canvas" is title text, not a deliberate `.md` -> `.canvas` swap.
+ */
+export function renameBaseName(oldPath: string, newBaseName: string): string {
+	const parts = oldPath.split("/");
+	const oldLeaf = parts.pop() ?? "";
+	const dot = oldLeaf.lastIndexOf(".");
+	parts.push(dot > 0 ? `${newBaseName}${oldLeaf.slice(dot)}` : newBaseName);
+	return parts.join("/");
+}

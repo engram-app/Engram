@@ -153,9 +153,9 @@ describe("NotePage (CRDT)", () => {
 			return screen.getByRole("textbox", { name: "Rename file" });
 		};
 
-		it("turns the file name into an input seeded with the full leaf name", async () => {
+		it("seeds the input with the display name — no extension to edit", async () => {
 			const input = await openRename();
-			expect(input).toHaveValue("note.md");
+			expect(input).toHaveValue("note");
 			// The folder crumb stays put — only the name is editable.
 			expect(screen.getByText("folder/")).toBeInTheDocument();
 		});
@@ -188,6 +188,27 @@ describe("NotePage (CRDT)", () => {
 			const input = await openRename();
 			fireEvent.keyDown(input, { key: "Enter" });
 			expect(renameNoteMutate).not.toHaveBeenCalled();
+		});
+
+		// The header edits the display name only — a typed extension is title
+		// text, never a file-type change. Changing .md -> .canvas would strand
+		// the note outside the CRDT markdown gate.
+		it("treats a typed extension as part of the title, not a type change", async () => {
+			const input = await openRename();
+			fireEvent.change(input, { target: { value: "board.canvas" } });
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(renameNoteMutate).toHaveBeenCalledWith(
+				expect.objectContaining({ new_path: "folder/board.canvas.md" }),
+			);
+		});
+
+		it("keeps a dotted title intact", async () => {
+			const input = await openRename();
+			fireEvent.change(input, { target: { value: "Node.js guide" } });
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(renameNoteMutate).toHaveBeenCalledWith(
+				expect.objectContaining({ new_path: "folder/Node.js guide.md" }),
+			);
 		});
 	});
 
