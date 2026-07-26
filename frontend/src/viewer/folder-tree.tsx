@@ -168,12 +168,15 @@ export default function FolderTree() {
 		}
 		const parsed = sourceIds.map(parseItemId);
 		const noteIds = parsed.filter((p) => p.kind === "note").map((p) => (p as { id: string }).id);
-		// A derived folder has no marker id, so it can't be a move SOURCE — only
-		// real-marker folders can be dragged. (It can still be a destination, below,
-		// since everything now moves by PATH.)
+		// Real-marker folders move by id; derived ones have no id, so they take the
+		// same path-based rename the Move dialog uses. Splitting them keeps drag
+		// and the dialog capable of the same things.
 		const folderIds = parsed
 			.filter((p) => p.kind === "folder" && !isSyntheticFolderId((p as { id: string }).id))
 			.map((p) => (p as { id: string }).id);
+		const derivedFolderPaths = parsed
+			.filter((p) => p.kind === "folder" && isSyntheticFolderId((p as { id: string }).id))
+			.map((p) => syntheticFolderPath((p as { id: string }).id));
 		const attachmentPaths = parsed
 			.filter((p) => p.kind === "attachment")
 			.map((p) => (p as { path: string }).path);
@@ -190,6 +193,13 @@ export default function FolderTree() {
 		}
 		if (folderIds.length > 0) {
 			batchMoveFolders.mutate({ ids: folderIds, target_parent: destFolder });
+		}
+		for (const path of derivedFolderPaths) {
+			const leaf = path.split("/").pop() ?? path;
+			renameFolder.mutate({
+				old_path: path,
+				new_path: destFolder ? `${destFolder}/${leaf}` : leaf,
+			});
 		}
 		if (attachmentPaths.length > 0) {
 			batchMoveAttachments.mutate({ paths: attachmentPaths, target_folder: destFolder });
@@ -413,7 +423,9 @@ export default function FolderTree() {
 	function titleForItem(itemId: string): string {
 		const p = parseItemId(itemId);
 		if (p.kind === "folder") {
-			const f = folders?.find((x) => x.id === p.id);
+			// allFolders: the synthesized superset, so an attachment-only dir gets
+			// its real name in the drawer instead of a generic "Folder".
+			const f = allFolders.find((x) => x.id === p.id);
 			return f ? (f.name.split("/").pop() ?? f.name) : "Folder";
 		}
 		if (p.kind === "note") {
