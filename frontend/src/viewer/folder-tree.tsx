@@ -560,7 +560,6 @@ export default function FolderTree() {
 							virtualItem={v}
 							items={items}
 							activeId={selectedNoteId}
-							measureElement={virtualizer.measureElement}
 							onContextMenu={handleContextMenu}
 							onLongPress={handleLongPress}
 							onFolderHover={prefetchFolderNotes}

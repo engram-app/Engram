@@ -6,6 +6,7 @@ import { noteName } from "../../lib/note-name";
 import { RenameInput } from "../tree-actions/rename-input";
 import { useLongPress } from "../tree-actions/use-long-press";
 import type { LoaderItem } from "./loader";
+import { TREE_ROW_HEIGHT } from "./row-metrics";
 import { isSyntheticFolderId } from "./synthesize-folders";
 import type { TreeItem } from "./types";
 
@@ -29,7 +30,7 @@ function rowClass(instance: ItemInstance<LoaderItem>, active: boolean): string {
 		// w-full so the folder <button> stretches like the note <a> (form controls
 		// shrink to content by default) — gives both the same full-width hover hit.
 		// relative anchors the absolutely-positioned indent guides.
-		"relative flex w-full items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left",
+		"relative flex w-full items-center gap-1 overflow-hidden rounded pl-1 pr-3 text-left",
 		// A solid neutral chip, not a tint of the cyan primary — a tinted
 		// highlight reads as "blue on blue" against this palette. Hover owns
 		// `accent`, so the two states stay clearly distinct.
@@ -119,8 +120,11 @@ export function TreeRow({ instance, activeId, onContextMenu, onLongPress, onFold
 		const tree = instance.getTree();
 		return (
 			<div
-				className="flex items-center gap-1 py-0.5 pr-3 pl-1"
-				style={{ paddingLeft: `${item.kind === "folder" ? folderPad : notePad}px` }}
+				className="flex items-center gap-1 pr-3 pl-1"
+				style={{
+					paddingLeft: `${item.kind === "folder" ? folderPad : notePad}px`,
+					height: TREE_ROW_HEIGHT,
+				}}
 			>
 				<RenameInput
 					initial={renameSeed(item)}
@@ -169,7 +173,7 @@ export function TreeRow({ instance, activeId, onContextMenu, onLongPress, onFold
 				aria-expanded={instance.isExpanded()}
 				aria-selected={instance.isSelected()}
 				className={rowClass(instance, active)}
-				style={{ paddingLeft: `${folderPad}px` }}
+				style={{ paddingLeft: `${folderPad}px`, height: TREE_ROW_HEIGHT }}
 			>
 				<IndentGuides depth={depth} />
 				<Chevron open={instance.isExpanded()} />
@@ -199,7 +203,7 @@ export function TreeRow({ instance, activeId, onContextMenu, onLongPress, onFold
 				aria-selected={instance.isSelected()}
 				aria-current={active ? "page" : undefined}
 				className={rowClass(instance, active)}
-				style={{ paddingLeft: `${notePad}px` }}
+				style={{ paddingLeft: `${notePad}px`, height: TREE_ROW_HEIGHT }}
 			>
 				<IndentGuides depth={depth} />
 				{/* On the active chip, inherit its text colour — `muted-foreground`
@@ -243,7 +247,7 @@ export function TreeRow({ instance, activeId, onContextMenu, onLongPress, onFold
 			aria-selected={instance.isSelected()}
 			aria-current={active ? "page" : undefined}
 			className={rowClass(instance, active)}
-			style={{ paddingLeft: `${notePad}px` }}
+			style={{ paddingLeft: `${notePad}px`, height: TREE_ROW_HEIGHT }}
 		>
 			<IndentGuides depth={depth} />
 			<span className="min-w-0 flex-1 truncate">{noteLabel(item)}</span>

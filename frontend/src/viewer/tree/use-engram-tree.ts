@@ -21,6 +21,7 @@ import {
 } from "../../api/queries";
 import { resolveDropMove } from "./drop-redirect";
 import { buildLoader, type LoaderItem, type SortKey } from "./loader";
+import { TREE_SLOT_HEIGHT } from "./row-metrics";
 import { ROOT_ID } from "./types";
 
 interface Deps {
@@ -256,11 +257,9 @@ export function useEngramTree(deps: Deps) {
 	const virtualizer = useVirtualizer({
 		count: items.length,
 		getScrollElement: () => deps.scrollParentRef.current,
-		// First-paint guess ONLY — TreeRowVirtualized attaches `measureElement`, so
-		// every slot is corrected to the row's real height (24px line-height + 4px
-		// padding + the 2px gutter) as soon as it renders. Being wrong here costs a
-		// scroll-offset correction, never an overlap.
-		estimateSize: () => 30,
+		// Exact, not an estimate: rows are pinned to the same constant, so no
+		// measurement pass is needed. See row-metrics.ts for why we don't measure.
+		estimateSize: () => TREE_SLOT_HEIGHT,
 		overscan: 8,
 	});
 

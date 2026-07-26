@@ -1,6 +1,7 @@
 import type { ItemInstance } from "@headless-tree/core";
 import type { VirtualItem } from "@tanstack/react-virtual";
 import type { LoaderItem } from "./loader";
+import { TREE_SLOT_HEIGHT } from "./row-metrics";
 import { TreeRow } from "./tree-row";
 
 interface Props {
@@ -8,9 +9,6 @@ interface Props {
 	items: ItemInstance<LoaderItem>[];
 	instanceFor?: (itemId: string) => ItemInstance<LoaderItem> | undefined;
 	activeId?: string | null;
-	// The virtualizer's own measuring ref. Attaching it makes each slot as tall
-	// as the row actually renders, instead of trusting `estimateSize`.
-	measureElement?: (el: HTMLElement | null) => void;
 	onContextMenu?: (itemId: string, x: number, y: number) => void;
 	onLongPress?: (itemId: string) => void;
 	onFolderHover?: (folderId: string) => void;
@@ -21,7 +19,6 @@ export function TreeRowVirtualized({
 	items,
 	instanceFor,
 	activeId,
-	measureElement,
 	onContextMenu,
 	onLongPress,
 	onFolderHover,
@@ -34,21 +31,16 @@ export function TreeRowVirtualized({
 
 	return (
 		<div
-			// Measured, not sized. `estimateSize` only positions the row until this
-			// lands; a hardcoded height here would silently clip or overlap whenever
-			// the row renders taller than the estimate (a font-size change on the
-			// tree container is enough).
-			ref={measureElement}
-			data-index={virtualItem.index}
-			// The gutter lives INSIDE the measured box, so it's part of the slot the
-			// virtualizer reserves. A margin would sit outside the border-box that
-			// ResizeObserver reports, and the rows would touch again.
+			// py-px splits the slot's gutter above and below the row, so neighbouring
+			// hover/selection fills never touch. TreeRow pins itself to
+			// TREE_ROW_HEIGHT, so row + gutter is exactly TREE_SLOT_HEIGHT.
 			className="py-px"
 			style={{
 				position: "absolute",
 				top: 0,
 				left: 0,
 				width: "100%",
+				height: TREE_SLOT_HEIGHT,
 				transform: `translateY(${virtualItem.start}px)`,
 			}}
 		>
