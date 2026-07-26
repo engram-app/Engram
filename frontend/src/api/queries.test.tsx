@@ -582,13 +582,18 @@ function seedNoteById(id: string, note: Partial<Note>) {
 	} satisfies Note);
 }
 
-describe("rename note does NOT re-path the note body cache optimistically", () => {
-	// The open editor keys its CRDT doc on `note.path`. Re-pathing `['note', id]`
-	// before the rename commits makes the editor enroll the new path early, which
-	// the CRDT channel bootstraps into a duplicate note that then 409s the rename
-	// (a stable cross-tab duplicate under load). The note cache must stay on the
-	// old path until onSettled's refetch confirms the server move.
-	it("leaves [note, vaultId, id] on the old path while the rename is in flight", async () => {
+describe("rename note re-paths the note body cache optimistically", () => {
+	// An open editor's header reads `['note', vaultId, id]`, so it has to flip
+	// the instant the user commits — waiting for onSettled's refetch reads as lag.
+	//
+	// This used to be deliberately skipped because the editor keyed its CRDT doc
+	// on `note.path`: re-pathing early made it enroll the new path before the
+	// rename committed, which the CRDT channel bootstrapped into a duplicate note
+	// that then 409'd the rename. note-page.tsx now keys the doc on `note.id`
+	// (stable across a rename) and only reads `path` for display + the `.md` gate,
+	// so the early-enroll hazard is gone and `ctx.prevNote` gives onError an exact
+	// rollback.
+	const seed = () => {
 		seedFolderNotes("a", [{ id: "42", path: "a/x.md", title: "X" }]);
 		seedFolderNotes("b", []);
 		seedFolders([
@@ -596,40 +601,47 @@ describe("rename note does NOT re-path the note body cache optimistically", () =
 			{ name: "b", count: 0 },
 		]);
 		seedNoteById("42", { id: "42", path: "a/x.md", folder: "a", title: "X", content: "# X" });
+	};
 
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
+	it("flips [note, vaultId, id] to the new path while the rename is in flight", async () => {
+		seed();
+		let resolveCreate!: (v: string) => void;
+		crdtCreateNote.mockReturnValue(
 			new Promise((r) => {
-				resolvePost = r;
+				resolveCreate = r;
 			}),
 		);
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
 		act(() => {
-			result.current.mutate({ id: "n1", old_path: "a/x.md", new_path: "b/y.md" });
+			result.current.mutate({ id: "42", old_path: "a/x.md", new_path: "b/y.md" });
 		});
 
-		// The FOLDER lists flip optimistically (snappy tree)…
 		await waitFor(() => {
-			const oldList = qc.getQueryData<{ notes: Array<{ path: string }> }>([
-				"folderNotes",
-				"42",
-				"a",
-			]);
-			expect(oldList?.notes.map((n) => n.path)).toEqual([]);
+			expect(qc.getQueryData<Note>(["note", "42", "42"])?.path).toBe("b/y.md");
 		});
-		// …but the note body cache stays on the OLD path (no early CRDT re-enroll).
+		const cached = qc.getQueryData<Note>(["note", "42", "42"]);
+		expect(cached?.folder).toBe("b");
+		// Body is untouched — only the location moves.
+		expect(cached?.content).toBe("# X");
+
+		resolveCreate("42");
+	});
+
+	it("rolls the note body cache back to the old path when the rename is refused", async () => {
+		seed();
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
+
+		const { result } = renderHook(() => useRenameNote(), { wrapper });
+		act(() => {
+			result.current.mutate({ id: "42", old_path: "a/x.md", new_path: "b/y.md" });
+		});
+
+		await waitFor(() => expect(result.current.isError).toBe(true));
 		const cached = qc.getQueryData<Note>(["note", "42", "42"]);
 		expect(cached?.path).toBe("a/x.md");
 		expect(cached?.folder).toBe("a");
 		expect(cached?.content).toBe("# X");
-
-		resolvePost({
-			renamed: true,
-			old_path: "a/x.md",
-			new_path: "b/y.md",
-			note: { id: "42", path: "b/y.md" },
-		});
 	});
 });
 

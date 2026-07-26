@@ -1506,16 +1506,24 @@ export function useRenameNote() {
 				});
 			}
 
-			// Deliberately do NOT re-path the note-body cache (`['note', vaultId,
-			// id]`) here. An open editor (note-page.tsx) keys its CRDT doc on
-			// `note.id`, which is stable across a rename, so this no longer risks
-			// tearing down/reopening the live doc or racing the CRDT channel's
-			// bootstrap-by-path. It's skipped anyway because there's no rollback
-			// for this cache entry (see the onError note below) — flipping `path`
-			// optimistically would show an unconfirmed path if the rename POST
-			// fails. Let onSettled's refetch move the note cache to the new path
-			// AFTER the server confirms the rename, exactly as the (passing)
-			// folder-move path already does.
+			// Re-path the note-body cache too, so an open editor's header flips
+			// the moment the user commits instead of lagging until onSettled's
+			// refetch. This was once deliberately skipped: the editor keyed its
+			// CRDT doc on `note.path`, so an early re-path made it enroll the new
+			// path before the rename committed, which the channel bootstrapped
+			// into a duplicate note that then 409'd the rename. note-page.tsx now
+			// keys the doc on `note.id` (stable across a rename) and reads `path`
+			// only for display + the `.md` gate, so that hazard is gone — and
+			// `ctx.prevNote` gives onError an exact rollback if the create is
+			// refused.
+			if (noteId !== null && prevNote) {
+				qc.setQueryData<Note>(["note", vaultId, noteId], {
+					...prevNote,
+					path: new_path,
+					folder: newFolder,
+				});
+			}
+
 			return ctx;
 		},
 		onError: (err, _vars, ctx) => {
@@ -1534,7 +1542,11 @@ export function useRenameNote() {
 			if (ctx.folders !== undefined) {
 				qc.setQueryData(foldersKey, ctx.folders);
 			}
-			// No note-cache rollback: onMutate no longer re-paths `['note', id]`.
+			// Undo the optimistic re-path so a refused rename can't leave the
+			// header showing a name the server never accepted.
+			if (ctx.noteId !== null && ctx.prevNote) {
+				qc.setQueryData<Note>(["note", vaultId, ctx.noteId], ctx.prevNote);
+			}
 			renameErrorToast(err, "file");
 		},
 		onSettled: () => {
