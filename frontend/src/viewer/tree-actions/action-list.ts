@@ -47,6 +47,12 @@ const ATTACHMENT_ACTIONS: readonly Action[] = [
 	{ id: "delete", label: "Delete", destructive: true },
 ];
 
+// Creation is path-keyed, so it works on a folder with no backend record.
+// Rename/move/delete are id-keyed and would fail on one.
+const SYNTHETIC_FOLDER_ACTIONS: readonly Action[] = FOLDER_ACTIONS.filter(
+	(a) => a.id === "new-note" || a.id === "new-folder",
+);
+
 export type ActionId =
 	| "new-note"
 	| "new-folder"
@@ -64,11 +70,16 @@ export interface Action {
 
 export function actionsFor({
 	kind,
+	synthetic = false,
 }: {
 	kind: "file" | "folder" | "attachment";
+	// True for a derived folder (`syn:` id) — one `/api/folders` reported with a
+	// null id because it holds no note directly. Real folder to the user, but
+	// there's no row to address by id.
+	synthetic?: boolean;
 }): readonly Action[] {
 	if (kind === "folder") {
-		return FOLDER_ACTIONS;
+		return synthetic ? SYNTHETIC_FOLDER_ACTIONS : FOLDER_ACTIONS;
 	}
 	if (kind === "attachment") {
 		return ATTACHMENT_ACTIONS;

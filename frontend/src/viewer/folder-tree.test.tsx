@@ -213,6 +213,35 @@ describe("FolderTree (HT)", () => {
 		expect(createFolderMutate).toHaveBeenCalledWith({ parent: "Projects" });
 	});
 
+	// `/api/folders` returns derived folders with a null id, which become `syn:`
+	// ids. Those are ordinary folders to the user, so right-clicking one must
+	// open OUR menu — it used to fall through to the browser's.
+	it("opens our menu on a derived (synthetic) folder, not the browser's", async () => {
+		mock.folders = [];
+		mock.rootNotes = [];
+		mock.attachments = [
+			{
+				path: "Media/cover.png",
+				mime: "image/png",
+				size: 1,
+				id: "att-1",
+				updated_at: "",
+				mtime: 0,
+			},
+		];
+		renderTree();
+		const media = await screen.findByRole("treeitem", { name: "Media" });
+		const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+		fireEvent(media, ev);
+		// preventDefault is what stops the native menu appearing.
+		expect(ev.defaultPrevented).toBe(true);
+		expect(await screen.findByRole("menu")).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "New note here" })).toBeInTheDocument();
+		// Id-keyed actions can't work without a backend row, so they're absent.
+		expect(screen.queryByRole("menuitem", { name: "Delete" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Move to…" })).not.toBeInTheDocument();
+	});
+
 	it("does not offer creation actions on a note row", async () => {
 		renderTree();
 		const note = await screen.findByRole("treeitem", { name: "a" });

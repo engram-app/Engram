@@ -344,6 +344,13 @@ export default function FolderTree() {
 		return rootNotes.find((n) => n.id === id);
 	}
 
+	// A derived folder (`syn:` id) is a real folder to the user but has no
+	// backend row, so only the path-keyed actions apply to it.
+	function isSyntheticOf(itemId: string): boolean {
+		const p = parseItemId(itemId);
+		return p.kind === "folder" && isSyntheticFolderId(p.id);
+	}
+
 	function kindOf(itemId: string): "file" | "folder" | "attachment" {
 		const p = parseItemId(itemId);
 		if (p.kind === "folder") {
@@ -610,7 +617,10 @@ export default function FolderTree() {
 			)}
 			{dialog.kind === "context" && (
 				<ContextMenu
-					actions={actionsFor({ kind: kindOf(dialog.itemId) })}
+					actions={actionsFor({
+						kind: kindOf(dialog.itemId),
+						synthetic: isSyntheticOf(dialog.itemId),
+					})}
 					position={dialog.position}
 					onPick={(actionId) => handleActionPick(actionId, dialog.itemId)}
 					// The action itself may open another dialog (delete/move) that
@@ -622,7 +632,10 @@ export default function FolderTree() {
 			{dialog.kind === "drawer" && (
 				<ActionDrawer
 					title={titleForItem(dialog.itemId)}
-					actions={actionsFor({ kind: kindOf(dialog.itemId) })}
+					actions={actionsFor({
+						kind: kindOf(dialog.itemId),
+						synthetic: isSyntheticOf(dialog.itemId),
+					})}
 					onPick={(actionId) => handleActionPick(actionId, dialog.itemId)}
 					// Same reasoning as the context menu above.
 					onClose={() => setDialog((prev) => (prev.kind === "drawer" ? { kind: "none" } : prev))}

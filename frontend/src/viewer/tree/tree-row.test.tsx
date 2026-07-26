@@ -239,7 +239,12 @@ describe("TreeRow", () => {
 		expect(onContextMenu).toHaveBeenCalledWith("f:1", 42, 99);
 	});
 
-	it("does not invoke onContextMenu on a synthetic (syn:) folder row", () => {
+	// A synthetic folder used to get NO handler, which meant right-clicking it
+	// opened the browser's own context menu. It gets ours now — narrowed to the
+	// path-keyed actions by `actionsFor({ synthetic: true })`, not suppressed
+	// here. Most folders in a real vault are synthetic (`/api/folders` returns
+	// derived folders with a null id), so this was the common case.
+	it("invokes onContextMenu on a synthetic (syn:) folder row too", () => {
 		const onContextMenu = vi.fn();
 		const synthetic: TreeItem = {
 			kind: "folder",
@@ -254,8 +259,11 @@ describe("TreeRow", () => {
 				<TreeRow instance={instance} onContextMenu={onContextMenu} />
 			</MemoryRouter>,
 		);
-		fireEvent.contextMenu(screen.getByRole("treeitem"), { clientX: 42, clientY: 99 });
-		expect(onContextMenu).not.toHaveBeenCalled();
+		const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+		fireEvent(screen.getByRole("treeitem"), ev);
+		expect(onContextMenu).toHaveBeenCalledWith("f:syn:pics", 0, 0);
+		// preventDefault is what keeps the native menu from appearing.
+		expect(ev.defaultPrevented).toBe(true);
 	});
 
 	it("invokes onContextMenu with item id + clientX/Y on right-click of an attachment row", () => {

@@ -153,21 +153,21 @@ export function TreeRow({ instance, activeId, onContextMenu, onLongPress, onFold
 	}
 
 	if (item.kind === "folder") {
-		// Synthetic folders are UI-only scaffolding for attachment-only dirs — they
-		// have no backend record, so rename/delete/move and note-prefetch don't
-		// apply. Drop their action affordances; expansion (to reveal the
-		// attachments inside) still works.
+		// A synthetic folder has no backend record, so note-prefetch (id-keyed)
+		// can't run for it. The MENU still opens: `actionsFor` narrows it to the
+		// path-keyed creation actions. Suppressing the handler entirely just
+		// handed the user the browser's own context menu.
 		const isSynthetic = isSyntheticFolderId(item.id);
 		const hoverPrefetch = onFolderHover && !isSynthetic ? () => onFolderHover(item.id) : undefined;
 		return (
 			<button
 				type="button"
 				{...instance.getProps()}
-				{...(isSynthetic ? {} : longPressProps)}
+				{...longPressProps}
 				// getProps() spreads role="treeitem" from @headless-tree; declare it
 				// explicitly so the linter sees the role that supports aria-expanded/selected
 				role="treeitem"
-				onContextMenu={isSynthetic ? undefined : contextMenuHandler}
+				onContextMenu={contextMenuHandler}
 				onPointerEnter={hoverPrefetch}
 				onFocus={hoverPrefetch}
 				aria-expanded={instance.isExpanded()}
