@@ -628,6 +628,47 @@ describe("rename note re-paths the note body cache optimistically", () => {
 		resolveCreate("42");
 	});
 
+	// The sidebar tree renders the id-keyed lists, NOT the path-keyed
+	// `folderNotes` ones onMutate already updated — so it needs its own
+	// optimistic write or the tree row lags a refetch behind the header.
+	it("re-paths the tree's id-keyed list so the sidebar name flips too", async () => {
+		seed();
+		seedFolderNotesById("9", [{ id: "42", path: "a/x.md", folder: "a" }]);
+		let resolveCreate!: (v: string) => void;
+		crdtCreateNote.mockReturnValue(
+			new Promise((r) => {
+				resolveCreate = r;
+			}),
+		);
+
+		const { result } = renderHook(() => useRenameNote(), { wrapper });
+		act(() => {
+			result.current.mutate({ id: "42", old_path: "a/x.md", new_path: "a/y.md" });
+		});
+
+		await waitFor(() => {
+			const rows = qc.getQueryData<Array<{ path: string }>>(["folder-notes-by-id", "42", "9"]);
+			expect(rows?.[0]?.path).toBe("a/y.md");
+		});
+
+		resolveCreate("42");
+	});
+
+	it("restores the id-keyed list when the rename is refused", async () => {
+		seed();
+		seedFolderNotesById("9", [{ id: "42", path: "a/x.md", folder: "a" }]);
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
+
+		const { result } = renderHook(() => useRenameNote(), { wrapper });
+		act(() => {
+			result.current.mutate({ id: "42", old_path: "a/x.md", new_path: "a/y.md" });
+		});
+
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		const rows = qc.getQueryData<Array<{ path: string }>>(["folder-notes-by-id", "42", "9"]);
+		expect(rows?.[0]?.path).toBe("a/x.md");
+	});
+
 	it("rolls the note body cache back to the old path when the rename is refused", async () => {
 		seed();
 		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));

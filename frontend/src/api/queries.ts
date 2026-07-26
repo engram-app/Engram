@@ -166,6 +166,10 @@ interface RenameNoteContext {
 	// fields under the SAME cache key.
 	noteId: string | null;
 	prevNote: Note | undefined;
+	// Snapshot of every id-keyed list we re-pathed. The sidebar tree renders
+	// THESE, not the path-keyed `folderNotes` entries above, so they get their
+	// own optimistic write — and their own rollback.
+	byIdLists: Array<{ key: readonly unknown[]; rows: NoteSummary[] }>;
 }
 
 interface RenameFolderContext {
@@ -1423,6 +1427,26 @@ export function useRenameNote() {
 				prevNote = qc.getQueryData<Note>(["note", vaultId, noteId]);
 			}
 
+			// Re-path the note wherever the tree caches it. Matching by id when we
+			// resolved one, else by old path. A rename keeps the note in its
+			// folder (both inline-rename entry points edit the leaf only), so an
+			// in-place re-path is enough; onSettled's refetch reconciles folder
+			// membership in the theoretical slash-typed move case.
+			const matchesRow = (n: NoteSummary) =>
+				noteId === null ? n.path === old_path : n.id === noteId;
+			const byIdLists: RenameNoteContext["byIdLists"] = [];
+			for (const q of qc.getQueryCache().findAll({ queryKey: ["folder-notes-by-id", vaultId] })) {
+				const rows = q.state.data as NoteSummary[] | undefined;
+				if (!rows?.some(matchesRow)) {
+					continue;
+				}
+				byIdLists.push({ key: q.queryKey, rows });
+				qc.setQueryData<NoteSummary[]>(
+					q.queryKey,
+					rows.map((n) => (matchesRow(n) ? { ...n, path: new_path, folder: newFolder } : n)),
+				);
+			}
+
 			const ctx: RenameNoteContext = {
 				oldFolder,
 				newFolder,
@@ -1431,6 +1455,7 @@ export function useRenameNote() {
 				folders,
 				noteId,
 				prevNote,
+				byIdLists,
 			};
 
 			// Build a renamed NoteSummary either from the existing list row
@@ -1541,6 +1566,9 @@ export function useRenameNote() {
 			}
 			if (ctx.folders !== undefined) {
 				qc.setQueryData(foldersKey, ctx.folders);
+			}
+			for (const { key, rows } of ctx.byIdLists) {
+				qc.setQueryData<NoteSummary[]>(key, rows);
 			}
 			// Undo the optimistic re-path so a refused rename can't leave the
 			// header showing a name the server never accepted.

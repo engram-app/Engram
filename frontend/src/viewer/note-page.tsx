@@ -171,7 +171,9 @@ export default function NotePage() {
 					) : (
 						<button
 							type="button"
-							className="min-w-0 truncate rounded px-1 font-medium hover:bg-accent"
+							// -mx-1 cancels the padding so the hover target is roomier than
+							// the text without nudging the name off the folder crumb.
+							className="-mx-1 min-w-0 truncate rounded px-1 font-medium hover:bg-accent"
 							title="Click to rename"
 							onClick={() => setRenamingFor(note.id)}
 						>
