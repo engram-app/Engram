@@ -53,7 +53,6 @@ const SORT_SECTIONS: readonly SortSection[] = [
 export default function FolderActions() {
 	const { collapseAll, sort, setSort, requestFolderRename } = useFolderTreeState();
 	const activeFolder = useActiveFolder();
-	const targetLabel = activeFolder === "" ? "vault root" : `"${activeFolder}"`;
 
 	const createNote = useCreateNote();
 	const createFolder = useCreateFolder();
@@ -80,7 +79,7 @@ export default function FolderActions() {
 							<FilePlus className={ICON} />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent>Creates in {targetLabel}</TooltipContent>
+					<TooltipContent>Create note</TooltipContent>
 				</Tooltip>
 
 				<Tooltip>
@@ -103,7 +102,7 @@ export default function FolderActions() {
 							<FolderPlus className={ICON} />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent>Creates in {targetLabel}</TooltipContent>
+					<TooltipContent>Create folder</TooltipContent>
 				</Tooltip>
 
 				{!demoActive && (
@@ -122,45 +121,55 @@ export default function FolderActions() {
 						<TooltipContent>Upload an attachment</TooltipContent>
 					</Tooltip>
 				)}
-			</TooltipProvider>
+				<DropdownMenu>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							{/* Both triggers compose onto the one Button via asChild. */}
+							<DropdownMenuTrigger asChild>
+								<Button variant="ghost" size="icon" aria-label="Sort" className={BUTTON}>
+									<ArrowUpDown className={ICON} />
+								</Button>
+							</DropdownMenuTrigger>
+						</TooltipTrigger>
+						<TooltipContent>Sort</TooltipContent>
+					</Tooltip>
+					<DropdownMenuContent align="end" className="w-[min(95vw,20rem)]">
+						<DropdownMenuRadioGroup value={sort} onValueChange={(v) => setSort(v as SortKey)}>
+							{SORT_SECTIONS.map((section, i) => (
+								// Fragment (not <section>) so Radix's roving keyboard nav across
+								// DropdownMenuRadioItem siblings keeps working — wrapping them in
+								// a real DOM element breaks the radio group.
+								<Fragment key={section.label}>
+									{i > 0 && <DropdownMenuSeparator />}
+									<DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase tracking-wide">
+										{section.label}
+									</DropdownMenuLabel>
+									{section.options.map((opt) => (
+										<DropdownMenuRadioItem key={opt.value} value={opt.value}>
+											{opt.label}
+										</DropdownMenuRadioItem>
+									))}
+								</Fragment>
+							))}
+						</DropdownMenuRadioGroup>
+					</DropdownMenuContent>
+				</DropdownMenu>
 
-			<DropdownMenu>
-				<DropdownMenuTrigger asChild>
-					<Button variant="ghost" size="icon" aria-label="Sort" title="Sort" className={BUTTON}>
-						<ArrowUpDown className={ICON} />
-					</Button>
-				</DropdownMenuTrigger>
-				<DropdownMenuContent align="end" className="w-[min(95vw,20rem)]">
-					<DropdownMenuRadioGroup value={sort} onValueChange={(v) => setSort(v as SortKey)}>
-						{SORT_SECTIONS.map((section, i) => (
-							// Fragment (not <section>) so Radix's roving keyboard nav across
-							// DropdownMenuRadioItem siblings keeps working — wrapping them in
-							// a real DOM element breaks the radio group.
-							<Fragment key={section.label}>
-								{i > 0 && <DropdownMenuSeparator />}
-								<DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase tracking-wide">
-									{section.label}
-								</DropdownMenuLabel>
-								{section.options.map((opt) => (
-									<DropdownMenuRadioItem key={opt.value} value={opt.value}>
-										{opt.label}
-									</DropdownMenuRadioItem>
-								))}
-							</Fragment>
-						))}
-					</DropdownMenuRadioGroup>
-				</DropdownMenuContent>
-			</DropdownMenu>
-			<Button
-				variant="ghost"
-				size="icon"
-				aria-label="Collapse all folders"
-				title="Collapse all folders"
-				onClick={collapseAll}
-				className={BUTTON}
-			>
-				<FoldVertical className={ICON} />
-			</Button>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							variant="ghost"
+							size="icon"
+							aria-label="Collapse all folders"
+							onClick={collapseAll}
+							className={BUTTON}
+						>
+							<FoldVertical className={ICON} />
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent>Collapse all folders</TooltipContent>
+				</Tooltip>
+			</TooltipProvider>
 		</section>
 	);
 }
