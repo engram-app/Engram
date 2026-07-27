@@ -242,7 +242,7 @@ jobs:
       # needs no AWS creds here and fails loudly if the image was never built.
       # On the rollback recipe the tagged SHA's main run is long since
       # complete, so this returns on the first poll.
-      # See docs/context/deploy-guardrails.md.
+      # See engram-workspace/docs/context/deploy-guardrails.md.
       - name: Wait for main CI to publish this commit's image
         env:
           GH_REPO: ${{ github.repository }}
@@ -282,7 +282,7 @@ jobs:
                 exit 0
                 ;;
               completed/*)
-                echo "::error::build-and-publish-image on run ${run_id} ended '${job}' — ${IMAGE_TAG} was never published. Refusing to pin a non-existent image (ECS would ImagePull-fail; see docs/context/deploy-guardrails.md)."
+                echo "::error::build-and-publish-image on run ${run_id} ended '${job}' — ${IMAGE_TAG} was never published. Refusing to pin a non-existent image (ECS would ImagePull-fail; see engram-workspace/docs/context/deploy-guardrails.md)."
                 exit 1
                 ;;
               *)
