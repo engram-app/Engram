@@ -239,14 +239,18 @@ export function scheduleRehandshake(docId: string, delayMs: number): void {
 	}
 	const attempts = rehandshakeAttempts.get(docId) ?? 0;
 	if (attempts >= REHANDSHAKE_MAX_ATTEMPTS) {
-		// Circuit open: stop the automatic retry storm. Four things re-arm it, so
-		// an open breaker is always an escapable state rather than a deaf note:
-		// a successful crdt_msg ack (clearRehandshakeBackoff), any inbound frame
-		// (handleFrame), a reconnect/refocus resync (resyncOpenDocs), or a user
-		// reopen (closeDoc). Loud so a stuck note stays diagnosable.
+		// Circuit open: stop the automatic retry storm. Three things re-arm it, so
+		// an open breaker is an escapable state rather than a stuck one: a
+		// successful crdt_msg ack (clearRehandshakeBackoff), a reconnect/refocus
+		// resync (resyncOpenDocs), or a user reopen (closeDoc). All three are
+		// naturally rate-limited — a user action, or the 3s resync throttle — which
+		// is what keeps re-arming from becoming its own storm. Inbound frames
+		// deliberately do NOT re-arm; see handleFrame. Note this does not silence
+		// the note: inbound frames still apply while the breaker is open. Loud so a
+		// stuck note stays diagnosable.
 		rlog().warn(
 			"crdt",
-			`re-handshake giving up note=${docId} after ${attempts} attempts — awaiting ack/frame/reconnect/reopen`,
+			`re-handshake giving up note=${docId} after ${attempts} attempts — awaiting ack/reconnect/reopen`,
 		);
 		return;
 	}
@@ -287,12 +291,17 @@ export async function handleFrame(noteId: string, b64: string): Promise<void> {
 	if (!session.manager.hasDoc(noteId)) {
 		return; // not active — drop; STEP1 re-syncs on reopen
 	}
-	// Receipt of ANY inbound frame proves the room is alive for this note, so the
-	// backoff has nothing left to back off from. The crdt_msg ack only proves the
-	// OUTBOUND leg and only fires when we push — without this, a note we merely
-	// read (remote edits streaming in, no local writes) could sit on a tripped
-	// breaker forever and never retry a later genuine failure.
-	rehandshakeAttempts.delete(noteId);
+	// NOTE: deliberately does NOT clear rehandshakeAttempts. An inbound frame
+	// looks like proof the room is healthy, but the failure this breaker exists
+	// for is push-side: scheduleRehandshake is fed by crdt_msg REJECTIONS, and
+	// `rate_limited` is one of them (see channel.ts). Rate-limited pushes while
+	// other devices keep editing means frames keep arriving — so clearing here
+	// would reset the budget on every frame and re-handshake without bound,
+	// restoring the exact storm this breaker bounds, under exactly the
+	// rate-limit starvation that has bitten this codebase before.
+	// A tripped breaker is NOT a deaf note: this path is independent of it, so
+	// live edits keep applying. Only the re-handshake retry stops, and reconnect,
+	// tab refocus (both -> resyncOpenDocs) and reopen (closeDoc) all re-arm it.
 	await session.channel.handleFrame(noteId, b64);
 }
 

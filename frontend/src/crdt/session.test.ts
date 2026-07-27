@@ -393,9 +393,13 @@ describe("crdt session", () => {
 			closeDoc("note-reopen");
 		});
 
-		it("an open breaker re-arms on any inbound frame (read-only note never acks)", async () => {
-			// Build a real frame from a throwaway session, then feed it to a session
-			// whose breaker is open — receipt alone must restore the budget.
+		// The inverse of the two above, and the reason handleFrame does NOT clear
+		// the budget. scheduleRehandshake is fed by crdt_msg REJECTIONS, and
+		// `rate_limited` is one of them — so "pushes rejected while other devices
+		// keep editing" is a real state in which frames keep arriving. If receipt
+		// re-armed the breaker, every frame would reset the budget and the retry
+		// would run without bound: the exact storm this breaker exists to stop.
+		it("inbound frames do NOT re-arm the breaker (rate-limited push + live traffic)", async () => {
 			const donor: string[] = [];
 			startCrdtSession({ vaultId: "v1", push: (_id, b64) => donor.push(b64) });
 			const a = await openDoc("note-inbound");
@@ -411,15 +415,19 @@ describe("crdt session", () => {
 				scheduleRehandshake("note-inbound", 1000);
 				await vi.advanceTimersByTimeAsync(30_000);
 			}
-			scheduleRehandshake("note-inbound", 1000); // open — nothing armed
+			scheduleRehandshake("note-inbound", 1000); // breaker open — nothing armed
 			await vi.advanceTimersByTimeAsync(30_000);
 			const stuck = frames.length;
 
-			await handleFrame("note-inbound", frame); // proof the room is alive
+			// Live traffic arrives for the note. The frame must still APPLY...
+			await handleFrame("note-inbound", frame);
+			const handle = await openDoc("note-inbound");
+			expect(handle!.ytext.toJSON()).toContain("remote-edit");
 
+			// ...but it must NOT hand the breaker a fresh budget.
 			scheduleRehandshake("note-inbound", 1000);
-			await vi.advanceTimersByTimeAsync(1000);
-			await vi.waitFor(() => expect(frames.length).toBeGreaterThan(stuck));
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(frames.length).toBe(stuck);
 			closeDoc("note-inbound");
 		});
 	});
