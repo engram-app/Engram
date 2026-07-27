@@ -197,6 +197,9 @@ export function closeDoc(noteId: string): void {
 	}
 	session.openNoteIds.delete(noteId);
 	session.enrollment.reset(noteId); // next open re-runs the STEP1 handshake
+	// A reopen is a user-driven retry — give it a fresh attempt budget, or a note
+	// that tripped the breaker would stay deaf for the rest of the session.
+	rehandshakeAttempts.delete(noteId);
 	const a = session.awareness.get(noteId);
 	if (a) {
 		a.destroy();
@@ -236,12 +239,14 @@ export function scheduleRehandshake(docId: string, delayMs: number): void {
 	}
 	const attempts = rehandshakeAttempts.get(docId) ?? 0;
 	if (attempts >= REHANDSHAKE_MAX_ATTEMPTS) {
-		// Circuit open: stop the automatic retry storm. A later successful ack
-		// (clearRehandshakeBackoff), a user reopen, or a throttled reconnect
-		// resync re-arms it. Loud so a stuck note stays diagnosable.
+		// Circuit open: stop the automatic retry storm. Four things re-arm it, so
+		// an open breaker is always an escapable state rather than a deaf note:
+		// a successful crdt_msg ack (clearRehandshakeBackoff), any inbound frame
+		// (handleFrame), a reconnect/refocus resync (resyncOpenDocs), or a user
+		// reopen (closeDoc). Loud so a stuck note stays diagnosable.
 		rlog().warn(
 			"crdt",
-			`re-handshake giving up note=${docId} after ${attempts} attempts — awaiting ack/reconnect`,
+			`re-handshake giving up note=${docId} after ${attempts} attempts — awaiting ack/frame/reconnect/reopen`,
 		);
 		return;
 	}
@@ -282,6 +287,12 @@ export async function handleFrame(noteId: string, b64: string): Promise<void> {
 	if (!session.manager.hasDoc(noteId)) {
 		return; // not active — drop; STEP1 re-syncs on reopen
 	}
+	// Receipt of ANY inbound frame proves the room is alive for this note, so the
+	// backoff has nothing left to back off from. The crdt_msg ack only proves the
+	// OUTBOUND leg and only fires when we push — without this, a note we merely
+	// read (remote edits streaming in, no local writes) could sit on a tripped
+	// breaker forever and never retry a later genuine failure.
+	rehandshakeAttempts.delete(noteId);
 	await session.channel.handleFrame(noteId, b64);
 }
 
@@ -300,6 +311,12 @@ export function resyncOpenDocs(): void {
 		return;
 	}
 	lastResyncAt = now;
+	// A reconnect (or a tab refocus) is a new connectivity epoch: attempts racked
+	// up against the OLD socket say nothing about this one. Clear the whole map so
+	// every open doc re-handshakes with a full budget — mirrors the plugin's
+	// `clearStrandHealAttempts()` on `onCrdtTopicJoined`. The throttle above is
+	// what keeps this from becoming its own storm.
+	rehandshakeAttempts.clear();
 	const ids = [...session.awareness.keys()];
 	if (ids.length > 0) {
 		rlog().info("crdt", `reconnect resync: re-enrolling ${ids.length} open doc(s)`);

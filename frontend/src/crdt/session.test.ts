@@ -346,6 +346,82 @@ describe("crdt session", () => {
 			await vi.waitFor(() => expect(frames.length).toBe(base + 1));
 			closeDoc("note-clr");
 		});
+
+		// A tripped breaker MUST stay escapable. The ack path alone is not enough:
+		// it only fires when we push, so a note we merely read could sit deaf for
+		// the rest of the session. These three pin the other exits.
+
+		it("an open breaker re-arms on a reconnect resync (new connectivity epoch)", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("note-recon");
+			for (let i = 0; i < 6; i++) {
+				scheduleRehandshake("note-recon", 1000);
+				await vi.advanceTimersByTimeAsync(30_000);
+			}
+			scheduleRehandshake("note-recon", 1000); // breaker open — no timer armed
+			await vi.advanceTimersByTimeAsync(30_000);
+			const stuck = frames.length;
+
+			resyncOpenDocs(); // reconnect: re-enrolls AND clears the attempt budget
+			await vi.waitFor(() => expect(frames.length).toBeGreaterThan(stuck));
+			const afterResync = frames.length;
+
+			// Budget restored: a fresh failure retries at the BASE delay again.
+			scheduleRehandshake("note-recon", 1000);
+			await vi.advanceTimersByTimeAsync(1000);
+			await vi.waitFor(() => expect(frames.length).toBe(afterResync + 1));
+			closeDoc("note-recon");
+		});
+
+		it("an open breaker re-arms on a user reopen (closeDoc clears the budget)", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("note-reopen");
+			for (let i = 0; i < 6; i++) {
+				scheduleRehandshake("note-reopen", 1000);
+				await vi.advanceTimersByTimeAsync(30_000);
+			}
+			closeDoc("note-reopen");
+			await openDoc("note-reopen");
+			const base = frames.length;
+
+			// Reopened with a fresh budget: the next failure retries at the base delay.
+			scheduleRehandshake("note-reopen", 1000);
+			await vi.advanceTimersByTimeAsync(1000);
+			await vi.waitFor(() => expect(frames.length).toBe(base + 1));
+			closeDoc("note-reopen");
+		});
+
+		it("an open breaker re-arms on any inbound frame (read-only note never acks)", async () => {
+			// Build a real frame from a throwaway session, then feed it to a session
+			// whose breaker is open — receipt alone must restore the budget.
+			const donor: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => donor.push(b64) });
+			const a = await openDoc("note-inbound");
+			a!.ytext.insert(0, "remote-edit");
+			await vi.waitFor(() => expect(donor.length).toBeGreaterThan(0));
+			const frame = donor.at(-1)!;
+			stopCrdtSession();
+
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("note-inbound");
+			for (let i = 0; i < 6; i++) {
+				scheduleRehandshake("note-inbound", 1000);
+				await vi.advanceTimersByTimeAsync(30_000);
+			}
+			scheduleRehandshake("note-inbound", 1000); // open — nothing armed
+			await vi.advanceTimersByTimeAsync(30_000);
+			const stuck = frames.length;
+
+			await handleFrame("note-inbound", frame); // proof the room is alive
+
+			scheduleRehandshake("note-inbound", 1000);
+			await vi.advanceTimersByTimeAsync(1000);
+			await vi.waitFor(() => expect(frames.length).toBeGreaterThan(stuck));
+			closeDoc("note-inbound");
+		});
 	});
 
 	describe("resyncOpenDocs throttle", () => {
