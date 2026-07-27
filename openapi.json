@@ -1245,8 +1245,20 @@
             "x-struct": null,
             "x-validate": null
           },
+          "conn_id": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "created_at": {
             "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "device_id": {
             "nullable": true,
             "type": "string",
             "x-struct": null,
@@ -1805,6 +1817,20 @@
       "LogInput": {
         "properties": {
           "category": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "conn_id": {
+            "description": "WebSocket connection id, correlates client logs to server breadcrumbs.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "device_id": {
+            "description": "Per-install Obsidian instance id, for per-device attribution.",
             "nullable": true,
             "type": "string",
             "x-struct": null,
