@@ -63,6 +63,8 @@ defmodule EngramWeb.LogsController do
       stack: log.stack,
       plugin_version: log.plugin_version,
       platform: log.platform,
+      device_id: log.device_id,
+      conn_id: log.conn_id,
       created_at: log.created_at
     }
   end
