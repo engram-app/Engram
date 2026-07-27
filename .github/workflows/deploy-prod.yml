@@ -202,6 +202,9 @@ jobs:
     # happy path below is byte-for-byte what it was before the gate existed.
     needs: release-e2e-gate
     runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: read
+      actions: read   # read main CI's build-and-publish-image conclusion
     steps:
       - name: Checkout engram (tagged commit)
         uses: actions/checkout@v7
@@ -222,6 +225,74 @@ jobs:
           echo "release_sha=$FULL_SHA" >> "$GITHUB_OUTPUT"
           echo "release=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           echo "Deploying $GITHUB_REF_NAME → image sha-$SHA (release=$FULL_SHA)"
+
+      # THE TAG DOES NOT BUILD THE IMAGE — main CI does, and this workflow
+      # races it. release-please.yml pushes release-v* the instant the release
+      # commit lands on main, i.e. the SAME push that starts main CI. There,
+      # build-and-publish-image `needs: [fingerprint, ci]`, so it is the LAST
+      # thing to run: the image reaches ECR ~20 min after the push, while the
+      # e2e gate above only absorbs ~14 min of that. On release-v0.11.0 the
+      # infra PR opened at 00:11:13 and terraform planned at 00:12:55, but the
+      # image did not land until 00:17:18 — data.aws_ecr_image.engram_pin_check
+      # failed the plan and the deploy stalled until a human re-ran it.
+      # release-v0.10.0 died the same way.
+      #
+      # So: never write the pin until the job that publishes the image has
+      # actually succeeded. Gating on the producer (rather than polling ECR)
+      # needs no AWS creds here and fails loudly if the image was never built.
+      # On the rollback recipe the tagged SHA's main run is long since
+      # complete, so this returns on the first poll.
+      # See engram-workspace/docs/context/deploy-guardrails.md.
+      - name: Wait for main CI to publish this commit's image
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.sha }}
+          IMAGE_TAG: ${{ steps.tags.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for ${IMAGE_TAG} to be published by main CI…"
+          for i in $(seq 1 60); do   # 60 * 30s = 30 min ceiling
+            # Query by head_sha (not `gh run list --limit N`) so a rollback to
+            # an old commit still resolves its run regardless of how many main
+            # runs have happened since.
+            #
+            # branch=main is LOAD-BEARING, not decoration. Several CI runs share
+            # a release commit's head_sha (the main push, plus repository_dispatch
+            # runs from plugin PRs, plus the release-v* workflow_dispatch e2e
+            # gate). Only the main-branch push run builds the image — every other
+            # one reports build-and-publish-image as `skipped`, which the case
+            # below (correctly) treats as fatal. Without this filter the newest
+            # run wins and the deploy hard-fails on a perfectly good release.
+            run_id=$(gh api \
+              "repos/${GH_REPO}/actions/runs?head_sha=${HEAD_SHA}&event=push&branch=main&per_page=100" \
+              -q '[.workflow_runs[] | select(.name=="CI") | select(.head_branch=="main")] | sort_by(.created_at) | last | .id' \
+              2>/dev/null || echo "")
+            if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+              echo "  no main CI run for ${HEAD_SHA} yet (poll $i)"
+              sleep 30
+              continue
+            fi
+            job=$(gh run view "$run_id" --repo "$GH_REPO" --json jobs \
+              -q '.jobs[] | select(.name=="build-and-publish-image") | "\(.status)/\(.conclusion)"' \
+              2>/dev/null || echo "")
+            case "$job" in
+              completed/success)
+                echo "${IMAGE_TAG} published by run ${run_id}."
+                exit 0
+                ;;
+              completed/*)
+                echo "::error::build-and-publish-image on run ${run_id} ended '${job}' — ${IMAGE_TAG} was never published. Refusing to pin a non-existent image (ECS would ImagePull-fail; see engram-workspace/docs/context/deploy-guardrails.md)."
+                exit 1
+                ;;
+              *)
+                echo "  run ${run_id}: build-and-publish-image=${job:-pending} (poll $i)"
+                ;;
+            esac
+            sleep 30
+          done
+          echo "::error::Timed out after 30 min waiting for build-and-publish-image on ${HEAD_SHA}. Prod NOT moved."
+          exit 1
 
       # Mint a short-lived installation token for the engram-infra-tf
       # GitHub App, scoped to engram-app/engram-infra only. Required

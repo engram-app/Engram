@@ -31,17 +31,20 @@ on:
       # one extra cheap run on the intermediate SHA — e2e-* already skips
       # itself on release-please-- refs — and the final push (the release
       # commit) lands a counting suite on the head the PR actually merges.
-      # The dispatch in release-please.yml stays as belt-and-braces.
       - "release-please--**"
       - "revert/**"
       - "security/**"
       - "test/**"
-    # `v*` covers semver release tags applied for marketing/audit.
-    # `release-v*` is the deploy trigger — CI already ran on the
-    # merge commit the tag points at, no need to rerun (and the
-    # version-check job mistakenly fires on the tag because the
-    # mix.exs version still matches main).
-    tags-ignore: ["v*", "release-v*"]
+    # NO tag should start this workflow. Every tag we push points at a commit
+    # already on main, which CI has gated — rerunning is pure waste (and the
+    # version-check job mistakenly fires on a tag because the mix.exs version
+    # still matches main).
+    #
+    # This was `["v*", "release-v*"]`, which missed release-please's own tag:
+    # it publishes BARE semver (`0.11.0`, no `v`), so every release quietly
+    # spawned a second full CI run on head_branch=0.11.0. `**` is exhaustive
+    # and needs no upkeep when a new tag shape appears.
+    tags-ignore: ["**"]
   repository_dispatch:
     types: [plugin-e2e-trigger]
   # Nightly full-e2e convergence run + flake ledger (measurement, non-gating —
