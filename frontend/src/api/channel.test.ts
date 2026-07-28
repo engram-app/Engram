@@ -299,3 +299,60 @@ describe("handleFoldersBatch", () => {
 		expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["folders", "7"] });
 	});
 });
+
+// --- Derived-folder invalidation (2026-07-28) --------------------------------
+// A note deleted from another device stayed in the sidebar until a reload.
+// flushBatch read the RAW folders cache and trusted `row.id`, which is null for
+// every DERIVED folder (a folder holding no note directly — most folders). The
+// entry was found, so the broad fallback was skipped, and the invalidation went
+// to the key `["folder-notes-by-id", vaultId, null]`, which nothing reads.
+describe("handleNoteChanged folder invalidation", () => {
+	const idKeyCalls = (qc: { invalidateQueries: ReturnType<typeof vi.fn> }) =>
+		qc.invalidateQueries.mock.calls
+			.map((c) => c[0]?.queryKey)
+			.filter((k: unknown[]) => Array.isArray(k) && k[0] === "folder-notes-by-id");
+
+	it("invalidates a DERIVED folder's id-keyed list via its syn: id", () => {
+		// id: null is what /api/folders returns for a derived folder, and
+		// getQueryData bypasses the select that would map it to syn:<path>.
+		const qc = mockQueryClient({ folders: [{ id: null, name: "Notes" }] });
+
+		handleNoteChanged({ event_type: "delete", path: "Notes/x.md", vault_id: "7" }, qc, "7");
+		vi.runAllTimers();
+
+		expect(idKeyCalls(qc)).toContainEqual(["folder-notes-by-id", "7", "syn:Notes"]);
+	});
+
+	it("never invalidates a null folder id", () => {
+		const qc = mockQueryClient({ folders: [{ id: null, name: "Notes" }] });
+
+		handleNoteChanged({ event_type: "delete", path: "Notes/x.md", vault_id: "7" }, qc, "7");
+		vi.runAllTimers();
+
+		for (const key of idKeyCalls(qc)) {
+			expect(key[2]).not.toBeNull();
+		}
+	});
+
+	it("still routes a root-level delete to the root sentinel", () => {
+		const qc = mockQueryClient({ folders: [] });
+
+		handleNoteChanged({ event_type: "delete", path: "top.md", vault_id: "7" }, qc, "7");
+		vi.runAllTimers();
+
+		expect(idKeyCalls(qc)).toContainEqual(["folder-notes-by-id", "7", "root"]);
+	});
+
+	it("uses the broadcast's folder field when present rather than re-deriving", () => {
+		const qc = mockQueryClient({ folders: [{ id: "real-id", name: "Notes" }] });
+
+		handleNoteChanged(
+			{ event_type: "delete", path: "Notes/x.md", folder: "Notes", vault_id: "7" },
+			qc,
+			"7",
+		);
+		vi.runAllTimers();
+
+		expect(idKeyCalls(qc)).toContainEqual(["folder-notes-by-id", "7", "real-id"]);
+	});
+});

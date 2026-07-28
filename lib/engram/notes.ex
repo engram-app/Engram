@@ -4325,7 +4325,15 @@ defmodule Engram.Notes do
     payload = %{
       "event_type" => event_type,
       "path" => path,
-      "vault_id" => vault_id
+      "vault_id" => vault_id,
+      # Parity with the upsert branch, which has always carried "folder".
+      # Receivers route a change to the right cached folder listing by this
+      # field; omitting it forced every client to re-derive it from the path,
+      # and the web app's re-derivation then had to map folder NAME -> folder
+      # ID, where a derived folder's null id silently invalidated nothing (the
+      # sidebar kept showing notes deleted from another device until reload).
+      # The server already knows the folder — send it.
+      "folder" => Helpers.extract_folder(path)
     }
 
     payload = if id, do: Map.put(payload, "id", id), else: payload

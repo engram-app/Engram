@@ -418,4 +418,48 @@ defmodule Engram.NotesBroadcastTest do
       refute Map.has_key?(payload, "device_id")
     end
   end
+
+  # The delete branch carried only path/vault_id/id, so every receiver had to
+  # re-derive the folder from the path. The web app's re-derivation then mapped
+  # folder NAME -> folder ID against a cache where derived folders carry a null
+  # id, and silently invalidated nothing — a note deleted on another device
+  # stayed in the sidebar until reload. Parity with upsert removes the need to
+  # re-derive at all.
+  describe "note_changed delete broadcast carries the folder" do
+    test "a note inside a folder reports that folder", %{user: user, vault: vault} do
+      {:ok, _note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Notes/Sub/a.md",
+          "content" => "# A",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      assert :ok = Notes.delete_note(user, vault, "Notes/Sub/a.md")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete"} = payload
+      }
+
+      assert payload["folder"] == "Notes/Sub"
+      assert payload["path"] == "Notes/Sub/a.md"
+    end
+
+    test "a root-level note reports the empty folder, not nil", %{user: user, vault: vault} do
+      {:ok, _note} =
+        Notes.upsert_note(user, vault, %{"path" => "top.md", "content" => "# T", "mtime" => 1.0})
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      assert :ok = Notes.delete_note(user, vault, "top.md")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete"} = payload
+      }
+
+      # "" is the root sentinel every client keys on; nil would be a cache miss.
+      assert payload["folder"] == ""
+    end
+  end
 end

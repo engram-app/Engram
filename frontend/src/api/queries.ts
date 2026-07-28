@@ -50,7 +50,7 @@ const selectAttachments = (data: { attachments: AttachmentSummary[] }) => data.a
 // every other folder resolves through the folders cache marker. Returns null
 // when an unknown non-root folder isn't in the cache yet — callers skip the
 // optimistic patch and let the list surface on its next fetch.
-function folderIdForPath(
+export function folderIdForPath(
 	qc: QueryClient,
 	vaultId: string | null | undefined,
 	folder: string,
