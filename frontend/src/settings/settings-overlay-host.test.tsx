@@ -34,10 +34,14 @@ describe("SettingsOverlayHost", () => {
 		expect(screen.queryByTestId("dialog")).toBeNull();
 	});
 
-	it("keeps the page mounted underneath when settings is open", () => {
+	it("keeps the page mounted underneath when settings is open", async () => {
 		renderHost("/work/note-1#settings/billing");
+		// The page underneath is synchronous (plain Outlet), but the dialog is
+		// lazy(), so it sits behind a Suspense boundary that resolves on a
+		// microtask. `vi.mock` does not make the dynamic import synchronous.
+		// Await the dialog; asserting it with a sync getBy* would always throw.
 		expect(screen.getByText("note body")).toBeInTheDocument();
-		expect(screen.getByTestId("dialog")).toHaveTextContent("section:billing");
+		expect(await screen.findByTestId("dialog")).toHaveTextContent("section:billing");
 	});
 
 	it("ignores unrelated hashes", () => {
