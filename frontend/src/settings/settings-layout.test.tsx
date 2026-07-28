@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EngramConfig } from "../config";
 import { ConfigProvider } from "../config-context";
 import { ThemeProvider } from "../theme/theme-provider";
-import SettingsLayout from "./settings-layout";
+import type { SettingsSectionKey } from "./settings-hash";
+import SettingsDialog from "./settings-layout";
 
 vi.mock("../auth/use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ user: { email: "todd@example.com" }, logout: vi.fn() }),
@@ -21,20 +22,20 @@ const testConfig: EngramConfig = {
 	tracingEnabled: false,
 };
 
-function renderAt(path: string) {
-	// SettingsLayout now calls useMe(); give it a query client with retry off so
-	// an unmocked /api/me fetch fails fast rather than retrying through the test.
+function LocationProbe() {
+	const loc = useLocation();
+	return <output data-testid="loc">{`${loc.pathname}${loc.hash}`}</output>;
+}
+
+function renderDialog(section: SettingsSectionKey, initialEntry = "/work/note-1#settings/account") {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	return render(
 		<ConfigProvider config={testConfig}>
 			<QueryClientProvider client={client}>
 				<ThemeProvider>
-					<MemoryRouter initialEntries={[path]}>
-						<Routes>
-							<Route path="/settings" element={<SettingsLayout />}>
-								<Route path="api-keys" element={<p>api keys body</p>} />
-							</Route>
-						</Routes>
+					<MemoryRouter initialEntries={[initialEntry]}>
+						<LocationProbe />
+						<SettingsDialog section={section} />
 					</MemoryRouter>
 				</ThemeProvider>
 			</QueryClientProvider>
@@ -42,7 +43,7 @@ function renderAt(path: string) {
 	);
 }
 
-describe("SettingsLayout", () => {
+describe("SettingsDialog", () => {
 	beforeEach(() => {
 		window.matchMedia = vi.fn().mockReturnValue({
 			matches: true,
@@ -51,14 +52,47 @@ describe("SettingsLayout", () => {
 		}) as any;
 	});
 
-	it("renders as a dialog with the settings nav + routed section", () => {
-		renderAt("/settings/api-keys");
-		// SettingsLayout is now a Radix Dialog overlaying whatever underlying
-		// app route is showing — the Rail lives on AppLayout (parent route), so
-		// assert on the dialog + section nav + routed body.
-		expect(screen.getByRole("dialog")).toBeInTheDocument();
-		expect(screen.getByRole("link", { name: "Account" })).toBeInTheDocument();
-		expect(screen.getByRole("link", { name: "Billing" })).toBeInTheDocument();
-		expect(screen.getByText("api keys body")).toBeInTheDocument();
+	it("renders the nav with a link per section", async () => {
+		renderDialog("account");
+		expect(await screen.findByRole("link", { name: "Billing" })).toHaveAttribute(
+			"href",
+			"#settings/billing",
+		);
+	});
+
+	it("marks the current section as the active nav item", async () => {
+		renderDialog("vaults");
+		expect(await screen.findByRole("link", { name: "Vaults" })).toHaveAttribute(
+			"aria-current",
+			"page",
+		);
+		expect(screen.getByRole("link", { name: "Account" })).not.toHaveAttribute("aria-current");
+	});
+
+	it("strips the hash on close and keeps you on the same page", async () => {
+		renderDialog("account", "/work/note-1#settings/account");
+		fireEvent.click(screen.getByRole("button", { name: /close settings/i }));
+		// The close is deferred by CLOSE_ANIMATION_MS so the Radix exit
+		// transition plays; findBy* polls past it.
+		expect(await screen.findByText("/work/note-1")).toBeInTheDocument();
+	});
+
+	it("falls back to account when the section is unavailable in this config", async () => {
+		const localConfig = { ...testConfig, authProvider: "local" as const, billingEnabled: false };
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<ConfigProvider config={localConfig}>
+				<QueryClientProvider client={client}>
+					<ThemeProvider>
+						<MemoryRouter initialEntries={["/work#settings/billing"]}>
+							<SettingsDialog section="billing" />
+						</MemoryRouter>
+					</ThemeProvider>
+				</QueryClientProvider>
+			</ConfigProvider>,
+		);
+		// Billing is not a section on a self-host build, so the nav must not
+		// offer it and the body must not be the billing page.
+		expect(screen.queryByRole("link", { name: "Billing" })).toBeNull();
 	});
 });

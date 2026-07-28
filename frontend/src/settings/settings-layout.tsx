@@ -1,7 +1,7 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Menu, X } from "lucide-react";
-import { useEffect, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router";
+import { lazy, Suspense, useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogOverlay } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -15,43 +15,78 @@ import {
 import { useMe } from "../api/queries";
 import { useConfig } from "../config-context";
 import { buildSettingsSections, type SettingsSection } from "./sections";
+import { type SettingsSectionKey, settingsHash } from "./settings-hash";
 
 // Keep this in sync with the duration-200 class on DialogPrimitive.Content
 // below — we hold the dialog mounted for one animation cycle after
 // onOpenChange(false) so Radix's exit transition plays before we navigate.
 const CLOSE_ANIMATION_MS = 200;
 
+// These are the exact modules router.tsx lazy-loads today.
+const AccountPage = lazy(() => import("./account-page"));
+const AccountPageLocal = lazy(() => import("./account-page-local"));
+const VaultsPage = lazy(() => import("./vaults-page"));
+const ConnectionsPage = lazy(() => import("./connections-page"));
+const BillingPage = lazy(() => import("../billing/billing-page"));
+const AdminPanel = lazy(() => import("../features/admin/AdminPanel"));
+
+function SectionBody({ section }: { section: SettingsSectionKey }) {
+	const config = useConfig();
+	switch (section) {
+		case "vaults":
+			return <VaultsPage />;
+		case "connections":
+			return <ConnectionsPage />;
+		case "billing":
+			return <BillingPage />;
+		case "admin":
+			return <AdminPanel />;
+		default:
+			return config.authProvider === "clerk" ? <AccountPage /> : <AccountPageLocal />;
+	}
+}
+
 function SettingsNavList({
 	sections,
+	current,
 	onNavigate,
 }: {
 	sections: SettingsSection[];
+	current: SettingsSectionKey;
 	onNavigate?: () => void;
 }) {
 	return (
 		<ul className="space-y-1">
-			{sections.map((s) => (
-				<li key={s.key}>
-					<NavLink
-						to={s.key}
-						onClick={onNavigate}
-						className={({ isActive }) =>
-							`block rounded-md px-3 py-2 text-sm transition-colors ${
-								isActive
+			{sections.map((s) => {
+				const active = s.key === current;
+				return (
+					<li key={s.key}>
+						{/* Plain <a>, not react-router's <Link>: Link always resolves
+						`to` against the current pathname, so a hash-only `to` still
+						renders `href="/current/path#settings/x"`. A native anchor with
+						a bare fragment href lets the browser do same-document hash
+						navigation (pathname untouched, no reload); BrowserRouter's
+						popstate listener picks up the resulting URL change. */}
+						<a
+							href={settingsHash(s.key)}
+							onClick={onNavigate}
+							aria-current={active ? "page" : undefined}
+							className={`block rounded-md px-3 py-2 text-sm transition-colors ${
+								active
 									? "bg-primary/10 font-medium text-primary"
 									: "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-							}`
-						}
-					>
-						{s.label}
-					</NavLink>
-				</li>
-			))}
+							}`}
+						>
+							{s.label}
+						</a>
+					</li>
+				);
+			})}
 		</ul>
 	);
 }
 
-export default function SettingsLayout() {
+export default function SettingsDialog({ section }: { section: SettingsSectionKey }) {
 	const config = useConfig();
 	const { data: me } = useMe();
 	const isAdmin = me?.role === "admin";
@@ -59,14 +94,26 @@ export default function SettingsLayout() {
 	const [navOpen, setNavOpen] = useState(false);
 	const [open, setOpen] = useState(true);
 	const navigate = useNavigate();
+	const location = useLocation();
 
+	// A hash can name a section this build does not have (`#settings/billing` on
+	// self-host, `#settings/admin` as a non-admin). Fall back rather than render
+	// an empty dialog body.
+	const current = sections.some((s) => s.key === section) ? section : "account";
+
+	// Close = strip the hash. Deferred by CLOSE_ANIMATION_MS so the Radix exit
+	// transition plays. This replaces the old `navigate("/")`, which threw away
+	// whatever page the user opened settings from.
 	useEffect(() => {
 		if (open) {
 			return;
 		}
-		const t = setTimeout(() => navigate("/"), CLOSE_ANIMATION_MS);
+		const t = setTimeout(
+			() => navigate({ pathname: location.pathname, search: location.search, hash: "" }),
+			CLOSE_ANIMATION_MS,
+		);
 		return () => clearTimeout(t);
-	}, [open, navigate]);
+	}, [open, navigate, location.pathname, location.search]);
 
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
@@ -107,7 +154,11 @@ export default function SettingsLayout() {
 								</SheetTitle>
 								<SheetDescription className="sr-only">Settings sections</SheetDescription>
 								<nav aria-label="Settings sections" className="p-3">
-									<SettingsNavList sections={sections} onNavigate={() => setNavOpen(false)} />
+									<SettingsNavList
+										sections={sections}
+										current={current}
+										onNavigate={() => setNavOpen(false)}
+									/>
 								</nav>
 							</SheetContent>
 						</Sheet>
@@ -125,14 +176,16 @@ export default function SettingsLayout() {
 									<h2 className="mb-3 px-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">
 										Settings
 									</h2>
-									<SettingsNavList sections={sections} />
+									<SettingsNavList sections={sections} current={current} />
 								</div>
 							</ScrollArea>
 						</nav>
 
 						<ScrollArea className="min-h-0 min-w-0 flex-1">
 							<div className="p-4 sm:p-6">
-								<Outlet />
+								<Suspense fallback={<p className="text-muted-foreground">Loading…</p>}>
+									<SectionBody section={current} />
+								</Suspense>
 							</div>
 						</ScrollArea>
 					</div>
