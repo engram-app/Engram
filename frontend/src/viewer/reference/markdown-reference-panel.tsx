@@ -33,7 +33,7 @@ function EntryRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 	};
 
 	return (
-		<li className="group border-border/60 border-b px-3 py-2.5 last:border-b-0">
+		<li className="group border-border/60 border-b px-3 py-2 last:border-b-0">
 			<p className="mb-1.5 flex items-center gap-2">
 				<span className="min-w-0 flex-1 truncate font-medium text-muted-foreground text-xs uppercase tracking-wide">
 					{entry.label}
@@ -62,13 +62,18 @@ function EntryRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 				// inside the panel's Radix one, and a column of those makes the whole
 				// section miserable to scroll. Previews are illustrative — clipping the
 				// far edge of a demo table costs nothing.
-				<figure className="prose-sm mb-1.5 overflow-hidden rounded border border-border/60 bg-background px-2 py-1.5">
+				// The `[&_.prose…]` pair is what actually removes the dead space here:
+				// Typography gives every block a ~1em vertical margin, and Mermaid adds
+				// its own my-4, so the box was mostly gutter. Collapsing the leading and
+				// trailing margins lets it hug the example while keeping the rhythm
+				// between blocks in a multi-part snippet.
+				<figure className="prose-sm mb-1 overflow-hidden border border-border/60 bg-background px-2 py-1 [&_.mermaid]:my-0 [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0">
 					<NoteView content={entry.syntax} tags={[]} />
 				</figure>
 			)}
 
 			{/* whitespace-pre-wrap already prevents horizontal overflow — no scroller. */}
-			<pre className="whitespace-pre-wrap break-words rounded bg-muted px-2 py-1 font-mono text-[11px] text-muted-foreground">
+			<pre className="whitespace-pre-wrap break-words bg-muted px-2 py-1 font-mono text-[11px] text-muted-foreground">
 				{entry.syntax}
 			</pre>
 
