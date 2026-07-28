@@ -1,7 +1,8 @@
 import type { EngramConfig } from "../config";
+import type { SettingsSectionKey } from "./settings-hash";
 
 export interface SettingsSection {
-	to: string;
+	key: SettingsSectionKey;
 	label: string;
 }
 
@@ -11,17 +12,17 @@ export function buildSettingsSections(
 	isAdmin = false,
 ): SettingsSection[] {
 	const sections: SettingsSection[] = [
-		{ to: "account", label: "Account" },
-		{ to: "vaults", label: "Vaults" },
-		{ to: "connections", label: "Connections" },
+		{ key: "account", label: "Account" },
+		{ key: "vaults", label: "Vaults" },
+		{ key: "connections", label: "Connections" },
 	];
 
 	if (billingEnabled) {
-		sections.push({ to: "billing", label: "Billing" });
+		sections.push({ key: "billing", label: "Billing" });
 	}
 
 	if (authProvider === "local" && isAdmin) {
-		sections.push({ to: "admin", label: "Administration" });
+		sections.push({ key: "admin", label: "Administration" });
 	}
 
 	return sections;

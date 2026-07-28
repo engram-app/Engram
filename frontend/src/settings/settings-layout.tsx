@@ -31,9 +31,9 @@ function SettingsNavList({
 	return (
 		<ul className="space-y-1">
 			{sections.map((s) => (
-				<li key={s.to}>
+				<li key={s.key}>
 					<NavLink
-						to={s.to}
+						to={s.key}
 						onClick={onNavigate}
 						className={({ isActive }) =>
 							`block rounded-md px-3 py-2 text-sm transition-colors ${
