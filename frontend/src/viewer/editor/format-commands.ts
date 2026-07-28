@@ -19,6 +19,42 @@ export function toggleWrap(view: EditorView, before: string, after: string = bef
 	view.focus();
 }
 
+/**
+ * Drop `snippet` in at the caret, replacing any selection.
+ *
+ * `block: true` marks snippets that are only valid at the start of a line
+ * (callouts, tables, fences, rules). Those get newlines synthesized around them
+ * so clicking "Insert" mid-paragraph produces valid markdown instead of a
+ * callout glued onto the end of a sentence. Inline snippets are inserted
+ * verbatim and never gain line breaks.
+ *
+ * ponytail: the caret lands after the snippet rather than selecting a
+ * placeholder inside it (e.g. the "text" in `**text**`). Upgrade path if that
+ * proves annoying: give entries an explicit placeholder offset and select it
+ * here instead of collapsing.
+ */
+export function insertSnippet(
+	view: EditorView,
+	snippet: string,
+	{ block = false }: { block?: boolean } = {},
+): void {
+	const { state } = view;
+	const { from, to } = state.selection.main;
+	const line = state.doc.lineAt(from);
+	// Only the text OUTSIDE the replaced range matters — a selection that spans
+	// the whole line leaves it blank, so no break is needed on that side.
+	const before = block && line.text.slice(0, from - line.from).trim() !== "" ? "\n" : "";
+	const after = block && line.text.slice(to - line.from).trim() !== "" ? "\n" : "";
+	const insert = `${before}${snippet}${after}`;
+
+	view.dispatch({
+		changes: { from, to, insert },
+		selection: { anchor: from + before.length + snippet.length },
+		scrollIntoView: true,
+	});
+	view.focus();
+}
+
 /** Prepend `prefix` (e.g. "# ", "> ", "- ") to each line the selection touches. */
 export function toggleLinePrefix(view: EditorView, prefix: string): void {
 	const { state } = view;
