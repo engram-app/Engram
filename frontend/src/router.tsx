@@ -192,7 +192,7 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 									],
 								},
 
-								// Legacy path settings — Phoenix still serves the SPA for these
+								// Legacy path settings. Phoenix still serves the SPA for these
 								// (router.ex) so old bookmarks boot and land on the hash form.
 								{ path: "/settings", element: suspended(<LegacySettingsRedirect />) },
 								{ path: "/settings/*", element: suspended(<LegacySettingsRedirect />) },
