@@ -13,11 +13,35 @@
 /* KaTeX math styles. */
 @import "katex/dist/katex.min.css" layer(base);
 
+/* Code-fence surface.
+ *
+ * @tailwindcss/typography hardcodes `--tw-prose-pre-bg` to a dark slate in BOTH
+ * light and dark mode, so fences rendered as near-black rectangles on a white
+ * page and ignored the theme entirely. Bind the surface to our own tokens so a
+ * code block is just another themed panel, and let highlight.js own only the
+ * syntax colours (its own backgrounds are cleared below).
+ *
+ * This also un-breaks Mermaid: react-markdown wraps every fence in <pre>, so a
+ * light-theme diagram SVG was being drawn onto that fixed dark surface. */
+@layer base {
+	.prose {
+		--tw-prose-pre-bg: var(--muted);
+		--tw-prose-pre-code: var(--foreground);
+	}
+
+	/* highlight.js themes paint their own page-coloured background; with the
+	 * surface now token-driven that would punch a light (or black) hole through
+	 * it. Keep their foreground colours, drop their backgrounds. */
+	.prose pre .hljs,
+	.prose code.hljs {
+		background: transparent;
+	}
+}
+
 /* Dark highlight.js theme — wrapped so it only applies under `.dark`. */
 @layer base {
 	html.dark .hljs {
 		color: #c9d1d9;
-		background: #0d1117;
 	}
 	html.dark .hljs-doctag,
 	html.dark .hljs-keyword,
