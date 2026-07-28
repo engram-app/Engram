@@ -1,12 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { act } from "react";
 import { MemoryRouter, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EngramConfig } from "../config";
 import { ConfigProvider } from "../config-context";
 import { ThemeProvider } from "../theme/theme-provider";
 import type { SettingsSectionKey } from "./settings-hash";
-import SettingsDialog from "./settings-layout";
+import SettingsDialog, { CLOSE_ANIMATION_MS } from "./settings-layout";
 
 vi.mock("../auth/use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ user: { email: "todd@example.com" }, logout: vi.fn() }),
@@ -84,11 +85,22 @@ describe("SettingsDialog", () => {
 	});
 
 	it("strips the hash on close and keeps you on the same page", async () => {
-		renderDialog("account", "/work/note-1#settings/account");
-		fireEvent.click(screen.getByRole("button", { name: /close settings/i }));
-		// The close is deferred by CLOSE_ANIMATION_MS so the Radix exit
-		// transition plays; findBy* polls past it.
-		expect(await screen.findByText("/work/note-1")).toBeInTheDocument();
+		// The close navigate is deferred by CLOSE_ANIMATION_MS so the Radix exit
+		// transition plays. Advance the clock explicitly rather than waiting on it:
+		// with real timers this asserts deterministic behavior by racing the wall
+		// clock, and under full suite parallel load the event loop starves past
+		// findBy*'s 1000ms default. Measured about 17 percent flake rate that way.
+		vi.useFakeTimers();
+		try {
+			renderDialog("account", "/work/note-1#settings/account");
+			fireEvent.click(screen.getByRole("button", { name: /close settings/i }));
+			await act(async () => {
+				vi.advanceTimersByTime(CLOSE_ANIMATION_MS);
+			});
+			expect(screen.getByText("/work/note-1")).toBeInTheDocument();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("falls back to account when the section is unavailable in this config", async () => {

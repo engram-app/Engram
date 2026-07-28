@@ -87,6 +87,10 @@ function SettingsNavList({
 	);
 }
 
+// Re-exported (rather than `export const` at the declaration site above) so
+// this stays after all non-export statements, per biome's useExportsLast.
+export { CLOSE_ANIMATION_MS };
+
 export default function SettingsDialog({ section }: { section: SettingsSectionKey }) {
 	const config = useConfig();
 	const { data: me } = useMe();
