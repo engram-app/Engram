@@ -1,10 +1,7 @@
-import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useEffect } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
 import { Outlet } from "react-router";
-import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useBillingStatus } from "../api/queries";
 import { useChannel } from "../api/use-channel";
@@ -13,45 +10,31 @@ import { ActiveEditorProvider } from "../viewer/editor/active-editor-context";
 import AppSidebarPanel, { Rail } from "./app-sidebar";
 import MobileLayout from "./mobile-layout";
 import { RailViewProvider } from "./rail-view-context";
-import { RightSidebarProvider, useRightSidebar } from "./right-sidebar-context";
+import RightToolPanel from "./right-tool-panel";
+import { RightToolsProvider, useRightTools } from "./right-tools-context";
 
 const LAYOUT_PANEL_IDS = ["sidebar", "main", "right-sidebar"];
 
 function DesktopLayout() {
 	const rightRef = usePanelRef();
-	const {
-		content: rightContent,
-		collapsed: rightCollapsed,
-		setCollapsed: setRightCollapsed,
-	} = useRightSidebar();
+	const { resolvedId, setActive } = useRightTools();
 	const { defaultLayout, onLayoutChanged } = useDefaultLayout({
 		id: "engram:app-layout-v2",
 		panelIds: LAYOUT_PANEL_IDS,
 		storage: typeof window === "undefined" ? undefined : window.localStorage,
 	});
 
-	const toggleRight = () => {
-		const p = rightRef.current;
-		if (!p) {
-			return;
-		}
-		if (p.isCollapsed()) {
-			p.expand();
-		} else {
-			p.collapse();
-		}
-	};
-
-	// biome-ignore lint/correctness/useExhaustiveDependencies: rightRef.current exposes imperative panel handles, not reactive values; the effect intentionally keys on rightContent alone.
+	// The active tool IS the open/closed state — there is no separate collapsed
+	// flag to keep in sync. Collapsing the panel clears the tool (and persists
+	// that); picking a tool from the rail re-expands it.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: rightRef.current exposes imperative panel handles, not reactive values; the effect intentionally keys on resolvedId alone.
 	useEffect(() => {
-		if (rightContent === null || rightContent === undefined) {
+		if (resolvedId === null) {
 			rightRef.current?.collapse();
 		} else if (rightRef.current?.isCollapsed()) {
 			rightRef.current?.expand();
 		}
-	}, [rightContent]);
-
-	const hasRight = rightContent !== null && rightContent !== undefined;
+	}, [resolvedId]);
 
 	return (
 		<section className="flex h-screen bg-background text-foreground">
@@ -84,18 +67,8 @@ function DesktopLayout() {
 							className="grid-overlay pointer-events-none absolute inset-0 z-0 opacity-30"
 						/>
 						<TrialBanner />
-						{Boolean(hasRight && rightCollapsed) && (
-							<Button
-								variant="ghost"
-								size="icon-sm"
-								onClick={toggleRight}
-								aria-label="Expand outline"
-								title="Expand outline"
-								className="absolute top-2 right-2 z-10 bg-card/80 backdrop-blur"
-							>
-								<PanelRightOpen />
-							</Button>
-						)}
+						{/* No floating expand button: the rail's tool group is now the one
+						    discoverable way to open this panel, for every tool. */}
 						<div className="relative z-10 flex-1 overflow-hidden p-6">
 							<Outlet />
 						</div>
@@ -110,23 +83,16 @@ function DesktopLayout() {
 					maxSize="40%"
 					collapsible
 					collapsedSize="0%"
-					onResize={(size) => setRightCollapsed(size.asPercentage === 0)}
+					// Dragging the panel shut is the same gesture as clicking Collapse,
+					// so it clears the active tool rather than leaving the two out of sync.
+					onResize={(size) => {
+						if (size.asPercentage === 0 && resolvedId !== null) {
+							setActive(null);
+						}
+					}}
 					className="border-border border-l bg-card"
 				>
-					<div className="flex h-full flex-col">
-						<div className="flex shrink-0 items-center justify-start border-border border-b px-1 py-1">
-							<Button
-								variant="ghost"
-								size="icon-sm"
-								onClick={toggleRight}
-								aria-label="Collapse outline"
-								title="Collapse outline"
-							>
-								<PanelRightClose />
-							</Button>
-						</div>
-						<ScrollArea className="flex-1">{rightContent}</ScrollArea>
-					</div>
+					<RightToolPanel onCollapse={() => setActive(null)} />
 				</ResizablePanel>
 			</ResizablePanelGroup>
 		</section>
@@ -157,7 +123,7 @@ function AppLayoutInner() {
 
 export default function AppLayout() {
 	return (
-		<RightSidebarProvider>
+		<RightToolsProvider>
 			<RailViewProvider>
 				<AttachmentUploadProvider>
 					{/* Must wrap BOTH the right sidebar and the <Outlet/> below it — the
@@ -167,6 +133,6 @@ export default function AppLayout() {
 					</ActiveEditorProvider>
 				</AttachmentUploadProvider>
 			</RailViewProvider>
-		</RightSidebarProvider>
+		</RightToolsProvider>
 	);
 }

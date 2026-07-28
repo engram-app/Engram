@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
+import { RightToolsProvider } from "../layout/right-tools-context";
 import { ActiveEditorProvider, useActiveEditor } from "./editor/active-editor-context";
 import NotePage from "./note-page";
 
@@ -14,10 +15,12 @@ function EditorProbe() {
 
 const renderPage = () =>
 	render(
-		<ActiveEditorProvider>
-			<NotePage />
-			<EditorProbe />
-		</ActiveEditorProvider>,
+		<RightToolsProvider>
+			<ActiveEditorProvider>
+				<NotePage />
+				<EditorProbe />
+			</ActiveEditorProvider>
+		</RightToolsProvider>,
 	);
 
 // NoteView relies on ConfigProvider / billing context not available in this
@@ -53,10 +56,6 @@ vi.mock("../api/queries", () => ({
 	useRenameNote: () => ({ mutate: renameNoteMutate, isPending: false }),
 }));
 vi.mock("react-router", () => ({ useParams: () => ({ id: "note-1" }) }));
-// Minimal stubs for the right-sidebar + lazy editor context used by the page.
-vi.mock("../layout/right-sidebar-context", () => ({
-	useRightSidebar: () => ({ setContent: () => {} }),
-}));
 
 const NOTE = {
 	id: "note-1",

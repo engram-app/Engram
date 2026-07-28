@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
-import { RightSidebarProvider, useRightSidebar } from "../layout/right-sidebar-context";
+import { RightToolsProvider, useRightTools } from "../layout/right-tools-context";
 import Dashboard from "./dashboard";
 
 const useVaultsSpy = vi.fn(() => ({ data: [{ id: "v1", name: "Vault" }] }));
@@ -12,17 +12,19 @@ vi.mock("../api/queries", () => ({
 }));
 
 function RightProbe() {
-	const { content } = useRightSidebar();
-	return <span data-testid="has-right">{content === null ? "no" : "yes"}</span>;
+	// The dashboard publishes an (empty) outline so the right panel keeps its
+	// chrome when no note is open — same behaviour as before the tool registry.
+	const { isAvailable } = useRightTools();
+	return <span data-testid="has-right">{isAvailable("outline") ? "yes" : "no"}</span>;
 }
 
 function renderDashboard(url = "/") {
 	return render(
 		<MemoryRouter initialEntries={[url]}>
-			<RightSidebarProvider>
+			<RightToolsProvider>
 				<Dashboard />
 				<RightProbe />
-			</RightSidebarProvider>
+			</RightToolsProvider>
 		</MemoryRouter>,
 	);
 }

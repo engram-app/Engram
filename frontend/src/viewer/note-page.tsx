@@ -14,7 +14,7 @@ import {
 	openDoc,
 	subscribeToCrdtSyncStatus,
 } from "../crdt/session";
-import { useRightSidebar } from "../layout/right-sidebar-context";
+import { useRightTools } from "../layout/right-tools-context";
 import { noteName } from "../lib/note-name";
 import { useActiveEditor } from "./editor/active-editor-context";
 import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
@@ -47,7 +47,7 @@ export default function NotePage() {
 	const validId = idStr && idStr.length > 0 ? idStr : null;
 
 	const { data: note, isLoading, error } = useNote(validId);
-	const { setContent: setRightContent } = useRightSidebar();
+	const { setSlot } = useRightTools();
 	const { setEditor } = useActiveEditor();
 
 	const [mode, setMode] = useState<Mode>("rendered");
@@ -115,12 +115,12 @@ export default function NotePage() {
 	const liveContent = useLiveContent(handle?.ytext ?? null, noteContent ?? "");
 	useEffect(() => {
 		if (notePath === undefined) {
-			setRightContent(null);
+			setSlot("outline", null);
 			return;
 		}
-		setRightContent(<NoteToc content={liveContent} />);
-		return () => setRightContent(null);
-	}, [notePath, liveContent, setRightContent]);
+		setSlot("outline", <NoteToc content={liveContent} />);
+		return () => setSlot("outline", null);
+	}, [notePath, liveContent, setSlot]);
 
 	// Publish the editor so right-sidebar tools (the markdown reference panel)
 	// can insert at the caret. Gated on the SAME condition that renders
