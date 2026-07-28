@@ -25,6 +25,13 @@ export interface SyntaxEntry {
 	block?: boolean;
 	/** Extra search terms that do not appear in the label, syntax, or blurb. */
 	keywords?: string[];
+	/**
+	 * Set false for entries whose live render would MISLEAD rather than teach:
+	 * frontmatter (NoteView strips it, leaving an empty box), and the two image
+	 * forms (a remote URL and a vault attachment that do not exist here, so both
+	 * render as broken/fallback). Those show source + description only.
+	 */
+	renderable?: false;
 }
 
 export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
@@ -183,6 +190,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		syntax: "![alt text](https://example.com/image.png)",
 		blurb: "Remote image.",
 		keywords: ["picture", "img", "photo"],
+		renderable: false,
 	},
 	{
 		id: "embed",
@@ -191,6 +199,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		syntax: "![[image.png]]",
 		blurb: "Embeds a file from your vault. Fetched through the attachments API.",
 		keywords: ["attachment", "transclude", "obsidian", "pdf"],
+		renderable: false,
 	},
 
 	// ── Callouts ────────────────────────────────────────────────────────────
@@ -270,6 +279,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		blurb: "Must be the very first thing in the note. Shows up as note properties.",
 		block: true,
 		keywords: ["yaml", "metadata", "properties", "tags", "header"],
+		renderable: false,
 	},
 	{
 		id: "tag",

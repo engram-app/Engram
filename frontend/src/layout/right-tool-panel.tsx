@@ -58,11 +58,14 @@ export default function RightToolPanel({ onCollapse }: { onCollapse: () => void 
 				</Button>
 			</header>
 
+			{/* overflow-hidden is load-bearing: without it this flex item can grow past
+			    the panel when a tool's content is tall, and the ancestor picks up a
+			    native scrollbar alongside the tool's own ScrollArea. */}
 			<section
 				id="right-tool-panel"
 				role="tabpanel"
 				aria-labelledby={resolvedId ? `right-tool-tab-${resolvedId}` : undefined}
-				className="min-h-0 flex-1"
+				className="min-h-0 flex-1 overflow-hidden"
 			>
 				{renderStatic ? (
 					<Suspense fallback={<p className="p-3 text-muted-foreground text-sm">Loading…</p>}>
