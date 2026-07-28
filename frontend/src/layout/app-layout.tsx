@@ -9,6 +9,7 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import { useBillingStatus } from "../api/queries";
 import { useChannel } from "../api/use-channel";
 import { AttachmentUploadProvider } from "../viewer/attachment-upload/provider";
+import { ActiveEditorProvider } from "../viewer/editor/active-editor-context";
 import AppSidebarPanel, { Rail } from "./app-sidebar";
 import MobileLayout from "./mobile-layout";
 import { RailViewProvider } from "./rail-view-context";
@@ -159,7 +160,11 @@ export default function AppLayout() {
 		<RightSidebarProvider>
 			<RailViewProvider>
 				<AttachmentUploadProvider>
-					<AppLayoutInner />
+					{/* Must wrap BOTH the right sidebar and the <Outlet/> below it — the
+					    note page publishes its editor here, the sidebar tools consume it. */}
+					<ActiveEditorProvider>
+						<AppLayoutInner />
+					</ActiveEditorProvider>
 				</AttachmentUploadProvider>
 			</RailViewProvider>
 		</RightSidebarProvider>
