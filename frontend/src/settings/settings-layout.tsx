@@ -1,7 +1,7 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Menu, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
-import { useLocation, useNavigate } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogOverlay } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -61,14 +61,15 @@ function SettingsNavList({
 				const active = s.key === current;
 				return (
 					<li key={s.key}>
-						{/* Plain <a>, not react-router's <Link>: Link always resolves
-						`to` against the current pathname, so a hash-only `to` still
-						renders `href="/current/path#settings/x"`. A native anchor with
-						a bare fragment href lets the browser do same-document hash
-						navigation (pathname untouched, no reload); BrowserRouter's
-						popstate listener picks up the resulting URL change. */}
-						<a
-							href={settingsHash(s.key)}
+						{/* react-router's <Link>, not a plain <a>: a native anchor's
+						fragment-only navigation fires `hashchange`, not `popstate`, and
+						react-router's history only listens for `popstate` — a plain <a>
+						would silently desync useLocation(). Link always resolves `to`
+						against the current pathname (so href is e.g.
+						"/work/note-1#settings/billing", not a bare hash), but it's
+						routed through history.push, which react-router does see. */}
+						<Link
+							to={settingsHash(s.key)}
 							onClick={onNavigate}
 							aria-current={active ? "page" : undefined}
 							className={`block rounded-md px-3 py-2 text-sm transition-colors ${
@@ -78,7 +79,7 @@ function SettingsNavList({
 							}`}
 						>
 							{s.label}
-						</a>
+						</Link>
 					</li>
 				);
 			})}
