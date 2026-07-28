@@ -451,10 +451,16 @@ defmodule EngramWeb.Router do
     delete "/mcp", McpController, :unsupported_transport
   end
 
-  # SPA routes — every path here mounts the React app. Whitelisted (not a
-  # blanket /*path catch-all) so unknown URLs hit Phoenix's default 404
-  # instead of silently rendering an HTML 200 over a typo'd API/OAuth/asset
-  # request. Every new top-level SPA route must be added here.
+  # SPA routes, every path here mounts the React app. The static entries
+  # below are whitelisted (not a blanket /*path catch-all) so unknown URLs
+  # hit Phoenix's default 404 instead of silently rendering an HTML 200
+  # over a typo'd API/OAuth/asset request. Every new top-level static SPA
+  # route must be added here.
+  #
+  # Below the whitelist, `/:slug` and `/:slug/:id` are dynamic vault-scoped
+  # routes (vault, and vault+note-or-attachment). Those are wildcards, so a
+  # deny-list for every non-SPA top-level prefix sits between the whitelist
+  # and the wildcards; see its comment for why order matters.
   scope "/", EngramWeb do
     pipe_through :spa
 
@@ -473,6 +479,30 @@ defmodule EngramWeb.Router do
     get "/oauth/consent", SpaController, :index
     # NOTE: no /share/* route: sharing doesn't exist yet (no /api/share*,
     # no schema, no SPA page). Removed 2026-07-02 (#858) after shipping as a
-    # vestigial whitelist entry; re-add alongside the actual feature.
+    # vestigial whitelist entry; re-add alongside the actual feature. (A
+    # bare 2-segment /share/:x now falls through to the vault-scoped
+    # /:slug/:id route below like any other slug; that's expected, not a
+    # revival of this feature.)
+
+    # Deny-list. MUST stay above the dynamic /:slug routes below: those are
+    # 1- and 2-segment wildcards, so without this a typo'd /api/notez would
+    # match /:slug/:id and serve an HTML 200 (the exact regression #858
+    # removed). EVERY new non-SPA top-level prefix must be added here.
+    match :*, "/api/*path", SpaController, :not_found
+    match :*, "/oauth/*path", SpaController, :not_found
+    match :*, "/webhooks/*path", SpaController, :not_found
+    match :*, "/.well-known/*path", SpaController, :not_found
+    # /assets isn't a router scope (it's Plug.Static mounted in
+    # endpoint.ex), so it's easy to miss here. Plug.Static only intercepts
+    # requests for files that exist; a mistyped/missing asset path falls
+    # through to the router and, without this entry, would match
+    # /:slug/:id and serve an HTML 200 for a broken <script src>.
+    match :*, "/assets/*path", SpaController, :not_found
+
+    # Vault-scoped SPA routes. `/:slug` is a vault, `/:slug/:id` a note or
+    # attachment. Kept last so every static route and the deny-list above
+    # wins.
+    get "/:slug", SpaController, :index
+    get "/:slug/:id", SpaController, :index
   end
 end

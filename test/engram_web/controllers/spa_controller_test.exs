@@ -22,13 +22,18 @@ defmodule EngramWeb.SpaControllerTest do
     assert response(conn, 200) =~ "<!DOCTYPE html>"
   end
 
-  test "GET /share/* is gone: no share feature exists behind it (#858)", %{conn: conn} do
-    # The whitelist entry was vestigial: no /api/share* endpoints, no share
-    # schema, no SPA route. Advertising the path without the feature ships
-    # ambiguous intent; re-add the route when sharing is actually designed.
-    # Nested path asserted too so a future narrower route (e.g. /share/:id)
-    # can't silently change deep-link behavior without touching this test.
-    assert conn |> get("/share/abc123") |> response(404)
+  test "GET /share/abc123 now serves the SPA as a vault-scoped route", %{conn: conn} do
+    # Was a dedicated 404 test pre-Task-7: the whitelist had no /share entry
+    # and there was no catch-all, so it 404'd. Task 7 adds /:slug/:id as a
+    # generic 2-segment dynamic route for ANY slug, so /share/abc123 is now
+    # indistinguishable from /my-vault/<id> at the router level ("share" is
+    # just a slug value). No share feature was revived; the frontend/vault
+    # lookup decides what "share" resolves to. Deeper (3+ segment) paths
+    # still have no matching route and 404, asserted below.
+    assert conn |> get("/share/abc123") |> response(200)
+  end
+
+  test "GET /share/abc123/folder/note still 404s (no 3-segment SPA route)", %{conn: conn} do
     assert conn |> get("/share/abc123/folder/note") |> response(404)
   end
 
@@ -154,6 +159,54 @@ defmodule EngramWeb.SpaControllerTest do
       conn = get(conn, "/assets/this-file-does-not-exist.js")
       assert conn.status == 404
       refute response(conn, 404) =~ "<div id=\"root\">"
+    end
+  end
+
+  describe "vault-scoped SPA routes" do
+    test "serves the SPA for a bare vault slug", %{conn: conn} do
+      conn = get(conn, "/my-vault")
+      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "serves the SPA for a vault-scoped note", %{conn: conn} do
+      conn = get(conn, "/my-vault/018f2b3c-0000-7000-8000-000000000000")
+      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+  end
+
+  describe "non-SPA prefixes must not fall through to /:slug (#858)" do
+    # Regression guard: without the deny-list these two-segment typos match
+    # `get "/:slug/:id"` and return an HTML 200, masking a broken API call.
+    test "a typo'd API path 404s instead of serving HTML", %{conn: conn} do
+      conn = get(conn, "/api/notez")
+      assert response(conn, 404)
+      [content_type] = get_resp_header(conn, "content-type")
+      refute content_type =~ "text/html"
+    end
+
+    test "a typo'd webhooks path 404s", %{conn: conn} do
+      assert conn |> get("/webhooks/bogus") |> response(404)
+    end
+
+    test "a typo'd well-known path 404s", %{conn: conn} do
+      assert conn |> get("/.well-known/bogus") |> response(404)
+    end
+
+    test "a typo'd oauth path 404s", %{conn: conn} do
+      assert conn |> get("/oauth/bogus") |> response(404)
+    end
+
+    test "a missing asset path 404s (fifth prefix: /assets is Plug.Static, not a router scope)",
+         %{conn: conn} do
+      # Plug.Static only intercepts requests for files that exist; a
+      # mistyped/missing asset path falls through to the router and needs
+      # its own deny-list entry or it would match /:slug/:id.
+      assert conn |> get("/assets/bogus.js") |> response(404)
+    end
+
+    test "but /oauth/consent still serves the SPA", %{conn: conn} do
+      conn = get(conn, "/oauth/consent")
+      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
     end
   end
 end
