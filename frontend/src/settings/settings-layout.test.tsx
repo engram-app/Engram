@@ -56,8 +56,8 @@ describe("SettingsDialog", () => {
 		renderDialog("account");
 		// react-router's <Link> resolves a hash-only `to` against the current
 		// pathname, so the href is "/work/note-1#settings/billing", not a bare
-		// hash. Assert the suffix — the real requirement is "this link targets
-		// the billing section" — not the page underneath.
+		// hash. Assert the suffix: the real requirement is "this link targets
+		// the billing section," not the page underneath.
 		const link = await screen.findByRole("link", { name: "Billing" });
 		expect(link.getAttribute("href")).toMatch(/#settings\/billing$/);
 	});
@@ -74,7 +74,7 @@ describe("SettingsDialog", () => {
 	it("clicking a nav link actually switches the router location's hash", async () => {
 		// Regression guard: a plain <a href="#settings/billing"> changes
 		// window.location.hash via native same-document navigation, which fires
-		// `hashchange` but NOT `popstate` — and react-router's history only
+		// `hashchange` but NOT `popstate`, and react-router's history only
 		// listens for `popstate`. That leaves useLocation() stale even though the
 		// URL bar changed, so the dialog would silently fail to switch sections.
 		// This must go through react-router's <Link> (history.push) instead.

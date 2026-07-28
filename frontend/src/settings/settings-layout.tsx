@@ -63,8 +63,8 @@ function SettingsNavList({
 					<li key={s.key}>
 						{/* react-router's <Link>, not a plain <a>: a native anchor's
 						fragment-only navigation fires `hashchange`, not `popstate`, and
-						react-router's history only listens for `popstate` — a plain <a>
-						would silently desync useLocation(). Link always resolves `to`
+						react-router's history only listens for `popstate` (a plain <a>
+						would silently desync useLocation()). Link always resolves `to`
 						against the current pathname (so href is e.g.
 						"/work/note-1#settings/billing", not a bare hash), but it's
 						routed through history.push, which react-router does see. */}
