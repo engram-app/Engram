@@ -888,6 +888,31 @@ In `vault_deleted_email.ex:42`:
 manage_url = EngramWeb.Endpoint.url() <> "/?highlight=#{vault.id}#settings/vaults"
 ```
 
+- [ ] **Step 4b: Update the config default (the one a literal grep misses)**
+
+In `config/runtime.exs:236`, the `:upgrade_url` default becomes:
+
+```elixir
+System.get_env("ENGRAM_UPGRADE_URL", "https://app.engram.page/#settings/billing")
+```
+
+This is the most important site in this task and the easiest to miss. The three plug
+literals above cover only the PAT and API-write 402s. Every other 402 (connection cap,
+device cap, notes cap, vaults cap, attachments) reads `:upgrade_url` from application
+config via `lib/engram_web/limit_response.ex:30`, sourced from this line. Grepping for
+the literal `/settings/billing` finds the plugs and misses this, because the value
+arrives through an indirection.
+
+Two of the three e2e assertions in `test_71_connections.py` (connection cap and device
+cap) assert against THIS value, not the plug literals, so they fail in Task 13 unless
+this changes.
+
+> **Deployment follow-up, outside this repo.** If `ENGRAM_UPGRADE_URL` is set as an env
+> var in engram-infra, that override still carries the old path form and must be updated
+> there separately. It degrades gracefully rather than breaking, because
+> `LegacySettingsRedirect` bounces `/settings/billing` to the hash form, but the extra
+> redirect hop remains until infra is updated.
+
 - [ ] **Step 5: Run to verify they pass**
 
 Run: `cd backend && python -m pytest e2e/tests/api_only/test_71_connections.py -k upgrade -v && mix test`
