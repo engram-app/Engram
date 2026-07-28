@@ -50,7 +50,7 @@ defmodule EngramWeb.Plugs.EnforceConnectionCapTest do
       assert body["limit_key"] == "obsidian_connections_cap"
       assert body["current"] == 1
       assert body["limit"] == 1
-      assert body["upgrade_url"] == "https://app.engram.page/settings/billing"
+      assert body["upgrade_url"] == "https://app.engram.page/#settings/billing"
       assert body["tier"] == "free"
     end
 

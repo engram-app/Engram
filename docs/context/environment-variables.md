@@ -46,7 +46,7 @@ Live. This is regenerated from `config/runtime.exs` (the ~90 vars it reads), wit
 | `ENGRAM_HOST_REWRITE_MCP_HOST` | `mcp.engram.page` | MCP host for path rewrite (:696). |
 | `ENGRAM_ALLOWED_EXTRA_HOSTS` | unset | Comma-sep extra allowed hosts (:688). |
 | `ENGRAM_FRONTEND_URL` | unset | Absolute SPA base URL for cross-origin OAuth `/authorize` 302 (post-eject) (:706). |
-| `ENGRAM_UPGRADE_URL` | `https://app.engram.page/settings/billing` | Upgrade URL surfaced in 402 limit-exceeded responses (:198-200). |
+| `ENGRAM_UPGRADE_URL` | `https://app.engram.page/#settings/billing` | Upgrade URL surfaced in 402 limit-exceeded responses (:198-200). |
 | `TRUST_CF_CONNECTING_IP` | `false` | Prod-only: trust `CF-Connecting-IP` for rate-limit client IP. Safe only under Cloudflare AOP `verify` (:534). |
 
 ## Storage / Attachments
