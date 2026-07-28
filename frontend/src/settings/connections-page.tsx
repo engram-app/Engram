@@ -23,6 +23,7 @@ import {
 	useRevokePat,
 } from "../api/queries";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
+import { settingsHash } from "./settings-hash";
 
 // ── Tier caps ─────────────────────────────────────────────────
 
@@ -196,7 +197,7 @@ function PatSection({
 						Upgrade to Starter to create API keys for scripting and external integrations.
 					</p>
 					<a
-						href="/settings/billing"
+						href={settingsHash("billing")}
 						className="shrink-0 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground text-sm hover:bg-primary/90"
 					>
 						Upgrade

@@ -19,6 +19,7 @@ import { connectionId as oauthConnectionId } from "../billing/existing-connectio
 import { useConnectionCap } from "../billing/use-connection-cap";
 import AuthPanel from "../layout/auth-panel";
 import AuthShell from "../layout/auth-shell";
+import { settingsHash } from "../settings/settings-hash";
 
 const REQUIRED_PARAMS = [
 	"client_id",
@@ -258,10 +259,10 @@ export default function OAuthAuthorizePage() {
 								will stop having access.{" "}
 								<a
 									className="underline underline-offset-4"
-									href="/settings/billing"
+									href={settingsHash("billing")}
 									onClick={(e) => {
 										e.preventDefault();
-										navigate("/settings/billing");
+										navigate({ hash: settingsHash("billing") });
 									}}
 								>
 									Upgrade
@@ -360,7 +361,7 @@ export default function OAuthAuthorizePage() {
 								variant="outline"
 								onClick={() => {
 									setShowSwapConfirm(false);
-									navigate("/settings/billing");
+									navigate({ hash: settingsHash("billing") });
 								}}
 								disabled={submitting}
 								className="w-full"

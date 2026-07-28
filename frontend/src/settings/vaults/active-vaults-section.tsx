@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { VaultCreateForm } from "@/components/vault-create-form";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { SettingsSectionCard } from "@/settings/account/section-card";
+import { settingsHash } from "../settings-hash";
 import { DeleteVaultDialog } from "./delete-vault-dialog";
 
 const inputClass =
@@ -126,7 +127,7 @@ export function ActiveVaultsSection() {
 						Your Free plan allows {vaultsCap} vault. Upgrade to Starter for more vaults.
 					</p>
 					<a
-						href="/settings/billing"
+						href={settingsHash("billing")}
 						className="shrink-0 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground text-sm hover:bg-primary/90"
 					>
 						Upgrade

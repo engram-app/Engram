@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
+import { settingsHash } from "@/settings/settings-hash";
 
 export function EmptyVaultState() {
 	return (
@@ -9,7 +10,7 @@ export function EmptyVaultState() {
 				You don't have any vaults right now. Create one to start syncing and searching your notes.
 			</p>
 			<Button asChild>
-				<Link to="/settings/vaults">Create a vault</Link>
+				<Link to={settingsHash("vaults")}>Create a vault</Link>
 			</Button>
 		</section>
 	);

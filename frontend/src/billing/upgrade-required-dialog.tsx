@@ -9,6 +9,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { settingsHash } from "@/settings/settings-hash";
 
 import { ExistingConnectionsPanel } from "./existing-connections-panel";
 import { copyFor } from "./limit-copy";
@@ -56,7 +57,7 @@ export function UpgradeRequiredDialog({ reason, open, onOpenChange }: UpgradeReq
 					<Button
 						onClick={() => {
 							onOpenChange(false);
-							navigate("/settings/billing");
+							navigate({ hash: settingsHash("billing") });
 						}}
 					>
 						Upgrade

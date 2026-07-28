@@ -12,6 +12,6 @@ describe("EmptyVaultState", () => {
 		);
 		expect(screen.getByText(/no vaults/iu)).toBeInTheDocument();
 		const link = screen.getByRole("link", { name: /create a vault/iu });
-		expect(link).toHaveAttribute("href", "/settings/vaults");
+		expect(link).toHaveAttribute("href", "/#settings/vaults");
 	});
 });

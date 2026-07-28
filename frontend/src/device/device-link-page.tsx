@@ -14,6 +14,7 @@ import AuthPanel from "../layout/auth-panel";
 import AuthShell from "../layout/auth-shell";
 import { SyncStatusPill } from "../onboarding/sync-status-pill";
 import { useVaultReadyEvents } from "../onboarding/use-vault-ready-events";
+import { settingsHash } from "../settings/settings-hash";
 
 interface Vault {
 	id: string;
@@ -231,9 +232,9 @@ function DeviceLinkPage() {
 							className="underline underline-offset-4"
 							onClick={(e) => {
 								e.preventDefault();
-								navigate("/settings/billing");
+								navigate({ hash: settingsHash("billing") });
 							}}
-							href="/settings/billing"
+							href={settingsHash("billing")}
 						>
 							Upgrade
 						</a>{" "}
@@ -251,9 +252,9 @@ function DeviceLinkPage() {
 							className="underline underline-offset-4"
 							onClick={(e) => {
 								e.preventDefault();
-								navigate("/settings/billing");
+								navigate({ hash: settingsHash("billing") });
 							}}
-							href="/settings/billing"
+							href={settingsHash("billing")}
 						>
 							Upgrade
 						</a>{" "}
@@ -301,10 +302,10 @@ function DeviceLinkPage() {
 								Your Free plan includes 1 vault — link into the existing one above, or{" "}
 								<a
 									className="underline underline-offset-4"
-									href="/settings/billing"
+									href={settingsHash("billing")}
 									onClick={(e) => {
 										e.preventDefault();
-										navigate("/settings/billing");
+										navigate({ hash: settingsHash("billing") });
 									}}
 								>
 									upgrade

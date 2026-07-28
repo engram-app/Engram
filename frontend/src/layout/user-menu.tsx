@@ -11,6 +11,7 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
+import { settingsHash } from "../settings/settings-hash";
 import type { ThemeChoice } from "../theme/storage";
 import { useTheme } from "../theme/theme-provider";
 
@@ -52,7 +53,7 @@ export default function UserMenu() {
 				</DropdownMenuLabel>
 				<DropdownMenuSeparator />
 				<DropdownMenuItem asChild className="gap-2.5 px-3 py-2.5 text-sm">
-					<Link to="/settings">
+					<Link to={settingsHash("account")}>
 						<Settings className="h-4 w-4" />
 						Settings
 					</Link>
