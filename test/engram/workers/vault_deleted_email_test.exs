@@ -60,4 +60,24 @@ defmodule Engram.Workers.VaultDeletedEmailTest do
     job = %Oban.Job{args: %{"user_id" => user.id, "vault_id" => Ecto.UUID.generate()}}
     assert :ok = VaultDeletedEmail.perform(job)
   end
+
+  test "manage_url keeps the query ahead of the fragment so location.search can parse it",
+       %{user: user} do
+    {:ok, v} = Vaults.create_vault(user, %{name: "Gone"})
+    {:ok, _} = Vaults.delete_vault(user, v.id)
+
+    expect(Engram.Email.ProviderMock, :send, 1, fn _to, _subject, html, _opts ->
+      # `/#settings/vaults?highlight=<id>` would be WRONG: everything after `#`
+      # is fragment, so the SPA's location.search never sees `highlight`.
+      [manage_url] =
+        Regex.run(~r{href="([^"]*highlight=#{v.id}[^"]*)"}, html, capture: :all_but_first)
+
+      assert manage_url =~ ~r{/\?highlight=#{v.id}#settings/vaults\z}
+      refute manage_url =~ ~r{#.*\?}
+      :ok
+    end)
+
+    job = %Oban.Job{args: %{"user_id" => user.id, "vault_id" => v.id}}
+    assert :ok = VaultDeletedEmail.perform(job)
+  end
 end

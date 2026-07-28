@@ -205,7 +205,7 @@ defmodule Engram.MailerTest do
         assert subject =~ "vault was deleted"
         assert html =~ "My Vault"
         assert html =~ "June 27, 2026"
-        assert html =~ "https://app.engram.page/settings/vaults?highlight=1"
+        assert html =~ "https://app.engram.page/?highlight=1#settings/vaults"
         refute subject =~ "—", "house style: no em dashes in copy"
         refute html =~ "—", "house style: no em dashes in copy"
         :ok
@@ -216,7 +216,7 @@ defmodule Engram.MailerTest do
                  user,
                  "My Vault",
                  "June 27, 2026",
-                 "https://app.engram.page/settings/vaults?highlight=1"
+                 "https://app.engram.page/?highlight=1#settings/vaults"
                )
     end
 
@@ -234,7 +234,7 @@ defmodule Engram.MailerTest do
                  user,
                  "<script>alert(1)</script>",
                  "June 27, 2026",
-                 "https://app.engram.page/settings/vaults?highlight=1"
+                 "https://app.engram.page/?highlight=1#settings/vaults"
                )
     end
   end
