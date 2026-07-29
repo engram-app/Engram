@@ -86,6 +86,13 @@ function InlineRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolea
 }
 
 function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
+	// `block` governs INSERTION (does it need newlines synthesized). Whether the
+	// template deserves a block of its own is a separate question, and the answer
+	// is just its shape: `---` is as self-evident as `**text**`, so it rides
+	// beside the label. Only a multi-line template earns its own <pre>. That drops
+	// a full-width row from most of Structure.
+	const templateFitsInline = !entry.syntax.includes("\n");
+
 	return (
 		<li className="group border-border/60 border-b px-3 py-2 last:border-b-0">
 			<p className="mb-1.5 flex items-center gap-2">
@@ -93,9 +100,17 @@ function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 				    the category header above it — same size, weight, colour and case —
 				    so there was no hierarchy to read and sections were easy to lose.
 				    The entry label is the quieter of the two now. */}
-				<span className="min-w-0 flex-1 truncate font-medium text-foreground text-xs">
-					{entry.label}
-				</span>
+				<span className="shrink-0 font-medium text-foreground text-xs">{entry.label}</span>
+				{templateFitsInline ? (
+					<code
+						className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground"
+						title="Inserted at the cursor"
+					>
+						{entry.syntax}
+					</code>
+				) : (
+					<span className="flex-1" />
+				)}
 				<InsertButton entry={entry} canInsert={canInsert} />
 			</p>
 
@@ -111,7 +126,7 @@ function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 				// inset inside an outer one, visibly failing to fill it (worst on
 				// Mermaid, whose centred SVG sat in a grey band floating in a white
 				// box). The container is gone, so there is nothing left to not fill.
-				<figure className={`mb-1 overflow-hidden ${PREVIEW}`}>
+				<figure className={`overflow-hidden ${templateFitsInline ? "" : "mb-1"} ${PREVIEW}`}>
 					<NoteView content={previewSource(entry)} tags={[]} />
 				</figure>
 			)}
@@ -120,9 +135,11 @@ function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 			    Insert drops at the caret. bg-muted/50 rather than the full token: a
 			    rendered fence now uses --muted itself, so a solid box directly beneath
 			    one read as a second identical panel. */}
-			<pre className={SOURCE} title="Inserted at the cursor">
-				{entry.syntax}
-			</pre>
+			{templateFitsInline ? null : (
+				<pre className={SOURCE} title="Inserted at the cursor">
+					{entry.syntax}
+				</pre>
+			)}
 		</li>
 	);
 }

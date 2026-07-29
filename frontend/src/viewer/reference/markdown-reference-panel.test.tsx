@@ -155,6 +155,30 @@ describe("MarkdownReferencePanel — adaptive rows", () => {
 		expect(callout.querySelector("pre")).not.toBeNull();
 	});
 
+	it("keeps a single-line block template beside the label, not in a block of its own", () => {
+		// `block` governs insertion, not layout. `---` is as self-evident as
+		// `**text**`, so it should not claim a full-width row.
+		renderPanel();
+		openSection("Structure");
+		const rule = row("Horizontal rule");
+		expect(rule.querySelector("pre")).toBeNull();
+		expect(rule.querySelector("code")?.textContent).toBe("---");
+		// It still gets a rendered preview — that is what block means here.
+		expect(rule.querySelector("figure hr")).not.toBeNull();
+	});
+
+	it("shows the heading ladder rather than asserting that levels exist", () => {
+		// "Levels 1–6" is the kind of blurb we deleted elsewhere. Render the
+		// sizes instead so the hierarchy is visible.
+		renderPanel();
+		openSection("Structure");
+		const heading = row("Heading");
+		const figure = heading.querySelector("figure") as HTMLElement;
+		expect(figure.querySelector("h1")?.textContent).toContain("Release notes");
+		expect(figure.querySelector("h2")?.textContent).toContain("Highlights");
+		expect(figure.querySelector("h3")?.textContent).toContain("Bug fixes");
+	});
+
 	it("drops the blurb entirely where the label already says it", () => {
 		// "Bold — strong emphasis" is four ways of saying nothing.
 		renderPanel();

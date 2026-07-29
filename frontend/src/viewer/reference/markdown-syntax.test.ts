@@ -1,3 +1,4 @@
+import matter from "gray-matter";
 import { describe, expect, test } from "vitest";
 import { filterSyntax, groupByCategory, previewSource, SYNTAX_ENTRIES } from "./markdown-syntax";
 
@@ -53,6 +54,18 @@ describe("markdown-syntax catalogue", () => {
 		}
 	});
 
+	test("no previewed entry is silently emptied by frontmatter parsing", () => {
+		// NoteView runs gray-matter before rendering, and it swallows a LEADING
+		// "---" as a frontmatter delimiter — so a bare horizontal rule previewed
+		// as an empty box. Any entry whose preview parses to nothing is claiming
+		// to demonstrate something while showing nothing.
+		for (const entry of SYNTAX_ENTRIES) {
+			if (entry.renderable !== false) {
+				expect(matter(previewSource(entry)).content.trim(), entry.id).not.toBe("");
+			}
+		}
+	});
+
 	test("sample text never just names its own feature", () => {
 		// The tautology this catalogue was rewritten to kill: `**bold**` rendering
 		// the word "bold" under a label reading "Bold" taught nothing. A template
@@ -72,9 +85,10 @@ describe("previewSource", () => {
 	});
 
 	test("falls back to the template when there is no demo", () => {
-		const rule = SYNTAX_ENTRIES.find((e) => e.id === "rule");
-		expect(rule?.demo).toBeUndefined();
-		expect(previewSource(rule as never)).toBe(rule?.syntax);
+		// A bare URL already teaches on its own — no worked example needed.
+		const autolink = SYNTAX_ENTRIES.find((e) => e.id === "autolink");
+		expect(autolink?.demo).toBeUndefined();
+		expect(previewSource(autolink as never)).toBe(autolink?.syntax);
 	});
 });
 
