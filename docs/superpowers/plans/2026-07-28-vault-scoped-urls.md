@@ -24,7 +24,11 @@
 - `@testing-library/user-event` is NOT a dependency. Use `fireEvent` from `@testing-library/react`, the existing convention across the suite. Add it to the file's existing `@testing-library/react` import where a snippet below uses it.
 - Nav links inside the settings dialog must be react-router `<Link>`, never a plain `<a href="#...">`. React Router v8's browser history listens to `popstate` only (`node_modules/react-router/dist/development/lib/router/history.js:335`); a native anchor hash navigation fires `hashchange` but not `popstate`, so `useLocation()` would go stale and `SettingsOverlayHost` would stop switching sections. `<Link to="#settings/x">` resolves to `<pathname>#settings/x`, so assert href with a suffix match, never string equality against a bare hash.
 - Reserved slug list, verbatim, identical in Elixir and TypeScript:
-  `sign-in sign-up waitlist link oauth onboard reset-password note search billing settings api webhooks .well-known`
+  `sign-in sign-up waitlist link oauth onboard reset-password note search billing settings api webhooks .well-known assets email socket`
+  (`assets`, `email`, and `socket` were added after Task 7 discovered them as non-SPA
+  prefixes. They are MORE important than the frontend-derived entries: those merely get
+  shadowed, but these now hit a hard 404 from the deny-list, so a vault slugged `assets`
+  would be completely unreachable rather than just awkward.)
 
 ---
 
@@ -1041,6 +1045,14 @@ In `backend/lib/engram_web/router.ex`, inside the existing `scope "/", EngramWeb
     # favicon.svg, engram-mark.svg, robots.txt) deliberately get NO entry: a
     # miss there is cosmetic and means a broken build, not a live failure.
     match :*, "/email/*path", SpaController, :not_found
+    # /socket is claimed by `socket_dispatch` in endpoint.ex, but ONLY for the
+    # exact transport subpath /socket/websocket. Bare /socket, /socket/bogus,
+    # and the second mount /socket/origin-probe all fall through to the router.
+    # The repo already treats this as a top-level prefix: see @api_allowed_prefixes
+    # in lib/engram_web/plugs/host_rewrite.ex. Adding this entry is safe because
+    # socket_dispatch runs BEFORE the router, so the real transport path never
+    # reaches here, but that MUST be covered by a test.
+    match :*, "/socket/*path", SpaController, :not_found
 
     # Vault-scoped SPA routes. `/:slug` is a vault, `/:slug/:id` a note or
     # attachment. Kept last so every static route above wins.
@@ -1133,6 +1145,7 @@ In `backend/lib/engram/vaults/vault.ex`, add above `def changeset`:
   @reserved_slugs ~w(
     sign-in sign-up waitlist link oauth onboard reset-password
     note search billing settings api webhooks .well-known
+    assets email socket
   )
 ```
 
