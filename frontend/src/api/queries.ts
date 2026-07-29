@@ -626,7 +626,11 @@ export function useCreateNote() {
 			// vaultId is already resolved in this mutation's closure; look up its
 			// slug from the cache rather than re-deriving it (a hook is
 			// unavailable here, since this runs inside a mutation callback).
-			const slug = qc.getQueryData<Vault[]>(["vaults"])?.find((v) => v.id === vaultId)?.slug;
+			// getQueryData bypasses useVaults's `select`, so the raw cache entry
+			// is still the wire shape ({ vaults }), not the post-select array.
+			const slug = qc
+				.getQueryData<{ vaults: Vault[] }>(["vaults"])
+				?.vaults?.find((v) => v.id === vaultId)?.slug;
 			navigate(slug ? `/${slug}/${id}` : `/note/${id}`);
 		},
 		onError: (err, _vars, ctx) => {
