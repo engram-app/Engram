@@ -204,6 +204,18 @@ defmodule EngramWeb.SpaControllerTest do
       assert conn |> get("/assets/bogus.js") |> response(404)
     end
 
+    test "a missing email asset path 404s and is not HTML (sixth prefix: /email)",
+         %{conn: conn} do
+      # /email is also Plug.Static-served via static_paths() (lib/engram_web.ex)
+      # and referenced from outbound email HTML. A masked HTML 200 there can
+      # get cached by a third-party mail proxy, so this asserts content-type
+      # too, not just status.
+      conn = get(conn, "/email/missing.png")
+      assert response(conn, 404)
+      [content_type] = get_resp_header(conn, "content-type")
+      refute content_type =~ "text/html"
+    end
+
     test "but /oauth/consent still serves the SPA", %{conn: conn} do
       conn = get(conn, "/oauth/consent")
       assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="

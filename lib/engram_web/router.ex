@@ -498,6 +498,13 @@ defmodule EngramWeb.Router do
     # through to the router and, without this entry, would match
     # /:slug/:id and serve an HTML 200 for a broken <script src>.
     match :*, "/assets/*path", SpaController, :not_found
+    # /email is also Plug.Static-served (see static_paths() in
+    # lib/engram_web.ex), same pass-through-on-miss shape as /assets. These
+    # paths are embedded in outbound email HTML and fetched by third-party
+    # mail proxies (Gmail image proxy, etc.), which may cache a 200 response.
+    # A masked HTML 200 there is worse than the usual case: the bad result
+    # can get cached remotely, not just seen once by a browser.
+    match :*, "/email/*path", SpaController, :not_found
 
     # Vault-scoped SPA routes. `/:slug` is a vault, `/:slug/:id` a note or
     # attachment. Kept last so every static route and the deny-list above
