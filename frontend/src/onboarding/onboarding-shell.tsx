@@ -26,6 +26,11 @@ function ShellInner({ children }: { children: ReactNode }) {
 	const startTour = async () => {
 		await demo.activate();
 		setTourActive(true);
+		// Demo mode makes useVaults return ONLY the synthetic demo vaults, so any
+		// real vault slug in the URL stops resolving and VaultRoute 404s. Bounce
+		// through / so VaultRedirect re-picks from the demo list. Same batch, so
+		// this renders once. onTourExit does the mirror of this on the way out.
+		navigate("/", { replace: true });
 	};
 
 	const onTourExit = (reachedEnd: boolean) => {

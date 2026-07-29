@@ -1,5 +1,6 @@
 import { Plug } from "lucide-react";
 import { useRef, useState } from "react";
+import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -196,12 +197,12 @@ function PatSection({
 					<p className="text-muted-foreground text-sm">
 						Upgrade to Starter to create API keys for scripting and external integrations.
 					</p>
-					<a
-						href={settingsHash("billing")}
+					<Link
+						to={settingsHash("billing")}
 						className="shrink-0 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground text-sm hover:bg-primary/90"
 					>
 						Upgrade
-					</a>
+					</Link>
 				</aside>
 			)}
 

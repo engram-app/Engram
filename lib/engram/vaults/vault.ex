@@ -30,18 +30,23 @@ defmodule Engram.Vaults.Vault do
     timestamps(type: :utc_datetime, inserted_at: :created_at)
   end
 
-  # Slugs that would make a vault unreachable. Two failure modes:
+  # Slugs that would make a vault unreachable. Three failure modes:
   #   - Frontend-shadowed (sign-in..settings): React Router ranks static
   #     segments above `/:slug`, so e.g. `/link` beats `/:slug` and the vault
   #     is simply unreachable by URL.
   #   - Backend-denied (api..socket): Task 7's Phoenix deny-list 404s these
   #     prefixes before the SPA ever loads, so a vault slugged `assets` is
   #     completely broken, not just awkward.
+  #   - Backend-forwarded (metrics): router.ex mounts `forward "/metrics",
+  #     PromEx.Plug` behind bearer auth, ahead of the vault route, so
+  #     `/metrics` and everything under it 401s before the SPA loads. No
+  #     deny-list entry needed for this one, the forward already wins by
+  #     declaration order.
   # Keep in sync with frontend/src/api/reserved-slugs.ts.
   @reserved_slugs ~w(
     sign-in sign-up waitlist link oauth onboard reset-password
     note search billing settings api webhooks .well-known
-    assets email socket
+    assets email socket metrics
   )
 
   @doc "Exposes the reserved-slug list so slug generation can dedup around it, same as a taken slug."

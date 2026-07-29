@@ -27,6 +27,12 @@ defmodule Engram.Vaults.VaultTest do
       end
     end
 
+    test "rejects a slug that the metrics forward 401s on" do
+      cs = Vault.changeset(%Vault{}, Map.put(@valid, :slug, "metrics"))
+      refute cs.valid?
+      assert "is reserved" in errors_on(cs).slug
+    end
+
     test "accepts an ordinary slug" do
       cs = Vault.changeset(%Vault{}, Map.put(@valid, :slug, "work"))
       assert cs.valid?
@@ -43,7 +49,7 @@ defmodule Engram.Vaults.VaultTest do
       assert "is reserved" in errors_on(cs).slug
     end
 
-    # Pins the exact 17-entry list. Written as a literal, not derived from
+    # Pins the exact 18-entry list. Written as a literal, not derived from
     # @reserved_slugs, so a deleted entry breaks this test instead of
     # silently passing. Mirrored 1:1 in reserved-slugs.test.ts, a human
     # dropping an entry from either list must edit both and notice.
@@ -51,7 +57,7 @@ defmodule Engram.Vaults.VaultTest do
       assert Vault.reserved_slugs() == ~w(
                sign-in sign-up waitlist link oauth onboard reset-password
                note search billing settings api webhooks .well-known
-               assets email socket
+               assets email socket metrics
              )
     end
   end

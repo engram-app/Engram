@@ -1,10 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { renderHook } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setActiveVaultId } from "./active-vault";
 import type { Vault } from "./queries";
-import { preferredVault, vaultBySlug } from "./vault-slug";
+import { preferredVault, useActiveVaultSlug, vaultBySlug } from "./vault-slug";
 
 function v(id: string, slug: string, is_default = false): Vault {
 	return { id, slug, is_default, name: slug } as Vault;
 }
+
+// useActiveVaultSlug is the sole slug source for four link sites and every
+// consumer test mocks it, so it needs its own coverage: a rename of
+// Vault.slug should not be able to ship green.
+let mockVaults: Vault[] | undefined;
+
+vi.mock("./queries", () => ({
+	useVaults: () => ({ data: mockVaults }),
+}));
 
 const vaults = [v("id-a", "work"), v("id-b", "personal", true), v("id-c", "archive")];
 
@@ -43,5 +54,32 @@ describe("preferredVault", () => {
 	it("returns null when there are no vaults", () => {
 		expect(preferredVault([], null)).toBeNull();
 		expect(preferredVault(undefined, "id-a")).toBeNull();
+	});
+});
+
+describe("useActiveVaultSlug", () => {
+	beforeEach(() => {
+		mockVaults = undefined;
+		setActiveVaultId(null);
+	});
+
+	it("returns null before the vault list loads", () => {
+		setActiveVaultId("id-a");
+		const { result } = renderHook(() => useActiveVaultSlug());
+		expect(result.current).toBeNull();
+	});
+
+	it("returns the slug of the active vault", () => {
+		mockVaults = vaults;
+		setActiveVaultId("id-b");
+		const { result } = renderHook(() => useActiveVaultSlug());
+		expect(result.current).toBe("personal");
+	});
+
+	it("returns null when the active id matches no vault", () => {
+		mockVaults = vaults;
+		setActiveVaultId("id-gone");
+		const { result } = renderHook(() => useActiveVaultSlug());
+		expect(result.current).toBeNull();
 	});
 });

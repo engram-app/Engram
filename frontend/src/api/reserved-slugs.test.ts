@@ -16,6 +16,10 @@ describe("isReservedSlug", () => {
 		expect(isReservedSlug(".well-known")).toBe(true);
 	});
 
+	it("rejects the metrics slug the PromEx forward 401s on", () => {
+		expect(isReservedSlug("metrics")).toBe(true);
+	});
+
 	it("accepts ordinary slugs", () => {
 		expect(isReservedSlug("work")).toBe(false);
 		expect(isReservedSlug("settings-archive")).toBe(false);
@@ -26,7 +30,7 @@ describe("isReservedSlug", () => {
 		expect(RESERVED_SLUGS.length).toBeGreaterThan(0);
 	});
 
-	// Pins the exact 17-entry list. Written as a literal, not derived from
+	// Pins the exact 18-entry list. Written as a literal, not derived from
 	// RESERVED_SLUGS, so a deleted entry breaks this test instead of silently
 	// passing. Mirrored 1:1 in vault_test.exs (Elixir) - a human dropping an
 	// entry from either list must edit both and notice.
@@ -49,6 +53,7 @@ describe("isReservedSlug", () => {
 			"assets",
 			"email",
 			"socket",
+			"metrics",
 		]);
 	});
 });
