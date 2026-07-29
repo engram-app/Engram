@@ -1,6 +1,6 @@
 import { Plug } from "lucide-react";
 import { useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -24,7 +24,7 @@ import {
 	useRevokePat,
 } from "../api/queries";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
-import { settingsHash } from "./settings-hash";
+import { settingsTo } from "./settings-hash";
 
 // ── Tier caps ─────────────────────────────────────────────────
 
@@ -184,6 +184,7 @@ function PatSection({
 }) {
 	const [showCreate, setShowCreate] = useState(false);
 	const [newKey, setNewKey] = useState<{ key: string; id: string; name: string } | null>(null);
+	const location = useLocation();
 
 	return (
 		<SettingsSectionCard
@@ -198,7 +199,7 @@ function PatSection({
 						Upgrade to Starter to create API keys for scripting and external integrations.
 					</p>
 					<Link
-						to={settingsHash("billing")}
+						to={settingsTo("billing", location.search)}
 						className="shrink-0 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground text-sm hover:bg-primary/90"
 					>
 						Upgrade

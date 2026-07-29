@@ -1,6 +1,6 @@
 import { FolderTree, Search, Settings } from "lucide-react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router";
-import { isSettingsHash, settingsHash } from "../settings/settings-hash";
+import { isSettingsHash, settingsTo } from "../settings/settings-hash";
 import { type RailView, useRailView } from "./rail-view-context";
 import { RIGHT_TOOLS, type RightToolDescriptor, useRightTools } from "./right-tools-context";
 import UserMenu from "./user-menu";
@@ -106,7 +106,7 @@ export default function Rail() {
 
 			<div className="flex-1" />
 			<Link
-				to={settingsHash("account")}
+				to={settingsTo("account", location.search)}
 				aria-label="Settings"
 				title="Settings"
 				aria-current={onSettings ? "page" : undefined}

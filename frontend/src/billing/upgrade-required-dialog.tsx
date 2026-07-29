@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -9,7 +9,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
-import { settingsHash } from "@/settings/settings-hash";
+import { settingsTo } from "@/settings/settings-hash";
 
 import { ExistingConnectionsPanel } from "./existing-connections-panel";
 import { copyFor } from "./limit-copy";
@@ -38,6 +38,7 @@ export interface UpgradeRequiredDialogProps {
 
 export function UpgradeRequiredDialog({ reason, open, onOpenChange }: UpgradeRequiredDialogProps) {
 	const navigate = useNavigate();
+	const location = useLocation();
 	const { title, body } = copyFor(reason);
 	const connKind = isConnectionCap(reason);
 
@@ -57,7 +58,7 @@ export function UpgradeRequiredDialog({ reason, open, onOpenChange }: UpgradeReq
 					<Button
 						onClick={() => {
 							onOpenChange(false);
-							navigate({ hash: settingsHash("billing") });
+							navigate(settingsTo("billing", location.search));
 						}}
 					>
 						Upgrade

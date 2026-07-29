@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import OAuthAuthorizePage from "./oauth-authorize-page";
 
@@ -90,6 +90,29 @@ function renderAt(qs: string) {
 	return render(
 		<QueryClientProvider client={qc}>
 			<MemoryRouter initialEntries={[`/oauth/consent${qs}`]}>
+				<OAuthAuthorizePage />
+			</MemoryRouter>
+		</QueryClientProvider>,
+	);
+}
+
+function LocationProbe() {
+	const location = useLocation();
+	return (
+		<div data-testid="location-probe">
+			{location.pathname}
+			{location.search}
+			{location.hash}
+		</div>
+	);
+}
+
+function renderWithProbeAt(qs: string) {
+	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	return render(
+		<QueryClientProvider client={qc}>
+			<MemoryRouter initialEntries={[`/oauth/consent${qs}`]}>
+				<LocationProbe />
 				<OAuthAuthorizePage />
 			</MemoryRouter>
 		</QueryClientProvider>,
@@ -223,6 +246,36 @@ describe("OAuthAuthorizePage", () => {
 		expect(consentOrder).toBeDefined();
 		expect(delOrder!).toBeLessThan(consentOrder!);
 		await waitFor(() => expect(assign).toHaveBeenCalledWith("https://app/cb?code=ok"));
+	});
+
+	it("clicking Upgrade in the at-cap banner keeps the OAuth query params (regression: settingsTo)", async () => {
+		// Regression for the bug where `navigate({ hash: settingsHash("billing") })`
+		// dropped the query string (react-router's resolvePath inherits pathname
+		// but not search). Losing client_id/redirect_uri/etc mid-consent re-renders
+		// this page into "Invalid authorization request", destroying the flow.
+		billingState.current = {
+			caps: { obsidian_connections: 1, mcp_connections: 1, api_write_enabled: true, vaults: null },
+			current_connections: { obsidian: 0, mcp: 1 },
+			device_swap_cooldown_remaining_hours: null,
+		};
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Desktop",
+			kind: "mcp",
+		});
+
+		renderWithProbeAt(VALID_QS);
+		const upgrade = await screen.findByRole("link", { name: /upgrade/iu });
+		fireEvent.click(upgrade);
+
+		const probe = screen.getByTestId("location-probe").textContent ?? "";
+		expect(probe).toContain("client_id=cli");
+		expect(probe).toContain("redirect_uri=");
+		expect(probe).toContain("state=xyz");
+		expect(probe).toContain("#settings/billing");
+		expect(
+			screen.queryByRole("heading", { name: /invalid authorization request/iu }),
+		).not.toBeInTheDocument();
 	});
 
 	it("cancels by redirecting back with access_denied", async () => {

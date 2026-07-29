@@ -519,6 +519,15 @@ defmodule EngramWeb.Router do
     # can get cached remotely, not just seen once by a browser.
     match :*, "/email/*path", SpaController, :not_found
 
+    # The remaining EngramWeb.static_paths/0 entries are single-segment, so they
+    # need exact matches rather than the /prefix/*path shape above. Plug.Static
+    # only serves files that exist; on a miss (broken build, deploy skew) these
+    # would otherwise fall through to get "/:slug" and return an HTML 200.
+    match :*, "/favicon.ico", SpaController, :not_found
+    match :*, "/favicon.svg", SpaController, :not_found
+    match :*, "/engram-mark.svg", SpaController, :not_found
+    match :*, "/robots.txt", SpaController, :not_found
+
     # Vault-scoped SPA routes. `/:slug` is a vault, `/:slug/:id` a note or
     # attachment. Kept last so every static route and the deny-list above
     # wins.

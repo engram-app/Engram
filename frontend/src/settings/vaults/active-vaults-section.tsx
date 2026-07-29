@@ -1,13 +1,13 @@
 import { Pencil, Star, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { toast } from "sonner";
 import { useBillingStatus, useUpdateVault, useVaults, type Vault } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import { VaultCreateForm } from "@/components/vault-create-form";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { SettingsSectionCard } from "@/settings/account/section-card";
-import { settingsHash } from "../settings-hash";
+import { settingsTo } from "../settings-hash";
 import { DeleteVaultDialog } from "./delete-vault-dialog";
 
 const inputClass =
@@ -104,6 +104,7 @@ export function ActiveVaultsSection() {
 	const { data: billing } = useBillingStatus();
 	const [deleteTarget, setDeleteTarget] = useState<Vault | null>(null);
 	const [createOpen, setCreateOpen] = useState(false);
+	const location = useLocation();
 
 	const vaultsCap = billing?.caps.vaults ?? null;
 	const vaultCount = vaults?.length ?? 0;
@@ -128,7 +129,7 @@ export function ActiveVaultsSection() {
 						Your Free plan allows {vaultsCap} vault. Upgrade to Starter for more vaults.
 					</p>
 					<Link
-						to={settingsHash("billing")}
+						to={settingsTo("billing", location.search)}
 						className="shrink-0 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground text-sm hover:bg-primary/90"
 					>
 						Upgrade

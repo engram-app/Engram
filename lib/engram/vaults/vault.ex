@@ -31,9 +31,14 @@ defmodule Engram.Vaults.Vault do
   end
 
   # Slugs that would make a vault unreachable. Three failure modes:
-  #   - Frontend-shadowed (sign-in..settings): React Router ranks static
-  #     segments above `/:slug`, so e.g. `/link` beats `/:slug` and the vault
-  #     is simply unreachable by URL.
+  #   - Route-shadowed (sign-in..settings): some of these have a top-level
+  #     static React Router route that beats `/:slug` (e.g. `/link`), making a
+  #     same-named vault unreachable by URL. Others (`search`, `billing`) have
+  #     NO such static route (`billing` only exists nested under
+  #     `/onboard/billing`; `search` is a rail-toggled panel, not a route), so
+  #     `/:slug` would actually match them; what actually stops a vault
+  #     from ever holding one of these slugs is `validate_exclusion` below,
+  #     not routing.
   #   - Backend-denied (api..socket): Task 7's Phoenix deny-list 404s these
   #     prefixes before the SPA ever loads, so a vault slugged `assets` is
   #     completely broken, not just awkward.

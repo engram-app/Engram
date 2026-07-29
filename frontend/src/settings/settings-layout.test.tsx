@@ -25,7 +25,7 @@ const testConfig: EngramConfig = {
 
 function LocationProbe() {
 	const loc = useLocation();
-	return <output data-testid="loc">{`${loc.pathname}${loc.hash}`}</output>;
+	return <output data-testid="loc">{`${loc.pathname}${loc.search}${loc.hash}`}</output>;
 }
 
 function renderDialog(section: SettingsSectionKey, initialEntry = "/work/note-1#settings/account") {
@@ -82,6 +82,19 @@ describe("SettingsDialog", () => {
 		renderDialog("account", "/work/note-1#settings/account");
 		fireEvent.click(await screen.findByRole("link", { name: "Billing" }));
 		expect(await screen.findByText("/work/note-1#settings/billing")).toBeInTheDocument();
+	});
+
+	it("clicking a nav link preserves the current query string (settingsTo regression)", async () => {
+		// react-router's resolvePath inherits pathname from the current location
+		// but NOT search, so a bare `to={settingsHash(...)}` silently dropped
+		// `?highlight=<id>` (e.g. from the vault-deleted email) the moment the
+		// user switched settings sections. SettingsNavList must thread
+		// location.search through settingsTo.
+		renderDialog("account", "/work/note-1?highlight=abc123#settings/account");
+		fireEvent.click(await screen.findByRole("link", { name: "Billing" }));
+		expect(
+			await screen.findByText("/work/note-1?highlight=abc123#settings/billing"),
+		).toBeInTheDocument();
 	});
 
 	it("strips the hash on close and keeps you on the same page", async () => {

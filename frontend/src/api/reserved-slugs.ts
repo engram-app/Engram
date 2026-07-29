@@ -3,8 +3,13 @@
 // this list currently has no runtime consumer in the SPA (the vault create
 // form has no slug field) - it exists as the cross-language mirror of the
 // Elixir list. Keep both lists identical:
-//   - Frontend-shadowed (sign-in..settings): React Router ranks static
-//     segments above `/:slug`, so these are simply unreachable by URL.
+//   - Route-shadowed (sign-in..settings): some of these have a top-level
+//     static React Router route that beats `/:slug` (e.g. `/link`), making a
+//     same-named vault unreachable by URL. Others (`search`, `billing`) have
+//     NO such static route (`billing` only exists nested under
+//     `/onboard/billing`; `search` is a rail-toggled panel, not a route), so
+//     `/:slug` would actually match them; the real protection for those is
+//     `validate_exclusion` in the backend changeset, not routing.
 //   - Backend-denied (api..socket): Task 7's Phoenix deny-list 404s these
 //     prefixes before the SPA ever loads.
 //   - Backend-forwarded (metrics): a bearer-auth-gated `forward` mounted

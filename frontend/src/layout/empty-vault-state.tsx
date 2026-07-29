@@ -1,8 +1,9 @@
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
-import { settingsHash } from "@/settings/settings-hash";
+import { settingsTo } from "@/settings/settings-hash";
 
 export function EmptyVaultState() {
+	const location = useLocation();
 	return (
 		<section className="flex flex-col items-center justify-center gap-3 py-16 text-center">
 			<h2 className="font-semibold text-foreground text-lg">No vaults</h2>
@@ -10,7 +11,7 @@ export function EmptyVaultState() {
 				You don't have any vaults right now. Create one to start syncing and searching your notes.
 			</p>
 			<Button asChild>
-				<Link to={settingsHash("vaults")}>Create a vault</Link>
+				<Link to={settingsTo("vaults", location.search)}>Create a vault</Link>
 			</Button>
 		</section>
 	);

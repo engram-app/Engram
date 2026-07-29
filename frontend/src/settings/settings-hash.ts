@@ -33,3 +33,15 @@ export function parseSettingsHash(hash: string): SettingsSectionKey | null {
 export function settingsHash(section: SettingsSectionKey): string {
 	return `${PREFIX}/${section}`;
 }
+
+/**
+ * Build a react-router `To` for opening settings that PRESERVES the current
+ * query string. React Router's resolvePath inherits `pathname` from the current
+ * location but NOT `search` (it defaults to ""), so a bare hash target silently
+ * drops the query. That breaks any page whose state lives in the URL, most
+ * severely /oauth/consent, which reads its params via useSearchParams and errors
+ * out the moment they vanish. Callers pass `location.search` from useLocation().
+ */
+export function settingsTo(section: SettingsSectionKey, search: string) {
+	return { search, hash: settingsHash(section) };
+}

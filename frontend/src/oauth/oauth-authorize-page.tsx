@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router";
+import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -19,7 +19,7 @@ import { connectionId as oauthConnectionId } from "../billing/existing-connectio
 import { useConnectionCap } from "../billing/use-connection-cap";
 import AuthPanel from "../layout/auth-panel";
 import AuthShell from "../layout/auth-shell";
-import { settingsHash } from "../settings/settings-hash";
+import { settingsHash, settingsTo } from "../settings/settings-hash";
 
 const REQUIRED_PARAMS = [
 	"client_id",
@@ -79,6 +79,7 @@ export default function OAuthAuthorizePage() {
 	const meQuery = useMe();
 	const vaultsQuery = useVaults();
 	const navigate = useNavigate();
+	const location = useLocation();
 	const qc = useQueryClient();
 
 	// Proactive cap check — kind comes from the OAuth client metadata so we
@@ -259,10 +260,10 @@ export default function OAuthAuthorizePage() {
 								will stop having access.{" "}
 								<a
 									className="underline underline-offset-4"
-									href={settingsHash("billing")}
+									href={`${location.search}${settingsHash("billing")}`}
 									onClick={(e) => {
 										e.preventDefault();
-										navigate({ hash: settingsHash("billing") });
+										navigate(settingsTo("billing", location.search));
 									}}
 								>
 									Upgrade
@@ -361,7 +362,7 @@ export default function OAuthAuthorizePage() {
 								variant="outline"
 								onClick={() => {
 									setShowSwapConfirm(false);
-									navigate({ hash: settingsHash("billing") });
+									navigate(settingsTo("billing", location.search));
 								}}
 								disabled={submitting}
 								className="w-full"

@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { destructiveAlert, fieldInput, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
@@ -14,7 +14,7 @@ import AuthPanel from "../layout/auth-panel";
 import AuthShell from "../layout/auth-shell";
 import { SyncStatusPill } from "../onboarding/sync-status-pill";
 import { useVaultReadyEvents } from "../onboarding/use-vault-ready-events";
-import { settingsHash } from "../settings/settings-hash";
+import { settingsHash, settingsTo } from "../settings/settings-hash";
 
 interface Vault {
 	id: string;
@@ -27,6 +27,7 @@ type Step = "enter-code" | "pick-vault" | "success" | "error";
 function DeviceLinkPage() {
 	const { isSignedIn } = useAuthAdapter();
 	const navigate = useNavigate();
+	const location = useLocation();
 	const qc = useQueryClient();
 	const [step, setStep] = useState<Step>("enter-code");
 	// RFC 8628 verification_uri_complete: if the plugin sends the user to
@@ -232,9 +233,9 @@ function DeviceLinkPage() {
 							className="underline underline-offset-4"
 							onClick={(e) => {
 								e.preventDefault();
-								navigate({ hash: settingsHash("billing") });
+								navigate(settingsTo("billing", location.search));
 							}}
-							href={settingsHash("billing")}
+							href={`${location.search}${settingsHash("billing")}`}
 						>
 							Upgrade
 						</a>{" "}
@@ -252,9 +253,9 @@ function DeviceLinkPage() {
 							className="underline underline-offset-4"
 							onClick={(e) => {
 								e.preventDefault();
-								navigate({ hash: settingsHash("billing") });
+								navigate(settingsTo("billing", location.search));
 							}}
-							href={settingsHash("billing")}
+							href={`${location.search}${settingsHash("billing")}`}
 						>
 							Upgrade
 						</a>{" "}
@@ -302,10 +303,10 @@ function DeviceLinkPage() {
 								Your Free plan includes 1 vault — link into the existing one above, or{" "}
 								<a
 									className="underline underline-offset-4"
-									href={settingsHash("billing")}
+									href={`${location.search}${settingsHash("billing")}`}
 									onClick={(e) => {
 										e.preventDefault();
-										navigate({ hash: settingsHash("billing") });
+										navigate(settingsTo("billing", location.search));
 									}}
 								>
 									upgrade

@@ -243,6 +243,75 @@ defmodule EngramWeb.SpaControllerTest do
     end
   end
 
+  describe "single-segment static_paths() get exact deny entries too" do
+    # EngramWeb.static_paths/0 lists favicon.ico, favicon.svg, engram-mark.svg,
+    # robots.txt (and email, covered above). These are single-segment, so they
+    # need an exact match rather than the /prefix/*path shape used elsewhere in
+    # the deny-list. All four real files exist on disk in this test env
+    # (priv/static/), so Plug.Static (mounted ahead of the router in the
+    # endpoint) always wins for these requests. The tests below prove that's
+    # still true after adding the router-level entries.
+    test "GET /favicon.ico still serves the real file, not the SPA", %{conn: conn} do
+      conn = get(conn, "/favicon.ico")
+      assert conn.status == 200
+      [content_type] = get_resp_header(conn, "content-type")
+      refute content_type =~ "text/html"
+      refute response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "GET /favicon.svg still serves the real file, not the SPA", %{conn: conn} do
+      conn = get(conn, "/favicon.svg")
+      assert conn.status == 200
+      [content_type] = get_resp_header(conn, "content-type")
+      refute content_type =~ "text/html"
+      refute response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "GET /engram-mark.svg still serves the real file, not the SPA", %{conn: conn} do
+      conn = get(conn, "/engram-mark.svg")
+      assert conn.status == 200
+      [content_type] = get_resp_header(conn, "content-type")
+      refute content_type =~ "text/html"
+      refute response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "GET /robots.txt still serves the real file, not the SPA", %{conn: conn} do
+      conn = get(conn, "/robots.txt")
+      assert conn.status == 200
+      [content_type] = get_resp_header(conn, "content-type")
+      refute content_type =~ "text/html"
+      refute response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "a bogus sibling single-segment path still reaches the SPA", %{conn: conn} do
+      # /nonexistent.txt isn't a real static file and isn't in the deny-list,
+      # so it must still fall through to the vault-scoped /:slug route like
+      # any other unrecognized single segment. Proves the new exact entries
+      # above are scoped to their four literal paths, not a blanket sweep.
+      conn = get(conn, "/nonexistent.txt")
+      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "on a Plug.Static miss (deploy skew), the router-level entries 404 instead of an HTML 200" do
+      # Plug.Static always wins while the real file exists (proven above), so
+      # the only way to exercise the router-level deny entries themselves is
+      # to bypass the endpoint's Plug.Static plug and hit the router
+      # directly, simulating the deploy-skew scenario (file missing from
+      # priv/static) without deleting a real file on disk.
+      for path <- ~w(/favicon.ico /favicon.svg /engram-mark.svg /robots.txt) do
+        conn =
+          Phoenix.ConnTest.build_conn(:get, path)
+          |> EngramWeb.Router.call(EngramWeb.Router.init([]))
+
+        assert conn.status == 404, "expected #{path} to 404 at the router level"
+        [content_type] = get_resp_header(conn, "content-type")
+
+        refute content_type =~ "text/html",
+               "expected #{path} not to serve HTML at the router level"
+      end
+    end
+  end
+
   defp assert_not_found_not_html(conn) do
     assert response(conn, 404)
     [content_type] = get_resp_header(conn, "content-type")

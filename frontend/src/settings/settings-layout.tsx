@@ -15,14 +15,16 @@ import {
 import { useMe } from "../api/queries";
 import { useConfig } from "../config-context";
 import { buildSettingsSections, type SettingsSection } from "./sections";
-import { type SettingsSectionKey, settingsHash } from "./settings-hash";
+import { type SettingsSectionKey, settingsTo } from "./settings-hash";
 
 // Keep this in sync with the duration-200 class on DialogPrimitive.Content
 // below — we hold the dialog mounted for one animation cycle after
 // onOpenChange(false) so Radix's exit transition plays before we navigate.
 const CLOSE_ANIMATION_MS = 200;
 
-// These are the exact modules router.tsx lazy-loads today.
+// These are the settings section bodies, lazily loaded here. Settings
+// stopped being a path route, so router.tsx no longer references any of
+// them; this component owns the section bodies exclusively.
 const AccountPage = lazy(() => import("./account-page"));
 const AccountPageLocal = lazy(() => import("./account-page-local"));
 const VaultsPage = lazy(() => import("./vaults-page"));
@@ -55,6 +57,7 @@ function SettingsNavList({
 	current: SettingsSectionKey;
 	onNavigate?: () => void;
 }) {
+	const location = useLocation();
 	return (
 		<ul className="space-y-1">
 			{sections.map((s) => {
@@ -67,9 +70,11 @@ function SettingsNavList({
 						would silently desync useLocation()). Link always resolves `to`
 						against the current pathname (so href is e.g.
 						"/work/note-1#settings/billing", not a bare hash), but it's
-						routed through history.push, which react-router does see. */}
+						routed through history.push, which react-router does see. `to`
+						also carries `search` explicitly: resolvePath does NOT inherit
+						the query string, only the pathname (see settingsTo). */}
 						<Link
-							to={settingsHash(s.key)}
+							to={settingsTo(s.key, location.search)}
 							onClick={onNavigate}
 							aria-current={active ? "page" : undefined}
 							className={`block rounded-md px-3 py-2 text-sm transition-colors ${
