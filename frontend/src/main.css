@@ -11,47 +11,34 @@
 @import "@fontsource-variable/inter";
 @import "@fontsource/noto-serif/400-italic.css";
 
-/* Obsidian-flavored callouts (matches @portaljs/remark-callouts class names). */
+/* Obsidian-flavored callouts (@portaljs/remark-callouts markup).
+ *
+ * The library emits `<blockquote class="callout" style="border-left-color: …">`
+ * with the per-type colour ALREADY inlined from the same `defaultConfig` map
+ * the CodeMirror live preview reads, and colours the icon to match. So colour
+ * needs no help from us — it was never the thing that diverged.
+ *
+ * What diverged was everything else. This block used to carry seven
+ * `.callout[data-callout="…"]` rules, and the library emits no `data-callout`
+ * attribute, so none of them ever matched: every callout got the generic blue
+ * background whatever its type, with a correctly-coloured bar on it. Deleted.
+ *
+ * Square, 3px bar, neutral background — deliberately identical to
+ * editor/callout.css, because the editor is what you look at while writing. */
 @layer components {
 	.callout {
-		@apply my-4 rounded-md border-l-4 border-blue-400 bg-blue-50 px-4 py-2 text-sm dark:bg-blue-950/40 dark:text-blue-50;
-	}
-	.callout[data-callout="note"] {
-		@apply border-blue-400 bg-blue-50 dark:bg-blue-950/40;
-	}
-	.callout[data-callout="tip"],
-	.callout[data-callout="hint"],
-	.callout[data-callout="important"] {
-		@apply border-teal-400 bg-teal-50 dark:bg-teal-950/40 dark:text-teal-50;
-	}
-	.callout[data-callout="warning"],
-	.callout[data-callout="caution"],
-	.callout[data-callout="attention"] {
-		@apply border-amber-400 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-50;
-	}
-	.callout[data-callout="danger"],
-	.callout[data-callout="error"],
-	.callout[data-callout="failure"],
-	.callout[data-callout="fail"],
-	.callout[data-callout="missing"] {
-		@apply border-red-400 bg-red-50 dark:bg-red-950/40 dark:text-red-50;
-	}
-	.callout[data-callout="success"],
-	.callout[data-callout="check"],
-	.callout[data-callout="done"] {
-		@apply border-green-400 bg-green-50 dark:bg-green-950/40 dark:text-green-50;
-	}
-	.callout[data-callout="question"],
-	.callout[data-callout="help"],
-	.callout[data-callout="faq"] {
-		@apply border-purple-400 bg-purple-50 dark:bg-purple-950/40 dark:text-purple-50;
-	}
-	.callout[data-callout="quote"],
-	.callout[data-callout="cite"] {
-		@apply border-gray-400 bg-gray-50 dark:bg-gray-900/60 dark:text-gray-100;
+		@apply my-4 border-l-[3px] px-3 py-2 text-sm;
+		/* Fallback only — the library's inline style wins where it sets one. */
+		border-left-color: var(--border);
+		background-color: var(--color-callout-bg, rgba(128, 128, 128, 0.08));
 	}
 	.callout-title {
 		@apply mb-1 flex items-center gap-2 font-semibold;
+	}
+	/* The library wraps the title in <strong><p>, which prose then gives block
+	   margins — enough to knock the icon out of alignment with the text. */
+	.callout-title p {
+		@apply my-0;
 	}
 
 	/* Wikilink styling — distinguish internal vault links from external. */

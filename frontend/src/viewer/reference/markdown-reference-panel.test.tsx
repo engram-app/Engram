@@ -83,6 +83,18 @@ describe("MarkdownReferencePanel — rendered previews", () => {
 		expect(figure?.textContent).not.toContain("[!note]");
 	});
 
+	it("lets the library inline the per-type colour our CSS deliberately omits", () => {
+		// main.css no longer carries a callout palette — it relies on
+		// @portaljs/remark-callouts inlining border-left-color from the same
+		// defaultConfig map the editor's live preview reads. If the library ever
+		// stops doing that, every callout silently goes neutral grey, so pin it.
+		renderPanel();
+		openSection("Callouts");
+		const callout = row("Warning callout").querySelector(".callout") as HTMLElement;
+		expect(callout).not.toBeNull();
+		expect(callout.getAttribute("style") ?? "").toMatch(/border-left-color:\s*#/u);
+	});
+
 	it("renders inline emphasis as real elements", () => {
 		renderPanel();
 		expect(row("Bold").querySelector("strong")?.textContent).toBe("deleted permanently");
