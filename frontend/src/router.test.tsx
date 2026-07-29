@@ -52,15 +52,30 @@ describe("createAppRouter - settings overlay mount point", () => {
 	// shell. If SettingsOverlayHost were moved inside AppLayout, these two
 	// routes would never see it and #settings/billing would be a silent
 	// no-op on both. That regression is exactly what this test guards.
+	// These wait on a CHAIN of two dynamic imports behind two Suspense
+	// boundaries: SettingsOverlayHost is lazy() in router.tsx, and the dialog
+	// is lazy() again inside the host. There is no fixed delay to advance, so
+	// fake timers cannot help; the only correct bound is one generous enough
+	// to survive suite contention. findBy*'s 1000ms default is arbitrary and
+	// too tight: this test was observed timing out under parallel load while
+	// taking 6.96s in isolation.
 	it("overlays the settings dialog atop /link (outside the app shell)", async () => {
 		renderAt("/link#settings/billing");
-		expect(await screen.findByTestId("device-link")).toBeInTheDocument();
-		expect(await screen.findByTestId("dialog")).toHaveTextContent("section:billing");
+		expect(
+			await screen.findByTestId("device-link", undefined, { timeout: 15_000 }),
+		).toBeInTheDocument();
+		expect(await screen.findByTestId("dialog", undefined, { timeout: 15_000 })).toHaveTextContent(
+			"section:billing",
+		);
 	});
 
 	it("overlays the settings dialog atop /oauth/consent (outside the app shell)", async () => {
 		renderAt("/oauth/consent#settings/billing");
-		expect(await screen.findByTestId("oauth-consent")).toBeInTheDocument();
-		expect(await screen.findByTestId("dialog")).toHaveTextContent("section:billing");
+		expect(
+			await screen.findByTestId("oauth-consent", undefined, { timeout: 15_000 }),
+		).toBeInTheDocument();
+		expect(await screen.findByTestId("dialog", undefined, { timeout: 15_000 })).toHaveTextContent(
+			"section:billing",
+		);
 	});
 });
