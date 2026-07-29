@@ -62,32 +62,16 @@ defmodule Engram.Notes.CrdtPersistence do
                 :ok
             end
 
-            applied = replay_tail(doc, user, note_id)
+            _applied = replay_tail(doc, user, note_id)
 
-            # Empty room after hydration: no tail-log applied AND the doc
-            # projects to empty text means this note carries no CRDT-edited
-            # content, so the only source of truth is the plaintext
-            # `notes.content`. Seed the doc from it so a device that has never
-            # opened the note (discovery via the crdt_doc_ready announce or a
-            # /changes pull) still receives the body over the y-protocols
-            # handshake. NOTE (#1087): the guard is projected-emptiness, not
-            # snapshot-absence — a genesis row stores an EMPTY-doc snapshot, so
-            # `from_snapshot?` alone let a room bind empty while the row held
-            # content (empty STEP2s vs REST getNote — the plugin's race-closer
-            # class). A legit cleared note can't be misread here: a real clear
-            # either rides the tail (`applied != []` blocks the seed) or a
-            # checkpoint that also wrote `content: ""` (seed_from_content
-            # no-ops on empty content). The client's `seedOnce` guard (skips
-            # when an LCA exists) prevents a double-seed once the server is
-            # authoritative.
-            # body_of (not text_of): a frontmatter-only snapshot projects
-            # non-empty text while the BODY is empty — that shape must still
-            # seed, or STEP2 serves a bodyless doc while the row has the body.
-            # ingest_plaintext upserts frontmatter keys idempotently, so
-            # seeding over existing frontmatter is safe.
-            if applied == [] and CrdtBridge.body_of(doc) == "" do
-              seed_from_content(doc, note, user)
-            end
+            # NOTE: the server no longer seeds the doc from `notes.content`
+            # here. That seed made the SERVER a third writer of note content,
+            # and reconciling three representations (doc / notes.content / disk)
+            # is the shape of every "which copy is authoritative" bug we have
+            # shipped. Non-CRDT writes (REST / MCP / web) now ingest into the
+            # doc at WRITE time — see CrdtDeliver.ingest_into_fresh_room — so a
+            # bound room already holds the body and `notes.content` is a
+            # DERIVED projection maintained by the checkpoint materializer.
 
             :ok = CrdtBridge.normalize_doc(doc)
 
@@ -337,25 +321,8 @@ defmodule Engram.Notes.CrdtPersistence do
   # + Y.Array("frontmatter_order") and only the body lands in the body Y.Text,
   # ensuring concurrent frontmatter edits engage the LWW per-key path.
   # maybe_decrypt_note_fields/2 also UTF-8-scrubs the content, keeping the Yjs
-  # text JSON-safe. A nil/empty body seeds nothing (a blank note stays blank).
-  defp seed_from_content(doc, %Note{} = note, user) do
-    case Crypto.maybe_decrypt_note_fields(note, user) do
-      {:ok, %Note{content: content, path: path}}
-      when is_binary(content) and content != "" ->
-        # Only MARKDOWN seeds through the frontmatter codec. A .canvas (or any
-        # non-md) note keeps its data in structural Y.Maps client-side and is
-        # client-seeded from its own file — ingesting its JSON as a markdown body
-        # would diff the whole blob into the content Y.Text and corrupt the doc.
-        if markdown?(path), do: :ok = CrdtBridge.ingest_plaintext(doc, content)
-        :ok
-
-      _ ->
-        :ok
-    end
-  end
 
   # A CRDT room only ever holds a markdown (`.md`) doc or a structural doc
   # (`.canvas`). Only markdown is projected to/from `notes.content` — everything
   # else is opaque Yjs the client owns. Mirrors CrdtDeliver's `.md` gate.
-  defp markdown?(path), do: is_binary(path) and String.ends_with?(path, ".md")
 end
