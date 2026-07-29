@@ -1026,6 +1026,21 @@ In `backend/lib/engram_web/router.ex`, inside the existing `scope "/", EngramWeb
     match :*, "/oauth/*path", SpaController, :not_found
     match :*, "/webhooks/*path", SpaController, :not_found
     match :*, "/.well-known/*path", SpaController, :not_found
+    # /assets is NOT a router scope, it is Plug.Static mounted in endpoint.ex,
+    # which makes it easy to miss when enumerating prefixes from `scope`
+    # declarations. Plug.Static only serves files that EXIST; on a miss it falls
+    # through to the router, so without this a stale <script src="/assets/old.js">
+    # would match /:slug/:id and get an HTML 200 that the browser then fails to
+    # parse as JavaScript.
+    match :*, "/assets/*path", SpaController, :not_found
+    # /email is also Plug.Static-served (see EngramWeb.static_paths/0) and is a
+    # DIRECTORY, so /email/engram-mark.png is two segments and collides with
+    # /:slug/:id. These URLs are embedded in emails and fetched by third-party
+    # image proxies that cache responses, so a masked HTML 200 is worse here
+    # than a clean 404. The single-segment static_paths entries (favicon.ico,
+    # favicon.svg, engram-mark.svg, robots.txt) deliberately get NO entry: a
+    # miss there is cosmetic and means a broken build, not a live failure.
+    match :*, "/email/*path", SpaController, :not_found
 
     # Vault-scoped SPA routes. `/:slug` is a vault, `/:slug/:id` a note or
     # attachment. Kept last so every static route above wins.
