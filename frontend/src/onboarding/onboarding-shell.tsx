@@ -34,7 +34,7 @@ function ShellInner({ children }: { children: ReactNode }) {
 		}
 		setTourActive(false);
 		demo.deactivate();
-		// The tour walks through a demo note (`/note/<id>`) that doesn't exist
+		// The tour walks through a demo note (`/<slug>/<id>`) that doesn't exist
 		// in the real backend. Bounce back to the dashboard so useNote doesn't
 		// 404 once the demo wrap drops.
 		navigate("/", { replace: true });

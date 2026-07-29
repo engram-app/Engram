@@ -1,4 +1,6 @@
+import { useActiveVaultId } from "./active-vault";
 import type { Vault } from "./queries";
+import { useVaults } from "./queries";
 
 export function vaultBySlug(vaults: Vault[] | undefined, slug: string | undefined): Vault | null {
 	if (!(vaults && slug)) {
@@ -21,4 +23,13 @@ export function preferredVault(vaults: Vault[] | undefined, hintId: string | nul
 		vaults[0] ??
 		null
 	);
+}
+
+// Slug of the vault currently in the store, for building note hrefs. Returns
+// null only before the vault list lands, which in practice does not happen
+// inside AppLayout (useAppBootstrap seeds it above).
+export function useActiveVaultSlug(): string | null {
+	const vaults = useVaults().data;
+	const activeId = useActiveVaultId();
+	return vaults?.find((v) => v.id === activeId)?.slug ?? null;
 }

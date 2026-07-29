@@ -2,6 +2,7 @@ import type { ItemInstance } from "@headless-tree/core";
 import { ChevronRight, File, FileText, Image } from "lucide-react";
 import type React from "react";
 import { Link } from "react-router";
+import { useActiveVaultSlug } from "../../api/vault-slug";
 import { noteName } from "../../lib/note-name";
 import { RenameInput } from "../tree-actions/rename-input";
 import { useLongPress } from "../tree-actions/use-long-press";
@@ -122,6 +123,7 @@ export function TreeRow({
 	onFolderHover,
 }: Props) {
 	const itemId = instance.getId();
+	const slug = useActiveVaultSlug();
 	const longPressHandlers = useLongPress({
 		onLongPress: () => onLongPress?.(itemId),
 	});
@@ -227,7 +229,7 @@ export function TreeRow({
 		// path-keyed (internal tree machinery).
 		return (
 			<Link
-				to={`/note/${item.id}`}
+				to={slug ? `/${slug}/${item.id}` : `/note/${item.id}`}
 				{...instance.getProps()}
 				{...longPressProps}
 				onContextMenu={contextMenuHandler}
@@ -270,7 +272,7 @@ export function TreeRow({
 
 	return (
 		<Link
-			to={`/note/${item.id}`}
+			to={slug ? `/${slug}/${item.id}` : `/note/${item.id}`}
 			{...htProps}
 			{...longPressProps}
 			onContextMenu={contextMenuHandler}

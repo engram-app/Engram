@@ -28,6 +28,12 @@ vi.mock("../api/queries", () => ({
 	useSearch: (q: string, filters: unknown) => useSearchSpy(q, filters),
 }));
 
+// ResultRow reads the active vault slug to build note hrefs. Default to null
+// (the fallback/legacy shape) so existing behavior is unaffected; the one
+// test below overrides it to check the vault-scoped shape.
+const activeSlugMock = vi.fn<() => string | null>(() => null);
+vi.mock("../api/vault-slug", () => ({ useActiveVaultSlug: () => activeSlugMock() }));
+
 function ViewProbe() {
 	const { view } = useRailView();
 	return <span data-testid="view">{view}</span>;
@@ -51,6 +57,7 @@ describe("SearchPanel", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
 		useSearchSpy.mockClear();
+		activeSlugMock.mockReturnValue(null);
 	});
 
 	it('renders header "Search" and an [x] return-to-files control', () => {
@@ -72,6 +79,23 @@ describe("SearchPanel", () => {
 		fireEvent.change(input, { target: { value: "hello" } });
 		expect(await screen.findByText("note")).toBeInTheDocument();
 		expect(screen.queryByText("Some H1 Heading")).not.toBeInTheDocument();
+	});
+
+	it("links a result to the legacy note route before the vault slug loads", async () => {
+		renderPanel();
+		const input = screen.getByPlaceholderText(/search your notes/iu) as HTMLInputElement;
+		fireEvent.change(input, { target: { value: "hello" } });
+		const link = (await screen.findByText("note")).closest("a") as HTMLAnchorElement;
+		expect(link.getAttribute("href")).toBe("/note/7");
+	});
+
+	it("links a result to the vault-scoped route once the active vault slug loads", async () => {
+		activeSlugMock.mockReturnValue("work");
+		renderPanel();
+		const input = screen.getByPlaceholderText(/search your notes/iu) as HTMLInputElement;
+		fireEvent.change(input, { target: { value: "hello" } });
+		const link = (await screen.findByText("note")).closest("a") as HTMLAnchorElement;
+		expect(link.getAttribute("href")).toBe("/work/7");
 	});
 
 	it("[x] returns to Files view", () => {
