@@ -115,6 +115,18 @@ defmodule Engram.VaultsTest do
       assert v3.slug == "notes-3"
     end
 
+    test "slug that would collide with a reserved word gets a numeric suffix instead of being rejected",
+         %{
+           user: user
+         } do
+      # Users never type a slug directly (see vault-create-form.tsx) so a plain
+      # rejection here would be a dead end: "Settings" always slugifies to
+      # "settings" and the user has no field to fix. Route reserved words
+      # through the same dedup path as a taken slug.
+      assert {:ok, vault} = Vaults.create_vault(user, %{name: "Settings"})
+      assert vault.slug == "settings-2"
+    end
+
     test "slug strips special characters", %{user: user} do
       assert {:ok, vault} = Vaults.create_vault(user, %{name: "My Vault!"})
       assert vault.slug == "my-vault"
@@ -490,6 +502,15 @@ defmodule Engram.VaultsTest do
 
       assert {:ok, updated} = Vaults.update_vault(user, vault.id, %{name: "Renamed Vault"})
       assert updated.slug == "renamed-vault"
+    end
+
+    test "renaming into a reserved word gets a numeric suffix instead of being rejected", %{
+      user: user
+    } do
+      {:ok, vault} = Vaults.create_vault(user, %{name: "Original"})
+
+      assert {:ok, updated} = Vaults.update_vault(user, vault.id, %{name: "Search"})
+      assert updated.slug == "search-2"
     end
 
     test "setting is_default clears other defaults", %{user: user} do

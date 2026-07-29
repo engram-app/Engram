@@ -769,7 +769,10 @@ defmodule Engram.Vaults do
         query
       end
 
-    existing = Repo.all(query)
+    # A reserved slug (see Vault.reserved_slugs/0) isn't in the DB, but it's
+    # unreachable/broken the same way a taken one is, so it's folded into the
+    # same collision set and gets the same -2, -3... dedup treatment.
+    existing = Repo.all(query) ++ Vault.reserved_slugs()
 
     if base_slug in existing do
       Enum.find_value(2..1000, fn n ->

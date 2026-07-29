@@ -30,6 +30,23 @@ defmodule Engram.Vaults.Vault do
     timestamps(type: :utc_datetime, inserted_at: :created_at)
   end
 
+  # Slugs that would make a vault unreachable. Two failure modes:
+  #   - Frontend-shadowed (sign-in..settings): React Router ranks static
+  #     segments above `/:slug`, so e.g. `/link` beats `/:slug` and the vault
+  #     is simply unreachable by URL.
+  #   - Backend-denied (api..socket): Task 7's Phoenix deny-list 404s these
+  #     prefixes before the SPA ever loads, so a vault slugged `assets` is
+  #     completely broken, not just awkward.
+  # Keep in sync with frontend/src/api/reserved-slugs.ts.
+  @reserved_slugs ~w(
+    sign-in sign-up waitlist link oauth onboard reset-password
+    note search billing settings api webhooks .well-known
+    assets email socket
+  )
+
+  @doc "Exposes the reserved-slug list so slug generation can dedup around it, same as a taken slug."
+  def reserved_slugs, do: @reserved_slugs
+
   def changeset(vault, attrs) do
     vault
     |> cast(attrs, [
@@ -51,6 +68,8 @@ defmodule Engram.Vaults.Vault do
       :name_nonce,
       :name_hmac
     ])
+    |> update_change(:slug, &String.downcase/1)
+    |> validate_exclusion(:slug, @reserved_slugs, message: "is reserved")
     |> unique_constraint([:user_id, :slug], name: :vaults_user_id_slug_index)
     |> unique_constraint([:user_id, :client_id], name: :vaults_user_id_client_id_index)
   end
