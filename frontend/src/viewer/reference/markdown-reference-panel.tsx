@@ -54,26 +54,29 @@ function EntryRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 			</p>
 
 			{entry.renderable === false ? null : (
-				// prose-sm: the shared markdown styles are tuned for an 840px document
-				// column, not a 300px rail.
+				// No border, background or padding of its own. Each preview already
+				// carries its own surface — a fence is grey, a callout is tinted, a
+				// table has rules — so wrapping it in another box left that surface
+				// inset inside an outer one, visibly failing to fill it (worst on
+				// Mermaid, whose centred SVG sat in a grey band floating in a white
+				// box). The container is gone, so there is nothing left to not fill.
 				//
-				// overflow-hidden, NOT overflow-x-auto: a wide preview (table, mermaid,
-				// long fence) would otherwise grow its own native horizontal scrollbar
-				// inside the panel's Radix one, and a column of those makes the whole
-				// section miserable to scroll. Previews are illustrative — clipping the
-				// far edge of a demo table costs nothing.
-				// The `[&_.prose…]` pair is what actually removes the dead space here:
-				// Typography gives every block a ~1em vertical margin, and Mermaid adds
-				// its own my-4, so the box was mostly gutter. Collapsing the leading and
-				// trailing margins lets it hug the example while keeping the rhythm
-				// between blocks in a multi-part snippet.
-				<figure className="prose-sm mb-1 overflow-hidden border border-border/60 bg-background px-2 py-1 [&_.mermaid]:my-0 [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0">
+				// prose-sm because the shared markdown styles are tuned for an 840px
+				// document column, not a 300px rail. The `[&_.prose…]` pair strips the
+				// ~1em margin Typography puts on every block (and Mermaid's own my-4),
+				// which was most of the dead space, while keeping the rhythm between
+				// blocks of a multi-part snippet.
+				<figure className="prose-sm mb-1 overflow-hidden [&_.mermaid]:my-0 [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0">
 					<NoteView content={entry.syntax} tags={[]} />
 				</figure>
 			)}
 
-			{/* whitespace-pre-wrap already prevents horizontal overflow — no scroller. */}
-			<pre className="whitespace-pre-wrap break-words bg-muted px-2 py-1 font-mono text-[11px] text-muted-foreground">
+			{/* bg-muted/50, not the full token: a rendered fence now uses --muted
+			    itself, so a solid source box directly beneath it read as a second
+			    identical panel. Half-strength keeps the code affordance while sitting
+			    clearly behind the preview.
+			    whitespace-pre-wrap already prevents horizontal overflow — no scroller. */}
+			<pre className="whitespace-pre-wrap break-words bg-muted/50 px-2 py-1 font-mono text-[11px] text-muted-foreground">
 				{entry.syntax}
 			</pre>
 
