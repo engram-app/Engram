@@ -1670,8 +1670,11 @@ children: [
 	// Bare `/` picks a vault; `/note/:id` is the pre-vault-scoping URL shape.
 	{ path: ROUTES.HOME, element: suspended(<VaultRedirect />) },
 	{ path: "/note/:id", element: suspended(<LegacyNoteRedirect />) },
-	// Vault-scoped. Kept LAST so every static route above wins RR's
-	// static-over-dynamic ranking.
+	// Vault-scoped. Listed last for readability only. NOTE: React Router's
+	// route ranking (computeScore) already scores static segments above
+	// dynamic ones as part of matching, independent of array order, so
+	// declaration order does NOT decide this. Verified against the installed
+	// react-router 8.3.0 matchRoutes: both orderings resolve identically.
 	{
 		path: "/:slug",
 		element: suspended(<VaultRoute />),
