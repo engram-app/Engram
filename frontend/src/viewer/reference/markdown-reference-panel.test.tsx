@@ -12,8 +12,7 @@ import MarkdownReferencePanel from "./markdown-reference-panel";
 vi.mock("../../billing/use-is-free-tier", () => ({ useIsFreeTier: () => false }));
 
 // jsdom neither maps <details> to role="group" nor hides collapsed content, so
-// sections are located structurally and assertions are scoped to one when it
-// matters.
+// sections are located structurally.
 function section(name: string): HTMLDetailsElement {
 	const summary = [...document.querySelectorAll("summary")].find((el) =>
 		(el.textContent ?? "").startsWith(name),
@@ -29,14 +28,15 @@ function section(name: string): HTMLDetailsElement {
  * renders no children at all (React mounts <details> children regardless of
  * `open`, so the component gates them explicitly to avoid ~29 simultaneous
  * markdown pipelines). jsdom does not action a summary click, so this drives the
- * same sequence a browser would — flip `open`, then fire the toggle event the
- * component listens for.
+ * same sequence a browser would.
  */
 function openSection(name: string): void {
 	const details = section(name);
 	details.open = true;
 	fireEvent(details, new Event("toggle"));
 }
+
+const row = (label: string) => screen.getByText(label).closest("li") as HTMLElement;
 
 let view: EditorView | null = null;
 afterEach(() => {
@@ -76,28 +76,22 @@ describe("MarkdownReferencePanel — rendered previews", () => {
 		// they see what it becomes.
 		renderPanel();
 		openSection("Callouts");
-		const row = screen.getByText("Note callout").closest("li") as HTMLElement;
+		const figure = row("Note callout").querySelector("figure");
 
-		// Source is present…
-		expect(within(row).getByText(/> \[!note\] Title/u)).toBeInTheDocument();
-		// …and so is the rendered result, as real markup rather than literal text.
-		const figure = row.querySelector("figure");
 		expect(figure).not.toBeNull();
-		expect(figure?.textContent).toContain("Body text.");
+		expect(figure?.textContent).toContain("Engram syncs as you type.");
 		expect(figure?.textContent).not.toContain("[!note]");
 	});
 
 	it("renders inline emphasis as real elements", () => {
 		renderPanel();
-		const row = screen.getByText("Bold").closest("li") as HTMLElement;
-		expect(row.querySelector("figure strong")?.textContent).toBe("bold");
+		expect(row("Bold").querySelector("strong")?.textContent).toBe("deleted permanently");
 	});
 
 	it("renders a table as a table", () => {
 		renderPanel();
 		openSection("Structure");
-		const row = screen.getByText("Table").closest("li") as HTMLElement;
-		expect(row.querySelector("figure table")).not.toBeNull();
+		expect(row("Table").querySelector("figure table")).not.toBeNull();
 	});
 
 	it("omits the preview where a live render would mislead", () => {
@@ -107,11 +101,70 @@ describe("MarkdownReferencePanel — rendered previews", () => {
 		openSection("Properties");
 		openSection("Links");
 		for (const label of ["Frontmatter", "Image by URL", "Embed attachment"]) {
-			const row = screen.getByText(label).closest("li") as HTMLElement;
-			expect(row.querySelector("figure"), label).toBeNull();
-			// The source and explanation still show.
-			expect(within(row).getByRole("button", { name: `Insert ${label}` })).toBeInTheDocument();
+			expect(row(label).querySelector("figure"), label).toBeNull();
+			expect(
+				within(row(label)).getByRole("button", { name: `Insert ${label}` }),
+			).toBeInTheDocument();
 		}
+	});
+});
+
+describe("MarkdownReferencePanel — demo teaches, template inserts", () => {
+	it("previews the worked example but inserts the neutral template", () => {
+		// One string could not do both jobs: a snippet realistic enough to teach
+		// is the wrong thing to drop at someone's caret.
+		renderPanel({ doc: "prose", caret: 5 });
+		openSection("Callouts");
+		const warning = row("Warning callout");
+
+		expect(warning.querySelector("figure")?.textContent).toContain("Back up first");
+		expect(warning.querySelector("pre")?.textContent).toBe("> [!warning] Title\n> Body.");
+
+		fireEvent.click(within(warning).getByRole("button", { name: "Insert Warning callout" }));
+		expect(view?.state.doc.toString()).toBe("prose\n> [!warning] Title\n> Body.");
+	});
+
+	it("shows the template verbatim, so the source line is what you get", () => {
+		renderPanel();
+		openSection("Structure");
+		const table = row("Table");
+		const shown = table.querySelector("pre")?.textContent;
+
+		fireEvent.click(within(table).getByRole("button", { name: "Insert Table" }));
+		expect(view?.state.doc.toString()).toBe(shown);
+	});
+});
+
+describe("MarkdownReferencePanel — adaptive rows", () => {
+	it("collapses a self-evident inline mark onto one line with no preview box", () => {
+		renderPanel();
+		const bold = row("Bold");
+		// Result renders inline rather than in a stacked figure…
+		expect(bold.querySelector("figure")).toBeNull();
+		expect(bold.querySelector("strong")).not.toBeNull();
+		// …and no separate source block competes with it.
+		expect(bold.querySelector("pre")).toBeNull();
+		expect(bold.querySelector("code")?.textContent).toBe("**text**");
+	});
+
+	it("keeps the stacked anatomy for block syntax that needs it", () => {
+		renderPanel();
+		openSection("Callouts");
+		const callout = row("Note callout");
+		expect(callout.querySelector("figure")).not.toBeNull();
+		expect(callout.querySelector("pre")).not.toBeNull();
+	});
+
+	it("drops the blurb entirely where the label already says it", () => {
+		// "Bold — strong emphasis" is four ways of saying nothing.
+		renderPanel();
+		expect(row("Bold").textContent).not.toMatch(/emphasis/iu);
+	});
+
+	it("keeps the blurb where it carries information the preview cannot", () => {
+		renderPanel();
+		openSection("Callouts");
+		expect(row("Foldable callout").textContent).toMatch(/starts folded/iu);
 	});
 });
 
@@ -128,7 +181,7 @@ describe("MarkdownReferencePanel — accordions", () => {
 		expect(within(section("Callouts")).getByText("3")).toBeInTheDocument();
 	});
 
-	it("renders a category\u2019s rows only once it is opened", () => {
+	it("renders a category’s rows only once it is opened", () => {
 		renderPanel();
 		expect(screen.queryByText("Note callout")).not.toBeInTheDocument();
 		openSection("Callouts");
@@ -167,24 +220,14 @@ describe("MarkdownReferencePanel — search and insert", () => {
 	it("inserts an inline snippet at the caret", () => {
 		renderPanel({ doc: "ab", caret: 1 });
 		fireEvent.click(screen.getByRole("button", { name: "Insert Bold" }));
-		expect(view?.state.doc.toString()).toBe("a**bold**b");
+		expect(view?.state.doc.toString()).toBe("a**text**b");
 	});
 
 	it("breaks a block snippet onto its own line", () => {
 		renderPanel({ doc: "prose", caret: 5 });
 		openSection("Callouts");
 		fireEvent.click(screen.getByRole("button", { name: "Insert Note callout" }));
-		expect(view?.state.doc.toString()).toBe("prose\n> [!note] Title\n> Body text.");
-	});
-
-	it("inserts exactly the source shown in the row", () => {
-		// Guards the displayed example and the inserted text drifting apart.
-		renderPanel();
-		openSection("Links");
-		const row = screen.getByText("Wikilink").closest("li") as HTMLElement;
-		const shown = within(row).getByText("[[Note name]]", { selector: "pre" });
-		fireEvent.click(within(row).getByRole("button", { name: "Insert Wikilink" }));
-		expect(view?.state.doc.toString()).toBe(shown.textContent);
+		expect(view?.state.doc.toString()).toBe("prose\n> [!note] Title\n> Body.");
 	});
 
 	it("disables insertion and explains why when no note is open", () => {

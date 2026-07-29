@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { filterSyntax, groupByCategory, SYNTAX_ENTRIES } from "./markdown-syntax";
+import { filterSyntax, groupByCategory, previewSource, SYNTAX_ENTRIES } from "./markdown-syntax";
 
 describe("markdown-syntax catalogue", () => {
 	test("entry ids are unique", () => {
@@ -7,10 +7,28 @@ describe("markdown-syntax catalogue", () => {
 		expect(new Set(ids).size).toBe(ids.length);
 	});
 
-	test("every entry carries a non-empty snippet and blurb", () => {
+	test("every entry carries a non-empty snippet", () => {
 		for (const entry of SYNTAX_ENTRIES) {
 			expect(entry.syntax.trim(), entry.id).not.toBe("");
-			expect(entry.blurb.trim(), entry.id).not.toBe("");
+		}
+	});
+
+	test("a blurb, where present, is non-empty", () => {
+		// Blurbs are optional on purpose: one that restates the label is noise.
+		for (const entry of SYNTAX_ENTRIES) {
+			if (entry.blurb !== undefined) {
+				expect(entry.blurb.trim(), entry.id).not.toBe("");
+			}
+		}
+	});
+
+	test("a demo, where present, actually differs from the template", () => {
+		// A demo identical to `syntax` is pure duplication — drop it and let
+		// previewSource fall back instead.
+		for (const entry of SYNTAX_ENTRIES) {
+			if (entry.demo !== undefined) {
+				expect(entry.demo, entry.id).not.toBe(entry.syntax);
+			}
 		}
 	});
 
@@ -22,6 +40,41 @@ describe("markdown-syntax catalogue", () => {
 				expect(entry.block, `${entry.id} is multi-line but not marked block`).toBe(true);
 			}
 		}
+	});
+
+	test("inline entries stay single-line in both their template and their demo", () => {
+		// Inline entries render on ONE row (label, template, result). A multi-line
+		// string would blow that layout apart.
+		for (const entry of SYNTAX_ENTRIES) {
+			if (!entry.block) {
+				expect(entry.syntax.includes("\n"), `${entry.id} template`).toBe(false);
+				expect(previewSource(entry).includes("\n"), `${entry.id} demo`).toBe(false);
+			}
+		}
+	});
+
+	test("sample text never just names its own feature", () => {
+		// The tautology this catalogue was rewritten to kill: `**bold**` rendering
+		// the word "bold" under a label reading "Bold" taught nothing. A template
+		// may still contain a generic word like "code"; what it must not do is
+		// echo the entry's own label back.
+		for (const entry of SYNTAX_ENTRIES) {
+			const label = entry.label.toLowerCase();
+			expect(previewSource(entry).toLowerCase(), entry.id).not.toContain(label);
+		}
+	});
+});
+
+describe("previewSource", () => {
+	test("prefers the worked example", () => {
+		const callout = SYNTAX_ENTRIES.find((e) => e.id === "callout-warning");
+		expect(previewSource(callout as never)).toBe(callout?.demo);
+	});
+
+	test("falls back to the template when there is no demo", () => {
+		const rule = SYNTAX_ENTRIES.find((e) => e.id === "rule");
+		expect(rule?.demo).toBeUndefined();
+		expect(previewSource(rule as never)).toBe(rule?.syntax);
 	});
 });
 

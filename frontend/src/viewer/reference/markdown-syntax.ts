@@ -13,14 +13,29 @@
 // Deliberately ABSENT because we do not render them: raw inline HTML (no
 // rehype-raw), ==highlight==, and comments (%% %%). Listing syntax that
 // silently does nothing is worse than omitting it.
+//
+// TWO STRINGS, TWO JOBS. `syntax` is what Insert drops at the caret, so it is a
+// neutral template you overwrite. `demo` is what the preview renders, so it is
+// realistic prose showing what the feature is FOR. One string could not serve
+// both: sharing it produced tautologies like `**bold**` rendering the word
+// "bold" beneath a label reading "Bold" — four ways of saying nothing. `demo` is
+// optional and falls back to `syntax` wherever the template already teaches.
+//
+// Sample text never names its own feature, for that same reason.
 
 export interface SyntaxEntry {
 	id: string;
 	category: string;
 	label: string;
-	/** Exactly what gets inserted. Keep it a runnable example, not a template. */
+	/** Inserted at the caret. A neutral template, not a worked example. */
 	syntax: string;
-	blurb: string;
+	/** Rendered in the preview. Defaults to `syntax`. Set it when realism teaches more. */
+	demo?: string;
+	/**
+	 * Only set when it says something the label and preview cannot. A blurb that
+	 * restates the label ("Bold — strong emphasis") is noise and belongs nowhere.
+	 */
+	blurb?: string;
 	/** Only valid at the start of a line — insertSnippet adds the breaks. */
 	block?: boolean;
 	/** Extra search terms that do not appear in the label, syntax, or blurb. */
@@ -28,8 +43,8 @@ export interface SyntaxEntry {
 	/**
 	 * Set false for entries whose live render would MISLEAD rather than teach:
 	 * frontmatter (NoteView strips it, leaving an empty box), and the two image
-	 * forms (a remote URL and a vault attachment that do not exist here, so both
-	 * render as broken/fallback). Those show source + description only.
+	 * forms (neither a remote URL nor a vault attachment resolves here, so both
+	 * render broken). Those show source + description only.
 	 */
 	renderable?: false;
 }
@@ -40,31 +55,32 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "bold",
 		category: "Text",
 		label: "Bold",
-		syntax: "**bold**",
-		blurb: "Strong emphasis.",
+		syntax: "**text**",
+		demo: "**deleted permanently**",
 		keywords: ["strong", "emphasis"],
 	},
 	{
 		id: "italic",
 		category: "Text",
 		label: "Italic",
-		syntax: "*italic*",
-		blurb: "Emphasis.",
+		syntax: "*text*",
+		demo: "*The Pragmatic Programmer*",
 		keywords: ["emphasis", "em"],
 	},
 	{
 		id: "bold-italic",
 		category: "Text",
 		label: "Bold italic",
-		syntax: "***bold italic***",
-		blurb: "Both at once.",
+		syntax: "***text***",
+		demo: "***never*** commit secrets",
+		keywords: ["strong", "emphasis"],
 	},
 	{
 		id: "strikethrough",
 		category: "Text",
 		label: "Strikethrough",
-		syntax: "~~struck~~",
-		blurb: "Crossed-out text.",
+		syntax: "~~text~~",
+		demo: "~~Tuesday~~ Thursday",
 		keywords: ["strike", "delete", "gfm"],
 	},
 	{
@@ -72,7 +88,8 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		category: "Text",
 		label: "Inline code",
 		syntax: "`code`",
-		blurb: "Monospace, no formatting applied inside.",
+		demo: "run `mix phx.server`",
+		blurb: "No formatting is applied inside.",
 		keywords: ["monospace", "backtick"],
 	},
 
@@ -82,6 +99,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		category: "Structure",
 		label: "Heading",
 		syntax: "## Heading",
+		demo: "## Deployment notes",
 		blurb: "Levels 1–6. Headings feed the Outline panel.",
 		block: true,
 		keywords: ["title", "h1", "h2", "toc", "outline"],
@@ -90,7 +108,8 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "bullet-list",
 		category: "Structure",
 		label: "Bullet list",
-		syntax: "- first\n- second",
+		syntax: "- item\n- item",
+		demo: "- Espresso\n- Filter\n  - Chemex",
 		blurb: "Indent two spaces to nest.",
 		block: true,
 		keywords: ["unordered", "ul"],
@@ -99,8 +118,8 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "numbered-list",
 		category: "Structure",
 		label: "Numbered list",
-		syntax: "1. first\n2. second",
-		blurb: "Ordered list.",
+		syntax: "1. item\n2. item",
+		demo: "1. Preheat\n2. Mix\n3. Bake",
 		block: true,
 		keywords: ["ordered", "ol"],
 	},
@@ -108,8 +127,9 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "task-list",
 		category: "Structure",
 		label: "Task list",
-		syntax: "- [ ] todo\n- [x] done",
-		blurb: "Checkboxes render read-only here; tick them in Obsidian.",
+		syntax: "- [ ] task",
+		demo: "- [x] Draft the outline\n- [ ] Write the intro",
+		blurb: "Read-only here — tick them in Obsidian.",
 		block: true,
 		keywords: ["checkbox", "todo", "checklist", "gfm"],
 	},
@@ -118,6 +138,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		category: "Structure",
 		label: "Blockquote",
 		syntax: "> quoted",
+		demo: "> Simplicity is prerequisite for reliability.",
 		blurb: "Nest with >>.",
 		block: true,
 		keywords: ["quote", "cite"],
@@ -127,7 +148,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		category: "Structure",
 		label: "Horizontal rule",
 		syntax: "---",
-		blurb: "Thematic break. Needs a blank line above to avoid making a heading.",
+		blurb: "Needs a blank line above, or it turns the line before into a heading.",
 		block: true,
 		keywords: ["divider", "hr", "separator", "break"],
 	},
@@ -136,6 +157,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		category: "Structure",
 		label: "Table",
 		syntax: "| Column | Column |\n| --- | --- |\n| cell | cell |",
+		demo: "| Roast | Kg |\n| --- | ---: |\n| Espresso | 12 |\n| Filter | 3 |",
 		blurb: "Use :--- and ---: in the divider row to align.",
 		block: true,
 		keywords: ["grid", "columns", "gfm"],
@@ -144,8 +166,9 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "footnote",
 		category: "Structure",
 		label: "Footnote",
-		syntax: "Claim.[^1]\n\n[^1]: The supporting note.",
-		blurb: "Renders as a numbered reference with a backlink.",
+		syntax: "Claim.[^1]\n\n[^1]: Source.",
+		demo: "Shipped on time.[^1]\n\n[^1]: For a generous value of on time.",
+		blurb: "Numbered automatically, with a link back.",
 		block: true,
 		keywords: ["citation", "reference", "gfm"],
 	},
@@ -156,7 +179,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		category: "Links",
 		label: "Wikilink",
 		syntax: "[[Note name]]",
-		blurb: "Link to another note by name.",
+		demo: "[[Deployment Runbook]]",
 		keywords: ["internal", "backlink", "obsidian"],
 	},
 	{
@@ -164,7 +187,8 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		category: "Links",
 		label: "Wikilink with alias",
 		syntax: "[[Note name|shown text]]",
-		blurb: "Same link, different display text.",
+		demo: "[[Deployment Runbook|the runbook]]",
+		blurb: "The pipe sets the display text.",
 		keywords: ["internal", "pipe", "obsidian"],
 	},
 	{
@@ -172,7 +196,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		category: "Links",
 		label: "External link",
 		syntax: "[label](https://example.com)",
-		blurb: "Standard markdown link.",
+		demo: "[Elixir docs](https://hexdocs.pm)",
 		keywords: ["url", "href", "hyperlink"],
 	},
 	{
@@ -187,19 +211,19 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "image",
 		category: "Links",
 		label: "Image by URL",
-		syntax: "![alt text](https://example.com/image.png)",
-		blurb: "Remote image.",
-		keywords: ["picture", "img", "photo"],
+		syntax: "![alt text](https://example.com/photo.png)",
+		blurb: "Any remote image. Not previewed here — that URL is not real.",
 		renderable: false,
+		keywords: ["picture", "img", "photo"],
 	},
 	{
 		id: "embed",
 		category: "Links",
 		label: "Embed attachment",
-		syntax: "![[image.png]]",
-		blurb: "Embeds a file from your vault. Fetched through the attachments API.",
-		keywords: ["attachment", "transclude", "obsidian", "pdf"],
+		syntax: "![[diagram.png]]",
+		blurb: "Embeds a file from your vault. Not previewed here — no such file.",
 		renderable: false,
+		keywords: ["attachment", "transclude", "obsidian", "pdf"],
 	},
 
 	// ── Callouts ────────────────────────────────────────────────────────────
@@ -207,8 +231,9 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "callout-note",
 		category: "Callouts",
 		label: "Note callout",
-		syntax: "> [!note] Title\n> Body text.",
-		blurb: "Admonition block. The title is optional.",
+		syntax: "> [!note] Title\n> Body.",
+		demo: "> [!note] Good to know\n> Engram syncs as you type.",
+		blurb: "The title is optional.",
 		block: true,
 		keywords: ["admonition", "aside", "info", "obsidian"],
 	},
@@ -216,8 +241,9 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "callout-warning",
 		category: "Callouts",
 		label: "Warning callout",
-		syntax: "> [!warning] Careful\n> Body text.",
-		blurb: "Also: tip, info, danger, success, question, quote.",
+		syntax: "> [!warning] Title\n> Body.",
+		demo: "> [!warning] Back up first\n> This cannot be undone.",
+		blurb: "Also tip, info, danger, success, question, quote.",
 		block: true,
 		keywords: ["admonition", "caution", "alert"],
 	},
@@ -225,7 +251,8 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "callout-foldable",
 		category: "Callouts",
 		label: "Foldable callout",
-		syntax: "> [!tip]- Collapsed by default\n> Body text.",
+		syntax: "> [!tip]- Title\n> Body.",
+		demo: "> [!tip]- Hidden until you click\n> There you go.",
 		blurb: "Trailing - starts folded, + starts open.",
 		block: true,
 		keywords: ["collapse", "fold", "details", "accordion"],
@@ -236,8 +263,9 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "code-fence",
 		category: "Code",
 		label: "Code block",
-		syntax: "```ts\nconst x = 1;\n```",
-		blurb: "Tag the language for syntax highlighting.",
+		syntax: "```ts\ncode\n```",
+		demo: "```ts\nconst total = items.length;\n```",
+		blurb: "Tag the language to highlight it.",
 		block: true,
 		keywords: ["fence", "syntax", "highlight", "snippet"],
 	},
@@ -245,8 +273,9 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "mermaid",
 		category: "Code",
 		label: "Mermaid diagram",
-		syntax: "```mermaid\ngraph TD\n  A[Start] --> B[End]\n```",
-		blurb: "Rendered as a diagram. Supports flowcharts, sequence, class, state.",
+		syntax: "```mermaid\ngraph TD\n  A --> B\n```",
+		demo: "```mermaid\ngraph LR\n  Edit --> Sync --> Vault\n```",
+		blurb: "Flowchart, sequence, class and state diagrams.",
 		block: true,
 		keywords: ["diagram", "graph", "flowchart", "chart", "uml"],
 	},
@@ -256,15 +285,17 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "math-inline",
 		category: "Math",
 		label: "Inline math",
-		syntax: "$E = mc^2$",
-		blurb: "KaTeX, rendered in the flow of the sentence.",
+		syntax: "$x^2$",
+		demo: "area grows as $r^2$",
+		blurb: "KaTeX, in the flow of the sentence.",
 		keywords: ["katex", "latex", "tex", "equation", "formula"],
 	},
 	{
 		id: "math-block",
 		category: "Math",
 		label: "Block math",
-		syntax: "$$\n\\int_0^1 x^2 \\, dx = \\frac{1}{3}\n$$",
+		syntax: "$$\nx^2\n$$",
+		demo: "$$\n\\int_0^1 x^2 \\, dx = \\frac{1}{3}\n$$",
 		blurb: "KaTeX, centred on its own line.",
 		block: true,
 		keywords: ["katex", "latex", "tex", "equation", "display"],
@@ -278,18 +309,23 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		syntax: "---\ntitle: My note\ntags: [idea, draft]\n---",
 		blurb: "Must be the very first thing in the note. Shows up as note properties.",
 		block: true,
-		keywords: ["yaml", "metadata", "properties", "tags", "header"],
 		renderable: false,
+		keywords: ["yaml", "metadata", "properties", "tags", "header"],
 	},
 	{
 		id: "tag",
 		category: "Properties",
 		label: "Tag",
-		syntax: "#tag",
-		blurb: "Inline tag. Also settable via the tags frontmatter key.",
+		syntax: "#topic",
+		blurb: "Also settable via the tags frontmatter key.",
 		keywords: ["hashtag", "label", "category"],
 	},
 ];
+
+/** What the preview renders: the worked example if there is one, else the template. */
+export function previewSource(entry: SyntaxEntry): string {
+	return entry.demo ?? entry.syntax;
+}
 
 /**
  * Case-insensitive AND-match across every searchable field: all whitespace-
@@ -307,7 +343,7 @@ export function filterSyntax(query: string): readonly SyntaxEntry[] {
 			entry.label,
 			entry.category,
 			entry.syntax,
-			entry.blurb,
+			entry.blurb ?? "",
 			...(entry.keywords ?? []),
 		]
 			.join(" ")

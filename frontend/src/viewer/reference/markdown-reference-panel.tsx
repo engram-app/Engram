@@ -1,11 +1,11 @@
-import { ChevronRight, Plus } from "lucide-react";
+import { ArrowRight, ChevronRight, Plus } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useActiveEditor } from "../editor/active-editor-context";
 import { insertSnippet } from "../editor/format-commands";
 import NoteView from "../note-view";
-import { filterSyntax, groupByCategory, type SyntaxEntry } from "./markdown-syntax";
+import { filterSyntax, groupByCategory, previewSource, type SyntaxEntry } from "./markdown-syntax";
 
 // Searchable catalogue of the markdown Engram renders, with one-click insertion
 // into the open note.
@@ -21,17 +21,71 @@ import { filterSyntax, groupByCategory, type SyntaxEntry } from "./markdown-synt
 // one of the ~29 entries spins up a full remark/KaTeX/mermaid pipeline the
 // moment the panel opens.
 
-function EntryRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
+// prose-sm because the shared markdown styles are tuned for an 840px document
+// column, not a 300px rail. The `[&_.prose…]` pair strips the ~1em margin
+// Typography puts on every block (and Mermaid's own my-4), which was most of the
+// dead space, while keeping the rhythm between blocks of a multi-part snippet.
+const PREVIEW =
+	"prose-sm [&_.mermaid]:my-0 [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0";
+
+const SOURCE =
+	"whitespace-pre-wrap break-words bg-muted/50 px-2 py-1 font-mono text-[11px] text-muted-foreground";
+
+function InsertButton({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
 	const { getView } = useActiveEditor();
+	return (
+		<Button
+			variant="ghost"
+			size="icon-sm"
+			disabled={!canInsert}
+			onClick={() => {
+				const view = getView();
+				if (view) {
+					insertSnippet(view, entry.syntax, { block: entry.block });
+				}
+			}}
+			aria-label={`Insert ${entry.label}`}
+			title={canInsert ? `Insert ${entry.label} at the cursor` : "Open a note to insert"}
+			// Revealed on hover/focus so a long list isn't a wall of buttons, but
+			// never hidden from keyboards or touch (where hover does not exist).
+			className="shrink-0 opacity-0 transition-opacity focus-visible:opacity-100 disabled:opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+		>
+			<Plus className="size-4" />
+		</Button>
+	);
+}
 
-	const insert = () => {
-		const view = getView();
-		if (!view) {
-			return;
-		}
-		insertSnippet(view, entry.syntax, { block: entry.block });
-	};
+// Inline marks are self-evident from their source, so they get ONE line:
+// name, template, result. Stacking a preview box, a source box and a blurb
+// around `**text**` padded the simple entries out to justify the complex ones.
+function InlineRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
+	return (
+		<li className="group flex items-center gap-2 border-border/60 border-b px-3 py-1.5 last:border-b-0">
+			<span className="w-20 shrink-0 truncate font-medium text-foreground text-xs">
+				{entry.label}
+			</span>
+			<code
+				className="shrink-0 font-mono text-[11px] text-muted-foreground"
+				title="Inserted at the cursor"
+			>
+				{entry.syntax}
+			</code>
+			{entry.renderable === false ? (
+				<span className="min-w-0 flex-1 truncate text-muted-foreground text-xs">{entry.blurb}</span>
+			) : (
+				<>
+					<ArrowRight className="size-3 shrink-0 text-muted-foreground/50" />
+					<span className={`min-w-0 flex-1 overflow-hidden ${PREVIEW}`}>
+						<NoteView content={previewSource(entry)} tags={[]} />
+					</span>
+				</>
+			)}
+			<InsertButton entry={entry} canInsert={canInsert} />
+		</li>
+	);
+}
 
+function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
 	return (
 		<li className="group border-border/60 border-b px-3 py-2 last:border-b-0">
 			<p className="mb-1.5 flex items-center gap-2">
@@ -42,20 +96,13 @@ function EntryRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 				<span className="min-w-0 flex-1 truncate font-medium text-foreground text-xs">
 					{entry.label}
 				</span>
-				<Button
-					variant="ghost"
-					size="icon-sm"
-					disabled={!canInsert}
-					onClick={insert}
-					aria-label={`Insert ${entry.label}`}
-					title={canInsert ? `Insert ${entry.label} at the cursor` : "Open a note to insert"}
-					// Revealed on hover/focus so a long list isn't a wall of buttons, but
-					// never hidden from keyboards or touch (where hover does not exist).
-					className="shrink-0 opacity-0 transition-opacity focus-visible:opacity-100 disabled:opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
-				>
-					<Plus className="size-4" />
-				</Button>
+				<InsertButton entry={entry} canInsert={canInsert} />
 			</p>
+
+			{/* Blurb sits directly under the label, as a subtitle. Trailing it after
+			    the source made it read as a footer nobody looks at, and it is the one
+			    part of the row that cannot be inferred from the preview. */}
+			{entry.blurb ? <p className="mb-1.5 text-muted-foreground text-xs">{entry.blurb}</p> : null}
 
 			{entry.renderable === false ? null : (
 				// No border, background or padding of its own. Each preview already
@@ -64,27 +111,18 @@ function EntryRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 				// inset inside an outer one, visibly failing to fill it (worst on
 				// Mermaid, whose centred SVG sat in a grey band floating in a white
 				// box). The container is gone, so there is nothing left to not fill.
-				//
-				// prose-sm because the shared markdown styles are tuned for an 840px
-				// document column, not a 300px rail. The `[&_.prose…]` pair strips the
-				// ~1em margin Typography puts on every block (and Mermaid's own my-4),
-				// which was most of the dead space, while keeping the rhythm between
-				// blocks of a multi-part snippet.
-				<figure className="prose-sm mb-1 overflow-hidden [&_.mermaid]:my-0 [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0">
-					<NoteView content={entry.syntax} tags={[]} />
+				<figure className={`mb-1 overflow-hidden ${PREVIEW}`}>
+					<NoteView content={previewSource(entry)} tags={[]} />
 				</figure>
 			)}
 
-			{/* bg-muted/50, not the full token: a rendered fence now uses --muted
-			    itself, so a solid source box directly beneath it read as a second
-			    identical panel. Half-strength keeps the code affordance while sitting
-			    clearly behind the preview.
-			    whitespace-pre-wrap already prevents horizontal overflow — no scroller. */}
-			<pre className="whitespace-pre-wrap break-words bg-muted/50 px-2 py-1 font-mono text-[11px] text-muted-foreground">
+			{/* The TEMPLATE, not the worked example above it — this is exactly what
+			    Insert drops at the caret. bg-muted/50 rather than the full token: a
+			    rendered fence now uses --muted itself, so a solid box directly beneath
+			    one read as a second identical panel. */}
+			<pre className={SOURCE} title="Inserted at the cursor">
 				{entry.syntax}
 			</pre>
-
-			<p className="mt-1 text-muted-foreground text-xs">{entry.blurb}</p>
 		</li>
 	);
 }
@@ -166,9 +204,13 @@ export default function MarkdownReferencePanel() {
 								</summary>
 								{open ? (
 									<ul>
-										{entries.map((entry) => (
-											<EntryRow key={entry.id} entry={entry} canInsert={hasEditor} />
-										))}
+										{entries.map((entry) =>
+											entry.block ? (
+												<BlockRow key={entry.id} entry={entry} canInsert={hasEditor} />
+											) : (
+												<InlineRow key={entry.id} entry={entry} canInsert={hasEditor} />
+											),
+										)}
 									</ul>
 								) : null}
 							</details>
