@@ -61,7 +61,7 @@ defmodule Engram.Notes.CrdtDeliver do
     # the user's next real edit as an echo — silently dropping the write. Those
     # files sync via the legacy push path, so only deliver/announce for `.md`.
     if String.ends_with?(path, ".md") do
-      push_to_room(user_id, vault_id, note_id, content)
+      push_to_live_room(user_id, note_id, content)
       # fanout_idle ALWAYS runs, even when a live room exists. It is NOT redundant
       # with the room's `update_v1`: `update_v1` broadcasts a DELTA (converges a
       # device that already holds the note, via gap-heal), while `fanout_idle`
@@ -77,28 +77,6 @@ defmodule Engram.Notes.CrdtDeliver do
     end
 
     :ok
-  end
-
-  # No live room: start an observed one and ingest the plaintext, so a note
-  # written entirely over REST still has an authoritative doc. Empty content is
-  # skipped for the same reason the live-room branch skips it — an unloaded body
-  # (the folder-rename cascade reads meta columns only) must never diff a doc
-  # down to empty.
-  defp ingest_into_fresh_room(_user_id, _vault_id, _note_id, ""), do: :ok
-
-  defp ingest_into_fresh_room(user_id, vault_id, note_id, content) do
-    case CrdtRegistry.ensure_observed(user_id, vault_id, note_id) do
-      {:ok, room} ->
-        room_apply(room, note_id, fn doc -> CrdtBridge.ingest_plaintext(doc, content) end)
-
-      {:error, reason} ->
-        Logger.warning(
-          "crdt deliver: could not start room to ingest a non-CRDT write",
-          Metadata.with_category(:warning, :sync, note_id: note_id, reason: inspect(reason))
-        )
-
-        :ok
-    end
   end
 
   # Vault-channel fan-out for a NON-CRDT-origin write (REST / MCP / web / cascade):
@@ -169,24 +147,13 @@ defmodule Engram.Notes.CrdtDeliver do
   # the doubling corruption this module exists to prevent, and the announce
   # (step 2) still fires so enrolled clients re-pull. Every skip is logged at
   # :error (Sentry-visible) — a sustained fallback rate must be loud.
-  # A non-CRDT write (REST / MCP / web) must land in the DOC, not just in
-  # `notes.content`. Previously this returned :ok when no room was live, so the
-  # doc stayed empty and only `notes.content` held the body — which is exactly
-  # why CrdtPersistence.bind had to seed a room from `notes.content` on every
-  # bind. That seed made the SERVER a third writer of note content (alongside
-  # the client and the disk flush), and a third writer is what every
-  # "which copy is authoritative right now" bug in this codebase has been made
-  # of. Starting a short-lived observed room here makes the doc authoritative at
-  # WRITE time, so nothing downstream has to reconcile two representations.
-  #
-  # ponytail: one observed room per non-CRDT write. `ensure_observed` bounds its
-  # lifetime to the caller, so it reaps at end of request rather than leaking —
-  # but a bulk import still starts one room per note. If that shows up in a
-  # profile, batch the ingest per vault instead of per note.
-  defp push_to_room(user_id, vault_id, note_id, content) do
+  defp push_to_live_room(user_id, note_id, content) do
     case CrdtRegistry.lookup(note_id) do
       nil ->
-        ingest_into_fresh_room(user_id, vault_id, note_id, content)
+        # Nothing to push: `upsert_note` has ALREADY merged this content into
+        # the note's persisted CRDT state (doc_from_state -> replay_tail ->
+        # merge_plaintext_*), so the doc is authoritative without a room.
+        :ok
 
       room ->
         case load_merged_state(user_id, note_id) do
