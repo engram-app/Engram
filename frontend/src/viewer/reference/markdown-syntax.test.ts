@@ -66,6 +66,19 @@ describe("markdown-syntax catalogue", () => {
 		}
 	});
 
+	test("a template-led row renders the very template it shows", () => {
+		// These rows put the syntax on the left and its result on the right. A
+		// separate `demo` would make the right-hand side the rendering of some
+		// OTHER string — the two would look related while being unrelated, which
+		// is worse than no example at all.
+		for (const entry of SYNTAX_ENTRIES) {
+			if (entry.templateLed) {
+				expect(entry.demo, `${entry.id} must render its own template`).toBeUndefined();
+				expect(previewSource(entry), entry.id).toBe(entry.syntax);
+			}
+		}
+	});
+
 	test("sample text never just names its own feature", () => {
 		// The tautology this catalogue was rewritten to kill: `**bold**` rendering
 		// the word "bold" under a label reading "Bold" taught nothing. A template
@@ -120,10 +133,10 @@ describe("previewSource", () => {
 	});
 
 	test("falls back to the template when there is no demo", () => {
-		// A bare URL already teaches on its own — no worked example needed.
-		const autolink = SYNTAX_ENTRIES.find((e) => e.id === "autolink");
-		expect(autolink?.demo).toBeUndefined();
-		expect(previewSource(autolink as never)).toBe(autolink?.syntax);
+		// A tag already teaches on its own — no worked example needed.
+		const tag = SYNTAX_ENTRIES.find((e) => e.id === "tag");
+		expect(tag?.demo).toBeUndefined();
+		expect(previewSource(tag as never)).toBe(tag?.syntax);
 	});
 });
 

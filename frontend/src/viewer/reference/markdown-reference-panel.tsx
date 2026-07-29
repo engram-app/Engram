@@ -35,10 +35,24 @@ import {
 // The `[&_…]` rules only trim the OUTER gutter (Typography's ~1em on the first
 // and last block, plus Mermaid's own my-4). Spacing BETWEEN blocks is left
 // alone, so multi-part snippets keep the document's rhythm too.
-const PREVIEW = "[&_.mermaid]:my-0 [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0";
+// [&_a]:pointer-events-none — previews should LOOK like the real thing without
+// behaving like it. A wikilink here points at a note that does not exist and an
+// external link would navigate away mid-edit. Done in CSS rather than a click
+// handler so there is no a11y rule to suppress and the text stays selectable.
+const PREVIEW =
+	"[&_a]:pointer-events-none [&_.mermaid]:my-0 [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0";
 
 const SOURCE =
 	"whitespace-pre-wrap break-words bg-muted/50 px-2 py-1 font-mono text-[11px] text-muted-foreground";
+
+/** A rendered example. See PREVIEW for why links here are inert. */
+function Preview({ entry, className = "" }: { entry: SyntaxEntry; className?: string }) {
+	return (
+		<span className={`${PREVIEW} ${className}`}>
+			<NoteView content={previewSource(entry)} tags={[]} />
+		</span>
+	);
+}
 
 function InsertButton({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
 	const { getView } = useActiveEditor();
@@ -101,9 +115,7 @@ function InlineRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolea
 					{entry.renderable === false ? null : (
 						<>
 							<ArrowRight className="size-3 shrink-0 text-muted-foreground/50" />
-							<span className={`min-w-0 flex-1 overflow-hidden ${PREVIEW}`}>
-								<NoteView content={previewSource(entry)} tags={[]} />
-							</span>
+							<Preview entry={entry} className="block min-w-0 flex-1 overflow-hidden" />
 						</>
 					)}
 				</p>
@@ -128,8 +140,55 @@ function InlineRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolea
 function GalleryRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
 	return (
 		<li className="group flex items-stretch border-border/60 border-b last:border-b-0">
-			<span className={`block min-w-0 flex-1 overflow-hidden px-3 py-1 ${PREVIEW}`}>
-				<NoteView content={previewSource(entry)} tags={[]} />
+			<Preview entry={entry} className="block min-w-0 flex-1 overflow-hidden px-3 py-1" />
+			<InsertButton entry={entry} canInsert={canInsert} />
+		</li>
+	);
+}
+
+/**
+ * Template-led row: syntax on the left, result on the right, no label.
+ *
+ * Used where the rendered output does NOT tell entries apart. Every link
+ * variant renders as the same blue link, so `[[ ]]` versus `[](  )` is the only
+ * thing that distinguishes them — putting the template first makes the column
+ * scannable, and a "Wikilink" label would only restate the brackets in words.
+ * The template column is a percentage so the arrows stay aligned down the
+ * section at any panel width, and it wraps rather than truncating: a syntax
+ * reference that hides half the syntax is worse than a taller row.
+ */
+function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
+	const previewable = entry.renderable !== false;
+	// Nothing to show on the right? Then the template gets the whole row instead
+	// of being squeezed into its column — that is what kept the long image
+	// template wrapping onto a second line for no reason.
+	const showsResult = previewable || Boolean(entry.blurb);
+	return (
+		<li className="group flex items-stretch border-border/60 border-b last:border-b-0">
+			<span className="block min-w-0 flex-1 px-3 py-1.5">
+				{/* items-center, and the template sized to its content rather than a
+				    fixed 45% column: the column aligned the arrows but left a wide dead
+				    gap after short templates like [[Note name]]. */}
+				<span className="flex items-center gap-2">
+					<code
+						className={`break-words font-mono text-[11px] text-foreground ${
+							showsResult ? "max-w-[60%] shrink-0" : "min-w-0 flex-1"
+						}`}
+					>
+						{entry.syntax}
+					</code>
+					{previewable ? (
+						<>
+							<ArrowRight className="size-3 shrink-0 text-muted-foreground/50" />
+							<Preview entry={entry} className="block min-w-0 flex-1 overflow-hidden" />
+						</>
+					) : entry.blurb ? (
+						<span className="min-w-0 flex-1 text-muted-foreground text-xs">{entry.blurb}</span>
+					) : null}
+				</span>
+				{previewable && entry.blurb ? (
+					<span className="mt-0.5 block text-muted-foreground text-xs">{entry.blurb}</span>
+				) : null}
 			</span>
 			<InsertButton entry={entry} canInsert={canInsert} />
 		</li>
@@ -178,8 +237,8 @@ function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 					// inset inside an outer one, visibly failing to fill it (worst on
 					// Mermaid, whose centred SVG sat in a grey band floating in a white
 					// box). The container is gone, so there is nothing left to not fill.
-					<figure className={`overflow-hidden ${templateFitsInline ? "" : "mb-1"} ${PREVIEW}`}>
-						<NoteView content={previewSource(entry)} tags={[]} />
+					<figure className={`overflow-hidden ${templateFitsInline ? "" : "mb-1"}`}>
+						<Preview entry={entry} className="block" />
 					</figure>
 				)}
 
@@ -295,6 +354,9 @@ export default function MarkdownReferencePanel() {
 											{entries.map((entry) => {
 												if (entry.hideTemplate) {
 													return <GalleryRow key={entry.id} entry={entry} canInsert={hasEditor} />;
+												}
+												if (entry.templateLed) {
+													return <TemplateRow key={entry.id} entry={entry} canInsert={hasEditor} />;
 												}
 												return fitsOneLine(entry) ? (
 													<InlineRow key={entry.id} entry={entry} canInsert={hasEditor} />

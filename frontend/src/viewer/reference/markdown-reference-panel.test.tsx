@@ -46,6 +46,8 @@ function row(label: string): HTMLElement {
 	const li = [...document.querySelectorAll("li")].find(
 		(el) =>
 			[...el.querySelectorAll("span")].some((sp) => sp.textContent === label) ||
+			// Template-led rows (Links) carry no label — the syntax identifies them.
+			el.querySelector("code")?.textContent === label ||
 			// Gallery rows carry no label — the callout's own title is the type name.
 			el.querySelector(".callout-title")?.textContent?.trim() === label,
 	);
@@ -134,11 +136,13 @@ describe("MarkdownReferencePanel — rendered previews", () => {
 		renderPanel();
 		openSection("Properties");
 		openSection("Links");
-		for (const label of ["Frontmatter", "Image by URL", "Embed attachment"]) {
+		for (const label of [
+			"Frontmatter",
+			"![text if the image can't load](https://example.com/photo.png)",
+			"![[diagram.png]]",
+		]) {
 			expect(row(label).querySelector("figure"), label).toBeNull();
-			expect(
-				within(row(label)).getByRole("button", { name: `Insert ${label}` }),
-			).toBeInTheDocument();
+			expect(within(row(label)).getByRole("button", { name: /^Insert /u })).toBeInTheDocument();
 		}
 	});
 });
@@ -183,6 +187,19 @@ describe("MarkdownReferencePanel — adaptive rows", () => {
 		// …and no separate source block competes with it.
 		expect(bold.querySelector("pre")).toBeNull();
 		expect(bold.querySelector("code")?.textContent).toBe("**text**");
+	});
+
+	it("leads a link row with its template and shows the result beside it", () => {
+		// Every link variant renders as the same blue link, so the syntax is what
+		// distinguishes them — a label column would only restate the brackets.
+		renderPanel();
+		openSection("Links");
+		const wikilink = row("[[Deployment Runbook]]");
+		expect(wikilink.querySelector("code")?.textContent).toBe("[[Deployment Runbook]]");
+		// The rendered side is this exact template's own output, not a stand-in.
+		expect(wikilink.querySelector("a")?.textContent).toBe("Deployment Runbook");
+		// No label span repeating "Wikilink".
+		expect(wikilink.textContent).not.toContain("Wikilink");
 	});
 
 	it("keeps the stacked anatomy for block syntax that needs it", () => {

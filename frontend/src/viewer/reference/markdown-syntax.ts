@@ -23,7 +23,10 @@ import { defaultConfig } from "@portaljs/remark-callouts";
 // "bold" beneath a label reading "Bold" — four ways of saying nothing. `demo` is
 // optional and falls back to `syntax` wherever the template already teaches.
 //
-// Sample text never names its own feature, for that same reason.
+// Sample text never names its own feature, for that same reason. Where an
+// example needs a URL or a product name, it points at Engram's own docs rather
+// than some unrelated third party — this is our reference, not a tour of the
+// ecosystem.
 
 interface SyntaxEntry {
 	id: string;
@@ -42,6 +45,13 @@ interface SyntaxEntry {
 	block?: boolean;
 	/** Extra search terms that do not appear in the label, syntax, or blurb. */
 	keywords?: string[];
+	/**
+	 * Lead the row with the TEMPLATE rather than a label. For links every
+	 * variant renders as the same blue link, so the syntax — not the result and
+	 * not a name — is what tells them apart, and a label column just repeats in
+	 * words what the brackets already say.
+	 */
+	templateLed?: true;
 	/**
 	 * The row shows its rendered result only. For categories where every entry
 	 * shares one format, that format is documented once in CATEGORY_INTROS —
@@ -151,7 +161,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		category: "Text",
 		label: "Inline code",
 		syntax: "`code`",
-		demo: "run `mix phx.server`",
+		demo: "run `engram sync`",
 		blurb: "No formatting is applied inside.",
 		keywords: ["monospace", "backtick"],
 	},
@@ -293,52 +303,52 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "wikilink",
 		category: "Links",
 		label: "Wikilink",
-		syntax: "[[Note name]]",
-		demo: "[[Deployment Runbook]]",
-		keywords: ["internal", "backlink", "obsidian"],
+		syntax: "[[Deployment Runbook]]",
+		templateLed: true,
+		keywords: ["internal", "backlink", "obsidian", "link"],
 	},
 	{
 		id: "wikilink-alias",
 		category: "Links",
 		label: "Wikilink with alias",
-		syntax: "[[Note name|shown text]]",
-		demo: "[[Deployment Runbook|the runbook]]",
+		// Same note as the row above, so the pair reads as one idea; the alias is a
+		// realistic shorthand rather than the word "alias".
+		syntax: "[[Deployment Runbook|the runbook]]",
 		blurb: "The pipe sets the display text.",
-		keywords: ["internal", "pipe", "obsidian"],
+		templateLed: true,
+		keywords: ["internal", "pipe", "obsidian", "link"],
 	},
 	{
 		id: "link",
 		category: "Links",
 		label: "External link",
-		syntax: "[label](https://example.com)",
-		demo: "[Elixir docs](https://hexdocs.pm)",
-		keywords: ["url", "href", "hyperlink"],
-	},
-	{
-		id: "autolink",
-		category: "Links",
-		label: "Bare URL",
-		syntax: "https://example.com",
-		blurb: "Linkified automatically — no brackets needed.",
-		keywords: ["autolink", "url", "gfm"],
+		syntax: "[Engram docs](https://engram.page/docs)",
+		templateLed: true,
+		keywords: ["url", "href", "hyperlink", "external", "link"],
 	},
 	{
 		id: "image",
 		category: "Links",
 		label: "Image by URL",
-		syntax: "![alt text](https://example.com/photo.png)",
-		blurb: "Any remote image. Not previewed here — that URL is not real.",
+		// The placeholder says what alt text is FOR. "alt" is jargon that teaches
+		// nobody, and this string is what lands in the note, so it should read as
+		// an instruction to replace.
+		// No blurb: the placeholder text explains itself, and "any image on the
+		// web" only restated the URL sitting right beside it.
+		syntax: "![text if the image can't load](https://example.com/photo.png)",
 		renderable: false,
-		keywords: ["picture", "img", "photo"],
+		templateLed: true,
+		keywords: ["picture", "img", "photo", "link"],
 	},
 	{
 		id: "embed",
 		category: "Links",
 		label: "Embed attachment",
 		syntax: "![[diagram.png]]",
-		blurb: "Embeds a file from your vault. Not previewed here — no such file.",
+		blurb: "A file from your vault.",
 		renderable: false,
-		keywords: ["attachment", "transclude", "obsidian", "pdf"],
+		templateLed: true,
+		keywords: ["attachment", "transclude", "obsidian", "pdf", "embed", "link"],
 	},
 
 	...CALLOUT_GALLERY,
