@@ -5,7 +5,13 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useActiveEditor } from "../editor/active-editor-context";
 import { insertSnippet } from "../editor/format-commands";
 import NoteView from "../note-view";
-import { filterSyntax, groupByCategory, previewSource, type SyntaxEntry } from "./markdown-syntax";
+import {
+	CATEGORY_INTROS,
+	filterSyntax,
+	groupByCategory,
+	previewSource,
+	type SyntaxEntry,
+} from "./markdown-syntax";
 
 // Searchable catalogue of the markdown Engram renders, with one-click insertion
 // into the open note.
@@ -49,9 +55,13 @@ function InsertButton({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boo
 			}}
 			aria-label={`Insert ${entry.label}`}
 			title={canInsert ? `Insert ${entry.label} at the cursor` : "Open a note to insert"}
+			// self-stretch + h-auto: the hit area spans the row's full height rather
+			// than being a small square floating at the top, so the button is easy to
+			// aim at next to a tall callout or table.
+			//
 			// Revealed on hover/focus so a long list isn't a wall of buttons, but
 			// never hidden from keyboards or touch (where hover does not exist).
-			className="shrink-0 opacity-0 transition-opacity focus-visible:opacity-100 disabled:opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+			className="h-auto w-9 shrink-0 self-stretch rounded-none opacity-0 transition-opacity focus-visible:opacity-100 disabled:opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
 		>
 			<Plus className="size-4" />
 		</Button>
@@ -73,35 +83,55 @@ function fitsOneLine(entry: SyntaxEntry): boolean {
 // to justify the complex ones.
 function InlineRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
 	return (
-		<li className="group border-border/60 border-b px-3 py-1.5 last:border-b-0">
-			<p className="flex items-center gap-2">
-				<span
-					className="w-24 shrink-0 truncate font-medium text-foreground text-xs"
-					title={entry.label}
-				>
-					{entry.label}
-				</span>
-				<code
-					className="shrink-0 font-mono text-[11px] text-muted-foreground"
-					title="Inserted at the cursor"
-				>
-					{entry.syntax}
-				</code>
-				{entry.renderable === false ? null : (
-					<>
-						<ArrowRight className="size-3 shrink-0 text-muted-foreground/50" />
-						<span className={`min-w-0 flex-1 overflow-hidden ${PREVIEW}`}>
-							<NoteView content={previewSource(entry)} tags={[]} />
-						</span>
-					</>
-				)}
-				<InsertButton entry={entry} canInsert={canInsert} />
-			</p>
-			{/* Rendered, not dropped. An earlier version of this row showed a blurb
+		<li className="group flex items-stretch border-border/60 border-b last:border-b-0">
+			<span className="block min-w-0 flex-1 px-3 py-1.5">
+				<p className="flex items-center gap-2">
+					<span
+						className="w-24 shrink-0 truncate font-medium text-foreground text-xs"
+						title={entry.label}
+					>
+						{entry.label}
+					</span>
+					<code
+						className="shrink-0 font-mono text-[11px] text-muted-foreground"
+						title="Inserted at the cursor"
+					>
+						{entry.syntax}
+					</code>
+					{entry.renderable === false ? null : (
+						<>
+							<ArrowRight className="size-3 shrink-0 text-muted-foreground/50" />
+							<span className={`min-w-0 flex-1 overflow-hidden ${PREVIEW}`}>
+								<NoteView content={previewSource(entry)} tags={[]} />
+							</span>
+						</>
+					)}
+				</p>
+				{/* Rendered, not dropped. An earlier version of this row showed a blurb
 			    only for non-previewable entries, which silently hid genuinely useful
 			    notes like "No formatting is applied inside" on inline code. Rows
 			    without a blurb stay a single line. */}
-			{entry.blurb ? <p className="mt-0.5 text-muted-foreground text-xs">{entry.blurb}</p> : null}
+				{entry.blurb ? <p className="mt-0.5 text-muted-foreground text-xs">{entry.blurb}</p> : null}
+			</span>
+			<InsertButton entry={entry} canInsert={canInsert} />
+		</li>
+	);
+}
+
+/**
+ * A callout-gallery row: the rendered callout and nothing else. No label — the
+ * callout's own title already IS the type name, so a label above it said the
+ * same word twice — and no template, because the format is stated once above
+ * the whole section. The Insert button sits inline beside it rather than on a
+ * heading row of its own.
+ */
+function GalleryRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
+	return (
+		<li className="group flex items-stretch border-border/60 border-b last:border-b-0">
+			<span className={`block min-w-0 flex-1 overflow-hidden px-3 py-1 ${PREVIEW}`}>
+				<NoteView content={previewSource(entry)} tags={[]} />
+			</span>
+			<InsertButton entry={entry} canInsert={canInsert} />
 		</li>
 	);
 }
@@ -112,55 +142,58 @@ function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 	// is just its shape: `---` is as self-evident as `**text**`, so it rides
 	// beside the label. Only a multi-line template earns its own <pre>. That drops
 	// a full-width row from most of Structure.
-	const templateFitsInline = !entry.syntax.includes("\n");
+	const templateFitsInline = !(entry.hideTemplate || entry.syntax.includes("\n"));
+	const showTemplateBlock = !entry.hideTemplate && entry.syntax.includes("\n");
 
 	return (
-		<li className="group border-border/60 border-b px-3 py-2 last:border-b-0">
-			<p className="mb-1.5 flex items-center gap-2">
-				{/* Sentence case, not uppercase: this used to be styled identically to
+		<li className="group flex items-stretch border-border/60 border-b last:border-b-0">
+			<span className="block min-w-0 flex-1 px-3 py-2">
+				<p className="mb-1.5 flex items-center gap-2">
+					{/* Sentence case, not uppercase: this used to be styled identically to
 				    the category header above it — same size, weight, colour and case —
 				    so there was no hierarchy to read and sections were easy to lose.
 				    The entry label is the quieter of the two now. */}
-				<span className="shrink-0 font-medium text-foreground text-xs">{entry.label}</span>
-				{templateFitsInline ? (
-					<code
-						className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground"
-						title="Inserted at the cursor"
-					>
-						{entry.syntax}
-					</code>
-				) : (
-					<span className="flex-1" />
-				)}
-				<InsertButton entry={entry} canInsert={canInsert} />
-			</p>
+					<span className="shrink-0 font-medium text-foreground text-xs">{entry.label}</span>
+					{templateFitsInline ? (
+						<code
+							className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground"
+							title="Inserted at the cursor"
+						>
+							{entry.syntax}
+						</code>
+					) : (
+						<span className="flex-1" />
+					)}
+				</p>
 
-			{/* Blurb sits directly under the label, as a subtitle. Trailing it after
+				{/* Blurb sits directly under the label, as a subtitle. Trailing it after
 			    the source made it read as a footer nobody looks at, and it is the one
 			    part of the row that cannot be inferred from the preview. */}
-			{entry.blurb ? <p className="mb-1.5 text-muted-foreground text-xs">{entry.blurb}</p> : null}
+				{entry.blurb ? <p className="mb-1.5 text-muted-foreground text-xs">{entry.blurb}</p> : null}
 
-			{entry.renderable === false ? null : (
-				// No border, background or padding of its own. Each preview already
-				// carries its own surface — a fence is grey, a callout is tinted, a
-				// table has rules — so wrapping it in another box left that surface
-				// inset inside an outer one, visibly failing to fill it (worst on
-				// Mermaid, whose centred SVG sat in a grey band floating in a white
-				// box). The container is gone, so there is nothing left to not fill.
-				<figure className={`overflow-hidden ${templateFitsInline ? "" : "mb-1"} ${PREVIEW}`}>
-					<NoteView content={previewSource(entry)} tags={[]} />
-				</figure>
-			)}
+				{entry.renderable === false ? null : (
+					// No border, background or padding of its own. Each preview already
+					// carries its own surface — a fence is grey, a callout is tinted, a
+					// table has rules — so wrapping it in another box left that surface
+					// inset inside an outer one, visibly failing to fill it (worst on
+					// Mermaid, whose centred SVG sat in a grey band floating in a white
+					// box). The container is gone, so there is nothing left to not fill.
+					<figure className={`overflow-hidden ${templateFitsInline ? "" : "mb-1"} ${PREVIEW}`}>
+						<NoteView content={previewSource(entry)} tags={[]} />
+					</figure>
+				)}
 
-			{/* The TEMPLATE, not the worked example above it — this is exactly what
+				{/* The TEMPLATE, not the worked example above it — this is exactly what
 			    Insert drops at the caret. bg-muted/50 rather than the full token: a
 			    rendered fence now uses --muted itself, so a solid box directly beneath
 			    one read as a second identical panel. */}
-			{templateFitsInline ? null : (
-				<pre className={SOURCE} title="Inserted at the cursor">
-					{entry.syntax}
-				</pre>
-			)}
+				{showTemplateBlock ? (
+					<pre className={SOURCE} title="Inserted at the cursor">
+						{entry.syntax}
+					</pre>
+				) : null}
+			</span>
+			<InsertButton entry={entry} canInsert={canInsert} />
 		</li>
 	);
 }
@@ -212,7 +245,12 @@ export default function MarkdownReferencePanel() {
 				</p>
 			)}
 
-			<ScrollArea className="min-h-0 flex-1">
+			{/* pr-2.5 matches the Radix scrollbar's own width. Without it the track
+			    sits ON TOP of the right-hand column, which put it over the insert
+			    buttons — they were centred correctly, they were just half-covered.
+			    Padding the Root insets the viewport while leaving the scrollbar
+			    (absolutely positioned to the border box) in the gutter it creates. */}
+			<ScrollArea className="min-h-0 flex-1 pr-2.5">
 				{groups.length === 0 ? (
 					<p className="px-3 py-6 text-center text-muted-foreground text-sm">
 						No syntax matches “{query}”.
@@ -222,6 +260,7 @@ export default function MarkdownReferencePanel() {
 						// A search forces every matching section open — hiding the hit the
 						// user just searched for behind a closed accordion is useless.
 						const open = searching || openCategories.has(category);
+						const intro = CATEGORY_INTROS[category];
 						return (
 							<details
 								key={category}
@@ -241,15 +280,30 @@ export default function MarkdownReferencePanel() {
 									</span>
 								</summary>
 								{open ? (
-									<ul>
-										{entries.map((entry) =>
-											fitsOneLine(entry) ? (
-												<InlineRow key={entry.id} entry={entry} canInsert={hasEditor} />
-											) : (
-												<BlockRow key={entry.id} entry={entry} canInsert={hasEditor} />
-											),
-										)}
-									</ul>
+									<>
+										{intro ? (
+											// One format, stated once and loudly, rather than repeated
+											// quietly on all thirteen rows beneath it.
+											<section className="border-border/60 border-b bg-muted/30 px-3 py-2.5">
+												<pre className="whitespace-pre-wrap break-words font-mono font-semibold text-foreground text-xs">
+													{intro.syntax}
+												</pre>
+												<p className="mt-1.5 text-muted-foreground text-xs">{intro.note}</p>
+											</section>
+										) : null}
+										<ul>
+											{entries.map((entry) => {
+												if (entry.hideTemplate) {
+													return <GalleryRow key={entry.id} entry={entry} canInsert={hasEditor} />;
+												}
+												return fitsOneLine(entry) ? (
+													<InlineRow key={entry.id} entry={entry} canInsert={hasEditor} />
+												) : (
+													<BlockRow key={entry.id} entry={entry} canInsert={hasEditor} />
+												);
+											})}
+										</ul>
+									</>
 								) : null}
 							</details>
 						);

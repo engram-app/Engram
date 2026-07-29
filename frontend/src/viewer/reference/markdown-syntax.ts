@@ -1,3 +1,5 @@
+import { defaultConfig } from "@portaljs/remark-callouts";
+
 // The markdown surface Engram actually renders, as data.
 //
 // TRUTHFULNESS RULE: every entry here must round-trip through NoteView. That
@@ -23,7 +25,7 @@
 //
 // Sample text never names its own feature, for that same reason.
 
-export interface SyntaxEntry {
+interface SyntaxEntry {
 	id: string;
 	category: string;
 	label: string;
@@ -41,6 +43,13 @@ export interface SyntaxEntry {
 	/** Extra search terms that do not appear in the label, syntax, or blurb. */
 	keywords?: string[];
 	/**
+	 * The row shows its rendered result only. For categories where every entry
+	 * shares one format, that format is documented once in CATEGORY_INTROS —
+	 * repeating it on all 13 callout rows would bury the thing they exist to
+	 * show.
+	 */
+	hideTemplate?: true;
+	/**
 	 * Set false for entries whose live render would MISLEAD rather than teach:
 	 * frontmatter (NoteView strips it, leaving an empty box), and the two image
 	 * forms (neither a remote URL nor a vault attachment resolves here, so both
@@ -48,6 +57,60 @@ export interface SyntaxEntry {
 	 */
 	renderable?: false;
 }
+
+/**
+ * One row per callout TYPE, generated from the library's own map rather than
+ * typed out — 13 base types today, plus 14 aliases that share their icons. A
+ * hand-written list would silently fall behind a library upgrade, and this
+ * section exists precisely to answer "which types are there and what do they
+ * look like".
+ *
+ * The title of each demo is the type's own name on purpose: mapping name →
+ * icon → colour IS the information. `hideTemplate` keeps the rows to just that
+ * mapping, because the format is spelled out once above them (CATEGORY_INTROS).
+ */
+/**
+ * A line of body text that suits each type, so the gallery reads as thirteen
+ * worked examples rather than thirteen repetitions of a word. Keyed by type; a
+ * type the library adds later falls back to something neutral rather than
+ * breaking the build.
+ */
+const CALLOUT_BODIES: Record<string, string> = {
+	note: "Worth knowing, but not urgent.",
+	tip: "A better way to do the same thing.",
+	warning: "Check this before you continue.",
+	abstract: "The short version, up front.",
+	info: "Background you may want.",
+	todo: "Still outstanding.",
+	success: "That worked as intended.",
+	question: "Something worth asking.",
+	failure: "That did not work.",
+	danger: "This cannot be undone.",
+	bug: "A known problem, not yet fixed.",
+	example: "Here is one, concretely.",
+	quote: "Said better by someone else.",
+};
+
+const CALLOUT_GALLERY: readonly SyntaxEntry[] = Object.entries(defaultConfig.types)
+	.filter(([, value]) => typeof value === "object")
+	.map(([type]) => ({
+		id: `callout-${type}`,
+		category: "Callouts",
+		label: type,
+		syntax: `> [!${type}] Title\n> Body.`,
+		demo: `> [!${type}] ${type}\n> ${CALLOUT_BODIES[type] ?? "Example text."}`,
+		block: true as const,
+		hideTemplate: true as const,
+		keywords: ["callout", "admonition", "aside", "banner"],
+	}));
+
+/** Shown once, prominently, above a category whose rows all share one format. */
+export const CATEGORY_INTROS: Record<string, { syntax: string; note: string }> = {
+	Callouts: {
+		syntax: "> [!type] Title\n> Body text.",
+		note: "Swap `type` for any name below. The title is optional.",
+	},
+};
 
 export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	// ── Text ────────────────────────────────────────────────────────────────
@@ -278,34 +341,22 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		keywords: ["attachment", "transclude", "obsidian", "pdf"],
 	},
 
-	// ── Callouts ────────────────────────────────────────────────────────────
-	{
-		id: "callout-note",
-		category: "Callouts",
-		label: "Note callout",
-		syntax: "> [!note] Title\n> Body.",
-		demo: "> [!note] Good to know\n> Engram syncs as you type.",
-		blurb: "The title is optional.",
-		block: true,
-		keywords: ["admonition", "aside", "info", "obsidian"],
-	},
-	{
-		id: "callout-warning",
-		category: "Callouts",
-		label: "Warning callout",
-		syntax: "> [!warning] Title\n> Body.",
-		demo: "> [!warning] Back up first\n> This cannot be undone.",
-		blurb: "Also tip, info, danger, success, question, quote.",
-		block: true,
-		keywords: ["admonition", "caution", "alert"],
-	},
+	...CALLOUT_GALLERY,
+
+	// ── Callouts: fold markers ────────────────────────────────────────────────────────────
 	{
 		id: "callout-foldable",
 		category: "Callouts",
 		label: "Foldable callout",
 		syntax: "> [!tip]- Title\n> Body.",
-		demo: "> [!tip]- Hidden until you click\n> There you go.",
-		blurb: "Trailing - starts folded, + starts open.",
+		// No demo, and not previewed: @portaljs/remark-callouts does not consume
+		// the fold marker, so remark parses the "- Title" that follows as a BULLET
+		// LIST and the title renders as `<ul><li>`. Showing that would teach the
+		// wrong thing. It does fold correctly in Obsidian, which is why the entry
+		// stays — but the blurb has to say where it works.
+		blurb:
+			"Obsidian only: - starts folded, + starts open. The web viewer shows the marker as a bullet.",
+		renderable: false,
 		block: true,
 		keywords: ["collapse", "fold", "details", "accordion"],
 	},
@@ -419,3 +470,5 @@ export function groupByCategory(
 	}
 	return [...groups];
 }
+
+export type { SyntaxEntry };

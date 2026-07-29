@@ -3,6 +3,7 @@ import { EditorView } from "@codemirror/view";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ThemeProvider } from "../../theme/theme-provider";
 import { ActiveEditorProvider, useActiveEditor } from "../editor/active-editor-context";
 import MarkdownReferencePanel from "./markdown-reference-panel";
 
@@ -36,7 +37,23 @@ function openSection(name: string): void {
 	fireEvent(details, new Event("toggle"));
 }
 
-const row = (label: string) => screen.getByText(label).closest("li") as HTMLElement;
+/**
+ * Locate a row by its LABEL specifically. A plain getByText breaks on the
+ * callout gallery, where the row for "note" also renders a callout whose title
+ * is the word "note" — the label is always the row's first <span>.
+ */
+function row(label: string): HTMLElement {
+	const li = [...document.querySelectorAll("li")].find(
+		(el) =>
+			[...el.querySelectorAll("span")].some((sp) => sp.textContent === label) ||
+			// Gallery rows carry no label — the callout's own title is the type name.
+			el.querySelector(".callout-title")?.textContent?.trim() === label,
+	);
+	if (!li) {
+		throw new Error(`No reference row labelled "${label}"`);
+	}
+	return li as HTMLElement;
+}
 
 let view: EditorView | null = null;
 afterEach(() => {
@@ -60,11 +77,15 @@ function renderPanel({ withEditor = true, doc = "", caret = 0 } = {}) {
 			parent: document.body,
 		});
 	}
+	// ThemeProvider is real, not stubbed: opening the Code section mounts
+	// MermaidBlock, which reads the resolved theme to pick its palette.
 	return render(
-		<ActiveEditorProvider>
-			<Publisher editor={view} />
-			<MarkdownReferencePanel />
-		</ActiveEditorProvider>,
+		<ThemeProvider>
+			<ActiveEditorProvider>
+				<Publisher editor={view} />
+				<MarkdownReferencePanel />
+			</ActiveEditorProvider>
+		</ThemeProvider>,
 	);
 }
 
@@ -76,11 +97,12 @@ describe("MarkdownReferencePanel — rendered previews", () => {
 		// they see what it becomes.
 		renderPanel();
 		openSection("Callouts");
-		const figure = row("Note callout").querySelector("figure");
+		// Gallery rows render the callout directly, with no figure wrapper.
+		const callout = row("note").querySelector(".callout");
 
-		expect(figure).not.toBeNull();
-		expect(figure?.textContent).toContain("Engram syncs as you type.");
-		expect(figure?.textContent).not.toContain("[!note]");
+		expect(callout).not.toBeNull();
+		expect(callout?.textContent).toContain("Worth knowing");
+		expect(callout?.textContent).not.toContain("[!note]");
 	});
 
 	it("lets the library inline the per-type colour our CSS deliberately omits", () => {
@@ -90,7 +112,7 @@ describe("MarkdownReferencePanel — rendered previews", () => {
 		// stops doing that, every callout silently goes neutral grey, so pin it.
 		renderPanel();
 		openSection("Callouts");
-		const callout = row("Warning callout").querySelector(".callout") as HTMLElement;
+		const callout = row("warning").querySelector(".callout") as HTMLElement;
 		expect(callout).not.toBeNull();
 		expect(callout.getAttribute("style") ?? "").toMatch(/border-left-color:\s*#/u);
 	});
@@ -126,14 +148,18 @@ describe("MarkdownReferencePanel — demo teaches, template inserts", () => {
 		// One string could not do both jobs: a snippet realistic enough to teach
 		// is the wrong thing to drop at someone's caret.
 		renderPanel({ doc: "prose", caret: 5 });
-		openSection("Callouts");
-		const warning = row("Warning callout");
+		openSection("Structure");
+		const table = row("Table");
 
-		expect(warning.querySelector("figure")?.textContent).toContain("Back up first");
-		expect(warning.querySelector("pre")?.textContent).toBe("> [!warning] Title\n> Body.");
+		expect(table.querySelector("figure")?.textContent).toContain("Espresso");
+		expect(table.querySelector("pre")?.textContent).toBe(
+			"| Column | Column |\n| --- | --- |\n| cell | cell |",
+		);
 
-		fireEvent.click(within(warning).getByRole("button", { name: "Insert Warning callout" }));
-		expect(view?.state.doc.toString()).toBe("prose\n> [!warning] Title\n> Body.");
+		fireEvent.click(within(table).getByRole("button", { name: "Insert Table" }));
+		expect(view?.state.doc.toString()).toBe(
+			"prose\n| Column | Column |\n| --- | --- |\n| cell | cell |",
+		);
 	});
 
 	it("shows the template verbatim, so the source line is what you get", () => {
@@ -161,10 +187,59 @@ describe("MarkdownReferencePanel — adaptive rows", () => {
 
 	it("keeps the stacked anatomy for block syntax that needs it", () => {
 		renderPanel();
+		openSection("Code");
+		const fence = row("Code block");
+		expect(fence.querySelector("figure")).not.toBeNull();
+		expect(fence.querySelector("pre")).not.toBeNull();
+	});
+
+	it("states a shared format once above the rows instead of on each of them", () => {
+		// All thirteen callout types take the same shape, so repeating it per row
+		// buried the icons those rows exist to show.
+		renderPanel();
 		openSection("Callouts");
-		const callout = row("Note callout");
-		expect(callout.querySelector("figure")).not.toBeNull();
-		expect(callout.querySelector("pre")).not.toBeNull();
+		const details = section("Callouts");
+		expect(details.textContent).toContain("> [!type] Title");
+		// The gallery rows themselves carry no template block.
+		expect(row("note").querySelector("pre")).toBeNull();
+		expect(row("warning").querySelector("pre")).toBeNull();
+	});
+
+	it("renders one row per callout type, each titled with its own name", () => {
+		renderPanel();
+		openSection("Callouts");
+		for (const type of ["note", "tip", "warning", "danger", "quote"]) {
+			expect(row(type).querySelector(".callout"), type).not.toBeNull();
+			expect(row(type).textContent, type).toContain(type);
+		}
+	});
+
+	it("drops the row label on gallery rows, since the callout title repeats it", () => {
+		renderPanel();
+		openSection("Callouts");
+		const note = row("note");
+		// The only "note" text in the row is the callout's own title.
+		expect(note.querySelectorAll(".callout-title").length).toBe(1);
+		expect(note.textContent?.match(/note/gu)?.length).toBe(1);
+	});
+
+	it("gives each callout type body text that suits it", () => {
+		renderPanel();
+		openSection("Callouts");
+		expect(row("danger").textContent).toContain("cannot be undone");
+		expect(row("success").textContent).toContain("worked as intended");
+	});
+
+	it("keeps the insert button inline with the callout", () => {
+		renderPanel();
+		openSection("Callouts");
+		const note = row("note");
+		const button = within(note).getByRole("button", { name: "Insert note" });
+		// A direct child of the row, so it can stretch to the row's full height —
+		// not tucked inside a heading line above the preview. (jsdom applies no
+		// Tailwind, so assert structure rather than computed layout.)
+		expect(button.parentElement).toBe(note);
+		expect(button.className).toContain("self-stretch");
 	});
 
 	it("keeps a single-line block template beside the label, not in a block of its own", () => {
@@ -230,15 +305,16 @@ describe("MarkdownReferencePanel — accordions", () => {
 
 	it("shows how many entries a collapsed category holds", () => {
 		renderPanel();
-		expect(within(section("Callouts")).getByText("3")).toBeInTheDocument();
+		// 13 generated types plus the fold-marker entry.
+		expect(within(section("Callouts")).getByText("14")).toBeInTheDocument();
 	});
 
 	it("renders a category’s rows only once it is opened", () => {
 		renderPanel();
-		expect(screen.queryByText("Note callout")).not.toBeInTheDocument();
+		expect(screen.queryByText("Foldable callout")).not.toBeInTheDocument();
 		openSection("Callouts");
 		expect(section("Callouts")).toHaveAttribute("open");
-		expect(screen.getByText("Note callout")).toBeInTheDocument();
+		expect(screen.getByText("Foldable callout")).toBeInTheDocument();
 	});
 
 	it("force-opens matching categories while searching", () => {
@@ -253,7 +329,7 @@ describe("MarkdownReferencePanel — search and insert", () => {
 	it("narrows to matching categories as the user types", () => {
 		renderPanel();
 		fireEvent.change(search(), { target: { value: "callout" } });
-		expect(screen.getByText("Note callout")).toBeInTheDocument();
+		expect(screen.getByText("Foldable callout")).toBeInTheDocument();
 		expect(screen.queryByText("Wikilink")).not.toBeInTheDocument();
 	});
 
@@ -278,7 +354,7 @@ describe("MarkdownReferencePanel — search and insert", () => {
 	it("breaks a block snippet onto its own line", () => {
 		renderPanel({ doc: "prose", caret: 5 });
 		openSection("Callouts");
-		fireEvent.click(screen.getByRole("button", { name: "Insert Note callout" }));
+		fireEvent.click(screen.getByRole("button", { name: "Insert note" }));
 		expect(view?.state.doc.toString()).toBe("prose\n> [!note] Title\n> Body.");
 	});
 

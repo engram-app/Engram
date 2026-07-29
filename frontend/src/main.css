@@ -359,15 +359,18 @@ html {
  * same callout looks the same while writing, while reading, and in the
  * reference panel. */
 .callout {
-	margin-block: 1rem;
+	/* Metrics measured off .cm-line.cm-callout in a live editor, not guessed:
+	   3px bar, 8px inline padding, no vertical padding, no own font-size. The
+	   0.875rem that used to sit here rendered the panel at 14px against the
+	   editor's 16px, which was most of the "doesn't match" gap. */
+	margin-block: 0.8em;
 	border-inline-start-width: 3px;
 	border-inline-start-style: solid;
 	border-inline-start-color: var(--border);
-	padding-inline: 0.75rem;
-	padding-block: 0.5rem;
+	padding-inline: 0.5rem;
+	padding-block: 0;
 	border-radius: 0;
 	background-color: var(--color-callout-bg, rgba(128, 128, 128, 0.08));
-	font-size: 0.875rem;
 	/* Undo the blockquote treatment: a callout is not a quotation. */
 	font-style: normal;
 	font-weight: 400;
@@ -378,14 +381,22 @@ html {
 .callout-title {
 	display: flex;
 	align-items: center;
-	gap: 0.5rem;
-	margin-bottom: 0.25rem;
+	gap: 0.4em;
 	font-weight: 600;
+	/* The editor colours the whole title, not just the icon. --callout-color is
+	   republished from the library's own inline border colour (note-view.tsx),
+	   so this stays a single source. */
+	color: var(--callout-color, inherit);
 }
 
-/* The library wraps the title in <strong><p>, which typography then gives block
- * margins — enough to knock the icon out of line with its own text. */
-.callout-title p,
+/* The library wraps the title in <strong><p>, and typography gives that inner
+ * <p> a 20px bottom margin. With the title flex-aligned to center, that makes
+ * <strong> 48px tall against a 16px icon, so the icon centres ~16px BELOW the
+ * text it belongs to. Both margins have to go, not just the top one. */
+.callout-title p {
+	margin: 0;
+}
+
 .callout-content > :first-child {
 	margin-top: 0;
 }

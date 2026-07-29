@@ -72,8 +72,43 @@ describe("markdown-syntax catalogue", () => {
 		// may still contain a generic word like "code"; what it must not do is
 		// echo the entry's own label back.
 		for (const entry of SYNTAX_ENTRIES) {
+			// The callout gallery is the deliberate exception: its labels ARE the
+			// type names, and a demo titled with its own type is precisely the
+			// mapping (name → icon → colour) those rows exist to show.
+			if (entry.hideTemplate) {
+				continue;
+			}
 			const label = entry.label.toLowerCase();
 			expect(previewSource(entry).toLowerCase(), entry.id).not.toContain(label);
+		}
+	});
+});
+
+describe("callout gallery", () => {
+	const gallery = SYNTAX_ENTRIES.filter((e) => e.hideTemplate);
+
+	test("is generated from the library map, not typed out by hand", () => {
+		// 13 base types today. Asserting a hardcoded list here would defeat the
+		// point — this only checks the generation produced a plausible set and
+		// covers the types users actually reach for.
+		expect(gallery.length).toBeGreaterThanOrEqual(10);
+		const ids = gallery.map((e) => e.id);
+		for (const type of ["note", "tip", "warning", "danger", "success", "quote"]) {
+			expect(ids, type).toContain(`callout-${type}`);
+		}
+	});
+
+	test("titles each demo with its own type name", () => {
+		for (const entry of gallery) {
+			expect(previewSource(entry), entry.id).toMatch(
+				new RegExp(`^> \\[!${entry.label}\\] ${entry.label}\\n> .+`, "u"),
+			);
+		}
+	});
+
+	test("still inserts a usable template rather than the demo", () => {
+		for (const entry of gallery) {
+			expect(entry.syntax, entry.id).toBe(`> [!${entry.label}] Title\n> Body.`);
 		}
 	});
 });
