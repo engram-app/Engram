@@ -21,12 +21,15 @@ import { filterSyntax, groupByCategory, previewSource, type SyntaxEntry } from "
 // one of the ~29 entries spins up a full remark/KaTeX/mermaid pipeline the
 // moment the panel opens.
 
-// prose-sm because the shared markdown styles are tuned for an 840px document
-// column, not a 300px rail. The `[&_.prose…]` pair strips the ~1em margin
-// Typography puts on every block (and Mermaid's own my-4), which was most of the
-// dead space, while keeping the rhythm between blocks of a multi-part snippet.
-const PREVIEW =
-	"prose-sm [&_.mermaid]:my-0 [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0";
+// NO prose-sm. The previews render at the document's own scale so a callout,
+// heading or table in this panel is pixel-identical to the same thing in a
+// note — that parity is the whole point of rendering through NoteView rather
+// than a lookalike, and a smaller scale quietly broke it.
+//
+// The `[&_…]` rules only trim the OUTER gutter (Typography's ~1em on the first
+// and last block, plus Mermaid's own my-4). Spacing BETWEEN blocks is left
+// alone, so multi-part snippets keep the document's rhythm too.
+const PREVIEW = "[&_.mermaid]:my-0 [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0";
 
 const SOURCE =
 	"whitespace-pre-wrap break-words bg-muted/50 px-2 py-1 font-mono text-[11px] text-muted-foreground";

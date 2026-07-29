@@ -11,36 +11,7 @@
 @import "@fontsource-variable/inter";
 @import "@fontsource/noto-serif/400-italic.css";
 
-/* Obsidian-flavored callouts (@portaljs/remark-callouts markup).
- *
- * The library emits `<blockquote class="callout" style="border-left-color: …">`
- * with the per-type colour ALREADY inlined from the same `defaultConfig` map
- * the CodeMirror live preview reads, and colours the icon to match. So colour
- * needs no help from us — it was never the thing that diverged.
- *
- * What diverged was everything else. This block used to carry seven
- * `.callout[data-callout="…"]` rules, and the library emits no `data-callout`
- * attribute, so none of them ever matched: every callout got the generic blue
- * background whatever its type, with a correctly-coloured bar on it. Deleted.
- *
- * Square, 3px bar, neutral background — deliberately identical to
- * editor/callout.css, because the editor is what you look at while writing. */
 @layer components {
-	.callout {
-		@apply my-4 border-l-[3px] px-3 py-2 text-sm;
-		/* Fallback only — the library's inline style wins where it sets one. */
-		border-left-color: var(--border);
-		background-color: var(--color-callout-bg, rgba(128, 128, 128, 0.08));
-	}
-	.callout-title {
-		@apply mb-1 flex items-center gap-2 font-semibold;
-	}
-	/* The library wraps the title in <strong><p>, which prose then gives block
-	   margins — enough to knock the icon out of alignment with the text. */
-	.callout-title p {
-		@apply my-0;
-	}
-
 	/* Wikilink styling — distinguish internal vault links from external. */
 	.internal a {
 		@apply text-indigo-600 no-underline hover:underline dark:text-indigo-400;
@@ -365,4 +336,60 @@ html {
    on Paddle's own overlay so it stays interactive above any dialog. */
 .paddle-frame-overlay {
 	pointer-events: auto;
+}
+
+/* Obsidian-flavored callouts (@portaljs/remark-callouts markup).
+ *
+ * DELIBERATELY UNLAYERED, and for a sharper reason than the code fences.
+ * The library renders a callout as a <blockquote>, and @tailwindcss/typography
+ * styles blockquote from the `utilities` layer — the last one. A rule in
+ * `components` therefore lost EVERY property typography sets: the 3px bar
+ * became 0.25rem, the padding became 1.11em, the margins 1.33em, and the text
+ * went ITALIC in the quote colour, because typography thinks a blockquote is a
+ * quotation. Unlayered rules outrank every layer, which is the only placement
+ * that works without !important.
+ *
+ * Colour is not set here on purpose: the library inlines border-left-color per
+ * type from the same defaultConfig map the CodeMirror live preview reads, and
+ * an inline style outranks even this. main.css used to carry seven
+ * `.callout[data-callout="…"]` rules — the library emits no such attribute, so
+ * none of them ever matched and every callout was generically blue.
+ *
+ * Square, 3px bar, neutral background: identical to editor/callout.css, so the
+ * same callout looks the same while writing, while reading, and in the
+ * reference panel. */
+.callout {
+	margin-block: 1rem;
+	border-inline-start-width: 3px;
+	border-inline-start-style: solid;
+	border-inline-start-color: var(--border);
+	padding-inline: 0.75rem;
+	padding-block: 0.5rem;
+	border-radius: 0;
+	background-color: var(--color-callout-bg, rgba(128, 128, 128, 0.08));
+	font-size: 0.875rem;
+	/* Undo the blockquote treatment: a callout is not a quotation. */
+	font-style: normal;
+	font-weight: 400;
+	color: inherit;
+	quotes: none;
+}
+
+.callout-title {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	margin-bottom: 0.25rem;
+	font-weight: 600;
+}
+
+/* The library wraps the title in <strong><p>, which typography then gives block
+ * margins — enough to knock the icon out of line with its own text. */
+.callout-title p,
+.callout-content > :first-child {
+	margin-top: 0;
+}
+
+.callout-content > :last-child {
+	margin-bottom: 0;
 }
