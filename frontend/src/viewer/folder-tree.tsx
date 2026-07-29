@@ -82,7 +82,7 @@ export default function FolderTree() {
 	const vaultId = useActiveVaultId();
 	const qc = useQueryClient();
 	const params = useParams();
-	const selectedNoteId = params.id ?? null;
+	const selectedNoteId = params.itemId ?? null;
 
 	const scrollRef = useRef<HTMLDivElement | null>(null);
 	const [dialog, setDialog] = useState<DialogState>({ kind: "none" });

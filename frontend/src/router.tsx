@@ -37,9 +37,12 @@ const OnboardRedirect = lazy(() =>
 	import("./onboarding/onboard-entry").then((m) => ({ default: m.OnboardRedirect })),
 );
 const Dashboard = lazy(() => import("./viewer/dashboard"));
-// /note/:id resolves to the note OR attachment viewer (VaultItemPage owns the
-// lazy NotePage/AttachmentPage chunks).
+// /:slug/:itemId resolves to the note OR attachment viewer (VaultItemPage owns
+// the lazy NotePage/AttachmentPage chunks).
 const VaultItemPage = lazy(() => import("./viewer/vault-item-page"));
+const VaultRoute = lazy(() => import("./viewer/vault-route"));
+const VaultRedirect = lazy(() => import("./viewer/vault-redirect"));
+const LegacyNoteRedirect = lazy(() => import("./viewer/legacy-note-redirect"));
 const ResetPasswordPage = lazy(() => import("./features/auth/ResetPasswordPage"));
 const DeviceLinkPage = lazy(() => import("./device/device-link-page"));
 const OAuthAuthorizePage = lazy(() => import("./oauth/oauth-authorize-page"));
@@ -183,8 +186,19 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 												{
 													element: suspendedScreen(<AppLayout />),
 													children: [
-														{ path: ROUTES.HOME, element: suspended(<Dashboard />) },
-														{ path: "/note/:id", element: suspended(<VaultItemPage />) },
+														// Bare `/` picks a vault; `/note/:id` is the pre-vault-scoping URL shape.
+														{ path: ROUTES.HOME, element: suspended(<VaultRedirect />) },
+														{ path: "/note/:id", element: suspended(<LegacyNoteRedirect />) },
+														// Vault-scoped. Kept LAST so every static route above wins RR's
+														// static-over-dynamic ranking.
+														{
+															path: "/:slug",
+															element: suspended(<VaultRoute />),
+															children: [
+																{ index: true, element: suspended(<Dashboard />) },
+																{ path: ":itemId", element: suspended(<VaultItemPage />) },
+															],
+														},
 													],
 												},
 											],
