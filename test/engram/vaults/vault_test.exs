@@ -36,5 +36,23 @@ defmodule Engram.Vaults.VaultTest do
       cs = Vault.changeset(%Vault{}, Map.put(@valid, :slug, "Settings"))
       refute cs.valid?
     end
+
+    test "rejection trims whitespace, matching the TS mirror's .trim()" do
+      cs = Vault.changeset(%Vault{}, Map.put(@valid, :slug, "  settings  "))
+      refute cs.valid?
+      assert "is reserved" in errors_on(cs).slug
+    end
+
+    # Pins the exact 17-entry list. Written as a literal, not derived from
+    # @reserved_slugs, so a deleted entry breaks this test instead of
+    # silently passing. Mirrored 1:1 in reserved-slugs.test.ts, a human
+    # dropping an entry from either list must edit both and notice.
+    test "the reserved list is exactly this set" do
+      assert Vault.reserved_slugs() == ~w(
+               sign-in sign-up waitlist link oauth onboard reset-password
+               note search billing settings api webhooks .well-known
+               assets email socket
+             )
+    end
   end
 end

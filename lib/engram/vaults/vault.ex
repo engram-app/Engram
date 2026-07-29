@@ -68,7 +68,7 @@ defmodule Engram.Vaults.Vault do
       :name_nonce,
       :name_hmac
     ])
-    |> update_change(:slug, &String.downcase/1)
+    |> update_change(:slug, &(&1 |> String.trim() |> String.downcase()))
     |> validate_exclusion(:slug, @reserved_slugs, message: "is reserved")
     |> unique_constraint([:user_id, :slug], name: :vaults_user_id_slug_index)
     |> unique_constraint([:user_id, :client_id], name: :vaults_user_id_client_id_index)

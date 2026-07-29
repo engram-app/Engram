@@ -25,4 +25,30 @@ describe("isReservedSlug", () => {
 		expect(RESERVED_SLUGS).toContain("settings");
 		expect(RESERVED_SLUGS.length).toBeGreaterThan(0);
 	});
+
+	// Pins the exact 17-entry list. Written as a literal, not derived from
+	// RESERVED_SLUGS, so a deleted entry breaks this test instead of silently
+	// passing. Mirrored 1:1 in vault_test.exs (Elixir) - a human dropping an
+	// entry from either list must edit both and notice.
+	it("the reserved list is exactly this set", () => {
+		expect(RESERVED_SLUGS).toEqual([
+			"sign-in",
+			"sign-up",
+			"waitlist",
+			"link",
+			"oauth",
+			"onboard",
+			"reset-password",
+			"note",
+			"search",
+			"billing",
+			"settings",
+			"api",
+			"webhooks",
+			".well-known",
+			"assets",
+			"email",
+			"socket",
+		]);
+	});
 });
