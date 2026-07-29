@@ -177,23 +177,24 @@ defmodule EngramWeb.SpaControllerTest do
   describe "non-SPA prefixes must not fall through to /:slug (#858)" do
     # Regression guard: without the deny-list these two-segment typos match
     # `get "/:slug/:id"` and return an HTML 200, masking a broken API call.
+    # Every case asserts BOTH status and content-type: a status-only check
+    # would not catch a regression where not_found/2 started returning
+    # text/html with a 404 status, which is exactly the "masked as success"
+    # failure mode this guard exists to prevent.
     test "a typo'd API path 404s instead of serving HTML", %{conn: conn} do
-      conn = get(conn, "/api/notez")
-      assert response(conn, 404)
-      [content_type] = get_resp_header(conn, "content-type")
-      refute content_type =~ "text/html"
+      conn |> get("/api/notez") |> assert_not_found_not_html()
     end
 
     test "a typo'd webhooks path 404s", %{conn: conn} do
-      assert conn |> get("/webhooks/bogus") |> response(404)
+      conn |> get("/webhooks/bogus") |> assert_not_found_not_html()
     end
 
     test "a typo'd well-known path 404s", %{conn: conn} do
-      assert conn |> get("/.well-known/bogus") |> response(404)
+      conn |> get("/.well-known/bogus") |> assert_not_found_not_html()
     end
 
     test "a typo'd oauth path 404s", %{conn: conn} do
-      assert conn |> get("/oauth/bogus") |> response(404)
+      conn |> get("/oauth/bogus") |> assert_not_found_not_html()
     end
 
     test "a missing asset path 404s (fifth prefix: /assets is Plug.Static, not a router scope)",
@@ -201,24 +202,51 @@ defmodule EngramWeb.SpaControllerTest do
       # Plug.Static only intercepts requests for files that exist; a
       # mistyped/missing asset path falls through to the router and needs
       # its own deny-list entry or it would match /:slug/:id.
-      assert conn |> get("/assets/bogus.js") |> response(404)
+      conn |> get("/assets/bogus.js") |> assert_not_found_not_html()
     end
 
     test "a missing email asset path 404s and is not HTML (sixth prefix: /email)",
          %{conn: conn} do
       # /email is also Plug.Static-served via static_paths() (lib/engram_web.ex)
       # and referenced from outbound email HTML. A masked HTML 200 there can
-      # get cached by a third-party mail proxy, so this asserts content-type
-      # too, not just status.
-      conn = get(conn, "/email/missing.png")
-      assert response(conn, 404)
-      [content_type] = get_resp_header(conn, "content-type")
-      refute content_type =~ "text/html"
+      # get cached by a third-party mail proxy, so content-type matters even
+      # more here than for /assets.
+      conn |> get("/email/missing.png") |> assert_not_found_not_html()
+    end
+
+    test "a bare /socket path 404s (seventh prefix: socket dispatch only claims /socket/websocket)",
+         %{conn: conn} do
+      conn |> get("/socket") |> assert_not_found_not_html()
+    end
+
+    test "a typo'd /socket path 404s", %{conn: conn} do
+      conn |> get("/socket/bogus") |> assert_not_found_not_html()
     end
 
     test "but /oauth/consent still serves the SPA", %{conn: conn} do
       conn = get(conn, "/oauth/consent")
       assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
     end
+
+    test "/socket/websocket still reaches the transport, unaffected by the deny-list", %{
+      conn: conn
+    } do
+      # socket_dispatch (from the `socket "/socket", EngramWeb.UserSocket`
+      # macro in endpoint.ex) claims this exact path BEFORE the router runs,
+      # so the new /socket/*path deny entry below it must never see this
+      # request. A plain GET with no Upgrade/Origin header hits the
+      # transport's own origin check and 403s, same as before this deny
+      # entry existed, proving the router-level deny-list never got a
+      # chance to intercept it.
+      conn = get(conn, "/socket/websocket")
+      assert conn.status == 403
+    end
+  end
+
+  defp assert_not_found_not_html(conn) do
+    assert response(conn, 404)
+    [content_type] = get_resp_header(conn, "content-type")
+    refute content_type =~ "text/html"
+    conn
   end
 end

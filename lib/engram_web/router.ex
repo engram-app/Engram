@@ -460,7 +460,8 @@ defmodule EngramWeb.Router do
   # Below the whitelist, `/:slug` and `/:slug/:id` are dynamic vault-scoped
   # routes (vault, and vault+note-or-attachment). Those are wildcards, so a
   # deny-list for every non-SPA top-level prefix sits between the whitelist
-  # and the wildcards; see its comment for why order matters.
+  # and the wildcards; see its comment for why order matters (it must stay
+  # BELOW the static whitelist above and ABOVE the wildcards below).
   scope "/", EngramWeb do
     pipe_through :spa
 
@@ -484,14 +485,26 @@ defmodule EngramWeb.Router do
     # /:slug/:id route below like any other slug; that's expected, not a
     # revival of this feature.)
 
-    # Deny-list. MUST stay above the dynamic /:slug routes below: those are
+    # Deny-list. MUST stay BELOW the static whitelist above (so a real
+    # static route like /oauth/consent still wins over its own prefix's
+    # deny entry) and ABOVE the dynamic /:slug routes below (those are
     # 1- and 2-segment wildcards, so without this a typo'd /api/notez would
-    # match /:slug/:id and serve an HTML 200 (the exact regression #858
+    # match /:slug/:id and serve an HTML 200, the exact regression #858
     # removed). EVERY new non-SPA top-level prefix must be added here.
     match :*, "/api/*path", SpaController, :not_found
     match :*, "/oauth/*path", SpaController, :not_found
     match :*, "/webhooks/*path", SpaController, :not_found
     match :*, "/.well-known/*path", SpaController, :not_found
+    # /socket is registered by the `socket "/socket", EngramWeb.UserSocket`
+    # macro in endpoint.ex, not a router scope, so it doesn't show up when
+    # enumerating scope declarations either. Endpoint-level socket dispatch
+    # only claims the exact transport subpath (/socket/websocket); every
+    # other /socket/* request (bare /socket, typos, /socket/origin-probe
+    # without its own /websocket suffix) falls through to the router same as
+    # /assets and /email. HostRewrite already treats /socket as a first-class
+    # top-level prefix (@api_allowed_prefixes in host_rewrite.ex); the SPA
+    # deny-list needs the same entry for the same reason.
+    match :*, "/socket/*path", SpaController, :not_found
     # /assets isn't a router scope (it's Plug.Static mounted in
     # endpoint.ex), so it's easy to miss here. Plug.Static only intercepts
     # requests for files that exist; a mistyped/missing asset path falls
