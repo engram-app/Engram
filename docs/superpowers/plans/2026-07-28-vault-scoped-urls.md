@@ -1689,6 +1689,48 @@ children: [
 
 Check `note-page.tsx` and `attachment-page.tsx` for their own `useParams()` calls and apply the same rename. Run `cd backend/frontend && grep -rn 'useParams' src/viewer/` to find them all.
 
+- [ ] **Step 3b: Make VaultSwitcher navigate. THIS MUST LAND IN THE SAME COMMIT AS THE ROUTES.**
+
+`layout/vault-switcher.tsx:74` currently calls `setActiveVaultId(next)` directly with no
+navigation. The moment `VaultRoute` is wired in, that becomes an unrecoverable hang: the
+store is mutated externally while the URL slug stays put, so `activeId !== vault.id` is
+permanently true and `VaultRoute` renders `LoadingPane` forever. Its effect only re-fires
+on `[vault]`, which does not change because the URL did not change. No test catches this,
+because nothing exercises vault switching through the real router.
+
+Contrast `onboarding/onboard-vault-page.tsx:87,97` and `device/device-link-page.tsx:170`,
+which are safe: each follows `setActiveVaultId` with `navigate("/")`, round-tripping
+through `VaultRedirect` back into a URL. The switcher has no such round-trip.
+
+Replace the `onValueChange` handler body:
+
+```tsx
+onValueChange={(next) => {
+	if (next === active.id) {
+		return;
+	}
+	const target = vaults.find((v) => v.id === next);
+	if (!target) {
+		return;
+	}
+	// Navigate; VaultRoute writes the active-vault store. Land on the vault
+	// root, not the current note, whose id does not exist in the new vault.
+	navigate(`/${target.slug}`);
+	qc.invalidateQueries();
+	window.dispatchEvent(
+		new CustomEvent("engram:vault-switched", { detail: { from: active.id, to: next } }),
+	);
+}}
+```
+
+Add `useNavigate` to the `react-router` import, add `const navigate = useNavigate();`, and
+drop the now-unused `setActiveVaultId` import. Also delete the reconciliation effect at
+`vault-switcher.tsx:19-31`: `VaultRedirect` now owns choosing a vault when none is valid,
+and it does so by navigating rather than writing the store.
+
+Add a test asserting the switcher NAVIGATES rather than writing the store, and that it
+lands on the vault root rather than carrying the old note id across.
+
 - [ ] **Step 4: Verify build and full suite**
 
 Run: `cd backend/frontend && bun run build && bun run test`
@@ -1765,7 +1807,13 @@ Add a `LocationProbe` to the file if absent (same shape as Task 5).
 Run: `cd backend/frontend && bun run test -- vault-switcher`
 Expected: FAIL, location stays `/work/note-1`.
 
-- [ ] **Step 4: Rework the switcher**
+- [ ] **Step 4: (MOVED TO TASK 11) Rework the switcher**
+
+> This step was moved into Task 11 Step 3b. Leaving `setActiveVaultId` in the switcher for
+> even one commit after the vault routes go live hangs the app on every vault switch, with
+> no test to catch it. If Task 11 already did this, skip. The original text follows for
+> reference only.
+
 
 In `backend/frontend/src/layout/vault-switcher.tsx`:
 
