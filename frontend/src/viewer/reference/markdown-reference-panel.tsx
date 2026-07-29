@@ -35,7 +35,11 @@ function EntryRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 	return (
 		<li className="group border-border/60 border-b px-3 py-2 last:border-b-0">
 			<p className="mb-1.5 flex items-center gap-2">
-				<span className="min-w-0 flex-1 truncate font-medium text-muted-foreground text-xs uppercase tracking-wide">
+				{/* Sentence case, not uppercase: this used to be styled identically to
+				    the category header above it — same size, weight, colour and case —
+				    so there was no hierarchy to read and sections were easy to lose.
+				    The entry label is the quieter of the two now. */}
+				<span className="min-w-0 flex-1 truncate font-medium text-foreground text-xs">
 					{entry.label}
 				</span>
 				<Button
@@ -149,10 +153,14 @@ export default function MarkdownReferencePanel() {
 								onToggle={(e) => setOpen(category, e.currentTarget.open)}
 								className="group/cat border-border border-b"
 							>
-								<summary className="flex cursor-pointer list-none items-center gap-1 px-3 py-1.5 font-medium text-muted-foreground text-xs uppercase tracking-wide hover:bg-muted/40">
-									<ChevronRight className="size-3.5 shrink-0 transition-transform group-open/cat:rotate-90" />
+								{/* sticky: once a section is open you scroll past several tall
+								    previews, and without a pinned header you lose track of which
+								    category you are in. The solid (not translucent) background is
+								    what lets it sit over a rendered preview without smearing. */}
+								<summary className="sticky top-0 z-10 flex cursor-pointer list-none items-center gap-1.5 border-border border-y bg-muted px-3 py-2 font-semibold text-foreground text-sm uppercase tracking-wider hover:bg-accent">
+									<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-open/cat:rotate-90" />
 									{category}
-									<span className="ml-auto text-[10px] tabular-nums opacity-60">
+									<span className="ml-auto rounded-full bg-background px-1.5 py-0.5 font-normal text-[10px] text-muted-foreground tabular-nums tracking-normal">
 										{entries.length}
 									</span>
 								</summary>
