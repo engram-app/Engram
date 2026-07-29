@@ -55,32 +55,50 @@ function InsertButton({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boo
 	);
 }
 
-// Inline marks are self-evident from their source, so they get ONE line:
-// name, template, result. Stacking a preview box, a source box and a blurb
-// around `**text**` padded the simple entries out to justify the complex ones.
+/**
+ * Everything fits on one line — template AND result. That is the real question
+ * for layout; `block` only ever meant "insertion needs newlines synthesized".
+ * Keying off shape is what lets the six heading levels read as a ladder of
+ * one-line rows rather than six stacked blocks.
+ */
+function fitsOneLine(entry: SyntaxEntry): boolean {
+	return !(entry.syntax.includes("\n") || previewSource(entry).includes("\n"));
+}
+
+// Self-evident syntax gets ONE line: name, template, result. Stacking a preview
+// box, a source box and a blurb around `**text**` padded the simple entries out
+// to justify the complex ones.
 function InlineRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
 	return (
-		<li className="group flex items-center gap-2 border-border/60 border-b px-3 py-1.5 last:border-b-0">
-			<span className="w-20 shrink-0 truncate font-medium text-foreground text-xs">
-				{entry.label}
-			</span>
-			<code
-				className="shrink-0 font-mono text-[11px] text-muted-foreground"
-				title="Inserted at the cursor"
-			>
-				{entry.syntax}
-			</code>
-			{entry.renderable === false ? (
-				<span className="min-w-0 flex-1 truncate text-muted-foreground text-xs">{entry.blurb}</span>
-			) : (
-				<>
-					<ArrowRight className="size-3 shrink-0 text-muted-foreground/50" />
-					<span className={`min-w-0 flex-1 overflow-hidden ${PREVIEW}`}>
-						<NoteView content={previewSource(entry)} tags={[]} />
-					</span>
-				</>
-			)}
-			<InsertButton entry={entry} canInsert={canInsert} />
+		<li className="group border-border/60 border-b px-3 py-1.5 last:border-b-0">
+			<p className="flex items-center gap-2">
+				<span
+					className="w-24 shrink-0 truncate font-medium text-foreground text-xs"
+					title={entry.label}
+				>
+					{entry.label}
+				</span>
+				<code
+					className="shrink-0 font-mono text-[11px] text-muted-foreground"
+					title="Inserted at the cursor"
+				>
+					{entry.syntax}
+				</code>
+				{entry.renderable === false ? null : (
+					<>
+						<ArrowRight className="size-3 shrink-0 text-muted-foreground/50" />
+						<span className={`min-w-0 flex-1 overflow-hidden ${PREVIEW}`}>
+							<NoteView content={previewSource(entry)} tags={[]} />
+						</span>
+					</>
+				)}
+				<InsertButton entry={entry} canInsert={canInsert} />
+			</p>
+			{/* Rendered, not dropped. An earlier version of this row showed a blurb
+			    only for non-previewable entries, which silently hid genuinely useful
+			    notes like "No formatting is applied inside" on inline code. Rows
+			    without a blurb stay a single line. */}
+			{entry.blurb ? <p className="mt-0.5 text-muted-foreground text-xs">{entry.blurb}</p> : null}
 		</li>
 	);
 }
@@ -222,10 +240,10 @@ export default function MarkdownReferencePanel() {
 								{open ? (
 									<ul>
 										{entries.map((entry) =>
-											entry.block ? (
-												<BlockRow key={entry.id} entry={entry} canInsert={hasEditor} />
-											) : (
+											fitsOneLine(entry) ? (
 												<InlineRow key={entry.id} entry={entry} canInsert={hasEditor} />
+											) : (
+												<BlockRow key={entry.id} entry={entry} canInsert={hasEditor} />
 											),
 										)}
 									</ul>

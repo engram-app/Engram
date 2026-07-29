@@ -167,16 +167,32 @@ describe("MarkdownReferencePanel — adaptive rows", () => {
 		expect(rule.querySelector("figure hr")).not.toBeNull();
 	});
 
-	it("shows the heading ladder rather than asserting that levels exist", () => {
-		// "Levels 1–6" is the kind of blurb we deleted elsewhere. Render the
-		// sizes instead so the hierarchy is visible.
+	it("gives every heading level its own one-line row, rendered at its own size", () => {
+		// "Levels 1–6" as prose is the kind of blurb we deleted elsewhere. Six
+		// rows show the ladder AND make each level separately insertable.
 		renderPanel();
 		openSection("Structure");
-		const heading = row("Heading");
-		const figure = heading.querySelector("figure") as HTMLElement;
-		expect(figure.querySelector("h1")?.textContent).toContain("Release notes");
-		expect(figure.querySelector("h2")?.textContent).toContain("Highlights");
-		expect(figure.querySelector("h3")?.textContent).toContain("Bug fixes");
+		for (let level = 1; level <= 6; level++) {
+			const heading = row(`Heading ${level}`);
+			expect(heading.querySelector(`h${level}`), `h${level} renders`).not.toBeNull();
+			// One line: template beside the label, no stacked source block.
+			expect(heading.querySelector("pre"), `h${level} has no source block`).toBeNull();
+			expect(heading.querySelector("code")?.textContent).toBe(`${"#".repeat(level)} Heading`);
+		}
+	});
+
+	it("inserts a heading at the level whose row was clicked", () => {
+		renderPanel({ doc: "prose", caret: 5 });
+		openSection("Structure");
+		fireEvent.click(screen.getByRole("button", { name: "Insert Heading 3" }));
+		expect(view?.state.doc.toString()).toBe("prose\n### Heading");
+	});
+
+	it("shows a blurb on a one-line row instead of swallowing it", () => {
+		// Regression guard: InlineRow once rendered blurbs only for entries with
+		// no preview, silently hiding useful notes on inline code and others.
+		renderPanel();
+		expect(row("Inline code").textContent).toMatch(/no formatting is applied inside/iu);
 	});
 
 	it("drops the blurb entirely where the label already says it", () => {

@@ -94,15 +94,62 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	},
 
 	// ── Structure ───────────────────────────────────────────────────────────
+	// One row per level. Reading down them shows the size ladder AND a real
+	// document outline, which is what a prose blurb saying "levels 1-6" could
+	// never do — and each level is separately insertable.
 	{
-		id: "heading",
+		id: "heading-1",
 		category: "Structure",
-		label: "Heading",
-		syntax: "## Heading",
-		demo: "# Release notes\n## Highlights\n### Bug fixes",
-		blurb: "One # per level, up to six. Headings feed the Outline panel.",
+		label: "Heading 1",
+		syntax: "# Heading",
+		demo: "# Release notes",
 		block: true,
-		keywords: ["title", "h1", "h2", "toc", "outline"],
+		keywords: ["title", "h1", "toc", "outline", "section"],
+	},
+	{
+		id: "heading-2",
+		category: "Structure",
+		label: "Heading 2",
+		syntax: "## Heading",
+		demo: "## Highlights",
+		block: true,
+		keywords: ["title", "h2", "toc", "outline", "section"],
+	},
+	{
+		id: "heading-3",
+		category: "Structure",
+		label: "Heading 3",
+		syntax: "### Heading",
+		demo: "### Bug fixes",
+		block: true,
+		keywords: ["title", "h3", "toc", "outline", "section"],
+	},
+	{
+		id: "heading-4",
+		category: "Structure",
+		label: "Heading 4",
+		syntax: "#### Heading",
+		demo: "#### Sync engine",
+		block: true,
+		keywords: ["title", "h4", "toc", "outline", "section"],
+	},
+	{
+		id: "heading-5",
+		category: "Structure",
+		label: "Heading 5",
+		syntax: "##### Heading",
+		demo: "##### Edge cases",
+		block: true,
+		keywords: ["title", "h5", "toc", "outline", "section"],
+	},
+	{
+		id: "heading-6",
+		category: "Structure",
+		label: "Heading 6",
+		syntax: "###### Heading",
+		demo: "###### Known issues",
+		block: true,
+		keywords: ["title", "h6", "toc", "outline", "section"],
 	},
 	{
 		id: "bullet-list",
