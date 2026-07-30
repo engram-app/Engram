@@ -45,33 +45,6 @@ const selectNotes = (data: { notes: NoteSummary[] }) => data.notes;
 
 const selectAttachments = (data: { attachments: AttachmentSummary[] }) => data.attachments;
 
-// Resolve a folder PATH (a NoteSummary.folder, or '' for the vault root) to the
-// id its note list is cached under. Root maps to the sentinel without a lookup;
-// every other folder resolves through the folders cache marker. Returns null
-// when an unknown non-root folder isn't in the cache yet — callers skip the
-// optimistic patch and let the list surface on its next fetch.
-function folderIdForPath(
-	qc: QueryClient,
-	vaultId: string | null | undefined,
-	folder: string,
-): string | null {
-	if (folder === "") {
-		return ROOT_FOLDER_ID;
-	}
-	// getQueryData returns the RAW payload — `select: selectFolders` only shapes
-	// what components see. So a derived folder still carries `id: null` here, and
-	// it must get the same `syn:<path>` id selectFolders would have given it,
-	// otherwise this returns null for most real folders and every caller silently
-	// skips its optimistic patch.
-	const row = qc
-		.getQueryData<{ folders: Array<Folder & { id: string | null }> }>(["folders", vaultId])
-		?.folders.find((f) => f.name === folder);
-	if (!row) {
-		return null;
-	}
-	return row.id ?? syntheticFolderId(row.name);
-}
-
 // Single source for the by-id note fetch used by useNote's queryFn.
 function fetchNoteById(id: string): Promise<Note> {
 	return api.get<Note>(`/notes/by-id/${id}`);
@@ -243,6 +216,36 @@ interface BatchFoldersContext {
 	// Snapshot every by-id note list whose folder is being deleted so
 	// rollback can restore them. Move doesn't touch these lists.
 	noteListSnapshots: Array<{ key: readonly unknown[]; data: NoteSummary[] | undefined }>;
+}
+
+// Resolve a folder PATH (a NoteSummary.folder, or '' for the vault root) to the
+// id its note list is cached under. Root maps to the sentinel without a lookup;
+// every other folder resolves through the folders cache marker. Returns null
+// when an unknown non-root folder isn't in the cache yet — callers skip the
+// optimistic patch and let the list surface on its next fetch.
+//
+// Declared here rather than beside the selectors above so it sits after the
+// last non-export statement: `useExportsLast` fires if an export precedes one.
+export function folderIdForPath(
+	qc: QueryClient,
+	vaultId: string | null | undefined,
+	folder: string,
+): string | null {
+	if (folder === "") {
+		return ROOT_FOLDER_ID;
+	}
+	// getQueryData returns the RAW payload — `select: selectFolders` only shapes
+	// what components see. So a derived folder still carries `id: null` here, and
+	// it must get the same `syn:<path>` id selectFolders would have given it,
+	// otherwise this returns null for most real folders and every caller silently
+	// skips its optimistic patch.
+	const row = qc
+		.getQueryData<{ folders: Array<Folder & { id: string | null }> }>(["folders", vaultId])
+		?.folders.find((f) => f.name === folder);
+	if (!row) {
+		return null;
+	}
+	return row.id ?? syntheticFolderId(row.name);
 }
 
 // Types matching backend JSON responses

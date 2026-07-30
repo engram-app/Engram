@@ -29,7 +29,7 @@ import {
 	sendCrdtCreateBatch,
 	sendCrdtDelete,
 } from "./crdt-ops";
-import { ROOT_FOLDER_ID } from "./queries";
+import { folderIdForPath } from "./queries";
 
 // phoenix.js's own default reconnect steps — kept for the 2nd+ attempt. Only
 // the FIRST reconnect is full-jittered, to de-sync a drained fleet so the
@@ -147,10 +147,6 @@ function folderFromPath(path: string): string {
 	return idx === -1 ? "" : path.slice(0, idx);
 }
 
-interface CachedFolders {
-	folders?: Array<{ id: string; name: string }>;
-}
-
 function flushBatch(batch: PendingBatch): void {
 	const { queryClient, vaultId, folders } = batch;
 	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
@@ -159,7 +155,6 @@ function flushBatch(batch: PendingBatch): void {
 	// The by-id keys are keyed on folder-marker ids; resolve names through
 	// the cached tree. Unknown folders (just created, tree not refetched
 	// yet) fall back to one broad invalidation.
-	const cached = queryClient.getQueryData<CachedFolders>(["folders", vaultId]);
 	let broadById = false;
 
 	// refetchType "all" (not the default "active"): the tree loader
@@ -175,22 +170,20 @@ function flushBatch(batch: PendingBatch): void {
 			queryKey: ["folderNotes", vaultId, folder],
 			refetchType: "all",
 		});
-		// Root has no folder marker; its id-keyed list keys under the sentinel.
-		if (folder === "") {
-			queryClient.invalidateQueries({
-				queryKey: ["folder-notes-by-id", vaultId, ROOT_FOLDER_ID],
-				refetchType: "all",
-			});
-			continue;
-		}
-		const entry = cached?.folders?.find((f) => f.name === folder);
-		if (entry) {
-			queryClient.invalidateQueries({
-				queryKey: ["folder-notes-by-id", vaultId, entry.id],
-				refetchType: "all",
-			});
-		} else {
+		// Use the SHARED resolver, not a local lookup: reading the raw folders
+		// cache and trusting `row.id` returns null for every DERIVED folder (most
+		// folders), and a found-but-null entry silently invalidated the key
+		// `[..., null]` while skipping the broad fallback below — so a note
+		// deleted on another device stayed in the sidebar until a reload.
+		// folderIdForPath re-applies selectFolders' `syn:<path>` normalisation.
+		const folderId = folderIdForPath(queryClient, vaultId, folder);
+		if (folderId === null) {
 			broadById = true;
+		} else {
+			queryClient.invalidateQueries({
+				queryKey: ["folder-notes-by-id", vaultId, folderId],
+				refetchType: "all",
+			});
 		}
 	}
 
