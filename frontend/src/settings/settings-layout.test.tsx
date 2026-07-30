@@ -63,6 +63,20 @@ describe("SettingsDialog", () => {
 		expect(link.getAttribute("href")).toMatch(/#settings\/billing$/);
 	});
 
+	it("renders an icon inside every nav link", async () => {
+		renderDialog("account");
+		await screen.findByRole("link", { name: "Billing" });
+
+		// The icon is aria-hidden (the label already names the section), so it is
+		// unreachable by role/name — query the rendered svg directly. Checking
+		// every link, not just one, is the point: a section declared without an
+		// icon would otherwise render a silent hole in the nav.
+		for (const name of ["Account", "Vaults", "Connections", "Billing"]) {
+			const link = screen.getByRole("link", { name });
+			expect(link.querySelector("svg"), `"${name}" nav link has no icon`).not.toBeNull();
+		}
+	});
+
 	it("marks the current section as the active nav item", async () => {
 		renderDialog("vaults");
 		expect(await screen.findByRole("link", { name: "Vaults" })).toHaveAttribute(
