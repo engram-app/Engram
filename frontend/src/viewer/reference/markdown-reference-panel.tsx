@@ -1,6 +1,7 @@
 import hljs from "highlight.js/lib/common";
 import { ArrowRight, ChevronRight, Plus } from "lucide-react";
 import { type ReactNode, useId, useMemo, useState } from "react";
+import { HelpTip } from "@/components/help-tip";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useActiveEditor } from "../editor/active-editor-context";
@@ -68,6 +69,10 @@ const SOURCE =
 // headers styled alike is what made sections hard to find in the first place.
 const ROW_HEADING = "font-semibold text-foreground text-sm";
 
+// Shared by the category links and the overview's link row, so an outbound link
+// looks the same wherever the panel offers one.
+const REF_LINK = "text-xs underline underline-offset-2 hover:text-foreground";
+
 /**
  * A REAL outbound link, unlike the inert anchors inside previews — this one is
  * the point. Its own line rather than trailing the prose, so it reads as "go
@@ -82,10 +87,66 @@ function RefLink({ link }: { link?: { href: string; label: string } }) {
 			href={link.href}
 			target="_blank"
 			rel="noreferrer"
-			className="mt-1.5 inline-block text-xs underline underline-offset-2 hover:text-foreground"
+			className={`mt-1.5 inline-block ${REF_LINK}`}
 		>
 			{link.label}
 		</a>
+	);
+}
+
+// Gruber's own statement of the design goal, from the page that introduced
+// Markdown in 2004. Quoted rather than paraphrased because it IS the answer to
+// "why this instead of a rich-text editor", and because a reference panel that
+// puts words in the inventor's mouth is a bad look. Source is linked below it.
+const GRUBER_QUOTE =
+	"A Markdown-formatted document should be publishable as-is, as plain text, without looking like it's been marked up with tags or formatting instructions.";
+
+const OVERVIEW_LINKS: readonly { href: string; label: string }[] = [
+	// The original. Still the most complete statement of the base syntax.
+	{ href: "https://daringfireball.net/projects/markdown/syntax", label: "Gruber's syntax guide" },
+	// CommonMark is the spec every modern renderer (ours included, via remark)
+	// actually implements; the tutorial is the fastest way in.
+	{ href: "https://commonmark.org/help/", label: "CommonMark in 10 minutes" },
+	// Obsidian's, because the extras below — callouts, wikilinks, properties —
+	// are its flavour rather than base Markdown, and its docs are the reference
+	// for those.
+	{ href: "https://help.obsidian.md/syntax", label: "Obsidian's flavour" },
+];
+
+/**
+ * What Markdown is and why the notes are written in it.
+ *
+ * Behind the `?` rather than pinned above the catalogue: it answers a question
+ * you have exactly once, and a permanent block of prose costs every later visit
+ * a scroll past something already read. The `?` keeps it one click away instead
+ * of nowhere.
+ */
+function Overview() {
+	return (
+		<>
+			<h2 className={ROW_HEADING}>Markdown</h2>
+			<p className="mt-1 text-muted-foreground leading-relaxed">
+				A handful of punctuation marks that mean formatting. John Gruber designed it in 2004 with
+				one overriding goal: readability.
+			</p>
+			<blockquote className="mt-2 border-border border-l-2 pl-2.5 text-foreground italic leading-relaxed">
+				{GRUBER_QUOTE}
+			</blockquote>
+			<p className="mt-2 text-muted-foreground leading-relaxed">
+				That is why your notes are plain <code className="font-mono">.md</code> files rather than a
+				database row. The source stays readable on its own, and any editor, script or version
+				control can read it, with or without Engram.
+			</p>
+			{/* flex-wrap, not a list: three short links read as one row at a
+			    comfortable panel width and stack themselves when it narrows. */}
+			<nav className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+				{OVERVIEW_LINKS.map((link) => (
+					<a key={link.href} href={link.href} target="_blank" rel="noreferrer" className={REF_LINK}>
+						{link.label}
+					</a>
+				))}
+			</nav>
+		</>
 	);
 }
 
@@ -426,7 +487,7 @@ export default function MarkdownReferencePanel() {
 
 	return (
 		<section className="flex h-full min-h-0 flex-col" aria-label="Markdown reference">
-			<search className="shrink-0 border-border border-b px-3 py-2">
+			<search className="flex shrink-0 items-center gap-2 border-border border-b px-3 py-2">
 				<label className="sr-only" htmlFor={searchId}>
 					Search markdown syntax
 				</label>
@@ -436,8 +497,11 @@ export default function MarkdownReferencePanel() {
 					value={query}
 					onChange={(e) => setQuery(e.target.value)}
 					placeholder="Search syntax…"
-					className="w-full rounded-md border border-border bg-background px-2 py-1 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+					className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
 				/>
+				<HelpTip label="About markdown">
+					<Overview />
+				</HelpTip>
 			</search>
 
 			{!hasEditor && (

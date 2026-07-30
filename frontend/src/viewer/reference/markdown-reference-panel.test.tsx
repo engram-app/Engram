@@ -27,7 +27,7 @@ function section(name: string): HTMLDetailsElement {
 /**
  * Expand a category. Necessary before asserting on its rows: a closed section
  * renders no children at all (React mounts <details> children regardless of
- * `open`, so the component gates them explicitly to avoid ~29 simultaneous
+ * `open`, so the component gates them explicitly to avoid dozens of simultaneous
  * markdown pipelines). jsdom does not action a summary click, so this drives the
  * same sequence a browser would.
  */
@@ -209,6 +209,51 @@ describe("MarkdownReferencePanel — demo teaches, template inserts", () => {
 		expect(mermaid.querySelector("pre")?.textContent).toBe(
 			"```mermaid\ngraph LR\n  Edit --> Sync --> Vault\n```",
 		);
+	});
+});
+
+describe("MarkdownReferencePanel — the ? help tip", () => {
+	it("stays out of the way until asked", () => {
+		renderPanel();
+		// Nothing of the explanation is in the DOM before the ? is clicked. The
+		// point of moving it behind the affordance was that a permanent block of
+		// prose costs every later visit a scroll past something already read.
+		expect(screen.queryByRole("heading", { name: "Markdown" })).toBeNull();
+		expect(screen.getByRole("button", { name: "About markdown" })).not.toBeNull();
+	});
+
+	// getByRole, not findByRole: Radix mounts the popover in the same commit as
+	// the click, so there is nothing to wait for. An await here would make the
+	// test depend on a 1s timeout instead, which the full suite blew through
+	// under parallel load while this file passed on its own every time.
+	it("says what markdown is, in the inventor's own words, with a source to check", () => {
+		renderPanel();
+		fireEvent.click(screen.getByRole("button", { name: "About markdown" }));
+		const dialog = screen.getByRole("dialog");
+		// The quote is Gruber's, verbatim from daringfireball.net. Paraphrasing it
+		// would put words in his mouth, so it is pinned here.
+		expect(dialog.textContent).toMatch(/publishable as-is, as plain text/u);
+		// Every claim in it is checkable: the original, the spec our renderer
+		// implements, and the flavour the extras below come from.
+		const hrefs = [...dialog.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+		expect(hrefs).toEqual([
+			"https://daringfireball.net/projects/markdown/syntax",
+			"https://commonmark.org/help/",
+			"https://help.obsidian.md/syntax",
+		]);
+	});
+
+	it("opens on CLICK, so the links inside it can be reached", () => {
+		// Regression guard against "make it a Tooltip": a hover tooltip closes when
+		// the pointer leaves the trigger, which puts these three links permanently
+		// out of reach — and gives touch users no way in at all.
+		renderPanel();
+		const trigger = screen.getByRole("button", { name: "About markdown" });
+		fireEvent.pointerEnter(trigger);
+		fireEvent.mouseOver(trigger);
+		expect(screen.queryByRole("dialog")).toBeNull();
+		fireEvent.click(trigger);
+		expect(screen.getByRole("dialog")).not.toBeNull();
 	});
 });
 
