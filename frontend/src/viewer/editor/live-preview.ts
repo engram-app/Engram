@@ -21,7 +21,7 @@ import { type Extension, Prec } from "@codemirror/state";
 import { blockquoteDepthPlugin } from "./blockquote-depth";
 import { calloutDecoration } from "./callout-decoration";
 import { katexDecoration } from "./katex-decoration";
-import { mermaidDecoration } from "./mermaid-decoration";
+import { mermaidDecoration, mermaidKeymap } from "./mermaid-decoration";
 
 export interface LivePreviewOpts {
 	resolveWikiLink: (name: string) => string;
@@ -82,6 +82,10 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		// in the editor while Reading mode drew the diagram. Ours, like the two
 		// above: a view-only widget that reveals its source on cursor entry.
 		mermaidDecoration,
+		// Lets ArrowUp/Down enter a rendered diagram instead of stepping over it.
+		// A block replace has no position inside it for the caret to land on, so
+		// without this the block is reachable only by clicking.
+		mermaidKeymap,
 		blockquoteDepthPlugin,
 	];
 }
