@@ -158,7 +158,7 @@ export const CATEGORY_INTROS: Record<
 		// was never implemented and was dropped from the spec in 2022. What remains
 		// true is that the SEQUENCE is what screen readers and our own Outline panel
 		// read, so a gap in it is a gap in the outline.
-		note: "Every heading becomes a line in the Outline panel — that panel is generated from these. Step down one level at a time; jumping ## to #### leaves a gap in it. By convention # is the note title, which your filename already gives you, so most notes start at ##.",
+		note: "Every heading becomes a line in the Outline panel, which is generated from these. Step down one level at a time; jumping ## to #### leaves a gap in it. By convention # is the note title, which your filename already gives you, so most notes start at ##.",
 	},
 	Callouts: {
 		syntax: "> [!type] Title\n> Body text.",
@@ -491,7 +491,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		// reader matching one to the other for no gain.
 		syntax: "```ts\nconst total = items.length;\n```",
 		blurb:
-			"Many languages are supported. Name the type straight after the opening fence — usually the file extension, so ts for TypeScript and js for JavaScript.",
+			"Many languages are supported. Name the type straight after the opening fence. It is usually the file extension: ts for TypeScript, js for JavaScript.",
 		block: true,
 		keywords: ["fence", "syntax", "highlight", "snippet", "language", "ts", "js", "elixir"],
 	},

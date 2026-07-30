@@ -68,7 +68,7 @@ function ToolButton({ tool }: { tool: RightToolDescriptor }) {
 			// they do not mark the current location the way the view buttons do.
 			aria-pressed={active}
 			disabled={!available}
-			title={available ? tool.label : `${tool.label} — open a note first`}
+			title={available ? tool.label : `${tool.label} (open a note first)`}
 			onClick={() => toggleActive(tool.id)}
 			className={`${railButtonClass(active)} disabled:pointer-events-none disabled:opacity-40`}
 		>
