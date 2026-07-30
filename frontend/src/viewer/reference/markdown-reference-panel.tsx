@@ -264,8 +264,23 @@ function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: bool
 						// leading-7 matches the prose line-height on the rendered side, so
 						// multi-line templates track their result line for line. Single-line
 						// rows are unaffected: the preview already sets the row height.
-						className={`whitespace-pre-wrap break-words font-mono text-foreground text-sm leading-7 ${
-							showsResult ? "max-w-[60%] shrink-0" : "min-w-0 flex-1"
+						// The template is the thing being documented, so it keeps its width
+						// while the result gives way — but it must still wrap once the result
+						// has nothing left to give, rather than push the result off the row.
+						// The preview's much larger shrink factor is what defers that to last.
+						//
+						// min-w-MIN, not min-w-0: with a zero floor the box shrank straight
+						// past its own text to 0px and the template overflowed invisibly
+						// instead of wrapping. A min-content floor is what forces the wrap.
+						// A max-w (the earlier approach) wrapped it at a fixed fraction even
+						// with room to spare.
+						// [overflow-wrap:anywhere] rather than break-words. They look alike,
+						// but only `anywhere` counts toward MIN-CONTENT width. With
+						// break-words a template containing a URL reported a min-content of
+						// the whole unbreakable URL, so min-w-min pinned the box at that
+						// width and it shoved the preview out of the row instead of wrapping.
+						className={`whitespace-pre-wrap font-mono text-foreground text-sm leading-7 [overflow-wrap:anywhere] ${
+							showsResult ? "min-w-min shrink" : "min-w-0 flex-1"
 						}`}
 					>
 						{entry.syntax}
@@ -273,7 +288,17 @@ function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: bool
 					{previewable ? (
 						<>
 							<ArrowRight className="size-3 shrink-0 text-muted-foreground/50" />
-							<Preview entry={entry} className="block min-w-0 flex-1 overflow-hidden" />
+							{/* No flex-1. That is `flex: 1 1 0%`, which claims ALL the leftover
+							    room whatever the content is, so a two-word rendered link
+							    reserved half the row and forced the template to wrap beside a
+							    band of empty space.
+							    Instead: sized by content, with a large shrink factor so it is
+							    the FIRST thing to give way, and min-w-min as the floor so it
+							    stops at its own longest word rather than collapsing to nothing
+							    and sliding out of the row. Past that point the template wraps.
+							    (min-w-min, not min-w-0, precisely because overflow-hidden
+							    would otherwise let it shrink to zero.) */}
+							<Preview entry={entry} className="block min-w-min shrink-[99] overflow-hidden" />
 						</>
 					) : entry.blurb ? (
 						<span className="min-w-0 flex-1 text-muted-foreground text-xs">{entry.blurb}</span>
