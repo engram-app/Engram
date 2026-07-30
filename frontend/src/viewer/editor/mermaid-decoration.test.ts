@@ -20,6 +20,26 @@ function mount(doc: string, anchor?: number) {
 
 const FENCE = "```mermaid\ngraph LR\n  Edit --> Sync\n```";
 
+/** How many fences the extension decided to render. */
+function widgetCount(v: EditorView): number {
+	return v.dom.querySelectorAll(".cm-mermaid-widget").length;
+}
+
+/**
+ * The source the widget was built from — read back off the decoration set
+ * rather than the DOM, because mermaid renders asynchronously and the container
+ * is still empty at assert time.
+ */
+function widgetCode(v: EditorView): string | null {
+	let code: string | null = null;
+	v.state.field(mermaidDecoration).between(0, v.state.doc.length, (_f, _t, deco) => {
+		const widget = deco.spec.widget as { code?: string } | undefined;
+		code = widget?.code ?? null;
+		return false;
+	});
+	return code;
+}
+
 describe("mermaidDecoration", () => {
 	test("replaces a mermaid fence with a widget, leaving the document untouched", () => {
 		// The whole extension is view-only: it decorates the source but must never
@@ -120,6 +140,30 @@ describe("mermaidDecoration", () => {
 			});
 			expect(enterMermaidDown(view)).toBe(false);
 		});
+	});
+
+	test("renders a fence indented inside a list item, as Reading mode does", () => {
+		// The old scan was anchored at column 0, so this stayed raw in the editor
+		// while remark rendered it — a hole in the editor/reading parity the rest
+		// of this file exists to close.
+		const doc = "- step one\n\n  ```mermaid\n  graph LR\n    A --> B\n  ```\n";
+		mount(doc, 0);
+		expect(widgetCount(view)).toBe(1);
+	});
+
+	test("hands mermaid a DEDENTED body, not one carrying the list indentation", () => {
+		const doc = "- step\n\n  ```mermaid\n  graph LR\n  ```\n";
+		mount(doc, 0);
+		expect(widgetCode(view)).toBe("graph LR");
+	});
+
+	test("ignores a ```mermaid line quoted inside a wider documentation fence", () => {
+		// A closing fence must be at least as long as its opener, so the inner
+		// ``` never closes the ````markdown block — the scan jumps the whole
+		// thing. The old one rendered a diagram in the middle of a code sample.
+		const doc = "````markdown\n```mermaid\ngraph LR\n```\n````\n";
+		mount(doc, 0);
+		expect(widgetCount(view)).toBe(0);
 	});
 
 	test("decorates each of several fences independently", () => {

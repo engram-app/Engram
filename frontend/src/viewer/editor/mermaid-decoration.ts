@@ -11,16 +11,6 @@ import { nextMermaidId, renderMermaid } from "../mermaid-render";
 import { selectionTouches } from "./decoration-utils";
 import "./mermaid.css";
 
-// ```mermaid opens; any bare ``` closes. Info strings other than "mermaid" are
-// somebody else's fence (and `codeLanguages` in live-preview.ts highlights those).
-//
-// ponytail: anchored at column 0 and blind to nesting, so a fence indented
-// inside a list item stays raw here (Reading mode renders it), and a ```mermaid
-// line nested inside a documentation fence is treated as real. Both are rare
-// enough to be worth less than a tree-sitter walk; upgrade path if they show up
-// is to read the fences off syntaxTree(state) instead of scanning lines.
-const FENCE_OPEN = /^```mermaid\s*$/;
-const FENCE_CLOSE = /^```\s*$/;
 
 /**
  * Renders one mermaid fence. The SVG arrives asynchronously, so toDOM returns an
@@ -89,10 +79,37 @@ interface Fence {
 	to: number;
 	openLine: number;
 	closeLine: number;
+	code: string;
 }
+
+// CommonMark fences, not just ```mermaid at column 0. The run of backticks and
+// the indentation are captured because both are load-bearing: a closing fence
+// must be at LEAST as long as its opener, which is the whole mechanism by which
+// a ````markdown block can quote a ```mermaid one.
+//
+// Info strings cannot contain a backtick, which is what keeps FENCE_OPEN from
+// matching a closer.
+const FENCE_OPEN = /^(?<indent> {0,3})(?<ticks>`{3,})[ \t]*(?<info>[^`]*?)[ \t]*$/;
+const FENCE_CLOSE = /^ {0,3}(?<ticks>`{3,})[ \t]*$/;
 
 /**
  * Every complete ```mermaid block in the document.
+ *
+ * Walks EVERY fence, not just the mermaid ones, and jumps the scan past each
+ * one it finds. That is what stops a ```mermaid line QUOTED inside a wider
+ * documentation fence from being read as a real block — it is content, and the
+ * scanner never looks at it. Leading indentation up to three spaces is allowed,
+ * so a fence inside a list item renders here as it already did in Reading mode.
+ *
+ * Scanned rather than read off syntaxTree(state), which was tried and reverted.
+ * The tree is parsed LAZILY: on a fresh EditorState it covered seven characters,
+ * and in a real editor it trails the viewport on a long note. Fences below the
+ * parse frontier would simply stop rendering — a worse failure than the two
+ * cases the tree would have fixed. This scan is O(lines) and always complete.
+ *
+ * ponytail: three spaces is the CommonMark document-level allowance, so a fence
+ * indented further by a NESTED list item is still missed. Upgrade path is to
+ * track container indentation; not worth it until someone hits it.
  *
  * Shared by the decoration and the arrow-key commands on purpose: two scanners
  * would be two answers to "where does this block start", and the commands exist
@@ -103,25 +120,56 @@ function fenceRanges(doc: Text): Fence[] {
 	let lineNo = 1;
 	while (lineNo <= doc.lines) {
 		const line = doc.line(lineNo);
-		if (!FENCE_OPEN.test(line.text)) {
+		const open = FENCE_OPEN.exec(line.text);
+		if (!open) {
 			lineNo++;
 			continue;
 		}
-		// Without a closing fence the block is still being typed, so leave it alone.
+		const indent = open.groups?.indent?.length ?? 0;
+		const ticks = open.groups?.ticks?.length ?? 0;
+		const info = open.groups?.info ?? "";
+
 		let closeNo = 0;
 		for (let n = lineNo + 1; n <= doc.lines; n++) {
-			if (FENCE_CLOSE.test(doc.line(n).text)) {
+			const close = FENCE_CLOSE.exec(doc.line(n).text);
+			if (close && (close.groups?.ticks?.length ?? 0) >= ticks) {
 				closeNo = n;
 				break;
 			}
 		}
+		// No closer means the block is still being typed — and that everything
+		// below is inside it, so there is nothing further to find either.
 		if (closeNo === 0) {
 			break;
 		}
-		out.push({ from: line.from, to: doc.line(closeNo).to, openLine: lineNo, closeLine: closeNo });
+
+		if (info === "mermaid") {
+			const body: string[] = [];
+			for (let n = lineNo + 1; n < closeNo; n++) {
+				body.push(dedent(doc.line(n).text, indent));
+			}
+			out.push({
+				from: line.from,
+				to: doc.line(closeNo).to,
+				openLine: lineNo,
+				closeLine: closeNo,
+				code: body.join("\n"),
+			});
+		}
+		// Past the whole block whether or not it was ours: everything between the
+		// marks is content, including any line that looks like a fence.
 		lineNo = closeNo + 1;
 	}
 	return out;
+}
+
+/** Drop up to `width` leading spaces, so an indented diagram reaches mermaid flush. */
+function dedent(line: string, width: number): string {
+	let i = 0;
+	while (i < width && line[i] === " ") {
+		i++;
+	}
+	return line.slice(i);
 }
 
 function buildMermaid(state: EditorState): DecorationSet {
@@ -135,20 +183,16 @@ function buildMermaid(state: EditorState): DecorationSet {
 		if (selectionTouches(sel, fence.from, fence.to)) {
 			continue;
 		}
-		const code: string[] = [];
-		for (let n = fence.openLine + 1; n < fence.closeLine; n++) {
-			code.push(doc.line(n).text);
-		}
 		ranges.push(
 			Decoration.replace({
-				widget: new MermaidWidget(code.join("\n"), dark),
+				widget: new MermaidWidget(fence.code, dark),
 				block: true,
 			}).range(fence.from, fence.to),
 		);
 	}
 
-	// `true` = let RangeSet sort. Regex scans discover ranges out of document
-	// order, and an unsorted set throws.
+	// `true` = let RangeSet sort. The scan is in document order, but the cost is
+	// nil and an unsorted set throws.
 	return Decoration.set(ranges, true);
 }
 
