@@ -186,7 +186,11 @@ export default defineConfig({
 			// and that must render the SPA, not proxy to Phoenix. Proxying it
 			// serves Phoenix's prebuilt index.html into the dev server, whose
 			// hashed asset URLs 404 — the app then hangs on "Loading…".
-			"^/api(/|$)": {
+			//
+			// The `?` in the class matters: Vite matches against the RAW req.url,
+			// query string included, so `[/?]` is what keeps /api?foo=1 proxied
+			// while /api-2?foo=1 still reaches the SPA.
+			"^/api(?:$|[/?])": {
 				target: apiTarget,
 				changeOrigin: true,
 			},
@@ -201,8 +205,10 @@ export default defineConfig({
 				changeOrigin: true,
 			},
 			// Anchored for the same reason as /api above: a slug like /socket-2
-			// must reach the SPA, not the WebSocket proxy.
-			"^/socket(/|$)": {
+			// must reach the SPA, not the WebSocket proxy. The upgrade handler
+			// matches on the raw req.url too, so /socket/websocket?vsn=2.0.0
+			// still proxies.
+			"^/socket(?:$|[/?])": {
 				target: apiTarget,
 				changeOrigin: true,
 				ws: true,
