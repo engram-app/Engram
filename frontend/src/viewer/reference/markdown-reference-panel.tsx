@@ -1,3 +1,4 @@
+import hljs from "highlight.js/lib/common";
 import { ArrowRight, ChevronRight, Plus } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -85,6 +86,48 @@ function RefLink({ link }: { link?: { href: string; label: string } }) {
 		>
 			{link.label}
 		</a>
+	);
+}
+
+// ```lang / body / ``` — the only template shape whose body is another language.
+const FENCE_TEMPLATE = /^```(?<lang>\w+)\n(?<body>[\s\S]*)\n```$/u;
+
+/**
+ * A template block, with a fenced body highlighted in its own language.
+ *
+ * The code-fence rows show the SAME string twice: once as the template you
+ * type, once as the result. Leaving the template flat grey beside a coloured
+ * result read as if the highlighting were something the panel did rather than
+ * something the editor does to your source. The fence markers stay plain, since
+ * they are markdown rather than code.
+ *
+ * Anything that is not a fence, or is tagged with a language highlight.js does
+ * not know (```mermaid), falls through untouched.
+ */
+function TemplateSource({ syntax }: { syntax: string }) {
+	const match = FENCE_TEMPLATE.exec(syntax);
+	const lang = match?.groups?.lang;
+	if (!(match && lang && hljs.getLanguage(lang))) {
+		return <>{syntax}</>;
+	}
+	// Bound to consts rather than inlined as JSX string literals: the closing
+	// fence is a bare "\n```", which biome's consistent-curly-braces rule rejects
+	// in braces and which cannot be written as JSX text without losing the break.
+	const openFence = `\`\`\`${lang}\n`;
+	const closeFence = "\n```";
+	return (
+		<>
+			{openFence}
+			{/* hljs escapes the source it highlights, and the input is our own static
+			    catalogue rather than note content, so nothing user-authored reaches
+			    innerHTML here. */}
+			<span
+				dangerouslySetInnerHTML={{
+					__html: hljs.highlight(match.groups?.body ?? "", { language: lang }).value,
+				}}
+			/>
+			{closeFence}
+		</>
 	);
 }
 
@@ -307,7 +350,7 @@ function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 					{/* The payload specifically — the context lines around it are not
 					    inserted, which is why the title sits here, not on the block. */}
 					<span title="Inserted at the cursor" className="block text-foreground">
-						{entry.syntax}
+						<TemplateSource syntax={entry.syntax} />
 					</span>
 					<ContextLines lines={entry.templatePostlude} />
 				</pre>

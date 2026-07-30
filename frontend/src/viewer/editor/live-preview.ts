@@ -15,6 +15,7 @@ import "./obsidian-theme.css";
 // Nested-blockquote depth rendering (Atomic renders `>` flat). Load after
 // Atomic's stylesheet so the depth-aware rules win the cascade.
 import "./blockquote-depth.css";
+import { ATOMIC_CODE_LANGUAGES } from "@atomic-editor/editor/code-languages";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import type { Extension } from "@codemirror/state";
 import { blockquoteDepthPlugin } from "./blockquote-depth";
@@ -36,7 +37,18 @@ export interface LivePreviewOpts {
  */
 export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 	return [
-		markdown({ base: markdownLanguage, extensions: [highlightMarkdown] }),
+		// codeLanguages is what makes a fenced block highlight as its LANGUAGE.
+		// Without it lang-markdown never parses the fence body, so ```ts rendered
+		// as undifferentiated code text in the editor while Reading mode (which
+		// highlights via rehype-highlight) coloured it — the same note looked
+		// different per pane. ATOMIC_CODE_LANGUAGES is the curated 21-language list
+		// the editor package ships for exactly this; every grammar sits behind a
+		// dynamic import, so they stay lazy chunks rather than eager bundle weight.
+		markdown({
+			base: markdownLanguage,
+			codeLanguages: ATOMIC_CODE_LANGUAGES,
+			extensions: [highlightMarkdown],
+		}),
 		// Applies the syntax-highlight *colors* for the markdown grammar tags
 		// `highlightMarkdown` adds (headings, emphasis, etc). Without this the
 		// live-preview text renders unstyled — atomicEditorTheme alone only sets

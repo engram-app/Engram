@@ -181,6 +181,35 @@ describe("MarkdownReferencePanel — demo teaches, template inserts", () => {
 		fireEvent.click(within(table).getByRole("button", { name: "Insert Table" }));
 		expect(view?.state.doc.toString()).toBe(`prose\n${shown}`);
 	});
+
+	it("highlights a fenced template's body, without altering what gets inserted", () => {
+		renderPanel({ doc: "prose", caret: 5 });
+		openSection("Code");
+		const highlighted = row("Highlighted Code Block");
+		const pre = highlighted.querySelector("pre");
+
+		// The body is tokenized in its own language…
+		expect(pre?.querySelector(".hljs-keyword")?.textContent).toBe("const");
+		// …while the template's TEXT stays byte-identical to the insert payload.
+		// Tokenizing must decorate the source, never rewrite it.
+		expect(pre?.textContent).toBe("```ts\nconst total = items.length;\n```");
+		fireEvent.click(
+			within(highlighted).getByRole("button", { name: "Insert Highlighted Code Block" }),
+		);
+		expect(view?.state.doc.toString()).toBe("prose\n```ts\nconst total = items.length;\n```");
+	});
+
+	it("leaves a fence alone when highlight.js does not know the language", () => {
+		// ```mermaid is a real fence but not a real grammar. Guarding on
+		// getLanguage is what keeps it from being tokenized as gibberish.
+		renderPanel();
+		openSection("Code");
+		const mermaid = row("Mermaid Diagram");
+		expect(mermaid.querySelector("pre")?.querySelector('[class*="hljs-"]')).toBeNull();
+		expect(mermaid.querySelector("pre")?.textContent).toBe(
+			"```mermaid\ngraph LR\n  Edit --> Sync --> Vault\n```",
+		);
+	});
 });
 
 describe("MarkdownReferencePanel — adaptive rows", () => {
