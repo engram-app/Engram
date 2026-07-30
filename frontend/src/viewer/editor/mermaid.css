@@ -1,0 +1,28 @@
+/* Mermaid block widget, emitted by mermaid-decoration.ts. */
+
+.cm-mermaid-widget {
+	display: flex;
+	justify-content: center;
+	/* PADDING, not margin, for the vertical rhythm. CM6 measures a block widget's
+	 * height with getBoundingClientRect, which includes padding but EXCLUDES
+	 * margin — a margin here would make the heightmap allocate less space than the
+	 * DOM actually consumes, so every line below the diagram would sit at a
+	 * different Y than CM6 thinks and clicks would land on the neighbouring line.
+	 * @atomic-editor/editor's table widget documents the same trap, having shipped
+	 * the bug first. */
+	padding: 0.5em 0;
+}
+
+.cm-mermaid-widget svg {
+	max-width: 100%;
+	height: auto;
+}
+
+/* A fence that does not parse. Normal while typing, so it stays quiet rather
+ * than alarming — but it has to be legible, not an empty gap. */
+.cm-mermaid-error {
+	justify-content: flex-start;
+	font-family: var(--font-mono, monospace);
+	font-size: 0.85em;
+	color: var(--atomic-editor-fg-muted, #6e6e6e);
+}

@@ -1,6 +1,7 @@
-import { type EditorState, type Range, RangeSetBuilder, StateField } from "@codemirror/state";
+import { type EditorState, type Range, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 import katex from "katex";
+import { selectionTouches } from "./decoration-utils";
 import "katex/dist/katex.min.css";
 
 class MathWidget extends WidgetType {
@@ -43,7 +44,7 @@ function buildMath(state: EditorState): DecorationSet {
 		const start = m.index ?? 0;
 		const end = start + m[0].length;
 		// Reveal raw when the cursor/selection intersects the span.
-		const active = sel.ranges.some((r) => r.from <= end && r.to >= start);
+		const active = selectionTouches(sel, start, end);
 		if (active) {
 			continue;
 		}
@@ -63,11 +64,9 @@ function buildMath(state: EditorState): DecorationSet {
 			: { widget: new MathWidget(tex, false) };
 		ranges.push(Decoration.replace(spec).range(start, end));
 	}
-	const builder = new RangeSetBuilder<Decoration>();
-	for (const r of ranges.sort((a, b) => a.from - b.from)) {
-		builder.add(r.from, r.to, r.value);
-	}
-	return builder.finish();
+	// `true` = let RangeSet sort. Regex scans discover ranges out of document
+	// order, and an unsorted set throws.
+	return Decoration.set(ranges, true);
 }
 
 // StateField (not ViewPlugin): block math replaces line breaks, which CM6 only

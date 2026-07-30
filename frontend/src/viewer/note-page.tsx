@@ -14,8 +14,9 @@ import {
 	openDoc,
 	subscribeToCrdtSyncStatus,
 } from "../crdt/session";
-import { useRightSidebar } from "../layout/right-sidebar-context";
+import { useRightTools } from "../layout/right-tools-context";
 import { noteName } from "../lib/note-name";
+import { useActiveEditor } from "./editor/active-editor-context";
 import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
 import { EditorToolbar } from "./editor/toolbar";
 import LoadingPane from "./loading-pane";
@@ -46,7 +47,8 @@ export default function NotePage() {
 	const validId = idStr && idStr.length > 0 ? idStr : null;
 
 	const { data: note, isLoading, error } = useNote(validId);
-	const { setContent: setRightContent } = useRightSidebar();
+	const { setSlot } = useRightTools();
+	const { setEditor } = useActiveEditor();
 
 	const [mode, setMode] = useState<Mode>("rendered");
 	// Which note the rename box belongs to, not a bare boolean: navigating to
@@ -113,12 +115,25 @@ export default function NotePage() {
 	const liveContent = useLiveContent(handle?.ytext ?? null, noteContent ?? "");
 	useEffect(() => {
 		if (notePath === undefined) {
-			setRightContent(null);
+			setSlot("outline", null);
 			return;
 		}
-		setRightContent(<NoteToc content={liveContent} />);
-		return () => setRightContent(null);
-	}, [notePath, liveContent, setRightContent]);
+		setSlot("outline", <NoteToc content={liveContent} />);
+		return () => setSlot("outline", null);
+	}, [notePath, liveContent, setSlot]);
+
+	// Publish the editor so right-sidebar tools (the markdown reference panel)
+	// can insert at the caret. Gated on the SAME condition that renders
+	// NoteEditor below, so "Insert" is disabled in reading mode and on
+	// non-markdown items rather than silently doing nothing.
+	const editorMounted = handle !== null && mode !== "reading";
+	useEffect(() => {
+		if (!editorMounted) {
+			return;
+		}
+		setEditor(() => editorViewRef.current);
+		return () => setEditor(null);
+	}, [editorMounted, setEditor]);
 
 	if (validId === null) {
 		return <p className="p-6 text-destructive">Invalid note id.</p>;
@@ -164,6 +179,11 @@ export default function NotePage() {
 						<RenameInput
 							initial={name}
 							kind="file"
+							// This reads as a title field, not a modal edit: you click it,
+							// retype, and click into the document. Losing the rename because
+							// you did not press Enter is a surprise, so focus leaving saves.
+							// Escape still abandons.
+							commitOnBlur
 							onCommit={commitRename}
 							onCancel={() => setRenamingFor(null)}
 						/>

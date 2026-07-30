@@ -95,3 +95,30 @@ describe("NoteView attachment gating", () => {
 		expect(screen.queryByTestId("attachment-fallback-lock")).toBeNull();
 	});
 });
+
+describe("NoteView callout colour republish", () => {
+	// The editor side of this contract is pinned in callout-decoration.test.ts;
+	// the reading side was pinned by nothing. Both panes have to hand CSS the
+	// same custom property or the callout TITLE loses its per-type colour in one
+	// of them, which is precisely the drift the shared map exists to prevent.
+	it("republishes the library's inline border colour as --callout-color", () => {
+		renderNote("> [!tip] Better way\n> body\n");
+		const quote = document.querySelector("blockquote");
+		expect(quote).not.toBeNull();
+		// The library inlines border-left-color per type. Whatever it picked, the
+		// custom property has to carry the SAME value — asserting a specific hex
+		// here would just re-encode the library's palette in a second place.
+		const border = quote?.style.borderLeftColor;
+		expect(border).toBeTruthy();
+		expect(quote?.style.getPropertyValue("--callout-color")).toBe(border);
+	});
+
+	it("leaves a plain blockquote alone rather than inventing a colour", () => {
+		// Only callouts get a border colour from the library. A plain quote has
+		// none, and publishing an empty custom property would make the title rule
+		// resolve to nothing instead of falling back to `inherit`.
+		renderNote("> just a quotation\n");
+		const quote = document.querySelector("blockquote");
+		expect(quote?.style.getPropertyValue("--callout-color")).toBe("");
+	});
+});

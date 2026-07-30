@@ -1,4 +1,4 @@
-import { type Range, RangeSetBuilder } from "@codemirror/state";
+import type { Range } from "@codemirror/state";
 import {
 	Decoration,
 	type DecorationSet,
@@ -25,11 +25,9 @@ function buildBlockquoteDecorations(view: EditorView): DecorationSet {
 			);
 		}
 	}
-	const builder = new RangeSetBuilder<Decoration>();
-	for (const r of ranges) {
-		builder.add(r.from, r.to, r.value);
-	}
-	return builder.finish();
+	// `true` = let RangeSet sort. Regex scans discover ranges out of document
+	// order, and an unsorted set throws.
+	return Decoration.set(ranges, true);
 }
 
 /**

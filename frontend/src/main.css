@@ -11,93 +11,31 @@
 @import "@fontsource-variable/inter";
 @import "@fontsource/noto-serif/400-italic.css";
 
-/* Obsidian-flavored callouts (matches @portaljs/remark-callouts class names). */
 @layer components {
-	.callout {
-		@apply my-4 rounded-md border-l-4 border-blue-400 bg-blue-50 px-4 py-2 text-sm dark:bg-blue-950/40 dark:text-blue-50;
-	}
-	.callout[data-callout="note"] {
-		@apply border-blue-400 bg-blue-50 dark:bg-blue-950/40;
-	}
-	.callout[data-callout="tip"],
-	.callout[data-callout="hint"],
-	.callout[data-callout="important"] {
-		@apply border-teal-400 bg-teal-50 dark:bg-teal-950/40 dark:text-teal-50;
-	}
-	.callout[data-callout="warning"],
-	.callout[data-callout="caution"],
-	.callout[data-callout="attention"] {
-		@apply border-amber-400 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-50;
-	}
-	.callout[data-callout="danger"],
-	.callout[data-callout="error"],
-	.callout[data-callout="failure"],
-	.callout[data-callout="fail"],
-	.callout[data-callout="missing"] {
-		@apply border-red-400 bg-red-50 dark:bg-red-950/40 dark:text-red-50;
-	}
-	.callout[data-callout="success"],
-	.callout[data-callout="check"],
-	.callout[data-callout="done"] {
-		@apply border-green-400 bg-green-50 dark:bg-green-950/40 dark:text-green-50;
-	}
-	.callout[data-callout="question"],
-	.callout[data-callout="help"],
-	.callout[data-callout="faq"] {
-		@apply border-purple-400 bg-purple-50 dark:bg-purple-950/40 dark:text-purple-50;
-	}
-	.callout[data-callout="quote"],
-	.callout[data-callout="cite"] {
-		@apply border-gray-400 bg-gray-50 dark:bg-gray-900/60 dark:text-gray-100;
-	}
-	.callout-title {
-		@apply mb-1 flex items-center gap-2 font-semibold;
-	}
-
 	/* Wikilink styling — distinguish internal vault links from external. */
 	.internal a {
 		@apply text-indigo-600 no-underline hover:underline dark:text-indigo-400;
 	}
 
-	/* Obsidian-flavored breathing room — overrides Tailwind typography defaults
-     across the elements ReactMarkdown emits, not just <p>. Without these,
-     dense list-heavy notes still feel cramped because prose only targets
-     paragraphs and headings, not <li> or fenced code. */
-	.prose {
-		line-height: 1.6;
-	}
-	.prose
-		:where(p, ul, ol, blockquote, pre, table):not(
-			:where([class~="not-prose"], [class~="not-prose"] *)
-		) {
-		margin-top: 0.8em;
-		margin-bottom: 0.8em;
-	}
-	/* Fenced code wraps long lines instead of scrolling horizontally. */
+	/* Fenced code wraps long lines instead of scrolling horizontally.
+	 *
+	 * This is the ONE rule from the old "Obsidian-flavored breathing room" block
+	 * that ever took effect, because Typography sets no white-space on <pre>.
+	 * The rest of that block — .prose line-height, the p/ul/ol/blockquote/pre/
+	 * table margins, li and li > p margins, the h1-h4 margins and line-height, the
+	 * h*:first-child reset and pre overflow-x — was dead on arrival and has been
+	 * removed. @tailwindcss/typography emits `.prose` into the `utilities`
+	 * layer; a later layer beats an earlier one whatever the specificity, so
+	 * nothing declared here can override it. Measured rather than assumed: the
+	 * block asked for line-height 1.6 and got 28px, li margins 0.35em and got
+	 * 8px, h2 margins 1.4em/0.5em and got 48px/24px.
+	 *
+	 * If that spacing is still wanted, it has to move OUT of @layer (see
+	 * viewer/markdown.css, which is unlayered for exactly this reason) — and
+	 * that is a real visual change to every note, not a no-op cleanup. */
 	.prose :where(pre, pre code):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
 		white-space: pre-wrap;
 		word-break: break-word;
-	}
-	.prose :where(pre):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
-		overflow-x: hidden;
-	}
-	.prose :where(li):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
-		margin-top: 0.35em;
-		margin-bottom: 0.35em;
-	}
-	.prose :where(li > p):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
-		margin-top: 0.3em;
-		margin-bottom: 0.3em;
-	}
-	.prose :where(h1, h2, h3, h4):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
-		margin-top: 1.4em;
-		margin-bottom: 0.5em;
-		line-height: 1.3;
-	}
-	.prose :where(h1):first-child,
-	.prose :where(h2):first-child,
-	.prose :where(h3):first-child {
-		margin-top: 0;
 	}
 
 	/* Anchor link icon next to headings (rehype-autolink-headings, behavior: "append"). */
@@ -219,6 +157,13 @@
 }
 
 :root {
+	/* Callout surface, read by BOTH the reading-mode `.callout` rules below and
+	 * the editor's `.cm-line.cm-callout` (viewer/editor/callout.css). It was
+	 * referenced from both with an identical inline fallback and defined in
+	 * neither, so the literal was the real source of truth in two places at once.
+	 * A neutral translucent grey works on either theme, hence no .dark variant. */
+	--color-callout-bg: rgba(128, 128, 128, 0.08);
+
 	/* Cyber-Organic palette (light) — ported from engram-marketing global.css. primary=cyan, secondary kept neutral (shadcn surface), brand-purple added as accent. */
 	--background: oklch(100.00% 0 0);
 	--foreground: oklch(14.52% 0.0021 286.13);
@@ -378,4 +323,71 @@ html {
    on Paddle's own overlay so it stays interactive above any dialog. */
 .paddle-frame-overlay {
 	pointer-events: auto;
+}
+
+/* Obsidian-flavored callouts (@portaljs/remark-callouts markup).
+ *
+ * DELIBERATELY UNLAYERED, and for a sharper reason than the code fences.
+ * The library renders a callout as a <blockquote>, and @tailwindcss/typography
+ * styles blockquote from the `utilities` layer — the last one. A rule in
+ * `components` therefore lost EVERY property typography sets: the 3px bar
+ * became 0.25rem, the padding became 1em, the margins 1.6em, and the text
+ * went ITALIC in the quote colour, because typography thinks a blockquote is a
+ * quotation. Unlayered rules outrank every layer, which is the only placement
+ * that works without !important.
+ *
+ * Colour is not set here on purpose: the library inlines border-left-color per
+ * type from the same defaultConfig map the CodeMirror live preview reads, and
+ * an inline style outranks even this. main.css used to carry seven
+ * `.callout[data-callout="…"]` rules — the library emits no such attribute, so
+ * none of them ever matched and every callout was generically blue.
+ *
+ * Square, 3px bar, neutral background: identical to editor/callout.css, so the
+ * same callout looks the same while writing, while reading, and in the
+ * reference panel. */
+.callout {
+	/* Metrics measured off .cm-line.cm-callout in a live editor, not guessed:
+	   3px bar, 8px inline padding, no vertical padding, no own font-size. The
+	   0.875rem that used to sit here rendered the panel at 14px against the
+	   editor's 16px, which was most of the "doesn't match" gap. */
+	margin-block: 0.8em;
+	border-inline-start-width: 3px;
+	border-inline-start-style: solid;
+	border-inline-start-color: var(--border);
+	padding-inline: 0.5rem;
+	padding-block: 0;
+	border-radius: 0;
+	background-color: var(--color-callout-bg);
+	/* Undo the blockquote treatment: a callout is not a quotation. */
+	font-style: normal;
+	font-weight: 400;
+	color: inherit;
+	quotes: none;
+}
+
+.callout-title {
+	display: flex;
+	align-items: center;
+	gap: 0.4em;
+	font-weight: 600;
+	/* The editor colours the whole title, not just the icon. --callout-color is
+	   republished from the library's own inline border colour (note-view.tsx),
+	   so this stays a single source. */
+	color: var(--callout-color, inherit);
+}
+
+/* The library wraps the title in <strong><p>, and typography gives that inner
+ * <p> a 20px bottom margin. With the title flex-aligned to center, that makes
+ * <strong> 48px tall against a 16px icon, so the icon centres ~16px BELOW the
+ * text it belongs to. Both margins have to go, not just the top one. */
+.callout-title p {
+	margin: 0;
+}
+
+.callout-content > :first-child {
+	margin-top: 0;
+}
+
+.callout-content > :last-child {
+	margin-bottom: 0;
 }

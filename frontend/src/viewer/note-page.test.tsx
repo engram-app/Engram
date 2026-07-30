@@ -2,7 +2,26 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
+import { RightToolsProvider } from "../layout/right-tools-context";
+import { ActiveEditorProvider, useActiveEditor } from "./editor/active-editor-context";
 import NotePage from "./note-page";
+
+// Real provider, not a stub: the page publishing its editor here is the seam the
+// right-sidebar reference panel inserts through, so it's worth exercising.
+function EditorProbe() {
+	const { hasEditor } = useActiveEditor();
+	return <span data-testid="has-editor">{String(hasEditor)}</span>;
+}
+
+const renderPage = () =>
+	render(
+		<RightToolsProvider>
+			<ActiveEditorProvider>
+				<NotePage />
+				<EditorProbe />
+			</ActiveEditorProvider>
+		</RightToolsProvider>,
+	);
 
 // NoteView relies on ConfigProvider / billing context not available in this
 // test harness. Mock it so we can assert on the `content` prop directly.
@@ -37,10 +56,6 @@ vi.mock("../api/queries", () => ({
 	useRenameNote: () => ({ mutate: renameNoteMutate, isPending: false }),
 }));
 vi.mock("react-router", () => ({ useParams: () => ({ id: "note-1" }) }));
-// Minimal stubs for the right-sidebar + lazy editor context used by the page.
-vi.mock("../layout/right-sidebar-context", () => ({
-	useRightSidebar: () => ({ setContent: () => {} }),
-}));
 
 const NOTE = {
 	id: "note-1",
@@ -65,13 +80,13 @@ describe("NotePage (CRDT)", () => {
 	});
 
 	it("opens + enrolls the CRDT doc for a .md note, keyed by note_id (not path)", async () => {
-		render(<NotePage />);
+		renderPage();
 		await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-1"));
 		expect(enroll).toHaveBeenCalledWith("note-1");
 	});
 
 	it("closes the doc on unmount, keyed by note_id", async () => {
-		const { unmount } = render(<NotePage />);
+		const { unmount } = renderPage();
 		await waitFor(() => expect(openDoc).toHaveBeenCalled());
 		unmount();
 		expect(closeDoc).toHaveBeenCalledWith("note-1");
@@ -86,7 +101,7 @@ describe("NotePage (CRDT)", () => {
 			isLoading: false,
 			error: null,
 		});
-		render(<NotePage />);
+		renderPage();
 		await waitFor(() => expect(screen.getByText("note")).toBeInTheDocument());
 		expect(openDoc).not.toHaveBeenCalled();
 		expect(enroll).not.toHaveBeenCalled();
@@ -108,7 +123,7 @@ describe("NotePage (CRDT)", () => {
 			error: null,
 		});
 
-		render(<NotePage />);
+		renderPage();
 
 		// Wait for openDoc to resolve and handle to be set
 		await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-1"));
@@ -127,6 +142,21 @@ describe("NotePage (CRDT)", () => {
 		expect(screen.getByTestId("note-view")).not.toHaveTextContent("# hi");
 	});
 
+	it("publishes the editor while it is mounted and withdraws it in reading mode", async () => {
+		renderPage();
+		// Editor only exists once the CRDT handle resolves.
+		await waitFor(() => expect(screen.getByTestId("has-editor")).toHaveTextContent("true"));
+
+		// Reading mode swaps the editor out for NoteView — nothing to insert into,
+		// so the reference panel's Insert action must go disabled rather than
+		// silently no-op against a torn-down view.
+		fireEvent.click(screen.getByRole("button", { name: "Reading" }));
+		await waitFor(() => expect(screen.getByTestId("has-editor")).toHaveTextContent("false"));
+
+		fireEvent.click(screen.getByRole("button", { name: "Rendered" }));
+		await waitFor(() => expect(screen.getByTestId("has-editor")).toHaveTextContent("true"));
+	});
+
 	it("renders the properties widget with frontmatter keys in the default rendered mode", async () => {
 		const doc = new Y.Doc();
 		doc.getMap("frontmatter").set("status", JSON.stringify("draft"));
@@ -137,7 +167,7 @@ describe("NotePage (CRDT)", () => {
 			doc,
 		});
 
-		render(<NotePage />);
+		renderPage();
 
 		// Widget should appear in the default rendered mode
 		await waitFor(() => expect(screen.getByText("status")).toBeInTheDocument());
@@ -148,7 +178,7 @@ describe("NotePage (CRDT)", () => {
 	// entry points can't drift apart.
 	describe("inline rename", () => {
 		const openRename = async () => {
-			render(<NotePage />);
+			renderPage();
 			fireEvent.click(await screen.findByRole("button", { name: "note" }));
 			return screen.getByRole("textbox", { name: "Rename file" });
 		};
@@ -222,7 +252,7 @@ describe("NotePage (CRDT)", () => {
 			doc,
 		});
 
-		render(<NotePage />);
+		renderPage();
 
 		// Default "rendered" mode: pills visible, editor visible, no raw YAML region.
 		await waitFor(() => expect(screen.getByText("status")).toBeInTheDocument());

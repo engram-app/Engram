@@ -14,7 +14,8 @@ import {
 import FolderTree from "../viewer/folder-tree";
 import FolderActions from "./folder-actions";
 import { FolderTreeProvider } from "./folder-tree-context";
-import { useRightSidebar } from "./right-sidebar-context";
+import RightToolPanel from "./right-tool-panel";
+import { RIGHT_TOOLS, useRightTools } from "./right-tools-context";
 import UserMenu from "./user-menu";
 import VaultSwitcher from "./vault-switcher";
 
@@ -29,10 +30,20 @@ function closeOnLinkClick(close: () => void) {
 }
 
 export default function MobileLayout() {
-	const { content: rightContent } = useRightSidebar();
+	const { resolvedId, setActive, isAvailable } = useRightTools();
 	const [leftOpen, setLeftOpen] = useState(false);
 	const [rightOpen, setRightOpen] = useState(false);
 	const { pathname } = useLocation();
+
+	// The drawer has no persistent rail to pick a tool from, so opening it with
+	// none active would show an empty sheet. Fall back to the first usable tool
+	// ("reference" always qualifies).
+	const openRight = () => {
+		if (resolvedId === null) {
+			setActive(RIGHT_TOOLS.find((tool) => isAvailable(tool.id))?.id ?? "reference");
+		}
+		setRightOpen(true);
+	};
 
 	// Programmatic navigations (e.g. clicking "New note" in FolderActions) don't
 	// trigger closeOnLinkClick. Close both drawers on any route change so the
@@ -85,38 +96,33 @@ export default function MobileLayout() {
 				</section>
 				<nav className="flex items-center gap-1" aria-label="Main navigation">
 					<UserMenu />
-					{Boolean(rightContent) && (
-						<Sheet open={rightOpen} onOpenChange={setRightOpen}>
-							<SheetTrigger asChild>
-								<Button variant="ghost" size="icon" aria-label="Open outline" className="h-11 w-11">
-									<PanelRightOpen />
-								</Button>
-							</SheetTrigger>
-							<SheetContent
-								side="right"
-								showCloseButton={false}
-								className="flex flex-col gap-0 p-0 data-[side=right]:w-[85vw] sm:max-w-none"
+					{/* Always available now — the reference tool is valid on every route,
+					    unlike the outline this drawer used to be gated on. */}
+					<Sheet open={rightOpen} onOpenChange={setRightOpen}>
+						<SheetTrigger asChild>
+							<Button
+								variant="ghost"
+								size="icon"
+								aria-label="Open tools"
+								className="h-11 w-11"
+								onClick={openRight}
 							>
-								<section className="flex shrink-0 items-center justify-between border-border border-b px-3 py-2">
-									<SheetTitle className="font-medium text-base">On this page</SheetTitle>
-									<SheetDescription className="sr-only">
-										Headings on the current note
-									</SheetDescription>
-									<SheetClose asChild>
-										<Button variant="ghost" size="icon-sm" aria-label="Close">
-											<X />
-										</Button>
-									</SheetClose>
-								</section>
-								<ScrollArea
-									className="min-h-0 flex-1"
-									onClick={closeOnLinkClick(() => setRightOpen(false))}
-								>
-									{rightContent}
-								</ScrollArea>
-							</SheetContent>
-						</Sheet>
-					)}
+								<PanelRightOpen />
+							</Button>
+						</SheetTrigger>
+						<SheetContent
+							side="right"
+							showCloseButton={false}
+							className="flex flex-col gap-0 p-0 data-[side=right]:w-[85vw] sm:max-w-none"
+							onClick={closeOnLinkClick(() => setRightOpen(false))}
+						>
+							<SheetTitle className="sr-only">Sidebar tools</SheetTitle>
+							<SheetDescription className="sr-only">
+								Note outline and markdown reference
+							</SheetDescription>
+							<RightToolPanel onCollapse={() => setRightOpen(false)} />
+						</SheetContent>
+					</Sheet>
 				</nav>
 			</header>
 			<main className="flex-1 overflow-y-auto bg-muted/40 text-foreground">
