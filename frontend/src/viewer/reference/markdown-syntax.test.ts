@@ -85,10 +85,11 @@ describe("markdown-syntax catalogue", () => {
 		// may still contain a generic word like "code"; what it must not do is
 		// echo the entry's own label back.
 		for (const entry of SYNTAX_ENTRIES) {
-			// The callout gallery is the deliberate exception: its labels ARE the
-			// type names, and a demo titled with its own type is precisely the
-			// mapping (name → icon → colour) those rows exist to show.
-			if (entry.hideTemplate) {
+			// Rows that render no label are exempt: the rule exists to stop a
+			// VISIBLE label and its example saying the same thing twice. With no
+			// label on screen there is nothing to duplicate, and a self-describing
+			// sample ("**Bold text**" rendering as bold text) is the whole point.
+			if (entry.hideTemplate || entry.templateLed) {
 				continue;
 			}
 			const label = entry.label.toLowerCase();
@@ -190,6 +191,7 @@ describe("groupByCategory", () => {
 		expect(grouped[0]?.[0]).toBe("Text");
 		expect(grouped.map(([name]) => name)).toEqual([
 			"Text",
+			"Headings",
 			"Structure",
 			"Links",
 			"Callouts",

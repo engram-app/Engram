@@ -66,6 +66,27 @@ interface SyntaxEntry {
 	 * render broken). Those show source + description only.
 	 */
 	renderable?: false;
+	/**
+	 * Render as a heading, a template block, then a BORDERED preview.
+	 *
+	 * For the one entry whose rendered output is itself a horizontal line:
+	 * unframed, the rule read as the panel's own row divider and appeared to
+	 * split the section in two rather than being the specimen, and a small label
+	 * beside an inline `---` never connected the dashes to the line they drew.
+	 */
+	framed?: true;
+	/**
+	 * Context lines shown around the template in a framed row, for syntax whose
+	 * rule is about what surrounds it. An EMPTY STRING renders as a labelled
+	 * "leave this line empty" ghost — the blank line the divider needs is
+	 * invisible by definition, so stating it in prose was the only alternative.
+	 *
+	 * Display only. Insert still drops `syntax` and nothing else. Keep `demo` in
+	 * step with these: the whole point is that the rendered specimen below is the
+	 * template above, so a mismatch teaches the wrong spacing.
+	 */
+	templatePrelude?: readonly string[];
+	templatePostlude?: readonly string[];
 }
 
 /**
@@ -115,7 +136,17 @@ const CALLOUT_GALLERY: readonly SyntaxEntry[] = Object.entries(defaultConfig.typ
 	}));
 
 /** Shown once, prominently, above a category whose rows all share one format. */
-export const CATEGORY_INTROS: Record<string, { syntax: string; note: string }> = {
+export const CATEGORY_INTROS: Record<string, { syntax?: string; note: string }> = {
+	Headings: {
+		// Deliberately worded as convention, because that is what it is: WCAG
+		// requires headings be descriptive and their relationships programmatically
+		// determinable (SC 1.3.1, 2.4.6) but does not forbid skipping levels, and
+		// the HTML5 outline algorithm that would have given multiple <h1>s meaning
+		// was never implemented and was dropped from the spec in 2022. What remains
+		// true is that the SEQUENCE is what screen readers and our own Outline panel
+		// read, so a gap in it is a gap in the outline.
+		note: "Every heading becomes a line in the Outline panel — that panel is generated from these. Step down one level at a time; jumping ## to #### leaves a gap in it. By convention # is the note title, which your filename already gives you, so most notes start at ##.",
+	},
 	Callouts: {
 		syntax: "> [!type] Title\n> Body text.",
 		note: "Swap `type` for any name below. The title is optional.",
@@ -128,42 +159,42 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "bold",
 		category: "Text",
 		label: "Bold",
-		syntax: "**text**",
-		demo: "**deleted permanently**",
+		syntax: "**Bold text**",
 		keywords: ["strong", "emphasis"],
+		templateLed: true,
 	},
 	{
 		id: "italic",
 		category: "Text",
 		label: "Italic",
-		syntax: "*text*",
-		demo: "*The Pragmatic Programmer*",
+		syntax: "*Italic text*",
 		keywords: ["emphasis", "em"],
+		templateLed: true,
 	},
 	{
 		id: "bold-italic",
 		category: "Text",
 		label: "Bold italic",
-		syntax: "***text***",
-		demo: "***never*** commit secrets",
+		syntax: "***Bold italic text***",
 		keywords: ["strong", "emphasis"],
+		templateLed: true,
 	},
 	{
 		id: "strikethrough",
 		category: "Text",
 		label: "Strikethrough",
-		syntax: "~~text~~",
-		demo: "~~Tuesday~~ Thursday",
+		syntax: "~~Struck through~~",
 		keywords: ["strike", "delete", "gfm"],
+		templateLed: true,
 	},
 	{
 		id: "inline-code",
 		category: "Text",
 		label: "Inline code",
-		syntax: "`code`",
-		demo: "run `engram sync`",
+		syntax: "`inline code`",
 		blurb: "No formatting is applied inside.",
 		keywords: ["monospace", "backtick"],
+		templateLed: true,
 	},
 
 	// ── Structure ───────────────────────────────────────────────────────────
@@ -172,118 +203,157 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	// never do — and each level is separately insertable.
 	{
 		id: "heading-1",
-		category: "Structure",
+		category: "Headings",
 		label: "Heading 1",
-		syntax: "# Heading",
-		demo: "# Release notes",
+		syntax: "# Heading 1",
 		block: true,
 		keywords: ["title", "h1", "toc", "outline", "section"],
+		templateLed: true,
 	},
 	{
 		id: "heading-2",
-		category: "Structure",
+		category: "Headings",
 		label: "Heading 2",
-		syntax: "## Heading",
-		demo: "## Highlights",
+		syntax: "## Heading 2",
 		block: true,
 		keywords: ["title", "h2", "toc", "outline", "section"],
+		templateLed: true,
 	},
 	{
 		id: "heading-3",
-		category: "Structure",
+		category: "Headings",
 		label: "Heading 3",
-		syntax: "### Heading",
-		demo: "### Bug fixes",
+		syntax: "### Heading 3",
 		block: true,
 		keywords: ["title", "h3", "toc", "outline", "section"],
+		templateLed: true,
 	},
 	{
 		id: "heading-4",
-		category: "Structure",
+		category: "Headings",
 		label: "Heading 4",
-		syntax: "#### Heading",
-		demo: "#### Sync engine",
+		syntax: "#### Heading 4",
 		block: true,
 		keywords: ["title", "h4", "toc", "outline", "section"],
+		templateLed: true,
 	},
 	{
 		id: "heading-5",
-		category: "Structure",
+		category: "Headings",
 		label: "Heading 5",
-		syntax: "##### Heading",
-		demo: "##### Edge cases",
+		syntax: "##### Heading 5",
 		block: true,
 		keywords: ["title", "h5", "toc", "outline", "section"],
+		templateLed: true,
 	},
 	{
 		id: "heading-6",
-		category: "Structure",
+		category: "Headings",
 		label: "Heading 6",
-		syntax: "###### Heading",
-		demo: "###### Known issues",
+		syntax: "###### Heading 6",
 		block: true,
 		keywords: ["title", "h6", "toc", "outline", "section"],
+		templateLed: true,
 	},
 	{
 		id: "bullet-list",
 		category: "Structure",
 		label: "Bullet list",
-		syntax: "- item",
-		demo: "- Espresso\n- Filter\n  - Chemex",
-		blurb: "Indent two spaces to nest.",
+		syntax: "- Bullet item",
 		block: true,
 		keywords: ["unordered", "ul"],
+		templateLed: true,
 	},
 	{
 		id: "numbered-list",
 		category: "Structure",
 		label: "Numbered list",
-		syntax: "1. item",
-		demo: "1. Preheat\n2. Mix\n3. Bake",
+		syntax: "1. Numbered item",
 		block: true,
 		keywords: ["ordered", "ol"],
+		templateLed: true,
 	},
 	{
 		id: "task-list",
 		category: "Structure",
 		label: "Task list",
-		syntax: "- [ ] task",
-		demo: "- [x] Draft the outline\n- [ ] Write the intro",
-		blurb: "Read-only here — tick them in Obsidian.",
+		// Both states in the template, so the left column shows the ONE character
+		// that distinguishes them. `demo` would split what is inserted from what is
+		// rendered for no gain here — the template already reads as an example.
+		syntax: "- [ ] Unchecked item\n- [x] Checked item",
 		block: true,
 		keywords: ["checkbox", "todo", "checklist", "gfm"],
+		templateLed: true,
 	},
 	{
 		id: "blockquote",
 		category: "Structure",
 		label: "Blockquote",
-		syntax: "> quoted",
-		demo: "> Simplicity is prerequisite for reliability.",
-		blurb: "Nest with >>.",
+		syntax: "> Quoted text",
 		block: true,
 		keywords: ["quote", "cite"],
+		templateLed: true,
+	},
+	// Three near-identical rows rather than one row with a "nest with >>" blurb.
+	// Depth is drawn — one rail per level — so three stacked previews show the
+	// ladder at a glance, which is the thing a sentence has to describe badly.
+	{
+		id: "blockquote-nested",
+		category: "Structure",
+		label: "Nested quote",
+		syntax: ">> Nested once",
+		block: true,
+		keywords: ["quote", "cite", "nest", "nested", "depth"],
+		templateLed: true,
+	},
+	{
+		id: "blockquote-nested-twice",
+		category: "Structure",
+		label: "Twice-nested quote",
+		syntax: ">>> Nested twice",
+		block: true,
+		keywords: ["quote", "cite", "nest", "nested", "depth"],
+		templateLed: true,
 	},
 	{
 		id: "rule",
 		category: "Structure",
-		label: "Horizontal rule",
+		// "Section divider" over "Horizontal rule": the label has to say what the
+		// thing is FOR, because the rendered line alone tells you nothing. The
+		// technical names stay searchable via keywords.
+		label: "Section Divider",
 		syntax: "---",
-		// Demo carries surrounding prose for TWO reasons: a divider between two
-		// paragraphs is what one is actually for, and NoteView runs gray-matter,
-		// which swallows a leading "---" as a frontmatter delimiter and previews
-		// an empty box.
-		demo: "Above the line\n\n---\n\nBelow the line",
-		blurb: "Needs a blank line above, or it turns the line before into a heading.",
+		templatePrelude: ["Text above the divider", ""],
+		templatePostlude: ["Text below the divider"],
+		// Character-for-character the template above: blank line before the dashes,
+		// none after. The specimen has to BE the template, or the row teaches one
+		// spacing and demonstrates another.
+		//
+		// The surrounding prose is also load-bearing for a second reason: NoteView
+		// runs gray-matter, which swallows a leading "---" as a frontmatter
+		// delimiter and previews an empty box.
+		demo: "Text above the divider\n\n---\nText below the divider",
+		// Names the mechanism, not just the rule. "Needs a blank line above, or it
+		// turns the line before into a heading" states a consequence with no cause,
+		// so it reads as an arbitrary gotcha; "the dashes underline it" is the bit
+		// that makes the behaviour predictable.
+		// No blurb. The blank-line rule used to be spelled out here; the template's
+		// ghost line now SHOWS it, and the sentence beside it was saying the same
+		// thing a second time.
 		block: true,
-		keywords: ["divider", "hr", "separator", "break"],
+		framed: true,
+		keywords: ["divider", "hr", "separator", "break", "horizontal", "rule", "line"],
 	},
 	{
 		id: "table",
 		category: "Structure",
 		label: "Table",
-		syntax: "| Column | Column |\n| --- | --- |\n| cell | cell |",
-		demo: "| Roast | Kg |\n| --- | ---: |\n| Espresso | 12 |\n| Filter | 3 |",
-		blurb: "Use :--- and ---: in the divider row to align.",
+		// No separate `demo` here, unlike the other block entries: a table's
+		// column widths, alignment and header shading only make sense next to the
+		// pipes that produced them, so the specimen has to BE the template. It is
+		// still a fine thing to drop at a caret — a two-column starter you edit.
+		syntax: "| Column | Column |\n| --- | ---: |\n| Cell | 1 |\n| Cell | 2 |",
+		blurb: "Use :--- and ---: in the divider row to align a column.",
 		block: true,
 		keywords: ["grid", "columns", "gfm"],
 	},
@@ -335,7 +405,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		// an instruction to replace.
 		// No blurb: the placeholder text explains itself, and "any image on the
 		// web" only restated the URL sitting right beside it.
-		syntax: "![text if the image can't load](https://example.com/photo.png)",
+		syntax: "![text if it can't load](https://example.com/photo.png)",
 		renderable: false,
 		templateLed: true,
 		keywords: ["picture", "img", "photo", "link"],
@@ -357,7 +427,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	{
 		id: "callout-foldable",
 		category: "Callouts",
-		label: "Foldable callout",
+		label: "Foldable Callout",
 		syntax: "> [!tip]- Title\n> Body.",
 		// No demo, and not previewed: @portaljs/remark-callouts does not consume
 		// the fold marker, so remark parses the "- Title" that follows as a BULLET
@@ -375,7 +445,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	{
 		id: "code-fence",
 		category: "Code",
-		label: "Code block",
+		label: "Code Block",
 		syntax: "```ts\ncode\n```",
 		demo: "```ts\nconst total = items.length;\n```",
 		blurb: "Tag the language to highlight it.",
@@ -385,7 +455,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	{
 		id: "mermaid",
 		category: "Code",
-		label: "Mermaid diagram",
+		label: "Mermaid Diagram",
 		syntax: "```mermaid\ngraph TD\n  A --> B\n```",
 		demo: "```mermaid\ngraph LR\n  Edit --> Sync --> Vault\n```",
 		blurb: "Flowchart, sequence, class and state diagrams.",
@@ -398,15 +468,15 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "math-inline",
 		category: "Math",
 		label: "Inline math",
-		syntax: "$x^2$",
-		demo: "area grows as $r^2$",
+		syntax: "$E = mc^2$",
 		blurb: "KaTeX, in the flow of the sentence.",
 		keywords: ["katex", "latex", "tex", "equation", "formula"],
+		templateLed: true,
 	},
 	{
 		id: "math-block",
 		category: "Math",
-		label: "Block math",
+		label: "Block Math",
 		syntax: "$$\nx^2\n$$",
 		demo: "$$\n\\int_0^1 x^2 \\, dx = \\frac{1}{3}\n$$",
 		blurb: "KaTeX, centred on its own line.",
@@ -432,6 +502,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		syntax: "#topic",
 		blurb: "Also settable via the tags frontmatter key.",
 		keywords: ["hashtag", "label", "category"],
+		templateLed: true,
 	},
 ];
 

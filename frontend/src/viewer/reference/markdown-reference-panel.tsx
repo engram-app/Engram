@@ -39,11 +39,33 @@ import {
 // behaving like it. A wikilink here points at a note that does not exist and an
 // external link would navigate away mid-edit. Done in CSS rather than a click
 // handler so there is no a11y rule to suppress and the text stays selectable.
+// [&_li]:my-0 drops Typography's 0.5em list-item margins. Prose spacing is
+// tuned for a full document; inside a two-line example it put a 36px pitch on
+// the rendered side against the template's 20px, so the two columns of the same
+// example visibly disagreed about where line two starts.
+// [&_blockquote:not(.callout)]:my-0 rather than relying on the `.prose>` resets
+// below: remark-callouts wraps a plain blockquote in an unclassed <div>, so the
+// quote is a GRANDchild of .prose and those first/last-child rules never reach
+// it. Its 1.6em margins survived and made every quote row twice the height of
+// its neighbours. Callouts are excluded — they keep their own spacing.
+// [&_hr]:mb-0 [&_hr+*]:mt-0 makes the divider specimen mirror its own template:
+// a blank line above the dashes, none below, so the gaps you see are the gaps
+// you typed. Typography's 3em hr margin plus the next paragraph's own margin
+// opened a gap under the rule that the template does not have.
 const PREVIEW =
-	"[&_a]:pointer-events-none [&_.mermaid]:my-0 [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0";
+	"[&_a]:pointer-events-none [&_.mermaid]:my-0 [&_li]:my-0 [&_blockquote:not(.callout)]:my-0 [&_hr]:mb-0 [&_hr+*]:mt-0 [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0";
 
+// text-sm: a middle ground. At 11px a template read as a different document
+// from the 16px result beside it; at the document's full 16px the longer
+// templates wrapped onto a second line. 14px keeps them legible and on one.
 const SOURCE =
-	"whitespace-pre-wrap break-words bg-muted/50 px-2 py-1 font-mono text-[11px] text-muted-foreground";
+	"whitespace-pre-wrap break-words bg-muted/50 px-2 py-1 font-mono text-sm text-muted-foreground";
+
+// One class for every row-level heading, so a row that needs a prominent title
+// cannot style it slightly differently from the next one. Sentence-weight and
+// not uppercase: the category <summary> above it owns that treatment, and two
+// headers styled alike is what made sections hard to find in the first place.
+const ROW_HEADING = "font-semibold text-foreground text-sm";
 
 /** A rendered example. See PREVIEW for why links here are inert. */
 function Preview({ entry, className = "" }: { entry: SyntaxEntry; className?: string }) {
@@ -97,7 +119,7 @@ function fitsOneLine(entry: SyntaxEntry): boolean {
 // to justify the complex ones.
 function InlineRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
 	return (
-		<li className="group flex items-stretch border-border/60 border-b last:border-b-0">
+		<li className="group flex items-stretch border-border border-b last:border-b-0">
 			<span className="block min-w-0 flex-1 px-3 py-1.5">
 				<p className="flex items-center gap-2">
 					<span
@@ -107,7 +129,7 @@ function InlineRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolea
 						{entry.label}
 					</span>
 					<code
-						className="shrink-0 font-mono text-[11px] text-muted-foreground"
+						className="shrink-0 font-mono text-muted-foreground text-sm"
 						title="Inserted at the cursor"
 					>
 						{entry.syntax}
@@ -139,7 +161,7 @@ function InlineRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolea
  */
 function GalleryRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
 	return (
-		<li className="group flex items-stretch border-border/60 border-b last:border-b-0">
+		<li className="group flex items-stretch border-border border-b last:border-b-0">
 			<Preview entry={entry} className="block min-w-0 flex-1 overflow-hidden px-3 py-1" />
 			<InsertButton entry={entry} canInsert={canInsert} />
 		</li>
@@ -164,14 +186,21 @@ function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: bool
 	// template wrapping onto a second line for no reason.
 	const showsResult = previewable || Boolean(entry.blurb);
 	return (
-		<li className="group flex items-stretch border-border/60 border-b last:border-b-0">
+		<li className="group flex items-stretch border-border border-b last:border-b-0">
 			<span className="block min-w-0 flex-1 px-3 py-1.5">
 				{/* items-center, and the template sized to its content rather than a
 				    fixed 45% column: the column aligned the arrows but left a wide dead
 				    gap after short templates like [[Note name]]. */}
 				<span className="flex items-center gap-2">
 					<code
-						className={`break-words font-mono text-[11px] text-foreground ${
+						// whitespace-pre-wrap: a multi-line template (the task list shows an
+						// unchecked and a checked item) would otherwise collapse onto one
+						// line — <code> does not preserve newlines on its own.
+						//
+						// leading-7 matches the prose line-height on the rendered side, so
+						// multi-line templates track their result line for line. Single-line
+						// rows are unaffected: the preview already sets the row height.
+						className={`whitespace-pre-wrap break-words font-mono text-foreground text-sm leading-7 ${
 							showsResult ? "max-w-[60%] shrink-0" : "min-w-0 flex-1"
 						}`}
 					>
@@ -195,62 +224,76 @@ function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: bool
 	);
 }
 
+/**
+ * Surrounding lines in a framed row's template. Block spans rather than embedded
+ * "\n": inside a <pre> they break the line just the same, and it keeps each line
+ * addressable for styling.
+ */
+function ContextLines({ lines }: { lines?: readonly string[] }) {
+	return lines?.map((line) =>
+		line === "" ? (
+			// The rule the divider teaches is about a line with nothing on it.
+			// Rendering that blank line as a visible ghost shows the shape; prose
+			// could only assert it.
+			<span key="blank" className="block text-muted-foreground/50 italic">
+				leave this line empty
+			</span>
+		) : (
+			<span key={line} className="block text-foreground">
+				{line}
+			</span>
+		),
+	);
+}
+
+/**
+ * Heading, template, then the rendered result: the reading order that matches
+ * how you actually use the row — name it, see what to type, see what you get.
+ *
+ * Every entry reaching here has a multi-line template, so the template always
+ * gets a block of its own; the single-line ones are all InlineRow or
+ * TemplateRow. `framed` adds a border around the preview, for the one result
+ * that is not self-evident — a lone horizontal rule read as the panel's own row
+ * separator rather than as the specimen.
+ */
 function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
-	// `block` governs INSERTION (does it need newlines synthesized). Whether the
-	// template deserves a block of its own is a separate question, and the answer
-	// is just its shape: `---` is as self-evident as `**text**`, so it rides
-	// beside the label. Only a multi-line template earns its own <pre>. That drops
-	// a full-width row from most of Structure.
-	const templateFitsInline = !(entry.hideTemplate || entry.syntax.includes("\n"));
-	const showTemplateBlock = !entry.hideTemplate && entry.syntax.includes("\n");
-
 	return (
-		<li className="group flex items-stretch border-border/60 border-b last:border-b-0">
+		<li className="group flex items-stretch border-border border-b last:border-b-0">
 			<span className="block min-w-0 flex-1 px-3 py-2">
-				<p className="mb-1.5 flex items-center gap-2">
-					{/* Sentence case, not uppercase: this used to be styled identically to
-				    the category header above it — same size, weight, colour and case —
-				    so there was no hierarchy to read and sections were easy to lose.
-				    The entry label is the quieter of the two now. */}
-					<span className="shrink-0 font-medium text-foreground text-xs">{entry.label}</span>
-					{templateFitsInline ? (
-						<code
-							className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground"
-							title="Inserted at the cursor"
-						>
-							{entry.syntax}
-						</code>
-					) : (
-						<span className="flex-1" />
-					)}
-				</p>
+				<p className={`mb-1 ${ROW_HEADING}`}>{entry.label}</p>
 
-				{/* Blurb sits directly under the label, as a subtitle. Trailing it after
-			    the source made it read as a footer nobody looks at, and it is the one
-			    part of the row that cannot be inferred from the preview. */}
-				{entry.blurb ? <p className="mb-1.5 text-muted-foreground text-xs">{entry.blurb}</p> : null}
+				{/* Blurb sits directly under the heading, as a subtitle. Trailing it
+			    after the source made it read as a footer nobody looks at, and it is
+			    the one part of the row that cannot be inferred from the preview.
+			    text-foreground, not muted: at muted/xs it read as a footnote you
+			    skip. Regular weight keeps it under the heading. */}
+				{entry.blurb ? <p className="mb-1.5 text-foreground text-xs">{entry.blurb}</p> : null}
+
+				{/* The TEMPLATE — exactly what Insert drops at the caret. bg-muted/50
+			    rather than the full token: a rendered fence uses --muted itself, so a
+			    solid box directly above one read as a second identical panel. */}
+				<pre className={`${SOURCE} ${entry.framed ? "mb-3" : "mb-1.5"}`}>
+					<ContextLines lines={entry.templatePrelude} />
+					{/* The payload specifically — the context lines around it are not
+					    inserted, which is why the title sits here, not on the block. */}
+					<span title="Inserted at the cursor" className="block text-foreground">
+						{entry.syntax}
+					</span>
+					<ContextLines lines={entry.templatePostlude} />
+				</pre>
 
 				{entry.renderable === false ? null : (
-					// No border, background or padding of its own. Each preview already
-					// carries its own surface — a fence is grey, a callout is tinted, a
-					// table has rules — so wrapping it in another box left that surface
-					// inset inside an outer one, visibly failing to fill it (worst on
-					// Mermaid, whose centred SVG sat in a grey band floating in a white
-					// box). The container is gone, so there is nothing left to not fill.
-					<figure className={`overflow-hidden ${templateFitsInline ? "" : "mb-1"}`}>
+					// Unframed, the preview gets no border, background or padding of its
+					// own. Each one already carries its own surface — a fence is grey, a
+					// callout is tinted, a table has rules — so an outer box left that
+					// surface inset inside another, visibly failing to fill it (worst on
+					// Mermaid, whose centred SVG sat in a grey band floating in a box).
+					<figure
+						className={`overflow-hidden ${entry.framed ? "border border-border px-3 py-2" : ""}`}
+					>
 						<Preview entry={entry} className="block" />
 					</figure>
 				)}
-
-				{/* The TEMPLATE, not the worked example above it — this is exactly what
-			    Insert drops at the caret. bg-muted/50 rather than the full token: a
-			    rendered fence now uses --muted itself, so a solid box directly beneath
-			    one read as a second identical panel. */}
-				{showTemplateBlock ? (
-					<pre className={SOURCE} title="Inserted at the cursor">
-						{entry.syntax}
-					</pre>
-				) : null}
 			</span>
 			<InsertButton entry={entry} canInsert={canInsert} />
 		</li>
@@ -325,7 +368,7 @@ export default function MarkdownReferencePanel() {
 								key={category}
 								open={open}
 								onToggle={(e) => setOpen(category, e.currentTarget.open)}
-								className="group/cat border-border border-b"
+								className="group/cat border-border border-b-2"
 							>
 								{/* sticky: once a section is open you scroll past several tall
 								    previews, and without a pinned header you lose track of which
@@ -343,11 +386,11 @@ export default function MarkdownReferencePanel() {
 										{intro ? (
 											// One format, stated once and loudly, rather than repeated
 											// quietly on all thirteen rows beneath it.
-											<section className="border-border/60 border-b bg-muted/30 px-3 py-2.5">
+											<section className="border-border border-b bg-muted/30 px-3 py-2.5">
 												<pre className="whitespace-pre-wrap break-words font-mono font-semibold text-foreground text-xs">
 													{intro.syntax}
 												</pre>
-												<p className="mt-1.5 text-muted-foreground text-xs">{intro.note}</p>
+												<p className="text-muted-foreground text-xs">{intro.note}</p>
 											</section>
 										) : null}
 										<ul>

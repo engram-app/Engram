@@ -45,7 +45,9 @@ function openSection(name: string): void {
 function row(label: string): HTMLElement {
 	const li = [...document.querySelectorAll("li")].find(
 		(el) =>
-			[...el.querySelectorAll("span")].some((sp) => sp.textContent === label) ||
+			// span OR p: block rows carry the label in a <p> of its own now that no
+			// template rides beside it.
+			[...el.querySelectorAll("span, p")].some((sp) => sp.textContent === label) ||
 			// Template-led rows (Links) carry no label — the syntax identifies them.
 			el.querySelector("code")?.textContent === label ||
 			// Gallery rows carry no label — the callout's own title is the type name.
@@ -121,7 +123,7 @@ describe("MarkdownReferencePanel — rendered previews", () => {
 
 	it("renders inline emphasis as real elements", () => {
 		renderPanel();
-		expect(row("Bold").querySelector("strong")?.textContent).toBe("deleted permanently");
+		expect(row("**Bold text**").querySelector("strong")?.textContent).toBe("Bold text");
 	});
 
 	it("renders a table as a table", () => {
@@ -138,7 +140,7 @@ describe("MarkdownReferencePanel — rendered previews", () => {
 		openSection("Links");
 		for (const label of [
 			"Frontmatter",
-			"![text if the image can't load](https://example.com/photo.png)",
+			"![text if it can't load](https://example.com/photo.png)",
 			"![[diagram.png]]",
 		]) {
 			expect(row(label).querySelector("figure"), label).toBeNull();
@@ -153,40 +155,42 @@ describe("MarkdownReferencePanel — demo teaches, template inserts", () => {
 		// is the wrong thing to drop at someone's caret.
 		renderPanel({ doc: "prose", caret: 5 });
 		openSection("Structure");
-		const table = row("Table");
+		const footnote = row("Footnote");
 
-		expect(table.querySelector("figure")?.textContent).toContain("Espresso");
-		expect(table.querySelector("pre")?.textContent).toBe(
-			"| Column | Column |\n| --- | --- |\n| cell | cell |",
-		);
+		expect(footnote.querySelector("figure")?.textContent).toContain("generous value of on time");
+		expect(footnote.querySelector("pre")?.textContent).toBe("Claim.[^1]\n\n[^1]: Source.");
 
-		fireEvent.click(within(table).getByRole("button", { name: "Insert Table" }));
-		expect(view?.state.doc.toString()).toBe(
-			"prose\n| Column | Column |\n| --- | --- |\n| cell | cell |",
-		);
+		fireEvent.click(within(footnote).getByRole("button", { name: "Insert Footnote" }));
+		expect(view?.state.doc.toString()).toBe("prose\nClaim.[^1]\n\n[^1]: Source.");
 	});
 
-	it("shows the template verbatim, so the source line is what you get", () => {
-		renderPanel();
+	it("makes the table its own specimen, since pipes only read next to their result", () => {
+		// The one block entry with NO separate demo. Column widths and alignment
+		// are unreadable apart from the source that produced them, so here the
+		// template and the preview are deliberately the same string.
+		renderPanel({ doc: "prose", caret: 5 });
 		openSection("Structure");
 		const table = row("Table");
 		const shown = table.querySelector("pre")?.textContent;
 
+		expect(shown).toBe("| Column | Column |\n| --- | ---: |\n| Cell | 1 |\n| Cell | 2 |");
+		expect(table.querySelector("figure table")).not.toBeNull();
+
 		fireEvent.click(within(table).getByRole("button", { name: "Insert Table" }));
-		expect(view?.state.doc.toString()).toBe(shown);
+		expect(view?.state.doc.toString()).toBe(`prose\n${shown}`);
 	});
 });
 
 describe("MarkdownReferencePanel — adaptive rows", () => {
 	it("collapses a self-evident inline mark onto one line with no preview box", () => {
 		renderPanel();
-		const bold = row("Bold");
+		const bold = row("**Bold text**");
 		// Result renders inline rather than in a stacked figure…
 		expect(bold.querySelector("figure")).toBeNull();
 		expect(bold.querySelector("strong")).not.toBeNull();
 		// …and no separate source block competes with it.
 		expect(bold.querySelector("pre")).toBeNull();
-		expect(bold.querySelector("code")?.textContent).toBe("**text**");
+		expect(bold.querySelector("code")?.textContent).toBe("**Bold text**");
 	});
 
 	it("leads a link row with its template and shows the result beside it", () => {
@@ -205,9 +209,20 @@ describe("MarkdownReferencePanel — adaptive rows", () => {
 	it("keeps the stacked anatomy for block syntax that needs it", () => {
 		renderPanel();
 		openSection("Code");
-		const fence = row("Code block");
+		const fence = row("Code Block");
 		expect(fence.querySelector("figure")).not.toBeNull();
 		expect(fence.querySelector("pre")).not.toBeNull();
+	});
+
+	it("explains heading nesting once, as convention rather than rule", () => {
+		// WCAG does not actually forbid skipping levels, and the outline algorithm
+		// that would have given multiple <h1>s meaning was dropped from the spec —
+		// so the wording has to stay honest about what it is.
+		renderPanel();
+		openSection("Headings");
+		const text = section("Headings").textContent ?? "";
+		expect(text).toMatch(/convention/iu);
+		expect(text).toMatch(/one level at a time/iu);
 	});
 
 	it("states a shared format once above the rows instead of on each of them", () => {
@@ -259,56 +274,61 @@ describe("MarkdownReferencePanel — adaptive rows", () => {
 		expect(button.className).toContain("self-stretch");
 	});
 
-	it("keeps a single-line block template beside the label, not in a block of its own", () => {
-		// `block` governs insertion, not layout. `---` is as self-evident as
-		// `**text**`, so it should not claim a full-width row.
+	it("stacks the divider as heading, template block, then a boxed specimen", () => {
+		// A lone horizontal rule is the one result that is not self-evident: it
+		// reads as the panel's own row separator. The box says "this is the
+		// example", and the template block ties the dashes to the line they drew.
 		renderPanel();
 		openSection("Structure");
-		const rule = row("Horizontal rule");
-		expect(rule.querySelector("pre")).toBeNull();
-		expect(rule.querySelector("code")?.textContent).toBe("---");
-		// It still gets a rendered preview — that is what block means here.
+		const rule = row("Section Divider");
+		// The template block also carries context lines, so pin the INSERT PAYLOAD
+		// specifically — that is the part the panel promises is what you get.
+		expect(rule.querySelector('[title="Inserted at the cursor"]')?.textContent).toBe("---");
+		// The blank line the rule needs is shown, not described.
+		expect(rule.querySelector("pre")?.textContent).toContain("leave this line empty");
 		expect(rule.querySelector("figure hr")).not.toBeNull();
+		expect(rule.querySelector("figure")?.className).toContain("border");
 	});
 
 	it("gives every heading level its own one-line row, rendered at its own size", () => {
 		// "Levels 1–6" as prose is the kind of blurb we deleted elsewhere. Six
 		// rows show the ladder AND make each level separately insertable.
 		renderPanel();
-		openSection("Structure");
+		openSection("Headings");
 		for (let level = 1; level <= 6; level++) {
-			const heading = row(`Heading ${level}`);
+			const template = `${"#".repeat(level)} Heading ${level}`;
+			const heading = row(template);
 			expect(heading.querySelector(`h${level}`), `h${level} renders`).not.toBeNull();
-			// One line: template beside the label, no stacked source block.
+			// One line: template then result, no stacked source block, no label.
 			expect(heading.querySelector("pre"), `h${level} has no source block`).toBeNull();
-			expect(heading.querySelector("code")?.textContent).toBe(`${"#".repeat(level)} Heading`);
+			expect(heading.querySelector("code")?.textContent).toBe(template);
 		}
 	});
 
 	it("inserts a heading at the level whose row was clicked", () => {
 		renderPanel({ doc: "prose", caret: 5 });
-		openSection("Structure");
+		openSection("Headings");
 		fireEvent.click(screen.getByRole("button", { name: "Insert Heading 3" }));
-		expect(view?.state.doc.toString()).toBe("prose\n### Heading");
+		expect(view?.state.doc.toString()).toBe("prose\n### Heading 3");
 	});
 
 	it("shows a blurb on a one-line row instead of swallowing it", () => {
 		// Regression guard: InlineRow once rendered blurbs only for entries with
 		// no preview, silently hiding useful notes on inline code and others.
 		renderPanel();
-		expect(row("Inline code").textContent).toMatch(/no formatting is applied inside/iu);
+		expect(row("`inline code`").textContent).toMatch(/no formatting is applied inside/iu);
 	});
 
 	it("drops the blurb entirely where the label already says it", () => {
 		// "Bold — strong emphasis" is four ways of saying nothing.
 		renderPanel();
-		expect(row("Bold").textContent).not.toMatch(/emphasis/iu);
+		expect(row("**Bold text**").textContent).not.toMatch(/emphasis/iu);
 	});
 
 	it("keeps the blurb where it carries information the preview cannot", () => {
 		renderPanel();
 		openSection("Callouts");
-		expect(row("Foldable callout").textContent).toMatch(/starts folded/iu);
+		expect(row("Foldable Callout").textContent).toMatch(/starts folded/iu);
 	});
 });
 
@@ -328,10 +348,10 @@ describe("MarkdownReferencePanel — accordions", () => {
 
 	it("renders a category’s rows only once it is opened", () => {
 		renderPanel();
-		expect(screen.queryByText("Foldable callout")).not.toBeInTheDocument();
+		expect(screen.queryByText("Foldable Callout")).not.toBeInTheDocument();
 		openSection("Callouts");
 		expect(section("Callouts")).toHaveAttribute("open");
-		expect(screen.getByText("Foldable callout")).toBeInTheDocument();
+		expect(screen.getByText("Foldable Callout")).toBeInTheDocument();
 	});
 
 	it("force-opens matching categories while searching", () => {
@@ -346,14 +366,14 @@ describe("MarkdownReferencePanel — search and insert", () => {
 	it("narrows to matching categories as the user types", () => {
 		renderPanel();
 		fireEvent.change(search(), { target: { value: "callout" } });
-		expect(screen.getByText("Foldable callout")).toBeInTheDocument();
+		expect(screen.getByText("Foldable Callout")).toBeInTheDocument();
 		expect(screen.queryByText("Wikilink")).not.toBeInTheDocument();
 	});
 
 	it("searches keywords, not just the visible label", () => {
 		renderPanel();
-		fireEvent.change(search(), { target: { value: "divider" } });
-		expect(screen.getByText("Horizontal rule")).toBeInTheDocument();
+		fireEvent.change(search(), { target: { value: "horizontal rule" } });
+		expect(screen.getByText("Section Divider")).toBeInTheDocument();
 	});
 
 	it("shows an empty state naming the failed query", () => {
@@ -365,7 +385,7 @@ describe("MarkdownReferencePanel — search and insert", () => {
 	it("inserts an inline snippet at the caret", () => {
 		renderPanel({ doc: "ab", caret: 1 });
 		fireEvent.click(screen.getByRole("button", { name: "Insert Bold" }));
-		expect(view?.state.doc.toString()).toBe("a**text**b");
+		expect(view?.state.doc.toString()).toBe("a**Bold text**b");
 	});
 
 	it("breaks a block snippet onto its own line", () => {
