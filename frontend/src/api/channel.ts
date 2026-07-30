@@ -177,13 +177,13 @@ function flushBatch(batch: PendingBatch): void {
 		// deleted on another device stayed in the sidebar until a reload.
 		// folderIdForPath re-applies selectFolders' `syn:<path>` normalisation.
 		const folderId = folderIdForPath(queryClient, vaultId, folder);
-		if (folderId !== null) {
+		if (folderId === null) {
+			broadById = true;
+		} else {
 			queryClient.invalidateQueries({
 				queryKey: ["folder-notes-by-id", vaultId, folderId],
 				refetchType: "all",
 			});
-		} else {
-			broadById = true;
 		}
 	}
 
