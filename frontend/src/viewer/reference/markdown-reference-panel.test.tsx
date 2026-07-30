@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThemeProvider } from "../../theme/theme-provider";
 import { ActiveEditorProvider, useActiveEditor } from "../editor/active-editor-context";
 import MarkdownReferencePanel from "./markdown-reference-panel";
+import { SYNTAX_ENTRIES } from "./markdown-syntax";
 
 // The real NoteView renders the previews (that is the point of this panel), but
 // its free-tier attachment gate needs billing + query context this harness has
@@ -210,6 +211,40 @@ describe("MarkdownReferencePanel — demo teaches, template inserts", () => {
 			"```mermaid\ngraph LR\n  Edit --> Sync --> Vault\n```",
 		);
 	});
+});
+
+// This one test opens every category at once, which is the entire catalogue
+// through the real remark/KaTeX/mermaid pipeline — including mermaid's dynamic
+// import. It genuinely runs past vitest's 5s default under parallel load: it
+// passed alone every time and timed out in the full suite, which is the shape
+// of a budget that is too small rather than a race. Raised deliberately instead
+// of split per category, because splitting pays for a fresh panel mount eight
+// times over to save nothing.
+const LONG = 30_000;
+
+describe("MarkdownReferencePanel — every entry actually renders", () => {
+	it(
+		"renders a row for every entry, through the real NoteView",
+		() => {
+			// The panel's premise is that previews go through the app's own renderer
+			// rather than a lookalike, which means a bad entry takes the panel down
+			// with a thrown remark/KaTeX/mermaid error rather than just looking wrong.
+			// No test swept all of them before this — Math, the KaTeX one and so the
+			// likeliest to throw, was opened by none at all — so an entry that took
+			// the panel down could be added with every suite still green.
+			renderPanel();
+			const categories = [...new Set(SYNTAX_ENTRIES.map((e) => e.category))];
+			for (const category of categories) {
+				openSection(category);
+			}
+			// Every entry reaches the DOM: the insert button is the one element every
+			// row shape renders, whichever layout the entry falls into.
+			for (const entry of SYNTAX_ENTRIES) {
+				expect(screen.getByRole("button", { name: `Insert ${entry.label}` })).not.toBeNull();
+			}
+		},
+		LONG,
+	);
 });
 
 describe("MarkdownReferencePanel — the ? help tip", () => {
