@@ -12,7 +12,7 @@
  */
 .cm-line.cm-callout {
 	border-left: 3px solid var(--callout-color, var(--color-border, #888));
-	background-color: var(--color-callout-bg, rgba(128, 128, 128, 0.08));
+	background-color: var(--color-callout-bg);
 	background-image: none;
 	padding-left: 0.5em;
 }

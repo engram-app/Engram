@@ -9,6 +9,7 @@ import {
 } from "@codemirror/view";
 import { defaultConfig } from "@portaljs/remark-callouts";
 import "./callout.css";
+import { selectionTouches } from "./decoration-utils";
 
 // First line of a callout block: `> [!type]`, an optional fold marker (`+`/`-`),
 // optionally followed by a title.
@@ -94,7 +95,7 @@ function buildCallouts(view: EditorView): DecorationSet {
 		const blockFrom = line.from;
 		const blockTo = doc.line(endLineNo).to;
 		// Reveal raw when the cursor/selection intersects the block.
-		const active = sel.ranges.some((r) => r.from <= blockTo && r.to >= blockFrom);
+		const active = selectionTouches(sel, blockFrom, blockTo);
 		if (!active) {
 			const style = resolveStyle(type);
 			const attributes: Record<string, string> = {

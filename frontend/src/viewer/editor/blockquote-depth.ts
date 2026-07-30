@@ -1,4 +1,4 @@
-import { type Range, RangeSetBuilder } from "@codemirror/state";
+import type { Range } from "@codemirror/state";
 import {
 	Decoration,
 	type DecorationSet,
@@ -6,6 +6,7 @@ import {
 	ViewPlugin,
 	type ViewUpdate,
 } from "@codemirror/view";
+import { decorationSet } from "./decoration-utils";
 
 // Atomic renders every blockquote line with one flat rail (no nesting). We set
 // a `--bq-depth` custom property per quote line; blockquote-depth.css reads it
@@ -25,11 +26,7 @@ function buildBlockquoteDecorations(view: EditorView): DecorationSet {
 			);
 		}
 	}
-	const builder = new RangeSetBuilder<Decoration>();
-	for (const r of ranges) {
-		builder.add(r.from, r.to, r.value);
-	}
-	return builder.finish();
+	return decorationSet(ranges);
 }
 
 /**

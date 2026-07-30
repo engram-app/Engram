@@ -1,6 +1,6 @@
 import hljs from "highlight.js/lib/common";
 import { ArrowRight, ChevronRight, Plus } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { type ReactNode, useId, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useActiveEditor } from "../editor/active-editor-context";
@@ -169,6 +169,36 @@ function InsertButton({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boo
 }
 
 /**
+ * The frame every reference row shares: one list item, the body, and the insert
+ * button pinned to its right.
+ *
+ * Extracted because all four row types repeated it verbatim, which made the
+ * insert button look like a per-row choice rather than the invariant it is —
+ * every entry in this panel is insertable, whatever shape its body takes.
+ */
+function Row({
+	entry,
+	canInsert,
+	children,
+}: {
+	entry: SyntaxEntry;
+	canInsert: boolean;
+	children: ReactNode;
+}) {
+	return (
+		<li className="group flex items-stretch border-border border-b last:border-b-0">
+			{children}
+			<InsertButton entry={entry} canInsert={canInsert} />
+		</li>
+	);
+}
+
+/** Separates a template from its rendered result. */
+function ResultArrow() {
+	return <ArrowRight className="size-3 shrink-0 text-muted-foreground/50" />;
+}
+
+/**
  * Everything fits on one line — template AND result. That is the real question
  * for layout; `block` only ever meant "insertion needs newlines synthesized".
  * Keying off shape is what lets the six heading levels read as a ladder of
@@ -183,7 +213,7 @@ function fitsOneLine(entry: SyntaxEntry): boolean {
 // to justify the complex ones.
 function InlineRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
 	return (
-		<li className="group flex items-stretch border-border border-b last:border-b-0">
+		<Row entry={entry} canInsert={canInsert}>
 			<span className="block min-w-0 flex-1 px-3 py-1.5">
 				<p className="flex items-center gap-2">
 					<span
@@ -200,7 +230,7 @@ function InlineRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolea
 					</code>
 					{entry.renderable === false ? null : (
 						<>
-							<ArrowRight className="size-3 shrink-0 text-muted-foreground/50" />
+							<ResultArrow />
 							<Preview entry={entry} className="block min-w-0 flex-1 overflow-hidden" />
 						</>
 					)}
@@ -211,8 +241,7 @@ function InlineRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolea
 			    without a blurb stay a single line. */}
 				{entry.blurb ? <p className="mt-0.5 text-muted-foreground text-xs">{entry.blurb}</p> : null}
 			</span>
-			<InsertButton entry={entry} canInsert={canInsert} />
-		</li>
+		</Row>
 	);
 }
 
@@ -225,10 +254,9 @@ function InlineRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolea
  */
 function GalleryRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
 	return (
-		<li className="group flex items-stretch border-border border-b last:border-b-0">
+		<Row entry={entry} canInsert={canInsert}>
 			<Preview entry={entry} className="block min-w-0 flex-1 overflow-hidden px-3 py-1" />
-			<InsertButton entry={entry} canInsert={canInsert} />
-		</li>
+		</Row>
 	);
 }
 
@@ -250,7 +278,7 @@ function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: bool
 	// template wrapping onto a second line for no reason.
 	const showsResult = previewable || Boolean(entry.blurb);
 	return (
-		<li className="group flex items-stretch border-border border-b last:border-b-0">
+		<Row entry={entry} canInsert={canInsert}>
 			<span className="block min-w-0 flex-1 px-3 py-1.5">
 				{/* items-center, and the template sized to its content rather than a
 				    fixed 45% column: the column aligned the arrows but left a wide dead
@@ -287,7 +315,7 @@ function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: bool
 					</code>
 					{previewable ? (
 						<>
-							<ArrowRight className="size-3 shrink-0 text-muted-foreground/50" />
+							<ResultArrow />
 							{/* No flex-1. That is `flex: 1 1 0%`, which claims ALL the leftover
 							    room whatever the content is, so a two-word rendered link
 							    reserved half the row and forced the template to wrap beside a
@@ -308,8 +336,7 @@ function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: bool
 					<span className="mt-0.5 block text-muted-foreground text-xs">{entry.blurb}</span>
 				) : null}
 			</span>
-			<InsertButton entry={entry} canInsert={canInsert} />
-		</li>
+		</Row>
 	);
 }
 
@@ -347,7 +374,7 @@ function ContextLines({ lines }: { lines?: readonly string[] }) {
  */
 function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
 	return (
-		<li className="group flex items-stretch border-border border-b last:border-b-0">
+		<Row entry={entry} canInsert={canInsert}>
 			<span className="block min-w-0 flex-1 px-3 py-2">
 				<p className={`mb-1 ${ROW_HEADING}`}>{entry.label}</p>
 
@@ -393,8 +420,7 @@ function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 					</figure>
 				)}
 			</span>
-			<InsertButton entry={entry} canInsert={canInsert} />
-		</li>
+		</Row>
 	);
 }
 

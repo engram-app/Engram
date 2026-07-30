@@ -178,6 +178,12 @@ export const CATEGORY_INTROS: Record<
 	},
 };
 
+/**
+ * The catalogue. The panel reads it through `filterSyntax` / `groupByCategory`
+ * rather than directly; it is exported for the tests that assert invariants
+ * across EVERY entry (chiefly the TRUTHFULNESS RULE above — that each one
+ * round-trips through NoteView). Not dead, and not a second read path.
+ */
 export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	// ── Text ────────────────────────────────────────────────────────────────
 	{

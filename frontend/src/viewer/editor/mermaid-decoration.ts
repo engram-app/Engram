@@ -1,11 +1,4 @@
-import {
-	type EditorState,
-	Prec,
-	type Range,
-	RangeSetBuilder,
-	StateField,
-	type Text,
-} from "@codemirror/state";
+import { type EditorState, Prec, type Range, StateField, type Text } from "@codemirror/state";
 import {
 	type Command,
 	Decoration,
@@ -15,6 +8,7 @@ import {
 	WidgetType,
 } from "@codemirror/view";
 import { nextMermaidId, renderMermaid } from "../mermaid-render";
+import { decorationSet, selectionTouches } from "./decoration-utils";
 import "./mermaid.css";
 
 // ```mermaid opens; any bare ``` closes. Info strings other than "mermaid" are
@@ -132,7 +126,7 @@ function buildMermaid(state: EditorState): DecorationSet {
 	for (const fence of fenceRanges(doc)) {
 		// Reveal raw when the cursor/selection intersects the block, matching
 		// callouts and math.
-		if (sel.ranges.some((r) => r.from <= fence.to && r.to >= fence.from)) {
+		if (selectionTouches(sel, fence.from, fence.to)) {
 			continue;
 		}
 		const code: string[] = [];
@@ -147,11 +141,7 @@ function buildMermaid(state: EditorState): DecorationSet {
 		);
 	}
 
-	const builder = new RangeSetBuilder<Decoration>();
-	for (const r of ranges) {
-		builder.add(r.from, r.to, r.value);
-	}
-	return builder.finish();
+	return decorationSet(ranges);
 }
 
 /**
