@@ -13,6 +13,11 @@
 /* KaTeX math styles. */
 @import "katex/dist/katex.min.css" layer(base);
 
+/* Editor palette tokens — also scoped to `.prose` there. Imported here so the
+ * task-list checkbox rules below resolve on read-only routes, which never mount
+ * a CodeMirror editor and so never pull in live-preview.ts. */
+@import "./editor/obsidian-theme.css" layer(base);
+
 /* Code-fence surface.
  *
  * @tailwindcss/typography hardcodes the <pre> background to a dark slate in
@@ -119,4 +124,169 @@
 		color: #ffdcd7;
 		background: #67060c;
 	}
+}
+
+/* Inline code.
+ *
+ * Typography renders `code` with literal BACKTICKS around it (::before/::after)
+ * and no surface at all, so inline code was indistinguishable from its own raw
+ * source — in the reference panel the rendered side looked identical to the
+ * template beside it. Drop the quote marks and give it a chip.
+ *
+ * Unlayered for the same reason as the fence rules above: typography lives in
+ * the `utilities` layer and beats anything layered, whatever its specificity.
+ * Squared to match the fences and callouts. */
+.prose :where(code):not(:where(pre code)) {
+	background-color: var(--muted);
+	padding: 0.1em 0.35em;
+	border-radius: 0;
+	font-weight: inherit;
+}
+
+.prose :where(code)::before,
+.prose :where(code)::after {
+	content: none;
+}
+
+/* Blockquotes.
+ *
+ * The editor (blockquote-depth.css) draws one 3px accent rail per `>` level at
+ * a 1rem pitch, upright text, no quote marks. Typography instead renders a
+ * single 0.25rem border-grey rail with italic text and curly ::before/::after
+ * quotes, so the same `> line` looked like a different document per pane.
+ *
+ * Depth needs no --bq-depth here: react-markdown nests a <blockquote> per
+ * level, so one rail each stacks to N rails at the same 1rem pitch the editor
+ * computes. border-left + padding-left sum to exactly 1rem so the text lands on
+ * the same column.
+ *
+ * `:not(.callout)` keeps this off remark-callouts' admonitions, which are also
+ * blockquotes and carry their own per-type rail colour (see main.css).
+ *
+ * Unlayered, like everything else here — typography is in `utilities`. */
+.prose :where(blockquote):not(.callout) {
+	font-style: normal;
+	font-weight: 400;
+	color: inherit;
+	quotes: none;
+	border-left: 3px solid
+		var(--atomic-editor-accent-soft, color-mix(in srgb, #7c3aed 72%, white 28%));
+	padding-left: calc(1rem - 3px);
+}
+
+/* A nested quote is a continuation of the same block, not a new one. Keeping
+ * Typography's 1.6em block margins here would open a gap between rails that the
+ * editor draws as one contiguous run. */
+.prose :where(blockquote blockquote) {
+	margin-top: 0;
+	margin-bottom: 0;
+}
+
+/* The quote's own paragraph margins, collapsing out through a blockquote that
+ * has no top/bottom border or padding, added ~20px of rail-less space above and
+ * below every quote — the editor draws none. Inner margins only, so a
+ * multi-paragraph quote still separates its paragraphs. Same treatment the
+ * callout title/body already get. */
+.prose :where(blockquote):not(.callout) > :first-child {
+	margin-top: 0;
+}
+
+.prose :where(blockquote):not(.callout) > :last-child {
+	margin-bottom: 0;
+}
+
+/* Tables.
+ *
+ * The editor's WYSIWYG table widget (.cm-atomic-table in
+ * @atomic-editor/editor's inline-preview.css) draws a full 1px grid with a
+ * shaded header. Typography draws horizontal rules only, no vertical lines and
+ * no header fill, so the same table looked like two different tables depending
+ * on the pane. Cell geometry and colours are that widget's, via the same
+ * palette tokens (see obsidian-theme.css).
+ *
+ * NOT ported: the widget's `width: max-content; min-width: 100%` plus its own
+ * scroll wrapper. That pairing exists to let a wide table scroll inside the
+ * editor; reading mode has no such wrapper, so adopting the width alone would
+ * push wide tables straight out of the page.
+ *
+ * text-align is safe to set here — remark-gfm expresses column alignment as an
+ * INLINE style, which outranks any stylesheet rule.
+ *
+ * Unlayered, like the rest of this file. */
+.prose :where(th, td) {
+	border: 1px solid var(--atomic-editor-border, #e2e2e4);
+	padding: 0.35em 0.6em;
+	text-align: left;
+	vertical-align: top;
+}
+
+.prose :where(th) {
+	font-weight: 700;
+	background: var(--atomic-editor-code-bg, rgba(0, 0, 0, 0.045));
+}
+
+/* Task lists (remark-gfm emits `ul.contains-task-list > li.task-list-item`).
+ *
+ * Reading mode was showing a disc bullet AND a native 13px checkbox, while the
+ * editor's live preview draws a styled 1.05em box with no bullet — the same
+ * note looked like two different documents depending on which pane you were in.
+ * These rules are a port of `.cm-atomic-task-checkbox` from
+ * @atomic-editor/editor's inline-preview.css, reading the SAME palette tokens
+ * (see obsidian-theme.css) so the two cannot drift on colour.
+ *
+ * Unlayered for the same reason as everything else in this file: typography
+ * lives in the `utilities` layer and its `list-style-type: disc` beats any
+ * layered override regardless of specificity.
+ *
+ * cursor stays default, not pointer: react-markdown renders these `disabled`,
+ * so reading mode genuinely cannot toggle them. */
+.prose :where(ul.contains-task-list) {
+	padding-left: 0;
+	list-style: none;
+}
+
+.prose :where(li.task-list-item) {
+	padding-left: 0;
+}
+
+.prose :where(li.task-list-item input[type="checkbox"]) {
+	appearance: none;
+	-webkit-appearance: none;
+	box-sizing: border-box;
+	display: inline-grid;
+	place-content: center;
+	width: 1.05em;
+	height: 1.05em;
+	/* The editor's rule pulls left by -0.16em to hang the box into the cm-line's
+	 * own padding. A read-mode list has padding-left: 0, so the same negative
+	 * margin puts the box OUTSIDE its container instead — clipped against the
+	 * preview's overflow-hidden, and misaligned with the text above it in a
+	 * full-width note. Everything else here is the editor's geometry verbatim. */
+	margin: 0 0.31em 0 0;
+	font-size: inherit;
+	vertical-align: 0.1em;
+	border: 1.5px solid var(--atomic-editor-fg-muted, #6e6e6e);
+	border-radius: 0.22em;
+	background: transparent;
+	transform: translateY(-0.04em);
+}
+
+/* The tick: two borders of an empty box, rotated into a checkmark. */
+.prose :where(li.task-list-item input[type="checkbox"])::after {
+	content: "";
+	width: 0.26em;
+	height: 0.5em;
+	border-right: 0.12em solid #ffffff;
+	border-bottom: 0.12em solid #ffffff;
+	transform: rotate(45deg) translate(-0.03em, -0.04em);
+	opacity: 0;
+}
+
+.prose :where(li.task-list-item input[type="checkbox"]:checked) {
+	background: var(--atomic-editor-accent, #7c5cff);
+	border-color: var(--atomic-editor-accent, #7c5cff);
+}
+
+.prose :where(li.task-list-item input[type="checkbox"]:checked)::after {
+	opacity: 1;
 }

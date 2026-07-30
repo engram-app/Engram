@@ -8,9 +8,16 @@
  *
  * Scope: light values on .cm-editor; dark values under `.dark .cm-editor`
  * (the app adds a `.dark` class to <html> — see theme/resolve.ts).
+ *
+ * `.prose` is included so READING mode can reuse the same palette. Task-list
+ * checkboxes are styled in markdown.css to match the editor's, and the only way
+ * for the two to match without a second palette that drifts is to read the same
+ * tokens. markdown.css imports this file so the vars exist even on a route that
+ * never mounts an editor.
  */
 
-.cm-editor {
+.cm-editor,
+.prose {
 	/* Obsidian default (light) */
 	--atomic-editor-fg: #222222; /* --text-normal */
 	--atomic-editor-fg-muted: #6e6e6e; /* --text-muted (syntax markers, bullets) */
@@ -23,7 +30,8 @@
 	--atomic-editor-code-rail: rgba(124, 92, 255, 0.35);
 }
 
-.dark .cm-editor {
+.dark .cm-editor,
+.dark .prose {
 	/* Obsidian default (dark) */
 	--atomic-editor-fg: #dcddde; /* --text-normal */
 	--atomic-editor-fg-muted: #999999; /* --text-muted */
