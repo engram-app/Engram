@@ -141,8 +141,8 @@ export function TreeRow({
 
 	const data = instance.getItemData();
 	const { item } = data;
-	// Folders are never the "open" thing — only notes and attachments route to
-	// /note/:id — so expanding one can't move the highlight.
+	// Folders are never the "open" thing: only notes and attachments route to
+	// /:vaultSlug/:itemId, so expanding one can't move the highlight.
 	const active = item.kind !== "folder" && item.id === activeId;
 	const menuOpen = itemId === menuOpenId;
 	const depth = instance.getItemMeta()?.level ?? 0;
@@ -224,9 +224,11 @@ export function TreeRow({
 			: item.mime === "application/pdf"
 				? FileText
 				: File;
-		// Routed by uuid under the unified /note/:id (VaultItemPage resolves
-		// note-vs-file) so the URL survives a rename/move. The HT itemId stays
-		// path-keyed (internal tree machinery).
+		// Routed by uuid under the unified /:vaultSlug/:itemId (VaultItemPage
+		// resolves note-vs-file) so the URL survives a rename/move. Falls back to
+		// the legacy /note/:id, which redirects, while the active vault's slug is
+		// still resolving. The HT itemId stays path-keyed (internal tree
+		// machinery).
 		return (
 			<Link
 				to={slug ? `/${slug}/${item.id}` : `/note/${item.id}`}
