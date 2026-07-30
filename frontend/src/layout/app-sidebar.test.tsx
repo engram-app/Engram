@@ -95,7 +95,7 @@ describe("AppSidebar — Free-tier footer", () => {
 
 		expect(screen.getByText(/free tier.*1 connection/iu)).toBeInTheDocument();
 		const link = screen.getByRole("link", { name: /upgrade/iu });
-		expect(link).toHaveAttribute("href", "/settings/billing");
+		expect(link).toHaveAttribute("href", "/#settings/billing");
 	});
 
 	it("does not render the footer when tier=pro", () => {

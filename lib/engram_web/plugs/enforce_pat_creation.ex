@@ -9,14 +9,14 @@ defmodule EngramWeb.Plugs.EnforcePatCreation do
   the JWT-authed `POST /api/connections/pat` route only.
 
   Rejection: HTTP 402 with
-  `{"error": "pat_disabled_on_free", "upgrade_url": "/settings/billing"}`.
+  `{"error": "pat_disabled_on_free", "upgrade_url": "/#settings/billing"}`.
   """
 
   import Plug.Conn
 
   alias Engram.Billing
 
-  @upgrade_url "/settings/billing"
+  @upgrade_url "/#settings/billing"
 
   def init(opts), do: opts
 

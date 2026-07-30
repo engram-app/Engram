@@ -1,5 +1,5 @@
 import { lazy, type ReactNode, Suspense } from "react";
-import { createBrowserRouter, Navigate, Outlet } from "react-router";
+import { createBrowserRouter, Outlet } from "react-router";
 import AuthGuard from "./auth/auth-guard";
 import CatchAllRoute from "./auth/catch-all-route";
 import SignInPage from "./auth/sign-in";
@@ -29,9 +29,6 @@ const OnboardingGate = lazy(() =>
 const OnboardingShell = lazy(() =>
 	import("./layout/app-shell").then((m) => ({ default: m.OnboardingShell })),
 );
-const SettingsLayout = lazy(() =>
-	import("./layout/app-shell").then((m) => ({ default: m.SettingsLayout })),
-);
 // Onboarding entry surface — same one-chunk barrel pattern.
 const OnboardLayout = lazy(() =>
 	import("./onboarding/onboard-entry").then((m) => ({ default: m.OnboardLayout })),
@@ -40,16 +37,22 @@ const OnboardRedirect = lazy(() =>
 	import("./onboarding/onboard-entry").then((m) => ({ default: m.OnboardRedirect })),
 );
 const Dashboard = lazy(() => import("./viewer/dashboard"));
-// /note/:id resolves to the note OR attachment viewer (VaultItemPage owns the
-// lazy NotePage/AttachmentPage chunks).
+// /:slug/:itemId resolves to the note OR attachment viewer (VaultItemPage owns
+// the lazy NotePage/AttachmentPage chunks).
 const VaultItemPage = lazy(() => import("./viewer/vault-item-page"));
-const BillingPage = lazy(() => import("./billing/billing-page"));
-const AdminPanel = lazy(() => import("./features/admin/AdminPanel"));
+const VaultRoute = lazy(() => import("./viewer/vault-route"));
+const VaultRedirect = lazy(() => import("./viewer/vault-redirect"));
+const LegacyNoteRedirect = lazy(() => import("./viewer/legacy-note-redirect"));
 const ResetPasswordPage = lazy(() => import("./features/auth/ResetPasswordPage"));
 const DeviceLinkPage = lazy(() => import("./device/device-link-page"));
-const ConnectionsPage = lazy(() => import("./settings/connections-page"));
-const VaultsPage = lazy(() => import("./settings/vaults-page"));
 const OAuthAuthorizePage = lazy(() => import("./oauth/oauth-authorize-page"));
+// Settings is a hash overlay mounted at the AuthGuard level (not inside
+// AppLayout) so /link and /oauth/consent, which sit outside the app shell
+// and link to `#settings/billing`, still resolve the overlay.
+const SettingsOverlayHost = lazy(() => import("./settings/settings-overlay-host"));
+// `/settings` and `/settings/*` are the old path route. Phoenix still serves
+// the SPA for those paths, so old bookmarks boot and land here.
+const LegacySettingsRedirect = lazy(() => import("./settings/legacy-settings-redirect"));
 const AgreementPage = lazy(() => import("./onboarding/agreement-page"));
 const OnboardBillingPage = lazy(() => import("./onboarding/onboard-billing-page"));
 const OnboardToolsPage = lazy(() => import("./onboarding/onboard-tools-page"));
@@ -110,15 +113,12 @@ export function getAppRouter(): AppRouter {
 	return _appRouter;
 }
 
-export function createAppRouter(config: EngramConfig): AppRouter {
-	// Lazy so Clerk-only code (the account page pulls in @clerk/react hooks)
-	// stays out of the main chunk for local self-host builds.
-	const AccountPage = lazy(() =>
-		config.authProvider === "clerk"
-			? import("./settings/account-page")
-			: import("./settings/account-page-local"),
-	);
-
+// ponytail: `config` is unused now that settings (the only config-branching
+// route) moved into settings-layout.tsx. Kept as a parameter (renamed with
+// the `_` prefix biome expects for intentionally-unused args) because
+// main.tsx and BootstrapGate call createAppRouter(config) and a future
+// config-gated route is a plausible reason to re-add branching here.
+export function createAppRouter(_config: EngramConfig): AppRouter {
 	return createBrowserRouter([
 		{
 			element: <RootLayout />,
@@ -139,85 +139,80 @@ export function createAppRouter(config: EngramConfig): AppRouter {
 				{
 					element: <AuthGuard />,
 					children: [
-						// Onboarding wizard — itself protected by AuthGuard, but NOT by
-						// OnboardingGate (would redirect-loop).
 						{
-							path: "/onboard",
-							element: suspendedScreen(<OnboardLayout />),
+							// Hash-addressed settings overlays EVERY authenticated route,
+							// including /link and /oauth/consent which sit outside the app
+							// shell and link to `#settings/billing`.
+							element: suspendedScreen(<SettingsOverlayHost />),
 							children: [
-								{ index: true, element: suspended(<OnboardRedirect />) },
-								{ path: "agreement", element: suspended(<AgreementPage />) },
-								{ path: "billing", element: suspended(<OnboardBillingPage />) },
-								{ path: "tools", element: suspended(<OnboardToolsPage />) },
-								{ path: "vault", element: suspended(<OnboardVaultPage />) },
-							],
-						},
-
-						// /link is reachable mid-onboarding — the wizard's Obsidian branch
-						// requires the user to complete device-flow here before progressing.
-						// Sits OUTSIDE the OnboardingGate to dodge the redirect-to-/onboard.
-						{ path: ROUTES.DEVICE_LINK, element: suspended(<DeviceLinkPage />) },
-
-						// OAuth consent — reachable mid-onboarding so an MCP client (e.g.
-						// Claude Desktop) initiating a connection during signup can complete
-						// the OAuth dance without being bounced to /onboard.
-						{ path: ROUTES.OAUTH_CONSENT, element: suspended(<OAuthAuthorizePage />) },
-
-						// Dashboard tree — gated by OnboardingGate.
-						{
-							element: suspendedScreen(<OnboardingGate />),
-							children: [
+								// Onboarding wizard — itself protected by AuthGuard, but NOT by
+								// OnboardingGate (would redirect-loop).
 								{
-									// OnboardingShell wraps the dashboard tree so the tour offer,
-									// first-vault modal, and checklist only mount on the main app
-									// surface — NOT on /settings/*, /device-link, or /oauth.
-									element: suspendedScreen(
-										<OnboardingShell>
-											<Outlet />
-										</OnboardingShell>,
-									),
+									path: "/onboard",
+									element: suspendedScreen(<OnboardLayout />),
+									children: [
+										{ index: true, element: suspended(<OnboardRedirect />) },
+										{ path: "agreement", element: suspended(<AgreementPage />) },
+										{ path: "billing", element: suspended(<OnboardBillingPage />) },
+										{ path: "tools", element: suspended(<OnboardToolsPage />) },
+										{ path: "vault", element: suspended(<OnboardVaultPage />) },
+									],
+								},
+
+								// /link is reachable mid-onboarding — the wizard's Obsidian branch
+								// requires the user to complete device-flow here before progressing.
+								// Sits OUTSIDE the OnboardingGate to dodge the redirect-to-/onboard.
+								{ path: ROUTES.DEVICE_LINK, element: suspended(<DeviceLinkPage />) },
+
+								// OAuth consent — reachable mid-onboarding so an MCP client (e.g.
+								// Claude Desktop) initiating a connection during signup can complete
+								// the OAuth dance without being bounced to /onboard.
+								{ path: ROUTES.OAUTH_CONSENT, element: suspended(<OAuthAuthorizePage />) },
+
+								// Dashboard tree — gated by OnboardingGate.
+								{
+									element: suspendedScreen(<OnboardingGate />),
 									children: [
 										{
-											element: suspendedScreen(<AppLayout />),
+											// OnboardingShell wraps the dashboard tree so the tour offer,
+											// first-vault modal, and checklist only mount on the main app
+											// surface — NOT on /settings/*, /device-link, or /oauth.
+											element: suspendedScreen(
+												<OnboardingShell>
+													<Outlet />
+												</OnboardingShell>,
+											),
 											children: [
-												{ path: ROUTES.HOME, element: suspended(<Dashboard />) },
-												{ path: "/note/:id", element: suspended(<VaultItemPage />) },
 												{
-													path: "settings",
-													element: suspended(<SettingsLayout />),
+													element: suspendedScreen(<AppLayout />),
 													children: [
+														// Bare `/` picks a vault; `/note/:id` is the pre-vault-scoping URL shape.
+														{ path: ROUTES.HOME, element: suspended(<VaultRedirect />) },
+														{ path: "/note/:id", element: suspended(<LegacyNoteRedirect />) },
+														// Vault-scoped. Listed last for readability only. React Router's
+														// route ranking already scores static segments above dynamic ones
+														// as part of matching, independent of declaration order, so
+														// position does not decide this. Verified against react-router
+														// 8.3.0's computeScore.
 														{
-															index: true,
-															element: <Navigate to="account" replace />,
+															path: "/:slug",
+															element: suspended(<VaultRoute />),
+															children: [
+																{ index: true, element: suspended(<Dashboard />) },
+																{ path: ":itemId", element: suspended(<VaultItemPage />) },
+															],
 														},
-														{
-															path: "account",
-															element: (
-																<Suspense
-																	fallback={<p className="text-muted-foreground">Loading…</p>}
-																>
-																	<AccountPage />
-																</Suspense>
-															),
-														},
-														{ path: "vaults", element: suspended(<VaultsPage />) },
-														{ path: "connections", element: suspended(<ConnectionsPage />) },
-														{
-															path: "api-keys",
-															element: <Navigate to="/settings/connections" replace />,
-														},
-														...(config.billingEnabled
-															? [{ path: "billing", element: suspended(<BillingPage />) }]
-															: []),
-														...(config.authProvider === "local"
-															? [{ path: "admin", element: suspended(<AdminPanel />) }]
-															: []),
 													],
 												},
 											],
 										},
 									],
 								},
+
+								// Legacy path settings. Phoenix still serves the SPA for these
+								// (router.ex) so old bookmarks boot and land on the hash form.
+								{ path: "/settings", element: suspended(<LegacySettingsRedirect />) },
+								{ path: "/settings/*", element: suspended(<LegacySettingsRedirect />) },
 							],
 						},
 					],

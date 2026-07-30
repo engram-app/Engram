@@ -15,7 +15,7 @@ const PdfView = lazy(() => import("./pdf-view"));
 // warm), then streams raw bytes (?raw=1) as a typed Blob so the browser renders
 // images / PDFs natively; unsupported types fall back to a download link.
 export default function AttachmentPage() {
-	const { id } = useParams();
+	const { itemId: id } = useParams();
 	const { data: attachments, isLoading } = useAttachments();
 	const att = attachments?.find((a) => a.id === id);
 	const path = att?.path ?? "";

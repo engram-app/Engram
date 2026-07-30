@@ -602,7 +602,7 @@ defmodule EngramWeb.NotesControllerTest do
       assert body["limit_key"] == "notes_cap"
       assert body["limit"] == 10_000
       assert body["current"] == 10_000
-      assert body["upgrade_url"] =~ "/settings/billing"
+      assert body["upgrade_url"] =~ "/#settings/billing"
     end
   end
 

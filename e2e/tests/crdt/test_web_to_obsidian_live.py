@@ -40,7 +40,8 @@ CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert
 
 
 def _note_id(api_sync, path: str) -> str:
-    """Server note id for `path` (the SPA opens /note/<id>). Shape-robust."""
+    """Server note id for `path` (the SPA opens the note at its vault-scoped
+    URL; /note/<id> only redirects there). Shape-robust."""
     note = api_sync.wait_for_note(path, timeout=CRDT_TIMEOUT)
     inner = note.get("note", note) if isinstance(note, dict) else {}
     nid = inner.get("id") or inner.get("note_id") or inner.get("uuid")

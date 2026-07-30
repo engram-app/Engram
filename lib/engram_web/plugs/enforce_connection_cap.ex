@@ -16,7 +16,7 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
        "tier": "free" | "starter" | "pro",
        "current": <integer>,
        "limit": <integer>,
-       "upgrade_url": "/settings/billing"}
+       "upgrade_url": "/#settings/billing"}
 
   Missing or unknown `client_id`: HTTP 400 with
       {"error": "missing_or_invalid_client_id"}

@@ -1,5 +1,6 @@
 import { FolderTree, Search, Settings } from "lucide-react";
-import { NavLink, useLocation, useNavigate } from "react-router";
+import { Link, NavLink, useLocation, useNavigate } from "react-router";
+import { isSettingsHash, settingsTo } from "../settings/settings-hash";
 import { type RailView, useRailView } from "./rail-view-context";
 import { RIGHT_TOOLS, type RightToolDescriptor, useRightTools } from "./right-tools-context";
 import UserMenu from "./user-menu";
@@ -33,12 +34,13 @@ function ViewButton({
 	const { view, setView } = useRailView();
 	const location = useLocation();
 	const navigate = useNavigate();
-	const onSettings = location.pathname.startsWith("/settings");
+	const onSettings = isSettingsHash(location.hash);
 	const active = view === id && !onSettings;
 	const onClick = () => {
 		setView(id);
 		if (onSettings) {
-			navigate("/");
+			// Strip the settings hash, stay on the page underneath.
+			navigate({ pathname: location.pathname, search: location.search, hash: "" });
 		}
 	};
 	return (
@@ -78,6 +80,8 @@ function ToolButton({ tool }: { tool: RightToolDescriptor }) {
 }
 
 export default function Rail() {
+	const location = useLocation();
+	const onSettings = isSettingsHash(location.hash);
 	return (
 		<nav
 			aria-label="App navigation"
@@ -101,14 +105,15 @@ export default function Rail() {
 			))}
 
 			<div className="flex-1" />
-			<NavLink
-				to="/settings"
+			<Link
+				to={settingsTo("account", location.search)}
 				aria-label="Settings"
 				title="Settings"
-				className={({ isActive }) => railButtonClass(isActive)}
+				aria-current={onSettings ? "page" : undefined}
+				className={railButtonClass(onSettings)}
 			>
 				<Settings className="h-5 w-5" />
-			</NavLink>
+			</Link>
 			<UserMenu />
 		</nav>
 	);

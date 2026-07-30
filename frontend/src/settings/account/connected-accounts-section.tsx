@@ -4,6 +4,7 @@ import type { OAuthStrategy } from "@clerk/shared/types";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { settingsHash } from "../settings-hash";
 import { DiscordIcon } from "./discord-icon";
 import { SettingsSectionCard } from "./section-card";
 
@@ -86,7 +87,7 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 		try {
 			const acct = await createExternalAccount({
 				strategy,
-				redirectUrl: `${window.location.origin}/settings/account`,
+				redirectUrl: `${window.location.origin}/${settingsHash("account")}`,
 			});
 			const url = acct?.verification?.externalVerificationRedirectURL;
 			if (url) {

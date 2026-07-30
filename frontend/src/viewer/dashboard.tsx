@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Link, useSearchParams } from "react-router";
 import { type NoteSummary, useFolderNotes, useVaults } from "../api/queries";
+import { useActiveVaultSlug } from "../api/vault-slug";
 import { EmptyVaultState } from "../layout/empty-vault-state";
 import { useRightTools } from "../layout/right-tools-context";
 import { noteName } from "../lib/note-name";
@@ -19,9 +20,13 @@ interface NoteRowProps {
 }
 
 function NoteRow({ note }: NoteRowProps) {
+	const slug = useActiveVaultSlug();
 	return (
 		<article className="border-gray-100 border-b py-3 last:border-0 dark:border-gray-800">
-			<Link to={`/note/${note.id}`} className="block hover:text-blue-700">
+			<Link
+				to={slug ? `/${slug}/${note.id}` : `/note/${note.id}`}
+				className="block hover:text-blue-700"
+			>
 				<h3 className="font-medium text-gray-900 text-sm dark:text-gray-100">
 					{noteName(note.path) || note.path}
 				</h3>

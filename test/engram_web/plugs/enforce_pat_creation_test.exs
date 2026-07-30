@@ -20,7 +20,7 @@ defmodule EngramWeb.Plugs.EnforcePatCreationTest do
       assert conn.status == 402
       body = Phoenix.ConnTest.json_response(conn, 402)
       assert body["error"] == "pat_disabled_on_free"
-      assert body["upgrade_url"] == "/settings/billing"
+      assert body["upgrade_url"] == "/#settings/billing"
     end
 
     test "passes through when api_write_enabled is true (override grant)", %{conn: conn} do

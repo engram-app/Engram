@@ -6,6 +6,12 @@ import type { LoaderItem } from "./loader";
 import { TreeRow } from "./tree-row";
 import type { TreeItem } from "./types";
 
+// TreeRow reads the active vault slug to build note hrefs. Default to null
+// (the fallback/legacy shape) so the existing href assertions below stay
+// valid; individual tests override with mockReturnValueOnce.
+const activeSlugMock = vi.fn<() => string | null>(() => null);
+vi.mock("../../api/vault-slug", () => ({ useActiveVaultSlug: () => activeSlugMock() }));
+
 const folderItem: TreeItem = {
 	kind: "folder",
 	id: "1",
@@ -112,6 +118,18 @@ describe("TreeRow", () => {
 		const link = screen.getByRole("link") as HTMLAnchorElement;
 		expect(link.getAttribute("href")).toBe("/note/100");
 		expect(screen.getByText("a")).toBeInTheDocument();
+	});
+
+	it("renders note as a vault-scoped link once the active vault slug loads", () => {
+		activeSlugMock.mockReturnValueOnce("work");
+		const instance = mockInstance({ data: noteItem });
+		render(
+			<MemoryRouter>
+				<TreeRow instance={instance} />
+			</MemoryRouter>,
+		);
+		const link = screen.getByRole("link") as HTMLAnchorElement;
+		expect(link.getAttribute("href")).toBe("/work/100");
 	});
 
 	it("shows uppercase ext badge for non-md notes", () => {
@@ -413,6 +431,18 @@ describe("TreeRow", () => {
 		// Base name only — the extension lives in the badge beside it.
 		expect(screen.getByText("a")).toBeInTheDocument();
 		expect(screen.queryByText("a.png")).not.toBeInTheDocument();
+	});
+
+	it("renders attachment as a vault-scoped link once the active vault slug loads", () => {
+		activeSlugMock.mockReturnValueOnce("work");
+		const instance = mockInstance({ data: attachmentItem });
+		render(
+			<MemoryRouter>
+				<TreeRow instance={instance} />
+			</MemoryRouter>,
+		);
+		const link = screen.getByRole("link") as HTMLAnchorElement;
+		expect(link.getAttribute("href")).toBe("/work/att-1");
 	});
 
 	it("shows uppercase ext badge for attachment", () => {

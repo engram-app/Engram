@@ -233,7 +233,7 @@ config :engram, :default_registration_mode, default_registration_mode
 # SaaS points at the in-app billing page; self-hosters can override or set to nil.
 config :engram,
        :upgrade_url,
-       System.get_env("ENGRAM_UPGRADE_URL", "https://app.engram.page/settings/billing")
+       System.get_env("ENGRAM_UPGRADE_URL", "https://app.engram.page/#settings/billing")
 
 # Email transactional provider (pricing v2 §C). Default: NoOp for self-host;
 # Resend when RESEND_API_KEY is set.

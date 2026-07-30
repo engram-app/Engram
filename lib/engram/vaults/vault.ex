@@ -30,6 +30,33 @@ defmodule Engram.Vaults.Vault do
     timestamps(type: :utc_datetime, inserted_at: :created_at)
   end
 
+  # Slugs that would make a vault unreachable. Three failure modes:
+  #   - Route-shadowed (sign-in..settings): some of these have a top-level
+  #     static React Router route that beats `/:slug` (e.g. `/link`), making a
+  #     same-named vault unreachable by URL. Others (`search`, `billing`) have
+  #     NO such static route (`billing` only exists nested under
+  #     `/onboard/billing`; `search` is a rail-toggled panel, not a route), so
+  #     `/:slug` would actually match them; what actually stops a vault
+  #     from ever holding one of these slugs is `validate_exclusion` below,
+  #     not routing.
+  #   - Backend-denied (api..socket): Task 7's Phoenix deny-list 404s these
+  #     prefixes before the SPA ever loads, so a vault slugged `assets` is
+  #     completely broken, not just awkward.
+  #   - Backend-forwarded (metrics): router.ex mounts `forward "/metrics",
+  #     PromEx.Plug` behind bearer auth, ahead of the vault route, so
+  #     `/metrics` and everything under it 401s before the SPA loads. No
+  #     deny-list entry needed for this one, the forward already wins by
+  #     declaration order.
+  # Keep in sync with frontend/src/api/reserved-slugs.ts.
+  @reserved_slugs ~w(
+    sign-in sign-up waitlist link oauth onboard reset-password
+    note search billing settings api webhooks .well-known
+    assets email socket metrics
+  )
+
+  @doc "Exposes the reserved-slug list so slug generation can dedup around it, same as a taken slug."
+  def reserved_slugs, do: @reserved_slugs
+
   def changeset(vault, attrs) do
     vault
     |> cast(attrs, [
@@ -51,6 +78,8 @@ defmodule Engram.Vaults.Vault do
       :name_nonce,
       :name_hmac
     ])
+    |> update_change(:slug, &(&1 |> String.trim() |> String.downcase()))
+    |> validate_exclusion(:slug, @reserved_slugs, message: "is reserved")
     |> unique_constraint([:user_id, :slug], name: :vaults_user_id_slug_index)
     |> unique_constraint([:user_id, :client_id], name: :vaults_user_id_client_id_index)
   end

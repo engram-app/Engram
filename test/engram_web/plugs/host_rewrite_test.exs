@@ -313,7 +313,14 @@ defmodule EngramWeb.Plugs.HostRewriteTest do
         EngramWeb.Router.__routes__()
         |> Enum.filter(&String.starts_with?(&1.path, "/api/"))
         |> Enum.map(&(&1.path |> String.split("/", trim: true) |> Enum.at(1)))
-        |> Enum.reject(&is_nil/1)
+        # Task 7's SPA-scope deny-list registers `/api/*path` as a literal
+        # catch-all fallback (matched only when nothing in the real /api
+        # scopes above it matched) so typo'd API paths 404 instead of
+        # falling through to the vault-scoped /:slug SPA route (#858). It
+        # isn't a named resource segment, so it has nothing to add to
+        # @api_top_segments: HostRewrite already passes any already-/api
+        # path through unmodified before this route is ever reached.
+        |> Enum.reject(&(is_nil(&1) or String.starts_with?(&1, "*")))
         |> MapSet.new()
 
       plug_segments = MapSet.new(HostRewrite.__api_top_segments__())

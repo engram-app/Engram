@@ -1,8 +1,13 @@
+import { CreditCard, type LucideIcon, Plug, ShieldCheck, User, Vault } from "lucide-react";
 import type { EngramConfig } from "../config";
+import type { SettingsSectionKey } from "./settings-hash";
 
 export interface SettingsSection {
-	to: string;
+	key: SettingsSectionKey;
 	label: string;
+	// The nav's leading glyph. Lives here rather than in settings-layout so the
+	// section list stays the single place a new section is declared.
+	icon: LucideIcon;
 }
 
 export function buildSettingsSections(
@@ -11,17 +16,17 @@ export function buildSettingsSections(
 	isAdmin = false,
 ): SettingsSection[] {
 	const sections: SettingsSection[] = [
-		{ to: "account", label: "Account" },
-		{ to: "vaults", label: "Vaults" },
-		{ to: "connections", label: "Connections" },
+		{ key: "account", label: "Account", icon: User },
+		{ key: "vaults", label: "Vaults", icon: Vault },
+		{ key: "connections", label: "Connections", icon: Plug },
 	];
 
 	if (billingEnabled) {
-		sections.push({ to: "billing", label: "Billing" });
+		sections.push({ key: "billing", label: "Billing", icon: CreditCard });
 	}
 
 	if (authProvider === "local" && isAdmin) {
-		sections.push({ to: "admin", label: "Administration" });
+		sections.push({ key: "admin", label: "Administration", icon: ShieldCheck });
 	}
 
 	return sections;

@@ -1,8 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import ConnectionsPage from "./connections-page";
+
+// Records the router's current hash so a test can prove a click actually
+// navigated (via history.push), not merely that the link's href looked right.
+function LocationProbe() {
+	const loc = useLocation();
+	return <output data-testid="loc-hash">{loc.hash}</output>;
+}
 
 // ── Controllable mock state ───────────────────────────────────
 // vi.mock is hoisted; we use these module-level variables to vary
@@ -114,6 +121,7 @@ function renderPage() {
 	return render(
 		<QueryClientProvider client={qc}>
 			<MemoryRouter>
+				<LocationProbe />
 				<ConnectionsPage />
 			</MemoryRouter>
 		</QueryClientProvider>,
@@ -169,6 +177,15 @@ describe("ConnectionsPage", () => {
 		renderPage();
 		expect(screen.getByText(/Upgrade to Starter to create API keys/iu)).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /\+ New Key/iu })).not.toBeInTheDocument();
+	});
+
+	it("Upgrade CTA click actually navigates (not just a correct href)", () => {
+		mockConnections.splice(0, mockConnections.length, basePat);
+		mockTier = "free";
+		renderPage();
+		expect(screen.getByTestId("loc-hash")).toHaveTextContent("");
+		fireEvent.click(screen.getByRole("link", { name: /upgrade/iu }));
+		expect(screen.getByTestId("loc-hash")).toHaveTextContent("#settings/billing");
 	});
 
 	it("shows unverified badge for MCP connection with verified=false", () => {

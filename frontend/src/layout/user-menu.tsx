@@ -1,5 +1,5 @@
 import { LogOut, Monitor, Moon, Settings, Sun } from "lucide-react";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -11,6 +11,7 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
+import { settingsTo } from "../settings/settings-hash";
 import type { ThemeChoice } from "../theme/storage";
 import { useTheme } from "../theme/theme-provider";
 
@@ -29,6 +30,7 @@ const THEME_OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: string; Icon: ty
 export default function UserMenu() {
 	const { user, logout } = useAuthAdapter();
 	const { theme, setTheme } = useTheme();
+	const location = useLocation();
 	const initial = user?.email?.[0]?.toUpperCase() ?? "?";
 
 	return (
@@ -52,7 +54,7 @@ export default function UserMenu() {
 				</DropdownMenuLabel>
 				<DropdownMenuSeparator />
 				<DropdownMenuItem asChild className="gap-2.5 px-3 py-2.5 text-sm">
-					<Link to="/settings">
+					<Link to={settingsTo("account", location.search)}>
 						<Settings className="h-4 w-4" />
 						Settings
 					</Link>

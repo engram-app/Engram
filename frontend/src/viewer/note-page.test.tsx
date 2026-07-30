@@ -55,7 +55,7 @@ vi.mock("../api/queries", () => ({
 	useNote: (...a: unknown[]) => useNoteMock(...a),
 	useRenameNote: () => ({ mutate: renameNoteMutate, isPending: false }),
 }));
-vi.mock("react-router", () => ({ useParams: () => ({ id: "note-1" }) }));
+vi.mock("react-router", () => ({ useParams: () => ({ itemId: "note-1" }) }));
 
 const NOTE = {
 	id: "note-1",
