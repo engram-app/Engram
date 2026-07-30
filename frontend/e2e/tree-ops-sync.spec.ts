@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import {
 	createFolder,
 	createVault,
+	noteUrlRe,
 	registerAndLogin,
 	signInForNote,
 	upsertNote,
@@ -211,10 +212,10 @@ test.describe("web tree ops sync (web to web)", () => {
 		// route/URL is left untouched (no redirect). That is the graceful
 		// state this test locks in: no dead editor showing stale content, no
 		// crash, no infinite spinner, just an explicit not-found message.
-		await expect(pageA).toHaveURL(new RegExp(`/note/${doomedId}`));
+		await expect(pageA).toHaveURL(noteUrlRe(doomedId));
 		await expect(pageA.getByText(/Failed to load note/u)).toBeVisible({ timeout: 10_000 });
 
-		await expect(pageB).toHaveURL(new RegExp(`/note/${doomedId}`));
+		await expect(pageB).toHaveURL(noteUrlRe(doomedId));
 		await expect(pageB.getByText(/Failed to load note/u)).toBeVisible({ timeout: 10_000 });
 
 		// No crash in either tab: the CRDT doc teardown (closeDoc fires from the
@@ -279,7 +280,8 @@ test.describe("web tree ops sync (web to web)", () => {
 		await expect(row(pageB, "mover")).toHaveCount(0, { timeout: 10_000 });
 
 		// Content sync must survive the move. Both tabs are anchored on the note
-		// (/note/:id, id stable across the move), so the editor stays bound.
+		// (/:vaultSlug/:noteId, id stable across the move), so the editor stays
+		// bound — the move changes the note's path, not its id.
 		// Edit in tab A and confirm it converges in tab B: a regression here means
 		// the move broke the note's live content channel.
 		const edA = pageA.locator(".cm-content");
