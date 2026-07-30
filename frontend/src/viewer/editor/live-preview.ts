@@ -22,11 +22,14 @@ import { type Extension, Prec } from "@codemirror/state";
 import { tags } from "@lezer/highlight";
 import { blockquoteDepthPlugin } from "./blockquote-depth";
 import { calloutDecoration } from "./callout-decoration";
+import { calloutMarker } from "./callout-marker";
 import { katexDecoration } from "./katex-decoration";
 import { mermaidDecoration, mermaidKeymap } from "./mermaid-decoration";
 
 /**
- * Repaint monospace text as body text.
+ * Token colours that must beat atomicMarkdownSyntax.
+ *
+ * MONOSPACE: repainted as body text.
  *
  * atomicMarkdownSyntax maps `t.monospace` to --atomic-editor-link, the SAME
  * token it uses for t.link and t.url. That makes every scrap of code purple:
@@ -38,9 +41,14 @@ import { mermaidDecoration, mermaidKeymap } from "./mermaid-decoration";
  * Body colour is the right answer rather than a third hue, because Reading mode
  * already renders inline code with no colour of its own: it takes a background
  * chip and inherits the text colour. This makes the panes agree again.
+ *
+ * PROCESSING INSTRUCTION: the `[!type]` callout marker (see callout-marker.ts).
+ * Faint, because on a revealed callout header it is the one part of the line
+ * that is syntax rather than the title you came to edit.
  */
-const monospaceAsBodyText = HighlightStyle.define([
+const syntaxOverrides = HighlightStyle.define([
 	{ tag: tags.monospace, color: "var(--atomic-editor-fg)" },
+	{ tag: tags.processingInstruction, color: "var(--atomic-editor-fg-faint)" },
 ]);
 
 export interface LivePreviewOpts {
@@ -68,10 +76,12 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		markdown({
 			base: markdownLanguage,
 			codeLanguages: ATOMIC_CODE_LANGUAGES,
-			extensions: [highlightMarkdown],
+			// calloutMarker must come before Link in the inline parser list, which
+			// it declares itself; order here is irrelevant.
+			extensions: [highlightMarkdown, calloutMarker],
 		}),
-		// See monospaceAsBodyText above — one tag, overriding atomicMarkdownSyntax.
-		Prec.highest(syntaxHighlighting(monospaceAsBodyText)),
+		// See syntaxOverrides above — two tags, both overriding atomicMarkdownSyntax.
+		Prec.highest(syntaxHighlighting(syntaxOverrides)),
 		// Applies the syntax-highlight *colors* for the markdown grammar tags
 		// `highlightMarkdown` adds (headings, emphasis, etc). Without this the
 		// live-preview text renders unstyled — atomicEditorTheme alone only sets
