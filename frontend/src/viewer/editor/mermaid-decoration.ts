@@ -11,7 +11,6 @@ import { nextMermaidId, renderMermaid } from "../mermaid-render";
 import { selectionTouches } from "./decoration-utils";
 import "./mermaid.css";
 
-
 /**
  * Renders one mermaid fence. The SVG arrives asynchronously, so toDOM returns an
  * empty container immediately and fills it later.
