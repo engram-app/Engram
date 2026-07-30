@@ -68,10 +68,12 @@ defmodule Engram.Notes.CrdtPersistence do
             # here. That seed made the SERVER a third writer of note content,
             # and reconciling three representations (doc / notes.content / disk)
             # is the shape of every "which copy is authoritative" bug we have
-            # shipped. Non-CRDT writes (REST / MCP / web) now ingest into the
-            # doc at WRITE time — see CrdtDeliver.ingest_into_fresh_room — so a
-            # bound room already holds the body and `notes.content` is a
-            # DERIVED projection maintained by the checkpoint materializer.
+            # shipped. Non-CRDT writes (REST / MCP / web) already merge their
+            # plaintext INTO the persisted CRDT state at WRITE time, roomlessly
+            # — `Notes.upsert_note` -> doc_from_state -> replay_tail ->
+            # merge_plaintext_* — so a bound room already holds the body and
+            # `notes.content` is a DERIVED projection maintained by the
+            # checkpoint materializer.
 
             :ok = CrdtBridge.normalize_doc(doc)
 
