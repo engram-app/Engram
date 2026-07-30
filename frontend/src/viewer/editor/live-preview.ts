@@ -17,7 +17,7 @@ import "./obsidian-theme.css";
 import "./blockquote-depth.css";
 import { ATOMIC_CODE_LANGUAGES } from "@atomic-editor/editor/code-languages";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import type { Extension } from "@codemirror/state";
+import { type Extension, Prec } from "@codemirror/state";
 import { blockquoteDepthPlugin } from "./blockquote-depth";
 import { calloutDecoration } from "./callout-decoration";
 import { katexDecoration } from "./katex-decoration";
@@ -69,7 +69,14 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 				window.location.assign(opts.resolveWikiLink(target));
 			},
 		}),
-		calloutDecoration,
+		// Prec.highest is load-bearing, not tidiness. A callout's header line is
+		// replaced wholesale by our icon+title widget, and inlinePreview emits its
+		// own replace over the QuoteMark on that same line. At equal precedence
+		// Atomic's won and ours was silently dropped — but only on a rebuild AFTER
+		// the first, so a callout rendered correctly until you put the caret in it,
+		// and arrowing back out left the header line completely blank. The widget
+		// was in the decoration set the whole time; it just lost the overlap.
+		Prec.highest(calloutDecoration),
 		katexDecoration,
 		// Atomic has no mermaid support of its own, so ```mermaid stayed raw text
 		// in the editor while Reading mode drew the diagram. Ours, like the two
