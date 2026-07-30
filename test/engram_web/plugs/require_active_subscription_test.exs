@@ -8,7 +8,7 @@ defmodule EngramWeb.Plugs.RequireActiveSubscriptionTest do
 
   setup do
     prev = Application.get_env(:engram, :upgrade_url)
-    Application.put_env(:engram, :upgrade_url, "https://app.engram.page/settings/billing")
+    Application.put_env(:engram, :upgrade_url, "https://app.engram.page/#settings/billing")
     on_exit(fn -> Application.put_env(:engram, :upgrade_url, prev) end)
     :ok
   end
@@ -59,7 +59,7 @@ defmodule EngramWeb.Plugs.RequireActiveSubscriptionTest do
       assert body["error"] == "limit_exceeded"
       assert body["reason"] == "account_suspended"
       assert body["tier"] == "free"
-      assert body["upgrade_url"] =~ "/settings/billing"
+      assert body["upgrade_url"] =~ "/#settings/billing"
     end
   end
 end
