@@ -87,6 +87,16 @@ interface SyntaxEntry {
 	 */
 	templatePrelude?: readonly string[];
 	templatePostlude?: readonly string[];
+	/**
+	 * A real outbound link for syntax that is a doorway to someone else's whole
+	 * language — Mermaid's diagram grammar, say. One row can show that the fence
+	 * exists; it cannot document the language inside it, and pretending otherwise
+	 * is how a reference goes stale.
+	 *
+	 * Distinct from the inert anchors in previews, which only need to LOOK like
+	 * links. Category-wide equivalents live in CATEGORY_INTROS.
+	 */
+	link?: { href: string; label: string };
 }
 
 /**
@@ -136,7 +146,10 @@ const CALLOUT_GALLERY: readonly SyntaxEntry[] = Object.entries(defaultConfig.typ
 	}));
 
 /** Shown once, prominently, above a category whose rows all share one format. */
-export const CATEGORY_INTROS: Record<string, { syntax?: string; note: string }> = {
+export const CATEGORY_INTROS: Record<
+	string,
+	{ syntax?: string; note: string; link?: { href: string; label: string } }
+> = {
 	Headings: {
 		// Deliberately worded as convention, because that is what it is: WCAG
 		// requires headings be descriptive and their relationships programmatically
@@ -150,6 +163,18 @@ export const CATEGORY_INTROS: Record<string, { syntax?: string; note: string }> 
 	Callouts: {
 		syntax: "> [!type] Title\n> Body text.",
 		note: "Swap `type` for any name below. The title is optional.",
+	},
+	Math: {
+		// The one category whose syntax is a doorway to an entire other language.
+		// Two rows can show WHERE math goes but not what can go in it, and the
+		// honest answer — a large subset of LaTeX, not all of it — is only useful
+		// alongside the list of what made the cut. Hence a real outbound link,
+		// unlike the Links section's examples, which deliberately point at us.
+		note: "Formulas are written in LaTeX and typeset by KaTeX. Single dollar signs keep one in the flow of a sentence; a pair on their own lines centres it as a block. KaTeX covers a large subset of LaTeX rather than all of it, so if a command renders as red source text, it is not supported.",
+		link: {
+			href: "https://ashki23.github.io/markdown-latex.html#latex",
+			label: "LaTeX syntax reference",
+		},
 	},
 };
 
@@ -450,19 +475,40 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "code-fence",
 		category: "Code",
 		label: "Code Block",
-		syntax: "```ts\ncode\n```",
-		demo: "```ts\nconst total = items.length;\n```",
-		blurb: "Tag the language to highlight it.",
+		// The BARE fence was missing entirely — the section documented only the
+		// language-tagged form, so the base syntax everyone reaches for first was
+		// nowhere in the reference.
+		syntax: "```\nPlain code, no highlighting\n```",
 		block: true,
-		keywords: ["fence", "syntax", "highlight", "snippet"],
+		keywords: ["fence", "snippet", "backticks", "preformatted", "pre", "monospace"],
+	},
+	{
+		id: "code-fence-lang",
+		category: "Code",
+		label: "Highlighted Code Block",
+		// Template and preview are the same string here, as with the table and the
+		// diagram: `code` above a rendered `const total = items.length;` left the
+		// reader matching one to the other for no gain.
+		syntax: "```ts\nconst total = items.length;\n```",
+		blurb:
+			"Many languages are supported. Name the type straight after the opening fence — usually the file extension, so ts for TypeScript and js for JavaScript.",
+		block: true,
+		keywords: ["fence", "syntax", "highlight", "snippet", "language", "ts", "js", "elixir"],
 	},
 	{
 		id: "mermaid",
 		category: "Code",
 		label: "Mermaid Diagram",
-		syntax: "```mermaid\ngraph TD\n  A --> B\n```",
-		demo: "```mermaid\ngraph LR\n  Edit --> Sync --> Vault\n```",
+		// No separate `demo`, for the same reason as the table: a diagram's shape
+		// is the whole lesson, and `A --> B` above a rendered Edit → Sync → Vault
+		// flow left the reader to guess which part of the source produced which
+		// box. The template IS the diagram you see.
+		syntax: "```mermaid\ngraph LR\n  Edit --> Sync --> Vault\n```",
 		blurb: "Flowchart, sequence, class and state diagrams.",
+		link: {
+			href: "https://mermaid.ai/open-source/intro/syntax-reference.html",
+			label: "Mermaid syntax reference",
+		},
 		block: true,
 		keywords: ["diagram", "graph", "flowchart", "chart", "uml"],
 	},
@@ -471,9 +517,11 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	{
 		id: "math-inline",
 		category: "Math",
-		label: "Inline math",
+		label: "Inline Math",
 		syntax: "$E = mc^2$",
-		blurb: "KaTeX, in the flow of the sentence.",
+		// Blurbs dropped from both Math rows: the category intro above them now
+		// carries the inline-vs-block distinction, and repeating "KaTeX" on each
+		// row said it three times on one screen.
 		keywords: ["katex", "latex", "tex", "equation", "formula"],
 		templateLed: true,
 	},
@@ -481,9 +529,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		id: "math-block",
 		category: "Math",
 		label: "Block Math",
-		syntax: "$$\nx^2\n$$",
-		demo: "$$\n\\int_0^1 x^2 \\, dx = \\frac{1}{3}\n$$",
-		blurb: "KaTeX, centred on its own line.",
+		syntax: "$$\n\\int_0^1 x^2 \\, dx = \\frac{1}{3}\n$$",
 		block: true,
 		keywords: ["katex", "latex", "tex", "equation", "display"],
 	},

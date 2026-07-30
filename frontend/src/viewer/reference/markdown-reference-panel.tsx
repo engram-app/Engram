@@ -67,6 +67,27 @@ const SOURCE =
 // headers styled alike is what made sections hard to find in the first place.
 const ROW_HEADING = "font-semibold text-foreground text-sm";
 
+/**
+ * A REAL outbound link, unlike the inert anchors inside previews — this one is
+ * the point. Its own line rather than trailing the prose, so it reads as "go
+ * here for more" instead of disappearing into the sentence.
+ */
+function RefLink({ link }: { link?: { href: string; label: string } }) {
+	if (!link) {
+		return null;
+	}
+	return (
+		<a
+			href={link.href}
+			target="_blank"
+			rel="noreferrer"
+			className="mt-1.5 inline-block text-xs underline underline-offset-2 hover:text-foreground"
+		>
+			{link.label}
+		</a>
+	);
+}
+
 /** A rendered example. See PREVIEW for why links here are inert. */
 function Preview({ entry, className = "" }: { entry: SyntaxEntry; className?: string }) {
 	return (
@@ -269,6 +290,15 @@ function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 			    skip. Regular weight keeps it under the heading. */}
 				{entry.blurb ? <p className="mb-1.5 text-foreground text-xs">{entry.blurb}</p> : null}
 
+				{/* Above the template, not trailing the row: a link to someone else's
+				    grammar is context for reading what follows, and at the bottom it
+				    sat below a tall preview where nobody would scroll to find it. */}
+				{entry.link ? (
+					<p className="mb-1.5">
+						<RefLink link={entry.link} />
+					</p>
+				) : null}
+
 				{/* The TEMPLATE — exactly what Insert drops at the caret. bg-muted/50
 			    rather than the full token: a rendered fence uses --muted itself, so a
 			    solid box directly above one read as a second identical panel. */}
@@ -387,10 +417,13 @@ export default function MarkdownReferencePanel() {
 											// One format, stated once and loudly, rather than repeated
 											// quietly on all thirteen rows beneath it.
 											<section className="border-border border-b bg-muted/30 px-3 py-2.5">
-												<pre className="whitespace-pre-wrap break-words font-mono font-semibold text-foreground text-xs">
-													{intro.syntax}
-												</pre>
+												{intro.syntax ? (
+													<pre className="whitespace-pre-wrap break-words font-mono font-semibold text-foreground text-xs">
+														{intro.syntax}
+													</pre>
+												) : null}
 												<p className="text-muted-foreground text-xs">{intro.note}</p>
+												<RefLink link={intro.link} />
 											</section>
 										) : null}
 										<ul>
