@@ -352,8 +352,12 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		// column widths, alignment and header shading only make sense next to the
 		// pipes that produced them, so the specimen has to BE the template. It is
 		// still a fine thing to drop at a caret — a two-column starter you edit.
-		syntax: "| Column | Column |\n| --- | ---: |\n| Cell | 1 |\n| Cell | 2 |",
-		blurb: "Use :--- and ---: in the divider row to align a column.",
+		// Self-describing, like the Text rows: each column is NAMED for the
+		// alignment its divider marker sets, so the specimen demonstrates all three
+		// markers instead of a sentence listing them.
+		syntax: "| Left | Center | Right |\n| :--- | :---: | ---: |\n| Cell | Cell | Cell |",
+		blurb:
+			"The divider row sets each column's alignment. Right-click a table in a note to insert or delete rows and columns.",
 		block: true,
 		keywords: ["grid", "columns", "gfm"],
 	},

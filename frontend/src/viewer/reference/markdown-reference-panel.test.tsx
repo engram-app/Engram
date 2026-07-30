@@ -173,7 +173,9 @@ describe("MarkdownReferencePanel — demo teaches, template inserts", () => {
 		const table = row("Table");
 		const shown = table.querySelector("pre")?.textContent;
 
-		expect(shown).toBe("| Column | Column |\n| --- | ---: |\n| Cell | 1 |\n| Cell | 2 |");
+		expect(shown).toBe(
+			"| Left | Center | Right |\n| :--- | :---: | ---: |\n| Cell | Cell | Cell |",
+		);
 		expect(table.querySelector("figure table")).not.toBeNull();
 
 		fireEvent.click(within(table).getByRole("button", { name: "Insert Table" }));
