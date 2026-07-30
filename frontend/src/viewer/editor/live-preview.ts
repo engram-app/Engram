@@ -21,6 +21,7 @@ import type { Extension } from "@codemirror/state";
 import { blockquoteDepthPlugin } from "./blockquote-depth";
 import { calloutDecoration } from "./callout-decoration";
 import { katexDecoration } from "./katex-decoration";
+import { mermaidDecoration } from "./mermaid-decoration";
 
 export interface LivePreviewOpts {
 	resolveWikiLink: (name: string) => string;
@@ -70,6 +71,10 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		}),
 		calloutDecoration,
 		katexDecoration,
+		// Atomic has no mermaid support of its own, so ```mermaid stayed raw text
+		// in the editor while Reading mode drew the diagram. Ours, like the two
+		// above: a view-only widget that reveals its source on cursor entry.
+		mermaidDecoration,
 		blockquoteDepthPlugin,
 	];
 }

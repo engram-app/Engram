@@ -1,45 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useTheme } from "../theme/theme-provider";
-
-let mermaidPromise: Promise<typeof import("mermaid").default> | null = null;
-
-// Theme is NOT set here. Mermaid bakes the palette into the SVG at render time,
-// so a module-level `theme: "default"` drew dark-on-transparent diagrams that
-// were unreadable in dark mode. `initialize` is idempotent and merges, so the
-// effect below re-applies the palette before each render instead.
-function loadMermaid() {
-	if (!mermaidPromise) {
-		mermaidPromise = import("mermaid").then((m) => {
-			m.default.initialize({ startOnLoad: false, securityLevel: "strict" });
-			return m.default;
-		});
-	}
-	return mermaidPromise;
-}
-
-let idCounter = 0;
+import { nextMermaidId, renderMermaid } from "./mermaid-render";
 
 export default function MermaidBlock({ code }: { code: string }) {
 	const ref = useRef<HTMLDivElement>(null);
 	const [error, setError] = useState<string | null>(null);
-	const [id] = useState(() => `mermaid-${++idCounter}`);
+	const [id] = useState(nextMermaidId);
 	const { resolved } = useTheme();
 
 	useEffect(() => {
 		let cancelled = false;
-		loadMermaid()
-			.then((mermaid) => {
-				// Re-apply before every render: the palette is baked into the SVG, so
-				// switching light/dark has to re-draw rather than restyle. Keying the
-				// effect on `resolved` is what makes that happen.
-				mermaid.initialize({
-					startOnLoad: false,
-					securityLevel: "strict",
-					theme: resolved === "dark" ? "dark" : "default",
-				});
-				return mermaid.render(id, code);
-			})
-			.then(({ svg }) => {
+		// Keyed on `resolved`: switching light/dark has to re-draw, because the
+		// palette is baked into the SVG rather than applied as CSS.
+		renderMermaid(id, code, resolved === "dark")
+			.then((svg) => {
 				if (cancelled || !ref.current) {
 					return;
 				}
