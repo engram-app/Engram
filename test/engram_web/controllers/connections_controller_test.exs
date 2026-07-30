@@ -309,7 +309,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
       body = json_response(conn, 402)
       assert body["error"] == "pat_disabled_on_free"
-      assert body["upgrade_url"] == "/settings/billing"
+      assert body["upgrade_url"] == "/#settings/billing"
     end
 
     test "201 on paid tier, returns raw key once", %{conn: conn} do

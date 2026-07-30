@@ -7,6 +7,20 @@ defmodule EngramWeb.SpaController do
     |> send_resp(200, injected_html())
   end
 
+  @doc """
+  404 for non-SPA prefixes.
+
+  The router's `/:slug` and `/:slug/:id` SPA routes are dynamic wildcards,
+  so without an explicit deny-list ahead of them a typo'd `/api/notez`
+  would match `/:slug/:id` and get an HTML 200, masking a broken API
+  call. See the deny-list comment in router.ex and #858.
+  """
+  def not_found(conn, _params) do
+    conn
+    |> put_resp_content_type("text/plain")
+    |> send_resp(404, "Not Found")
+  end
+
   defp injected_html do
     {pre, post} = cached_split()
     pre <> config_script() <> post

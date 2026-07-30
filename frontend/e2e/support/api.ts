@@ -104,12 +104,21 @@ export async function createFolder(
 	}
 }
 
-// Navigates straight to /note/:id, which the AuthGuard redirects to
+// Matches "the browser is on this note's page" without hardcoding the URL
+// shape. Notes are served at /:vaultSlug/:noteId, and specs do not know the
+// slug; anchoring on the trailing id keeps these assertions working the next
+// time the shape moves (it already moved once, from the old /note/:id).
+export function noteUrlRe(noteId: number | string): RegExp {
+	return new RegExp(`/${noteId}(?:[?#]|$)`);
+}
+
+// Navigates straight to the legacy /note/:id, which the AuthGuard redirects to
 // /sign-in. Seeds localStorage["engram.activeVaultId"] on the sign-in page
 // BEFORE completing sign-in, not after, so the value survives the
 // post-sign-in redirect and NotePage's first query targets the right vault.
 // The vault-switcher's auto-select would not pick the newly created vault in
-// time otherwise. Then signs in and asserts arrival back at /note/:id.
+// time otherwise. Then signs in and asserts arrival on the note — via the
+// legacy-note redirect, which lands on /:vaultSlug/:noteId.
 export async function signInForNote(
 	page: Page,
 	email: string,
@@ -127,5 +136,5 @@ export async function signInForNote(
 	await page.getByLabel("Password", { exact: true }).fill(PASS);
 	await page.getByRole("button", { name: /sign in/iu }).click();
 
-	await expect(page).toHaveURL(new RegExp(`/note/${noteId}`), { timeout: 10_000 });
+	await expect(page).toHaveURL(noteUrlRe(noteId), { timeout: 10_000 });
 }

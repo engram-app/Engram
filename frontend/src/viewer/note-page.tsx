@@ -43,7 +43,7 @@ interface DocHandle {
 
 export default function NotePage() {
 	const params = useParams();
-	const idStr = params.id;
+	const idStr = params.itemId;
 	const validId = idStr && idStr.length > 0 ? idStr : null;
 
 	const { data: note, isLoading, error } = useNote(validId);

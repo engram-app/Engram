@@ -926,10 +926,22 @@ defmodule EngramWeb.CrdtChannelTest do
       update_b64 = Base.encode64(<<0, 2, 0>>)
       absent = Ecto.UUID.generate()
 
-      # 4 handshake frames — double the edit override of 2 — all must pass.
-      for b64 <- [step1_b64, step1_b64, step2_b64, step2_b64] do
+      # 4 handshake frames — double the edit override of 2 — all must pass the
+      # limiter. Asserted positively (each frame reaches its post-limiter
+      # outcome) rather than refuting "rate_limited": a refute with a timeout
+      # also passes when the channel is starved and never replies, so it could
+      # not tell "not rate limited" from "not run". The two reasons differ
+      # because only step1 carries a state vector: <<0, 0, 0>> unwraps to an
+      # EMPTY vector, which safe_wire_frame?/1 fails closed on, while step2
+      # takes the always-allowed non-step1 path and reaches the absent doc_id.
+      for {b64, reason} <- [
+            {step1_b64, "implausible_state_vector"},
+            {step1_b64, "implausible_state_vector"},
+            {step2_b64, "note_not_found"},
+            {step2_b64, "note_not_found"}
+          ] do
         ref = push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => b64})
-        refute_reply ref, :error, %{reason: "rate_limited"}, 100
+        assert_reply ref, :error, %{reason: ^reason}, 3000
       end
 
       # The edit budget (2) is UNTOUCHED by those handshakes: two updates pass,
@@ -1024,8 +1036,13 @@ defmodule EngramWeb.CrdtChannelTest do
 
       Sandbox.allow(Repo, self(), sock_a.channel_pid)
 
-      push(sock_a, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
-      push(sock_a, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      # Await each reply (see the user-scoped test below for why): the two
+      # allowed frames are asserted ALLOWED, and each frame gets its own
+      # timeout instead of all three sharing one 3s window.
+      ref_a1 = push(sock_a, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      assert_reply ref_a1, :error, %{reason: "note_not_found"}, 3000
+      ref_a2 = push(sock_a, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      assert_reply ref_a2, :error, %{reason: "note_not_found"}, 3000
       ref_a = push(sock_a, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
       assert_reply ref_a, :error, %{reason: "rate_limited"}, 3000
 
@@ -1038,8 +1055,12 @@ defmodule EngramWeb.CrdtChannelTest do
 
       Sandbox.allow(Repo, self(), sock_b.channel_pid)
 
+      # Positive assertion, not a refute: device B's frame must be seen to be
+      # ALLOWED (it passes check_rate and reaches ensure_room, which answers
+      # note_not_found for the absent doc_id). A refute with a timeout passes
+      # vacuously when the channel is starved and replies nothing at all.
       ref_b = push(sock_b, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
-      refute_reply ref_b, :error, %{reason: "rate_limited"}, 300
+      assert_reply ref_b, :error, %{reason: "note_not_found"}, 3000
     end
 
     @tag capture_log: true
@@ -1064,18 +1085,30 @@ defmodule EngramWeb.CrdtChannelTest do
 
       Sandbox.allow(Repo, self(), atk_sock.channel_pid)
 
-      # Attacker exhausts its OWN (user-scoped) bucket (override = 2).
-      push(atk_sock, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
-      push(atk_sock, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      # Attacker exhausts its OWN (user-scoped) bucket (override = 2). Each
+      # reply is awaited before the next push: the two allowed frames must be
+      # seen to be ALLOWED (they reach ensure_room and come back note_not_found
+      # for the absent doc_id), which the previous fire-and-forget form never
+      # checked — an off-by-one that rejected frame 1 still left frame 3
+      # rate_limited and the test green. Awaiting also gives each frame its own
+      # timeout budget instead of requiring all three inside one 3s window,
+      # where a scheduler-starved channel produced an empty mailbox and a flake.
+      ref1 = push(atk_sock, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      assert_reply ref1, :error, %{reason: "note_not_found"}, 3000
+      ref2 = push(atk_sock, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      assert_reply ref2, :error, %{reason: "note_not_found"}, 3000
       ref_atk = push(atk_sock, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
       assert_reply ref_atk, :error, %{reason: "rate_limited"}, 3000
 
       # The victim's bucket is untouched — the server-derived user_id prefix
-      # means the forged device_id landed in the attacker's own tenant. The
-      # victim pushes an absent note_id too (limiter counts it, no room).
+      # means the forged device_id landed in the attacker's own tenant. Assert
+      # the frame was ALLOWED (note_not_found: it passed check_rate and reached
+      # ensure_room) rather than refuting a rate_limited reply: a refute with a
+      # timeout passes vacuously when the channel is starved and never replies
+      # at all, so it could not distinguish "not rate limited" from "not run".
       victim_absent = Ecto.UUID.generate()
       ref_victim = push(socket, "crdt_msg", %{"doc_id" => victim_absent, "b64" => tiny_b64})
-      refute_reply ref_victim, :error, %{reason: "rate_limited"}, 300
+      assert_reply ref_victim, :error, %{reason: "note_not_found"}, 3000
     end
   end
 

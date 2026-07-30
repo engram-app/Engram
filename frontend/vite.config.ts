@@ -178,7 +178,19 @@ export default defineConfig({
 			// changeOrigin rewrites the Host header to the target — required when
 			// VITE_API_TARGET points at a remote host routed by Host (e.g. Cloudflare);
 			// harmless against localhost.
-			"/api": {
+			//
+			// Anchored as a RegExp (a leading ^ makes Vite treat the key as one)
+			// because a bare "/api" is a PREFIX match, which also swallows vault
+			// slugs like /api-2. Reserved slugs stop a vault from being exactly
+			// "api", but `unique_slug` hands out api-2 for a vault named "api",
+			// and that must render the SPA, not proxy to Phoenix. Proxying it
+			// serves Phoenix's prebuilt index.html into the dev server, whose
+			// hashed asset URLs 404 — the app then hangs on "Loading…".
+			//
+			// The `?` in the class matters: Vite matches against the RAW req.url,
+			// query string included, so `[/?]` is what keeps /api?foo=1 proxied
+			// while /api-2?foo=1 still reaches the SPA.
+			"^/api(?:$|[/?])": {
 				target: apiTarget,
 				changeOrigin: true,
 			},
@@ -192,7 +204,11 @@ export default defineConfig({
 				target: apiTarget,
 				changeOrigin: true,
 			},
-			"/socket": {
+			// Anchored for the same reason as /api above: a slug like /socket-2
+			// must reach the SPA, not the WebSocket proxy. The upgrade handler
+			// matches on the raw req.url too, so /socket/websocket?vsn=2.0.0
+			// still proxies.
+			"^/socket(?:$|[/?])": {
 				target: apiTarget,
 				changeOrigin: true,
 				ws: true,

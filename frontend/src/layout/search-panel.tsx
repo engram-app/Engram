@@ -6,6 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { noteName } from "@/lib/note-name";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { type SearchFilters, type SearchResult, useSearch } from "../api/queries";
+import { useActiveVaultSlug } from "../api/vault-slug";
 import { useRailView } from "./rail-view-context";
 import { pushRecent, readRecent } from "./recent-searches";
 
@@ -163,11 +164,12 @@ function RecentList({ recent, onPick }: { recent: string[]; onPick: (q: string) 
 }
 
 function ResultRow({ result }: { result: SearchResult }) {
+	const slug = useActiveVaultSlug();
 	// Orphan hits (no id) are unreachable — render nothing.
 	if (result.id === null) {
 		return null;
 	}
-	const href = `/note/${result.id}`;
+	const href = slug ? `/${slug}/${result.id}` : `/note/${result.id}`;
 	return (
 		<Link
 			to={href}

@@ -8,6 +8,7 @@ import {
 	type Folder,
 	type Note,
 	useAcceptTerms,
+	useAppBootstrap,
 	useAttachments,
 	useBatchDeleteAttachments,
 	useBatchDeleteFolders,
@@ -31,6 +32,7 @@ import {
 	useReverseCancel,
 	useSearch,
 	useUploadAttachment,
+	useVaults,
 } from "./queries";
 
 vi.mock("sonner", () => ({
@@ -42,8 +44,10 @@ vi.mock("sonner", () => ({
 }));
 
 // queries.ts pulls useNavigate from react-router (useCreateNote). Stub it so
-// the hooks render without a Router in these unit tests.
-vi.mock("react-router", () => ({ useNavigate: () => () => {} }));
+// the hooks render without a Router in these unit tests. A shared spy (not a
+// bare no-op) so tests can assert what useCreateNote navigates to.
+const navigateSpy = vi.hoisted(() => vi.fn());
+vi.mock("react-router", () => ({ useNavigate: () => navigateSpy }));
 
 // Pin the active vault id so cache keys are deterministic for the
 // optimistic-update tests below. The hook reads from a module-scoped
@@ -93,6 +97,7 @@ beforeEach(() => {
 	crdtCreateNoteWithContent
 		.mockReset()
 		.mockImplementation((docId: string) => Promise.resolve(docId));
+	navigateSpy.mockClear();
 	qc = new QueryClient();
 });
 
@@ -1032,6 +1037,24 @@ describe("useCreateNote — optimistic placeholder", () => {
 			expect(root?.[0]?.id).toBe(MINTED_ID);
 			expect(root?.[0]?.pending).toBe(false);
 		});
+	});
+
+	// getQueryData(["vaults"]) bypasses useVaults's `select`, so the cache still
+	// holds the wire shape ({ vaults: [...] }), not the post-select array. This
+	// is the shape the key actually has whenever it was last populated by the
+	// real queryFn or by useAppBootstrap's seed (see the useVaults describe
+	// block below); reading it as a bare array throws inside onSuccess and
+	// silently kills the navigate call.
+	it("navigates to the vault-scoped route using the raw { vaults } cache shape", async () => {
+		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
+		qc.setQueryData(["vaults"], { vaults: [{ id: "42", slug: "work" }] });
+
+		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync({ folder: "", id: MINTED_ID });
+		});
+
+		expect(navigateSpy).toHaveBeenCalledWith(`/work/${MINTED_ID}`);
 	});
 
 	// `/api/folders` returns DERIVED folders (ones holding no note directly) with
@@ -2003,5 +2026,27 @@ describe("useUploadAttachment", () => {
 		expect(spy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
 		expect(spy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
 		expect(spy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
+	});
+});
+
+describe("useAppBootstrap seeding useVaults", () => {
+	// Regression guard: useAppBootstrap seeds the ["vaults"] cache key with the
+	// same wire shape ({ vaults: [...] }) the /vaults queryFn itself returns, so
+	// useVaults's `select` unwraps it into the array on the very first render,
+	// with no extra fetch. If the seed is ever "simplified" to a bare array,
+	// `select` returns undefined and every vault-list consumer breaks silently.
+	it("useVaults resolves the seeded vault array, not undefined", async () => {
+		get.mockResolvedValueOnce({
+			onboarding: { enabled: false },
+			capabilities: { tier: "free", limits: {} },
+			vaults: { vaults: [{ id: "42", slug: "work", name: "Work" }] },
+		});
+
+		const boot = renderHook(() => useAppBootstrap(), { wrapper });
+		await waitFor(() => expect(boot.result.current.isSuccess).toBe(true));
+
+		const vaults = renderHook(() => useVaults(), { wrapper });
+		await waitFor(() => expect(vaults.result.current.isFetching).toBe(false));
+		expect(vaults.result.current.data).toEqual([{ id: "42", slug: "work", name: "Work" }]);
 	});
 });

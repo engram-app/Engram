@@ -55,7 +55,7 @@ class WebSpaPeer:
         self._page = await self._ctx.new_page()
 
     async def open_note(self, note_id: str, vault_id: str) -> None:
-        """Sign in (if needed) and open ``/note/<note_id>`` in the editor.
+        """Sign in (if needed) and open the note at its vault-scoped URL.
 
         Mirrors ``signInForNote``: navigate to the note, get bounced to the
         sign-in page, seed ``engram.activeVaultId`` BEFORE completing sign-in so
@@ -75,7 +75,12 @@ class WebSpaPeer:
         await page.get_by_label("Password", exact=True).fill(self.password)
         await page.get_by_role("button", name=re.compile("sign in", re.I)).click()
 
-        await page.wait_for_url(re.compile(rf"/note/{re.escape(str(note_id))}"), timeout=15_000)
+        # The seeded activeVaultId lets LegacyNoteRedirect rewrite /note/<id> to
+        # /<vault-slug>/<id>, so match on the id with a boundary rather than the
+        # old fixed /note/ prefix. Accepts both shapes.
+        await page.wait_for_url(
+            re.compile(rf"/{re.escape(str(note_id))}(?:[?#]|$)"), timeout=15_000
+        )
         await self._editor().wait_for(state="visible", timeout=15_000)
 
     def _editor(self):

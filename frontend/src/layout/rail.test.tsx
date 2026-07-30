@@ -7,6 +7,11 @@ import Rail from "./rail";
 import { RailViewProvider, useRailView } from "./rail-view-context";
 import { RightToolsProvider, useRightTools } from "./right-tools-context";
 
+function LocationProbe() {
+	const loc = useLocation();
+	return <output data-testid="loc">{`${loc.pathname}${loc.hash}`}</output>;
+}
+
 vi.mock("../auth/use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ user: { email: "todd@example.com" }, logout: vi.fn() }),
 }));
@@ -151,7 +156,10 @@ describe("Rail", () => {
 		expect(screen.getByRole("link", { name: /home/iu })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Search" })).toBeInTheDocument();
-		expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
+		expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute(
+			"href",
+			"/#settings/account",
+		);
 		expect(screen.getByRole("button", { name: "User menu" })).toBeInTheDocument();
 	});
 
@@ -190,29 +198,43 @@ describe("Rail", () => {
 		expect(screen.getByRole("button", { name: "Search" })).toHaveAttribute("data-tour", "search");
 	});
 
-	it("clicking Files from /settings navigates back to /", () => {
+	it("clicking Files from the settings hash strips the hash and stays on /", () => {
 		render(
-			<Wrap initialEntries={["/settings"]}>
+			<Wrap initialEntries={["/#settings/account"]}>
 				<Rail />
-				<PathProbe />
+				<LocationProbe />
 			</Wrap>,
 		);
-		expect(screen.getByTestId("pathname").textContent).toBe("/settings");
+		expect(screen.getByTestId("loc")).toHaveTextContent("/#settings/account");
 		fireEvent.click(screen.getByRole("button", { name: "Files" }));
-		expect(screen.getByTestId("pathname").textContent).toBe("/");
+		expect(screen.getByTestId("loc")).toHaveTextContent("/");
+		expect(screen.getByTestId("loc")).not.toHaveTextContent("#settings");
 	});
 
-	it("clicking Search from /settings navigates back to / and sets view to search", () => {
+	it("clicking Search from the settings hash strips the hash and sets view to search", () => {
 		render(
-			<Wrap initialEntries={["/settings"]}>
+			<Wrap initialEntries={["/#settings/account"]}>
 				<Rail />
-				<PathProbe />
+				<LocationProbe />
 				<ActiveProbe />
 			</Wrap>,
 		);
 		fireEvent.click(screen.getByRole("button", { name: "Search" }));
-		expect(screen.getByTestId("pathname").textContent).toBe("/");
+		expect(screen.getByTestId("loc")).toHaveTextContent("/");
+		expect(screen.getByTestId("loc")).not.toHaveTextContent("#settings");
 		expect(screen.getByTestId("view").textContent).toBe("search");
+	});
+
+	it("closes settings without leaving the current note", () => {
+		render(
+			<Wrap initialEntries={["/work/note-1#settings/account"]}>
+				<LocationProbe />
+				<Rail />
+			</Wrap>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /files/i }));
+		expect(screen.getByTestId("loc")).toHaveTextContent("/work/note-1");
+		expect(screen.getByTestId("loc")).not.toHaveTextContent("#settings");
 	});
 
 	it("clicking Files from / does NOT change the pathname", () => {

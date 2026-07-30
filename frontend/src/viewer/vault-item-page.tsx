@@ -8,14 +8,14 @@ import LoadingPane from "./loading-pane";
 const NotePage = lazy(() => import("./note-page"));
 const AttachmentPage = lazy(() => import("./attachment-page"));
 
-// Resolver behind the unified /note/:id route. Notes and attachments share one
+// Resolver behind the unified /:slug/:itemId route. Notes and attachments share one
 // URL shape (like Obsidian, where everything is a vault item) — decide which
 // viewer to mount by checking the loaded attachments list. The tree sidebar
 // keeps that list warm, so in-app navigation resolves instantly; a cold
 // deep-link to an attachment briefly renders NotePage until the list lands,
 // then re-resolves (the common case — a note — is never delayed).
 export default function VaultItemPage() {
-	const { id } = useParams();
+	const { itemId: id } = useParams();
 	const { data: attachments, isLoading } = useAttachments();
 
 	// Until the attachments list has loaded we can't tell a note id from an

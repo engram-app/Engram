@@ -39,7 +39,11 @@ defmodule Engram.Workers.VaultDeletedEmail do
       true ->
         purge_at = DateTime.add(vault.deleted_at, @retention_days * 86_400, :second)
         purge_date = Calendar.strftime(purge_at, "%B %-d, %Y")
-        manage_url = EngramWeb.Endpoint.url() <> "/settings/vaults?highlight=#{vault.id}"
+
+        # The section goes in the hash and `highlight` stays in the real query
+        # string: a query placed inside a hash is never parsed by
+        # location.search, so the SPA would never see it there.
+        manage_url = EngramWeb.Endpoint.url() <> "/?highlight=#{vault.id}#settings/vaults"
 
         _ =
           Mailer.send_vault_deletion_notice(user, vault_name(vault, user), purge_date, manage_url)
