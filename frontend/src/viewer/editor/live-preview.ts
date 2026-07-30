@@ -17,11 +17,31 @@ import "./obsidian-theme.css";
 import "./blockquote-depth.css";
 import { ATOMIC_CODE_LANGUAGES } from "@atomic-editor/editor/code-languages";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { type Extension, Prec } from "@codemirror/state";
+import { tags } from "@lezer/highlight";
 import { blockquoteDepthPlugin } from "./blockquote-depth";
 import { calloutDecoration } from "./callout-decoration";
 import { katexDecoration } from "./katex-decoration";
 import { mermaidDecoration, mermaidKeymap } from "./mermaid-decoration";
+
+/**
+ * Repaint monospace text as body text.
+ *
+ * atomicMarkdownSyntax maps `t.monospace` to --atomic-editor-link, the SAME
+ * token it uses for t.link and t.url. That makes every scrap of code purple:
+ * inline `code`, and the entire body of any fence whose language we cannot
+ * parse (```dataview being the one that surfaced it). One variable serving two
+ * meanings, so it cannot be split by setting a token — it needs a highlight
+ * style that wins.
+ *
+ * Body colour is the right answer rather than a third hue, because Reading mode
+ * already renders inline code with no colour of its own: it takes a background
+ * chip and inherits the text colour. This makes the panes agree again.
+ */
+const monospaceAsBodyText = HighlightStyle.define([
+	{ tag: tags.monospace, color: "var(--atomic-editor-fg)" },
+]);
 
 export interface LivePreviewOpts {
 	resolveWikiLink: (name: string) => string;
@@ -54,6 +74,7 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		// `highlightMarkdown` adds (headings, emphasis, etc). Without this the
 		// live-preview text renders unstyled — atomicEditorTheme alone only sets
 		// layout/surface colors, not per-token highlighting.
+		Prec.highest(syntaxHighlighting(monospaceAsBodyText)),
 		atomicMarkdownSyntax,
 		atomicEditorTheme,
 		tables({}),

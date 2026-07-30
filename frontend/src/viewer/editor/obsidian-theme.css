@@ -55,6 +55,17 @@
 	--atomic-editor-link: #6b4ce6; /* accent purple, darkened for light-bg contrast */
 	--atomic-editor-link-hover: #5738c4;
 	--atomic-editor-accent: #7c5cff; /* --interactive-accent */
+	/* Text selection. Unset, this fell back to the package's
+	 * color-mix(#7c3aed 28%, #1e1e1e 72%) — purple mixed into a DARK base — so
+	 * light mode painted selected text at 1.20:1 against #222222 body copy.
+	 * Selecting text made it unreadable.
+	 *
+	 * Blue rather than the accent purple: selection is the one surface users
+	 * have a strong prior about, and every editor they have used (VS Code,
+	 * macOS, GitHub) paints it blue. It also pairs with the GitHub token palette
+	 * below. Body text lands at 10.67:1 and the worst code token at 3.07:1,
+	 * while staying visibly distinct from the white page. */
+	--atomic-editor-selection-bg: #b3d7ff;
 	--atomic-editor-border: #e2e2e4;
 	--atomic-editor-code-bg: rgba(0, 0, 0, 0.045);
 	--atomic-editor-code-rail: rgba(124, 92, 255, 0.35);
@@ -94,6 +105,12 @@
 	--atomic-editor-link: #8b6cef; /* accent purple (hsl 254 80% 68%) */
 	--atomic-editor-link-hover: #a78bfa;
 	--atomic-editor-accent: #8b6cef;
+	/* GitHub Dark's selection blue, matching the light block's reasoning. The
+	 * package fallback (a dark purple) was legible here — dark mode was the one
+	 * theme it happened to suit — but it left the two modes disagreeing about
+	 * what a selection looks like. Body text 7.82:1, worst code token 3.46:1,
+	 * and more visible against the page than the purple it replaces. */
+	--atomic-editor-selection-bg: #143d79;
 	--atomic-editor-border: #333333;
 	--atomic-editor-code-bg: rgba(255, 255, 255, 0.06);
 	--atomic-editor-code-rail: rgba(139, 108, 239, 0.5);
