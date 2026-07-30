@@ -53,11 +53,23 @@ describe("calloutMarker", () => {
 		expect(found).toContain("Link");
 	});
 
+	test("leaves an image alone — ![ starts one character before the bracket", () => {
+		expect(nodes("> ![!note](a.png)")).not.toContain("CalloutMarker");
+	});
+
 	test("does not claim a bracket mid-line, where a link is what you meant", () => {
 		// The marker is only a marker at the start of the blockquote's content.
 		// `[!x]` further along is prose or a link, and Reading mode agrees.
 		const found = nodes("> see [!important] here");
 		expect(found).not.toContain("CalloutMarker");
+	});
+
+	test("claims a marker opening a plain paragraph, matching what Reading mode shows", () => {
+		// remark-callouts only builds a callout inside a blockquote, so `[!note]`
+		// starting a bare paragraph renders as the literal text `[!note]` there.
+		// Claiming it here makes the editor agree, instead of hiding the brackets
+		// and painting it as a link to nowhere.
+		expect(nodes("[!note] loose text")).toContain("CalloutMarker");
 	});
 
 	test("ignores a bracket that is not a marker at all", () => {

@@ -42,13 +42,16 @@ import { mermaidDecoration, mermaidKeymap } from "./mermaid-decoration";
  * already renders inline code with no colour of its own: it takes a background
  * chip and inherits the text colour. This makes the panes agree again.
  *
- * PROCESSING INSTRUCTION: the `[!type]` callout marker (see callout-marker.ts).
- * Faint, because on a revealed callout header it is the one part of the line
- * that is syntax rather than the title you came to edit.
+ * SPECIAL PROCESSING INSTRUCTION: the `[!type]` callout marker (see
+ * callout-marker.ts). Faint, because on a revealed callout header it is the one
+ * part of the line that is syntax rather than the title you came to edit.
+ * special(), not the bare tag — lezer hands plain processingInstruction to every
+ * syntax mark it knows (HeaderMark, QuoteMark, ListMark, LinkMark, …), so
+ * targeting it here would repaint all of them.
  */
 const syntaxOverrides = HighlightStyle.define([
 	{ tag: tags.monospace, color: "var(--atomic-editor-fg)" },
-	{ tag: tags.processingInstruction, color: "var(--atomic-editor-fg-faint)" },
+	{ tag: tags.special(tags.processingInstruction), color: "var(--atomic-editor-fg-faint)" },
 ]);
 
 export interface LivePreviewOpts {

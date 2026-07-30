@@ -1,6 +1,15 @@
 import { tags } from "@lezer/highlight";
 import type { MarkdownConfig } from "@lezer/markdown";
 
+const MARKER = /^\[!\w+\][+-]?/;
+
+// `[` — the only character worth waking this parser up for.
+const OPEN_BRACKET = 91;
+
+// Longest real type is "attention" (9). 32 bounds the scan without ruling out a
+// type the library might add.
+const MAX_MARKER = 32;
+
 /**
  * Teach the markdown grammar that `[!type]` is a callout marker, not a link.
  *
@@ -25,21 +34,27 @@ import type { MarkdownConfig } from "@lezer/markdown";
  * act on — the icon, the colour and the bracket-hiding all follow from it.
  *
  * Installed `before: "Link"` so it claims the `[` first.
+ *
+ * The rule is "at the start of an inline section", which in a blockquote is
+ * after the `> `. That also claims `[!note]` opening a PLAIN paragraph, where
+ * it is not a callout — but Reading mode renders that as the literal text
+ * `[!note]` too, so matching it here is the behaviour that agrees with the
+ * other pane. What it must never claim is a bracket further into a line, which
+ * really can be a link.
  */
-const MARKER = /^\[!\w+\][+-]?/;
-
-// `[` — the only character worth waking this parser up for.
-const OPEN_BRACKET = 91;
-
-// Longest real type is "attention" (9). 32 bounds the scan without ruling out a
-// type the library might add.
-const MAX_MARKER = 32;
-
 export const calloutMarker: MarkdownConfig = {
 	// Its own node rather than swallowing it as plain text: a named node is what
 	// lets the highlighter dim it as syntax, and what a future feature (folding,
 	// a type autocomplete) would hang off.
-	defineNodes: [{ name: "CalloutMarker", style: tags.processingInstruction }],
+	//
+	// special(), NOT bare processingInstruction. Lezer gives that ONE tag to
+	// HeaderMark, QuoteMark, ListMark, LinkMark, EmphasisMark, CodeMark,
+	// TableDelimiter and more, so a Prec.highest rule targeting it repaints every
+	// syntax mark in the editor — the exact trap `t.monospace` already sprang on
+	// this file's neighbour. A special() variant is distinguishable by a rule
+	// that asks for it, and still falls back to the plain tag for any rule that
+	// does not.
+	defineNodes: [{ name: "CalloutMarker", style: tags.special(tags.processingInstruction) }],
 	parseInline: [
 		{
 			name: "CalloutMarker",

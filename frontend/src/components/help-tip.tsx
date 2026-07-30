@@ -35,8 +35,10 @@ export function HelpTip({
 		<Popover>
 			<PopoverTrigger
 				type="button"
+				// aria-label only, no title=: the two would be the same string, and a
+				// screen reader that reads both says it twice. Sighted users get the
+				// affordance from the icon.
 				aria-label={label}
-				title={label}
 				className={`inline-flex shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground ${className}`}
 			>
 				<CircleHelp className="size-4" />
@@ -44,7 +46,11 @@ export function HelpTip({
 			{/* max-h + scroll: the trigger is usually pinned near the top of a panel,
 			    so a long explanation would otherwise run off the bottom of a short
 			    viewport with no way to reach the end of it. */}
+			{/* aria-label: PopoverContent is role="dialog", and a dialog with no
+			    accessible name is announced as just "dialog". Reusing `label` names
+			    it the same thing the trigger promised. */}
 			<PopoverContent
+				aria-label={label}
 				align={align}
 				className="max-h-[min(28rem,70vh)] overflow-y-auto text-xs leading-relaxed"
 			>
