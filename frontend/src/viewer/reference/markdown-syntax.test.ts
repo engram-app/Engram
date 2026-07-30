@@ -213,3 +213,23 @@ describe("groupByCategory", () => {
 		expect(grouped[0]?.[0]).toBe("Callouts");
 	});
 });
+
+describe("escaping", () => {
+	const entry = SYNTAX_ENTRIES.find((e) => e.id === "escape");
+
+	test("shows a template that renders to something DIFFERENT from itself", () => {
+		// The whole lesson of this row: you type two more characters than you see.
+		// If the template and the result ever match, the row teaches nothing.
+		expect(entry?.syntax).toBe("\\*not italic\\*");
+	});
+
+	test("cites the official list of escapable characters rather than asserting one", () => {
+		expect(entry?.link?.href).toBe("https://daringfireball.net/projects/markdown/syntax#backslash");
+	});
+
+	test("is findable by what someone would actually type into the search box", () => {
+		for (const query of ["escape", "backslash", "literal", "asterisk"]) {
+			expect(filterSyntax(query).map((e) => e.id)).toContain("escape");
+		}
+	});
+});

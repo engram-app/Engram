@@ -227,6 +227,28 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		keywords: ["monospace", "backtick"],
 		templateLed: true,
 	},
+	{
+		// Sits directly under inline code on purpose: they are the two ways to
+		// stop a mark from being a mark, and knowing only the second one is why
+		// people end up wrapping a lone asterisk in backticks and getting a grey
+		// chip they did not want.
+		//
+		// This row is the one place a template and its result differ VISIBLY in
+		// the same characters, which is the whole lesson — you type two more
+		// characters than you see.
+		id: "escape",
+		category: "Text",
+		label: "Escape a mark",
+		syntax: "\\*not italic\\*",
+		blurb:
+			"A backslash makes the next punctuation mark literal, so it shows up instead of formatting. Works on any of them: \\* \\_ \\# \\` \\[ \\] and the rest.",
+		keywords: ["escape", "backslash", "literal", "verbatim", "asterisk", "underscore", "raw"],
+		templateLed: true,
+		link: {
+			href: "https://daringfireball.net/projects/markdown/syntax#backslash",
+			label: "Which characters can be escaped",
+		},
+	},
 
 	// ── Structure ───────────────────────────────────────────────────────────
 	// One row per level. Reading down them shows the size ladder AND a real

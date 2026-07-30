@@ -350,6 +350,15 @@ function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: bool
 				{previewable && entry.blurb ? (
 					<span className="mt-0.5 block text-muted-foreground text-xs">{entry.blurb}</span>
 				) : null}
+				{/* BlockRow has always rendered entry.link; this row silently dropped
+				    it, so an entry that carried one lost it by virtue of which layout
+				    it happened to fall into. A reference row holding a source it does
+				    not show is worse than one with no source at all. */}
+				{entry.link ? (
+					<span className="block">
+						<RefLink link={entry.link} />
+					</span>
+				) : null}
 			</span>
 		</Row>
 	);
