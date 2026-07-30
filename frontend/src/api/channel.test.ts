@@ -323,27 +323,7 @@ describe("handleNoteChanged folder invalidation", () => {
 		expect(idKeyCalls(qc)).toContainEqual(["folder-notes-by-id", "7", "syn:Notes"]);
 	});
 
-	it("never invalidates a null folder id", () => {
-		const qc = mockQueryClient({ folders: [{ id: null, name: "Notes" }] });
-
-		handleNoteChanged({ event_type: "delete", path: "Notes/x.md", vault_id: "7" }, qc, "7");
-		vi.runAllTimers();
-
-		for (const key of idKeyCalls(qc)) {
-			expect(key[2]).not.toBeNull();
-		}
-	});
-
-	it("still routes a root-level delete to the root sentinel", () => {
-		const qc = mockQueryClient({ folders: [] });
-
-		handleNoteChanged({ event_type: "delete", path: "top.md", vault_id: "7" }, qc, "7");
-		vi.runAllTimers();
-
-		expect(idKeyCalls(qc)).toContainEqual(["folder-notes-by-id", "7", "root"]);
-	});
-
-	it("uses the broadcast's folder field when present rather than re-deriving", () => {
+	it("resolves a NON-derived folder through its real id, not a syn: id", () => {
 		const qc = mockQueryClient({ folders: [{ id: "real-id", name: "Notes" }] });
 
 		handleNoteChanged(

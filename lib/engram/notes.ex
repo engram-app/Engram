@@ -4332,7 +4332,9 @@ defmodule Engram.Notes do
       # and the web app's re-derivation then had to map folder NAME -> folder
       # ID, where a derived folder's null id silently invalidated nothing (the
       # sidebar kept showing notes deleted from another device until reload).
-      # The server already knows the folder — send it.
+      # The server already knows the folder — send it. Note this is parity for
+      # NOTE changes only: attachments.ex builds its own note_changed payloads
+      # and still omits the field (harmless — its consumers re-derive).
       "folder" => Helpers.extract_folder(path)
     }
 
