@@ -64,9 +64,14 @@ export function RenameInput({
 		if (settled.current) {
 			return;
 		}
+		// Trimmed before comparing AND before committing: untrimmed, "  " was
+		// truthy and different from `initial`, so it renamed the file to a path of
+		// literal spaces. Trimming also makes "name" and " name " the no-op they
+		// look like.
+		const next = value.trim();
 		settled.current = true;
-		if (commit && value && value !== initial) {
-			onCommit(value);
+		if (commit && next && next !== initial) {
+			onCommit(next);
 		} else {
 			onCancel();
 		}
@@ -93,7 +98,14 @@ export function RenameInput({
 						settle(false);
 					}
 				}}
-				onBlur={() => settle(Boolean(commitOnBlur))}
+				// A blur with no relatedTarget and a document that still has focus is
+				// a real click-away inside the page. When the WINDOW is deactivated
+				// (alt-tab, another app), browsers also fire blur on the focused
+				// element — and committing there renamed the note to whatever half-typed
+				// text was in the box, a path mutation that cascades to the tree,
+				// wikilinks and sync. `settled` then latches, so it cannot be undone in
+				// place. Alt-tabbing away now leaves the edit open, exactly where it was.
+				onBlur={() => settle(Boolean(commitOnBlur) && document.hasFocus())}
 				className="w-full rounded border border-ring bg-background px-1 py-0.5 text-foreground text-sm outline-none"
 			/>
 			{Boolean(error) && (

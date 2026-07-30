@@ -1,7 +1,7 @@
 import { type EditorState, type Range, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 import katex from "katex";
-import { decorationSet, selectionTouches } from "./decoration-utils";
+import { selectionTouches } from "./decoration-utils";
 import "katex/dist/katex.min.css";
 
 class MathWidget extends WidgetType {
@@ -64,7 +64,9 @@ function buildMath(state: EditorState): DecorationSet {
 			: { widget: new MathWidget(tex, false) };
 		ranges.push(Decoration.replace(spec).range(start, end));
 	}
-	return decorationSet(ranges);
+	// `true` = let RangeSet sort. Regex scans discover ranges out of document
+	// order, and an unsorted set throws.
+	return Decoration.set(ranges, true);
 }
 
 // StateField (not ViewPlugin): block math replaces line breaks, which CM6 only

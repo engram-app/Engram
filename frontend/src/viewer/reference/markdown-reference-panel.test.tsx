@@ -213,7 +213,7 @@ describe("MarkdownReferencePanel — demo teaches, template inserts", () => {
 });
 
 describe("MarkdownReferencePanel — adaptive rows", () => {
-	it("collapses a self-evident inline mark onto one line with no preview box", () => {
+	it("keeps a self-evident inline mark on one line with no preview box", () => {
 		renderPanel();
 		const bold = row("**Bold text**");
 		// Result renders inline rather than in a stacked figure…
@@ -344,8 +344,8 @@ describe("MarkdownReferencePanel — adaptive rows", () => {
 	});
 
 	it("shows a blurb on a one-line row instead of swallowing it", () => {
-		// Regression guard: InlineRow once rendered blurbs only for entries with
-		// no preview, silently hiding useful notes on inline code and others.
+		// Regression guard: blurbs were once rendered only for entries with no
+		// preview, silently hiding useful notes on inline code and others.
 		renderPanel();
 		expect(row("`inline code`").textContent).toMatch(/no formatting is applied inside/iu);
 	});

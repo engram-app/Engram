@@ -22,7 +22,7 @@
 	 * This is the ONE rule from the old "Obsidian-flavored breathing room" block
 	 * that ever took effect, because Typography sets no white-space on <pre>.
 	 * The rest of that block — .prose line-height, the p/ul/ol/blockquote/pre/
-	 * table margins, li and li > p margins, the h1-h4 margins, the
+	 * table margins, li and li > p margins, the h1-h4 margins and line-height, the
 	 * h*:first-child reset and pre overflow-x — was dead on arrival and has been
 	 * removed. @tailwindcss/typography emits `.prose` into the `utilities`
 	 * layer; a later layer beats an earlier one whatever the specificity, so
@@ -331,7 +331,7 @@ html {
  * The library renders a callout as a <blockquote>, and @tailwindcss/typography
  * styles blockquote from the `utilities` layer — the last one. A rule in
  * `components` therefore lost EVERY property typography sets: the 3px bar
- * became 0.25rem, the padding became 1.11em, the margins 1.33em, and the text
+ * became 0.25rem, the padding became 1em, the margins 1.6em, and the text
  * went ITALIC in the quote colour, because typography thinks a blockquote is a
  * quotation. Unlayered rules outrank every layer, which is the only placement
  * that works without !important.

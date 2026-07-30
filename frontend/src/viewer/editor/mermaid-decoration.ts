@@ -8,11 +8,17 @@ import {
 	WidgetType,
 } from "@codemirror/view";
 import { nextMermaidId, renderMermaid } from "../mermaid-render";
-import { decorationSet, selectionTouches } from "./decoration-utils";
+import { selectionTouches } from "./decoration-utils";
 import "./mermaid.css";
 
 // ```mermaid opens; any bare ``` closes. Info strings other than "mermaid" are
 // somebody else's fence (and `codeLanguages` in live-preview.ts highlights those).
+//
+// ponytail: anchored at column 0 and blind to nesting, so a fence indented
+// inside a list item stays raw here (Reading mode renders it), and a ```mermaid
+// line nested inside a documentation fence is treated as real. Both are rare
+// enough to be worth less than a tree-sitter walk; upgrade path if they show up
+// is to read the fences off syntaxTree(state) instead of scanning lines.
 const FENCE_OPEN = /^```mermaid\s*$/;
 const FENCE_CLOSE = /^```\s*$/;
 
@@ -141,7 +147,9 @@ function buildMermaid(state: EditorState): DecorationSet {
 		);
 	}
 
-	return decorationSet(ranges);
+	// `true` = let RangeSet sort. Regex scans discover ranges out of document
+	// order, and an unsorted set throws.
+	return Decoration.set(ranges, true);
 }
 
 /**
@@ -168,6 +176,20 @@ function enterFence(view: EditorView, forward: boolean): boolean {
 	}
 	const { doc } = state;
 	const caretLine = doc.lineAt(range.head).number;
+	// Vertical motion is VISUAL, not per-line: a soft-wrapped paragraph above a
+	// fence occupies several screen rows, and a line-number check alone fired on
+	// every one of them — ArrowDown from the paragraph's first row teleported into
+	// the diagram, skipping the rest of the text the user was reading. Ask CM6
+	// where the caret would actually land instead. Landing on a different line
+	// means this really is the last (or first) visual row of it.
+	//
+	// `moved === range.head` covers the no-layout case (jsdom, an unmeasured
+	// view), where moveVertically cannot move and would otherwise disable the
+	// keymap outright.
+	const moved = view.moveVertically(range, forward).head;
+	if (moved !== range.head && doc.lineAt(moved).number === caretLine) {
+		return false;
+	}
 	for (const fence of fenceRanges(doc)) {
 		// Already inside: the block is revealed and normal motion is what should
 		// carry the caret through its lines.

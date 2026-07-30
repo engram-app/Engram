@@ -100,7 +100,12 @@
 	--atomic-editor-fg: #dcddde; /* --text-normal */
 	--atomic-editor-fg-muted: #999999; /* --text-muted */
 	/* Same reasoning as light: #666666 measures 3.30:1 on the dark surface.
-	 * #7d8590 clears AA at 5.07:1 and is GitHub Dark's own muted grey. */
+	 * #7d8590 clears AA at 5.07:1 and is GitHub Dark's own muted grey.
+	 *
+	 * Dark ratios throughout this block are measured on GitHub Dark's own
+	 * #0d1117, not on our --background (oklch(18.76% …) ≈ #131315). The two are
+	 * within ~0.1 of each other, so every pass/fail conclusion holds, but the
+	 * printed numbers are GitHub's surface rather than the one the app paints. */
 	--atomic-editor-fg-faint: #7d8590;
 	--atomic-editor-link: #8b6cef; /* accent purple (hsl 254 80% 68%) */
 	--atomic-editor-link-hover: #a78bfa;
@@ -117,7 +122,7 @@
 
 	/* Code-token palette: GitHub Dark. The same hexes markdown.css already uses
 	 * for highlight.js under `.dark`, so the two panes stay one palette. Worst
-	 * measured contrast on #0d1117 is `comment` at 6.15:1. */
+	 * measured contrast on #0d1117 is `comment` at 6.15:1 (6.03:1 on ours). */
 	--atomic-editor-hl-keyword: #ff7b72;
 	--atomic-editor-hl-type: #ff7b72;
 	--atomic-editor-hl-function: #d2a8ff;

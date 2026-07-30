@@ -73,16 +73,45 @@ describe("format-commands", () => {
 
 		test("also breaks the trailing remainder onto its own line", () => {
 			mount("ab", 1, 1);
-			insertSnippet(view, "---", { block: true });
-			expect(view.state.doc.toString()).toBe("a\n---\nb");
+			insertSnippet(view, "| a |", { block: true });
+			expect(view.state.doc.toString()).toBe("a\n| a |\nb");
+		});
+
+		test("takes the trailing remainder from the line the selection ENDS on", () => {
+			// Regression: the tail used to be sliced out of the line holding `from`,
+			// so a multi-line selection indexed past that line's end, got "", and
+			// glued the remainder onto the snippet ("he\n| a |rld").
+			mount("hello\nworld", 2, 8);
+			insertSnippet(view, "| a |", { block: true });
+			expect(view.state.doc.toString()).toBe("he\n| a |\nrld");
 		});
 
 		test("consumes the blank line it is dropped on instead of adding another", () => {
 			// Caret on the empty line between two paragraphs: that line BECOMES the
 			// snippet's line. Synthesizing breaks here would leave stray blank lines.
 			mount("one\n\ntwo", 4, 4);
+			insertSnippet(view, "| a |", { block: true });
+			expect(view.state.doc.toString()).toBe("one\n| a |\ntwo");
+		});
+
+		test("keeps a blank line above a rule so it is not read as a setext heading", () => {
+			// `a\n---` is an <h2>, not a divider: the paragraph above is swallowed and
+			// the rule disappears. Every other block snippet may interrupt a paragraph.
+			mount("ab", 1, 1);
 			insertSnippet(view, "---", { block: true });
-			expect(view.state.doc.toString()).toBe("one\n---\ntwo");
+			expect(view.state.doc.toString()).toBe("a\n\n---\nb");
+		});
+
+		test("does not consume the blank line separating a rule from the text above", () => {
+			mount("one\n\ntwo", 4, 4);
+			insertSnippet(view, "---", { block: true });
+			expect(view.state.doc.toString()).toBe("one\n\n---\ntwo");
+		});
+
+		test("adds no blank line above a rule at the very start of the document", () => {
+			mount("", 0, 0);
+			insertSnippet(view, "---", { block: true });
+			expect(view.state.doc.toString()).toBe("---");
 		});
 
 		test("an inline snippet never gains line breaks, even mid-word", () => {

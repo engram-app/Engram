@@ -55,7 +55,7 @@ interface SyntaxEntry {
 	/**
 	 * The row shows its rendered result only. For categories where every entry
 	 * shares one format, that format is documented once in CATEGORY_INTROS —
-	 * repeating it on all 13 callout rows would bury the thing they exist to
+	 * repeating it on every callout row would bury the thing they exist to
 	 * show.
 	 */
 	hideTemplate?: true;
@@ -100,17 +100,6 @@ interface SyntaxEntry {
 }
 
 /**
- * One row per callout TYPE, generated from the library's own map rather than
- * typed out — 13 base types today, plus 14 aliases that share their icons. A
- * hand-written list would silently fall behind a library upgrade, and this
- * section exists precisely to answer "which types are there and what do they
- * look like".
- *
- * The title of each demo is the type's own name on purpose: mapping name →
- * icon → colour IS the information. `hideTemplate` keeps the rows to just that
- * mapping, because the format is spelled out once above them (CATEGORY_INTROS).
- */
-/**
  * A line of body text that suits each type, so the gallery reads as thirteen
  * worked examples rather than thirteen repetitions of a word. Keyed by type; a
  * type the library adds later falls back to something neutral rather than
@@ -132,6 +121,17 @@ const CALLOUT_BODIES: Record<string, string> = {
 	quote: "Said better by someone else.",
 };
 
+/**
+ * One row per callout TYPE, generated from the library's own map rather than
+ * typed out — 13 base types today, plus 14 aliases that share their icons. A
+ * hand-written list would silently fall behind a library upgrade, and this
+ * section exists precisely to answer "which types are there and what do they
+ * look like".
+ *
+ * The title of each demo is the type's own name on purpose: mapping name →
+ * icon → colour IS the information. `hideTemplate` keeps the rows to just that
+ * mapping, because the format is spelled out once above them (CATEGORY_INTROS).
+ */
 const CALLOUT_GALLERY: readonly SyntaxEntry[] = Object.entries(defaultConfig.types)
 	.filter(([, value]) => typeof value === "object")
 	.map(([type]) => ({
@@ -364,10 +364,6 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		// runs gray-matter, which swallows a leading "---" as a frontmatter
 		// delimiter and previews an empty box.
 		demo: "Text above the divider\n\n---\nText below the divider",
-		// Names the mechanism, not just the rule. "Needs a blank line above, or it
-		// turns the line before into a heading" states a consequence with no cause,
-		// so it reads as an arbitrary gotcha; "the dashes underline it" is the bit
-		// that makes the behaviour predictable.
 		// No blurb. The blank-line rule used to be spelled out here; the template's
 		// ghost line now SHOWS it, and the sentence beside it was saying the same
 		// thing a second time.

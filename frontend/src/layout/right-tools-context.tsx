@@ -38,6 +38,27 @@ const RIGHT_TOOLS: readonly RightToolDescriptor[] = [
 
 const STORAGE_KEY = "engram:right-tool";
 
+// Storage can be unavailable outright — Safari private mode, a blocked
+// third-party context, a full quota. This is a UI PREFERENCE: losing it is a
+// non-event, but letting the DOMException escape a render or an effect tears
+// the whole AppLayout subtree down into the error boundary. So both sides fail
+// closed to "no preference" rather than propagating.
+function readKey(): string | null {
+	try {
+		return window.localStorage.getItem(STORAGE_KEY);
+	} catch {
+		return null;
+	}
+}
+
+function writeKey(value: string): void {
+	try {
+		window.localStorage.setItem(STORAGE_KEY, value);
+	} catch {
+		// Preference not persisted; the session still works.
+	}
+}
+
 // "" persists an explicitly collapsed panel — distinct from a missing key, which
 // means "never chosen" and should fall back to the outline (the old behaviour,
 // where opening a note revealed its table of contents).
@@ -45,7 +66,7 @@ function readStored(): RightToolId | null {
 	if (typeof window === "undefined") {
 		return "outline";
 	}
-	const raw = window.localStorage.getItem(STORAGE_KEY);
+	const raw = readKey();
 	if (raw === "") {
 		return null;
 	}
@@ -79,7 +100,7 @@ function RightToolsProvider({ children }: { children: ReactNode }) {
 	const [slots, setSlots] = useState<Partial<Record<RightToolId, ReactNode>>>({});
 
 	useEffect(() => {
-		window.localStorage.setItem(STORAGE_KEY, activeId ?? "");
+		writeKey(activeId ?? "");
 	}, [activeId]);
 
 	const setActive = useCallback((id: RightToolId | null) => setActiveState(id), []);
@@ -90,8 +111,13 @@ function RightToolsProvider({ children }: { children: ReactNode }) {
 
 	const setSlot = useCallback((id: RightToolId, node: ReactNode) => {
 		setSlots((prev) => {
-			// Referential no-op guard: NotePage re-publishes the outline on every
-			// content keystroke, and an unconditional setState here would loop.
+			// Referential no-op guard. Not loop protection — NotePage's effect is
+			// keyed on [notePath, liveContent, setSlot], so it cannot re-fire without
+			// a dep change. What this catches is the repeated `setSlot(id, null)`
+			// that unmount and route changes fire, each of which would otherwise
+			// hand every consumer of `slots` a fresh object for no reason. A fresh
+			// <NoteToc/> element per keystroke is NOT caught by it, and does not
+			// need to be.
 			if (prev[id] === node) {
 				return prev;
 			}

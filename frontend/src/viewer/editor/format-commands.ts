@@ -2,6 +2,9 @@ import { indentWithTab } from "@codemirror/commands";
 import { type ChangeSpec, EditorSelection, type Extension } from "@codemirror/state";
 import { type EditorView, keymap } from "@codemirror/view";
 
+/** Opens with a line of only `-` or `=` — what CommonMark reads as a setext heading underline. */
+const SETEXT_UNDERLINE = /^[-=]+[ \t]*(?:\n|$)/;
+
 /** Tab indents / Shift-Tab dedents the selected lines (Obsidian parity). */
 export const indentKeymap: Extension = keymap.of([indentWithTab]);
 
@@ -28,6 +31,14 @@ export function toggleWrap(view: EditorView, before: string, after: string = bef
  * callout glued onto the end of a sentence. Inline snippets are inserted
  * verbatim and never gain line breaks.
  *
+ * One newline is enough for almost every block snippet: tables, fences, lists,
+ * quotes and headings all legally INTERRUPT a paragraph in CommonMark. The
+ * exception is a snippet that opens with a run of `-` or `=`, which is a setext
+ * UNDERLINE when it directly follows paragraph text — `Text\n---` is an `<h2>`,
+ * not a divider. So the rule and frontmatter entries silently ate the line above
+ * and produced no rule at all, in the same panel whose rule row teaches the
+ * blank-line requirement. Those get a blank line above instead.
+ *
  * ponytail: the caret lands after the snippet rather than selecting a
  * placeholder inside it (e.g. the "text" in `**text**`). Upgrade path if that
  * proves annoying: give entries an explicit placeholder offset and select it
@@ -40,11 +51,28 @@ export function insertSnippet(
 ): void {
 	const { state } = view;
 	const { from, to } = state.selection.main;
-	const line = state.doc.lineAt(from);
+	// Two lines, not one: with a multi-line selection the trailing remainder
+	// lives on the line holding `to`. Slicing it out of the line holding `from`
+	// indexed past that line's end, `slice` returned "", and the tail got glued
+	// onto the snippet — "hello\nworld" selected [2,8] became "he\n| a |rld".
+	const startLine = state.doc.lineAt(from);
+	const endLine = state.doc.lineAt(to);
 	// Only the text OUTSIDE the replaced range matters — a selection that spans
 	// the whole line leaves it blank, so no break is needed on that side.
-	const before = block && line.text.slice(0, from - line.from).trim() !== "" ? "\n" : "";
-	const after = block && line.text.slice(to - line.from).trim() !== "" ? "\n" : "";
+	let before = block && startLine.text.slice(0, from - startLine.from).trim() !== "" ? "\n" : "";
+	const after = block && endLine.text.slice(to - endLine.from).trim() !== "" ? "\n" : "";
+
+	if (block && SETEXT_UNDERLINE.test(snippet)) {
+		const prevLine = startLine.number > 1 ? state.doc.line(startLine.number - 1) : null;
+		if (before !== "") {
+			before = "\n\n";
+		} else if (prevLine !== null && prevLine.text.trim() !== "") {
+			// The snippet already starts its own line, but the line above still
+			// holds text — the caret sitting on the blank separator between two
+			// paragraphs is the common case, and consuming it re-joins them.
+			before = "\n";
+		}
+	}
 	const insert = `${before}${snippet}${after}`;
 
 	view.dispatch({

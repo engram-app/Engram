@@ -70,11 +70,12 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 			codeLanguages: ATOMIC_CODE_LANGUAGES,
 			extensions: [highlightMarkdown],
 		}),
+		// See monospaceAsBodyText above — one tag, overriding atomicMarkdownSyntax.
+		Prec.highest(syntaxHighlighting(monospaceAsBodyText)),
 		// Applies the syntax-highlight *colors* for the markdown grammar tags
 		// `highlightMarkdown` adds (headings, emphasis, etc). Without this the
 		// live-preview text renders unstyled — atomicEditorTheme alone only sets
 		// layout/surface colors, not per-token highlighting.
-		Prec.highest(syntaxHighlighting(monospaceAsBodyText)),
 		atomicMarkdownSyntax,
 		atomicEditorTheme,
 		tables({}),

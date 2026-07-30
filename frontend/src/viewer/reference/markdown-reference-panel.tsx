@@ -25,7 +25,7 @@ import {
 // Categories are native <details> accordions, and a closed one renders NO
 // children. That conditional matters: React mounts <details> children whether
 // or not the element is open — only the browser hides them — so without it every
-// one of the ~29 entries spins up a full remark/KaTeX/mermaid pipeline the
+// one of the catalogue's entries spins up a full remark/KaTeX/mermaid pipeline the
 // moment the panel opens.
 
 // NO prose-sm. The previews render at the document's own scale so a callout,
@@ -199,53 +199,6 @@ function ResultArrow() {
 }
 
 /**
- * Everything fits on one line — template AND result. That is the real question
- * for layout; `block` only ever meant "insertion needs newlines synthesized".
- * Keying off shape is what lets the six heading levels read as a ladder of
- * one-line rows rather than six stacked blocks.
- */
-function fitsOneLine(entry: SyntaxEntry): boolean {
-	return !(entry.syntax.includes("\n") || previewSource(entry).includes("\n"));
-}
-
-// Self-evident syntax gets ONE line: name, template, result. Stacking a preview
-// box, a source box and a blurb around `**text**` padded the simple entries out
-// to justify the complex ones.
-function InlineRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
-	return (
-		<Row entry={entry} canInsert={canInsert}>
-			<span className="block min-w-0 flex-1 px-3 py-1.5">
-				<p className="flex items-center gap-2">
-					<span
-						className="w-24 shrink-0 truncate font-medium text-foreground text-xs"
-						title={entry.label}
-					>
-						{entry.label}
-					</span>
-					<code
-						className="shrink-0 font-mono text-muted-foreground text-sm"
-						title="Inserted at the cursor"
-					>
-						{entry.syntax}
-					</code>
-					{entry.renderable === false ? null : (
-						<>
-							<ResultArrow />
-							<Preview entry={entry} className="block min-w-0 flex-1 overflow-hidden" />
-						</>
-					)}
-				</p>
-				{/* Rendered, not dropped. An earlier version of this row showed a blurb
-			    only for non-previewable entries, which silently hid genuinely useful
-			    notes like "No formatting is applied inside" on inline code. Rows
-			    without a blurb stay a single line. */}
-				{entry.blurb ? <p className="mt-0.5 text-muted-foreground text-xs">{entry.blurb}</p> : null}
-			</span>
-		</Row>
-	);
-}
-
-/**
  * A callout-gallery row: the rendered callout and nothing else. No label — the
  * callout's own title already IS the type name, so a label above it said the
  * same word twice — and no template, because the format is stated once above
@@ -267,9 +220,10 @@ function GalleryRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boole
  * variant renders as the same blue link, so `[[ ]]` versus `[](  )` is the only
  * thing that distinguishes them — putting the template first makes the column
  * scannable, and a "Wikilink" label would only restate the brackets in words.
- * The template column is a percentage so the arrows stay aligned down the
- * section at any panel width, and it wraps rather than truncating: a syntax
- * reference that hides half the syntax is worse than a taller row.
+ * The template is sized to its content and wraps rather than truncating: a
+ * syntax reference that hides half the syntax is worse than a taller row. (A
+ * fixed-percentage column aligned the arrows but left a dead gap after short
+ * templates — see the inline note on the flex row below.)
  */
 function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
 	const previewable = entry.renderable !== false;
@@ -346,16 +300,21 @@ function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: bool
  * addressable for styling.
  */
 function ContextLines({ lines }: { lines?: readonly string[] }) {
-	return lines?.map((line) =>
+	// Keyed by INDEX, not by text: these are fixed, ordered lines that never
+	// reorder, and two blanks (or two identical lines) in one prelude would
+	// otherwise collide on the same key.
+	return lines?.map((line, i) =>
 		line === "" ? (
 			// The rule the divider teaches is about a line with nothing on it.
 			// Rendering that blank line as a visible ghost shows the shape; prose
 			// could only assert it.
-			<span key="blank" className="block text-muted-foreground/50 italic">
+			// biome-ignore lint/suspicious/noArrayIndexKey: static, never-reordered lines
+			<span key={i} className="block text-muted-foreground/50 italic">
 				leave this line empty
 			</span>
 		) : (
-			<span key={line} className="block text-foreground">
+			// biome-ignore lint/suspicious/noArrayIndexKey: static, never-reordered lines
+			<span key={i} className="block text-foreground">
 				{line}
 			</span>
 		),
@@ -367,8 +326,8 @@ function ContextLines({ lines }: { lines?: readonly string[] }) {
  * how you actually use the row — name it, see what to type, see what you get.
  *
  * Every entry reaching here has a multi-line template, so the template always
- * gets a block of its own; the single-line ones are all InlineRow or
- * TemplateRow. `framed` adds a border around the preview, for the one result
+ * gets a block of its own; the single-line ones are all TemplateRow or
+ * GalleryRow. `framed` adds a border around the preview, for the one result
  * that is not self-evident — a lone horizontal rule read as the panel's own row
  * separator rather than as the specimen.
  */
@@ -424,16 +383,32 @@ function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 	);
 }
 
+/** Only the first category starts open, so the panel is not a wall of examples. */
+const DEFAULT_OPEN: ReadonlySet<string> = new Set(["Text"]);
+
 export default function MarkdownReferencePanel() {
 	const [query, setQuery] = useState("");
-	// Only the first category starts open — the whole point of the accordions is
-	// that the panel does not open as a wall of 29 examples.
-	const [openCategories, setOpenCategories] = useState<ReadonlySet<string>>(new Set(["Text"]));
+	const [openCategories, setOpenCategories] = useState<ReadonlySet<string>>(DEFAULT_OPEN);
 	const { hasEditor } = useActiveEditor();
 	const searchId = useId();
 
 	const groups = useMemo(() => groupByCategory(filterSyntax(query)), [query]);
 	const searching = query.trim() !== "";
+
+	// A search opens every matching section — hiding the hit the user just
+	// searched for behind a closed accordion is useless. Done by ADJUSTING state
+	// during render (React's sanctioned derive-from-props pattern) rather than by
+	// computing `open={searching || openCategories.has(c)}`: that expression let
+	// the user collapse a section mid-search, at which point the DOM was closed
+	// while the prop stayed `true`. React saw no prop change on the next
+	// keystroke, never wrote the property back, and the section could not be
+	// reopened until the search cleared. <details> is only safely controlled when
+	// one value is authoritative.
+	const [lastQuery, setLastQuery] = useState(query);
+	if (query !== lastQuery) {
+		setLastQuery(query);
+		setOpenCategories(searching ? new Set(groups.map(([category]) => category)) : DEFAULT_OPEN);
+	}
 
 	const setOpen = (category: string, open: boolean) =>
 		setOpenCategories((prev) => {
@@ -483,9 +458,7 @@ export default function MarkdownReferencePanel() {
 					</p>
 				) : (
 					groups.map(([category, entries]) => {
-						// A search forces every matching section open — hiding the hit the
-						// user just searched for behind a closed accordion is useless.
-						const open = searching || openCategories.has(category);
+						const open = openCategories.has(category);
 						const intro = CATEGORY_INTROS[category];
 						return (
 							<details
@@ -528,11 +501,7 @@ export default function MarkdownReferencePanel() {
 												if (entry.templateLed) {
 													return <TemplateRow key={entry.id} entry={entry} canInsert={hasEditor} />;
 												}
-												return fitsOneLine(entry) ? (
-													<InlineRow key={entry.id} entry={entry} canInsert={hasEditor} />
-												) : (
-													<BlockRow key={entry.id} entry={entry} canInsert={hasEditor} />
-												);
+												return <BlockRow key={entry.id} entry={entry} canInsert={hasEditor} />;
 											})}
 										</ul>
 									</>
