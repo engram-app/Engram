@@ -179,6 +179,11 @@ export default function NotePage() {
 						<RenameInput
 							initial={name}
 							kind="file"
+							// This reads as a title field, not a modal edit: you click it,
+							// retype, and click into the document. Losing the rename because
+							// you did not press Enter is a surprise, so focus leaving saves.
+							// Escape still abandons.
+							commitOnBlur
 							onCommit={commitRename}
 							onCancel={() => setRenamingFor(null)}
 						/>
