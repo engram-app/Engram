@@ -123,7 +123,9 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     doc = CrdtBridge.new_doc()
     _returned = CrdtPersistence.bind(st, note2.id, doc)
 
-    assert CrdtBridge.text_of(doc) =~ "hello world"
+    # `==`, not `=~`: full-body doubling is a previously-shipped failure mode of
+    # this merge path, and `=~` passes on "hello worldhello world".
+    assert CrdtBridge.text_of(doc) == "hello world"
   end
 
   test "bind/3 does NOT seed from content when a tail-log exists (no double-seed)", ctx do

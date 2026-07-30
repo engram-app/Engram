@@ -52,8 +52,10 @@ defmodule Engram.Notes.CrdtPersistence do
       Repo.with_tenant(user_id, fn ->
         case Repo.get(Note, note_id) do
           %Note{} = note ->
-            # Hydrate the snapshot when present. Whether one existed no longer
-            # gates the seed below — projected-body-emptiness does (#1087).
+            # Hydrate the snapshot when present. Absent one, the doc stays
+            # empty: nothing here re-seeds it from `notes.content` (see the
+            # NOTE below). CrdtCheckpoint guards against that empty doc being
+            # materialized back over the body.
             case Crypto.decrypt_crdt_state(note, user) do
               {:ok, snapshot} when is_binary(snapshot) ->
                 :ok = Yex.apply_update(doc, snapshot)
@@ -316,15 +318,4 @@ defmodule Engram.Notes.CrdtPersistence do
     end)
     |> Enum.reverse()
   end
-
-  # Seeds a fresh doc from the note's plaintext content via the frontmatter
-  # codec. Used only when the note has no CRDT state yet (see bind/3) so
-  # discovery delivers the body. Frontmatter is split into Y.Map("frontmatter")
-  # + Y.Array("frontmatter_order") and only the body lands in the body Y.Text,
-  # ensuring concurrent frontmatter edits engage the LWW per-key path.
-  # maybe_decrypt_note_fields/2 also UTF-8-scrubs the content, keeping the Yjs
-
-  # A CRDT room only ever holds a markdown (`.md`) doc or a structural doc
-  # (`.canvas`). Only markdown is projected to/from `notes.content` — everything
-  # else is opaque Yjs the client owns. Mirrors CrdtDeliver's `.md` gate.
 end

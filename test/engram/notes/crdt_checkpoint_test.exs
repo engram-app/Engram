@@ -844,4 +844,34 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
     assert_receive {:DOWN, ^ref, :process, ^timer, _}, 1_000
   end
+
+  test "checkpoint does NOT blank a legacy note whose row has no crdt_state", ctx do
+    %{user: user, vault: vault} = ctx
+    # The 2026-07-06 id-keying cutover NULLed crdt_state for EVERY note, on the
+    # documented premise that bind would re-seed it from notes.content. Now that
+    # the server no longer authors content, such a note binds to an EMPTY doc —
+    # and unbind checkpoints unconditionally. Without a guard this materializes
+    # "" over the note body and announces the emptied note to every device.
+    #
+    # The structural (.canvas) path is already protected; markdown was not.
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "legacy.md", "content" => "IMPORTANT"})
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+    # Exactly what bind/3 now produces for such a row: an empty doc.
+    doc = CrdtBridge.new_doc()
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    {:ok, reloaded} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, reloaded} = Crypto.maybe_decrypt_note_fields(reloaded, user)
+    assert reloaded.content == "IMPORTANT"
+  end
 end
