@@ -3,10 +3,9 @@ defmodule EngramWeb.OAuthRegisterController do
   RFC 7591 Dynamic Client Registration. Public, rate-limited.
 
   Mints public PKCE clients by default, `token_endpoint_auth_method=none`
-  with no `client_secret`. Confidential clients can be requested but are
-  not yet supported (no secret minting wired up); validation rejects
-  `client_secret_post` / `client_secret_basic` to keep the surface
-  small until Phase 4 needs it.
+  with no `client_secret`. A client that asks for `client_secret_post` or
+  `client_secret_basic` is minted a secret, returned once in the 201 and
+  stored only as a hash. PKCE is required either way.
   """
   use EngramWeb, :controller
 
@@ -73,13 +72,20 @@ defmodule EngramWeb.OAuthRegisterController do
     )
   end
 
-  # The DCR body is the only place a client's self-reported identity exists.
+  # The DCR body is the only place a client's self-reported identity exists;
   # no vendor publishes these strings. When one resolves to no slug, its
   # onboarding checklist row cannot tick, so record the normalized name and let
   # prod tell us what to add to `@name_aliases` instead of guessing.
   #
-  # Logs the NORMALIZED name deliberately: it drops the user-chosen server
-  # suffix ("Claude Code (my-private-project)"), so nothing personal ships.
+  # Everything logged here is deliberately de-identified:
+  #
+  #   * the NORMALIZED name, which drops the user-chosen server suffix
+  #     ("Claude Code (my-private-project)"), and
+  #   * scheme + host only, never the full redirect. A self-hosted client
+  #     redirects to the operator's own domain with a path that can carry
+  #     instance detail, and RequestLogger already redacts request paths, so
+  #     shipping whole URIs here would undercut that. Scheme + host is all the
+  #     classification (vendor / loopback / self-hosted) actually needs.
   defp log_unattributed(%{kind: "mcp"} = client) do
     identity = LogoAllowlist.resolve(client.software_id, client.redirect_uris, client.client_name)
 
@@ -88,7 +94,7 @@ defmodule EngramWeb.OAuthRegisterController do
         "mcp_dcr_unattributed_client",
         Metadata.with_category(:info, :lifecycle,
           normalized_name: LogoAllowlist.normalize_name(client.client_name),
-          redirect_uris: client.redirect_uris,
+          redirect_origins: redirect_origins(client.redirect_uris),
           software_id: client.software_id
         )
       )
@@ -96,6 +102,17 @@ defmodule EngramWeb.OAuthRegisterController do
   end
 
   defp log_unattributed(_), do: :ok
+
+  defp redirect_origins(uris) when is_list(uris) do
+    Enum.map(uris, fn uri ->
+      case URI.new(uri) do
+        {:ok, %URI{scheme: scheme, host: host}} -> "#{scheme}://#{host}"
+        _ -> "unparseable"
+      end
+    end)
+  end
+
+  defp redirect_origins(_), do: []
 
   defp emit_telemetry(result, client_id, software_id, kind) do
     :telemetry.execute(@telemetry_event, %{count: 1}, %{

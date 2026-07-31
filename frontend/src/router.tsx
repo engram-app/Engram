@@ -16,7 +16,7 @@ import LoadingPane from "./viewer/loading-pane";
 // KaTeX wiring + CodeMirror behind NotePage) dominated a 1.78 MB main
 // chunk that even the sign-in page had to parse. Entry surfaces
 // (sign-in/up, guards) stay eager; everything behind navigation —
-// including the authenticated app shell, loads on demand.
+// including the authenticated app shell — loads on demand.
 
 // The app-shell layouts all resolve through ONE barrel module so they share a
 // single async chunk (no gate → shell → layout chunk waterfall). This is what
@@ -29,19 +29,13 @@ const OnboardingGate = lazy(() =>
 const OnboardingShell = lazy(() =>
 	import("./layout/app-shell").then((m) => ({ default: m.OnboardingShell })),
 );
-// Onboarding entry surface, same one-chunk barrel pattern.
+// Onboarding entry surface — same one-chunk barrel pattern.
 const OnboardLayout = lazy(() =>
 	import("./onboarding/onboard-entry").then((m) => ({ default: m.OnboardLayout })),
 );
 const OnboardRedirect = lazy(() =>
 	import("./onboarding/onboard-entry").then((m) => ({ default: m.OnboardRedirect })),
 );
-// Dev-only (see the guarded route below). The `lazy()` must live INSIDE the
-// DEV ternary, not at plain module scope: a bare `lazy(() => import(...))`
-// still emits its chunk in a production build even when the only route
-// referencing it is guarded away, verified, it shipped 4.3 kB of dead weight.
-// With the dynamic import in a statically-false branch, Rollup drops it.
-const ConnectorQcPage = import.meta.env.DEV ? lazy(() => import("./dev/connector-qc-page")) : null;
 const Dashboard = lazy(() => import("./viewer/dashboard"));
 // /:slug/:itemId resolves to the note OR attachment viewer (VaultItemPage owns
 // the lazy NotePage/AttachmentPage chunks).
@@ -52,6 +46,13 @@ const LegacyNoteRedirect = lazy(() => import("./viewer/legacy-note-redirect"));
 const ResetPasswordPage = lazy(() => import("./features/auth/ResetPasswordPage"));
 const DeviceLinkPage = lazy(() => import("./device/device-link-page"));
 const OAuthAuthorizePage = lazy(() => import("./oauth/oauth-authorize-page"));
+// Dev-only (see the guarded route below). The `lazy()` MUST live inside the
+// DEV ternary, not at plain module scope: a bare `lazy(() => import(...))`
+// still emits its chunk in a production build even when the only route
+// referencing it is guarded away. Verified the hard way, it shipped 4.3 kB of
+// dead weight. With the dynamic import in a statically-false branch, Rollup
+// drops it entirely.
+const ConnectorQcPage = import.meta.env.DEV ? lazy(() => import("./dev/connector-qc-page")) : null;
 // Settings is a hash overlay mounted at the AuthGuard level (not inside
 // AppLayout) so /link and /oauth/consent, which sit outside the app shell
 // and link to `#settings/billing`, still resolve the overlay.
@@ -77,18 +78,18 @@ function suspendedScreen(el: ReactNode) {
 	return <Suspense fallback={<LoadingScreen />}>{el}</Suspense>;
 }
 
-// Root layout, mounts the UpgradeDialogProvider INSIDE the router so the
+// Root layout — mounts the UpgradeDialogProvider INSIDE the router so the
 // dialog's `useNavigate` works, and so any nested API call that 402s opens
 // the modal via the module-level handler. Wrapping `RouterProvider` from
 // `main.tsx` would not give the provider router context.
 function RootLayout() {
-	// Dev-only route-level crash trigger, the twin of main.tsx's `?boom` (which
+	// Dev-only route-level crash trigger — the twin of main.tsx's `?boom` (which
 	// throws ABOVE the router to hit RootErrorBoundary). This throws INSIDE the
-	// router, so it exercises the route errorElement (RouteErrorBoundary), the
+	// router, so it exercises the route errorElement (RouteErrorBoundary) — the
 	// path a real route crash like the note editor takes. Visit `?routeboom`.
 	// Stripped from prod by the import.meta.env.DEV gate.
 	if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("routeboom")) {
-		throw new Error("Intentional crash (?routeboom), testing the route error boundary");
+		throw new Error("Intentional crash (?routeboom) — testing the route error boundary");
 	}
 	return (
 		<UpgradeDialogProvider>
@@ -111,7 +112,7 @@ export function installAppRouter(r: AppRouter) {
 
 // Lazy getter used by code paths that need to imperatively navigate
 // (e.g. Clerk's routerPush). Throws if invoked before BootstrapGate
-// mounted, that would be a wiring regression worth surfacing loudly.
+// mounted — that would be a wiring regression worth surfacing loudly.
 export function getAppRouter(): AppRouter {
 	if (!_appRouter) {
 		throw new Error("Router accessed before installAppRouter() ran");
@@ -138,10 +139,9 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 				{ path: ROUTES.SIGN_IN, element: <SignInPage /> },
 				{ path: ROUTES.SIGN_UP, element: <SignUpPage /> },
 				{ path: ROUTES.WAITLIST, element: <WaitlistPage /> },
-				// Public reset, the one-time token IS the credential.
+				// Public reset — the one-time token IS the credential.
 				{ path: "/reset-password", element: suspended(<ResetPasswordPage />) },
-
-				// Dev-only connector QC gallery, spreads into nothing in production.
+				// Dev-only connector QC gallery — spreads into nothing in production.
 				...(ConnectorQcPage
 					? [{ path: "/__qc/connectors", element: suspended(<ConnectorQcPage />) }]
 					: []),
@@ -156,7 +156,7 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 							// shell and link to `#settings/billing`.
 							element: suspendedScreen(<SettingsOverlayHost />),
 							children: [
-								// Onboarding wizard, itself protected by AuthGuard, but NOT by
+								// Onboarding wizard — itself protected by AuthGuard, but NOT by
 								// OnboardingGate (would redirect-loop).
 								{
 									path: "/onboard",
@@ -170,24 +170,24 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 									],
 								},
 
-								// /link is reachable mid-onboarding, the wizard's Obsidian branch
+								// /link is reachable mid-onboarding — the wizard's Obsidian branch
 								// requires the user to complete device-flow here before progressing.
 								// Sits OUTSIDE the OnboardingGate to dodge the redirect-to-/onboard.
 								{ path: ROUTES.DEVICE_LINK, element: suspended(<DeviceLinkPage />) },
 
-								// OAuth consent, reachable mid-onboarding so an MCP client (e.g.
+								// OAuth consent — reachable mid-onboarding so an MCP client (e.g.
 								// Claude Desktop) initiating a connection during signup can complete
 								// the OAuth dance without being bounced to /onboard.
 								{ path: ROUTES.OAUTH_CONSENT, element: suspended(<OAuthAuthorizePage />) },
 
-								// Dashboard tree, gated by OnboardingGate.
+								// Dashboard tree — gated by OnboardingGate.
 								{
 									element: suspendedScreen(<OnboardingGate />),
 									children: [
 										{
 											// OnboardingShell wraps the dashboard tree so the tour offer,
 											// first-vault modal, and checklist only mount on the main app
-											// surface, NOT on /settings/*, /device-link, or /oauth.
+											// surface — NOT on /settings/*, /device-link, or /oauth.
 											element: suspendedScreen(
 												<OnboardingShell>
 													<Outlet />
@@ -229,7 +229,7 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 					],
 				},
 
-				// Catch-all, auth-aware: signed-out visitors are bounced to sign-in
+				// Catch-all — auth-aware: signed-out visitors are bounced to sign-in
 				// (with return_to), signed-in users see the real 404. A typo for a
 				// logged-in user is just a typo; for a logged-out one there's nothing
 				// to do on a 404 but authenticate.

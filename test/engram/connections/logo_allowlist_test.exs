@@ -34,11 +34,24 @@ defmodule Engram.Connections.LogoAllowlistTest do
            } = result
   end
 
-  # Identity precedence only. `verified` here comes from the claude.ai host, not
-  # from the software_id, the two are resolved independently.
-  test "resolve prefers software_id over redirect host for identity" do
+  # REVERSED 2026-07-30 during review. This previously asserted that
+  # `software_id` outranked the redirect host for identity, which is backwards:
+  # software_id is a self-asserted DCR body field and the host is not. A client
+  # claiming one vendor while its grant is delivered to another must be listed
+  # as the vendor that actually receives the code.
+  test "resolve prefers the redirect host over a self-asserted software_id" do
     result = LogoAllowlist.resolve("engram-vault-sync", ["https://claude.ai/x"])
-    assert %{verified: true, slug: nil, logo: "/assets/clients/engram-vault-sync.svg"} = result
+
+    assert %{verified: true, slug: "claude", logo: "/assets/clients/claude.svg"} = result
+  end
+
+  # software_id still supplies identity when no vendor host is present, which is
+  # the case it exists for: our own Obsidian plugin redirects to a custom
+  # scheme, so nothing else can name it.
+  test "resolve falls back to software_id when there is no vendor host" do
+    result = LogoAllowlist.resolve("engram-vault-sync", ["obsidian://engram/cb"])
+
+    assert %{verified: false, slug: nil, logo: "/assets/clients/engram-vault-sync.svg"} = result
   end
 
   test "resolve ignores loopback and custom-scheme redirects" do
@@ -125,6 +138,20 @@ defmodule Engram.Connections.LogoAllowlistTest do
   test "client_name cannot upgrade a spoofed vendor host to verified" do
     assert %{verified: false, logo: nil} =
              LogoAllowlist.resolve(nil, ["https://claude.ai@evil.com/cb"], "Claude Code (x)")
+  end
+
+  # Precedence is proven-over-claimed. software_id is a self-asserted DCR body
+  # field; the vendor host is not. If a client claims one vendor and its grant
+  # is delivered to another, the one we can PROVE must be what the user sees,
+  # otherwise the connections list shows "ChatGPT" for a code Anthropic
+  # received.
+  test "a verified host wins over a conflicting self-asserted software_id" do
+    assert %{verified: true, slug: "claude", display_name: "Claude"} =
+             LogoAllowlist.resolve(
+               "openai-chatgpt",
+               ["https://claude.ai/api/mcp/auth_callback"],
+               nil
+             )
   end
 
   test "a verified host match wins over client_name" do

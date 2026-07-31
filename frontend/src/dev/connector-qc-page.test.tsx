@@ -28,8 +28,11 @@ describe("ConnectorQcPage", () => {
 	it("renders the connector states the gallery exists to show", () => {
 		renderGallery();
 
-		// Verified vendor, recognized-local, and unrecognized all present.
-		expect(screen.getAllByText(/Claude Code \(engram\)/iu).length).toBeGreaterThan(0);
+		// Verified vendor, recognized-local, and unrecognized all present. The
+		// fixture registers as "Claude Code (engram)"; the card shows the catalog
+		// spelling, so the user-chosen suffix must not survive to the UI.
+		expect(screen.getAllByText(/^Claude Code$/u).length).toBeGreaterThan(0);
+		expect(screen.queryByText(/\(engram\)/u)).toBeNull();
 		expect(screen.getAllByText(/some-random-agent/iu).length).toBeGreaterThan(0);
 
 		// Exactly one chip: the unrecognized client. Recognized ones are plain.

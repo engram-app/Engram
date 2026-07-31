@@ -54,6 +54,19 @@ export const TOOL_CODING: ToolOption[] = [
 ];
 
 /**
+ * Canonical product name per slug, for surfaces that resolved a slug but only
+ * have the client's self-reported name to show.
+ *
+ * Clients register under whatever string they like: Claude Code sends
+ * `Claude Code (<mcp-server-name>)` with a user-chosen suffix, so the raw name
+ * reads as "Claude Code (engram)" in the connections list. Once the slug is
+ * resolved we already know the product, so prefer the catalog's spelling.
+ */
+export const TOOL_LABELS: Record<string, string> = Object.fromEntries(
+	[...TOOL_ASSISTANTS, ...TOOL_CODING].map(({ slug, label }) => [slug, label]),
+);
+
+/**
  * The opt-out. NOT a member of the lists above, because it does not answer
  * "which client will you connect?" the way every other option does. It answers
  * "none", which makes it mutually exclusive with all of them, and a peer

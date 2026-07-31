@@ -443,7 +443,7 @@ defmodule EngramWeb.OAuthTokenControllerTest do
   end
 
   describe "POST /oauth/token — confidential client authentication" do
-    defp confidential_client(method, redirect_uri \\ "https://app.lobehub.com/oauth/callback") do
+    defp confidential_client(method, redirect_uri) do
       {:ok, client} =
         OAuth.register_client(%{
           "redirect_uris" => [redirect_uri],

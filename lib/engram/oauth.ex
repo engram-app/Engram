@@ -540,10 +540,51 @@ defmodule Engram.OAuth do
   defp match_redirect_uri(_client, nil), do: {:client_error, "invalid_redirect_uri"}
 
   defp match_redirect_uri(client, uri) do
-    if uri in client.redirect_uris do
+    if uri in client.redirect_uris or loopback_port_match?(client.redirect_uris, uri) do
       {:ok, uri}
     else
       {:client_error, "invalid_redirect_uri"}
+    end
+  end
+
+  # RFC 8252 §7.3: "the authorization server MUST allow any port to be specified
+  # at the time of the request for loopback IP redirect URIs, to accommodate
+  # clients that obtain an available ephemeral port from the operating system at
+  # the time of the request."
+  #
+  # Exact matching is correct everywhere else and stays the first check above.
+  # But a DCR client registers once and persists its client_id, while asking the
+  # OS for a fresh ephemeral port on every launch. Without this, every
+  # local-first connector (Claude Code, Cline, OpenCode, Cursor, Windsurf) works
+  # on first run and fails on the second with invalid_redirect_uri.
+  #
+  # The exemption is scoped to `http` + a loopback host, and covers ONLY the
+  # port: host, path and query must still match exactly. Extending it to https
+  # would let anyone who controls any port on a registered host collect auth
+  # codes. On loopback that concern does not apply the same way, since reaching
+  # the port at all means already being on the user's machine, and PKCE still
+  # binds the code to the request that started it.
+  defp loopback_port_match?(registered, uri) do
+    case loopback_identity(uri) do
+      nil -> false
+      identity -> Enum.any?(registered, &(loopback_identity(&1) == identity))
+    end
+  end
+
+  # Everything identifying a loopback redirect except its port, or nil when the
+  # URI is not an http loopback one (which disables the exemption entirely).
+  #
+  # The whole parsed URI is compared with the port blanked, rather than a
+  # hand-listed subset of fields: that keeps userinfo and fragment significant
+  # (`http://evil@127.0.0.1/cb` must not match `http://127.0.0.1/cb`) and cannot
+  # silently widen if URI ever grows a field.
+  defp loopback_identity(uri) do
+    case URI.new(uri) do
+      {:ok, %URI{scheme: "http", host: host} = parsed} ->
+        if Client.loopback_host?(host), do: %{parsed | port: nil}
+
+      _ ->
+        nil
     end
   end
 

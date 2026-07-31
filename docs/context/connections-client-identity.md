@@ -17,11 +17,21 @@ So `lookup(nil)` never matched → generic `<Plug>` icon, "unverified" badge, no
 
 Identity resolves in `lib/engram/connections/logo_allowlist.ex`:
 
-| Source | Grants | Why |
-|---|---|---|
-| `software_id` allowlist | `verified` + logo + slug | Explicit, but nearly nothing sends one |
-| `redirect_uri` **host** allowlist | `verified` + logo + slug | A vendor-owned HTTPS host is un-spoofable for grant delivery |
-| `client_name`, normalized | **slug only** | Self-asserted, so it may never grant `verified` or a logo |
+Identity resolves **proven before claimed**, and `verified` is decided
+separately from identity by the host alone:
+
+| Precedence | Source | Grants | Why |
+|---|---|---|---|
+| 1 | `redirect_uri` **host** allowlist | identity + the only thing that sets `verified` | A vendor-owned HTTPS host is un-spoofable for grant delivery |
+| 2 | `software_id` allowlist | identity only | Self-asserted DCR body field; explicit, but nearly nothing sends one |
+| 3 | `client_name`, normalized | **slug only** | Self-asserted, so it may never grant `verified` or a logo |
+
+> **The host outranks `software_id` (reversed during review, 2026-07-30).** It
+> used to be the other way round, which meant a client registering
+> `software_id: "openai-chatgpt"` while redirecting to `claude.ai` was listed as
+> **ChatGPT** and carried a verified badge earned by Anthropic's host. If a
+> grant is delivered to a vendor, that vendor is who the user is connected to;
+> what the client *claims* cannot outrank it.
 
 `slug` then flows `Connections.list_for_user/1` → `ConnectionsController.serialize/1` → `/api/connections` → React (`connectedSlugs.has(slug)` ticks the checklist row; `ToolMark slug={...}` renders the brand mark).
 
@@ -38,9 +48,9 @@ Classes 2 and 3 are the majority of the catalog. **Any design keying attribution
 ## Trust model (security-relevant, do not weaken)
 
 **Identity and verification are computed independently.** Identity (logo /
-display_name / slug) comes from the first match of `software_id` → host → name.
-`verified: true` is granted by **one thing only**: a vendor-owned **HTTPS**
-redirect host, no userinfo, case-folded.
+display_name / slug) comes from the first match of host → `software_id` → name,
+**proven before claimed**. `verified: true` is granted by **one thing only**: a
+vendor-owned **HTTPS** redirect host, no userinfo, case-folded.
 
 > **Tightened 2026-07-30.** `software_id` used to grant `verified: true`. It is
 > an RFC 7591 field the client sends *about itself* in the DCR body, exactly as
@@ -49,13 +59,23 @@ redirect host, no userinfo, case-folded.
 > list as a verified Claude Desktop, logo and all. Not an authorization-time
 > phishing vector (the consent screen shows only `client_id` + `client_name`),
 > but it made a rogue grant look trustworthy enough not to revoke. It now
-> supplies identity only. Device-flow rows are unaffected, `device_rows/1`
+> supplies identity only, and only when no vendor host outranks it.
+>
+> **Be precise about the residue.** That client still gets Claude's logo and
+> display name; it just loses the badge. Withholding the icon too means deleting
+> the `@software_id` map, which still carries our own `engram-vault-sync`
+> plugin. Four of its five entries are unvalidated guesses, and deleting them
+> once prod confirms nothing sends them is the real fix. `verified` is the
+> boundary that actually holds.
+>
+> Device-flow rows are unaffected, `device_rows/1`
 > hardcodes `verified: true`, which is legitimate because our own server mints
 > the `family_id`; no client-supplied metadata is involved.
 
 - **Why HTTPS host is un-spoofable:** a forged DCR client can *claim* `redirect_uri=https://claude.ai/...`, but the auth code is then delivered to claude.ai, not to the attacker. The vendor controls the callback handler.
 - **Why custom schemes / http are NOT:** `com.evil.app://claude.ai/cb` and `http://claude.ai/...` both parse to host `claude.ai` but deliver the code to an attacker-controlled handler. `lookup_by_host/1` enforces `%URI{scheme: "https", userinfo: nil}`. (Code review caught this; the naive host-only match was exploitable.)
 - **`client_name` grants `slug` and nothing else.** It is self-asserted and trivially spoofable, but ticking a row in your *own* checklist is not a security boundary. The logo and the verified badge, where spoofing actually matters, stay host/`software_id` gated. `logo_allowlist_test.exs` pins this explicitly.
+- **A proven host outranks a claimed `software_id`** (reversed during review, 2026-07-30). Previously `software_id` won, so a client claiming `openai-chatgpt` while redirecting to `claude.ai` was listed as ChatGPT *and* verified via Anthropic's host. Whoever receives the code is who the user is connected to.
 
 > **Correction (2026-07-30).** This doc previously said custom schemes and localhost were *"identify-only: they may set icon/name but never grant verified."* That was the intended design; the code never implemented it, `lookup_by_host/1` returned the empty placeholder, so loopback clients got **no slug at all** and their checklist row could never tick. The doc/code mismatch is why the gap survived six weeks. Slug attribution for those clients now comes from `client_name`.
 
@@ -134,6 +154,50 @@ permanently unverifiable.
 > where you pre-register URLs with a provider. Under DCR the desktop client
 > sends `cursor://anysphere.cursor-mcp/oauth/callback`. Third case today where
 > vendor docs disagreed with an observed registration; trust the row.
+
+## Loopback clients get a port exemption at authorize (RFC 8252 §7.3)
+
+Registration is only half the path. A client that registers fine can still be
+turned away at `/oauth/authorize`, and local-first clients were:
+
+> RFC 8252 §7.3: "the authorization server **MUST** allow any port to be
+> specified at the time of the request for loopback IP redirect URIs, to
+> accommodate clients that obtain an available ephemeral port from the operating
+> system at the time of the request."
+
+`match_redirect_uri/2` did an exact `uri in client.redirect_uris`. That is
+correct for every other class, and it is the first check still. But a DCR client
+**registers once and persists its `client_id`**, then asks the OS for a fresh
+ephemeral port on every launch. So the flow is: first run registers
+`http://127.0.0.1:1456/...` and works, second run comes back on port 49152 and
+gets `invalid_redirect_uri`.
+
+This is why the observed ports look arbitrary (62184, 1456, 19876). **Never
+treat an observed loopback port as stable, and never hardcode one.** The port is
+the one component of a loopback redirect guaranteed to change.
+
+The exemption is scoped hard:
+
+| Component | Loopback `http` | Everything else |
+|---|---|---|
+| scheme | must be `http` | exact |
+| host | exact (`localhost` ≠ `127.0.0.1`) | exact |
+| **port** | **ignored** | exact |
+| path, query | exact | exact |
+
+It does **not** extend to `https`. Relaxing the port on `https://claude.ai`
+would let anyone who controls any port on a registered host collect auth codes.
+On loopback that argument does not hold the same way, since reaching the port
+means already being on the user's machine, and PKCE still binds the code to the
+request that started it.
+
+`Engram.OAuth.Client.loopback_host?/1` is the single definition of "loopback",
+shared by registration and authorization. If those two lists ever drifted apart,
+a URI would be accepted at DCR and rejected on every authorize.
+
+The token endpoint keeps exact matching (`check_code_redirect_uri/2`), and
+should: it compares against the URI actually used at authorize, which was stored
+on the code row, not against the registration.
 
 ## Slug derivation is algorithmic, not a vendor map
 
@@ -217,7 +281,7 @@ Catalog decisions that follow:
 - **No `gemini_cli` slug.** Adding a product Google is retiring would be new dead
   config. If an enterprise Gemini CLI user connects, the tripwire logs it.
 
-## The real fix for local clients: CIMD (not yet implemented)
+## The real fix for local clients: CIMD (not yet implemented, tracked in #1148)
 
 **Client ID Metadata Documents** make the `client_id` an HTTPS URL owned by the
 client vendor; the authorization server fetches it to obtain the client's
@@ -248,6 +312,22 @@ its `client_id` must equal its own URL), cache with refresh, derive the redirect
 allowlist from it, and guard the fetch against SSRF. Once shipped, Claude Code
 grants become genuinely `verified` and the "recognized, self-reported" tier
 below stops applying to them.
+
+**Scoped in #1148** (~2 days, one PR). Three findings from that scoping worth
+having here, because they are the non-obvious parts:
+
+- **DCR does not go away.** Seven of the nine observed connectors do not use
+  CIMD, and self-hosted clients never can (no vendor to publish a document).
+  The two paths are independent and both stay.
+- **Do not widen the `client_id` PK.** It is `:binary_id` and `get_client/1`
+  hard-casts UUID, but `oauth_authorization_codes.client_id` and
+  `oauth_refresh_tokens.client_id` have **no FK constraint** (checked in
+  `structure.sql`; only `user_id`/`vault_id` are constrained). So add a unique
+  `cimd_url` column, keep UUIDs internal, and resolve URL-shaped ids to the row.
+- **Advertising the flag is not reversible in-flight.** Claude Code stops
+  choosing DCR the moment it sees the flag and will *not* fall back if our CIMD
+  path is broken, so connections fail outright rather than degrading. Gate it on
+  config and verify against staging with a real client before flipping.
 
 ## "Why is Claude Code unverified? Am I connected wrong?"
 

@@ -4,7 +4,20 @@ defmodule Engram.Billing.OverrideCacheTest do
   alias Engram.Billing.OverrideCache
 
   setup do
-    on_exit(fn -> OverrideCache.evict_all() end)
+    on_exit(fn ->
+      OverrideCache.evict_all()
+
+      # evict_all/0 clears this node's ETS synchronously but ALSO broadcasts, and
+      # the GenServer applies that broadcast in a later handle_info. Left
+      # undrained, the clear can land *after* the next test has populated the
+      # cache and silently wipe its fixtures — which is a cross-test flake, not
+      # a production bug: eviction being eventually-applied is the design.
+      #
+      # :sys.get_state/1 is a call, so it queues behind whatever is already in
+      # the mailbox and returning proves the broadcast was handled.
+      _ = :sys.get_state(OverrideCache)
+    end)
+
     :ok
   end
 

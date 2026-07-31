@@ -24,6 +24,7 @@ import {
 	useRevokePat,
 } from "../api/queries";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
+import { TOOL_LABELS } from "../onboarding/onboarding-tools";
 import { ToolMark } from "../onboarding/tool-icon";
 import { settingsTo } from "./settings-hash";
 
@@ -99,7 +100,15 @@ function ConnectionCard({
 					/>
 					<div className="min-w-0 flex-1">
 						<div className="truncate font-medium">
-							{connection.name ?? "Unnamed"}
+							{/* Prefer the catalog spelling once a slug is resolved. The backend
+							    passes the client's self-reported name through, and Claude Code
+							    registers as "Claude Code (<server>)" with a user-chosen suffix,
+							    so the raw string leaks a local config detail into a list of
+							    vendors. Same reasoning as the brand mark above, already keyed
+							    on slug. */}
+							{(connection.slug ? TOOL_LABELS[connection.slug] : null) ??
+								connection.name ??
+								"Unnamed"}
 							{/* A chip only where it carries information. A recognized
 							    client (slug resolved, official brand mark alongside) is
 							    presented plainly. Badging Claude Code as suspect is
@@ -157,7 +166,7 @@ function ConnectionCard({
 								{connection.verified
 									? "Verified. Sign-in redirects to a domain the vendor owns."
 									: connection.slug
-										? "Recognized, self-reported. This app runs locally or on your own server, so there is no vendor domain to check it against. Nothing is wrong with your setup."
+										? "Self-reported. Local and self-hosted apps have no domain to check, so this is normal."
 										: "Unrecognized client. Revoke it if you don't recognize the redirect below."}
 							</dd>
 						</>

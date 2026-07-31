@@ -71,6 +71,17 @@ defmodule Engram.OAuth.Client do
   @spec confidential?(String.t() | nil) :: boolean()
   def confidential?(method), do: method in @confidential_auth_methods
 
+  @doc """
+  True for the loopback hosts RFC 8252 §7.3 permits over plain `http`.
+
+  Shared with `Engram.OAuth.match_redirect_uri/2`, which grants those hosts a
+  port exemption at authorization time. Registration and authorization must
+  agree on what counts as loopback: if this list drifted between them, a URI
+  could be accepted at DCR and then rejected on every authorize.
+  """
+  @spec loopback_host?(String.t() | nil) :: boolean()
+  def loopback_host?(host), do: host in @loopback_hosts
+
   def registration_changeset(client, attrs) do
     client
     |> cast(attrs, @cast_fields)
@@ -193,11 +204,18 @@ defmodule Engram.OAuth.Client do
       {:ok, %URI{scheme: "https", host: host}} when is_binary(host) and host != "" ->
         []
 
-      {:ok, %URI{scheme: "http", host: host}} when host in @loopback_hosts ->
-        []
+      # `https:///cb` and `https:foo` parse with scheme "https" and a nil/empty
+      # host, so they miss the clause above. Without this they would reach the
+      # permissive custom-scheme branch and be admitted as if "https" were a
+      # native-app scheme. Admitting custom schemes must not silently admit a
+      # well-known scheme with its host missing.
+      {:ok, %URI{scheme: "https"}} ->
+        [redirect_uris: "missing host: #{uri}"]
 
-      {:ok, %URI{scheme: "http"}} ->
-        [redirect_uris: "non-loopback http is not allowed: #{uri}"]
+      {:ok, %URI{scheme: "http", host: host}} ->
+        if loopback_host?(host),
+          do: [],
+          else: [redirect_uris: "non-loopback http is not allowed: #{uri}"]
 
       {:ok, %URI{scheme: scheme}} when scheme in ["javascript", "data", "file"] ->
         [redirect_uris: "unsafe scheme #{scheme}: #{uri}"]

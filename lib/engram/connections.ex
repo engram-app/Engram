@@ -7,11 +7,11 @@ defmodule Engram.Connections do
   ## Revoke routing
 
   The same `client_id` JSON field carries different identifiers per kind:
-    * `:obsidian` (device-flow), `client_id = family_id` (UUID), revoke via
+    * `:obsidian` (device-flow) — `client_id = family_id` (UUID), revoke via
       `DELETE /api/connections/device/:family_id`
-    * `:mcp`, `:obsidian` (OAuth), `client_id = oauth_clients.client_id`,
+    * `:mcp`, `:obsidian` (OAuth) — `client_id = oauth_clients.client_id`,
       revoke via `DELETE /api/connections/oauth/:client_id`
-    * `:pat`, `key_id` (integer), revoke via `DELETE /api/connections/pat/:id`
+    * `:pat` — `key_id` (integer), revoke via `DELETE /api/connections/pat/:id`
 
   Frontend consumers must branch on `kind` to choose the right route.
   """
@@ -130,7 +130,7 @@ defmodule Engram.Connections do
   `vault_id` for `user_id`.
 
   Called at vault soft-delete time so the connections page clears immediately.
-  Idempotent, safe to call twice.
+  Idempotent — safe to call twice.
   """
   @spec revoke_by_vault(Ecto.UUID.t(), Ecto.UUID.t()) :: :ok
   def revoke_by_vault(user_id, vault_id) do
@@ -298,12 +298,12 @@ defmodule Engram.Connections do
     )
     |> Repo.all(skip_tenant_check: true)
     |> Enum.map(fn rt ->
-      # Hardcoded for the Obsidian plugin, the only device-flow client today.
+      # Hardcoded for the Obsidian plugin — the only device-flow client today.
       # If other device-flow clients are added, thread
       # device_authorizations.client_id through to discriminate.
       %{
         kind: :obsidian,
-        # family_id is stable per connection lineage, safe to use as client_id
+        # family_id is stable per connection lineage — safe to use as client_id
         client_id: rt.family_id,
         key_id: nil,
         name: "Obsidian Vault Sync",

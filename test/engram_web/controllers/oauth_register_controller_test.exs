@@ -205,6 +205,23 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
       assert body["error"] == "invalid_redirect_uri"
     end
 
+    # Regression guard for the custom-scheme relaxation. `https:///cb` parses
+    # with scheme "https" and host "", so it misses the https clause (which
+    # requires a non-empty host) and would otherwise fall through to the
+    # permissive native-app branch. Admitting custom schemes must not become
+    # admitting a well-known scheme with its host missing.
+    test "rejects https redirect_uri with no host", %{conn: conn} do
+      for uri <- ["https:///cb", "https://", "https:foo"] do
+        conn =
+          post(conn, "/oauth/register", %{
+            "redirect_uris" => [uri]
+          })
+
+        body = json_response(conn, 400)
+        assert body["error"] == "invalid_redirect_uri", "expected #{uri} to be rejected"
+      end
+    end
+
     test "rejects javascript: redirect_uri", %{conn: conn} do
       conn =
         post(conn, "/oauth/register", %{

@@ -5,7 +5,7 @@ defmodule Engram.Onboarding do
   Onboarding runs for every account. The only toggle is `:billing_enabled`,
   which gates the hosted-only steps: agreement (ToS) and billing (Paddle).
   When false (self-host: AUTH_PROVIDER=local + no PADDLE_API_KEY), the wizard
-  still runs but treats `terms_ok` and `subscription_ok` as auto-pass, the
+  still runs but treats `terms_ok` and `subscription_ok` as auto-pass — the
   operator owns their own legal posture and there is no paywall. The `:vault`
   step (questionnaire + first vault) gates in every mode.
   """
@@ -23,11 +23,14 @@ defmodule Engram.Onboarding do
 
   # FTUX questionnaire tool catalog. Add new clients here in lockstep with
   # the frontend constants (see frontend/src/onboarding/onboarding-tools.ts).
-  # Renames are MIGRATIONS, old slugs in user rows won't be auto-rewritten.
+  # Renames are MIGRATIONS — old slugs in user rows won't be auto-rewritten.
+  #
   # No `gemini` entry on purpose: the consumer Gemini app cannot add a custom
   # remote MCP server (that is Gemini Enterprise / Antigravity only), so the row
-  # would be uncompletable. Antigravity is Google's supported MCP path, it
-  # superseded Gemini CLI for Pro/Ultra/free tiers on 2026-06-18.
+  # would be uncompletable. Antigravity is Google's supported MCP path; it
+  # superseded Gemini CLI for Pro/Ultra/free tiers on 2026-06-18. The frontend
+  # lists a disabled `gemini` row to say so, and its absence here means that
+  # slug can never reach a profile even if the UI is bypassed.
   @valid_tools ~w(
     claude chatgpt grok mistral open_webui lobechat
     claude_code cursor windsurf cline continue opencode github_copilot antigravity
@@ -131,15 +134,15 @@ defmodule Engram.Onboarding do
   @doc """
   Compute the onboarding state for a user. Returns a map with:
 
-    * `:enabled`, true when billing (and therefore the wizard) is active
-    * `:terms_ok`, latest accepted ToS version satisfies the computed floor
-    * `:subscription_ok`, user has trialing/active/past_due subscription
-    * `:current_tos_version`, latest published ToS version (from `terms_versions`)
-    * `:current_privacy_version`, latest published Privacy version
-    * `:terms_notice`, metadata for the newest published ToS version the user
+    * `:enabled` — true when billing (and therefore the wizard) is active
+    * `:terms_ok` — latest accepted ToS version satisfies the computed floor
+    * `:subscription_ok` — user has trialing/active/past_due subscription
+    * `:current_tos_version` — latest published ToS version (from `terms_versions`)
+    * `:current_privacy_version` — latest published Privacy version
+    * `:terms_notice` — metadata for the newest published ToS version the user
       has not yet accepted (version/effective_date/material/changelog/accept_url),
       or `nil` when the user is already on the current version
-    * `:next_step`, one of `:agreement | :billing | :tools | :vault | :done`
+    * `:next_step` — one of `:agreement | :billing | :tools | :vault | :done`
 
   The gate is computed from the `terms_versions` table via
   `Engram.Legal.VersionCache`: `terms_ok` compares the user's latest accepted
@@ -155,7 +158,7 @@ defmodule Engram.Onboarding do
   short-circuit to ok and the chain falls through to tools → vault. The
   `:tools` step collects the questionnaire's tool checkboxes; `:vault`
   owns the obsidian/fresh source pick + first-vault creation.
-  `:enabled` is always true, every account onboards.
+  `:enabled` is always true — every account onboards.
   """
   def status(user) do
     billing_active = Application.get_env(:engram, :billing_enabled, false)
@@ -201,7 +204,7 @@ defmodule Engram.Onboarding do
     if billing_active, do: [:agreement, :billing, :tools, :vault], else: [:tools, :vault]
   end
 
-  # Self-host (billing_enabled=false) doesn't run a ToS gate, operators own
+  # Self-host (billing_enabled=false) doesn't run a ToS gate — operators own
   # their legal posture. Hosted mode performs the real cache-backed check.
   defp terms_state(_user, false), do: {true, nil, nil, nil}
 
@@ -219,7 +222,7 @@ defmodule Engram.Onboarding do
   POSTs once per screen (tools from `/onboard/tools`, uses_obsidian from
   `/onboard/vault`), so this accepts either field independently or both
   together. `completed_at` stamps the moment BOTH `tools` and
-  `uses_obsidian` are present after the merge, that's the signal
+  `uses_obsidian` are present after the merge — that's the signal
   `profile_complete?/1` keys on.
 
   Validates only the fields actually being set: `tools` must be a non-empty
@@ -264,7 +267,7 @@ defmodule Engram.Onboarding do
         |> Repo.update(skip_tenant_check: true)
         |> tap(fn
           # uses_obsidian flips can re-arm the vault gate for a passed
-          # user, drop the cached verdict so the plug re-derives.
+          # user — drop the cached verdict so the plug re-derives.
           {:ok, _} -> Engram.Onboarding.GateCache.evict(user.id)
           _ -> :ok
         end)
@@ -293,7 +296,7 @@ defmodule Engram.Onboarding do
     end
   end
 
-  # Re-read the column rather than trusting the caller's struct, callers that
+  # Re-read the column rather than trusting the caller's struct — callers that
   # just ran `set_profile/2` and then `status/1` would otherwise see a stale
   # `nil` and the gate would stick on `:vault` even after a successful save.
   defp current_profile(user) do
@@ -379,7 +382,7 @@ defmodule Engram.Onboarding do
     # (the `vault_populated` channel broadcast then unblocks the wizard). Note
     # the asymmetry with `RequireOnboarding`: the plug still SKIPS the vault
     # gate for `uses_obsidian=true` so the plugin can actually push that first
-    # sync, runtime permission and wizard navigation are intentionally
+    # sync — runtime permission and wizard navigation are intentionally
     # separated. See `EngramWeb.Plugs.RequireOnboarding`.
     if has_vault, do: :done, else: :vault
   end
@@ -402,7 +405,7 @@ defmodule Engram.Onboarding do
   end
 
   @doc """
-  Record an onboarding milestone for `user_id`. Idempotent, re-recording the
+  Record an onboarding milestone for `user_id`. Idempotent — re-recording the
   same action returns `:ok` with no extra row. Returns `{:error, changeset}`
   only on enum/validation failure.
   """

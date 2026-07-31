@@ -153,7 +153,41 @@ describe("ConnectionsPage", () => {
 		renderPage();
 
 		expect(screen.queryByText(/^unverified$/iu)).toBeNull();
-		expect(screen.getByText(/nothing is wrong with your setup/iu)).toBeInTheDocument();
+		expect(screen.getByText(/self-reported/iu)).toBeInTheDocument();
+	});
+
+	// Claude Code registers as "Claude Code (<mcp-server-name>)" where the suffix
+	// is whatever the user named their server, so passing the raw client_name
+	// through puts a local config detail in a list of vendor names. Once the slug
+	// resolves we know the product, so show the catalog spelling.
+	it("shows the catalog product name, not the client's self-reported one", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...baseMcp,
+			name: "Claude Code (engram)",
+			slug: "claude_code",
+			verified: false,
+		});
+		mockTier = "starter";
+		renderPage();
+
+		// getAllBy: the brand mark's <title> carries the product name too.
+		expect(screen.getAllByText("Claude Code").length).toBeGreaterThan(0);
+		expect(screen.queryByText(/\(engram\)/u)).toBeNull();
+	});
+
+	// No slug means no catalog entry to prefer, so the self-reported name is all
+	// we have and must still render rather than collapsing to "Unnamed".
+	it("keeps the self-reported name when no slug resolved", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...baseMcp,
+			name: "Some Unknown Client",
+			slug: null,
+			verified: false,
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText("Some Unknown Client")).toBeInTheDocument();
 	});
 
 	it("still labels an unrecognized client unverified", () => {

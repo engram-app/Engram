@@ -16,8 +16,17 @@ defmodule Engram.Connections.LogoAllowlist do
   `software_id` and `client_name` both arrive inside the DCR request body, so
   they are things the client *says about itself*. Neither may grant
   `verified: true`; they supply identity only. (Tightened 2026-07-30:
-  `software_id` previously granted the badge, which let anyone registering
-  `software_id: "anthropic-claude-desktop"` wear the Claude logo.)
+  `software_id` previously granted the badge outright.)
+
+  Be precise about what that does and does not buy. A client registering
+  `software_id: "anthropic-claude-desktop"` still gets Claude's **logo and
+  display name** — it only no longer gets the badge, and the host now outranks
+  it for display. Withholding the icon too would need the `@software_id` map
+  gone, and it still carries our own `engram-vault-sync` plugin. Four of its
+  five entries are unvalidated guesses (see below) and should probably be
+  deleted once observation confirms nothing sends them; that is the real fix,
+  and it is not this one. The security boundary that actually holds is
+  `verified`.
 
   Loopback and custom schemes (Cursor desktop registers
   `cursor://anysphere.cursor-mcp/…`) never match the host map, so
@@ -100,7 +109,13 @@ defmodule Engram.Connections.LogoAllowlist do
   Resolve a client's identity, and separately decide whether it is verified.
 
   **Identity** (logo / display_name / slug) comes from the first source that
-  matches: `software_id`, then redirect host, then the normalized `client_name`.
+  matches, **proven before claimed**: the redirect host, then `software_id`,
+  then the normalized `client_name`.
+
+  The host leads because it is the only source that is not self-asserted. A
+  client claiming `software_id: "openai-chatgpt"` while redirecting to
+  `claude.ai` must not be listed as ChatGPT: the grant is delivered to
+  Anthropic, so Anthropic is who the user is actually connected to.
 
   **`verified`** is decided by exactly one thing: whether the redirect lands on
   a vendor-owned HTTPS host. Identity and verification are deliberately
@@ -109,13 +124,13 @@ defmodule Engram.Connections.LogoAllowlist do
   """
   @spec resolve(String.t() | nil, [String.t()] | nil, String.t() | nil) :: entry()
   def resolve(software_id, redirect_uris, client_name \\ nil) do
-    by_id = lookup(software_id)
     by_host = lookup_by_host(redirect_uris)
+    by_id = lookup(software_id)
 
     identity =
       cond do
-        by_id != @empty -> by_id
         by_host != @empty -> by_host
+        by_id != @empty -> by_id
         true -> lookup_by_name(client_name)
       end
 

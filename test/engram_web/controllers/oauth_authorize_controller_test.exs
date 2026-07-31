@@ -125,6 +125,72 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
     end
   end
 
+  # RFC 8252 §7.3: "the authorization server MUST allow any port to be specified
+  # at the time of the request for loopback IP redirect URIs, to accommodate
+  # clients that obtain an available ephemeral port from the operating system at
+  # the time of the request."
+  #
+  # This is not academic. A DCR client registers once and persists its
+  # client_id, but grabs a NEW ephemeral port on every launch. Under exact
+  # matching, every local-first connector (Claude Code, Cline, OpenCode, Cursor,
+  # Windsurf) breaks on its second run and can only recover by re-registering.
+  describe "GET /oauth/authorize — loopback ephemeral ports (RFC 8252 §7.3)" do
+    test "accepts a different port than the one registered", %{conn: conn} do
+      client = register_client("http://127.0.0.1:1456/mcp/oauth/callback")
+
+      params = valid_params(client.client_id, "http://127.0.0.1:49152/mcp/oauth/callback")
+
+      conn = get(conn, "/oauth/authorize", params)
+
+      assert conn.status == 302
+    end
+
+    test "accepts an added port when none was registered", %{conn: conn} do
+      client = register_client("http://localhost/callback")
+
+      params = valid_params(client.client_id, "http://localhost:8912/callback")
+
+      conn = get(conn, "/oauth/authorize", params)
+
+      assert conn.status == 302
+    end
+
+    test "still requires the path to match", %{conn: conn} do
+      client = register_client("http://127.0.0.1:1456/mcp/oauth/callback")
+
+      params = valid_params(client.client_id, "http://127.0.0.1:1456/steal")
+
+      conn = get(conn, "/oauth/authorize", params)
+
+      assert conn.status == 400
+      assert conn.resp_body =~ "invalid_redirect_uri"
+    end
+
+    test "still requires the loopback host to match", %{conn: conn} do
+      client = register_client("http://127.0.0.1:1456/mcp/oauth/callback")
+
+      params = valid_params(client.client_id, "http://localhost:1456/mcp/oauth/callback")
+
+      conn = get(conn, "/oauth/authorize", params)
+
+      assert conn.status == 400
+      assert conn.resp_body =~ "invalid_redirect_uri"
+    end
+
+    # The port exemption is scoped to loopback. Relaxing it for https would let
+    # anyone who controls any port on a registered host collect auth codes.
+    test "does not relax the port for a non-loopback https redirect", %{conn: conn} do
+      client = register_client("https://claude.ai/api/mcp/auth_callback")
+
+      params = valid_params(client.client_id, "https://claude.ai:8443/api/mcp/auth_callback")
+
+      conn = get(conn, "/oauth/authorize", params)
+
+      assert conn.status == 400
+      assert conn.resp_body =~ "invalid_redirect_uri"
+    end
+  end
+
   describe "GET /oauth/authorize — bad params (redirect with error)" do
     test "redirects to redirect_uri?error=unsupported_response_type when not code", %{conn: conn} do
       client = register_client()
