@@ -198,7 +198,8 @@ defmodule Engram.Connections do
           connected_at: DateTime.t() | nil,
           first_user_agent: String.t() | nil,
           first_ip: String.t() | nil,
-          redirect_uris: [String.t()]
+          redirect_uris: [String.t()],
+          cimd_url: String.t() | nil
         }
 
   @spec list_for_user(User.t()) :: [connection_view()]
@@ -247,7 +248,8 @@ defmodule Engram.Connections do
         connected_at: t.inserted_at,
         first_user_agent: c.first_user_agent,
         first_ip: format_inet(c.first_ip),
-        redirect_uris: c.redirect_uris || []
+        redirect_uris: c.redirect_uris || [],
+        cimd_url: c.cimd_url
       }
     end)
     |> Enum.sort_by(&(&1.last_used_at || &1.connected_at), {:desc, DateTime})
@@ -282,7 +284,8 @@ defmodule Engram.Connections do
         connected_at: k.created_at,
         first_user_agent: nil,
         first_ip: nil,
-        redirect_uris: []
+        redirect_uris: [],
+        cimd_url: nil
       }
     end)
     |> Enum.sort_by(&(&1.last_used_at || &1.connected_at), {:desc, DateTime})
@@ -320,7 +323,8 @@ defmodule Engram.Connections do
         connected_at: rt.inserted_at,
         first_user_agent: nil,
         first_ip: nil,
-        redirect_uris: []
+        redirect_uris: [],
+        cimd_url: nil
       }
     end)
   end

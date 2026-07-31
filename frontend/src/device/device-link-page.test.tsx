@@ -70,6 +70,7 @@ vi.mock("../api/queries", async (importOriginal) => {
 					first_user_agent: null,
 					first_ip: null,
 					redirect_uris: [],
+					cimd_url: null,
 				},
 			],
 			isLoading: false,

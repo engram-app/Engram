@@ -1090,6 +1090,10 @@ export interface Connection {
 	first_user_agent: string | null;
 	first_ip: string | null;
 	redirect_uris: string[];
+	/** CIMD metadata-document URL. Present only for clients that published one;
+	 *  it is the client's public identifier and the reason it can be verified
+	 *  despite redirecting to loopback. */
+	cimd_url: string | null;
 }
 
 export interface CapErrorBody {
