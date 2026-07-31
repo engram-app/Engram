@@ -565,22 +565,59 @@ defmodule EngramWeb.CrdtChannelTest do
          %{socket: socket, user: user, vault: vault} do
       # The e2e test_38/43 shape, in-process: crdt_create makes a bare genesis
       # row (empty content, EMPTY-doc snapshot); a REST write then lands
-      # content while NO room is live. The next STEP1 must open a room whose
-      # bind seeds from the row — pre-fix, from_snapshot? (the empty genesis
-      # snapshot) defeated the seed and STEP2 served empty forever.
+      # content while NO room is live. The next STEP1 must still serve the body.
+      #
+      # This is the USER-FACING #1087 guarantee, and it survives the removal of
+      # the bind-time content seed: `upsert_note` merges the plaintext INTO the
+      # note's persisted CRDT state roomlessly (doc_from_state -> replay_tail ->
+      # merge_plaintext_*), so the doc already carries the body by the time the
+      # room binds. Nothing has to resurrect `notes.content` here.
       genesis_id = Ecto.UUID.generate()
       ref = push(socket, "crdt_create", %{"doc_id" => genesis_id, "path" => "Notes/g.md"})
       assert_reply ref, :ok, %{doc_id: created_id}
 
       # Kill the genesis room so the REST write below lands with no live room
       # (deliver_out's live-room push must not be what heals this).
-      Engram.Notes.CrdtRegistry.terminate_room(created_id)
+      CrdtRegistry.terminate_room(created_id)
 
-      # REST content write; wipe the state columns back to the EMPTY genesis
-      # snapshot shape (simulating the merge-never-reached-state window).
       {:ok, _} =
         Engram.Notes.upsert_note(user, vault, %{"path" => "Notes/g.md", "content" => "late body"})
 
+      client = CrdtBridge.new_doc()
+      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+      {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+      push(socket, "crdt_msg", %{"doc_id" => created_id, "b64" => Base.encode64(frame)})
+
+      assert_push "crdt_msg", %{"doc_id" => ^created_id, "b64" => b64}, 3000
+      {:ok, {:sync, {:sync_step2, update}}} = Yex.Sync.message_decode(Base.decode64!(b64))
+      :ok = Yex.apply_update(client, update)
+      assert CrdtBridge.text_of(client) == "late body"
+    end
+
+    test "STEP2 does NOT resurrect notes.content over an empty-projecting snapshot (#1087 class)",
+         %{socket: socket, user: user, vault: vault} do
+      # Channel-layer twin of the CrdtPersistence test of the same name: the doc
+      # is the sole authority, so a row whose crdt_state projects empty serves an
+      # EMPTY STEP2 even though `notes.content` is non-empty. The server used to
+      # seed from the plaintext row here, which is exactly what made it a third
+      # writer of note content.
+      #
+      # This divergence is only constructible by hand — the write path keeps the
+      # two consistent, which is what the sibling test above pins.
+      genesis_id = Ecto.UUID.generate()
+      ref = push(socket, "crdt_create", %{"doc_id" => genesis_id, "path" => "Notes/diverged.md"})
+      assert_reply ref, :ok, %{doc_id: created_id}
+
+      CrdtRegistry.terminate_room(created_id)
+
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "Notes/diverged.md",
+          "content" => "late body"
+        })
+
+      # Hand-wipe the state columns back to the EMPTY genesis snapshot, leaving
+      # crdt_state empty while notes.content holds the body.
       {:ok, empty_state} = Yex.encode_state_as_update(CrdtBridge.new_doc())
       {:ok, {ct, nonce}} = Engram.Crypto.encrypt_crdt_state(empty_state, user, created_id)
 
@@ -600,7 +637,7 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_push "crdt_msg", %{"doc_id" => ^created_id, "b64" => b64}, 3000
       {:ok, {:sync, {:sync_step2, update}}} = Yex.Sync.message_decode(Base.decode64!(b64))
       :ok = Yex.apply_update(client, update)
-      assert CrdtBridge.text_of(client) == "late body"
+      assert CrdtBridge.text_of(client) == ""
     end
 
     test "a successfully routed crdt_msg is ACKED with :ok", %{socket: socket, doc_id: doc_id} do
@@ -823,7 +860,7 @@ defmodule EngramWeb.CrdtChannelTest do
 
       # Verify the room's doc was updated
       {:ok, room_pid} =
-        Engram.Notes.CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+        CrdtRegistry.ensure_started(user.id, vault.id, note.id)
 
       doc = SharedDoc.get_doc(room_pid)
       assert CrdtBridge.text_of(doc) == "base updated"

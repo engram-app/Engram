@@ -150,6 +150,9 @@ defmodule Engram.Notes.CrdtDeliver do
   defp push_to_live_room(user_id, note_id, content) do
     case CrdtRegistry.lookup(note_id) do
       nil ->
+        # Nothing to push: `upsert_note` has ALREADY merged this content into
+        # the note's persisted CRDT state (doc_from_state -> replay_tail ->
+        # merge_plaintext_*), so the doc is authoritative without a room.
         :ok
 
       room ->

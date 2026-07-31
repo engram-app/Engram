@@ -223,6 +223,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
   defp do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user) do
     with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
          text = CrdtBridge.text_of(union_doc),
+         :ok <- ensure_projection_safe(note, text),
          {:ok, raw_state} <- encode(union_doc),
          {_flat_doc, state} <- maybe_flatten(union_doc, raw_state, note_id),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id),
@@ -239,9 +240,33 @@ defmodule Engram.Notes.CrdtCheckpoint do
         user: user
       })
     else
+      {:skip, _} = skip -> skip
       err -> {:abort, err}
     end
   end
+
+  # A row with NO persisted CRDT state whose doc projects nothing is the
+  # "legacy note, not opened since the crdt_state wipe" case: bind produced an
+  # empty doc because there was nothing to load, not because the user emptied
+  # the note. `notes.content` is authoritative there, so materializing "" over
+  # it is pure data loss — and the announce would propagate the blanking to
+  # every other device.
+  #
+  # Migration 20260706210000 NULLed crdt_state for EVERY note, on the premise
+  # that bind would re-seed it from notes.content. Now that the server no longer
+  # authors content, nothing re-seeds, so this is reachable for any note not
+  # written since that cutover.
+  #
+  # A genuine "user deleted all the text" does NOT hit this: those deletion ops
+  # are themselves persisted state, so crdt_state_ciphertext is non-nil and real
+  # emptying still materializes.
+  #
+  # CheckpointNote applies the same guard off the live path
+  # (`has_state?`, lib/engram/workers/checkpoint_note.ex), and the structural
+  # branch below never projects text at all. Markdown-on-unbind was the one
+  # path without it.
+  defp ensure_projection_safe(%Note{crdt_state_ciphertext: nil}, ""), do: {:skip, :no_crdt_state}
+  defp ensure_projection_safe(_note, _text), do: :ok
 
   # Structural (non-markdown, e.g. `.canvas`) checkpoint. The doc keeps its data
   # in Y.Maps, not the markdown content Y.Text — so `text_of` would project ""

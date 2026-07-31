@@ -81,15 +81,19 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert cached_user.id == user.id
   end
 
-  test "bind/3 seeds the doc from notes.content when fresh (no snapshot, no tail-log)", ctx do
+  test "bind/3 does NOT seed the doc from notes.content", ctx do
     %{user: user, vault: vault} = ctx
-    # A note whose CRDT state has never been written (no snapshot, no tail-log)
-    # but which carries plaintext content. A device that has never CRDT-edited
-    # this note (e.g. device B discovering it) must still receive that content
-    # over the y-protocols handshake — so bind seeds the doc from notes.content.
+    # The server used to seed a bound room from `notes.content`, which made it a
+    # THIRD writer of note content alongside the client and the disk flush.
+    # Reconciling three representations is the shape of every "which copy is
+    # authoritative" bug in this codebase, so the seed is gone: the doc is the
+    # only authority and `notes.content` is a derived projection.
     {:ok, note2} =
       Notes.upsert_note(user, vault, %{"path" => "seed.md", "content" => "hello world"})
 
+    # Force the legacy shape the seed existed for: plaintext present, CRDT state
+    # absent. `upsert_note` no longer produces this state (see the test below),
+    # so it has to be constructed by hand.
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
         Repo.update_all(
@@ -102,6 +106,25 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     doc = CrdtBridge.new_doc()
     _returned = CrdtPersistence.bind(st, note2.id, doc)
 
+    assert CrdtBridge.text_of(doc) == ""
+  end
+
+  test "a plaintext write leaves the body in the note's persisted CRDT state", ctx do
+    %{user: user, vault: vault} = ctx
+    # THIS is what makes removing the bind seed safe. upsert_note merges the
+    # incoming plaintext into the persisted CRDT state roomlessly
+    # (doc_from_state -> replay_tail -> merge_plaintext_*), so a device that has
+    # never CRDT-edited the note still receives the body over the handshake —
+    # without the server ever writing into a bound room.
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{"path" => "written.md", "content" => "hello world"})
+
+    st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
+    doc = CrdtBridge.new_doc()
+    _returned = CrdtPersistence.bind(st, note2.id, doc)
+
+    # `==`, not `=~`: full-body doubling is a previously-shipped failure mode of
+    # this merge path, and `=~` passes on "hello worldhello world".
     assert CrdtBridge.text_of(doc) == "hello world"
   end
 
@@ -183,15 +206,16 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert CrdtBridge.body_of(doc) == ""
   end
 
-  test "bind/3 seeds when the snapshot exists but projects to EMPTY text and content is non-empty (#1087 empty-snapshot class)",
+  test "bind/3 does NOT resurrect notes.content over an empty-projecting snapshot (#1087 class)",
        ctx do
     %{user: user, vault: vault} = ctx
-    # The genesis crdt_create row shape after a REST content write whose merge
-    # never reached the state column: crdt_state holds an EMPTY-doc snapshot
-    # while notes.content is non-empty. from_snapshot? alone must not defeat
-    # the seed — an empty-projecting doc with no tail has exactly one source
-    # of truth, the plaintext row content. (Pre-fix: STEP2 served empty while
-    # REST getNote returned the body — the plugin's race-closer class.)
+    # crdt_state holds an EMPTY-doc snapshot while notes.content is non-empty.
+    # The server used to treat the plaintext row as the source of truth here and
+    # seed the doc from it — which is precisely what made it a third writer.
+    # The doc is now authoritative even when it projects empty: this divergence
+    # is only constructible by hand, because the write path merges plaintext
+    # INTO the CRDT state (see "a plaintext write leaves the body in the note's
+    # persisted CRDT state").
     {:ok, note2} =
       Notes.upsert_note(user, vault, %{"path" => "empty-snap.md", "content" => "real body"})
 
@@ -210,7 +234,7 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     doc = CrdtBridge.new_doc()
     _returned = CrdtPersistence.bind(st, note2.id, doc)
 
-    assert CrdtBridge.text_of(doc) == "real body"
+    assert CrdtBridge.text_of(doc) == ""
   end
 
   test "bind/3 does NOT seed when the snapshot projects empty AND content is empty (bare genesis row)",
@@ -268,7 +292,7 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     refute text =~ "STALE"
   end
 
-  test "bind/3 seeds when the snapshot carries ONLY frontmatter (empty body) and content has a body",
+  test "bind/3 does NOT resurrect notes.content over a frontmatter-only snapshot",
        ctx do
     %{user: user, vault: vault} = ctx
     # Frontmatter-only snapshot: text_of projects non-empty ("---\n...") but the
@@ -295,7 +319,13 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     doc = CrdtBridge.new_doc()
     _returned = CrdtPersistence.bind(st, note2.id, doc)
 
-    assert CrdtBridge.text_of(doc) =~ "real body"
+    # The snapshot is authoritative even when it disagrees with notes.content.
+    # This divergence is only constructible by hand now: the write path merges
+    # plaintext INTO the CRDT state, so the two cannot drift apart in
+    # production. Seeding from content here is what made the server a third
+    # writer, and the #1087 empty-STEP2 class came from trying to guess which
+    # of the two representations was right.
+    refute CrdtBridge.text_of(doc) =~ "real body"
   end
 
   # ── update_v1/4 writes encrypted log row ──────────────────────────────────
@@ -577,25 +607,14 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert is_binary(CrdtBridge.text_of(doc))
   end
 
-  # ── seed_from_content routes frontmatter through the codec ────────────────
+  # ── frontmatter survives the plaintext WRITE path (not a bind-time seed) ──
 
-  test "bind/3 seed routes frontmatter into Y.Map, not body Y.Text", ctx do
+  test "a plaintext write routes frontmatter into Y.Map, not body Y.Text", ctx do
     %{user: user, vault: vault} = ctx
-
-    # Note whose plaintext content includes a frontmatter block.
     content = "---\ntitle: Hi\n---\nbody\n"
 
     {:ok, note2} =
       Notes.upsert_note(user, vault, %{"path" => "fm_seed.md", "content" => content})
-
-    # Clear CRDT state so bind/3 takes the fresh-room / seed path.
-    {:ok, _} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note2.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
-        )
-      end)
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()
@@ -604,7 +623,7 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     {fm_order, fm_values} = CrdtBridge.frontmatter_of(doc)
 
     # Frontmatter must be populated in the Y.Map — not silently dropped.
-    assert fm_order != [], "frontmatter_order should be non-empty after seed"
+    assert fm_order != [], "frontmatter_order should be non-empty after the write"
     assert Map.has_key?(fm_values, "title"), "Y.Map must contain the 'title' key"
 
     # Body Y.Text must NOT contain the raw frontmatter block.
