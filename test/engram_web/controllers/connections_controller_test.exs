@@ -29,11 +29,16 @@ defmodule EngramWeb.ConnectionsControllerTest do
     test "returns oauth + pat rows for the authenticated user", %{conn: conn} do
       user = insert(:user)
 
+      # Shaped like the real Claude registration observed in prod: no
+      # `software_id` (no observed connector sends one), attributed and verified
+      # by its vendor-owned HTTPS redirect host. That is the path that still
+      # yields a logo + slug after #1156, so it is the one worth asserting flows
+      # all the way through serialization to JSON.
       client =
         insert(:oauth_client,
           kind: "mcp",
-          software_id: "anthropic-claude-desktop",
-          client_name: "Claude Desktop"
+          client_name: "Claude",
+          redirect_uris: ["https://claude.ai/api/mcp/auth_callback"]
         )
 
       insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
@@ -51,9 +56,10 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert is_list(body)
 
       mcp = Enum.find(body, fn r -> r["kind"] == "mcp" end)
-      assert mcp["name"] == "Claude Desktop"
-      # Loopback redirect + self-asserted software_id => identity yes, badge no.
-      assert mcp["verified"] == false
+      assert mcp["name"] == "Claude"
+      # A vendor-owned HTTPS redirect host is the ONLY thing that grants the
+      # badge: the auth code is delivered to Anthropic, not to a forger.
+      assert mcp["verified"] == true
       assert mcp["slug"] == "claude"
       assert mcp["client_id"] == client.client_id
 

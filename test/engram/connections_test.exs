@@ -123,12 +123,7 @@ defmodule Engram.ConnectionsTest do
       user = insert_user()
       vault = insert(:vault, user: user)
 
-      client =
-        insert(:oauth_client,
-          kind: "mcp",
-          software_id: "anthropic-claude-desktop",
-          client_name: "Claude Desktop"
-        )
+      client = insert(:oauth_client, kind: "mcp", client_name: "Claude Desktop")
 
       insert(:oauth_refresh_token,
         user_id: user.id,
@@ -136,9 +131,10 @@ defmodule Engram.ConnectionsTest do
         vault_id: vault.id
       )
 
-      # verified: false, the factory's redirect is loopback, and a self-asserted
-      # software_id no longer buys the badge (tightened 2026-07-30). Identity
-      # still resolves from it.
+      # verified: false — the factory's redirect is loopback, so nothing about
+      # this client is provable. The displayed name falls back to the registered
+      # `client_name`, which is all a loopback client can ever supply since the
+      # guessed vendor `software_id` entries were deleted (#1156).
       assert [
                %{
                  kind: :mcp,

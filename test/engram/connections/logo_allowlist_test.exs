@@ -8,11 +8,35 @@ defmodule Engram.Connections.LogoAllowlistTest do
   end
 
   # software_id arrives in the DCR body, it is a claim, not a proof. If this
-  # ever goes green with verified: true, anyone can wear the Claude Desktop
-  # logo and badge in a victim's connections list by registering that id.
+  # ever goes green with verified: true, anyone can wear a logo and badge in a
+  # victim's connections list by registering that id.
   test "a self-asserted software_id cannot buy the verified badge" do
-    assert %{verified: false, display_name: "Claude Desktop", logo: "/assets/clients/claude.svg"} =
-             LogoAllowlist.resolve("anthropic-claude-desktop", ["http://localhost:1234/cb"])
+    assert %{
+             verified: false,
+             display_name: "Obsidian Vault Sync",
+             logo: "/assets/clients/engram-vault-sync.svg"
+           } = LogoAllowlist.resolve("engram-vault-sync", ["http://localhost:1234/cb"])
+  end
+
+  # #1156. The map used to carry four GUESSED vendor entries, so a rogue client
+  # registering `software_id: "anthropic-claude-desktop"` was listed as Claude
+  # Desktop with Anthropic's logo — no badge, but trustworthy-looking enough that
+  # a user would not revoke it. None of the nine connectors observed in prod
+  # sends the field, so the entries attributed nobody and cost an attacker
+  # nothing. If any of these ever resolves again, that spoofing surface is back.
+  test "a self-asserted vendor software_id grants no identity at all" do
+    for id <- ~w(anthropic-claude-desktop cursor.sh openai-chatgpt vscode-engram) do
+      assert %{verified: false, logo: nil, display_name: nil, slug: nil} =
+               LogoAllowlist.resolve(id, ["http://localhost:1234/cb"]),
+             "#{id} must not grant a vendor logo, name or slug"
+    end
+  end
+
+  # The one surviving entry, and why it survives: our plugin redirects to a
+  # custom scheme, so neither the host layer nor name derivation can name it.
+  test "our own plugin keeps its software_id identity" do
+    assert %{logo: "/assets/clients/engram-vault-sync.svg", display_name: "Obsidian Vault Sync"} =
+             LogoAllowlist.lookup("engram-vault-sync")
   end
 
   test "unknown software_id returns unverified placeholder" do
@@ -148,7 +172,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
   test "a verified host wins over a conflicting self-asserted software_id" do
     assert %{verified: true, slug: "claude", display_name: "Claude"} =
              LogoAllowlist.resolve(
-               "openai-chatgpt",
+               "engram-vault-sync",
                ["https://claude.ai/api/mcp/auth_callback"],
                nil
              )

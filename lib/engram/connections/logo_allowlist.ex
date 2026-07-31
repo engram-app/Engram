@@ -18,15 +18,15 @@ defmodule Engram.Connections.LogoAllowlist do
   `verified: true`; they supply identity only. (Tightened 2026-07-30:
   `software_id` previously granted the badge outright.)
 
-  Be precise about what that does and does not buy. A client registering
-  `software_id: "anthropic-claude-desktop"` still gets Claude's **logo and
-  display name** — it only no longer gets the badge, and the host now outranks
-  it for display. Withholding the icon too would need the `@software_id` map
-  gone, and it still carries our own `engram-vault-sync` plugin. Four of its
-  five entries are unvalidated guesses (see below) and should probably be
-  deleted once observation confirms nothing sends them; that is the real fix,
-  and it is not this one. The security boundary that actually holds is
-  `verified`.
+  `software_id` no longer names any vendor either (2026-07-31). It used to carry
+  four guessed vendor entries, so a rogue client registering
+  `software_id: "anthropic-claude-desktop"` still appeared as **Claude Desktop**
+  wearing Anthropic's logo — badge-less, but trustworthy-looking enough not to
+  revoke. None of the nine connectors observed in prod sends the field at all,
+  so the map was carrying attribution for nobody while remaining a free
+  vendor-logo grant to anyone who read this source. The only surviving entry is
+  our own plugin, which needs it: it redirects to a custom scheme and has
+  nothing else to identify it.
 
   Loopback and custom schemes (Cursor desktop registers
   `cursor://anysphere.cursor-mcp/…`) never match the host map, so
@@ -35,29 +35,28 @@ defmodule Engram.Connections.LogoAllowlist do
 
   @empty %{verified: false, logo: nil, display_name: nil, slug: nil}
 
-  # Keyed on RFC 7591 software_id. `engram-vault-sync` is our own plugin and is
-  # the only proven-real entry. The other four are unvalidated guesses left in
-  # place (harmless, real clients never send them) pending observation.
+  # Keyed on RFC 7591 software_id. OUR OWN PLUGIN ONLY.
+  #
+  # This map hands out a vendor logo and display name on a field the client
+  # asserts about itself, so every entry is a spoofing surface: whatever
+  # `software_id` you put here, anyone can register claiming it. Four guessed
+  # vendor entries (`anthropic-claude-desktop`, `cursor.sh`, `openai-chatgpt`,
+  # `vscode-engram`) were deleted on 2026-07-31 — none had ever been observed on
+  # a real registration, and all nine connectors seen in prod omit the field
+  # entirely, so they cost real users nothing and bought an attacker Anthropic's
+  # icon.
+  #
+  # `engram-vault-sync` stays because it is ours and because it has no
+  # alternative: it redirects to a custom scheme, which neither the host layer
+  # nor name derivation can attribute.
+  #
+  # DO NOT add a vendor here to "improve attribution". A vendor that redirects to
+  # its own HTTPS host belongs in @redirect_host, where the claim is provable; a
+  # vendor that cannot is attributed by `client_name`, which grants slug only.
   @software_id %{
     "engram-vault-sync" => %{
       logo: "/assets/clients/engram-vault-sync.svg",
       display_name: "Obsidian Vault Sync",
-      slug: nil
-    },
-    "anthropic-claude-desktop" => %{
-      logo: "/assets/clients/claude.svg",
-      display_name: "Claude Desktop",
-      slug: "claude"
-    },
-    "cursor.sh" => %{logo: "/assets/clients/cursor.svg", display_name: "Cursor", slug: "cursor"},
-    "openai-chatgpt" => %{
-      logo: "/assets/clients/chatgpt.svg",
-      display_name: "ChatGPT",
-      slug: "chatgpt"
-    },
-    "vscode-engram" => %{
-      logo: "/assets/clients/vscode.svg",
-      display_name: "VS Code (Engram)",
       slug: nil
     }
   }

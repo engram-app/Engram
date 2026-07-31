@@ -181,8 +181,7 @@ IO.puts("  device_refresh_token (Obsidian plugin)")
 
 claude_for_free =
   insert_oauth_client.(%{
-    "client_name" => "Demo: Claude Desktop (free)",
-    "software_id" => "anthropic-claude-desktop",
+    "client_name" => "Claude",
     "software_version" => "0.10.4",
     "redirect_uris" => ["https://claude.ai/api/mcp/auth_callback"],
     "scope" => "mcp",
@@ -206,8 +205,7 @@ IO.puts("  2 device_refresh_tokens (two Obsidian installs)")
 
 claude_for_starter =
   insert_oauth_client.(%{
-    "client_name" => "Demo: Claude Desktop (starter)",
-    "software_id" => "anthropic-claude-desktop",
+    "client_name" => "Claude",
     "software_version" => "0.10.4",
     "redirect_uris" => ["https://claude.ai/api/mcp/auth_callback"],
     "scope" => "mcp",
@@ -224,8 +222,7 @@ _ =
 
 cursor_for_starter =
   insert_oauth_client.(%{
-    "client_name" => "Demo: Cursor",
-    "software_id" => "cursor.sh",
+    "client_name" => "Cursor",
     "software_version" => "0.42.0",
     "redirect_uris" => ["http://127.0.0.1:54321/cb"],
     "scope" => "mcp",
