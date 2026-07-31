@@ -34,10 +34,18 @@ defmodule Engram.Repo.Migrations.AddCimdToOauthClientsExpand do
   @disable_ddl_transaction true
   @disable_migration_lock true
 
+  # `:timestamptz`, not `:utc_datetime_usec` — the latter renders as bare
+  # `timestamp`, which drops the UTC offset, and squawk's `prefer-timestamp-tz`
+  # rejects it (same reason `20260703100000_notes_okf_fields_expand` uses
+  # timestamptz for its two date columns). This column is an absolute instant: it
+  # is compared against `DateTime.utc_now/0` to decide whether the cached document
+  # is stale, so an ambiguous offset would make TTL arithmetic wrong by hours.
+  # The Ecto schema field stays `:utc_datetime_usec` and reads it back as a UTC
+  # DateTime with microsecond precision.
   def change do
     alter table(:oauth_clients) do
       add :cimd_url, :text
-      add :cimd_fetched_at, :utc_datetime_usec
+      add :cimd_fetched_at, :timestamptz
     end
 
     # Partial: only CIMD rows are indexed, so the DCR majority costs nothing to
