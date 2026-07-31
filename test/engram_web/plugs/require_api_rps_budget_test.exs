@@ -8,7 +8,37 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudgetTest do
     user = insert(:user)
     api_key = %Engram.Accounts.ApiKey{id: 1, user_id: user.id, name: "test"}
     EngramWeb.RateLimiter.reset_buckets!()
+
+    # Hammer derives its bucket from wall-clock (`div(now_ms, scale_ms)`), so
+    # against the production 1 s window a burst of N+1 calls is racing a real
+    # second boundary: under runner load the warm-up calls straddle it, the
+    # bucket resets, and the call that must be denied is back under cap
+    # (#1080 / #936). Widening the window makes every call in a burst land in
+    # ONE bucket by construction — the cap behaviour under test is unchanged,
+    # only the timing assumption is removed. `async: false` + reset_buckets!
+    # above means the wider window cannot leak between tests.
+    Application.put_env(:engram, :api_rps_period_ms, 60_000)
+    on_exit(fn -> Application.delete_env(:engram, :api_rps_period_ms) end)
+
     %{user: user, api_key: api_key}
+  end
+
+  # The seam must not drift prod. If someone sets :api_rps_period_ms in
+  # runtime.exs, "RPS" silently stops meaning per-second.
+  test "the window defaults to one second when unconfigured" do
+    Application.delete_env(:engram, :api_rps_period_ms)
+    user = insert(:user)
+    api_key = %Engram.Accounts.ApiKey{id: 1, user_id: user.id, name: "test"}
+
+    conn =
+      Phoenix.ConnTest.build_conn()
+      |> assign(:current_user, user)
+      |> assign(:current_api_key, api_key)
+      |> RequireApiRpsBudget.call([])
+
+    # Free tier caps at 0, so this denies immediately and the body carries the
+    # window the plug actually used.
+    assert Phoenix.ConnTest.json_response(conn, 429)["period_ms"] == 1_000
   end
 
   describe "JWT-authed (no current_api_key)" do
@@ -61,7 +91,7 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudgetTest do
       end
     end
 
-    test "halts 429 once cap is exceeded within the same second",
+    test "halts 429 once the cap is exceeded within one window",
          %{conn: conn, user: user, api_key: api_key} do
       for _ <- 1..3 do
         conn
