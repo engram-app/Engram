@@ -10,7 +10,6 @@ that should work identically with Clerk or local auth:
 
 import os
 
-import pytest
 import requests
 
 API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"

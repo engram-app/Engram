@@ -69,7 +69,7 @@ def _register_test_user(ts: int):
     email = f"e2e-vault-iso-{ts}+clerk_test@example.com"
     password = secrets.token_urlsafe(32)
 
-    clerk_user_id, clerk_auth, api_key = provision_clerk_user(
+    clerk_user_id, _clerk_auth, api_key = provision_clerk_user(
         clerk_client, email, password, API_URL,
     )
 

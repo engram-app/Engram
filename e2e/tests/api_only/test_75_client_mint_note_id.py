@@ -18,7 +18,6 @@ import secrets
 import time
 import uuid
 
-import pytest
 
 API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
 

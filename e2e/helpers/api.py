@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import time
 import uuid
 from urllib.parse import quote

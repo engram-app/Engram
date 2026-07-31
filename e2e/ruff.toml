@@ -1,0 +1,37 @@
+# Lint config for the e2e pytest harness (#946).
+#
+# Scoped deliberately. Ruff 0.16's DEFAULT rule set reports 161 findings here,
+# most of them judgement calls about test style rather than defects:
+# `BLE001` blind-except (36), `ASYNC210` blocking-http-in-async (18),
+# `S110` try-except-pass (16), `PLW1510` subprocess-without-check (14).
+# Several of those are load-bearing in a harness that deliberately tolerates
+# partial failure while polling a live stack, so turning them on wholesale
+# would mean either 161 edits to test semantics or 161 `noqa`s. Neither is
+# worth it to catch an unused import.
+#
+# So this selects the "this binding is dead" class the issue actually names —
+# an unused import in test_09, an unused `cdp_a` unpack in test_82 — plus the
+# syntax-error tier. Cheap, zero false positives, and it fails CI.
+#
+# To see what is being left on the table:
+#   uvx ruff check --isolated e2e/
+#
+# Widening is a separate decision, per rule, with its own PR.
+[lint]
+select = [
+	"E9",     # syntax / IO errors — never not a bug
+	"E402",   # import not at top of file (the existing `# noqa: E402`s exist for this)
+	"F",      # pyflakes: unused imports, unused locals, undefined names
+	"RUF059", # unused unpacked variable (the test_82 `cdp_a` case)
+]
+
+# NOT selected: RUF100 (unused-noqa). It is actively counterproductive against a
+# narrow select — the harness carries `# noqa: BLE001` / `# noqa: ARG002`
+# comments written for the wider rule set, and RUF100 would flag every one of
+# them as dead and invite deleting suppressions we would need the moment that
+# set is turned on. Re-enable it together with the rules its noqas name.
+
+# Tests assert on fixtures that exist only for their side effects; pytest's own
+# fixture-injection idiom looks like an unused argument to any linter.
+[lint.per-file-ignores]
+"conftest.py" = ["F811"] # fixture redefinition is the pytest idiom
