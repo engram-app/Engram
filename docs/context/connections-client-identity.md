@@ -325,8 +325,8 @@ Status and why it matters:
 - **Claude Code supports CIMD** (`oauth_cimd`). Anthropic's docs state Claude
   picks it only when the AS metadata advertises **both**:
   - `token_endpoint_auth_methods_supported` containing `"none"`, ✅
-  - `client_id_metadata_document_supported: true`, ✅ **now advertised, but only
-    when `ENGRAM_CIMD_ENABLED=true`** (see the rollout warning below)
+  - `client_id_metadata_document_supported: true`, ✅ **advertised
+    unconditionally** in `well_known_controller.ex`
 - Claude Desktop / Web / Cowork appear to use CIMD too, via shared infra.
 - No MCP client sends an RFC 7591 `software_statement` (signed JWT), so that is
   not an alternative route to cryptographic vendor attribution today.
@@ -412,18 +412,24 @@ parties. There was no SSRF guard anywhere in `lib/` before this.
   connected to, turning the anti-amplification control into a DoS vector against
   our own clients. Pinned by a test.
 
-> **⚠ ROLLOUT: advertising the flag is not reversible in-flight.** Claude Code
-> stops choosing DCR the moment it sees `client_id_metadata_document_supported`
-> and will **not** fall back if our CIMD path is broken, so connections fail
-> outright rather than degrading. That is why `:cimd_enabled` defaults to
-> **false**. Set `ENGRAM_CIMD_ENABLED=true` on staging, connect a real Claude
-> Code, confirm the grant lands with a `cimd_url`, then flip prod. Existing DCR
-> grants are separate rows and keep working either way.
+> **⚠ There is NO feature flag, deliberately.** An earlier revision gated this on
+> `ENGRAM_CIMD_ENABLED` (default off) so the capability could be advertised
+> staging-first. That was removed before merge: it was a knob that would be set to
+> `true` once and never touched again, and a default-off flag nobody remembers to
+> set is the worse failure — CIMD looks shipped, silently does nothing, and no
+> tripwire fires because no CIMD traffic ever arrives.
+>
+> What that means operationally: **CIMD goes live the moment this deploys.** Claude
+> Code stops choosing DCR as soon as it sees
+> `client_id_metadata_document_supported`, and it does **not** fall back if our
+> path is broken, so new Claude Code connections would fail rather than degrade.
+> Existing DCR grants are separate rows and are unaffected either way. Backing it
+> out is a revert of the advertisement line plus a deploy, not a config change.
 
 **Tripwires:** `mcp_cimd_rejected` (a document was refused — reason + host, host
 only because `:lifecycle` ships to Loki) and `mcp_cimd_stale_retained` (a refresh
-failed and we are serving yesterday's document). If CIMD is advertised and real
-clients start failing, these are the first place to look.
+failed and we are serving yesterday's document). Since there is no flag to blame,
+these two are the first place to look if connectors start failing after a deploy.
 
 ## "Why is Claude Code unverified? Am I connected wrong?"
 

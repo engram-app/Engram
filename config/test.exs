@@ -130,11 +130,6 @@ config :engram, :paddle_client, Engram.Paddle.ClientMock
 # cimd_http_fetcher_test.exs, and the SSRF guard has its own suite.
 config :engram, :cimd_fetcher, Engram.OAuth.Cimd.FetcherMock
 
-# CIMD itself is ON in test so the resolution paths are exercised. Production
-# defaults to OFF (see config/runtime.exs) — advertising the capability changes
-# Claude Code's behaviour immediately and must be a deliberate staging-first flip.
-config :engram, :cimd_enabled, true
-
 # Clerk webhook — svix-style HMAC signing. Secret is base64 of "clerk-test-secret"
 # (prefix `whsec_` is stripped before decoding per svix spec).
 config :engram, :clerk_webhook_secret, "whsec_Y2xlcmstdGVzdC1zZWNyZXQ="

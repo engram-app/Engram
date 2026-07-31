@@ -579,8 +579,7 @@ defmodule Engram.OAuth do
   defp fetch_client(nil), do: {:client_error, "invalid_client"}
 
   # The ONE place that may fetch a CIMD document. A URL-shaped client_id goes to
-  # `Cimd.ensure_client/1`, which handles first contact, TTL refresh, and the
-  # disabled-flag case (with CIMD off, a URL client_id is simply not a client).
+  # `Cimd.ensure_client/1`, which handles both first contact and TTL refresh.
   # Refreshing here rather than in `get_client/1` keeps network I/O on the
   # interactive authorize path only, never on token exchange or revocation.
   defp fetch_client(client_id) do

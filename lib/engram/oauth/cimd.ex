@@ -92,8 +92,7 @@ defmodule Engram.OAuth.Cimd do
   @window_ms 60_000
 
   @type reason ::
-          :cimd_disabled
-          | :not_cimd
+          :not_cimd
           | :rate_limited
           | :client_id_mismatch
           | :missing_redirect_uris
@@ -105,24 +104,6 @@ defmodule Engram.OAuth.Cimd do
           | :fetch_failed
           | {:http_status, pos_integer()}
           | SsrfGuard.reason()
-
-  @doc """
-  True when CIMD resolution is switched on.
-
-  Defaults to **false**, and that default is load-bearing. Advertising
-  `client_id_metadata_document_supported` changes Claude Code's behaviour
-  immediately: it stops choosing DCR, and it does **not** silently fall back. A
-  bug on this path therefore breaks Claude Code connections outright rather than
-  degrading them. Turn it on in staging, verify with a real client, then flip
-  prod.
-
-  Turning it back OFF stops new CIMD authorizations but deliberately does NOT
-  invalidate grants already issued: `Engram.OAuth.get_client/1` still resolves a
-  stored `cimd_url`, so existing refresh tokens keep working. A kill switch that
-  also revoked live access would make flipping it the more damaging action.
-  """
-  @spec enabled?() :: boolean()
-  def enabled?, do: Application.get_env(:engram, :cimd_enabled, false)
 
   @doc """
   True when `client_id` is shaped like a CIMD identifier rather than a DCR UUID.
@@ -147,11 +128,7 @@ defmodule Engram.OAuth.Cimd do
   """
   @spec ensure_client(term()) :: {:ok, Client.t()} | {:error, reason()}
   def ensure_client(url) do
-    cond do
-      not enabled?() -> {:error, :cimd_disabled}
-      not url_shaped?(url) -> {:error, :not_cimd}
-      true -> ensure(url)
-    end
+    if url_shaped?(url), do: ensure(url), else: {:error, :not_cimd}
   end
 
   @doc "Looks up a CIMD client by its URL. No network I/O."

@@ -100,35 +100,25 @@ defmodule EngramWeb.WellKnownControllerTest do
 
   # This key is not cosmetic capability signalling. Claude picks CIMD only when
   # the metadata advertises BOTH "none" in token_endpoint_auth_methods_supported
-  # and this flag, and once it does it stops choosing DCR with no silent
-  # fallback. So the advertisement must track the flag exactly: advertising it
-  # while the CIMD path is disabled would break Claude Code outright.
+  # and this key, and once it does it stops choosing DCR with NO silent fallback.
+  # So this assertion is really about the contract: if the key is ever removed or
+  # gated, Claude Code stops using CIMD and silently reverts to anonymous DCR
+  # registrations — the exact gap #1148 existed to close, and nothing else would
+  # notice.
   describe "client_id_metadata_document_supported" do
-    setup do
-      previous = Application.get_env(:engram, :cimd_enabled)
-      on_exit(fn -> Application.put_env(:engram, :cimd_enabled, previous) end)
-      :ok
-    end
-
-    test "is advertised when CIMD is enabled", %{conn: conn} do
-      Application.put_env(:engram, :cimd_enabled, true)
-
-      body =
-        conn |> get("/.well-known/oauth-authorization-server") |> json_response(200)
+    test "is advertised, unconditionally", %{conn: conn} do
+      body = conn |> get("/.well-known/oauth-authorization-server") |> json_response(200)
 
       assert body["client_id_metadata_document_supported"] == true
     end
 
-    # Absent rather than false: the draft treats this as opt-in capability
-    # advertisement, and an explicit false invites a client to cache a negative
-    # answer past the point where we flip it on.
-    test "is absent entirely when CIMD is disabled", %{conn: conn} do
-      Application.put_env(:engram, :cimd_enabled, false)
+    # Both halves of the precondition have to hold together: Claude checks for
+    # "none" AND the CIMD key, so losing either one silently drops it back to DCR.
+    test "advertises both halves of the CIMD precondition together", %{conn: conn} do
+      body = conn |> get("/.well-known/oauth-authorization-server") |> json_response(200)
 
-      body =
-        conn |> get("/.well-known/oauth-authorization-server") |> json_response(200)
-
-      refute Map.has_key?(body, "client_id_metadata_document_supported")
+      assert "none" in body["token_endpoint_auth_methods_supported"]
+      assert body["client_id_metadata_document_supported"] == true
     end
   end
 end

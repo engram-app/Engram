@@ -1,6 +1,6 @@
 defmodule Engram.OAuth.CimdTest do
-  # async: false — these tests flip the node-global :cimd_enabled flag, and Mox
-  # expectations on the fetcher are set from the test process.
+  # async: false — the CIMD fetch rate limiter's ETS buckets are node-global, and
+  # Mox expectations on the fetcher are set from the test process.
   use Engram.DataCase, async: false
 
   import Mox
@@ -35,12 +35,6 @@ defmodule Engram.OAuth.CimdTest do
     )
   end
 
-  defp with_cimd(enabled) do
-    previous = Application.get_env(:engram, :cimd_enabled)
-    Application.put_env(:engram, :cimd_enabled, enabled)
-    on_exit(fn -> Application.put_env(:engram, :cimd_enabled, previous) end)
-  end
-
   describe "url_shaped?/1" do
     test "only https URLs are CIMD-shaped" do
       assert Cimd.url_shaped?("https://claude.ai/x")
@@ -52,23 +46,17 @@ defmodule Engram.OAuth.CimdTest do
   end
 
   describe "ensure_client/1 gating" do
-    test "refuses to resolve anything while the flag is off" do
-      with_cimd(false)
-      assert {:error, :cimd_disabled} = Cimd.ensure_client(@url)
-    end
-
-    test "refuses a non-URL client_id" do
-      with_cimd(true)
+    # The `https://` prefix is the only discriminator, so a DCR uuid (or any
+    # garbage) must never be sent down the fetch path.
+    test "refuses anything that is not a URL-shaped client_id" do
       assert {:error, :not_cimd} = Cimd.ensure_client(Ecto.UUID.generate())
+      assert {:error, :not_cimd} = Cimd.ensure_client("http://claude.ai/insecure")
+      assert {:error, :not_cimd} = Cimd.ensure_client("garbage")
+      assert {:error, :not_cimd} = Cimd.ensure_client(nil)
     end
   end
 
   describe "ensure_client/1 first contact" do
-    setup do
-      with_cimd(true)
-      :ok
-    end
-
     test "fetches the document and stores a client whose wire id is the URL" do
       expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
 
@@ -157,11 +145,6 @@ defmodule Engram.OAuth.CimdTest do
   end
 
   describe "ensure_client/1 caching" do
-    setup do
-      with_cimd(true)
-      :ok
-    end
-
     test "a fresh row is served without refetching" do
       expect(FetcherMock, :fetch, 1, fn @url -> {:ok, document()} end)
 
@@ -227,11 +210,6 @@ defmodule Engram.OAuth.CimdTest do
   # This is an unauthenticated-request-triggered outbound fetch, so it is a
   # traffic amplifier pointed at third parties, not merely a load risk for us.
   describe "rate limiting" do
-    setup do
-      with_cimd(true)
-      :ok
-    end
-
     test "stops fetching the same host once the per-host budget is spent" do
       stub(FetcherMock, :fetch, fn url -> {:ok, %{document() | "client_id" => url}} end)
 
@@ -292,7 +270,6 @@ defmodule Engram.OAuth.CimdTest do
 
   describe "get_by_url/1" do
     test "never reaches the network" do
-      with_cimd(true)
       # No expectation set: a fetch here would fail verify_on_exit!.
       assert {:error, :not_found} = Cimd.get_by_url(@url)
       assert {:error, :not_found} = Cimd.get_by_url(nil)
@@ -303,7 +280,6 @@ defmodule Engram.OAuth.CimdTest do
   # but every table downstream stores the internal UUID.
   describe "the wire client_id round-trip" do
     setup do
-      with_cimd(true)
       expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
       {:ok, client} = Cimd.ensure_client(@url)
       %{client: client}

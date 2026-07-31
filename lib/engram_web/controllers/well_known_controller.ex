@@ -56,7 +56,7 @@ defmodule EngramWeb.WellKnownController do
 
     json(
       conn,
-      maybe_advertise_cimd(%{
+      %{
         issuer: base,
         authorization_endpoint: base <> "/oauth/authorize",
         token_endpoint: base <> "/oauth/token",
@@ -74,27 +74,17 @@ defmodule EngramWeb.WellKnownController do
           "client_secret_post",
           "client_secret_basic"
         ],
-        scopes_supported: ["mcp"]
-      })
+        scopes_supported: ["mcp"],
+        # CIMD (IETF draft-ietf-oauth-client-id-metadata-document). Not cosmetic
+        # capability signalling: Anthropic's docs say Claude picks CIMD only when
+        # the metadata advertises BOTH `"none"` above and this key, so this line
+        # is what moves Claude Code off DCR — and it does NOT silently fall back,
+        # so if `Engram.OAuth.Cimd` is broken, new Claude Code connections fail
+        # rather than degrade. Existing DCR grants are separate rows and keep
+        # working. Backing that out is a revert, not a config change.
+        client_id_metadata_document_supported: true
+      }
     )
-  end
-
-  # Advertised only when CIMD is switched on, and the flag defaults to off.
-  #
-  # This is not cosmetic capability signalling: Anthropic's docs say Claude picks
-  # CIMD only when the metadata advertises BOTH `"none"` in
-  # token_endpoint_auth_methods_supported (above) and this key. Adding it flips
-  # Claude Code off the DCR path immediately, with no silent fallback if our CIMD
-  # path is broken — so it is gated rather than shipped on. See
-  # `Engram.OAuth.Cimd.enabled?/0`.
-  #
-  # Absent rather than `false` when disabled: the draft treats the key as opt-in
-  # capability advertisement, and an explicit false invites a client to cache a
-  # negative answer past the point where we flip it on.
-  defp maybe_advertise_cimd(metadata) do
-    if Engram.OAuth.Cimd.enabled?(),
-      do: Map.put(metadata, :client_id_metadata_document_supported, true),
-      else: metadata
   end
 
   defp base_url(conn) do

@@ -1,6 +1,6 @@
 # Context Doc: Environment Variables
 
-_Last verified: 2026-07-31 (added `ENGRAM_CIMD_ENABLED`; otherwise regenerated from `config/runtime.exs` on 2026-06-18)_
+_Last verified: 2026-07-31 (regenerated from `config/runtime.exs` on 2026-06-18; no CIMD var — CIMD is unconditional, see `connections-client-identity.md`)_
 
 ## Status
 Live. This is regenerated from `config/runtime.exs` (the ~90 vars it reads), with compile-time defaults pulled from `config/config.exs`, `config/dev.exs`, `config/test.exs`. Line numbers cite `config/runtime.exs` unless noted.
@@ -112,16 +112,6 @@ Live. This is regenerated from `config/runtime.exs` (the ~90 vars it reads), wit
 | `CLERK_WEBHOOK_SECRET` | unset | Verifies inbound svix signatures (`whsec_*`) (:304). |
 | `CLERK_AUTHORIZED_PARTIES` | unset (passthrough) | Comma-sep `azp` allowlist (:313). |
 | `CLERK_WAITLIST_MODE` | unset | `1`/`true` → SPA waitlist UI (mirror the Clerk dashboard) (:333). |
-| `ENGRAM_CIMD_ENABLED` | `false` | `true` enables CIMD (URL-shaped `client_id`s) **and advertises the capability**. See the warning below. |
-
-> **⚠ `ENGRAM_CIMD_ENABLED` is not a cosmetic capability flag.** Setting it adds
-> `client_id_metadata_document_supported: true` to
-> `/.well-known/oauth-authorization-server`, and Claude Code then stops choosing
-> DCR with **no silent fallback** — a bug on the CIMD path breaks its connections
-> outright rather than degrading them. Flip it on staging, connect a real Claude
-> Code, confirm the grant lands with a `cimd_url`, then flip prod. Turning it back
-> off stops new CIMD authorizations but deliberately leaves existing grants
-> working. Details: `docs/context/connections-client-identity.md`.
 
 ## Encryption / Key Provider
 
