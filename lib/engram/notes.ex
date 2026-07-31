@@ -1492,6 +1492,55 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Current text of `note` from the authority, for callers that must
+  read-modify-write it.
+
+  `notes.content` is the REST/search **façade**. Since the server stopped
+  authoring content (#1141) it is materialized from the CRDT doc at checkpoint,
+  so between a doc write and its checkpoint the column lags. Reading it and
+  writing back a derived full-content string is therefore data loss: the merge
+  in `upsert_note/4` faithfully applies the diff it is given, and a diff
+  computed from a blank base deletes the body (#1159).
+
+  Resolution mirrors `ensure_projection_safe/2` in `Notes.CrdtCheckpoint`, so
+  the two agree on which side is authoritative:
+
+    * no `crdt_state` — nothing has been written through the doc, so the façade
+      IS the authority (legacy/pre-CRDT rows).
+    * `crdt_state` present — the doc is the authority, including when it
+      projects empty. A genuine "user deleted all the text" persists deletion
+      ops, so an empty projection there is real and must not be second-guessed.
+
+  Tail replay is included for the same reason `maybe_merge_crdt/4` does it:
+  ops committed since the last checkpoint are part of the current text.
+
+  Plain reads must keep using `get_note/3`; this is deliberately not on the hot
+  path, since it decrypts and rebuilds a Yjs doc.
+  """
+  @spec authoritative_content(map(), Note.t()) :: {:ok, String.t()} | {:error, term()}
+  def authoritative_content(user, %Note{} = note) do
+    case Crypto.decrypt_crdt_state(note, user) do
+      {:ok, nil} ->
+        {:ok, note.content || ""}
+
+      {:ok, state} ->
+        with {:ok, doc} <- CrdtBridge.doc_from_state(state) do
+          # replay_tail reads crdt_update_log, which is tenant-scoped. Callers
+          # reach this from a controller rather than from inside upsert_note's
+          # transaction, so establish the tenant here.
+          Repo.with_tenant(user.id, fn ->
+            _replayed = CrdtPersistence.replay_tail(doc, user, note.id)
+          end)
+
+          {:ok, CrdtBridge.project_doc(doc)}
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  @doc """
   Gets a note by its primary key id, scoped to the given user + vault.
 
   Returns `{:ok, note}` when found and owned by the caller, `{:error, :not_found}`
