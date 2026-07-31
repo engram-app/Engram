@@ -28,15 +28,56 @@ function encodePathSegments(path: string): string {
 	return path.split("/").map(encodeURIComponent).join("/");
 }
 
+/**
+ * A folder row exactly as `/api/folders` sends it, BEFORE `selectFolders` runs.
+ *
+ * The distinction from `Folder` is `id`, and it matters: the wire sends `null`
+ * for the synthetic root row AND for every *derived* folder (one holding no
+ * note directly, which is most of them). `selectFolders` maps those to
+ * `syn:<path>` — but `getQueryData` returns the **pre-select** payload, so
+ * every raw-cache reader sees the nulls.
+ *
+ * Typing the raw cache as `{ folders: Folder[] }` (id: string) is what let the
+ * #1140 delete-invalidation bug compile: the lookup found a row, so the
+ * not-found fallback was skipped, and the invalidation was keyed on
+ * `[..., null]` — a key nothing reads, so a note deleted on another device
+ * stayed in the sidebar until reload.
+ *
+ * Use this at every `getQueryData`/`setQueryData` site for the
+ * `["folders", vaultId]` key, so the compiler rejects the next reader that
+ * forgets. Anything downstream of `select` keeps using `Folder`.
+ *
+ * NOTE the `Omit`. Writing this as `Folder & { id: string | null }` does
+ * NOTHING: TypeScript intersects the property types, and
+ * `string & (string | null)` reduces back to `string`. The old inline
+ * annotation on `selectFolders`/`folderIdForPath` was exactly that, so it read
+ * as if it modelled the null while still letting `.id` be used as a `string`.
+ * Omit the field first, then re-add it, or the whole type is decorative.
+ */
+type RawFolder = Omit<Folder, "id"> & { id: string | null };
+interface RawFoldersCache {
+	folders: RawFolder[];
+}
+
+/**
+ * The id a raw row answers to once `selectFolders` has run — a real marker id,
+ * else the stable `syn:<path>` id a derived folder carries.
+ *
+ * Anything that compares raw rows against ids supplied by the tree MUST go
+ * through this. The tree only ever holds post-select ids, so a bare
+ * `idSet.has(f.id)` silently never matches a derived folder (its raw id is
+ * `null`), which is why selecting one for a batch move/delete produced no
+ * optimistic patch at all until the server round-trip landed.
+ */
+const effectiveFolderId = (f: RawFolder): string => f.id ?? syntheticFolderId(f.name);
+
 // Hoisted so React Query treats the select identity as stable; otherwise an
 // inline arrow re-runs every render and returns a fresh array, breaking
 // memoized consumers (e.g. useEngramTree's rebuild useEffect).
-// The backend returns a null id for the synthetic root row (name === '') AND for
-// every *derived* folder (one that exists only because notes live in it — no
-// explicit marker row). Drop only the root row; give derived folders a stable
-// synthetic id keyed on their path so the `Folder.id: string` contract holds and
-// they aren't erased from the tree. synthesizeFolders then links parents/ancestors.
-const selectFolders = (data: { folders: Array<Folder & { id: string | null }> }): Folder[] =>
+// Drop only the root row; give derived folders a stable synthetic id keyed on
+// their path so the `Folder.id: string` contract holds and they aren't erased
+// from the tree. synthesizeFolders then links parents/ancestors.
+const selectFolders = (data: RawFoldersCache): Folder[] =>
 	data.folders
 		.filter((f) => f.name !== "")
 		.map((f) => (f.id === null ? { ...f, id: syntheticFolderId(f.name) } : (f as Folder)));
@@ -136,7 +177,7 @@ interface RenameNoteContext {
 	newFolder: string;
 	oldFolderNotes: { notes: NoteSummary[] } | undefined;
 	newFolderNotes: { notes: NoteSummary[] } | undefined;
-	folders: { folders: Folder[] } | undefined;
+	folders: RawFoldersCache | undefined;
 	// The note id is stable across rename — only `path`/`folder` shift.
 	// We snapshot the previous note value so rollback restores those
 	// fields under the SAME cache key.
@@ -149,7 +190,7 @@ interface RenameNoteContext {
 }
 
 interface RenameFolderContext {
-	folders: { folders: Folder[] } | undefined;
+	folders: RawFoldersCache | undefined;
 	// Snapshot of every cached folderNotes entry we touched, keyed by the
 	// joined query key. Folder rename is coarse (see below) — we DROP all
 	// child folderNotes entries to force refetch on next expand, which
@@ -161,12 +202,12 @@ interface DeleteNoteContext {
 	folder: string;
 	id: string;
 	folderNotes: { notes: NoteSummary[] } | undefined;
-	folders: { folders: Folder[] } | undefined;
+	folders: RawFoldersCache | undefined;
 	note: Note | undefined;
 }
 
 interface DeleteFolderContext {
-	folders: { folders: Folder[] } | undefined;
+	folders: RawFoldersCache | undefined;
 	folderList: { notes: NoteSummary[] } | undefined;
 }
 
@@ -189,12 +230,15 @@ interface BatchNotesContext {
 	noteListSnapshots: Array<{ key: readonly unknown[]; data: NoteSummary[] | undefined }>;
 	// Folders cache snapshot — present only when a move patched folder counts
 	// (so the tree's structure key changes and it rebuilds). Used for rollback.
-	folders?: { folders: Folder[] };
+	folders?: RawFoldersCache;
 }
 
 // Walk the folders cache and collect `id` plus every transitive
 // descendant by parent_id chain. Used by both batch folder mutations.
-function collectFolderDescendants(folders: Folder[], rootIds: string[]): Set<string> {
+//
+// Takes RAW rows and keys on `effectiveFolderId`, so the returned set is in the
+// same id space as `rootIds` (which come from the tree, i.e. post-select).
+function collectFolderDescendants(folders: RawFolder[], rootIds: string[]): Set<string> {
 	const result = new Set<string>(rootIds);
 	// Iterate until no new ids land in the set — folders are typically
 	// shallow, so this is cheap even with the naive scan.
@@ -202,8 +246,9 @@ function collectFolderDescendants(folders: Folder[], rootIds: string[]): Set<str
 	while (changed) {
 		changed = false;
 		for (const f of folders) {
-			if (f.parent_id !== null && result.has(f.parent_id) && !result.has(f.id)) {
-				result.add(f.id);
+			const id = effectiveFolderId(f);
+			if (f.parent_id !== null && result.has(f.parent_id) && !result.has(id)) {
+				result.add(id);
 				changed = true;
 			}
 		}
@@ -212,7 +257,7 @@ function collectFolderDescendants(folders: Folder[], rootIds: string[]): Set<str
 }
 
 interface BatchFoldersContext {
-	folders: { folders: Folder[] } | undefined;
+	folders: RawFoldersCache | undefined;
 	// Snapshot every by-id note list whose folder is being deleted so
 	// rollback can restore them. Move doesn't touch these lists.
 	noteListSnapshots: Array<{ key: readonly unknown[]; data: NoteSummary[] | undefined }>;
@@ -240,7 +285,7 @@ export function folderIdForPath(
 	// otherwise this returns null for most real folders and every caller silently
 	// skips its optimistic patch.
 	const row = qc
-		.getQueryData<{ folders: Array<Folder & { id: string | null }> }>(["folders", vaultId])
+		.getQueryData<RawFoldersCache>(["folders", vaultId])
 		?.folders.find((f) => f.name === folder);
 	if (!row) {
 		return null;
@@ -312,7 +357,7 @@ export function useFolders() {
 		// expose the count of root-level notes. The tree owns root notes via
 		// `useFolderNotes('')`; drop the synthetic row so consumers only see real
 		// folder markers + the `Folder.id: string` contract holds.
-		queryFn: () => api.get<{ folders: Array<Folder & { id: string | null }> }>("/folders"),
+		queryFn: () => api.get<RawFoldersCache>("/folders"),
 		select: selectFolders,
 		enabled: !demo?.active,
 		// Folder listing decrypts every marker row server-side; without a
@@ -657,7 +702,7 @@ export function useCreateFolder() {
 
 	return useMutation<{ folder: string }, ApiError, { parent: string }>({
 		mutationFn: async ({ parent }) => {
-			const cached = qc.getQueryData<{ folders: Folder[] }>(["folders", vaultId]);
+			const cached = qc.getQueryData<RawFoldersCache>(["folders", vaultId]);
 			const existingFolders = cached?.folders.map((f) => f.name) ?? [];
 
 			// Restrict to direct children of the parent — siblings only.
@@ -1437,7 +1482,7 @@ export function useRenameNote() {
 
 			const oldFolderNotes = qc.getQueryData<{ notes: NoteSummary[] }>(oldListKey);
 			const newFolderNotes = qc.getQueryData<{ notes: NoteSummary[] }>(newListKey);
-			const folders = qc.getQueryData<{ folders: Folder[] }>(foldersKey);
+			const folders = qc.getQueryData<RawFoldersCache>(foldersKey);
 
 			// Resolve the note id from whatever cache has it. The folder
 			// list is the cheapest lookup; failing that, walk every cached
@@ -1530,7 +1575,7 @@ export function useRenameNote() {
 
 			// Adjust folder counts when the note crosses folder boundaries.
 			if (oldFolder !== newFolder && folders) {
-				qc.setQueryData<{ folders: Folder[] }>(foldersKey, (prev) => {
+				qc.setQueryData<RawFoldersCache>(foldersKey, (prev) => {
 					if (!prev) {
 						return prev;
 					}
@@ -1648,13 +1693,13 @@ export function useRenameFolder() {
 			await qc.cancelQueries({ queryKey: ["note", vaultId] });
 
 			const ctx: RenameFolderContext = {
-				folders: qc.getQueryData<{ folders: Folder[] }>(foldersKey),
+				folders: qc.getQueryData<RawFoldersCache>(foldersKey),
 				childLists: [],
 			};
 
 			// Rewrite folder names.
 			if (ctx.folders) {
-				qc.setQueryData<{ folders: Folder[] }>(foldersKey, (prev) => {
+				qc.setQueryData<RawFoldersCache>(foldersKey, (prev) => {
 					if (!prev) {
 						return prev;
 					}
@@ -1755,7 +1800,7 @@ export function useDeleteNote() {
 				folder,
 				id,
 				folderNotes: qc.getQueryData<{ notes: NoteSummary[] }>(listKey),
-				folders: qc.getQueryData<{ folders: Folder[] }>(foldersKey),
+				folders: qc.getQueryData<RawFoldersCache>(foldersKey),
 				note: qc.getQueryData<Note>(noteKey),
 			};
 
@@ -1765,7 +1810,7 @@ export function useDeleteNote() {
 				}));
 			}
 			if (ctx.folders) {
-				qc.setQueryData<{ folders: Folder[] }>(foldersKey, (prev) =>
+				qc.setQueryData<RawFoldersCache>(foldersKey, (prev) =>
 					prev
 						? {
 								folders: prev.folders.map((f) =>
@@ -1833,12 +1878,12 @@ export function useDeleteFolder() {
 			await qc.cancelQueries({ queryKey: listKey });
 
 			const ctx: DeleteFolderContext = {
-				folders: qc.getQueryData<{ folders: Folder[] }>(foldersKey),
+				folders: qc.getQueryData<RawFoldersCache>(foldersKey),
 				folderList: qc.getQueryData<{ notes: NoteSummary[] }>(listKey),
 			};
 
 			if (ctx.folders) {
-				qc.setQueryData<{ folders: Folder[] }>(foldersKey, (prev) =>
+				qc.setQueryData<RawFoldersCache>(foldersKey, (prev) =>
 					prev
 						? {
 								folders: prev.folders.filter(
@@ -2111,7 +2156,7 @@ export function useBatchMoveNotes() {
 			// keys under the folder's loader id — a real marker id, else the stable
 			// `syn:<path>` id a derived folder carries — so the optimistic add lands
 			// in the same list the tree reads.
-			const foldersCache = qc.getQueryData<{ folders: Folder[] }>(["folders", vaultId]);
+			const foldersCache = qc.getQueryData<RawFoldersCache>(["folders", vaultId]);
 			const targetFolderName = target_folder;
 			const targetCacheId =
 				target_folder === ""
@@ -2198,9 +2243,9 @@ export function useBatchMoveNotes() {
 			// suspenders for rebuild but the SOLE optimistic source for the count.
 			// Snapshot for rollback. Skipped when nothing moved; for a root target
 			// ('root' has no folder row) sources still decrement.
-			let foldersSnapshot: { folders: Folder[] } | undefined;
+			let foldersSnapshot: RawFoldersCache | undefined;
 			if (moved.length > 0 || removedPerName.size > 0) {
-				const cache = qc.getQueryData<{ folders: Folder[] }>(["folders", vaultId]);
+				const cache = qc.getQueryData<RawFoldersCache>(["folders", vaultId]);
 				if (cache) {
 					foldersSnapshot = cache;
 					const patched = cache.folders.map((f) => {
@@ -2217,7 +2262,7 @@ export function useBatchMoveNotes() {
 						}
 						return count === f.count ? f : { ...f, count };
 					});
-					qc.setQueryData<{ folders: Folder[] }>(["folders", vaultId], { folders: patched });
+					qc.setQueryData<RawFoldersCache>(["folders", vaultId], { folders: patched });
 				}
 			}
 
@@ -2258,7 +2303,7 @@ export function useBatchDeleteFolders() {
 			await qc.cancelQueries({ queryKey: foldersKey });
 			await qc.cancelQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 
-			const folders = qc.getQueryData<{ folders: Folder[] }>(foldersKey);
+			const folders = qc.getQueryData<RawFoldersCache>(foldersKey);
 			const ctx: BatchFoldersContext = { folders, noteListSnapshots: [] };
 
 			// Compute the full set of ids (roots + transitive descendants)
@@ -2268,8 +2313,8 @@ export function useBatchDeleteFolders() {
 				: new Set<string>(ids);
 
 			if (folders) {
-				qc.setQueryData<{ folders: Folder[] }>(foldersKey, {
-					folders: folders.folders.filter((f) => !removedIds.has(f.id)),
+				qc.setQueryData<RawFoldersCache>(foldersKey, {
+					folders: folders.folders.filter((f) => !removedIds.has(effectiveFolderId(f))),
 				});
 			}
 
@@ -2328,7 +2373,7 @@ export function useBatchMoveFolders() {
 			const foldersKey = ["folders", vaultId] as const;
 			await qc.cancelQueries({ queryKey: foldersKey });
 
-			const folders = qc.getQueryData<{ folders: Folder[] }>(foldersKey);
+			const folders = qc.getQueryData<RawFoldersCache>(foldersKey);
 			const ctx: BatchFoldersContext = { folders, noteListSnapshots: [] };
 			if (!folders) {
 				return ctx;
@@ -2347,7 +2392,9 @@ export function useBatchMoveFolders() {
 			// Cycle defense by path: the target is one of the moved folders or sits
 			// under one. Skip the optimistic patch and let the server reject (it has
 			// the authoritative cycle check). Frontend silence beats lying.
-			const movedNames = folders.folders.filter((f) => ids.includes(f.id)).map((f) => f.name);
+			const movedNames = folders.folders
+				.filter((f) => ids.includes(effectiveFolderId(f)))
+				.map((f) => f.name);
 			if (movedNames.some((n) => target_parent === n || target_parent.startsWith(`${n}/`))) {
 				return ctx;
 			}
@@ -2358,8 +2405,8 @@ export function useBatchMoveFolders() {
 			// intra-subtree parent) but their .name prefix is rewritten so
 			// the path string stays coherent.
 			const idSet = new Set(ids);
-			const patched = folders.folders.map<Folder>((f) => {
-				if (idSet.has(f.id)) {
+			const patched = folders.folders.map<RawFolder>((f) => {
+				if (idSet.has(effectiveFolderId(f))) {
 					const slash = f.name.lastIndexOf("/");
 					const basename = slash < 0 ? f.name : f.name.slice(slash + 1);
 					return {
@@ -2368,13 +2415,15 @@ export function useBatchMoveFolders() {
 						name: targetName ? `${targetName}/${basename}` : basename,
 					};
 				}
-				if (descendants.has(f.id)) {
+				if (descendants.has(effectiveFolderId(f))) {
 					// Find the ancestor in the moved set whose name is the
 					// longest prefix of `f.name` — that's the root whose path
 					// we just rewrote. Compose the descendant's new name by
 					// stripping the OLD ancestor prefix and re-attaching the NEW.
 					const oldOriginal = folders.folders.find(
-						(m) => idSet.has(m.id) && (f.name === m.name || f.name.startsWith(`${m.name}/`)),
+						(m) =>
+							idSet.has(effectiveFolderId(m)) &&
+							(f.name === m.name || f.name.startsWith(`${m.name}/`)),
 					);
 					if (!oldOriginal) {
 						return f;
@@ -2388,7 +2437,7 @@ export function useBatchMoveFolders() {
 				return f;
 			});
 
-			qc.setQueryData<{ folders: Folder[] }>(foldersKey, { folders: patched });
+			qc.setQueryData<RawFoldersCache>(foldersKey, { folders: patched });
 			return ctx;
 		},
 		onError: (_err, _vars, ctx) => {
