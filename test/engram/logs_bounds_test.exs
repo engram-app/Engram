@@ -13,7 +13,7 @@ defmodule Engram.LogsBoundsTest do
 
   alias Engram.Logs
 
-  defp entry(over \\ %{}) do
+  defp entry(over) do
     Map.merge(
       %{
         "ts" => DateTime.utc_now() |> DateTime.to_iso8601(),
