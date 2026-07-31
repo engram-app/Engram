@@ -50,4 +50,16 @@ defmodule Engram.Notes.CrdtDocTest do
 
     assert updated.content =~ "SHUTDOWN EDIT"
   end
+
+  # #851. Rooms flush a full checkpoint in terminate/2. The OTP default of
+  # 5_000 ms can brutal-kill that flush on a deploy, when every room terminates
+  # at once and contends for the DB pool. Lossless (the tail-log still has every
+  # update) but wasteful. Pinned so the grace is not silently dropped.
+  test "child_spec grants terminate/2 enough shutdown grace to flush a checkpoint" do
+    spec = Engram.Notes.CrdtDoc.child_spec(note_id: "n1", user_id: "u1", vault_id: "v1")
+
+    assert spec.shutdown == 15_000
+    # Still :temporary — a crashed room must not be resurrected observer-less.
+    assert spec.restart == :temporary
+  end
 end

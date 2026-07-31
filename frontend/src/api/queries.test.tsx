@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type React from "react";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { syntheticFolderId } from "../viewer/tree/synthesize-folders";
 import { ApiError } from "./client";
 import { CrdtOpError } from "./crdt-ops";
 import {
@@ -1557,6 +1558,77 @@ describe("useBatchDeleteFolders", () => {
 		// by-id lists for removed folder + descendant are dropped, sibling intact
 		expect(qc.getQueryData(["folder-notes-by-id", "42", "7"])).toBeUndefined();
 		expect(qc.getQueryData(["folder-notes-by-id", "42", "8"])).toBeUndefined();
+
+		resolvePost({ deleted: 2 });
+	});
+
+	// #1145. The raw cache sends `id: null` for every DERIVED folder (one holding
+	// no note directly). The tree only ever holds post-select ids, so it passes
+	// `syn:<path>` for these — and the optimistic patch used to compare that
+	// against the raw `null`, which never matches. Result: selecting a derived
+	// folder produced no optimistic removal at all, and the row lingered until
+	// the server round-trip landed. Same shape as the #1140 bug.
+	it("optimistically removes a DERIVED folder selected by its synthetic id", async () => {
+		qc.setQueryData(["folders", "42"], {
+			folders: [
+				{ id: null, parent_id: null, name: "derived", count: 2 },
+				{ id: "9", parent_id: null, name: "other", count: 0 },
+			],
+		});
+		let resolvePost!: (v: unknown) => void;
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
+
+		const { result } = renderHook(() => useBatchDeleteFolders(), { wrapper });
+		act(() => {
+			result.current.mutate({ ids: [syntheticFolderId("derived")] });
+		});
+
+		await waitFor(() => {
+			const folders = qc.getQueryData<{ folders: Array<{ name: string }> }>(["folders", "42"]);
+			expect(folders?.folders.map((f) => f.name)).toEqual(["other"]);
+		});
+
+		resolvePost({ deleted: 1 });
+	});
+
+	// The nastier half of the same bug: EVERY derived folder carries `id: null`,
+	// so keying the cascade set on the raw id conflated them all. Deleting `top`
+	// put `null` in the removed set via its derived child, and the filter then
+	// matched that `null` against an UNRELATED derived folder elsewhere in the
+	// tree — optimistically deleting a folder the user never selected.
+	it("cascades onto a DERIVED child without taking unrelated derived folders with it", async () => {
+		qc.setQueryData(["folders", "42"], {
+			folders: [
+				{ id: "7", parent_id: null, name: "top", count: 0 },
+				// Derived child: no marker row of its own, so the wire sends a null
+				// id — but its parent_id is the real parent, so the cascade walk
+				// reaches it and must key it on its synthetic id.
+				{ id: null, parent_id: "7", name: "top/sub", count: 3 },
+				// Unrelated derived folder. Also `id: null`. Must survive.
+				{ id: null, parent_id: "9", name: "other/keep", count: 1 },
+				{ id: "9", parent_id: null, name: "other", count: 0 },
+			],
+		});
+		let resolvePost!: (v: unknown) => void;
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
+
+		const { result } = renderHook(() => useBatchDeleteFolders(), { wrapper });
+		act(() => {
+			result.current.mutate({ ids: ["7"] });
+		});
+
+		await waitFor(() => {
+			const folders = qc.getQueryData<{ folders: Array<{ name: string }> }>(["folders", "42"]);
+			expect(folders?.folders.map((f) => f.name).sort()).toEqual(["other", "other/keep"]);
+		});
 
 		resolvePost({ deleted: 2 });
 	});

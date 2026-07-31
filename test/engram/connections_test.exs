@@ -130,21 +130,29 @@ defmodule Engram.ConnectionsTest do
           client_name: "Claude Desktop"
         )
 
+      # That software_id is a SPOOF, not a real Claude Desktop registration:
+      # the key was deleted in #1156 and real Claude Desktop is attributed by
+      # its claude.ai redirect host (see the next test). Kept here precisely to
+      # pin that the rogue claim yields no vendor identity.
+
       insert(:oauth_refresh_token,
         user_id: user.id,
         client_id: client.client_id,
         vault_id: vault.id
       )
 
-      # verified: false, the factory's redirect is loopback, and a self-asserted
-      # software_id no longer buys the badge (tightened 2026-07-30). Identity
-      # still resolves from it.
+      # `name` here is the raw self-reported client_name falling through
+      # (`identity.display_name || c.client_name`), NOT resolved identity:
+      # logo/slug/display_name are all nil, so the UI badges this as an
+      # unverified client rather than rendering Anthropic's logo.
       assert [
                %{
                  kind: :mcp,
                  client_id: cid,
                  name: "Claude Desktop",
                  verified: false,
+                 logo: nil,
+                 slug: nil,
                  vault_id: vid
                }
              ] =
