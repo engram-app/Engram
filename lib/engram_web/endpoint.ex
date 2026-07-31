@@ -8,7 +8,18 @@ defmodule EngramWeb.Endpoint do
 
   socket "/socket", EngramWeb.UserSocket,
     websocket: [
-      check_origin: {__MODULE__, :check_origin, []}
+      check_origin: {__MODULE__, :check_origin, []},
+      # Transport-level backstop. CrdtChannel already rejects oversize
+      # `crdt_msg` payloads (5 MB decoded ≈ 6.67 MB base64) BEFORE decoding,
+      # but that check only covers that one event — every other channel could
+      # read an arbitrarily large frame into memory first.
+      #
+      # Deliberately set ABOVE the channel's b64 ceiling, not equal to it: an
+      # oversize crdt_msg should keep hitting the app-level guard and get a
+      # clean `frame_too_large` reply, rather than having the socket killed
+      # underneath it. This only catches frames past anything the app will
+      # ever legitimately accept.
+      max_frame_size: 8_000_000
     ],
     longpoll: false,
     drainer: [batch_size: 1_000, batch_interval: 2_000, shutdown: 25_000]

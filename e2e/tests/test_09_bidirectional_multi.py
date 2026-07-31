@@ -3,7 +3,7 @@
 import pytest
 
 from helpers.log_oracle import wait_for_delivery
-from helpers.vault import list_notes, read_note, write_note
+from helpers.vault import read_note, write_note
 
 
 @pytest.mark.asyncio

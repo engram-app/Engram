@@ -7,36 +7,23 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: false, logo: "/assets/clients/engram-vault-sync.svg"} = result
   end
 
-  # software_id arrives in the DCR body, it is a claim, not a proof. If this
-  # ever goes green with verified: true, anyone can wear a logo and badge in a
-  # victim's connections list by registering that id.
-  test "a self-asserted software_id cannot buy the verified badge" do
-    assert %{
-             verified: false,
-             display_name: "Obsidian Vault Sync",
-             logo: "/assets/clients/engram-vault-sync.svg"
-           } = LogoAllowlist.resolve("engram-vault-sync", ["http://localhost:1234/cb"])
+  # software_id arrives in the DCR body, it is a claim, not a proof. Since the
+  # four guessed vendor entries were deleted (#1156) it buys no identity at
+  # all, not merely no badge: a rogue registration gets the placeholder and the
+  # "Unverified client" chip instead of Anthropic's logo and name.
+  test "a self-asserted vendor software_id buys no identity at all" do
+    assert %{verified: false, display_name: nil, logo: nil, slug: nil} =
+             LogoAllowlist.resolve("anthropic-claude-desktop", ["http://localhost:1234/cb"])
   end
 
-  # #1156. The map used to carry four GUESSED vendor entries, so a rogue client
-  # registering `software_id: "anthropic-claude-desktop"` was listed as Claude
-  # Desktop with Anthropic's logo — no badge, but trustworthy-looking enough that
-  # a user would not revoke it. None of the nine connectors observed in prod
-  # sends the field, so the entries attributed nobody and cost an attacker
-  # nothing. If any of these ever resolves again, that spoofing surface is back.
-  test "a self-asserted vendor software_id grants no identity at all" do
-    for id <- ~w(anthropic-claude-desktop cursor.sh openai-chatgpt vscode-engram) do
-      assert %{verified: false, logo: nil, display_name: nil, slug: nil} =
+  # The other three deleted guesses, same rule. Named individually so a
+  # re-added key fails here rather than silently restoring the logo grant.
+  test "the deleted guessed software_ids resolve to the placeholder" do
+    for id <- ~w(cursor.sh openai-chatgpt vscode-engram) do
+      assert %{verified: false, display_name: nil, logo: nil, slug: nil} =
                LogoAllowlist.resolve(id, ["http://localhost:1234/cb"]),
-             "#{id} must not grant a vendor logo, name or slug"
+             "#{id} must not grant vendor identity from a self-asserted claim"
     end
-  end
-
-  # The one surviving entry, and why it survives: our plugin redirects to a
-  # custom scheme, so neither the host layer nor name derivation can name it.
-  test "our own plugin keeps its software_id identity" do
-    assert %{logo: "/assets/clients/engram-vault-sync.svg", display_name: "Obsidian Vault Sync"} =
-             LogoAllowlist.lookup("engram-vault-sync")
   end
 
   test "unknown software_id returns unverified placeholder" do
@@ -169,6 +156,9 @@ defmodule Engram.Connections.LogoAllowlistTest do
   # is delivered to another, the one we can PROVE must be what the user sees,
   # otherwise the connections list shows "ChatGPT" for a code Anthropic
   # received.
+  # Uses `engram-vault-sync` because it is now the only software_id that
+  # resolves to anything: with a deleted guess the assertion would pass on an
+  # empty lookup and prove nothing about precedence.
   test "a verified host wins over a conflicting self-asserted software_id" do
     assert %{verified: true, slug: "claude", display_name: "Claude"} =
              LogoAllowlist.resolve(
@@ -273,6 +263,14 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{slug: nil} = LogoAllowlist.resolve(nil, ["http://127.0.0.1:1/cb"], "")
   end
 
+  test "unknown or nil client_name stays empty" do
+    assert %{verified: false, slug: nil} =
+             LogoAllowlist.resolve(nil, ["http://localhost:1/cb"], "Some Random Client")
+
+    assert %{verified: false, slug: nil} =
+             LogoAllowlist.resolve(nil, ["http://localhost:1/cb"], nil)
+  end
+
   # --- CIMD: the only proof a loopback client can ever offer ---
 
   # THE case CIMD exists for. Claude Code redirects to loopback, so the redirect
@@ -348,11 +346,4 @@ defmodule Engram.Connections.LogoAllowlistTest do
              LogoAllowlist.resolve(nil, ["http://127.0.0.1:1/cb"], "Cline", nil)
   end
 
-  test "unknown or nil client_name stays empty" do
-    assert %{verified: false, slug: nil} =
-             LogoAllowlist.resolve(nil, ["http://localhost:1/cb"], "Some Random Client")
-
-    assert %{verified: false, slug: nil} =
-             LogoAllowlist.resolve(nil, ["http://localhost:1/cb"], nil)
-  end
 end

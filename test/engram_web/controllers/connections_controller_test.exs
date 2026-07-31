@@ -29,16 +29,16 @@ defmodule EngramWeb.ConnectionsControllerTest do
     test "returns oauth + pat rows for the authenticated user", %{conn: conn} do
       user = insert(:user)
 
-      # Shaped like the real Claude registration observed in prod: no
-      # `software_id` (no observed connector sends one), attributed and verified
-      # by its vendor-owned HTTPS redirect host. That is the path that still
-      # yields a logo + slug after #1156, so it is the one worth asserting flows
-      # all the way through serialization to JSON.
+      # A real loopback client: Claude Code registers under its product name
+      # with a user-chosen server suffix and sends no software_id at all. Its
+      # slug comes from normalize_name/1 stripping the parenthetical, which is
+      # the only attribution path left for local-first clients since the
+      # guessed software_id entries were deleted (#1156).
       client =
         insert(:oauth_client,
           kind: "mcp",
-          client_name: "Claude",
-          redirect_uris: ["https://claude.ai/api/mcp/auth_callback"]
+          software_id: nil,
+          client_name: "Claude Code (engram)"
         )
 
       insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
@@ -56,11 +56,11 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert is_list(body)
 
       mcp = Enum.find(body, fn r -> r["kind"] == "mcp" end)
-      assert mcp["name"] == "Claude"
-      # A vendor-owned HTTPS redirect host is the ONLY thing that grants the
-      # badge: the auth code is delivered to Anthropic, not to a forger.
-      assert mcp["verified"] == true
-      assert mcp["slug"] == "claude"
+      assert mcp["name"] == "Claude Code (engram)"
+      # Loopback redirect => never verified. The slug still resolves, from the
+      # name, so the onboarding checklist row can tick.
+      assert mcp["verified"] == false
+      assert mcp["slug"] == "claude_code"
       assert mcp["client_id"] == client.client_id
 
       pat = Enum.find(body, fn r -> r["kind"] == "pat" end)

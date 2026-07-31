@@ -76,13 +76,13 @@ Nothing else may ever grant it.
 > but it made a rogue grant look trustworthy enough not to revoke. It now
 > supplies identity only, and only when no vendor host outranks it.
 >
-> **The residue is gone too (#1156, 2026-07-31).** Withholding the badge left a
-> rogue `software_id: "anthropic-claude-desktop"` still wearing Claude's logo and
-> display name — badge-less, but trustworthy-looking enough that a user would not
-> revoke it. The four guessed vendor entries have now been **deleted**; only our
-> own `engram-vault-sync` remains, which needs the entry because it redirects to a
-> custom scheme and nothing else can name it. A rogue client claiming a vendor
-> `software_id` now resolves to nothing at all.
+> **Residue removed 2026-07-31 (#1156).** The tightening above left the rogue
+> client with Claude's logo and display name; it only lost the badge. The four
+> guessed `@software_id` entries were then deleted, so a self-asserted
+> `software_id` now resolves to the unverified placeholder and grants **no
+> vendor identity at all**. Only our own `engram-vault-sync` remains, and it
+> needs the entry: it redirects to a custom scheme, so no host can attribute
+> it, and its `client_name` derives no catalog slug.
 >
 > Device-flow rows are unaffected, `device_rows/1`
 > hardcodes `verified: true`, which is legitimate because our own server mints
@@ -90,7 +90,7 @@ Nothing else may ever grant it.
 
 - **Why HTTPS host is un-spoofable:** a forged DCR client can *claim* `redirect_uri=https://claude.ai/...`, but the auth code is then delivered to claude.ai, not to the attacker. The vendor controls the callback handler.
 - **Why custom schemes / http are NOT:** `com.evil.app://claude.ai/cb` and `http://claude.ai/...` both parse to host `claude.ai` but deliver the code to an attacker-controlled handler. `lookup_by_host/1` enforces `%URI{scheme: "https", userinfo: nil}`. (Code review caught this; the naive host-only match was exploitable.)
-- **`client_name` grants `slug` and nothing else.** It is self-asserted and trivially spoofable, but ticking a row in your *own* checklist is not a security boundary. The logo and the verified badge, where spoofing actually matters, stay host/`software_id` gated. `logo_allowlist_test.exs` pins this explicitly.
+- **`client_name` grants `slug` and nothing else.** It is self-asserted and trivially spoofable, but ticking a row in your *own* checklist is not a security boundary. The logo and the verified badge, where spoofing actually matters, are host-gated only (since #1156 deleted the guessed `software_id` entries, no self-asserted field grants a vendor logo). `logo_allowlist_test.exs` pins this explicitly.
 - **A proven host outranks a claimed `software_id`** (reversed during review, 2026-07-30). Previously `software_id` won, so a client claiming `openai-chatgpt` while redirecting to `claude.ai` was listed as ChatGPT *and* verified via Anthropic's host. Whoever receives the code is who the user is connected to.
 
 > **Correction (2026-07-30).** This doc previously said custom schemes and localhost were *"identify-only: they may set icon/name but never grant verified."* That was the intended design; the code never implemented it, `lookup_by_host/1` returned the empty placeholder, so loopback clients got **no slug at all** and their checklist row could never tick. The doc/code mismatch is why the gap survived six weeks. Slug attribution for those clients now comes from `client_name`.
@@ -249,20 +249,13 @@ SELECT software_id, client_name, redirect_uris FROM oauth_clients;
 
 `@lobehub/icons-static-svg` is already a dependency and already covers every catalog slug. Use `ToolMark slug={...}` (`frontend/src/onboarding/tool-icon.tsx`). The backend `logo: "/assets/clients/*.svg"` field is a legacy parallel system still needed only for `engram-vault-sync` and `vscode`; `grok.svg`/`mistral.svg` were never created and don't need to be.
 
-## `@software_id` now contains our plugin and nothing else (#1156, 2026-07-31)
+## Deleted: the 4 guessed `software_id` entries (2026-07-31, #1156)
 
-`anthropic-claude-desktop`, `cursor.sh`, `openai-chatgpt` and `vscode-engram` were
-UNVALIDATED guesses and have been **deleted**. None had ever been observed on a
-real registration, and all nine connectors seen in prod omit the field entirely,
-so they attributed nobody while handing any attacker who read the source a
-vendor logo and display name in a victim's connections list.
+`anthropic-claude-desktop`, `cursor.sh`, `openai-chatgpt`, `vscode-engram` were UNVALIDATED guesses, and are now **gone**. Prod data proved they never fire (the real ChatGPT and Claude grants both arrive with `software_id: null`; Cursor registers `cursor://` with no `software_id`). They were not merely dead config, they were a free vendor-logo grant for anyone who read the source: registering `software_id: "anthropic-claude-desktop"` put Anthropic's logo and name on a rogue grant in the victim's connections list, with no `unverified` chip (the chip is suppressed whenever a slug resolves, deliberately, so Claude Code is not badged as suspect).
 
-**Do not add a vendor here to "improve attribution".** Every entry in this map is
-a spoofing surface, because `software_id` is a field the client asserts about
-itself in the DCR body. A vendor that redirects to its own HTTPS host belongs in
-`@redirect_host`, where the claim is provable; one that cannot is attributed by
-`client_name`, which grants slug only. `engram-vault-sync` is the sole exception
-and only because it is ours.
+`engram-vault-sync` is the only remaining entry and the only proven-real one.
+
+**Rule going forward: add a key here only for a `software_id` observed on a real registration.** A guess re-opens the impersonation. Check the `mcp_dcr_unattributed_client` tripwire for what clients actually send.
 
 `@name_aliases` currently carries one **inferred, not observed** entry: `visual_studio_code` → `github_copilot`. VS Code drives MCP OAuth itself, above the extension, so a Copilot user's grant is expected to arrive under the product name. The tripwire will confirm or refute it.
 

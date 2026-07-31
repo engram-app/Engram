@@ -8,8 +8,8 @@ defmodule Engram.Connections.LogoAllowlist do
   the `redirect_uri` host, the RFC 7591 `software_id` (which now names only our
   own plugin), and the normalized `client_name`.
 
-  **Can we prove it?** Two sources, and both are proofs of the same shape —
-  "this party controls a host the vendor owns":
+  **Can we prove it?** Two sources, and both are the same proof in different
+  clothes — "this party controls a host the vendor owns":
 
     * A vendor-owned HTTPS **redirect** host. A forger can claim
       `redirect_uri=https://claude.ai/...`, but the auth code is then delivered
@@ -18,24 +18,26 @@ defmodule Engram.Connections.LogoAllowlist do
       host and it declared the same `client_id`; nobody but Anthropic can serve a
       document at `claude.ai`.
 
-  CIMD is the one that matters for local-first clients. Claude Code, Cline,
-  Cursor and OpenCode all redirect to loopback, so the redirect can never prove
-  anything about them — see `Engram.OAuth.Cimd`.
+  CIMD is the one that reaches local-first clients. Claude Code, Cline, Cursor
+  and OpenCode all redirect to loopback, so the redirect can never prove anything
+  about them — see `Engram.OAuth.Cimd`.
 
   `software_id` and `client_name` both arrive inside the DCR request body, so
   they are things the client *says about itself*. Neither may grant
   `verified: true`; they supply identity only. (Tightened 2026-07-30:
   `software_id` previously granted the badge outright.)
 
-  `software_id` no longer names any vendor either (2026-07-31). It used to carry
-  four guessed vendor entries, so a rogue client registering
-  `software_id: "anthropic-claude-desktop"` still appeared as **Claude Desktop**
-  wearing Anthropic's logo — badge-less, but trustworthy-looking enough not to
-  revoke. None of the nine connectors observed in prod sends the field at all,
-  so the map was carrying attribution for nobody while remaining a free
-  vendor-logo grant to anyone who read this source. The only surviving entry is
-  our own plugin, which needs it: it redirects to a custom scheme and has
-  nothing else to identify it.
+  As of 2026-07-31 a self-asserted `software_id` buys **no vendor identity at
+  all**. The four guessed entries that previously handed out Claude's, Cursor's,
+  ChatGPT's and VS Code's logos were deleted, leaving only our own
+  `engram-vault-sync` plugin. A rogue client registering
+  `software_id: "anthropic-claude-desktop"` now resolves to the unverified
+  placeholder and renders with the "Unverified client" chip, rather than
+  appearing in the victim's connections list wearing Anthropic's logo.
+
+  This closed the last gap where a claim, not a proof, drove what the user sees.
+  The security boundary is still `verified`; this removed the cosmetic
+  trustworthiness that made a rogue grant look not worth revoking.
 
   Loopback and custom schemes (Cursor desktop registers
   `cursor://anysphere.cursor-mcp/…`) never match the host map, so
@@ -44,24 +46,20 @@ defmodule Engram.Connections.LogoAllowlist do
 
   @empty %{verified: false, logo: nil, display_name: nil, slug: nil}
 
-  # Keyed on RFC 7591 software_id. OUR OWN PLUGIN ONLY.
+  # Keyed on RFC 7591 software_id. Entries here must be OBSERVED on a real
+  # registration, never guessed: this map is the one place a self-asserted
+  # string still buys a vendor's logo, so every speculative key is a free
+  # impersonation for anyone who reads the source.
   #
-  # This map hands out a vendor logo and display name on a field the client
-  # asserts about itself, so every entry is a spoofing surface: whatever
-  # `software_id` you put here, anyone can register claiming it. Four guessed
-  # vendor entries (`anthropic-claude-desktop`, `cursor.sh`, `openai-chatgpt`,
-  # `vscode-engram`) were deleted on 2026-07-31 — none had ever been observed on
-  # a real registration, and all nine connectors seen in prod omit the field
-  # entirely, so they cost real users nothing and bought an attacker Anthropic's
-  # icon.
+  # `engram-vault-sync` is our own plugin, and it needs the entry: it redirects
+  # to a custom scheme, so the host map can never attribute it, and its
+  # `client_name` does not derive to a catalog slug.
   #
-  # `engram-vault-sync` stays because it is ours and because it has no
-  # alternative: it redirects to a custom scheme, which neither the host layer
-  # nor name derivation can attribute.
-  #
-  # DO NOT add a vendor here to "improve attribution". A vendor that redirects to
-  # its own HTTPS host belongs in @redirect_host, where the claim is provable; a
-  # vendor that cannot is attributed by `client_name`, which grants slug only.
+  # Four guessed entries (`anthropic-claude-desktop`, `cursor.sh`,
+  # `openai-chatgpt`, `vscode-engram`) were deleted 2026-07-31. None was ever
+  # observed in prod; all nine real connectors are attributed by redirect host
+  # or `client_name`, and Cursor in fact registers `cursor://` with no
+  # software_id at all.
   @software_id %{
     "engram-vault-sync" => %{
       logo: "/assets/clients/engram-vault-sync.svg",
@@ -121,8 +119,8 @@ defmodule Engram.Connections.LogoAllowlist do
   redirect host, then `software_id`, then the normalized `client_name`.
 
   The two host sources lead because they are the only ones that are not
-  self-asserted. A client claiming `software_id: "openai-chatgpt"` while
-  redirecting to `claude.ai` must not be listed as ChatGPT: the grant is
+  self-asserted. A client claiming `software_id: "engram-vault-sync"` while
+  redirecting to `claude.ai` must not be listed as our plugin: the grant is
   delivered to Anthropic, so Anthropic is who the user is actually connected to.
 
   **`verified`** is decided by two sources, and by nothing else:
@@ -253,9 +251,13 @@ defmodule Engram.Connections.LogoAllowlist do
   Identity for a known `software_id`: logo, display_name, slug.
 
   Never sets `verified`: `software_id` is an RFC 7591 field the client sends
-  about itself, so anyone can register claiming `anthropic-claude-desktop`.
-  Granting the badge on it would let a rogue client wear a vendor's logo in the
-  user's connections list. Only `resolve/3` decides verification, from the host.
+  about itself, so anyone can register claiming to be anyone. Only `resolve/3`
+  decides verification, from the host.
+
+  The map is deliberately down to our own plugin, so an unrecognized claim
+  returns the placeholder rather than a vendor's logo. Adding a key here on a
+  guess re-opens that impersonation; add one only for an id observed on a real
+  registration.
   """
   @spec lookup(String.t() | nil) :: entry()
   def lookup(software_id) when is_binary(software_id) do

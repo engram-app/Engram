@@ -123,7 +123,17 @@ defmodule Engram.ConnectionsTest do
       user = insert_user()
       vault = insert(:vault, user: user)
 
-      client = insert(:oauth_client, kind: "mcp", client_name: "Claude Desktop")
+      client =
+        insert(:oauth_client,
+          kind: "mcp",
+          software_id: "anthropic-claude-desktop",
+          client_name: "Claude Desktop"
+        )
+
+      # That software_id is a SPOOF, not a real Claude Desktop registration:
+      # the key was deleted in #1156 and real Claude Desktop is attributed by
+      # its claude.ai redirect host (see the next test). Kept here precisely to
+      # pin that the rogue claim yields no vendor identity.
 
       insert(:oauth_refresh_token,
         user_id: user.id,
@@ -131,16 +141,18 @@ defmodule Engram.ConnectionsTest do
         vault_id: vault.id
       )
 
-      # verified: false — the factory's redirect is loopback, so nothing about
-      # this client is provable. The displayed name falls back to the registered
-      # `client_name`, which is all a loopback client can ever supply since the
-      # guessed vendor `software_id` entries were deleted (#1156).
+      # `name` here is the raw self-reported client_name falling through
+      # (`identity.display_name || c.client_name`), NOT resolved identity:
+      # logo/slug/display_name are all nil, so the UI badges this as an
+      # unverified client rather than rendering Anthropic's logo.
       assert [
                %{
                  kind: :mcp,
                  client_id: cid,
                  name: "Claude Desktop",
                  verified: false,
+                 logo: nil,
+                 slug: nil,
                  vault_id: vid
                }
              ] =
