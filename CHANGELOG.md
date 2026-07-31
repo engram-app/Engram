@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.12.0](https://github.com/engram-app/Engram/compare/0.11.0...0.12.0) (2026-07-31)
+
+
+### Features
+
+* **logs:** return device_id and conn_id from GET /logs ([#1123](https://github.com/engram-app/Engram/issues/1123)) ([e0dcf30](https://github.com/engram-app/Engram/commit/e0dcf30e502ed419c4c006c02fb2d7b5535f67e2))
+* **web:** markdown reference panel, and the editor/reading-mode parity gaps it exposed ([#1142](https://github.com/engram-app/Engram/issues/1142)) ([adaf038](https://github.com/engram-app/Engram/commit/adaf0386d48755378cc92b713354d521cb09f25f))
+* **web:** vault-scoped URLs (/:slug/:itemId) + settings as a hash overlay ([#1143](https://github.com/engram-app/Engram/issues/1143)) ([74577ed](https://github.com/engram-app/Engram/commit/74577ed114903a1322f1151912fd11c112212d75))
+
+
+### Bug Fixes
+
+* **deploy:** close the prod deploy valve + drop the redundant Release-PR dispatch ([#1133](https://github.com/engram-app/Engram/issues/1133)) ([a20086c](https://github.com/engram-app/Engram/commit/a20086ca3ad253bc28c5637c31e6902516688625))
+* **oauth:** attribute every MCP connector, not just vendor-hosted ([#1147](https://github.com/engram-app/Engram/issues/1147)) ([bc6d940](https://github.com/engram-app/Engram/commit/bc6d940a2b434ee0cb9ef502bb32adcba4c7203e))
+* **sync:** delete broadcasts carry the folder; tree invalidation stops silently no-oping ([#1140](https://github.com/engram-app/Engram/issues/1140)) ([d6ed33d](https://github.com/engram-app/Engram/commit/d6ed33d914a1a977766d12ff5b05835c7f5d56bf))
+* **web-crdt:** bound the reconnect + re-handshake retry storm ([#1124](https://github.com/engram-app/Engram/issues/1124)) ([928d62f](https://github.com/engram-app/Engram/commit/928d62f3a8e9a7b3ef6d6e2826979d8ba100c0dc))
+
 ## [0.11.0](https://github.com/engram-app/Engram/compare/0.10.0...0.11.0) (2026-07-26)
 
 
