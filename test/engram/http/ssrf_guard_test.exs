@@ -1,5 +1,12 @@
 defmodule Engram.Http.SsrfGuardTest do
-  use ExUnit.Case, async: true
+  # async: false — the hostname tests below do REAL DNS (`localhost`, and an
+  # NXDOMAIN lookup for a `.invalid` name). Run async, that resolver traffic
+  # competes with neighbours that assert bounded wall-clock latency —
+  # `Engram.Cluster.ReadinessTest` asserts a real `:inet_res` call finishes well
+  # under 5s, and it started failing with resolver timeouts when this module was
+  # async. The IP-literal tests need no isolation; the module is serialized for
+  # the three that touch the resolver.
+  use ExUnit.Case, async: false
 
   alias Engram.Http.SsrfGuard
 

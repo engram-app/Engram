@@ -3,7 +3,13 @@ defmodule Engram.OAuth.Cimd.HttpFetcherTest do
   # rather than `fetch/1` because the SSRF guard would (correctly) refuse a
   # loopback target — that separation is the point of the two functions, and the
   # guard's own rules are covered in Engram.Http.SsrfGuardTest.
-  use ExUnit.Case, async: true
+  # async: false — this module makes REAL HTTP calls (Bypass), including a 256 KB
+  # body it halts mid-stream and a `Bypass.down/1`, and each distinct
+  # `connect_options` spins up its own Finch pool. Run async, that competes with
+  # neighbours whose assertions are timing-bounded (`Engram.Embedders.VoyageTest`
+  # uses a 5s receive_timeout), which showed up as `Req.TransportError{reason:
+  # :timeout}` in unrelated suites rather than as a failure here.
+  use ExUnit.Case, async: false
 
   alias Engram.OAuth.Cimd.HttpFetcher
 
