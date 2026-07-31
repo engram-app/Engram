@@ -4244,7 +4244,7 @@ jobs:
 
       - name: Login to GHCR
         if: steps.version.outputs.image_exists != 'true'
-        uses: docker/login-action@v4
+        uses: docker/login-action@v4.5.2
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
