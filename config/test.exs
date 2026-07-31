@@ -61,7 +61,24 @@ config :engram,
        Engram.Repo,
        Keyword.merge(repo_opts,
          pool: Ecto.Adapters.SQL.Sandbox,
-         pool_size: System.schedulers_online() * 2
+         # Headroom over ExUnit's concurrency limit is deliberate and load-bearing.
+         #
+         # ExUnit's default `max_cases` is ALSO `System.schedulers_online() * 2`, so
+         # sizing the pool to exactly that leaves zero spare connections: with every
+         # async slot holding a checkout, any additional connection queues on an
+         # empty pool and waits out the 15s timeout. That is #1158 — a whole module
+         # failing in `setup` with "connection not available and request was dropped
+         # from queue", which looks like a defect in whichever module lost the race
+         # rather than the resource shape it actually is.
+         #
+         # Two things need that spare capacity: a sync (`async: false`) module's own
+         # checkout, and any process a test spawns that does its own DB work (the
+         # `:global` CRDT rooms in Engram.Notes.CrdtTransportTest are the case that
+         # surfaced this).
+         #
+         # Raising the checkout timeout instead would only lengthen the queue wait —
+         # it hides the contention rather than removing it.
+         pool_size: System.schedulers_online() * 2 + 10
        )
 
 # We don't run a server during test. If one is required,
