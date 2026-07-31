@@ -42,7 +42,6 @@ import secrets
 from datetime import datetime
 
 import pytest
-import requests
 
 from helpers.api import ApiClient
 from helpers.clerk import ClerkClient
