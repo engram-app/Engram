@@ -9,7 +9,6 @@ Migrated to API-only: seeds data via api_sync.create_note() instead of Obsidian
 vault writes, so these 11 tests run during the Obsidian boot gap in CI.
 """
 
-import time
 
 import pytest
 
@@ -131,6 +130,11 @@ async def test_write_isolation_cannot_append_to_other_user_note(api_sync, api_is
 
     # isolation-user attempts to append to sync-user's note
     status = api_iso.append_note(path, "\n\nINJECTED BY ATTACKER")
+    # Mirrors the delete/rename cases above: RLS makes another user's note
+    # invisible, so the attempt is either a no-op 200 or a 404. 403 is also a
+    # correct refusal. Anything else (esp. 5xx) means the isolation boundary
+    # was reached rather than skipped.
+    assert status in (200, 403, 404), f"Unexpected status {status} for cross-user append"
 
     # sync-user's note must be unchanged
     note = api_sync.get_note(path)
@@ -199,6 +203,9 @@ async def test_write_isolation_cannot_rename_other_user_folder(api_sync, api_iso
 
     # isolation-user attempts to rename sync-user's folder
     status = api_iso.rename_folder("E2E/IsoFolder", "E2E/HijackedFolder")
+    assert status in (200, 403, 404), (
+        f"Unexpected status {status} for cross-user folder rename"
+    )
 
     # sync-user's note must still be at the original folder path
     note = api_sync.get_note(path)

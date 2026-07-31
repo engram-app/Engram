@@ -326,27 +326,30 @@ defmodule Engram.MCP.Handlers do
     replace = args["replace"] || ""
     occurrence = args["occurrence"] || 0
 
-    case Notes.get_note(user, vault, path) do
-      {:ok, note} ->
-        if String.contains?(note.content, find) do
-          {new_content, count} = do_replace(note.content, find, replace, occurrence)
+    # Read the AUTHORITY, not the `notes.content` façade: the façade lags a doc
+    # write until checkpoint, so patching from it can commit an older body and
+    # drop edits made since (#1159).
+    with {:ok, note} <- Notes.get_note(user, vault, path),
+         {:ok, current} <- Notes.authoritative_content(user, note) do
+      if String.contains?(current, find) do
+        {new_content, count} = do_replace(current, find, replace, occurrence)
 
-          case Notes.upsert_note(user, vault, %{
-                 "path" => path,
-                 "content" => new_content,
-                 "mtime" => now(),
-                 "base_hash" => note.content_hash
-               }) do
-            {:ok, _} -> {:ok, "Replaced #{count} occurrence(s) in #{path}"}
-            {:error, :version_conflict, _} -> {:ok, "Note changed concurrently; retry: #{path}"}
-            {:error, _} -> {:ok, "Failed to patch note: #{path}"}
-          end
-        else
-          {:ok, "Text not found in #{path}"}
+        case Notes.upsert_note(user, vault, %{
+               "path" => path,
+               "content" => new_content,
+               "mtime" => now(),
+               "base_hash" => note.content_hash
+             }) do
+          {:ok, _} -> {:ok, "Replaced #{count} occurrence(s) in #{path}"}
+          {:error, :version_conflict, _} -> {:ok, "Note changed concurrently; retry: #{path}"}
+          {:error, _} -> {:ok, "Failed to patch note: #{path}"}
         end
-
-      {:error, :not_found} ->
-        {:ok, "Note not found: #{path}"}
+      else
+        {:ok, "Text not found in #{path}"}
+      end
+    else
+      {:error, :not_found} -> {:ok, "Note not found: #{path}"}
+      {:error, _} -> {:ok, "Could not read current content for #{path}; retry"}
     end
   end
 
@@ -356,64 +359,66 @@ defmodule Engram.MCP.Handlers do
     new_content = args["content"] || ""
     level = args["level"] || 2
 
-    case Notes.get_note(user, vault, path) do
-      {:ok, note} ->
-        prefix = String.duplicate("#", max(1, min(level, 6))) <> " "
-        target = prefix <> heading
-        lines = String.split(note.content, "\n")
+    # Same authority rule as patch_note: section surgery against the stale
+    # `notes.content` façade would rewrite the note from an older body (#1159).
+    with {:ok, note} <- Notes.get_note(user, vault, path),
+         {:ok, current} <- Notes.authoritative_content(user, note) do
+      prefix = String.duplicate("#", max(1, min(level, 6))) <> " "
+      target = prefix <> heading
+      lines = String.split(current, "\n")
 
-        start_idx =
-          Enum.find_index(lines, fn line ->
-            String.trim(line) == String.trim(target)
+      start_idx =
+        Enum.find_index(lines, fn line ->
+          String.trim(line) == String.trim(target)
+        end)
+
+      if start_idx == nil do
+        {:ok, "Heading not found: #{target}"}
+      else
+        end_idx =
+          Enum.find_index(Enum.drop(lines, start_idx + 1), fn line ->
+            stripped = String.trim_leading(line)
+
+            if String.starts_with?(stripped, "#") do
+              h_level =
+                stripped
+                |> String.graphemes()
+                |> Enum.take_while(&(&1 == "#"))
+                |> length()
+
+              rest = String.slice(stripped, h_level, 1)
+              h_level <= level and rest in [" ", ""]
+            else
+              false
+            end
           end)
 
-        if start_idx == nil do
-          {:ok, "Heading not found: #{target}"}
-        else
-          end_idx =
-            Enum.find_index(Enum.drop(lines, start_idx + 1), fn line ->
-              stripped = String.trim_leading(line)
+        end_idx =
+          if end_idx == nil,
+            do: length(lines),
+            else: start_idx + 1 + end_idx
 
-              if String.starts_with?(stripped, "#") do
-                h_level =
-                  stripped
-                  |> String.graphemes()
-                  |> Enum.take_while(&(&1 == "#"))
-                  |> length()
+        new_lines =
+          Enum.slice(lines, 0, start_idx + 1) ++
+            [String.trim_trailing(new_content, "\n")] ++
+            Enum.slice(lines, end_idx, length(lines))
 
-                rest = String.slice(stripped, h_level, 1)
-                h_level <= level and rest in [" ", ""]
-              else
-                false
-              end
-            end)
+        final_content = Enum.join(new_lines, "\n")
 
-          end_idx =
-            if end_idx == nil,
-              do: length(lines),
-              else: start_idx + 1 + end_idx
-
-          new_lines =
-            Enum.slice(lines, 0, start_idx + 1) ++
-              [String.trim_trailing(new_content, "\n")] ++
-              Enum.slice(lines, end_idx, length(lines))
-
-          final_content = Enum.join(new_lines, "\n")
-
-          case Notes.upsert_note(user, vault, %{
-                 "path" => path,
-                 "content" => final_content,
-                 "mtime" => now(),
-                 "base_hash" => note.content_hash
-               }) do
-            {:ok, _} -> {:ok, "Section '#{heading}' updated in #{path}"}
-            {:error, :version_conflict, _} -> {:ok, "Note changed concurrently; retry: #{path}"}
-            {:error, _} -> {:ok, "Failed to update section in #{path}"}
-          end
+        case Notes.upsert_note(user, vault, %{
+               "path" => path,
+               "content" => final_content,
+               "mtime" => now(),
+               "base_hash" => note.content_hash
+             }) do
+          {:ok, _} -> {:ok, "Section '#{heading}' updated in #{path}"}
+          {:error, :version_conflict, _} -> {:ok, "Note changed concurrently; retry: #{path}"}
+          {:error, _} -> {:ok, "Failed to update section in #{path}"}
         end
-
-      {:error, :not_found} ->
-        {:ok, "Note not found: #{path}"}
+      end
+    else
+      {:error, :not_found} -> {:ok, "Note not found: #{path}"}
+      {:error, _} -> {:ok, "Could not read current content for #{path}; retry"}
     end
   end
 
@@ -564,10 +569,16 @@ defmodule Engram.MCP.Handlers do
   # the current content and returns the new content. Public (doc: false) so
   # the CAS interleaving is unit-testable with a racing rebuild fun.
   def rmw_upsert(user, vault, path, rebuild, attempt \\ 0) do
-    with {:ok, note} <- Notes.get_note(user, vault, path) do
+    with {:ok, note} <- Notes.get_note(user, vault, path),
+         # Rebuild from the AUTHORITY, not the `notes.content` façade. The façade
+         # is materialized at checkpoint and lags a doc write, so rebuilding from
+         # it can commit a shorter or older body (#1159). base_hash still guards
+         # the concurrent-REST-write race, but it cannot detect façade lag:
+         # content and content_hash go stale together.
+         {:ok, current} <- Notes.authoritative_content(user, note) do
       case Notes.upsert_note(user, vault, %{
              "path" => path,
-             "content" => rebuild.(note.content),
+             "content" => rebuild.(current),
              "mtime" => now(),
              "base_hash" => note.content_hash
            }) do
