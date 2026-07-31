@@ -82,7 +82,14 @@ defmodule Engram.Notes.CrdtDoc do
       # never exit — an immortal orphan. Rooms are ephemeral; channels restart
       # them on demand via CrdtRegistry.ensure_observed (stale pids are evicted
       # by the channel's monitor).
-      restart: :temporary
+      restart: :temporary,
+      # Rooms flush a full checkpoint in terminate/2. The OTP default of 5_000
+      # can brutal-kill that flush mid-write on a deploy, when every room
+      # terminates at once and they contend for the DB pool. Nothing is lost
+      # when that happens — the encrypted tail-log still holds every update, so
+      # the next bind replays it — but the work is wasted and the note reloads
+      # the slow way. 15 s buys a large flush time to land.
+      shutdown: 15_000
     }
   end
 end
