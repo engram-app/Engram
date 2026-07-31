@@ -107,7 +107,11 @@ defmodule Engram.Cluster.Readiness do
   `@resolve_timeout_ms` could have blown the health-check budget while the test
   carried on passing.
   """
-  @spec resolve_budget_ms() :: pos_integer()
+  # No @spec: both operands are module attributes, so this constant-folds and
+  # Dialyzer infers the exact literal. Any honest spec would either be that
+  # literal (which has to be edited in lockstep with the constant, defeating
+  # the point of deriving it) or a supertype, which CI rejects as
+  # contract_supertype.
   def resolve_budget_ms, do: @resolve_timeout_ms * @resolve_retry
 
   @doc false
