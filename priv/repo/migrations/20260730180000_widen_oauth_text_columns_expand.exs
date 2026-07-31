@@ -18,11 +18,39 @@ defmodule Engram.Repo.Migrations.WidenOauthTextColumnsExpand do
   # store. `oauth_clients.redirect_uris` failed at registration and
   # `oauth_authorization_codes.redirect_uri` would have failed at mint.
   #
-  # safety_assured: "varchar(N) -> text is binary-coercible in PostgreSQL and
-  # does NOT rewrite the table or take a long ACCESS EXCLUSIVE lock (the
-  # constraint is simply dropped). Widening only: every existing value remains
-  # valid, and no reader can observe a narrower type. Incident: Windsurf
-  # consent 500, 2026-07-30."
+  # squawk-ignore-file: squawk's `changing-column-type` fires on all three
+  # ALTERs and has no per-statement ignore, so the whole file is marked. The
+  # rule is generic: it cannot tell a binary-coercible widening from a real type
+  # change. Measured on PostgreSQL 18.4 by comparing pg_class.relfilenode before
+  # and after (a changed relfilenode means the heap was rewritten):
+  #
+  #   varchar(255)   -> text     relfilenode UNCHANGED   no rewrite
+  #   varchar(255)[] -> text[]   relfilenode CHANGED     FULL REWRITE
+  #
+  # So the scalar columns are free, and the ARRAY one is not: PostgreSQL's
+  # no-rewrite path does not apply at the array level even though the element
+  # cast is binary coercible. An earlier version of this comment claimed all
+  # three were rewrite-free. That was wrong, and on a large table it would have
+  # been an outage.
+  #
+  # safety_assured: "Two of the three ALTERs are binary-coercible widenings that
+  # do not rewrite the heap (verified via relfilenode). The third,
+  # oauth_clients.redirect_uris varchar(255)[] -> text[], DOES rewrite the table
+  # under ACCESS EXCLUSIVE. It is safe here only because oauth_clients is small:
+  # it holds one narrow row per DCR client registration, with no historical
+  # accumulation (codes and tokens live in other tables). Widening only, so
+  # every existing value stays valid and no reader can observe a narrower type.
+  # Incident: Windsurf consent 500, 2026-07-30."
+  #
+  # BEFORE DEPLOY, confirm the rewrite is still trivial:
+  #
+  #   SELECT count(*), pg_size_pretty(pg_total_relation_size('oauth_clients'))
+  #   FROM oauth_clients;
+  #
+  # At launch scale this is milliseconds. If that table has grown unexpectedly
+  # large, do the array column separately (add text[] column, backfill, swap)
+  # rather than taking a long exclusive lock on the OAuth client table, which
+  # would block every token exchange for the duration.
 
   def up do
     execute "ALTER TABLE oauth_authorization_codes ALTER COLUMN state TYPE text"
