@@ -345,5 +345,4 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: false, slug: "cline"} =
              LogoAllowlist.resolve(nil, ["http://127.0.0.1:1/cb"], "Cline", nil)
   end
-
 end
