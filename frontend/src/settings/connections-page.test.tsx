@@ -47,7 +47,7 @@ vi.mock("../config-context", async () => {
 	const actual = await vi.importActual<typeof import("../config-context")>("../config-context");
 	return {
 		...actual,
-		// SaaS context — free-tier cap fallbacks under test depend on this.
+		// SaaS context, free-tier cap fallbacks under test depend on this.
 		useConfig: () => ({ billingEnabled: true }) as ReturnType<typeof actual.useConfig>,
 	};
 });
@@ -138,6 +138,52 @@ describe("ConnectionsPage", () => {
 		expect(screen.getByRole("heading", { name: /Obsidian plugins/iu })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: /AI tools/iu })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: /API keys/iu })).toBeInTheDocument();
+	});
+
+	// A recognized local/self-hosted client is unverifiable by construction, so
+	// it must not carry the same "unverified" badge as an unknown client, that
+	// reads as a fixable fault and prompts "am I connected wrong?".
+	it("shows no warning chip for a recognized client, explaining provenance in the detail row", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...baseMcp,
+			slug: "claude_code",
+			verified: false,
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.queryByText(/^unverified$/iu)).toBeNull();
+		expect(screen.getByText(/nothing is wrong with your setup/iu)).toBeInTheDocument();
+	});
+
+	it("still labels an unrecognized client unverified", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...baseMcp,
+			slug: null,
+			verified: false,
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText(/^unverified$/iu)).toBeInTheDocument();
+		expect(screen.queryByText(/^self-reported$/iu)).toBeNull();
+	});
+
+	// Brand marks come from the slug, not a per-vendor asset the backend has to
+	// ship, Grok has no /assets/clients/grok.svg and still renders its mark.
+	it("renders the brand mark for a slugged connection with no logo asset", () => {
+		mockConnections.splice(0, mockConnections.length, { ...baseMcp, slug: "grok", logo: null });
+		mockTier = "starter";
+		renderPage();
+		expect(screen.getByTestId("tool-mark-grok")).toBeInTheDocument();
+	});
+
+	it("falls back to the backend logo, then a plug, when the slug has no mark", () => {
+		mockConnections.splice(0, mockConnections.length, baseObs);
+		mockTier = "starter";
+		const { container } = renderPage();
+		expect(container.querySelector('img[src="/x.svg"]')).toBeInTheDocument();
+		expect(screen.queryByTestId(/^tool-mark-/u)).toBeNull();
 	});
 
 	it("shows the obsidian connection name and omits the unverified badge", () => {

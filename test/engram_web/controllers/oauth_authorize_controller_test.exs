@@ -252,6 +252,74 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
     end
   end
 
+  # Prod 500 observed 2026-07-30 connecting Windsurf:
+  #   (Postgrex.Error) 22001 value too long for type character varying(255)
+  #   at Engram.OAuth.mint_authorization_code/3
+  # Two columns on oauth_authorization_codes could overflow. `state` is
+  # client-supplied and RFC 6749 puts no bound on it (IDEs pack routing data in
+  # there). `redirect_uri` is worse: our own DCR accepts up to 2048 bytes, then
+  # we tried to store it in varchar(255) — we accepted a value we could not
+  # persist. Both must round-trip, not crash.
+  describe "POST /api/oauth/authorize/consent — oversized fields (Windsurf 500)" do
+    test "mints a code when state exceeds 255 characters", %{conn: conn} do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+      long_state = String.duplicate("s", 900)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("state", long_state)
+        |> Map.put("vault_choice", "vault:#{vault.id}")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      assert conn.status == 200
+      json = Jason.decode!(conn.resp_body)
+      query = json["redirect_uri"] |> URI.parse() |> Map.get(:query) |> URI.decode_query()
+      assert query["state"] == long_state
+    end
+
+    test "mints a code when the registered redirect_uri exceeds 255 characters", %{conn: conn} do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      # Comfortably over 255, comfortably under the 2048 DCR accepts.
+      redirect_uri = "https://windsurf.example.com/cb?p=" <> String.duplicate("q", 400)
+      client = register_client(redirect_uri)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("vault_choice", "vault:#{vault.id}")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      assert conn.status == 200
+      json = Jason.decode!(conn.resp_body)
+      assert String.starts_with?(json["redirect_uri"], redirect_uri)
+    end
+
+    # Widening the column must not make it unbounded storage: the endpoint is
+    # reachable by any signed-in user, and a code row lives 10 minutes.
+    test "rejects an absurd state instead of persisting it", %{conn: conn} do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      client = register_client()
+
+      params =
+        client.client_id
+        |> valid_params(hd(client.redirect_uris))
+        |> Map.put("state", String.duplicate("s", 5000))
+        |> Map.put("vault_choice", "vault:#{vault.id}")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      assert conn.status == 400
+    end
+  end
+
   describe "POST /api/oauth/authorize/consent — vault ownership" do
     test "returns 200 with redirect_uri carrying ?error=access_denied when vault not owned",
          %{conn: conn} do

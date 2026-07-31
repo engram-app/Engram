@@ -1,8 +1,12 @@
 defmodule Engram.OAuth.Client do
   @moduledoc """
   Schema for an OAuth 2.1 client registered via Dynamic Client Registration
-  (RFC 7591). Public clients (PKCE-only) carry no secret. Confidential
-  clients are not used today but the schema accommodates them.
+  (RFC 7591).
+
+  Public clients (PKCE-only) carry no secret. Confidential clients
+  (`client_secret_post` / `client_secret_basic`) are minted a secret at
+  registration and authenticate at the token endpoint; server-side connectors
+  such as LobeHub cloud require one. PKCE is mandatory for both.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -10,16 +14,26 @@ defmodule Engram.OAuth.Client do
   require Logger
 
   @primary_key {:client_id, :binary_id, autogenerate: true}
-  # Only public PKCE clients are supported until confidential-client minting
-  # ships (Phase 4). Reject client_secret_* to avoid handing back a 201 with
-  # no secret — a broken half-state for the caller.
-  @valid_auth_methods ~w(none)
+  # Public PKCE clients (`none`) and confidential clients. A confidential
+  # registration mints a secret in `Engram.OAuth.register_client/1`, so the 201
+  # always carries one; the earlier restriction to `none` existed only because
+  # nothing minted secrets, and it made server-side connectors (LobeHub cloud)
+  # unregisterable rather than merely unverified.
+  #
+  # PKCE stays mandatory for BOTH. A secret authenticates the client; PKCE binds
+  # the code to the request that started it. They are not substitutes.
+  @valid_auth_methods ~w(none client_secret_post client_secret_basic)
+  @confidential_auth_methods ~w(client_secret_post client_secret_basic)
   @valid_grant_types ~w(authorization_code refresh_token)
   @valid_response_types ~w(code)
   @loopback_hosts ~w(localhost 127.0.0.1 ::1)
 
   schema "oauth_clients" do
     field :client_secret_hash, :string
+    # Plaintext, returned in the registration response and never again. Virtual
+    # so it cannot be persisted or read back: a client that loses its secret
+    # re-registers.
+    field :client_secret, :string, virtual: true
     field :redirect_uris, {:array, :string}
     field :client_name, :string
     field :scope, :string
@@ -52,6 +66,10 @@ defmodule Engram.OAuth.Client do
                   kind first_user_agent first_ip)a
 
   @metadata_uri_fields ~w(logo_uri tos_uri policy_uri)a
+
+  @doc "True when the registered auth method requires a client secret."
+  @spec confidential?(String.t() | nil) :: boolean()
+  def confidential?(method), do: method in @confidential_auth_methods
 
   def registration_changeset(client, attrs) do
     client
@@ -184,15 +202,26 @@ defmodule Engram.OAuth.Client do
       {:ok, %URI{scheme: scheme}} when scheme in ["javascript", "data", "file"] ->
         [redirect_uris: "unsafe scheme #{scheme}: #{uri}"]
 
-      {:ok, %URI{scheme: scheme, host: host}} when is_binary(scheme) and scheme != "" ->
-        # Native app custom scheme (e.g. com.cursor.app://callback). Must
-        # have a reverse-DNS-like dot in the scheme to avoid weak schemes
-        # like `myapp://` per RFC 8252 §7.1.
-        if String.contains?(scheme, ".") or host in @loopback_hosts do
-          []
-        else
-          [redirect_uris: "weak custom scheme #{scheme}: #{uri}"]
-        end
+      {:ok, %URI{scheme: scheme}} when is_binary(scheme) and scheme != "" ->
+        # Native-app custom scheme (`cursor://…`, `com.cursor.app://…`).
+        #
+        # We previously required a reverse-DNS dot in the scheme, citing
+        # RFC 8252 §7.1. That section obliges *apps* to choose such a scheme;
+        # it does not ask authorization servers to reject the ones that don't,
+        # and enforcing it turned real clients away at registration (observed
+        # 2026-07-30: Cursor desktop registers `cursor://`).
+        #
+        # The dot bought less than it looked like. It never made a scheme
+        # exclusive: any app can claim `com.foo://` as easily as `foo://`, so it
+        # lowered accidental-collision odds, not deliberate squatting.
+        # The real defence against a squatter intercepting the redirect is
+        # PKCE, which RFC 8252 mandates for exactly this reason and which we
+        # require unconditionally: an interceptor gets a code it cannot
+        # redeem without the verifier.
+        #
+        # Custom schemes remain permanently unverifiable (see
+        # Connections.LogoAllowlist). This admits them; it does not trust them.
+        []
 
       _ ->
         [redirect_uris: "invalid URI: #{uri}"]

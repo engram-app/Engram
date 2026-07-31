@@ -2,7 +2,7 @@ defmodule EngramWeb.OAuthRegisterController do
   @moduledoc """
   RFC 7591 Dynamic Client Registration. Public, rate-limited.
 
-  Mints public PKCE clients by default — `token_endpoint_auth_method=none`
+  Mints public PKCE clients by default, `token_endpoint_auth_method=none`
   with no `client_secret`. Confidential clients can be requested but are
   not yet supported (no secret minting wired up); validation rejects
   `client_secret_post` / `client_secret_basic` to keep the surface
@@ -10,8 +10,12 @@ defmodule EngramWeb.OAuthRegisterController do
   """
   use EngramWeb, :controller
 
+  alias Engram.Connections.LogoAllowlist
+  alias Engram.Logger.Metadata
   alias Engram.OAuth
   alias EngramWeb.RequestMeta
+
+  require Logger
 
   @telemetry_event [:engram, :mcp, :dcr, :register]
 
@@ -24,6 +28,7 @@ defmodule EngramWeb.OAuthRegisterController do
     case OAuth.register_client(enriched) do
       {:ok, client} ->
         emit_telemetry(:ok, client.client_id, client.software_id, client.kind)
+        log_unattributed(client)
 
         conn
         |> put_status(:created)
@@ -38,12 +43,59 @@ defmodule EngramWeb.OAuthRegisterController do
         )
 
         {error, description} = changeset_error(changeset)
+        log_rejected(changeset, description)
 
         conn
         |> put_status(:bad_request)
         |> json(%{error: error, error_description: description})
     end
   end
+
+  # A rejected registration is a connector that cannot connect AT ALL, and the
+  # only record of why lives in this request. Telemetry alone carries no
+  # `token_endpoint_auth_method`, so a client asking for a confidential
+  # registration (which we do not mint) failed silently from our side while the
+  # vendor surfaced our error as their own 500. Log enough to identify the
+  # client and the metadata it wanted.
+  #
+  # `:lifecycle` because `:auth` info does not ship to Loki (see
+  # Engram.Logger.Category). Name is normalized, so no user-chosen suffix leaks.
+  defp log_rejected(changeset, description) do
+    Logger.warning(
+      "mcp_dcr_rejected",
+      Metadata.with_category(:warning, :lifecycle,
+        normalized_name:
+          changeset |> Ecto.Changeset.get_field(:client_name) |> LogoAllowlist.normalize_name(),
+        requested_auth_method: Ecto.Changeset.get_field(changeset, :token_endpoint_auth_method),
+        software_id: Ecto.Changeset.get_field(changeset, :software_id),
+        reason: description
+      )
+    )
+  end
+
+  # The DCR body is the only place a client's self-reported identity exists.
+  # no vendor publishes these strings. When one resolves to no slug, its
+  # onboarding checklist row cannot tick, so record the normalized name and let
+  # prod tell us what to add to `@name_aliases` instead of guessing.
+  #
+  # Logs the NORMALIZED name deliberately: it drops the user-chosen server
+  # suffix ("Claude Code (my-private-project)"), so nothing personal ships.
+  defp log_unattributed(%{kind: "mcp"} = client) do
+    identity = LogoAllowlist.resolve(client.software_id, client.redirect_uris, client.client_name)
+
+    if is_nil(identity.slug) do
+      Logger.info(
+        "mcp_dcr_unattributed_client",
+        Metadata.with_category(:info, :lifecycle,
+          normalized_name: LogoAllowlist.normalize_name(client.client_name),
+          redirect_uris: client.redirect_uris,
+          software_id: client.software_id
+        )
+      )
+    end
+  end
+
+  defp log_unattributed(_), do: :ok
 
   defp emit_telemetry(result, client_id, software_id, kind) do
     :telemetry.execute(@telemetry_event, %{count: 1}, %{
@@ -64,6 +116,11 @@ defmodule EngramWeb.OAuthRegisterController do
       grant_types: client.grant_types,
       response_types: client.response_types,
       token_endpoint_auth_method: client.token_endpoint_auth_method,
+      client_secret: client.client_secret,
+      # RFC 7591 §3.2.1: REQUIRED whenever a client_secret is issued. 0 means
+      # the secret does not expire. Map.reject below drops it for public
+      # clients, where there is no secret to describe.
+      client_secret_expires_at: client.client_secret && 0,
       software_id: client.software_id,
       software_version: client.software_version,
       logo_uri: client.logo_uri,
@@ -90,7 +147,7 @@ defmodule EngramWeb.OAuthRegisterController do
       # Only stringify when the placeholder is actually present. A failed cast
       # (e.g. a JSON string where an array is expected) carries opts like
       # `type: {:array, :string}` whose message ("is invalid") has no
-      # placeholder — eagerly to_string-ing that tuple is what crashed (500).
+      # placeholder, eagerly to_string-ing that tuple is what crashed (500).
       if String.contains?(acc, placeholder) do
         String.replace(acc, placeholder, to_string(value))
       else

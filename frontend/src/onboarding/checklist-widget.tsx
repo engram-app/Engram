@@ -41,6 +41,9 @@ const DOC_URLS: Record<string, string> = {
 	opencode: "https://engram.page/docs/integrations/opencode/",
 	github_copilot: "https://engram.page/docs/integrations/github-copilot/",
 	other_mcp: "https://engram.page/docs/mcp/manual-config/",
+	// No `antigravity` entry yet, engram-marketing has no integrations/antigravity/
+	// page, and a mapped-but-missing URL is a hard 404 where the unmapped
+	// fallback below is a working index. Add it with the marketing page.
 };
 const DOC_FALLBACK = "https://engram.page/docs/integrations/";
 
@@ -58,6 +61,7 @@ const TOOL_LABELS: Record<string, string> = {
 	continue: "Connect Continue",
 	opencode: "Connect OpenCode",
 	github_copilot: "Connect GitHub Copilot",
+	antigravity: "Connect Antigravity",
 	other_mcp: "Connect another MCP client",
 };
 
@@ -99,7 +103,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 		});
 
 		ob.recordAsync(action).catch(() => {
-			// The mutation hook already retries 3× — reaching here means the
+			// The mutation hook already retries 3×, reaching here means the
 			// server rejected. Roll back by invalidating so the next refetch
 			// restores the real cache state.
 			qc.invalidateQueries({ queryKey: ["onboarding", "status"] });
@@ -116,6 +120,14 @@ export function ChecklistWidget({ onStartTour }: Props) {
 			.filter((c) => c.kind === "mcp")
 			.map((c) => c.slug)
 			.filter((s): s is string => Boolean(s)),
+	);
+	// `other_mcp` is the one row with no slug of its own, no client ever
+	// resolves to it, so slug-matching left it permanently unstickable. It's
+	// satisfied by any live MCP grant not already claimed by another row the
+	// user picked (an unrecognized client has slug null and always counts).
+	const otherSelected = new Set(tools.filter((t) => t !== "other_mcp"));
+	const hasUnclaimedMcp = (connections.data ?? []).some(
+		(c) => c.kind === "mcp" && !(c.slug && otherSelected.has(c.slug)),
 	);
 
 	const items: Item[] = [
@@ -142,7 +154,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 					{
 						key: "tour",
 						label: "Take the tour",
-						// No in-row completion signal — `tour_completed` removes the row
+						// No in-row completion signal, `tour_completed` removes the row
 						// structurally (guard above). Only dismissal hides it here.
 						done: false,
 						dismissed: isDismissed("tour"),
@@ -154,7 +166,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 			(slug): Item => ({
 				key: slug,
 				label: TOOL_LABELS[slug] ?? `Connect ${slug}`,
-				done: connectedSlugs.has(slug),
+				done: slug === "other_mcp" ? hasUnclaimedMcp : connectedSlugs.has(slug),
 				dismissed: isDismissed(slug),
 				docUrl: DOC_URLS[slug] ?? DOC_FALLBACK,
 				dismissible: true,
@@ -163,7 +175,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 	];
 
 	// Dismissed rows are removed entirely (the × is "hide this"). Completed rows
-	// stay visible — struck through — so progress is felt, not silently erased.
+	// stay visible, struck through, so progress is felt, not silently erased.
 	// The whole widget retires only once nothing is left to act on.
 	const visible = items.filter((i) => !i.dismissed);
 	const hasActionable = items.some((i) => !(i.done || i.dismissed));
@@ -235,7 +247,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 							<span aria-hidden>{i.done ? "☑" : "☐"}</span>
 							{i.label}
 						</span>
-						{/* Completed rows carry no actions — just the checked-off label. */}
+						{/* Completed rows carry no actions, just the checked-off label. */}
 						{!i.done && (
 							<span className="flex items-center gap-1">
 								{i.startTour ? (
@@ -266,7 +278,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 			</ul>
 			{isFreeTier && (
 				<p className="border-border border-t px-4 py-3 text-muted-foreground text-xs">
-					You're on Free — 1 connection.{" "}
+					You're on Free, 1 connection.{" "}
 					<Link
 						to="/onboard/billing"
 						className="font-medium text-foreground underline underline-offset-4"

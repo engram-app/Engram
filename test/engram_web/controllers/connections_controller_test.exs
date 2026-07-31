@@ -52,7 +52,8 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
       mcp = Enum.find(body, fn r -> r["kind"] == "mcp" end)
       assert mcp["name"] == "Claude Desktop"
-      assert mcp["verified"] == true
+      # Loopback redirect + self-asserted software_id => identity yes, badge no.
+      assert mcp["verified"] == false
       assert mcp["slug"] == "claude"
       assert mcp["client_id"] == client.client_id
 
@@ -69,7 +70,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
     test "returns 403 for API-key-authed requests (PAT must not list connections)", %{conn: conn} do
       # The nested RequireSession plug gates the route. grant_api_write! lets
       # the request pass RequireApiRpsBudget so it reaches RequireSession,
-      # which then returns 403 with api_key_not_allowed — matching the pattern
+      # which then returns 403 with api_key_not_allowed, matching the pattern
       # in auth_controller_test.exs.
       user = insert(:user)
       {:ok, raw_key, _api_key} = Engram.Accounts.create_api_key(user, "test-key")
@@ -149,7 +150,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert Engram.Connections.count_active(user.id, :mcp) == 0
     end
 
-    test "is idempotent — second revoke returns 204", %{conn: conn} do
+    test "is idempotent, second revoke returns 204", %{conn: conn} do
       user = insert(:user)
       vault = insert(:vault, user: user)
       client = insert(:oauth_client, kind: "mcp")
@@ -234,7 +235,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert Engram.Connections.count_active(user.id, :obsidian) == 0
     end
 
-    test "204 is idempotent — second revoke also returns 204", %{conn: conn} do
+    test "204 is idempotent, second revoke also returns 204", %{conn: conn} do
       user = insert(:user)
       vault = insert(:vault, user: user)
       family_id = Ecto.UUID.generate()
@@ -374,7 +375,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
         |> delete("/api/connections/pat/#{api_key.id}")
 
       assert conn.status == 204
-      # Confirm it's gone — list_for_user should not include it.
+      # Confirm it's gone, list_for_user should not include it.
       refute Enum.any?(Engram.Connections.list_for_user(user), fn r ->
                r.kind == :pat and r.key_id == api_key.id
              end)
