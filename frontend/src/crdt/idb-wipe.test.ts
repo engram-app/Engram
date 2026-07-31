@@ -105,6 +105,27 @@ describe("wipeCrdtIndexedDb", () => {
 		await expect(wipeCrdtIndexedDb()).resolves.toBeUndefined();
 	});
 
+	// rememberCrdtDb runs on EVERY doc open. Without the write-through cache it
+	// re-read, re-parsed, linear-scanned and re-serialised the whole registry
+	// each time — O(n²) across a vault, with a synchronous main-thread write per
+	// open. Storage must be touched once per NAME, not once per call.
+	it("does not touch storage when re-remembering a known name", () => {
+		const setItem = vi.spyOn(globalThis.localStorage, "setItem");
+		const name = `${CRDT_IDB_PREFIX}v1/hot-note`;
+
+		rememberCrdtDb(name);
+		const afterFirst = setItem.mock.calls.length;
+		expect(afterFirst).toBeGreaterThan(0);
+
+		for (let i = 0; i < 50; i++) {
+			rememberCrdtDb(name);
+		}
+
+		expect(setItem.mock.calls.length).toBe(afterFirst);
+		expect(knownCrdtDbs()).toEqual([name]);
+		setItem.mockRestore();
+	});
+
 	it("no-ops when indexedDB itself is absent", async () => {
 		rememberCrdtDb(`${CRDT_IDB_PREFIX}v1/note-a`);
 		vi.stubGlobal("indexedDB", undefined);

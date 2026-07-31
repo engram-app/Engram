@@ -54,25 +54,51 @@ function writeRegistry(names: string[]): void {
 	}
 }
 
+/**
+ * Write-through cache of the registry.
+ *
+ * `rememberCrdtDb` is called on EVERY doc open, so without this it would do a
+ * localStorage read + `JSON.parse` + linear scan + `JSON.stringify` + a
+ * synchronous write each time — O(n²) across a vault of n notes, with n
+ * main-thread-blocking writes. Browsing a large vault would jank.
+ *
+ * `null` means "not loaded yet"; the registry is read from storage at most once
+ * per page load. localStorage is single-origin and we are the only writer, so
+ * the cache cannot go stale under us within a document. Another TAB could add
+ * names we don't see, which is exactly why the wipe still unions this with
+ * `indexedDB.databases()` rather than trusting it alone.
+ */
+let cache: Set<string> | null = null;
+
+function load(): Set<string> {
+	if (cache === null) {
+		cache = new Set(readRegistry());
+	}
+	return cache;
+}
+
 /** Record a CRDT database name so the logout wipe can find it without
  *  `indexedDB.databases()`. Idempotent; safe to call on every doc open. */
 export function rememberCrdtDb(name: string): void {
-	const names = readRegistry();
-	if (names.includes(name)) {
+	const names = load();
+	if (names.has(name)) {
 		return;
 	}
-	names.push(name);
-	writeRegistry(names);
+	names.add(name);
+	// One write per name ever, not per open. Unavoidable if the name is to be
+	// durable before the database is created (see the call site in manager.ts).
+	writeRegistry([...names]);
 }
 
 /** Every CRDT database name this origin is known to have created. */
 export function knownCrdtDbs(): string[] {
-	return readRegistry();
+	return [...load()];
 }
 
 /** Drop the registry. Called by the wipe once the databases are gone, so the
  *  list does not grow without bound across sessions. */
 export function forgetCrdtDbs(): void {
+	cache = null;
 	try {
 		globalThis.localStorage?.removeItem(REGISTRY_KEY);
 	} catch {
