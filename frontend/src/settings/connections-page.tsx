@@ -170,8 +170,16 @@ function ConnectionCard({
 								    publishing a document at a domain it owns, which is how a
 								    loopback app can be verified at all. Saying "redirects to
 								    a domain the vendor owns" about Claude Code would be
-								    plainly false — it redirects to localhost. */}
-								{connection.cimd_url
+								    plainly false — it redirects to localhost.
+
+								    `verified` gates BOTH "Verified." strings; `cimd_url` only
+								    chooses which proof to name. Branching on cimd_url alone
+								    would duplicate the backend's verification rule here, in
+								    another language, with nothing keeping the two in sync — so
+								    loosening SsrfGuard or lookup_by_cimd could make this claim
+								    verification the backend never granted. The server stays
+								    the only thing that decides `verified`. */}
+								{connection.verified && connection.cimd_url
 									? "Verified. The app publishes its identity at a domain it owns."
 									: connection.verified
 										? "Verified. Sign-in redirects to a domain the vendor owns."

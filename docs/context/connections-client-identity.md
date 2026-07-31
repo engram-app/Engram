@@ -438,10 +438,17 @@ The UI shows **four** states (`connections-page.tsx`):
 
 | Condition | Chip | `Identity:` row says |
 |---|---|---|
-| `cimd_url` present | *(none)* | "The app publishes its identity at a domain it owns" |
+| `verified` **and** `cimd_url` | *(none)* | "The app publishes its identity at a domain it owns" |
 | `verified`, no `cimd_url` | *(none)* | "Sign-in redirects to a domain the vendor owns" |
 | `!verified` and `slug` | *(none)* | "Self-reported. Local and self-hosted apps have no domain to check, so this is normal" |
 | `!verified` and no `slug` | `unverified` | "Unrecognized client. Revoke it if you don't recognize the redirect below" |
+
+**`verified` gates both "Verified." strings; `cimd_url` only chooses which proof
+to name.** Branching on `cimd_url` alone would restate the backend's verification
+rule in TypeScript with nothing keeping the two in sync, so loosening `SsrfGuard`
+or `lookup_by_cimd` could have the UI assert a proof the server never granted.
+The server stays the only thing that decides `verified`; a test pins the
+unreachable-today `verified: false` + `cimd_url` combination.
 
 **Keep the first two strings distinct.** They describe genuinely different proofs,
 and collapsing them makes one of the two a lie: Claude Code over CIMD does *not*
