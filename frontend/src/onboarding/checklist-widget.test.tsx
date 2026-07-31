@@ -5,7 +5,8 @@ import { useSyncExternalStore } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BillingStatus, Connection, OnboardingAction, OnboardingStatus } from "../api/queries";
-import { ChecklistWidget } from "./checklist-widget";
+import { ChecklistWidget, DOC_URLS } from "./checklist-widget";
+import { TOOL_ASSISTANTS, TOOL_CODING } from "./onboarding-tools";
 import type { useOnboardingActions } from "./use-onboarding-actions";
 
 let actionsList: OnboardingAction[] = [];
@@ -246,6 +247,26 @@ describe("ChecklistWidget, per-tool rows", () => {
 
 		const link = screen.getByRole("link", { name: /setup guide/iu });
 		expect(link).toHaveAttribute("href", "https://engram.page/docs/integrations/");
+	});
+
+	// #1157: `antigravity` sat in the widget's label map with no DOC_URLS entry,
+	// so its row silently rendered the generic index instead of its own guide.
+	// Asserted against the canonical FTUX catalog rather than a hand-copied
+	// list, so the next connector added there fails here until it is mapped.
+	//
+	// Deliberately a map-parity check and NOT a render: rendering all 14 rows
+	// costs enough CPU to starve a sibling suite's real-timer chain (it tipped
+	// agreement-page.flow.test.tsx over its waitFor budget under full-suite
+	// parallelism). Nothing here needs the DOM.
+	it("maps every selectable catalog tool to its own doc URL", () => {
+		const missing = [...TOOL_ASSISTANTS, ...TOOL_CODING]
+			// `unavailable` tools are absent from the backend @valid_tools and can
+			// never reach a saved profile, so they render no row to link.
+			.filter((t) => !t.unavailable)
+			.map((t) => t.slug)
+			.filter((slug) => !DOC_URLS[slug]);
+
+		expect(missing).toEqual([]);
 	});
 
 	it("per-tool CTA opens in a new tab with rel=noreferrer", () => {

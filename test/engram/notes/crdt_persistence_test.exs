@@ -71,6 +71,57 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert CrdtBridge.text_of(doc) == "base"
   end
 
+  # #852. bind/3 used to swallow a decrypt FAILURE through the same catch-all
+  # clause as "no snapshot yet", so an undecryptable snapshot silently started a
+  # fresh lineage: the tail replays onto an empty doc, the room looks converged,
+  # and the next checkpoint writes that truncated doc back over the real content.
+  # A transient failure (DEK cache miss, a read mid-rotation) would have become
+  # permanent data loss. Notes.maybe_merge_crdt/4 already refused on the same
+  # signal; this aligns bind/3 with it.
+  test "bind/3 REFUSES to bind when the crdt_state snapshot cannot be decrypted", ctx do
+    %{user: user, note: note} = ctx
+
+    # Flip a byte so AEAD verification fails — the same shape a wrong-DEK or
+    # mid-rotation read presents as.
+    <<first, rest::binary>> = note.crdt_state_ciphertext
+    tampered = <<:erlang.bxor(first, 0xFF), rest::binary>>
+
+    Repo.with_tenant(user.id, fn ->
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(set: [crdt_state_ciphertext: tampered])
+    end)
+
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
+    doc = CrdtBridge.new_doc()
+
+    capture_log(fn ->
+      assert_raise RuntimeError, ~r/crdt_state decrypt failed/, fn ->
+        CrdtPersistence.bind(st, note.id, doc)
+      end
+    end)
+
+    # The doc must be left EMPTY rather than seeded with a fresh lineage —
+    # that empty-but-plausible doc is the thing a later checkpoint would
+    # have written back over the note body.
+    assert CrdtBridge.text_of(doc) == ""
+  end
+
+  # The legitimate half of the same branch must keep working: a note that has
+  # never been checkpointed has no snapshot at all, and that is not an error.
+  test "bind/3 still binds a note with no snapshot (nil ciphertext)", ctx do
+    %{user: user, note: note} = ctx
+
+    Repo.with_tenant(user.id, fn ->
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil])
+    end)
+
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
+    doc = CrdtBridge.new_doc()
+
+    assert %{user: _} = CrdtPersistence.bind(st, note.id, doc)
+  end
+
   test "bind/3 returns state map with resolved :user cached", ctx do
     %{user: user, note: note} = ctx
     st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}

@@ -18,15 +18,17 @@ defmodule Engram.Connections.LogoAllowlist do
   `verified: true`; they supply identity only. (Tightened 2026-07-30:
   `software_id` previously granted the badge outright.)
 
-  Be precise about what that does and does not buy. A client registering
-  `software_id: "anthropic-claude-desktop"` still gets Claude's **logo and
-  display name** — it only no longer gets the badge, and the host now outranks
-  it for display. Withholding the icon too would need the `@software_id` map
-  gone, and it still carries our own `engram-vault-sync` plugin. Four of its
-  five entries are unvalidated guesses (see below) and should probably be
-  deleted once observation confirms nothing sends them; that is the real fix,
-  and it is not this one. The security boundary that actually holds is
-  `verified`.
+  As of 2026-07-31 a self-asserted `software_id` buys **no vendor identity at
+  all**. The four guessed entries that previously handed out Claude's, Cursor's,
+  ChatGPT's and VS Code's logos were deleted, leaving only our own
+  `engram-vault-sync` plugin. A rogue client registering
+  `software_id: "anthropic-claude-desktop"` now resolves to the unverified
+  placeholder and renders with the "Unverified client" chip, rather than
+  appearing in the victim's connections list wearing Anthropic's logo.
+
+  This closed the last gap where a claim, not a proof, drove what the user sees.
+  The security boundary is still `verified`; this removed the cosmetic
+  trustworthiness that made a rogue grant look not worth revoking.
 
   Loopback and custom schemes (Cursor desktop registers
   `cursor://anysphere.cursor-mcp/…`) never match the host map, so
@@ -35,29 +37,24 @@ defmodule Engram.Connections.LogoAllowlist do
 
   @empty %{verified: false, logo: nil, display_name: nil, slug: nil}
 
-  # Keyed on RFC 7591 software_id. `engram-vault-sync` is our own plugin and is
-  # the only proven-real entry. The other four are unvalidated guesses left in
-  # place (harmless, real clients never send them) pending observation.
+  # Keyed on RFC 7591 software_id. Entries here must be OBSERVED on a real
+  # registration, never guessed: this map is the one place a self-asserted
+  # string still buys a vendor's logo, so every speculative key is a free
+  # impersonation for anyone who reads the source.
+  #
+  # `engram-vault-sync` is our own plugin, and it needs the entry: it redirects
+  # to a custom scheme, so the host map can never attribute it, and its
+  # `client_name` does not derive to a catalog slug.
+  #
+  # Four guessed entries (`anthropic-claude-desktop`, `cursor.sh`,
+  # `openai-chatgpt`, `vscode-engram`) were deleted 2026-07-31. None was ever
+  # observed in prod; all nine real connectors are attributed by redirect host
+  # or `client_name`, and Cursor in fact registers `cursor://` with no
+  # software_id at all.
   @software_id %{
     "engram-vault-sync" => %{
       logo: "/assets/clients/engram-vault-sync.svg",
       display_name: "Obsidian Vault Sync",
-      slug: nil
-    },
-    "anthropic-claude-desktop" => %{
-      logo: "/assets/clients/claude.svg",
-      display_name: "Claude Desktop",
-      slug: "claude"
-    },
-    "cursor.sh" => %{logo: "/assets/clients/cursor.svg", display_name: "Cursor", slug: "cursor"},
-    "openai-chatgpt" => %{
-      logo: "/assets/clients/chatgpt.svg",
-      display_name: "ChatGPT",
-      slug: "chatgpt"
-    },
-    "vscode-engram" => %{
-      logo: "/assets/clients/vscode.svg",
-      display_name: "VS Code (Engram)",
       slug: nil
     }
   }
@@ -113,8 +110,8 @@ defmodule Engram.Connections.LogoAllowlist do
   then the normalized `client_name`.
 
   The host leads because it is the only source that is not self-asserted. A
-  client claiming `software_id: "openai-chatgpt"` while redirecting to
-  `claude.ai` must not be listed as ChatGPT: the grant is delivered to
+  client claiming `software_id: "engram-vault-sync"` while redirecting to
+  `claude.ai` must not be listed as our plugin: the grant is delivered to
   Anthropic, so Anthropic is who the user is actually connected to.
 
   **`verified`** is decided by exactly one thing: whether the redirect lands on
@@ -190,9 +187,13 @@ defmodule Engram.Connections.LogoAllowlist do
   Identity for a known `software_id`: logo, display_name, slug.
 
   Never sets `verified`: `software_id` is an RFC 7591 field the client sends
-  about itself, so anyone can register claiming `anthropic-claude-desktop`.
-  Granting the badge on it would let a rogue client wear a vendor's logo in the
-  user's connections list. Only `resolve/3` decides verification, from the host.
+  about itself, so anyone can register claiming to be anyone. Only `resolve/3`
+  decides verification, from the host.
+
+  The map is deliberately down to our own plugin, so an unrecognized claim
+  returns the placeholder rather than a vendor's logo. Adding a key here on a
+  guess re-opens that impersonation; add one only for an id observed on a real
+  registration.
   """
   @spec lookup(String.t() | nil) :: entry()
   def lookup(software_id) when is_binary(software_id) do

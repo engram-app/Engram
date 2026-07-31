@@ -41,6 +41,12 @@ interface Brand {
 // Skipping the MCP wordmark deliberately: ships as "ModelContextProtocol"
 // (335px viewBox) which dominates the row and isn't the label we want here
 // anyway. We fall through to the plain `fallbackLabel`.
+// `chatgpt` and `lobechat` intentionally wear their VENDOR's mark (OpenAI,
+// LobeHub) rather than the product's. Checked 2026-07-31 (#1157): the
+// package ships no `chatgpt-*` or `lobechat-*` asset at all, only
+// `openai*.svg` and `lobehub*.svg`, so the vendor mark is the whole of what
+// is available. Not drift, and not worth re-investigating — it changes only
+// if @lobehub/icons-static-svg adds product-specific assets.
 const BRANDS: Record<string, Brand> = {
 	claude: { mark: claudeColor, wordmark: claudeText },
 	chatgpt: { mark: openaiMark, wordmark: openaiText },

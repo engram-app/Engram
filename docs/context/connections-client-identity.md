@@ -61,12 +61,13 @@ vendor-owned **HTTPS** redirect host, no userinfo, case-folded.
 > but it made a rogue grant look trustworthy enough not to revoke. It now
 > supplies identity only, and only when no vendor host outranks it.
 >
-> **Be precise about the residue.** That client still gets Claude's logo and
-> display name; it just loses the badge. Withholding the icon too means deleting
-> the `@software_id` map, which still carries our own `engram-vault-sync`
-> plugin. Four of its five entries are unvalidated guesses, and deleting them
-> once prod confirms nothing sends them is the real fix. `verified` is the
-> boundary that actually holds.
+> **Residue removed 2026-07-31 (#1156).** The tightening above left the rogue
+> client with Claude's logo and display name; it only lost the badge. The four
+> guessed `@software_id` entries were then deleted, so a self-asserted
+> `software_id` now resolves to the unverified placeholder and grants **no
+> vendor identity at all**. Only our own `engram-vault-sync` remains, and it
+> needs the entry: it redirects to a custom scheme, so no host can attribute
+> it, and its `client_name` derives no catalog slug.
 >
 > Device-flow rows are unaffected, `device_rows/1`
 > hardcodes `verified: true`, which is legitimate because our own server mints
@@ -74,7 +75,7 @@ vendor-owned **HTTPS** redirect host, no userinfo, case-folded.
 
 - **Why HTTPS host is un-spoofable:** a forged DCR client can *claim* `redirect_uri=https://claude.ai/...`, but the auth code is then delivered to claude.ai, not to the attacker. The vendor controls the callback handler.
 - **Why custom schemes / http are NOT:** `com.evil.app://claude.ai/cb` and `http://claude.ai/...` both parse to host `claude.ai` but deliver the code to an attacker-controlled handler. `lookup_by_host/1` enforces `%URI{scheme: "https", userinfo: nil}`. (Code review caught this; the naive host-only match was exploitable.)
-- **`client_name` grants `slug` and nothing else.** It is self-asserted and trivially spoofable, but ticking a row in your *own* checklist is not a security boundary. The logo and the verified badge, where spoofing actually matters, stay host/`software_id` gated. `logo_allowlist_test.exs` pins this explicitly.
+- **`client_name` grants `slug` and nothing else.** It is self-asserted and trivially spoofable, but ticking a row in your *own* checklist is not a security boundary. The logo and the verified badge, where spoofing actually matters, are host-gated only (since #1156 deleted the guessed `software_id` entries, no self-asserted field grants a vendor logo). `logo_allowlist_test.exs` pins this explicitly.
 - **A proven host outranks a claimed `software_id`** (reversed during review, 2026-07-30). Previously `software_id` won, so a client claiming `openai-chatgpt` while redirecting to `claude.ai` was listed as ChatGPT *and* verified via Anthropic's host. Whoever receives the code is who the user is connected to.
 
 > **Correction (2026-07-30).** This doc previously said custom schemes and localhost were *"identify-only: they may set icon/name but never grant verified."* That was the intended design; the code never implemented it, `lookup_by_host/1` returned the empty placeholder, so loopback clients got **no slug at all** and their checklist row could never tick. The doc/code mismatch is why the gap survived six weeks. Slug attribution for those clients now comes from `client_name`.
@@ -233,9 +234,13 @@ SELECT software_id, client_name, redirect_uris FROM oauth_clients;
 
 `@lobehub/icons-static-svg` is already a dependency and already covers every catalog slug. Use `ToolMark slug={...}` (`frontend/src/onboarding/tool-icon.tsx`). The backend `logo: "/assets/clients/*.svg"` field is a legacy parallel system still needed only for `engram-vault-sync` and `vscode`; `grok.svg`/`mistral.svg` were never created and don't need to be.
 
-## Known stale: the 4 guessed `software_id` entries
+## Deleted: the 4 guessed `software_id` entries (2026-07-31, #1156)
 
-`anthropic-claude-desktop`, `cursor.sh`, `openai-chatgpt`, `vscode-engram` are UNVALIDATED guesses. Prod data now **proves** they never fire (the real ChatGPT and Claude grants both arrive with `software_id: null`). Harmless, but they read as coverage, do not add more speculative entries. The only proven-real `software_id` is our own `engram-vault-sync`.
+`anthropic-claude-desktop`, `cursor.sh`, `openai-chatgpt`, `vscode-engram` were UNVALIDATED guesses, and are now **gone**. Prod data proved they never fire (the real ChatGPT and Claude grants both arrive with `software_id: null`; Cursor registers `cursor://` with no `software_id`). They were not merely dead config, they were a free vendor-logo grant for anyone who read the source: registering `software_id: "anthropic-claude-desktop"` put Anthropic's logo and name on a rogue grant in the victim's connections list, with no `unverified` chip (the chip is suppressed whenever a slug resolves, deliberately, so Claude Code is not badged as suspect).
+
+`engram-vault-sync` is the only remaining entry and the only proven-real one.
+
+**Rule going forward: add a key here only for a `software_id` observed on a real registration.** A guess re-opens the impersonation. Check the `mcp_dcr_unattributed_client` tripwire for what clients actually send.
 
 `@name_aliases` currently carries one **inferred, not observed** entry: `visual_studio_code` → `github_copilot`. VS Code drives MCP OAuth itself, above the extension, so a Copilot user's grant is expected to arrive under the product name. The tripwire will confirm or refute it.
 
