@@ -47,7 +47,7 @@ vi.mock("../config-context", async () => {
 	const actual = await vi.importActual<typeof import("../config-context")>("../config-context");
 	return {
 		...actual,
-		// SaaS context — free-tier cap fallbacks under test depend on this.
+		// SaaS context, free-tier cap fallbacks under test depend on this.
 		useConfig: () => ({ billingEnabled: true }) as ReturnType<typeof actual.useConfig>,
 	};
 });
@@ -138,6 +138,86 @@ describe("ConnectionsPage", () => {
 		expect(screen.getByRole("heading", { name: /Obsidian plugins/iu })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: /AI tools/iu })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: /API keys/iu })).toBeInTheDocument();
+	});
+
+	// A recognized local/self-hosted client is unverifiable by construction, so
+	// it must not carry the same "unverified" badge as an unknown client, that
+	// reads as a fixable fault and prompts "am I connected wrong?".
+	it("shows no warning chip for a recognized client, explaining provenance in the detail row", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...baseMcp,
+			slug: "claude_code",
+			verified: false,
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.queryByText(/^unverified$/iu)).toBeNull();
+		expect(screen.getByText(/self-reported/iu)).toBeInTheDocument();
+	});
+
+	// Claude Code registers as "Claude Code (<mcp-server-name>)" where the suffix
+	// is whatever the user named their server, so passing the raw client_name
+	// through puts a local config detail in a list of vendor names. Once the slug
+	// resolves we know the product, so show the catalog spelling.
+	it("shows the catalog product name, not the client's self-reported one", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...baseMcp,
+			name: "Claude Code (engram)",
+			slug: "claude_code",
+			verified: false,
+		});
+		mockTier = "starter";
+		renderPage();
+
+		// getAllBy: the brand mark's <title> carries the product name too.
+		expect(screen.getAllByText("Claude Code").length).toBeGreaterThan(0);
+		expect(screen.queryByText(/\(engram\)/u)).toBeNull();
+	});
+
+	// No slug means no catalog entry to prefer, so the self-reported name is all
+	// we have and must still render rather than collapsing to "Unnamed".
+	it("keeps the self-reported name when no slug resolved", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...baseMcp,
+			name: "Some Unknown Client",
+			slug: null,
+			verified: false,
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText("Some Unknown Client")).toBeInTheDocument();
+	});
+
+	it("still labels an unrecognized client unverified", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...baseMcp,
+			slug: null,
+			verified: false,
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText(/^unverified$/iu)).toBeInTheDocument();
+		expect(screen.queryByText(/^self-reported$/iu)).toBeNull();
+	});
+
+	// Brand marks come from the slug, not a per-vendor asset the backend has to
+	// ship, Grok has no /assets/clients/grok.svg and still renders its mark.
+	it("renders the brand mark for a slugged connection with no logo asset", () => {
+		mockConnections.splice(0, mockConnections.length, { ...baseMcp, slug: "grok", logo: null });
+		mockTier = "starter";
+		renderPage();
+		expect(screen.getByTestId("tool-mark-grok")).toBeInTheDocument();
+	});
+
+	it("falls back to the backend logo, then a plug, when the slug has no mark", () => {
+		mockConnections.splice(0, mockConnections.length, baseObs);
+		mockTier = "starter";
+		const { container } = renderPage();
+		expect(container.querySelector('img[src="/x.svg"]')).toBeInTheDocument();
+		expect(screen.queryByTestId(/^tool-mark-/u)).toBeNull();
 	});
 
 	it("shows the obsidian connection name and omits the unverified badge", () => {

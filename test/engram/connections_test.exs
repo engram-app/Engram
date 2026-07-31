@@ -28,7 +28,7 @@ defmodule Engram.ConnectionsTest do
       family = Ecto.UUID.generate()
 
       # Both tokens are active (revoked_at: nil, consumed_at: nil). Without
-      # DISTINCT client_id in the query this would return 2 — the DISTINCT is
+      # DISTINCT client_id in the query this would return 2, the DISTINCT is
       # the load-bearing assertion here.
       insert(:oauth_refresh_token,
         user_id: user.id,
@@ -70,7 +70,7 @@ defmodule Engram.ConnectionsTest do
       vault = insert(:vault, user: user)
       family = Ecto.UUID.generate()
 
-      # Two tokens in the same family — should collapse to 1
+      # Two tokens in the same family, should collapse to 1
       insert(:device_refresh_token, user: user, vault: vault, family_id: family)
       insert(:device_refresh_token, user: user, vault: vault, family_id: family)
 
@@ -136,12 +136,15 @@ defmodule Engram.ConnectionsTest do
         vault_id: vault.id
       )
 
+      # verified: false, the factory's redirect is loopback, and a self-asserted
+      # software_id no longer buys the badge (tightened 2026-07-30). Identity
+      # still resolves from it.
       assert [
                %{
                  kind: :mcp,
                  client_id: cid,
                  name: "Claude Desktop",
-                 verified: true,
+                 verified: false,
                  vault_id: vid
                }
              ] =
@@ -175,6 +178,34 @@ defmodule Engram.ConnectionsTest do
              ] = Connections.list_for_user(user)
     end
 
+    # Regression: Claude Code redirects to loopback, which is un-verifiable by
+    # design, so it resolved to slug: nil and the onboarding checklist row for
+    # it could never tick. The slug must survive to the view while `verified`
+    # and `logo` stay off, the name is self-asserted.
+    test "attributes a loopback client to its slug via client_name, unverified" do
+      user = insert_user()
+
+      client =
+        insert(:oauth_client,
+          kind: "mcp",
+          software_id: nil,
+          client_name: "Claude Code (engram)",
+          redirect_uris: ["http://localhost:62184/callback"]
+        )
+
+      insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+
+      assert [
+               %{
+                 kind: :mcp,
+                 name: "Claude Code (engram)",
+                 verified: false,
+                 slug: "claude_code",
+                 logo: nil
+               }
+             ] = Connections.list_for_user(user)
+    end
+
     test "includes PATs as kind=:pat" do
       user = insert_user()
       insert(:api_key, user: user, name: "my-script")
@@ -192,7 +223,7 @@ defmodule Engram.ConnectionsTest do
       older = ~U[2026-01-01 00:00:00Z]
       newer = ~U[2026-05-30 00:00:00Z]
 
-      # client_a older, client_b newer — B should sort first regardless of alphabetic order
+      # client_a older, client_b newer, B should sort first regardless of alphabetic order
       insert(:oauth_refresh_token,
         user_id: user.id,
         client_id: client_a.client_id,
@@ -281,7 +312,7 @@ defmodule Engram.ConnectionsTest do
       user = insert_user()
       # create_vault drives the real encryption pipeline so list_vaults/1 can
       # decrypt the name back. The factory-built :vault has random ciphertext
-      # which would decrypt to nil — that's the "vault gone" path tested below.
+      # which would decrypt to nil, that's the "vault gone" path tested below.
       {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Personal"})
       client = insert(:oauth_client, kind: "mcp")
 
@@ -302,7 +333,7 @@ defmodule Engram.ConnectionsTest do
 
       # Factory inserts a vault row but its ciphertext is random, so
       # Vaults.list_vaults logs a decrypt failure + returns the vault without
-      # a :name. The merge step then yields vault_name: nil — the same shape
+      # a :name. The merge step then yields vault_name: nil, the same shape
       # the frontend sees when a vault was soft-deleted between the grant and
       # the page render.
       stale = insert(:vault, user: user)
@@ -378,7 +409,7 @@ defmodule Engram.ConnectionsTest do
       assert Connections.count_active(user.id, :obsidian) == 0
     end
 
-    test "is idempotent — second revoke returns :ok" do
+    test "is idempotent, second revoke returns :ok" do
       user = insert_user()
       vault = insert(:vault, user: user)
       family_id = Ecto.UUID.generate()
@@ -473,7 +504,7 @@ defmodule Engram.ConnectionsTest do
       assert Connections.count_active(other.id, :obsidian) == 1
     end
 
-    test "is idempotent — second call on already-revoked vault returns :ok" do
+    test "is idempotent, second call on already-revoked vault returns :ok" do
       user = insert_user()
       vault = insert(:vault, user: user)
       client = insert(:oauth_client, kind: "mcp")
@@ -497,7 +528,7 @@ defmodule Engram.ConnectionsTest do
 
     test "leaves OAuth grants with no vault binding (vault_id: nil) untouched" do
       # vault_id is cast-only on OAuth refresh tokens (not required), so a grant
-      # can have nil binding. Such a grant is NOT scoped to any vault — it shows
+      # can have nil binding. Such a grant is NOT scoped to any vault, it shows
       # on the connections page with vault_id: nil, independent of any vault.
       # Deleting a vault must not collaterally revoke it.
       user = insert_user()
@@ -512,7 +543,7 @@ defmodule Engram.ConnectionsTest do
 
       assert :ok = Connections.revoke_by_vault(user.id, vault.id)
 
-      # The unbound grant survives — it was never the deleted vault's connection
+      # The unbound grant survives, it was never the deleted vault's connection
       assert Connections.count_active(user.id, :mcp) == 1
     end
   end

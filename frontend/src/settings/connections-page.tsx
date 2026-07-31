@@ -24,13 +24,15 @@ import {
 	useRevokePat,
 } from "../api/queries";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
+import { TOOL_LABELS } from "../onboarding/onboarding-tools";
+import { ToolMark } from "../onboarding/tool-icon";
 import { settingsTo } from "./settings-hash";
 
 // ── Tier caps ─────────────────────────────────────────────────
 
 // Caps come from /billing/status which resolves UserLimitOverride +
 // tier defaults via Engram.Billing.effective_limit/2. Don't re-derive
-// from tier here — overrides (support comps, demo seeds) would render
+// from tier here, overrides (support comps, demo seeds) would render
 // stale.
 function useTierCaps() {
 	const { data } = useBillingStatus();
@@ -71,25 +73,54 @@ function ConnectionCard({
 	return (
 		<article className="group flex items-start rounded-lg border border-border bg-card">
 			{/* <details> wraps the summary + expanded dl. The Revoke button is a
-          sibling, not a descendant of <summary> — interactive descendants of
+          sibling, not a descendant of <summary>, interactive descendants of
           <summary> aren't allowed by the HTML spec, and Firefox/Safari skip
           Tab focus on them. */}
 			<details className="min-w-0 flex-1 open:pb-3">
 				<summary className="flex cursor-pointer items-center gap-3 px-3 py-3 [&::-webkit-details-marker]:hidden">
-					{connection.logo ? (
-						<img src={connection.logo} alt="" className="size-10 shrink-0 rounded" />
-					) : (
-						<div
-							className="flex size-10 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground"
-							aria-hidden
-						>
-							<Plug className="size-5" />
-						</div>
-					)}
+					{/* Brand mark by slug first, @lobehub/icons-static-svg covers every
+					    catalog connector, so this needs no per-vendor asset. Falls back
+					    to the backend-supplied logo (Obsidian plugin, VS Code), then a
+					    generic plug for anything unrecognized. */}
+					<ToolMark
+						slug={connection.slug}
+						className="flex size-10 shrink-0 items-center justify-center [&_svg]:size-7"
+						fallback={
+							connection.logo ? (
+								<img src={connection.logo} alt="" className="size-10 shrink-0 rounded" />
+							) : (
+								<div
+									className="flex size-10 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground"
+									aria-hidden
+								>
+									<Plug className="size-5" />
+								</div>
+							)
+						}
+					/>
 					<div className="min-w-0 flex-1">
 						<div className="truncate font-medium">
-							{connection.name ?? "Unnamed"}
-							{!connection.verified && (
+							{/* Prefer the catalog spelling once a slug is resolved. The backend
+							    passes the client's self-reported name through, and Claude Code
+							    registers as "Claude Code (<server>)" with a user-chosen suffix,
+							    so the raw string leaks a local config detail into a list of
+							    vendors. Same reasoning as the brand mark above, already keyed
+							    on slug. */}
+							{(connection.slug ? TOOL_LABELS[connection.slug] : null) ??
+								connection.name ??
+								"Unnamed"}
+							{/* A chip only where it carries information. A recognized
+							    client (slug resolved, official brand mark alongside) is
+							    presented plainly. Badging Claude Code as suspect is
+							    wrong, it just redirects to loopback and so cannot be
+							    proven either way. Provenance is spelled out in the
+							    expanded Identity row. Reserve the chip for clients we
+							    genuinely do not recognize, where it's actionable.
+
+							    This gets retired for Claude once we ship CIMD: an
+							    Anthropic-hosted client_id URL is provable, so those
+							    grants become properly `verified`. */}
+							{!(connection.verified || connection.slug) && (
 								<span className="ms-2 rounded bg-muted px-1.5 py-0.5 align-middle font-normal text-muted-foreground text-xs">
 									unverified
 								</span>
@@ -126,6 +157,18 @@ function ConnectionCard({
 						<>
 							<dt>Scopes:</dt>
 							<dd>{connection.scope}</dd>
+						</>
+					)}
+					{connection.kind === "mcp" && (
+						<>
+							<dt>Identity:</dt>
+							<dd>
+								{connection.verified
+									? "Verified. Sign-in redirects to a domain the vendor owns."
+									: connection.slug
+										? "Self-reported. Local and self-hosted apps have no domain to check, so this is normal."
+										: "Unrecognized client. Revoke it if you don't recognize the redirect below."}
+							</dd>
 						</>
 					)}
 					<dt>Identifier:</dt>
@@ -309,7 +352,7 @@ function CreatePatModal({
 						className="mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-foreground text-sm focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
 					/>
 					<span className="mt-1 block text-muted-foreground text-xs">
-						Helps you identify the key later — pick something memorable.
+						Helps you identify the key later, pick something memorable.
 					</span>
 				</label>
 
@@ -396,7 +439,7 @@ function RevealKeyModal({
 
 				{copyState === "error" && (
 					<p className="text-destructive text-sm" role="alert">
-						Copy failed — click the field and press Cmd/Ctrl+C to copy manually.
+						Copy failed, click the field and press Cmd/Ctrl+C to copy manually.
 					</p>
 				)}
 

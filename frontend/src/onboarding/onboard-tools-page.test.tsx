@@ -80,7 +80,7 @@ beforeEach(() => {
 	billingEnabled = true;
 });
 
-describe("OnboardToolsPage — Free tier", () => {
+describe("OnboardToolsPage: Free tier", () => {
 	it("shows the Free-tier banner with an Upgrade link to /onboard/billing", () => {
 		render(wrap(<OnboardToolsPage />));
 
@@ -97,7 +97,7 @@ describe("OnboardToolsPage — Free tier", () => {
 		fireEvent.click(claude);
 		expect(claude).toHaveAttribute("data-state", "checked");
 
-		// Then click Cursor — Claude should deselect.
+		// Then click Cursor, Claude should deselect.
 		const cursor = screen.getByLabelText(/^Cursor$/iu);
 		fireEvent.click(cursor);
 		expect(cursor).toHaveAttribute("data-state", "checked");
@@ -105,7 +105,7 @@ describe("OnboardToolsPage — Free tier", () => {
 	});
 });
 
-describe("OnboardToolsPage — Self-host (billing disabled)", () => {
+describe("OnboardToolsPage: Self-host (billing disabled)", () => {
 	beforeEach(() => {
 		// Self-host: no billing. tier is still "free" (no subscription) but
 		// connections are unlimited, so the step must not gate to a single pick.
@@ -132,9 +132,73 @@ describe("OnboardToolsPage — Self-host (billing disabled)", () => {
 		expect(claude).toHaveAttribute("data-state", "checked");
 		expect(cursor).toHaveAttribute("data-state", "checked");
 	});
+
+	// "I'm not connecting an AI tool yet" answers "none", so it cannot coexist
+	// with a client. As a peer checkbox it silently could, which is why it moved
+	// out of the grid.
+	it("clears every client when the no-AI-tool opt-out is picked", () => {
+		render(wrap(<OnboardToolsPage />));
+
+		const claude = screen.getByLabelText(/^Claude$/iu);
+		fireEvent.click(claude);
+		expect(claude).toHaveAttribute("data-state", "checked");
+
+		const optOut = screen.getByLabelText(/not connecting an AI tool yet/iu);
+		fireEvent.click(optOut);
+
+		expect(optOut).toHaveAttribute("data-state", "checked");
+		expect(claude).toHaveAttribute("data-state", "unchecked");
+	});
+
+	it("clears the opt-out when a client is picked", () => {
+		render(wrap(<OnboardToolsPage />));
+
+		const optOut = screen.getByLabelText(/not connecting an AI tool yet/iu);
+		fireEvent.click(optOut);
+		expect(optOut).toHaveAttribute("data-state", "checked");
+
+		const cursor = screen.getByLabelText(/^Cursor$/iu);
+		fireEvent.click(cursor);
+
+		expect(cursor).toHaveAttribute("data-state", "checked");
+		expect(optOut).toHaveAttribute("data-state", "unchecked");
+	});
+
+	it("groups 'Another MCP client' with the coding tools, not a third list", () => {
+		render(wrap(<OnboardToolsPage />));
+
+		expect(screen.getByLabelText(/another MCP client/iu)).toBeInTheDocument();
+		expect(screen.queryByText(/^other connections$/iu)).toBeNull();
+	});
+
+	// Gemini is listed but unselectable: the platform, not Engram, lacks
+	// custom-MCP support. Listing it beats a silent absence, but it must never
+	// become a selection; that would create an uncompletable checklist row.
+	it("lists Gemini as unavailable and refuses selection", () => {
+		render(wrap(<OnboardToolsPage />));
+
+		const gemini = screen.getByLabelText(/^Gemini$/iu);
+		expect(gemini).toBeDisabled();
+
+		fireEvent.click(gemini);
+		expect(gemini).not.toHaveAttribute("data-state", "checked");
+	});
+
+	// The explanation lives behind a click-to-open HelpTip, not a hover tooltip:
+	// the checkbox is disabled and therefore unfocusable, so hover-only content
+	// would be unreachable by keyboard and absent entirely on touch.
+	it("explains the Gemini limitation via a keyboard- and touch-reachable affordance", () => {
+		render(wrap(<OnboardToolsPage />));
+
+		const trigger = screen.getByRole("button", { name: /why gemini can't be connected/iu });
+		expect(screen.queryByText(/can't add custom MCP connectors/iu)).toBeNull();
+
+		fireEvent.click(trigger);
+		expect(screen.getByText(/can't add custom MCP connectors/iu)).toBeInTheDocument();
+	});
 });
 
-describe("OnboardToolsPage — Paid tier", () => {
+describe("OnboardToolsPage: Paid tier", () => {
 	beforeEach(() => {
 		billingStatus = {
 			data: { tier: "pro", active: true } as Partial<BillingStatus>,

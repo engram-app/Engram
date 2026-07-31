@@ -80,7 +80,15 @@ defmodule EngramWeb.WellKnownControllerTest do
 
       # Must match what /oauth/register actually accepts (#282) — advertising
       # client_secret_* here would tell clients to request a method we 400 on.
-      assert body["token_endpoint_auth_methods_supported"] == ["none"]
+      # "none" must remain advertised: Claude only chooses CIMD when it is,
+      # and every existing public PKCE client depends on it.
+      assert "none" in body["token_endpoint_auth_methods_supported"]
+
+      assert body["token_endpoint_auth_methods_supported"] == [
+               "none",
+               "client_secret_post",
+               "client_secret_basic"
+             ]
     end
 
     test "responds with application/json content-type", %{conn: conn} do

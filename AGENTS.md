@@ -334,6 +334,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 **Architecture & Decisions**
 - Elixir decision audit, library deps, infra checklist (partially superseded — read inline corrections) → `docs/context/elixir-architecture-decisions.md`
 - Full SQL schema, RLS policies, Ecto enforcement → `docs/context/database-schema-rls.md`
+- Widening a column type without rewriting the table (`varchar[]` → `text[]` DOES rewrite; how to measure with relfilenode; when `# squawk-ignore-file` is justified) → `docs/context/migration-column-type-rewrites.md`
 - All env vars by category → `docs/context/environment-variables.md`
 - Rate limiter & cap architecture — Postgres + BEAM only, zero Redis → `docs/context/rate-limiter-architecture.md`
 - Cross-workspace SaaS pricing model → `../engram-workspace/docs/context/pricing-strategy.md`
@@ -362,7 +363,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - OAuth 2.1 + DCR on `/api/mcp` — wire flow, endpoints, token model, scopes → `docs/context/mcp-oauth.md`
 - MCP vault selection design — stateless `set_vault`, fate of the default vault → `docs/context/mcp-vault-selection.md`
 - Refresh-token rotation — leeway/overlap window, token-family reuse detection → `docs/context/refresh-token-reuse-detection.md`
-- How `/settings/connections` identifies an OAuth/MCP client → `docs/context/connections-client-identity.md`
+- How `/settings/connections` + the onboarding checklist identify an OAuth/MCP client (slug attribution, the three hosting classes, HTTPS trust model) → `docs/context/connections-client-identity.md`
 - Onboarding demo vault poisons `activeVaultId` → prod 404 storm (fixed) → `docs/context/demo-vault-activevaultid-poisoning.md`
 
 **Frontend / SPA**

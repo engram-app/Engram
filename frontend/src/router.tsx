@@ -46,6 +46,13 @@ const LegacyNoteRedirect = lazy(() => import("./viewer/legacy-note-redirect"));
 const ResetPasswordPage = lazy(() => import("./features/auth/ResetPasswordPage"));
 const DeviceLinkPage = lazy(() => import("./device/device-link-page"));
 const OAuthAuthorizePage = lazy(() => import("./oauth/oauth-authorize-page"));
+// Dev-only (see the guarded route below). The `lazy()` MUST live inside the
+// DEV ternary, not at plain module scope: a bare `lazy(() => import(...))`
+// still emits its chunk in a production build even when the only route
+// referencing it is guarded away. Verified the hard way, it shipped 4.3 kB of
+// dead weight. With the dynamic import in a statically-false branch, Rollup
+// drops it entirely.
+const ConnectorQcPage = import.meta.env.DEV ? lazy(() => import("./dev/connector-qc-page")) : null;
 // Settings is a hash overlay mounted at the AuthGuard level (not inside
 // AppLayout) so /link and /oauth/consent, which sit outside the app shell
 // and link to `#settings/billing`, still resolve the overlay.
@@ -134,6 +141,10 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 				{ path: ROUTES.WAITLIST, element: <WaitlistPage /> },
 				// Public reset — the one-time token IS the credential.
 				{ path: "/reset-password", element: suspended(<ResetPasswordPage />) },
+				// Dev-only connector QC gallery — spreads into nothing in production.
+				...(ConnectorQcPage
+					? [{ path: "/__qc/connectors", element: suspended(<ConnectorQcPage />) }]
+					: []),
 
 				// Authenticated routes
 				{

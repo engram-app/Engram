@@ -442,6 +442,183 @@ defmodule EngramWeb.OAuthTokenControllerTest do
     end
   end
 
+  describe "POST /oauth/token — confidential client authentication" do
+    defp confidential_client(method, redirect_uri) do
+      {:ok, client} =
+        OAuth.register_client(%{
+          "redirect_uris" => [redirect_uri],
+          "client_name" => "LobeChat",
+          "token_endpoint_auth_method" => method
+        })
+
+      client
+    end
+
+    defp code_for(client, redirect_uri) do
+      user = insert(:user)
+      {verifier, challenge} = pkce_pair()
+      {mint_code(user, client, redirect_uri, challenge), verifier}
+    end
+
+    test "exchanges a code when the secret arrives in the body", %{conn: conn} do
+      uri = "https://app.lobehub.com/oauth/callback"
+      client = confidential_client("client_secret_post", uri)
+      {code, verifier} = code_for(client, uri)
+
+      conn =
+        post(conn, "/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => uri,
+          "client_id" => client.client_id,
+          "client_secret" => client.client_secret,
+          "code_verifier" => verifier
+        })
+
+      assert %{"access_token" => token} = json_response(conn, 200)
+      assert is_binary(token)
+    end
+
+    test "exchanges a code when the secret arrives via HTTP Basic", %{conn: conn} do
+      uri = "https://app.lobehub.com/oauth/callback"
+      client = confidential_client("client_secret_basic", uri)
+      {code, verifier} = code_for(client, uri)
+
+      basic = Base.encode64("#{client.client_id}:#{client.client_secret}")
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Basic #{basic}")
+        |> post("/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => uri,
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+
+      assert %{"access_token" => _} = json_response(conn, 200)
+    end
+
+    test "rejects a confidential client that omits its secret", %{conn: conn} do
+      uri = "https://app.lobehub.com/oauth/callback"
+      client = confidential_client("client_secret_post", uri)
+      {code, verifier} = code_for(client, uri)
+
+      conn =
+        post(conn, "/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => uri,
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+
+      assert %{"error" => "invalid_client"} = json_response(conn, 401)
+    end
+
+    test "rejects a wrong secret", %{conn: conn} do
+      uri = "https://app.lobehub.com/oauth/callback"
+      client = confidential_client("client_secret_post", uri)
+      {code, verifier} = code_for(client, uri)
+
+      conn =
+        post(conn, "/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => uri,
+          "client_id" => client.client_id,
+          "client_secret" => "not-the-secret",
+          "code_verifier" => verifier
+        })
+
+      assert %{"error" => "invalid_client"} = json_response(conn, 401)
+    end
+
+    # The registered method binds in BOTH directions. A public client that
+    # starts presenting a secret is either confused or an attacker probing;
+    # silently accepting it would make the registered method decorative.
+    test "rejects a secret presented by a client registered public", %{conn: conn} do
+      uri = "https://claude.ai/api/mcp/auth_callback"
+      client = register_client(uri)
+      {code, verifier} = code_for(client, uri)
+
+      conn =
+        post(conn, "/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => uri,
+          "client_id" => client.client_id,
+          "client_secret" => "unexpected",
+          "code_verifier" => verifier
+        })
+
+      assert %{"error" => "invalid_client"} = json_response(conn, 401)
+    end
+
+    # Some OAuth libraries send `Basic base64("client_id:")` for public clients.
+    # An empty password is "no secret", not a presented credential; reading it
+    # literally would reject a public client for authenticating.
+    test "treats an empty Basic password as no credential", %{conn: conn} do
+      uri = "https://claude.ai/api/mcp/auth_callback"
+      client = register_client(uri)
+      {code, verifier} = code_for(client, uri)
+
+      basic = Base.encode64("#{client.client_id}:")
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Basic #{basic}")
+        |> post("/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => uri,
+          "code_verifier" => verifier
+        })
+
+      assert %{"access_token" => _} = json_response(conn, 200)
+    end
+
+    test "authenticates the refresh grant too", %{conn: conn} do
+      uri = "https://app.lobehub.com/oauth/callback"
+      client = confidential_client("client_secret_post", uri)
+      {code, verifier} = code_for(client, uri)
+
+      %{"refresh_token" => refresh} =
+        conn
+        |> post("/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => uri,
+          "client_id" => client.client_id,
+          "client_secret" => client.client_secret,
+          "code_verifier" => verifier
+        })
+        |> json_response(200)
+
+      unauthenticated =
+        build_conn()
+        |> post("/oauth/token", %{
+          "grant_type" => "refresh_token",
+          "refresh_token" => refresh,
+          "client_id" => client.client_id
+        })
+
+      assert %{"error" => "invalid_client"} = json_response(unauthenticated, 401)
+
+      authenticated =
+        build_conn()
+        |> post("/oauth/token", %{
+          "grant_type" => "refresh_token",
+          "refresh_token" => refresh,
+          "client_id" => client.client_id,
+          "client_secret" => client.client_secret
+        })
+
+      assert %{"access_token" => _} = json_response(authenticated, 200)
+    end
+  end
+
   describe "POST /oauth/token — invalid input" do
     test "rejects unsupported grant_type", %{conn: conn} do
       conn = post(conn, "/oauth/token", %{"grant_type" => "password"})
