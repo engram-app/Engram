@@ -13,6 +13,8 @@ defmodule Engram.OAuth.Client do
 
   require Logger
 
+  @type t :: %__MODULE__{}
+
   @primary_key {:client_id, :binary_id, autogenerate: true}
   # Public PKCE clients (`none`) and confidential clients. A confidential
   # registration mints a secret in `Engram.OAuth.register_client/1`, so the 201

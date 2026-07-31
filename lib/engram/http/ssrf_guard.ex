@@ -152,8 +152,11 @@ defmodule Engram.Http.SsrfGuard do
   defp validate_uri(%URI{host: host}) when not is_binary(host) or host == "",
     do: {:error, :missing_host}
 
-  defp validate_uri(%URI{userinfo: info}) when not is_nil(info), do: {:error, :userinfo_present}
-  defp validate_uri(%URI{fragment: frag}) when not is_nil(frag), do: {:error, :fragment_present}
+  # `is_binary` rather than `not is_nil`: URI leaves both fields nil when absent
+  # and a string when present, so the positive form says the same thing and keeps
+  # credo's negated-guard check happy.
+  defp validate_uri(%URI{userinfo: info}) when is_binary(info), do: {:error, :userinfo_present}
+  defp validate_uri(%URI{fragment: frag}) when is_binary(frag), do: {:error, :fragment_present}
   defp validate_uri(%URI{port: port}) when port != 443, do: {:error, :unsupported_port}
   defp validate_uri(%URI{} = uri), do: {:ok, uri}
 

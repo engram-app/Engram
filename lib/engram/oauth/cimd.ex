@@ -114,6 +114,11 @@ defmodule Engram.OAuth.Cimd do
   bug on this path therefore breaks Claude Code connections outright rather than
   degrading them. Turn it on in staging, verify with a real client, then flip
   prod.
+
+  Turning it back OFF stops new CIMD authorizations but deliberately does NOT
+  invalidate grants already issued: `Engram.OAuth.get_client/1` still resolves a
+  stored `cimd_url`, so existing refresh tokens keep working. A kill switch that
+  also revoked live access would make flipping it the more damaging action.
   """
   @spec enabled?() :: boolean()
   def enabled?, do: Application.get_env(:engram, :cimd_enabled, false)
@@ -193,10 +198,20 @@ defmodule Engram.OAuth.Cimd do
       {:ok, client}
     else
       {:error, reason} ->
-        log("mcp_cimd_rejected", url, reason)
+        log_rejected(url, reason)
         {:error, reason}
     end
   end
+
+  # A rate-limit denial is deliberately NOT logged. The fetch is bounded but the
+  # log line would not be: /oauth/authorize is unauthenticated, so an attacker
+  # varying the URL gets one Loki line per attempt while the limiter cheaply
+  # refuses each one — unbounded log volume behind a bounded side effect. The
+  # limiter already emits `[:engram, :rate_limiter, :hit]` with
+  # `purpose: :cimd_fetch, result: :deny`, so the volume is visible as a metric,
+  # which is the right shape for it. Logs stay for anomalies.
+  defp log_rejected(_url, :rate_limited), do: :ok
+  defp log_rejected(url, reason), do: log("mcp_cimd_rejected", url, reason)
 
   defp rate_limit(url) do
     host = URI.parse(url).host || "unknown"

@@ -256,7 +256,7 @@ defmodule Engram.OAuth.CimdTest do
           Cimd.ensure_client("https://vendor-#{index}.example/client")
         end
 
-      assert Enum.count(results, &(&1 == {:error, :rate_limited})) > 0,
+      assert Enum.any?(results, &(&1 == {:error, :rate_limited})),
              "a global cap must bound total outbound fetches, not just per-host ones"
 
       assert Enum.count(results, &match?({:ok, _}, &1)) <= 60

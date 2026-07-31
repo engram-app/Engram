@@ -85,7 +85,16 @@ defmodule EngramWeb.Schemas.Connection do
       connected_at: %Schema{type: :string, format: :"date-time", nullable: true},
       first_user_agent: %Schema{type: :string, nullable: true},
       first_ip: %Schema{type: :string, nullable: true},
-      redirect_uris: %Schema{type: :array, nullable: true, items: %Schema{type: :string}}
+      redirect_uris: %Schema{type: :array, nullable: true, items: %Schema{type: :string}},
+      cimd_url: %Schema{
+        type: :string,
+        nullable: true,
+        description:
+          "CIMD metadata-document URL. Present only for clients that published one, " <>
+            "in which case it is the client's public identifier and the reason it can " <>
+            "be `verified` despite redirecting to loopback.",
+        example: "https://claude.ai/.well-known/oauth-client"
+      }
     },
     required: [:kind]
   })
