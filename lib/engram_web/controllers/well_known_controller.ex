@@ -54,22 +54,47 @@ defmodule EngramWeb.WellKnownController do
   def authorization_server(conn, _params) do
     base = base_url(conn)
 
-    json(conn, %{
-      issuer: base,
-      authorization_endpoint: base <> "/oauth/authorize",
-      token_endpoint: base <> "/oauth/token",
-      registration_endpoint: base <> "/oauth/register",
-      revocation_endpoint: base <> "/oauth/revoke",
-      response_types_supported: ["code"],
-      grant_types_supported: ["authorization_code", "refresh_token"],
-      code_challenge_methods_supported: ["S256"],
-      # `none` MUST stay first-class here, not merely present for legacy: Claude
-      # selects its CIMD flow only when this list contains "none", and would
-      # otherwise fall back to DCR. The secret-based methods are additive, for
-      # server-side connectors that cannot hold a public client.
-      token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
-      scopes_supported: ["mcp"]
-    })
+    json(
+      conn,
+      maybe_advertise_cimd(%{
+        issuer: base,
+        authorization_endpoint: base <> "/oauth/authorize",
+        token_endpoint: base <> "/oauth/token",
+        registration_endpoint: base <> "/oauth/register",
+        revocation_endpoint: base <> "/oauth/revoke",
+        response_types_supported: ["code"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
+        code_challenge_methods_supported: ["S256"],
+        # `none` MUST stay first-class here, not merely present for legacy: Claude
+        # selects its CIMD flow only when this list contains "none", and would
+        # otherwise fall back to DCR. The secret-based methods are additive, for
+        # server-side connectors that cannot hold a public client.
+        token_endpoint_auth_methods_supported: [
+          "none",
+          "client_secret_post",
+          "client_secret_basic"
+        ],
+        scopes_supported: ["mcp"]
+      })
+    )
+  end
+
+  # Advertised only when CIMD is switched on, and the flag defaults to off.
+  #
+  # This is not cosmetic capability signalling: Anthropic's docs say Claude picks
+  # CIMD only when the metadata advertises BOTH `"none"` in
+  # token_endpoint_auth_methods_supported (above) and this key. Adding it flips
+  # Claude Code off the DCR path immediately, with no silent fallback if our CIMD
+  # path is broken — so it is gated rather than shipped on. See
+  # `Engram.OAuth.Cimd.enabled?/0`.
+  #
+  # Absent rather than `false` when disabled: the draft treats the key as opt-in
+  # capability advertisement, and an explicit false invites a client to cache a
+  # negative answer past the point where we flip it on.
+  defp maybe_advertise_cimd(metadata) do
+    if Engram.OAuth.Cimd.enabled?(),
+      do: Map.put(metadata, :client_id_metadata_document_supported, true),
+      else: metadata
   end
 
   defp base_url(conn) do

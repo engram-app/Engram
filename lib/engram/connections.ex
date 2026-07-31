@@ -228,7 +228,8 @@ defmodule Engram.Connections do
     )
     |> Repo.all()
     |> Enum.map(fn {t, c} ->
-      identity = LogoAllowlist.resolve(c.software_id, c.redirect_uris, c.client_name)
+      identity =
+        LogoAllowlist.resolve(c.software_id, c.redirect_uris, c.client_name, c.cimd_url)
 
       %{
         kind: String.to_existing_atom(c.kind),

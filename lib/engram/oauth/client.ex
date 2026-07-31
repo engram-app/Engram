@@ -50,6 +50,17 @@ defmodule Engram.OAuth.Client do
     field :tos_uri, :string
     field :policy_uri, :string
 
+    # CIMD (Client ID Metadata Documents). `cimd_url` is the wire `client_id` for
+    # a client that published a metadata document instead of registering: an
+    # HTTPS URL its vendor owns. NULL for every DCR client. The UUID primary key
+    # stays the internal identity either way (see `Engram.OAuth.get_client/1`).
+    #
+    # `cimd_fetched_at` is the cache clock — the row is the document cache, so
+    # there is no second source of truth for the redirect allowlist derived from
+    # it.
+    field :cimd_url, :string
+    field :cimd_fetched_at, :utc_datetime_usec
+
     # Read-only metadata populated at DCR time.
     # Queries in Connections use :kind to distinguish MCP vs Obsidian clients.
     field :kind, :string, default: "mcp"
@@ -108,6 +119,50 @@ defmodule Engram.OAuth.Client do
     |> validate_length(:software_version, max: 255)
     |> validate_length(:first_user_agent, max: 500)
     |> validate_metadata_uris()
+  end
+
+  @doc """
+  Changeset for a client whose metadata came from a CIMD document rather than a
+  DCR request body.
+
+  Deliberately routed through `registration_changeset/2`: a metadata document
+  carries the same RFC 7591 fields, and every validation there (redirect-URI
+  schemes, the `https:///cb` host-less trap, array bounds, grant/response type
+  subsets, metadata URI schemes) applies verbatim. A CIMD-specific validation
+  path would be a second implementation of the same rules, free to drift.
+
+  Two fields are NOT taken from the document:
+
+    * `token_endpoint_auth_method` is forced to `none`. A CIMD client never
+      registered, so no secret was ever minted for it; PKCE is the binding. The
+      caller rejects a document that asks for a confidential method rather than
+      silently downgrading it (see `Engram.OAuth.Cimd`).
+    * `software_id` is dropped. It would be attributable here — the document is
+      served by the vendor's own host — but it buys nothing: after #1156 the
+      `software_id` map names only our own plugin. Storing it would re-grow the
+      surface that issue removed.
+  """
+  def cimd_changeset(client, url, document) when is_binary(url) and is_map(document) do
+    client
+    |> registration_changeset(%{
+      "redirect_uris" => document["redirect_uris"],
+      "client_name" => document["client_name"],
+      "scope" => document["scope"],
+      "grant_types" => document["grant_types"],
+      "response_types" => document["response_types"],
+      "logo_uri" => document["logo_uri"],
+      "tos_uri" => document["tos_uri"],
+      "policy_uri" => document["policy_uri"],
+      "kind" => "mcp",
+      "token_endpoint_auth_method" => "none"
+    })
+    |> put_change(:cimd_url, url)
+    |> put_change(:cimd_fetched_at, DateTime.utc_now())
+    |> validate_length(:cimd_url, max: 2048)
+    # Converts the partial unique index into a changeset error so a concurrent
+    # first-contact race resolves by re-reading the winner's row instead of
+    # raising. Named explicitly: the index is partial, so Ecto cannot infer it.
+    |> unique_constraint(:cimd_url, name: :oauth_clients_cimd_url_index)
   end
 
   # DCR is a public endpoint:

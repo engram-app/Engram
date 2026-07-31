@@ -485,6 +485,19 @@ config :engram,
        :billing_enabled,
        auth_provider == :clerk and System.get_env("PADDLE_API_KEY") != nil
 
+# CIMD (Client ID Metadata Documents) toggle — DEFAULT OFF, deliberately.
+#
+# Advertising `client_id_metadata_document_supported` changes Claude Code's
+# behaviour the moment it ships: it stops choosing DCR, and it does NOT silently
+# fall back. So a bug on the CIMD path breaks Claude Code connections outright
+# rather than degrading them, which is exactly the kind of change that must not
+# ride along with a deploy unnoticed.
+#
+# Roll out: set ENGRAM_CIMD_ENABLED=true on staging, connect a real Claude Code
+# and confirm the grant lands with a `cimd_url`, then set it in prod. Existing
+# DCR grants are separate rows and keep working either way.
+config :engram, :cimd_enabled, System.get_env("ENGRAM_CIMD_ENABLED") == "true"
+
 # Plan limits enforcement toggle.
 # SaaS default: enforce when Paddle is configured.
 # Self-host default: bypass when no Paddle key.

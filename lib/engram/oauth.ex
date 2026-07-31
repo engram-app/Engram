@@ -13,7 +13,7 @@ defmodule Engram.OAuth do
   """
   import Ecto.Query
   alias Engram.Accounts
-  alias Engram.OAuth.{AuthorizationCode, Client, RefreshToken}
+  alias Engram.OAuth.{AuthorizationCode, Cimd, Client, RefreshToken}
   alias Engram.Repo
 
   @code_bytes 32
@@ -63,6 +63,15 @@ defmodule Engram.OAuth do
   defp maybe_put_secret_hash(changeset, secret),
     do: Ecto.Changeset.put_change(changeset, :client_secret_hash, hash_code(secret))
 
+  @doc """
+  Looks up a client by its **wire** `client_id`, which is either a DCR UUID or a
+  CIMD metadata-document URL.
+
+  Pure database lookup — no network I/O, deliberately. Only
+  `validate_authorization_request/1` may fetch a document
+  (`Engram.OAuth.Cimd.ensure_client/1`); the token, refresh and revoke paths
+  resolve an already-known CIMD client without reaching out to its vendor.
+  """
   def get_client(client_id) when is_binary(client_id) do
     case Ecto.UUID.cast(client_id) do
       {:ok, _} ->
@@ -73,12 +82,38 @@ defmodule Engram.OAuth do
           client -> {:ok, client}
         end
 
+      # Not a UUID. A CIMD client's wire id is an HTTPS URL, resolved against the
+      # `cimd_url` column; the primary key stays internal. Anything else is
+      # simply unknown.
       :error ->
-        {:error, :not_found}
+        if Cimd.url_shaped?(client_id),
+          do: Cimd.get_by_url(client_id),
+          else: {:error, :not_found}
     end
   end
 
   def get_client(_), do: {:error, :not_found}
+
+  # Wire client_id -> internal UUID.
+  #
+  # Everything downstream of authorization stores and compares the internal UUID:
+  # `oauth_authorization_codes.client_id` and `oauth_refresh_tokens.client_id` are
+  # uuid columns. A CIMD client, though, presents its URL on every token,
+  # refresh and revoke request, so a bare `==` against the stored value fails for
+  # the legitimate client. Normalizing at each of those boundaries is what makes
+  # the URL a wire-only concern.
+  #
+  # The two-argument form short-circuits when the caller already knows the stored
+  # value and it matches — the DCR case, which must not pay for a query.
+  defp internal_client_id(wire_id, known) when wire_id == known, do: known
+  defp internal_client_id(wire_id, _known), do: internal_client_id(wire_id)
+
+  defp internal_client_id(wire_id) do
+    case get_client(wire_id) do
+      {:ok, %Client{client_id: id}} -> id
+      {:error, :not_found} -> nil
+    end
+  end
 
   @doc """
   Authenticates the client on a token request, per RFC 6749 §3.2.1.
@@ -283,7 +318,7 @@ defmodule Engram.OAuth do
         {:error, :invalid_grant}
 
       %RefreshToken{} = rt ->
-        rotate_existing(rt, client_id, ip)
+        rotate_existing(rt, internal_client_id(client_id, rt.client_id), ip)
     end
   end
 
@@ -381,7 +416,14 @@ defmodule Engram.OAuth do
   end
 
   defp check_code_client(%{client_id: actual}, requested) when actual == requested, do: :ok
-  defp check_code_client(_, _), do: {:error, :invalid_grant}
+
+  # A CIMD client presents its document URL here while the code row stores the
+  # internal UUID, so a literal mismatch is not yet a failure. Only reached when
+  # the fast path above misses, which is either that case or a genuinely wrong
+  # client.
+  defp check_code_client(%{client_id: actual}, requested) do
+    if actual == internal_client_id(requested), do: :ok, else: {:error, :invalid_grant}
+  end
 
   defp check_code_redirect_uri(%{redirect_uri: actual}, requested) when actual == requested,
     do: :ok
@@ -467,10 +509,16 @@ defmodule Engram.OAuth do
   def revoke_token(raw_token, client_id, _hint) when is_binary(raw_token) do
     hash = hash_code(raw_token)
 
-    case Repo.one(from(rt in RefreshToken, where: rt.token_hash == ^hash),
-           skip_tenant_check: true
-         ) do
-      %RefreshToken{client_id: ^client_id, user_id: user_id} = rt ->
+    row =
+      Repo.one(from(rt in RefreshToken, where: rt.token_hash == ^hash), skip_tenant_check: true)
+
+    # Normalized against the row's own client_id so a CIMD client can revoke with
+    # the URL it authenticates with. A nil (unknown wire id) matches nothing,
+    # which lands on the catch-all below and still returns :ok per RFC 7009 §2.2.
+    owner = internal_client_id(client_id, row && row.client_id)
+
+    case row do
+      %RefreshToken{client_id: ^owner, user_id: user_id} = rt ->
         rt
         |> Ecto.Changeset.change(%{revoked_at: DateTime.utc_now(:second)})
         |> Repo.update!(skip_tenant_check: true)
@@ -530,10 +578,22 @@ defmodule Engram.OAuth do
 
   defp fetch_client(nil), do: {:client_error, "invalid_client"}
 
+  # The ONE place that may fetch a CIMD document. A URL-shaped client_id goes to
+  # `Cimd.ensure_client/1`, which handles first contact, TTL refresh, and the
+  # disabled-flag case (with CIMD off, a URL client_id is simply not a client).
+  # Refreshing here rather than in `get_client/1` keeps network I/O on the
+  # interactive authorize path only, never on token exchange or revocation.
   defp fetch_client(client_id) do
-    case get_client(client_id) do
-      {:ok, client} -> {:ok, client}
-      {:error, :not_found} -> {:client_error, "invalid_client"}
+    if Cimd.url_shaped?(client_id) do
+      case Cimd.ensure_client(client_id) do
+        {:ok, client} -> {:ok, client}
+        {:error, _reason} -> {:client_error, "invalid_client"}
+      end
+    else
+      case get_client(client_id) do
+        {:ok, client} -> {:ok, client}
+        {:error, :not_found} -> {:client_error, "invalid_client"}
+      end
     end
   end
 
