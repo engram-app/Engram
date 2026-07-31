@@ -29,11 +29,16 @@ defmodule EngramWeb.ConnectionsControllerTest do
     test "returns oauth + pat rows for the authenticated user", %{conn: conn} do
       user = insert(:user)
 
+      # A real loopback client: Claude Code registers under its product name
+      # with a user-chosen server suffix and sends no software_id at all. Its
+      # slug comes from normalize_name/1 stripping the parenthetical, which is
+      # the only attribution path left for local-first clients since the
+      # guessed software_id entries were deleted (#1156).
       client =
         insert(:oauth_client,
           kind: "mcp",
-          software_id: "anthropic-claude-desktop",
-          client_name: "Claude Desktop"
+          software_id: nil,
+          client_name: "Claude Code (engram)"
         )
 
       insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
@@ -51,10 +56,11 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert is_list(body)
 
       mcp = Enum.find(body, fn r -> r["kind"] == "mcp" end)
-      assert mcp["name"] == "Claude Desktop"
-      # Loopback redirect + self-asserted software_id => identity yes, badge no.
+      assert mcp["name"] == "Claude Code (engram)"
+      # Loopback redirect => never verified. The slug still resolves, from the
+      # name, so the onboarding checklist row can tick.
       assert mcp["verified"] == false
-      assert mcp["slug"] == "claude"
+      assert mcp["slug"] == "claude_code"
       assert mcp["client_id"] == client.client_id
 
       pat = Enum.find(body, fn r -> r["kind"] == "pat" end)

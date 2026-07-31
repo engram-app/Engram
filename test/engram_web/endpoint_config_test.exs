@@ -171,4 +171,31 @@ defmodule EngramWeb.EndpointConfigTest do
       |> Plug.Conn.put_req_header("origin", origin)
     end
   end
+
+  # #849. The transport had no frame ceiling at all: CrdtChannel guards its own
+  # `crdt_msg` payload before base64-decoding it, but that covers exactly one
+  # event — any other channel would read an arbitrarily large frame into memory
+  # first. This pins the backstop.
+  describe "websocket max_frame_size" do
+    test "the /socket transport declares a frame ceiling" do
+      {_path, _mod, opts} =
+        Enum.find(EngramWeb.Endpoint.__sockets__(), fn {path, _, _} -> path == "/socket" end)
+
+      assert Keyword.get(opts[:websocket], :max_frame_size) == 8_000_000
+    end
+
+    # Ordering invariant, not a magic number: an oversize crdt_msg must keep
+    # hitting the CHANNEL's guard (clean `frame_too_large` reply) rather than
+    # having the socket killed underneath it. Equal limits would race.
+    test "the transport ceiling sits above CrdtChannel's own base64 ceiling" do
+      {_path, _mod, opts} =
+        Enum.find(EngramWeb.Endpoint.__sockets__(), fn {path, _, _} -> path == "/socket" end)
+
+      transport_cap = Keyword.fetch!(opts[:websocket], :max_frame_size)
+      # Mirrors @max_frame_bytes / @max_b64_bytes in EngramWeb.CrdtChannel.
+      channel_b64_cap = div(5_000_000 * 4, 3) + 8
+
+      assert transport_cap > channel_b64_cap
+    end
+  end
 end

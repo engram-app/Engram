@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/engram-app/Engram/compare/0.12.0...0.12.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* **notes:** append must read the authority, not the stale content facade ([#1168](https://github.com/engram-app/Engram/issues/1168)) ([ff57339](https://github.com/engram-app/Engram/commit/ff57339d84e723d014cb3e72cf45f07800b162c5))
+
 ## [0.12.0](https://github.com/engram-app/Engram/compare/0.11.0...0.12.0) (2026-07-31)
 
 
