@@ -5,6 +5,8 @@ defmodule EngramWeb.NotesController do
 
   alias Engram.Notes
 
+  require Logger
+
   @max_note_bytes 10 * 1024 * 1024
 
   operation(:upsert,
@@ -113,18 +115,48 @@ defmodule EngramWeb.NotesController do
 
     case Notes.get_note(user, vault, path) do
       {:ok, note} ->
-        content = String.trim_trailing(note.content, "\n") <> "\n" <> text
+        # Append is a read-modify-write, so it must read the AUTHORITY, not the
+        # `notes.content` façade. The façade is materialized from the CRDT doc
+        # at checkpoint, so it lags a doc write; deriving the new full content
+        # from a stale (blank) base makes `upsert_note/4`'s merge compute a diff
+        # that deletes the body. That is #1159, seen in prod CI as a note
+        # arriving on the other device as just the appended fragment.
+        case Notes.authoritative_content(user, note) do
+          {:ok, base} ->
+            content = String.trim_trailing(base, "\n") <> "\n" <> text
 
-        case Notes.upsert_note(user, vault, %{
-               "path" => path,
-               "content" => content,
-               "mtime" => note.mtime
-             }) do
-          {:ok, updated} ->
-            json(conn, %{created: false, path: path, note: note_json(updated)})
+            case Notes.upsert_note(user, vault, %{
+                   "path" => path,
+                   "content" => content,
+                   "mtime" => note.mtime
+                 }) do
+              {:ok, updated} ->
+                json(conn, %{created: false, path: path, note: note_json(updated)})
 
-          {:error, changeset} ->
-            conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
+              {:error, changeset} ->
+                conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
+            end
+
+          # Refuse rather than fall back to the façade. Falling back is exactly
+          # the bug: it is the path that silently truncates the note. A failed
+          # append is recoverable; a destroyed note is not.
+          {:error, reason} ->
+            Logger.error(
+              "note_append_authority_unavailable",
+              # classify_reason/1, not inspect/1: the reason can carry a
+              # %Note{} with decrypted virtual fields, and this file's own
+              # T3.0.6 guard (no_inspect_in_json_response_test) exists to stop
+              # that leaking into logs. The label keeps the signal.
+              Engram.Logger.Metadata.with_category(:error, :sync,
+                note_id: note.id,
+                user_id: user.id,
+                reason_label: classify_reason(reason)
+              )
+            )
+
+            conn
+            |> put_status(503)
+            |> json(%{error: "append_unavailable", reason: "could not read current note content"})
         end
 
       {:error, :not_found} ->
