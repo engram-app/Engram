@@ -402,9 +402,15 @@ parties. There was no SSRF guard anywhere in `lib/` before this.
 - **Redirects are not followed.** A redirect is a new URL that would bypass the
   guard that approved the first one. A vendor that redirects its metadata document
   does not work, and that is the correct outcome.
-- Body capped mid-stream at 64 KB; per-host (10/min) **and** global (60/min) rate
-  limit buckets. Per-host alone is useless against an attacker varying the host,
-  which is exactly the amplification case.
+- Body capped mid-stream at 64 KB.
+- **Two rate-limit budgets, deliberately separate.** *Discovery* (a URL we have
+  never seen) is the attacker-reachable path and is capped per-host (10/min) AND
+  globally (60/min) — per-host alone does nothing against a caller varying the
+  host, which is the amplification case. *Refresh* of an already-known client
+  gets its own per-host bucket (10/min), because sharing one global budget would
+  let an attacker cycling hosts starve refreshes for vendors real users are
+  connected to, turning the anti-amplification control into a DoS vector against
+  our own clients. Pinned by a test.
 
 > **⚠ ROLLOUT: advertising the flag is not reversible in-flight.** Claude Code
 > stops choosing DCR the moment it sees `client_id_metadata_document_supported`

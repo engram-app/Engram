@@ -246,6 +246,33 @@ defmodule Engram.OAuth.CimdTest do
       assert Enum.count(results, &(&1 == {:error, :rate_limited})) == 2
     end
 
+    # THE reason discovery and refresh have separate budgets. If they shared one,
+    # an attacker cycling hosts would consume it and every legitimate refresh would
+    # be stuck serving a stale document — the anti-amplification control turned
+    # into a denial-of-service vector against the vendors we actually serve.
+    test "a saturated discovery budget does not starve a refresh of a known client" do
+      stub(FetcherMock, :fetch, fn url -> {:ok, %{document() | "client_id" => url}} end)
+
+      assert {:ok, client} = Cimd.ensure_client(@url)
+      expire(client)
+
+      # Burn the whole discovery budget on hosts nobody is connected to.
+      for index <- 1..70 do
+        Cimd.ensure_client("https://attacker-#{index}.example/client")
+      end
+
+      # The known client is stale, so this is a refresh, and it must still go out
+      # rather than silently degrading to the retained stale row.
+      expect(FetcherMock, :fetch, fn @url ->
+        {:ok, document(%{"redirect_uris" => ["http://127.0.0.1:4321/cb"]})}
+      end)
+
+      assert {:ok, refreshed} = Cimd.ensure_client(@url)
+
+      assert refreshed.redirect_uris == ["http://127.0.0.1:4321/cb"],
+             "refresh was starved by discovery traffic — the buckets are shared again"
+    end
+
     # A per-host bucket alone is useless against an attacker who varies the host,
     # which is exactly the amplification case, so a global bucket has to exist too.
     test "a global budget bounds fetches across all hosts" do

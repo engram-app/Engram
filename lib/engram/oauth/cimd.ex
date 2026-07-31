@@ -87,7 +87,8 @@ defmodule Engram.OAuth.Cimd do
   # aimed at third parties is what makes this an amplifier rather than just a
   # load risk for us.
   @per_host_limit 10
-  @global_limit 60
+  @discover_limit 60
+  @refresh_limit 10
   @window_ms 60_000
 
   @type reason ::
@@ -185,45 +186,78 @@ defmodule Engram.OAuth.Cimd do
         {:ok, refreshed}
 
       {:error, reason} ->
-        log("mcp_cimd_stale_retained", url, reason)
+        log_unless_rate_limited("mcp_cimd_stale_retained", url, reason)
         {:ok, client}
     end
   end
 
   defp fetch_and_store(url, existing) do
-    with :ok <- rate_limit(url),
+    with :ok <- rate_limit(url, existing),
          {:ok, document} <- Fetcher.impl().fetch(url),
          :ok <- validate_document(document, url),
          {:ok, client} <- store(url, document, existing) do
       {:ok, client}
     else
       {:error, reason} ->
-        log_rejected(url, reason)
+        log_unless_rate_limited("mcp_cimd_rejected", url, reason)
         {:error, reason}
     end
   end
 
-  # A rate-limit denial is deliberately NOT logged. The fetch is bounded but the
-  # log line would not be: /oauth/authorize is unauthenticated, so an attacker
-  # varying the URL gets one Loki line per attempt while the limiter cheaply
-  # refuses each one — unbounded log volume behind a bounded side effect. The
-  # limiter already emits `[:engram, :rate_limiter, :hit]` with
+  # A rate-limit denial is deliberately NOT logged, on either path. The fetch is
+  # bounded but the log line would not be: /oauth/authorize is unauthenticated, so
+  # a caller varying the URL — or simply replaying one known-stale client — earns
+  # one Loki line per attempt while the limiter cheaply refuses each one.
+  # Unbounded log volume behind a bounded side effect.
+  #
+  # The limiter already emits `[:engram, :rate_limiter, :hit]` with
   # `purpose: :cimd_fetch, result: :deny`, so the volume is visible as a metric,
   # which is the right shape for it. Logs stay for anomalies.
-  defp log_rejected(_url, :rate_limited), do: :ok
-  defp log_rejected(url, reason), do: log("mcp_cimd_rejected", url, reason)
+  defp log_unless_rate_limited(_event, _url, :rate_limited), do: :ok
+  defp log_unless_rate_limited(event, url, reason), do: log(event, url, reason)
 
-  defp rate_limit(url) do
-    host = URI.parse(url).host || "unknown"
-
-    with {:allow, _} <- RateLimiter.hit("cimd:global", @window_ms, @global_limit, :cimd_fetch),
+  # Two budgets, deliberately separate, because they face different callers.
+  #
+  # DISCOVERY (`existing == nil`) is the attacker-reachable path: any
+  # unauthenticated /oauth/authorize may name a URL we have never seen. Bounded
+  # per-host AND globally — a per-host limit alone does nothing against a caller
+  # varying the host, which is exactly the amplification case.
+  #
+  # REFRESH (`existing != nil`) requires a row that already passed discovery, so
+  # it cannot be reached without first getting a document accepted. It gets its
+  # OWN bucket so that saturating the discovery budget cannot starve refreshes for
+  # vendors real users are already connected to. Sharing one global bucket would
+  # turn this anti-amplification control into a denial-of-service vector against
+  # the clients we actually serve: an attacker cycling hosts would consume the
+  # budget and every legitimate refresh would then fall back to a stale document
+  # until its TTL work could get through.
+  #
+  # Refresh is still per-host capped: a vendor that is down leaves its row
+  # permanently stale, so every authorize for that client retries the fetch.
+  defp rate_limit(url, nil) do
+    with {:allow, _} <-
+           RateLimiter.hit("cimd:discover", @window_ms, @discover_limit, :cimd_fetch),
          {:allow, _} <-
-           RateLimiter.hit("cimd:host:" <> host, @window_ms, @per_host_limit, :cimd_fetch) do
+           RateLimiter.hit("cimd:host:" <> host_of(url), @window_ms, @per_host_limit, :cimd_fetch) do
       :ok
     else
       {:deny, _} -> {:error, :rate_limited}
     end
   end
+
+  defp rate_limit(url, _existing) do
+    case RateLimiter.hit(
+           "cimd:refresh:" <> host_of(url),
+           @window_ms,
+           @refresh_limit,
+           :cimd_fetch
+         ) do
+      {:allow, _} -> :ok
+      {:deny, _} -> {:error, :rate_limited}
+    end
+  end
+
+  defp host_of(url), do: URI.parse(url).host || "unknown"
 
   # THE binding. Everything else is metadata; this is what ties the document to
   # the URL, and therefore the client's identity to a host only its vendor can

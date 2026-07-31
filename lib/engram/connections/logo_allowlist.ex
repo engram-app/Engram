@@ -117,18 +117,27 @@ defmodule Engram.Connections.LogoAllowlist do
   Resolve a client's identity, and separately decide whether it is verified.
 
   **Identity** (logo / display_name / slug) comes from the first source that
-  matches, **proven before claimed**: the redirect host, then `software_id`,
-  then the normalized `client_name`.
+  matches, **proven before claimed**: the CIMD `client_id` host, then the
+  redirect host, then `software_id`, then the normalized `client_name`.
 
-  The host leads because it is the only source that is not self-asserted. A
-  client claiming `software_id: "openai-chatgpt"` while redirecting to
-  `claude.ai` must not be listed as ChatGPT: the grant is delivered to
-  Anthropic, so Anthropic is who the user is actually connected to.
+  The two host sources lead because they are the only ones that are not
+  self-asserted. A client claiming `software_id: "openai-chatgpt"` while
+  redirecting to `claude.ai` must not be listed as ChatGPT: the grant is
+  delivered to Anthropic, so Anthropic is who the user is actually connected to.
 
-  **`verified`** is decided by exactly one thing: whether the redirect lands on
-  a vendor-owned HTTPS host. Identity and verification are deliberately
-  computed independently: `software_id` and `client_name` both arrive in the
-  DCR body and are equally self-asserted, so neither may grant the badge.
+  **`verified`** is decided by two sources, and by nothing else:
+
+    * the redirect landing on a vendor-owned HTTPS host, or
+    * a CIMD `client_id` whose metadata document we fetched from that host.
+
+  Both are the same argument — "this party controls a host the vendor owns" —
+  and CIMD is the one that reaches loopback clients, which no redirect can
+  prove. Note that CIMD grants the badge **without** the host having to appear
+  in `@redirect_host`: fetching the document already established who serves it.
+
+  Identity and verification are deliberately computed independently, because
+  `software_id` and `client_name` both arrive in the DCR body and are equally
+  self-asserted, so neither may ever grant the badge.
   """
   @spec resolve(String.t() | nil, [String.t()] | nil, String.t() | nil, String.t() | nil) ::
           entry()
