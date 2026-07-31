@@ -1,6 +1,6 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThemeProvider } from "../../theme/theme-provider";
@@ -36,6 +36,23 @@ function openSection(name: string): void {
 	const details = section(name);
 	details.open = true;
 	fireEvent(details, new Event("toggle"));
+}
+
+/**
+ * Wait for a rendered preview inside a gallery row.
+ *
+ * Every preview lands via an ASYNC state update (React logs the usual "not
+ * wrapped in act(...)" warning for it), so querying on the same tick as
+ * openSection is a race — one these tests only won while the suite was fast
+ * enough. It lost on CI the moment an unrelated branch added two tests
+ * elsewhere. Awaiting is the fix; the assertions are unchanged.
+ */
+function rendered(label: string, selector: string): Promise<Element> {
+	return waitFor(() => {
+		const el = row(label).querySelector(selector);
+		expect(el, `${selector} in row "${label}"`).not.toBeNull();
+		return el as Element;
+	});
 }
 
 /**
@@ -97,40 +114,44 @@ function renderPanel({ withEditor = true, doc = "", caret = 0 } = {}) {
 const search = () => screen.getByRole("searchbox", { name: /search markdown syntax/iu });
 
 describe("MarkdownReferencePanel — rendered previews", () => {
-	it("renders the callout as an actual callout, not just its source", () => {
+	// Awaited, not asserted synchronously: the panel renders each preview via an
+	// ASYNC state update (React logs the classic "not wrapped in act(...)"
+	// warning for it), so reading `.callout` on the same tick as openSection is a
+	// race the test only won while the suite was fast. It lost that race on CI
+	// once this branch added two tests elsewhere — the defect is the missing
+	// await, not the added load. The assertions themselves are unchanged.
+	it("renders the callout as an actual callout, not just its source", async () => {
 		// The reason the panel exists: "> [!tip]" teaches nobody anything until
 		// they see what it becomes.
 		renderPanel();
 		openSection("Callouts");
 		// Gallery rows render the callout directly, with no figure wrapper.
-		const callout = row("note").querySelector(".callout");
+		const callout = await rendered("note", ".callout");
 
-		expect(callout).not.toBeNull();
-		expect(callout?.textContent).toContain("Worth knowing");
-		expect(callout?.textContent).not.toContain("[!note]");
+		expect(callout.textContent).toContain("Worth knowing");
+		expect(callout.textContent).not.toContain("[!note]");
 	});
 
-	it("lets the library inline the per-type colour our CSS deliberately omits", () => {
+	it("lets the library inline the per-type colour our CSS deliberately omits", async () => {
 		// main.css no longer carries a callout palette — it relies on
 		// @portaljs/remark-callouts inlining border-left-color from the same
 		// defaultConfig map the editor's live preview reads. If the library ever
 		// stops doing that, every callout silently goes neutral grey, so pin it.
 		renderPanel();
 		openSection("Callouts");
-		const callout = row("warning").querySelector(".callout") as HTMLElement;
-		expect(callout).not.toBeNull();
+		const callout = (await rendered("warning", ".callout")) as HTMLElement;
 		expect(callout.getAttribute("style") ?? "").toMatch(/border-left-color:\s*#/u);
 	});
 
-	it("renders inline emphasis as real elements", () => {
+	it("renders inline emphasis as real elements", async () => {
 		renderPanel();
-		expect(row("**Bold text**").querySelector("strong")?.textContent).toBe("Bold text");
+		expect((await rendered("**Bold text**", "strong")).textContent).toBe("Bold text");
 	});
 
-	it("renders a table as a table", () => {
+	it("renders a table as a table", async () => {
 		renderPanel();
 		openSection("Structure");
-		expect(row("Table").querySelector("figure table")).not.toBeNull();
+		await rendered("Table", "figure table");
 	});
 
 	it("omits the preview where a live render would mislead", () => {

@@ -3264,6 +3264,55 @@ jobs:
           rm -rf "$PREV_DIR"
           git worktree prune
 
+  e2e-lint:
+    name: e2e harness lint (ruff)
+    # Skip on cross-repo plugin dispatch — the plugin cannot regress the
+    # Python harness.
+    if: github.event_name != 'repository_dispatch'
+    runs-on: [self-hosted, linux, x64, isolated, light]
+    # The e2e/ tree had no lint step at all (#946), so dead imports and unused
+    # bindings shipped unnoticed — including two isolation tests that captured
+    # an attacker's HTTP status and never asserted on it.
+    #
+    # Scope is deliberately narrow (see e2e/ruff.toml): the "this binding is
+    # dead" class plus syntax errors. Ruff's full default set reports 161
+    # findings here, mostly style judgement calls in a harness that tolerates
+    # partial failure on purpose. Widening is a separate decision per rule.
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Need history to diff against origin/main in the guard step.
+          fetch-depth: 50
+
+      - name: Path-filter early-exit
+        id: guard
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            echo "On main - running lint unconditionally."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch origin main --depth=50 >/dev/null 2>&1 || true
+          if git diff --quiet origin/main HEAD -- e2e/ 2>/dev/null; then
+            echo "Skipped - no e2e/ changes vs main."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "e2e/ changed - running lint."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Pinned: an unpinned linter turns an upstream release into a surprise
+      # red build on an unrelated PR. Bumping it is a deliberate change.
+      - name: Install ruff
+        if: steps.guard.outputs.skip != 'true'
+        run: python3 -m pip install --user --quiet --break-system-packages "ruff==0.16.1"
+
+      - name: ruff check
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: e2e
+        run: python3 -m ruff check --output-format=github .
+
   frontend-lint:
     name: frontend lint+types+unit
     # Skip on cross-repo plugin dispatch — the plugin cannot regress the SPA.
@@ -3570,7 +3619,7 @@ jobs:
     # and a real e2e/unit failure there is never gated. Mirrors the per-job +
     # prebuild is-full forcing so main is genuinely the full safety net.
     if: always() && (needs.fingerprint.outputs.is-full == 'true' || needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
-    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, migration-gates, static-checks]
+    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, e2e-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, migration-gates, static-checks]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
@@ -3579,6 +3628,7 @@ jobs:
           UT="${{ needs.unit-tests.result }}"
           LN="${{ needs.lint.result }}"
           FL="${{ needs.frontend-lint.result }}"
+          EL="${{ needs.e2e-lint.result }}"
           SD="${{ needs.storage-database.result }}"
           EC="${{ needs.e2e-clerk.result }}"
           ED="${{ needs.e2e-crdt.result }}"
@@ -3623,7 +3673,7 @@ jobs:
           # are intentionally skipped — plugin cannot regress backend internals.
           # Only assert success when those jobs actually ran. (e2e-* moved to the
           # report-only warnings above; deterministic jobs remain the merge gate.)
-          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "static-checks=$SC" "migration-gates=$MG"; do
+          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "e2e-lint=$EL" "storage-database=$SD" "static-checks=$SC" "migration-gates=$MG"; do
             name="${pair%=*}"; result="${pair#*=}"
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "::error::$name failed: $result"

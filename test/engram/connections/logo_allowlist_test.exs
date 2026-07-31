@@ -7,12 +7,23 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: false, logo: "/assets/clients/engram-vault-sync.svg"} = result
   end
 
-  # software_id arrives in the DCR body, it is a claim, not a proof. If this
-  # ever goes green with verified: true, anyone can wear the Claude Desktop
-  # logo and badge in a victim's connections list by registering that id.
-  test "a self-asserted software_id cannot buy the verified badge" do
-    assert %{verified: false, display_name: "Claude Desktop", logo: "/assets/clients/claude.svg"} =
+  # software_id arrives in the DCR body, it is a claim, not a proof. Since the
+  # four guessed vendor entries were deleted (#1156) it buys no identity at
+  # all, not merely no badge: a rogue registration gets the placeholder and the
+  # "Unverified client" chip instead of Anthropic's logo and name.
+  test "a self-asserted vendor software_id buys no identity at all" do
+    assert %{verified: false, display_name: nil, logo: nil, slug: nil} =
              LogoAllowlist.resolve("anthropic-claude-desktop", ["http://localhost:1234/cb"])
+  end
+
+  # The other three deleted guesses, same rule. Named individually so a
+  # re-added key fails here rather than silently restoring the logo grant.
+  test "the deleted guessed software_ids resolve to the placeholder" do
+    for id <- ~w(cursor.sh openai-chatgpt vscode-engram) do
+      assert %{verified: false, display_name: nil, logo: nil, slug: nil} =
+               LogoAllowlist.resolve(id, ["http://localhost:1234/cb"]),
+             "#{id} must not grant vendor identity from a self-asserted claim"
+    end
   end
 
   test "unknown software_id returns unverified placeholder" do
@@ -145,10 +156,13 @@ defmodule Engram.Connections.LogoAllowlistTest do
   # is delivered to another, the one we can PROVE must be what the user sees,
   # otherwise the connections list shows "ChatGPT" for a code Anthropic
   # received.
+  # Uses `engram-vault-sync` because it is now the only software_id that
+  # resolves to anything: with a deleted guess the assertion would pass on an
+  # empty lookup and prove nothing about precedence.
   test "a verified host wins over a conflicting self-asserted software_id" do
     assert %{verified: true, slug: "claude", display_name: "Claude"} =
              LogoAllowlist.resolve(
-               "openai-chatgpt",
+               "engram-vault-sync",
                ["https://claude.ai/api/mcp/auth_callback"],
                nil
              )

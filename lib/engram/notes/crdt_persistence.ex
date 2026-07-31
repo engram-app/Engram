@@ -60,8 +60,36 @@ defmodule Engram.Notes.CrdtPersistence do
               {:ok, snapshot} when is_binary(snapshot) ->
                 :ok = Yex.apply_update(doc, snapshot)
 
-              _ ->
+              # No snapshot yet (`crdt_state_ciphertext` is nil): legitimate for
+              # a note that has never been checkpointed. The doc stays empty and
+              # `replay_tail/3` below fills it from the log.
+              {:ok, nil} ->
                 :ok
+
+              # FAIL LOUD. This used to fall into the clause above via a
+              # catch-all `_`, which is the opposite policy from
+              # `Notes.maybe_merge_crdt/4` — that one refuses on the same signal
+              # (`throw {:crdt_decrypt, err}`). bind/3 was the fail-OPEN sibling.
+              #
+              # Continuing here starts a FRESH lineage for a note that already
+              # has state: the tail replays onto an empty doc, the room looks
+              # converged, and the next checkpoint writes that truncated doc back
+              # over the real content. A *transient* decrypt failure (DEK cache
+              # miss, a read mid-DEK-rotation) would become permanent data loss.
+              #
+              # Raising fails the room start instead, so the client's join errors
+              # and retries. A genuinely corrupt snapshot then surfaces as a loud,
+              # repeated failure rather than as silent truncation.
+              {:error, reason} ->
+                Logger.error(
+                  "crdt bind refused: crdt_state decrypt failed for note #{note_id}",
+                  Metadata.with_category(:error, :sync,
+                    note_id: note_id,
+                    reason: inspect(reason)
+                  )
+                )
+
+                raise "CrdtPersistence.bind/3: crdt_state decrypt failed for note #{note_id} (#{inspect(reason)}) — refusing to bind an empty doc over existing state"
             end
 
             _applied = replay_tail(doc, user, note_id)
