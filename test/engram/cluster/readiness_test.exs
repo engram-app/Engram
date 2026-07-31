@@ -112,19 +112,47 @@ defmodule Engram.Cluster.ReadinessTest do
   end
 
   describe "resolve_a/2 (real :inet_res call, bounded timeout)" do
-    test "fails open (returns []) within a bounded budget against an unresponsive resolver" do
-      # 192.0.2.0/24 is TEST-NET-1 (RFC 5737): reserved, guaranteed non-routable,
-      # so this never gets a real answer — it exercises the same
-      # unresponsive-resolver path a hung VPC/Cloud Map resolver would.
+    # The invariant that actually matters — "we did not ship an unbounded
+    # resolver, so a hung VPC/Cloud Map lookup cannot pull every task out of
+    # rotation" — is arithmetic, so assert it as arithmetic. No clock, cannot
+    # flake, and it fails the moment someone raises @resolve_timeout_ms.
+    #
+    # This also closes a real gap: the timing test below hard-codes its own
+    # threshold, so raising the production timeout could have blown the ALB
+    # health-check budget while the test carried on passing.
+    test "the shipped resolver budget stays well under the 5s ALB health-check timeout" do
+      assert Readiness.resolve_budget_ms() <= 2_000,
+             "resolve_a's worst case is #{Readiness.resolve_budget_ms()}ms; the ALB health " <>
+               "check times out at 5s, so a bound this large risks pulling healthy tasks " <>
+               "out of rotation"
+    end
+
+    # And prove the bound is honoured, with a SMALL window.
+    #
+    # This used to run the production 1_500ms timeout and assert < 4s. Nominal
+    # is 1.50s (measured), so ~2.7x headroom, which sounds ample but it is wall
+    # clock around a real network call inside a parallel suite: on a loaded
+    # machine it recorded 4.08s and 5.50s and went red twice (#1158).
+    #
+    # 300ms nominal against a 2s assertion is ~6.6x headroom for identical
+    # coverage. :inet_res rejects retry: 0, so shrinking `timeout` is the only
+    # lever available. Do NOT answer a future flake here by raising the
+    # threshold: shrink the window, or the assertion stops meaning anything.
+    test "fails open (returns []) within its configured bound against an unresponsive resolver" do
+      # 192.0.2.0/24 is TEST-NET-1 (RFC 5737): reserved and guaranteed
+      # non-routable, so this never gets an answer — the same path a hung
+      # resolver takes.
       {elapsed_us, result} =
         :timer.tc(fn ->
-          Readiness.resolve_a(~c"example.invalid", nameservers: [{{192, 0, 2, 1}, 53}])
+          Readiness.resolve_a(~c"example.invalid",
+            nameservers: [{{192, 0, 2, 1}, 53}],
+            timeout: 300,
+            retry: 1
+          )
         end)
 
-      assert result == []
-      # Well under the 5s ALB health-check timeout (with headroom for CI jitter);
-      # the unbounded default (~6s+) would blow this.
-      assert elapsed_us < 4_000_000
+      assert result == [], "an unresponsive resolver must fail open, not raise"
+      assert elapsed_us < 2_000_000
     end
   end
 end

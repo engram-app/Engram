@@ -92,9 +92,25 @@ defmodule Engram.Cluster.Readiness do
   # retry/timeout (~6s+ worst case) means a hanging VPC resolver would pull
   # every task from rotation instead of failing open. `opts` lets tests
   # point at an unresponsive nameserver to prove the bound holds.
-  @doc false
   @resolve_timeout_ms 1_500
+  # :inet_res counts ATTEMPTS here, not extra tries: retry: 1 is a single
+  # 1_500ms attempt (measured 1.50s against a black-holed nameserver), and
+  # :inet_res rejects retry: 0 outright. So the worst case is timeout × retry.
   @resolve_retry 1
+
+  @doc """
+  Worst-case wall time `resolve_a/2` can spend with the default options, in ms.
+
+  Exposed so the suite can assert the shipped bound stays under the ALB's 5s
+  health-check timeout WITHOUT measuring a clock. The timing test that used to
+  carry that invariant hard-coded its own number, so raising
+  `@resolve_timeout_ms` could have blown the health-check budget while the test
+  carried on passing.
+  """
+  @spec resolve_budget_ms() :: pos_integer()
+  def resolve_budget_ms, do: @resolve_timeout_ms * @resolve_retry
+
+  @doc false
   def resolve_a(query, opts \\ []) do
     resolve_opts = Keyword.merge([timeout: @resolve_timeout_ms, retry: @resolve_retry], opts)
 
