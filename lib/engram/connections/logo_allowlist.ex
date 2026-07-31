@@ -35,29 +35,26 @@ defmodule Engram.Connections.LogoAllowlist do
 
   @empty %{verified: false, logo: nil, display_name: nil, slug: nil}
 
-  # Keyed on RFC 7591 software_id. `engram-vault-sync` is our own plugin and is
-  # the only proven-real entry. The other four are unvalidated guesses left in
-  # place (harmless, real clients never send them) pending observation.
+  # Keyed on RFC 7591 software_id.
+  #
+  # ONE entry, deliberately: our own Obsidian plugin, which needs it because it
+  # redirects to a custom scheme and so has no host to be identified by.
+  #
+  # Four vendor guesses (`anthropic-claude-desktop`, `cursor.sh`,
+  # `openai-chatgpt`, `vscode-engram`) were deleted 2026-07-31 (#1156). None had
+  # ever been observed on a real registration: all nine connectors seen in prod
+  # are attributed by redirect host or by `client_name`, and not one sends
+  # software_id. They therefore attributed nobody, while handing anyone who read
+  # this file a free vendor logo and display name just by claiming the id.
+  #
+  # Do not re-add a vendor entry speculatively. `software_id` is self-asserted,
+  # so an entry here is a claim we have agreed to render, not a fact. Add one
+  # only once `mcp_dcr_unattributed_client` shows a real client that needs it
+  # AND nothing else can attribute it.
   @software_id %{
     "engram-vault-sync" => %{
       logo: "/assets/clients/engram-vault-sync.svg",
       display_name: "Obsidian Vault Sync",
-      slug: nil
-    },
-    "anthropic-claude-desktop" => %{
-      logo: "/assets/clients/claude.svg",
-      display_name: "Claude Desktop",
-      slug: "claude"
-    },
-    "cursor.sh" => %{logo: "/assets/clients/cursor.svg", display_name: "Cursor", slug: "cursor"},
-    "openai-chatgpt" => %{
-      logo: "/assets/clients/chatgpt.svg",
-      display_name: "ChatGPT",
-      slug: "chatgpt"
-    },
-    "vscode-engram" => %{
-      logo: "/assets/clients/vscode.svg",
-      display_name: "VS Code (Engram)",
       slug: nil
     }
   }

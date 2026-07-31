@@ -29,11 +29,15 @@ defmodule EngramWeb.ConnectionsControllerTest do
     test "returns oauth + pat rows for the authenticated user", %{conn: conn} do
       user = insert(:user)
 
+      # Mirrors a real observed registration rather than a synthetic one: no
+      # software_id (not one connector seen in prod sends it) plus a loopback
+      # redirect, so attribution comes from client_name. The trailing
+      # parenthetical is the user-chosen server name Claude Code appends.
       client =
         insert(:oauth_client,
           kind: "mcp",
-          software_id: "anthropic-claude-desktop",
-          client_name: "Claude Desktop"
+          software_id: nil,
+          client_name: "Claude Code (engram)"
         )
 
       insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
@@ -51,10 +55,11 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert is_list(body)
 
       mcp = Enum.find(body, fn r -> r["kind"] == "mcp" end)
-      assert mcp["name"] == "Claude Desktop"
-      # Loopback redirect + self-asserted software_id => identity yes, badge no.
+      assert mcp["name"] == "Claude Code (engram)"
+      # Loopback redirect is unverifiable by construction, so: slug yes (the
+      # checklist row can tick), badge no.
       assert mcp["verified"] == false
-      assert mcp["slug"] == "claude"
+      assert mcp["slug"] == "claude_code"
       assert mcp["client_id"] == client.client_id
 
       pat = Enum.find(body, fn r -> r["kind"] == "pat" end)

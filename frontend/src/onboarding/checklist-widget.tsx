@@ -40,10 +40,8 @@ const DOC_URLS: Record<string, string> = {
 	continue: "https://engram.page/docs/integrations/continue/",
 	opencode: "https://engram.page/docs/integrations/opencode/",
 	github_copilot: "https://engram.page/docs/integrations/github-copilot/",
+	antigravity: "https://engram.page/docs/integrations/antigravity/",
 	other_mcp: "https://engram.page/docs/mcp/manual-config/",
-	// No `antigravity` entry yet, engram-marketing has no integrations/antigravity/
-	// page, and a mapped-but-missing URL is a hard 404 where the unmapped
-	// fallback below is a working index. Add it with the marketing page.
 };
 const DOC_FALLBACK = "https://engram.page/docs/integrations/";
 

@@ -7,12 +7,28 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: false, logo: "/assets/clients/engram-vault-sync.svg"} = result
   end
 
-  # software_id arrives in the DCR body, it is a claim, not a proof. If this
-  # ever goes green with verified: true, anyone can wear the Claude Desktop
-  # logo and badge in a victim's connections list by registering that id.
-  test "a self-asserted software_id cannot buy the verified badge" do
-    assert %{verified: false, display_name: "Claude Desktop", logo: "/assets/clients/claude.svg"} =
-             LogoAllowlist.resolve("anthropic-claude-desktop", ["http://localhost:1234/cb"])
+  # software_id arrives in the DCR body: a claim, not a proof.
+  #
+  # Tightened twice. #1147 stopped it granting `verified`, but it still handed
+  # over the vendor's logo and display name. #1156 deleted the four guessed
+  # vendor entries outright, so claiming one now buys NOTHING: no badge, no
+  # logo, no name, no slug.
+  #
+  # If any of these start returning vendor branding again, someone has re-added
+  # a speculative @software_id entry and reopened the hole.
+  test "claiming a vendor software_id buys no branding at all" do
+    for claimed <- ~w(anthropic-claude-desktop cursor.sh openai-chatgpt vscode-engram) do
+      assert %{verified: false, display_name: nil, logo: nil, slug: nil} =
+               LogoAllowlist.resolve(claimed, ["http://localhost:1234/cb"]),
+             "#{claimed} must not confer branding"
+    end
+  end
+
+  # Our own plugin is the one legitimate entry: it redirects to a custom scheme,
+  # so no host identifies it and client_name derivation does not cover it.
+  test "our own plugin is still identified by software_id" do
+    assert %{verified: false, display_name: "Obsidian Vault Sync", slug: nil} =
+             LogoAllowlist.resolve("engram-vault-sync", ["obsidian://engram/cb"])
   end
 
   test "unknown software_id returns unverified placeholder" do

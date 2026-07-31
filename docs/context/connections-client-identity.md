@@ -233,9 +233,15 @@ SELECT software_id, client_name, redirect_uris FROM oauth_clients;
 
 `@lobehub/icons-static-svg` is already a dependency and already covers every catalog slug. Use `ToolMark slug={...}` (`frontend/src/onboarding/tool-icon.tsx`). The backend `logo: "/assets/clients/*.svg"` field is a legacy parallel system still needed only for `engram-vault-sync` and `vscode`; `grok.svg`/`mistral.svg` were never created and don't need to be.
 
-## Known stale: the 4 guessed `software_id` entries
+## The 4 guessed `software_id` entries were DELETED (2026-07-31, #1156)
 
-`anthropic-claude-desktop`, `cursor.sh`, `openai-chatgpt`, `vscode-engram` are UNVALIDATED guesses. Prod data now **proves** they never fire (the real ChatGPT and Claude grants both arrive with `software_id: null`). Harmless, but they read as coverage, do not add more speculative entries. The only proven-real `software_id` is our own `engram-vault-sync`.
+`anthropic-claude-desktop`, `cursor.sh`, `openai-chatgpt` and `vscode-engram` were unvalidated guesses. Prod proved they never fire: all nine observed connectors are attributed by redirect host or by `client_name`, and **not one sends `software_id` at all** (the real ChatGPT and Claude grants both arrive with `software_id: null`).
+
+This section used to call them "harmless". They were not. Because `software_id` is self-asserted, each entry was a standing offer: register claiming `anthropic-claude-desktop` and the connections list hands you Claude's logo and display name, with no `unverified` chip (the chip is suppressed whenever a slug resolves, so Claude Code is not badged as suspect). They attributed nobody real, while giving anyone who read the source a free vendor identity.
+
+`@software_id` now holds exactly **one** entry, our own `engram-vault-sync`, which genuinely needs it: the plugin redirects to a custom scheme, so no host identifies it and name derivation does not cover it.
+
+> **Do not re-add a vendor entry speculatively.** An entry here is a claim we have agreed to render, not a fact. Add one only after `mcp_dcr_unattributed_client` shows a real client that needs it AND nothing else can attribute it. `logo_allowlist_test.exs` pins all four deleted ids as conferring no branding.
 
 `@name_aliases` currently carries one **inferred, not observed** entry: `visual_studio_code` → `github_copilot`. VS Code drives MCP OAuth itself, above the extension, so a Copilot user's grant is expected to arrive under the product name. The tripwire will confirm or refute it.
 

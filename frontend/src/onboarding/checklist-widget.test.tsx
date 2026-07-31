@@ -6,6 +6,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BillingStatus, Connection, OnboardingAction, OnboardingStatus } from "../api/queries";
 import { ChecklistWidget } from "./checklist-widget";
+import { TOOL_ASSISTANTS, TOOL_CODING } from "./onboarding-tools";
 import type { useOnboardingActions } from "./use-onboarding-actions";
 
 let actionsList: OnboardingAction[] = [];
@@ -238,6 +239,36 @@ describe("ChecklistWidget, per-tool rows", () => {
 
 		expect(screen.getByText(/connect claude/iu)).toHaveClass("line-through");
 		expect(screen.getByText(/connect another mcp client/iu)).not.toHaveClass("line-through");
+	});
+
+	// Structural guard for #1157. Antigravity shipped with a catalog entry, a
+	// label and an icon, but no DOC_URLS mapping, so its row silently rendered the
+	// generic index instead of its own guide. Nothing failed, because the fallback
+	// made the gap invisible.
+	//
+	// The fallback exists for slugs we do not recognise (a stale profile from an
+	// older release). It must never be what a CURRENT catalog connector resolves
+	// to, so assert per-slug instead of trusting the map to be complete by eye.
+	//
+	// `unavailable` entries are excluded: Gemini is listed to explain that it
+	// cannot connect, and deliberately has no guide.
+	it("every selectable catalog connector maps to its own doc URL, not the fallback", () => {
+		const selectable = [...TOOL_ASSISTANTS, ...TOOL_CODING].filter((t) => !t.unavailable);
+
+		expect(selectable.length).toBeGreaterThan(10);
+
+		for (const { slug, label } of selectable) {
+			onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [slug] };
+			const { unmount } = render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+
+			const link = screen.getByRole("link", { name: /setup guide/iu });
+			expect(
+				link.getAttribute("href"),
+				`${label} (${slug}) has no DOC_URLS entry, so its row falls back to the docs index`,
+			).not.toBe("https://engram.page/docs/integrations/");
+
+			unmount();
+		}
 	});
 
 	it("falls back to /docs/integrations/ for an unmapped slug", () => {
