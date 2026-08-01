@@ -282,7 +282,7 @@ defmodule Engram.Attachments do
   # API and `batch_delete/3` share one implementation and count truthfully.
   # opts[:origin_device_id] is stamped into the delete broadcast (#970) so the
   # originating device can drop its own fanout echo.
-  defp do_delete_attachment(user, vault, path, opts \\ []) do
+  defp do_delete_attachment(user, vault, path, opts) do
     path = PathSanitizer.sanitize(path)
     now = DateTime.utc_now(:second)
 

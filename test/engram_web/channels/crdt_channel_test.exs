@@ -436,6 +436,36 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_note_content_eventually(user, vault, good, "ok")
     end
 
+    test "reply preserves per-entry input order, error entries in place", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      ids = for _ <- 1..8, do: Ecto.UUID.generate()
+
+      creates =
+        ids
+        |> Enum.with_index()
+        |> Enum.map(fn {id, i} ->
+          %{"doc_id" => id, "path" => "Ord#{i}.md", "b64" => frame_for_content("body-#{i}")}
+        end)
+        # Malformed entry spliced mid-batch: it must reply in ITS slot, not
+        # shifted or dropped, so the client can correlate results by index.
+        |> List.insert_at(3, %{"path" => "no-doc-id.md"})
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :ok, %{results: results}, 10_000
+
+      assert length(results) == 9
+      assert Enum.map(results, & &1.doc_id) == Enum.map(creates, &Map.get(&1, "doc_id"))
+      assert %{status: "error", reason: "bad_frame"} = Enum.at(results, 3)
+      assert results |> List.delete_at(3) |> Enum.all?(&(&1.status == "ok"))
+
+      for {id, i} <- Enum.with_index(ids) do
+        assert_note_content_eventually(user, vault, id, "body-#{i}")
+      end
+    end
+
     test "rejects an oversized creates list", %{socket: socket} do
       creates =
         for _ <- 1..101,
