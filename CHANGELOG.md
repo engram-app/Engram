@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.4](https://github.com/engram-app/Engram/compare/0.12.3...0.12.4) (2026-08-01)
+
+
+### Bug Fixes
+
+* **vaults:** promote the next default only after the delete succeeds ([#1187](https://github.com/engram-app/Engram/issues/1187)) ([9f0e07d](https://github.com/engram-app/Engram/commit/9f0e07d203294b68c6809e5cc4a1198e0a6ecb32))
+* **web:** re-point a stale persisted vault id at an owned vault ([#1183](https://github.com/engram-app/Engram/issues/1183)) ([923aba2](https://github.com/engram-app/Engram/commit/923aba2a17d4a6d10b0eebeb8a870a377a4ee0e0))
+
 ## [0.12.3](https://github.com/engram-app/Engram/compare/0.12.2...0.12.3) (2026-08-01)
 
 
