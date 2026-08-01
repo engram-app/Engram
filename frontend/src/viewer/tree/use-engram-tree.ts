@@ -22,7 +22,7 @@ import {
 import { resolveDropMove } from "./drop-redirect";
 import { buildLoader, type LoaderItem, type SortKey } from "./loader";
 import { TREE_SLOT_HEIGHT } from "./row-metrics";
-import { ROOT_ID } from "./types";
+import { type ParsedItemId, parseItemId, ROOT_ID } from "./types";
 
 interface Deps {
 	folders: Folder[];
@@ -67,6 +67,62 @@ function attachmentsFingerprint(attachments?: AttachmentSummary[]): string {
 	return `${attachments.length}:${max}`;
 }
 
+type TreeLoader = ReturnType<typeof buildLoader>;
+
+/**
+ * Stand-in row for an id whose data has not landed yet — the folders query is
+ * refetching, or `inner` was just rebuilt (its `childIndex` starts empty), so
+ * the id cannot be resolved for a tick even though the row is on screen.
+ *
+ * The kind is encoded in the id, so it is knowable with ZERO loaded data.
+ * Deriving it is the whole point: this used to hardcode
+ * `item.kind: "folder"` + `isFolder: false`, which is self-contradictory. The
+ * render path switches on `item.kind` and drew a chevron, while headless-tree
+ * switches on `isItemFolder` and saw a LEAF — and HT reads that at click time.
+ * A click landing inside the window therefore took the leaf branch: it selected
+ * the row and never toggled expansion. Nothing re-clicks, so the folder stayed
+ * shut until the user clicked again (#1178, seen as a `move note propagates to
+ * a second tab` e2e flake).
+ *
+ * `parseItemId` throws on a malformed id; this must stay total, because its
+ * only job is to keep HT from crashing mid-render.
+ */
+function placeholderItem(itemId: string): Data {
+	let parsed: ParsedItemId | null = null;
+	try {
+		parsed = parseItemId(itemId);
+	} catch {
+		// Unknown id shape. Fall through to the leaf placeholder below: a leaf is
+		// the safe default for something we cannot name, since claiming it is a
+		// folder would invite HT to ask for children that will never exist.
+	}
+	if (parsed?.kind === "folder") {
+		return {
+			itemId,
+			item: { kind: "folder", id: parsed.id, path: "", name: itemId, count: 0 },
+			isFolder: true,
+		};
+	}
+	if (parsed?.kind === "attachment") {
+		return {
+			itemId,
+			item: { kind: "attachment", id: itemId, path: parsed.path, mime: "", size: 0 },
+			isFolder: false,
+		};
+	}
+	return {
+		itemId,
+		item: {
+			kind: "note",
+			id: parsed?.kind === "note" ? parsed.id : itemId,
+			path: "",
+			title: itemId,
+			ext: null,
+		},
+		isFolder: false,
+	};
+}
+
 export function treeStructureKey(
 	folders: Pick<Folder, "id" | "count" | "parent_id">[],
 	sort: SortKey,
@@ -101,45 +157,7 @@ export function useEngramTree(deps: Deps) {
 		[deps.folders, deps.qc, deps.vaultId, deps.sort, deps.attachments, deps.fetchFolderNotes],
 	);
 
-	// Bridge our LoaderItem-returning loader to HT's TreeDataLoader<T> shape
-	// (getItem -> T, getChildren -> string[]). We index getChildren results
-	// by itemId so a subsequent getItem(id) lookup hits the same row data.
-	const dataLoader = useMemo(() => {
-		const childIndex = new Map<string, LoaderItem>();
-		return {
-			getItem(itemId: string): Data {
-				if (itemId === ROOT_ID) {
-					return {
-						itemId: ROOT_ID,
-						item: { kind: "folder", id: "root", path: "", name: "", count: 0 },
-						isFolder: true,
-					};
-				}
-				const cached = childIndex.get(itemId);
-				if (cached) {
-					return cached;
-				}
-				const direct = inner.getItem(itemId);
-				if (direct) {
-					childIndex.set(itemId, direct);
-					return direct;
-				}
-				// Fallback placeholder so HT doesn't crash before data lands.
-				return {
-					itemId,
-					item: { kind: "folder", id: itemId, path: "", name: itemId, count: 0 },
-					isFolder: false,
-				};
-			},
-			getChildren(itemId: string): string[] {
-				const kids = inner.getChildren(itemId);
-				for (const k of kids) {
-					childIndex.set(k.itemId, k);
-				}
-				return kids.map((k) => k.itemId);
-			},
-		};
-	}, [inner]);
+	const dataLoader = useMemo(() => createTreeDataLoader(inner), [inner]);
 
 	const tree = useTree<Data>({
 		rootItemId: ROOT_ID,
@@ -264,4 +282,39 @@ export function useEngramTree(deps: Deps) {
 	});
 
 	return { tree, virtualizer, items };
+}
+
+// Bridge our LoaderItem-returning loader to HT's TreeDataLoader<T> shape
+// (getItem -> T, getChildren -> string[]). We index getChildren results
+// by itemId so a subsequent getItem(id) lookup hits the same row data.
+export function createTreeDataLoader(inner: Pick<TreeLoader, "getItem" | "getChildren">) {
+	const childIndex = new Map<string, LoaderItem>();
+	return {
+		getItem(itemId: string): Data {
+			if (itemId === ROOT_ID) {
+				return {
+					itemId: ROOT_ID,
+					item: { kind: "folder", id: "root", path: "", name: "", count: 0 },
+					isFolder: true,
+				};
+			}
+			const cached = childIndex.get(itemId);
+			if (cached) {
+				return cached;
+			}
+			const direct = inner.getItem(itemId);
+			if (direct) {
+				childIndex.set(itemId, direct);
+				return direct;
+			}
+			return placeholderItem(itemId);
+		},
+		getChildren(itemId: string): string[] {
+			const kids = inner.getChildren(itemId);
+			for (const k of kids) {
+				childIndex.set(k.itemId, k);
+			}
+			return kids.map((k) => k.itemId);
+		},
+	};
 }
