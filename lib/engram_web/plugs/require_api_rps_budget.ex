@@ -19,7 +19,22 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudget do
 
   alias Engram.Billing
 
-  @period_ms 1_000
+  @default_period_ms 1_000
+
+  # The window LENGTH is configuration, not the behaviour under test: what the
+  # gate promises is "N requests per window, then 429". Hammer derives its
+  # bucket from wall-clock (`div(now_ms, scale_ms)`), so a test that fires N+1
+  # calls against a 1 s window is racing a real second boundary — under load the
+  # warm-up calls straddle it, the bucket resets, and the call that should be
+  # denied is back under cap (#1080 / #936, observed 1/3785 in CI).
+  #
+  # Widening the window in tests removes the race outright rather than papering
+  # over it: all N+1 calls land in ONE bucket by construction, with no timing
+  # assumption left to lose. Prod never sets this. Same shape as the
+  # `:crdt_msg_rate_limit_override` seam in CrdtChannel.
+  defp period_ms do
+    Application.get_env(:engram, :api_rps_period_ms, @default_period_ms)
+  end
 
   def init(opts), do: opts
 
@@ -39,7 +54,7 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudget do
   end
 
   defp check_rate_limit(conn, user, limit) do
-    case EngramWeb.RateLimiter.hit("api_rps:#{user.id}", @period_ms, limit, :api_rps) do
+    case EngramWeb.RateLimiter.hit("api_rps:#{user.id}", period_ms(), limit, :api_rps) do
       {:allow, _count} -> conn
       {:deny, _retry_after_ms} -> deny(conn, limit)
     end
@@ -53,7 +68,7 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudget do
       Jason.encode!(%{
         error: "api_rps_exceeded",
         limit: limit,
-        period_ms: @period_ms
+        period_ms: period_ms()
       })
     )
     |> halt()
