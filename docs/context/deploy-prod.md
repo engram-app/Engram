@@ -41,14 +41,50 @@ git tag release-v0.5.234
 git push origin release-v0.5.234
 ```
 
-The deploy workflow takes ~30 seconds to open the engram-infra PR. End-to-end (PR open → auto-merge after CI → `terraform apply` → service stable) is typically ~5-8 min depending on engram-infra CI latency.
+The deploy workflow takes ~30 seconds to open the engram-infra PR. **Prod does not
+move until you promote** (see below). Once promoted, `terraform apply` → service
+stable is typically ~5-8 min depending on engram-infra CI latency.
 
 Watch the chain:
 
 1. **engram** Actions tab → `Deploy prod` → link to bot PR in step summary
-2. **engram-infra** PR → CI greenlights → auto-merge fires
-3. **engram-infra** Actions tab → `terraform (prod)` → apply log
-4. **AWS** → `aws ecs describe-services` shows new task def revision
+2. **staging** → verify it carries this release (below)
+3. **engram-infra** PR → you merge it
+4. **engram-infra** Actions tab → `terraform (prod)` → apply log
+5. **AWS** → `aws ecs describe-services` shows new task def revision
+
+## Promotion gate (staging first)
+
+Merging the release-please PR rolls staging and prod off the same event. Until
+engram-app/Engram#1155 the prod bump PR was auto-merged, so prod moved as soon as
+its checks went green — before anyone could look at staging. The PR is now opened
+and left alone.
+
+Staging is rolling to the same release automatically. Before promoting, check it
+carries the release and is actually healthy:
+
+```bash
+# 1. staging is serving the expected version
+curl -s https://staging.engram.page/api/health | jq .
+
+# 2. migrations ran clean and the container booted (not crash-looping)
+#    -> engram-infra Actions tab, `terraform (staging)` apply log
+
+# 3. a real client handshake works, not just HTTP 200
+#    -> docs/context/staging-mcp-oauth-connect.md
+```
+
+Then promote. The `Deploy prod` job summary prints this exact line with the PR
+number filled in:
+
+```bash
+gh pr merge --squash --repo engram-app/engram-infra <PR_NUMBER>
+```
+
+**Why not required reviewers?** A GitHub Environment protection rule would also
+gate this, but it puts a reviewer in the path of an incident rollback. This gate
+is one command by the operator, so a forward-roll is not slowed — see the
+rollback recipe.
 
 ## Rollback recipe
 
@@ -62,7 +98,7 @@ git tag release-v0.5.235 $GOOD_SHA
 git push origin release-v0.5.235
 ```
 
-The workflow opens an engram-infra PR bumping the var to that older `sha-<7>`. On merge, TF registers a fresh revision pinning the old image and the service rolls back. Task def history in ECS becomes the deploy log — `aws ecs list-task-definitions --family-prefix engram-saas-prod` shows every revision in order.
+The workflow opens an engram-infra PR bumping the var to that older `sha-<7>`. Merge it immediately — the promotion gate above is a manual merge, not a review requirement, so nothing queues behind another person during an incident. On merge, TF registers a fresh revision pinning the old image and the service rolls back. Task def history in ECS becomes the deploy log — `aws ecs list-task-definitions --family-prefix engram-saas-prod` shows every revision in order.
 
 ## Inspect deploy state
 
