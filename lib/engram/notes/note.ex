@@ -71,11 +71,11 @@ defmodule Engram.Notes.Note do
     # Head marker of the canonical CRDT doc: sha256(state_vector) url-b64 (see
     # CrdtTransport.head_marker/1). INVALIDATE-and-self-heal, not maintained: it
     # is NULLed on every CRDT-state change (update_v1 on a tail append; a DB
-    # trigger on any crdt_state_ciphertext write), and vault_heads self-heals a
-    # NULL by rebuilding the doc once and storing the result — so a non-NULL
-    # value is a lazily-cached head, refreshed on the next poll after any edit.
-    # BackfillCrdtHead warms existing NULLs. Not encrypted: a hash of clock
-    # counts carries no note content.
+    # trigger on any crdt_state_ciphertext write), and the BackfillCrdtHead
+    # worker re-warms a NULL by rebuilding the doc once and storing the result —
+    # so a non-NULL value is a cached head (read by the sync manifest),
+    # re-warmed after any edit. Not encrypted: a hash of clock counts carries
+    # no note content.
     field :crdt_head, :string
 
     field :type_ciphertext, :binary

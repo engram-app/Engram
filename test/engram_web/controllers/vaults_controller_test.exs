@@ -368,7 +368,7 @@ defmodule EngramWeb.VaultsControllerTest do
       assert body["limit_key"] == "vaults_cap"
       assert body["limit"] == 1
       assert body["current"] == 1
-      assert body["upgrade_url"] =~ "/settings/billing"
+      assert body["upgrade_url"] =~ "/#settings/billing"
     end
   end
 end

@@ -722,6 +722,24 @@ defmodule Engram.Attachments do
   end
 
   @doc """
+  Lists attachment metadata directly inside `folder` (non-recursive), mirroring
+  `Notes.list_notes_in_folder/3`. Root is `""`. Returns `{:ok, metas}`.
+  """
+  @spec list_in_folder(map(), map(), String.t()) :: {:ok, [map()]} | {:error, term()}
+  def list_in_folder(user, vault, folder) do
+    with {:ok, metas} <- list_attachments(user, vault) do
+      {:ok, Enum.filter(metas, fn m -> attachment_folder(m.path) == folder end)}
+    end
+  end
+
+  defp attachment_folder(path) do
+    case Path.dirname(path) do
+      "." -> ""
+      dir -> dir
+    end
+  end
+
+  @doc """
   Lists attachment changes since a given timestamp. Returns metadata only (no content).
   """
   def list_changes(user, vault, since) do

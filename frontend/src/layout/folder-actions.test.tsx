@@ -5,12 +5,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import FolderActions from "./folder-actions";
 import { FolderTreeProvider } from "./folder-tree-context";
 
-const { navigate, post, toastError, openUpload } = vi.hoisted(() => ({
+const { navigate, post, toastError, openUpload, crdtCreateNote } = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	post: vi.fn(),
 	toastError: vi.fn(),
 	openUpload: vi.fn(),
+	// Note create rides the CRDT channel now; echo the minted doc_id on ok.
+	crdtCreateNote: vi.fn((docId: string) => Promise.resolve(docId)),
 }));
+
+vi.mock("../api/channel", () => ({ crdtCreateNote, crdtDeleteNote: vi.fn() }));
 
 vi.mock("../viewer/attachment-upload/provider", () => ({
 	useAttachmentUpload: () => ({ openUpload }),
@@ -56,7 +60,7 @@ vi.mock("../api/active-vault", () => ({
 
 function renderWithProviders() {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	// Seed the active-note cache so useActiveFolder() resolves to "foo"
+	// A note in "foo" is open — the toolbar must still create at the ROOT.
 	qc.setQueryData(["note", "1", "42"], { id: "42", folder: "foo", path: "foo/bar.md" });
 	return render(
 		<MemoryRouter initialEntries={["/note/42"]}>
@@ -77,50 +81,51 @@ describe("FolderActions", () => {
 		post.mockReset();
 		toastError.mockReset();
 		openUpload.mockReset();
+		crdtCreateNote.mockReset().mockImplementation((docId: string) => Promise.resolve(docId));
 		demoActive = false;
 	});
 
-	it("creates a note in the active folder when New note is clicked", async () => {
-		post.mockResolvedValue({ note: { path: "foo/Untitled.md" } });
+	// Obsidian's equivalent buttons always target the vault root; following the
+	// open note's folder made the destination unpredictable.
+	it("creates a note at the vault root, ignoring the open note's folder", async () => {
 		renderWithProviders();
 
 		fireEvent.click(screen.getByRole("button", { name: "New note" }));
 
 		await waitFor(() => {
-			expect(post).toHaveBeenCalledWith(
-				"/notes",
-				expect.objectContaining({ path: "foo/Untitled.md", content: "" }),
-			);
+			expect(crdtCreateNote).toHaveBeenCalledWith(expect.any(String), "Untitled.md");
 		});
+		expect(post).not.toHaveBeenCalledWith("/notes", expect.anything());
 	});
 
-	it("creates a folder under the active folder when New folder is clicked", async () => {
-		post.mockResolvedValue({ folder: { name: "foo/Untitled folder", count: 0 } });
+	it("creates a folder at the vault root, ignoring the open note's folder", async () => {
+		post.mockResolvedValue({ folder: { name: "untitled", count: 0 } });
 		renderWithProviders();
 
 		fireEvent.click(screen.getByRole("button", { name: "New folder" }));
 
 		await waitFor(() => {
-			expect(post).toHaveBeenCalledWith("/folders", { folder: "foo/Untitled folder" });
+			expect(post).toHaveBeenCalledWith("/folders", { folder: "untitled" });
 		});
 	});
 
 	it("navigates to the new note by id on success", async () => {
-		post.mockResolvedValue({ note: { id: 7, path: "foo/Untitled.md" } });
 		renderWithProviders();
 
 		fireEvent.click(screen.getByRole("button", { name: "New note" }));
 
 		await waitFor(() => {
-			expect(navigate).toHaveBeenCalledWith("/note/7");
+			expect(crdtCreateNote).toHaveBeenCalled();
 		});
+		const mintedId = crdtCreateNote.mock.calls[0]?.[0];
+		expect(navigate).toHaveBeenCalledWith(`/note/${mintedId}`);
 	});
 
-	it("opens the upload flow targeting the active folder when Upload is clicked", () => {
+	it("opens the upload flow targeting the vault root when Upload is clicked", () => {
 		renderWithProviders();
 		fireEvent.click(screen.getByRole("button", { name: "Upload attachment" }));
 		// Seeded active note lives in folder "foo" (see renderWithProviders).
-		expect(openUpload).toHaveBeenCalledWith(undefined, "foo");
+		expect(openUpload).toHaveBeenCalledWith(undefined, "");
 	});
 
 	it("hides the Upload button on demo vaults", () => {

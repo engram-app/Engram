@@ -71,6 +71,57 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert CrdtBridge.text_of(doc) == "base"
   end
 
+  # #852. bind/3 used to swallow a decrypt FAILURE through the same catch-all
+  # clause as "no snapshot yet", so an undecryptable snapshot silently started a
+  # fresh lineage: the tail replays onto an empty doc, the room looks converged,
+  # and the next checkpoint writes that truncated doc back over the real content.
+  # A transient failure (DEK cache miss, a read mid-rotation) would have become
+  # permanent data loss. Notes.maybe_merge_crdt/4 already refused on the same
+  # signal; this aligns bind/3 with it.
+  test "bind/3 REFUSES to bind when the crdt_state snapshot cannot be decrypted", ctx do
+    %{user: user, note: note} = ctx
+
+    # Flip a byte so AEAD verification fails — the same shape a wrong-DEK or
+    # mid-rotation read presents as.
+    <<first, rest::binary>> = note.crdt_state_ciphertext
+    tampered = <<:erlang.bxor(first, 0xFF), rest::binary>>
+
+    Repo.with_tenant(user.id, fn ->
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(set: [crdt_state_ciphertext: tampered])
+    end)
+
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
+    doc = CrdtBridge.new_doc()
+
+    capture_log(fn ->
+      assert_raise RuntimeError, ~r/crdt_state decrypt failed/, fn ->
+        CrdtPersistence.bind(st, note.id, doc)
+      end
+    end)
+
+    # The doc must be left EMPTY rather than seeded with a fresh lineage —
+    # that empty-but-plausible doc is the thing a later checkpoint would
+    # have written back over the note body.
+    assert CrdtBridge.text_of(doc) == ""
+  end
+
+  # The legitimate half of the same branch must keep working: a note that has
+  # never been checkpointed has no snapshot at all, and that is not an error.
+  test "bind/3 still binds a note with no snapshot (nil ciphertext)", ctx do
+    %{user: user, note: note} = ctx
+
+    Repo.with_tenant(user.id, fn ->
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil])
+    end)
+
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
+    doc = CrdtBridge.new_doc()
+
+    assert %{user: _} = CrdtPersistence.bind(st, note.id, doc)
+  end
+
   test "bind/3 returns state map with resolved :user cached", ctx do
     %{user: user, note: note} = ctx
     st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
@@ -81,15 +132,19 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert cached_user.id == user.id
   end
 
-  test "bind/3 seeds the doc from notes.content when fresh (no snapshot, no tail-log)", ctx do
+  test "bind/3 does NOT seed the doc from notes.content", ctx do
     %{user: user, vault: vault} = ctx
-    # A note whose CRDT state has never been written (no snapshot, no tail-log)
-    # but which carries plaintext content. A device that has never CRDT-edited
-    # this note (e.g. device B discovering it) must still receive that content
-    # over the y-protocols handshake — so bind seeds the doc from notes.content.
+    # The server used to seed a bound room from `notes.content`, which made it a
+    # THIRD writer of note content alongside the client and the disk flush.
+    # Reconciling three representations is the shape of every "which copy is
+    # authoritative" bug in this codebase, so the seed is gone: the doc is the
+    # only authority and `notes.content` is a derived projection.
     {:ok, note2} =
       Notes.upsert_note(user, vault, %{"path" => "seed.md", "content" => "hello world"})
 
+    # Force the legacy shape the seed existed for: plaintext present, CRDT state
+    # absent. `upsert_note` no longer produces this state (see the test below),
+    # so it has to be constructed by hand.
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
         Repo.update_all(
@@ -102,6 +157,25 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     doc = CrdtBridge.new_doc()
     _returned = CrdtPersistence.bind(st, note2.id, doc)
 
+    assert CrdtBridge.text_of(doc) == ""
+  end
+
+  test "a plaintext write leaves the body in the note's persisted CRDT state", ctx do
+    %{user: user, vault: vault} = ctx
+    # THIS is what makes removing the bind seed safe. upsert_note merges the
+    # incoming plaintext into the persisted CRDT state roomlessly
+    # (doc_from_state -> replay_tail -> merge_plaintext_*), so a device that has
+    # never CRDT-edited the note still receives the body over the handshake —
+    # without the server ever writing into a bound room.
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{"path" => "written.md", "content" => "hello world"})
+
+    st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
+    doc = CrdtBridge.new_doc()
+    _returned = CrdtPersistence.bind(st, note2.id, doc)
+
+    # `==`, not `=~`: full-body doubling is a previously-shipped failure mode of
+    # this merge path, and `=~` passes on "hello worldhello world".
     assert CrdtBridge.text_of(doc) == "hello world"
   end
 
@@ -154,6 +228,155 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     _returned = CrdtPersistence.bind(st, note2.id, doc)
 
     assert CrdtBridge.text_of(doc) == ""
+  end
+
+  test "bind/3 does NOT ingest a .canvas note's JSON as markdown body (structural, client-seeded)",
+       ctx do
+    %{user: user, vault: vault} = ctx
+    # A canvas note stores structural data (Y.Map nodes/edges) client-side; its
+    # notes.content is raw .canvas JSON. Seeding it through the markdown frontmatter
+    # codec would diff the whole JSON into the body Y.Text — corrupting the doc.
+    # Canvas rooms are client-seeded, so bind must NOT seed the body from content.
+    canvas_json = ~s({"nodes":[{"id":"n1","type":"text","text":"hi"}],"edges":[]})
+
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{"path" => "board.canvas", "content" => canvas_json})
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note2.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+    st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
+    doc = CrdtBridge.new_doc()
+    _returned = CrdtPersistence.bind(st, note2.id, doc)
+
+    assert CrdtBridge.body_of(doc) == ""
+  end
+
+  test "bind/3 does NOT resurrect notes.content over an empty-projecting snapshot (#1087 class)",
+       ctx do
+    %{user: user, vault: vault} = ctx
+    # crdt_state holds an EMPTY-doc snapshot while notes.content is non-empty.
+    # The server used to treat the plaintext row as the source of truth here and
+    # seed the doc from it — which is precisely what made it a third writer.
+    # The doc is now authoritative even when it projects empty: this divergence
+    # is only constructible by hand, because the write path merges plaintext
+    # INTO the CRDT state (see "a plaintext write leaves the body in the note's
+    # persisted CRDT state").
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{"path" => "empty-snap.md", "content" => "real body"})
+
+    {:ok, empty_state} = Yex.encode_state_as_update(CrdtBridge.new_doc())
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(empty_state, user, note2.id)
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note2.id),
+          set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+        )
+      end)
+
+    st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
+    doc = CrdtBridge.new_doc()
+    _returned = CrdtPersistence.bind(st, note2.id, doc)
+
+    assert CrdtBridge.text_of(doc) == ""
+  end
+
+  test "bind/3 does NOT seed when the snapshot projects empty AND content is empty (bare genesis row)",
+       ctx do
+    %{user: user, vault: vault} = ctx
+    {:ok, note2} = Notes.upsert_note(user, vault, %{"path" => "bare-genesis.md", "content" => ""})
+
+    {:ok, empty_state} = Yex.encode_state_as_update(CrdtBridge.new_doc())
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(empty_state, user, note2.id)
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note2.id),
+          set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+        )
+      end)
+
+    st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
+    doc = CrdtBridge.new_doc()
+    _returned = CrdtPersistence.bind(st, note2.id, doc)
+
+    assert CrdtBridge.text_of(doc) == ""
+  end
+
+  test "bind/3 does NOT seed over a snapshot whose tail carries a legit clear (delete-all survives)",
+       ctx do
+    %{user: user, vault: vault} = ctx
+    # A tail row that cleared the text: doc projects empty AFTER hydration, but
+    # applied != [] — the clear is CRDT history, not a missing seed. Content
+    # must NOT resurrect.
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{"path" => "cleared.md", "content" => "STALE"})
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note2.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+    st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
+
+    # Tail: insert then delete-all on ONE lineage → projects empty.
+    {:ok, %{state: with_text}} = CrdtBridge.merge_plaintext(nil, "TO CLEAR")
+    {:ok, %{state: tail_update}} = CrdtBridge.merge_plaintext(with_text, "")
+    seed_doc = CrdtBridge.new_doc()
+    _ = CrdtPersistence.update_v1(st, tail_update, note2.id, seed_doc)
+
+    doc = CrdtBridge.new_doc()
+    _returned = CrdtPersistence.bind(st, note2.id, doc)
+
+    text = CrdtBridge.text_of(doc)
+    refute text =~ "STALE"
+  end
+
+  test "bind/3 does NOT resurrect notes.content over a frontmatter-only snapshot",
+       ctx do
+    %{user: user, vault: vault} = ctx
+    # Frontmatter-only snapshot: text_of projects non-empty ("---\n...") but the
+    # BODY is empty — the seed discriminator must be body-emptiness, or this
+    # shape keeps serving a bodyless STEP2 while the row holds the body.
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{
+        "path" => "fm-only.md",
+        "content" => "---\ntitle: x\n---\nreal body"
+      })
+
+    {:ok, %{state: fm_only}} = CrdtBridge.merge_plaintext(nil, "---\ntitle: x\n---\n")
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(fm_only, user, note2.id)
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note2.id),
+          set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+        )
+      end)
+
+    st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
+    doc = CrdtBridge.new_doc()
+    _returned = CrdtPersistence.bind(st, note2.id, doc)
+
+    # The snapshot is authoritative even when it disagrees with notes.content.
+    # This divergence is only constructible by hand now: the write path merges
+    # plaintext INTO the CRDT state, so the two cannot drift apart in
+    # production. Seeding from content here is what made the server a third
+    # writer, and the #1087 empty-STEP2 class came from trying to guess which
+    # of the two representations was right.
+    refute CrdtBridge.text_of(doc) =~ "real body"
   end
 
   # ── update_v1/4 writes encrypted log row ──────────────────────────────────
@@ -210,13 +433,83 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert_receive %Phoenix.Socket.Broadcast{
       topic: ^topic,
       event: "note_yjs_update",
-      payload: %{"note_id" => note_id, "b64" => b64, "head" => head}
+      payload: %{"note_id" => note_id, "b64" => b64, "head" => head, "seq" => seq}
     }
 
     assert note_id == note.id
     assert {:ok, ^upd} = Base.decode64(b64)
     assert is_binary(head) and head != ""
     assert head == Engram.Notes.CrdtTransport.head_marker(doc)
+    # gap-heal (Phase D2): carries the note's current vault-global change
+    # seq (the same field `list_changes_by_seq` orders by) so a device can
+    # detect a missed/reordered live op and self-heal via catch-up.
+    assert seq == note.seq
+  end
+
+  test "update_v1/4 fans out the correct seq when crdt_head is already nil (select: 0-rows fallback)",
+       ctx do
+    %{user: user, note: note} = ctx
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
+
+    # A freshly-created note's crdt_head is nil (only ever set later by the
+    # transport self-heal read path), so the seq-fetching update_all's
+    # `not is_nil(n.crdt_head)` guard matches ZERO rows here and update_v1
+    # must fall back to a select-only query to still surface the seq.
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get(Note, note.id) end)
+    assert raw_note.crdt_head == nil
+
+    {:ok, %{state: upd}} = CrdtBridge.merge_plaintext(nil, "zero rows fallback")
+    doc = CrdtBridge.new_doc()
+    :ok = Yex.apply_update(doc, upd)
+
+    topic = "sync:#{user.id}:#{note.vault_id}"
+    EngramWeb.Endpoint.subscribe(topic)
+
+    _st2 = CrdtPersistence.update_v1(st, upd, note.id, doc)
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      topic: ^topic,
+      event: "note_yjs_update",
+      payload: %{"seq" => seq}
+    }
+
+    assert seq == note.seq
+  end
+
+  test "update_v1/4 fans out the correct seq via update_all select: when crdt_head is set (non-empty rows)",
+       ctx do
+    %{user: user, note: note} = ctx
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
+
+    # Simulate a note whose crdt_head cache is populated (set by the transport
+    # self-heal read path) BEFORE this live delta arrives — the common hot-path
+    # shape the `select: n.seq` clause targets: the update_all both
+    # invalidates crdt_head AND returns the row's seq in one query.
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id), set: [crdt_head: "stale-head"])
+      end)
+
+    {:ok, %{state: upd}} = CrdtBridge.merge_plaintext(nil, "returning path")
+    doc = CrdtBridge.new_doc()
+    :ok = Yex.apply_update(doc, upd)
+
+    topic = "sync:#{user.id}:#{note.vault_id}"
+    EngramWeb.Endpoint.subscribe(topic)
+
+    _st2 = CrdtPersistence.update_v1(st, upd, note.id, doc)
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      topic: ^topic,
+      event: "note_yjs_update",
+      payload: %{"seq" => seq}
+    }
+
+    assert seq == note.seq
+
+    # The stale head cache was invalidated by the same update_all.
+    {:ok, updated} = Repo.with_tenant(user.id, fn -> Repo.get(Note, note.id) end)
+    assert updated.crdt_head == nil
   end
 
   test "update_v1/4 with cached user does not hit Accounts.get_user!", ctx do
@@ -365,25 +658,14 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert is_binary(CrdtBridge.text_of(doc))
   end
 
-  # ── seed_from_content routes frontmatter through the codec ────────────────
+  # ── frontmatter survives the plaintext WRITE path (not a bind-time seed) ──
 
-  test "bind/3 seed routes frontmatter into Y.Map, not body Y.Text", ctx do
+  test "a plaintext write routes frontmatter into Y.Map, not body Y.Text", ctx do
     %{user: user, vault: vault} = ctx
-
-    # Note whose plaintext content includes a frontmatter block.
     content = "---\ntitle: Hi\n---\nbody\n"
 
     {:ok, note2} =
       Notes.upsert_note(user, vault, %{"path" => "fm_seed.md", "content" => content})
-
-    # Clear CRDT state so bind/3 takes the fresh-room / seed path.
-    {:ok, _} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note2.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
-        )
-      end)
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()
@@ -392,7 +674,7 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     {fm_order, fm_values} = CrdtBridge.frontmatter_of(doc)
 
     # Frontmatter must be populated in the Y.Map — not silently dropped.
-    assert fm_order != [], "frontmatter_order should be non-empty after seed"
+    assert fm_order != [], "frontmatter_order should be non-empty after the write"
     assert Map.has_key?(fm_values, "title"), "Y.Map must contain the 'title' key"
 
     # Body Y.Text must NOT contain the raw frontmatter block.

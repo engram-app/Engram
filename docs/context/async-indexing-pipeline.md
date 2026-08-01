@@ -14,7 +14,7 @@ Oban uses the existing PostgreSQL database — no new infrastructure, no new fai
 ## Request Flow
 
 ```
-POST /notes (or Channel push_note)
+POST /notes (or a crdt: channel write)
   → Persist to PostgreSQL (immediate, in request)
   → Compute content_hash — if unchanged from previous, skip Oban job
   → Increment version

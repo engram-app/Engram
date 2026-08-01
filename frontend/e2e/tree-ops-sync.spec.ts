@@ -2,11 +2,13 @@ import { expect, type Page, test } from "@playwright/test";
 import {
 	createFolder,
 	createVault,
+	noteUrlRe,
 	registerAndLogin,
 	signInForNote,
 	upsertNote,
 } from "./support/api";
 import {
+	collapseFolder,
 	commitRename,
 	confirmDelete,
 	expandFolder,
@@ -211,10 +213,10 @@ test.describe("web tree ops sync (web to web)", () => {
 		// route/URL is left untouched (no redirect). That is the graceful
 		// state this test locks in: no dead editor showing stale content, no
 		// crash, no infinite spinner, just an explicit not-found message.
-		await expect(pageA).toHaveURL(new RegExp(`/note/${doomedId}`));
+		await expect(pageA).toHaveURL(noteUrlRe(doomedId));
 		await expect(pageA.getByText(/Failed to load note/u)).toBeVisible({ timeout: 10_000 });
 
-		await expect(pageB).toHaveURL(new RegExp(`/note/${doomedId}`));
+		await expect(pageB).toHaveURL(noteUrlRe(doomedId));
 		await expect(pageB.getByText(/Failed to load note/u)).toBeVisible({ timeout: 10_000 });
 
 		// No crash in either tab: the CRDT doc teardown (closeDoc fires from the
@@ -273,13 +275,13 @@ test.describe("web tree ops sync (web to web)", () => {
 		// Old folder must no longer contain the note. Collapse Dest so the only
 		// visible "mover" row would be under Source, then assert it is gone when
 		// Source is expanded and Dest collapsed.
-		await row(pageB, "Dest").click(); // collapse Dest
-		await expect(row(pageB, "Dest")).toHaveAttribute("aria-expanded", "false");
+		await collapseFolder(pageB, "Dest");
 		await expandFolder(pageB, "Source");
 		await expect(row(pageB, "mover")).toHaveCount(0, { timeout: 10_000 });
 
 		// Content sync must survive the move. Both tabs are anchored on the note
-		// (/note/:id, id stable across the move), so the editor stays bound.
+		// (/:vaultSlug/:noteId, id stable across the move), so the editor stays
+		// bound — the move changes the note's path, not its id.
 		// Edit in tab A and confirm it converges in tab B: a regression here means
 		// the move broke the note's live content channel.
 		const edA = pageA.locator(".cm-content");
@@ -387,8 +389,7 @@ test.describe("web tree ops sync (web to web)", () => {
 		// Old location clears: Movable is no longer a root-level folder. Collapse
 		// Parent so its subtree hides; Movable must then be absent (it now exists
 		// only under the collapsed Parent, not at root).
-		await row(pageB, "Parent").click();
-		await expect(row(pageB, "Parent")).toHaveAttribute("aria-expanded", "false");
+		await collapseFolder(pageB, "Parent");
 		await expect(row(pageB, "Movable")).toHaveCount(0, { timeout: 10_000 });
 
 		// Content sync must survive the folder move. Tabs are anchored on the leaf

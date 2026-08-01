@@ -689,22 +689,14 @@ defmodule Engram.Notes do
                      {:ok, decrypt_or_raise!(live, user)}
 
                    {:ok, false} ->
-                     # Same greppable Loki tripwire as REST's upsert_note
-                     # {:id_collision, live} arm (notes.ex ~line 493) — a
-                     # client-minted id reused at a different path is the
-                     # 2026-07-06 wrong-mint corruption signature, and the
-                     # socket path must not be blind to it.
-                     Logger.warning(
-                       "note_id_collision_rejected",
-                       Metadata.with_category(:warning, :sync,
-                         user_id: user.id,
-                         vault_id: vault.id,
-                         note_id: live.id,
-                         server_version: live.version
-                       )
-                     )
-
-                     {:error, :id_conflict, decrypt_or_raise!(live, user)}
+                     # Phase E2 (rename-as-move): a crdt_create for a KNOWN live
+                     # id at a new, FREE path is a rename — relocate the row in
+                     # place (same move_note pipeline the tombstone-resurrect
+                     # rename leg uses), no tombstone-first dance, which also
+                     # removes the #970 delete-wins window from renames entirely.
+                     # A target path OCCUPIED by a DIFFERENT live note stays a
+                     # genuine conflict (the pre-E2 behavior).
+                     genesis_relocate_live(live, user, vault, sanitized_path, folder)
 
                    {:error, _} = err ->
                      err
@@ -729,16 +721,23 @@ defmodule Engram.Notes do
           :ok = CrdtDeliver.announce_ready(user.id, vault.id, note.path, note.id)
           {:ok, note}
 
-        {:ok, {:ok, note, :announce_moved}} ->
-          # A resurrect that RE-PATHED the note (rename restore) must fan the
-          # new-path upsert to peers, exactly like the REST move_note :moved leg
-          # (upsert_note). announce_ready alone carries only the id — peers would
-          # see the old-path delete but never the new-path upsert, so the note
-          # vanishes on them until their next pull. broadcast_change's "upsert"
-          # clause also deliver_outs the CRDT state (which announces the doc), so
-          # no separate announce_ready is needed. Fired post-commit, same as the
-          # :announce leg above.
+        {:ok, {:ok, note, {:announce_moved, old_path}}} ->
+          # A rename-as-move (live relocate or resurrect-rename) must fan BOTH the
+          # new-path upsert AND the old-path delete to peers — exactly like the
+          # REST rename delete leg (do_rewrite_note). broadcast_change's "upsert"
+          # also deliver_outs the CRDT state (announces the doc), so no separate
+          # announce_ready is needed. Upsert BEFORE delete: a receiver relocates
+          # the note's id to the new path first, so it treats the delete as a
+          # relocation leg (id now lives elsewhere) instead of tearing the note's
+          # CRDT room down by id. Without the old-path delete a web receiver (no
+          # local mirror) keeps the note in its old folder forever. Fired
+          # post-commit, same as the :announce leg above.
           :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, [])
+
+          if old_path != note.path do
+            :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
+          end
+
           {:ok, note}
 
         {:ok, inner} ->
@@ -831,6 +830,72 @@ defmodule Engram.Notes do
   # decrypt_or_raise!/2): a DEK/KMS decrypt failure on the tombstone's
   # ciphertext must surface as a clean {:error, _} that the channel replies
   # create_failed for, not a raise that crashes/drops the socket.
+  # Phase E2 (rename-as-move): relocate a LIVE note to a new FREE path when its
+  # own id arrives via crdt_create at that path — the socket-native rename.
+  # Mirrors genesis_resurrect_decrypted's move leg (identity content merge via
+  # move_note: re-path + version/seq bump + :announce_moved fan-out) minus the
+  # tombstone concerns. An occupied target keeps the pre-E2 id_conflict reply,
+  # with the same greppable Loki tripwire as REST's upsert {:id_collision, live}
+  # arm (a client-minted id reused at another OCCUPIED path is still the
+  # 2026-07-06 wrong-mint corruption signature).
+  defp genesis_relocate_live(live, user, vault, sanitized_path, folder) do
+    with {:ok, query} <- note_by_path_query(user, vault, sanitized_path) do
+      case Repo.one(query) do
+        nil ->
+          decrypted = decrypt_or_raise!(live, user)
+
+          base_attrs = %{
+            content: decrypted.content,
+            title: decrypted.title,
+            tags: decrypted.tags,
+            content_hash: decrypted.content_hash,
+            mtime: decrypted.mtime
+          }
+
+          case move_note(decrypted, base_attrs, user, sanitized_path, folder) do
+            {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
+              case Crypto.maybe_decrypt_note_fields(updated, user) do
+                {:ok, moved} ->
+                  Logger.info(
+                    "note_id_relocated",
+                    Metadata.with_category(:info, :sync,
+                      user_id: user.id,
+                      vault_id: vault.id,
+                      note_id: moved.id,
+                      server_version: moved.version
+                    )
+                  )
+
+                  # Carry the OLD path so the post-commit handler can fan an
+                  # old-path delete to peers (a web receiver has no local mirror
+                  # to drop the note from its old folder otherwise).
+                  {:ok, moved, {:announce_moved, decrypted.path}}
+
+                {:error, reason} ->
+                  log_resurrect_decrypt_failure(reason, user, updated)
+                  {:error, reason}
+              end
+
+            {:error, _} = err ->
+              err
+          end
+
+        %Note{} = _occupant ->
+          Logger.warning(
+            "note_id_collision_rejected",
+            Metadata.with_category(:warning, :sync,
+              user_id: user.id,
+              vault_id: vault.id,
+              note_id: live.id,
+              server_version: live.version
+            )
+          )
+
+          {:error, :id_conflict, decrypt_or_raise!(live, user)}
+      end
+    end
+  end
+
   defp genesis_resurrect(prior, user, sanitized_path, folder) do
     case Crypto.maybe_decrypt_note_fields(prior, user) do
       {:ok, prior} ->
@@ -868,7 +933,9 @@ defmodule Engram.Notes do
         {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
           case Crypto.maybe_decrypt_note_fields(updated, user) do
             {:ok, decrypted} ->
-              tag = if renamed?, do: :announce_moved, else: :announce
+              # A rename-restore carries the OLD (tombstone) path so peers clear
+              # it; a same-path resurrect just announces.
+              tag = if renamed?, do: {:announce_moved, prior.path}, else: :announce
               {:ok, decrypted, tag}
 
             {:error, reason} ->
@@ -1361,22 +1428,38 @@ defmodule Engram.Notes do
           end
 
         true ->
-          # Two independent docs from the same snapshot:
-          # - snapshot_doc: the shared ancestor; the incoming diff is applied here to
-          #   capture the minimal Yjs operations that encode the incoming change.
-          # - tail_doc: snapshot + replayed tail; the captured incoming operations are
-          #   applied here so Yjs merges them convergently with the tail operations.
-          with {:ok, snapshot_doc} <- CrdtBridge.doc_from_state(prior_state),
-               {:ok, tail_doc} <- CrdtBridge.doc_from_state(prior_state) do
-            # Fold in updates logged since the last checkpoint. Runs inside the
-            # caller's with_tenant txn — no nested tenant context needed.
-            _count = CrdtPersistence.replay_tail(tail_doc, user, note_id)
+          with {:ok, snapshot_doc} <- CrdtBridge.doc_from_state(prior_state) do
+            if CrdtBridge.body_of(snapshot_doc) == "" do
+              # #1087 sibling of bind/3's seed guard: the ancestor check is
+              # projected-BODY-emptiness, not snapshot-absence. A genesis row
+              # stores an EMPTY-doc snapshot — three-way against that ancestor
+              # turns the incoming diff into insert-everything, which unions
+              # with a bind-time tail seed into a DOUBLED body. An
+              # empty-projecting ancestor takes the same tail-inclusive
+              # two-way path as a nil snapshot (reusing the hydrated doc keeps
+              # the empty snapshot's lineage continuity).
+              _count = CrdtPersistence.replay_tail(snapshot_doc, user, note_id)
+              CrdtBridge.merge_plaintext_into_doc(snapshot_doc, incoming_content)
+            else
+              # Two independent docs from the same snapshot:
+              # - snapshot_doc: the shared ancestor; the incoming diff is applied
+              #   here to capture the minimal Yjs operations that encode the
+              #   incoming change.
+              # - tail_doc: snapshot + replayed tail; the captured incoming
+              #   operations are applied here so Yjs merges them convergently
+              #   with the tail operations.
+              with {:ok, tail_doc} <- CrdtBridge.doc_from_state(prior_state) do
+                # Fold in updates logged since the last checkpoint. Runs inside
+                # the caller's with_tenant txn — no nested tenant context needed.
+                _count = CrdtPersistence.replay_tail(tail_doc, user, note_id)
 
-            CrdtBridge.merge_plaintext_relative_to_snapshot(
-              snapshot_doc,
-              tail_doc,
-              incoming_content
-            )
+                CrdtBridge.merge_plaintext_relative_to_snapshot(
+                  snapshot_doc,
+                  tail_doc,
+                  incoming_content
+                )
+              end
+            end
           end
       end
 
@@ -1405,6 +1488,55 @@ defmodule Engram.Notes do
       {:ok, nil} -> {:error, :not_found}
       {:ok, note} -> {:ok, decrypt_or_raise!(note, user)}
       _ -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Current text of `note` from the authority, for callers that must
+  read-modify-write it.
+
+  `notes.content` is the REST/search **façade**. Since the server stopped
+  authoring content (#1141) it is materialized from the CRDT doc at checkpoint,
+  so between a doc write and its checkpoint the column lags. Reading it and
+  writing back a derived full-content string is therefore data loss: the merge
+  in `upsert_note/4` faithfully applies the diff it is given, and a diff
+  computed from a blank base deletes the body (#1159).
+
+  Resolution mirrors `ensure_projection_safe/2` in `Notes.CrdtCheckpoint`, so
+  the two agree on which side is authoritative:
+
+    * no `crdt_state` — nothing has been written through the doc, so the façade
+      IS the authority (legacy/pre-CRDT rows).
+    * `crdt_state` present — the doc is the authority, including when it
+      projects empty. A genuine "user deleted all the text" persists deletion
+      ops, so an empty projection there is real and must not be second-guessed.
+
+  Tail replay is included for the same reason `maybe_merge_crdt/4` does it:
+  ops committed since the last checkpoint are part of the current text.
+
+  Plain reads must keep using `get_note/3`; this is deliberately not on the hot
+  path, since it decrypts and rebuilds a Yjs doc.
+  """
+  @spec authoritative_content(map(), Note.t()) :: {:ok, String.t()} | {:error, term()}
+  def authoritative_content(user, %Note{} = note) do
+    case Crypto.decrypt_crdt_state(note, user) do
+      {:ok, nil} ->
+        {:ok, note.content || ""}
+
+      {:ok, state} ->
+        with {:ok, doc} <- CrdtBridge.doc_from_state(state) do
+          # replay_tail reads crdt_update_log, which is tenant-scoped. Callers
+          # reach this from a controller rather than from inside upsert_note's
+          # transaction, so establish the tenant here.
+          Repo.with_tenant(user.id, fn ->
+            _replayed = CrdtPersistence.replay_tail(doc, user, note.id)
+          end)
+
+          {:ok, CrdtBridge.project_doc(doc)}
+        end
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -3265,6 +3397,29 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Counts live `kind == "note"` rows under `folder` (the folder itself and any
+  nested subfolder), for the empty-folder gate in `Engram.Folders.delete/4`.
+  Folder markers and attachments are NOT counted. Returns 0 when the user has
+  no DEK yet (nothing encrypted, so nothing to count).
+  """
+  @spec count_folder_notes(map(), map(), String.t()) :: non_neg_integer()
+  def count_folder_notes(user, vault, folder) do
+    case Crypto.get_dek(user) do
+      {:ok, _dek} ->
+        prefix = folder <> "/"
+
+        fetch_decrypted_live_rows(user, vault)
+        |> Enum.count(fn r ->
+          f = r.folder || ""
+          r.kind == "note" and (f == folder or String.starts_with?(f, prefix))
+        end)
+
+      _ ->
+        0
+    end
+  end
+
+  @doc """
   Returns all non-deleted notes in a specific folder for a user.
   Pass "" for root-level notes.
   """
@@ -4219,7 +4374,17 @@ defmodule Engram.Notes do
     payload = %{
       "event_type" => event_type,
       "path" => path,
-      "vault_id" => vault_id
+      "vault_id" => vault_id,
+      # Parity with the upsert branch, which has always carried "folder".
+      # Receivers route a change to the right cached folder listing by this
+      # field; omitting it forced every client to re-derive it from the path,
+      # and the web app's re-derivation then had to map folder NAME -> folder
+      # ID, where a derived folder's null id silently invalidated nothing (the
+      # sidebar kept showing notes deleted from another device until reload).
+      # The server already knows the folder — send it. Note this is parity for
+      # NOTE changes only: attachments.ex builds its own note_changed payloads
+      # and still omits the field (harmless — its consumers re-derive).
+      "folder" => Helpers.extract_folder(path)
     }
 
     payload = if id, do: Map.put(payload, "id", id), else: payload

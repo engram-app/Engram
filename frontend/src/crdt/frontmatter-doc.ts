@@ -1,5 +1,6 @@
 import type * as Y from "yjs";
 import { coerceValue, type PropertyType } from "../viewer/property-types";
+import { emitFrontmatter } from "./frontmatter-codec";
 
 const EMPTY_DEFAULT: Record<PropertyType, unknown> = {
 	text: "",
@@ -127,6 +128,67 @@ export function setType(doc: Y.Doc, key: string, type: PropertyType): void {
 		types.set(key, type);
 		if (row) {
 			values.set(key, JSON.stringify(coerceValue(row.value, type)));
+		}
+	});
+}
+
+export const RAW_FRONTMATTER_KEY = "frontmatter_raw";
+
+export function rawMap(doc: Y.Doc): Y.Map<string> {
+	return doc.getMap<string>(RAW_FRONTMATTER_KEY);
+}
+
+export function readRaws(doc: Y.Doc): Record<string, string> {
+	const out: Record<string, string> = {};
+	rawMap(doc).forEach((v, k) => {
+		out[k] = v;
+	});
+	return out;
+}
+
+/** Emit the frontmatter block (inner YAML, no fences) from the live maps. */
+export function emitFrontmatterText(doc: Y.Doc): string {
+	const { values, order } = frontmatterMaps(doc);
+	const valuesRec: Record<string, string> = {};
+	values.forEach((v, k) => {
+		valuesRec[k] = v;
+	});
+	return emitFrontmatter(order.toArray(), valuesRec, readRaws(doc));
+}
+
+/**
+ * Apply a parsed frontmatter block to the Y.Map with a MINIMAL per-key diff, in
+ * one transaction. `parsed.values` are canonical-JSON strings (from
+ * parseFrontmatter) and are stored as-is — do NOT re-JSON.stringify. A concurrent
+ * pill edit to an untouched key is never clobbered; keys held in frontmatter_raw
+ * are preserved. Types are left to the pills.
+ */
+export function applyParsedFrontmatter(
+	doc: Y.Doc,
+	parsed: { order: string[]; values: Record<string, string> },
+): void {
+	const { values, order } = frontmatterMaps(doc);
+	const raws = rawMap(doc);
+	doc.transact(() => {
+		for (const key of Object.keys(parsed.values)) {
+			const next = parsed.values[key]!;
+			if (values.get(key) !== next) {
+				values.set(key, next);
+			}
+		}
+		for (const key of [...values.keys()]) {
+			if (!(key in parsed.values || raws.has(key))) {
+				values.delete(key);
+			}
+		}
+		const current = order.toArray();
+		const changed =
+			current.length !== parsed.order.length || current.some((k, i) => k !== parsed.order[i]);
+		if (changed) {
+			order.delete(0, order.length);
+			if (parsed.order.length > 0) {
+				order.insert(0, parsed.order);
+			}
 		}
 	});
 }

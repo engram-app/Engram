@@ -9,7 +9,6 @@ Migrated to API-only: seeds data via api_sync.create_note() instead of Obsidian
 vault writes, so these 11 tests run during the Obsidian boot gap in CI.
 """
 
-import time
 
 import pytest
 
@@ -27,7 +26,7 @@ async def test_write_isolation_cannot_modify_other_user_note(api_sync, api_iso):
 
     # sync-user creates a note via API
     api_sync.create_note(path, original_content)
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
     # isolation-user attempts to overwrite it via API
     api_iso.create_note(path, "# Hijacked\nOverwritten by isolation-user.")
@@ -51,7 +50,7 @@ async def test_write_isolation_cannot_delete_other_user_note(api_sync, api_iso):
     path = "E2E/WriteIsolationDeleteTarget.md"
 
     api_sync.create_note(path, "# Protected\nThis should survive deletion attempts.")
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
     # isolation-user attempts to delete sync-user's note
     status = api_iso.delete_note(path)
@@ -71,7 +70,7 @@ async def test_write_isolation_changes_endpoint(api_sync, api_iso):
     path = "E2E/WriteIsolationChanges.md"
 
     api_sync.create_note(path, "# Changes Test\nOnly sync-user should see this.")
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
     since = "2000-01-01T00:00:00Z"
     changes = api_iso.get_changes(since)
@@ -94,7 +93,7 @@ async def test_write_isolation_cannot_rename_other_user_note(api_sync, api_iso):
     renamed_path = "E2E/Hijacked-Rename.md"
 
     api_sync.create_note(path, "# Rename Target\nThis should not be renamed by others.")
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
     # isolation-user attempts to rename sync-user's note
     status = api_iso.rename_note(path, renamed_path)
@@ -127,10 +126,15 @@ async def test_write_isolation_cannot_append_to_other_user_note(api_sync, api_is
     original = "# Append Target\nOriginal content only."
 
     api_sync.create_note(path, original)
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
     # isolation-user attempts to append to sync-user's note
     status = api_iso.append_note(path, "\n\nINJECTED BY ATTACKER")
+    # Mirrors the delete/rename cases above: RLS makes another user's note
+    # invisible, so the attempt is either a no-op 200 or a 404. 403 is also a
+    # correct refusal. Anything else (esp. 5xx) means the isolation boundary
+    # was reached rather than skipped.
+    assert status in (200, 403, 404), f"Unexpected status {status} for cross-user append"
 
     # sync-user's note must be unchanged
     note = api_sync.get_note(path)
@@ -195,10 +199,13 @@ async def test_write_isolation_cannot_rename_other_user_folder(api_sync, api_iso
     """User C cannot rename user A's folder via POST /folders/rename."""
     path = "E2E/IsoFolder/FolderRenameTarget.md"
     api_sync.create_note(path, "# Folder Target\nInside a folder owned by sync-user.")
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
     # isolation-user attempts to rename sync-user's folder
     status = api_iso.rename_folder("E2E/IsoFolder", "E2E/HijackedFolder")
+    assert status in (200, 403, 404), (
+        f"Unexpected status {status} for cross-user folder rename"
+    )
 
     # sync-user's note must still be at the original folder path
     note = api_sync.get_note(path)
@@ -224,7 +231,7 @@ async def test_write_isolation_manifest_does_not_leak(api_sync, api_iso):
     """User C's sync manifest should not include user A's notes or attachments."""
     path = "E2E/ManifestIsolation.md"
     api_sync.create_note(path, "# Manifest Test\nShould not appear in other manifest.")
-    api_sync.wait_for_note(path, timeout=10)
+    api_sync.wait_for_note(path)
 
     # sync-user's manifest should include the note
     sync_manifest = api_sync.get_manifest()

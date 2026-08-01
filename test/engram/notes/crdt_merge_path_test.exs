@@ -216,6 +216,70 @@ defmodule Engram.Notes.CrdtMergePathTest do
            "duplication detected: #{inspect(updated.content)}"
   end
 
+  test "EMPTY-projecting snapshot with tail rows merges without duplicating the body (#1087 sibling)",
+       ctx do
+    %{user: user, vault: vault} = ctx
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "empty-snap-dup.md", "content" => "placeholder"})
+
+    # Set crdt_state to an encrypted EMPTY-doc snapshot (the genesis shape) —
+    # NOT nil. Pre-fix, maybe_merge_crdt took the three-way leg with an empty
+    # ancestor: the incoming diff became insert-everything and unioned with the
+    # bind-seeded tail into a doubled body.
+    {:ok, empty_state} = Yex.encode_state_as_update(CrdtBridge.new_doc())
+    {:ok, {ect, enonce}} = Crypto.encrypt_crdt_state(empty_state, user, note.id)
+
+    Repo.with_tenant(user.id, fn ->
+      {:ok,
+       Repo.update_all(
+         from(n in Engram.Notes.Note, where: n.id == ^note.id),
+         set: [crdt_state_ciphertext: ect, crdt_state_nonce: enonce]
+       )}
+    end)
+
+    # Bind-time seed lineage in the tail: full text inserted against an empty doc.
+    seed_doc = CrdtBridge.new_doc()
+    {:ok, _ref} = Yex.Doc.monitor_update_v1(seed_doc)
+    text = Yex.Doc.get_text(seed_doc, CrdtBridge.text_name())
+    :ok = CrdtBridge.diff_into_text(text, "shared base + LIVE")
+
+    seed_update =
+      receive do
+        {:update_v1, update, _origin, ^seed_doc} -> update
+      after
+        1_000 -> raise "timeout waiting for seed update_v1"
+      end
+
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(seed_update, user, note.id)
+
+    Repo.with_tenant(user.id, fn ->
+      Repo.insert_all(CrdtUpdateLog, [
+        %{
+          id: Ecto.UUID.generate(),
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: nonce,
+          inserted_at: DateTime.utc_now()
+        }
+      ])
+    end)
+
+    {:ok, updated} =
+      Notes.upsert_note(user, vault, %{
+        "path" => "empty-snap-dup.md",
+        "content" => "shared base + REST"
+      })
+
+    assert length(String.split(updated.content, "shared base")) == 2,
+           "body was duplicated: #{inspect(updated.content)}"
+
+    refute String.contains?(updated.content, "RESTshared"),
+           "duplication detected: #{inspect(updated.content)}"
+  end
+
   # Inserts one synthetic Yjs update row into the tail-log for the given note.
   # The update extends the snapshot doc's text by appending `suffix`.
   # Steps:

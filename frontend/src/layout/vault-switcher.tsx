@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Lock } from "lucide-react";
-import { useEffect } from "react";
+import { useNavigate } from "react-router";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -8,27 +8,14 @@ import {
 	DropdownMenuRadioItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { setActiveVaultId, useActiveVaultId } from "../api/active-vault";
+import { useActiveVaultId } from "../api/active-vault";
 import { useVaults, type Vault } from "../api/queries";
 
 function VaultSwitcher() {
 	const { data: vaults, isLoading } = useVaults();
 	const activeId = useActiveVaultId();
 	const qc = useQueryClient();
-
-	useEffect(() => {
-		if (!vaults || vaults.length === 0) {
-			return;
-		}
-		const stillValid = activeId !== null && vaults.some((v) => v.id === activeId);
-		if (stillValid) {
-			return;
-		}
-		const fallback = vaults.find((v) => v.is_default) ?? vaults[0];
-		if (fallback) {
-			setActiveVaultId(fallback.id);
-		}
-	}, [vaults, activeId]);
+	const navigate = useNavigate();
 
 	if (isLoading) {
 		return <p className="px-3 py-2 text-muted-foreground text-xs">Loading vaults…</p>;
@@ -66,12 +53,18 @@ function VaultSwitcher() {
 				>
 					<DropdownMenuRadioGroup
 						value={active.id}
-						onValueChange={(v) => {
-							const next = v;
+						onValueChange={(next) => {
 							if (next === active.id) {
 								return;
 							}
-							setActiveVaultId(next);
+							const target = vaults.find((v) => v.id === next);
+							if (!target) {
+								return;
+							}
+							// Navigate; VaultRoute writes the active-vault store. Land on the
+							// vault root, not the current note, whose id does not exist in
+							// the new vault.
+							navigate(`/${target.slug}`);
 							qc.invalidateQueries();
 							// Onboarding tour gates step 0 on a real switch; emit a DOM
 							// event the controller can listen for without coupling layers.

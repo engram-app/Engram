@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import time
 from datetime import datetime
 from urllib.parse import quote
 
@@ -131,17 +132,33 @@ async def test_full_device_flow(
             # reached the server. Assert server-side arrival instead of the
             # (now-unreliable) push counter.
 
-            # Verify note reached server using OAuth access token
-            resp = requests.get(
-                f"{API_URL}/notes/{quote(path, safe='')}",
-                headers={
-                    "Authorization": f"Bearer {tokens['access_token']}",
-                    "X-Vault-ID": str(tokens["vault_id"]),
-                },
-                timeout=10,
+            # Verify note reached server using the OAuth access token. This is a
+            # CRDT note: `create` returns once the metadata row exists, but the
+            # body propagates asynchronously over the Yjs room, so a single GET
+            # right after the sync races the body and intermittently reads empty
+            # content (server GET 200, content=""). Poll the content instead —
+            # mirrors api.wait_for_note_content, but with the OAuth token +
+            # X-Vault-ID this test needs (the note lives in the OAuth vault, not
+            # the API-key session's default vault).
+            deadline = time.monotonic() + 15
+            server_content = ""
+            while time.monotonic() < deadline:
+                resp = requests.get(
+                    f"{API_URL}/notes/{quote(path, safe='')}",
+                    headers={
+                        "Authorization": f"Bearer {tokens['access_token']}",
+                        "X-Vault-ID": str(tokens["vault_id"]),
+                    },
+                    timeout=10,
+                )
+                assert resp.status_code == 200, f"Server GET returned {resp.status_code}"
+                server_content = resp.json().get("content", "")
+                if "OAuth Device Flow E2E" in server_content:
+                    break
+                time.sleep(0.5)
+            assert "OAuth Device Flow E2E" in server_content, (
+                f"note content did not reach server within 15s: {server_content[:200]!r}"
             )
-            assert resp.status_code == 200, f"Server GET returned {resp.status_code}"
-            assert "OAuth Device Flow E2E" in resp.json().get("content", "")
 
         finally:
             # ── 7. Restore original API key auth ──────────────────

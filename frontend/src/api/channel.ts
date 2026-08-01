@@ -1,19 +1,35 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { type Channel, Socket } from "phoenix";
+import { toast } from "sonner";
+import { buildGenesisFrame } from "../crdt/genesis";
+import { CrdtOpQueueController } from "../crdt/op-queue-controller";
+import { createIndexedDbPersister } from "../crdt/op-queue-persist";
 import {
+	clearRehandshakeBackoff as clearCrdtRehandshakeBackoff,
 	enrollIfLive as crdtEnrollIfLive,
 	handleFrame as crdtHandleFrame,
+	getCrdtSyncStatus,
 	notifyCrdtChannelError,
 	notifyCrdtChannelJoined,
 	resyncOpenDocs,
 	scheduleRehandshake as scheduleCrdtRehandshake,
 	startCrdtSession,
 	stopCrdtSession,
+	subscribeToCrdtSyncStatus,
 } from "../crdt/session";
+import { uuid7 } from "../crdt/uuid7";
 import { rlog } from "../observability/remote-log";
 import { beacon, newTraceContext, parseTraceparent, tracingEnabled } from "../observability/trace";
 import { getWsBase, joinWsUrl } from "./base";
-import { ROOT_FOLDER_ID } from "./queries";
+import {
+	type CrdtCreateBatchResult,
+	CrdtOpError,
+	type PushChannel,
+	sendCrdtCreate,
+	sendCrdtCreateBatch,
+	sendCrdtDelete,
+} from "./crdt-ops";
+import { folderIdForPath } from "./queries";
 
 // phoenix.js's own default reconnect steps — kept for the 2nd+ attempt. Only
 // the FIRST reconnect is full-jittered, to de-sync a drained fleet so the
@@ -37,6 +53,11 @@ let serverJitterMs: number | null = null;
 let socket: Socket | null = null;
 let channel: Channel | null = null;
 let crdtChannel: Channel | null = null;
+// Durable, acked, bounded outbound queue for terminal CRDT ops (create/delete)
+// — issue #1030. Instantiated per connection; ops issued while the topic isn't
+// joined are held and delivered on reconnect instead of being dropped.
+let opQueue: CrdtOpQueueController | null = null;
+let opQueueUnsub: (() => void) | null = null;
 
 // Bumped by disconnectChannel (which connectChannel calls at entry, and which
 // also runs on effect teardown / vault switch). connectChannel captures it
@@ -62,6 +83,15 @@ let latestToken: string | null = null;
 // the next retry (phoenix backoff caps at 5s) reads params() and self-heals.
 let latestGetToken: (() => Promise<string | null>) | null = null;
 let tokenRefreshInFlight = false;
+
+// The crdt room is reliably usable only once its join succeeded (sync status
+// "synced"). A non-null-but-connecting/errored channel would accept a push that
+// silently times out ~10s later; gating on status returns null instead, which
+// the durable op queue (#1030) treats as "hold and retry" — so a send issued
+// before the room is joined is buffered, not lost.
+function joinedCrdtChannel(): PushChannel | null {
+	return getCrdtSyncStatus() === "synced" ? (crdtChannel as unknown as PushChannel | null) : null;
+}
 
 async function refreshTokenForRetry(): Promise<void> {
 	if (!latestGetToken || tokenRefreshInFlight) {
@@ -89,7 +119,6 @@ interface ConnectOptions {
 	vaultId: string;
 	getToken: () => Promise<string | null>;
 	queryClient: QueryClient;
-	onSocketOpen?: () => void;
 }
 
 type NoteChangedListener = (payload: NoteChangedPayload) => void;
@@ -118,10 +147,6 @@ function folderFromPath(path: string): string {
 	return idx === -1 ? "" : path.slice(0, idx);
 }
 
-interface CachedFolders {
-	folders?: Array<{ id: string; name: string }>;
-}
-
 function flushBatch(batch: PendingBatch): void {
 	const { queryClient, vaultId, folders } = batch;
 	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
@@ -130,7 +155,6 @@ function flushBatch(batch: PendingBatch): void {
 	// The by-id keys are keyed on folder-marker ids; resolve names through
 	// the cached tree. Unknown folders (just created, tree not refetched
 	// yet) fall back to one broad invalidation.
-	const cached = queryClient.getQueryData<CachedFolders>(["folders", vaultId]);
 	let broadById = false;
 
 	// refetchType "all" (not the default "active"): the tree loader
@@ -146,22 +170,20 @@ function flushBatch(batch: PendingBatch): void {
 			queryKey: ["folderNotes", vaultId, folder],
 			refetchType: "all",
 		});
-		// Root has no folder marker; its id-keyed list keys under the sentinel.
-		if (folder === "") {
-			queryClient.invalidateQueries({
-				queryKey: ["folder-notes-by-id", vaultId, ROOT_FOLDER_ID],
-				refetchType: "all",
-			});
-			continue;
-		}
-		const entry = cached?.folders?.find((f) => f.name === folder);
-		if (entry) {
-			queryClient.invalidateQueries({
-				queryKey: ["folder-notes-by-id", vaultId, entry.id],
-				refetchType: "all",
-			});
-		} else {
+		// Use the SHARED resolver, not a local lookup: reading the raw folders
+		// cache and trusting `row.id` returns null for every DERIVED folder (most
+		// folders), and a found-but-null entry silently invalidated the key
+		// `[..., null]` while skipping the broad fallback below — so a note
+		// deleted on another device stayed in the sidebar until a reload.
+		// folderIdForPath re-applies selectFolders' `syn:<path>` normalisation.
+		const folderId = folderIdForPath(queryClient, vaultId, folder);
+		if (folderId === null) {
 			broadById = true;
+		} else {
+			queryClient.invalidateQueries({
+				queryKey: ["folder-notes-by-id", vaultId, folderId],
+				refetchType: "all",
+			});
 		}
 	}
 
@@ -199,6 +221,27 @@ export function pushFailureBeacon(docId: string, startUs: number, reason: string
 
 export const RECONNECT_JITTER_DEFAULT_MS = 5000;
 export const RECONNECT_JITTER_MAX_MS = 60_000;
+
+/**
+ * Reconcile the structural views a backgrounded/offline tab could have missed.
+ * The socket drops events while disconnected (no replay) and the web keeps no
+ * local mirror, so "backfill" = invalidate the folder/note-list/attachment
+ * caches and let react-query refetch current state. Called on every socket
+ * (re)connect and on wake (focus/visible/online). Replaces the deleted
+ * /sync/changes cursor feed (backend #1036).
+ */
+export function backfillStructural(queryClient: QueryClient, vaultId: string): void {
+	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
+	queryClient.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
+	queryClient.invalidateQueries({ queryKey: ["attachments", vaultId] });
+	// The sidebar tree renders note rows from the id-keyed family, not the
+	// name-keyed ["folderNotes"] above (that feeds the dashboard). Its expanded
+	// subfolders have no mounted observer, so a default ("active") invalidate
+	// leaves them stale-but-unfetched forever — refetchType "all" forces the
+	// refetch, exactly as flushBatch does. Without it a sleep/offline catch-up
+	// never converges tree membership until a full page reload.
+	queryClient.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId], refetchType: "all" });
+}
 
 export function clampReconnectJitter(raw: unknown): number | null {
 	if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
@@ -386,13 +429,7 @@ export function handleFoldersBatch(
 	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 }
 
-export async function connectChannel({
-	userId,
-	vaultId,
-	getToken,
-	queryClient,
-	onSocketOpen,
-}: ConnectOptions) {
+export async function connectChannel({ userId, vaultId, getToken, queryClient }: ConnectOptions) {
 	disconnectChannel();
 	const gen = connectGeneration;
 
@@ -422,18 +459,13 @@ export async function connectChannel({
 
 	socket.connect();
 
-	// Fires on initial connect AND every reconnect — the durable-feed catch-up
-	// trigger. The socket can drop events while disconnected (no replay), so a
-	// reconnect kicks a cursor pull to backfill the gap.
-	// Also re-arms CRDT handshakes on reconnect so the session re-syncs state.
-	// Folder markers no longer ride that feed (backend #976 excludes kind=="folder"),
-	// so an empty-folder delete missed while offline carries no note rows to pull.
-	// Reconcile the folder snapshot directly on (re)connect — snapshot-diff, like
-	// the plugin — so a reconnecting tab drops folders deleted in the gap.
+	// Fires on initial connect AND every reconnect. The socket drops events while
+	// disconnected (no replay), so a reconnect re-arms CRDT handshakes (open docs
+	// re-sync) and reconciles the structural views a gap could have staled —
+	// snapshot-diff, like the plugin.
 	socket.onOpen(() => {
 		resyncOpenDocs();
-		queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
-		onSocketOpen?.();
+		backfillStructural(queryClient, vaultId);
 	});
 
 	const topic = `sync:${userId}:${vaultId}`;
@@ -466,6 +498,12 @@ export async function connectChannel({
 			const startUs = Date.now() * 1000;
 			crdtChannel
 				?.push("crdt_msg", { doc_id: docId, b64 })
+				.receive("ok", () => {
+					// Successful ack: the channel is healthy for this note. Clear its
+					// re-handshake backoff so the breaker re-arms and the next genuine
+					// failure starts from the base delay (not a stale escalated one).
+					clearCrdtRehandshakeBackoff(docId);
+				})
 				.receive("error", (resp: { reason?: string }) => {
 					rlog().warn(
 						"crdt",
@@ -493,6 +531,52 @@ export async function connectChannel({
 	});
 	const crdtTopic = `crdt:${userId}:${vaultId}`;
 	crdtChannel = socket.channel(crdtTopic, { crdt_proto: 2 });
+
+	// Durable outbound queue (#1030): create/delete ops route through here so a
+	// send issued while the topic isn't joined is HELD and delivered on join,
+	// acked + retried with backoff, bounded + TTL'd. The caller (mutation) owns
+	// its own cache reconciliation via the settled promise, so remapId is a
+	// no-op; drops just get logged, and a plan-cap block surfaces the upgrade toast.
+	opQueue = new CrdtOpQueueController({
+		channel: () => {
+			const ch = joinedCrdtChannel();
+			return ch
+				? {
+						crdtCreate: (id, p) => sendCrdtCreate(ch, id, p),
+						crdtDelete: (id) => sendCrdtDelete(ch, id),
+					}
+				: null;
+		},
+		remapId: () => {
+			// no-op: the calling mutation swaps the optimistic id for the settled
+			// server id (adopt included) via the promise this returns.
+		},
+		onDropSurfaced: (op, reason) =>
+			rlog().warn("crdt", `crdt_${op.kind} dropped (${reason}) undelivered: ${op.docId}`),
+		onLimitSurfaced: () => toast.error("You've hit your note limit — upgrade to add more."),
+		persister: createIndexedDbPersister(userId, vaultId),
+		mintId: () => uuid7(),
+	});
+	const queue = opQueue;
+	opQueue.start().catch(() => {
+		// start() only reads persisted ops; a failure just means no restore
+	});
+	// Drive the queue's join gate off the CRDT sync status — the same source of
+	// truth joinedCrdtChannel() gates sends on. "synced" flushes held ops; any
+	// other state holds them (so a disconnect doesn't burn the retry budget).
+	const driveJoinGate = (s: string) => {
+		if (s === "synced") {
+			queue.joined().catch(() => {
+				// a flush error is transient; the 5s ticker re-drives due ops
+			});
+		} else {
+			queue.left();
+		}
+	};
+	opQueueUnsub = subscribeToCrdtSyncStatus(driveJoinGate);
+	// subscribe() doesn't fire for the current value — cover the (rare) case where
+	// the topic is already joined by the time we wired up.
+	driveJoinGate(getCrdtSyncStatus());
 	// doc_id IS the note_id on the wire (id-keyed CRDT doc_id) — no path
 	// splitting needed.
 	crdtChannel.on("crdt_msg", (p: { doc_id: string; b64: string }) => {
@@ -514,6 +598,64 @@ export async function connectChannel({
 			notifyCrdtChannelError();
 			console.error("CRDT channel join failed", resp);
 		});
+}
+
+/**
+ * CRDT note create/delete over the live `crdt:` channel — the socket-native
+ * replacement for REST `POST /notes` / `/notes/batch-delete` / `DELETE
+ * /notes/by-id` (web REST-purge, issue #1101).
+ *
+ * Routed through the durable op queue (#1030): the returned promise settles on
+ * the op's FINAL outcome — resolving with the authoritative doc_id (ADOPT-safe)
+ * once the server acks, or rejecting on a terminal reason / ttl / overflow /
+ * max-attempts drop. An op issued while the topic isn't joined is HELD and
+ * delivered on reconnect, not dropped. Falls back to a direct (reject-fast) send
+ * only when no connection/queue exists.
+ */
+export function crdtCreateNote(docId: string, path: string): Promise<string> {
+	return opQueue
+		? opQueue.enqueueCreate(docId, path)
+		: sendCrdtCreate(joinedCrdtChannel(), docId, path);
+}
+
+export function crdtDeleteNote(docId: string): Promise<{ doc_id: string }> {
+	return opQueue ? opQueue.enqueueDelete(docId) : sendCrdtDelete(joinedCrdtChannel(), docId);
+}
+
+export function crdtCreateNotesBatch(
+	creates: { doc_id: string; path: string; b64: string }[],
+): Promise<CrdtCreateBatchResult> {
+	return sendCrdtCreateBatch(joinedCrdtChannel(), creates);
+}
+
+/**
+ * Create a note WITH content in one round trip: build a genesis frame from the
+ * markdown and send it as a single-entry crdt_create_batch. Returns the server's
+ * authoritative doc_id, or rejects with a CrdtOpError carrying the entry's
+ * reason. The socket-native replacement for `POST /notes {path, content}` (the
+ * copy-note / seed paths — issue #1101).
+ */
+export async function crdtCreateNoteWithContent(
+	docId: string,
+	path: string,
+	markdown: string,
+): Promise<string> {
+	const b64 = buildGenesisFrame(markdown);
+	const { results } = await crdtCreateNotesBatch([{ doc_id: docId, path, b64 }]);
+	const [r] = results;
+	if (!r || r.status === "error") {
+		throw new CrdtOpError(r?.reason ?? "create_failed", "crdt_create_batch");
+	}
+	// ADOPT guard: unlike a bare crdt_create (adopt-safe — no content to lose),
+	// a create-WITH-content that adopts a DIFFERENT note at an occupied path
+	// silently drops our genesis frame (backend skips seeding a non-empty doc,
+	// or worse seeds our content into an unrelated empty occupant). A mismatched
+	// doc_id means the path was taken — surface it as the same conflict the old
+	// POST /notes 409 produced so the caller can toast, not vanish the copy.
+	if (r.doc_id !== docId) {
+		throw new CrdtOpError("create_failed", "crdt_create_batch");
+	}
+	return r.doc_id;
 }
 
 /** True when the live-sync socket exists and Phoenix reports it OPEN. Note: a
@@ -569,7 +711,7 @@ export async function reconnectWithFreshToken(
  * Install the socket-health triggers: on tab focus / visibilitychange→visible /
  * online, either reconnect (fresh-token, session-preserving) or just backfill.
  *
- * The existing focus-only cursor-sync and CRDT-resync triggers assume the socket
+ * The CRDT-resync triggers assume the socket
  * is alive; after a long idle or laptop sleep it can be half-open with no
  * `onclose`, so nothing re-establishes it and live updates stop until a reload.
  * `reconnect` fires when the socket is dead, or when the wake signal implies it's
@@ -643,6 +785,14 @@ export function disconnectChannel() {
 	// already discards its eventual result.
 	tokenRefreshInFlight = false;
 	__resetNoteChangeBatch();
+	if (opQueueUnsub) {
+		opQueueUnsub();
+		opQueueUnsub = null;
+	}
+	if (opQueue) {
+		opQueue.stop();
+		opQueue = null;
+	}
 	if (crdtChannel) {
 		crdtChannel.leave();
 		crdtChannel = null;

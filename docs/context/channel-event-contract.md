@@ -20,12 +20,12 @@ WebSocket connect: wss://api.engram.page/socket/websocket?token=<api_key|jwt>
 
 ## Client → Server Events
 
-| Event | Payload | Server Response | Purpose |
-|-------|---------|-----------------|---------|
-| `push_note` | `{path, content, mtime, version?}` | `{note: {...}, indexing: "queued"}` or `{conflict: true, server_note: {...}}` | Push local change (same contract as POST /notes) |
-| `delete_note` | `{path}` | `{deleted: true}` | Soft-delete (same as DELETE /notes/{path}) |
-| `rename_note` | `{old_path, new_path}` | `{note: {...}}` | Rename (same as POST /notes/rename) |
-| `pull_changes` | `{since: ISO8601}` | `{changes: [...], server_time: ISO8601}` | Pull changes since timestamp (meta-only — no content; clients fetch bodies separately) |
+None. All writes ride the `crdt:` channel (`crdt_msg`, `crdt_create`,
+`crdt_create_batch`, `crdt_delete`, `crdt_catchup_since`). The legacy inbound
+ops (`push_note`, `delete_note`, `rename_note`, `pull_changes`) had no caller
+in any shipped client and were removed; a stray frame gets a
+`{"reason": "gone", "use": "crdt channel"}` error reply (catch-all — the
+channel never crashes on unknown frames, same posture as #862's stub).
 
 ## Server → Client Broadcasts
 
@@ -58,29 +58,12 @@ per-path serverHash → equal means no-op; differing means apply inline
 
 ## Echo Suppression
 
-Channel-originated pushes (`push_note`) broadcast via `broadcast_from/4` — the
-pushing socket does NOT receive its own `note_changed`. HTTP-originated pushes
-(REST single + batch) cannot identify a socket and use plain `broadcast`; the
-plugin's pushing/recently-pushed sets plus the hash compare make the echo a
-no-op. The 5-second echo cooldown remains as a safety net.
-
-## Conflict Flow (over WebSocket)
-
-```
-Client sends: push_note {path: "Health/Labs.md", content: "...", version: 3}
-Server checks: notes.version for this path
-
-If version matches (3 == 3):
-  → Upsert, increment to version 4
-  → Reply: {note: {..., version: 4, content_hash}, indexing: "queued"}
-  → broadcast_from: note_changed {path, event_type: "upsert", ...}
-
-If version mismatch (3 != 5):
-  → Reply: {conflict: true, server_note: {content: "...", version: 5}}
-  → Client performs 3-way merge (base from BaseStore + local + server_note.content)
-  → If clean merge: client sends push_note again with merged content + version: 5
-  → If conflicts: client shows ConflictModal, user resolves, then push
-```
+HTTP-originated pushes (REST single + batch) cannot identify a socket and use
+plain `broadcast`; the plugin's pushing/recently-pushed sets plus the hash
+compare make the echo a no-op. The 5-second echo cooldown remains as a safety
+net. (Channel-originated `push_note` and its `broadcast_from/4` echo exclusion
+died with the inbound ops — CRDT writes converge via Yjs merge, which is
+idempotent under echo by construction.)
 
 ## References
 - Sync Channel: `lib/engram_web/channels/sync_channel.ex`

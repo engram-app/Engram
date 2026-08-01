@@ -1,0 +1,26 @@
+/*
+ * Per-type color arrives as an inline `--callout-color` from the shared callout
+ * map (see callout-decoration.ts) — the same source Reading mode renders from,
+ * so all Obsidian types and aliases are covered without a hardcoded list.
+ *
+ * Selector is `.cm-line.cm-callout`, not `.cm-callout`: every callout line is
+ * ALSO an Atomic blockquote line, and blockquote-depth.css targets those with
+ * `.cm-line.cm-atomic-blockquote` — 2 classes to 1, so a bare `.cm-callout`
+ * loses `border-left` to that rule's `border-left: none` no matter the import
+ * order. Matching its specificity (and loading later, see live-preview.ts) lets
+ * the callout swap the nesting rail for its own colored bar.
+ */
+.cm-line.cm-callout {
+	border-left: 3px solid var(--callout-color, var(--color-border, #888));
+	background-color: var(--color-callout-bg);
+	background-image: none;
+	padding-left: 0.5em;
+}
+
+.cm-callout-title {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4em;
+	font-weight: 600;
+	color: var(--callout-color, inherit);
+}

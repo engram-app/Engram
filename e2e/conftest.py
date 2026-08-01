@@ -62,6 +62,77 @@ def pytest_configure(config):
             returncode=1,
         )
 
+# ---------------------------------------------------------------------------
+# Infra circuit breaker — stop the suite when the stack is provably dead
+# ---------------------------------------------------------------------------
+# 2026-07-21 triage: in 3 of 24 failed runs, 245 of 311 failure lines were
+# ConnectionError noise — the backend (or an Obsidian instance) died and every
+# remaining test still burned its full retry/timeout budget against a dead
+# endpoint. A refused connection is terminal, not a flake: probe the backend
+# once and stop the run instead of grinding out dozens of guaranteed failures.
+# Under xdist each worker trips independently (globals are per-process); with
+# the backend down, every worker trips on its next test.
+
+_CONN_REFUSED_MARKERS = ("Connection refused", "ConnectionRefusedError", "NewConnectionError")
+_OBSIDIAN_DEAD_THRESHOLD = 3
+_consecutive_conn_failures = 0
+
+
+def _backend_alive() -> bool:
+    import requests
+
+    try:
+        # Bypass any HTTP(S)_PROXY: a reachable proxy fronting a dead backend
+        # would answer 502 and score "alive", masking the immediate abort.
+        requests.get(
+            f"{API_URL}/health", timeout=3, proxies={"http": None, "https": None}
+        )
+        return True
+    except requests.exceptions.ConnectionError:
+        return False
+    except Exception:
+        # Any HTTP-level answer (or timeout) means the socket is accepting;
+        # only a refused/unreachable connection counts as dead.
+        return True
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    global _consecutive_conn_failures
+    if rep.when == "call" and rep.passed:
+        _consecutive_conn_failures = 0
+        return
+    if not rep.failed:
+        return
+    text = repr(call.excinfo.value) if call.excinfo else str(rep.longrepr)
+    if not any(m in text for m in _CONN_REFUSED_MARKERS):
+        _consecutive_conn_failures = 0
+        return
+    if not _backend_alive():
+        item.session.shouldstop = (
+            f"INFRA DEAD: backend {API_URL} refuses connections "
+            f"(first seen in {item.nodeid}) — aborting the suite; every "
+            "remaining test would fail the same way. Check stack/compose logs."
+        )
+        logging.getLogger("conftest").error(item.session.shouldstop)
+        return
+    if rep.when == "teardown":
+        # A refused teardown after a refused call is the SAME event — counting
+        # both would trip the threshold after ~1.5 tests instead of 3 (review).
+        # The backend-dead probe above still runs for teardown failures.
+        return
+    _consecutive_conn_failures += 1
+    if _consecutive_conn_failures >= _OBSIDIAN_DEAD_THRESHOLD:
+        item.session.shouldstop = (
+            f"INFRA DEAD: {_consecutive_conn_failures} consecutive "
+            f"connection-refused failures while the backend is healthy — an "
+            f"Obsidian/CDP instance is gone (last: {item.nodeid}). Aborting."
+        )
+        logging.getLogger("conftest").error(item.session.shouldstop)
+
+
 def _worker_index() -> int:
     """xdist worker number (0 for master / serial runs)."""
     worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
@@ -132,6 +203,13 @@ _RUN_ID = os.environ.get("GITHUB_RUN_ID", "local")
 # mid-suite Clerk session minter). "localjob" outside CI.
 _JOB_ID = os.environ.get("GITHUB_JOB", "localjob")
 
+# Age floor for worker-0's in-suite Clerk sweep. A concurrently-starting
+# sibling xdist worker's just-provisioned user is age ~0s and must survive;
+# a prior attempt's leftover (only reaped on a re-run) is minutes old. 120s
+# sits comfortably between the two. See cleanup_all_e2e_clerk_users (#160/#869
+# lineage + the worker-level race in run 29670308705).
+_SWEEP_MIN_AGE_SECONDS = 120
+
 
 # ---------------------------------------------------------------------------
 # Unique timestamp for this test run
@@ -168,7 +246,15 @@ def auth_provider():
         # Scope sweep to THIS run+job namespace — never touch sibling runs'
         # OR sibling jobs' users (issues #160, #869). Orphans from crashed
         # runs are reaped out-of-band by .github/workflows/clerk-orphans.yml.
-        provider.cleanup_all_e2e_users(run_id=_RUN_ID, job_id=_JOB_ID)
+        #
+        # min_age_seconds guards the worker-level race (run 29670308705): the
+        # run+job marker matches every worker, so without an age floor worker
+        # 0's session-start sweep deletes worker 1's just-provisioned live
+        # user. 120s >> worker-start skew (seconds) yet << job duration, so a
+        # prior attempt's leftovers (reaped on a re-run) are always older.
+        provider.cleanup_all_e2e_users(
+            run_id=_RUN_ID, job_id=_JOB_ID, min_age_seconds=_SWEEP_MIN_AGE_SECONDS
+        )
     return provider
 
 
@@ -730,7 +816,6 @@ async def _assert_plugin_surfaces(cdp_a):
             if (typeof p.syncEngine?.isRecentlyPushed !== 'function') missing.push('isRecentlyPushed');
             if (typeof p.syncEngine?.handleStreamEvent !== 'function') missing.push('handleStreamEvent');
             if (!(p.syncEngine?.syncState instanceof Map)) missing.push('syncState:Map');
-            if (typeof p.settings?.conflictResolution === 'undefined') missing.push('settings.conflictResolution');
             for (const id of cmds) {
                 if (!app.commands.findCommand(`engram-vault-sync:${id}`)) {
                     missing.push(`command:${id}`);

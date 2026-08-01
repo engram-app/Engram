@@ -9,14 +9,13 @@
 	// directly, without invoking the Worker.
 	"main": "./worker/index.ts",
 	"workers_dev": false,
-	// CUTOVER (Phase M): serve app.engram.page from this Worker via a ROUTE,
-	// not a custom domain. A route shadows the existing proxied
-	// app.engram.page → ALB DNS record (CF runs Worker routes before the
-	// origin), so there's no DNS change, no conflict, and no outage — and
-	// reverting is just removing this route + redeploying. The TF-managed
-	// app_engram_page CNAME stays (the route needs a proxied record to exist).
-	// The deploy token carries Zone → Workers Routes:Edit on engram.page.
-	"routes": [{ "pattern": "app.engram.page/*", "zone_name": "engram.page" }],
+	// app.engram.page/* is served by this Worker via a Cloudflare Worker ROUTE,
+	// now owned by Terraform (engram-infra main/cloudflare/workers.tf,
+	// cloudflare_workers_route.app_spa). It is intentionally NOT declared here,
+	// so `wrangler versions upload`/`deploy` never creates or asserts the route
+	// (TF is the single owner). The route shadows the proxied app.engram.page →
+	// ALB DNS record (CF runs Worker routes before the origin); the TF-managed
+	// proxied CNAME must stay for the route to bind.
 	"assets": {
 		"directory": "./dist",
 		"binding": "ASSETS",

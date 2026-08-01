@@ -153,6 +153,57 @@ defmodule EngramWeb.LogsControllerTest do
       assert Map.has_key?(entry, "platform")
     end
 
+    test "returns device_id and conn_id when present, null otherwise", %{conn: conn} do
+      conn = get(conn, "/api/logs")
+      body = json_response(conn, 200)
+
+      # Seeded logs (msg1/msg2/msg3) carry no device_id/conn_id.
+      Enum.each(body["logs"], fn entry ->
+        assert Map.has_key?(entry, "device_id")
+        assert Map.has_key?(entry, "conn_id")
+        assert entry["device_id"] == nil
+        assert entry["conn_id"] == nil
+      end)
+    end
+
+    test "filters can attribute rows to a specific instance by device_id, two instances sharing one user",
+         %{conn: conn} do
+      post(conn, "/api/logs", %{
+        logs: [
+          %{
+            ts: "2026-04-03T01:03:00Z",
+            level: "info",
+            category: "channel",
+            message: "Event: note_changed path=A.md",
+            platform: "desktop",
+            device_id: "instance-a",
+            conn_id: "conn-a-1"
+          },
+          %{
+            ts: "2026-04-03T01:03:01Z",
+            level: "info",
+            category: "pull",
+            message: "Applied: A.md | localLen=10 | remoteLen=10",
+            platform: "desktop",
+            device_id: "instance-b",
+            conn_id: "conn-b-1"
+          }
+        ]
+      })
+
+      conn = get(conn, "/api/logs")
+      body = json_response(conn, 200)
+
+      instance_b_rows = Enum.filter(body["logs"], &(&1["device_id"] == "instance-b"))
+      assert length(instance_b_rows) == 1
+      assert hd(instance_b_rows)["message"] == "Applied: A.md | localLen=10 | remoteLen=10"
+      assert hd(instance_b_rows)["conn_id"] == "conn-b-1"
+
+      instance_a_rows = Enum.filter(body["logs"], &(&1["device_id"] == "instance-a"))
+      assert length(instance_a_rows) == 1
+      assert hd(instance_a_rows)["message"] == "Event: note_changed path=A.md"
+    end
+
     test "multi-tenant isolation — user B cannot see user A's logs", %{conn: _conn} do
       user_b = insert(:user)
       insert(:vault, user: user_b, is_default: true)

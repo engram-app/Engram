@@ -238,88 +238,6 @@
         "x-struct": "Elixir.EngramWeb.Schemas.TagsResponse",
         "x-validate": null
       },
-      "BatchUpsertResult": {
-        "properties": {
-          "content_hash": {
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "errors": {
-            "nullable": true,
-            "type": "object",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "id": {
-            "format": "uuid",
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "parse_reason": {
-            "description": "Present when parse_status is \"degraded\": {code, message, detail}",
-            "nullable": true,
-            "type": "object",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "parse_status": {
-            "description": "Frontmatter parse outcome",
-            "enum": [
-              "ok",
-              "degraded"
-            ],
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "path": {
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "server_note": {
-            "nullable": true,
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Note"
-              }
-            ],
-            "x-struct": null,
-            "x-validate": null
-          },
-          "server_path": {
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "status": {
-            "enum": [
-              "ok",
-              "conflict",
-              "error"
-            ],
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "version": {
-            "nullable": true,
-            "type": "integer",
-            "x-struct": null,
-            "x-validate": null
-          }
-        },
-        "title": "BatchUpsertResult",
-        "type": "object",
-        "x-struct": "Elixir.EngramWeb.Schemas.BatchUpsertResult",
-        "x-validate": null
-      },
       "NoteResponse": {
         "properties": {
           "note": {
@@ -638,38 +556,6 @@
         "x-struct": "Elixir.EngramWeb.Schemas.SearchRequest",
         "x-validate": null
       },
-      "SyncChangesResponse": {
-        "properties": {
-          "changes": {
-            "items": {
-              "$ref": "#/components/schemas/SyncChange"
-            },
-            "type": "array",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "has_more": {
-            "type": "boolean",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "next_cursor": {
-            "description": "Opaque keyset cursor; null on the last page.",
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          }
-        },
-        "required": [
-          "changes",
-          "has_more"
-        ],
-        "title": "SyncChangesResponse",
-        "type": "object",
-        "x-struct": "Elixir.EngramWeb.Schemas.SyncChangesResponse",
-        "x-validate": null
-      },
       "RegisterVaultRequest": {
         "example": {
           "client_id": "obsidian-9f1b2c3d4e5f",
@@ -705,6 +591,13 @@
             "x-struct": null,
             "x-validate": null
           },
+          "crdt_head": {
+            "description": "CRDT head fingerprint (notes only) — equality with the client's recorded head proves a live-bound doc is converged without content transfer.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "id": {
             "description": "Stable note/attachment id — lets a client reconcile its path↔id map.",
             "format": "uuid",
@@ -714,6 +607,13 @@
           },
           "path": {
             "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "seq": {
+            "description": "Vault-global change sequence of the row's last write — integer-diff validation hook (a client whose recorded seq is lower is behind).",
+            "nullable": true,
+            "type": "integer",
             "x-struct": null,
             "x-validate": null
           }
@@ -1062,64 +962,6 @@
         "x-struct": "Elixir.EngramWeb.Schemas.AttachmentChange",
         "x-validate": null
       },
-      "SyncChange": {
-        "properties": {
-          "content": {
-            "description": "Note body — present only when fields=all.",
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "content_hash": {
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "deleted": {
-            "nullable": true,
-            "type": "boolean",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "id": {
-            "format": "uuid",
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "path": {
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "seq": {
-            "description": "Per-vault ordering key.",
-            "type": "integer",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "type": {
-            "enum": [
-              "note",
-              "attachment"
-            ],
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          }
-        },
-        "required": [
-          "type",
-          "seq"
-        ],
-        "title": "SyncChange",
-        "type": "object",
-        "x-struct": "Elixir.EngramWeb.Schemas.SyncChange",
-        "x-validate": null
-      },
       "UpdateVaultRequest": {
         "example": {
           "is_default": true,
@@ -1403,8 +1245,20 @@
             "x-struct": null,
             "x-validate": null
           },
+          "conn_id": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "created_at": {
             "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "device_id": {
             "nullable": true,
             "type": "string",
             "x-struct": null,
@@ -1968,6 +1822,20 @@
             "x-struct": null,
             "x-validate": null
           },
+          "conn_id": {
+            "description": "WebSocket connection id, correlates client logs to server breadcrumbs.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "device_id": {
+            "description": "Per-install Obsidian instance id, for per-device attribution.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "level": {
             "example": "error",
             "type": "string",
@@ -2008,44 +1876,6 @@
         "title": "LogInput",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.LogInput",
-        "x-validate": null
-      },
-      "BatchUpsertRequest": {
-        "example": {
-          "notes": [
-            {
-              "content": "# Engram\n\nAn AI-powered personal knowledge base.\n",
-              "mtime": 1.7189e9,
-              "path": "Projects/Engram.md",
-              "tags": [
-                "project",
-                "ai"
-              ]
-            },
-            {
-              "content": "## 2026-06-20\n\n- Shipped the batch upsert endpoint.\n",
-              "mtime": 1.7189001e9,
-              "path": "Daily/2026-06-20.md"
-            }
-          ]
-        },
-        "properties": {
-          "notes": {
-            "items": {
-              "$ref": "#/components/schemas/UpsertNoteRequest"
-            },
-            "maxItems": 100,
-            "type": "array",
-            "x-struct": null,
-            "x-validate": null
-          }
-        },
-        "required": [
-          "notes"
-        ],
-        "title": "BatchUpsertRequest",
-        "type": "object",
-        "x-struct": "Elixir.EngramWeb.Schemas.BatchUpsertRequest",
         "x-validate": null
       },
       "CreatePatRequest": {
@@ -2406,13 +2236,16 @@
             "type": "integer",
             "x-struct": null,
             "x-validate": null
+          },
+          "unchanged": {
+            "description": "Present (true) only when `since_seq` equals the current watermark — the manifest body is omitted because nothing changed.",
+            "nullable": true,
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
           }
         },
         "required": [
-          "notes",
-          "attachments",
-          "total_notes",
-          "total_attachments",
           "change_seq"
         ],
         "title": "ManifestResponse",
@@ -2700,25 +2533,6 @@
         "x-struct": "Elixir.EngramWeb.Schemas.HealthStatus",
         "x-validate": null
       },
-      "BatchUpsertResponse": {
-        "properties": {
-          "results": {
-            "items": {
-              "$ref": "#/components/schemas/BatchUpsertResult"
-            },
-            "type": "array",
-            "x-struct": null,
-            "x-validate": null
-          }
-        },
-        "required": [
-          "results"
-        ],
-        "title": "BatchUpsertResponse",
-        "type": "object",
-        "x-struct": "Elixir.EngramWeb.Schemas.BatchUpsertResponse",
-        "x-validate": null
-      },
       "VaultDeleted": {
         "properties": {
           "deleted": {
@@ -2988,9 +2802,22 @@
     "/api/sync/manifest": {
       "get": {
         "callbacks": {},
-        "description": "Every live note + attachment path and content hash, for sync reconciliation.",
+        "description": "Every live note + attachment path, content hash, and change seq, for sync reconciliation. Pass `since_seq` (the `change_seq` of a previous manifest) to short-circuit: when nothing has changed the response is just `{unchanged: true, change_seq}` with the body omitted.",
         "operationId": "sync-manifest",
-        "parameters": [],
+        "parameters": [
+          {
+            "description": "Watermark from a prior manifest's `change_seq`; invalid values are ignored.",
+            "example": "1042",
+            "in": "query",
+            "name": "since_seq",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -3006,51 +2833,6 @@
         "summary": "Get the full vault manifest",
         "tags": [
           "Sync"
-        ]
-      }
-    },
-    "/api/notes/batch": {
-      "post": {
-        "callbacks": {},
-        "description": "Creates or updates up to 100 notes in one request, returning a per-note result (`ok`, `conflict`, or `error`) so a single bad or oversized (>10MB) note does not fail the batch. More than 100 notes returns 400, and exceeding the plan's note cap returns 402. Requires the `X-Idempotency-Key` header for safe retries.",
-        "operationId": "notes-batch-upsert",
-        "parameters": [],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BatchUpsertRequest"
-              }
-            }
-          },
-          "description": "Notes array",
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BatchUpsertResponse"
-                }
-              }
-            },
-            "description": "Per-note results"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Invalid array / >100 items"
-          }
-        },
-        "summary": "Upsert up to 100 notes (idempotent via X-Idempotency-Key)",
-        "tags": [
-          "Notes"
         ]
       }
     },
@@ -3697,84 +3479,6 @@
         "summary": "Update the current user's profile",
         "tags": [
           "Account"
-        ]
-      }
-    },
-    "/api/sync/changes": {
-      "get": {
-        "callbacks": {},
-        "description": "Pulls one ordered page of the merged note and attachment change feed, each entry tagged with its `type`, using keyset pagination via an opaque `cursor` (`has_more` + `next_cursor`). `fields=meta` strips note content; `limit` is capped at 500. The cursor the client sends is recorded as its durably-applied device watermark, and a cursor older than the retention window returns 410.",
-        "operationId": "sync-changes",
-        "parameters": [
-          {
-            "description": "Max rows (≤500)",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "x-struct": null,
-              "x-validate": null
-            }
-          },
-          {
-            "description": "\"meta\" or \"all\"",
-            "in": "query",
-            "name": "fields",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "x-struct": null,
-              "x-validate": null
-            }
-          },
-          {
-            "description": "Opaque keyset cursor",
-            "in": "query",
-            "name": "cursor",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "x-struct": null,
-              "x-validate": null
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SyncChangesResponse"
-                }
-              }
-            },
-            "description": "Changes page"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MessageError"
-                }
-              }
-            },
-            "description": "Invalid cursor"
-          },
-          "410": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MessageError"
-                }
-              }
-            },
-            "description": "Cursor older than retention window"
-          }
-        },
-        "summary": "Pull the unified note + attachment change feed",
-        "tags": [
-          "Sync"
         ]
       }
     },

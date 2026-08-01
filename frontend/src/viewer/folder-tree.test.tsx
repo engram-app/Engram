@@ -3,41 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FolderTreeProvider } from "../layout/folder-tree-context";
-import FolderTree, { withPreservedExtension } from "./folder-tree";
-
-describe("withPreservedExtension", () => {
-	it("appends the original extension to a dotted title (the bug being fixed)", () => {
-		expect(withPreservedExtension("Child.md", "meeting v1.2")).toBe("meeting v1.2.md");
-	});
-
-	it("appends the original extension when the new name contains a non-extension dot", () => {
-		expect(withPreservedExtension("Child.md", "Node.js guide")).toBe("Node.js guide.md");
-	});
-
-	it("appends the original extension when the new name has no dot at all", () => {
-		expect(withPreservedExtension("Child.md", "renamed")).toBe("renamed.md");
-	});
-
-	it("keeps the new name when it already ends with the original extension", () => {
-		expect(withPreservedExtension("Child.md", "renamed.md")).toBe("renamed.md");
-	});
-
-	it("appends .canvas to a dotted title when renaming a canvas", () => {
-		expect(withPreservedExtension("diagram.canvas", "flow v2")).toBe("flow v2.canvas");
-	});
-
-	it("respects a deliberate swap to another recognized note extension", () => {
-		expect(withPreservedExtension("Child.md", "board.canvas")).toBe("board.canvas");
-	});
-
-	it("re-appends the original extension for an attachment renamed to a bare title", () => {
-		expect(withPreservedExtension("photo.png", "vacation")).toBe("vacation.png");
-	});
-
-	it("keeps an attachment rename that preserves its own extension", () => {
-		expect(withPreservedExtension("photo.png", "photo v2.png")).toBe("photo v2.png");
-	});
-});
+import FolderTree from "./folder-tree";
 
 // The HT-driven FolderTree's UX is the COMPOSITION of already-tested
 // primitives (loader, useEngramTree, TreeRow, dialogs). These integration
@@ -69,12 +35,21 @@ const {
 	batchMoveNotesMutate,
 	batchDeleteFoldersMutate,
 	batchMoveFoldersMutate,
+	createNoteMutate,
+	createFolderMutate,
+	createdFolder,
+	deleteFolderMutate,
 	mock,
 } = vi.hoisted(() => ({
 	batchDeleteNotesMutate: vi.fn(),
 	batchMoveNotesMutate: vi.fn(),
 	batchDeleteFoldersMutate: vi.fn(),
 	batchMoveFoldersMutate: vi.fn(),
+	createNoteMutate: vi.fn(),
+	createFolderMutate: vi.fn(),
+	// Path the mocked create resolves with, so the rename-on-create effect fires.
+	createdFolder: { path: "Projects/untitled" },
+	deleteFolderMutate: vi.fn(),
 	// Mutable per-test fixtures (folders + root notes + loading flag + attachments), set in beforeEach.
 	mock: {
 		folders: [] as unknown[],
@@ -134,6 +109,18 @@ vi.mock("../api/queries", async () => {
 			mutateAsync: vi.fn(() => Promise.resolve()),
 			isPending: false,
 		}),
+		useCreateNote: () => ({ mutate: createNoteMutate, isPending: false }),
+		useCreateFolder: () => ({
+			mutate: (
+				vars: { parent: string },
+				opts?: { onSuccess?: (data: { folder: string }) => void },
+			) => {
+				createFolderMutate(vars);
+				opts?.onSuccess?.({ folder: createdFolder.path });
+			},
+			isPending: false,
+		}),
+		useDeleteFolder: () => ({ mutate: deleteFolderMutate, isPending: false }),
 		useBatchDeleteNotes: () => ({ mutate: batchDeleteNotesMutate, isPending: false }),
 		useBatchMoveNotes: () => ({ mutate: batchMoveNotesMutate, isPending: false }),
 		useBatchDeleteFolders: () => ({ mutate: batchDeleteFoldersMutate, isPending: false }),
@@ -163,6 +150,9 @@ beforeEach(() => {
 	batchMoveNotesMutate.mockReset();
 	batchDeleteFoldersMutate.mockReset();
 	batchMoveFoldersMutate.mockReset();
+	createNoteMutate.mockReset();
+	createFolderMutate.mockReset();
+	deleteFolderMutate.mockReset();
 	mock.folders = DEFAULT_FOLDERS.map((f) => ({ ...f }));
 	mock.rootNotes = [{ ...DEFAULT_ROOT_NOTE }];
 	mock.loading = false;
@@ -219,6 +209,180 @@ describe("FolderTree (HT)", () => {
 			expect(screen.getByRole("menuitem", { name: "Move to…" })).toBeInTheDocument();
 			expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
 		});
+	});
+
+	it("outlines the right-clicked row while its menu is open, and clears after", async () => {
+		renderTree();
+		const projects = await screen.findByRole("treeitem", { name: "Projects" });
+		expect(projects.className).not.toMatch(/ring-2/u);
+
+		fireEvent.contextMenu(projects, { clientX: 50, clientY: 60 });
+		await screen.findByRole("menu");
+		expect(screen.getByRole("treeitem", { name: "Projects" }).className).toMatch(/ring-2/u);
+
+		// Escape closes the menu; the outline goes with it. ContextMenu listens on
+		// `document`, and an event fired at `window` never reaches it.
+		fireEvent.keyDown(document, { key: "Escape" });
+		await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+		expect(screen.getByRole("treeitem", { name: "Projects" }).className).not.toMatch(/ring-2/u);
+	});
+
+	// Creation targets the RIGHT-CLICKED folder, not the toolbar's active one —
+	// that difference is the whole point of putting them on the menu.
+	it("creates a note inside the right-clicked folder", async () => {
+		renderTree();
+		const projects = await screen.findByRole("treeitem", { name: "Projects" });
+		fireEvent.contextMenu(projects, { clientX: 50, clientY: 60 });
+		fireEvent.click(await screen.findByRole("menuitem", { name: "New note here" }));
+		// The id is minted client-side so the optimistic row is addressable at once.
+		expect(createNoteMutate).toHaveBeenCalledWith(
+			expect.objectContaining({ folder: "Projects", id: expect.any(String) }),
+		);
+	});
+
+	it("creates a subfolder under the right-clicked folder", async () => {
+		renderTree();
+		const projects = await screen.findByRole("treeitem", { name: "Projects" });
+		fireEvent.contextMenu(projects, { clientX: 50, clientY: 60 });
+		fireEvent.click(await screen.findByRole("menuitem", { name: "New subfolder" }));
+		expect(createFolderMutate).toHaveBeenCalledWith({ parent: "Projects" });
+	});
+
+	// `/api/folders` returns derived folders with a null id, which become `syn:`
+	// ids. Those are ordinary folders to the user, so right-clicking one must
+	// open OUR menu — it used to fall through to the browser's.
+	it("opens our menu on a derived (synthetic) folder, not the browser's", async () => {
+		mock.folders = [];
+		mock.rootNotes = [];
+		mock.attachments = [
+			{
+				path: "Media/cover.png",
+				mime: "image/png",
+				size: 1,
+				id: "att-1",
+				updated_at: "",
+				mtime: 0,
+			},
+		];
+		renderTree();
+		const media = await screen.findByRole("treeitem", { name: "Media" });
+		const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+		fireEvent(media, ev);
+		// preventDefault is what stops the native menu appearing.
+		expect(ev.defaultPrevented).toBe(true);
+		expect(await screen.findByRole("menu")).toBeInTheDocument();
+		// Same menu as any other folder — rename/move/delete all have path-based
+		// routes, so a missing backend id is no reason to offer the user less.
+		for (const label of ["New note here", "New subfolder", "Rename", "Move to…", "Delete"]) {
+			expect(screen.getByRole("menuitem", { name: label })).toBeInTheDocument();
+		}
+	});
+
+	it("deletes a derived folder by path, never by its syn: id", async () => {
+		mock.folders = [];
+		mock.rootNotes = [];
+		mock.attachments = [
+			{
+				path: "Media/cover.png",
+				mime: "image/png",
+				size: 1,
+				id: "att-1",
+				updated_at: "",
+				mtime: 0,
+			},
+		];
+		renderTree();
+		const media = await screen.findByRole("treeitem", { name: "Media" });
+		fireEvent.contextMenu(media, { clientX: 5, clientY: 5 });
+		fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+		fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+		expect(deleteFolderMutate).toHaveBeenCalledWith({ path: "Media" });
+		// The id-keyed batch endpoint would 404 on a `syn:` id.
+		expect(batchDeleteFoldersMutate).not.toHaveBeenCalled();
+	});
+
+	// The placeholder name should never survive by accident: the new folder opens
+	// in rename mode with the name fully selected, so the first keystroke wins.
+	it("opens a newly created folder in rename mode, name preselected", async () => {
+		mock.folders = [
+			{ id: "1", parent_id: null, name: "Projects", count: 1 },
+			{ id: "9", parent_id: "1", name: "Projects/untitled", count: 0 },
+		];
+		renderTree();
+		const projects = await screen.findByRole("treeitem", { name: "Projects" });
+		fireEvent.contextMenu(projects, { clientX: 50, clientY: 60 });
+		fireEvent.click(await screen.findByRole("menuitem", { name: "New subfolder" }));
+
+		const input = (await screen.findByRole("textbox", {
+			name: "Rename folder",
+		})) as HTMLInputElement;
+		expect(input).toHaveValue("untitled");
+		expect(input.selectionStart).toBe(0);
+		expect(input.selectionEnd).toBe("untitled".length);
+	});
+
+	// Right-clicking empty tree space targets the vault root.
+	describe("empty-space context menu", () => {
+		const openRootMenu = async () => {
+			renderTree();
+			const tree = await screen.findByTestId("folder-tree-root");
+			fireEvent.contextMenu(tree, { clientX: 10, clientY: 200 });
+			await screen.findByRole("menu");
+		};
+
+		it("offers creation actions only", async () => {
+			await openRootMenu();
+			expect(screen.getByRole("menuitem", { name: "New note" })).toBeInTheDocument();
+			expect(screen.getByRole("menuitem", { name: "New folder" })).toBeInTheDocument();
+			// The root isn't a folder you can address.
+			for (const label of ["Rename", "Move to…", "Delete"]) {
+				expect(screen.queryByRole("menuitem", { name: label })).not.toBeInTheDocument();
+			}
+		});
+
+		it("creates a note at the vault root", async () => {
+			await openRootMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "New note" }));
+			expect(createNoteMutate).toHaveBeenCalledWith(
+				expect.objectContaining({ folder: "", id: expect.any(String) }),
+			);
+		});
+
+		it("creates a folder at the root and opens it in rename mode", async () => {
+			createdFolder.path = "untitled";
+			mock.folders = [{ id: "7", parent_id: null, name: "untitled", count: 0 }];
+			await openRootMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "New folder" }));
+			expect(createFolderMutate).toHaveBeenCalledWith({ parent: "" });
+
+			const input = (await screen.findByRole("textbox", {
+				name: "Rename folder",
+			})) as HTMLInputElement;
+			expect(input).toHaveValue("untitled");
+			expect(input.selectionEnd).toBe("untitled".length);
+			createdFolder.path = "Projects/untitled";
+		});
+
+		// A row right-click must not fall through to the container, or the row's
+		// menu would be replaced by the root one the moment it opened.
+		it("does not fire when right-clicking a row", async () => {
+			renderTree();
+			const projects = await screen.findByRole("treeitem", { name: "Projects" });
+			fireEvent.contextMenu(projects, { clientX: 50, clientY: 60 });
+			await screen.findByRole("menu");
+			expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
+			expect(screen.queryByRole("menuitem", { name: "New folder" })).not.toBeInTheDocument();
+		});
+	});
+
+	it("does not offer creation actions on a note row", async () => {
+		renderTree();
+		const note = await screen.findByRole("treeitem", { name: "a" });
+		fireEvent.contextMenu(note, { clientX: 10, clientY: 10 });
+		await screen.findByRole("menu");
+		expect(screen.queryByRole("menuitem", { name: "New note here" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "New subfolder" })).not.toBeInTheDocument();
 	});
 
 	it("long-press (touch) on a row opens the ActionDrawer", async () => {
@@ -282,6 +446,7 @@ describe("FolderTree (HT)", () => {
 			},
 		];
 		renderTree();
-		expect(await screen.findByText("cover.png")).toBeInTheDocument();
+		// Base name only — the extension renders as a separate badge.
+		expect(await screen.findByText("cover")).toBeInTheDocument();
 	});
 });

@@ -18,6 +18,16 @@ The OIDC build role (`engram-saas-prod-ecr-push`) trusts `refs/heads/main` + `re
 
 ## Release recipe
 
+**The normal path is automatic — you do not tag by hand.** Merging the
+release-please PR makes release-please.yml push `release-v<version>` itself, so
+`deploy-prod.yml` fires without anyone running the commands below.
+
+That is also why deploy-prod cannot assume the image already exists: the tag is
+pushed by the *same* main push that starts main CI, and `build-and-publish-image`
+runs last in that CI. `open-infra-pr` therefore waits for that job to succeed
+before writing the pin (see "Failure modes"). The manual recipe below is for a
+rollback or a re-release of an older commit.
+
 ```bash
 # Pull latest main, confirm CI is green, confirm the image is in ECR
 git checkout main && git pull
@@ -84,7 +94,7 @@ Operator AWS profile is `engram-infra-operator` (read-only — `operator-cheatsh
 
 - **`deploy-prod.yml` step "Rewrite engram_image_tag default" fails** — regex regression. Check `main/envs/prod/variables.tf` shape in engram-infra; the workflow expects exactly one `variable "engram_image_tag"` block with a `default = "..."` line.
 - **Bot PR opens but doesn't auto-merge** — engram-infra CI failing (typically tflint or terraform plan). Open the PR, read the failing check, fix root cause in engram-infra. The bot will reuse the `bot/bump-engram-prod` branch on the next release tag.
-- **`terraform apply` on engram-infra fails on `ResourceNotFoundException`** — `sha-<7>` image isn't in ECR. The `build-and-publish-image` job in `verify.yml` for that commit hasn't finished (or never ran). Confirm with `aws ecr describe-images`; rerun the `verify.yml` run (or its `build-and-publish-image` job) if needed.
+- **`terraform (prod)` fails on `reading ECR Images: couldn't find resource`** — the `sha-<7>` image isn't in ECR, so `data.aws_ecr_image.engram_pin_check` (ecs.tf) and `engram_image_pin` (ecr.tf) fail the plan. This used to happen on *every* release: the tag is pushed the instant the release commit lands on main, and `build-and-publish-image` finishes ~20 min later, while the release e2e gate only absorbed ~14 min — `release-v0.10.0` and `release-v0.11.0` both died this way. `open-infra-pr` now waits for that job before writing the pin, so a fresh occurrence means the wait timed out (>30 min) or the job genuinely failed. Confirm with `aws ecr describe-images`, then re-run the failed `terraform (prod)` check — or, if the bot PR has gone behind main, `gh pr update-branch <n>` in engram-infra, which re-runs the checks and lets auto-merge finish.
 - **Service crash-loops after deploy** — task running but health checks fail. Check CloudWatch Logs `/ecs/engram-saas-prod`, then forward-roll to the last-known-good `sha-<7>` via a new release tag.
 - **App token mint step 403s** — `engram-infra-tf` App permissions changed. Required: `contents: read & write` + `pull-requests: read & write` on engram-infra. Adjust at https://github.com/organizations/engram-app/settings/apps/engram-infra-tf.
 

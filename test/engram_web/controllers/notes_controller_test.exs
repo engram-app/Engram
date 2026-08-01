@@ -210,6 +210,78 @@ defmodule EngramWeb.NotesControllerTest do
       assert note["content"] =~ "World!"
     end
 
+    # Regression for #1159 (data loss). `notes.content` is the REST/search
+    # FACADE, materialized from the CRDT doc at checkpoint. Since #1141 the
+    # server no longer authors content, so between a doc write and its
+    # checkpoint the column can lag the doc.
+    #
+    # Append used to read that column, concatenate, and hand the result to
+    # `upsert_note` as the note's full new content. upsert_note honours its
+    # "server merges, never clobbers" contract faithfully, which is exactly the
+    # problem: told the new full text is only the appended fragment, it computes
+    # a diff that DELETES the original body.
+    #
+    # Seen in CI as e2e test_37 (#1136): device B received "\n\nAppended line 1."
+    # which is precisely `"" <> "\n" <> "\nAppended line 1."`.
+    #
+    # The stale window is simulated by blanking ONLY the facade column and
+    # leaving crdt_state intact. That is a reachable real state, not a contrivance.
+    test "append does not destroy the body when the facade column is stale", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      path = "Test/StaleFacade.md"
+
+      created =
+        conn
+        |> post("/api/notes", %{
+          path: path,
+          content: "# Append Test\nOriginal content.",
+          mtime: 1_000.0
+        })
+        |> json_response(200)
+
+      note_id = created["note"]["id"]
+      {:ok, note} = Engram.Notes.get_note_by_id(user, vault, note_id)
+      refute is_nil(note.crdt_state_ciphertext), "precondition: note must carry CRDT state"
+
+      blank_facade_content!(user, note_id)
+
+      conn2 = post(conn, "/api/notes/append", %{path: path, text: "\nAppended line 1."})
+      assert %{"note" => appended} = json_response(conn2, 200)
+
+      assert appended["content"] =~ "Original content.",
+             "append dropped the body: #{inspect(appended["content"])}"
+
+      assert appended["content"] =~ "Appended line 1."
+    end
+
+    # Belt and braces on the same defect: whatever the response says, the row
+    # that ends up committed must not be shorter than what we started with.
+    test "a stale-facade append leaves the stored note intact", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      path = "Test/StaleFacadeTwo.md"
+
+      created =
+        conn
+        |> post("/api/notes", %{path: path, content: "# Keep\nBody text here.", mtime: 1_000.0})
+        |> json_response(200)
+
+      note_id = created["note"]["id"]
+      blank_facade_content!(user, note_id)
+
+      post(conn, "/api/notes/append", %{path: path, text: "\nmore"})
+
+      {:ok, after_note} = Engram.Notes.get_note_by_id(user, vault, note_id)
+
+      assert after_note.content =~ "Body text here.",
+             "stored note lost its body: #{inspect(after_note.content)}"
+    end
+
     test "creates new note when note doesn't exist", %{conn: conn} do
       conn = post(conn, "/api/notes/append", %{path: "Nope/Missing.md", text: "stuff"})
       resp = json_response(conn, 200)
@@ -602,7 +674,7 @@ defmodule EngramWeb.NotesControllerTest do
       assert body["limit_key"] == "notes_cap"
       assert body["limit"] == 10_000
       assert body["current"] == 10_000
-      assert body["upgrade_url"] =~ "/settings/billing"
+      assert body["upgrade_url"] =~ "/#settings/billing"
     end
   end
 
@@ -677,5 +749,25 @@ defmodule EngramWeb.NotesControllerTest do
       conn = delete(conn, ~p"/api/notes/Prunable.md")
       assert %{"deleted" => true} = json_response(conn, 200)
     end
+  end
+
+  # Models the reachable "facade lags the doc" state from #1159: the CRDT state
+  # stays intact while `notes.content` materializes as empty. Encrypting "" via
+  # the same helper the write path uses keeps the AAD binding valid, so this is
+  # a genuine row shape rather than a corrupted one (a NULL ciphertext would
+  # decrypt to nil and exercise a different branch).
+  defp blank_facade_content!(user, note_id) do
+    import Ecto.Query, only: [from: 2]
+
+    {:ok, enc} = Engram.Crypto.encrypt_note_fields(%{content: "", title: "stale"}, user, note_id)
+
+    {1, _} =
+      Engram.Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note_id),
+        [set: [content_ciphertext: enc.content_ciphertext, content_nonce: enc.content_nonce]],
+        skip_tenant_check: true
+      )
+
+    :ok
   end
 end

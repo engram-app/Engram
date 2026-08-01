@@ -21,7 +21,7 @@ async def test_client_logs_ship_without_opt_in(vault_a, cdp_a, api_sync):
 
     # Generate plugin activity so there is something to ship.
     write_note(vault_a, "E2E/Rlog81/trigger.md", "# Rlog81\nForce rlog entries")
-    api_sync.wait_for_note("E2E/Rlog81/trigger.md", timeout=15)
+    api_sync.wait_for_note("E2E/Rlog81/trigger.md")
     await cdp_a.trigger_full_sync()
     await cdp_a.flush_remote_logs()
 

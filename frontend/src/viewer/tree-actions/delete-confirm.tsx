@@ -25,22 +25,22 @@ export function DeleteConfirm({ nodes, onConfirm, onCancel }: Props) {
 	return (
 		<dialog
 			open
-			className="fixed inset-0 z-50 m-auto rounded-lg bg-white p-4 shadow-xl dark:bg-gray-900"
+			className="fixed inset-0 z-50 m-auto rounded-lg border border-border bg-popover p-4 text-popover-foreground shadow-xl"
 		>
-			<p className="mb-4 text-gray-800 text-sm dark:text-gray-100">{message}</p>
-			<p className="mb-4 text-gray-500 text-xs dark:text-gray-400">This cannot be undone.</p>
+			<p className="mb-4 text-sm">{message}</p>
+			<p className="mb-4 text-muted-foreground text-xs">This cannot be undone.</p>
 			<div className="flex justify-end gap-2">
 				<button
 					type="button"
 					onClick={onCancel}
-					className="rounded border border-gray-300 px-3 py-1 text-sm dark:border-gray-700"
+					className="rounded border border-border px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground"
 				>
 					Cancel
 				</button>
 				<button
 					type="button"
 					onClick={onConfirm}
-					className="rounded bg-red-600 px-3 py-1 text-sm text-white hover:bg-red-700"
+					className="rounded bg-destructive px-3 py-1 text-background text-sm hover:bg-destructive/90"
 				>
 					Delete
 				</button>

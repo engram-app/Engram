@@ -94,6 +94,55 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert tail_count_after == 0
   end
 
+  # ── #983 task 2: user-resolve raise must NOT escape terminate/2 ────────────
+  # `checkpoint/5` runs on the room's `terminate/2` (unbind path). Its ONE DB
+  # call outside `do_checkpoint`'s rescue is `Accounts.get_user/1`. Under pool
+  # starvation that raises `DBConnection.ConnectionError` straight out of
+  # terminate/2 (the 2026-07-09 incident stack frame). It must degrade to `:ok`
+  # like `do_checkpoint` already does. A raising `get_user` is forced here with
+  # an un-castable id (any raise from the resolve step must be swallowed, not
+  # just ConnectionError) — the fix is a blanket function-level rescue.
+  test "checkpoint returns :ok (does not raise) when get_user raises", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before AFTER")
+
+    # Seed a tail row so we can prove the degraded no-op does NOT prune it.
+    {:ok, {ct, n}} = Crypto.encrypt_crdt_state("fake_update", user, note.id)
+
+    Repo.with_tenant(user.id, fn ->
+      Repo.insert_all(CrdtUpdateLog, [
+        %{
+          id: Ecto.UUID.generate(),
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: n,
+          inserted_at: DateTime.utc_now()
+        }
+      ])
+    end)
+
+    # "not-a-uuid" makes Accounts.get_user/1 raise Ecto.Query.CastError, standing
+    # in for the prod DBConnection.ConnectionError — both must be swallowed.
+    assert :ok = CrdtCheckpoint.checkpoint("not-a-uuid", vault.id, note.id, doc)
+
+    # Degraded to a no-op: content untouched and the tail row survives (data safe).
+    {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+    assert fresh.content == "before"
+
+    {:ok, tail_after} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.aggregate(from(l in CrdtUpdateLog, where: l.note_id == ^note.id), :count)
+      end)
+
+    assert tail_after == 1
+  end
+
   # ── deliver-out gap: a web-editor edit (CRDT checkpoint) must reach clients ─
   # that are not actively enrolled in the note's room (e.g. Obsidian). REST/MCP
   # writes announce via CrdtDeliver; the checkpoint is the ONLY path that
@@ -121,6 +170,48 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     }
 
     assert doc_id == note.id
+  end
+
+  test "checkpoint on a .canvas doc persists Yjs state without clobbering content or churning seq",
+       ctx do
+    %{user: user, vault: vault} = ctx
+    # A canvas doc keeps its data in Y.Maps (nodes/edges), not the markdown content
+    # Y.Text — so text_of projects "". The checkpoint must NOT materialize that ""
+    # over notes.content (a silent wipe of the canvas JSON) nor bump seq. It DOES
+    # persist the structural Yjs snapshot: notes.content is vestigial for canvas,
+    # a new device rebuilds the board from the persisted Yjs deltas.
+    canvas_json = ~s({"nodes":[{"id":"n1","type":"text","text":"hi"}],"edges":[]})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "board.canvas", "content" => canvas_json})
+
+    # Drop the REST-era crdt_state so the checkpoint folds only the live canvas doc.
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+    # A canvas-shaped live doc: structural data in a Y.Map, content Y.Text empty.
+    doc = CrdtBridge.new_doc()
+    Yex.Map.set(Yex.Doc.get_map(doc, "nodes"), "n1", "hi")
+
+    seq0 = Vaults.current_seq(user.id, vault.id)
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    # content preserved verbatim — NOT projected to "" from the empty content Y.Text.
+    {:ok, fresh} = Notes.get_note(user, vault, "board.canvas")
+    assert fresh.content == canvas_json
+    # seq must NOT advance — structural doc, no phantom content edit.
+    assert Vaults.current_seq(user.id, vault.id) == seq0
+
+    # The structural Yjs state IS persisted (nodes map survived the checkpoint).
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, state} = Crypto.decrypt_crdt_state(raw, user)
+    {:ok, rebuilt} = CrdtBridge.doc_from_state(state)
+    assert Yex.Map.to_map(Yex.Doc.get_map(rebuilt, "nodes")) == %{"n1" => "hi"}
   end
 
   test "checkpoint does NOT announce when text is unchanged (compaction — no re-pull spam)",
@@ -752,5 +843,35 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     send(room_pid, :stop)
 
     assert_receive {:DOWN, ^ref, :process, ^timer, _}, 1_000
+  end
+
+  test "checkpoint does NOT blank a legacy note whose row has no crdt_state", ctx do
+    %{user: user, vault: vault} = ctx
+    # The 2026-07-06 id-keying cutover NULLed crdt_state for EVERY note, on the
+    # documented premise that bind would re-seed it from notes.content. Now that
+    # the server no longer authors content, such a note binds to an EMPTY doc —
+    # and unbind checkpoints unconditionally. Without a guard this materializes
+    # "" over the note body and announces the emptied note to every device.
+    #
+    # The structural (.canvas) path is already protected; markdown was not.
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "legacy.md", "content" => "IMPORTANT"})
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+    # Exactly what bind/3 now produces for such a row: an empty doc.
+    doc = CrdtBridge.new_doc()
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    {:ok, reloaded} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, reloaded} = Crypto.maybe_decrypt_note_fields(reloaded, user)
+    assert reloaded.content == "IMPORTANT"
   end
 end

@@ -32,7 +32,7 @@ export function TourController({ active, onExit, setReachedEnd }: Props) {
 
 	// The final step targets `[data-tour="dashboard-root"]` which only exists
 	// on the dashboard route. If the user opened a demo note during step 1,
-	// we're on /note/<id> and Joyride times out waiting for that target.
+	// we're on /<slug>/<id> and Joyride times out waiting for that target.
 	// Bounce back to / when we land on the final step.
 	useEffect(() => {
 		if (!active) {

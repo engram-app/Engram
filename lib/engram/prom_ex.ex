@@ -24,7 +24,6 @@ defmodule Engram.PromEx do
       # telemetry events that the bundled plugins don't cover.
       Engram.PromEx.Voyage,
       Engram.PromEx.Qdrant,
-      Engram.PromEx.Sync,
       Engram.PromEx.Search,
       Engram.PromEx.Mcp,
       Engram.PromEx.Crypto,

@@ -8,5 +8,4 @@
 
 export { default as OnboardingGate } from "../onboarding/onboarding-gate";
 export { OnboardingShell } from "../onboarding/onboarding-shell";
-export { default as SettingsLayout } from "../settings/settings-layout";
 export { default as AppLayout } from "./app-layout";

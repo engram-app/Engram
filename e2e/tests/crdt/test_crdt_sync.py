@@ -21,6 +21,7 @@ import pytest
 
 from helpers.log_oracle import wait_for_delivery
 from helpers.vault import delete_note, wait_for_content, wait_for_file_gone, write_note
+from helpers.latency import DELIVERY_TIMEOUT
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("E2E_ENABLE_CRDT") != "true",
@@ -28,7 +29,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 # CRDT delivery = server checkpoint debounce (~5s) + handshake; be generous.
-CRDT_TIMEOUT = 30
+CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert
 
 
 async def _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, body, marker):
@@ -167,18 +168,26 @@ async def _confirm_room_free(cdp, path):
     crdt_msg room stream). Returns the note_id.
 
     trigger_full_sync() drives the idle pull-discovery path, which maps +
-    confirms the note but does NOT STEP1-enroll a not-live-bound note
-    (sync.ts:3790/3820 guards) — so the note stays room-free.
+    confirms the note but does NOT STEP1-enroll a not-live-bound note via the
+    discovery path (sync.ts isLiveBound guard). A checkpoint-driven catch-up
+    CAN, however, open a TRANSIENT heal room via the diverged-cold-note
+    re-handshake (sync.ts:5578, deliberately un-gated); the plugin releases it
+    asynchronously once convergence commits (releaseHealRoom). So wait for that
+    release rather than sampling the enrolled set the instant the sync returns —
+    a single immediate snapshot races the async release (the source of this
+    test's flakiness). A genuinely stuck room still fails via timeout.
     """
     await cdp.wait_for_stream_connected()
     await cdp.trigger_full_sync()
     note_id = await cdp.get_note_id_for_path(path)
     assert note_id, f"device never mapped a note_id for {path} — cannot prove fan-out"
-    enrolled = await cdp.get_enrolled_note_ids()
-    assert note_id not in enrolled, (
-        f"precondition violated: device holds a CRDT room for idle note {path} "
-        f"(note_id={note_id}); convergence could ride crdt_msg, not the fan-out"
-    )
+    try:
+        await cdp.wait_for_room_free(note_id, timeout=CRDT_TIMEOUT)
+    except TimeoutError as e:
+        pytest.fail(
+            f"precondition violated: device holds a CRDT room for idle note {path} "
+            f"(note_id={note_id}); convergence could ride crdt_msg, not the fan-out — {e}"
+        )
     return note_id
 
 
@@ -280,30 +289,33 @@ async def test_cold_send_over_fanout_opens_no_room(vault_a, vault_b, cdp_a, cdp_
 
 
 @pytest.mark.asyncio
-async def test_fanout_receive_after_hibernate_rehydrates(vault_a, vault_b, cdp_a, cdp_b, api_sync):
-    """[P1] A fan-out apply frees B's Y.Doc (applyPushedNoteUpdate →
-    hibernateIfIdle → closeDoc). A SECOND edit must still converge, proving the
-    apply-after-free path re-opens the doc from IndexedDB and merges correctly —
-    end to end, no process restart.
+async def test_fanout_sequential_edits_converge_preserving_prior_state(
+    vault_a, vault_b, cdp_a, cdp_b, api_sync
+):
+    """[P1] Two SEQUENTIAL remote edits to an idle note both converge on B over
+    the fan-out alone, the second preserving the first.
+
+    (Was ``test_fanout_receive_after_hibernate_rehydrates``: the Relay-model
+    persistent-doc engine NEVER frees an idle Y.Doc — ``closeDoc`` /
+    ``hibernateIfIdle`` are no-ops now, so there is no free-then-rehydrate step to
+    assert. The residual guarantee — a second fan-out apply merges onto the doc
+    the first left behind, no state lost — still matters and is what this pins.)
     """
-    path = "E2E/Crdt/FanoutHibernate.md"
+    path = "E2E/Crdt/FanoutSequential.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "base\n", "base")
-    note_id = await _confirm_room_free(cdp_b, path)
+    await _confirm_room_free(cdp_b, path)
     try:
         await cdp_b.suppress_fanout_backstops()
 
-        # First remote edit converges via the fan-out, which then hibernates the
-        # idle doc after durably recording the head.
+        # First remote edit converges via the fan-out.
         write_note(vault_a, path, "base\nEDIT_ONE\n")
         wait_for_content(vault_b, path, "EDIT_ONE", timeout=CRDT_TIMEOUT)
-        await cdp_b.wait_for_crdt_doc_freed(note_id, timeout=CRDT_TIMEOUT)
 
-        # Second edit AFTER the doc was freed — must rehydrate from IndexedDB and
-        # merge, preserving the prior state.
+        # Second edit merges onto the (still-resident) doc, preserving prior state.
         write_note(vault_a, path, "base\nEDIT_ONE\nEDIT_TWO\n")
         b_final = wait_for_content(vault_b, path, "EDIT_TWO", timeout=CRDT_TIMEOUT)
         assert "EDIT_ONE" in b_final and "base" in b_final, (
-            f"rehydrated apply lost prior state: {b_final!r}"
+            f"second fan-out apply lost prior state: {b_final!r}"
         )
     finally:
         await cdp_b.restore_fanout_backstops()

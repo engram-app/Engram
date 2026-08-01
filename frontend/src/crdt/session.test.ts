@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	__isNoteOpen,
+	clearRehandshakeBackoff,
 	closeDoc,
 	enroll,
 	enrollIfLive,
@@ -290,6 +291,169 @@ describe("crdt session", () => {
 			const before = frames.length;
 			await vi.advanceTimersByTimeAsync(1000);
 			expect(frames.length).toBe(before);
+		});
+
+		it("backs off exponentially across consecutive failures", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("note-bo");
+			const base = frames.length; // re-handshake itself produces the STEP1
+			// Attempt 1 fires at the base delay (1000).
+			scheduleRehandshake("note-bo", 1000);
+			await vi.advanceTimersByTimeAsync(1000);
+			await vi.waitFor(() => expect(frames.length).toBe(base + 1));
+			// Attempt 2 doubles to 2000 — 1000 is NOT enough to fire it.
+			scheduleRehandshake("note-bo", 1000);
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(frames.length).toBe(base + 1);
+			await vi.advanceTimersByTimeAsync(1000); // total 2000
+			await vi.waitFor(() => expect(frames.length).toBe(base + 2));
+			closeDoc("note-bo");
+		});
+
+		it("stops re-handshaking after the attempt cap (circuit breaker)", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("note-cb");
+			const base = frames.length;
+			// Exhaust the attempt budget; advance past the capped max delay each time.
+			for (let i = 0; i < 6; i++) {
+				scheduleRehandshake("note-cb", 1000);
+				await vi.advanceTimersByTimeAsync(30_000);
+			}
+			const afterCap = frames.length;
+			expect(afterCap).toBe(base + 6);
+			// Circuit open: the 7th schedule arms no timer, so nothing more fires.
+			scheduleRehandshake("note-cb", 1000);
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(frames.length).toBe(afterCap);
+			closeDoc("note-cb");
+		});
+
+		it("clearRehandshakeBackoff resets to the base delay + re-arms the breaker", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("note-clr");
+			// One failure → attempts=1 (next would double to 2000).
+			scheduleRehandshake("note-clr", 1000);
+			await vi.advanceTimersByTimeAsync(1000);
+			const base = frames.length;
+			// A successful ack clears the backoff.
+			clearRehandshakeBackoff("note-clr");
+			// Next failure fires at the BASE delay (1000), proving the reset.
+			scheduleRehandshake("note-clr", 1000);
+			await vi.advanceTimersByTimeAsync(1000);
+			await vi.waitFor(() => expect(frames.length).toBe(base + 1));
+			closeDoc("note-clr");
+		});
+
+		// A tripped breaker MUST stay escapable. The ack path alone is not enough:
+		// it only fires when we push, so a note we merely read could sit deaf for
+		// the rest of the session. These three pin the other exits.
+
+		it("an open breaker re-arms on a reconnect resync (new connectivity epoch)", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("note-recon");
+			for (let i = 0; i < 6; i++) {
+				scheduleRehandshake("note-recon", 1000);
+				await vi.advanceTimersByTimeAsync(30_000);
+			}
+			scheduleRehandshake("note-recon", 1000); // breaker open — no timer armed
+			await vi.advanceTimersByTimeAsync(30_000);
+			const stuck = frames.length;
+
+			resyncOpenDocs(); // reconnect: re-enrolls AND clears the attempt budget
+			await vi.waitFor(() => expect(frames.length).toBeGreaterThan(stuck));
+			const afterResync = frames.length;
+
+			// Budget restored: a fresh failure retries at the BASE delay again.
+			scheduleRehandshake("note-recon", 1000);
+			await vi.advanceTimersByTimeAsync(1000);
+			await vi.waitFor(() => expect(frames.length).toBe(afterResync + 1));
+			closeDoc("note-recon");
+		});
+
+		it("an open breaker re-arms on a user reopen (closeDoc clears the budget)", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("note-reopen");
+			for (let i = 0; i < 6; i++) {
+				scheduleRehandshake("note-reopen", 1000);
+				await vi.advanceTimersByTimeAsync(30_000);
+			}
+			closeDoc("note-reopen");
+			await openDoc("note-reopen");
+			const base = frames.length;
+
+			// Reopened with a fresh budget: the next failure retries at the base delay.
+			scheduleRehandshake("note-reopen", 1000);
+			await vi.advanceTimersByTimeAsync(1000);
+			await vi.waitFor(() => expect(frames.length).toBe(base + 1));
+			closeDoc("note-reopen");
+		});
+
+		// The inverse of the two above, and the reason handleFrame does NOT clear
+		// the budget. scheduleRehandshake is fed by crdt_msg REJECTIONS, and
+		// `rate_limited` is one of them — so "pushes rejected while other devices
+		// keep editing" is a real state in which frames keep arriving. If receipt
+		// re-armed the breaker, every frame would reset the budget and the retry
+		// would run without bound: the exact storm this breaker exists to stop.
+		it("inbound frames do NOT re-arm the breaker (rate-limited push + live traffic)", async () => {
+			const donor: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => donor.push(b64) });
+			const a = await openDoc("note-inbound");
+			a!.ytext.insert(0, "remote-edit");
+			await vi.waitFor(() => expect(donor.length).toBeGreaterThan(0));
+			const frame = donor.at(-1)!;
+			stopCrdtSession();
+
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("note-inbound");
+			for (let i = 0; i < 6; i++) {
+				scheduleRehandshake("note-inbound", 1000);
+				await vi.advanceTimersByTimeAsync(30_000);
+			}
+			scheduleRehandshake("note-inbound", 1000); // breaker open — nothing armed
+			await vi.advanceTimersByTimeAsync(30_000);
+			const stuck = frames.length;
+
+			// Live traffic arrives for the note. The frame must still APPLY...
+			await handleFrame("note-inbound", frame);
+			const handle = await openDoc("note-inbound");
+			expect(handle!.ytext.toJSON()).toContain("remote-edit");
+
+			// ...but it must NOT hand the breaker a fresh budget.
+			scheduleRehandshake("note-inbound", 1000);
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(frames.length).toBe(stuck);
+			closeDoc("note-inbound");
+		});
+	});
+
+	describe("resyncOpenDocs throttle", () => {
+		it("re-enrolls at most once per window under a reconnect storm", async () => {
+			const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+			try {
+				const frames: string[] = [];
+				startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+				await openDoc("note-th");
+				const base = frames.length; // openDoc alone does not enroll
+				resyncOpenDocs(); // first: enrolls the open doc → one STEP1
+				await vi.waitFor(() => expect(frames.length).toBe(base + 1));
+				const afterFirst = frames.length;
+				resyncOpenDocs(); // same instant → throttled
+				resyncOpenDocs();
+				await new Promise((r) => setTimeout(r, 20));
+				expect(frames.length).toBe(afterFirst);
+				nowSpy.mockReturnValue(1_000_000 + 4000); // past the window
+				resyncOpenDocs();
+				await vi.waitFor(() => expect(frames.length).toBe(afterFirst + 1));
+				closeDoc("note-th");
+			} finally {
+				nowSpy.mockRestore();
+			}
 		});
 	});
 

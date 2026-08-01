@@ -2,11 +2,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type React from "react";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { syntheticFolderId } from "../viewer/tree/synthesize-folders";
 import { ApiError } from "./client";
+import { CrdtOpError } from "./crdt-ops";
 import {
 	type Folder,
 	type Note,
 	useAcceptTerms,
+	useAppBootstrap,
 	useAttachments,
 	useBatchDeleteAttachments,
 	useBatchDeleteFolders,
@@ -30,6 +33,7 @@ import {
 	useReverseCancel,
 	useSearch,
 	useUploadAttachment,
+	useVaults,
 } from "./queries";
 
 vi.mock("sonner", () => ({
@@ -41,8 +45,10 @@ vi.mock("sonner", () => ({
 }));
 
 // queries.ts pulls useNavigate from react-router (useCreateNote). Stub it so
-// the hooks render without a Router in these unit tests.
-vi.mock("react-router", () => ({ useNavigate: () => () => {} }));
+// the hooks render without a Router in these unit tests. A shared spy (not a
+// bare no-op) so tests can assert what useCreateNote navigates to.
+const navigateSpy = vi.hoisted(() => vi.fn());
+vi.mock("react-router", () => ({ useNavigate: () => navigateSpy }));
 
 // Pin the active vault id so cache keys are deterministic for the
 // optimistic-update tests below. The hook reads from a module-scoped
@@ -58,6 +64,18 @@ const { get, post, del } = vi.hoisted(() => ({
 	post: vi.fn(),
 	del: vi.fn(),
 }));
+
+// Note create/delete now ride the CRDT channel, not REST. Mock the channel ops
+// (crdtCreateNote echoes its minted doc_id back on success — the ok reply's
+// doc_id equals the id we sent).
+const { crdtCreateNote, crdtDeleteNote, crdtCreateNoteWithContent } = vi.hoisted(() => ({
+	crdtCreateNote: vi.fn((docId: string, _path: string) => Promise.resolve(docId)),
+	crdtDeleteNote: vi.fn((docId: string) => Promise.resolve({ doc_id: docId })),
+	crdtCreateNoteWithContent: vi.fn((docId: string, _path: string, _md: string) =>
+		Promise.resolve(docId),
+	),
+}));
+vi.mock("./channel", () => ({ crdtCreateNote, crdtDeleteNote, crdtCreateNoteWithContent }));
 vi.mock("./client", async () => {
 	const actual = await vi.importActual<typeof import("./client")>("./client");
 	return {
@@ -73,6 +91,14 @@ beforeEach(() => {
 	get.mockReset();
 	post.mockReset();
 	del.mockReset();
+	crdtCreateNote.mockReset().mockImplementation((docId: string) => Promise.resolve(docId));
+	crdtDeleteNote
+		.mockReset()
+		.mockImplementation((docId: string) => Promise.resolve({ doc_id: docId }));
+	crdtCreateNoteWithContent
+		.mockReset()
+		.mockImplementation((docId: string) => Promise.resolve(docId));
+	navigateSpy.mockClear();
 	qc = new QueryClient();
 });
 
@@ -193,19 +219,18 @@ describe("useNote by id", () => {
 });
 
 describe("useRenameNote", () => {
-	it("POSTs /notes/rename and invalidates folders + folder lists + old note key", async () => {
-		post.mockResolvedValue({ renamed: true, old_path: "a/x.md", new_path: "b/y.md" });
+	it("sends crdt_create with the note id at the new path (rename-as-move) + invalidates", async () => {
 		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
 		await act(async () => {
-			await result.current.mutateAsync({ old_path: "a/x.md", new_path: "b/y.md" });
+			await result.current.mutateAsync({ id: "n1", old_path: "a/x.md", new_path: "b/y.md" });
 		});
 
-		expect(post).toHaveBeenCalledWith("/notes/rename", {
-			old_path: "a/x.md",
-			new_path: "b/y.md",
-		});
+		// Rename/move = crdt_create for a KNOWN id at a new free path (backend
+		// relocates the row in place). No REST /notes/rename.
+		expect(crdtCreateNote).toHaveBeenCalledWith("n1", "b/y.md");
+		expect(post).not.toHaveBeenCalledWith("/notes/rename", expect.anything());
 		// onSettled scopes invalidation by vault — broader keys would
 		// touch other vaults' caches needlessly.
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
@@ -213,13 +238,13 @@ describe("useRenameNote", () => {
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["note", "42"] });
 	});
 
-	it("surfaces 409 as ApiError", async () => {
-		post.mockRejectedValue(new ApiError(409, "conflict"));
+	it("surfaces create_failed (target path occupied) to the caller", async () => {
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
 		await expect(
-			result.current.mutateAsync({ old_path: "a.md", new_path: "b.md" }),
-		).rejects.toMatchObject({ status: 409 });
+			result.current.mutateAsync({ id: "n1", old_path: "a.md", new_path: "b.md" }),
+		).rejects.toMatchObject({ reason: "create_failed" });
 	});
 });
 
@@ -252,8 +277,7 @@ describe("useRenameFolder", () => {
 });
 
 describe("useDeleteNote", () => {
-	it("DELETEs /notes/by-id/:id and invalidates folders + folder list + note", async () => {
-		del.mockResolvedValue({ deleted: true });
+	it("sends crdt_delete by id and invalidates folders + folder list + note", async () => {
 		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 
 		const { result } = renderHook(() => useDeleteNote(), { wrapper });
@@ -261,9 +285,10 @@ describe("useDeleteNote", () => {
 			await result.current.mutateAsync({ id: "42", path: "foo bar/x y.md" });
 		});
 
-		// URL is keyed on the note id — server is the source of truth for
-		// path/folder lookups, so the client just supplies the id.
-		expect(del).toHaveBeenCalledWith("/notes/by-id/42");
+		// Delete rides the CRDT channel by id (parity with the plugin) — the
+		// server owns path/folder lookups, so the client just supplies the id.
+		expect(crdtDeleteNote).toHaveBeenCalledWith("42");
+		expect(del).not.toHaveBeenCalled();
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
 		// onMutate invalidates (not removes) the note's cache, keyed by id, so a
@@ -272,30 +297,19 @@ describe("useDeleteNote", () => {
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["note", "42", "42"] });
 	});
 
-	it("surfaces backend errors as ApiError", async () => {
-		del.mockRejectedValue(new ApiError(404, "not found"));
+	it("surfaces a rejected crdt_delete (e.g. disconnected) to the caller", async () => {
+		crdtDeleteNote.mockRejectedValue(new CrdtOpError("disconnected", "crdt_delete"));
 
 		const { result } = renderHook(() => useDeleteNote(), { wrapper });
 		await expect(result.current.mutateAsync({ id: "7", path: "gone.md" })).rejects.toMatchObject({
-			status: 404,
+			reason: "disconnected",
 		});
 	});
 });
 
 describe("useDuplicateNote", () => {
-	it("GETs source content then POSTs new note at new_path and invalidates listings", async () => {
-		get.mockResolvedValue({
-			path: "a.md",
-			title: "a",
-			folder: "",
-			tags: [],
-			version: 1,
-			mtime: "",
-			created_at: "",
-			updated_at: "",
-			content: "hello world",
-		});
-		post.mockResolvedValue({ note: { path: "a (copy).md", content: "hello world" } });
+	it("GETs source content then genesis-creates the copy at new_path (no POST /notes)", async () => {
+		get.mockResolvedValue({ path: "a.md", content: "hello world" });
 		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 
 		const { result } = renderHook(() => useDuplicateNote(), { wrapper });
@@ -304,22 +318,27 @@ describe("useDuplicateNote", () => {
 		});
 
 		expect(get).toHaveBeenCalledWith("/notes/a.md");
-		expect(post).toHaveBeenCalledWith(
-			"/notes",
-			expect.objectContaining({ path: "a (copy).md", content: "hello world" }),
+		// Copy content genesis-created over the crdt channel at the new path.
+		expect(crdtCreateNoteWithContent).toHaveBeenCalledWith(
+			expect.any(String),
+			"a (copy).md",
+			"hello world",
 		);
+		expect(post).not.toHaveBeenCalledWith("/notes", expect.anything());
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
 	});
 
-	it("surfaces 409 from POST as ApiError so callers can toast", async () => {
+	it("surfaces create_failed (target occupied) so callers can toast", async () => {
 		get.mockResolvedValue({ content: "x" });
-		post.mockRejectedValue(new ApiError(409, "conflict"));
+		crdtCreateNoteWithContent.mockRejectedValue(
+			new CrdtOpError("create_failed", "crdt_create_batch"),
+		);
 
 		const { result } = renderHook(() => useDuplicateNote(), { wrapper });
 		await expect(
 			result.current.mutateAsync({ src_path: "a.md", new_path: "a (copy).md" }),
-		).rejects.toMatchObject({ status: 409 });
+		).rejects.toMatchObject({ reason: "create_failed" });
 	});
 
 	it("mirrors the optimistic placeholder into the tree by-id list", async () => {
@@ -330,10 +349,10 @@ describe("useDuplicateNote", () => {
 		qc.setQueryData(["folderNotes", "42", "dst"], { notes: [] });
 
 		get.mockResolvedValue({ content: "x" });
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
+		let resolveCreate: () => void = () => {};
+		crdtCreateNoteWithContent.mockReturnValue(
 			new Promise((r) => {
-				resolvePost = r;
+				resolveCreate = () => r("real-dup");
 			}),
 		);
 
@@ -351,24 +370,12 @@ describe("useDuplicateNote", () => {
 			expect(byId?.some((n) => n.path === "dst/a copy.md")).toBe(true);
 		});
 
-		resolvePost({
-			note: {
-				id: "real",
-				path: "dst/a copy.md",
-				title: "a copy",
-				folder: "dst",
-				tags: [],
-				version: 1,
-				mtime: "",
-				created_at: "",
-				updated_at: "",
-			},
-		});
+		resolveCreate();
 
-		// After success the placeholder id is swapped for the server id.
+		// After success the placeholder id is swapped for the minted doc_id.
 		await waitFor(() => {
 			const byId = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "f9"]);
-			expect(byId?.some((n) => n.id === "real")).toBe(true);
+			expect(byId?.some((n) => n.id === "real-dup")).toBe(true);
 		});
 	});
 });
@@ -437,17 +444,17 @@ describe("optimistic rename note", () => {
 			{ name: "b", count: 0 },
 		]);
 
-		// Hold the POST so we can inspect the optimistic state.
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
+		// Hold crdt_create so we can inspect the optimistic state.
+		let resolveRename: () => void = () => {};
+		crdtCreateNote.mockReturnValue(
 			new Promise((r) => {
-				resolvePost = r;
+				resolveRename = () => r("n1");
 			}),
 		);
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
 		act(() => {
-			result.current.mutate({ old_path: "a/x.md", new_path: "b/x.md" });
+			result.current.mutate({ id: "n1", old_path: "a/x.md", new_path: "b/x.md" });
 		});
 
 		await waitFor(() => {
@@ -470,7 +477,7 @@ describe("optimistic rename note", () => {
 		expect(folders?.folders.find((f) => f.name === "b")?.count).toBe(1);
 
 		// Settle the promise so React Query unwinds cleanly.
-		resolvePost({ renamed: true, old_path: "a/x.md", new_path: "b/x.md" });
+		resolveRename();
 	});
 
 	it("restores the pre-mutation cache snapshot when the mutation rejects", async () => {
@@ -481,12 +488,12 @@ describe("optimistic rename note", () => {
 			{ name: "b", count: 0 },
 		]);
 
-		post.mockRejectedValue(new ApiError(409, "conflict"));
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
 		await act(async () => {
 			try {
-				await result.current.mutateAsync({ old_path: "a/x.md", new_path: "b/x.md" });
+				await result.current.mutateAsync({ id: "n1", old_path: "a/x.md", new_path: "b/x.md" });
 			} catch {
 				// Expected — we want the rollback.
 			}
@@ -515,8 +522,8 @@ describe("optimistic delete note", () => {
 		]);
 		seedFolders([{ name: "", count: 2 }]);
 
-		let resolveDel!: (v: unknown) => void;
-		del.mockReturnValue(
+		let resolveDel!: (v: { doc_id: string }) => void;
+		crdtDeleteNote.mockReturnValue(
 			new Promise((r) => {
 				resolveDel = r;
 			}),
@@ -532,7 +539,7 @@ describe("optimistic delete note", () => {
 			expect(list?.notes.map((n) => n.path)).toEqual(["stays.md"]);
 		});
 
-		resolveDel({ deleted: true });
+		resolveDel({ doc_id: "1" });
 	});
 
 	it("restores the cache when the delete fails", async () => {
@@ -542,7 +549,7 @@ describe("optimistic delete note", () => {
 		]);
 		seedFolders([{ name: "", count: 2 }]);
 
-		del.mockRejectedValue(new ApiError(500, "boom"));
+		crdtDeleteNote.mockRejectedValue(new CrdtOpError("disconnected", "crdt_delete"));
 
 		const { result } = renderHook(() => useDeleteNote(), { wrapper });
 		await act(async () => {
@@ -581,13 +588,18 @@ function seedNoteById(id: string, note: Partial<Note>) {
 	} satisfies Note);
 }
 
-describe("rename note does NOT re-path the note body cache optimistically", () => {
-	// The open editor keys its CRDT doc on `note.path`. Re-pathing `['note', id]`
-	// before the rename commits makes the editor enroll the new path early, which
-	// the CRDT channel bootstraps into a duplicate note that then 409s the rename
-	// (a stable cross-tab duplicate under load). The note cache must stay on the
-	// old path until onSettled's refetch confirms the server move.
-	it("leaves [note, vaultId, id] on the old path while the rename is in flight", async () => {
+describe("rename note re-paths the note body cache optimistically", () => {
+	// An open editor's header reads `['note', vaultId, id]`, so it has to flip
+	// the instant the user commits — waiting for onSettled's refetch reads as lag.
+	//
+	// This used to be deliberately skipped because the editor keyed its CRDT doc
+	// on `note.path`: re-pathing early made it enroll the new path before the
+	// rename committed, which the CRDT channel bootstrapped into a duplicate note
+	// that then 409'd the rename. note-page.tsx now keys the doc on `note.id`
+	// (stable across a rename) and only reads `path` for display + the `.md` gate,
+	// so the early-enroll hazard is gone and `ctx.prevNote` gives onError an exact
+	// rollback.
+	const seed = () => {
 		seedFolderNotes("a", [{ id: "42", path: "a/x.md", title: "X" }]);
 		seedFolderNotes("b", []);
 		seedFolders([
@@ -595,40 +607,88 @@ describe("rename note does NOT re-path the note body cache optimistically", () =
 			{ name: "b", count: 0 },
 		]);
 		seedNoteById("42", { id: "42", path: "a/x.md", folder: "a", title: "X", content: "# X" });
+	};
 
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
+	it("flips [note, vaultId, id] to the new path while the rename is in flight", async () => {
+		seed();
+		let resolveCreate!: (v: string) => void;
+		crdtCreateNote.mockReturnValue(
 			new Promise((r) => {
-				resolvePost = r;
+				resolveCreate = r;
 			}),
 		);
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
 		act(() => {
-			result.current.mutate({ old_path: "a/x.md", new_path: "b/y.md" });
+			result.current.mutate({ id: "42", old_path: "a/x.md", new_path: "b/y.md" });
 		});
 
-		// The FOLDER lists flip optimistically (snappy tree)…
 		await waitFor(() => {
-			const oldList = qc.getQueryData<{ notes: Array<{ path: string }> }>([
-				"folderNotes",
-				"42",
-				"a",
-			]);
-			expect(oldList?.notes.map((n) => n.path)).toEqual([]);
+			expect(qc.getQueryData<Note>(["note", "42", "42"])?.path).toBe("b/y.md");
 		});
-		// …but the note body cache stays on the OLD path (no early CRDT re-enroll).
+		const cached = qc.getQueryData<Note>(["note", "42", "42"]);
+		expect(cached?.folder).toBe("b");
+		// Body is untouched — only the location moves.
+		expect(cached?.content).toBe("# X");
+
+		resolveCreate("42");
+	});
+
+	// The sidebar tree renders the id-keyed lists, NOT the path-keyed
+	// `folderNotes` ones onMutate already updated — so it needs its own
+	// optimistic write or the tree row lags a refetch behind the header.
+	it("re-paths the tree's id-keyed list so the sidebar name flips too", async () => {
+		seed();
+		seedFolderNotesById("9", [{ id: "42", path: "a/x.md", folder: "a" }]);
+		let resolveCreate!: (v: string) => void;
+		crdtCreateNote.mockReturnValue(
+			new Promise((r) => {
+				resolveCreate = r;
+			}),
+		);
+
+		const { result } = renderHook(() => useRenameNote(), { wrapper });
+		act(() => {
+			result.current.mutate({ id: "42", old_path: "a/x.md", new_path: "a/y.md" });
+		});
+
+		await waitFor(() => {
+			const rows = qc.getQueryData<Array<{ path: string }>>(["folder-notes-by-id", "42", "9"]);
+			expect(rows?.[0]?.path).toBe("a/y.md");
+		});
+
+		resolveCreate("42");
+	});
+
+	it("restores the id-keyed list when the rename is refused", async () => {
+		seed();
+		seedFolderNotesById("9", [{ id: "42", path: "a/x.md", folder: "a" }]);
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
+
+		const { result } = renderHook(() => useRenameNote(), { wrapper });
+		act(() => {
+			result.current.mutate({ id: "42", old_path: "a/x.md", new_path: "a/y.md" });
+		});
+
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		const rows = qc.getQueryData<Array<{ path: string }>>(["folder-notes-by-id", "42", "9"]);
+		expect(rows?.[0]?.path).toBe("a/x.md");
+	});
+
+	it("rolls the note body cache back to the old path when the rename is refused", async () => {
+		seed();
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
+
+		const { result } = renderHook(() => useRenameNote(), { wrapper });
+		act(() => {
+			result.current.mutate({ id: "42", old_path: "a/x.md", new_path: "b/y.md" });
+		});
+
+		await waitFor(() => expect(result.current.isError).toBe(true));
 		const cached = qc.getQueryData<Note>(["note", "42", "42"]);
 		expect(cached?.path).toBe("a/x.md");
 		expect(cached?.folder).toBe("a");
 		expect(cached?.content).toBe("# X");
-
-		resolvePost({
-			renamed: true,
-			old_path: "a/x.md",
-			new_path: "b/y.md",
-			note: { id: "42", path: "b/y.md" },
-		});
 	});
 });
 
@@ -792,33 +852,26 @@ function seedFolderNotesById(
 }
 
 describe("useBatchDeleteNotes", () => {
-	it("POSTs ids and sends a UUID X-Idempotency-Key header", async () => {
-		post.mockResolvedValue({ deleted: 2 });
-
+	it("sends one crdt_delete per id (no batch REST call)", async () => {
 		const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper });
 		await act(async () => {
 			await result.current.mutateAsync({ ids: ["1", "2"] });
 		});
 
-		expect(post).toHaveBeenCalledWith(
-			"/notes/batch-delete",
-			{ ids: ["1", "2"] },
-			expect.objectContaining({
-				headers: expect.objectContaining({
-					"X-Idempotency-Key": expect.stringMatching(UUID_RE),
-				}),
-			}),
-		);
+		expect(crdtDeleteNote).toHaveBeenCalledWith("1");
+		expect(crdtDeleteNote).toHaveBeenCalledWith("2");
+		expect(crdtDeleteNote).toHaveBeenCalledTimes(2);
+		expect(post).not.toHaveBeenCalled();
 	});
 
 	it("optimistically removes ids from every cached folder-notes-by-id list", async () => {
 		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }, { id: "3" }]);
 		seedFolderNotesById("6", [{ id: "4" }]);
 
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
+		let resolveDeletes: () => void = () => {};
+		crdtDeleteNote.mockReturnValue(
 			new Promise((r) => {
-				resolvePost = r;
+				resolveDeletes = () => r({ doc_id: "x" });
 			}),
 		);
 
@@ -835,12 +888,12 @@ describe("useBatchDeleteNotes", () => {
 		const list6 = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "6"]);
 		expect(list6?.map((n) => n.id)).toEqual([]);
 
-		resolvePost({ deleted: 3 });
+		resolveDeletes();
 	});
 
-	it("rolls back every patched list when the server rejects", async () => {
+	it("rolls back every patched list when a delete rejects", async () => {
 		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }, { id: "3" }]);
-		post.mockRejectedValue(new ApiError(500, "boom"));
+		crdtDeleteNote.mockRejectedValue(new CrdtOpError("disconnected", "crdt_delete"));
 
 		const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper });
 		await act(async () => {
@@ -856,7 +909,6 @@ describe("useBatchDeleteNotes", () => {
 	});
 
 	it("invalidates folders + folder-notes-by-id on success", async () => {
-		post.mockResolvedValue({ deleted: 2 });
 		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 
 		const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper });
@@ -866,6 +918,28 @@ describe("useBatchDeleteNotes", () => {
 
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
+	});
+
+	it("reconciles server truth even on a (partial) failure — Promise.all is not atomic", async () => {
+		// A mid-batch reject leaves some ids already deleted server-side while
+		// onError restores EVERY optimistically-removed row (including the gone
+		// ones). Reconciliation must run on the failure path too, else the tree
+		// shows phantom notes (404 on click) until an unrelated refetch.
+		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }]);
+		crdtDeleteNote.mockRejectedValue(new CrdtOpError("rate_limited", "crdt_delete"));
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+		const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper });
+		await act(async () => {
+			try {
+				await result.current.mutateAsync({ ids: ["1", "2"] });
+			} catch {
+				// expected
+			}
+		});
+
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
 	});
 
 	it("optimistically strips deleted root notes from the by-id root list", async () => {
@@ -895,9 +969,9 @@ describe("useBatchDeleteNotes", () => {
 		resolvePost({ deleted: 1 });
 	});
 
-	it("rolls back the by-id root list when the server rejects", async () => {
+	it("rolls back the by-id root list when a delete rejects", async () => {
 		seedFolderNotesById("root", [{ id: "1", path: "a.md", folder: "" }]);
-		post.mockRejectedValue(new ApiError(500, "boom"));
+		crdtDeleteNote.mockRejectedValue(new CrdtOpError("disconnected", "crdt_delete"));
 
 		const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper });
 		await act(async () => {
@@ -913,21 +987,28 @@ describe("useBatchDeleteNotes", () => {
 	});
 });
 
+// The caller mints the note id, so the optimistic row is addressable the moment
+// it renders — no `optimistic-` placeholder that gets swapped on ack.
+const MINTED_ID = "01920000-0000-7000-8000-000000000abc";
+
 describe("useCreateNote — optimistic placeholder", () => {
 	it('inserts a placeholder at root (by-id "root") then swaps it for the real note', async () => {
 		// Root notes share the one id-keyed cache under the 'root' sentinel.
 		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
 
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
-			new Promise((r) => {
-				resolvePost = r;
-			}),
+		// Hold crdt_create pending so the optimistic placeholder is observable,
+		// then resolve with the minted doc_id (the ok reply echoes the id we sent).
+		let resolveCreate: () => void = () => {};
+		crdtCreateNote.mockImplementation(
+			(docId: string) =>
+				new Promise<string>((r) => {
+					resolveCreate = () => r(docId);
+				}),
 		);
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
 		act(() => {
-			result.current.mutate({ folder: "" });
+			result.current.mutate({ folder: "", id: MINTED_ID });
 		});
 
 		await waitFor(() => {
@@ -937,16 +1018,111 @@ describe("useCreateNote — optimistic placeholder", () => {
 				"root",
 			]);
 			expect(root).toHaveLength(1);
-			expect(root?.[0]?.id).toMatch(/^optimistic-/u);
+			// Final id from the start — not a throwaway that gets swapped later.
+			expect(root?.[0]?.id).toBe(MINTED_ID);
 			expect(root?.[0]?.title).toBe("Untitled");
 		});
 
-		resolvePost({ note: { id: "real-1" } });
+		// The very id the row is already rendering under goes on the wire.
+		expect(crdtCreateNote).toHaveBeenCalledWith(MINTED_ID, "Untitled.md");
+
+		resolveCreate();
 
 		await waitFor(() => {
-			const root = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "root"]);
-			expect(root?.[0]?.id).toBe("real-1");
+			const root = qc.getQueryData<Array<{ id: string; pending?: boolean }>>([
+				"folder-notes-by-id",
+				"42",
+				"root",
+			]);
+			// Unchanged id; only `pending` settles.
+			expect(root?.[0]?.id).toBe(MINTED_ID);
+			expect(root?.[0]?.pending).toBe(false);
 		});
+	});
+
+	// getQueryData(["vaults"]) bypasses useVaults's `select`, so the cache still
+	// holds the wire shape ({ vaults: [...] }), not the post-select array. This
+	// is the shape the key actually has whenever it was last populated by the
+	// real queryFn or by useAppBootstrap's seed (see the useVaults describe
+	// block below); reading it as a bare array throws inside onSuccess and
+	// silently kills the navigate call.
+	it("navigates to the vault-scoped route using the raw { vaults } cache shape", async () => {
+		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
+		qc.setQueryData(["vaults"], { vaults: [{ id: "42", slug: "work" }] });
+
+		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync({ folder: "", id: MINTED_ID });
+		});
+
+		expect(navigateSpy).toHaveBeenCalledWith(`/work/${MINTED_ID}`);
+	});
+
+	// `/api/folders` returns DERIVED folders (ones holding no note directly) with
+	// a null id; `selectFolders` maps those to `syn:<path>` for consumers, but the
+	// raw cache keeps the null. Resolving the target folder off the raw cache
+	// therefore yielded null for most real-world folders, so the optimistic insert
+	// was skipped entirely and the new note only appeared after a reload.
+	it("inserts a placeholder into a DERIVED folder's list (null id -> syn:)", async () => {
+		qc.setQueryData(["folders", "42"], {
+			folders: [{ id: null, parent_id: null, name: "Media", count: 0 }],
+		});
+		qc.setQueryData(["folder-notes-by-id", "42", "syn:Media"], []);
+
+		let resolveCreate: () => void = () => {};
+		crdtCreateNote.mockImplementation(
+			(docId: string) =>
+				new Promise<string>((r) => {
+					resolveCreate = () => r(docId);
+				}),
+		);
+
+		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		act(() => {
+			result.current.mutate({ folder: "Media", id: MINTED_ID });
+		});
+
+		await waitFor(() => {
+			const rows = qc.getQueryData<Array<{ id: string; path: string }>>([
+				"folder-notes-by-id",
+				"42",
+				"syn:Media",
+			]);
+			expect(rows).toHaveLength(1);
+			expect(rows?.[0]?.path).toBe("Media/Untitled.md");
+			expect(rows?.[0]?.id).toBe(MINTED_ID);
+		});
+
+		resolveCreate();
+
+		await waitFor(() => {
+			const rows = qc.getQueryData<Array<{ id: string; pending?: boolean }>>([
+				"folder-notes-by-id",
+				"42",
+				"syn:Media",
+			]);
+			expect(rows?.[0]?.pending).toBe(false);
+		});
+	});
+
+	// A collapsed folder has never fetched its notes, so there's no list to patch.
+	// The create still has to mark it stale, or the note stays invisible until a
+	// reload even after the server confirms it.
+	it("invalidates the target folder's list when it wasn't cached", async () => {
+		qc.setQueryData(["folders", "42"], {
+			folders: [{ id: "f9", parent_id: null, name: "Archive", count: 0 }],
+		});
+		const invalidate = vi.spyOn(qc, "invalidateQueries");
+
+		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		act(() => {
+			result.current.mutate({ folder: "Archive", id: MINTED_ID });
+		});
+
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		expect(invalidate).toHaveBeenCalledWith(
+			expect.objectContaining({ queryKey: ["folder-notes-by-id", "42", "f9"] }),
+		);
 	});
 
 	it("inserts a placeholder into the by-id list for a subfolder", async () => {
@@ -955,67 +1131,113 @@ describe("useCreateNote — optimistic placeholder", () => {
 		});
 		qc.setQueryData(["folder-notes-by-id", "42", "f9"], []);
 
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
-			new Promise((r) => {
-				resolvePost = r;
-			}),
+		let resolveCreate: () => void = () => {};
+		crdtCreateNote.mockImplementation(
+			(docId: string) =>
+				new Promise<string>((r) => {
+					resolveCreate = () => r(docId);
+				}),
 		);
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
 		act(() => {
-			result.current.mutate({ folder: "sub" });
+			result.current.mutate({ folder: "sub", id: MINTED_ID });
 		});
 
 		await waitFor(() => {
 			const byId = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "f9"]);
 			expect(byId).toHaveLength(1);
-			expect(byId?.[0]?.id).toMatch(/^optimistic-/u);
+			expect(byId?.[0]?.id).toBe(MINTED_ID);
 		});
 
-		resolvePost({ note: { id: "real-2" } });
+		resolveCreate();
 
 		await waitFor(() => {
 			const byId = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "f9"]);
-			expect(byId?.[0]?.id).toBe("real-2");
+			expect(byId?.[0]?.id).toBe(MINTED_ID);
 		});
+	});
+
+	it("bumps the name and retries when crdt_create fails with create_failed (path owned)", async () => {
+		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
+		// First attempt: the path is already owned → create_failed. Second attempt
+		// (bumped name) succeeds by echoing its minted id.
+		crdtCreateNote
+			.mockRejectedValueOnce(new CrdtOpError("create_failed", "crdt_create"))
+			.mockImplementation((docId: string) => Promise.resolve(docId));
+
+		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync({ folder: "", id: MINTED_ID });
+		});
+
+		expect(crdtCreateNote).toHaveBeenCalledTimes(2);
+		expect(crdtCreateNote.mock.calls[0]![1]).toBe("Untitled.md");
+		expect(crdtCreateNote.mock.calls[1]![1]).toBe("Untitled 1.md");
+		// Only the PATH is retried — a collision rejects the path, not the id, and
+		// the optimistic row is already rendering under it.
+		expect(crdtCreateNote.mock.calls[0]![0]).toBe(MINTED_ID);
+		expect(crdtCreateNote.mock.calls[1]![0]).toBe(MINTED_ID);
+	});
+
+	it("surfaces notes_cap_reached without retrying", async () => {
+		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("notes_cap_reached", "crdt_create"));
+
+		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		await expect(result.current.mutateAsync({ folder: "", id: MINTED_ID })).rejects.toMatchObject({
+			reason: "notes_cap_reached",
+		});
+		expect(crdtCreateNote).toHaveBeenCalledTimes(1);
 	});
 });
 
 describe("useBatchMoveNotes", () => {
-	it("POSTs ids + target_folder path with UUID idempotency header", async () => {
-		post.mockResolvedValue({ moved: 2 });
-
+	it("sends one crdt_create per id at target_folder/basename (no batch REST)", async () => {
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		await act(async () => {
-			await result.current.mutateAsync({ ids: ["1", "2"], target_folder: "dst" });
+			await result.current.mutateAsync({
+				ids: ["1", "2"],
+				target_folder: "dst",
+				paths: { "1": "a/x.md", "2": "b/y.md" },
+			});
 		});
 
-		expect(post).toHaveBeenCalledWith(
-			"/notes/batch-move",
-			{ ids: ["1", "2"], target_folder: "dst" },
-			expect.objectContaining({
-				headers: expect.objectContaining({
-					"X-Idempotency-Key": expect.stringMatching(UUID_RE),
-				}),
-			}),
-		);
+		expect(crdtCreateNote).toHaveBeenCalledWith("1", "dst/x.md");
+		expect(crdtCreateNote).toHaveBeenCalledWith("2", "dst/y.md");
+		expect(post).not.toHaveBeenCalled();
+	});
+
+	it("moves to the vault root as a bare basename", async () => {
+		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync({
+				ids: ["1"],
+				target_folder: "",
+				paths: { "1": "a/x.md" },
+			});
+		});
+		expect(crdtCreateNote).toHaveBeenCalledWith("1", "x.md");
 	});
 
 	it("optimistically strips moved notes from source lists before resolution", async () => {
 		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }, { id: "3" }]);
 		seedFolderNotesById("9", [{ id: "4" }]);
 
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
+		let resolveMove: () => void = () => {};
+		crdtCreateNote.mockReturnValue(
 			new Promise((r) => {
-				resolvePost = r;
+				resolveMove = () => r("1");
 			}),
 		);
 
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		act(() => {
-			result.current.mutate({ ids: ["1", "2"], target_folder: "dst" });
+			result.current.mutate({
+				ids: ["1", "2"],
+				target_folder: "dst",
+				paths: { "1": "x.md", "2": "y.md" },
+			});
 		});
 
 		await waitFor(() => {
@@ -1023,17 +1245,21 @@ describe("useBatchMoveNotes", () => {
 			expect(src?.map((n) => n.id)).toEqual(["3"]);
 		});
 
-		resolvePost({ moved: 2 });
+		resolveMove();
 	});
 
-	it("rolls back source list on server error (e.g. 409)", async () => {
+	it("rolls back source list when a move rejects (target occupied)", async () => {
 		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }, { id: "3" }]);
-		post.mockRejectedValue(new ApiError(409, "conflict"));
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
 
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		await act(async () => {
 			try {
-				await result.current.mutateAsync({ ids: ["1", "2"], target_folder: "dst" });
+				await result.current.mutateAsync({
+					ids: ["1", "2"],
+					target_folder: "dst",
+					paths: { "1": "x.md", "2": "y.md" },
+				});
 			} catch {
 				// expected
 			}
@@ -1083,12 +1309,16 @@ describe("useBatchMoveNotes", () => {
 			],
 		});
 		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }, { id: "3" }]);
-		post.mockRejectedValue(new ApiError(409, "conflict"));
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
 
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		await act(async () => {
 			try {
-				await result.current.mutateAsync({ ids: ["1", "2"], target_folder: "dst" });
+				await result.current.mutateAsync({
+					ids: ["1", "2"],
+					target_folder: "dst",
+					paths: { "1": "src/1.md", "2": "src/2.md" },
+				});
 			} catch {
 				// expected
 			}
@@ -1177,16 +1407,20 @@ describe("useBatchMoveNotes", () => {
 		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }]);
 		qc.setQueryData(["folder-notes-by-id", "42", "syn:Derived"], []);
 
-		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(
+		let resolveMove: () => void = () => {};
+		crdtCreateNote.mockReturnValue(
 			new Promise((r) => {
-				resolvePost = r;
+				resolveMove = () => r("1");
 			}),
 		);
 
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		act(() => {
-			result.current.mutate({ ids: ["1"], target_folder: "Derived" });
+			result.current.mutate({
+				ids: ["1"],
+				target_folder: "Derived",
+				paths: { "1": "src/x.md" },
+			});
 		});
 
 		await waitFor(() => {
@@ -1203,13 +1437,10 @@ describe("useBatchMoveNotes", () => {
 			expect(folders?.folders.find((f) => f.name === "Derived")?.count).toBe(1);
 		});
 
-		expect(post).toHaveBeenCalledWith(
-			"/notes/batch-move",
-			{ ids: ["1"], target_folder: "Derived" },
-			expect.anything(),
-		);
+		expect(crdtCreateNote).toHaveBeenCalledWith("1", "Derived/x.md");
+		expect(post).not.toHaveBeenCalled();
 
-		resolvePost({ moved: 1 });
+		resolveMove();
 	});
 
 	it("decrements a DERIVED source folder count when moving notes OUT of it", async () => {
@@ -1248,6 +1479,31 @@ describe("useBatchMoveNotes", () => {
 		});
 
 		resolvePost({ moved: 1 });
+	});
+
+	it("reconciles server truth even on a (partial) failure — crdt_create per id is not atomic", async () => {
+		// Promise.all over per-id crdt_create: a mid-batch reject leaves some ids
+		// moved server-side while onError restores every optimistically re-pathed
+		// row → notes shown in the OLD folder until an unrelated refetch. Reconcile
+		// must run on the failure path too.
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
+		await act(async () => {
+			try {
+				await result.current.mutateAsync({
+					ids: ["1"],
+					target_folder: "dst",
+					paths: { "1": "src/a.md" },
+				});
+			} catch {
+				// expected
+			}
+		});
+
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
 	});
 });
 
@@ -1306,6 +1562,77 @@ describe("useBatchDeleteFolders", () => {
 		resolvePost({ deleted: 2 });
 	});
 
+	// #1145. The raw cache sends `id: null` for every DERIVED folder (one holding
+	// no note directly). The tree only ever holds post-select ids, so it passes
+	// `syn:<path>` for these — and the optimistic patch used to compare that
+	// against the raw `null`, which never matches. Result: selecting a derived
+	// folder produced no optimistic removal at all, and the row lingered until
+	// the server round-trip landed. Same shape as the #1140 bug.
+	it("optimistically removes a DERIVED folder selected by its synthetic id", async () => {
+		qc.setQueryData(["folders", "42"], {
+			folders: [
+				{ id: null, parent_id: null, name: "derived", count: 2 },
+				{ id: "9", parent_id: null, name: "other", count: 0 },
+			],
+		});
+		let resolvePost!: (v: unknown) => void;
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
+
+		const { result } = renderHook(() => useBatchDeleteFolders(), { wrapper });
+		act(() => {
+			result.current.mutate({ ids: [syntheticFolderId("derived")] });
+		});
+
+		await waitFor(() => {
+			const folders = qc.getQueryData<{ folders: Array<{ name: string }> }>(["folders", "42"]);
+			expect(folders?.folders.map((f) => f.name)).toEqual(["other"]);
+		});
+
+		resolvePost({ deleted: 1 });
+	});
+
+	// The nastier half of the same bug: EVERY derived folder carries `id: null`,
+	// so keying the cascade set on the raw id conflated them all. Deleting `top`
+	// put `null` in the removed set via its derived child, and the filter then
+	// matched that `null` against an UNRELATED derived folder elsewhere in the
+	// tree — optimistically deleting a folder the user never selected.
+	it("cascades onto a DERIVED child without taking unrelated derived folders with it", async () => {
+		qc.setQueryData(["folders", "42"], {
+			folders: [
+				{ id: "7", parent_id: null, name: "top", count: 0 },
+				// Derived child: no marker row of its own, so the wire sends a null
+				// id — but its parent_id is the real parent, so the cascade walk
+				// reaches it and must key it on its synthetic id.
+				{ id: null, parent_id: "7", name: "top/sub", count: 3 },
+				// Unrelated derived folder. Also `id: null`. Must survive.
+				{ id: null, parent_id: "9", name: "other/keep", count: 1 },
+				{ id: "9", parent_id: null, name: "other", count: 0 },
+			],
+		});
+		let resolvePost!: (v: unknown) => void;
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
+
+		const { result } = renderHook(() => useBatchDeleteFolders(), { wrapper });
+		act(() => {
+			result.current.mutate({ ids: ["7"] });
+		});
+
+		await waitFor(() => {
+			const folders = qc.getQueryData<{ folders: Array<{ name: string }> }>(["folders", "42"]);
+			expect(folders?.folders.map((f) => f.name).sort()).toEqual(["other", "other/keep"]);
+		});
+
+		resolvePost({ deleted: 2 });
+	});
+
 	it("rolls back the folders cache when the server rejects", async () => {
 		qc.setQueryData(["folders", "42"], {
 			folders: [
@@ -1326,6 +1653,30 @@ describe("useBatchDeleteFolders", () => {
 
 		const folders = qc.getQueryData<{ folders: Folder[] }>(["folders", "42"]);
 		expect(folders?.folders.map((f) => f.id).sort()).toEqual(["7", "9"]);
+	});
+
+	it("reconciles server truth on the error path (lost ack after a committed delete)", async () => {
+		// A single atomic POST, but a network error AFTER the server commits (or a
+		// non-transactional partial delete) makes onError restore the folders while
+		// the server actually dropped them → phantom folders until an unrelated
+		// refetch. Reconciliation must run on the error path too.
+		qc.setQueryData(["folders", "42"], {
+			folders: [{ id: "7", parent_id: null, name: "top", count: 0 }],
+		});
+		post.mockRejectedValue(new ApiError(500, "boom"));
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+		const { result } = renderHook(() => useBatchDeleteFolders(), { wrapper });
+		await act(async () => {
+			try {
+				await result.current.mutateAsync({ ids: ["7"] });
+			} catch {
+				// expected
+			}
+		});
+
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
 	});
 });
 
@@ -1450,6 +1801,30 @@ describe("useBatchMoveFolders", () => {
 		expect(folders?.folders.find((f) => f.id === "7")?.name).toBe("src");
 		expect(folders?.folders.find((f) => f.id === "7")?.parent_id).toBeNull();
 		expect(folders?.folders.find((f) => f.id === "8")?.name).toBe("src/sub");
+	});
+
+	it("reconciles server truth on the error path (lost ack after a committed move)", async () => {
+		// Single atomic POST, but a network error after the server commits (or a
+		// non-transactional partial move) runs onError, which restores the
+		// optimistically re-pathed folders the server actually moved → phantom
+		// state until an unrelated refetch. Reconcile on both paths.
+		qc.setQueryData(["folders", "42"], {
+			folders: [{ id: "7", parent_id: null, name: "src", count: 0 }],
+		});
+		post.mockRejectedValue(new ApiError(500, "boom"));
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+		const { result } = renderHook(() => useBatchMoveFolders(), { wrapper });
+		await act(async () => {
+			try {
+				await result.current.mutateAsync({ ids: ["7"], target_parent: "dst" });
+			} catch {
+				// expected
+			}
+		});
+
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
 	});
 });
 
@@ -1617,6 +1992,22 @@ describe("useBatchMoveAttachments", () => {
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
 	});
+
+	it("reconciles the attachments list on the error path (lost ack after a committed move)", async () => {
+		post.mockRejectedValue(new ApiError(500, "boom"));
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+		const { result } = renderHook(() => useBatchMoveAttachments(), { wrapper });
+		await act(async () => {
+			try {
+				await result.current.mutateAsync({ paths: ["a.png"], target_folder: "img" });
+			} catch {
+				// expected
+			}
+		});
+
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
+	});
 });
 
 describe("useBatchDeleteAttachments", () => {
@@ -1649,6 +2040,25 @@ describe("useBatchDeleteAttachments", () => {
 		});
 
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
+	});
+
+	it("reconciles the attachments list on the error path (lost ack after a committed delete)", async () => {
+		// No optimistic removal here, so a lost ack (server committed, client saw a
+		// network error) leaves the DELETED attachments still showing until a
+		// refetch — onSuccess-only reconcile never fires. Reconcile on both paths.
+		post.mockRejectedValue(new ApiError(500, "boom"));
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+		const { result } = renderHook(() => useBatchDeleteAttachments(), { wrapper });
+		await act(async () => {
+			try {
+				await result.current.mutateAsync({ paths: ["a.png"] });
+			} catch {
+				// expected
+			}
+		});
+
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
 	});
 });
@@ -1688,5 +2098,27 @@ describe("useUploadAttachment", () => {
 		expect(spy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
 		expect(spy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
 		expect(spy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
+	});
+});
+
+describe("useAppBootstrap seeding useVaults", () => {
+	// Regression guard: useAppBootstrap seeds the ["vaults"] cache key with the
+	// same wire shape ({ vaults: [...] }) the /vaults queryFn itself returns, so
+	// useVaults's `select` unwraps it into the array on the very first render,
+	// with no extra fetch. If the seed is ever "simplified" to a bare array,
+	// `select` returns undefined and every vault-list consumer breaks silently.
+	it("useVaults resolves the seeded vault array, not undefined", async () => {
+		get.mockResolvedValueOnce({
+			onboarding: { enabled: false },
+			capabilities: { tier: "free", limits: {} },
+			vaults: { vaults: [{ id: "42", slug: "work", name: "Work" }] },
+		});
+
+		const boot = renderHook(() => useAppBootstrap(), { wrapper });
+		await waitFor(() => expect(boot.result.current.isSuccess).toBe(true));
+
+		const vaults = renderHook(() => useVaults(), { wrapper });
+		await waitFor(() => expect(vaults.result.current.isFetching).toBe(false));
+		expect(vaults.result.current.data).toEqual([{ id: "42", slug: "work", name: "Work" }]);
 	});
 });

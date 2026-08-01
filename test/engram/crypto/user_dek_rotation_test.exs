@@ -33,6 +33,30 @@ defmodule Engram.Crypto.UserDekRotationTest do
     {:ok, user: user}
   end
 
+  describe "rotate_user/1 — socket drain (#1092)" do
+    test "broadcasts a socket disconnect once the rotation lock is acquired", %{user: user} do
+      EngramWeb.Endpoint.subscribe("user_socket:#{user.id}")
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+    end
+
+    test "does NOT broadcast when the lock is already held", %{user: user} do
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      EngramWeb.Endpoint.subscribe("user_socket:#{user.id}")
+
+      assert {:error, :rotation_in_progress} = UserDekRotation.rotate_user(user.id)
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 200
+    end
+  end
+
   describe "rotate_user/1 — lock handling" do
     test "returns {:error, :rotation_in_progress} when already locked", %{user: user} do
       Repo.update_all(

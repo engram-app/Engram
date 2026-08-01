@@ -16,7 +16,7 @@ defmodule EngramWeb.Plugs.EnforceDeviceCapTest do
   # Pin upgrade_url for assertions; default is nil in test env.
   setup do
     prev = Application.get_env(:engram, :upgrade_url)
-    Application.put_env(:engram, :upgrade_url, "https://app.engram.page/settings/billing")
+    Application.put_env(:engram, :upgrade_url, "https://app.engram.page/#settings/billing")
     on_exit(fn -> Application.put_env(:engram, :upgrade_url, prev) end)
     :ok
   end
@@ -93,7 +93,7 @@ defmodule EngramWeb.Plugs.EnforceDeviceCapTest do
       assert body["limit_key"] == "concurrent_devices"
       assert body["limit"] == 1
       assert body["current"] == 1
-      assert body["upgrade_url"] == "https://app.engram.page/settings/billing"
+      assert body["upgrade_url"] == "https://app.engram.page/#settings/billing"
     end
 
     test "halts 402 with device_swap_cooldown when at cap and a recent revoke is within the window" do
@@ -135,7 +135,7 @@ defmodule EngramWeb.Plugs.EnforceDeviceCapTest do
       assert body["limit"] == 24
       # Should be roughly 22 hours remaining (allow tiny clock skew).
       assert body["current"] in [22, 23]
-      assert body["upgrade_url"] == "https://app.engram.page/settings/billing"
+      assert body["upgrade_url"] == "https://app.engram.page/#settings/billing"
     end
 
     test "halts 402 with concurrent_devices_exceeded when recent revoke is past the cooldown window" do

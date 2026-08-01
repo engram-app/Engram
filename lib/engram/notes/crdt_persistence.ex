@@ -52,28 +52,58 @@ defmodule Engram.Notes.CrdtPersistence do
       Repo.with_tenant(user_id, fn ->
         case Repo.get(Note, note_id) do
           %Note{} = note ->
-            from_snapshot? =
-              case Crypto.decrypt_crdt_state(note, user) do
-                {:ok, snapshot} when is_binary(snapshot) ->
-                  :ok = Yex.apply_update(doc, snapshot)
-                  true
+            # Hydrate the snapshot when present. Absent one, the doc stays
+            # empty: nothing here re-seeds it from `notes.content` (see the
+            # NOTE below). CrdtCheckpoint guards against that empty doc being
+            # materialized back over the body.
+            case Crypto.decrypt_crdt_state(note, user) do
+              {:ok, snapshot} when is_binary(snapshot) ->
+                :ok = Yex.apply_update(doc, snapshot)
 
-                _ ->
-                  false
-              end
+              # No snapshot yet (`crdt_state_ciphertext` is nil): legitimate for
+              # a note that has never been checkpointed. The doc stays empty and
+              # `replay_tail/3` below fills it from the log.
+              {:ok, nil} ->
+                :ok
 
-            tail_count = replay_tail(doc, user, note_id)
+              # FAIL LOUD. This used to fall into the clause above via a
+              # catch-all `_`, which is the opposite policy from
+              # `Notes.maybe_merge_crdt/4` — that one refuses on the same signal
+              # (`throw {:crdt_decrypt, err}`). bind/3 was the fail-OPEN sibling.
+              #
+              # Continuing here starts a FRESH lineage for a note that already
+              # has state: the tail replays onto an empty doc, the room looks
+              # converged, and the next checkpoint writes that truncated doc back
+              # over the real content. A *transient* decrypt failure (DEK cache
+              # miss, a read mid-DEK-rotation) would become permanent data loss.
+              #
+              # Raising fails the room start instead, so the client's join errors
+              # and retries. A genuinely corrupt snapshot then surfaces as a loud,
+              # repeated failure rather than as silent truncation.
+              {:error, reason} ->
+                Logger.error(
+                  "crdt bind refused: crdt_state decrypt failed for note #{note_id}",
+                  Metadata.with_category(:error, :sync,
+                    note_id: note_id,
+                    reason: inspect(reason)
+                  )
+                )
 
-            # Fresh room: no snapshot AND no tail-log updates means this note has
-            # never been CRDT-edited, so the only source of truth is the plaintext
-            # `notes.content`. Seed the doc from it so a device that has never
-            # opened the note (discovery via the crdt_doc_ready announce or a
-            # /changes pull) still receives the body over the y-protocols
-            # handshake. The client's `seedOnce` guard (skips when an LCA exists)
-            # prevents a double-seed once the server is authoritative.
-            if not from_snapshot? and tail_count == 0 do
-              seed_from_content(doc, note, user)
+                raise "CrdtPersistence.bind/3: crdt_state decrypt failed for note #{note_id} (#{inspect(reason)}) — refusing to bind an empty doc over existing state"
             end
+
+            _applied = replay_tail(doc, user, note_id)
+
+            # NOTE: the server no longer seeds the doc from `notes.content`
+            # here. That seed made the SERVER a third writer of note content,
+            # and reconciling three representations (doc / notes.content / disk)
+            # is the shape of every "which copy is authoritative" bug we have
+            # shipped. Non-CRDT writes (REST / MCP / web) already merge their
+            # plaintext INTO the persisted CRDT state at WRITE time, roomlessly
+            # — `Notes.upsert_note` -> doc_from_state -> replay_tail ->
+            # merge_plaintext_* — so a bound room already holds the body and
+            # `notes.content` is a DERIVED projection maintained by the
+            # checkpoint materializer.
 
             :ok = CrdtBridge.normalize_doc(doc)
 
@@ -99,28 +129,63 @@ defmodule Engram.Notes.CrdtPersistence do
 
     case Crypto.encrypt_crdt_state(update, user, note_id) do
       {:ok, {ct, nonce}} ->
-        Repo.with_tenant(user_id, fn ->
-          %CrdtUpdateLog{}
-          |> CrdtUpdateLog.changeset(%{
-            note_id: note_id,
-            user_id: user_id,
-            vault_id: vault_id,
-            update_ciphertext: ct,
-            update_nonce: nonce
-          })
-          |> Repo.insert!()
+        {:ok, seq} =
+          Repo.with_tenant(user_id, fn ->
+            %CrdtUpdateLog{}
+            |> CrdtUpdateLog.changeset(%{
+              note_id: note_id,
+              user_id: user_id,
+              vault_id: vault_id,
+              update_ciphertext: ct,
+              update_nonce: nonce
+            })
+            |> Repo.insert!()
 
-          # Invalidate the cached head in the SAME txn as the tail append: this
-          # update advanced the doc, so any stored crdt_head is now stale.
-          # vault_heads self-heals the NULL by rebuilding once (snapshot + full
-          # tail = authoritative), so we never trust an off-by-one head. Guard on
-          # not-nil so an already-invalidated hot note skips the write. Sets ONLY
-          # crdt_head — no updated_at/version/seq churn (checkpoint owns those).
-          from(n in Note,
-            where: n.id == ^note_id and n.kind == "note" and not is_nil(n.crdt_head)
-          )
-          |> Repo.update_all(set: [crdt_head: nil])
-        end)
+            # Invalidate the cached head in the SAME txn as the tail append: this
+            # update advanced the doc, so any stored crdt_head is now stale.
+            # The BackfillCrdtHead worker re-warms the NULL by rebuilding once
+            # (snapshot + full tail = authoritative), so we never trust an
+            # off-by-one head. Guard on
+            # not-nil so an already-invalidated hot note skips the write. Sets ONLY
+            # crdt_head — no updated_at/version/seq churn (checkpoint owns those).
+            #
+            # The note's current vault-global change seq (Vaults.next_seq!-
+            # assigned at the last write/checkpoint, the same field
+            # `list_changes_by_seq` orders by), carried on the fan-out payload
+            # below for gap-heal (spec §3 Phase D2), rides this SAME update_all
+            # via a `select` on the query (update_all/delete_all have no
+            # `:returning` option — Ecto only returns a second element when the
+            # query itself carries a `select`) — this is the hot per-delta path
+            # (moduledoc: "cheap, frequent... O(append)", prior pool-exhaustion
+            # incident history), so a second unconditional Repo.get here would
+            # double the query cost of every keystroke. The guard skips rows
+            # whose crdt_head is already nil, so `rows` is empty in that case
+            # and we fall back to a select-only read. KNOWN COST: crdt_head
+            # starts nil and is only repopulated by another device's
+            # head-read, so a SOLO typing burst takes the fallback on every
+            # delta — a seq-only point-SELECT inside the already-open
+            # transaction (NOT a full Note load — the Note row carries
+            # crdt_state_ciphertext, the encrypted CRDT snapshot, KBs-MBs,
+            # which a per-keystroke fallback must not drag across the
+            # connection). Accepted: seq is heal-trigger-only (staleness
+            # fine), and avoiding the read entirely would need per-room seq
+            # caching or a no-op UPDATE (MVCC/WAL churn), both worse than a
+            # select-only read.
+            {_count, rows} =
+              from(n in Note,
+                where: n.id == ^note_id and n.kind == "note" and not is_nil(n.crdt_head),
+                select: n.seq
+              )
+              |> Repo.update_all(set: [crdt_head: nil])
+
+            case rows do
+              [seq | _] ->
+                seq
+
+              [] ->
+                Repo.one(from(n in Note, where: n.id == ^note_id, select: n.seq))
+            end
+          end)
 
         # Fan out the update to every device on this vault over the single
         # per-vault sync channel (Relay's `document.updated` model). This is
@@ -143,14 +208,25 @@ defmodule Engram.Notes.CrdtPersistence do
         # advances the watermark only to the head it truly reached (plugin
         # `e2304ed`). Without that client guard, the cheap cold-reconcile hash gate
         # would skip a silently-partial note.
+        # GUARANTEE BOUNDARY (review 2026-07-22): this seq does not advance per
+        # socket delta (checkpoint owns it), so a same-note burst of live deltas
+        # shares ONE seq — the plugin's behind-detector cannot see a loss WITHIN
+        # such a burst; those heal via checkpoint/announce instead. Seq gap-heal
+        # covers seq-BUMPING edits (REST/MCP/checkpoint-driven). And a nil seq
+        # (row deleted concurrently, the Repo.get fallback) is no signal at all:
+        # omit the key rather than ship "seq" => nil to the behind-detector.
+        payload = %{
+          "note_id" => note_id,
+          "b64" => Base.encode64(update),
+          "head" => CrdtTransport.head_marker(doc)
+        }
+
+        payload = if is_integer(seq), do: Map.put(payload, "seq", seq), else: payload
+
         Engram.Notes.FanoutPacer.emit(
           "sync:#{user_id}:#{vault_id}",
           "note_yjs_update",
-          %{
-            "note_id" => note_id,
-            "b64" => Base.encode64(update),
-            "head" => CrdtTransport.head_marker(doc)
-          },
+          payload,
           note_id
         )
 
@@ -210,15 +286,23 @@ defmodule Engram.Notes.CrdtPersistence do
     :ok
   end
 
-  # Replays the encrypted tail-log onto `doc` and returns the number of rows
-  # found (whether or not each decrypted) so bind/3 can tell a fresh room (0
-  # rows) from one that already carries CRDT history.
+  # Replays the encrypted tail-log onto `doc` and returns the ids of the rows
+  # that were ACTUALLY applied (decrypted successfully), in insertion order. A
+  # caller that persists `doc` can then prune EXACTLY those rows — never a row
+  # it did not fold in (a later concurrent append) and never a row that failed
+  # to decrypt (which stays in the log for a future successful replay). `[]`
+  # means nothing applied, which bind/3 reads as "fresh room".
+  #
+  # Returning applied ids (not a count) is the #285 fix substrate: an
+  # `inserted_at`/id RANGE watermark can tie or reorder within a clock tick and
+  # prune an unfolded row; an exact-id prune cannot.
   #
   # Public so `maybe_merge_crdt/4` in `Engram.Notes` can reuse this function
   # when building the REST merge base: snapshot + tail ≡ bind/3's recipe.
   # Must be called inside the caller's `Repo.with_tenant` transaction — it
   # queries `CrdtUpdateLog` which is tenant-scoped by RLS.
   @doc false
+  @spec replay_tail(Yex.Doc.t(), map(), String.t()) :: [Ecto.UUID.t()]
   def replay_tail(doc, user, note_id) do
     rows =
       CrdtUpdateLog
@@ -226,7 +310,8 @@ defmodule Engram.Notes.CrdtPersistence do
       |> order_by([l], asc: l.inserted_at)
       |> Repo.all()
 
-    Enum.each(rows, fn row ->
+    rows
+    |> Enum.reduce([], fn row, applied ->
       shaped = %Note{
         id: note_id,
         dek_version: Crypto.row_version_aad_bound(),
@@ -236,13 +321,16 @@ defmodule Engram.Notes.CrdtPersistence do
 
       case Crypto.decrypt_crdt_state(shaped, user) do
         {:ok, upd} when is_binary(upd) ->
-          Yex.apply_update(doc, upd)
+          _ = Yex.apply_update(doc, upd)
+          [row.id | applied]
 
         {:error, reason} ->
           Logger.warning(
             "crdt replay_tail decrypt failed note_id=#{note_id} reason=#{inspect(reason)}",
             Metadata.with_category(:warning, :sync, note_id: note_id, reason: inspect(reason))
           )
+
+          applied
 
         unexpected ->
           Logger.warning(
@@ -252,26 +340,10 @@ defmodule Engram.Notes.CrdtPersistence do
               reason: "unexpected_shape"
             )
           )
+
+          applied
       end
     end)
-
-    length(rows)
-  end
-
-  # Seeds a fresh doc from the note's plaintext content via the frontmatter
-  # codec. Used only when the note has no CRDT state yet (see bind/3) so
-  # discovery delivers the body. Frontmatter is split into Y.Map("frontmatter")
-  # + Y.Array("frontmatter_order") and only the body lands in the body Y.Text,
-  # ensuring concurrent frontmatter edits engage the LWW per-key path.
-  # maybe_decrypt_note_fields/2 also UTF-8-scrubs the content, keeping the Yjs
-  # text JSON-safe. A nil/empty body seeds nothing (a blank note stays blank).
-  defp seed_from_content(doc, %Note{} = note, user) do
-    case Crypto.maybe_decrypt_note_fields(note, user) do
-      {:ok, %Note{content: content}} when is_binary(content) and content != "" ->
-        :ok = CrdtBridge.ingest_plaintext(doc, content)
-
-      _ ->
-        :ok
-    end
+    |> Enum.reverse()
   end
 end

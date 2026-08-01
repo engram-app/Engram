@@ -29,11 +29,16 @@ defmodule EngramWeb.ConnectionsControllerTest do
     test "returns oauth + pat rows for the authenticated user", %{conn: conn} do
       user = insert(:user)
 
+      # A real loopback client: Claude Code registers under its product name
+      # with a user-chosen server suffix and sends no software_id at all. Its
+      # slug comes from normalize_name/1 stripping the parenthetical, which is
+      # the only attribution path left for local-first clients since the
+      # guessed software_id entries were deleted (#1156).
       client =
         insert(:oauth_client,
           kind: "mcp",
-          software_id: "anthropic-claude-desktop",
-          client_name: "Claude Desktop"
+          software_id: nil,
+          client_name: "Claude Code (engram)"
         )
 
       insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
@@ -51,9 +56,11 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert is_list(body)
 
       mcp = Enum.find(body, fn r -> r["kind"] == "mcp" end)
-      assert mcp["name"] == "Claude Desktop"
-      assert mcp["verified"] == true
-      assert mcp["slug"] == "claude"
+      assert mcp["name"] == "Claude Code (engram)"
+      # Loopback redirect => never verified. The slug still resolves, from the
+      # name, so the onboarding checklist row can tick.
+      assert mcp["verified"] == false
+      assert mcp["slug"] == "claude_code"
       assert mcp["client_id"] == client.client_id
 
       pat = Enum.find(body, fn r -> r["kind"] == "pat" end)
@@ -69,7 +76,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
     test "returns 403 for API-key-authed requests (PAT must not list connections)", %{conn: conn} do
       # The nested RequireSession plug gates the route. grant_api_write! lets
       # the request pass RequireApiRpsBudget so it reaches RequireSession,
-      # which then returns 403 with api_key_not_allowed — matching the pattern
+      # which then returns 403 with api_key_not_allowed, matching the pattern
       # in auth_controller_test.exs.
       user = insert(:user)
       {:ok, raw_key, _api_key} = Engram.Accounts.create_api_key(user, "test-key")
@@ -149,7 +156,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert Engram.Connections.count_active(user.id, :mcp) == 0
     end
 
-    test "is idempotent — second revoke returns 204", %{conn: conn} do
+    test "is idempotent, second revoke returns 204", %{conn: conn} do
       user = insert(:user)
       vault = insert(:vault, user: user)
       client = insert(:oauth_client, kind: "mcp")
@@ -234,7 +241,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert Engram.Connections.count_active(user.id, :obsidian) == 0
     end
 
-    test "204 is idempotent — second revoke also returns 204", %{conn: conn} do
+    test "204 is idempotent, second revoke also returns 204", %{conn: conn} do
       user = insert(:user)
       vault = insert(:vault, user: user)
       family_id = Ecto.UUID.generate()
@@ -309,7 +316,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
       body = json_response(conn, 402)
       assert body["error"] == "pat_disabled_on_free"
-      assert body["upgrade_url"] == "/settings/billing"
+      assert body["upgrade_url"] == "/#settings/billing"
     end
 
     test "201 on paid tier, returns raw key once", %{conn: conn} do
@@ -374,7 +381,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
         |> delete("/api/connections/pat/#{api_key.id}")
 
       assert conn.status == 204
-      # Confirm it's gone — list_for_user should not include it.
+      # Confirm it's gone, list_for_user should not include it.
       refute Enum.any?(Engram.Connections.list_for_user(user), fn r ->
                r.kind == :pat and r.key_id == api_key.id
              end)

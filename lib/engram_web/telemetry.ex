@@ -201,16 +201,17 @@ defmodule EngramWeb.Telemetry do
         description: "Indexing-time encrypt failures (e.g. missing DEK at re-embed)"
       ),
 
-      # T3.7 — rotation gate blocked events (channel + worker bypass paths).
-      # Emitted whenever a SyncChannel handler or Oban worker is turned away
-      # because the user's DEK rotation is in flight. Operators can use the
-      # rate to size the retry window and quantify contention per rotation run.
+      # T3.7 — rotation gate blocked events (Oban worker bypass path; the
+      # gated SyncChannel handlers were removed with the dead inbound ops).
+      # Emitted whenever an Oban worker is turned away because the user's DEK
+      # rotation is in flight. Operators can use the rate to size the retry
+      # window and quantify contention per rotation run.
       counter("engram.crypto.rotate.dek.gate_blocked.count",
         event_name: [:engram, :crypto, :rotate, :dek, :gate_blocked],
         measurement: :count,
         tags: [:gate_path, :op],
         description:
-          "T3.7 writes/reads blocked by RotationGate (channel/worker bypass path). Tags: gate_path (:channel | :worker), op (handler/worker name)"
+          "T3.7 writes/reads blocked by RotationGate (worker bypass path). Tags: gate_path (:worker), op (worker name)"
       ),
 
       # PR #289 — embed rate-limit defense surfaces.

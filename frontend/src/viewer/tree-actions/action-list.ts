@@ -1,3 +1,26 @@
+import {
+	Copy,
+	FilePlus,
+	FolderInput,
+	FolderPlus,
+	Link2,
+	type LucideIcon,
+	Pencil,
+	Trash2,
+} from "lucide-react";
+
+// Keyed by id rather than carried on each Action — the three lists below repeat
+// the same ids, so one map keeps a single icon per action instead of three.
+const ACTION_ICONS: Record<ActionId, LucideIcon> = {
+	"new-note": FilePlus,
+	"new-folder": FolderPlus,
+	rename: Pencil,
+	move: FolderInput,
+	duplicate: Copy,
+	"copy-wikilink": Link2,
+	delete: Trash2,
+};
+
 const FILE_ACTIONS: readonly Action[] = [
 	{ id: "rename", label: "Rename" },
 	{ id: "move", label: "Move to…" },
@@ -6,7 +29,12 @@ const FILE_ACTIONS: readonly Action[] = [
 	{ id: "delete", label: "Delete", destructive: true },
 ];
 
+// Creation first — the common right-click intent on a folder is "put something
+// in here". These target the right-clicked folder, not the toolbar's active
+// one, so the labels say "here" rather than reading as global actions.
 const FOLDER_ACTIONS: readonly Action[] = [
+	{ id: "new-note", label: "New note here" },
+	{ id: "new-folder", label: "New subfolder" },
 	{ id: "rename", label: "Rename" },
 	{ id: "move", label: "Move to…" },
 	{ id: "delete", label: "Delete", destructive: true },
@@ -19,7 +47,22 @@ const ATTACHMENT_ACTIONS: readonly Action[] = [
 	{ id: "delete", label: "Delete", destructive: true },
 ];
 
-export type ActionId = "rename" | "move" | "duplicate" | "copy-wikilink" | "delete";
+// Right-clicking empty tree space acts on the vault root. No rename/move/delete
+// — the root isn't a folder you can address — so it's creation only, and the
+// labels drop the "here" since there's no folder being pointed at.
+const ROOT_ACTIONS: readonly Action[] = [
+	{ id: "new-note", label: "New note" },
+	{ id: "new-folder", label: "New folder" },
+];
+
+export type ActionId =
+	| "new-note"
+	| "new-folder"
+	| "rename"
+	| "move"
+	| "duplicate"
+	| "copy-wikilink"
+	| "delete";
 
 export interface Action {
 	id: ActionId;
@@ -27,11 +70,19 @@ export interface Action {
 	destructive?: boolean;
 }
 
+// Every folder gets the same menu, derived or not. A derived folder has no id
+// to send to the id-keyed batch endpoints, but rename, move and delete all have
+// path-based routes (`POST /folders/rename`, `DELETE /folders/*path`), so the
+// call site picks the right one — the user shouldn't see a lesser menu for a
+// distinction that's purely about how the backend stores the folder.
 export function actionsFor({
 	kind,
 }: {
-	kind: "file" | "folder" | "attachment";
+	kind: "file" | "folder" | "attachment" | "root";
 }): readonly Action[] {
+	if (kind === "root") {
+		return ROOT_ACTIONS;
+	}
 	if (kind === "folder") {
 		return FOLDER_ACTIONS;
 	}
@@ -40,3 +91,5 @@ export function actionsFor({
 	}
 	return FILE_ACTIONS;
 }
+
+export { ACTION_ICONS };

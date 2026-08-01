@@ -1,4 +1,5 @@
-import type { Action, ActionId } from "./action-list";
+import { ListChecks } from "lucide-react";
+import { ACTION_ICONS, type Action, type ActionId } from "./action-list";
 
 interface Props {
 	title: string;
@@ -20,28 +21,31 @@ export function ActionDrawer({ title, actions, onPick, onClose, onSelectMore }: 
 			/>
 			<div
 				role="menu"
-				className="fixed inset-x-0 bottom-0 z-50 rounded-t-2xl bg-white dark:bg-gray-900"
+				className="fixed inset-x-0 bottom-0 z-50 rounded-t-2xl bg-popover text-popover-foreground"
 			>
-				<div className="mx-auto my-2 h-1 w-10 rounded-full bg-gray-300 dark:bg-gray-700" />
-				<p className="truncate px-4 py-2 font-medium text-gray-700 text-sm dark:text-gray-200">
-					{title}
-				</p>
-				{actions.map((a) => (
-					<button
-						key={a.id}
-						type="button"
-						role="menuitem"
-						onClick={() => {
-							onPick(a.id);
-							onClose();
-						}}
-						className={`flex w-full px-4 py-3 text-left text-base ${
-							a.destructive ? "text-red-600 dark:text-red-400" : "text-gray-800 dark:text-gray-100"
-						}`}
-					>
-						{a.label}
-					</button>
-				))}
+				<div className="mx-auto my-2 h-1 w-10 rounded-full bg-border" />
+				<p className="truncate px-4 py-2 font-medium text-sm">{title}</p>
+				{actions.map((a) => {
+					const Icon = ACTION_ICONS[a.id];
+					return (
+						<button
+							key={a.id}
+							type="button"
+							role="menuitem"
+							onClick={() => {
+								onPick(a.id);
+								onClose();
+							}}
+							className={`flex w-full items-center gap-3 px-4 py-3 text-left text-base ${
+								a.destructive ? "text-destructive" : ""
+							}`}
+						>
+							{/* aria-hidden so the menuitem's accessible name stays the label */}
+							<Icon aria-hidden="true" className="h-4 w-4 shrink-0" />
+							{a.label}
+						</button>
+					);
+				})}
 				{onSelectMore ? (
 					<button
 						type="button"
@@ -49,8 +53,9 @@ export function ActionDrawer({ title, actions, onPick, onClose, onSelectMore }: 
 							onSelectMore();
 							onClose();
 						}}
-						className="flex w-full border-gray-200 border-t px-4 py-3 text-left text-base text-gray-800 dark:border-gray-700 dark:text-gray-100"
+						className="flex w-full items-center gap-3 border-border border-t px-4 py-3 text-left text-base"
 					>
+						<ListChecks aria-hidden="true" className="h-4 w-4 shrink-0" />
 						Select more
 					</button>
 				) : null}

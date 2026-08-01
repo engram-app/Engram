@@ -1,7 +1,10 @@
 defmodule Engram.Workers.BackfillCrdtHead do
   @moduledoc """
-  Warm the `notes.crdt_head` column so `CrdtTransport.vault_heads/2` never pays
-  an O(notes) doc-rebuild on a live poll.
+  Warm the `notes.crdt_head` column so the sync manifest
+  (`SyncController.manifest`) serves a real head marker per note instead of
+  `nil`. The manifest passes `crdt_head` through as-is (a NULL flows as `nil`),
+  so a cold client can only diff its per-note heads once the column is
+  populated; this worker fills NULLs off the request path.
 
   Per (user, vault): walks notes whose `crdt_head` is still NULL, rebuilds each
   doc ONCE via `CrdtTransport.backfill_head/3` (which persists the computed

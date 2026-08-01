@@ -7,9 +7,31 @@ describe("actionsFor", () => {
 		expect(ids).toEqual(["rename", "move", "duplicate", "copy-wikilink", "delete"]);
 	});
 
-	it("folder actions: rename, move, delete (no duplicate, no wikilink)", () => {
+	// Creation comes first: a folder's most common right-click intent is "put
+	// something in here", and it targets THIS folder rather than the toolbar's
+	// active one. No duplicate — copying a folder needs a recursive server-side
+	// copy that doesn't exist yet.
+	it("folder actions: new-note, new-folder, rename, move, delete", () => {
 		const ids = actionsFor({ kind: "folder" }).map((a) => a.id);
-		expect(ids).toEqual(["rename", "move", "delete"]);
+		expect(ids).toEqual(["new-note", "new-folder", "rename", "move", "delete"]);
+	});
+
+	it("folder labels name the target so they can't read as global actions", () => {
+		expect(actionsFor({ kind: "folder" }).map((a) => a.label)).toEqual([
+			"New note here",
+			"New subfolder",
+			"Rename",
+			"Move to…",
+			"Delete",
+		]);
+	});
+
+	it("creation actions stay off files and attachments", () => {
+		for (const kind of ["file", "attachment"] as const) {
+			const ids = actionsFor({ kind }).map((a) => a.id);
+			expect(ids).not.toContain("new-note");
+			expect(ids).not.toContain("new-folder");
+		}
 	});
 
 	it("labels match design spec verbatim", () => {

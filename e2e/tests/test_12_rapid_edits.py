@@ -22,7 +22,7 @@ async def test_rapid_edits(vault_a, cdp_a, api_sync):
         time.sleep(0.05)  # 50ms between writes — well within debounce window
 
     # Wait for the final version to land on server
-    api_sync.wait_for_note_content(path, "Version 10", timeout=15)
+    api_sync.wait_for_note_content(path, "Version 10")
 
     # Verify server has the FINAL version, not an intermediate one
     note = api_sync.get_note(path)

@@ -1,0 +1,23 @@
+/*
+ * Nested-blockquote rendering. Atomic gives every `>` line one flat rail at a
+ * fixed 1rem indent (its depth logic is lists-only). blockquote-depth.ts sets
+ * a `--bq-depth` custom property per quote line; here we read it to indent by
+ * one level per `>` and draw one accent rail per level (replacing Atomic's
+ * single border rail). Depth 1 looks identical to before; `>>`/`>>>` nest.
+ *
+ * Loaded after Atomic's stylesheet (see live-preview.ts) so these win the
+ * cascade at equal specificity.
+ */
+.cm-line.cm-atomic-blockquote {
+	padding-left: calc(1rem * var(--bq-depth, 1));
+	/* One rail every 1rem, clipped to the indent width => one rail per level. */
+	border-left: none;
+	background-image: repeating-linear-gradient(
+		to right,
+		var(--atomic-editor-accent-soft, color-mix(in srgb, #7c3aed 72%, white 28%)) 0 3px,
+		transparent 3px 1rem
+	);
+	background-repeat: no-repeat;
+	background-position: left top;
+	background-size: calc(1rem * var(--bq-depth, 1)) 100%;
+}

@@ -5,7 +5,8 @@ import { useSyncExternalStore } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BillingStatus, Connection, OnboardingAction, OnboardingStatus } from "../api/queries";
-import { ChecklistWidget } from "./checklist-widget";
+import { ChecklistWidget, DOC_URLS } from "./checklist-widget";
+import { TOOL_ASSISTANTS, TOOL_CODING } from "./onboarding-tools";
 import type { useOnboardingActions } from "./use-onboarding-actions";
 
 let actionsList: OnboardingAction[] = [];
@@ -68,10 +69,33 @@ vi.mock("../config-context", async () => {
 	const actual = await vi.importActual<typeof import("../config-context")>("../config-context");
 	return {
 		...actual,
-		// SaaS context — free-tier footer logic under test depends on this.
+		// SaaS context, free-tier footer logic under test depends on this.
 		useConfig: () => ({ billingEnabled: true }) as ReturnType<typeof actual.useConfig>,
 	};
 });
+
+function mcpConn(over: Partial<Connection> = {}): Connection {
+	return {
+		kind: "mcp",
+		slug: null,
+		client_id: "c1",
+		key_id: null,
+		name: "Client",
+		software_id: null,
+		software_version: null,
+		verified: false,
+		logo: null,
+		vault_id: null,
+		vault_name: null,
+		scope: "mcp",
+		last_used_at: null,
+		connected_at: null,
+		first_user_agent: null,
+		first_ip: null,
+		redirect_uris: [],
+		...over,
+	} as Connection;
+}
 
 let activeQc: QueryClient | null = null;
 
@@ -119,7 +143,7 @@ afterEach(() => {
 	// no-op
 });
 
-describe("ChecklistWidget — per-tool rows", () => {
+describe("ChecklistWidget, per-tool rows", () => {
 	it("renders one row per slug in profile.tools", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude", "cursor"] };
 		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
@@ -156,7 +180,7 @@ describe("ChecklistWidget — per-tool rows", () => {
 		};
 		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
 
-		// Completed row stays — checked off, struck through, no actions — rather
+		// Completed row stays, checked off, struck through, no actions, rather
 		// than vanishing (#604).
 		const claude = screen.getByText(/connect claude/iu);
 		expect(claude).toBeInTheDocument();
@@ -175,7 +199,7 @@ describe("ChecklistWidget — per-tool rows", () => {
 	});
 
 	it("renders the tour row whenever the user has not completed the tour", () => {
-		// No tour_offered_skipped required anymore — the row is standing.
+		// No tour_offered_skipped required anymore, the row is standing.
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] };
 		const onStart = vi.fn();
 		render(wrap(<ChecklistWidget onStartTour={onStart} />));
@@ -192,12 +216,57 @@ describe("ChecklistWidget — per-tool rows", () => {
 		expect(screen.queryByText(/web.only/iu)).toBeNull();
 	});
 
+	// "Other connection" is a real FTUX choice, but no client ever resolves to
+	// the slug `other_mcp`, slugs come from the backend allowlist. Matching it
+	// by slug made the row unstickable by construction.
+	it("ticks the other_mcp row for an MCP client matching no known slug", () => {
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["other_mcp"] };
+		connectionsValue = { data: [mcpConn({ slug: null, name: "some-cli" })], isLoading: false };
+		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+
+		const row = screen.getByText(/connect another mcp client/iu);
+		expect(row).toHaveClass("line-through");
+		expect(row).toHaveTextContent("☑");
+	});
+
+	it("does not tick other_mcp when the only connection is a separately-selected tool", () => {
+		onboardingStatusValue.data!.profile = {
+			uses_obsidian: false,
+			tools: ["claude", "other_mcp"],
+		};
+		connectionsValue = { data: [mcpConn({ slug: "claude", name: "Claude" })], isLoading: false };
+		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+
+		expect(screen.getByText(/connect claude/iu)).toHaveClass("line-through");
+		expect(screen.getByText(/connect another mcp client/iu)).not.toHaveClass("line-through");
+	});
+
 	it("falls back to /docs/integrations/ for an unmapped slug", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["some_brand_new_tool"] };
 		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
 
 		const link = screen.getByRole("link", { name: /setup guide/iu });
 		expect(link).toHaveAttribute("href", "https://engram.page/docs/integrations/");
+	});
+
+	// #1157: `antigravity` sat in the widget's label map with no DOC_URLS entry,
+	// so its row silently rendered the generic index instead of its own guide.
+	// Asserted against the canonical FTUX catalog rather than a hand-copied
+	// list, so the next connector added there fails here until it is mapped.
+	//
+	// Deliberately a map-parity check and NOT a render: rendering all 14 rows
+	// costs enough CPU to starve a sibling suite's real-timer chain (it tipped
+	// agreement-page.flow.test.tsx over its waitFor budget under full-suite
+	// parallelism). Nothing here needs the DOM.
+	it("maps every selectable catalog tool to its own doc URL", () => {
+		const missing = [...TOOL_ASSISTANTS, ...TOOL_CODING]
+			// `unavailable` tools are absent from the backend @valid_tools and can
+			// never reach a saved profile, so they render no row to link.
+			.filter((t) => !t.unavailable)
+			.map((t) => t.slug)
+			.filter((slug) => !DOC_URLS[slug]);
+
+		expect(missing).toEqual([]);
 	});
 
 	it("per-tool CTA opens in a new tab with rel=noreferrer", () => {
@@ -210,7 +279,7 @@ describe("ChecklistWidget — per-tool rows", () => {
 	});
 });
 
-describe("ChecklistWidget — Obsidian plugin row", () => {
+describe("ChecklistWidget, Obsidian plugin row", () => {
 	it("renders the Obsidian plugin row when uses_obsidian is true", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: true, tools: [] };
 		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
@@ -263,7 +332,7 @@ describe("ChecklistWidget — Obsidian plugin row", () => {
 	});
 });
 
-describe("ChecklistWidget — dismiss", () => {
+describe("ChecklistWidget, dismiss", () => {
 	it("does not render a row already recorded as dismissed", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude", "cursor"] };
 		actionsList.push("dismissed:claude");
@@ -346,7 +415,7 @@ describe("ChecklistWidget — dismiss", () => {
 	});
 });
 
-describe("ChecklistWidget — hide when empty", () => {
+describe("ChecklistWidget, hide when empty", () => {
 	it("renders nothing when every row is done or dismissed", () => {
 		actionsList.push("first_vault_created", "dismissed:claude", "dismissed:tour");
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
@@ -356,7 +425,7 @@ describe("ChecklistWidget — hide when empty", () => {
 	});
 });
 
-describe("ChecklistWidget — completed rows stay visible (#604)", () => {
+describe("ChecklistWidget, completed rows stay visible (#604)", () => {
 	it("renders a completed row checked off, struck through, with no action buttons", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude", "cursor"] };
 		connectionsValue = {
@@ -430,7 +499,7 @@ describe("ChecklistWidget — completed rows stay visible (#604)", () => {
 	});
 });
 
-describe("ChecklistWidget — chrome", () => {
+describe("ChecklistWidget, chrome", () => {
 	it("shows the Finish setup pill when collapsed", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
 		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
@@ -451,7 +520,7 @@ describe("ChecklistWidget — chrome", () => {
 	});
 });
 
-describe("ChecklistWidget — Free-tier reminder", () => {
+describe("ChecklistWidget, Free-tier reminder", () => {
 	it("renders Free reminder with Upgrade link to /onboard/billing when tier=free", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
 		billingStatusValue.data = { tier: "free", active: false } as Partial<BillingStatus>;

@@ -13,7 +13,17 @@ defmodule EngramWeb.Schemas.LogInput do
       stack: %Schema{type: :string, nullable: true},
       ts: %Schema{type: :string, format: :"date-time", nullable: true},
       plugin_version: %Schema{type: :string, nullable: true},
-      platform: %Schema{type: :string, nullable: true}
+      platform: %Schema{type: :string, nullable: true},
+      device_id: %Schema{
+        type: :string,
+        nullable: true,
+        description: "Per-install Obsidian instance id, for per-device attribution."
+      },
+      conn_id: %Schema{
+        type: :string,
+        nullable: true,
+        description: "WebSocket connection id, correlates client logs to server breadcrumbs."
+      }
     }
   })
 end
@@ -64,6 +74,8 @@ defmodule EngramWeb.Schemas.LogRecord do
       stack: %Schema{type: :string, nullable: true},
       plugin_version: %Schema{type: :string, nullable: true},
       platform: %Schema{type: :string, nullable: true},
+      device_id: %Schema{type: :string, nullable: true},
+      conn_id: %Schema{type: :string, nullable: true},
       created_at: %Schema{type: :string, format: :"date-time", nullable: true}
     }
   })

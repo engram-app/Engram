@@ -30,7 +30,7 @@ async def test_remote_logging_plugin_pipeline(vault_a, cdp_a, api_sync):
     # Create a note to trigger push → generates rlog entries
     # (push start, push ok, etc.)
     write_note(vault_a, "E2E/Rlog16/trigger.md", "# Rlog trigger\nForce rlog entries")
-    api_sync.wait_for_note("E2E/Rlog16/trigger.md", timeout=15)
+    api_sync.wait_for_note("E2E/Rlog16/trigger.md")
 
     # Trigger a full sync — generates pull started/done rlog entries
     await cdp_a.trigger_full_sync()

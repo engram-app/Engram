@@ -13,7 +13,21 @@ defmodule EngramWeb.Schemas.ManifestEntry do
         description: "Stable note/attachment id — lets a client reconcile its path↔id map."
       },
       path: %Schema{type: :string},
-      content_hash: %Schema{type: :string, nullable: true}
+      content_hash: %Schema{type: :string, nullable: true},
+      seq: %Schema{
+        type: :integer,
+        nullable: true,
+        description:
+          "Vault-global change sequence of the row's last write — integer-diff " <>
+            "validation hook (a client whose recorded seq is lower is behind)."
+      },
+      crdt_head: %Schema{
+        type: :string,
+        nullable: true,
+        description:
+          "CRDT head fingerprint (notes only) — equality with the client's " <>
+            "recorded head proves a live-bound doc is converged without content transfer."
+      }
     },
     required: [:id, :path]
   })
@@ -32,55 +46,16 @@ defmodule EngramWeb.Schemas.ManifestResponse do
       attachments: %Schema{type: :array, items: EngramWeb.Schemas.ManifestEntry},
       total_notes: %Schema{type: :integer},
       total_attachments: %Schema{type: :integer},
-      change_seq: %Schema{type: :integer, description: "Current per-vault sequence watermark."}
-    },
-    required: [:notes, :attachments, :total_notes, :total_attachments, :change_seq]
-  })
-end
-
-defmodule EngramWeb.Schemas.SyncChange do
-  @moduledoc "One entry in the unified note+attachment change feed."
-  alias OpenApiSpex.Schema
-  require OpenApiSpex
-
-  OpenApiSpex.schema(%{
-    title: "SyncChange",
-    type: :object,
-    properties: %{
-      type: %Schema{type: :string, enum: ["note", "attachment"]},
-      path: %Schema{type: :string},
-      seq: %Schema{type: :integer, description: "Per-vault ordering key."},
-      id: %Schema{type: :string, format: :uuid, nullable: true},
-      content_hash: %Schema{type: :string, nullable: true},
-      content: %Schema{
-        type: :string,
+      change_seq: %Schema{type: :integer, description: "Current per-vault sequence watermark."},
+      unchanged: %Schema{
+        type: :boolean,
         nullable: true,
-        description: "Note body — present only when fields=all."
-      },
-      deleted: %Schema{type: :boolean, nullable: true}
+        description:
+          "Present (true) only when `since_seq` equals the current watermark — " <>
+            "the manifest body is omitted because nothing changed."
+      }
     },
-    required: [:type, :seq]
-  })
-end
-
-defmodule EngramWeb.Schemas.SyncChangesResponse do
-  @moduledoc false
-  alias OpenApiSpex.Schema
-  require OpenApiSpex
-
-  OpenApiSpex.schema(%{
-    title: "SyncChangesResponse",
-    type: :object,
-    properties: %{
-      changes: %Schema{type: :array, items: EngramWeb.Schemas.SyncChange},
-      next_cursor: %Schema{
-        type: :string,
-        nullable: true,
-        description: "Opaque keyset cursor; null on the last page."
-      },
-      has_more: %Schema{type: :boolean}
-    },
-    required: [:changes, :has_more]
+    required: [:change_seq]
   })
 end
 

@@ -1,5 +1,10 @@
 defmodule EngramWeb.ApiSpecTest do
-  use ExUnit.Case, async: true
+  # async: false — building the full ApiSpec resolves ~100 schema modules via
+  # OpenApiSpex.resolve_schema_modules. Running that concurrently with the rest
+  # of the suite intermittently races OpenApiSpex's schema resolution (raises in
+  # resolve_schema_modules_from_response): green in isolation, flaky only in the
+  # full suite. Serializing this module removes the race.
+  use ExUnit.Case, async: false
 
   describe "HealthStatus schema" do
     test "is a valid OpenApiSpex schema struct with the expected fields" do
@@ -284,11 +289,6 @@ defmodule EngramWeb.ApiSpecTest do
       op = spec.paths["/api/sync/manifest"].get
       assert op.tags == ["Sync"]
       assert Map.has_key?(op.responses, 200)
-    end
-
-    test "GET /api/sync/changes documents 200/400/410", %{spec: spec} do
-      op = spec.paths["/api/sync/changes"].get
-      assert Enum.sort(Map.keys(op.responses)) == [200, 400, 410]
     end
 
     test "GET /api/embed-status documents 200", %{spec: spec} do

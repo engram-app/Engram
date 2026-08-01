@@ -19,7 +19,7 @@ defmodule EngramWeb.LimitResponseTest do
                "limit_key" => "notes_cap",
                "limit" => 10_000,
                "current" => 10_000,
-               "upgrade_url" => "https://app.engram.page/settings/billing"
+               "upgrade_url" => "https://app.engram.page/#settings/billing"
              }
     end
 
@@ -44,7 +44,7 @@ defmodule EngramWeb.LimitResponseTest do
       Application.put_env(:engram, :upgrade_url, nil)
 
       on_exit(fn ->
-        Application.put_env(:engram, :upgrade_url, "https://app.engram.page/settings/billing")
+        Application.put_env(:engram, :upgrade_url, "https://app.engram.page/#settings/billing")
       end)
 
       user = insert(:user, free_tier_accepted_at: DateTime.utc_now())

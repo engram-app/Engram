@@ -1,9 +1,11 @@
 """Test 41: Canvas files (.canvas) sync between A and B.
 
-Canvas files are JSON text treated as TEXT_EXTENSIONS in the plugin.
-They sync through the same pushNote path as markdown but with a
-different extension. Verifies the full round-trip preserves JSON structure,
-received live on B with no manual pull.
+Since #306 canvas syncs over the CRDT transport (structural Yjs — nodes/edges
+Y.Maps), NOT the legacy REST pushNote path. The backend persists the canvas Yjs
+state opaquely and keeps notes.content VESTIGIAL for canvas (it never
+materializes canvas edits into notes.content — a new device rebuilds the board
+from the Yjs deltas). So these tests assert CONVERGENCE on device B's disk, not
+that the server's notes.content reflects the edit.
 """
 
 import json
@@ -37,11 +39,11 @@ async def test_canvas_sync(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     await cdp_a.trigger_full_sync()
 
     # Server should have it
-    note = api_sync.wait_for_note(path, timeout=10)
+    note = api_sync.wait_for_note(path)
     assert note is not None, "Canvas should be on server"
 
     # B receives it live — no manual pull
-    b_raw = wait_for_delivery(vault_b, path, api_sync, timeout=30)
+    b_raw = wait_for_delivery(vault_b, path, api_sync)
 
     # Verify JSON structure is preserved
     b_data = json.loads(b_raw)
@@ -57,8 +59,8 @@ async def test_canvas_modify_sync(vault_a, vault_b, cdp_a, cdp_b, api_sync):
 
     # Create base canvas, B receives it live
     write_note(vault_a, path, CANVAS_CONTENT)
-    api_sync.wait_for_note(path, timeout=10)
-    wait_for_delivery(vault_b, path, api_sync, timeout=30)
+    api_sync.wait_for_note(path)
+    wait_for_delivery(vault_b, path, api_sync)
 
     # Modify canvas — add a node
     modified = json.loads(CANVAS_CONTENT)
@@ -68,12 +70,14 @@ async def test_canvas_modify_sync(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     })
     write_note(vault_a, path, json.dumps(modified, indent=2))
 
-    api_sync.wait_for_note_content(path, "New node", timeout=10)
-
-    # B receives the modification live. B's file already exists (from the
-    # base canvas above) so the delivery oracle's non-empty guard can't
-    # detect this specific update; wait_for_content polls for the new node's
-    # text instead — still a pure vault-disk poll, no pull involved.
-    b_raw = wait_for_content(vault_b, path, "New node", timeout=30)
+    # NOTE: we do NOT assert the edit reaches the server's notes.content — since
+    # #306 canvas content is vestigial on the server (the edit lives in the Yjs
+    # state, not notes.content). Convergence is verified on B's disk below.
+    #
+    # B receives the modification live over the CRDT fan-out. B's file already
+    # exists (from the base canvas above) so the delivery oracle's non-empty guard
+    # can't detect this specific update; wait_for_content polls for the new node's
+    # text instead — a pure vault-disk poll, no pull involved.
+    b_raw = wait_for_content(vault_b, path, "New node")
     b_data = json.loads(b_raw)
     assert len(b_data["nodes"]) == 3, "Modified canvas should have 3 nodes"

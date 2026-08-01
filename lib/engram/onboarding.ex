@@ -24,9 +24,16 @@ defmodule Engram.Onboarding do
   # FTUX questionnaire tool catalog. Add new clients here in lockstep with
   # the frontend constants (see frontend/src/onboarding/onboarding-tools.ts).
   # Renames are MIGRATIONS — old slugs in user rows won't be auto-rewritten.
+  #
+  # No `gemini` entry on purpose: the consumer Gemini app cannot add a custom
+  # remote MCP server (that is Gemini Enterprise / Antigravity only), so the row
+  # would be uncompletable. Antigravity is Google's supported MCP path; it
+  # superseded Gemini CLI for Pro/Ultra/free tiers on 2026-06-18. The frontend
+  # lists a disabled `gemini` row to say so, and its absence here means that
+  # slug can never reach a profile even if the UI is bypassed.
   @valid_tools ~w(
     claude chatgpt grok mistral open_webui lobechat
-    claude_code cursor windsurf cline continue opencode github_copilot
+    claude_code cursor windsurf cline continue opencode github_copilot antigravity
     web_only other_mcp
   )
 

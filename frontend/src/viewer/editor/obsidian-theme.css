@@ -1,0 +1,139 @@
+/*
+ * Obsidian-default color palette for the live-preview editor.
+ *
+ * Atomic Editor is fully CSS-variable driven; its built-in fallbacks are
+ * dark-theme values (e.g. --atomic-editor-fg defaults to #dcddde), so in light
+ * mode headings/body render washed-out. We set the vars per theme to match
+ * Obsidian's default light/dark palette. Token-driven, no !important.
+ *
+ * Scope: light values on .cm-editor; dark values under `.dark .cm-editor`
+ * (the app adds a `.dark` class to <html> — see theme/resolve.ts).
+ *
+ * `.prose` is included so READING mode can reuse the same palette. Task-list
+ * checkboxes are styled in markdown.css to match the editor's, and the only way
+ * for the two to match without a second palette that drifts is to read the same
+ * tokens. markdown.css imports this file so the vars exist even on a route that
+ * never mounts an editor.
+ *
+ * ── The --atomic-editor-hl-* block ──────────────────────────────────────────
+ *
+ * These thirteen colour the CODE inside a fence, and going unset was a real
+ * bug rather than a missing nicety: Atomic's fallbacks are Material Palenight,
+ * a DARK palette, so light mode inherited it wholesale. Measured on white,
+ * every token failed WCAG AA and `variable` (most identifiers) came in at
+ * 1.03:1 — near-white on white, effectively invisible. It only started
+ * mattering when live-preview.ts began passing `codeLanguages`, since before
+ * that no fence body was ever tokenized.
+ *
+ * The palette is GitHub Light / GitHub Dark, chosen because Reading mode
+ * ALREADY highlights with it (markdown.css imports highlight.js's github.css
+ * and carries a hand-written github-dark block). Same reasoning as the
+ * blockquote rails and task-list checkboxes: one palette, so the panes cannot
+ * disagree about what a keyword looks like.
+ *
+ * TO ADD A THEME: this is the seam. A palette is thirteen values plus the
+ * handful above; a picker means scoping a second block (`[data-code-theme=…]`)
+ * and letting the cascade choose. Nothing outside this file needs to know.
+ * Ready-made CM6 themes (@uiw/codemirror-theme-*, @codemirror/theme-one-dark)
+ * were considered and rejected for that job: each is a full Extension bundling
+ * its own EditorView.theme and HighlightStyle, so adopting one would replace
+ * atomicEditorTheme wholesale and take the markdown styling with it. Their
+ * published hexes are still perfectly good to COPY into a block like these.
+ */
+
+.cm-editor,
+.prose {
+	/* Obsidian default (light) */
+	--atomic-editor-fg: #222222; /* --text-normal */
+	--atomic-editor-fg-muted: #6e6e6e; /* --text-muted (syntax markers, bullets) */
+	/* --text-faint (revealed syntax markers, blockquote). Obsidian's own value is
+	 * ~#a0a0a0, which measures 2.61:1 on white and made a revealed marker — the
+	 * language name after ```, the ** around bold — barely legible on the one line
+	 * where you are actually editing it. #767676 is the lightest grey that still
+	 * clears WCAG AA at 4.54:1, so it stays de-emphasised without vanishing. */
+	--atomic-editor-fg-faint: #767676;
+	--atomic-editor-link: #6b4ce6; /* accent purple, darkened for light-bg contrast */
+	--atomic-editor-link-hover: #5738c4;
+	--atomic-editor-accent: #7c5cff; /* --interactive-accent */
+	/* Text selection. Unset, this fell back to the package's
+	 * color-mix(#7c3aed 28%, #1e1e1e 72%) — purple mixed into a DARK base — so
+	 * light mode painted selected text at 1.20:1 against #222222 body copy.
+	 * Selecting text made it unreadable.
+	 *
+	 * Blue rather than the accent purple: selection is the one surface users
+	 * have a strong prior about, and every editor they have used (VS Code,
+	 * macOS, GitHub) paints it blue. It also pairs with the GitHub token palette
+	 * below. Body text lands at 10.67:1 and the worst code token at 3.07:1,
+	 * while staying visibly distinct from the white page. */
+	--atomic-editor-selection-bg: #b3d7ff;
+	--atomic-editor-border: #e2e2e4;
+	--atomic-editor-code-bg: rgba(0, 0, 0, 0.045);
+	--atomic-editor-code-rail: rgba(124, 92, 255, 0.35);
+
+	/* Code-token palette: GitHub Light. See the block comment below for why
+	 * these exist and why this palette. Every value clears WCAG AA (4.5:1) on
+	 * white; the measured worst case is `keyword` at 4.57:1. */
+	--atomic-editor-hl-keyword: #d73a49;
+	--atomic-editor-hl-type: #d73a49;
+	--atomic-editor-hl-function: #6f42c1;
+	--atomic-editor-hl-property: #005cc5;
+	--atomic-editor-hl-number: #005cc5;
+	--atomic-editor-hl-operator: #005cc5;
+	/* Plain identifiers stay body-coloured. GitHub's stylesheet maps
+	 * `.hljs-variable` to its blue "constant" group, but that grouping is for
+	 * highlight.js's narrower tag; CM6's variableName covers ORDINARY
+	 * identifiers, so taking the blue would paint most of the line. */
+	--atomic-editor-hl-variable: #24292e;
+	--atomic-editor-hl-string: #032f62;
+	--atomic-editor-hl-regexp: #032f62;
+	/* GitHub's own #e36209 measures 3.49:1 on white, below AA. #953800 is their
+	 * current light-theme variable colour and clears it at 7.39:1. */
+	--atomic-editor-hl-escape: #953800;
+	--atomic-editor-hl-tag: #22863a;
+	--atomic-editor-hl-comment: #6a737d;
+	--atomic-editor-hl-invalid: #b31d28;
+}
+
+.dark .cm-editor,
+.dark .prose {
+	/* Obsidian default (dark) */
+	--atomic-editor-fg: #dcddde; /* --text-normal */
+	--atomic-editor-fg-muted: #999999; /* --text-muted */
+	/* Same reasoning as light: #666666 measures 3.30:1 on the dark surface.
+	 * #7d8590 clears AA at 5.07:1 and is GitHub Dark's own muted grey.
+	 *
+	 * Dark ratios throughout this block are measured on GitHub Dark's own
+	 * #0d1117, not on our --background (oklch(18.76% …) ≈ #131315). The two are
+	 * within ~0.1 of each other, so every pass/fail conclusion holds, but the
+	 * printed numbers are GitHub's surface rather than the one the app paints. */
+	--atomic-editor-fg-faint: #7d8590;
+	--atomic-editor-link: #8b6cef; /* accent purple (hsl 254 80% 68%) */
+	--atomic-editor-link-hover: #a78bfa;
+	--atomic-editor-accent: #8b6cef;
+	/* GitHub Dark's selection blue, matching the light block's reasoning. The
+	 * package fallback (a dark purple) was legible here — dark mode was the one
+	 * theme it happened to suit — but it left the two modes disagreeing about
+	 * what a selection looks like. Body text 7.82:1, worst code token 3.46:1,
+	 * and more visible against the page than the purple it replaces. */
+	--atomic-editor-selection-bg: #143d79;
+	--atomic-editor-border: #333333;
+	--atomic-editor-code-bg: rgba(255, 255, 255, 0.06);
+	--atomic-editor-code-rail: rgba(139, 108, 239, 0.5);
+
+	/* Code-token palette: GitHub Dark. The same hexes markdown.css already uses
+	 * for highlight.js under `.dark`, so the two panes stay one palette. Worst
+	 * measured contrast on #0d1117 is `comment` at 6.15:1 (6.03:1 on ours). */
+	--atomic-editor-hl-keyword: #ff7b72;
+	--atomic-editor-hl-type: #ff7b72;
+	--atomic-editor-hl-function: #d2a8ff;
+	--atomic-editor-hl-property: #79c0ff;
+	--atomic-editor-hl-number: #79c0ff;
+	--atomic-editor-hl-operator: #79c0ff;
+	--atomic-editor-hl-variable: #c9d1d9;
+	--atomic-editor-hl-string: #a5d6ff;
+	--atomic-editor-hl-regexp: #a5d6ff;
+	--atomic-editor-hl-escape: #ffa657;
+	--atomic-editor-hl-tag: #7ee787;
+	--atomic-editor-hl-comment: #8b949e;
+	--atomic-editor-hl-invalid: #ffdcd7;
+}

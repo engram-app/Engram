@@ -8,6 +8,7 @@ import {
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { collideBump } from "@/lib/collide-bump";
+import { uuid7 } from "../crdt/uuid7";
 import { DEMO_VAULT_ID_PREFIX } from "../onboarding/tour/demo-vault-ids";
 import { useDemoVaultOptional } from "../onboarding/tour/demo-vault-provider";
 import {
@@ -16,7 +17,9 @@ import {
 	syntheticFolderPath,
 } from "../viewer/tree/synthesize-folders";
 import { useActiveVaultId } from "./active-vault";
+import { crdtCreateNote, crdtCreateNoteWithContent, crdtDeleteNote } from "./channel";
 import { ApiError, api } from "./client";
+import { CrdtOpError } from "./crdt-ops";
 
 // Encode each path segment but preserve slashes so Phoenix's splat
 // routes match. encodeURIComponent on a full path produces %2F, which
@@ -25,15 +28,56 @@ function encodePathSegments(path: string): string {
 	return path.split("/").map(encodeURIComponent).join("/");
 }
 
+/**
+ * A folder row exactly as `/api/folders` sends it, BEFORE `selectFolders` runs.
+ *
+ * The distinction from `Folder` is `id`, and it matters: the wire sends `null`
+ * for the synthetic root row AND for every *derived* folder (one holding no
+ * note directly, which is most of them). `selectFolders` maps those to
+ * `syn:<path>` — but `getQueryData` returns the **pre-select** payload, so
+ * every raw-cache reader sees the nulls.
+ *
+ * Typing the raw cache as `{ folders: Folder[] }` (id: string) is what let the
+ * #1140 delete-invalidation bug compile: the lookup found a row, so the
+ * not-found fallback was skipped, and the invalidation was keyed on
+ * `[..., null]` — a key nothing reads, so a note deleted on another device
+ * stayed in the sidebar until reload.
+ *
+ * Use this at every `getQueryData`/`setQueryData` site for the
+ * `["folders", vaultId]` key, so the compiler rejects the next reader that
+ * forgets. Anything downstream of `select` keeps using `Folder`.
+ *
+ * NOTE the `Omit`. Writing this as `Folder & { id: string | null }` does
+ * NOTHING: TypeScript intersects the property types, and
+ * `string & (string | null)` reduces back to `string`. The old inline
+ * annotation on `selectFolders`/`folderIdForPath` was exactly that, so it read
+ * as if it modelled the null while still letting `.id` be used as a `string`.
+ * Omit the field first, then re-add it, or the whole type is decorative.
+ */
+type RawFolder = Omit<Folder, "id"> & { id: string | null };
+interface RawFoldersCache {
+	folders: RawFolder[];
+}
+
+/**
+ * The id a raw row answers to once `selectFolders` has run — a real marker id,
+ * else the stable `syn:<path>` id a derived folder carries.
+ *
+ * Anything that compares raw rows against ids supplied by the tree MUST go
+ * through this. The tree only ever holds post-select ids, so a bare
+ * `idSet.has(f.id)` silently never matches a derived folder (its raw id is
+ * `null`), which is why selecting one for a batch move/delete produced no
+ * optimistic patch at all until the server round-trip landed.
+ */
+const effectiveFolderId = (f: RawFolder): string => f.id ?? syntheticFolderId(f.name);
+
 // Hoisted so React Query treats the select identity as stable; otherwise an
 // inline arrow re-runs every render and returns a fresh array, breaking
 // memoized consumers (e.g. useEngramTree's rebuild useEffect).
-// The backend returns a null id for the synthetic root row (name === '') AND for
-// every *derived* folder (one that exists only because notes live in it — no
-// explicit marker row). Drop only the root row; give derived folders a stable
-// synthetic id keyed on their path so the `Folder.id: string` contract holds and
-// they aren't erased from the tree. synthesizeFolders then links parents/ancestors.
-const selectFolders = (data: { folders: Array<Folder & { id: string | null }> }): Folder[] =>
+// Drop only the root row; give derived folders a stable synthetic id keyed on
+// their path so the `Folder.id: string` contract holds and they aren't erased
+// from the tree. synthesizeFolders then links parents/ancestors.
+const selectFolders = (data: RawFoldersCache): Folder[] =>
 	data.folders
 		.filter((f) => f.name !== "")
 		.map((f) => (f.id === null ? { ...f, id: syntheticFolderId(f.name) } : (f as Folder)));
@@ -41,26 +85,6 @@ const selectFolders = (data: { folders: Array<Folder & { id: string | null }> })
 const selectNotes = (data: { notes: NoteSummary[] }) => data.notes;
 
 const selectAttachments = (data: { attachments: AttachmentSummary[] }) => data.attachments;
-
-// Resolve a folder PATH (a NoteSummary.folder, or '' for the vault root) to the
-// id its note list is cached under. Root maps to the sentinel without a lookup;
-// every other folder resolves through the folders cache marker. Returns null
-// when an unknown non-root folder isn't in the cache yet — callers skip the
-// optimistic patch and let the list surface on its next fetch.
-function folderIdForPath(
-	qc: QueryClient,
-	vaultId: string | null | undefined,
-	folder: string,
-): string | null {
-	if (folder === "") {
-		return ROOT_FOLDER_ID;
-	}
-	return (
-		qc
-			.getQueryData<{ folders: Folder[] }>(["folders", vaultId])
-			?.folders.find((f) => f.name === folder)?.id ?? null
-	);
-}
 
 // Single source for the by-id note fetch used by useNote's queryFn.
 function fetchNoteById(id: string): Promise<Note> {
@@ -94,11 +118,7 @@ function patchRowInList(
 // Filenames in a note list, ignoring our own optimistic placeholders (so a
 // freshly-inserted placeholder doesn't bump the name the server picks).
 function realFilenames(notes: NoteSummary[]): Set<string> {
-	return new Set(
-		notes
-			.filter((n) => !n.id.startsWith("optimistic-"))
-			.map((n) => n.path.split("/").pop() ?? n.path),
-	);
+	return new Set(notes.filter((n) => !n.pending).map((n) => n.path.split("/").pop() ?? n.path));
 }
 
 // Path → parent folder. `'a/b/c.md'` → `'a/b'`; `'a.md'` → `''`. Same
@@ -125,11 +145,18 @@ function updateCachedList<T>(
 
 // 409/404/etc → human-grade toast copy. Centralised so all four
 // mutations (and the standalone drop handler) speak the same dialect.
-function renameErrorToast(err: ApiError, kind: "file" | "folder") {
+// Shared by note rename (CRDT → CrdtOpError) and folder/attachment rename
+// (REST → ApiError). A note's target-occupied conflict surfaces as
+// crdt_create's `create_failed`; the REST paths use HTTP 409/404.
+function renameErrorToast(err: unknown, kind: "file" | "folder") {
 	const noun = kind === "file" ? "note" : "folder";
-	if (err.status === 409) {
+	const conflict =
+		(err instanceof ApiError && err.status === 409) ||
+		(err instanceof CrdtOpError && err.reason === "create_failed");
+	const gone = err instanceof ApiError && err.status === 404;
+	if (conflict) {
 		toast.error(`A ${noun} with that name already exists.`);
-	} else if (err.status === 404) {
+	} else if (gone) {
 		toast.error(`${noun[0]?.toUpperCase()}${noun.slice(1)} no longer exists.`);
 	} else {
 		toast.error("Rename failed.");
@@ -150,16 +177,20 @@ interface RenameNoteContext {
 	newFolder: string;
 	oldFolderNotes: { notes: NoteSummary[] } | undefined;
 	newFolderNotes: { notes: NoteSummary[] } | undefined;
-	folders: { folders: Folder[] } | undefined;
+	folders: RawFoldersCache | undefined;
 	// The note id is stable across rename — only `path`/`folder` shift.
 	// We snapshot the previous note value so rollback restores those
 	// fields under the SAME cache key.
 	noteId: string | null;
 	prevNote: Note | undefined;
+	// Snapshot of every id-keyed list we re-pathed. The sidebar tree renders
+	// THESE, not the path-keyed `folderNotes` entries above, so they get their
+	// own optimistic write — and their own rollback.
+	byIdLists: Array<{ key: readonly unknown[]; rows: NoteSummary[] }>;
 }
 
 interface RenameFolderContext {
-	folders: { folders: Folder[] } | undefined;
+	folders: RawFoldersCache | undefined;
 	// Snapshot of every cached folderNotes entry we touched, keyed by the
 	// joined query key. Folder rename is coarse (see below) — we DROP all
 	// child folderNotes entries to force refetch on next expand, which
@@ -171,12 +202,12 @@ interface DeleteNoteContext {
 	folder: string;
 	id: string;
 	folderNotes: { notes: NoteSummary[] } | undefined;
-	folders: { folders: Folder[] } | undefined;
+	folders: RawFoldersCache | undefined;
 	note: Note | undefined;
 }
 
 interface DeleteFolderContext {
-	folders: { folders: Folder[] } | undefined;
+	folders: RawFoldersCache | undefined;
 	folderList: { notes: NoteSummary[] } | undefined;
 }
 
@@ -199,12 +230,15 @@ interface BatchNotesContext {
 	noteListSnapshots: Array<{ key: readonly unknown[]; data: NoteSummary[] | undefined }>;
 	// Folders cache snapshot — present only when a move patched folder counts
 	// (so the tree's structure key changes and it rebuilds). Used for rollback.
-	folders?: { folders: Folder[] };
+	folders?: RawFoldersCache;
 }
 
 // Walk the folders cache and collect `id` plus every transitive
 // descendant by parent_id chain. Used by both batch folder mutations.
-function collectFolderDescendants(folders: Folder[], rootIds: string[]): Set<string> {
+//
+// Takes RAW rows and keys on `effectiveFolderId`, so the returned set is in the
+// same id space as `rootIds` (which come from the tree, i.e. post-select).
+function collectFolderDescendants(folders: RawFolder[], rootIds: string[]): Set<string> {
 	const result = new Set<string>(rootIds);
 	// Iterate until no new ids land in the set — folders are typically
 	// shallow, so this is cheap even with the naive scan.
@@ -212,8 +246,9 @@ function collectFolderDescendants(folders: Folder[], rootIds: string[]): Set<str
 	while (changed) {
 		changed = false;
 		for (const f of folders) {
-			if (f.parent_id !== null && result.has(f.parent_id) && !result.has(f.id)) {
-				result.add(f.id);
+			const id = effectiveFolderId(f);
+			if (f.parent_id !== null && result.has(f.parent_id) && !result.has(id)) {
+				result.add(id);
 				changed = true;
 			}
 		}
@@ -222,10 +257,40 @@ function collectFolderDescendants(folders: Folder[], rootIds: string[]): Set<str
 }
 
 interface BatchFoldersContext {
-	folders: { folders: Folder[] } | undefined;
+	folders: RawFoldersCache | undefined;
 	// Snapshot every by-id note list whose folder is being deleted so
 	// rollback can restore them. Move doesn't touch these lists.
 	noteListSnapshots: Array<{ key: readonly unknown[]; data: NoteSummary[] | undefined }>;
+}
+
+// Resolve a folder PATH (a NoteSummary.folder, or '' for the vault root) to the
+// id its note list is cached under. Root maps to the sentinel without a lookup;
+// every other folder resolves through the folders cache marker. Returns null
+// when an unknown non-root folder isn't in the cache yet — callers skip the
+// optimistic patch and let the list surface on its next fetch.
+//
+// Declared here rather than beside the selectors above so it sits after the
+// last non-export statement: `useExportsLast` fires if an export precedes one.
+export function folderIdForPath(
+	qc: QueryClient,
+	vaultId: string | null | undefined,
+	folder: string,
+): string | null {
+	if (folder === "") {
+		return ROOT_FOLDER_ID;
+	}
+	// getQueryData returns the RAW payload — `select: selectFolders` only shapes
+	// what components see. So a derived folder still carries `id: null` here, and
+	// it must get the same `syn:<path>` id selectFolders would have given it,
+	// otherwise this returns null for most real folders and every caller silently
+	// skips its optimistic patch.
+	const row = qc
+		.getQueryData<RawFoldersCache>(["folders", vaultId])
+		?.folders.find((f) => f.name === folder);
+	if (!row) {
+		return null;
+	}
+	return row.id ?? syntheticFolderId(row.name);
 }
 
 // Types matching backend JSON responses
@@ -243,6 +308,10 @@ export interface Folder {
 
 export interface NoteSummary {
 	id: string;
+	// Client-only: set on an optimistic row whose create hasn't been acked yet.
+	// The row already carries its FINAL id (we mint it), so the id can no longer
+	// signal "not real yet" — this flag does.
+	pending?: boolean;
 	path: string;
 	title: string;
 	folder: string;
@@ -288,7 +357,7 @@ export function useFolders() {
 		// expose the count of root-level notes. The tree owns root notes via
 		// `useFolderNotes('')`; drop the synthetic row so consumers only see real
 		// folder markers + the `Folder.id: string` contract holds.
-		queryFn: () => api.get<{ folders: Array<Folder & { id: string | null }> }>("/folders"),
+		queryFn: () => api.get<RawFoldersCache>("/folders"),
 		select: selectFolders,
 		enabled: !demo?.active,
 		// Folder listing decrypts every marker row server-side; without a
@@ -497,10 +566,10 @@ export function useCreateNote() {
 	return useMutation<
 		{ path: string; id: string },
 		ApiError,
-		{ folder: string },
+		{ folder: string; id: string },
 		CreateNoteContext | undefined
 	>({
-		mutationFn: async ({ folder }) => {
+		mutationFn: async ({ folder, id }) => {
 			const folderId = folderIdForPath(qc, vaultId, folder);
 			const existingNotes = folderId
 				? (qc.getQueryData<NoteSummary[]>(["folder-notes-by-id", vaultId, folderId]) ?? [])
@@ -514,14 +583,20 @@ export function useCreateNote() {
 				const name = collideBump(existingNames, "Untitled.md", { cap: 1000 });
 				const path = folder ? `${folder}/${name}` : name;
 				try {
-					const { note } = await api.post<{ note: Note }>("/notes", {
-						path,
-						content: "",
-						mtime: Date.now() / 1000,
-					});
-					return { path, id: note.id };
+					// crdt_create genesis over the live channel (replaces POST /notes);
+					// the ok reply echoes our minted note_id. The id is stable across
+					// retries — a collision rejects the PATH, never the id, and the
+					// optimistic row is already rendering under it.
+					await crdtCreateNote(id, path);
+					return { path, id };
 				} catch (err) {
-					if (err instanceof ApiError && err.status === 409) {
+					// The path is already owned (unique-constraint create_failed) or was
+					// just deleted (delete-wins window) — bump the name and retry, the
+					// CRDT twin of the old 409 loop. Cap/rate/disconnect propagate.
+					if (
+						err instanceof CrdtOpError &&
+						(err.reason === "create_failed" || err.reason === "recently_deleted")
+					) {
 						existingNames.add(name);
 						continue;
 					}
@@ -533,7 +608,7 @@ export function useCreateNote() {
 		// Drop a placeholder row into the id-keyed list the tree reads so a new
 		// note shows instantly (on-disk feel), then swap it for the server row on
 		// success. Root and subfolders share one cache keyed by folder id.
-		onMutate: async ({ folder }) => {
+		onMutate: async ({ folder, id }) => {
 			const folderId = folderIdForPath(qc, vaultId, folder);
 			// Unknown non-root folder not in the cache yet — skip; surfaces on expand.
 			if (folderId === null) {
@@ -551,9 +626,12 @@ export function useCreateNote() {
 			const name = collideBump(realFilenames(snapshot), "Untitled.md", { cap: 1000 });
 			const path = folder ? `${folder}/${name}` : name;
 			const now = new Date().toISOString();
-			const placeholderId = `optimistic-${crypto.randomUUID()}`;
 			const placeholder: NoteSummary = {
-				id: placeholderId,
+				// The id we're about to send, not a throwaway: the row is addressable
+				// the moment it appears, so clicking it before the ack opens the right
+				// note instead of a dead `optimistic-…` route.
+				id,
+				pending: true,
 				path,
 				title: name.replace(/\.md$/u, ""),
 				folder,
@@ -565,34 +643,52 @@ export function useCreateNote() {
 			};
 
 			qc.setQueryData<NoteSummary[]>(key, [...snapshot, placeholder]);
-			return { key, snapshot, placeholderId };
+			return { key, snapshot, placeholderId: id };
 		},
 		onSuccess: ({ id, path }, vars, ctx) => {
 			// Swap the placeholder for the server-assigned id/path.
 			if (ctx) {
 				const filename = path.split("/").pop() ?? path;
+				// Id already matches — only the confirmed path/title and the pending
+				// flag need settling.
 				patchRowInList(qc, ctx.key, ctx.placeholderId, {
-					id,
 					path,
 					title: filename.replace(/\.md$/u, ""),
+					pending: false,
 				});
 				// Only the target folder's list changed — no need to stale the whole
 				// prefix (which would force every folder to refetch on next expand).
 				qc.invalidateQueries({ queryKey: ctx.key });
+			} else {
+				// No ctx = the folder's list wasn't cached (collapsed, never opened),
+				// so there was no placeholder to swap. Still mark it stale, or the
+				// note stays invisible there until a reload.
+				const folderId = folderIdForPath(qc, vaultId, vars.folder);
+				if (folderId !== null) {
+					qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId, folderId] });
+				}
 			}
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			// Keep the path-keyed list fresh for the dashboard folder-browse view.
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId, vars.folder] });
-			navigate(`/note/${id}`);
+			// vaultId is already resolved in this mutation's closure; look up its
+			// slug from the cache rather than re-deriving it (a hook is
+			// unavailable here, since this runs inside a mutation callback).
+			// getQueryData bypasses useVaults's `select`, so the raw cache entry
+			// is still the wire shape ({ vaults }), not the post-select array.
+			const slug = qc
+				.getQueryData<{ vaults: Vault[] }>(["vaults"])
+				?.vaults?.find((v) => v.id === vaultId)?.slug;
+			navigate(slug ? `/${slug}/${id}` : `/note/${id}`);
 		},
 		onError: (err, _vars, ctx) => {
 			if (ctx) {
 				qc.setQueryData(ctx.key, ctx.snapshot);
 			}
-			if (err instanceof ApiError && err.status === 402) {
+			if (err instanceof CrdtOpError && err.reason === "notes_cap_reached") {
 				toast.error("You've hit your note limit — upgrade to add more.");
-			} else if (err instanceof ApiError && err.status === 403) {
-				toast.error("You don't have permission to create notes here.");
+			} else if (err instanceof CrdtOpError && err.reason === "disconnected") {
+				toast.error("Reconnecting — can't create notes while offline.");
 			} else {
 				toast.error("Couldn't create the note. Try again.");
 			}
@@ -606,7 +702,7 @@ export function useCreateFolder() {
 
 	return useMutation<{ folder: string }, ApiError, { parent: string }>({
 		mutationFn: async ({ parent }) => {
-			const cached = qc.getQueryData<{ folders: Folder[] }>(["folders", vaultId]);
+			const cached = qc.getQueryData<RawFoldersCache>(["folders", vaultId]);
 			const existingFolders = cached?.folders.map((f) => f.name) ?? [];
 
 			// Restrict to direct children of the parent — siblings only.
@@ -620,7 +716,7 @@ export function useCreateFolder() {
 
 			const MAX_RACES = 5;
 			for (let attempt = 0; attempt < MAX_RACES; attempt++) {
-				const name = collideBump(childNames, "Untitled folder", { cap: 1000 });
+				const name = collideBump(childNames, "untitled", { cap: 1000 });
 				const folder = parent ? `${parent}/${name}` : name;
 				try {
 					await api.post<{ folder: { name: string; count: number } }>("/folders", { folder });
@@ -1366,16 +1462,19 @@ export function useRenameNote() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<
-		{ renamed: boolean; old_path: string; new_path: string; note: Note },
-		ApiError,
-		{ old_path: string; new_path: string },
+		{ renamed: boolean; old_path: string; new_path: string },
+		CrdtOpError,
+		{ id: string; old_path: string; new_path: string },
 		RenameNoteContext
 	>({
-		mutationFn: (vars) =>
-			api.post<{ renamed: boolean; old_path: string; new_path: string; note: Note }>(
-				"/notes/rename",
-				vars,
-			),
+		// Rename/move = crdt_create for a KNOWN live id at a new FREE path — the
+		// backend relocates the row in place (rename-as-move, notes.ex Phase E2),
+		// keeping the note_id + content. A path OCCUPIED by a different note comes
+		// back as create_failed. Replaces POST /notes/rename.
+		mutationFn: async ({ id, old_path, new_path }) => {
+			await crdtCreateNote(id, new_path);
+			return { renamed: true, old_path, new_path };
+		},
 		onMutate: async ({ old_path, new_path }) => {
 			const oldFolder = folderOf(old_path);
 			const newFolder = folderOf(new_path);
@@ -1390,7 +1489,7 @@ export function useRenameNote() {
 
 			const oldFolderNotes = qc.getQueryData<{ notes: NoteSummary[] }>(oldListKey);
 			const newFolderNotes = qc.getQueryData<{ notes: NoteSummary[] }>(newListKey);
-			const folders = qc.getQueryData<{ folders: Folder[] }>(foldersKey);
+			const folders = qc.getQueryData<RawFoldersCache>(foldersKey);
 
 			// Resolve the note id from whatever cache has it. The folder
 			// list is the cheapest lookup; failing that, walk every cached
@@ -1412,6 +1511,26 @@ export function useRenameNote() {
 				prevNote = qc.getQueryData<Note>(["note", vaultId, noteId]);
 			}
 
+			// Re-path the note wherever the tree caches it. Matching by id when we
+			// resolved one, else by old path. A rename keeps the note in its
+			// folder (both inline-rename entry points edit the leaf only), so an
+			// in-place re-path is enough; onSettled's refetch reconciles folder
+			// membership in the theoretical slash-typed move case.
+			const matchesRow = (n: NoteSummary) =>
+				noteId === null ? n.path === old_path : n.id === noteId;
+			const byIdLists: RenameNoteContext["byIdLists"] = [];
+			for (const q of qc.getQueryCache().findAll({ queryKey: ["folder-notes-by-id", vaultId] })) {
+				const rows = q.state.data as NoteSummary[] | undefined;
+				if (!rows?.some(matchesRow)) {
+					continue;
+				}
+				byIdLists.push({ key: q.queryKey, rows });
+				qc.setQueryData<NoteSummary[]>(
+					q.queryKey,
+					rows.map((n) => (matchesRow(n) ? { ...n, path: new_path, folder: newFolder } : n)),
+				);
+			}
+
 			const ctx: RenameNoteContext = {
 				oldFolder,
 				newFolder,
@@ -1420,6 +1539,7 @@ export function useRenameNote() {
 				folders,
 				noteId,
 				prevNote,
+				byIdLists,
 			};
 
 			// Build a renamed NoteSummary either from the existing list row
@@ -1462,7 +1582,7 @@ export function useRenameNote() {
 
 			// Adjust folder counts when the note crosses folder boundaries.
 			if (oldFolder !== newFolder && folders) {
-				qc.setQueryData<{ folders: Folder[] }>(foldersKey, (prev) => {
+				qc.setQueryData<RawFoldersCache>(foldersKey, (prev) => {
 					if (!prev) {
 						return prev;
 					}
@@ -1495,16 +1615,24 @@ export function useRenameNote() {
 				});
 			}
 
-			// Deliberately do NOT re-path the note-body cache (`['note', vaultId,
-			// id]`) here. An open editor (note-page.tsx) keys its CRDT doc on
-			// `note.id`, which is stable across a rename, so this no longer risks
-			// tearing down/reopening the live doc or racing the CRDT channel's
-			// bootstrap-by-path. It's skipped anyway because there's no rollback
-			// for this cache entry (see the onError note below) — flipping `path`
-			// optimistically would show an unconfirmed path if the rename POST
-			// fails. Let onSettled's refetch move the note cache to the new path
-			// AFTER the server confirms the rename, exactly as the (passing)
-			// folder-move path already does.
+			// Re-path the note-body cache too, so an open editor's header flips
+			// the moment the user commits instead of lagging until onSettled's
+			// refetch. This was once deliberately skipped: the editor keyed its
+			// CRDT doc on `note.path`, so an early re-path made it enroll the new
+			// path before the rename committed, which the channel bootstrapped
+			// into a duplicate note that then 409'd the rename. note-page.tsx now
+			// keys the doc on `note.id` (stable across a rename) and reads `path`
+			// only for display + the `.md` gate, so that hazard is gone — and
+			// `ctx.prevNote` gives onError an exact rollback if the create is
+			// refused.
+			if (noteId !== null && prevNote) {
+				qc.setQueryData<Note>(["note", vaultId, noteId], {
+					...prevNote,
+					path: new_path,
+					folder: newFolder,
+				});
+			}
+
 			return ctx;
 		},
 		onError: (err, _vars, ctx) => {
@@ -1523,7 +1651,14 @@ export function useRenameNote() {
 			if (ctx.folders !== undefined) {
 				qc.setQueryData(foldersKey, ctx.folders);
 			}
-			// No note-cache rollback: onMutate no longer re-paths `['note', id]`.
+			for (const { key, rows } of ctx.byIdLists) {
+				qc.setQueryData<NoteSummary[]>(key, rows);
+			}
+			// Undo the optimistic re-path so a refused rename can't leave the
+			// header showing a name the server never accepted.
+			if (ctx.noteId !== null && ctx.prevNote) {
+				qc.setQueryData<Note>(["note", vaultId, ctx.noteId], ctx.prevNote);
+			}
 			renameErrorToast(err, "file");
 		},
 		onSettled: () => {
@@ -1565,13 +1700,13 @@ export function useRenameFolder() {
 			await qc.cancelQueries({ queryKey: ["note", vaultId] });
 
 			const ctx: RenameFolderContext = {
-				folders: qc.getQueryData<{ folders: Folder[] }>(foldersKey),
+				folders: qc.getQueryData<RawFoldersCache>(foldersKey),
 				childLists: [],
 			};
 
 			// Rewrite folder names.
 			if (ctx.folders) {
-				qc.setQueryData<{ folders: Folder[] }>(foldersKey, (prev) => {
+				qc.setQueryData<RawFoldersCache>(foldersKey, (prev) => {
 					if (!prev) {
 						return prev;
 					}
@@ -1652,7 +1787,12 @@ export function useDeleteNote() {
 		{ id: string; path: string },
 		DeleteNoteContext
 	>({
-		mutationFn: ({ id }) => api.del<{ deleted: boolean }>(`/notes/by-id/${id}`),
+		// Delete over the live crdt channel (replaces DELETE /notes/by-id). The ack
+		// is idempotent — resolving means durably deleted (even if already gone).
+		mutationFn: async ({ id }) => {
+			await crdtDeleteNote(id);
+			return { deleted: true };
+		},
 		onMutate: async ({ id, path }) => {
 			const folder = folderOf(path);
 			const listKey = ["folderNotes", vaultId, folder] as const;
@@ -1667,7 +1807,7 @@ export function useDeleteNote() {
 				folder,
 				id,
 				folderNotes: qc.getQueryData<{ notes: NoteSummary[] }>(listKey),
-				folders: qc.getQueryData<{ folders: Folder[] }>(foldersKey),
+				folders: qc.getQueryData<RawFoldersCache>(foldersKey),
 				note: qc.getQueryData<Note>(noteKey),
 			};
 
@@ -1677,7 +1817,7 @@ export function useDeleteNote() {
 				}));
 			}
 			if (ctx.folders) {
-				qc.setQueryData<{ folders: Folder[] }>(foldersKey, (prev) =>
+				qc.setQueryData<RawFoldersCache>(foldersKey, (prev) =>
 					prev
 						? {
 								folders: prev.folders.map((f) =>
@@ -1745,12 +1885,12 @@ export function useDeleteFolder() {
 			await qc.cancelQueries({ queryKey: listKey });
 
 			const ctx: DeleteFolderContext = {
-				folders: qc.getQueryData<{ folders: Folder[] }>(foldersKey),
+				folders: qc.getQueryData<RawFoldersCache>(foldersKey),
 				folderList: qc.getQueryData<{ notes: NoteSummary[] }>(listKey),
 			};
 
 			if (ctx.folders) {
-				qc.setQueryData<{ folders: Folder[] }>(foldersKey, (prev) =>
+				qc.setQueryData<RawFoldersCache>(foldersKey, (prev) =>
 					prev
 						? {
 								folders: prev.folders.filter(
@@ -1782,39 +1922,40 @@ export function useDeleteFolder() {
 	});
 }
 
-// Duplicate a note: read source content, then write a fresh note at a
-// caller-chosen `new_path`. The collision-free name is computed by the
-// caller (see `viewer/tree-actions/duplicate.ts#nextCopyName`) — keeping
-// this mutation a thin GET-then-POST means tests don't need to reason
-// about siblings, and the name policy stays in one place.
+// Duplicate a note: read source content over REST, then genesis-create a
+// fresh note at a caller-chosen `new_path` over the CRDT channel. The
+// collision-free name is computed by the caller (see
+// `viewer/tree-actions/duplicate.ts#nextCopyName`) — keeping this mutation a
+// thin GET-then-crdt_create means tests don't need to reason about siblings,
+// and the name policy stays in one place.
 //
 // Optimistic strategy: drop a placeholder NoteSummary into the new
-// folder's list immediately so the row appears in the tree. The GET+POST
-// happens in the background; on success the placeholder is replaced
-// (via onSettled refetch); on error the placeholder is pulled.
+// folder's list immediately so the row appears in the tree. The GET +
+// genesis-create happens in the background; on success the placeholder is
+// replaced (via onSettled refetch); on error the placeholder is pulled.
 
 export function useDuplicateNote() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<
-		{ note: Note },
-		ApiError,
+		{ id: string; path: string },
+		ApiError | CrdtOpError,
 		{ src_path: string; new_path: string },
 		DuplicateNoteContext
 	>({
+		// Read the source over REST (reads stay REST), then genesis-create the copy
+		// WITH content over the crdt channel (crdt_create_batch) — replaces the
+		// second leg's POST /notes. The ok reply echoes our minted id.
 		mutationFn: async ({ src_path, new_path }) => {
 			const src = await api.get<Note>(`/notes/${encodePathSegments(src_path)}`);
-			return api.post<{ note: Note }>("/notes", {
-				path: new_path,
-				content: src.content ?? "",
-				mtime: Date.now() / 1000,
-			});
+			const id = await crdtCreateNoteWithContent(uuid7(), new_path, src.content ?? "");
+			return { id, path: new_path };
 		},
 		onMutate: async ({ src_path, new_path }) => {
 			const newFolder = folderOf(new_path);
 			const targetId = folderIdForPath(qc, vaultId, newFolder);
 
-			// Placeholder id — the real one arrives with the POST response.
+			// Placeholder id — the real one arrives with the crdt_create reply.
 			// `optimistic-` prefix avoids collisions with real backend uuids;
 			// onSuccess swaps it for the server-assigned id in the cached list.
 			const placeholderId = `optimistic-${crypto.randomUUID()}`;
@@ -1831,6 +1972,9 @@ export function useDuplicateNote() {
 			const now = new Date().toISOString();
 			const placeholder: NoteSummary = {
 				id: placeholderId,
+				// Marks the row as not-yet-acked for realFilenames, which used to infer
+				// that from the `optimistic-` id prefix.
+				pending: true,
 				path: new_path,
 				title: srcRow?.title ?? "",
 				folder: newFolder,
@@ -1860,33 +2004,23 @@ export function useDuplicateNote() {
 			return ctx;
 		},
 		onSuccess: (data, _vars, ctx) => {
-			if (!ctx?.key) {
+			if (!(ctx?.key && data.id)) {
 				return;
 			}
-			const real = data.note;
-			if (!real?.id) {
-				return;
-			}
-			// Swap the placeholder for the real server row so a tree consumer keying
-			// on `n.id` transitions smoothly. onSettled also invalidates; the swap
-			// avoids a momentary "missing note" flash.
-			patchRowInList(qc, ctx.key, ctx.placeholderId, {
-				id: real.id,
-				path: real.path,
-				title: real.title,
-				folder: real.folder,
-				tags: real.tags,
-				version: real.version,
-				mtime: real.mtime,
-				created_at: real.created_at,
-				updated_at: real.updated_at,
-			});
+			// The placeholder already carries the copied fields (title/tags/folder);
+			// only the id is provisional. Swap placeholder id → the minted id so a
+			// tree consumer keying on `n.id` transitions smoothly (onSettled also
+			// invalidates; the swap avoids a momentary "missing note" flash).
+			patchRowInList(qc, ctx.key, ctx.placeholderId, { id: data.id, path: data.path });
 		},
 		onError: (err, _vars, ctx) => {
 			if (ctx?.key && ctx.snapshot !== undefined) {
 				qc.setQueryData(ctx.key, ctx.snapshot);
 			}
-			if (err.status === 409) {
+			const conflict =
+				(err instanceof ApiError && err.status === 409) ||
+				(err instanceof CrdtOpError && err.reason === "create_failed");
+			if (conflict) {
 				toast.error("A note with that name already exists.");
 			} else {
 				toast.error("Failed to duplicate.");
@@ -1926,8 +2060,17 @@ export function useBatchDeleteNotes() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<{ deleted: number }, ApiError, { ids: string[] }, BatchNotesContext>({
-		mutationFn: ({ ids }) =>
-			api.post<{ deleted: number }>("/notes/batch-delete", { ids }, idempotencyHeaders()),
+		// No batch crdt op — one crdt_delete per id, concurrently (replaces
+		// POST /notes/batch-delete). ponytail: N round trips + non-atomic — a
+		// mid-batch reject fails the whole Promise.all → onError rollback; the
+		// onSettled invalidation reconciles server truth on BOTH paths (a partial
+		// failure leaves some ids deleted while onError restores every row).
+		// Fine for typical multi-selects; add a server batch op if very large
+		// selections appear.
+		mutationFn: async ({ ids }) => {
+			await Promise.all(ids.map((id) => crdtDeleteNote(id)));
+			return { deleted: ids.length };
+		},
 		onMutate: async ({ ids }) => {
 			await qc.cancelQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			const idSet = new Set(ids);
@@ -1972,7 +2115,9 @@ export function useBatchDeleteNotes() {
 			}
 			toast.error("Batch delete failed.");
 		},
-		onSuccess: () => {
+		onSettled: () => {
+			// Reconcile after success AND partial failure — Promise.all is not
+			// atomic, so onError's full restore can resurrect already-deleted rows.
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
@@ -1985,16 +2130,30 @@ export function useBatchMoveNotes() {
 	const vaultId = useActiveVaultId();
 	return useMutation<
 		{ moved: number },
-		ApiError,
-		{ ids: string[]; target_folder: string },
+		CrdtOpError,
+		{ ids: string[]; target_folder: string; paths?: Record<string, string> },
 		BatchNotesContext
 	>({
-		mutationFn: ({ ids, target_folder }) =>
-			api.post<{ moved: number }>(
-				"/notes/batch-move",
-				{ ids, target_folder },
-				idempotencyHeaders(),
-			),
+		// Move = one crdt_create per id at `target_folder/<current basename>` (the
+		// rename-as-move relocate). `paths` (id → current path) MUST be resolved by
+		// the caller BEFORE the optimistic onMutate re-paths the cache — resolving
+		// from the cache here would read the already-moved path. No batch op —
+		// concurrent, non-atomic; a reject rolls back the whole optimistic move.
+		// Replaces POST /notes/batch-move.
+		mutationFn: async ({ ids, target_folder, paths = {} }) => {
+			await Promise.all(
+				ids.map((id) => {
+					const cur = paths[id];
+					if (cur === undefined) {
+						return Promise.resolve();
+					}
+					const leaf = cur.split("/").pop() ?? cur;
+					const newPath = target_folder ? `${target_folder}/${leaf}` : leaf;
+					return crdtCreateNote(id, newPath);
+				}),
+			);
+			return { moved: ids.length };
+		},
 		onMutate: async ({ ids, target_folder }) => {
 			await qc.cancelQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			await qc.cancelQueries({ queryKey: ["folders", vaultId] });
@@ -2004,7 +2163,7 @@ export function useBatchMoveNotes() {
 			// keys under the folder's loader id — a real marker id, else the stable
 			// `syn:<path>` id a derived folder carries — so the optimistic add lands
 			// in the same list the tree reads.
-			const foldersCache = qc.getQueryData<{ folders: Folder[] }>(["folders", vaultId]);
+			const foldersCache = qc.getQueryData<RawFoldersCache>(["folders", vaultId]);
 			const targetFolderName = target_folder;
 			const targetCacheId =
 				target_folder === ""
@@ -2091,9 +2250,9 @@ export function useBatchMoveNotes() {
 			// suspenders for rebuild but the SOLE optimistic source for the count.
 			// Snapshot for rollback. Skipped when nothing moved; for a root target
 			// ('root' has no folder row) sources still decrement.
-			let foldersSnapshot: { folders: Folder[] } | undefined;
+			let foldersSnapshot: RawFoldersCache | undefined;
 			if (moved.length > 0 || removedPerName.size > 0) {
-				const cache = qc.getQueryData<{ folders: Folder[] }>(["folders", vaultId]);
+				const cache = qc.getQueryData<RawFoldersCache>(["folders", vaultId]);
 				if (cache) {
 					foldersSnapshot = cache;
 					const patched = cache.folders.map((f) => {
@@ -2110,7 +2269,7 @@ export function useBatchMoveNotes() {
 						}
 						return count === f.count ? f : { ...f, count };
 					});
-					qc.setQueryData<{ folders: Folder[] }>(["folders", vaultId], { folders: patched });
+					qc.setQueryData<RawFoldersCache>(["folders", vaultId], { folders: patched });
 				}
 			}
 
@@ -2128,7 +2287,10 @@ export function useBatchMoveNotes() {
 			}
 			toast.error("Batch move failed.");
 		},
-		onSuccess: () => {
+		onSettled: () => {
+			// crdt_create per id is non-atomic (Promise.all): a mid-batch reject
+			// leaves some ids moved server-side while onError restores every row,
+			// so reconcile must run on both paths.
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
@@ -2148,7 +2310,7 @@ export function useBatchDeleteFolders() {
 			await qc.cancelQueries({ queryKey: foldersKey });
 			await qc.cancelQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 
-			const folders = qc.getQueryData<{ folders: Folder[] }>(foldersKey);
+			const folders = qc.getQueryData<RawFoldersCache>(foldersKey);
 			const ctx: BatchFoldersContext = { folders, noteListSnapshots: [] };
 
 			// Compute the full set of ids (roots + transitive descendants)
@@ -2158,8 +2320,8 @@ export function useBatchDeleteFolders() {
 				: new Set<string>(ids);
 
 			if (folders) {
-				qc.setQueryData<{ folders: Folder[] }>(foldersKey, {
-					folders: folders.folders.filter((f) => !removedIds.has(f.id)),
+				qc.setQueryData<RawFoldersCache>(foldersKey, {
+					folders: folders.folders.filter((f) => !removedIds.has(effectiveFolderId(f))),
 				});
 			}
 
@@ -2187,7 +2349,10 @@ export function useBatchDeleteFolders() {
 			}
 			toast.error("Batch delete failed.");
 		},
-		onSuccess: () => {
+		onSettled: () => {
+			// Reconcile on both paths: a lost ack (server committed, client saw a
+			// network error) or a non-transactional partial delete would otherwise
+			// leave onError's restore showing folders the server actually dropped.
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
@@ -2215,7 +2380,7 @@ export function useBatchMoveFolders() {
 			const foldersKey = ["folders", vaultId] as const;
 			await qc.cancelQueries({ queryKey: foldersKey });
 
-			const folders = qc.getQueryData<{ folders: Folder[] }>(foldersKey);
+			const folders = qc.getQueryData<RawFoldersCache>(foldersKey);
 			const ctx: BatchFoldersContext = { folders, noteListSnapshots: [] };
 			if (!folders) {
 				return ctx;
@@ -2234,7 +2399,9 @@ export function useBatchMoveFolders() {
 			// Cycle defense by path: the target is one of the moved folders or sits
 			// under one. Skip the optimistic patch and let the server reject (it has
 			// the authoritative cycle check). Frontend silence beats lying.
-			const movedNames = folders.folders.filter((f) => ids.includes(f.id)).map((f) => f.name);
+			const movedNames = folders.folders
+				.filter((f) => ids.includes(effectiveFolderId(f)))
+				.map((f) => f.name);
 			if (movedNames.some((n) => target_parent === n || target_parent.startsWith(`${n}/`))) {
 				return ctx;
 			}
@@ -2245,8 +2412,8 @@ export function useBatchMoveFolders() {
 			// intra-subtree parent) but their .name prefix is rewritten so
 			// the path string stays coherent.
 			const idSet = new Set(ids);
-			const patched = folders.folders.map<Folder>((f) => {
-				if (idSet.has(f.id)) {
+			const patched = folders.folders.map<RawFolder>((f) => {
+				if (idSet.has(effectiveFolderId(f))) {
 					const slash = f.name.lastIndexOf("/");
 					const basename = slash < 0 ? f.name : f.name.slice(slash + 1);
 					return {
@@ -2255,13 +2422,15 @@ export function useBatchMoveFolders() {
 						name: targetName ? `${targetName}/${basename}` : basename,
 					};
 				}
-				if (descendants.has(f.id)) {
+				if (descendants.has(effectiveFolderId(f))) {
 					// Find the ancestor in the moved set whose name is the
 					// longest prefix of `f.name` — that's the root whose path
 					// we just rewrote. Compose the descendant's new name by
 					// stripping the OLD ancestor prefix and re-attaching the NEW.
 					const oldOriginal = folders.folders.find(
-						(m) => idSet.has(m.id) && (f.name === m.name || f.name.startsWith(`${m.name}/`)),
+						(m) =>
+							idSet.has(effectiveFolderId(m)) &&
+							(f.name === m.name || f.name.startsWith(`${m.name}/`)),
 					);
 					if (!oldOriginal) {
 						return f;
@@ -2275,7 +2444,7 @@ export function useBatchMoveFolders() {
 				return f;
 			});
 
-			qc.setQueryData<{ folders: Folder[] }>(foldersKey, { folders: patched });
+			qc.setQueryData<RawFoldersCache>(foldersKey, { folders: patched });
 			return ctx;
 		},
 		onError: (_err, _vars, ctx) => {
@@ -2287,7 +2456,10 @@ export function useBatchMoveFolders() {
 			}
 			toast.error("Batch move failed.");
 		},
-		onSuccess: () => {
+		onSettled: () => {
+			// Reconcile on both paths: a lost ack (server committed, client saw a
+			// network error) leaves onError's restore showing folders the server
+			// actually moved until an unrelated refetch.
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
@@ -2326,7 +2498,10 @@ export function useBatchMoveAttachments() {
 				{ paths, target_folder },
 				idempotencyHeaders(),
 			),
-		onSuccess: () => {
+		onSettled: () => {
+			// Reconcile on both paths: a lost ack (server committed, client saw a
+			// network error) leaves the attachments shown at their old paths until
+			// an unrelated refetch.
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 			qc.invalidateQueries({ queryKey: ["attachments", vaultId] });
@@ -2345,7 +2520,10 @@ export function useBatchDeleteAttachments() {
 	return useMutation<{ deleted: number }, ApiError, { paths: string[] }>({
 		mutationFn: ({ paths }) =>
 			api.post<{ deleted: number }>("/attachments/batch-delete", { paths }, idempotencyHeaders()),
-		onSuccess: () => {
+		onSettled: () => {
+			// Reconcile on both paths: no optimistic removal here, so a lost ack
+			// (server committed, client saw a network error) would otherwise leave
+			// the deleted attachments visible until an unrelated refetch.
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 			qc.invalidateQueries({ queryKey: ["attachments", vaultId] });

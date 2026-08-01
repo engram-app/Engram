@@ -1,10 +1,11 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import type { EditorView } from "@codemirror/view";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { useNote } from "../api/queries";
+import { useNote, useRenameNote } from "../api/queries";
 import {
 	type CrdtSyncStatus,
 	closeDoc,
@@ -13,17 +14,27 @@ import {
 	openDoc,
 	subscribeToCrdtSyncStatus,
 } from "../crdt/session";
-import { useRightSidebar } from "../layout/right-sidebar-context";
+import { useRightTools } from "../layout/right-tools-context";
 import { noteName } from "../lib/note-name";
+import { useActiveEditor } from "./editor/active-editor-context";
+import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
+import { EditorToolbar } from "./editor/toolbar";
 import LoadingPane from "./loading-pane";
 import NoteToc from "./note-toc";
 import NoteView from "./note-view";
 import { PropertiesWidget } from "./properties-widget";
+import { RenameInput } from "./tree-actions/rename-input";
+import { renameBaseName } from "./tree-actions/rename-path";
 import { useLiveContent } from "./use-live-content";
 
 const NoteEditor = lazy(() => import("./note-editor"));
 
-type Mode = "live" | "reading";
+type Mode = "rendered" | "raw" | "reading";
+const MODES: ReadonlyArray<{ value: Mode; label: string }> = [
+	{ value: "rendered", label: "Rendered" },
+	{ value: "raw", label: "Raw" },
+	{ value: "reading", label: "Reading" },
+];
 interface DocHandle {
 	ytext: Y.Text;
 	awareness: Awareness;
@@ -32,15 +43,26 @@ interface DocHandle {
 
 export default function NotePage() {
 	const params = useParams();
-	const idStr = params.id;
+	const idStr = params.itemId;
 	const validId = idStr && idStr.length > 0 ? idStr : null;
 
 	const { data: note, isLoading, error } = useNote(validId);
-	const { setContent: setRightContent } = useRightSidebar();
+	const { setSlot } = useRightTools();
+	const { setEditor } = useActiveEditor();
 
-	const [mode, setMode] = useState<Mode>("live");
+	const [mode, setMode] = useState<Mode>("rendered");
+	// Which note the rename box belongs to, not a bare boolean: navigating to
+	// another note keeps this component mounted, and an id-keyed value closes
+	// the box on its own instead of carrying over onto the newly opened note.
+	const [renamingFor, setRenamingFor] = useState<string | null>(null);
 	const [handle, setHandle] = useState<DocHandle | null>(null);
+	const renameNote = useRenameNote();
 	const [syncStatus, setSyncStatus] = useState<CrdtSyncStatus>(getCrdtSyncStatus);
+	const editorViewRef = useRef<EditorView | null>(null);
+	// Mirrors NoteView's remark-wiki-link hrefTemplate. useCallback keeps a
+	// stable identity so passing it to NoteEditor doesn't re-fire the
+	// decorationsCompartment reconfigure effect on every render.
+	const resolveWikiLink = useCallback((permalink: string) => `/notes/${encodeURI(permalink)}`, []);
 
 	const path = note?.path ?? null;
 	const noteId = note?.id ?? null;
@@ -93,12 +115,25 @@ export default function NotePage() {
 	const liveContent = useLiveContent(handle?.ytext ?? null, noteContent ?? "");
 	useEffect(() => {
 		if (notePath === undefined) {
-			setRightContent(null);
+			setSlot("outline", null);
 			return;
 		}
-		setRightContent(<NoteToc content={liveContent} />);
-		return () => setRightContent(null);
-	}, [notePath, liveContent, setRightContent]);
+		setSlot("outline", <NoteToc content={liveContent} />);
+		return () => setSlot("outline", null);
+	}, [notePath, liveContent, setSlot]);
+
+	// Publish the editor so right-sidebar tools (the markdown reference panel)
+	// can insert at the caret. Gated on the SAME condition that renders
+	// NoteEditor below, so "Insert" is disabled in reading mode and on
+	// non-markdown items rather than silently doing nothing.
+	const editorMounted = handle !== null && mode !== "reading";
+	useEffect(() => {
+		if (!editorMounted) {
+			return;
+		}
+		setEditor(() => editorViewRef.current);
+		return () => setEditor(null);
+	}, [editorMounted, setEditor]);
 
 	if (validId === null) {
 		return <p className="p-6 text-destructive">Invalid note id.</p>;
@@ -115,6 +150,18 @@ export default function NotePage() {
 
 	const name = noteName(note.path);
 	const titlePath = note.folder ? `${note.folder}/${name}` : name;
+	const commitRename = (next: string) => {
+		setRenamingFor(null);
+		// Base-name rename: the header never shows the extension, so the user
+		// can't change the file type from here — the original one is always
+		// re-attached. (The tree's rename is the place to swap .md <-> .canvas.)
+		const new_path = renameBaseName(note.path, next);
+		if (new_path === note.path) {
+			return;
+		}
+		// `mutate`, not `mutateAsync` — the mutation's onError owns the toast.
+		renameNote.mutate({ id: note.id, old_path: note.path, new_path });
+	};
 
 	return (
 		<section className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]">
@@ -128,19 +175,49 @@ export default function NotePage() {
 					{Boolean(note.folder) && (
 						<span className="min-w-0 shrink truncate text-muted-foreground">{note.folder}/</span>
 					)}
-					<span className="min-w-0 truncate font-medium">{name}</span>
+					{renamingFor === note.id ? (
+						<RenameInput
+							initial={name}
+							kind="file"
+							// This reads as a title field, not a modal edit: you click it,
+							// retype, and click into the document. Losing the rename because
+							// you did not press Enter is a surprise, so focus leaving saves.
+							// Escape still abandons.
+							commitOnBlur
+							onCommit={commitRename}
+							onCancel={() => setRenamingFor(null)}
+						/>
+					) : (
+						<button
+							type="button"
+							// -mx-1 cancels the padding so the hover target is roomier than
+							// the text without nudging the name off the folder crumb.
+							className="-mx-1 min-w-0 truncate rounded px-1 font-medium hover:bg-accent"
+							title="Click to rename"
+							onClick={() => setRenamingFor(note.id)}
+						>
+							{name}
+						</button>
+					)}
 				</h2>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="shrink-0"
-					onClick={() => setMode((m) => (m === "live" ? "reading" : "live"))}
-				>
-					{mode === "live" ? "↗ Reading view" : "✎ Edit"}
-				</Button>
+				<fieldset className="m-0 flex shrink-0 gap-1 border-0 p-0">
+					<legend className="sr-only">View mode</legend>
+					{MODES.map(({ value, label }) => (
+						<Button
+							key={value}
+							variant={mode === value ? "secondary" : "ghost"}
+							size="sm"
+							aria-pressed={mode === value}
+							onClick={() => setMode(value)}
+						>
+							{label}
+						</Button>
+					))}
+				</fieldset>
 			</div>
 
-			{handle ? <PropertiesWidget doc={handle.doc} /> : null}
+			{handle && mode === "rendered" ? <PropertiesWidget doc={handle.doc} /> : null}
+			{handle && mode === "raw" ? <RawFrontmatterEditor doc={handle.doc} /> : null}
 
 			{mode === "reading" ? (
 				<ScrollArea className="min-h-0 flex-1">
@@ -152,7 +229,18 @@ export default function NotePage() {
 				<div className="min-h-0 flex-1 overflow-hidden" data-tour="note-editor">
 					<Suspense fallback={<p className="py-5 text-muted-foreground">Loading editor…</p>}>
 						{handle ? (
-							<NoteEditor ytext={handle.ytext} awareness={handle.awareness} />
+							<>
+								<EditorToolbar getView={() => editorViewRef.current} />
+								<NoteEditor
+									ytext={handle.ytext}
+									awareness={handle.awareness}
+									mode={mode === "raw" ? "raw" : "rendered"}
+									resolveWikiLink={resolveWikiLink}
+									onView={(v) => {
+										editorViewRef.current = v;
+									}}
+								/>
+							</>
 						) : (
 							<p className="py-5 text-muted-foreground">Connecting…</p>
 						)}

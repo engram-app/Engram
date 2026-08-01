@@ -44,7 +44,9 @@ class AuthProvider(ABC):
         """Best-effort cleanup of a provisioned user."""
 
     @abstractmethod
-    def cleanup_all_e2e_users(self, run_id: str | None = None, job_id: str | None = None) -> int:
+    def cleanup_all_e2e_users(
+        self, run_id: str | None = None, job_id: str | None = None, min_age_seconds: float = 0
+    ) -> int:
         """Sweep e2e-* users for ``run_id`` (defaults to None = all runs).
 
         Callers in the pytest session pass the current run id so they only
@@ -108,9 +110,13 @@ class ClerkAuthProvider(AuthProvider):
         except Exception as e:
             logger.warning("Failed to delete Clerk user %s: %s", provider_user_id, e)
 
-    def cleanup_all_e2e_users(self, run_id: str | None = None, job_id: str | None = None) -> int:
+    def cleanup_all_e2e_users(
+        self, run_id: str | None = None, job_id: str | None = None, min_age_seconds: float = 0
+    ) -> int:
         from helpers.cleanup import cleanup_all_e2e_clerk_users
-        return cleanup_all_e2e_clerk_users(self.clerk_client, run_id=run_id, job_id=job_id)
+        return cleanup_all_e2e_clerk_users(
+            self.clerk_client, run_id=run_id, job_id=job_id, min_age_seconds=min_age_seconds
+        )
 
     def get_clerk_auth(self, clerk_user_id: str):
         """Return a ClerkAuth adapter for direct JWT auth (OAuth tests)."""
@@ -170,7 +176,9 @@ class LocalAuthProvider(AuthProvider):
         # Local users are cleaned up via DB cleanup in session teardown
         pass
 
-    def cleanup_all_e2e_users(self, run_id: str | None = None, job_id: str | None = None) -> int:  # noqa: ARG002
+    def cleanup_all_e2e_users(
+        self, run_id: str | None = None, job_id: str | None = None, min_age_seconds: float = 0  # noqa: ARG002
+    ) -> int:
         # No external service to clean — DB cleanup handles it
         return 0
 

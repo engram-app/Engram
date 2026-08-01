@@ -53,6 +53,60 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
       assert "http://127.0.0.1:9999/cb" in body["redirect_uris"]
     end
 
+    # Observed 2026-07-30: Cursor desktop registers `cursor://anysphere.cursor-mcp/...`,
+    # a single-word scheme. We used to require a reverse-DNS dot per RFC 8252
+    # §7.1, which turned Cursor away at registration. That is a requirement on
+    # apps, not a mandate for servers to reject them, and the interception it
+    # guards against is already handled by mandatory PKCE: a squatting app
+    # receives a code it cannot redeem. A dot also never made a scheme
+    # exclusive on any OS, so it lowered collision odds and nothing more.
+    test "accepts a single-word native custom scheme (Cursor)", %{conn: conn} do
+      conn =
+        post(conn, "/oauth/register", %{
+          "redirect_uris" => ["cursor://anysphere.cursor-mcp/oauth/callback"],
+          "client_name" => "Cursor"
+        })
+
+      body = json_response(conn, 201)
+      assert "cursor://anysphere.cursor-mcp/oauth/callback" in body["redirect_uris"]
+    end
+
+    # Relaxing the dot rule must not relax the dangerous-scheme rule.
+    for scheme <- ~w(javascript data file) do
+      test "still rejects the unsafe #{scheme} scheme", %{conn: conn} do
+        conn =
+          post(conn, "/oauth/register", %{
+            "redirect_uris" => ["#{unquote(scheme)}://evil/callback"],
+            "client_name" => "Nope"
+          })
+
+        assert json_response(conn, 400)["error"] == "invalid_redirect_uri"
+      end
+    end
+
+    # A custom scheme can never be proven, so it must never earn the badge no
+    # matter how legitimate the client looks.
+    test "a custom-scheme client is registered but never verified", %{conn: conn} do
+      conn =
+        post(conn, "/oauth/register", %{
+          "redirect_uris" => ["cursor://anysphere.cursor-mcp/oauth/callback"],
+          "client_name" => "Cursor"
+        })
+
+      body = json_response(conn, 201)
+      {:ok, client} = Engram.OAuth.get_client(body["client_id"])
+
+      identity =
+        Engram.Connections.LogoAllowlist.resolve(
+          client.software_id,
+          client.redirect_uris,
+          client.client_name
+        )
+
+      refute identity.verified
+      assert identity.slug == "cursor"
+    end
+
     test "accepts native-app custom scheme redirect_uri", %{conn: conn} do
       params = %{
         "redirect_uris" => ["com.cursor.app://oauth/callback"],
@@ -151,6 +205,23 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
       assert body["error"] == "invalid_redirect_uri"
     end
 
+    # Regression guard for the custom-scheme relaxation. `https:///cb` parses
+    # with scheme "https" and host "", so it misses the https clause (which
+    # requires a non-empty host) and would otherwise fall through to the
+    # permissive native-app branch. Admitting custom schemes must not become
+    # admitting a well-known scheme with its host missing.
+    test "rejects https redirect_uri with no host", %{conn: conn} do
+      for uri <- ["https:///cb", "https://", "https:foo"] do
+        conn =
+          post(conn, "/oauth/register", %{
+            "redirect_uris" => [uri]
+          })
+
+        body = json_response(conn, 400)
+        assert body["error"] == "invalid_redirect_uri", "expected #{uri} to be rejected"
+      end
+    end
+
     test "rejects javascript: redirect_uri", %{conn: conn} do
       conn =
         post(conn, "/oauth/register", %{
@@ -200,22 +271,52 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
       assert body["error"] == "invalid_redirect_uri"
     end
 
-    test "rejects client_secret_post auth method (only public PKCE supported)", %{conn: conn} do
+    # Confidential registration exists because server-side connectors (LobeHub
+    # cloud, observed 2026-07-30) ask for it and cannot fall back to a public
+    # client. Rejecting them made the connector unusable, not merely unverified.
+    for method <- ~w(client_secret_post client_secret_basic) do
+      test "issues a client_secret for #{method}", %{conn: conn} do
+        conn =
+          post(conn, "/oauth/register", %{
+            "redirect_uris" => ["https://app.lobehub.com/oauth/callback"],
+            "client_name" => "LobeChat",
+            "token_endpoint_auth_method" => unquote(method)
+          })
+
+        body = json_response(conn, 201)
+
+        assert body["token_endpoint_auth_method"] == unquote(method)
+        assert is_binary(body["client_secret"])
+        assert byte_size(body["client_secret"]) >= 32
+        # RFC 7591 §3.2.1 requires this field whenever a secret is issued.
+        # 0 means "does not expire".
+        assert body["client_secret_expires_at"] == 0
+      end
+    end
+
+    test "persists only a hash of the client_secret", %{conn: conn} do
       conn =
         post(conn, "/oauth/register", %{
-          "redirect_uris" => ["https://x/cb"],
+          "redirect_uris" => ["https://app.lobehub.com/oauth/callback"],
+          "client_name" => "LobeChat",
           "token_endpoint_auth_method" => "client_secret_post"
         })
 
-      body = json_response(conn, 400)
-      assert body["error"] == "invalid_client_metadata"
+      body = json_response(conn, 201)
+      {:ok, client} = Engram.OAuth.get_client(body["client_id"])
+
+      assert is_binary(client.client_secret_hash)
+      refute client.client_secret_hash == body["client_secret"]
+      # The plaintext is returned exactly once, at registration, and never read
+      # back out of the database.
+      assert is_nil(client.client_secret)
     end
 
-    test "rejects client_secret_basic auth method", %{conn: conn} do
+    test "still rejects an auth method we do not implement", %{conn: conn} do
       conn =
         post(conn, "/oauth/register", %{
           "redirect_uris" => ["https://x/cb"],
-          "token_endpoint_auth_method" => "client_secret_basic"
+          "token_endpoint_auth_method" => "private_key_jwt"
         })
 
       body = json_response(conn, 400)

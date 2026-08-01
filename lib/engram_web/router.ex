@@ -369,9 +369,8 @@ defmodule EngramWeb.Router do
     get "/notes/changes", NotesController, :changes
     get "/notes/by-id/:id", NotesController, :show_by_id
     delete "/notes/by-id/:id", NotesController, :delete_by_id
-    post "/notes/:id/updates", CrdtSyncController, :post_update
-    get "/notes/:id/updates", CrdtSyncController, :get_updates
-    get "/vault/heads", CrdtSyncController, :vault_heads
+    # REST /notes/:id/updates + GET /vault/heads DELETED (Phase E3/#1088) — Yjs
+    # deltas AND head discovery travel ONLY over the crdt: socket topic now.
     get "/notes/*path", NotesController, :show
     delete "/notes/*path", NotesController, :delete
 
@@ -380,7 +379,6 @@ defmodule EngramWeb.Router do
     # The plug halts with the cached response BEFORE the action runs.
     scope "/" do
       pipe_through EngramWeb.Plugs.IdempotencyKey
-      post "/notes/batch", NotesController, :batch_upsert
       post "/notes/batch-delete", NotesController, :batch_delete
       post "/notes/batch-move", NotesController, :batch_move
       post "/folders/batch-delete", FoldersController, :batch_delete
@@ -404,7 +402,6 @@ defmodule EngramWeb.Router do
 
     # Sync
     get "/sync/manifest", SyncController, :manifest
-    get "/sync/changes", SyncController, :changes
 
     # Attachments
     post "/attachments", AttachmentsController, :upload
@@ -459,10 +456,17 @@ defmodule EngramWeb.Router do
     delete "/mcp", McpController, :unsupported_transport
   end
 
-  # SPA routes — every path here mounts the React app. Whitelisted (not a
-  # blanket /*path catch-all) so unknown URLs hit Phoenix's default 404
-  # instead of silently rendering an HTML 200 over a typo'd API/OAuth/asset
-  # request. Every new top-level SPA route must be added here.
+  # SPA routes, every path here mounts the React app. The static entries
+  # below are whitelisted (not a blanket /*path catch-all) so unknown URLs
+  # hit Phoenix's default 404 instead of silently rendering an HTML 200
+  # over a typo'd API/OAuth/asset request. Every new top-level static SPA
+  # route must be added here.
+  #
+  # Below the whitelist, `/:slug` and `/:slug/:id` are dynamic vault-scoped
+  # routes (vault, and vault+note-or-attachment). Those are wildcards, so a
+  # deny-list for every non-SPA top-level prefix sits between the whitelist
+  # and the wildcards; see its comment for why order matters (it must stay
+  # BELOW the static whitelist above and ABOVE the wildcards below).
   scope "/", EngramWeb do
     pipe_through :spa
 
@@ -481,6 +485,58 @@ defmodule EngramWeb.Router do
     get "/oauth/consent", SpaController, :index
     # NOTE: no /share/* route: sharing doesn't exist yet (no /api/share*,
     # no schema, no SPA page). Removed 2026-07-02 (#858) after shipping as a
-    # vestigial whitelist entry; re-add alongside the actual feature.
+    # vestigial whitelist entry; re-add alongside the actual feature. (A
+    # bare 2-segment /share/:x now falls through to the vault-scoped
+    # /:slug/:id route below like any other slug; that's expected, not a
+    # revival of this feature.)
+
+    # Deny-list. MUST stay BELOW the static whitelist above (so a real
+    # static route like /oauth/consent still wins over its own prefix's
+    # deny entry) and ABOVE the dynamic /:slug routes below (those are
+    # 1- and 2-segment wildcards, so without this a typo'd /api/notez would
+    # match /:slug/:id and serve an HTML 200, the exact regression #858
+    # removed). EVERY new non-SPA top-level prefix must be added here.
+    match :*, "/api/*path", SpaController, :not_found
+    match :*, "/oauth/*path", SpaController, :not_found
+    match :*, "/webhooks/*path", SpaController, :not_found
+    match :*, "/.well-known/*path", SpaController, :not_found
+    # /socket is registered by the `socket "/socket", EngramWeb.UserSocket`
+    # macro in endpoint.ex, not a router scope, so it doesn't show up when
+    # enumerating scope declarations either. Endpoint-level socket dispatch
+    # only claims the exact transport subpath (/socket/websocket); every
+    # other /socket/* request (bare /socket, typos, /socket/origin-probe
+    # without its own /websocket suffix) falls through to the router same as
+    # /assets and /email. HostRewrite already treats /socket as a first-class
+    # top-level prefix (@api_allowed_prefixes in host_rewrite.ex); the SPA
+    # deny-list needs the same entry for the same reason.
+    match :*, "/socket/*path", SpaController, :not_found
+    # /assets isn't a router scope (it's Plug.Static mounted in
+    # endpoint.ex), so it's easy to miss here. Plug.Static only intercepts
+    # requests for files that exist; a mistyped/missing asset path falls
+    # through to the router and, without this entry, would match
+    # /:slug/:id and serve an HTML 200 for a broken <script src>.
+    match :*, "/assets/*path", SpaController, :not_found
+    # /email is also Plug.Static-served (see static_paths() in
+    # lib/engram_web.ex), same pass-through-on-miss shape as /assets. These
+    # paths are embedded in outbound email HTML and fetched by third-party
+    # mail proxies (Gmail image proxy, etc.), which may cache a 200 response.
+    # A masked HTML 200 there is worse than the usual case: the bad result
+    # can get cached remotely, not just seen once by a browser.
+    match :*, "/email/*path", SpaController, :not_found
+
+    # The remaining EngramWeb.static_paths/0 entries are single-segment, so they
+    # need exact matches rather than the /prefix/*path shape above. Plug.Static
+    # only serves files that exist; on a miss (broken build, deploy skew) these
+    # would otherwise fall through to get "/:slug" and return an HTML 200.
+    match :*, "/favicon.ico", SpaController, :not_found
+    match :*, "/favicon.svg", SpaController, :not_found
+    match :*, "/engram-mark.svg", SpaController, :not_found
+    match :*, "/robots.txt", SpaController, :not_found
+
+    # Vault-scoped SPA routes. `/:slug` is a vault, `/:slug/:id` a note or
+    # attachment. Kept last so every static route and the deny-list above
+    # wins.
+    get "/:slug", SpaController, :index
+    get "/:slug/:id", SpaController, :index
   end
 end

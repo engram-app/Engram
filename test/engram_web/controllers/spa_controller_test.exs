@@ -22,13 +22,18 @@ defmodule EngramWeb.SpaControllerTest do
     assert response(conn, 200) =~ "<!DOCTYPE html>"
   end
 
-  test "GET /share/* is gone: no share feature exists behind it (#858)", %{conn: conn} do
-    # The whitelist entry was vestigial: no /api/share* endpoints, no share
-    # schema, no SPA route. Advertising the path without the feature ships
-    # ambiguous intent; re-add the route when sharing is actually designed.
-    # Nested path asserted too so a future narrower route (e.g. /share/:id)
-    # can't silently change deep-link behavior without touching this test.
-    assert conn |> get("/share/abc123") |> response(404)
+  test "GET /share/abc123 now serves the SPA as a vault-scoped route", %{conn: conn} do
+    # Was a dedicated 404 test pre-Task-7: the whitelist had no /share entry
+    # and there was no catch-all, so it 404'd. Task 7 adds /:slug/:id as a
+    # generic 2-segment dynamic route for ANY slug, so /share/abc123 is now
+    # indistinguishable from /my-vault/<id> at the router level ("share" is
+    # just a slug value). No share feature was revived; the frontend/vault
+    # lookup decides what "share" resolves to. Deeper (3+ segment) paths
+    # still have no matching route and 404, asserted below.
+    assert conn |> get("/share/abc123") |> response(200)
+  end
+
+  test "GET /share/abc123/folder/note still 404s (no 3-segment SPA route)", %{conn: conn} do
     assert conn |> get("/share/abc123/folder/note") |> response(404)
   end
 
@@ -155,5 +160,162 @@ defmodule EngramWeb.SpaControllerTest do
       assert conn.status == 404
       refute response(conn, 404) =~ "<div id=\"root\">"
     end
+  end
+
+  describe "vault-scoped SPA routes" do
+    test "serves the SPA for a bare vault slug", %{conn: conn} do
+      conn = get(conn, "/my-vault")
+      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "serves the SPA for a vault-scoped note", %{conn: conn} do
+      conn = get(conn, "/my-vault/018f2b3c-0000-7000-8000-000000000000")
+      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+  end
+
+  describe "non-SPA prefixes must not fall through to /:slug (#858)" do
+    # Regression guard: without the deny-list these two-segment typos match
+    # `get "/:slug/:id"` and return an HTML 200, masking a broken API call.
+    # Every case asserts BOTH status and content-type: a status-only check
+    # would not catch a regression where not_found/2 started returning
+    # text/html with a 404 status, which is exactly the "masked as success"
+    # failure mode this guard exists to prevent.
+    test "a typo'd API path 404s instead of serving HTML", %{conn: conn} do
+      conn |> get("/api/notez") |> assert_not_found_not_html()
+    end
+
+    test "a typo'd webhooks path 404s", %{conn: conn} do
+      conn |> get("/webhooks/bogus") |> assert_not_found_not_html()
+    end
+
+    test "a typo'd well-known path 404s", %{conn: conn} do
+      conn |> get("/.well-known/bogus") |> assert_not_found_not_html()
+    end
+
+    test "a typo'd oauth path 404s", %{conn: conn} do
+      conn |> get("/oauth/bogus") |> assert_not_found_not_html()
+    end
+
+    test "a missing asset path 404s (fifth prefix: /assets is Plug.Static, not a router scope)",
+         %{conn: conn} do
+      # Plug.Static only intercepts requests for files that exist; a
+      # mistyped/missing asset path falls through to the router and needs
+      # its own deny-list entry or it would match /:slug/:id.
+      conn |> get("/assets/bogus.js") |> assert_not_found_not_html()
+    end
+
+    test "a missing email asset path 404s and is not HTML (sixth prefix: /email)",
+         %{conn: conn} do
+      # /email is also Plug.Static-served via static_paths() (lib/engram_web.ex)
+      # and referenced from outbound email HTML. A masked HTML 200 there can
+      # get cached by a third-party mail proxy, so content-type matters even
+      # more here than for /assets.
+      conn |> get("/email/missing.png") |> assert_not_found_not_html()
+    end
+
+    test "a bare /socket path 404s (seventh prefix: socket dispatch only claims /socket/websocket)",
+         %{conn: conn} do
+      conn |> get("/socket") |> assert_not_found_not_html()
+    end
+
+    test "a typo'd /socket path 404s", %{conn: conn} do
+      conn |> get("/socket/bogus") |> assert_not_found_not_html()
+    end
+
+    test "but /oauth/consent still serves the SPA", %{conn: conn} do
+      conn = get(conn, "/oauth/consent")
+      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "/socket/websocket still reaches the transport, unaffected by the deny-list", %{
+      conn: conn
+    } do
+      # socket_dispatch (from the `socket "/socket", EngramWeb.UserSocket`
+      # macro in endpoint.ex) claims this exact path BEFORE the router runs,
+      # so the new /socket/*path deny entry below it must never see this
+      # request. A plain GET with no Upgrade/Origin header hits the
+      # transport's own origin check and 403s, same as before this deny
+      # entry existed, proving the router-level deny-list never got a
+      # chance to intercept it.
+      conn = get(conn, "/socket/websocket")
+      assert conn.status == 403
+    end
+  end
+
+  describe "single-segment static_paths() get exact deny entries too" do
+    # EngramWeb.static_paths/0 lists favicon.ico, favicon.svg, engram-mark.svg,
+    # robots.txt (and email, covered above). These are single-segment, so they
+    # need an exact match rather than the /prefix/*path shape used elsewhere in
+    # the deny-list. All four real files exist on disk in this test env
+    # (priv/static/), so Plug.Static (mounted ahead of the router in the
+    # endpoint) always wins for these requests. The tests below prove that's
+    # still true after adding the router-level entries.
+    test "GET /favicon.ico still serves the real file, not the SPA", %{conn: conn} do
+      conn = get(conn, "/favicon.ico")
+      assert conn.status == 200
+      [content_type] = get_resp_header(conn, "content-type")
+      refute content_type =~ "text/html"
+      refute response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "GET /favicon.svg still serves the real file, not the SPA", %{conn: conn} do
+      conn = get(conn, "/favicon.svg")
+      assert conn.status == 200
+      [content_type] = get_resp_header(conn, "content-type")
+      refute content_type =~ "text/html"
+      refute response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "GET /engram-mark.svg still serves the real file, not the SPA", %{conn: conn} do
+      conn = get(conn, "/engram-mark.svg")
+      assert conn.status == 200
+      [content_type] = get_resp_header(conn, "content-type")
+      refute content_type =~ "text/html"
+      refute response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "GET /robots.txt still serves the real file, not the SPA", %{conn: conn} do
+      conn = get(conn, "/robots.txt")
+      assert conn.status == 200
+      [content_type] = get_resp_header(conn, "content-type")
+      refute content_type =~ "text/html"
+      refute response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "a bogus sibling single-segment path still reaches the SPA", %{conn: conn} do
+      # /nonexistent.txt isn't a real static file and isn't in the deny-list,
+      # so it must still fall through to the vault-scoped /:slug route like
+      # any other unrecognized single segment. Proves the new exact entries
+      # above are scoped to their four literal paths, not a blanket sweep.
+      conn = get(conn, "/nonexistent.txt")
+      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "on a Plug.Static miss (deploy skew), the router-level entries 404 instead of an HTML 200" do
+      # Plug.Static always wins while the real file exists (proven above), so
+      # the only way to exercise the router-level deny entries themselves is
+      # to bypass the endpoint's Plug.Static plug and hit the router
+      # directly, simulating the deploy-skew scenario (file missing from
+      # priv/static) without deleting a real file on disk.
+      for path <- ~w(/favicon.ico /favicon.svg /engram-mark.svg /robots.txt) do
+        conn =
+          Phoenix.ConnTest.build_conn(:get, path)
+          |> EngramWeb.Router.call(EngramWeb.Router.init([]))
+
+        assert conn.status == 404, "expected #{path} to 404 at the router level"
+        [content_type] = get_resp_header(conn, "content-type")
+
+        refute content_type =~ "text/html",
+               "expected #{path} not to serve HTML at the router level"
+      end
+    end
+  end
+
+  defp assert_not_found_not_html(conn) do
+    assert response(conn, 404)
+    [content_type] = get_resp_header(conn, "content-type")
+    refute content_type =~ "text/html"
+    conn
   end
 end

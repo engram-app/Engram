@@ -6,6 +6,7 @@ import type { BillingStatus } from "../api/queries";
 import { ThemeProvider } from "../theme/theme-provider";
 import AppSidebarPanel, { Rail } from "./app-sidebar";
 import { RailViewProvider } from "./rail-view-context";
+import { RightToolsProvider } from "./right-tools-context";
 
 let billingStatusValue: { data: Partial<BillingStatus> | undefined; isLoading: boolean } = {
 	data: { tier: "free", active: false } as Partial<BillingStatus>,
@@ -45,8 +46,10 @@ function renderSidebar() {
 			<ThemeProvider>
 				<MemoryRouter>
 					<RailViewProvider>
-						<Rail />
-						<AppSidebarPanel />
+						<RightToolsProvider>
+							<Rail />
+							<AppSidebarPanel />
+						</RightToolsProvider>
 					</RailViewProvider>
 				</MemoryRouter>
 			</ThemeProvider>
@@ -92,7 +95,7 @@ describe("AppSidebar — Free-tier footer", () => {
 
 		expect(screen.getByText(/free tier.*1 connection/iu)).toBeInTheDocument();
 		const link = screen.getByRole("link", { name: /upgrade/iu });
-		expect(link).toHaveAttribute("href", "/settings/billing");
+		expect(link).toHaveAttribute("href", "/#settings/billing");
 	});
 
 	it("does not render the footer when tier=pro", () => {

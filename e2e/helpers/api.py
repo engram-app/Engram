@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
-import re
 import time
+import uuid
 from urllib.parse import quote
 
 import requests
+
+from helpers.latency import DELIVERY_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,17 @@ class ApiClient:
         )
         return resp.status_code
 
+    def batch_delete_notes(self, ids: list[str]) -> int:
+        """POST /notes/batch-delete with note IDs (from the manifest). Returns
+        status. The endpoint enforces X-Idempotency-Key (any fresh UUID)."""
+        resp = self.session.post(
+            f"{self.base_url}/notes/batch-delete",
+            json={"ids": ids},
+            headers={"X-Idempotency-Key": str(uuid.uuid4())},
+            timeout=30,
+        )
+        return resp.status_code
+
     def get_changes(self, since: str) -> dict:
         """GET /notes/changes?since=..."""
         resp = self.session.get(
@@ -87,14 +100,12 @@ class ApiClient:
         return resp.json()
 
     def wait_for_note(
-        self, path: str, timeout: float = 30, poll: float = 0.5
+        self, path: str, timeout: float = DELIVERY_TIMEOUT, poll: float = 0.5
     ) -> dict:
         """Poll until note exists on server. Returns the note dict.
 
-        Default 30s (was 10s) matches the load-tuned delivery budgets
-        (RT_TIMEOUT, wait_for_stream): under e2e-clerk 2-worker load the
-        plugin's push can legitimately exceed 10s. Callsites that still pass an
-        explicit timeout=10 keep the tighter budget until swept separately.
+        Shares the central delivery budget (helpers.latency): the timeout is a
+        true-breakage bound, not a latency assert.
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -105,7 +116,7 @@ class ApiClient:
         raise TimeoutError(f"Note {path} not on server after {timeout}s")
 
     def wait_for_note_content(
-        self, path: str, expected: str, timeout: float = 10, poll: float = 0.5
+        self, path: str, expected: str, timeout: float = DELIVERY_TIMEOUT, poll: float = 0.5
     ) -> dict:
         """Poll until note on server contains expected substring."""
         deadline = time.monotonic() + timeout
@@ -119,7 +130,7 @@ class ApiClient:
         )
 
     def wait_for_note_gone(
-        self, path: str, timeout: float = 10, poll: float = 0.5
+        self, path: str, timeout: float = DELIVERY_TIMEOUT, poll: float = 0.5
     ) -> None:
         """Poll until note returns 404 on server."""
         deadline = time.monotonic() + timeout
@@ -131,7 +142,7 @@ class ApiClient:
         raise TimeoutError(f"Note {path} still on server after {timeout}s")
 
     def wait_for_attachment(
-        self, path: str, timeout: float = 15, poll: float = 0.5
+        self, path: str, timeout: float = DELIVERY_TIMEOUT, poll: float = 0.5
     ) -> None:
         """Poll until attachment is reachable on server (2xx)."""
         deadline = time.monotonic() + timeout
@@ -142,7 +153,7 @@ class ApiClient:
         raise TimeoutError(f"Attachment {path} not on server after {timeout}s")
 
     def wait_for_attachment_gone(
-        self, path: str, timeout: float = 15, poll: float = 0.5
+        self, path: str, timeout: float = DELIVERY_TIMEOUT, poll: float = 0.5
     ) -> None:
         """Poll until attachment returns 404 on server."""
         deadline = time.monotonic() + timeout

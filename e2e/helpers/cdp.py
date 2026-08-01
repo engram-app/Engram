@@ -11,6 +11,8 @@ from typing import Any
 import requests
 import websockets
 
+from helpers.latency import DELIVERY_TIMEOUT
+
 logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "engram-vault-sync"
@@ -60,10 +62,21 @@ class CdpClient:
                 pass
             self._ws = None
 
-    async def evaluate(self, expr: str, await_promise: bool = False) -> Any:
+    async def evaluate(
+        self, expr: str, await_promise: bool = False, timeout: float = 120
+    ) -> Any:
         """Evaluate JS expression in Obsidian's renderer process.
 
         Uses a persistent WebSocket connection, reconnecting on failure.
+
+        Bounded: an awaited promise that never settles (e.g. a plugin
+        fullSync wedged on a stalled requestUrl — the test_57 300s
+        pytest-timeout hangs) raises CdpError after `timeout` instead of
+        holding the xdist worker hostage until pytest-timeout's SIGALRM.
+        120s sits above every legitimate long promise (bulk first sync,
+        plugin reload) and well under the 300s cap, so the worker is freed
+        with a NAMED failure. On timeout the socket is dropped so a late
+        reply for this msg id cannot be consumed by the next evaluate.
         """
         self._msg_id += 1
         msg_id = self._msg_id
@@ -93,16 +106,36 @@ class CdpClient:
                 raise CdpError(f"JS error: {result.get('description', result)}")
             return result
 
+        # `timeout` is a TOTAL budget across the initial attempt and the one
+        # connection-level retry: a late first-attempt failure must not double
+        # the ceiling to 2x and eat the margin under pytest-timeout's 300s
+        # (review: 240s worst case left only 60s).
+        deadline = time.monotonic() + timeout
         await self._ensure_connected()
         try:
-            return await _send_recv()
+            return await asyncio.wait_for(_send_recv(), timeout)
+        except asyncio.TimeoutError:
+            await self._close()
+            raise CdpError(
+                f"CDP evaluate timed out after {timeout}s "
+                f"(awaitPromise={await_promise}) on port {self.port}: {expr[:200]}"
+            ) from None
         except CdpError:
             raise
         except Exception:
             # Reconnect once and retry on connection-level failures
             await self._close()
             await self._ensure_connected()
-            return await _send_recv()
+            remaining = max(1.0, deadline - time.monotonic())
+            try:
+                return await asyncio.wait_for(_send_recv(), remaining)
+            except asyncio.TimeoutError:
+                await self._close()
+                raise CdpError(
+                    f"CDP evaluate timed out after {timeout}s total (retry window "
+                    f"{remaining:.0f}s, awaitPromise={await_promise}) on port "
+                    f"{self.port}: {expr[:200]}"
+                ) from None
 
     async def wait_for_plugin_ready(self, timeout: float = 30) -> None:
         """Poll until the engram-vault-sync plugin's SyncEngine reports ready."""
@@ -684,10 +717,11 @@ class CdpClient:
         )
         return bool(result)
 
-    async def trigger_pull(self) -> int:
-        """Call syncEngine.pull() and return count of pulled notes."""
+    async def trigger_catch_up(self) -> int:
+        """Call syncEngine.catchUp() (socket seq-replay + manifest reconcile) and
+        return the count of applied ops. Replaces the deleted REST pull()."""
         result = await self.evaluate(
-            f"{ENGINE_PATH}.pull().then(r => r)", await_promise=True
+            f"{ENGINE_PATH}.catchUp().then(r => r)", await_promise=True
         )
         return result if isinstance(result, int) else 0
 
@@ -704,9 +738,10 @@ class CdpClient:
         """Read the lastSync timestamp string."""
         return await self.evaluate(f"{ENGINE_PATH}.lastSync")
 
-    async def get_sync_cursor(self) -> str | None:
-        """Read the opaque sync cursor (B2 ordered-pull watermark)."""
-        return await self.evaluate(f"{ENGINE_PATH}.getSyncCursor()")
+    async def get_catchup_seq(self) -> int:
+        """Read the socket op-log catch-up watermark (seq)."""
+        result = await self.evaluate(f"{ENGINE_PATH}.getCatchupSeq()")
+        return result if isinstance(result, int) else 0
 
     async def accelerate_echo_expiry(self, path: str, ms: int = 200) -> None:
         """Replace the pending recentlyPushed timer for ``path`` with a short one.
@@ -782,7 +817,7 @@ class CdpClient:
             # string; the real timeout is still raised by the caller.
             return f"<stream diag unavailable: {e!r}>"
 
-    async def wait_for_stream_connected(self, timeout: float = 10) -> None:
+    async def wait_for_stream_connected(self, timeout: float = DELIVERY_TIMEOUT) -> None:
         """Poll until the WebSocket channel reports connected.
 
         Use at the top of tests that rely on live propagation — the channel
@@ -799,36 +834,6 @@ class CdpClient:
             f"Stream not connected after {timeout}s on CDP port {self.port} — channel={diag}"
         )
 
-
-    async def set_conflict_resolution(self, mode: str) -> None:
-        """Set the plugin's conflictResolution setting.
-
-        Modes: 'auto' (creates conflict files) or 'modal' (calls onConflict handler).
-        """
-        js = f"{ENGINE_PATH}.settings.conflictResolution = '{mode}'"
-        await self.evaluate(js)
-        logger.info("Conflict resolution set to '%s' on CDP port %d", mode, self.port)
-
-    async def override_conflict_handler(
-        self, choice: str, merged_content: str | None = None
-    ) -> None:
-        """Override onConflict to auto-resolve with the given choice.
-
-        Valid choices: 'keep-local', 'keep-remote', 'keep-both', 'skip', 'merge'
-        """
-        if merged_content is not None:
-            escaped = json.dumps(merged_content)
-            js = (
-                f"{ENGINE_PATH}.onConflict = async (info) => "
-                f"({{choice: '{choice}', mergedContent: {escaped}}})"
-            )
-        else:
-            js = (
-                f"{ENGINE_PATH}.onConflict = async (info) => "
-                f"({{choice: '{choice}'}})"
-            )
-        await self.evaluate(js)
-        logger.info("Conflict handler overridden to '%s'", choice)
 
     async def pause_outgoing_sync(self) -> None:
         """Block plugin from pushing changes by replacing handlers with no-ops.
@@ -876,9 +881,8 @@ class CdpClient:
 
         Plain filesystem writes (helpers.vault.write_note) are picked up only
         when Obsidian's file watcher fires — async, racy. Code paths that need
-        the file to be in ``app.vault.getFiles()`` immediately (e.g. the
-        ``setup_conflict_for_a`` seed's step-1 trigger_full_sync) must use
-        this helper instead.
+        the file to be in ``app.vault.getFiles()`` immediately (e.g. a seed
+        step followed by trigger_full_sync) must use this helper instead.
 
         Creates parent folders as needed. Idempotent: modifies if the file
         already exists, otherwise creates.
@@ -909,11 +913,9 @@ class CdpClient:
     async def pause_incoming_sync(self) -> None:
         """Silence incoming WebSocket events by replacing handleStreamEvent.
 
-        Used by setup_conflict_for_a to guarantee that ``pull()`` is the
-        ONLY path that can detect divergence and open ConflictModal —
-        without this, B's full_sync push broadcasts an upsert event to A
-        which races against pull() under resolveConflict's single-flight
-        gate. The race produced the test_54 PerHunk flake on PR #162.
+        Lets a test guarantee that ``pull()`` is the ONLY path that can apply
+        remote content — without this, a full_sync push broadcasts an upsert
+        event that races against pull().
         """
         js = f"""
         (function() {{
@@ -1053,6 +1055,27 @@ class CdpClient:
             f"CRDT doc {note_id} still resident after {timeout}s on CDP port {self.port}"
         )
 
+    async def wait_for_room_free(self, note_id: str, timeout: float = 30) -> None:
+        """Poll until note_id is absent from CrdtEnrollment.enrolled.
+
+        A checkpoint-driven catch-up can open a TRANSIENT heal room for an idle
+        cold note (the diverged-cold-note re-handshake, sync.ts:5578, which is
+        NOT isLiveBound-gated by design). The plugin releases it asynchronously
+        once convergence commits (commitCrdtConvergence -> releaseHealRoom). A
+        single immediate get_enrolled_note_ids() sample right after
+        trigger_full_sync races that release; poll for it instead. A genuinely
+        stuck room still fails via timeout, so the invariant stays enforced.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if note_id not in await self.get_enrolled_note_ids():
+                return
+            await asyncio.sleep(0.2)
+        raise TimeoutError(
+            f"CRDT heal room for {note_id} not released after {timeout}s "
+            f"on CDP port {self.port}"
+        )
+
     async def rename_file(self, old_path: str, new_path: str) -> None:
         """Rename a file through Obsidian's vault API (triggers handleRename)."""
         escaped_old = json.dumps(old_path)
@@ -1067,27 +1090,6 @@ class CdpClient:
         """
         result = await self.evaluate(js, await_promise=True)
         logger.info("Renamed %s → %s: %s", old_path, new_path, result)
-
-    async def restore_conflict_handler(self) -> None:
-        """Restore the original modal-based conflict handler.
-
-        Re-wires the handler that opens ConflictModal.
-        """
-        js = f"""
-        (function() {{
-            const plugin = {PLUGIN_PATH};
-            const ConflictModal = require('{PLUGIN_ID}').ConflictModal
-                || plugin.app.plugins.plugins['{PLUGIN_ID}'].constructor.__ConflictModal;
-            // Fallback: set to null so SyncEngine uses its default skip behavior
-            plugin.syncEngine.onConflict = null;
-        }})()
-        """
-        try:
-            await self.evaluate(js)
-        except CdpError:
-            # If we can't restore the fancy handler, null is safe (defaults to skip)
-            await self.evaluate(f"{ENGINE_PATH}.onConflict = null")
-        logger.info("Conflict handler restored")
 
     # ------------------------------------------------------------------
     # Resilience testing helpers
@@ -1408,155 +1410,6 @@ class CdpClient:
                 return
             await asyncio.sleep(0.1)
         raise TimeoutError("SearchView did not mount")
-
-    # ------------------------------------------------------------------
-    # Step 3: ConflictModal interaction helpers
-    # ------------------------------------------------------------------
-    #
-    # SELECTOR CONCERNS (see report):
-    #   - get_conflict_view_mode: plan queried '[data-view-mode]' which does
-    #     not exist in source. We query the active button inside
-    #     .engram-conflict-view-toggle instead.
-    #   - toggle_conflict_view: plan used .engram-view-toggle (missing);
-    #     corrected to .engram-conflict-view-toggle.
-    #   - click_all_local / click_all_remote: plan used .engram-all-local /
-    #     .engram-all-remote (missing); corrected to text-based button search
-    #     inside .engram-conflict-bulk.
-    #   - pick_conflict_hunk: plan used .engram-hunk (missing) and
-    #     [data-side=...] (missing); corrected to .engram-conflict-hunk and
-    #     button text "Use local" / "Use remote".
-    #   - set_merge_editor: plan used textarea.engram-merge-editor (missing);
-    #     corrected to .engram-conflict-merge-editor.
-    #   - click_conflict_accept: plan used .engram-accept (missing);
-    #     corrected to button text "Apply merge" inside .engram-conflict-actions.
-    #   - click_conflict_skip: plan used .engram-skip (missing);
-    #     corrected to button text "Skip" inside .engram-conflict-actions.
-
-    async def get_conflict_view_mode(self) -> str:
-        """Return 'unified' or 'side-by-side' based on the active toggle button.
-
-        Reads the active button text inside .engram-conflict-view-toggle.
-        Source has no data-view-mode attribute — plan selector was speculative.
-        """
-        return await self.evaluate(
-            "(() => {"
-            "const toggle = document.querySelector("
-            "'.engram-conflict-modal .engram-conflict-view-toggle');"
-            "if (!toggle) return null;"
-            "const active = toggle.querySelector('button.is-active');"
-            "if (!active) return null;"
-            "const t = active.textContent.trim().toLowerCase();"
-            "return t === 'side-by-side' ? 'side-by-side' : 'unified';"
-            "})()"
-        )
-
-    async def toggle_conflict_view(self) -> None:
-        """Click the non-active view button in .engram-conflict-view-toggle."""
-        await self.evaluate(
-            "(() => {"
-            "const toggle = document.querySelector("
-            "'.engram-conflict-modal .engram-conflict-view-toggle');"
-            "if (!toggle) return;"
-            "const inactive = Array.from(toggle.querySelectorAll('button'))"
-            ".find(b => !b.classList.contains('is-active'));"
-            "if (inactive) inactive.click();"
-            "})()"
-        )
-
-    async def click_all_local(self) -> None:
-        """Click the 'All local' bulk button inside .engram-conflict-bulk."""
-        await self.evaluate(
-            "(() => {"
-            "const bulk = document.querySelector("
-            "'.engram-conflict-modal .engram-conflict-bulk');"
-            "if (!bulk) return;"
-            "Array.from(bulk.querySelectorAll('button'))"
-            ".find(b => b.textContent.trim() === 'All local')?.click();"
-            "})()"
-        )
-
-    async def click_all_remote(self) -> None:
-        """Click the 'All remote' bulk button inside .engram-conflict-bulk."""
-        await self.evaluate(
-            "(() => {"
-            "const bulk = document.querySelector("
-            "'.engram-conflict-modal .engram-conflict-bulk');"
-            "if (!bulk) return;"
-            "Array.from(bulk.querySelectorAll('button'))"
-            ".find(b => b.textContent.trim() === 'All remote')?.click();"
-            "})()"
-        )
-
-    async def pick_conflict_hunk(self, index: int, side: str) -> None:
-        """Click 'Use local' or 'Use remote' in a hunk by index.
-
-        side ∈ {'local', 'remote'}. Source uses button text 'Use local' /
-        'Use remote' inside .engram-conflict-hunk-controls — no data-side.
-        """
-        label = "Use local" if side == "local" else "Use remote"
-        await self.evaluate(
-            f"(() => {{"
-            f"const hunk = document.querySelectorAll("
-            f"'.engram-conflict-modal .engram-conflict-hunk')[{index}];"
-            f"if (!hunk) return;"
-            f"const label = {json.dumps(label)};"
-            f"Array.from(hunk.querySelectorAll('.engram-conflict-hunk-controls button'))"
-            f".find(b => b.textContent.trim() === label)?.click();"
-            f"}})()"
-        )
-
-    async def set_merge_editor(self, content: str) -> None:
-        """Set the merge editor textarea value and fire input + change events."""
-        await self.evaluate(
-            f"(() => {{const t = document.querySelector("
-            f"'.engram-conflict-modal .engram-conflict-merge-editor'); "
-            f"t.value = {json.dumps(content)}; "
-            f"t.dispatchEvent(new Event('input', {{bubbles: true}})); "
-            f"t.dispatchEvent(new Event('change', {{bubbles: true}})); }})()"
-        )
-
-    async def click_conflict_accept(self) -> None:
-        """Click 'Apply merge' in the conflict modal actions footer."""
-        await self.evaluate(
-            "(() => {"
-            "const footer = document.querySelector("
-            "'.engram-conflict-modal .engram-conflict-actions');"
-            "if (!footer) return;"
-            "Array.from(footer.querySelectorAll('button'))"
-            ".find(b => b.textContent.trim() === 'Apply merge')?.click();"
-            "})()"
-        )
-
-    async def click_conflict_skip(self) -> None:
-        """Click 'Skip' in the conflict modal actions footer."""
-        await self.evaluate(
-            "(() => {"
-            "const footer = document.querySelector("
-            "'.engram-conflict-modal .engram-conflict-actions');"
-            "if (!footer) return;"
-            "Array.from(footer.querySelectorAll('button'))"
-            ".find(b => b.textContent.trim() === 'Skip')?.click();"
-            "})()"
-        )
-
-    async def wait_for_conflict_modal_closed(self, timeout: float = 10) -> None:
-        """Poll until .engram-conflict-modal is gone from the DOM.
-
-        Distinct from wait_for_modal_closed() which targets the sync-preview
-        modal.  Conflict resolution can involve a full-sync round-trip so the
-        default timeout is more generous (10 s vs 5 s).
-        """
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            present = await self.evaluate(
-                "Boolean(document.querySelector('.engram-conflict-modal'))"
-            )
-            if not present:
-                return
-            await asyncio.sleep(0.1)
-        raise TimeoutError(
-            f"ConflictModal still mounted after {timeout}s on CDP port {self.port}"
-        )
 
     # ------------------------------------------------------------------
     # Step 4: SyncPreviewModal destructive confirm helpers

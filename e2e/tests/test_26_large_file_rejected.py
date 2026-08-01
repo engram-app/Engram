@@ -25,7 +25,7 @@ async def test_large_file_rejected(vault_a, cdp_a, api_sync):
 
     # Poll for the normal note — once it arrives, the push cycle has completed
     # and the large note has already been attempted and rejected
-    api_sync.wait_for_note(normal_path, timeout=10)
+    api_sync.wait_for_note(normal_path)
 
     # Large note should NOT be on server (413 rejection)
     note = api_sync.get_note(large_path)

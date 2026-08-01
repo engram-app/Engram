@@ -130,9 +130,18 @@ defmodule Engram.Notes.HelpersTest do
       assert log =~ "invalid UTF-8"
     end
 
+    # Partial match, not `== ""`: capture_log is node-global, so in an async
+    # module a sibling test's log line lands in this capture and an
+    # emptiness assertion flakes. `log_write_scrub/0` is the only Logger call
+    # in scrub_utf8/2, so refuting its message is the assertion that actually
+    # binds the code under test. (ExUnit.CaptureLog docs prescribe exactly
+    # this: "consider such cases in your assertions, typically by using the
+    # =~/2 operator to perform partial matches".)
     test "stays silent on read/search boundaries (counter-only, avoids log spam)" do
-      assert capture_log(fn -> Helpers.scrub_utf8("x" <> <<0xE2>>, :read) end) == ""
-      assert capture_log(fn -> Helpers.scrub_utf8("x" <> <<0xE2>>, :search) end) == ""
+      refute capture_log(fn -> Helpers.scrub_utf8("x" <> <<0xE2>>, :read) end) =~ "invalid UTF-8"
+
+      refute capture_log(fn -> Helpers.scrub_utf8("x" <> <<0xE2>>, :search) end) =~
+               "invalid UTF-8"
     end
   end
 

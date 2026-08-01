@@ -3,6 +3,8 @@ defmodule Engram.MCP.HandlersTest do
 
   alias Engram.Attachments
   alias Engram.MCP.Handlers
+  alias Engram.MCP.Tools
+  alias Engram.Notes
 
   setup do
     prev = Application.get_env(:engram, :storage)
@@ -126,7 +128,7 @@ defmodule Engram.MCP.HandlersTest do
     end
 
     test "move_attachment registered as a tool" do
-      assert {:ok, %{name: "move_attachment"}} = Engram.MCP.Tools.get("move_attachment")
+      assert {:ok, %{name: "move_attachment"}} = Tools.get("move_attachment")
     end
 
     test "an unexpected crypto error returns a clean message, not a crash", %{
@@ -168,6 +170,149 @@ defmodule Engram.MCP.HandlersTest do
                "(Bug 2) so a non-:conflict coordinator error doesn't 500"
 
       assert handler =~ "Could not rename folder"
+    end
+  end
+
+  describe "get_notes handler" do
+    test "batch-reads multiple notes in one call", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "alpha", "mtime" => 1.0})
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "beta", "mtime" => 1.0})
+
+      assert {:ok, body} =
+               Handlers.handle("get_notes", user, vault, %{"paths" => ["A.md", "B.md"]})
+
+      assert body =~ "alpha"
+      assert body =~ "beta"
+    end
+
+    test "reports a missing path inline without failing the batch", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "alpha", "mtime" => 1.0})
+
+      assert {:ok, body} =
+               Handlers.handle("get_notes", user, vault, %{"paths" => ["A.md", "gone.md"]})
+
+      assert body =~ "alpha"
+      assert body =~ "Note not found: gone.md"
+    end
+
+    test "rejects an empty paths list", %{user: user, vault: vault} do
+      assert {:error, _} = Handlers.handle("get_notes", user, vault, %{"paths" => []})
+    end
+
+    test "rejects more than 20 paths", %{user: user, vault: vault} do
+      paths = for i <- 1..21, do: "n#{i}.md"
+      assert {:error, msg} = Handlers.handle("get_notes", user, vault, %{"paths" => paths})
+      assert msg =~ "max 20"
+    end
+
+    test "rejects a non-string path element", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      assert {:error, msg} =
+               Handlers.handle("get_notes", user, vault, %{"paths" => ["ok.md", 123]})
+
+      assert msg =~ "must be a string"
+    end
+
+    test "registered as a tool",
+      do: assert({:ok, %{name: "get_notes"}} = Tools.get("get_notes"))
+  end
+
+  describe "delete_folder handler" do
+    test "deletes an empty folder", %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Empty")
+
+      assert {:ok, msg} = Handlers.handle("delete_folder", user, vault, %{"folder" => "Empty"})
+      assert msg =~ "Folder deleted: Empty"
+    end
+
+    test "refuses a non-empty folder and reports counts", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+
+      assert {:ok, msg} = Handlers.handle("delete_folder", user, vault, %{"folder" => "Docs"})
+      assert msg =~ "recursive: true"
+      assert msg =~ "1 notes"
+    end
+
+    test "recursive deletes contents", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+
+      assert {:ok, msg} =
+               Handlers.handle("delete_folder", user, vault, %{
+                 "folder" => "Docs",
+                 "recursive" => true
+               })
+
+      assert msg =~ "Folder deleted: Docs"
+      assert {:error, :not_found} = Notes.get_note(user, vault, "Docs/a.md")
+    end
+
+    test "refuses to delete the vault root", %{user: user, vault: vault} do
+      assert {:ok, msg} = Handlers.handle("delete_folder", user, vault, %{"folder" => ""})
+      assert msg =~ "root"
+    end
+
+    test "registered as a tool",
+      do: assert({:ok, %{name: "delete_folder"}} = Tools.get("delete_folder"))
+  end
+
+  describe "list_folder attachment visibility" do
+    test "lists attachments alongside notes", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "Docs/p.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      assert {:ok, body} = Handlers.handle("list_folder", user, vault, %{"folder" => "Docs"})
+
+      assert body =~ "Docs/a.md"
+      assert body =~ "Docs/p.png"
+      assert body =~ "(attachment)"
+    end
+
+    test "attachment listing is non-recursive", %{user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "Docs/Sub/deep.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      assert {:ok, body} = Handlers.handle("list_folder", user, vault, %{"folder" => "Docs"})
+      refute body =~ "deep.png"
+    end
+
+    test "renders an attachments-only folder (no notes)", %{user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "Docs/p.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      assert {:ok, body} = Handlers.handle("list_folder", user, vault, %{"folder" => "Docs"})
+
+      assert body =~ "Docs/p.png"
+      assert body =~ "(attachment)"
+      refute body =~ "No notes found"
     end
   end
 end

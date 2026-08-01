@@ -1,6 +1,6 @@
 import remarkCallouts from "@portaljs/remark-callouts";
 import matter from "gray-matter";
-import { memo, useMemo } from "react";
+import { type CSSProperties, memo, useMemo } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import rehypeHighlight from "rehype-highlight";
@@ -100,7 +100,7 @@ function NoteView({ content, tags }: NoteViewProps) {
 						url.startsWith(ATTACHMENT_SCHEME) ? url : defaultUrlTransform(url)
 					}
 					components={{
-						code({ className, children, ...rest }) {
+						code({ node: _node, className, children, ...rest }) {
 							const lang = /language-(?<lang>\w+)/u.exec(className ?? "")?.[1];
 							const code = String(children).replace(/\n$/u, "");
 							if (lang === "mermaid") {
@@ -110,6 +110,42 @@ function NoteView({ content, tags }: NoteViewProps) {
 								<code className={className} {...rest}>
 									{children}
 								</code>
+							);
+						},
+						// remark-callouts inlines `border-left-color` per type, from the same
+						// map the CodeMirror live preview reads. Republish it as a custom
+						// property so CSS can reuse that exact colour (for the title text)
+						// without keeping a second palette that drifts from it.
+						blockquote({ node: _node, children, ...rest }) {
+							const style = rest.style as CSSProperties | undefined;
+							const color = style?.borderLeftColor;
+							return (
+								<blockquote
+									{...rest}
+									style={color ? ({ ...style, "--callout-color": color } as CSSProperties) : style}
+								>
+									{children}
+								</blockquote>
+							);
+						},
+						// The library ALSO inlines a tinted background on the callout title.
+						// The editor's live preview has no such bar, and an inline style
+						// cannot be overridden from a stylesheet without !important — so it
+						// gets dropped here instead.
+						div({ node: _node, className, children, ...rest }) {
+							const cls = String(className ?? "");
+							if (cls.includes("callout-title")) {
+								const { style: _tint, ...untinted } = rest as Record<string, unknown>;
+								return (
+									<div className={cls} {...untinted}>
+										{children}
+									</div>
+								);
+							}
+							return (
+								<div className={className} {...rest}>
+									{children}
+								</div>
 							);
 						},
 						img({ src, alt }) {

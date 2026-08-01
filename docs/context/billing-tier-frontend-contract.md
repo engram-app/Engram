@@ -72,4 +72,4 @@ subscriptions surface as their paid tier (`:starter`/`:pro`), because the
 ## References
 - PR #309 (header restyle + free-tier billing fix).
 - `docs/context/paddle-integration.md` (webhook/lifecycle side of subscriptions).
-- `docs/context/pricing-v2-server-side-enforcement-audit.md` (server-side tier enforcement).
+- Server-side tier enforcement is encoded by `mix engram.lint.no_client_only_rate_limits` (CI) — every `LimitKeys` key must have a server-side enforcement site.

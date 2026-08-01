@@ -101,4 +101,22 @@ defmodule Engram.Notes.FanoutPacerTest do
     assert_receive(%Phoenix.Socket.Broadcast{topic: ^ta}, 200)
     assert_receive(%Phoenix.Socket.Broadcast{topic: ^tb}, 200)
   end
+
+  test "test_drop_next/2 swallows exactly n emits for that note, then resumes" do
+    Application.put_env(:engram, :fanout_pacing_enabled, false)
+    topic = "sync:u5:v1"
+    EngramWeb.Endpoint.subscribe(topic)
+
+    FanoutPacer.test_drop_next("doomed", 2)
+
+    FanoutPacer.emit(topic, "note_yjs_update", payload("doomed"), "doomed")
+    FanoutPacer.emit(topic, "note_yjs_update", payload("other"), "other")
+    FanoutPacer.emit(topic, "note_yjs_update", payload("doomed"), "doomed")
+    FanoutPacer.emit(topic, "note_yjs_update", payload("doomed"), "doomed")
+
+    # Other notes are untouched; the armed note loses exactly 2 frames.
+    assert_receive %Phoenix.Socket.Broadcast{payload: %{"note_id" => "other"}}, 200
+    assert_receive %Phoenix.Socket.Broadcast{payload: %{"note_id" => "doomed"}}, 200
+    refute_receive %Phoenix.Socket.Broadcast{payload: %{"note_id" => "doomed"}}, 100
+  end
 end

@@ -63,7 +63,11 @@ defmodule EngramWeb.WellKnownController do
       response_types_supported: ["code"],
       grant_types_supported: ["authorization_code", "refresh_token"],
       code_challenge_methods_supported: ["S256"],
-      token_endpoint_auth_methods_supported: ["none"],
+      # `none` MUST stay first-class here, not merely present for legacy: Claude
+      # selects its CIMD flow only when this list contains "none", and would
+      # otherwise fall back to DCR. The secret-based methods are additive, for
+      # server-side connectors that cannot hold a public client.
+      token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
       scopes_supported: ["mcp"]
     })
   end

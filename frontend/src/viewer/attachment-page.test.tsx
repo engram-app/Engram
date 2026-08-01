@@ -41,9 +41,9 @@ beforeEach(() => {
 
 function renderAt(id: string) {
 	return render(
-		<MemoryRouter initialEntries={[`/note/${id}`]}>
+		<MemoryRouter initialEntries={[`/work/${id}`]}>
 			<Routes>
-				<Route path="/note/:id" element={<AttachmentPage />} />
+				<Route path="/:slug/:itemId" element={<AttachmentPage />} />
 			</Routes>
 		</MemoryRouter>,
 	);

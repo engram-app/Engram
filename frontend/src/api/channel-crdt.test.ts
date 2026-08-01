@@ -56,6 +56,8 @@ const sessionMock = vi.hoisted(() => ({
 	notifyCrdtChannelError: vi.fn(),
 	resyncOpenDocs: vi.fn(),
 	scheduleRehandshake: vi.fn(),
+	getCrdtSyncStatus: vi.fn(() => "connecting"),
+	subscribeToCrdtSyncStatus: vi.fn(() => () => {}),
 }));
 vi.mock("../crdt/session", () => sessionMock);
 

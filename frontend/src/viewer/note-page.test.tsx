@@ -2,7 +2,26 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
+import { RightToolsProvider } from "../layout/right-tools-context";
+import { ActiveEditorProvider, useActiveEditor } from "./editor/active-editor-context";
 import NotePage from "./note-page";
+
+// Real provider, not a stub: the page publishing its editor here is the seam the
+// right-sidebar reference panel inserts through, so it's worth exercising.
+function EditorProbe() {
+	const { hasEditor } = useActiveEditor();
+	return <span data-testid="has-editor">{String(hasEditor)}</span>;
+}
+
+const renderPage = () =>
+	render(
+		<RightToolsProvider>
+			<ActiveEditorProvider>
+				<NotePage />
+				<EditorProbe />
+			</ActiveEditorProvider>
+		</RightToolsProvider>,
+	);
 
 // NoteView relies on ConfigProvider / billing context not available in this
 // test harness. Mock it so we can assert on the `content` prop directly.
@@ -31,12 +50,12 @@ vi.mock("../crdt/session", () => ({
 }));
 
 const useNoteMock = vi.fn();
-vi.mock("../api/queries", () => ({ useNote: (...a: unknown[]) => useNoteMock(...a) }));
-vi.mock("react-router", () => ({ useParams: () => ({ id: "note-1" }) }));
-// Minimal stubs for the right-sidebar + lazy editor context used by the page.
-vi.mock("../layout/right-sidebar-context", () => ({
-	useRightSidebar: () => ({ setContent: () => {} }),
+const { renameNoteMutate } = vi.hoisted(() => ({ renameNoteMutate: vi.fn() }));
+vi.mock("../api/queries", () => ({
+	useNote: (...a: unknown[]) => useNoteMock(...a),
+	useRenameNote: () => ({ mutate: renameNoteMutate, isPending: false }),
 }));
+vi.mock("react-router", () => ({ useParams: () => ({ itemId: "note-1" }) }));
 
 const NOTE = {
 	id: "note-1",
@@ -61,13 +80,13 @@ describe("NotePage (CRDT)", () => {
 	});
 
 	it("opens + enrolls the CRDT doc for a .md note, keyed by note_id (not path)", async () => {
-		render(<NotePage />);
+		renderPage();
 		await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-1"));
 		expect(enroll).toHaveBeenCalledWith("note-1");
 	});
 
 	it("closes the doc on unmount, keyed by note_id", async () => {
-		const { unmount } = render(<NotePage />);
+		const { unmount } = renderPage();
 		await waitFor(() => expect(openDoc).toHaveBeenCalled());
 		unmount();
 		expect(closeDoc).toHaveBeenCalledWith("note-1");
@@ -82,7 +101,7 @@ describe("NotePage (CRDT)", () => {
 			isLoading: false,
 			error: null,
 		});
-		render(<NotePage />);
+		renderPage();
 		await waitFor(() => expect(screen.getByText("note")).toBeInTheDocument());
 		expect(openDoc).not.toHaveBeenCalled();
 		expect(enroll).not.toHaveBeenCalled();
@@ -104,13 +123,13 @@ describe("NotePage (CRDT)", () => {
 			error: null,
 		});
 
-		render(<NotePage />);
+		renderPage();
 
 		// Wait for openDoc to resolve and handle to be set
 		await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-1"));
 
-		// Switch to reading view
-		fireEvent.click(screen.getByRole("button", { name: /reading view/i }));
+		// Switch to reading mode
+		fireEvent.click(screen.getByRole("button", { name: "Reading" }));
 
 		// NoteView is mocked — assert on the content prop it receives.
 		// The live Y.Text content should be passed, not the stale REST "# hi".
@@ -123,7 +142,22 @@ describe("NotePage (CRDT)", () => {
 		expect(screen.getByTestId("note-view")).not.toHaveTextContent("# hi");
 	});
 
-	it("renders the properties widget with frontmatter keys in both modes", async () => {
+	it("publishes the editor while it is mounted and withdraws it in reading mode", async () => {
+		renderPage();
+		// Editor only exists once the CRDT handle resolves.
+		await waitFor(() => expect(screen.getByTestId("has-editor")).toHaveTextContent("true"));
+
+		// Reading mode swaps the editor out for NoteView — nothing to insert into,
+		// so the reference panel's Insert action must go disabled rather than
+		// silently no-op against a torn-down view.
+		fireEvent.click(screen.getByRole("button", { name: "Reading" }));
+		await waitFor(() => expect(screen.getByTestId("has-editor")).toHaveTextContent("false"));
+
+		fireEvent.click(screen.getByRole("button", { name: "Rendered" }));
+		await waitFor(() => expect(screen.getByTestId("has-editor")).toHaveTextContent("true"));
+	});
+
+	it("renders the properties widget with frontmatter keys in the default rendered mode", async () => {
 		const doc = new Y.Doc();
 		doc.getMap("frontmatter").set("status", JSON.stringify("draft"));
 		doc.getArray("frontmatter_order").insert(0, ["status"]);
@@ -133,9 +167,115 @@ describe("NotePage (CRDT)", () => {
 			doc,
 		});
 
-		render(<NotePage />);
+		renderPage();
 
-		// Widget should appear in the default live mode
+		// Widget should appear in the default rendered mode
 		await waitFor(() => expect(screen.getByText("status")).toBeInTheDocument());
+	});
+
+	// Inline rename from the header — same semantics as the tree's rename
+	// (leaf-name edit, folder untouched, extension preserved), so the two
+	// entry points can't drift apart.
+	describe("inline rename", () => {
+		const openRename = async () => {
+			renderPage();
+			fireEvent.click(await screen.findByRole("button", { name: "note" }));
+			return screen.getByRole("textbox", { name: "Rename file" });
+		};
+
+		it("seeds the input with the display name — no extension to edit", async () => {
+			const input = await openRename();
+			expect(input).toHaveValue("note");
+			// The folder crumb stays put — only the name is editable.
+			expect(screen.getByText("folder/")).toBeInTheDocument();
+		});
+
+		it("commits on Enter, keeping the folder and the extension", async () => {
+			const input = await openRename();
+			fireEvent.change(input, { target: { value: "renamed" } });
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(renameNoteMutate).toHaveBeenCalledWith({
+				id: "note-1",
+				old_path: "folder/note.md",
+				new_path: "folder/renamed.md",
+			});
+			await waitFor(() =>
+				expect(screen.queryByRole("textbox", { name: "Rename file" })).not.toBeInTheDocument(),
+			);
+		});
+
+		it("cancels on Escape without renaming", async () => {
+			const input = await openRename();
+			fireEvent.change(input, { target: { value: "renamed" } });
+			fireEvent.keyDown(input, { key: "Escape" });
+			expect(renameNoteMutate).not.toHaveBeenCalled();
+			await waitFor(() =>
+				expect(screen.queryByRole("textbox", { name: "Rename file" })).not.toBeInTheDocument(),
+			);
+		});
+
+		it("does not fire a rename when the name is unchanged", async () => {
+			const input = await openRename();
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(renameNoteMutate).not.toHaveBeenCalled();
+		});
+
+		// The header edits the display name only — a typed extension is title
+		// text, never a file-type change. Changing .md -> .canvas would strand
+		// the note outside the CRDT markdown gate.
+		it("treats a typed extension as part of the title, not a type change", async () => {
+			const input = await openRename();
+			fireEvent.change(input, { target: { value: "board.canvas" } });
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(renameNoteMutate).toHaveBeenCalledWith(
+				expect.objectContaining({ new_path: "folder/board.canvas.md" }),
+			);
+		});
+
+		it("keeps a dotted title intact", async () => {
+			const input = await openRename();
+			fireEvent.change(input, { target: { value: "Node.js guide" } });
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(renameNoteMutate).toHaveBeenCalledWith(
+				expect.objectContaining({ new_path: "folder/Node.js guide.md" }),
+			);
+		});
+	});
+
+	it("swaps the frontmatter surface across rendered/raw/reading modes", async () => {
+		const doc = new Y.Doc();
+		doc.getMap("frontmatter").set("status", JSON.stringify("draft"));
+		doc.getArray("frontmatter_order").insert(0, ["status"]);
+		openDoc.mockResolvedValue({
+			ytext: doc.getText("content"),
+			awareness: new Awareness(doc),
+			doc,
+		});
+
+		renderPage();
+
+		// Default "rendered" mode: pills visible, editor visible, no raw YAML region.
+		await waitFor(() => expect(screen.getByText("status")).toBeInTheDocument());
+		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
+		expect(screen.queryByLabelText(/Frontmatter \(raw YAML\)/i)).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Rendered" })).toHaveAttribute(
+			"aria-pressed",
+			"true",
+		);
+
+		// Switch to "raw": raw YAML region visible, pills hidden.
+		fireEvent.click(screen.getByRole("button", { name: "Raw" }));
+		await waitFor(() =>
+			expect(screen.getByLabelText(/Frontmatter \(raw YAML\)/i)).toBeInTheDocument(),
+		);
+		expect(screen.queryByText("status")).not.toBeInTheDocument();
+		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
+
+		// Switch to "reading": NoteView visible, neither frontmatter surface shown.
+		fireEvent.click(screen.getByRole("button", { name: "Reading" }));
+		await waitFor(() => expect(screen.getByTestId("note-view")).toBeInTheDocument());
+		expect(screen.queryByLabelText(/Frontmatter \(raw YAML\)/i)).not.toBeInTheDocument();
+		expect(screen.queryByText("status")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("note-editor")).not.toBeInTheDocument();
 	});
 });

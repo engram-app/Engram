@@ -35,6 +35,23 @@ const docEpochs = new Map<string, number>();
 /** Pending per-note_id rehandshake timers (error/timeout reply recovery). */
 const rehandshakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+/** Per-note consecutive re-handshake attempts, for exponential backoff + a
+ *  circuit-breaker. Cleared by `clearRehandshakeBackoff` on a successful
+ *  crdt_msg ack (connectivity proven for that note) and on teardown. Without a
+ *  bound, a persistently-failing handshake re-fired every ~1s forever and,
+ *  combined with the reconnect-driven `resyncOpenDocs`, turned any socket
+ *  hiccup into a CPU-melting storm. */
+const rehandshakeAttempts = new Map<string, number>();
+const REHANDSHAKE_MAX_ATTEMPTS = 6;
+const REHANDSHAKE_MAX_DELAY_MS = 30_000;
+
+/** Throttle for `resyncOpenDocs`: a reconnect storm fires `socket.onOpen` many
+ *  times in seconds, and each call re-enrolls every open doc. One re-sync per
+ *  window is enough to recover; the rest is amplification. NEGATIVE_INFINITY so
+ *  the first call in a session always passes. */
+const RESYNC_MIN_INTERVAL_MS = 3000;
+let lastResyncAt = Number.NEGATIVE_INFINITY;
+
 function bumpEpoch(noteId: string): void {
 	docEpochs.set(noteId, (docEpochs.get(noteId) ?? 0) + 1);
 }
@@ -136,6 +153,8 @@ export function stopCrdtSession(): void {
 		clearTimeout(t);
 	}
 	rehandshakeTimers.clear();
+	rehandshakeAttempts.clear();
+	lastResyncAt = Number.NEGATIVE_INFINITY;
 	session.manager.destroy().catch((e) => console.warn("CRDT session teardown error", e));
 	session = null;
 }
@@ -178,6 +197,9 @@ export function closeDoc(noteId: string): void {
 	}
 	session.openNoteIds.delete(noteId);
 	session.enrollment.reset(noteId); // next open re-runs the STEP1 handshake
+	// A reopen is a user-driven retry — give it a fresh attempt budget, or a note
+	// that tripped the breaker would stay deaf for the rest of the session.
+	rehandshakeAttempts.delete(noteId);
 	const a = session.awareness.get(noteId);
 	if (a) {
 		a.destroy();
@@ -215,7 +237,31 @@ export function scheduleRehandshake(docId: string, delayMs: number): void {
 	if (rehandshakeTimers.has(docId)) {
 		return;
 	}
-	rlog().info("crdt", `re-handshake scheduled note=${docId} delayMs=${delayMs}`);
+	const attempts = rehandshakeAttempts.get(docId) ?? 0;
+	if (attempts >= REHANDSHAKE_MAX_ATTEMPTS) {
+		// Circuit open: stop the automatic retry storm. Three things re-arm it, so
+		// an open breaker is an escapable state rather than a stuck one: a
+		// successful crdt_msg ack (clearRehandshakeBackoff), a reconnect/refocus
+		// resync (resyncOpenDocs), or a user reopen (closeDoc). All three are
+		// naturally rate-limited — a user action, or the 3s resync throttle — which
+		// is what keeps re-arming from becoming its own storm. Inbound frames
+		// deliberately do NOT re-arm; see handleFrame. Note this does not silence
+		// the note: inbound frames still apply while the breaker is open. Loud so a
+		// stuck note stays diagnosable.
+		rlog().warn(
+			"crdt",
+			`re-handshake giving up note=${docId} after ${attempts} attempts — awaiting ack/reconnect/reopen`,
+		);
+		return;
+	}
+	// Exponential backoff on the caller's base delay, capped. The first failure
+	// uses the base delay; each consecutive failure doubles it.
+	const backoff = Math.min(delayMs * 2 ** attempts, REHANDSHAKE_MAX_DELAY_MS);
+	rehandshakeAttempts.set(docId, attempts + 1);
+	rlog().info(
+		"crdt",
+		`re-handshake scheduled note=${docId} delayMs=${backoff} attempt=${attempts + 1}`,
+	);
 	rehandshakeTimers.set(
 		docId,
 		setTimeout(() => {
@@ -225,8 +271,17 @@ export function scheduleRehandshake(docId: string, delayMs: number): void {
 			}
 			session.enrollment.reset(docId);
 			session.enrollment.enroll(docId);
-		}, delayMs),
+		}, backoff),
 	);
+}
+
+/** Clear a note's re-handshake backoff + circuit-breaker. Called on a
+ *  successful crdt_msg ack (the channel is proven healthy for this note) so the
+ *  NEXT genuine failure starts from the base delay with a fresh attempt budget.
+ *  Normal editing keeps the backoff clear; only a persistently-failing note
+ *  accumulates attempts toward the cap. */
+export function clearRehandshakeBackoff(docId: string): void {
+	rehandshakeAttempts.delete(docId);
 }
 
 export async function handleFrame(noteId: string, b64: string): Promise<void> {
@@ -236,6 +291,17 @@ export async function handleFrame(noteId: string, b64: string): Promise<void> {
 	if (!session.manager.hasDoc(noteId)) {
 		return; // not active — drop; STEP1 re-syncs on reopen
 	}
+	// NOTE: deliberately does NOT clear rehandshakeAttempts. An inbound frame
+	// looks like proof the room is healthy, but the failure this breaker exists
+	// for is push-side: scheduleRehandshake is fed by crdt_msg REJECTIONS, and
+	// `rate_limited` is one of them (see channel.ts). Rate-limited pushes while
+	// other devices keep editing means frames keep arriving — so clearing here
+	// would reset the budget on every frame and re-handshake without bound,
+	// restoring the exact storm this breaker bounds, under exactly the
+	// rate-limit starvation that has bitten this codebase before.
+	// A tripped breaker is NOT a deaf note: this path is independent of it, so
+	// live edits keep applying. Only the re-handshake retry stops, and reconnect,
+	// tab refocus (both -> resyncOpenDocs) and reopen (closeDoc) all re-arm it.
 	await session.channel.handleFrame(noteId, b64);
 }
 
@@ -247,6 +313,19 @@ export function resyncOpenDocs(): void {
 	if (!session) {
 		return;
 	}
+	// Throttle: a reconnect storm fires this many times per second; one full
+	// re-enroll per window recovers, the rest just amplifies the storm.
+	const now = Date.now();
+	if (now - lastResyncAt < RESYNC_MIN_INTERVAL_MS) {
+		return;
+	}
+	lastResyncAt = now;
+	// A reconnect (or a tab refocus) is a new connectivity epoch: attempts racked
+	// up against the OLD socket say nothing about this one. Clear the whole map so
+	// every open doc re-handshakes with a full budget — mirrors the plugin's
+	// `clearStrandHealAttempts()` on `onCrdtTopicJoined`. The throttle above is
+	// what keeps this from becoming its own storm.
+	rehandshakeAttempts.clear();
 	const ids = [...session.awareness.keys()];
 	if (ids.length > 0) {
 		rlog().info("crdt", `reconnect resync: re-enrolling ${ids.length} open doc(s)`);

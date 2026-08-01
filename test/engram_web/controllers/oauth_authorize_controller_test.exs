@@ -125,6 +125,72 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
     end
   end
 
+  # RFC 8252 §7.3: "the authorization server MUST allow any port to be specified
+  # at the time of the request for loopback IP redirect URIs, to accommodate
+  # clients that obtain an available ephemeral port from the operating system at
+  # the time of the request."
+  #
+  # This is not academic. A DCR client registers once and persists its
+  # client_id, but grabs a NEW ephemeral port on every launch. Under exact
+  # matching, every local-first connector (Claude Code, Cline, OpenCode, Cursor,
+  # Windsurf) breaks on its second run and can only recover by re-registering.
+  describe "GET /oauth/authorize — loopback ephemeral ports (RFC 8252 §7.3)" do
+    test "accepts a different port than the one registered", %{conn: conn} do
+      client = register_client("http://127.0.0.1:1456/mcp/oauth/callback")
+
+      params = valid_params(client.client_id, "http://127.0.0.1:49152/mcp/oauth/callback")
+
+      conn = get(conn, "/oauth/authorize", params)
+
+      assert conn.status == 302
+    end
+
+    test "accepts an added port when none was registered", %{conn: conn} do
+      client = register_client("http://localhost/callback")
+
+      params = valid_params(client.client_id, "http://localhost:8912/callback")
+
+      conn = get(conn, "/oauth/authorize", params)
+
+      assert conn.status == 302
+    end
+
+    test "still requires the path to match", %{conn: conn} do
+      client = register_client("http://127.0.0.1:1456/mcp/oauth/callback")
+
+      params = valid_params(client.client_id, "http://127.0.0.1:1456/steal")
+
+      conn = get(conn, "/oauth/authorize", params)
+
+      assert conn.status == 400
+      assert conn.resp_body =~ "invalid_redirect_uri"
+    end
+
+    test "still requires the loopback host to match", %{conn: conn} do
+      client = register_client("http://127.0.0.1:1456/mcp/oauth/callback")
+
+      params = valid_params(client.client_id, "http://localhost:1456/mcp/oauth/callback")
+
+      conn = get(conn, "/oauth/authorize", params)
+
+      assert conn.status == 400
+      assert conn.resp_body =~ "invalid_redirect_uri"
+    end
+
+    # The port exemption is scoped to loopback. Relaxing it for https would let
+    # anyone who controls any port on a registered host collect auth codes.
+    test "does not relax the port for a non-loopback https redirect", %{conn: conn} do
+      client = register_client("https://claude.ai/api/mcp/auth_callback")
+
+      params = valid_params(client.client_id, "https://claude.ai:8443/api/mcp/auth_callback")
+
+      conn = get(conn, "/oauth/authorize", params)
+
+      assert conn.status == 400
+      assert conn.resp_body =~ "invalid_redirect_uri"
+    end
+  end
+
   describe "GET /oauth/authorize — bad params (redirect with error)" do
     test "redirects to redirect_uri?error=unsupported_response_type when not code", %{conn: conn} do
       client = register_client()
@@ -249,6 +315,74 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
 
       assert {:ok, code_row} = OAuth.get_authorization_code_by_raw(query["code"])
       assert is_nil(code_row.vault_id)
+    end
+  end
+
+  # Prod 500 observed 2026-07-30 connecting Windsurf:
+  #   (Postgrex.Error) 22001 value too long for type character varying(255)
+  #   at Engram.OAuth.mint_authorization_code/3
+  # Two columns on oauth_authorization_codes could overflow. `state` is
+  # client-supplied and RFC 6749 puts no bound on it (IDEs pack routing data in
+  # there). `redirect_uri` is worse: our own DCR accepts up to 2048 bytes, then
+  # we tried to store it in varchar(255) — we accepted a value we could not
+  # persist. Both must round-trip, not crash.
+  describe "POST /api/oauth/authorize/consent — oversized fields (Windsurf 500)" do
+    test "mints a code when state exceeds 255 characters", %{conn: conn} do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+      long_state = String.duplicate("s", 900)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("state", long_state)
+        |> Map.put("vault_choice", "vault:#{vault.id}")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      assert conn.status == 200
+      json = Jason.decode!(conn.resp_body)
+      query = json["redirect_uri"] |> URI.parse() |> Map.get(:query) |> URI.decode_query()
+      assert query["state"] == long_state
+    end
+
+    test "mints a code when the registered redirect_uri exceeds 255 characters", %{conn: conn} do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      # Comfortably over 255, comfortably under the 2048 DCR accepts.
+      redirect_uri = "https://windsurf.example.com/cb?p=" <> String.duplicate("q", 400)
+      client = register_client(redirect_uri)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("vault_choice", "vault:#{vault.id}")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      assert conn.status == 200
+      json = Jason.decode!(conn.resp_body)
+      assert String.starts_with?(json["redirect_uri"], redirect_uri)
+    end
+
+    # Widening the column must not make it unbounded storage: the endpoint is
+    # reachable by any signed-in user, and a code row lives 10 minutes.
+    test "rejects an absurd state instead of persisting it", %{conn: conn} do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      client = register_client()
+
+      params =
+        client.client_id
+        |> valid_params(hd(client.redirect_uris))
+        |> Map.put("state", String.duplicate("s", 5000))
+        |> Map.put("vault_choice", "vault:#{vault.id}")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      assert conn.status == 400
     end
   end
 

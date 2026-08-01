@@ -16,6 +16,9 @@ import {
 	useBatchMoveAttachments,
 	useBatchMoveFolders,
 	useBatchMoveNotes,
+	useCreateFolder,
+	useCreateNote,
+	useDeleteFolder,
 	useDuplicateNote,
 	useFolderNotesById,
 	useFolders,
@@ -24,11 +27,16 @@ import {
 	useRenameFolder,
 	useRenameNote,
 } from "../api/queries";
+import { uuid7 } from "../crdt/uuid7";
 import { useFolderTreeState } from "../layout/folder-tree-context";
 import { noteName } from "../lib/note-name";
-import { isSyntheticFolderId, synthesizeFolders } from "./tree/synthesize-folders";
+import {
+	isSyntheticFolderId,
+	synthesizeFolders,
+	syntheticFolderPath,
+} from "./tree/synthesize-folders";
 import { TreeRowVirtualized } from "./tree/tree-row-virtualized";
-import { parseItemId } from "./tree/types";
+import { parseItemId, ROOT_ID } from "./tree/types";
 import { useEngramTree } from "./tree/use-engram-tree";
 import { ActionDrawer } from "./tree-actions/action-drawer";
 import { type ActionId, actionsFor } from "./tree-actions/action-list";
@@ -36,39 +44,7 @@ import { ContextMenu } from "./tree-actions/context-menu";
 import { DeleteConfirm } from "./tree-actions/delete-confirm";
 import { nextCopyName } from "./tree-actions/duplicate";
 import { MoveDialog } from "./tree-actions/move-dialog";
-
-// RenameInput's caret selection only spans the basename (up to the
-// extension dot) so a normal type-over-selection edit leaves the extension
-// intact. That's a UX convenience, not a guarantee: a select-all, paste, or
-// programmatic value replacement (e.g. Playwright's `.fill`) bypasses the
-// selection and can hand back a bare name with no extension at all, or a
-// dotted TITLE (e.g. "meeting v1.2", "Node.js guide") that isn't actually an
-// extension change. Without this guard the note/attachment gets renamed to a
-// path that doesn't end in the original extension server-side. For a note
-// that silently breaks the CRDT doc's `.endsWith(".md")` gate on next open,
-// stranding the editor on "Connecting…" forever.
-//
-// Rule: preserve the original extension unless newName ends with it already,
-// or explicitly ends with a recognized note extension (a deliberate swap,
-// e.g. .md -> .canvas). Otherwise the trailing dot(s) in newName are part of
-// the title, not an extension, so the original extension is re-appended.
-// ponytail: known ceiling, an attachment ext-swap like ("a.png","a.jpg")
-// becomes "a.jpg.png" since .jpg isn't in the recognized list. Inline rename
-// isn't the intended path for changing a file's type; add a MIME allowlist
-// only if that becomes a real complaint.
-const RECOGNIZED_NOTE_EXTENSIONS = [".md", ".canvas"];
-function withPreservedExtension(oldLeaf: string, newName: string): string {
-	const dot = oldLeaf.lastIndexOf(".");
-	const origExt = dot > 0 ? oldLeaf.slice(dot) : "";
-	const lowerNewName = newName.toLowerCase();
-	if (origExt && lowerNewName.endsWith(origExt.toLowerCase())) {
-		return newName;
-	}
-	if (RECOGNIZED_NOTE_EXTENSIONS.some((ext) => lowerNewName.endsWith(ext))) {
-		return newName;
-	}
-	return origExt ? `${newName}${origExt}` : newName;
-}
+import { renameBaseName } from "./tree-actions/rename-path";
 
 // Row shapes that <DeleteConfirm> and <MoveDialog> accept.
 type DeleteRow =
@@ -101,14 +77,18 @@ export default function FolderTree() {
 		() => synthesizeFolders(folders ?? EMPTY_FOLDERS, attachments),
 		[folders, attachments],
 	);
-	const { sort } = useFolderTreeState();
+	const { sort, pendingFolderRename, requestFolderRename, clearFolderRename } =
+		useFolderTreeState();
 	const vaultId = useActiveVaultId();
 	const qc = useQueryClient();
 	const params = useParams();
-	const selectedNoteId = params.id ?? null;
+	const selectedNoteId = params.itemId ?? null;
 
 	const scrollRef = useRef<HTMLDivElement | null>(null);
 	const [dialog, setDialog] = useState<DialogState>({ kind: "none" });
+	// Row to outline while its menu is up — the context menu on desktop, the
+	// action drawer on touch.
+	const menuOpenId = dialog.kind === "context" || dialog.kind === "drawer" ? dialog.itemId : null;
 
 	const batchDeleteNotes = useBatchDeleteNotes();
 	const batchMoveNotes = useBatchMoveNotes();
@@ -117,6 +97,9 @@ export default function FolderTree() {
 	const renameNote = useRenameNote();
 	const renameFolder = useRenameFolder();
 	const duplicateNote = useDuplicateNote();
+	const createNote = useCreateNote();
+	const createFolder = useCreateFolder();
+	const deleteFolder = useDeleteFolder();
 	const renameAttachment = useRenameAttachment();
 	const batchMoveAttachments = useBatchMoveAttachments();
 	const batchDeleteAttachments = useBatchDeleteAttachments();
@@ -126,10 +109,6 @@ export default function FolderTree() {
 	// existing item path's folder + new leaf name.
 	const onRenameCommit = (itemId: string, newName: string) => {
 		const p = parseItemId(itemId);
-		// Synthetic folders have no backend record — nothing to rename.
-		if (p.kind === "folder" && isSyntheticFolderId(p.id)) {
-			return;
-		}
 		if (p.kind === "note") {
 			const item = qc
 				.getQueryCache()
@@ -139,37 +118,49 @@ export default function FolderTree() {
 			if (!item) {
 				return;
 			}
-			const parts = item.path.split("/");
-			const oldLeaf = parts.pop() ?? "";
-			parts.push(withPreservedExtension(oldLeaf, newName));
-			const new_path = parts.join("/");
-			renameNote
-				.mutateAsync({ old_path: item.path, new_path })
-				.catch(() => toast.error("Rename failed"));
+			// `mutate` (not `mutateAsync`): the mutation's own onError already
+			// raises a specific toast, so awaiting only to re-toast a generic
+			// "Rename failed" would show the user two of them.
+			renameNote.mutate({
+				id: item.id,
+				old_path: item.path,
+				new_path: renameBaseName(item.path, newName),
+			});
 		} else if (p.kind === "folder") {
-			const folder = folders?.find((f) => f.id === p.id);
+			// `allFolders` (not `folders`) so derived folders resolve too — folder
+			// rename posts old_path/new_path, which needs no backend id.
+			const folder = allFolders.find((f) => f.id === p.id);
 			if (!folder) {
 				return;
 			}
 			const parts = folder.name.split("/");
 			parts[parts.length - 1] = newName;
-			const new_path = parts.join("/");
-			renameFolder
-				.mutateAsync({ old_path: folder.name, new_path })
-				.catch(() => toast.error("Rename failed"));
+			renameFolder.mutate({ old_path: folder.name, new_path: parts.join("/") });
 		} else if (p.kind === "attachment") {
-			const parts = p.path.split("/");
-			const oldLeaf = parts.pop() ?? "";
-			parts.push(withPreservedExtension(oldLeaf, newName));
-			const new_path = parts.join("/");
-			renameAttachment
-				.mutateAsync({ old_path: p.path, new_path })
-				.catch(() => toast.error("Rename failed"));
+			renameAttachment.mutate({ old_path: p.path, new_path: renameBaseName(p.path, newName) });
 		}
 	};
 
 	// Drag-and-drop move — partition sources by kind, dispatch to the
 	// matching batch hook. Drop target must be a folder or the vault root.
+	// A CRDT move = crdt_create per id at its NEW path, which the mutation builds
+	// from each note's CURRENT path. Resolve those here (from the by-id cache the
+	// tree renders) BEFORE the optimistic onMutate re-paths the rows.
+	const resolveNotePaths = (ids: string[]): Record<string, string> => {
+		const all = qc
+			.getQueryCache()
+			.findAll({ queryKey: ["folder-notes-by-id", vaultId] })
+			.flatMap((q) => (q.state.data as Array<{ id: string; path: string }> | undefined) ?? []);
+		const out: Record<string, string> = {};
+		for (const id of ids) {
+			const p = all.find((n) => n.id === id)?.path;
+			if (p !== undefined) {
+				out[id] = p;
+			}
+		}
+		return out;
+	};
+
 	const onMove = (sourceIds: string[], targetItemId: string) => {
 		const target = parseItemId(targetItemId);
 		if (target.kind !== "folder" && target.kind !== "root") {
@@ -177,12 +168,15 @@ export default function FolderTree() {
 		}
 		const parsed = sourceIds.map(parseItemId);
 		const noteIds = parsed.filter((p) => p.kind === "note").map((p) => (p as { id: string }).id);
-		// A derived folder has no marker id, so it can't be a move SOURCE — only
-		// real-marker folders can be dragged. (It can still be a destination, below,
-		// since everything now moves by PATH.)
+		// Real-marker folders move by id; derived ones have no id, so they take the
+		// same path-based rename the Move dialog uses. Splitting them keeps drag
+		// and the dialog capable of the same things.
 		const folderIds = parsed
 			.filter((p) => p.kind === "folder" && !isSyntheticFolderId((p as { id: string }).id))
 			.map((p) => (p as { id: string }).id);
+		const derivedFolderPaths = parsed
+			.filter((p) => p.kind === "folder" && isSyntheticFolderId((p as { id: string }).id))
+			.map((p) => syntheticFolderPath((p as { id: string }).id));
 		const attachmentPaths = parsed
 			.filter((p) => p.kind === "attachment")
 			.map((p) => (p as { path: string }).path);
@@ -191,10 +185,21 @@ export default function FolderTree() {
 		const destFolder =
 			target.kind === "root" ? "" : (allFolders.find((f) => f.id === target.id)?.name ?? "");
 		if (noteIds.length > 0) {
-			batchMoveNotes.mutate({ ids: noteIds, target_folder: destFolder });
+			batchMoveNotes.mutate({
+				ids: noteIds,
+				target_folder: destFolder,
+				paths: resolveNotePaths(noteIds),
+			});
 		}
 		if (folderIds.length > 0) {
 			batchMoveFolders.mutate({ ids: folderIds, target_parent: destFolder });
+		}
+		for (const path of derivedFolderPaths) {
+			const leaf = path.split("/").pop() ?? path;
+			renameFolder.mutate({
+				old_path: path,
+				new_path: destFolder ? `${destFolder}/${leaf}` : leaf,
+			});
 		}
 		if (attachmentPaths.length > 0) {
 			batchMoveAttachments.mutate({ paths: attachmentPaths, target_folder: destFolder });
@@ -311,6 +316,34 @@ export default function FolderTree() {
 		}
 	}, [selectedNoteId, folders, activeNote, tree]);
 
+	// A just-created folder opens straight in rename mode, so its placeholder
+	// name is never kept by accident. Runs on every render until it lands: the
+	// folder only reaches the tree after `['folders']` refetches and HT rebuilds,
+	// and its row only exists once its ancestors are expanded.
+	useEffect(() => {
+		if (pendingFolderRename === null) {
+			return;
+		}
+		const created = allFolders.find((f) => f.name === pendingFolderRename);
+		if (!created) {
+			return;
+		}
+		const segments = pendingFolderRename.split("/").slice(0, -1);
+		for (let i = 1; i <= segments.length; i++) {
+			const ancestor = allFolders.find((f) => f.name === segments.slice(0, i).join("/"));
+			const inst = ancestor ? tree.getItemInstance(`f:${ancestor.id}`) : undefined;
+			if (inst && !inst.isExpanded()) {
+				inst.expand();
+			}
+		}
+		const instance = tree.getItemInstance(`f:${created.id}`);
+		if (!instance) {
+			return;
+		}
+		instance.startRenaming();
+		clearFolderRename();
+	}, [pendingFolderRename, allFolders, tree, clearFolderRename]);
+
 	// Resolve a single item id → the row shape DeleteConfirm / MoveDialog accept.
 	function rowsFor(itemId: string, mode: "delete" | "move"): DeleteRow[] | MoveRow[] {
 		const p = parseItemId(itemId);
@@ -324,15 +357,17 @@ export default function FolderTree() {
 				: [{ kind: "file", path: note.path }];
 		}
 		if (p.kind === "folder") {
-			const folder = folders?.find((f) => f.id === p.id);
+			// `allFolders`, not `folders`: the synthesized list is a superset that
+			// also covers attachment-only dirs and missing ancestors. Looking these
+			// up in the raw list returned [] and the dialog opened empty.
+			const folder = allFolders.find((f) => f.id === p.id);
 			if (!folder) {
 				return [];
 			}
 			const direct = folder.count;
-			const descendants =
-				folders
-					?.filter((f) => f.name.startsWith(`${folder.name}/`))
-					.reduce((sum, f) => sum + f.count, 0) ?? 0;
+			const descendants = allFolders
+				.filter((f) => f.name.startsWith(`${folder.name}/`))
+				.reduce((sum, f) => sum + f.count, 0);
 			return mode === "delete"
 				? [{ kind: "folder", path: folder.name, childCount: direct + descendants }]
 				: [{ kind: "folder", path: folder.name }];
@@ -358,8 +393,24 @@ export default function FolderTree() {
 		return rootNotes.find((n) => n.id === id);
 	}
 
-	function kindOf(itemId: string): "file" | "folder" | "attachment" {
+	// Folder path a creation action targets: the right-clicked folder, or '' for
+	// the vault root (empty-space right-click). Null when the item is neither.
+	function targetFolderPath(itemId: string): string | null {
 		const p = parseItemId(itemId);
+		if (p.kind === "root") {
+			return "";
+		}
+		if (p.kind === "folder") {
+			return allFolders.find((f) => f.id === p.id)?.name ?? "";
+		}
+		return null;
+	}
+
+	function kindOf(itemId: string): "file" | "folder" | "attachment" | "root" {
+		const p = parseItemId(itemId);
+		if (p.kind === "root") {
+			return "root";
+		}
 		if (p.kind === "folder") {
 			return "folder";
 		}
@@ -372,7 +423,9 @@ export default function FolderTree() {
 	function titleForItem(itemId: string): string {
 		const p = parseItemId(itemId);
 		if (p.kind === "folder") {
-			const f = folders?.find((x) => x.id === p.id);
+			// allFolders: the synthesized superset, so an attachment-only dir gets
+			// its real name in the drawer instead of a generic "Folder".
+			const f = allFolders.find((x) => x.id === p.id);
 			return f ? (f.name.split("/").pop() ?? f.name) : "Folder";
 		}
 		if (p.kind === "note") {
@@ -382,7 +435,7 @@ export default function FolderTree() {
 		if (p.kind === "attachment") {
 			return p.path.split("/").pop() ?? p.path;
 		}
-		return "";
+		return "Vault root";
 	}
 
 	function openDelete(itemIds: string[]) {
@@ -405,6 +458,28 @@ export default function FolderTree() {
 
 	function handleActionPick(actionId: ActionId, itemId: string) {
 		switch (actionId) {
+			// Both target the RIGHT-CLICKED folder, not the toolbar's active one.
+			// Resolved from `allFolders` (which includes synthetic folders) so
+			// creating inside an attachment-only directory works by path.
+			case "new-note": {
+				const target = targetFolderPath(itemId);
+				if (target === null) {
+					break;
+				}
+				createNote.mutate({ folder: target, id: uuid7() });
+				break;
+			}
+			case "new-folder": {
+				const target = targetFolderPath(itemId);
+				if (target === null) {
+					break;
+				}
+				createFolder.mutate(
+					{ parent: target },
+					{ onSuccess: ({ folder }) => requestFolderRename(folder) },
+				);
+				break;
+			}
 			case "rename": {
 				const instance = tree.getItemInstance(itemId);
 				if (instance) {
@@ -461,38 +536,47 @@ export default function FolderTree() {
 	function partition(itemIds: string[]): {
 		noteIds: string[];
 		folderIds: string[];
+		derivedFolderPaths: string[];
 		attachmentPaths: string[];
 	} {
 		const noteIds: string[] = [];
 		const folderIds: string[] = [];
+		const derivedFolderPaths: string[] = [];
 		const attachmentPaths: string[] = [];
 		for (const id of itemIds) {
 			const p = parseItemId(id);
 			if (p.kind === "note") {
 				noteIds.push(p.id);
-			}
-			// Synthetic folders (syn:) have no backend record — never send their id
-			// to a batch mutation. Unreachable today (their rows expose no menu), but
-			// a guard here keeps any future bulk-select path from 404ing.
-			else if (p.kind === "folder" && !isSyntheticFolderId(p.id)) {
-				folderIds.push(p.id);
+			} else if (p.kind === "folder") {
+				// A derived folder has no backend id, so it can't ride the id-keyed
+				// batch endpoints. It still has a path, and delete/move both have
+				// path-based routes — so split it out rather than dropping it.
+				if (isSyntheticFolderId(p.id)) {
+					derivedFolderPaths.push(syntheticFolderPath(p.id));
+				} else {
+					folderIds.push(p.id);
+				}
 			} else if (p.kind === "attachment") {
 				attachmentPaths.push(p.path);
 			}
 		}
-		return { noteIds, folderIds, attachmentPaths };
+		return { noteIds, folderIds, derivedFolderPaths, attachmentPaths };
 	}
 
 	function commitDelete() {
 		if (dialog.kind !== "delete") {
 			return;
 		}
-		const { noteIds, folderIds, attachmentPaths } = partition(dialog.itemIds);
+		const { noteIds, folderIds, derivedFolderPaths, attachmentPaths } = partition(dialog.itemIds);
 		if (noteIds.length > 0) {
 			batchDeleteNotes.mutate({ ids: noteIds });
 		}
 		if (folderIds.length > 0) {
 			batchDeleteFolders.mutate({ ids: folderIds });
+		}
+		// No id to batch on — DELETE /folders/*path takes one folder at a time.
+		for (const path of derivedFolderPaths) {
+			deleteFolder.mutate({ path });
 		}
 		if (attachmentPaths.length > 0) {
 			batchDeleteAttachments.mutate({ paths: attachmentPaths });
@@ -505,14 +589,27 @@ export default function FolderTree() {
 		if (dialog.kind !== "move") {
 			return;
 		}
-		const { noteIds, folderIds, attachmentPaths } = partition(dialog.itemIds);
+		const { noteIds, folderIds, derivedFolderPaths, attachmentPaths } = partition(dialog.itemIds);
 		// Everything moves by PATH (targetFolderName is the folder path, '' = root),
 		// so a derived folder with no marker is a valid destination.
 		if (noteIds.length > 0) {
-			batchMoveNotes.mutate({ ids: noteIds, target_folder: targetFolderName });
+			batchMoveNotes.mutate({
+				ids: noteIds,
+				target_folder: targetFolderName,
+				paths: resolveNotePaths(noteIds),
+			});
 		}
 		if (folderIds.length > 0) {
 			batchMoveFolders.mutate({ ids: folderIds, target_parent: targetFolderName });
+		}
+		// Moving a folder is a rename into a new parent — and rename is path-based,
+		// so it's the route a derived folder can actually take.
+		for (const path of derivedFolderPaths) {
+			const leaf = path.split("/").pop() ?? path;
+			renameFolder.mutate({
+				old_path: path,
+				new_path: targetFolderName ? `${targetFolderName}/${leaf}` : leaf,
+			});
 		}
 		if (attachmentPaths.length > 0) {
 			batchMoveAttachments.mutate({ paths: attachmentPaths, target_folder: targetFolderName });
@@ -523,20 +620,14 @@ export default function FolderTree() {
 
 	if (isLoading) {
 		return (
-			<p
-				data-testid="folder-tree-root"
-				className="px-3 py-2 text-gray-500 text-xs dark:text-gray-400"
-			>
+			<p data-testid="folder-tree-root" className="px-3 py-2 text-muted-foreground text-xs">
 				Loading…
 			</p>
 		);
 	}
 	if (isError) {
 		return (
-			<p
-				data-testid="folder-tree-root"
-				className="px-3 py-2 text-red-600 text-xs dark:text-red-400"
-			>
+			<p data-testid="folder-tree-root" className="px-3 py-2 text-destructive text-xs">
 				Failed to load folders.
 			</p>
 		);
@@ -546,10 +637,7 @@ export default function FolderTree() {
 	// must still render the tree — the loader stitches rootNotes under ROOT.
 	if (!folders || (allFolders.length === 0 && rootNotes.length === 0 && attachments.length === 0)) {
 		return (
-			<p
-				data-testid="folder-tree-root"
-				className="px-3 py-2 text-gray-500 text-xs dark:text-gray-400"
-			>
+			<p data-testid="folder-tree-root" className="px-3 py-2 text-muted-foreground text-xs">
 				No notes yet.
 			</p>
 		);
@@ -561,13 +649,21 @@ export default function FolderTree() {
 			<nav
 				{...containerProps}
 				ref={setContainerEl}
+				onContextMenu={(e) => {
+					// Empty space only — rows stopPropagation, but a right-click can
+					// also land on the container's padding or below the last row.
+					e.preventDefault();
+					setDialog({ kind: "context", itemId: ROOT_ID, position: { x: e.clientX, y: e.clientY } });
+				}}
 				onDragOver={onContainerDragOver}
 				onDragLeave={onContainerDragLeave}
 				onDrop={onContainerDrop}
 				data-testid="folder-tree-root"
 				data-tour="folder-tree"
-				className={`relative min-h-0 flex-1 overflow-auto py-2 text-base ${
-					rootDragOver ? "bg-blue-50/40 ring-1 ring-blue-400 ring-inset dark:bg-blue-950/30" : ""
+				// px-2 insets the rows from the sidebar edges — rows are w-full, so
+				// without it the hover/selection chip runs edge to edge.
+				className={`relative min-h-0 flex-1 overflow-auto px-2 py-2 text-base ${
+					rootDragOver ? "bg-primary/10 ring-1 ring-ring ring-inset" : ""
 				}`}
 			>
 				{/* minHeight ensures blank, droppable space below the rows even for a
@@ -580,6 +676,8 @@ export default function FolderTree() {
 							key={items[v.index]?.getId() ?? v.index}
 							virtualItem={v}
 							items={items}
+							activeId={selectedNoteId}
+							menuOpenId={menuOpenId}
 							onContextMenu={handleContextMenu}
 							onLongPress={handleLongPress}
 							onFolderHover={prefetchFolderNotes}
@@ -628,5 +726,3 @@ export default function FolderTree() {
 		</>
 	);
 }
-
-export { withPreservedExtension };

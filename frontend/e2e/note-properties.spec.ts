@@ -1,4 +1,8 @@
 import { expect, type Page, test } from "@playwright/test";
+// The URL-shape matcher is imported rather than copied: the note route moved
+// once already (/note/:id -> /:vaultSlug/:noteId) and a duplicated regex here
+// is exactly what went stale last time.
+import { noteUrlRe } from "./support/api";
 
 /**
  * E2e coverage for the PropertiesWidget (#frontmatter-properties).
@@ -97,8 +101,9 @@ async function upsertNote(
 }
 
 /**
- * Navigate to the note URL; AuthGuard redirects to /sign-in, complete sign-in,
- * and land back on /note/:id. Seeds engram.activeVaultId before sign-in so the
+ * Navigate to the legacy /note/:id URL; AuthGuard redirects to /sign-in,
+ * complete sign-in, and land on the note — the legacy-note redirect resolves
+ * it to /:vaultSlug/:noteId. Seeds engram.activeVaultId before sign-in so the
  * post-redirect render uses the correct vault.
  */
 async function signInForNote(
@@ -118,7 +123,7 @@ async function signInForNote(
 	await page.getByLabel("Password", { exact: true }).fill(PASS);
 	await page.getByRole("button", { name: /sign in/i }).click();
 
-	await expect(page).toHaveURL(new RegExp(`/note/${noteId}`), { timeout: 10_000 });
+	await expect(page).toHaveURL(noteUrlRe(noteId), { timeout: 10_000 });
 }
 
 /**
@@ -217,7 +222,7 @@ test.describe("PropertiesWidget e2e", () => {
 		// Reload the page — y-indexeddb restores the Y.Doc (including frontmatter_types)
 		// from IndexedDB; the type override must survive.
 		await page.reload();
-		await expect(page).toHaveURL(new RegExp(`/note/${noteId}`), { timeout: 10_000 });
+		await expect(page).toHaveURL(noteUrlRe(noteId), { timeout: 10_000 });
 
 		// Wait for the widget to re-render with the same note after reload.
 		await waitForProperty(page, "due");

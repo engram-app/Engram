@@ -33,9 +33,17 @@ defmodule Engram.Notes.CrdtCheckpoint do
   snapshot-compaction write with NO version/seq churn, so calling it on every
   room exit is cheap.
 
-  Options: `:watermark` — a pre-captured prune boundary (max inserted_at of
-  the tail rows the doc already reflects). When omitted, it is captured here
-  BEFORE the doc is encoded, so rows landing mid-encode survive the prune.
+  Options:
+    * `:prune_ids` — the EXACT ids of the tail rows folded into `doc` (from
+      `CrdtPersistence.replay_tail/3`). Prune deletes only these. Required for
+      DETACHED-doc callers (`CheckpointNote`) whose `doc` reflects a fixed
+      replay set, not the live tail: an id-range/watermark prune can tie within
+      a clock tick and destroy a concurrent append (#285).
+    * `:watermark` — a pre-captured `inserted_at` prune boundary for LIVE-room
+      callers (timer / unbind), whose `doc` is the live NIF ref and so reflects
+      every tail row up to now. When both are omitted, the watermark is captured
+      here BEFORE the doc is encoded, so rows landing mid-encode survive the
+      prune. `:prune_ids` takes precedence when present.
 
   Never called per-keystroke — driven by `CrdtCheckpointTimer` (debounced)
   and by `CrdtPersistence.unbind/3` on room exit. Never raises: any internal
@@ -59,23 +67,46 @@ defmodule Engram.Notes.CrdtCheckpoint do
       user ->
         do_checkpoint(user, user_id, vault_id, note_id, doc, opts)
     end
+  rescue
+    # The user-resolve above is the ONE DB call outside do_checkpoint's rescue.
+    # Under pool starvation Accounts.get_user raises DBConnection.ConnectionError
+    # straight out of terminate/2 (the 2026-07-09 incident frame). Swallow ANY
+    # raise here so unbind/checkpoint always degrades to :ok — the tail-WAL is
+    # untouched (nothing pruned), so the flush replays on the next room bind.
+    err ->
+      Logger.error(
+        "crdt checkpoint raised resolving user note_id=#{note_id} error=#{Exception.format(:error, err, __STACKTRACE__)}",
+        Metadata.with_category(:error, :sync, note_id: note_id)
+      )
+
+      :ok
   end
 
   defp do_checkpoint(user, user_id, vault_id, note_id, doc, opts) do
-    # Capture the prune watermark BEFORE reading/encoding the doc. Any tail row
-    # inserted while we encode is NOT necessarily in the snapshot, so it must
-    # survive the prune (it replays on next bind — apply_update is idempotent).
-    watermark =
-      case Keyword.fetch(opts, :watermark) do
-        {:ok, wm} ->
-          wm
+    # Determine the prune boundary. `:prune_ids` (detached callers) is the exact
+    # set of folded rows — safest. Otherwise fall back to the `inserted_at`
+    # watermark path for live-room callers whose doc reflects the whole tail.
+    prune =
+      case Keyword.fetch(opts, :prune_ids) do
+        {:ok, ids} when is_list(ids) ->
+          {:ids, ids}
 
         :error ->
-          # A capture failure degrades to nil: prune becomes a no-op, which is the
-          # safe direction (rows are kept and replayed on next bind).
-          case Repo.with_tenant(user_id, fn -> tail_watermark(note_id) end) do
-            {:ok, wm} -> wm
-            _ -> nil
+          # Capture the prune watermark BEFORE reading/encoding the doc. Any tail
+          # row inserted while we encode is NOT necessarily in the snapshot, so it
+          # must survive the prune (it replays on next bind — apply_update is
+          # idempotent).
+          case Keyword.fetch(opts, :watermark) do
+            {:ok, wm} ->
+              {:watermark, wm}
+
+            :error ->
+              # A capture failure degrades to nil: prune becomes a no-op, which is
+              # the safe direction (rows are kept and replayed on next bind).
+              case Repo.with_tenant(user_id, fn -> tail_watermark(note_id) end) do
+                {:ok, wm} -> {:watermark, wm}
+                _ -> {:watermark, nil}
+              end
           end
       end
 
@@ -115,25 +146,10 @@ defmodule Engram.Notes.CrdtCheckpoint do
               raw_note ->
                 {:ok, note} = Crypto.maybe_decrypt_note_fields(raw_note, user)
 
-                with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
-                     text = CrdtBridge.text_of(union_doc),
-                     {:ok, raw_state} <- encode(union_doc),
-                     {_flat_doc, state} <- maybe_flatten(union_doc, raw_state, note_id),
-                     {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id),
-                     {:ok, key} <- Crypto.dek_content_hash_key(user) do
-                  content_hash = Crypto.hmac_content_hash(key, text)
-                  tags = Helpers.extract_tags(text)
-
-                  checkpoint_write(note, vault_id, note_id, watermark, opts, %{
-                    text: text,
-                    tags: tags,
-                    content_hash: content_hash,
-                    ct: ct,
-                    nonce: nonce,
-                    user: user
-                  })
+                if markdown?(note.path) do
+                  do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user)
                 else
-                  err -> {:abort, err}
+                  do_structural_checkpoint(note, note_id, live_state, prune, user)
                 end
             end
           end)
@@ -195,6 +211,96 @@ defmodule Engram.Notes.CrdtCheckpoint do
       :ok
   end
 
+  # A CRDT room only ever holds a markdown (`.md`) doc or a structural doc
+  # (`.canvas`). Only markdown projects to/from `notes.content`. Mirrors
+  # CrdtDeliver's `.md` gate.
+  defp markdown?(path), do: is_binary(path) and String.ends_with?(path, ".md")
+
+  # Markdown checkpoint (unchanged behaviour): materialize the projected body into
+  # content/content_hash/title/tags, bump version/seq on a real change, else
+  # degrade to a snapshot-compaction write. Returns the same {prev, new, path}
+  # outcome tuple the caller's `case outcome` matches on.
+  defp do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user) do
+    with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
+         text = CrdtBridge.text_of(union_doc),
+         :ok <- ensure_projection_safe(note, text),
+         {:ok, raw_state} <- encode(union_doc),
+         {_flat_doc, state} <- maybe_flatten(union_doc, raw_state, note_id),
+         {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id),
+         {:ok, key} <- Crypto.dek_content_hash_key(user) do
+      content_hash = Crypto.hmac_content_hash(key, text)
+      tags = Helpers.extract_tags(text)
+
+      checkpoint_write(note, vault_id, note_id, prune, opts, %{
+        text: text,
+        tags: tags,
+        content_hash: content_hash,
+        ct: ct,
+        nonce: nonce,
+        user: user
+      })
+    else
+      {:skip, _} = skip -> skip
+      err -> {:abort, err}
+    end
+  end
+
+  # A row with NO persisted CRDT state whose doc projects nothing is the
+  # "legacy note, not opened since the crdt_state wipe" case: bind produced an
+  # empty doc because there was nothing to load, not because the user emptied
+  # the note. `notes.content` is authoritative there, so materializing "" over
+  # it is pure data loss — and the announce would propagate the blanking to
+  # every other device.
+  #
+  # Migration 20260706210000 NULLed crdt_state for EVERY note, on the premise
+  # that bind would re-seed it from notes.content. Now that the server no longer
+  # authors content, nothing re-seeds, so this is reachable for any note not
+  # written since that cutover.
+  #
+  # A genuine "user deleted all the text" does NOT hit this: those deletion ops
+  # are themselves persisted state, so crdt_state_ciphertext is non-nil and real
+  # emptying still materializes.
+  #
+  # CheckpointNote applies the same guard off the live path
+  # (`has_state?`, lib/engram/workers/checkpoint_note.ex), and the structural
+  # branch below never projects text at all. Markdown-on-unbind was the one
+  # path without it.
+  defp ensure_projection_safe(%Note{crdt_state_ciphertext: nil}, ""), do: {:skip, :no_crdt_state}
+  defp ensure_projection_safe(_note, _text), do: :ok
+
+  # Structural (non-markdown, e.g. `.canvas`) checkpoint. The doc keeps its data
+  # in Y.Maps, not the markdown content Y.Text — so `text_of` would project ""
+  # and clobber notes.content, and `maybe_flatten` would reseed via project_doc
+  # and DESTROY the structure. So persist the Yjs snapshot opaquely (union-folded
+  # for monotonicity, same as markdown), prune the tail, and leave
+  # content/title/tags/version/seq untouched: notes.content is vestigial for
+  # canvas — a new device rebuilds the board from the persisted Yjs deltas
+  # (spec 2026-07-23). Returns equal hashes so the caller skips embed + announce.
+  #
+  # ponytail: no structural flatten yet. A canvas that crosses the client-id
+  # ceiling keeps its full state vector; add a structural (nodes/edges-preserving)
+  # flatten in Phase 2 if a real board ever hits it.
+  defp do_structural_checkpoint(note, note_id, live_state, prune, user) do
+    with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
+         {:ok, raw_state} <- encode(union_doc),
+         {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(raw_state, user, note_id) do
+      {1, _} =
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note_id and n.kind == "note"),
+          set: [
+            crdt_state_ciphertext: ct,
+            crdt_state_nonce: nonce,
+            dek_version: Crypto.row_version_aad_bound()
+          ]
+        )
+
+      prune_tail(note_id, prune)
+      {note.content_hash, note.content_hash, note.path}
+    else
+      err -> {:abort, err}
+    end
+  end
+
   # Folds the row's stored CRDT state with the live doc's encoded state into a
   # fresh scratch doc (Yjs union — idempotent, shared lineage). Absent stored
   # state (legacy/lazy row) degrades to the live state alone; an UNREADABLE
@@ -223,7 +329,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # inside the caller's tenant txn; returns {prev_hash, new_hash, path} —
   # equal hashes mean "no content change committed" (compaction / stale abort),
   # which suppresses the caller's embed + announce.
-  defp checkpoint_write(note, vault_id, note_id, watermark, opts, m) do
+  defp checkpoint_write(note, vault_id, note_id, prune, opts, m) do
     %{text: text, tags: tags, content_hash: content_hash, ct: ct, nonce: nonce, user: user} = m
     prev = note.content_hash
 
@@ -240,7 +346,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
           ]
         )
 
-      prune_tail(note_id, watermark)
+      prune_tail(note_id, prune)
       {prev, content_hash, note.path}
     else
       # Re-derive title from the note's decrypted (sanitized-at-write) path.
@@ -292,7 +398,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
       case Repo.update_all(fenced_query, set: set) do
         {1, _} ->
-          prune_tail(note_id, watermark)
+          prune_tail(note_id, prune)
           {prev, content_hash, note.path}
 
         {0, _} ->
@@ -381,15 +487,29 @@ defmodule Engram.Notes.CrdtCheckpoint do
     |> Repo.one()
   end
 
-  # Prune only the tail-log rows captured by this snapshot's watermark.
-  # Rows inserted after the watermark survive for the next checkpoint/replay —
-  # they are NOT yet folded into the snapshot and must not be discarded.
-  # When watermark is nil (log was empty), there is nothing to delete.
-  # Runs inside the same `Repo.with_tenant` transaction as the notes UPDATE
-  # for atomicity.
-  defp prune_tail(_note_id, nil), do: :ok
+  # Prune the consumed tail-log rows. Two boundary shapes:
+  #
+  #   * `{:ids, ids}` — delete EXACTLY these rows (detached callers). A concurrent
+  #     append is not in the set, so it survives regardless of clock ties; a row
+  #     that failed to decrypt was excluded by replay_tail, so it is never pruned
+  #     unfolded. This is the #285 root fix.
+  #   * `{:watermark, wm}` — delete rows at/below the `inserted_at` watermark
+  #     (live-room callers whose doc reflects the whole tail). nil / empty set is
+  #     a no-op (nothing folded yet).
+  #
+  # Runs inside the same `Repo.with_tenant` transaction as the notes UPDATE for
+  # atomicity.
+  defp prune_tail(_note_id, {:ids, []}), do: :ok
 
-  defp prune_tail(note_id, watermark) do
+  defp prune_tail(note_id, {:ids, ids}) do
+    CrdtUpdateLog
+    |> where([l], l.note_id == ^note_id and l.id in ^ids)
+    |> Repo.delete_all()
+  end
+
+  defp prune_tail(_note_id, {:watermark, nil}), do: :ok
+
+  defp prune_tail(note_id, {:watermark, watermark}) do
     CrdtUpdateLog
     |> where([l], l.note_id == ^note_id and l.inserted_at <= ^watermark)
     |> Repo.delete_all()

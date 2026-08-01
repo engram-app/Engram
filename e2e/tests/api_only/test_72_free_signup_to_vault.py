@@ -42,7 +42,6 @@ import secrets
 from datetime import datetime
 
 import pytest
-import requests
 
 from helpers.api import ApiClient
 from helpers.clerk import ClerkClient
@@ -124,7 +123,7 @@ def test_free_signup_to_first_note():
     note_content = "# Hello Engram\n\nFirst note on Free tier."
     api_v.create_note(note_path, note_content)
 
-    server_note = api_v.wait_for_note(note_path, timeout=10)
+    server_note = api_v.wait_for_note(note_path)
     assert server_note["content"] == note_content, (
         f"server returned wrong content: {server_note}"
     )
