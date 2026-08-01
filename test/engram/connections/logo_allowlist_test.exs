@@ -235,6 +235,48 @@ defmodule Engram.Connections.LogoAllowlistTest do
              LogoAllowlist.resolve(nil, ["http://localhost:1/cb"], "antigravity-client")
   end
 
+  # Observed 2026-08-01 on staging, both previously rendering as "Unrecognized
+  # client". Devin has no catalog slug: `Engram.Onboarding.valid_tools/0` has no
+  # `devin`, and adding one needs a /docs/integrations/devin/ page first
+  # (checklist-widget's #1157 parity test). Attribution and the badge do not
+  # depend on the slug, so the entry stands on its own.
+  test "resolve verifies Devin by its vendor host, with no catalog slug" do
+    assert %{verified: true, display_name: "Devin", slug: nil} =
+             LogoAllowlist.resolve(
+               nil,
+               ["https://api.devin.ai/mcp/oauth/callback"],
+               "Devin"
+             )
+  end
+
+  # LobeHub is the cloud host, LobeChat the product and the catalog slug — so
+  # this host ticks an onboarding row that already exists. The observed
+  # client_name is "LobeHub", which does NOT derive to `lobechat`, so the host
+  # map is what carries the mapping.
+  test "resolve verifies LobeHub by its vendor host and maps it to the lobechat slug" do
+    assert %{verified: true, display_name: "LobeChat", slug: "lobechat"} =
+             LogoAllowlist.resolve(
+               nil,
+               ["https://app.lobehub.com/oauth/connector/callback"],
+               "LobeHub"
+             )
+
+    # Prove the name alone would NOT have carried the slug.
+    assert %{slug: nil, verified: false} =
+             LogoAllowlist.resolve(nil, ["http://localhost:1/cb"], "LobeHub")
+  end
+
+  # Self-hosted LobeChat redirects to the operator's own domain, so it must stay
+  # unverified — the cloud entry above must not leak the badge to every install.
+  test "self-hosted LobeChat on an operator domain stays unverified" do
+    assert %{verified: false} =
+             LogoAllowlist.resolve(
+               nil,
+               ["https://lobe.mycompany.example/oauth/connector/callback"],
+               "LobeHub"
+             )
+  end
+
   # Self-hosted clients redirect to the operator's OWN domain, so there is no
   # vendor host to allowlist, ever. Observed in prod 2026-07-30: Open WebUI
   # arriving from a user-run instance. It must still earn its slug (via name)
