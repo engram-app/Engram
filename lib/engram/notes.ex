@@ -3562,28 +3562,36 @@ defmodule Engram.Notes do
   @spec rename_folder(map(), map(), String.t(), String.t()) ::
           {:ok, integer()} | {:error, :conflict | term()}
   def rename_folder(user, vault, old_folder, new_folder) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      rename_folder_gated(user, vault, old_folder, new_folder, nil)
+    end
+  end
+
+  # Conflict-gated rename shared by the public entry point (rows = nil →
+  # do_rename_folder scans the vault itself) and the batch-move path (rows =
+  # the ONE decrypted scan shared across all K markers). Caller must have run
+  # `Crypto.ensure_user_dek/1` already.
+  defp rename_folder_gated(user, vault, old_folder, new_folder, rows) do
     new_folder = String.trim_trailing(new_folder, "/")
     old_prefix = old_folder <> "/"
 
-    with {:ok, user} <- Crypto.ensure_user_dek(user) do
-      cond do
-        # No-op rename: same folder. Skip the target conflict check so the
-        # call is idempotent rather than colliding with itself.
-        old_folder == new_folder ->
-          do_rename_folder(user, vault, old_folder, old_prefix, new_folder)
+    cond do
+      # No-op rename: same folder. Skip the target conflict check so the
+      # call is idempotent rather than colliding with itself.
+      old_folder == new_folder ->
+        do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows)
 
-        folder_target_exists?(user, vault, new_folder) ->
-          # Pre-check the unique (user, vault, path_hmac) constraint so
-          # the caller gets {:error, :conflict} instead of a Postgrex
-          # unique_violation crash deeper in the cascade. Matches by
-          # folder_hmac (exact match on the immediate folder) — covers
-          # the common case of renaming onto a populated folder or an
-          # existing folder marker.
-          {:error, :conflict}
+      folder_target_exists?(user, vault, new_folder) ->
+        # Pre-check the unique (user, vault, path_hmac) constraint so
+        # the caller gets {:error, :conflict} instead of a Postgrex
+        # unique_violation crash deeper in the cascade. Matches by
+        # folder_hmac (exact match on the immediate folder) — covers
+        # the common case of renaming onto a populated folder or an
+        # existing folder marker.
+        {:error, :conflict}
 
-        true ->
-          do_rename_folder(user, vault, old_folder, old_prefix, new_folder)
-      end
+      true ->
+        do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows)
     end
   end
 
@@ -3685,14 +3693,49 @@ defmodule Engram.Notes do
     |> Map.new(fn n -> {n.id, n.content || ""} end)
   end
 
-  defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder) do
+  # Per-class column sets for the folder-rename batch UPDATE. Each list MUST
+  # equal the keys the matching kw builder returns (folder_only_aad_bound /
+  # phase_b_path_folder_for / full_aad_bound_kw) — values are fetched from the
+  # kw by these names when the VALUES rows are built.
+  @marker_rename_cols [:folder_ciphertext, :folder_nonce, :folder_hmac]
+  @v2_rename_cols [
+    :path_ciphertext,
+    :path_nonce,
+    :path_hmac,
+    :folder_ciphertext,
+    :folder_nonce,
+    :folder_hmac
+  ]
+  @v1_rename_cols [
+    :content_ciphertext,
+    :content_nonce,
+    :title_ciphertext,
+    :title_nonce,
+    :path_ciphertext,
+    :path_nonce,
+    :path_hmac,
+    :folder_ciphertext,
+    :folder_nonce,
+    :folder_hmac,
+    :tags_ciphertext,
+    :tags_nonce,
+    :tags_hmac,
+    :dek_version
+  ]
+
+  # Statement-size bound for the VALUES join: 500 rows × ≤15 params stays
+  # well under Postgres's 65535-bind-param protocol limit.
+  @rename_update_chunk 500
+
+  defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows) do
     # :meta scan (#863 review): the v2 branch below never reads content —
     # a folder rename preserves the basename so the title can't change and
     # content/tags AADs key on note_id. Decrypting every content blob in
     # the vault kept rename O(vault-content-size); only legacy v1 rows
     # (full AAD rebind, needs content + recomputed title) fetch content,
-    # targeted by id below.
-    decrypted = fetch_decrypted_live_rows(user, vault)
+    # targeted by id below. `rows` (batch-move path) reuses a scan the caller
+    # already holds instead of re-scanning per marker.
+    decrypted = rows || fetch_decrypted_live_rows(user, vault)
 
     notes =
       Enum.filter(decrypted, fn n ->
@@ -3765,56 +3808,53 @@ defmodule Engram.Notes do
         Repo.with_tenant(user.id, fn ->
           seq = Engram.Vaults.next_seq!(vault.id)
 
-          Enum.each(updates, fn {note, _old_path, new_path, new_note_folder, new_title} ->
-            case note.kind do
-              "folder" ->
-                {ct, nonce, hmac} =
-                  folder_only_aad_bound(user, note.id, new_note_folder, note.dek_version)
+          # Batched write side: the old shape issued one update_all PER NOTE
+          # (each row carries its own re-encrypted envelopes, so a plain
+          # update_all can't express it). Partition rows by the column set
+          # each class updates and apply each class as chunked
+          # `UPDATE ... FROM (VALUES ...)` statements — column sets are
+          # IDENTICAL to the old per-note set lists:
+          #   markers → folder envelope only;
+          #   AAD-bound v2 notes (#863) → path + folder envelopes only
+          #     (content/tags AADs key on note_id and the basename can't
+          #     change, so re-encrypting content was pure TOAST/WAL churn);
+          #   legacy v1 rows → full rebind (the rename is their upgrade to
+          #     AAD-bound encryption, dek_version stamped to 2).
+          grouped =
+            updates
+            |> Enum.map(fn {note, _old_path, new_path, new_note_folder, new_title} ->
+              case note.kind do
+                "folder" ->
+                  {ct, nonce, hmac} =
+                    folder_only_aad_bound(user, note.id, new_note_folder, note.dek_version)
 
-                from(n in Note, where: n.id == ^note.id)
-                |> Repo.update_all(
-                  set: [
-                    folder_ciphertext: ct,
-                    folder_nonce: nonce,
-                    folder_hmac: hmac,
-                    updated_at: now,
-                    seq: seq
-                  ]
-                )
+                  {:marker,
+                   {note.id, [folder_ciphertext: ct, folder_nonce: nonce, folder_hmac: hmac]}}
 
-              _ ->
-                # AAD-bound rows (#863): content/tags AADs key on note_id only
-                # and a folder rename preserves the basename (title cannot
-                # change), so only the path + folder envelopes need rotating.
-                # The old full re-encrypt rewrote the content blob (largest
-                # column) on every note in the folder — pure TOAST/WAL churn.
-                # Legacy v1 rows keep the full rebind: the rename is their
-                # upgrade to AAD-bound encryption.
-                kw =
+                _ ->
                   if note.dek_version == Crypto.row_version_aad_bound() do
-                    phase_b_path_folder_for(user, note.id, new_path, new_note_folder)
+                    {:v2,
+                     {note.id, phase_b_path_folder_for(user, note.id, new_path, new_note_folder)}}
                   else
-                    full_aad_bound_kw(
-                      user,
-                      note.id,
-                      Map.get(content_by_id, note.id, ""),
-                      new_title,
-                      new_path,
-                      new_note_folder,
-                      note.tags || []
-                    )
+                    {:v1,
+                     {note.id,
+                      full_aad_bound_kw(
+                        user,
+                        note.id,
+                        Map.get(content_by_id, note.id, ""),
+                        new_title,
+                        new_path,
+                        new_note_folder,
+                        note.tags || []
+                      )}}
                   end
+              end
+            end)
+            |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
 
-                from(n in Note, where: n.id == ^note.id)
-                |> Repo.update_all(
-                  set:
-                    [
-                      updated_at: now,
-                      seq: seq
-                    ] ++ kw
-                )
-            end
-          end)
+          bulk_rename_update!(grouped[:marker] || [], @marker_rename_cols, now, seq)
+          bulk_rename_update!(grouped[:v2] || [], @v2_rename_cols, now, seq)
+          bulk_rename_update!(grouped[:v1] || [], @v1_rename_cols, now, seq)
 
           # Insert soft-deleted tombstones for old paths so the HTTP changes
           # feed includes delete signals. Without these, polling clients
@@ -4148,12 +4188,22 @@ defmodule Engram.Notes do
 
   # Shared move loop (runs inside a transaction): move each marker under
   # `target_folder` (a path), rolling the whole batch back on the first failure.
+  #
+  # ONE shared vault scan for the whole batch (mirrors do_delete_folders/3) —
+  # the old shape re-ran fetch_decrypted_live_rows (full-vault fetch + decrypt)
+  # inside EVERY marker's rename cascade. The scan is advanced IN MEMORY after
+  # each successful rename so a batch containing a parent and its own
+  # descendant still filters against post-move state (the per-marker re-scan
+  # got that for free by re-reading the DB inside the same transaction).
   defp reduce_move_folders(user, vault, marker_ids, target_folder, dek) do
+    rows = fetch_decrypted_live_rows(user, vault)
+
     marker_ids
-    |> Enum.reduce_while(%{moved: 0, pairs: []}, fn id, acc ->
-      case move_folder_into(user, vault, id, target_folder, dek) do
+    |> Enum.reduce_while({%{moved: 0, pairs: []}, rows}, fn id, {acc, rows} ->
+      case move_folder_into(user, vault, id, target_folder, dek, rows) do
         {:ok, {old_folder, new_folder}} ->
-          {:cont, %{acc | moved: acc.moved + 1, pairs: [{old_folder, new_folder} | acc.pairs]}}
+          acc = %{acc | moved: acc.moved + 1, pairs: [{old_folder, new_folder} | acc.pairs]}
+          {:cont, {acc, advance_renamed_rows(rows, old_folder, new_folder)}}
 
         {:error, :not_found} ->
           {:halt, {:rollback, {:not_found, id}}}
@@ -4170,21 +4220,56 @@ defmodule Engram.Notes do
     end)
     |> case do
       {:rollback, reason} -> Repo.rollback(reason)
-      %{pairs: pairs} = acc -> %{acc | pairs: Enum.reverse(pairs)}
+      {%{pairs: pairs} = acc, _rows} -> %{acc | pairs: Enum.reverse(pairs)}
     end
   end
 
+  # In-memory mirror of what do_rename_folder/6 just committed, applied to the
+  # shared batch scan: rows under `old_folder` get folder/path rewritten and
+  # (real notes) dek_version bumped to AAD-bound — exactly the DB-visible
+  # outcome — so the next marker in the batch sees current state without a
+  # re-scan. Filter + rewrite arithmetic MUST match do_rename_folder/6.
+  defp advance_renamed_rows(rows, old_folder, new_folder) do
+    old_prefix = old_folder <> "/"
+    old_len = String.length(old_folder)
+
+    Enum.map(rows, fn n ->
+      folder = n.folder || ""
+
+      if folder == old_folder or String.starts_with?(folder, old_prefix) do
+        new_note_folder =
+          if folder == old_folder,
+            do: new_folder,
+            else: new_folder <> String.slice(folder, old_len..-1//1)
+
+        new_path =
+          case n.kind do
+            "folder" -> n.path
+            _ -> new_note_folder <> String.slice(n.path, String.length(folder)..-1//1)
+          end
+
+        dek_version =
+          if n.kind == "note", do: Crypto.row_version_aad_bound(), else: n.dek_version
+
+        %{n | folder: new_note_folder, path: new_path, dek_version: dek_version}
+      else
+        n
+      end
+    end)
+  end
+
   # Resolve source marker → compute new folder under target → delegate to
-  # rename_folder/4 (which cascades through descendants). Mirrors
-  # move_note_into_folder/4's contract: returns {:ok, _} or {:error, atom}.
-  defp move_folder_into(user, vault, id, target_folder, dek) do
+  # the gated rename (which cascades through descendants, reusing the shared
+  # batch scan). Mirrors move_note_into_folder/4's contract: returns {:ok, _}
+  # or {:error, atom}.
+  defp move_folder_into(user, vault, id, target_folder, dek, rows) do
     case get_folder_marker_by_id(user, vault, id) do
       {:ok, marker} ->
         source_folder = hydrate_folder_marker(marker, dek).folder
 
         # Cycle guard: moving a folder into itself or any descendant would
         # produce a path that's a strict suffix of the source, which both
-        # `do_rename_folder/5`'s prefix scan can't reason about and is
+        # `do_rename_folder/6`'s prefix scan can't reason about and is
         # semantically nonsense ("a" cannot live under "a/b"). Catch it
         # before the cascade runs so the caller gets a stable `:cycle`
         # signal instead of partial moves or a Postgrex crash.
@@ -4200,7 +4285,7 @@ defmodule Engram.Notes do
               tf -> tf <> "/" <> leaf
             end
 
-          case rename_folder(user, vault, source_folder, new_folder) do
+          case rename_folder_gated(user, vault, source_folder, new_folder, rows) do
             {:ok, _count} -> {:ok, {source_folder, new_folder}}
             {:error, :conflict} -> {:error, :conflict}
             {:error, reason} -> {:error, reason}
@@ -4594,6 +4679,65 @@ defmodule Engram.Notes do
   # row-id-bound AAD and recomputes the folder_hmac. Returns
   # `{ciphertext, nonce, hmac}` — caller splices into Repo.update_all `set:`.
   # No content/title/path/tags work because markers have none of those.
+  defp rename_col_sql_type(:tags_hmac), do: "bytea[]"
+  defp rename_col_sql_type(:dek_version), do: "integer"
+  defp rename_col_sql_type(_col), do: "bytea"
+
+  # One `UPDATE notes ... FROM (VALUES ...)` per ≤500-row chunk. Every row in a
+  # class gets DISTINCT ciphertexts, so this can't be a single update_all — but
+  # it must not be one UPDATE per note either (the N+1 this replaces). Runs
+  # inside the caller's with_tenant transaction: the RLS role restricts the raw
+  # UPDATE to the tenant's rows, and the shared `seq`/`now` stamp keeps the
+  # #614 one-op-one-seq contract. `rows` is [{note_id, kw}] where `kw` holds a
+  # value for every column in `cols`. A nested-collision unique violation
+  # raises Postgrex.Error exactly like the per-note update_all did.
+  defp bulk_rename_update!([], _cols, _now, _seq), do: :ok
+
+  defp bulk_rename_update!(rows, cols, now, seq) do
+    set_sql = Enum.map_join(cols, ", ", &"#{&1} = v.#{&1}") <> ", updated_at = $1, seq = $2"
+    ncols = length(cols) + 1
+    naive_now = DateTime.to_naive(now)
+
+    rows
+    |> Enum.chunk_every(@rename_update_chunk)
+    |> Enum.each(fn chunk ->
+      values_sql =
+        chunk
+        |> Enum.with_index()
+        |> Enum.map_join(", ", fn {_row, i} ->
+          base = 3 + i * ncols
+
+          col_placeholders =
+            cols
+            |> Enum.with_index(1)
+            |> Enum.map_join(", ", fn {col, j} ->
+              "$#{base + j}::#{rename_col_sql_type(col)}"
+            end)
+
+          "($#{base}::uuid, #{col_placeholders})"
+        end)
+
+      params =
+        [naive_now, seq] ++
+          Enum.flat_map(chunk, fn {id, kw} ->
+            [Ecto.UUID.dump!(id) | Enum.map(cols, &Keyword.fetch!(kw, &1))]
+          end)
+
+      _ =
+        Repo.query!(
+          """
+          UPDATE notes AS n
+          SET #{set_sql}
+          FROM (VALUES #{values_sql}) AS v(id, #{Enum.join(cols, ", ")})
+          WHERE n.id = v.id
+          """,
+          params
+        )
+    end)
+
+    :ok
+  end
+
   defp folder_only_aad_bound(user, row_id, folder, _dek_version) do
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, filter_key} = Crypto.dek_filter_key(user)
