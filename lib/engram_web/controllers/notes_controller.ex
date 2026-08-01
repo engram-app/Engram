@@ -498,9 +498,6 @@ defmodule EngramWeb.NotesController do
           {:error, {:conflict, id}} ->
             conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
 
-          {:error, :batch_too_large} ->
-            conn |> put_status(422) |> json(%{error: "batch_too_large", max: 500})
-
           {:error, _reason} ->
             conn |> put_status(500) |> json(%{error: "internal"})
         end
@@ -585,9 +582,6 @@ defmodule EngramWeb.NotesController do
 
       {:error, {:conflict, id}} ->
         conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
-
-      {:error, :batch_too_large} ->
-        conn |> put_status(422) |> json(%{error: "batch_too_large", max: 500})
 
       {:error, _reason} ->
         conn |> put_status(500) |> json(%{error: "internal"})

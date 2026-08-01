@@ -509,22 +509,44 @@ defmodule Engram.NotesBatchSetBasedTest do
   # a multi-item batch that fails late leaks events for rolled-back renames.
   # The after-commit buffer for move/folder ops is the tracked follow-up.
 
-  describe "batch size cap (context boundary)" do
-    # No boundary ever enforced a batch cap (the "capped at the controller"
-    # comment was aspirational), yet the legacy change feed's convergence
-    # assumption breaks if one bulk write stamps >500 rows on a single
-    # timestamp (notes_controller.ex changes_server_time comment). 500 =
-    # that documented bound; the plugin chunks at ≤100 per request anyway.
-    test "batch_delete_notes rejects more than 500 ids", %{user: user, vault: vault} do
-      ids = for _ <- 1..501, do: Ecto.UUID.generate()
-      assert {:error, :batch_too_large} = Notes.batch_delete_notes(user, vault, ids)
+  describe "batch size limits (context boundary)" do
+    # Delete/move accept ANY size — real consumers (e2e harness cleanup,
+    # test_77 bulk teardown) legitimately send >1000 ids in one request. The
+    # actual invariant is ≤500 rows per server TIMESTAMP (the legacy
+    # `updated_at >= since` feed re-serves the same page forever if a
+    # same-stamp run exceeds the page size — notes_controller.ex
+    # changes_server_time), so bulk deletes stamp tombstones in ≤500-row
+    # chunks with distinct timestamps instead of rejecting the request.
+    test "batch_delete_notes accepts >500 ids and chunk-stamps tombstones", %{
+      user: user,
+      vault: vault
+    } do
+      notes = for _ <- 1..501, do: insert(:note, user: user, vault: vault)
+      ids = Enum.map(notes, & &1.id)
+
+      assert {:ok, %{deleted: 501}} = Notes.batch_delete_notes(user, vault, ids)
+
+      stamps =
+        Repo.with_tenant(user.id, fn ->
+          import Ecto.Query
+
+          Repo.all(
+            from(n in Engram.Notes.Note,
+              where: n.id in ^ids,
+              select: n.updated_at,
+              distinct: true
+            )
+          )
+        end)
+        |> elem(1)
+
+      assert length(stamps) >= 2,
+             ">500 tombstones must not share one timestamp (legacy-feed wedge)"
     end
 
-    test "batch_move_notes rejects more than 500 ids", %{user: user, vault: vault} do
-      ids = for _ <- 1..501, do: Ecto.UUID.generate()
-      assert {:error, :batch_too_large} = Notes.batch_move_notes(user, vault, ids, "root")
-    end
-
+    # Upsert keeps a hard cap: each entry costs an encrypt + CRDT merge, so
+    # an unbounded request is a real compute-DoS vector, and no client sends
+    # >500 (the plugin chunks at ≤100).
     test "batch_upsert_notes rejects more than 500 entries", %{user: user, vault: vault} do
       params = for i <- 1..501, do: %{path: "bulk/n#{i}.md"}
       assert {:error, :batch_too_large} = Notes.batch_upsert_notes(user, vault, params)

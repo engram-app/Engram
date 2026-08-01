@@ -87,12 +87,15 @@ defmodule Engram.Notes do
     from(n in Note, where: n.kind == "note")
   end
 
-  # Batch-op cap, enforced at the context boundary (no controller ever did,
-  # despite older comments claiming so). 500 = the legacy change feed's
-  # convergence bound: >500 rows stamped on one server timestamp can make a
-  # legacy pull re-serve the same page forever (see notes_controller.ex
-  # changes_server_time). The plugin chunks at ≤100 per request; the SPA
-  # sends unchunked selections, so the cap sits above any realistic one.
+  # 500 = the legacy change feed's convergence bound: >500 rows stamped on
+  # one server timestamp can make a legacy `updated_at >= since` pull
+  # re-serve the same page forever (see notes_controller.ex
+  # changes_server_time). Used two ways:
+  #   * batch_delete_notes chunk-stamps tombstones ≤500 per timestamp, so
+  #     ANY request size is safe (e2e teardown legitimately sends >1000 ids);
+  #   * batch_upsert_notes hard-caps at 500 — each entry costs an encrypt +
+  #     CRDT merge, so unbounded requests are a compute-DoS vector, and no
+  #     client sends >500 (the plugin chunks at ≤100).
   @max_batch_entries 500
 
   @doc """
@@ -2019,12 +2022,7 @@ defmodule Engram.Notes do
           | {:error, {:not_found, String.t()} | term()}
   def batch_delete_notes(_user, _vault, []), do: {:ok, %{deleted: 0}}
 
-  def batch_delete_notes(_user, _vault, ids)
-      when is_list(ids) and length(ids) > @max_batch_entries,
-      do: {:error, :batch_too_large}
-
   def batch_delete_notes(user, vault, ids) when is_list(ids) do
-    now = DateTime.utc_now()
     # Duplicate ids collapse to one delete (idempotent-delete semantics);
     # `deleted` counts DISTINCT notes, documented in the @doc above.
     ids = Enum.uniq(ids)
@@ -2050,12 +2048,28 @@ defmodule Engram.Notes do
           case Enum.find(ids, &(not MapSet.member?(found, &1))) do
             nil ->
               seq = Engram.Vaults.next_seq!(vault.id)
+              base_now = DateTime.utc_now()
 
-              {updated, _} =
-                from(n in Note,
-                  where: n.id in ^Enum.map(notes, & &1.id) and is_nil(n.deleted_at)
-                )
-                |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
+              # Stamp tombstones in ≤500-row chunks with DISTINCT timestamps:
+              # the legacy `updated_at >= since` feed pages by timestamp, and
+              # a same-stamp run longer than the page size re-serves the same
+              # page forever (changes_server_time). +i µs guarantees distinct
+              # stamps even when consecutive utc_now() calls collide.
+              updated =
+                notes
+                |> Enum.map(& &1.id)
+                |> Enum.chunk_every(@max_batch_entries)
+                |> Enum.with_index()
+                |> Enum.map(fn {chunk_ids, i} ->
+                  now_i = DateTime.add(base_now, i, :microsecond)
+
+                  {n, _} =
+                    from(n in Note, where: n.id in ^chunk_ids and is_nil(n.deleted_at))
+                    |> Repo.update_all(set: [deleted_at: now_i, updated_at: now_i, seq: seq])
+
+                  n
+                end)
+                |> Enum.sum()
 
               :ok = UsageMeters.dec_notes_count(user.id, updated)
 
@@ -2150,10 +2164,6 @@ defmodule Engram.Notes do
           {:ok, %{moved: non_neg_integer()}}
           | {:error, {:not_found | :conflict, String.t()} | term()}
   def batch_move_notes(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
-
-  def batch_move_notes(_user, _vault, ids, _target)
-      when is_list(ids) and length(ids) > @max_batch_entries,
-      do: {:error, :batch_too_large}
 
   # Move into a folder given by PATH. No marker is required — a "derived" folder
   # exists purely as a path on its notes. `folder == ""` means the vault root.
