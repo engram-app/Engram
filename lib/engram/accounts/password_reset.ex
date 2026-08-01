@@ -107,5 +107,5 @@ defmodule Engram.Accounts.PasswordReset do
   defp normalize({:error, :invalid}), do: {:error, :invalid}
   defp normalize({:error, other}), do: {:error, other}
 
-  defp hash_token(raw), do: :crypto.hash(:sha256, raw) |> Base.encode16(case: :lower)
+  defp hash_token(raw), do: Engram.Crypto.sha256_hex(raw)
 end

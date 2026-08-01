@@ -44,20 +44,16 @@ defmodule Engram.Workers.EmbedNote do
     # T3.2 — `old_path_hmac` is a base64-encoded HMAC, never plaintext path.
     old_path_hmac_b64 = args["old_path_hmac"]
 
-    # skip_tenant_check: trusted internal worker — queries already scoped to note_id/user_id
-    case Repo.get(Note, note_id, skip_tenant_check: true) do
-      nil ->
-        {:discard, "note #{note_id} not found"}
+    case Engram.Notes.fetch_note_for_worker(note_id) do
+      {:discard, _reason} = discard ->
+        discard
 
-      %Note{deleted_at: deleted_at} when deleted_at != nil ->
-        {:discard, "note #{note_id} is soft-deleted"}
-
-      %Note{content_hash: hash, embed_hash: hash}
+      {:ok, %Note{content_hash: hash, embed_hash: hash}}
       when hash != nil and is_nil(old_path_hmac_b64) ->
         # Already embedded this exact content and no rename pending — skip
         :ok
 
-      note ->
+      {:ok, note} ->
         # T3.7 — gate writes during DEK rotation. The worker may have been
         # enqueued before the lock was acquired; re-check the live row.
         case RotationGate.check(note.user_id) do

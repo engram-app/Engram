@@ -16,110 +16,69 @@ defmodule Engram.Paddle.Client.HTTP do
 
   @impl true
   def create_customer_portal_session(customer_id) when is_binary(customer_id) do
-    with {:ok, api_key} <- fetch_api_key() do
-      url = base_url() <> "/customers/" <> customer_id <> "/portal-sessions"
-
-      case Req.post(url, headers: headers(api_key), json: %{}, receive_timeout: 10_000) do
-        {:ok,
-         %Req.Response{
-           status: 201,
-           body: %{"data" => %{"urls" => %{"general" => %{"overview" => overview}}}}
-         }} ->
+    request(
+      :post,
+      "/customers/" <> customer_id <> "/portal-sessions",
+      "portal-session",
+      fn
+        %Req.Response{
+          status: 201,
+          body: %{"data" => %{"urls" => %{"general" => %{"overview" => overview}}}}
+        } ->
           {:ok, overview}
 
-        {:ok, %Req.Response{status: status, body: body}} ->
-          Logger.warning(
-            "Paddle portal-session non-201",
-            Metadata.with_category(:warning, :billing,
-              status: status,
-              reason_label: inspect(body)
-            )
-          )
-
-          {:error, {:paddle_error, status, body}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
+        _ ->
+          :error
+      end,
+      json: %{},
+      # This endpoint predates log_non_2xx and logged "non-201"; the message
+      # is kept verbatim so log-based alerting/queries don't silently break.
+      log_message: "Paddle portal-session non-201"
+    )
   end
 
   @impl true
   def get_subscription(subscription_id) when is_binary(subscription_id) do
-    with {:ok, api_key} <- fetch_api_key() do
-      url = base_url() <> "/subscriptions/" <> subscription_id
-
-      case Req.get(url, headers: headers(api_key), receive_timeout: 10_000) do
-        {:ok, %Req.Response{status: 200, body: %{"data" => data}}} ->
-          {:ok, data}
-
-        {:ok, %Req.Response{status: status, body: body}} ->
-          log_non_2xx("subscription", status, body)
-          {:error, {:paddle_error, status, body}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
+    request(:get, "/subscriptions/" <> subscription_id, "subscription", fn
+      %Req.Response{status: 200, body: %{"data" => data}} -> {:ok, data}
+      _ -> :error
+    end)
   end
 
   @impl true
   def list_transactions(subscription_id) when is_binary(subscription_id) do
-    with {:ok, api_key} <- fetch_api_key() do
-      url = base_url() <> "/transactions"
-
-      params = [subscription_id: subscription_id, order_by: "billed_at[DESC]", per_page: 50]
-
-      case Req.get(url, headers: headers(api_key), params: params, receive_timeout: 10_000) do
-        {:ok, %Req.Response{status: 200, body: %{"data" => data}}} when is_list(data) ->
-          {:ok, data}
-
-        {:ok, %Req.Response{status: status, body: body}} ->
-          log_non_2xx("transactions", status, body)
-          {:error, {:paddle_error, status, body}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
+    request(
+      :get,
+      "/transactions",
+      "transactions",
+      fn
+        %Req.Response{status: 200, body: %{"data" => data}} when is_list(data) -> {:ok, data}
+        _ -> :error
+      end,
+      params: [subscription_id: subscription_id, order_by: "billed_at[DESC]", per_page: 50]
+    )
   end
 
   @impl true
   def get_transaction_invoice(transaction_id) when is_binary(transaction_id) do
-    with {:ok, api_key} <- fetch_api_key() do
-      url = base_url() <> "/transactions/" <> transaction_id <> "/invoice"
-
-      case Req.get(url, headers: headers(api_key), receive_timeout: 10_000) do
-        {:ok, %Req.Response{status: 200, body: %{"data" => %{"url" => invoice_url}}}} ->
-          {:ok, invoice_url}
-
-        {:ok, %Req.Response{status: status, body: body}} ->
-          log_non_2xx("transaction-invoice", status, body)
-          {:error, {:paddle_error, status, body}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
+    request(:get, "/transactions/" <> transaction_id <> "/invoice", "transaction-invoice", fn
+      %Req.Response{status: 200, body: %{"data" => %{"url" => invoice_url}}} -> {:ok, invoice_url}
+      _ -> :error
+    end)
   end
 
   @impl true
   def get_portal_session(customer_id) when is_binary(customer_id) do
-    with {:ok, api_key} <- fetch_api_key() do
-      url = base_url() <> "/customers/" <> customer_id <> "/portal-sessions"
-
-      case Req.post(url, headers: headers(api_key), json: %{}, receive_timeout: 10_000) do
-        {:ok, %Req.Response{status: 201, body: %{"data" => %{"urls" => urls}}}} ->
-          {:ok, urls}
-
-        {:ok, %Req.Response{status: status, body: body}} ->
-          log_non_2xx("portal-session", status, body)
-          {:error, {:paddle_error, status, body}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
+    request(
+      :post,
+      "/customers/" <> customer_id <> "/portal-sessions",
+      "portal-session",
+      fn
+        %Req.Response{status: 201, body: %{"data" => %{"urls" => urls}}} -> {:ok, urls}
+        _ -> :error
+      end,
+      json: %{}
+    )
   end
 
   @impl true
@@ -210,80 +169,82 @@ defmodule Engram.Paddle.Client.HTTP do
 
   @impl true
   def get_update_payment_transaction(subscription_id) when is_binary(subscription_id) do
-    with {:ok, api_key} <- fetch_api_key() do
-      url =
-        base_url() <>
-          "/subscriptions/" <> subscription_id <> "/update-payment-method-transaction"
-
-      case Req.get(url, headers: headers(api_key), receive_timeout: 10_000) do
-        {:ok, %Req.Response{status: 200, body: %{"data" => data}}} ->
-          {:ok, data}
-
-        {:ok, %Req.Response{status: status, body: body}} ->
-          log_non_2xx("update-payment-transaction", status, body)
-          {:error, {:paddle_error, status, body}}
-
-        {:error, reason} ->
-          {:error, reason}
+    request(
+      :get,
+      "/subscriptions/" <> subscription_id <> "/update-payment-method-transaction",
+      "update-payment-transaction",
+      fn
+        %Req.Response{status: 200, body: %{"data" => data}} -> {:ok, data}
+        _ -> :error
       end
-    end
+    )
   end
 
   @impl true
   def cancel_subscription(subscription_id, effective_from, opts \\ [])
       when is_binary(subscription_id) and effective_from in [:immediately, :next_billing_period] do
-    with {:ok, api_key} <- fetch_api_key() do
-      url = base_url() <> "/subscriptions/" <> subscription_id <> "/cancel"
-
-      body = %{effective_from: Atom.to_string(effective_from)}
-
-      req_headers =
-        case Keyword.get(opts, :idempotency_key) do
-          key when is_binary(key) -> headers(api_key) ++ [{"paddle-ik", key}]
-          _ -> headers(api_key)
-        end
-
-      case Req.post(url, headers: req_headers, json: body, receive_timeout: 10_000) do
-        {:ok, %Req.Response{status: 200, body: %{"data" => data}}} ->
-          {:ok, data}
-
-        {:ok, %Req.Response{status: status, body: body}} ->
-          log_non_2xx("subscription-cancel", status, body)
-          {:error, {:paddle_error, status, body}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
+    request(
+      :post,
+      "/subscriptions/" <> subscription_id <> "/cancel",
+      "subscription-cancel",
+      fn
+        %Req.Response{status: 200, body: %{"data" => data}} -> {:ok, data}
+        _ -> :error
+      end,
+      json: %{effective_from: Atom.to_string(effective_from)},
+      idempotency_key: Keyword.get(opts, :idempotency_key)
+    )
   end
 
   @impl true
   def preview_subscription_update(subscription_id, items, opts \\ [])
       when is_binary(subscription_id) and is_list(items) do
-    with {:ok, api_key} <- fetch_api_key() do
-      url = base_url() <> "/subscriptions/" <> subscription_id <> "/preview"
-      body = subscription_update_body(items, opts)
-
-      case Req.patch(url, headers: headers(api_key), json: body, receive_timeout: 10_000) do
-        {:ok, %Req.Response{status: 200, body: %{"data" => data}}} ->
-          {:ok, data}
-
-        {:ok, %Req.Response{status: status, body: body}} ->
-          log_non_2xx("subscription-preview", status, body)
-          {:error, {:paddle_error, status, body}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
+    request(
+      :patch,
+      "/subscriptions/" <> subscription_id <> "/preview",
+      "subscription-preview",
+      fn
+        %Req.Response{status: 200, body: %{"data" => data}} -> {:ok, data}
+        _ -> :error
+      end,
+      json: subscription_update_body(items, opts)
+    )
   end
 
   @impl true
   def update_subscription(subscription_id, items, opts \\ [])
       when is_binary(subscription_id) and is_list(items) do
+    request(
+      :patch,
+      "/subscriptions/" <> subscription_id,
+      "subscription-update",
+      fn
+        %Req.Response{status: 200, body: %{"data" => data}} -> {:ok, data}
+        _ -> :error
+      end,
+      json: subscription_update_body(items, opts),
+      idempotency_key: Keyword.get(opts, :idempotency_key)
+    )
+  end
+
+  # ── shared request driver ─────────────────────────────────────────
+  #
+  # Every non-paginated Paddle call is the same shape: fetch the API key,
+  # build URL + headers, issue one Req call, pattern-match the single success
+  # shape, and map everything else to a warning log +
+  # `{:error, {:paddle_error, status, body}}`. `extract` matches ONLY the
+  # success response (status AND body shape) and returns `{:ok, result}`;
+  # any other response — wrong status, or a 2xx with an unexpected body —
+  # returns `:error` and takes the same non-2xx path the hand-rolled
+  # versions did. (`list_subscriptions/1` stays hand-rolled: pagination.)
+  #
+  # Options: `:json` (request body), `:params` (query params),
+  # `:idempotency_key` (adds the `paddle-ik` header when a binary),
+  # `:log_message` (verbatim warning-message override — see
+  # create_customer_portal_session/1).
+  defp request(verb, path, label, extract, opts \\ []) do
     with {:ok, api_key} <- fetch_api_key() do
-      url = base_url() <> "/subscriptions/" <> subscription_id
-      body = subscription_update_body(items, opts)
+      url = base_url() <> path
 
       req_headers =
         case Keyword.get(opts, :idempotency_key) do
@@ -291,19 +252,34 @@ defmodule Engram.Paddle.Client.HTTP do
           _ -> headers(api_key)
         end
 
-      case Req.patch(url, headers: req_headers, json: body, receive_timeout: 10_000) do
-        {:ok, %Req.Response{status: 200, body: %{"data" => data}}} ->
-          {:ok, data}
+      req_opts =
+        [headers: req_headers, receive_timeout: 10_000] ++
+          Keyword.take(opts, [:json, :params])
 
-        {:ok, %Req.Response{status: status, body: body}} ->
-          log_non_2xx("subscription-update", status, body)
-          {:error, {:paddle_error, status, body}}
+      case do_req(verb, url, req_opts) do
+        {:ok, %Req.Response{status: status, body: body} = resp} ->
+          case extract.(resp) do
+            {:ok, _} = ok ->
+              ok
+
+            :error ->
+              case Keyword.get(opts, :log_message) do
+                nil -> log_non_2xx(label, status, body)
+                message -> log_paddle_warning(message, status, body)
+              end
+
+              {:error, {:paddle_error, status, body}}
+          end
 
         {:error, reason} ->
           {:error, reason}
       end
     end
   end
+
+  defp do_req(:get, url, opts), do: Req.get(url, opts)
+  defp do_req(:post, url, opts), do: Req.post(url, opts)
+  defp do_req(:patch, url, opts), do: Req.patch(url, opts)
 
   # Paddle PATCH /subscriptions/{id} treats `items` as REPLACE (not merge), so
   # an empty list either 422s ('items must be non-empty') or wipes the
@@ -329,9 +305,12 @@ defmodule Engram.Paddle.Client.HTTP do
     end
   end
 
-  defp log_non_2xx(label, status, body) do
+  defp log_non_2xx(label, status, body),
+    do: log_paddle_warning("Paddle #{label} non-2xx", status, body)
+
+  defp log_paddle_warning(message, status, body) do
     Logger.warning(
-      "Paddle #{label} non-2xx",
+      message,
       Metadata.with_category(:warning, :billing, status: status, reason_label: inspect(body))
     )
   end

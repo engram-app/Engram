@@ -488,19 +488,7 @@ defmodule Engram.Billing do
           custom_data: data["custom_data"] || %{}
         }
 
-        attrs =
-          case tier_from_subscription(data) do
-            {:ok, tier} ->
-              Map.put(base_attrs, :tier, Atom.to_string(tier))
-
-            {:error, :unknown_price_id} ->
-              _ =
-                Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
-                  extra: %{user_id: user_id, payload_keys: Map.keys(data)}
-                )
-
-              base_attrs
-          end
+        attrs = attrs_with_tier(base_attrs, data, user_id)
 
         # Omit :custom_data from the replace list. Paddle delivers at-least-once,
         # so a retried subscription.created must NOT clobber the affiliate /
@@ -538,12 +526,7 @@ defmodule Engram.Billing do
   end
 
   def upsert_from_paddle_event(%{"event_type" => "subscription.canceled", "data" => data}) do
-    subscription_id = data["id"]
-
-    case Repo.one(
-           from(s in Subscription, where: s.paddle_subscription_id == ^subscription_id),
-           skip_tenant_check: true
-         ) do
+    case get_subscription_by_paddle_id(data["id"]) do
       %Subscription{} = sub ->
         sub_with_user = Repo.preload(sub, :user, skip_tenant_check: true)
         user = sub_with_user.user
@@ -554,19 +537,7 @@ defmodule Engram.Billing do
           current_period_end: parse_period_end(data)
         }
 
-        update_attrs =
-          case tier_from_subscription(data) do
-            {:ok, tier_atom} ->
-              Map.put(base_attrs, :tier, Atom.to_string(tier_atom))
-
-            {:error, :unknown_price_id} ->
-              _ =
-                Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
-                  extra: %{user_id: sub.user_id, payload_keys: Map.keys(data)}
-                )
-
-              base_attrs
-          end
+        update_attrs = attrs_with_tier(base_attrs, data, sub.user_id)
 
         # Flip the user to Free at cancellation (period end per Paddle's engine).
         # `free_tier_accepted_at` is stamped only when nil so a user who had
@@ -619,31 +590,14 @@ defmodule Engram.Billing do
 
   def upsert_from_paddle_event(%{"event_type" => type, "data" => data})
       when type in ~w(subscription.activated subscription.updated subscription.past_due) do
-    subscription_id = data["id"]
-
-    case Repo.one(
-           from(s in Subscription, where: s.paddle_subscription_id == ^subscription_id),
-           skip_tenant_check: true
-         ) do
+    case get_subscription_by_paddle_id(data["id"]) do
       %Subscription{tier: prev_tier, status: prev_status} = sub ->
         base_attrs = %{
           status: data["status"],
           current_period_end: parse_period_end(data)
         }
 
-        update_attrs =
-          case tier_from_subscription(data) do
-            {:ok, tier} ->
-              Map.put(base_attrs, :tier, Atom.to_string(tier))
-
-            {:error, :unknown_price_id} ->
-              _ =
-                Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
-                  extra: %{user_id: sub.user_id, payload_keys: Map.keys(data)}
-                )
-
-              base_attrs
-          end
+        update_attrs = attrs_with_tier(base_attrs, data, sub.user_id)
 
         result =
           sub
@@ -677,6 +631,34 @@ defmodule Engram.Billing do
   end
 
   def upsert_from_paddle_event(_event), do: {:ok, :ignored}
+
+  # Resolve the tier from the event's price_id and merge it into `base_attrs`.
+  # An unknown price_id leaves the tier UNCHANGED (attrs without :tier) rather
+  # than downgrading — a misconfigured price map must never strip a paying
+  # user's tier — and pages via Sentry so ops fixes the mapping.
+  defp attrs_with_tier(base_attrs, data, user_id) do
+    case tier_from_subscription(data) do
+      {:ok, tier} ->
+        Map.put(base_attrs, :tier, Atom.to_string(tier))
+
+      {:error, :unknown_price_id} ->
+        _ =
+          Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
+            extra: %{user_id: user_id, payload_keys: Map.keys(data)}
+          )
+
+        base_attrs
+    end
+  end
+
+  # Webhook-side lookup: Paddle's subscription id is the only key we have at
+  # this point (no user in scope yet), hence skip_tenant_check.
+  defp get_subscription_by_paddle_id(subscription_id) do
+    Repo.one(
+      from(s in Subscription, where: s.paddle_subscription_id == ^subscription_id),
+      skip_tenant_check: true
+    )
+  end
 
   # Notify the user's open browser tabs that their subscription state
   # changed server-side, so the activation overlay can hand off to the
