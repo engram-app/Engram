@@ -3157,12 +3157,36 @@ jobs:
         id: pg
         run: |
           docker rm -f "$PG_CONTAINER" 2>/dev/null || true
-          docker run -d --name "$PG_CONTAINER" \
-            -e POSTGRES_USER=engram \
-            -e POSTGRES_PASSWORD=engram \
-            -e POSTGRES_DB=engram_n1 \
-            -P \
-            postgres:18.4
+
+          # Same port race as the unit-tests job's ephemeral postgres, and the
+          # same fix. `-P` lets docker auto-allocate a host port, but between
+          # resolving one and binding it another runner on this shared VM can
+          # claim it, and rootless docker surfaces that as a hard failure:
+          #
+          #   RootlessKit PortManager.AddPort(): listen tcp4 0.0.0.0:32814:
+          #   bind: address already in use
+          #
+          # That is a job-level red on a PR whose migrations are fine, which is
+          # the worst kind of red: it costs a human a full investigation to
+          # learn nothing. Observed on run 30662527833. Retry up to 5 times;
+          # each attempt gets a fresh allocation.
+          for attempt in 1 2 3 4 5; do
+            if docker run -d --name "$PG_CONTAINER" \
+                -e POSTGRES_USER=engram \
+                -e POSTGRES_PASSWORD=engram \
+                -e POSTGRES_DB=engram_n1 \
+                -P \
+                postgres:18.4; then
+              break
+            fi
+            echo "Attempt $attempt: docker run failed (likely port race) — cleaning up + retrying"
+            docker rm -f "$PG_CONTAINER" 2>/dev/null || true
+            sleep 1
+            if [ "$attempt" = "5" ]; then
+              echo "::error::Postgres container failed to start after 5 attempts"
+              exit 1
+            fi
+          done
           # Wait for ready
           for i in $(seq 1 30); do
             if docker exec "$PG_CONTAINER" pg_isready -U engram >/dev/null 2>&1; then

@@ -8,6 +8,23 @@ import { ActiveEditorProvider, useActiveEditor } from "../editor/active-editor-c
 import MarkdownReferencePanel from "./markdown-reference-panel";
 import { SYNTAX_ENTRIES } from "./markdown-syntax";
 
+// Vitest's default 5s per-test budget is mis-sized for this file, which is the
+// one place that drives the REAL markdown pipeline (remark/rehype +
+// @portaljs/remark-callouts) through jsdom, dozens of times over.
+//
+// Measured locally on an idle machine: 19.4s of test time across 39 tests, with
+// the slowest single test at 3821ms — 76% of the default budget already spent
+// before any contention. On a shared runner that tips over, and it did:
+// "renders the callout as an actual callout" failed with "Test timed out in
+// 5000ms" while passing 39/39 locally.
+//
+// This raises the CEILING, not the bar. Every assertion is unchanged, and a test
+// that genuinely hangs still fails — it just no longer fails for being honestly
+// slow on a loaded box. The alternative, mocking the markdown pipeline, would
+// delete the only thing these tests exist to prove: that "> [!tip]" really does
+// become a callout.
+vi.setConfig({ testTimeout: 20_000 });
+
 // The real NoteView renders the previews (that is the point of this panel), but
 // its free-tier attachment gate needs billing + query context this harness has
 // no business standing up.
