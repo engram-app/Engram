@@ -279,8 +279,8 @@ defmodule Engram.Attachments do
 
   # Soft-deletes one attachment and returns whether a live row actually
   # transitioned to deleted (`false` for an absent/already-deleted path).
-  # Broadcasts + best-effort blob cleanup happen here so both the single-delete
-  # API and `batch_delete/3` share one implementation and count truthfully.
+  # Single-delete path only — `batch_delete/3` has its own one-transaction
+  # implementation with the same broadcast payload + blob-cleanup contract.
   # opts[:origin_device_id] is stamped into the delete broadcast (#970) so the
   # originating device can drop its own fanout echo.
   defp do_delete_attachment(user, vault, path, opts) do
