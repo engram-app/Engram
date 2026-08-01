@@ -69,8 +69,12 @@ defmodule Engram.Connections.LogoAllowlist do
   }
 
   # Keyed on redirect_uri host. Vendor-owned HTTPS hosts only. Every entry here
-  # was observed on a real grant (prod, 2026-07-30). Do not add speculative
-  # hosts; an entry that never fires is dead config that reads as coverage.
+  # was observed on a real grant — the first five in prod on 2026-07-30, Devin
+  # and LobeHub on staging on 2026-08-01. Staging counts because what the rule
+  # is actually guarding is "a real client really redirected here", not which
+  # environment answered; a guessed host is the thing that must never land. Do
+  # not add speculative hosts; an entry that never fires is dead config that
+  # reads as coverage.
   # `logo: nil` where we have no asset yet; the UI falls back to a plug icon.
   @redirect_host %{
     "claude.ai" => %{
