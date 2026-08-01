@@ -414,11 +414,5 @@ defmodule EngramWeb.VaultsController do
 
   defp parse_id(id) when is_binary(id), do: Ecto.UUID.cast(id)
 
-  defp format_errors(changeset) do
-    Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
-      Enum.reduce(opts, msg, fn {key, value}, acc ->
-        String.replace(acc, "%{#{key}}", to_string(value))
-      end)
-    end)
-  end
+  defp format_errors(changeset), do: EngramWeb.format_errors(changeset)
 end

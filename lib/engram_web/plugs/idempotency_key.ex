@@ -6,6 +6,7 @@ defmodule EngramWeb.Plugs.IdempotencyKey do
   """
   import Plug.Conn
   alias Engram.Idempotency
+  alias EngramWeb.Plugs.Halt
 
   def init(opts), do: opts
 
@@ -28,10 +29,7 @@ defmodule EngramWeb.Plugs.IdempotencyKey do
     # before this plug), so one tenant can never replay another's response.
     case Idempotency.lookup(conn.assigns.current_user, key) do
       {:ok, %{status: status, body: body}} ->
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(status, Jason.encode!(body))
-        |> halt()
+        Halt.json(conn, status, body)
 
       :miss ->
         assign(conn, :idempotency_key, key)
@@ -39,9 +37,6 @@ defmodule EngramWeb.Plugs.IdempotencyKey do
   end
 
   defp reject(conn, code) do
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(400, Jason.encode!(%{error: code}))
-    |> halt()
+    Halt.json(conn, 400, %{error: code})
   end
 end

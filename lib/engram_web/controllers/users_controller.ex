@@ -37,7 +37,7 @@ defmodule EngramWeb.UsersController do
       {"Profile fields", "application/json", Schemas.UpdateProfileRequest, required: true},
     responses: [
       ok: {"Updated user", "application/json", Schemas.UserResponse},
-      unprocessable_entity: {"Validation error", "application/json", Schemas.ValidationError}
+      unprocessable_entity: {"Validation error", "application/json", Schemas.Error}
     ]
   )
 
@@ -57,16 +57,11 @@ defmodule EngramWeb.UsersController do
         })
 
       {:error, %Ecto.Changeset{} = cs} ->
-        details =
-          Ecto.Changeset.traverse_errors(cs, fn {msg, opts} ->
-            Enum.reduce(opts, msg, fn {k, v}, acc ->
-              String.replace(acc, "%{#{k}}", to_string(v))
-            end)
-          end)
-
+        # Sibling-controller 422 shape (%{errors: field → messages}) — this was
+        # the one endpoint returning %{error: "validation_failed", details: ...}.
         conn
         |> put_status(422)
-        |> json(%{error: "validation_failed", details: details})
+        |> json(%{errors: EngramWeb.format_errors(cs)})
     end
   end
 

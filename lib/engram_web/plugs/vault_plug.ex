@@ -14,6 +14,7 @@ defmodule EngramWeb.Plugs.VaultPlug do
   import Plug.Conn
 
   alias Engram.Vaults
+  alias EngramWeb.Plugs.Halt
 
   def init(opts), do: opts
 
@@ -25,8 +26,11 @@ defmodule EngramWeb.Plugs.VaultPlug do
         api_key = conn.assigns[:current_api_key]
 
         case Vaults.check_api_key_access(api_key, vault) do
-          :ok -> assign(conn, :current_vault, vault)
-          :forbidden -> halt_with(conn, 403, "API key does not have access to this vault")
+          :ok ->
+            assign(conn, :current_vault, vault)
+
+          :forbidden ->
+            Halt.json(conn, 403, %{error: "API key does not have access to this vault"})
         end
 
       # A non-UUID X-Vault-ID (e.g. a client sending a stale/placeholder id like
@@ -67,13 +71,6 @@ defmodule EngramWeb.Plugs.VaultPlug do
   defp reject(conn, reason, message) do
     conn
     |> assign(:reject_reason, reason)
-    |> halt_with(404, message)
-  end
-
-  defp halt_with(conn, status, message) do
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(status, Jason.encode!(%{error: message}))
-    |> halt()
+    |> Halt.json(404, %{error: message})
   end
 end

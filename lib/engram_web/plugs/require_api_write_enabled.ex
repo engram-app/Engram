@@ -14,9 +14,8 @@ defmodule EngramWeb.Plugs.RequireApiWriteEnabled do
   vault-scoped pipeline are gated.
   """
 
-  import Plug.Conn
-
   alias Engram.Billing
+  alias EngramWeb.Plugs.Halt
 
   @read_post_paths ~w(/api/search)
 
@@ -39,16 +38,10 @@ defmodule EngramWeb.Plugs.RequireApiWriteEnabled do
         conn
 
       _ ->
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(
-          402,
-          Jason.encode!(%{
-            error: "api_write_not_available",
-            upgrade_url: "/#settings/billing"
-          })
-        )
-        |> halt()
+        Halt.json(conn, 402, %{
+          error: "api_write_not_available",
+          upgrade_url: "/#settings/billing"
+        })
     end
   end
 end

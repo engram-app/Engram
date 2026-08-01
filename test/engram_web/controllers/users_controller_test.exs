@@ -47,7 +47,9 @@ defmodule EngramWeb.UsersControllerTest do
         |> put_req_header("content-type", "application/json")
         |> patch("/api/me", Jason.encode!(%{display_name: String.duplicate("x", 81)}))
 
-      assert %{"error" => "validation_failed"} = json_response(conn, 422)
+      # Sibling-controller 422 shape (%{errors: field → [messages]}) — unified
+      # from the old one-off %{error: "validation_failed", details: ...}.
+      assert %{"errors" => %{"display_name" => [_ | _]}} = json_response(conn, 422)
     end
 
     test "401 without bearer" do
