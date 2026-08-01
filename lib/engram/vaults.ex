@@ -481,12 +481,20 @@ defmodule Engram.Vaults do
             })
             |> Repo.update()
 
-          if was_default do
-            promote_next_default(user.id)
-          end
-
           case result do
             {:ok, deleted} ->
+              # Promote only after the row is actually flipped. `with_tenant`
+              # wraps this in a transaction, so a RAISING promote would roll the
+              # delete back with it — but an `{:error, changeset}` update does
+              # not roll anything back, and promoting there would COMMIT a second
+              # is_default row alongside the still-default, still-undeleted
+              # original. `get_default_vault` uses Repo.one, which raises on two
+              # rows: every client that sends no X-Vault-ID (the Obsidian plugin,
+              # MCP) would 500 until the data was repaired by hand.
+              if was_default do
+                promote_next_default(user.id)
+              end
+
               _ = Engram.Connections.revoke_by_vault(deleted.user_id, deleted.id)
               _ = Engram.Workers.CleanupVault.enqueue(deleted.id, deleted.user_id)
               _ = Engram.Workers.VaultDeletedEmail.enqueue(deleted.user_id, deleted.id)
