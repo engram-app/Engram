@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.12.2](https://github.com/engram-app/Engram/compare/0.12.1...0.12.2) (2026-08-01)
+
+
+### Bug Fixes
+
+* **auth:** stop a self-asserted software_id granting a vendor logo ([#1163](https://github.com/engram-app/Engram/issues/1163)) ([c754e54](https://github.com/engram-app/Engram/commit/c754e54ac12a12816dd8f7a1dc911bafa16cc955)), closes [#1156](https://github.com/engram-app/Engram/issues/1156)
+* **ci:** stop two false reds — n1-compat port race and a mis-sized test budget ([#1180](https://github.com/engram-app/Engram/issues/1180)) ([f7500c5](https://github.com/engram-app/Engram/commit/f7500c5f7087f8b24631e16cdc4fe2e297e05208))
+* **crdt:** refuse to bind a room when the snapshot fails to decrypt ([#1164](https://github.com/engram-app/Engram/issues/1164)) ([15b8233](https://github.com/engram-app/Engram/commit/15b82335a6a2696533ff080618317b59a7633cee)), closes [#852](https://github.com/engram-app/Engram/issues/852)
+* **e2e:** converge folder expansion instead of racing it ([#1179](https://github.com/engram-app/Engram/issues/1179)) ([fa36b17](https://github.com/engram-app/Engram/commit/fa36b174c865d9a604cb52a8b9ba28c2552e4486))
+* **logs:** bound the ingest path and delete the dead ClientLog changeset ([#1170](https://github.com/engram-app/Engram/issues/1170)) ([8b627f4](https://github.com/engram-app/Engram/commit/8b627f45e8ae8d2f8329654caf208a1252d3f1f3))
+* **oauth:** stop granting vendor identity on unprovable claims (CIMD + software_id deletion) ([#1167](https://github.com/engram-app/Engram/issues/1167)) ([03b2c2f](https://github.com/engram-app/Engram/commit/03b2c2f684035a4722ca43dd358921f8729771b1))
+* **onboarding:** give the Antigravity checklist row its docs link ([#1162](https://github.com/engram-app/Engram/issues/1162)) ([d76ada2](https://github.com/engram-app/Engram/commit/d76ada2e701c2c3397993f8c92c9b444f672b368)), closes [#1157](https://github.com/engram-app/Engram/issues/1157)
+* **test:** give the Ecto pool headroom over ExUnit's max_cases ([#1161](https://github.com/engram-app/Engram/issues/1161)) ([490895d](https://github.com/engram-app/Engram/commit/490895dcd4f8be4ef6a7a79277a22f062628adce)), closes [#1158](https://github.com/engram-app/Engram/issues/1158)
+* **test:** remove the wall-clock race from the API RPS budget test ([#1171](https://github.com/engram-app/Engram/issues/1171)) ([316c305](https://github.com/engram-app/Engram/commit/316c3055d0379ac90cf86c00ee37dfe351ce866f)), closes [#1080](https://github.com/engram-app/Engram/issues/1080) [#936](https://github.com/engram-app/Engram/issues/936)
+* **test:** split the readiness resolver guard into arithmetic + a small window ([#1177](https://github.com/engram-app/Engram/issues/1177)) ([c849f53](https://github.com/engram-app/Engram/commit/c849f5387148ae1411c66152e26364b68ebe9eff))
+* **web:** make the logout IndexedDB wipe work without indexedDB.databases() ([#1172](https://github.com/engram-app/Engram/issues/1172)) ([84493a6](https://github.com/engram-app/Engram/commit/84493a64717fd932f1c3992ece070256e84da52c))
+* **web:** type the raw folders cache as nullable-id, and key on it correctly ([#1169](https://github.com/engram-app/Engram/issues/1169)) ([8044276](https://github.com/engram-app/Engram/commit/8044276e8b30c162cfe2fc679bd83124016c37ae))
+* **ws:** bound socket frames and give room shutdown room to flush ([#1165](https://github.com/engram-app/Engram/issues/1165)) ([100f078](https://github.com/engram-app/Engram/commit/100f078f254f3f64f3a0ca728528eccb9cce16ac)), closes [#849](https://github.com/engram-app/Engram/issues/849) [#851](https://github.com/engram-app/Engram/issues/851)
+
 ## [0.12.1](https://github.com/engram-app/Engram/compare/0.12.0...0.12.1) (2026-07-31)
 
 
