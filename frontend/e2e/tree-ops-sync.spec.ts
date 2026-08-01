@@ -8,6 +8,7 @@ import {
 	upsertNote,
 } from "./support/api";
 import {
+	collapseFolder,
 	commitRename,
 	confirmDelete,
 	expandFolder,
@@ -274,8 +275,7 @@ test.describe("web tree ops sync (web to web)", () => {
 		// Old folder must no longer contain the note. Collapse Dest so the only
 		// visible "mover" row would be under Source, then assert it is gone when
 		// Source is expanded and Dest collapsed.
-		await row(pageB, "Dest").click(); // collapse Dest
-		await expect(row(pageB, "Dest")).toHaveAttribute("aria-expanded", "false");
+		await collapseFolder(pageB, "Dest");
 		await expandFolder(pageB, "Source");
 		await expect(row(pageB, "mover")).toHaveCount(0, { timeout: 10_000 });
 
@@ -389,8 +389,7 @@ test.describe("web tree ops sync (web to web)", () => {
 		// Old location clears: Movable is no longer a root-level folder. Collapse
 		// Parent so its subtree hides; Movable must then be absent (it now exists
 		// only under the collapsed Parent, not at root).
-		await row(pageB, "Parent").click();
-		await expect(row(pageB, "Parent")).toHaveAttribute("aria-expanded", "false");
+		await collapseFolder(pageB, "Parent");
 		await expect(row(pageB, "Movable")).toHaveCount(0, { timeout: 10_000 });
 
 		// Content sync must survive the folder move. Tabs are anchored on the leaf
