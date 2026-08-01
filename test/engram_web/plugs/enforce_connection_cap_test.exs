@@ -98,6 +98,66 @@ defmodule EngramWeb.Plugs.EnforceConnectionCapTest do
       assert conn.status == 400
     end
 
+    # Regression: a CIMD client's wire client_id is an HTTPS metadata-document
+    # URL, not a UUID. This plug used to gate its lookup on `Ecto.UUID.cast/1`
+    # and treat every non-UUID as unknown, so consent 400'd for EVERY CIMD
+    # client while `GET /oauth/authorize` succeeded — Claude Code reached the
+    # consent screen and could never get past it.
+    test "resolves a CIMD client by its URL-shaped client_id", %{conn: conn, user: user} do
+      url = "https://claude.ai/oauth/claude-code-client-metadata"
+      insert(:oauth_client, kind: "mcp", cimd_url: url)
+
+      conn =
+        conn
+        |> Map.put(:method, "POST")
+        |> Map.put(:request_path, "/api/oauth/authorize/consent")
+        |> Map.put(:params, %{"client_id" => url})
+        |> assign(:current_user, user)
+        |> EnforceConnectionCap.call([])
+
+      refute conn.halted
+    end
+
+    # The cap must apply to CIMD clients too. Resolving the URL is only half the
+    # fix: if it resolved but counted against nothing, CIMD would be an
+    # accidental bypass of the paid tier.
+    test "enforces the mcp cap for a CIMD client at its limit", %{conn: conn, user: user} do
+      url = "https://claude.ai/oauth/claude-code-client-metadata"
+      client = insert(:oauth_client, kind: "mcp", cimd_url: url)
+      insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+
+      conn =
+        conn
+        |> Map.put(:method, "POST")
+        |> Map.put(:request_path, "/api/oauth/authorize/consent")
+        |> Map.put(:params, %{"client_id" => url})
+        |> assign(:current_user, user)
+        |> EnforceConnectionCap.call([])
+
+      assert conn.halted
+      assert conn.status == 402
+      body = Phoenix.ConnTest.json_response(conn, 402)
+      assert body["reason"] == "mcp_connections_exceeded"
+    end
+
+    # A non-UUID that is also not a CIMD URL stays unknown — the fix must widen
+    # the lookup to URLs, not open it to arbitrary strings.
+    test "still returns 400 for a non-UUID, non-CIMD client_id", %{conn: conn, user: user} do
+      conn =
+        conn
+        |> Map.put(:method, "POST")
+        |> Map.put(:request_path, "/api/oauth/authorize/consent")
+        |> Map.put(:params, %{"client_id" => "not-a-uuid-and-not-a-url"})
+        |> assign(:current_user, user)
+        |> EnforceConnectionCap.call([])
+
+      assert conn.halted
+      assert conn.status == 400
+
+      assert Phoenix.ConnTest.json_response(conn, 400)["error"] ==
+               "missing_or_invalid_client_id"
+    end
+
     test "passes when limits_enforced is false (self-host / unlimited tier)", %{
       conn: conn,
       user: user,

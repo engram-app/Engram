@@ -36,9 +36,8 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
   """
 
   import Plug.Conn
-  import Ecto.Query
 
-  alias Engram.{Billing, Connections, Repo}
+  alias Engram.{Billing, Connections, OAuth}
   alias Engram.OAuth.Client
 
   def init(opts), do: opts
@@ -118,18 +117,17 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
     :unlimited
   end
 
+  # Delegates rather than querying directly: `client_id` on the wire is either a
+  # DCR UUID or a CIMD metadata-document URL, and `OAuth.get_client/1` is the one
+  # place that knows both shapes. This plug previously ran its own
+  # `Ecto.UUID.cast/1`-gated query, so every CIMD client failed here with 400
+  # while `GET /oauth/authorize` succeeded — Claude Code reached consent and
+  # could never complete it. Any future client_id shape is now handled in one
+  # place instead of two that must be kept in step.
   defp lookup_client(%{"client_id" => client_id}) when is_binary(client_id) do
-    case Ecto.UUID.cast(client_id) do
-      {:ok, _} ->
-        case Repo.one(from(c in Client, where: c.client_id == ^client_id),
-               skip_tenant_check: true
-             ) do
-          nil -> :error
-          client -> {:ok, client}
-        end
-
-      :error ->
-        :error
+    case OAuth.get_client(client_id) do
+      {:ok, client} -> {:ok, client}
+      {:error, :not_found} -> :error
     end
   end
 
