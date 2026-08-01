@@ -4213,9 +4213,6 @@ defmodule Engram.Notes do
 
         {:error, :cycle} ->
           {:halt, {:rollback, {:cycle, id}}}
-
-        {:error, reason} ->
-          {:halt, {:rollback, reason}}
       end
     end)
     |> case do
@@ -4285,10 +4282,12 @@ defmodule Engram.Notes do
               tf -> tf <> "/" <> leaf
             end
 
+          # rename_folder_gated's only error is :conflict — the batch entry
+          # point already ran ensure_user_dek, so rename_folder/4's wider
+          # error surface can't arise here (dialyzer proves the coverage).
           case rename_folder_gated(user, vault, source_folder, new_folder, rows) do
             {:ok, _count} -> {:ok, {source_folder, new_folder}}
             {:error, :conflict} -> {:error, :conflict}
-            {:error, reason} -> {:error, reason}
           end
         end
 
