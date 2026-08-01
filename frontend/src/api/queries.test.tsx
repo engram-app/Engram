@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type React from "react";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { syntheticFolderId } from "../viewer/tree/synthesize-folders";
+import { getActiveVaultId, setActiveVaultId } from "./active-vault";
 import { ApiError } from "./client";
 import { CrdtOpError } from "./crdt-ops";
 import {
@@ -22,6 +23,7 @@ import {
 	useCreateNote,
 	useDeleteFolder,
 	useDeleteNote,
+	useDeleteVault,
 	useDuplicateNote,
 	useFolderNotesById,
 	useFolders,
@@ -2120,5 +2122,54 @@ describe("useAppBootstrap seeding useVaults", () => {
 		const vaults = renderHook(() => useVaults(), { wrapper });
 		await waitFor(() => expect(vaults.result.current.isFetching).toBe(false));
 		expect(vaults.result.current.data).toEqual([{ id: "42", slug: "work", name: "Work" }]);
+	});
+
+	// The reconcile has to happen HERE, inside the queryFn, and not in an effect
+	// on the gate: parent effects run after their children's, so by then the
+	// sidebar's folder/attachment queries have already gone out under the dead
+	// id and 404'd. Guards the wiring — the pick itself is covered in
+	// active-vault.test.ts.
+	it("re-points a stale persisted vault id at a vault the account owns", async () => {
+		setActiveVaultId("vault-deleted-elsewhere");
+		get.mockResolvedValueOnce({
+			onboarding: { enabled: false },
+			capabilities: { tier: "free", limits: {} },
+			vaults: { vaults: [{ id: "42", slug: "work", name: "Work", is_default: true }] },
+		});
+
+		const boot = renderHook(() => useAppBootstrap(), { wrapper });
+		await waitFor(() => expect(boot.result.current.isSuccess).toBe(true));
+
+		expect(getActiveVaultId()).toBe("42");
+	});
+
+	// Deleting the LAST vault has to re-run the onboarding gate: the backend
+	// answers `next_step: :vault` for an account owning none, but that verdict is
+	// only read at bootstrap. Without the ["bootstrap"] invalidation the user sits
+	// in an empty shell with no route out.
+	it("re-runs the onboarding gate after a vault delete, not just the vault list", async () => {
+		const spy = vi.spyOn(qc, "invalidateQueries");
+		del.mockResolvedValueOnce({ deleted: true });
+
+		const { result } = renderHook(() => useDeleteVault(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync("42");
+		});
+
+		expect(spy).toHaveBeenCalledWith({ queryKey: ["vaults"] });
+		expect(spy).toHaveBeenCalledWith({ queryKey: ["bootstrap"] });
+	});
+
+	// Deleting/purging a vault only invalidates ["vaults"], so the refetch is the
+	// only thing standing between "user deleted the vault they were in" and a
+	// store that keeps 404ing every request until a full page reload.
+	it("re-points a stale vault id on the /vaults refetch too", async () => {
+		setActiveVaultId("vault-deleted-in-session");
+		get.mockResolvedValueOnce({ vaults: [{ id: "42", slug: "work", name: "Work" }] });
+
+		const vaults = renderHook(() => useVaults(), { wrapper });
+		await waitFor(() => expect(vaults.result.current.isSuccess).toBe(true));
+
+		expect(getActiveVaultId()).toBe("42");
 	});
 });
