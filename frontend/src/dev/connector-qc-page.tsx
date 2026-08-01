@@ -40,6 +40,7 @@ function conn(over: Partial<Connection>): Connection {
 		first_user_agent: null,
 		first_ip: "::ffff:10.30.1.140",
 		redirect_uris: [],
+		cimd_url: null,
 		...over,
 	} as Connection;
 }
@@ -96,6 +97,27 @@ const CONNECTIONS: Connection[] = [
 		verified: false,
 		redirect_uris: ["https://ai.ras.band/oauth/clients/mcp:1/callback"],
 		first_user_agent: "Python/3.11 aiohttp/3.13.5",
+	}),
+	// Not observed yet: the CIMD shape. Same loopback redirect as the Claude Code
+	// row above, but verified — the metadata document is the proof the redirect
+	// cannot supply. Worth eyeballing side by side, since the two rows differ only
+	// in whether a document exists.
+	conn({
+		name: "Claude Code (engram)",
+		slug: "claude_code",
+		verified: true,
+		redirect_uris: ["http://localhost:62184/callback"],
+		cimd_url: "https://claude.ai/.well-known/oauth-client",
+		first_user_agent: "Bun/1.4.0",
+	}),
+	// Not observed: a CIMD vendor with no allowlist entry. Verified on the strength
+	// of the document alone, displaying the host it was served from.
+	conn({
+		name: "newvendor-client",
+		slug: null,
+		verified: true,
+		redirect_uris: ["http://127.0.0.1:5000/cb"],
+		cimd_url: "https://newvendor.example/mcp-client",
 	}),
 	// Not observed, the unrecognized case, which must still look actionable.
 	conn({

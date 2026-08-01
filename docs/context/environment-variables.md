@@ -1,6 +1,6 @@
 # Context Doc: Environment Variables
 
-_Last verified: 2026-06-18 (regenerated from `config/runtime.exs`)_
+_Last verified: 2026-07-31 (regenerated from `config/runtime.exs` on 2026-06-18; no CIMD var — CIMD is unconditional, see `connections-client-identity.md`)_
 
 ## Status
 Live. This is regenerated from `config/runtime.exs` (the ~90 vars it reads), with compile-time defaults pulled from `config/config.exs`, `config/dev.exs`, `config/test.exs`. Line numbers cite `config/runtime.exs` unless noted.

@@ -4,14 +4,23 @@ defmodule Engram.Connections.LogoAllowlist do
 
   ## Two independent questions
 
-  **Who is this?** Three sources, in precedence order: the RFC 7591
-  `software_id` (most MCP clients omit it), the `redirect_uri` host, and the
-  normalized `client_name`.
+  **Who is this?** Four sources, in precedence order: the CIMD `client_id` host,
+  the `redirect_uri` host, the RFC 7591 `software_id` (which now names only our
+  own plugin), and the normalized `client_name`.
 
-  **Can we prove it?** Exactly one source: a vendor-owned HTTPS redirect host.
-  That is un-spoofable for grant delivery: a forger can claim
-  `redirect_uri=https://claude.ai/...`, but the auth code is then delivered to
-  Anthropic, not to them.
+  **Can we prove it?** Two sources, and both are the same proof in different
+  clothes — "this party controls a host the vendor owns":
+
+    * A vendor-owned HTTPS **redirect** host. A forger can claim
+      `redirect_uri=https://claude.ai/...`, but the auth code is then delivered
+      to Anthropic, not to them.
+    * A **CIMD** `client_id` URL. We fetched a metadata document from that exact
+      host and it declared the same `client_id`; nobody but Anthropic can serve a
+      document at `claude.ai`.
+
+  CIMD is the one that reaches local-first clients. Claude Code, Cline, Cursor
+  and OpenCode all redirect to loopback, so the redirect can never prove anything
+  about them — see `Engram.OAuth.Cimd`.
 
   `software_id` and `client_name` both arrive inside the DCR request body, so
   they are things the client *says about itself*. Neither may grant
@@ -106,33 +115,88 @@ defmodule Engram.Connections.LogoAllowlist do
   Resolve a client's identity, and separately decide whether it is verified.
 
   **Identity** (logo / display_name / slug) comes from the first source that
-  matches, **proven before claimed**: the redirect host, then `software_id`,
-  then the normalized `client_name`.
+  matches, **proven before claimed**: the CIMD `client_id` host, then the
+  redirect host, then `software_id`, then the normalized `client_name`.
 
-  The host leads because it is the only source that is not self-asserted. A
-  client claiming `software_id: "engram-vault-sync"` while redirecting to
-  `claude.ai` must not be listed as our plugin: the grant is delivered to
-  Anthropic, so Anthropic is who the user is actually connected to.
+  The two host sources lead because they are the only ones that are not
+  self-asserted. A client claiming `software_id: "engram-vault-sync"` while
+  redirecting to `claude.ai` must not be listed as our plugin: the grant is
+  delivered to Anthropic, so Anthropic is who the user is actually connected to.
 
-  **`verified`** is decided by exactly one thing: whether the redirect lands on
-  a vendor-owned HTTPS host. Identity and verification are deliberately
-  computed independently: `software_id` and `client_name` both arrive in the
-  DCR body and are equally self-asserted, so neither may grant the badge.
+  **`verified`** is decided by two sources, and by nothing else:
+
+    * the redirect landing on a vendor-owned HTTPS host, or
+    * a CIMD `client_id` whose metadata document we fetched from that host.
+
+  Both are the same argument — "this party controls a host the vendor owns" —
+  and CIMD is the one that reaches loopback clients, which no redirect can
+  prove. Note that CIMD grants the badge **without** the host having to appear
+  in `@redirect_host`: fetching the document already established who serves it.
+
+  Identity and verification are deliberately computed independently, because
+  `software_id` and `client_name` both arrive in the DCR body and are equally
+  self-asserted, so neither may ever grant the badge.
   """
-  @spec resolve(String.t() | nil, [String.t()] | nil, String.t() | nil) :: entry()
-  def resolve(software_id, redirect_uris, client_name \\ nil) do
+  @spec resolve(String.t() | nil, [String.t()] | nil, String.t() | nil, String.t() | nil) ::
+          entry()
+  def resolve(software_id, redirect_uris, client_name \\ nil, cimd_url \\ nil) do
+    by_cimd = lookup_by_cimd(cimd_url)
     by_host = lookup_by_host(redirect_uris)
     by_id = lookup(software_id)
 
     identity =
       cond do
+        by_cimd != @empty -> fill_slug(by_cimd, client_name)
         by_host != @empty -> by_host
         by_id != @empty -> by_id
         true -> lookup_by_name(client_name)
       end
 
-    %{identity | verified: by_host != @empty}
+    %{identity | verified: by_cimd != @empty or by_host != @empty}
   end
+
+  # A CIMD vendor we have no `@redirect_host` entry for still deserves its
+  # checklist row, and the name-derived slug is exactly the mechanism loopback
+  # clients already use. Safe for the same reason it is safe there: a slug ticks a
+  # row in the user's own checklist and grants neither logo nor badge. A CIMD
+  # client has *more* standing than a loopback one, not less.
+  defp fill_slug(%{slug: nil} = identity, client_name),
+    do: %{identity | slug: lookup_by_name(client_name).slug}
+
+  defp fill_slug(identity, _client_name), do: identity
+
+  # A CIMD `client_id` is an HTTPS URL whose document we fetched from that exact
+  # host, and the document's own `client_id` had to equal the URL. So the host
+  # owner authored this client, by the same argument that makes a vendor redirect
+  # host un-spoofable — and unlike the redirect, it works for loopback clients,
+  # which is the entire reason CIMD is worth implementing.
+  #
+  # Verification therefore does NOT depend on recognising the host: fetching the
+  # document already proved who serves it. `@redirect_host` is consulted only to
+  # dress the row (logo, product name, catalog slug) for vendors we know.
+  defp lookup_by_cimd(url) when is_binary(url) do
+    case URI.new(url) do
+      {:ok, %URI{scheme: "https", host: host, userinfo: nil}}
+      when is_binary(host) and host != "" ->
+        @empty
+        |> Map.merge(Map.get(@redirect_host, String.downcase(host), %{}))
+        |> Map.put(:verified, true)
+        |> put_host_display_name(host)
+
+      _ ->
+        @empty
+    end
+  end
+
+  defp lookup_by_cimd(_), do: @empty
+
+  # An unrecognised CIMD vendor shows its host as the display name. The host is
+  # proven (that is what fetching the document established), so this is honest,
+  # and it beats a blank name on a row the UI is about to call verified.
+  defp put_host_display_name(%{display_name: nil} = identity, host),
+    do: %{identity | display_name: host}
+
+  defp put_host_display_name(identity, _host), do: identity
 
   # Slug-only attribution from the self-asserted `client_name`. UNVERIFIED BY
   # CONSTRUCTION: this path may set `slug` and nothing else.

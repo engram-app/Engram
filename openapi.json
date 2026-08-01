@@ -1422,6 +1422,14 @@
       },
       "Connection": {
         "properties": {
+          "cimd_url": {
+            "description": "CIMD metadata-document URL. Present only for clients that published one, in which case it is the client's public identifier and the reason it can be `verified` despite redirecting to loopback.",
+            "example": "https://claude.ai/.well-known/oauth-client",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "client_id": {
             "nullable": true,
             "type": "string",
