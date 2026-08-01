@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.3](https://github.com/engram-app/Engram/compare/0.12.2...0.12.3) (2026-08-01)
+
+
+### Bug Fixes
+
+* **oauth:** resolve CIMD clients in the consent connection-cap plug ([#1184](https://github.com/engram-app/Engram/issues/1184)) ([a974168](https://github.com/engram-app/Engram/commit/a974168bca530ae33d9c72d1f78638decff6b161)), closes [#1148](https://github.com/engram-app/Engram/issues/1148)
+
 ## [0.12.2](https://github.com/engram-app/Engram/compare/0.12.1...0.12.2) (2026-08-01)
 
 
