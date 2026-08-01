@@ -16,7 +16,7 @@ import {
 	syntheticFolderId,
 	syntheticFolderPath,
 } from "../viewer/tree/synthesize-folders";
-import { useActiveVaultId } from "./active-vault";
+import { reconcileActiveVault, useActiveVaultId } from "./active-vault";
 import { crdtCreateNote, crdtCreateNoteWithContent, crdtDeleteNote } from "./channel";
 import { ApiError, api } from "./client";
 import { CrdtOpError } from "./crdt-ops";
@@ -1055,6 +1055,11 @@ export function useAppBootstrap() {
 			qc.setQueryData(["onboarding", "status"], data.onboarding);
 			qc.setQueryData(["capabilities"], data.capabilities);
 			qc.setQueryData(["vaults"], data.vaults);
+			// Runs here, not in an effect: parent effects fire AFTER their
+			// children's, so a gate-level effect would land one render too late and
+			// the sidebar's folder/attachment queries would already have gone out
+			// under a dead vault id. See reconcileActiveVault.
+			reconcileActiveVault(data.vaults.vaults);
 			if (data.billing) {
 				qc.setQueryData(["billing", "status"], data.billing);
 			}

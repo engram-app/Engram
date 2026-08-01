@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type React from "react";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { syntheticFolderId } from "../viewer/tree/synthesize-folders";
+import { getActiveVaultId, setActiveVaultId } from "./active-vault";
 import { ApiError } from "./client";
 import { CrdtOpError } from "./crdt-ops";
 import {
@@ -2120,5 +2121,24 @@ describe("useAppBootstrap seeding useVaults", () => {
 		const vaults = renderHook(() => useVaults(), { wrapper });
 		await waitFor(() => expect(vaults.result.current.isFetching).toBe(false));
 		expect(vaults.result.current.data).toEqual([{ id: "42", slug: "work", name: "Work" }]);
+	});
+
+	// The reconcile has to happen HERE, inside the queryFn, and not in an effect
+	// on the gate: parent effects run after their children's, so by then the
+	// sidebar's folder/attachment queries have already gone out under the dead
+	// id and 404'd. Guards the wiring — the pick itself is covered in
+	// active-vault.test.ts.
+	it("re-points a stale persisted vault id at a vault the account owns", async () => {
+		setActiveVaultId("vault-deleted-elsewhere");
+		get.mockResolvedValueOnce({
+			onboarding: { enabled: false },
+			capabilities: { tier: "free", limits: {} },
+			vaults: { vaults: [{ id: "42", slug: "work", name: "Work", is_default: true }] },
+		});
+
+		const boot = renderHook(() => useAppBootstrap(), { wrapper });
+		await waitFor(() => expect(boot.result.current.isSuccess).toBe(true));
+
+		expect(getActiveVaultId()).toBe("42");
 	});
 });
