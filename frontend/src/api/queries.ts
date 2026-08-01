@@ -1325,11 +1325,21 @@ export function useDeletedVaults() {
 	});
 }
 
+// Vault count is an onboarding input: the backend answers `next_step: :vault`
+// for an account that owns none, and OnboardingGate redirects there. That
+// verdict is computed once, at bootstrap — so a user who deletes their LAST
+// vault mid-session would otherwise sit in a shell with nothing to show and no
+// route out, every request 404ing on `no_default_vault` until a manual reload.
+// Invalidating ["bootstrap"] alongside ["vaults"] re-runs the gate.
 export function useDeleteVault() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (id: string) => api.del<{ deleted: boolean }>(`/vaults/${id}`),
-		onSuccess: () => qc.invalidateQueries({ queryKey: ["vaults"] }),
+		onSuccess: () =>
+			Promise.all([
+				qc.invalidateQueries({ queryKey: ["vaults"] }),
+				qc.invalidateQueries({ queryKey: ["bootstrap"] }),
+			]),
 	});
 }
 
@@ -1337,7 +1347,13 @@ export function useRestoreVault() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (id: string) => api.post<{ vault: Vault }>(`/vaults/${id}/restore`),
-		onSuccess: () => qc.invalidateQueries({ queryKey: ["vaults"] }),
+		// Restoring the only vault has to flip the gate back the other way
+		// (`:vault` -> `:done`), or the user is stuck on the wizard step.
+		onSuccess: () =>
+			Promise.all([
+				qc.invalidateQueries({ queryKey: ["vaults"] }),
+				qc.invalidateQueries({ queryKey: ["bootstrap"] }),
+			]),
 	});
 }
 
@@ -1345,7 +1361,11 @@ export function usePurgeVault() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (id: string) => api.post<{ purged: boolean }>(`/vaults/${id}/purge`),
-		onSuccess: () => qc.invalidateQueries({ queryKey: ["vaults"] }),
+		onSuccess: () =>
+			Promise.all([
+				qc.invalidateQueries({ queryKey: ["vaults"] }),
+				qc.invalidateQueries({ queryKey: ["bootstrap"] }),
+			]),
 	});
 }
 

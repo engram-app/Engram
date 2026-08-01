@@ -23,6 +23,7 @@ import {
 	useCreateNote,
 	useDeleteFolder,
 	useDeleteNote,
+	useDeleteVault,
 	useDuplicateNote,
 	useFolderNotesById,
 	useFolders,
@@ -2140,6 +2141,23 @@ describe("useAppBootstrap seeding useVaults", () => {
 		await waitFor(() => expect(boot.result.current.isSuccess).toBe(true));
 
 		expect(getActiveVaultId()).toBe("42");
+	});
+
+	// Deleting the LAST vault has to re-run the onboarding gate: the backend
+	// answers `next_step: :vault` for an account owning none, but that verdict is
+	// only read at bootstrap. Without the ["bootstrap"] invalidation the user sits
+	// in an empty shell with no route out.
+	it("re-runs the onboarding gate after a vault delete, not just the vault list", async () => {
+		const spy = vi.spyOn(qc, "invalidateQueries");
+		del.mockResolvedValueOnce({ deleted: true });
+
+		const { result } = renderHook(() => useDeleteVault(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync("42");
+		});
+
+		expect(spy).toHaveBeenCalledWith({ queryKey: ["vaults"] });
+		expect(spy).toHaveBeenCalledWith({ queryKey: ["bootstrap"] });
 	});
 
 	// Deleting/purging a vault only invalidates ["vaults"], so the refetch is the
