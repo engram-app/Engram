@@ -10,16 +10,26 @@ defmodule Engram.OAuth.Client do
   require Logger
 
   @primary_key {:client_id, :binary_id, autogenerate: true}
-  # Only public PKCE clients are supported until confidential-client minting
-  # ships (Phase 4). Reject client_secret_* to avoid handing back a 201 with
-  # no secret — a broken half-state for the caller.
-  @valid_auth_methods ~w(none)
+  # Public PKCE clients (`none`) and confidential clients. A confidential
+  # registration mints a secret in `Engram.OAuth.register_client/1`, so the 201
+  # always carries one; the earlier restriction to `none` existed only because
+  # nothing minted secrets, and it made server-side connectors (LobeHub cloud)
+  # unregisterable rather than merely unverified.
+  #
+  # PKCE stays mandatory for BOTH. A secret authenticates the client; PKCE binds
+  # the code to the request that started it. They are not substitutes.
+  @valid_auth_methods ~w(none client_secret_post client_secret_basic)
+  @confidential_auth_methods ~w(client_secret_post client_secret_basic)
   @valid_grant_types ~w(authorization_code refresh_token)
   @valid_response_types ~w(code)
   @loopback_hosts ~w(localhost 127.0.0.1 ::1)
 
   schema "oauth_clients" do
     field :client_secret_hash, :string
+    # Plaintext, returned in the registration response and never again. Virtual
+    # so it cannot be persisted or read back: a client that loses its secret
+    # re-registers.
+    field :client_secret, :string, virtual: true
     field :redirect_uris, {:array, :string}
     field :client_name, :string
     field :scope, :string
@@ -52,6 +62,10 @@ defmodule Engram.OAuth.Client do
                   kind first_user_agent first_ip)a
 
   @metadata_uri_fields ~w(logo_uri tos_uri policy_uri)a
+
+  @doc "True when the registered auth method requires a client secret."
+  @spec confidential?(String.t() | nil) :: boolean()
+  def confidential?(method), do: method in @confidential_auth_methods
 
   def registration_changeset(client, attrs) do
     client

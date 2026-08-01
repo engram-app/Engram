@@ -25,11 +25,42 @@ defmodule Engram.OAuth do
 
   # ── Clients (Phase 2) ────────────────────────────────────────────
 
+  @client_secret_prefix "engram_oauth_cs_"
+  @client_secret_bytes 32
+
+  @doc """
+  Registers a DCR client.
+
+  A confidential registration (`client_secret_post` / `client_secret_basic`)
+  mints a secret here rather than in the changeset, because the plaintext must
+  reach the caller exactly once while only its hash is stored. The returned
+  struct carries the plaintext on the virtual `:client_secret` field; reloading
+  the row later yields `nil` there, by design.
+  """
   def register_client(attrs) do
-    %Client{}
-    |> Client.registration_changeset(attrs)
+    changeset = Client.registration_changeset(%Client{}, attrs)
+    secret = mint_client_secret(Ecto.Changeset.get_field(changeset, :token_endpoint_auth_method))
+
+    changeset
+    |> maybe_put_secret_hash(secret)
     |> Repo.insert(skip_tenant_check: true)
+    |> case do
+      {:ok, client} -> {:ok, %{client | client_secret: secret}}
+      other -> other
+    end
   end
+
+  defp mint_client_secret(method) do
+    if Client.confidential?(method) do
+      @client_secret_prefix <>
+        Base.url_encode64(:crypto.strong_rand_bytes(@client_secret_bytes), padding: false)
+    end
+  end
+
+  defp maybe_put_secret_hash(changeset, nil), do: changeset
+
+  defp maybe_put_secret_hash(changeset, secret),
+    do: Ecto.Changeset.put_change(changeset, :client_secret_hash, hash_code(secret))
 
   def get_client(client_id) when is_binary(client_id) do
     case Ecto.UUID.cast(client_id) do
@@ -47,6 +78,43 @@ defmodule Engram.OAuth do
   end
 
   def get_client(_), do: {:error, :not_found}
+
+  @doc """
+  Authenticates the client on a token request, per RFC 6749 §3.2.1.
+
+  The registered `token_endpoint_auth_method` binds in BOTH directions: a
+  confidential client must present its secret, and a client registered `none`
+  must not. Accepting a secret from a public client would make the registered
+  method decorative and mask a confused or probing caller.
+
+  `secret` is whatever the caller supplied (HTTP Basic or request body), or
+  `nil`. Comparison is constant-time against the stored hash.
+  """
+  @spec authenticate_client(String.t() | nil, String.t() | nil) ::
+          :ok | {:error, :invalid_client}
+  def authenticate_client(client_id, secret) do
+    case get_client(client_id) do
+      {:ok, client} -> check_client_secret(client, secret)
+      # Unknown client_id is indistinguishable from a bad secret on purpose.
+      {:error, :not_found} -> {:error, :invalid_client}
+    end
+  end
+
+  defp check_client_secret(client, secret) do
+    cond do
+      not Client.confidential?(client.token_endpoint_auth_method) ->
+        if is_nil(secret), do: :ok, else: {:error, :invalid_client}
+
+      is_nil(secret) or is_nil(client.client_secret_hash) ->
+        {:error, :invalid_client}
+
+      Plug.Crypto.secure_compare(hash_code(secret), client.client_secret_hash) ->
+        :ok
+
+      true ->
+        {:error, :invalid_client}
+    end
+  end
 
   # ── Authorization codes (Phase 3) ────────────────────────────────
 

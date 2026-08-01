@@ -64,6 +64,11 @@ defmodule EngramWeb.OAuthRegisterController do
       grant_types: client.grant_types,
       response_types: client.response_types,
       token_endpoint_auth_method: client.token_endpoint_auth_method,
+      client_secret: client.client_secret,
+      # RFC 7591 §3.2.1: REQUIRED whenever a client_secret is issued. 0 means
+      # the secret does not expire. Map.reject below drops it for public
+      # clients, where there is no secret to describe.
+      client_secret_expires_at: client.client_secret && 0,
       software_id: client.software_id,
       software_version: client.software_version,
       logo_uri: client.logo_uri,
