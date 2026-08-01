@@ -19,6 +19,7 @@ defmodule Engram.Attachments do
   alias Engram.Repo
   alias Engram.Storage
   alias Engram.Storage.MimeWhitelist
+  alias Engram.Sync.Broadcast
 
   @doc """
   Upserts an attachment. Decodes base64 content, detects MIME type, computes hash.
@@ -351,7 +352,7 @@ defmodule Engram.Attachments do
                 _ -> payload
               end
 
-            Engram.Sync.Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", payload)
+            Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", payload)
           end
 
         deleted?
@@ -711,7 +712,7 @@ defmodule Engram.Attachments do
             deleted_set = MapSet.new(deleted_hmacs)
 
             for path <- sanitized, MapSet.member?(deleted_set, hmac_by_path[path]) do
-              Engram.Sync.Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", %{
+              Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", %{
                 "event_type" => "delete",
                 "kind" => "attachment",
                 "path" => path,
@@ -855,7 +856,7 @@ defmodule Engram.Attachments do
       "mtime" => att.mtime
     }
 
-    _ = Engram.Sync.Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", payload)
+    _ = Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", payload)
     :ok
   end
 
