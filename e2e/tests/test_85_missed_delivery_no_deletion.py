@@ -80,28 +80,29 @@ async def test_missed_delivery_then_local_push_no_deletion(
         # push declares B's stale base_hash. This is the killer push.
         await cdp_b.push_file_now(path, f"{base}\n{local_marker}\n")
 
-        # THE invariant: no silent deletion, in either direction. Whatever the
-        # conflict flow chose (409 → conflict copy + keep-local, or merge),
-        # both markers must survive on SOME surface: the server note or B's
-        # vault (main file or conflict copy). Poll — the conflict flow (409 →
-        # copy write) needs a moment under CI load; a fixed sleep flakes.
+        # THE incident invariant, checked HERE in the deaf window (before any
+        # reconnect can mask it): B's ignorant push must NOT delete the server
+        # edit. The stale base_hash makes the backend CAS gate 409 the push, so
+        # the server retains its edit — assert that on the SERVER specifically
+        # (not "somewhere"), because that is exactly what the ignorant push would
+        # have clobbered without the gate. B's own local edit must also survive.
+        # Poll: the 409 conflict-copy write can lag under CI load; a fixed sleep
+        # flakes.
         server_body = ""
         b_union = ""
         deadline = 20
         while deadline > 0:
             server_body = (api_sync.get_note(path) or {}).get("content", "")
             b_union = _vault_texts(vault_b, folder)
-            if (server_marker in server_body or server_marker in b_union) and (
-                local_marker in b_union or local_marker in server_body
-            ):
+            if server_marker in server_body and local_marker in b_union:
                 break
             await asyncio.sleep(1)
             deadline -= 1
-        assert server_marker in server_body or server_marker in b_union, (
-            "the ignorant push silently deleted the server edit "
+        assert server_marker in server_body, (
+            "the ignorant push deleted the server edit in the deaf window "
             f"(server={server_body[:200]!r}, b_union={b_union[:300]!r})"
         )
-        assert local_marker in b_union or local_marker in server_body, (
+        assert local_marker in b_union, (
             f"B's local edit vanished (server={server_body[:200]!r}, b_union={b_union[:300]!r})"
         )
     finally:
