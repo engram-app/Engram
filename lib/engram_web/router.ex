@@ -10,6 +10,19 @@ defmodule EngramWeb.Router do
     }
   end
 
+  # Same as `:api` minus content negotiation. Used only by the MCP
+  # method-not-allowed routes below: a Streamable-HTTP client opens the
+  # server→client stream with `Accept: text/event-stream`, which
+  # `plug :accepts, ["json"]` answers 406 — before the controller that would
+  # have told it "POST-only". Negotiating a representation for a request we are
+  # rejecting on method alone is meaningless, so this pipeline simply does not.
+  pipeline :api_any_accept do
+    plug :put_secure_browser_headers, %{
+      "x-content-type-options" => "nosniff",
+      "x-frame-options" => "DENY"
+    }
+  end
+
   pipeline :rate_limit_auth do
     plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
   end
@@ -445,8 +458,14 @@ defmodule EngramWeb.Router do
   # Allow here rather than letting GET/DELETE fall through to Phoenix's 404,
   # which clients treat as a missing endpoint and abort. Auth-free on
   # purpose: an unsupported method is a method-level fact, not an authz one.
+  #
+  # `:api_any_accept`, NOT `:api`: the GET that opens the stream carries
+  # `Accept: text/event-stream`, and `plug :accepts, ["json"]` 406s it before
+  # this controller runs. That made the 405 above unreachable for precisely the
+  # clients it exists to serve — observed with Cursor, which falls back to the
+  # legacy HTTP+SSE transport and aborts on the 406.
   scope "/api", EngramWeb do
-    pipe_through :api
+    pipe_through :api_any_accept
     get "/mcp", McpController, :unsupported_transport
     delete "/mcp", McpController, :unsupported_transport
   end
