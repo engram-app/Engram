@@ -54,22 +54,37 @@ defmodule EngramWeb.WellKnownController do
   def authorization_server(conn, _params) do
     base = base_url(conn)
 
-    json(conn, %{
-      issuer: base,
-      authorization_endpoint: base <> "/oauth/authorize",
-      token_endpoint: base <> "/oauth/token",
-      registration_endpoint: base <> "/oauth/register",
-      revocation_endpoint: base <> "/oauth/revoke",
-      response_types_supported: ["code"],
-      grant_types_supported: ["authorization_code", "refresh_token"],
-      code_challenge_methods_supported: ["S256"],
-      # `none` MUST stay first-class here, not merely present for legacy: Claude
-      # selects its CIMD flow only when this list contains "none", and would
-      # otherwise fall back to DCR. The secret-based methods are additive, for
-      # server-side connectors that cannot hold a public client.
-      token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
-      scopes_supported: ["mcp"]
-    })
+    json(
+      conn,
+      %{
+        issuer: base,
+        authorization_endpoint: base <> "/oauth/authorize",
+        token_endpoint: base <> "/oauth/token",
+        registration_endpoint: base <> "/oauth/register",
+        revocation_endpoint: base <> "/oauth/revoke",
+        response_types_supported: ["code"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
+        code_challenge_methods_supported: ["S256"],
+        # `none` MUST stay first-class here, not merely present for legacy: Claude
+        # selects its CIMD flow only when this list contains "none", and would
+        # otherwise fall back to DCR. The secret-based methods are additive, for
+        # server-side connectors that cannot hold a public client.
+        token_endpoint_auth_methods_supported: [
+          "none",
+          "client_secret_post",
+          "client_secret_basic"
+        ],
+        scopes_supported: ["mcp"],
+        # CIMD (IETF draft-ietf-oauth-client-id-metadata-document). Not cosmetic
+        # capability signalling: Anthropic's docs say Claude picks CIMD only when
+        # the metadata advertises BOTH `"none"` above and this key, so this line
+        # is what moves Claude Code off DCR — and it does NOT silently fall back,
+        # so if `Engram.OAuth.Cimd` is broken, new Claude Code connections fail
+        # rather than degrade. Existing DCR grants are separate rows and keep
+        # working. Backing that out is a revert, not a config change.
+        client_id_metadata_document_supported: true
+      }
+    )
   end
 
   defp base_url(conn) do

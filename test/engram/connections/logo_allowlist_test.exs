@@ -270,4 +270,79 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: false, slug: nil} =
              LogoAllowlist.resolve(nil, ["http://localhost:1/cb"], nil)
   end
+
+  # --- CIMD: the only proof a loopback client can ever offer ---
+
+  # THE case CIMD exists for. Claude Code redirects to loopback, so the redirect
+  # layer can never verify it. The CIMD client_id can, because we fetched a
+  # document from that host and it declared this exact client_id.
+  test "a CIMD client_id verifies a client whose redirect is loopback" do
+    assert %{verified: true, slug: "claude", display_name: "Claude"} =
+             LogoAllowlist.resolve(
+               nil,
+               ["http://127.0.0.1:51234/callback"],
+               "Claude Code (engram)",
+               "https://claude.ai/.well-known/oauth-client"
+             )
+  end
+
+  # Verification does not depend on RECOGNISING the host: fetching the document
+  # already proved who serves it. The allowlist only dresses the row for vendors
+  # we happen to know.
+  test "an unrecognised CIMD host is still verified, and shows its host" do
+    assert %{verified: true, display_name: "newvendor.example", logo: nil} =
+             LogoAllowlist.resolve(
+               nil,
+               ["http://127.0.0.1:1/cb"],
+               nil,
+               "https://newvendor.example/client"
+             )
+  end
+
+  # An unrecognised CIMD vendor still earns its checklist row via the same
+  # name derivation loopback clients already use.
+  test "an unrecognised CIMD host takes its slug from client_name" do
+    assert %{verified: true, slug: "cline"} =
+             LogoAllowlist.resolve(
+               nil,
+               ["http://127.0.0.1:1/cb"],
+               "Cline",
+               "https://cline.example/client"
+             )
+  end
+
+  test "CIMD identity outranks a conflicting redirect host" do
+    assert %{verified: true, slug: "claude", display_name: "Claude"} =
+             LogoAllowlist.resolve(
+               nil,
+               ["https://chatgpt.com/connector/oauth/x"],
+               nil,
+               "https://claude.ai/.well-known/oauth-client"
+             )
+  end
+
+  # Defensive: a cimd_url is only ever written by Engram.OAuth.Cimd, which fetched
+  # it through the SSRF guard (https, no userinfo). If a malformed one ever reached
+  # this row, it must not be treated as proof of anything.
+  test "a malformed cimd_url grants no verification" do
+    for url <- [
+          "http://claude.ai/client",
+          "https://claude.ai@evil.example/client",
+          "https:///client",
+          "not a url",
+          ""
+        ] do
+      assert %{verified: false} =
+               LogoAllowlist.resolve(nil, ["http://127.0.0.1:1/cb"], nil, url),
+             "#{inspect(url)} must not verify"
+    end
+  end
+
+  test "a nil cimd_url leaves existing behaviour untouched" do
+    assert %{verified: true, slug: "claude"} =
+             LogoAllowlist.resolve(nil, ["https://claude.ai/cb"], nil, nil)
+
+    assert %{verified: false, slug: "cline"} =
+             LogoAllowlist.resolve(nil, ["http://127.0.0.1:1/cb"], "Cline", nil)
+  end
 end

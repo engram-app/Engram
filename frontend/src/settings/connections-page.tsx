@@ -117,9 +117,10 @@ function ConnectionCard({
 							    expanded Identity row. Reserve the chip for clients we
 							    genuinely do not recognize, where it's actionable.
 
-							    This gets retired for Claude once we ship CIMD: an
-							    Anthropic-hosted client_id URL is provable, so those
-							    grants become properly `verified`. */}
+							    CIMD shipped, so a client that published a metadata
+							    document is now properly `verified` and takes the first
+							    branch — including loopback ones like Claude Code, which
+							    the redirect could never prove either way. */}
 							{!(connection.verified || connection.slug) && (
 								<span className="ms-2 rounded bg-muted px-1.5 py-0.5 align-middle font-normal text-muted-foreground text-xs">
 									unverified
@@ -163,16 +164,38 @@ function ConnectionCard({
 						<>
 							<dt>Identity:</dt>
 							<dd>
-								{connection.verified
-									? "Verified. Sign-in redirects to a domain the vendor owns."
-									: connection.slug
-										? "Self-reported. Local and self-hosted apps have no domain to check, so this is normal."
-										: "Unrecognized client. Revoke it if you don't recognize the redirect below."}
+								{/* Two different proofs, and the copy must not conflate them.
+								    A redirect-verified client proved itself by where the
+								    sign-in code is delivered; a CIMD client proved itself by
+								    publishing a document at a domain it owns, which is how a
+								    loopback app can be verified at all. Saying "redirects to
+								    a domain the vendor owns" about Claude Code would be
+								    plainly false — it redirects to localhost.
+
+								    `verified` gates BOTH "Verified." strings; `cimd_url` only
+								    chooses which proof to name. Branching on cimd_url alone
+								    would duplicate the backend's verification rule here, in
+								    another language, with nothing keeping the two in sync — so
+								    loosening SsrfGuard or lookup_by_cimd could make this claim
+								    verification the backend never granted. The server stays
+								    the only thing that decides `verified`. */}
+								{connection.verified && connection.cimd_url
+									? "Verified. The app publishes its identity at a domain it owns."
+									: connection.verified
+										? "Verified. Sign-in redirects to a domain the vendor owns."
+										: connection.slug
+											? "Self-reported. Local and self-hosted apps have no domain to check, so this is normal."
+											: "Unrecognized client. Revoke it if you don't recognize the redirect below."}
 							</dd>
 						</>
 					)}
 					<dt>Identifier:</dt>
-					<dd className="break-all font-mono">{connection.client_id ?? connection.key_id}</dd>
+					{/* For a CIMD client the URL *is* the public identifier, and unlike an
+					    opaque UUID the user can check it by visiting it. The internal
+					    client_id stays what the revoke button keys on. */}
+					<dd className="break-all font-mono">
+						{connection.cimd_url ?? connection.client_id ?? connection.key_id}
+					</dd>
 					{Boolean(connection.first_ip) && (
 						<>
 							<dt>First IP:</dt>

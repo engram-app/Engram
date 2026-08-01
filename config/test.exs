@@ -141,6 +141,12 @@ config :engram, :paddle_pro_annual_price_id, "pri_pro_annual_test"
 config :engram, :paddle_env, "sandbox"
 config :engram, :paddle_client, Engram.Paddle.ClientMock
 
+# CIMD document transport. The mock keeps the CIMD policy tests (client_id
+# binding, TTL, stale retention, first-contact race) off the network; the real
+# transport is exercised directly against a local server in
+# cimd_http_fetcher_test.exs, and the SSRF guard has its own suite.
+config :engram, :cimd_fetcher, Engram.OAuth.Cimd.FetcherMock
+
 # Clerk webhook — svix-style HMAC signing. Secret is base64 of "clerk-test-secret"
 # (prefix `whsec_` is stripped before decoding per svix spec).
 config :engram, :clerk_webhook_secret, "whsec_Y2xlcmstdGVzdC1zZWNyZXQ="

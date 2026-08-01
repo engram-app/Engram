@@ -189,7 +189,11 @@ defmodule EngramWeb.ConnectionsController do
       connected_at: row.connected_at,
       first_user_agent: row.first_user_agent,
       first_ip: row.first_ip,
-      redirect_uris: row.redirect_uris
+      redirect_uris: row.redirect_uris,
+      # A CIMD client's PUBLIC identifier is this URL; `client_id` is the internal
+      # UUID the revoke button keys on. The UI shows the URL because it is the
+      # thing the user can actually verify by visiting it.
+      cimd_url: row.cimd_url
     }
   end
 end

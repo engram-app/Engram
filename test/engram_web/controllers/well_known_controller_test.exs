@@ -97,4 +97,28 @@ defmodule EngramWeb.WellKnownControllerTest do
       assert ["application/json" <> _] = get_resp_header(conn, "content-type")
     end
   end
+
+  # This key is not cosmetic capability signalling. Claude picks CIMD only when
+  # the metadata advertises BOTH "none" in token_endpoint_auth_methods_supported
+  # and this key, and once it does it stops choosing DCR with NO silent fallback.
+  # So this assertion is really about the contract: if the key is ever removed or
+  # gated, Claude Code stops using CIMD and silently reverts to anonymous DCR
+  # registrations — the exact gap #1148 existed to close, and nothing else would
+  # notice.
+  describe "client_id_metadata_document_supported" do
+    test "is advertised, unconditionally", %{conn: conn} do
+      body = conn |> get("/.well-known/oauth-authorization-server") |> json_response(200)
+
+      assert body["client_id_metadata_document_supported"] == true
+    end
+
+    # Both halves of the precondition have to hold together: Claude checks for
+    # "none" AND the CIMD key, so losing either one silently drops it back to DCR.
+    test "advertises both halves of the CIMD precondition together", %{conn: conn} do
+      body = conn |> get("/.well-known/oauth-authorization-server") |> json_response(200)
+
+      assert "none" in body["token_endpoint_auth_methods_supported"]
+      assert body["client_id_metadata_document_supported"] == true
+    end
+  end
 end
