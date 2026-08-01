@@ -1,6 +1,7 @@
 import { IndexeddbPersistence } from "y-indexeddb";
 import * as Y from "yjs";
 import { frontmatterMaps } from "./frontmatter-doc";
+import { rememberCrdtDb } from "./idb-registry";
 
 interface Entry {
 	doc: Y.Doc;
@@ -156,7 +157,13 @@ export class CrdtManager {
 			return cached;
 		}
 		const doc = new Y.Doc();
-		const persistence = new IndexeddbPersistence(CRDT_IDB_PREFIX + id, doc);
+		const dbName = CRDT_IDB_PREFIX + id;
+		// Write the name down BEFORE opening it: on a browser with no
+		// indexedDB.databases() the logout wipe has no other way to find this
+		// database, and a crash between open and register would strand plaintext
+		// note content on disk (#873).
+		rememberCrdtDb(dbName);
+		const persistence = new IndexeddbPersistence(dbName, doc);
 		const text = doc.getText("content");
 		persistence.on("error", (err: unknown) => this.opts.onPersistError?.(noteId, err));
 		// Single listener: local updates go to the channel; remote-origin updates

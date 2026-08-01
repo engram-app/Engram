@@ -2,7 +2,53 @@ import { QueryClient } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { Folder, NoteSummary } from "../../api/queries";
-import { treeStructureKey, useEngramTree } from "./use-engram-tree";
+import { formatItemId } from "./types";
+import { createTreeDataLoader, treeStructureKey, useEngramTree } from "./use-engram-tree";
+
+describe("createTreeDataLoader", () => {
+	// An `inner` that knows nothing — models the window where the folders query
+	// has been re-keyed or is refetching, so `deps.folders` cannot resolve an id
+	// the tree is still displaying.
+	const emptyInner = { getItem: () => undefined, getChildren: () => [] };
+
+	// #1178. The placeholder used to hardcode `isFolder: false`, which made a
+	// folder row briefly claim to be a LEAF. headless-tree reads `isItemFolder`
+	// at click time, so a click landing in that window took the leaf branch: it
+	// selected the row and never toggled expansion, and since nothing re-clicks,
+	// the folder stayed shut forever. Folder-ness is encoded in the item id, so
+	// it is knowable with zero loaded data and must never be guessed.
+	it("reports a folder as a folder even when its data has not landed", () => {
+		const loader = createTreeDataLoader(emptyInner);
+		const item = loader.getItem(formatItemId({ kind: "folder", id: "f-source" }));
+		expect(item.isFolder).toBe(true);
+	});
+
+	it("keeps the placeholder's rendered kind consistent with isFolder", () => {
+		const loader = createTreeDataLoader(emptyInner);
+		const item = loader.getItem(formatItemId({ kind: "folder", id: "f-source" }));
+		// The render path switches on `item.kind`; HT switches on `isFolder`. If
+		// these disagree the row draws a chevron it will not honour.
+		expect(item.item.kind === "folder").toBe(item.isFolder);
+	});
+
+	it("does not turn an unresolved note into a folder", () => {
+		const loader = createTreeDataLoader(emptyInner);
+		const item = loader.getItem(formatItemId({ kind: "note", id: "n1" }));
+		expect(item.isFolder).toBe(false);
+		expect(item.item.kind === "folder").toBe(false);
+	});
+
+	it("prefers real data over the placeholder once it lands", () => {
+		const id = formatItemId({ kind: "folder", id: "f-real" });
+		const real = {
+			itemId: id,
+			item: { kind: "folder" as const, id: "f-real", path: "Real", name: "Real", count: 0 },
+			isFolder: true,
+		};
+		const loader = createTreeDataLoader({ getItem: () => real, getChildren: () => [] });
+		expect(loader.getItem(id)).toBe(real);
+	});
+});
 
 describe("treeStructureKey", () => {
 	it("changes when a folder count changes (so a move rebuilds the tree)", () => {
