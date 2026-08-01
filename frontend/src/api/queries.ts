@@ -1240,7 +1240,15 @@ export function useVaults() {
 	const demo = useDemoVaultOptional();
 	const query = useQuery({
 		queryKey: ["vaults"],
-		queryFn: () => api.get<{ vaults: Vault[] }>("/vaults"),
+		queryFn: async () => {
+			const data = await api.get<{ vaults: Vault[] }>("/vaults");
+			// Second reconcile point, and the one that covers in-session death of
+			// the active vault: deleting/purging a vault only invalidates this key,
+			// so without this the store would keep pointing at the vault the user
+			// just deleted (404ing every request) until a full reload.
+			reconcileActiveVault(data.vaults);
+			return data;
+		},
 		select: (data) => data.vaults,
 		enabled: !demo?.active,
 		// Seeded fresh by useAppBootstrap on first load; vault mutations invalidate

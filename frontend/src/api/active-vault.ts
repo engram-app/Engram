@@ -101,8 +101,9 @@ export function preferredVault(vaults: Vault[] | undefined, hintId: string | nul
 
 /**
  * Re-point a persisted selection at a vault the account actually owns. Call it
- * with the authoritative vault list as soon as it lands (the bootstrap seed),
- * BEFORE any vault-scoped view mounts.
+ * from every path that learns the authoritative vault list — the bootstrap seed
+ * (before any vault-scoped view mounts) and the /vaults fetch itself, which is
+ * what a delete/purge invalidation refetches through.
  *
  * A stored id whose vault is gone — deleted from another device, or an env
  * whose DB was wiped — is strictly worse than no selection at all: it is a
@@ -116,11 +117,15 @@ export function preferredVault(vaults: Vault[] | undefined, hintId: string | nul
  * skips connecting entirely while the active vault is null, so clearing would
  * trade the 404s for a silently dead socket.
  */
-export function reconcileActiveVault(vaults: Vault[]) {
+export function reconcileActiveVault(vaults: Vault[] | undefined) {
 	const current = activeVaultId;
 	// A live demo selection is a tour fixture and never appears in the real
 	// list — reconciling it would yank the user out of the tour mid-step.
-	if (current === null || isDemoVaultId(current)) {
+	// `vaults` is optional so a payload missing the list can't throw from inside
+	// a queryFn: healing is best-effort, and taking the bootstrap query (and
+	// with it the whole authenticated shell) down over it would be a far worse
+	// failure than the 404s this exists to prevent.
+	if (!vaults || current === null || isDemoVaultId(current)) {
 		return;
 	}
 	if (vaults.some((v) => v.id === current)) {

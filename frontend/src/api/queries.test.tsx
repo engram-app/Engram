@@ -2141,4 +2141,17 @@ describe("useAppBootstrap seeding useVaults", () => {
 
 		expect(getActiveVaultId()).toBe("42");
 	});
+
+	// Deleting/purging a vault only invalidates ["vaults"], so the refetch is the
+	// only thing standing between "user deleted the vault they were in" and a
+	// store that keeps 404ing every request until a full page reload.
+	it("re-points a stale vault id on the /vaults refetch too", async () => {
+		setActiveVaultId("vault-deleted-in-session");
+		get.mockResolvedValueOnce({ vaults: [{ id: "42", slug: "work", name: "Work" }] });
+
+		const vaults = renderHook(() => useVaults(), { wrapper });
+		await waitFor(() => expect(vaults.result.current.isSuccess).toBe(true));
+
+		expect(getActiveVaultId()).toBe("42");
+	});
 });

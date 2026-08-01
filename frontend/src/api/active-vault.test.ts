@@ -112,6 +112,16 @@ describe("reconcileActiveVault", () => {
 		expect(localStorage.getItem(KEY)).toBeNull();
 	});
 
+	it("no-ops on a payload with no vault list instead of throwing", () => {
+		// It runs inside queryFns; throwing here would fail the bootstrap query and
+		// take down the whole authenticated shell.
+		setActiveVaultId("dead-vault");
+		expect(() => {
+			reconcileActiveVault(undefined);
+		}).not.toThrow();
+		expect(getActiveVaultId()).toBe("dead-vault");
+	});
+
 	it("no-ops when nothing is selected", () => {
 		reconcileActiveVault(owned);
 		expect(getActiveVaultId()).toBeNull();
