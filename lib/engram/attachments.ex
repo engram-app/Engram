@@ -643,9 +643,9 @@ defmodule Engram.Attachments do
   no attachments, idempotent).
 
   Seq note (DRY-by-design, diverges from a literal "one transaction under one
-  seq"): `batch_delete/3` → `do_delete_attachment` allocates a fresh per-item
-  `seq` per path rather than a single batch-wide `seq`. Per-item seq is SAFE for
-  deletes — the soft-deleted row itself is the change signal, so the #614
+  seq"): `batch_delete/3` allocates a contiguous per-row seq block (each row
+  gets its OWN seq) rather than a single batch-wide `seq`. Per-row seq is SAFE
+  for deletes — the soft-deleted row itself is the change signal, so the #614
   same-seq cursor-skip concern (a moved row + its same-seq tombstone) simply does
   not arise (delete has no tombstone). Cross-table + cross-item atomicity is
   provided by the `Engram.Folders` coordinator's `atomic/1` wrapper, so a
@@ -675,6 +675,13 @@ defmodule Engram.Attachments do
   Soft-deletes each attachment by path. Idempotent. `:deleted` counts paths that
   actually held a live row (absent/already-deleted paths don't count).
 
+  ONE transaction for the whole batch (was one per path): resolve every
+  path_hmac up front, allocate a contiguous per-row seq block from the vault
+  counter, soft-delete via a single VALUES-join UPDATE, then run the
+  post-commit side effects — one batched blob delete plus the same per-path
+  `note_changed` delete broadcast `do_delete_attachment/4` emits (payload
+  shape identical; batch calls carry no origin device, same as before).
+
   Capped at 500 paths per batch (`{:error, :batch_too_large}` above that).
   """
   @spec batch_delete(map(), map(), [String.t()]) ::
@@ -687,8 +694,151 @@ defmodule Engram.Attachments do
 
   def batch_delete(user, vault, paths) when is_list(paths) do
     user = fresh_user(user)
-    deleted = Enum.count(paths, fn p -> do_delete_attachment(user, vault, p) end)
-    {:ok, %{deleted: deleted}}
+
+    case Crypto.dek_filter_key(user) do
+      {:ok, filter_key} ->
+        sanitized = paths |> Enum.map(&PathSanitizer.sanitize/1) |> Enum.uniq()
+        hmac_by_path = Map.new(sanitized, &{&1, Crypto.hmac_field(filter_key, &1)})
+
+        case batch_soft_delete_rows(user, vault, Map.values(hmac_by_path)) do
+          {:ok, {deleted_hmacs, storage_keys}} ->
+            # Post-commit side effects — batched blob cleanup (best-effort,
+            # rows are already soft-deleted so a failure only leaks a zombie
+            # blob, exactly like the single-delete path), then one broadcast
+            # per deleted path in input order.
+            delete_external_many(storage_keys)
+
+            deleted_set = MapSet.new(deleted_hmacs)
+
+            for path <- sanitized, MapSet.member?(deleted_set, hmac_by_path[path]) do
+              Engram.Sync.Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", %{
+                "event_type" => "delete",
+                "kind" => "attachment",
+                "path" => path,
+                "vault_id" => vault.id
+              })
+            end
+
+            {:ok, %{deleted: length(deleted_hmacs)}}
+
+          {:error, reason} ->
+            require Logger
+
+            Logger.warning(
+              "batch_delete: tenant transaction failed",
+              Metadata.with_category(:warning, :sync, reason: inspect(reason))
+            )
+
+            {:ok, %{deleted: 0}}
+        end
+
+      {:error, :no_dek} ->
+        # No DEK = no attachments to delete; mirror do_delete_attachment.
+        {:ok, %{deleted: 0}}
+    end
+  end
+
+  # One tenant transaction for the whole batch: find the live rows, allocate a
+  # contiguous seq block (one vault-counter UPDATE — same row lock
+  # `Vaults.next_seq!/1` takes, so per-vault allocation stays serialized), and
+  # soft-delete every row via a single VALUES-join UPDATE that stamps each row
+  # its OWN seq (the `(seq, id)` keyset feed requires per-row-distinct,
+  # monotonic seqs — N rows must never share one). Returns
+  # `{:ok, {deleted_path_hmacs, storage_keys}}` for the actually-deleted rows.
+  defp batch_soft_delete_rows(_user, _vault, []), do: {:ok, {[], []}}
+
+  defp batch_soft_delete_rows(user, vault, hmacs) do
+    now = DateTime.utc_now(:second)
+
+    Repo.with_tenant(user.id, fn ->
+      rows =
+        from(a in Attachment,
+          where:
+            a.path_hmac in ^hmacs and a.user_id == ^user.id and
+              a.vault_id == ^vault.id and is_nil(a.deleted_at),
+          order_by: a.id,
+          select: {a.id, a.path_hmac, a.storage_key}
+        )
+        |> Repo.all()
+
+      if rows == [] do
+        {[], []}
+      else
+        n = length(rows)
+
+        # Contiguous block of N seqs in ONE statement — mirrors next_seq!/1's
+        # raw-SQL idiom (the returned value is the LAST seq of the block).
+        %{rows: [[last_seq]]} =
+          Repo.query!(
+            "UPDATE vaults SET change_seq = change_seq + $2 WHERE id = $1 RETURNING change_seq",
+            [Ecto.UUID.dump!(vault.id), n]
+          )
+
+        id_seqs =
+          rows
+          |> Enum.with_index(last_seq - n + 1)
+          |> Enum.map(fn {{id, _hmac, _key}, seq} -> {id, seq} end)
+
+        # One UPDATE for all rows. `deleted_at IS NULL` re-guard: a row a
+        # concurrent transaction deleted between our SELECT and this UPDATE is
+        # skipped (its allocated seq goes unused — gaps are fine, the feed
+        # only needs monotonic-unique). RETURNING tells us which rows this
+        # statement actually transitioned so the count + broadcasts stay
+        # truthful. Runs under the with_tenant RLS role like every other raw
+        # statement in this transaction.
+        values_sql =
+          id_seqs
+          |> Enum.with_index()
+          |> Enum.map_join(", ", fn {_pair, i} ->
+            "($#{i * 2 + 2}::uuid, $#{i * 2 + 3}::bigint)"
+          end)
+
+        params = [
+          DateTime.to_naive(now)
+          | Enum.flat_map(id_seqs, fn {id, seq} -> [Ecto.UUID.dump!(id), seq] end)
+        ]
+
+        %{rows: returned} =
+          Repo.query!(
+            """
+            UPDATE attachments AS a
+            SET deleted_at = $1, updated_at = $1, seq = v.seq
+            FROM (VALUES #{values_sql}) AS v(id, seq)
+            WHERE a.id = v.id AND a.deleted_at IS NULL
+            RETURNING a.path_hmac, a.storage_key
+            """,
+            params
+          )
+
+        deleted_hmacs = returned |> Enum.map(fn [hmac, _key] -> hmac end) |> Enum.uniq()
+        storage_keys = for [_hmac, key] <- returned, is_binary(key), do: key
+        {deleted_hmacs, storage_keys}
+      end
+    end)
+    |> unwrap_tenant()
+  end
+
+  # Batched counterpart of delete_external/1 — same best-effort contract.
+  defp delete_external_many([]), do: :ok
+
+  defp delete_external_many(storage_keys) do
+    case Storage.adapter().delete_many(storage_keys) do
+      {:ok, _count} ->
+        :ok
+
+      {:error, reason} ->
+        require Logger
+
+        Logger.warning(
+          "Failed to batch-delete blobs (rows already soft-deleted)",
+          Metadata.with_category(:warning, :sync,
+            key_count: length(storage_keys),
+            reason: inspect(reason)
+          )
+        )
+
+        :ok
+    end
   end
 
   # Real-time parity: reuse the existing `note_changed` socket event the plugin

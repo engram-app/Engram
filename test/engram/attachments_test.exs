@@ -838,7 +838,7 @@ defmodule Engram.AttachmentsTest do
 
   describe "delete_folder/3 (attachment cascade)" do
     test "soft-deletes nested attachments under the folder", %{user: user, vault: vault} do
-      Mox.stub(Engram.MockStorage, :delete, fn _key -> :ok end)
+      Mox.stub(Engram.MockStorage, :delete_many, fn _keys -> {:ok, 0} end)
       put_attachment(user, vault, "Docs/a.png")
       put_attachment(user, vault, "Docs/sub/b.png")
       put_attachment(user, vault, "Other/c.png")

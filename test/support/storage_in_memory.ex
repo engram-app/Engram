@@ -52,6 +52,13 @@ defmodule Engram.Storage.InMemory do
   end
 
   @impl true
+  def delete_many(keys) when is_list(keys) do
+    ensure_table()
+    Enum.each(keys, &:ets.delete(@table, &1))
+    {:ok, length(keys)}
+  end
+
+  @impl true
   def exists?(key) do
     ensure_table()
     :ets.member(@table, key)

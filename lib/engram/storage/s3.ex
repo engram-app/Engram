@@ -48,9 +48,10 @@ defmodule Engram.Storage.S3 do
     end
   end
 
-  defp delete_many([]), do: {:ok, 0}
+  @impl true
+  def delete_many([]), do: {:ok, 0}
 
-  defp delete_many(keys) do
+  def delete_many(keys) do
     case ExAws.S3.delete_multiple_objects(bucket(), keys) |> ExAws.request() do
       {:ok, _} -> {:ok, length(keys)}
       {:error, reason} -> {:error, reason}

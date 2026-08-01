@@ -84,4 +84,64 @@ defmodule Engram.AttachmentsSeqFeedTest do
     refute more2
     assert is_nil(next2)
   end
+
+  # Pins the batch-delete seq contract: every soft-deleted row gets its OWN
+  # seq (monotonic, distinct — the (seq, id) keyset feed depends on per-row
+  # uniqueness within the batch), tombstones surface in the feed, and each
+  # deleted path still broadcasts its own note_changed delete event with the
+  # single-delete payload shape.
+  test "batch_delete: distinct monotonic seqs, feed tombstones, per-path broadcasts", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, _} = put(user, vault, "a.png")
+    {:ok, _} = put(user, vault, "b.png")
+    {:ok, _} = put(user, vault, "c.png")
+
+    EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+    watermark = Vaults.current_seq(user.id, vault.id)
+
+    assert {:ok, %{deleted: 3}} =
+             Attachments.batch_delete(user, vault, ["a.png", "b.png", "c.png"])
+
+    {:ok, %{changes: changes}} = Attachments.list_changes_by_seq(user, vault, watermark)
+
+    tombstones = Enum.filter(changes, & &1.deleted)
+    assert Enum.map(tombstones, & &1.path) |> Enum.sort() == ["a.png", "b.png", "c.png"]
+
+    seqs = Enum.map(tombstones, & &1.seq)
+    assert length(Enum.uniq(seqs)) == 3, "expected 3 DISTINCT seqs, got #{inspect(seqs)}"
+    assert seqs == Enum.sort(seqs)
+    assert Enum.all?(seqs, &(&1 > watermark))
+
+    # One delete broadcast per path, single-delete payload shape, no device_id.
+    for path <- ["a.png", "b.png", "c.png"] do
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload:
+          %{
+            "event_type" => "delete",
+            "kind" => "attachment",
+            "path" => ^path,
+            "vault_id" => _
+          } = payload
+      }
+
+      refute Map.has_key?(payload, "device_id")
+    end
+  end
+
+  test "batch_delete counts only previously-live paths and is idempotent", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, _} = put(user, vault, "x.png")
+
+    assert {:ok, %{deleted: 1}} =
+             Attachments.batch_delete(user, vault, ["x.png", "absent.png"])
+
+    # Second round: nothing live anymore.
+    assert {:ok, %{deleted: 0}} = Attachments.batch_delete(user, vault, ["x.png"])
+  end
 end

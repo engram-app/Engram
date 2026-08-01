@@ -66,6 +66,16 @@ defmodule Engram.Storage.Database do
   end
 
   @impl true
+  def delete_many(keys) when is_list(keys) do
+    %{num_rows: count} =
+      Repo.query!("DELETE FROM storage_objects WHERE storage_key = ANY($1)", [keys])
+
+    {:ok, count}
+  rescue
+    e -> {:error, e}
+  end
+
+  @impl true
   def exists?(key) when is_binary(key) do
     # Log-and-return-false on DB errors, matching S3.exists?/1 exactly — a
     # deliberate adapter-parity decision (98a94976): the @callback contract
