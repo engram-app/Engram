@@ -31,6 +31,9 @@ defmodule Engram.Attachments do
     explicit_mime = attrs["mime_type"] || attrs[:mime_type]
 
     with {:ok, plaintext} <- decode_base64(content_b64),
+         # Security boundary: enforced HERE, not (only) in the controller —
+         # MCP tools, Oban jobs, and console callers must hit the same gate.
+         :ok <- MimeWhitelist.check(explicit_mime || MimeWhitelist.detect_mime(path), path),
          :ok <- validate_size(plaintext, user),
          {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
@@ -664,12 +667,23 @@ defmodule Engram.Attachments do
     end
   end
 
+  # Shared with Engram.Notes' batch caps: 500 = the legacy change feed's
+  # convergence bound (>500 rows on one server timestamp can loop a pull).
+  @max_batch_entries 500
+
   @doc """
   Soft-deletes each attachment by path. Idempotent. `:deleted` counts paths that
   actually held a live row (absent/already-deleted paths don't count).
+
+  Capped at 500 paths per batch (`{:error, :batch_too_large}` above that).
   """
-  @spec batch_delete(map(), map(), [String.t()]) :: {:ok, %{deleted: non_neg_integer()}}
+  @spec batch_delete(map(), map(), [String.t()]) ::
+          {:ok, %{deleted: non_neg_integer()}} | {:error, :batch_too_large}
   def batch_delete(_user, _vault, []), do: {:ok, %{deleted: 0}}
+
+  def batch_delete(_user, _vault, paths)
+      when is_list(paths) and length(paths) > @max_batch_entries,
+      do: {:error, :batch_too_large}
 
   def batch_delete(user, vault, paths) when is_list(paths) do
     user = fresh_user(user)

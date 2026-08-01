@@ -508,4 +508,26 @@ defmodule Engram.NotesBatchSetBasedTest do
   # still broadcast mid-transaction per item (see its moduledoc caveat), so
   # a multi-item batch that fails late leaks events for rolled-back renames.
   # The after-commit buffer for move/folder ops is the tracked follow-up.
+
+  describe "batch size cap (context boundary)" do
+    # No boundary ever enforced a batch cap (the "capped at the controller"
+    # comment was aspirational), yet the legacy change feed's convergence
+    # assumption breaks if one bulk write stamps >500 rows on a single
+    # timestamp (notes_controller.ex changes_server_time comment). 500 =
+    # that documented bound; the plugin chunks at ≤100 per request anyway.
+    test "batch_delete_notes rejects more than 500 ids", %{user: user, vault: vault} do
+      ids = for _ <- 1..501, do: Ecto.UUID.generate()
+      assert {:error, :batch_too_large} = Notes.batch_delete_notes(user, vault, ids)
+    end
+
+    test "batch_move_notes rejects more than 500 ids", %{user: user, vault: vault} do
+      ids = for _ <- 1..501, do: Ecto.UUID.generate()
+      assert {:error, :batch_too_large} = Notes.batch_move_notes(user, vault, ids, "root")
+    end
+
+    test "batch_upsert_notes rejects more than 500 entries", %{user: user, vault: vault} do
+      params = for i <- 1..501, do: %{path: "bulk/n#{i}.md"}
+      assert {:error, :batch_too_large} = Notes.batch_upsert_notes(user, vault, params)
+    end
+  end
 end

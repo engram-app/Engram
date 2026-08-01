@@ -118,8 +118,12 @@ defmodule Engram.Notes.CrdtTransport do
 
   # LEB128 varuint reader, capped at 10 continuation bytes (enough for any
   # 64-bit value) so a run of 0x80 bytes can't loop unbounded either.
+  # Public (@doc false) so CrdtBridge.client_count/1 shares the bounded
+  # decoder instead of keeping its own unbounded reimplementation.
   @max_varuint_bytes 10
-  defp read_leb128_varuint(bin), do: read_leb128_varuint(bin, 0, 0, @max_varuint_bytes)
+  @doc false
+  @spec read_leb128_varuint(binary()) :: {:ok, non_neg_integer(), binary()} | :error
+  def read_leb128_varuint(bin), do: read_leb128_varuint(bin, 0, 0, @max_varuint_bytes)
 
   defp read_leb128_varuint(_bin, _acc, _shift, 0), do: :error
   defp read_leb128_varuint(<<>>, _acc, _shift, _budget), do: :error

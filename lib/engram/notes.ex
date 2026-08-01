@@ -87,6 +87,14 @@ defmodule Engram.Notes do
     from(n in Note, where: n.kind == "note")
   end
 
+  # Batch-op cap, enforced at the context boundary (no controller ever did,
+  # despite older comments claiming so). 500 = the legacy change feed's
+  # convergence bound: >500 rows stamped on one server timestamp can make a
+  # legacy pull re-serve the same page forever (see notes_controller.ex
+  # changes_server_time). The plugin chunks at ≤100 per request; the SPA
+  # sends unchunked selections, so the cap sits above any realistic one.
+  @max_batch_entries 500
+
   @doc """
   #590: maps Qdrant point ids → the owning note's decrypted display fields
   (`source_path`, `tags`).
@@ -2011,6 +2019,10 @@ defmodule Engram.Notes do
           | {:error, {:not_found, String.t()} | term()}
   def batch_delete_notes(_user, _vault, []), do: {:ok, %{deleted: 0}}
 
+  def batch_delete_notes(_user, _vault, ids)
+      when is_list(ids) and length(ids) > @max_batch_entries,
+      do: {:error, :batch_too_large}
+
   def batch_delete_notes(user, vault, ids) when is_list(ids) do
     now = DateTime.utc_now()
     # Duplicate ids collapse to one delete (idempotent-delete semantics);
@@ -2139,6 +2151,10 @@ defmodule Engram.Notes do
           | {:error, {:not_found | :conflict, String.t()} | term()}
   def batch_move_notes(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
 
+  def batch_move_notes(_user, _vault, ids, _target)
+      when is_list(ids) and length(ids) > @max_batch_entries,
+      do: {:error, :batch_too_large}
+
   # Move into a folder given by PATH. No marker is required — a "derived" folder
   # exists purely as a path on its notes. `folder == ""` means the vault root.
   def batch_move_notes(user, vault, ids, {:path, folder})
@@ -2264,6 +2280,10 @@ defmodule Engram.Notes do
           | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
           | {:error, term()}
   def batch_upsert_notes(_user, _vault, []), do: {:ok, %{results: []}}
+
+  def batch_upsert_notes(_user, _vault, notes_params)
+      when is_list(notes_params) and length(notes_params) > @max_batch_entries,
+      do: {:error, :batch_too_large}
 
   def batch_upsert_notes(user, vault, notes_params) when is_list(notes_params) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),

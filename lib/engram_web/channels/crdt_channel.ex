@@ -430,7 +430,15 @@ defmodule EngramWeb.CrdtChannel do
               captured_version: captured_version
             )
         rescue
-          _ -> :ok
+          e ->
+            # Still best-effort (timer checkpoint is the backstop), but never
+            # silent — this was the one unlogged rescue in this module.
+            Logger.warning(
+              "crdt create checkpoint materialize failed: #{Exception.message(e)}",
+              Metadata.with_category(:warning, :websocket, doc_id: note_id)
+            )
+
+            :ok
         end
       end
 

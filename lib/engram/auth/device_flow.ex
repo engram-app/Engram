@@ -97,7 +97,9 @@ defmodule Engram.Auth.DeviceFlow do
 
       auth ->
         case Repo.one(
-               from(v in Vaults.Vault, where: v.id == ^vault_id and v.user_id == ^user.id),
+               from(v in Vaults.Vault,
+                 where: v.id == ^vault_id and v.user_id == ^user.id and is_nil(v.deleted_at)
+               ),
                skip_tenant_check: true
              ) do
           nil ->

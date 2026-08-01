@@ -65,12 +65,12 @@ defmodule Engram.Storage.Database do
 
   @impl true
   def exists?(key) when is_binary(key) do
+    # No rescue: a dead DB must raise loudly (caller/job retries), not read
+    # as "object missing" — the S3 adapter makes the same 404-vs-error split.
     case Repo.query!("SELECT 1 FROM storage_objects WHERE storage_key = $1 LIMIT 1", [key]) do
       %{rows: [[1]]} -> true
       %{rows: []} -> false
     end
-  rescue
-    _ -> false
   end
 
   @impl true

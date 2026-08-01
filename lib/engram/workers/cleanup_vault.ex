@@ -12,6 +12,12 @@ defmodule Engram.Workers.CleanupVault do
   4. Storage blobs (post-commit, best-effort) — only after DB is authoritative
   """
 
+  # Deliberately NO Oban `unique` key: a restore-then-re-delete cycle needs a
+  # second scheduled job while the first (now no-op) one still exists, and
+  # uniqueness over :scheduled would silently drop it — losing the cleanup.
+  # Duplicate-run safety comes from the DB transaction instead: the second
+  # run's `Repo.delete!` hits StaleEntryError on the vanished row and rolls
+  # back (same reasoning documented in BackfillCrdtHead/BackfillCrdtState).
   use Oban.Worker, queue: :cleanup, max_attempts: 3
 
   import Ecto.Query
