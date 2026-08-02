@@ -507,7 +507,7 @@ defmodule EngramWeb.NotesControllerTest do
   # Serializer nil-content boundary (same class as the broadcast_change fix,
   # e2e test_34): a meta-projected struct whose content was never loaded must
   # OMIT the content key, never fabricate "" beside a real content_hash.
-  # nil cannot reach note_json/change_json through today's callers (all of
+  # nil cannot reach note_json through today's callers (all of
   # them full-load + decrypt), so this pins the boundary directly: a future
   # projection leak fails as a missing key (the plugin fetches on absence)
   # instead of a silent 0-byte file seeded as converged forever.

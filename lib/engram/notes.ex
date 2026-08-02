@@ -2936,8 +2936,9 @@ defmodule Engram.Notes do
   ordered by `(seq, id)`, paginated.
 
   Unlike the retired timestamp feed (`list_changes_page/4`, removed with
-  `GET /notes/changes`) this carries the full
-  renames all flow through the unified `/sync/changes` pull. Folder-marker
+  `GET /notes/changes`) this carries the full note change set including
+  tombstones (no `deleted_at` filter), so deletes and renames all flow
+  through the unified seq-feed pull. Folder-marker
   rows (`kind == "folder"`) are EXCLUDED (#976): they carry `path: nil`,
   which crashed tombstone apply on pre-#216 plugins, and clients sync
   markers via the dedicated folder-marker endpoint, never this feed.

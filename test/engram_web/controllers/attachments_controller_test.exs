@@ -680,5 +680,27 @@ defmodule EngramWeb.AttachmentsControllerTest do
       conn_b_get = get(conn_b, "/api/attachments/photos/secret.png")
       assert json_response(conn_b_get, 404)
     end
+
+    test "user B's sync manifest excludes user A's attachments", %{conn: conn} do
+      post(conn, "/api/attachments", %{
+        path: "photos/secret.png",
+        content_base64: @sample_base64,
+        mtime: 1_000.0
+      })
+
+      user_b = insert(:user)
+      insert(:vault, user: user_b, is_default: true)
+      {:ok, api_key_b, _} = Engram.Accounts.create_api_key(user_b, "b-key")
+      grant_api_write!(user_b)
+
+      conn_b =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{api_key_b}")
+
+      # The only remaining attachment LIST surface: cross-user isolation on
+      # it was previously pinned via the retired GET /attachments/changes.
+      body = json_response(get(conn_b, "/api/sync/manifest"), 200)
+      assert body["attachments"] == []
+    end
   end
 end
