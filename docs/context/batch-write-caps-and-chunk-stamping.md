@@ -1,4 +1,4 @@
-# Batch-write caps + chunk-stamped tombstones — the ≤500-rows-per-TIMESTAMP invariant
+# Batch-write caps + chunk-stamped tombstones — the fewer-than-500-rows-per-TIMESTAMP invariant
 
 _Last verified: 2026-08-01_
 
@@ -16,13 +16,15 @@ every poll, and on a truncated page `server_time` is the last returned row's
 `updated_at` (see `changes_server_time` in
 `lib/engram_web/controllers/notes_controller.ex`). The `>= since` filter
 re-serves the boundary row once; applies are idempotent, so that's fine —
-**unless more than the page size (500) rows share one `updated_at`
-microsecond**. A same-stamp run longer than 500 makes every subsequent poll
-return the identical page: the client can never advance past the run.
+**unless a page-size (500) or longer run of rows shares one `updated_at`
+microsecond**. Because the boundary is inclusive, a run of EXACTLY 500 wedges
+too: the page is entirely one stamp, `server_time` stays on that stamp, and
+every subsequent poll returns the identical page.
 
-So the real constraint is **≤500 rows per server TIMESTAMP** — not ≤500 ids
-per request. Those are different things, and conflating them is exactly the
-trap below.
+So the real constraint is **STRICTLY FEWER than 500 rows per server
+TIMESTAMP** — not ≤500 ids per request. Those are different things, and
+conflating them is exactly the trap below. (The exactly-500 off-by-one was
+itself caught in #1188's review pass — the first fix chunked at 500.)
 
 ## The trap we hit (2026-08-01)
 
@@ -50,14 +52,20 @@ just `frontend/` and the plugin.
 ## The fix — chunk-stamp instead of reject
 
 `batch_delete_notes/3` (`lib/engram/notes.ex`) now accepts any request size
-and enforces the invariant directly: tombstones are stamped in ≤500-id
-chunks (`Enum.chunk_every(@max_batch_entries)`), each chunk getting a
-**distinct** timestamp — `base_now = DateTime.utc_now()` plus `i`
-microseconds per chunk index, guaranteeing distinctness even when
-consecutive `utc_now()` calls collide. All chunks run inside the one
-transaction and share one `seq` (notes batch-delete has always allocated a
-single `Vaults.next_seq!`; the paginated feed's `(seq, id)` keyset tolerates
-seq ties via the id tiebreak).
+and enforces the invariant directly: tombstones are stamped in
+`@stamp_chunk` (400) id chunks, each chunk getting a **distinct**
+timestamp — `base_now = DateTime.utc_now()` plus `i` microseconds per chunk
+index, guaranteeing distinctness even when consecutive `utc_now()` calls
+collide. 400 sits comfortably under the strict <500 bound. All chunks run
+inside the one transaction and share one `seq` (notes batch-delete has
+always allocated a single `Vaults.next_seq!`; the paginated feed's
+`(seq, id)` keyset uses a STRICT `>` comparison with an id tiebreak, so seq
+ties of any size are safe there).
+
+`batch_upsert_notes/3` stamps through the same grouping: each entry's row
+gets `Notes.bulk_stamp(base_now, index)` (400 rows per stamp) instead of one
+shared `now` — a full 500-entry batch on one stamp would be exactly the
+wedge condition.
 
 This also fixed a **pre-existing** wedge: before any cap existed, an
 uncapped 1100-id delete already stamped an 1100-row same-timestamp tombstone

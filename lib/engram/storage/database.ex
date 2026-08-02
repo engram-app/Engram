@@ -21,6 +21,8 @@ defmodule Engram.Storage.Database do
 
   alias Engram.Repo
 
+  require Logger
+
   # Escape char for LIKE patterns so a storage_key containing `_`/`%` (paths
   # may) is matched literally in delete_prefix/1.
   @like_escape "\\"
@@ -65,12 +67,26 @@ defmodule Engram.Storage.Database do
 
   @impl true
   def exists?(key) when is_binary(key) do
-    # No rescue: a dead DB must raise loudly (caller/job retries), not read
-    # as "object missing" — the S3 adapter makes the same 404-vs-error split.
+    # Log-and-return-false on DB errors, matching S3.exists?/1 exactly — a
+    # deliberate adapter-parity decision (98a94976): the @callback contract
+    # promises a boolean, and callers must not crash on a transient DB
+    # error, but the failure must be LOUD in logs (never a bare
+    # `rescue _ -> false`).
     case Repo.query!("SELECT 1 FROM storage_objects WHERE storage_key = $1 LIMIT 1", [key]) do
       %{rows: [[1]]} -> true
       %{rows: []} -> false
     end
+  rescue
+    e ->
+      Logger.error(
+        "Database.exists? failed",
+        Engram.Logger.Metadata.with_category(:error, :sync,
+          storage_key: key,
+          reason: inspect(e)
+        )
+      )
+
+      false
   end
 
   @impl true

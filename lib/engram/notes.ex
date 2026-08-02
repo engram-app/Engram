@@ -91,12 +91,25 @@ defmodule Engram.Notes do
   # one server timestamp can make a legacy `updated_at >= since` pull
   # re-serve the same page forever (see notes_controller.ex
   # changes_server_time). Used two ways:
-  #   * batch_delete_notes chunk-stamps tombstones ≤500 per timestamp, so
-  #     ANY request size is safe (e2e teardown legitimately sends >1000 ids);
+  #   * batch_delete_notes chunk-stamps tombstones @stamp_chunk per
+  #     timestamp, so ANY request size is safe (e2e teardown legitimately
+  #     sends >1000 ids);
   #   * batch_upsert_notes hard-caps at 500 — each entry costs an encrypt +
   #     CRDT merge, so unbounded requests are a compute-DoS vector, and no
-  #     client sends >500 (the plugin chunks at ≤100).
+  #     client sends >500 (the plugin chunks at ≤100) — and stamps its
+  #     creates through the same @stamp_chunk grouping.
   @max_batch_entries 500
+
+  # Rows per shared timestamp for bulk writes. STRICTLY below the 500-row
+  # legacy page: the `since` boundary is inclusive, so a same-stamp run of
+  # EXACTLY page size re-serves the same page forever, not just >page.
+  @stamp_chunk 400
+
+  @doc false
+  # Timestamp for the i-th row of a bulk write: base + one µs per
+  # @stamp_chunk rows. Distinct-by-construction even when consecutive
+  # utc_now() calls collide in the same microsecond.
+  def bulk_stamp(base, i), do: DateTime.add(base, div(i, @stamp_chunk), :microsecond)
 
   @doc """
   #590: maps Qdrant point ids → the owning note's decrypted display fields
@@ -2050,15 +2063,16 @@ defmodule Engram.Notes do
               seq = Engram.Vaults.next_seq!(vault.id)
               base_now = DateTime.utc_now()
 
-              # Stamp tombstones in ≤500-row chunks with DISTINCT timestamps:
-              # the legacy `updated_at >= since` feed pages by timestamp, and
-              # a same-stamp run longer than the page size re-serves the same
-              # page forever (changes_server_time). +i µs guarantees distinct
+              # Stamp tombstones in @stamp_chunk-row chunks with DISTINCT
+              # timestamps: the legacy `updated_at >= since` feed pages by
+              # timestamp with an INCLUSIVE boundary, so a same-stamp run of
+              # page size or longer re-serves the same page forever
+              # (changes_server_time). +1 µs per chunk guarantees distinct
               # stamps even when consecutive utc_now() calls collide.
               updated =
                 notes
                 |> Enum.map(& &1.id)
-                |> Enum.chunk_every(@max_batch_entries)
+                |> Enum.chunk_every(@stamp_chunk)
                 |> Enum.with_index()
                 |> Enum.map(fn {chunk_ids, i} ->
                   now_i = DateTime.add(base_now, i, :microsecond)
@@ -2459,9 +2473,14 @@ defmodule Engram.Notes do
 
     now = DateTime.utc_now()
 
+    # Per-entry bulk_stamp/2 instead of one shared `now`: a full 500-entry
+    # batch stamping one timestamp is EXACTLY the legacy page size, which
+    # wedges the inclusive `updated_at >= since` feed (changes_server_time).
     {entries, insert_rows} =
-      Enum.map_reduce(entries, [], fn entry, rows ->
-        process_batch_entry(entry, existing_by_hmac, user, vault, now, rows)
+      entries
+      |> Enum.with_index()
+      |> Enum.map_reduce([], fn {entry, i}, rows ->
+        process_batch_entry(entry, existing_by_hmac, user, vault, bulk_stamp(now, i), rows)
       end)
 
     # on_conflict: :nothing — a PK collision (client-supplied id already in

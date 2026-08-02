@@ -377,6 +377,9 @@ defmodule Engram.Notes.CrdtBridge do
     # needed a DoS cap once, in safe_wire_frame?/1).
     case CrdtTransport.read_leb128_varuint(Yex.encode_state_vector!(doc)) do
       {:ok, count, _rest} -> count
+      # Unreachable in practice (input is our own encode_state_vector!
+      # round-trip, always a well-formed varint); 0 just means "don't
+      # flatten yet", so silent degradation is the safe direction here.
       :error -> 0
     end
   end

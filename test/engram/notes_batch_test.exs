@@ -526,22 +526,32 @@ defmodule Engram.NotesBatchSetBasedTest do
 
       assert {:ok, %{deleted: 501}} = Notes.batch_delete_notes(user, vault, ids)
 
-      stamps =
-        Repo.with_tenant(user.id, fn ->
-          import Ecto.Query
+      stamp_runs = stamp_run_sizes(user, ids)
 
-          Repo.all(
-            from(n in Engram.Notes.Note,
-              where: n.id in ^ids,
-              select: n.updated_at,
-              distinct: true
-            )
-          )
-        end)
-        |> elem(1)
-
-      assert length(stamps) >= 2,
+      # STRICTLY fewer than the 500-row legacy page per stamp: the since
+      # boundary is inclusive, so a run of EXACTLY page-size wedges too.
+      assert length(stamp_runs) >= 2,
              ">500 tombstones must not share one timestamp (legacy-feed wedge)"
+
+      assert Enum.max(stamp_runs) < 500,
+             "a same-stamp run of exactly page size (500) re-serves forever"
+    end
+
+    test "batch_upsert_notes stamps creates in <500-row timestamp runs", %{
+      user: user,
+      vault: vault
+    } do
+      params = for i <- 1..401, do: %{path: "stampchunk/n#{i}.md"}
+      assert {:ok, %{results: results}} = Notes.batch_upsert_notes(user, vault, params)
+      ids = results |> Enum.filter(&(&1.status == :ok)) |> Enum.map(& &1.id)
+      assert length(ids) == 401
+
+      stamp_runs = stamp_run_sizes(user, ids)
+
+      assert length(stamp_runs) >= 2,
+             "bulk creates must not all share one updated_at (legacy-feed wedge)"
+
+      assert Enum.max(stamp_runs) < 500
     end
 
     # Upsert keeps a hard cap: each entry costs an encrypt + CRDT merge, so
@@ -551,5 +561,21 @@ defmodule Engram.NotesBatchSetBasedTest do
       params = for i <- 1..501, do: %{path: "bulk/n#{i}.md"}
       assert {:error, :batch_too_large} = Notes.batch_upsert_notes(user, vault, params)
     end
+  end
+
+  # Sizes of each distinct-updated_at group among the given note ids.
+  defp stamp_run_sizes(user, ids) do
+    Repo.with_tenant(user.id, fn ->
+      import Ecto.Query
+
+      Repo.all(
+        from(n in Engram.Notes.Note,
+          where: n.id in ^ids,
+          group_by: n.updated_at,
+          select: count(n.id)
+        )
+      )
+    end)
+    |> elem(1)
   end
 end
