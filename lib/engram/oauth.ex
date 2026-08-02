@@ -707,5 +707,5 @@ defmodule Engram.OAuth do
     base <> sep <> URI.encode_query(cleaned)
   end
 
-  defp hash_code(raw), do: :crypto.hash(:sha256, raw) |> Base.encode16(case: :lower)
+  defp hash_code(raw), do: Engram.Crypto.sha256_hex(raw)
 end

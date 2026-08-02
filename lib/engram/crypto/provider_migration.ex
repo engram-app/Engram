@@ -42,7 +42,7 @@ defmodule Engram.Crypto.ProviderMigration do
 
   alias Engram.Accounts
   alias Engram.Accounts.User
-  alias Engram.Crypto.{Config, KeyProvider}
+  alias Engram.Crypto.{Config, KeyProvider, MigrationRunner}
   alias Engram.Crypto.KeyProvider.{AwsKms, Local}
   alias Engram.Repo
 
@@ -65,7 +65,7 @@ defmodule Engram.Crypto.ProviderMigration do
 
     started_at = System.monotonic_time()
     result = do_migrate(user_id, target_provider)
-    duration_us = duration_us_since(started_at)
+    duration_us = MigrationRunner.duration_us_since(started_at)
     emit_telemetry(user_id, target_provider, result, duration_us)
 
     case result do
@@ -83,7 +83,9 @@ defmodule Engram.Crypto.ProviderMigration do
   users and users without an `encrypted_dek` (latter is rare; counted as
   skipped because the fleet drain semantically completes for them).
   """
-  @spec migrate_all(provider_atom(), keyword()) :: counts() | {:error, term()}
+  # No {:error, _} arm — same reasoning as MasterRotation.rotate_all/2:
+  # per-user failures land in :failed; the error arm was always dead.
+  @spec migrate_all(provider_atom(), keyword()) :: counts()
   def migrate_all(target_provider, opts \\ []) when target_provider in [:local, :aws_kms] do
     batch_size = Keyword.get(opts, :batch_size, 100)
     target_name = Atom.to_string(target_provider)
@@ -95,11 +97,11 @@ defmodule Engram.Crypto.ProviderMigration do
       )
       |> Repo.one(skip_tenant_check: true)
 
-    drive_loop(target_provider, "00000000-0000-0000-0000-000000000000", batch_size, %{
-      ok: 0,
-      skipped: already_at_target || 0,
-      failed: 0
-    })
+    MigrationRunner.drive(
+      &off_target_ids(target_name, &1, batch_size),
+      &migrate_user(&1, target_provider),
+      %{ok: 0, skipped: already_at_target || 0, failed: 0}
+    )
   end
 
   @doc """
@@ -205,14 +207,6 @@ defmodule Engram.Crypto.ProviderMigration do
   defp module_for(:local), do: Local
   defp module_for(:aws_kms), do: AwsKms
 
-  defp duration_us_since(started_at) do
-    System.convert_time_unit(
-      System.monotonic_time() - started_at,
-      :native,
-      :microsecond
-    )
-  end
-
   defp emit_telemetry(user_id, target_provider, {:migrated, _}, duration_us) do
     :telemetry.execute(
       [:engram, :crypto, :migrate_provider, :user],
@@ -267,47 +261,21 @@ defmodule Engram.Crypto.ProviderMigration do
 
   defp classify_reason(_other), do: "other"
 
-  defp drive_loop(target_provider, last_id, batch_size, acc) do
-    target_name = Atom.to_string(target_provider)
-
-    ids =
-      from(u in User,
-        where: not is_nil(u.encrypted_dek) and u.key_provider != ^target_name,
-        where: u.id > ^last_id,
-        select: u.id,
-        order_by: u.id,
-        limit: ^batch_size
-      )
-      |> Repo.all(skip_tenant_check: true)
-
-    case ids do
-      [] ->
-        acc
-
-      _ ->
-        acc =
-          Enum.reduce(ids, acc, fn id, a ->
-            case migrate_user(id, target_provider) do
-              :ok -> Map.update!(a, :ok, &(&1 + 1))
-              :skipped -> Map.update!(a, :skipped, &(&1 + 1))
-              {:error, _} -> Map.update!(a, :failed, &(&1 + 1))
-            end
-          end)
-
-        drive_loop(target_provider, List.last(ids), batch_size, acc)
-    end
+  # Next id-ordered page of users whose wrap is not yet under `target_name`.
+  # Shared by the in-process drive loop and the Oban enqueue loop.
+  defp off_target_ids(target_name, last_id, batch_size) do
+    from(u in User,
+      where: not is_nil(u.encrypted_dek) and u.key_provider != ^target_name,
+      where: u.id > ^last_id,
+      select: u.id,
+      order_by: u.id,
+      limit: ^batch_size
+    )
+    |> Repo.all(skip_tenant_check: true)
   end
 
   defp enqueue_loop(target_provider, target_name, last_id, batch_size, total) do
-    ids =
-      from(u in User,
-        where: not is_nil(u.encrypted_dek) and u.key_provider != ^target_name,
-        where: u.id > ^last_id,
-        select: u.id,
-        order_by: u.id,
-        limit: ^batch_size
-      )
-      |> Repo.all(skip_tenant_check: true)
+    ids = off_target_ids(target_name, last_id, batch_size)
 
     case ids do
       [] ->

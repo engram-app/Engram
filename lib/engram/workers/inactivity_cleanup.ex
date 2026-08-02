@@ -50,43 +50,31 @@ defmodule Engram.Workers.InactivityCleanup do
   end
 
   defp sweep_60_day_warning do
-    cutoff = days_ago(@days_60)
-    floor_cutoff = days_ago(@days_80)
-
-    users =
-      Repo.all(
-        from(u in User,
-          join: m in "usage_meters",
-          on: m.user_id == u.id,
-          where:
-            is_nil(u.deleted_at) and
-              is_nil(u.inactivity_warning_60_at) and
-              m.last_active_at < ^cutoff and
-              m.last_active_at >= ^floor_cutoff
-        ),
-        skip_tenant_check: true
-      )
-
-    Enum.each(users, fn user ->
-      if warn_enabled?(user) do
-        _ = Mailer.send_inactivity_warning_60(user)
-
-        user
-        |> Ecto.Changeset.change(%{inactivity_warning_60_at: DateTime.utc_now()})
-        |> Repo.update!(skip_tenant_check: true)
-
-        :telemetry.execute(
-          [:engram, :abuse, :inactivity_warning],
-          %{count: 1, days: @days_60},
-          %{user_id: user.id}
-        )
-      end
-    end)
+    sweep_warning(
+      @days_60,
+      @days_80,
+      :inactivity_warning_60_at,
+      &Mailer.send_inactivity_warning_60/1
+    )
   end
 
   defp sweep_80_day_warning do
-    cutoff = days_ago(@days_80)
-    floor_cutoff = days_ago(@days_90)
+    sweep_warning(
+      @days_80,
+      @days_90,
+      :inactivity_warning_80_at,
+      &Mailer.send_inactivity_warning_80/1
+    )
+  end
+
+  # Both warning rungs are the same sweep: find live users whose last activity
+  # falls inside [floor_days, days) who haven't been stamped yet, mail them,
+  # stamp `warned_field`. The floor keeps the rungs disjoint — a user already
+  # past the next rung's threshold gets that rung's (sterner) email instead of
+  # both.
+  defp sweep_warning(days, floor_days, warned_field, mailer_fun) do
+    cutoff = days_ago(days)
+    floor_cutoff = days_ago(floor_days)
 
     users =
       Repo.all(
@@ -95,7 +83,7 @@ defmodule Engram.Workers.InactivityCleanup do
           on: m.user_id == u.id,
           where:
             is_nil(u.deleted_at) and
-              is_nil(u.inactivity_warning_80_at) and
+              is_nil(field(u, ^warned_field)) and
               m.last_active_at < ^cutoff and
               m.last_active_at >= ^floor_cutoff
         ),
@@ -104,15 +92,15 @@ defmodule Engram.Workers.InactivityCleanup do
 
     Enum.each(users, fn user ->
       if warn_enabled?(user) do
-        _ = Mailer.send_inactivity_warning_80(user)
+        _ = mailer_fun.(user)
 
         user
-        |> Ecto.Changeset.change(%{inactivity_warning_80_at: DateTime.utc_now()})
+        |> Ecto.Changeset.change(%{warned_field => DateTime.utc_now()})
         |> Repo.update!(skip_tenant_check: true)
 
         :telemetry.execute(
           [:engram, :abuse, :inactivity_warning],
-          %{count: 1, days: @days_80},
+          %{count: 1, days: days},
           %{user_id: user.id}
         )
       end

@@ -1581,6 +1581,27 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Worker-side note fetch: loads by id with `skip_tenant_check` (trusted
+  internal workers scope by note_id, not tenant) and maps the two dead-end
+  states to an Oban `{:discard, reason}` — a vanished note or a soft-deleted
+  one is permanently un-processable, so retrying would only burn attempts.
+  Used by `Engram.Workers.EmbedNote` and `Engram.Workers.RepathNoteIndex`.
+  """
+  @spec fetch_note_for_worker(String.t()) :: {:ok, Note.t()} | {:discard, String.t()}
+  def fetch_note_for_worker(note_id) do
+    case Repo.get(Note, note_id, skip_tenant_check: true) do
+      nil ->
+        {:discard, "note #{note_id} not found"}
+
+      %Note{deleted_at: deleted_at} when deleted_at != nil ->
+        {:discard, "note #{note_id} is soft-deleted"}
+
+      note ->
+        {:ok, note}
+    end
+  end
+
+  @doc """
   True when a live note with `note_id` exists in `vault_id` for `user`.
 
   Ownership check for the CRDT channel: doc_id is now the note_id, so the
