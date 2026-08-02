@@ -7,6 +7,8 @@ defmodule EngramWeb.FoldersController do
   alias EngramWeb.BatchOps
   alias EngramWeb.Schemas
 
+  action_fallback EngramWeb.FallbackController
+
   operation(:index,
     operation_id: "folders-index",
     summary: "List folders",
@@ -254,11 +256,9 @@ defmodule EngramWeb.FoldersController do
           attachments: att_count
         })
 
-      {:error, :conflict} ->
-        conn |> put_status(409) |> json(%{error: "conflict"})
-
-      {:error, _reason} ->
-        conn |> put_status(500) |> json(%{error: "internal"})
+      # :conflict → 409, anything else → 500 internal, via action_fallback.
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -303,35 +303,21 @@ defmodule EngramWeb.FoldersController do
         conn |> put_status(400) |> json(%{error: "invalid_ids"})
 
       {:ok, ids} ->
-        case Folders.batch_delete(user, vault, ids) do
-          {:ok, %{notes: n, attachments: a}} ->
-            body = %{deleted: n, deleted_attachments: a}
+        # Errors fall through to the action_fallback: {:not_found, id}/
+        # {:conflict, id} render with item_id; the attachment-leg BARE atoms
+        # (Bug 1 — the offender is a file path, not a folder UUID) render
+        # without item_id; anything else → 500 internal.
+        with {:ok, %{notes: n, attachments: a}} <- Folders.batch_delete(user, vault, ids) do
+          body = %{deleted: n, deleted_attachments: a}
 
-            Engram.Idempotency.remember(
-              conn.assigns.current_user,
-              conn.assigns.idempotency_key,
-              %{status: 200, body: body}
-            )
+          Engram.Idempotency.remember(
+            conn.assigns.current_user,
+            conn.assigns.idempotency_key,
+            %{status: 200, body: body}
+          )
 
-            BatchOps.broadcast_batch(user, vault, "folders.batch", %{op: "delete", ids: ids})
-            json(conn, body)
-
-          {:error, {:not_found, id}} ->
-            conn |> put_status(404) |> json(%{error: "not_found", item_id: id})
-
-          {:error, {:conflict, id}} ->
-            conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
-
-          # Attachment-leg errors (Bug 1) surface as bare atoms; the offender is
-          # a file path, not a folder UUID, so omit item_id.
-          {:error, :conflict} ->
-            conn |> put_status(409) |> json(%{error: "conflict"})
-
-          {:error, :not_found} ->
-            conn |> put_status(404) |> json(%{error: "not_found"})
-
-          {:error, _reason} ->
-            conn |> put_status(500) |> json(%{error: "internal"})
+          BatchOps.broadcast_batch(user, vault, "folders.batch", %{op: "delete", ids: ids})
+          json(conn, body)
         end
     end
   end
@@ -415,26 +401,17 @@ defmodule EngramWeb.FoldersController do
 
         json(conn, body)
 
-      {:error, {:not_found, id}} ->
-        conn |> put_status(404) |> json(%{error: "not_found", item_id: id})
-
-      {:error, {:conflict, id}} ->
-        conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
-
+      # Bespoke shape (single occurrence) — stays inline per the fallback
+      # contract.
       {:error, {:cycle, id}} ->
         conn |> put_status(409) |> json(%{error: "cycle", item_id: id})
 
-      # Attachment-leg conflicts (Bug 1 + Bug 5) surface as BARE atoms — the
-      # offender is a file path, not a folder UUID, so we omit item_id rather
-      # than mislabel a path as a folder id.
-      {:error, :conflict} ->
-        conn |> put_status(409) |> json(%{error: "conflict"})
-
-      {:error, :not_found} ->
-        conn |> put_status(404) |> json(%{error: "not_found"})
-
-      {:error, _reason} ->
-        conn |> put_status(500) |> json(%{error: "internal"})
+      # The rest falls through to the action_fallback: {:not_found, id}/
+      # {:conflict, id} render with item_id; attachment-leg BARE atoms
+      # (Bug 1 + Bug 5 — the offender is a file path, not a folder UUID)
+      # render without item_id; anything else → 500 internal.
+      {:error, _} = error ->
+        error
     end
   end
 

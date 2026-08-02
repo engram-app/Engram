@@ -6,6 +6,8 @@ defmodule EngramWeb.NotesController do
   alias Engram.Notes
   alias EngramWeb.BatchOps
 
+  action_fallback EngramWeb.FallbackController
+
   require Logger
 
   @max_note_bytes 10 * 1024 * 1024
@@ -49,10 +51,8 @@ defmodule EngramWeb.NotesController do
           |> put_status(409)
           |> json(%{conflict: true, server_note: note_json(server_note)})
 
-        {:error, %Ecto.Changeset{} = changeset} ->
-          conn
-          |> put_status(422)
-          |> json(%{errors: format_errors(changeset)})
+        {:error, %Ecto.Changeset{}} = error ->
+          error
 
         {:error, {:notes_cap_reached, limit, current}} ->
           # Pricing v2 §G — Free notes_cap (and Starter at higher ceiling)
@@ -237,8 +237,8 @@ defmodule EngramWeb.NotesController do
       {:ok, note} ->
         json(conn, %{renamed: true, old_path: old_path, new_path: new_path, note: note_json(note)})
 
-      {:error, :conflict} ->
-        conn |> put_status(409) |> json(%{error: "conflict"})
+      {:error, :conflict} = error ->
+        error
 
       {:error, :not_found} ->
         conn |> put_status(404) |> json(%{error: "not found"})
@@ -481,27 +481,19 @@ defmodule EngramWeb.NotesController do
         conn |> put_status(400) |> json(%{error: "invalid_ids"})
 
       {:ok, ids} ->
-        case Notes.batch_delete_notes(user, vault, ids) do
-          {:ok, %{deleted: n}} ->
-            body = %{deleted: n}
+        # Error tuples ({:not_found, id}/{:conflict, id}/internal) fall
+        # through to the action_fallback.
+        with {:ok, %{deleted: n}} <- Notes.batch_delete_notes(user, vault, ids) do
+          body = %{deleted: n}
 
-            Engram.Idempotency.remember(
-              conn.assigns.current_user,
-              conn.assigns.idempotency_key,
-              %{status: 200, body: body}
-            )
+          Engram.Idempotency.remember(
+            conn.assigns.current_user,
+            conn.assigns.idempotency_key,
+            %{status: 200, body: body}
+          )
 
-            BatchOps.broadcast_batch(user, vault, "notes.batch", %{op: "delete", ids: ids})
-            json(conn, body)
-
-          {:error, {:not_found, id}} ->
-            conn |> put_status(404) |> json(%{error: "not_found", item_id: id})
-
-          {:error, {:conflict, id}} ->
-            conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
-
-          {:error, _reason} ->
-            conn |> put_status(500) |> json(%{error: "internal"})
+          BatchOps.broadcast_batch(user, vault, "notes.batch", %{op: "delete", ids: ids})
+          json(conn, body)
         end
     end
   end
@@ -566,33 +558,25 @@ defmodule EngramWeb.NotesController do
 
   # Shared response for both move variants. `broadcast_extra` carries the
   # destination (target_folder path or target_folder_id) to peer sessions.
+  # Error tuples ({:not_found, id}/{:conflict, id}/internal) fall through to
+  # the action_fallback.
   defp send_move_result(conn, user, vault, ids, result, broadcast_extra) do
-    case result do
-      {:ok, %{moved: n}} ->
-        body = %{moved: n}
+    with {:ok, %{moved: n}} <- result do
+      body = %{moved: n}
 
-        Engram.Idempotency.remember(conn.assigns.current_user, conn.assigns.idempotency_key, %{
-          status: 200,
-          body: body
-        })
+      Engram.Idempotency.remember(conn.assigns.current_user, conn.assigns.idempotency_key, %{
+        status: 200,
+        body: body
+      })
 
-        BatchOps.broadcast_batch(
-          user,
-          vault,
-          "notes.batch",
-          Map.merge(%{op: "move", ids: ids}, broadcast_extra)
-        )
+      BatchOps.broadcast_batch(
+        user,
+        vault,
+        "notes.batch",
+        Map.merge(%{op: "move", ids: ids}, broadcast_extra)
+      )
 
-        json(conn, body)
-
-      {:error, {:not_found, id}} ->
-        conn |> put_status(404) |> json(%{error: "not_found", item_id: id})
-
-      {:error, {:conflict, id}} ->
-        conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
-
-      {:error, _reason} ->
-        conn |> put_status(500) |> json(%{error: "internal"})
+      json(conn, body)
     end
   end
 

@@ -2,6 +2,8 @@ defmodule EngramWeb.Admin.InviteController do
   use EngramWeb, :controller
   alias Engram.Invites
 
+  action_fallback EngramWeb.FallbackController
+
   def create(conn, params) do
     attrs = %{
       label: params["label"],
@@ -25,10 +27,9 @@ defmodule EngramWeb.Admin.InviteController do
   end
 
   def delete(conn, %{"id" => id}) do
-    case Invites.revoke(id) do
-      # 200 + JSON (not 204): the frontend `api.del` parses the body.
-      {:ok, _} -> json(conn, %{ok: true})
-      {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not_found"})
+    # 200 + JSON (not 204): the frontend `api.del` parses the body.
+    with {:ok, _} <- Invites.revoke(id) do
+      json(conn, %{ok: true})
     end
   end
 
