@@ -443,27 +443,51 @@ defmodule Engram.Vaults do
             {:error, :not_found}
 
           vault ->
-            attrs =
-              attrs
-              |> atomize_keys()
-              |> then(&maybe_regenerate_slug(user.id, vault, &1))
-              |> inject_name_phase_b(user, vault.id)
+            attrs = atomize_keys(attrs)
 
-            if Map.get(attrs, :is_default) == true do
-              clear_defaults(user.id, vault_id)
-            end
-
-            vault
-            |> Vault.changeset(attrs)
-            |> Repo.update()
-            |> case do
-              {:ok, v} -> {:ok, decrypt_vault_if_needed(v, user)}
-              other -> other
+            if blank_name?(attrs) do
+              # Without this guard a blank rename would slip through as a
+              # half-update: inject_name_phase_b skips it (trio keeps the old
+              # name) while maybe_regenerate_slug still rewrites the slug
+              # from "".
+              {:error, blank_name_changeset(vault)}
+            else
+              do_update_vault(user, vault, attrs)
             end
         end
       end)
       |> unwrap_transaction()
     end
+  end
+
+  defp do_update_vault(user, vault, attrs) do
+    attrs =
+      attrs
+      |> then(&maybe_regenerate_slug(user.id, vault, &1))
+      |> inject_name_phase_b(user, vault.id)
+
+    if Map.get(attrs, :is_default) == true do
+      clear_defaults(user.id, vault.id)
+    end
+
+    vault
+    |> Vault.changeset(attrs)
+    |> Repo.update()
+    |> case do
+      {:ok, v} -> {:ok, decrypt_vault_if_needed(v, user)}
+      other -> other
+    end
+  end
+
+  defp blank_name?(attrs) do
+    name = attrs[:name]
+    is_binary(name) and String.trim(name) == ""
+  end
+
+  defp blank_name_changeset(vault) do
+    vault
+    |> Ecto.Changeset.change()
+    |> Ecto.Changeset.add_error(:name, "can't be blank", validation: :required)
   end
 
   # ── Delete (soft) ───────────────────────────────────────────────────────────
@@ -662,7 +686,9 @@ defmodule Engram.Vaults do
   defp inject_name_phase_b(attrs, user, vault_id) do
     name = attrs[:name] || attrs["name"]
 
-    if is_binary(name) do
+    # A blank name is treated as absent: the trio stays unpopulated and the
+    # changeset surfaces `name can't be blank`, same as an omitted name.
+    if is_binary(name) and String.trim(name) != "" do
       {:ok, dek} = Engram.Crypto.get_dek(user)
       {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
       aad = Engram.Crypto.aad_for_row(:vaults, :name, vault_id)
