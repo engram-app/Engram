@@ -38,7 +38,11 @@ export const TOOL_ASSISTANTS: ToolOption[] = [
 export const TOOL_CODING: ToolOption[] = [
 	{ slug: "claude_code", label: "Claude Code" },
 	{ slug: "cursor", label: "Cursor" },
-	{ slug: "windsurf", label: "Windsurf" },
+	{ slug: "devin", label: "Devin" },
+	// Cognition acquired Windsurf in 2025 and renamed this IDE "Devin Desktop"
+	// on 2026-06-02. The slug stays `windsurf` because profiles, the doc URL and
+	// the brand mark all key on it; only the label reflects the current name.
+	{ slug: "windsurf", label: "Devin Desktop (Windsurf)" },
 	{ slug: "cline", label: "Cline" },
 	{ slug: "continue", label: "Continue" },
 	{ slug: "opencode", label: "OpenCode" },

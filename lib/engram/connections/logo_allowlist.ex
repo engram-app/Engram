@@ -93,14 +93,24 @@ defmodule Engram.Connections.LogoAllowlist do
     # `antigravity` slug; the host is what carries it. Shared by Antigravity 2.0,
     # the IDE, and the CLI (one documented callback for all three).
     "antigravity.google" => %{logo: nil, display_name: "Antigravity", slug: "antigravity"},
-    # Devin registers `client_name: "Devin"`, which does not derive to a catalog
-    # slug because there is no `devin` tool in `Engram.Onboarding.valid_tools/0`
-    # — so `slug: nil` and it gets no checklist row. Adding one would need a
-    # `/docs/integrations/devin/` page first: `checklist-widget.tsx` has a parity
-    # test (#1157) requiring every selectable slug to carry its own doc URL, and
-    # that page currently 404s. Attribution and the verified badge do not depend
-    # on the slug, so this entry is useful on its own.
-    "api.devin.ai" => %{logo: nil, display_name: "Devin", slug: nil},
+    # Devin's CLOUD agent. `slug` is not only the onboarding-checklist key — the
+    # connections page resolves a brand mark by slug FIRST (`ToolMark`), then the
+    # backend `logo`, then a generic icon. So `slug: nil` here meant no icon at
+    # all, unlike every other `logo: nil` entry above, which all pair with a slug
+    # that exists in the frontend BRANDS map.
+    #
+    # `devin` is deliberately NOT in `Engram.Onboarding.valid_tools/0`: a slug
+    # only *creates* a checklist row when the user picked that tool in the FTUX
+    # questionnaire, and connection slugs merely mark existing rows complete. So
+    # this buys the icon without inventing a row that would need a
+    # `/docs/integrations/devin/` page (that page 404s, and `checklist-widget`'s
+    # #1157 parity test requires one for every SELECTABLE slug).
+    #
+    # Vendor note: Cognition, which makes Devin, acquired Windsurf in 2025 and
+    # renamed that IDE "Devin Desktop" on 2026-06-02. Same vendor as the
+    # `windsurf` slug, but a different client — the IDE redirects to loopback,
+    # this is the server-side agent.
+    "api.devin.ai" => %{logo: nil, display_name: "Devin", slug: "devin"},
     # LobeHub is the cloud host; LobeChat is the product and the catalog slug, so
     # the row already exists in onboarding and this host ticks it. The observed
     # `client_name` is "LobeHub", which is why the host map has to carry the
