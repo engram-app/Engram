@@ -114,13 +114,30 @@ defmodule Engram.Cluster.Readiness do
   # contract_supertype.
   def resolve_budget_ms, do: @resolve_timeout_ms * @resolve_retry
 
+  @doc """
+  The options `resolve_a/2` hands to `:inet_res`, with the shipped bound
+  applied and caller opts taking precedence.
+
+  Split out so the suite can assert the bound actually reaches the resolver
+  WITHOUT a clock. This is the only Engram logic in `resolve_a/2` — everything
+  else is a stdlib call — and it is the one thing that can silently break the
+  budget: drop this merge and lookups quietly fall back to `:inet_res`'s own
+  defaults while `resolve_budget_ms/0` keeps reporting the intended number.
+
+  The wall-clock test that used to sit here could not catch that (a lookup at
+  the 1_500ms default still finished inside its 2s assertion) and flaked three
+  times trying. See the comment in `test/engram/cluster/readiness_test.exs`.
+  """
+  @spec resolve_opts(keyword()) :: keyword()
+  def resolve_opts(opts \\ []) do
+    Keyword.merge([timeout: @resolve_timeout_ms, retry: @resolve_retry], opts)
+  end
+
   @doc false
   def resolve_a(query, opts \\ []) do
-    resolve_opts = Keyword.merge([timeout: @resolve_timeout_ms, retry: @resolve_retry], opts)
-
     query
     |> to_charlist()
-    |> :inet_res.lookup(:in, :a, resolve_opts)
+    |> :inet_res.lookup(:in, :a, resolve_opts(opts))
     |> Enum.map(&to_string(:inet.ntoa(&1)))
   end
 
