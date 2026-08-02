@@ -158,6 +158,22 @@ defmodule Engram.VaultsTest do
       assert errors[:name] == ["can't be blank"]
       refute Map.has_key?(errors, :name_ciphertext)
     end
+
+    test "rejects a blank name", %{user: user} do
+      assert {:error, changeset} = Vaults.create_vault(user, %{name: "   "})
+      assert errors_on(changeset)[:name] == ["can't be blank"]
+    end
+
+    test "update_vault rejects a blank name without touching the slug", %{user: user} do
+      {:ok, vault} = Vaults.create_vault(user, %{name: "Keep Me"})
+
+      assert {:error, changeset} = Vaults.update_vault(user, vault.id, %{name: ""})
+      assert errors_on(changeset)[:name] == ["can't be blank"]
+
+      {:ok, reloaded} = Vaults.get_vault(user, vault.id)
+      assert reloaded.name == "Keep Me"
+      assert reloaded.slug == vault.slug
+    end
   end
 
   # ---------------------------------------------------------------------------
