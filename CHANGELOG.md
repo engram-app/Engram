@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.5](https://github.com/engram-app/Engram/compare/0.12.4...0.12.5) (2026-08-02)
+
+
+### Bug Fixes
+
+* **mcp:** make third-party MCP clients connect and attribute correctly (Cursor 406, Devin + LobeHub) ([#1189](https://github.com/engram-app/Engram/issues/1189)) ([0ae2f6b](https://github.com/engram-app/Engram/commit/0ae2f6b596771855550bcf7a8e7fe57bac727fb8))
+
 ## [0.12.4](https://github.com/engram-app/Engram/compare/0.12.3...0.12.4) (2026-08-01)
 
 
