@@ -71,16 +71,26 @@ defmodule Engram.Vaults.Vault do
       :name_hmac,
       :dek_version
     ])
-    |> validate_required([
-      :slug,
-      :user_id,
-      :name_ciphertext,
-      :name_nonce,
-      :name_hmac
-    ])
+    |> validate_required([:slug, :user_id])
+    |> validate_encrypted_name()
     |> update_change(:slug, &(&1 |> String.trim() |> String.downcase()))
     |> validate_exclusion(:slug, @reserved_slugs, message: "is reserved")
     |> unique_constraint([:user_id, :slug], name: :vaults_user_id_slug_index)
     |> unique_constraint([:user_id, :client_id], name: :vaults_user_id_client_id_index)
+  end
+
+  # Phase B invariant: a vault row must carry the encrypted-name trio. The trio
+  # is populated by inject_name_phase_b/3 from the client-supplied `name`, so a
+  # missing trio means the caller omitted `name` — error on the public virtual
+  # field rather than leaking internal column names into 422 bodies.
+  defp validate_encrypted_name(changeset) do
+    if Enum.all?(
+         [:name_ciphertext, :name_nonce, :name_hmac],
+         &(get_field(changeset, &1) not in [nil, ""])
+       ) do
+      changeset
+    else
+      add_error(changeset, :name, "can't be blank", validation: :required)
+    end
   end
 end
