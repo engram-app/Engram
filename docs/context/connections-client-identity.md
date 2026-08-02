@@ -95,7 +95,7 @@ Nothing else may ever grant it.
 
 > **Correction (2026-07-30).** This doc previously said custom schemes and localhost were *"identify-only: they may set icon/name but never grant verified."* That was the intended design; the code never implemented it, `lookup_by_host/1` returned the empty placeholder, so loopback clients got **no slug at all** and their checklist row could never tick. The doc/code mismatch is why the gap survived six weeks. Slug attribution for those clients now comes from `client_name`.
 
-## Observed registrations (prod, 2026-07-30)
+## Observed registrations (prod 2026-07-30, staging 2026-08-01)
 
 Ground truth from real grants, not published docs:
 
@@ -106,15 +106,36 @@ Ground truth from real grants, not published docs:
 | Grok | `Grok` | `https://grok.com/connectors-oauth-exchange-code/` | host | yes |
 | Mistral | `mistral-mcp-client` | `https://callback.mistral.ai/v1/integrations_auth/oauth2_callback` | host | yes |
 | Antigravity | `antigravity-client` | `https://antigravity.google/oauth-callback` | host | yes |
-| Claude Code | `Claude Code (<server>)` | `http://localhost:<port>/callback` | name | no |
+| Devin | `Devin` | `https://api.devin.ai/mcp/oauth/callback` | host | yes |
+| LobeHub | `LobeHub` | `https://app.lobehub.com/oauth/connector/callback` | host | yes |
+| Claude Code | `Claude Code (<server>)` | `http://localhost:<port>/callback` | name, then CIMD | yes (CIMD) |
 | Open WebUI | `Open WebUI` | `https://<user-domain>/oauth/clients/mcp:1/callback` | name | no |
 | Cline | `Cline` | `http://127.0.0.1:<port>/mcp/oauth/callback` | name | no |
 | OpenCode | `OpenCode` | `http://127.0.0.1:<port>/mcp/oauth/callback` | name | no |
 
 Mistral and Antigravity are the cases where **name** derivation fails
 (`mistral_mcp_client` / `antigravity_client` are not catalog slugs) and the host
-saves it. Claude Code, Open WebUI, Cline and OpenCode are the exact inverse.
-Neither layer alone covers all nine, keep both.
+saves it. Open WebUI, Cline and OpenCode are the exact inverse. Neither layer
+alone covers all of them, keep both.
+
+**Devin and LobeHub added 2026-08-01** (staging), both by vendor host. Two
+things they illustrate:
+
+- **Devin carries `slug: nil`.** There is no `devin` in
+  `Engram.Onboarding.valid_tools/0`, and adding one is gated on a
+  `/docs/integrations/devin/` page existing — `checklist-widget.tsx` has a
+  parity test (#1157) requiring every selectable slug to own a doc URL, and that
+  page 404s today. Attribution and the badge do not depend on the slug, so the
+  entry is useful without a checklist row.
+- **LobeHub maps to the `lobechat` slug.** LobeHub is the cloud host, LobeChat
+  the product and the catalog slug. The observed `client_name` is `"LobeHub"`,
+  which does *not* derive to `lobechat`, so the host map carries it. This is
+  cloud-only: a **self-hosted** LobeChat redirects to the operator's own domain,
+  matches nothing, and stays unverified — same boundary as Open WebUI. There is
+  a test pinning that.
+
+**Claude Code is now verified via CIMD**, not by redirect (it is loopback, which
+can never prove anything). It is the worked example of why CIMD exists.
 
 > **Do not assume a client registers under its product name.** Three of nine
 > observed clients append a suffix (`-client`, `(<server>)`). The name layer is a

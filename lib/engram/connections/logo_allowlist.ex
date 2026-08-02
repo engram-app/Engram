@@ -69,8 +69,12 @@ defmodule Engram.Connections.LogoAllowlist do
   }
 
   # Keyed on redirect_uri host. Vendor-owned HTTPS hosts only. Every entry here
-  # was observed on a real grant (prod, 2026-07-30). Do not add speculative
-  # hosts; an entry that never fires is dead config that reads as coverage.
+  # was observed on a real grant — the first five in prod on 2026-07-30, Devin
+  # and LobeHub on staging on 2026-08-01. Staging counts because what the rule
+  # is actually guarding is "a real client really redirected here", not which
+  # environment answered; a guessed host is the thing that must never land. Do
+  # not add speculative hosts; an entry that never fires is dead config that
+  # reads as coverage.
   # `logo: nil` where we have no asset yet; the UI falls back to a plug icon.
   @redirect_host %{
     "claude.ai" => %{
@@ -88,7 +92,20 @@ defmodule Engram.Connections.LogoAllowlist do
     # Antigravity registers as "antigravity-client", which does NOT derive to the
     # `antigravity` slug; the host is what carries it. Shared by Antigravity 2.0,
     # the IDE, and the CLI (one documented callback for all three).
-    "antigravity.google" => %{logo: nil, display_name: "Antigravity", slug: "antigravity"}
+    "antigravity.google" => %{logo: nil, display_name: "Antigravity", slug: "antigravity"},
+    # Devin registers `client_name: "Devin"`, which does not derive to a catalog
+    # slug because there is no `devin` tool in `Engram.Onboarding.valid_tools/0`
+    # — so `slug: nil` and it gets no checklist row. Adding one would need a
+    # `/docs/integrations/devin/` page first: `checklist-widget.tsx` has a parity
+    # test (#1157) requiring every selectable slug to carry its own doc URL, and
+    # that page currently 404s. Attribution and the verified badge do not depend
+    # on the slug, so this entry is useful on its own.
+    "api.devin.ai" => %{logo: nil, display_name: "Devin", slug: nil},
+    # LobeHub is the cloud host; LobeChat is the product and the catalog slug, so
+    # the row already exists in onboarding and this host ticks it. The observed
+    # `client_name` is "LobeHub", which is why the host map has to carry the
+    # mapping — the name does not derive to `lobechat`.
+    "app.lobehub.com" => %{logo: nil, display_name: "LobeChat", slug: "lobechat"}
   }
 
   # Slugs a client may self-report via `client_name`. `web_only` / `other_mcp`
