@@ -60,7 +60,7 @@ The cap broke e2e on day one.
 contract (caps, status codes, param semantics), grep `e2e/` for usage — not
 just `frontend/` and the plugin.
 
-## The fix — chunk-stamp instead of reject
+## The fix — chunk-stamp instead of reject (historical)
 
 `batch_delete_notes/3` (`lib/engram/notes.ex`) now accepts any request size
 and enforces the invariant directly: tombstones are stamped in
