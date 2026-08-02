@@ -81,31 +81,47 @@ defmodule Engram.Repo do
     Process.put(:engram_tenant, uuid)
 
     try do
-      transaction(fn ->
-        # `set_config(..., true)` == SET LOCAL, but as a regular SELECT it
-        # takes a bind parameter (no string interpolation) and applies the
-        # tenant + the engram_app role drop in a single round trip.
-        # Superusers bypass RLS even with FORCE — the role drop scopes
-        # enforcement to this transaction.
-        _ =
-          query!(
-            "SELECT set_config('app.current_tenant', $1, true), " <>
-              "set_config('role', 'engram_app', true)",
-            [uuid]
-          )
+      # `source:` is purely observability. Ecto reads it straight off the query
+      # opts (`Ecto.Adapters.SQL.log/5`) and opentelemetry_ecto appends it to
+      # the span name — there is no per-query naming hook, so without it these
+      # statements render as bare `engram.repo.query`. Transaction opts reach
+      # the same code path via `checkout_or_transaction/4`, so this also names
+      # the begin/commit pair.
+      #
+      # Worth the three keywords: a 2026-08-02 trace audit found 3,069 of 5,389
+      # repo.query spans anonymous over 23h, almost all of them this block on
+      # the hot path (13 per GET /api/sync/manifest). Anonymous spans got read
+      # as background-job noise; they are actually 7.9ms of tenant setup
+      # against 5.1ms of real data queries.
+      transaction(
+        fn ->
+          # `set_config(..., true)` == SET LOCAL, but as a regular SELECT it
+          # takes a bind parameter (no string interpolation) and applies the
+          # tenant + the engram_app role drop in a single round trip.
+          # Superusers bypass RLS even with FORCE — the role drop scopes
+          # enforcement to this transaction.
+          _ =
+            query!(
+              "SELECT set_config('app.current_tenant', $1, true), " <>
+                "set_config('role', 'engram_app', true)",
+              [uuid],
+              source: "tenant_enter"
+            )
 
-        result = fun.()
-        # In Ecto Sandbox (tests), this transaction runs as a savepoint.
-        # PostgreSQL's transaction-local settings span the full outer
-        # transaction, so RELEASE SAVEPOINT would leak `engram_app` into
-        # the sandbox transaction. Resetting the role INSIDE the
-        # transaction (`set_config('role', 'none', true)` == SET LOCAL
-        # ROLE NONE) ensures the last local setting that persists is the
-        # default. In production this runs inside a real transaction and
-        # is harmless.
-        _ = query!("SELECT set_config('role', 'none', true)")
-        result
-      end)
+          result = fun.()
+          # In Ecto Sandbox (tests), this transaction runs as a savepoint.
+          # PostgreSQL's transaction-local settings span the full outer
+          # transaction, so RELEASE SAVEPOINT would leak `engram_app` into
+          # the sandbox transaction. Resetting the role INSIDE the
+          # transaction (`set_config('role', 'none', true)` == SET LOCAL
+          # ROLE NONE) ensures the last local setting that persists is the
+          # default. In production this runs inside a real transaction and
+          # is harmless.
+          _ = query!("SELECT set_config('role', 'none', true)", [], source: "tenant_exit")
+          result
+        end,
+        source: "tenant_txn"
+      )
     after
       Process.delete(:engram_tenant)
     end
