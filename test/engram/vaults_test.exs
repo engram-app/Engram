@@ -600,6 +600,11 @@ defmodule Engram.VaultsTest do
 
       {:ok, promoted} = Vaults.get_default_vault(user)
       assert promoted.id == v2.id
+
+      # Exactly one, stated outright: get_default_vault/1 is a Repo.one, so a
+      # second is_default row makes it RAISE rather than return a wrong vault.
+      # Asserting the count fails with "2 != 1" instead of an Ecto stacktrace.
+      assert Enum.count(Vaults.list_vaults(user), & &1.is_default) == 1
     end
 
     test "does not promote when non-default vault is deleted", %{user: user} do

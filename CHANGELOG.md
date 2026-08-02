@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.12.5](https://github.com/engram-app/Engram/compare/0.12.4...0.12.5) (2026-08-02)
+
+
+### Bug Fixes
+
+* **mcp:** make third-party MCP clients connect and attribute correctly (Cursor 406, Devin + LobeHub) ([#1189](https://github.com/engram-app/Engram/issues/1189)) ([0ae2f6b](https://github.com/engram-app/Engram/commit/0ae2f6b596771855550bcf7a8e7fe57bac727fb8))
+
+## [0.12.4](https://github.com/engram-app/Engram/compare/0.12.3...0.12.4) (2026-08-01)
+
+
+### Bug Fixes
+
+* **vaults:** promote the next default only after the delete succeeds ([#1187](https://github.com/engram-app/Engram/issues/1187)) ([9f0e07d](https://github.com/engram-app/Engram/commit/9f0e07d203294b68c6809e5cc4a1198e0a6ecb32))
+* **web:** re-point a stale persisted vault id at an owned vault ([#1183](https://github.com/engram-app/Engram/issues/1183)) ([923aba2](https://github.com/engram-app/Engram/commit/923aba2a17d4a6d10b0eebeb8a870a377a4ee0e0))
+
+## [0.12.3](https://github.com/engram-app/Engram/compare/0.12.2...0.12.3) (2026-08-01)
+
+
+### Bug Fixes
+
+* **oauth:** resolve CIMD clients in the consent connection-cap plug ([#1184](https://github.com/engram-app/Engram/issues/1184)) ([a974168](https://github.com/engram-app/Engram/commit/a974168bca530ae33d9c72d1f78638decff6b161)), closes [#1148](https://github.com/engram-app/Engram/issues/1148)
+
 ## [0.12.2](https://github.com/engram-app/Engram/compare/0.12.1...0.12.2) (2026-08-01)
 
 

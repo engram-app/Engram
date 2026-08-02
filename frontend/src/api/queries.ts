@@ -16,7 +16,7 @@ import {
 	syntheticFolderId,
 	syntheticFolderPath,
 } from "../viewer/tree/synthesize-folders";
-import { useActiveVaultId } from "./active-vault";
+import { reconcileActiveVault, useActiveVaultId } from "./active-vault";
 import { crdtCreateNote, crdtCreateNoteWithContent, crdtDeleteNote } from "./channel";
 import { ApiError, api } from "./client";
 import { CrdtOpError } from "./crdt-ops";
@@ -1055,6 +1055,11 @@ export function useAppBootstrap() {
 			qc.setQueryData(["onboarding", "status"], data.onboarding);
 			qc.setQueryData(["capabilities"], data.capabilities);
 			qc.setQueryData(["vaults"], data.vaults);
+			// Runs here, not in an effect: parent effects fire AFTER their
+			// children's, so a gate-level effect would land one render too late and
+			// the sidebar's folder/attachment queries would already have gone out
+			// under a dead vault id. See reconcileActiveVault.
+			reconcileActiveVault(data.vaults.vaults);
 			if (data.billing) {
 				qc.setQueryData(["billing", "status"], data.billing);
 			}
@@ -1235,7 +1240,15 @@ export function useVaults() {
 	const demo = useDemoVaultOptional();
 	const query = useQuery({
 		queryKey: ["vaults"],
-		queryFn: () => api.get<{ vaults: Vault[] }>("/vaults"),
+		queryFn: async () => {
+			const data = await api.get<{ vaults: Vault[] }>("/vaults");
+			// Second reconcile point, and the one that covers in-session death of
+			// the active vault: deleting/purging a vault only invalidates this key,
+			// so without this the store would keep pointing at the vault the user
+			// just deleted (404ing every request) until a full reload.
+			reconcileActiveVault(data.vaults);
+			return data;
+		},
 		select: (data) => data.vaults,
 		enabled: !demo?.active,
 		// Seeded fresh by useAppBootstrap on first load; vault mutations invalidate
@@ -1312,11 +1325,21 @@ export function useDeletedVaults() {
 	});
 }
 
+// Vault count is an onboarding input: the backend answers `next_step: :vault`
+// for an account that owns none, and OnboardingGate redirects there. That
+// verdict is computed once, at bootstrap — so a user who deletes their LAST
+// vault mid-session would otherwise sit in a shell with nothing to show and no
+// route out, every request 404ing on `no_default_vault` until a manual reload.
+// Invalidating ["bootstrap"] alongside ["vaults"] re-runs the gate.
 export function useDeleteVault() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (id: string) => api.del<{ deleted: boolean }>(`/vaults/${id}`),
-		onSuccess: () => qc.invalidateQueries({ queryKey: ["vaults"] }),
+		onSuccess: () =>
+			Promise.all([
+				qc.invalidateQueries({ queryKey: ["vaults"] }),
+				qc.invalidateQueries({ queryKey: ["bootstrap"] }),
+			]),
 	});
 }
 
@@ -1324,7 +1347,13 @@ export function useRestoreVault() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (id: string) => api.post<{ vault: Vault }>(`/vaults/${id}/restore`),
-		onSuccess: () => qc.invalidateQueries({ queryKey: ["vaults"] }),
+		// Restoring the only vault has to flip the gate back the other way
+		// (`:vault` -> `:done`), or the user is stuck on the wizard step.
+		onSuccess: () =>
+			Promise.all([
+				qc.invalidateQueries({ queryKey: ["vaults"] }),
+				qc.invalidateQueries({ queryKey: ["bootstrap"] }),
+			]),
 	});
 }
 
@@ -1332,7 +1361,11 @@ export function usePurgeVault() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (id: string) => api.post<{ purged: boolean }>(`/vaults/${id}/purge`),
-		onSuccess: () => qc.invalidateQueries({ queryKey: ["vaults"] }),
+		onSuccess: () =>
+			Promise.all([
+				qc.invalidateQueries({ queryKey: ["vaults"] }),
+				qc.invalidateQueries({ queryKey: ["bootstrap"] }),
+			]),
 	});
 }
 
