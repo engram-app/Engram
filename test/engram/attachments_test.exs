@@ -325,10 +325,23 @@ defmodule Engram.AttachmentsTest do
       assert "is invalid" in errors_on(changeset).encryption_version
     end
 
-    test "requires content_nonce", %{base: base} do
+    test "missing content_nonce errors on the public :content key", %{base: base} do
       changeset = Attachment.changeset(%Attachment{}, %{base | content_nonce: nil})
       refute changeset.valid?
-      assert "can't be blank" in errors_on(changeset).content_nonce
+      assert "can't be blank" in errors_on(changeset).content
+      refute Map.has_key?(errors_on(changeset), :content_nonce)
+    end
+
+    test "missing path trio errors on the public :path key", %{base: base} do
+      changeset =
+        Attachment.changeset(
+          %Attachment{},
+          Map.drop(base, [:path_ciphertext, :path_nonce, :path_hmac])
+        )
+
+      refute changeset.valid?
+      assert "can't be blank" in errors_on(changeset).path
+      refute Map.has_key?(errors_on(changeset), :path_ciphertext)
     end
   end
 

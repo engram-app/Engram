@@ -166,6 +166,14 @@ defmodule EngramWeb.VaultsControllerTest do
                "errors" => %{"name" => ["can't be blank"]}
              }
     end
+
+    test "returns 422 with blank name", %{conn: conn} do
+      conn = post(conn, "/api/vaults", %{name: "  "})
+
+      assert json_response(conn, 422) == %{
+               "errors" => %{"name" => ["can't be blank"]}
+             }
+    end
   end
 
   describe "GET /api/vaults/:id" do
