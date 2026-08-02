@@ -83,7 +83,9 @@ defmodule Engram.Crypto.ProviderMigration do
   users and users without an `encrypted_dek` (latter is rare; counted as
   skipped because the fleet drain semantically completes for them).
   """
-  @spec migrate_all(provider_atom(), keyword()) :: counts() | {:error, term()}
+  # No {:error, _} arm — same reasoning as MasterRotation.rotate_all/2:
+  # per-user failures land in :failed; the error arm was always dead.
+  @spec migrate_all(provider_atom(), keyword()) :: counts()
   def migrate_all(target_provider, opts \\ []) when target_provider in [:local, :aws_kms] do
     batch_size = Keyword.get(opts, :batch_size, 100)
     target_name = Atom.to_string(target_provider)

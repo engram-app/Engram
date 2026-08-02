@@ -87,7 +87,10 @@ defmodule Engram.Crypto.MasterRotation do
 
   Returns the aggregate `counts` map.
   """
-  @spec rotate_all(pos_integer(), keyword()) :: counts() | {:error, term()}
+  # No {:error, _} arm: per-user failures count into :failed (unchanged from
+  # the pre-MigrationRunner loop); the old spec's error arm was always dead —
+  # dialyzer can now prove it through MigrationRunner.drive/2's spec.
+  @spec rotate_all(pos_integer(), keyword()) :: counts()
   def rotate_all(target_version, opts \\ [])
       when is_integer(target_version) and target_version >= 1 do
     batch_size = Keyword.get(opts, :batch_size, 100)
