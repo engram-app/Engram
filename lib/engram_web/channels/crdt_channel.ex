@@ -294,8 +294,11 @@ defmodule EngramWeb.CrdtChannel do
 
           prepared =
             creates
-            |> Task.async_stream(&prepare_create(&1, user, vault),
-              max_concurrency: System.schedulers_online(),
+            |> Task.async_stream(
+              fn entry ->
+                entry_guard(entry, fn -> prepare_create(entry, user, vault) end)
+              end,
+              max_concurrency: batch_concurrency(),
               ordered: true,
               # Per-entry work is internally bounded (DB timeouts, the 5s
               # SharedDoc call timeout) — matching the old serial shape,
@@ -327,18 +330,20 @@ defmodule EngramWeb.CrdtChannel do
             entries
             |> Task.async_stream(
               fn
-                {:enrolled, note_id, frame, room} ->
-                  seed_and_checkpoint(user, vault, note_id, frame, room)
-                  %{doc_id: note_id, status: "ok"}
+                {:enrolled, note_id, frame, room} = entry ->
+                  entry_guard(entry, fn ->
+                    seed_and_checkpoint(user, vault, note_id, frame, room)
+                    {:result, %{doc_id: note_id, status: "ok"}}
+                  end)
 
-                {:result, res} ->
+                {:result, _} = res ->
                   res
               end,
-              max_concurrency: System.schedulers_online(),
+              max_concurrency: batch_concurrency(),
               ordered: true,
               timeout: :infinity
             )
-            |> Enum.map(fn {:ok, res} -> res end)
+            |> Enum.map(fn {:ok, {:result, res}} -> res end)
 
           {:reply, {:ok, %{results: results}}, socket}
 
@@ -441,6 +446,71 @@ defmodule EngramWeb.CrdtChannel do
       {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
     end
   end
+
+  # Concurrency for the crdt_create_batch phase-1 and phase-3 streams. Bounded
+  # by the DB POOL, not the scheduler count: each entry opens its own
+  # `Repo.with_tenant` TRANSACTION and pins a pooled connection for the whole of
+  # it, so N concurrent entries hold N of the pool's connections for as long as
+  # they run.
+  #
+  # Sizing this off System.schedulers_online() starved the pool (default
+  # POOL_SIZE=10) during e2e bulk first sync: entries died on a ~183ms
+  # DBConnection queue timeout, and because Task.async_stream LINKS its tasks to
+  # the caller, that exit killed the channel process itself — after which the
+  # socket had no channel for the topic and every later client frame came back
+  # "unmatched topic" (Phoenix socket.ex). One pool timeout took out the whole
+  # connection, not one create.
+  #
+  # A quarter of the pool keeps the batch from monopolising it: the same node is
+  # concurrently serving other channels, the checkpoint timers and the seq feed.
+  # The parallelism win here is overlapping the SharedDoc round-trip with the DB
+  # write, which saturates well below the pool size anyway.
+  @doc false
+  # Public only so a test can pin the pool bound — the regression that caused
+  # this was a plausible-looking `System.schedulers_online()`, and nothing else
+  # in the module would catch a refactor back to it.
+  def batch_concurrency do
+    :engram
+    |> Application.get_env(Engram.Repo, [])
+    |> Keyword.get(:pool_size, 10)
+    |> div(4)
+    |> max(1)
+  end
+
+  # Contain a per-entry failure to that entry. `crdt_create_batch` documents
+  # partial failure as per-entry ("one bad entry returns an error result but the
+  # batch reply is still :ok"), but an unhandled raise/exit in a Task.async_stream
+  # task propagates through the link and takes the channel down instead — turning
+  # one transient DB hiccup into a dead topic the client retries against forever.
+  # This maps such a failure onto the `create_failed` result the contract already
+  # defines. NOT a silent swallow: every occurrence is logged with the reason.
+  @doc false
+  # Public only so a test can pin containment directly; the failures it catches
+  # (pool timeout, dead room) are not injectable through the channel API.
+  def entry_guard(entry, fun) do
+    fun.()
+  rescue
+    e ->
+      log_entry_failure(entry, Exception.message(e))
+  catch
+    :exit, reason ->
+      log_entry_failure(entry, "exited: #{inspect(reason)}")
+  end
+
+  defp log_entry_failure(entry, reason) do
+    doc_id = entry_doc_id(entry)
+
+    Logger.warning(
+      "crdt_create_batch entry failed: #{reason}",
+      Metadata.with_category(:warning, :websocket, doc_id: doc_id)
+    )
+
+    {:result, %{doc_id: doc_id, status: "error", reason: "create_failed"}}
+  end
+
+  defp entry_doc_id({:enrolled, note_id, _frame, _room}), do: note_id
+  defp entry_doc_id(%{"doc_id" => doc_id}), do: doc_id
+  defp entry_doc_id(_), do: nil
 
   # Phase-1 half of a crdt_create_batch entry: everything that needs NO socket
   # state — validation, frame decode/guard, the genesis DB write. Runs inside

@@ -14,6 +14,7 @@ defmodule EngramWeb.Plugs.RotationLockCheck do
   import Plug.Conn
 
   alias Engram.Accounts.User
+  alias EngramWeb.Plugs.Halt
 
   def init(opts), do: opts
 
@@ -22,9 +23,7 @@ defmodule EngramWeb.Plugs.RotationLockCheck do
       %User{dek_rotation_locked_at: %DateTime{}} ->
         conn
         |> put_resp_header("retry-after", "60")
-        |> put_resp_content_type("application/json")
-        |> send_resp(503, Jason.encode!(%{error: "rotation_in_progress"}))
-        |> halt()
+        |> Halt.json(503, %{error: "rotation_in_progress"})
 
       _ ->
         conn

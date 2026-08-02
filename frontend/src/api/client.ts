@@ -12,6 +12,21 @@ let tokenGetter: (() => Promise<string | null>) | null = null;
 // than an event bus to stay simple and tree-shakeable.
 let upgradeHandler: ((reason: string) => void) | null = null;
 
+/** First "field: message" from the unified 422 shape %{errors: %{field => [msgs]}}.
+ *  Controllers return this shape with no top-level `error` key, so the generic
+ *  error surface must read it or validation toasts degrade to bare statusText. */
+function firstValidationError(errors: unknown): string | undefined {
+	if (typeof errors !== "object" || errors === null) {
+		return;
+	}
+	const [field, msgs] = Object.entries(errors)[0] ?? [];
+	if (!field) {
+		return;
+	}
+	const msg = Array.isArray(msgs) ? msgs[0] : msgs;
+	return typeof msg === "string" ? `${field}: ${msg}` : field;
+}
+
 async function authFetch(path: string, options: RequestInit = {}): Promise<Response> {
 	const token = await getAuthToken();
 
@@ -53,7 +68,10 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
 				body.upgrade_url ?? null,
 			);
 		}
-		throw new ApiError(response.status, body.error ?? response.statusText);
+		throw new ApiError(
+			response.status,
+			body.error ?? firstValidationError(body.errors) ?? response.statusText,
+		);
 	}
 
 	return response;

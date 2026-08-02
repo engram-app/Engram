@@ -347,6 +347,74 @@ defmodule EngramWeb.CrdtChannelTest do
   # crdt_create_batch — bulk genesis-with-content (Task 1, single-push-path)
   # ---------------------------------------------------------------------------
 
+  describe "crdt_create_batch concurrency + failure containment" do
+    test "batch concurrency is bounded by the DB pool, never the scheduler count" do
+      # The regression this pins: `max_concurrency: System.schedulers_online()`.
+      # Every batch entry opens its own Repo.with_tenant TRANSACTION and pins a
+      # pooled connection for its whole duration, so concurrency above pool_size
+      # guarantees DBConnection queue timeouts under load. In e2e bulk first sync
+      # that killed the channel process (see the linked-task test below) and every
+      # later client frame on the topic came back "unmatched topic".
+      pool = Application.get_env(:engram, Engram.Repo, []) |> Keyword.get(:pool_size, 10)
+      concurrency = EngramWeb.CrdtChannel.batch_concurrency()
+
+      assert concurrency >= 1, "must always make forward progress"
+
+      assert concurrency <= pool,
+             "batch concurrency #{concurrency} exceeds the DB pool (#{pool}) — " <>
+               "entries hold a pooled connection each, so this starves the pool"
+
+      refute concurrency > div(pool, 2),
+             "a create batch must not be able to monopolise the pool — the same node " <>
+               "is serving other channels, the checkpoint timers and the seq feed"
+    end
+
+    test "a raising entry becomes that entry's create_failed result, not a channel crash" do
+      # Task.async_stream LINKS its tasks to the caller, which in a channel IS the
+      # channel process — so an unhandled raise in one entry revokes the client's
+      # whole topic subscription. The batch contract promises per-entry partial
+      # failure, so the failure must come back as this entry's result.
+      entry = %{"doc_id" => "doc-1", "path" => "A.md", "b64" => "x"}
+
+      log =
+        capture_log(fn ->
+          assert {:result, %{doc_id: "doc-1", status: "error", reason: "create_failed"}} =
+                   EngramWeb.CrdtChannel.entry_guard(entry, fn ->
+                     raise RuntimeError, "connection not available"
+                   end)
+        end)
+
+      # Contained, but never silent — a swallowed pool timeout is how this class
+      # of failure stays invisible until e2e goes red.
+      assert log =~ "crdt_create_batch entry failed"
+      assert log =~ "connection not available"
+    end
+
+    test "an exiting entry (dead room / pool timeout) is contained the same way" do
+      # DBConnection queue timeouts surface as an exit, not a raise, and a dead
+      # SharedDoc room exits the caller of GenServer.call. Both must be contained.
+      entry = {:enrolled, "note-9", <<0>>, self()}
+
+      log =
+        capture_log(fn ->
+          assert {:result, %{doc_id: "note-9", status: "error", reason: "create_failed"}} =
+                   EngramWeb.CrdtChannel.entry_guard(entry, fn ->
+                     exit({:timeout, {GenServer, :call, [:room, :get_doc, 5000]}})
+                   end)
+        end)
+
+      assert log =~ "crdt_create_batch entry failed"
+      assert log =~ "exited"
+    end
+
+    test "a successful entry passes its value through untouched" do
+      assert {:result, %{status: "ok"}} =
+               EngramWeb.CrdtChannel.entry_guard(%{"doc_id" => "d"}, fn ->
+                 {:result, %{status: "ok"}}
+               end)
+    end
+  end
+
   describe "crdt_create_batch" do
     test "creates every note with content and allocates seqs", %{
       socket: socket,

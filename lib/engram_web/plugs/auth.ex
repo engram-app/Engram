@@ -13,6 +13,9 @@ defmodule EngramWeb.Plugs.Auth do
   """
 
   import Plug.Conn
+
+  alias EngramWeb.Plugs.Halt
+
   require Logger
 
   def init(opts), do: opts
@@ -48,10 +51,7 @@ defmodule EngramWeb.Plugs.Auth do
         # Alertable counter (the log is grep-only). Coarse bounded reason tag.
         _ = Engram.Auth.emit_rejected(reason, :http)
 
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(401, Jason.encode!(%{error: "unauthorized"}))
-        |> halt()
+        Halt.json(conn, 401, %{error: "unauthorized"})
     end
   end
 

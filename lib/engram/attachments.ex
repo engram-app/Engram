@@ -683,6 +683,10 @@ defmodule Engram.Attachments do
     end
   end
 
+  # Shared with Engram.Notes' batch caps: 500 = the legacy change feed's
+  # convergence bound (>500 rows on one server timestamp can loop a pull).
+  @max_batch_entries 500
+
   @doc """
   Soft-deletes each attachment by path. Idempotent. `:deleted` counts paths that
   actually held a live row (absent/already-deleted paths don't count).

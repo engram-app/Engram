@@ -35,10 +35,9 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
   path. Document tracked in the design spec.
   """
 
-  import Plug.Conn
-
   alias Engram.{Billing, Connections, OAuth}
   alias Engram.OAuth.Client
+  alias EngramWeb.Plugs.Halt
 
   def init(opts), do: opts
 
@@ -81,7 +80,7 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
         end
 
       :error ->
-        send_json(conn, 400, %{error: "missing_or_invalid_client_id"})
+        Halt.json(conn, 400, %{error: "missing_or_invalid_client_id"})
     end
   end
 
@@ -132,11 +131,4 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
   end
 
   defp lookup_client(_), do: :error
-
-  defp send_json(conn, status, body) do
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(status, Jason.encode!(body))
-    |> halt()
-  end
 end

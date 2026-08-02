@@ -1757,29 +1757,6 @@
         "x-struct": "Elixir.EngramWeb.Schemas.ApiKeysResponse",
         "x-validate": null
       },
-      "ValidationError": {
-        "properties": {
-          "details": {
-            "description": "field → [messages]",
-            "type": "object",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "error": {
-            "example": "validation_failed",
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          }
-        },
-        "required": [
-          "error"
-        ],
-        "title": "ValidationError",
-        "type": "object",
-        "x-struct": "Elixir.EngramWeb.Schemas.ValidationError",
-        "x-validate": null
-      },
       "DeletedCount": {
         "properties": {
           "deleted": {
@@ -3477,7 +3454,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ValidationError"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             },
