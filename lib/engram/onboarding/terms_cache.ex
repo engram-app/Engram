@@ -12,48 +12,16 @@ defmodule Engram.Onboarding.TermsCache do
   since the floor comparison is `>=`.
   """
 
-  use GenServer
-
-  @table :engram_terms_cache
-
-  def start_link(_opts) do
-    GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
-  end
+  use Engram.Cache.NodeLocalEts, table: :engram_terms_cache
 
   @spec accepted_version(user_id :: integer(), document :: String.t()) :: String.t() | nil
-  def accepted_version(user_id, document), do: ets_get(user_id, document)
-
-  @spec put_accepted(user_id :: integer(), document :: String.t(), version :: String.t()) :: :ok
-  def put_accepted(user_id, document, version), do: ets_put(user_id, document, version)
-
-  defp ets_get(user_id, document) do
-    case :ets.lookup(@table, {user_id, document}) do
+  def accepted_version(user_id, document) do
+    case ets_lookup({user_id, document}) do
       [{{^user_id, ^document}, version}] -> version
       _ -> nil
     end
-  rescue
-    # Table absent → report nothing cached so the caller re-queries the DB.
-    ArgumentError -> nil
   end
 
-  defp ets_put(user_id, document, version) do
-    :ets.insert(@table, {{user_id, document}, version})
-    :ok
-  rescue
-    ArgumentError -> :ok
-  end
-
-  @impl true
-  def init(:ok) do
-    _ =
-      :ets.new(@table, [
-        :named_table,
-        :public,
-        :set,
-        read_concurrency: true,
-        write_concurrency: true
-      ])
-
-    {:ok, %{}}
-  end
+  @spec put_accepted(user_id :: integer(), document :: String.t(), version :: String.t()) :: :ok
+  def put_accepted(user_id, document, version), do: ets_insert({{user_id, document}, version})
 end
