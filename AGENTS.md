@@ -342,6 +342,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 **Sync & CRDT**
 - Server-side sync protocol — seq change-log, cursor-pull, manifest, realtime channel (start here for sync work) → `docs/context/sync-protocol.md`
 - Phoenix Channel events, conflict flow, plugin integration → `docs/context/channel-event-contract.md`
+- Parallelising channel work (`Task.async_stream`) without starving the DB pool / killing the channel → `docs/context/channel-parallelism-db-pool.md`
 - CRDT lineage doubling — why the same edit must be encoded exactly once (PR #846) → `docs/context/crdt-lineage-doubling.md`
 - CRDT id-keyed rename old-path resurrection race (plugin #183) → `docs/context/crdt-id-keyed-rename-resurrection.md`
 - CRDT note_id-collision corruption incident, the id-keying cutover day (2026-07-06) → `docs/context/crdt-id-collision-corruption-2026-07-06.md`

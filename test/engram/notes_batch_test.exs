@@ -397,11 +397,81 @@ defmodule Engram.NotesBatchTest do
 
       assert pairs == [{"Docs", "Archive/Docs"}]
     end
+
+    test "moving a parent and its child in one batch tracks the child's post-move path", %{
+      user: user,
+      vault: vault
+    } do
+      # After "A" moves under Parent, its subtree (incl. the "A/B" marker and
+      # its note) lives at "Parent/A/..." — the second move must operate on
+      # THAT state, not the pre-batch snapshot, ending with "A/B" extracted to
+      # "Parent/B".
+      {:ok, _target} = Notes.create_folder_marker(user, vault, "Parent")
+      {:ok, a} = Notes.create_folder_marker(user, vault, "A")
+      {:ok, ab} = Notes.create_folder_marker(user, vault, "A/B")
+      {:ok, na} = Notes.upsert_note(user, vault, %{path: "A/a.md"})
+      {:ok, nb} = Notes.upsert_note(user, vault, %{path: "A/B/b.md"})
+
+      assert {:ok, %{moved: 2, pairs: pairs}} =
+               Notes.batch_move_folders(user, vault, [a.id, ab.id], {:path, "Parent"})
+
+      assert pairs == [{"A", "Parent/A"}, {"Parent/A/B", "Parent/B"}]
+
+      {:ok, moved_a} = Notes.get_note_by_id(user, vault, na.id)
+      assert moved_a.path == "Parent/A/a.md"
+
+      {:ok, moved_b} = Notes.get_note_by_id(user, vault, nb.id)
+      assert moved_b.path == "Parent/B/b.md"
+    end
+
+    test "scans the vault once for the whole batch, not once per marker", %{
+      user: user,
+      vault: vault
+    } do
+      # Same N+1 class as batch_delete_folders above: each marker's
+      # rename_folder cascade used to re-fetch + re-decrypt EVERY live row in
+      # the vault (fetch_decrypted_live_rows per marker id).
+      {:ok, target} = Notes.create_folder_marker(user, vault, "Parent")
+      {:ok, m1} = Notes.create_folder_marker(user, vault, "F1")
+      {:ok, m2} = Notes.create_folder_marker(user, vault, "F2")
+      {:ok, m3} = Notes.create_folder_marker(user, vault, "F3")
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F1/a.md"})
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F2/b.md"})
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F3/c.md"})
+
+      {result, scans} =
+        with_vault_scan_count(fn ->
+          Notes.batch_move_folders(user, vault, [m1.id, m2.id, m3.id], target.id)
+        end)
+
+      assert {:ok, %{moved: 3}} = result
+
+      assert scans == 1,
+             "expected ONE shared full-vault scan for the whole batch, saw #{scans}"
+    end
   end
 
   # Counts Repo queries against the notes table emitted while `fun` runs,
   # scoped to this test's pid (same shape as billing_test's helper).
   defp with_notes_query_count(fun) do
+    count_notes_queries(fun, fn _sql -> true end)
+  end
+
+  # Counts only FULL-VAULT scans (fetch_decrypted_live_rows' shape): a SELECT
+  # over live rows with no id / folder_hmac / path_hmac narrowing. Marker
+  # lookups, conflict checks, and content-by-id fetches don't match, so the
+  # count pins exactly the O(vault) N+1 the shared-scan restructure removed.
+  defp with_vault_scan_count(fun) do
+    count_notes_queries(fun, fn sql ->
+      where_clause = sql |> String.split(" WHERE ", parts: 2) |> Enum.at(1, "")
+
+      String.starts_with?(sql, "SELECT") and where_clause =~ ~s("deleted_at" IS NULL) and
+        not (where_clause =~ ~s("id")) and not (where_clause =~ "folder_hmac") and
+        not (where_clause =~ "path_hmac")
+    end)
+  end
+
+  defp count_notes_queries(fun, matcher) do
     test_pid = self()
     {:ok, counter} = Agent.start_link(fn -> 0 end)
     handler_id = {__MODULE__, make_ref()}
@@ -409,8 +479,10 @@ defmodule Engram.NotesBatchTest do
     :telemetry.attach(
       handler_id,
       [:engram, :repo, :query],
-      fn _event, _measurements, %{source: src}, _config ->
-        if src == "notes" and self() == test_pid, do: Agent.update(counter, &(&1 + 1))
+      fn _event, _measurements, %{source: src} = meta, _config ->
+        if src == "notes" and self() == test_pid and matcher.(meta[:query] || "") do
+          Agent.update(counter, &(&1 + 1))
+        end
       end,
       nil
     )
@@ -552,6 +624,45 @@ defmodule Engram.NotesBatchSetBasedTest do
              "bulk creates must not all share one updated_at (legacy-feed wedge)"
 
       assert Enum.max(stamp_runs) < 500
+    end
+
+    @tag timeout: 120_000
+    test "rename_folder chunk-stamps >500-row cascades (rows + tombstones)", %{
+      user: user,
+      vault: vault
+    } do
+      # do_rename_folder stamps EVERY touched row (marker + renamed rows +
+      # old-path tombstones) in one cascade; a single shared `now` puts >500
+      # rows on one timestamp and wedges the legacy `updated_at >= since`
+      # feed exactly like an unchunked batch delete would.
+      {:ok, %{results: r1}} =
+        Notes.batch_upsert_notes(user, vault, for(i <- 1..500, do: %{path: "BigStamp/n#{i}.md"}))
+
+      {:ok, %{results: r2}} = Notes.batch_upsert_notes(user, vault, [%{path: "BigStamp/n501.md"}])
+      assert Enum.all?(r1 ++ r2, &(&1.status == :ok))
+
+      {:ok, _marker} = Notes.create_folder_marker(user, vault, "BigStamp")
+
+      assert {:ok, _} = Notes.rename_folder(user, vault, "BigStamp", "BigStampMoved")
+
+      # Every note row in the vault now carries a rename-time stamp: the
+      # marker + 501 renamed rows + 501 tombstones.
+      {:ok, ids} =
+        Repo.with_tenant(user.id, fn ->
+          import Ecto.Query
+
+          Repo.all(from(n in Engram.Notes.Note, where: n.vault_id == ^vault.id, select: n.id))
+        end)
+
+      assert length(ids) == 1003
+
+      stamp_runs = stamp_run_sizes(user, ids)
+
+      assert length(stamp_runs) >= 2,
+             "a >500-row rename cascade must not share one updated_at (legacy-feed wedge)"
+
+      assert Enum.max(stamp_runs) < 500,
+             "a same-stamp run of exactly page size (500) re-serves forever"
     end
 
     # Upsert keeps a hard cap: each entry costs an encrypt + CRDT merge, so

@@ -347,6 +347,74 @@ defmodule EngramWeb.CrdtChannelTest do
   # crdt_create_batch — bulk genesis-with-content (Task 1, single-push-path)
   # ---------------------------------------------------------------------------
 
+  describe "crdt_create_batch concurrency + failure containment" do
+    test "batch concurrency is bounded by the DB pool, never the scheduler count" do
+      # The regression this pins: `max_concurrency: System.schedulers_online()`.
+      # Every batch entry opens its own Repo.with_tenant TRANSACTION and pins a
+      # pooled connection for its whole duration, so concurrency above pool_size
+      # guarantees DBConnection queue timeouts under load. In e2e bulk first sync
+      # that killed the channel process (see the linked-task test below) and every
+      # later client frame on the topic came back "unmatched topic".
+      pool = Application.get_env(:engram, Engram.Repo, []) |> Keyword.get(:pool_size, 10)
+      concurrency = EngramWeb.CrdtChannel.batch_concurrency()
+
+      assert concurrency >= 1, "must always make forward progress"
+
+      assert concurrency <= pool,
+             "batch concurrency #{concurrency} exceeds the DB pool (#{pool}) — " <>
+               "entries hold a pooled connection each, so this starves the pool"
+
+      refute concurrency > div(pool, 2),
+             "a create batch must not be able to monopolise the pool — the same node " <>
+               "is serving other channels, the checkpoint timers and the seq feed"
+    end
+
+    test "a raising entry becomes that entry's create_failed result, not a channel crash" do
+      # Task.async_stream LINKS its tasks to the caller, which in a channel IS the
+      # channel process — so an unhandled raise in one entry revokes the client's
+      # whole topic subscription. The batch contract promises per-entry partial
+      # failure, so the failure must come back as this entry's result.
+      entry = %{"doc_id" => "doc-1", "path" => "A.md", "b64" => "x"}
+
+      log =
+        capture_log(fn ->
+          assert {:result, %{doc_id: "doc-1", status: "error", reason: "create_failed"}} =
+                   EngramWeb.CrdtChannel.entry_guard(entry, fn ->
+                     raise RuntimeError, "connection not available"
+                   end)
+        end)
+
+      # Contained, but never silent — a swallowed pool timeout is how this class
+      # of failure stays invisible until e2e goes red.
+      assert log =~ "crdt_create_batch entry failed"
+      assert log =~ "connection not available"
+    end
+
+    test "an exiting entry (dead room / pool timeout) is contained the same way" do
+      # DBConnection queue timeouts surface as an exit, not a raise, and a dead
+      # SharedDoc room exits the caller of GenServer.call. Both must be contained.
+      entry = {:enrolled, "note-9", <<0>>, self()}
+
+      log =
+        capture_log(fn ->
+          assert {:result, %{doc_id: "note-9", status: "error", reason: "create_failed"}} =
+                   EngramWeb.CrdtChannel.entry_guard(entry, fn ->
+                     exit({:timeout, {GenServer, :call, [:room, :get_doc, 5000]}})
+                   end)
+        end)
+
+      assert log =~ "crdt_create_batch entry failed"
+      assert log =~ "exited"
+    end
+
+    test "a successful entry passes its value through untouched" do
+      assert {:result, %{status: "ok"}} =
+               EngramWeb.CrdtChannel.entry_guard(%{"doc_id" => "d"}, fn ->
+                 {:result, %{status: "ok"}}
+               end)
+    end
+  end
+
   describe "crdt_create_batch" do
     test "creates every note with content and allocates seqs", %{
       socket: socket,
@@ -434,6 +502,72 @@ defmodule EngramWeb.CrdtChannelTest do
       assert by_id["not-a-uuid"] == "error"
 
       assert_note_content_eventually(user, vault, good, "ok")
+    end
+
+    test "reply preserves per-entry input order, error entries in place", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      ids = for _ <- 1..8, do: Ecto.UUID.generate()
+
+      creates =
+        ids
+        |> Enum.with_index()
+        |> Enum.map(fn {id, i} ->
+          %{"doc_id" => id, "path" => "Ord#{i}.md", "b64" => frame_for_content("body-#{i}")}
+        end)
+        # Malformed entry spliced mid-batch: it must reply in ITS slot, not
+        # shifted or dropped, so the client can correlate results by index.
+        |> List.insert_at(3, %{"path" => "no-doc-id.md"})
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :ok, %{results: results}, 10_000
+
+      assert length(results) == 9
+      assert Enum.map(results, & &1.doc_id) == Enum.map(creates, &Map.get(&1, "doc_id"))
+      assert %{status: "error", reason: "bad_frame"} = Enum.at(results, 3)
+      assert results |> List.delete_at(3) |> Enum.all?(&(&1.status == "ok"))
+
+      for {id, i} <- Enum.with_index(ids) do
+        assert_note_content_eventually(user, vault, id, "body-#{i}")
+      end
+    end
+
+    test "a mid-batch duplicate id replies in ITS slot (results index-aligned)", %{
+      socket: socket,
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      # The plugin correlates batch results to creates BY ARRAY INDEX
+      # (sync.ts applyBatchResults) — a conflict entry that shifts, drops, or
+      # reorders silently mis-binds every later note (cross-note corruption).
+      # Deterministic mid-batch conflict: `note` is live at "p.md" and its
+      # duplicate create targets a path OCCUPIED by another live note →
+      # id_conflict, in exactly its input slot.
+      {:ok, _occupant} =
+        Notes.upsert_note(user, vault, %{"path" => "Occupied.md", "content" => "x"})
+
+      ok1 = Ecto.UUID.generate()
+      ok2 = Ecto.UUID.generate()
+
+      creates = [
+        %{"doc_id" => ok1, "path" => "Idx0.md", "b64" => frame_for_content("zero")},
+        %{"doc_id" => note.id, "path" => "Occupied.md", "b64" => frame_for_content("dup")},
+        %{"doc_id" => ok2, "path" => "Idx2.md", "b64" => frame_for_content("two")}
+      ]
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :ok, %{results: results}, 10_000
+
+      assert Enum.map(results, & &1.doc_id) == [ok1, note.id, ok2]
+
+      assert [%{status: "ok"}, %{status: "error", reason: "id_conflict"}, %{status: "ok"}] =
+               results
+
+      assert_note_content_eventually(user, vault, ok1, "zero")
+      assert_note_content_eventually(user, vault, ok2, "two")
     end
 
     test "rejects an oversized creates list", %{socket: socket} do

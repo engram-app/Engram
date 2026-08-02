@@ -9,6 +9,7 @@ defmodule Engram.FoldersTest do
     on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
     Mox.stub(Engram.MockStorage, :put, fn _key, _bin, _opts -> :ok end)
     Mox.stub(Engram.MockStorage, :delete, fn _key -> :ok end)
+    Mox.stub(Engram.MockStorage, :delete_many, fn keys -> {:ok, length(keys)} end)
 
     user = insert(:user)
     vault = insert(:vault, user: user)
