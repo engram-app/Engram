@@ -466,6 +466,42 @@ defmodule EngramWeb.CrdtChannelTest do
       end
     end
 
+    test "a mid-batch duplicate id replies in ITS slot (results index-aligned)", %{
+      socket: socket,
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      # The plugin correlates batch results to creates BY ARRAY INDEX
+      # (sync.ts applyBatchResults) — a conflict entry that shifts, drops, or
+      # reorders silently mis-binds every later note (cross-note corruption).
+      # Deterministic mid-batch conflict: `note` is live at "p.md" and its
+      # duplicate create targets a path OCCUPIED by another live note →
+      # id_conflict, in exactly its input slot.
+      {:ok, _occupant} =
+        Notes.upsert_note(user, vault, %{"path" => "Occupied.md", "content" => "x"})
+
+      ok1 = Ecto.UUID.generate()
+      ok2 = Ecto.UUID.generate()
+
+      creates = [
+        %{"doc_id" => ok1, "path" => "Idx0.md", "b64" => frame_for_content("zero")},
+        %{"doc_id" => note.id, "path" => "Occupied.md", "b64" => frame_for_content("dup")},
+        %{"doc_id" => ok2, "path" => "Idx2.md", "b64" => frame_for_content("two")}
+      ]
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :ok, %{results: results}, 10_000
+
+      assert Enum.map(results, & &1.doc_id) == [ok1, note.id, ok2]
+
+      assert [%{status: "ok"}, %{status: "error", reason: "id_conflict"}, %{status: "ok"}] =
+               results
+
+      assert_note_content_eventually(user, vault, ok1, "zero")
+      assert_note_content_eventually(user, vault, ok2, "two")
+    end
+
     test "rejects an oversized creates list", %{socket: socket} do
       creates =
         for _ <- 1..101,

@@ -626,6 +626,45 @@ defmodule Engram.NotesBatchSetBasedTest do
       assert Enum.max(stamp_runs) < 500
     end
 
+    @tag timeout: 120_000
+    test "rename_folder chunk-stamps >500-row cascades (rows + tombstones)", %{
+      user: user,
+      vault: vault
+    } do
+      # do_rename_folder stamps EVERY touched row (marker + renamed rows +
+      # old-path tombstones) in one cascade; a single shared `now` puts >500
+      # rows on one timestamp and wedges the legacy `updated_at >= since`
+      # feed exactly like an unchunked batch delete would.
+      {:ok, %{results: r1}} =
+        Notes.batch_upsert_notes(user, vault, for(i <- 1..500, do: %{path: "BigStamp/n#{i}.md"}))
+
+      {:ok, %{results: r2}} = Notes.batch_upsert_notes(user, vault, [%{path: "BigStamp/n501.md"}])
+      assert Enum.all?(r1 ++ r2, &(&1.status == :ok))
+
+      {:ok, _marker} = Notes.create_folder_marker(user, vault, "BigStamp")
+
+      assert {:ok, _} = Notes.rename_folder(user, vault, "BigStamp", "BigStampMoved")
+
+      # Every note row in the vault now carries a rename-time stamp: the
+      # marker + 501 renamed rows + 501 tombstones.
+      {:ok, ids} =
+        Repo.with_tenant(user.id, fn ->
+          import Ecto.Query
+
+          Repo.all(from(n in Engram.Notes.Note, where: n.vault_id == ^vault.id, select: n.id))
+        end)
+
+      assert length(ids) == 1003
+
+      stamp_runs = stamp_run_sizes(user, ids)
+
+      assert length(stamp_runs) >= 2,
+             "a >500-row rename cascade must not share one updated_at (legacy-feed wedge)"
+
+      assert Enum.max(stamp_runs) < 500,
+             "a same-stamp run of exactly page size (500) re-serves forever"
+    end
+
     # Upsert keeps a hard cap: each entry costs an encrypt + CRDT merge, so
     # an unbounded request is a real compute-DoS vector, and no client sends
     # >500 (the plugin chunks at ≤100).

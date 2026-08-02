@@ -3723,8 +3723,11 @@ defmodule Engram.Notes do
     :dek_version
   ]
 
-  # Statement-size bound for the VALUES join: 500 rows × ≤15 params stays
-  # well under Postgres's 65535-bind-param protocol limit.
+  # Statement-size bound for the VALUES join: 500 rows × ≤16 params stays
+  # well under Postgres's 65535-bind-param protocol limit. Timestamp chunking
+  # is independent of this: each row carries its own bulk_stamp/2 updated_at
+  # (grouped @stamp_chunk rows per stamp), so SQL chunk size never creates a
+  # same-stamp run.
   @rename_update_chunk 500
 
   defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows) do
@@ -3852,9 +3855,22 @@ defmodule Engram.Notes do
             end)
             |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
 
-          bulk_rename_update!(grouped[:marker] || [], @marker_rename_cols, now, seq)
-          bulk_rename_update!(grouped[:v2] || [], @v2_rename_cols, now, seq)
-          bulk_rename_update!(grouped[:v1] || [], @v1_rename_cols, now, seq)
+          # Chunk-stamp every row this cascade writes — all three row-classes
+          # AND the old-path tombstones below — through bulk_stamp/2 under ONE
+          # global row counter, so no @stamp_chunk-crossing run shares an
+          # updated_at (a single shared `now` puts an unbounded cascade on one
+          # timestamp and wedges the legacy `updated_at >= since` feed, same
+          # class as batch_delete_notes' tombstone chunking). Only the
+          # timestamps vary: `seq` stays IDENTICAL for every row — the #614
+          # one-op-one-seq contract that keeps a cursor pull from splitting
+          # the renamed rows from their tombstones.
+          {marker_rows, offset} = stamp_rename_rows(grouped[:marker] || [], now, 0)
+          {v2_rows, offset} = stamp_rename_rows(grouped[:v2] || [], now, offset)
+          {v1_rows, offset} = stamp_rename_rows(grouped[:v1] || [], now, offset)
+
+          bulk_rename_update!(marker_rows, @marker_rename_cols, seq)
+          bulk_rename_update!(v2_rows, @v2_rename_cols, seq)
+          bulk_rename_update!(v1_rows, @v1_rename_cols, seq)
 
           # Insert soft-deleted tombstones for old paths so the HTTP changes
           # feed includes delete signals. Without these, polling clients
@@ -3862,9 +3878,12 @@ defmodule Engram.Notes do
           # are full-row inserts so each must carry the encrypted
           # path/folder/tags fields too. Marker rows have no path to
           # tombstone — skip them. Built in-memory from `real_note_updates`,
-          # stamped with the same `seq` as the renamed rows.
+          # stamped with the same `seq` as the renamed rows; their timestamps
+          # continue the global bulk_stamp counter started above.
           tombstones =
-            Enum.map(real_note_updates, fn {_note, old_path, _new_path, _new_folder, _title} ->
+            real_note_updates
+            |> Enum.with_index(offset)
+            |> Enum.map(fn {{_note, old_path, _new_path, _new_folder, _title}, i} ->
               # T3.6 — pre-allocate the tombstone id so the AAD bind string can
               # be constructed before insert. Tombstones are full-row inserts
               # written with empty content/title/tags but the row-id-bound AAD
@@ -3872,6 +3891,7 @@ defmodule Engram.Notes do
               # from any other AAD-bound row at read time.
               tomb_id = mint_id()
               old_path_folder = Helpers.extract_folder(old_path)
+              stamp = bulk_stamp(now, i)
 
               full_kw =
                 full_aad_bound_kw(user, tomb_id, "", "", old_path, old_path_folder, [])
@@ -3882,9 +3902,9 @@ defmodule Engram.Notes do
                 mtime: mtime_float,
                 user_id: user.id,
                 vault_id: vault.id,
-                created_at: now,
-                updated_at: now,
-                deleted_at: now,
+                created_at: stamp,
+                updated_at: stamp,
+                deleted_at: stamp,
                 seq: seq
               }
 
@@ -4682,20 +4702,37 @@ defmodule Engram.Notes do
   defp rename_col_sql_type(:dek_version), do: "integer"
   defp rename_col_sql_type(_col), do: "bytea"
 
+  # Attaches a bulk_stamp/2 timestamp to each {id, kw} rename row, continuing
+  # a global row counter across the caller's row-classes (see
+  # do_rename_folder): row i gets `bulk_stamp(base, offset + local_i)`, and
+  # the returned offset lets the next class (or the tombstone builder) keep
+  # counting so no @stamp_chunk-sized run repeats across classes.
+  defp stamp_rename_rows(rows, base, offset) do
+    stamped =
+      rows
+      |> Enum.with_index(offset)
+      |> Enum.map(fn {{id, kw}, i} -> {id, bulk_stamp(base, i), kw} end)
+
+    {stamped, offset + length(rows)}
+  end
+
   # One `UPDATE notes ... FROM (VALUES ...)` per ≤500-row chunk. Every row in a
   # class gets DISTINCT ciphertexts, so this can't be a single update_all — but
   # it must not be one UPDATE per note either (the N+1 this replaces). Runs
   # inside the caller's with_tenant transaction: the RLS role restricts the raw
-  # UPDATE to the tenant's rows, and the shared `seq`/`now` stamp keeps the
-  # #614 one-op-one-seq contract. `rows` is [{note_id, kw}] where `kw` holds a
-  # value for every column in `cols`. A nested-collision unique violation
-  # raises Postgrex.Error exactly like the per-note update_all did.
-  defp bulk_rename_update!([], _cols, _now, _seq), do: :ok
+  # UPDATE to the tenant's rows, and the shared `seq` keeps the #614
+  # one-op-one-seq contract (each row carries its OWN chunk-grouped updated_at
+  # stamp — see stamp_rename_rows). `rows` is [{note_id, stamp, kw}] where `kw`
+  # holds a value for every column in `cols`. A nested-collision unique
+  # violation raises Postgrex.Error exactly like the per-note update_all did.
+  defp bulk_rename_update!([], _cols, _seq), do: :ok
 
-  defp bulk_rename_update!(rows, cols, now, seq) do
-    set_sql = Enum.map_join(cols, ", ", &"#{&1} = v.#{&1}") <> ", updated_at = $1, seq = $2"
-    ncols = length(cols) + 1
-    naive_now = DateTime.to_naive(now)
+  defp bulk_rename_update!(rows, cols, seq) do
+    set_sql =
+      Enum.map_join(cols, ", ", &"#{&1} = v.#{&1}") <> ", updated_at = v.updated_at, seq = $1"
+
+    # id + updated_at + the class's columns, per VALUES row.
+    ncols = length(cols) + 2
 
     rows
     |> Enum.chunk_every(@rename_update_chunk)
@@ -4704,22 +4741,25 @@ defmodule Engram.Notes do
         chunk
         |> Enum.with_index()
         |> Enum.map_join(", ", fn {_row, i} ->
-          base = 3 + i * ncols
+          base = 2 + i * ncols
 
           col_placeholders =
             cols
-            |> Enum.with_index(1)
+            |> Enum.with_index(2)
             |> Enum.map_join(", ", fn {col, j} ->
               "$#{base + j}::#{rename_col_sql_type(col)}"
             end)
 
-          "($#{base}::uuid, #{col_placeholders})"
+          "($#{base}::uuid, $#{base + 1}::timestamp, #{col_placeholders})"
         end)
 
       params =
-        [naive_now, seq] ++
-          Enum.flat_map(chunk, fn {id, kw} ->
-            [Ecto.UUID.dump!(id) | Enum.map(cols, &Keyword.fetch!(kw, &1))]
+        [seq] ++
+          Enum.flat_map(chunk, fn {id, stamp, kw} ->
+            [
+              Ecto.UUID.dump!(id),
+              DateTime.to_naive(stamp) | Enum.map(cols, &Keyword.fetch!(kw, &1))
+            ]
           end)
 
       _ =
@@ -4727,7 +4767,7 @@ defmodule Engram.Notes do
           """
           UPDATE notes AS n
           SET #{set_sql}
-          FROM (VALUES #{values_sql}) AS v(id, #{Enum.join(cols, ", ")})
+          FROM (VALUES #{values_sql}) AS v(id, updated_at, #{Enum.join(cols, ", ")})
           WHERE n.id = v.id
           """,
           params

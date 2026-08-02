@@ -653,6 +653,10 @@ defmodule Engram.Attachments do
   mid-loop failure still rolls the whole op back. Reusing `batch_delete/3` keeps
   one delete path instead of a bespoke single-seq `update_all`.
   """
+  # Shared with Engram.Notes' batch caps: 500 = the legacy change feed's
+  # convergence bound (>500 rows on one server timestamp can loop a pull).
+  @max_batch_entries 500
+
   @spec delete_folder(map(), map(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def delete_folder(user, vault, folder) do
     prefix = String.trim_trailing(folder, "/") <> "/"
@@ -660,17 +664,24 @@ defmodule Engram.Attachments do
     case list_attachments(user, vault) do
       {:ok, metas} ->
         paths = metas |> Enum.map(& &1.path) |> Enum.filter(&String.starts_with?(&1, prefix))
-        {:ok, %{deleted: n}} = batch_delete(user, vault, paths)
-        {:ok, n}
+
+        # The @max_batch_entries cap on batch_delete/3 is a REQUEST-boundary
+        # guard; this folder cascade is server-internal, so chunk under the
+        # cap instead of crashing on a >500-attachment folder.
+        deleted =
+          paths
+          |> Enum.chunk_every(@max_batch_entries)
+          |> Enum.reduce(0, fn chunk, acc ->
+            {:ok, %{deleted: n}} = batch_delete(user, vault, chunk)
+            acc + n
+          end)
+
+        {:ok, deleted}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
-
-  # Shared with Engram.Notes' batch caps: 500 = the legacy change feed's
-  # convergence bound (>500 rows on one server timestamp can loop a pull).
-  @max_batch_entries 500
 
   @doc """
   Soft-deletes each attachment by path. Idempotent. `:deleted` counts paths that
@@ -701,37 +712,32 @@ defmodule Engram.Attachments do
         sanitized = paths |> Enum.map(&PathSanitizer.sanitize/1) |> Enum.uniq()
         hmac_by_path = Map.new(sanitized, &{&1, Crypto.hmac_field(filter_key, &1)})
 
-        case batch_soft_delete_rows(user, vault, Map.values(hmac_by_path)) do
-          {:ok, {deleted_hmacs, storage_keys}} ->
-            # Post-commit side effects — batched blob cleanup (best-effort,
-            # rows are already soft-deleted so a failure only leaks a zombie
-            # blob, exactly like the single-delete path), then one broadcast
-            # per deleted path in input order.
-            delete_external_many(storage_keys)
+        # batch_soft_delete_rows never returns {:error, _}: a DB failure
+        # RAISES (Repo.query! inside the tenant transaction), rolling back
+        # the WHOLE batch. All-or-nothing is deliberate — a change from the
+        # old per-path independent transactions — and callers see the raise,
+        # never a fake `deleted: 0` success.
+        {:ok, {deleted_hmacs, storage_keys}} =
+          batch_soft_delete_rows(user, vault, Map.values(hmac_by_path))
 
-            deleted_set = MapSet.new(deleted_hmacs)
+        # Post-commit side effects — batched blob cleanup (best-effort,
+        # rows are already soft-deleted so a failure only leaks a zombie
+        # blob, exactly like the single-delete path), then one broadcast
+        # per deleted path in input order.
+        delete_external_many(storage_keys)
 
-            for path <- sanitized, MapSet.member?(deleted_set, hmac_by_path[path]) do
-              Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", %{
-                "event_type" => "delete",
-                "kind" => "attachment",
-                "path" => path,
-                "vault_id" => vault.id
-              })
-            end
+        deleted_set = MapSet.new(deleted_hmacs)
 
-            {:ok, %{deleted: length(deleted_hmacs)}}
-
-          {:error, reason} ->
-            require Logger
-
-            Logger.warning(
-              "batch_delete: tenant transaction failed",
-              Metadata.with_category(:warning, :sync, reason: inspect(reason))
-            )
-
-            {:ok, %{deleted: 0}}
+        for path <- sanitized, MapSet.member?(deleted_set, hmac_by_path[path]) do
+          Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", %{
+            "event_type" => "delete",
+            "kind" => "attachment",
+            "path" => path,
+            "vault_id" => vault.id
+          })
         end
+
+        {:ok, %{deleted: length(deleted_hmacs)}}
 
       {:error, :no_dek} ->
         # No DEK = no attachments to delete; mirror do_delete_attachment.

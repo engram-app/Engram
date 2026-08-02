@@ -850,5 +850,17 @@ defmodule Engram.AttachmentsTest do
     test "empty folder is an idempotent no-op", %{user: user, vault: vault} do
       assert {:ok, 0} = Attachments.delete_folder(user, vault, "Nope")
     end
+
+    @tag timeout: 120_000
+    test "cascades a folder larger than the 500-path batch cap", %{user: user, vault: vault} do
+      # batch_delete/3 rejects >500 paths ({:error, :batch_too_large}) — a
+      # REQUEST-boundary guard. The folder cascade is server-internal and
+      # must chunk under it, not crash on a big folder.
+      Mox.stub(Engram.MockStorage, :delete_many, fn keys -> {:ok, length(keys)} end)
+      for i <- 1..501, do: put_attachment(user, vault, "Big/f#{i}.png")
+
+      assert {:ok, 501} = Attachments.delete_folder(user, vault, "Big")
+      assert live_paths(user, vault) == []
+    end
   end
 end

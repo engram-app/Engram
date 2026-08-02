@@ -53,10 +53,41 @@ defmodule Engram.Storage.S3 do
 
   def delete_many(keys) do
     case ExAws.S3.delete_multiple_objects(bucket(), keys) |> ExAws.request() do
-      {:ok, _} -> {:ok, length(keys)}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{body: body}} ->
+        # S3 DeleteObjects returns HTTP 200 even when individual keys fail —
+        # failures ride the DeleteResult body as <Error> entries (ExAws has
+        # no parser for this op, so `body` is the raw XML). Count them so a
+        # partial failure is visible instead of reported as a full success.
+        case count_delete_errors(body) do
+          0 ->
+            {:ok, length(keys)}
+
+          error_count ->
+            require Logger
+
+            Logger.error(
+              "S3.delete_many partial failure",
+              Engram.Logger.Metadata.with_category(:error, :sync,
+                key_count: length(keys),
+                error_count: error_count
+              )
+            )
+
+            {:ok, length(keys) - error_count}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
+
+  # Per-key failures in a DeleteResult body look like
+  # <Error><Key>..</Key><Code>..</Code><Message>..</Message></Error>.
+  defp count_delete_errors(xml) when is_binary(xml) do
+    length(String.split(xml, "<Error>")) - 1
+  end
+
+  defp count_delete_errors(_), do: 0
 
   @impl true
   def list_user_prefixes do
