@@ -26,9 +26,13 @@ defmodule Engram.TenantScopeLintTest do
 
   @files ~w(engram/notes.ex engram/vaults.ex engram/attachments.ex)
 
-  # A raw tenant predicate: `<binding>.user_id == ^...`. The leading `.`
+  # A raw tenant predicate: `<binding>.user_id == ^...` (or the Ecto
+  # dynamic-field spelling `field(x, :user_id) == ^...`). The leading `.`
   # keeps doc-prose mentions of "user_id == ^user_id" from tripping the lint.
-  @raw_predicate ~r/\.\s*user_id\s*==\s*\^/
+  # KNOWN LIMITATION: a `dynamic/2` fragment or reversed operands
+  # (`^x == n.user_id`) would evade the regex — neither spelling exists in
+  # these files today; extend the pattern if one appears.
+  @raw_predicate ~r/(\.\s*user_id|field\(\s*\w+\s*,\s*:user_id\s*\))\s*==\s*\^/
 
   # The scope helpers themselves — the one place the raw predicate lives.
   @helper_head ~r/^defp?\s+scoped/
@@ -83,15 +87,16 @@ defmodule Engram.TenantScopeLintTest do
     |> String.split("\n")
     |> Enum.with_index(1)
     |> Enum.reduce({"(module body)", []}, fn {line, line_no}, {head, acc} ->
-      cond do
-        Regex.match?(~r/^\s*defp?\s+\w/, line) ->
-          {String.trim(line), acc}
+      # NOT mutually exclusive: a one-line `defp foo(...), do: <query>` both
+      # declares the head AND may inline the predicate — check both, or such
+      # a line silently evades the lint.
+      head =
+        if Regex.match?(~r/^\s*defp?\s+\w/, line), do: String.trim(line), else: head
 
-        Regex.match?(@raw_predicate, line) and not SourceLint.commented?(line) ->
-          {head, [{rel, line_no, head, line} | acc]}
-
-        true ->
-          {head, acc}
+      if Regex.match?(@raw_predicate, line) and not SourceLint.commented?(line) do
+        {head, [{rel, line_no, head, line} | acc]}
+      else
+        {head, acc}
       end
     end)
     |> elem(1)
