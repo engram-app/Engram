@@ -245,6 +245,21 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert reloaded_note.tags_hmac == [expected_red, expected_blue]
     end
 
+    test "note tags decrypt to original plaintext after rotation", %{user: user, note: note} do
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      reloaded_note =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      assert {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(reloaded_note, reloaded_user)
+      assert decrypted.tags == ["red", "blue"]
+    end
+
     test "vault name_hmac matches new filter_key after rotation", %{user: user, vault: vault} do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
@@ -413,6 +428,34 @@ defmodule Engram.Crypto.UserDekRotationTest do
       expected = Crypto.hmac_field(new_filter_key, "report.pdf")
 
       assert reloaded_att.path_hmac == expected
+    end
+
+    test "attachment path metadata decrypts to original plaintext after rotation", %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "PathDecryptTest")
+
+      attachment =
+        Engram.Fixtures.insert_attachment!(user, vault, %{
+          path: "report.pdf",
+          content: "hi",
+          mime_type: "application/pdf"
+        })
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      reloaded_att =
+        Repo.one!(from(a in Engram.Attachments.Attachment, where: a.id == ^attachment.id),
+          skip_tenant_check: true
+        )
+
+      assert {:ok, decrypted} =
+               Crypto.maybe_decrypt_attachment_fields(reloaded_att, reloaded_user)
+
+      assert decrypted.path == "report.pdf"
     end
   end
 
