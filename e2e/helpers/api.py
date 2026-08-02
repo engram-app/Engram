@@ -89,16 +89,6 @@ class ApiClient:
         )
         return resp.status_code
 
-    def get_changes(self, since: str) -> dict:
-        """GET /notes/changes?since=..."""
-        resp = self.session.get(
-            f"{self.base_url}/notes/changes",
-            params={"since": since},
-            timeout=10,
-        )
-        self._raise_for_status(resp)
-        return resp.json()
-
     def wait_for_note(
         self, path: str, timeout: float = DELIVERY_TIMEOUT, poll: float = 0.5
     ) -> dict:

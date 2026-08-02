@@ -165,8 +165,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
   end
 
   test "MCP write advances the sync changes feed", %{user: user, vault: vault} do
-    since = ~U[2020-01-01 00:00:00Z]
-    {:ok, %{changes: before_changes}} = Notes.list_changes_page(user, vault, since)
+    {:ok, %{changes: before_changes}} = Notes.list_changes_by_seq(user, vault, 0)
     refute Enum.any?(before_changes, &(&1.path == "mcp/feed.md"))
 
     assert {:ok, _} =
@@ -177,7 +176,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
 
     assert_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
 
-    {:ok, %{changes: after_changes}} = Notes.list_changes_page(user, vault, since)
+    {:ok, %{changes: after_changes}} = Notes.list_changes_by_seq(user, vault, 0)
     assert Enum.any?(after_changes, &(&1.path == "mcp/feed.md"))
   end
 end

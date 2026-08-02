@@ -90,17 +90,15 @@ defmodule Engram.VaultIsolationTest do
   end
 
   # ---------------------------------------------------------------------------
-  # 3. list_changes scoped to vault
+  # 3. list_changes_by_seq scoped to vault
   # ---------------------------------------------------------------------------
 
-  describe "list_changes/3 vault scoping" do
-    test "list_changes for vault_a excludes vault_b notes", %{
+  describe "list_changes_by_seq/4 vault scoping" do
+    test "changes for vault_a exclude vault_b notes", %{
       user: user,
       vault_a: vault_a,
       vault_b: vault_b
     } do
-      past = ~U[2020-01-01 00:00:00Z]
-
       {:ok, _} =
         Notes.upsert_note(user, vault_a, %{
           "path" => "vault-a-note.md",
@@ -115,20 +113,18 @@ defmodule Engram.VaultIsolationTest do
           "mtime" => 1_000.0
         })
 
-      {:ok, %{changes: changes_a}} = Notes.list_changes_page(user, vault_a, past)
+      {:ok, %{changes: changes_a}} = Notes.list_changes_by_seq(user, vault_a, 0)
       paths_a = Enum.map(changes_a, & &1.path)
 
       assert "vault-a-note.md" in paths_a
       refute "vault-b-note.md" in paths_a
     end
 
-    test "list_changes for vault_b excludes vault_a notes", %{
+    test "changes for vault_b exclude vault_a notes", %{
       user: user,
       vault_a: vault_a,
       vault_b: vault_b
     } do
-      past = ~U[2020-01-01 00:00:00Z]
-
       {:ok, _} =
         Notes.upsert_note(user, vault_a, %{
           "path" => "vault-a-note.md",
@@ -143,7 +139,7 @@ defmodule Engram.VaultIsolationTest do
           "mtime" => 1_000.0
         })
 
-      {:ok, %{changes: changes_b}} = Notes.list_changes_page(user, vault_b, past)
+      {:ok, %{changes: changes_b}} = Notes.list_changes_by_seq(user, vault_b, 0)
       paths_b = Enum.map(changes_b, & &1.path)
 
       assert "vault-b-note.md" in paths_b

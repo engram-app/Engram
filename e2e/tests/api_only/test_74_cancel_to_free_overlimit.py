@@ -10,7 +10,7 @@ Covers Phase 4 (cancel webhook → tier flip) end-to-end at the wire level:
      Subscription row flips to status=canceled, which makes
      Billing.tier/1 fall through to :free.
   4. GET /api/billing/status returns tier=free.
-  5. GET /notes/changes returns the seeded notes (read still works).
+  5. GET /sync/manifest still responds (read still works, not 402'd).
   6. POST /notes for a NEW path returns 402 reason=notes_cap_exceeded.
   7. Delete enough notes via the API to drop usage under 10_000 — but
      since we never inserted real rows for the seeded count, the
@@ -229,13 +229,13 @@ def test_cancel_pro_to_free_over_limit():
         f"{body.get('tier')!r}: {body}"
     )
 
-    # ── 5. Reads still work — manifest reports the seeded count ─────────
-    # We didn't insert real note rows, so /notes/changes won't list 12k
+    # ── 5. Reads still work — manifest fetch succeeds ───────────────────
+    # We didn't insert real note rows, so the manifest won't list 12k
     # notes — what we CAN observe is that the read endpoint isn't 402'd.
-    # The endpoint expects ISO8601 since; response key is `changes`.
-    changes = api_v.get_changes(since="2000-01-01T00:00:00Z")
-    assert isinstance(changes.get("changes"), list), (
-        f"/notes/changes should still respond with a list on Free over-cap; got: {changes}"
+    manifest = api_v.get_manifest()
+    assert isinstance(manifest.get("notes"), list), (
+        f"/sync/manifest should still respond with a notes list on Free over-cap; "
+        f"got: {manifest}"
     )
 
     # ── 6. Create a new note → 402 notes_cap_exceeded ──────────────────

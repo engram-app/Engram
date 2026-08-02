@@ -65,19 +65,18 @@ async def test_write_isolation_cannot_delete_other_user_note(api_sync, api_iso):
 
 
 @pytest.mark.asyncio
-async def test_write_isolation_changes_endpoint(api_sync, api_iso):
-    """User C should not see user A's changes in GET /notes/changes."""
+async def test_write_isolation_manifest_excludes_other_user(api_sync, api_iso):
+    """User C should not see user A's notes in GET /sync/manifest."""
     path = "E2E/WriteIsolationChanges.md"
 
     api_sync.create_note(path, "# Changes Test\nOnly sync-user should see this.")
     api_sync.wait_for_note(path)
 
-    since = "2000-01-01T00:00:00Z"
-    changes = api_iso.get_changes(since)
-    iso_paths = [n.get("source_path", "") for n in changes.get("notes", [])]
+    manifest = api_iso.get_manifest()
+    iso_paths = [n["path"] for n in manifest.get("notes", [])]
     assert path not in iso_paths, (
-        f"SECURITY BREACH: isolation-user can see sync-user's changes! "
-        f"Found {path} in changes response."
+        f"SECURITY BREACH: isolation-user can see sync-user's notes! "
+        f"Found {path} in manifest response."
     )
 
 

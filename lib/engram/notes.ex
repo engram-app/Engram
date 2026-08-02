@@ -107,10 +107,10 @@ defmodule Engram.Notes do
     from(n in scoped(user, vault), where: is_nil(n.deleted_at))
   end
 
-  # 500 = the legacy change feed's convergence bound: >500 rows stamped on
-  # one server timestamp can make a legacy `updated_at >= since` pull
-  # re-serve the same page forever (see notes_controller.ex
-  # changes_server_time). Used two ways:
+  # 500 = the (now retired, 410) legacy change feed's convergence bound:
+  # >500 rows stamped on one server timestamp could make a legacy
+  # `updated_at >= since` pull re-serve the same page forever. Kept until the
+  # chunk-stamping follow-up removes it. Used two ways:
   #   * batch_delete_notes chunk-stamps tombstones @stamp_chunk per
   #     timestamp, so ANY request size is safe (e2e teardown legitimately
   #     sends >1000 ids);
@@ -120,9 +120,10 @@ defmodule Engram.Notes do
   #     creates through the same @stamp_chunk grouping.
   @max_batch_entries 500
 
-  # Rows per shared timestamp for bulk writes. STRICTLY below the 500-row
-  # legacy page: the `since` boundary is inclusive, so a same-stamp run of
-  # EXACTLY page size re-serves the same page forever, not just >page.
+  # Rows per shared timestamp for bulk writes. STRICTLY below the retired
+  # feed's 500-row page: its inclusive `since` boundary meant a same-stamp run
+  # of EXACTLY page size re-served the same page forever. Removal is the
+  # chunk-stamping follow-up.
   @stamp_chunk 400
 
   @doc false
@@ -2931,92 +2932,13 @@ defmodule Engram.Notes do
   @changes_page_max_limit 500
 
   @doc """
-  Keyset-paginated variant of `list_changes/4` (sync protocol rev).
-
-  Options:
-
-    * `limit:` — page size, clamped to 1..#{@changes_page_max_limit}
-      (default #{@changes_page_max_limit}).
-    * `cursor:` — opaque cursor from a previous page's `next_cursor`.
-      Encodes `(updated_at, id)`; rows are ordered by that pair so pages
-      never lose or duplicate rows even when timestamps collide.
-    * `fields: :meta` — skip the content column + its decrypt; entries carry
-      `content_hash` instead (`content: nil`). Clients fetch bodies
-      selectively for hashes they don't already hold.
-
-  Returns `{:ok, %{changes: [...], has_more: bool, next_cursor: binary | nil}}`
-  or `{:error, :invalid_cursor}`.
-  """
-  @spec list_changes_page(map(), map(), DateTime.t(), keyword()) ::
-          {:ok, %{changes: [map()], has_more: boolean(), next_cursor: binary() | nil}}
-          | {:error, :invalid_cursor}
-  def list_changes_page(user, vault, since, opts \\ []) do
-    limit =
-      opts
-      |> Keyword.get(:limit, @changes_page_max_limit)
-      |> min(@changes_page_max_limit)
-      |> max(1)
-
-    fields = Keyword.get(opts, :fields, :all)
-
-    with {:ok, cursor} <- decode_changes_cursor(Keyword.get(opts, :cursor)) do
-      base =
-        from(n in scoped(user, vault),
-          where: n.updated_at >= ^since and n.kind == "note",
-          order_by: [asc: n.updated_at, asc: n.id],
-          limit: ^(limit + 1)
-        )
-
-      base =
-        case cursor do
-          nil ->
-            base
-
-          {ts, id} ->
-            from(n in base,
-              where: n.updated_at > ^ts or (n.updated_at == ^ts and n.id > ^id)
-            )
-        end
-
-      query =
-        case fields do
-          :meta -> from(n in base, select: struct(n, @note_meta_fields))
-          :all -> base
-        end
-
-      {:ok, notes} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
-
-      {page, has_more} =
-        if length(notes) > limit do
-          {Enum.take(notes, limit), true}
-        else
-          {notes, false}
-        end
-
-      changes =
-        page
-        |> decrypt_or_raise!(user)
-        |> Enum.map(&change_map/1)
-
-      _ = log_changes_page(since, changes)
-
-      next_cursor =
-        if has_more do
-          last = List.last(page)
-          encode_changes_cursor(last.updated_at, last.id)
-        end
-
-      {:ok, %{changes: changes, has_more: has_more, next_cursor: next_cursor}}
-    end
-  end
-
-  @doc """
   Seq-cursor change feed: rows with `(seq, id) > (after_seq, after_id)`,
   ordered by `(seq, id)`, paginated.
 
-  Unlike `list_changes_page/4` (the timestamp feed) this carries the full
-  note change set including tombstones (no `deleted_at` filter) so deletes /
-  renames all flow through the unified `/sync/changes` pull. Folder-marker
+  Unlike the retired timestamp feed (`list_changes_page/4`, removed with
+  `GET /notes/changes`) this carries the full note change set including
+  tombstones (no `deleted_at` filter), so deletes and renames all flow
+  through the unified seq-feed pull. Folder-marker
   rows (`kind == "folder"`) are EXCLUDED (#976): they carry `path: nil`,
   which crashed tombstone apply on pre-#216 plugins, and clients sync
   markers via the dedicated folder-marker endpoint, never this feed.
@@ -3090,33 +3012,6 @@ defmodule Engram.Notes do
     {:ok, %{changes: changes, has_more: has_more, next: next}}
   end
 
-  # Catch-up-pull breadcrumb: a reconnecting client pulls `/api/notes/changes`
-  # to recover notes missed while disconnected (e2e `test_23`). The flake is a
-  # note returning EMPTY (or absent) from the pull, so we log what the page
-  # actually delivered — count + per-note `id:content_len` — to prove
-  # present/empty/absent server-side. Only NON-empty pages log, so an idle poll
-  # (the common case) stays silent and prod is not spammed on every poll.
-  # Privacy: UUID + content BYTE-LENGTH only. Never the path or content.
-  @changes_trace_sample 20
-  defp log_changes_page(_since, []), do: :ok
-
-  defp log_changes_page(since, changes) do
-    sample =
-      changes
-      |> Enum.take(@changes_trace_sample)
-      |> Enum.map_join(",", fn c -> "#{c.id}:#{byte_size(c.content || "")}" end)
-
-    more =
-      if length(changes) > @changes_trace_sample,
-        do: "+#{length(changes) - @changes_trace_sample}",
-        else: ""
-
-    Logger.info(
-      "changes page since=#{DateTime.to_iso8601(since)} count=#{length(changes)} notes=#{sample}#{more}",
-      Metadata.with_category(:info, :sync)
-    )
-  end
-
   defp change_map(note) do
     %{
       id: note.id,
@@ -3134,24 +3029,6 @@ defmodule Engram.Notes do
       parse_reason: note.parse_reason
     }
   end
-
-  defp encode_changes_cursor(updated_at, id),
-    do: Base.url_encode64("#{DateTime.to_iso8601(updated_at)}|#{id}", padding: false)
-
-  defp decode_changes_cursor(nil), do: {:ok, nil}
-
-  defp decode_changes_cursor(cursor) when is_binary(cursor) do
-    with {:ok, raw} <- Base.url_decode64(cursor, padding: false),
-         [ts_str, id_str] <- String.split(raw, "|", parts: 2),
-         {:ok, ts, _} <- DateTime.from_iso8601(ts_str),
-         {:ok, id} <- Ecto.UUID.cast(id_str) do
-      {:ok, {ts, id}}
-    else
-      _ -> {:error, :invalid_cursor}
-    end
-  end
-
-  defp decode_changes_cursor(_), do: {:error, :invalid_cursor}
 
   @doc """
   Returns unique tags across all non-deleted notes for a user.
@@ -3850,9 +3727,10 @@ defmodule Engram.Notes do
           bulk_rename_update!(v2_rows, @v2_rename_cols, seq)
           bulk_rename_update!(v1_rows, @v1_rename_cols, seq)
 
-          # Insert soft-deleted tombstones for old paths so the HTTP changes
-          # feed includes delete signals. Without these, polling clients
-          # retain stale files at old paths after a folder rename. Tombstones
+          # Insert soft-deleted tombstones for old paths so the seq feed
+          # (list_changes_by_seq — no deleted_at filter) carries delete
+          # signals. Without these, catch-up clients retain stale files at
+          # old paths after a folder rename. Tombstones
           # are full-row inserts so each must carry the encrypted
           # path/folder/tags fields too. Marker rows have no path to
           # tombstone — skip them. Built in-memory from `real_note_updates`,

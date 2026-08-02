@@ -10,11 +10,15 @@ forever on one page; or, the day-one version of the trap, e2e teardown gets
 
 ## The invariant
 
-The legacy change feed (`GET /notes/changes`) pages by **timestamp** with an
-**inclusive** boundary: legacy clients advance `since = server_time` after
-every poll, and on a truncated page `server_time` is the last returned row's
-`updated_at` (see `changes_server_time` in
-`lib/engram_web/controllers/notes_controller.ex`). The `>= since` filter
+> **2026-08-02:** the legacy feed itself is RETIRED — `GET /notes/changes` /
+> `GET /attachments/changes` now always return 410 Gone. The chunk-stamping
+> mechanism below still exists (removing it is a follow-up PR); this section
+> is the historical WHY.
+
+The legacy change feed (`GET /notes/changes`) paged by **timestamp** with an
+**inclusive** boundary: legacy clients advanced `since = server_time` after
+every poll, and on a truncated page `server_time` was the last returned row's
+`updated_at`. The `>= since` filter
 re-serves the boundary row once; applies are idempotent, so that's fine —
 **unless a page-size (500) or longer run of rows shares one `updated_at`
 microsecond**. Because the boundary is inclusive, a run of EXACTLY 500 wedges
@@ -34,9 +38,10 @@ stale comment claiming the request was already "capped at the controller
 (100)". **No such controller cap ever existed.** And the e2e harness is a
 legitimate consumer of uncapped bulk deletes:
 
-- `e2e/tests/api_only/test_76_batch_pagination.py` teardown sends all 1100
-  seeded ids in **one** `POST /notes/batch-delete` request ("no documented
-  cap on ids", per its own comment).
+- `e2e/tests/api_only/test_76_batch_pagination.py` (deleted with the feed,
+  2026-08-02) teardown sent all 1100 seeded ids in **one**
+  `POST /notes/batch-delete` request ("no documented cap on ids", per its
+  own comment).
 - `e2e/tests/test_77_bulk_first_sync.py` teardown bulk-deletes its ~1000
   `Bulk/*` notes deliberately via batch-delete instead of 1,000 paced
   DELETEs — its docstring documents why: no time budget, no rate-limit
@@ -83,9 +88,10 @@ with per-note stamps, so no same-stamp run can form. Its cap (and the dead
   merge, so unbounded requests are a compute-DoS vector — and no legitimate
   client sends >500 (the plugin chunks at ≤100).
 - **`Attachments.batch_delete/3` caps at 500 paths**
-  (`lib/engram/attachments.ex`). Its legacy `list_changes` feed has no
-  since-pagination loop, so the wedge class doesn't apply — but no bulk
-  consumer exceeds the cap either, so it stays as a cheap guard.
+  (`lib/engram/attachments.ex`). Its legacy `list_changes` feed (removed
+  2026-08-02) had no since-pagination loop, so the wedge class never
+  applied — but no bulk consumer exceeds the cap either, so it stays as a
+  cheap guard.
 
 The rationale lives next to `@max_batch_entries` in both modules; if you
 touch either cap, update those comments and this doc together.
@@ -96,4 +102,5 @@ touch either cap, update those comments and this doc together.
 - PR #1194 — batch write-path perf rewrite building on it
 - `lib/engram/notes.ex` — `@max_batch_entries` comment + `batch_delete_notes/3`
 - `lib/engram_web/controllers/notes_controller.ex` — `changes_server_time`
-  comment (the convergence bound, spelled out)
+  comment (the convergence bound, spelled out; deleted with the feed —
+  see git history of that file for the full rationale)

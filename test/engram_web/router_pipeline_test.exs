@@ -24,14 +24,14 @@ defmodule EngramWeb.RouterPipelineTest do
       |> Ecto.Changeset.change(%{deleted_at: DateTime.utc_now()})
       |> Engram.Repo.update!(skip_tenant_check: true)
 
-      conn = get(conn, "/api/notes/changes")
+      conn = get(conn, "/api/sync/manifest")
 
       assert conn.status == 410
       assert %{"error" => "account_deleted"} = json_response(conn, 410)
     end
 
     test "non-deleted user proceeds past AccountDeleted", %{conn: conn} do
-      conn = get(conn, "/api/notes/changes")
+      conn = get(conn, "/api/sync/manifest")
       # Any status other than 410 proves AccountDeleted didn't halt
       refute conn.status == 410
     end
@@ -42,7 +42,7 @@ defmodule EngramWeb.RouterPipelineTest do
          %{conn: conn, user: user} do
       assert is_nil(UsageMeters.last_active_at(user.id))
 
-      _ = get(conn, "/api/notes/changes")
+      _ = get(conn, "/api/sync/manifest")
 
       assert %DateTime{} = UsageMeters.last_active_at(user.id)
     end
