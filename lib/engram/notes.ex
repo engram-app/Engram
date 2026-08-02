@@ -3727,9 +3727,10 @@ defmodule Engram.Notes do
           bulk_rename_update!(v2_rows, @v2_rename_cols, seq)
           bulk_rename_update!(v1_rows, @v1_rename_cols, seq)
 
-          # Insert soft-deleted tombstones for old paths so the HTTP changes
-          # feed includes delete signals. Without these, polling clients
-          # retain stale files at old paths after a folder rename. Tombstones
+          # Insert soft-deleted tombstones for old paths so the seq feed
+          # (list_changes_by_seq — no deleted_at filter) carries delete
+          # signals. Without these, catch-up clients retain stale files at
+          # old paths after a folder rename. Tombstones
           # are full-row inserts so each must carry the encrypted
           # path/folder/tags fields too. Marker rows have no path to
           # tombstone — skip them. Built in-memory from `real_note_updates`,
