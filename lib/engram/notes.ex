@@ -107,30 +107,11 @@ defmodule Engram.Notes do
     from(n in scoped(user, vault), where: is_nil(n.deleted_at))
   end
 
-  # 500 = the (now retired, 410) legacy change feed's convergence bound:
-  # >500 rows stamped on one server timestamp could make a legacy
-  # `updated_at >= since` pull re-serve the same page forever. Kept until the
-  # chunk-stamping follow-up removes it. Used two ways:
-  #   * batch_delete_notes chunk-stamps tombstones @stamp_chunk per
-  #     timestamp, so ANY request size is safe (e2e teardown legitimately
-  #     sends >1000 ids);
-  #   * batch_upsert_notes hard-caps at 500 — each entry costs an encrypt +
-  #     CRDT merge, so unbounded requests are a compute-DoS vector, and no
-  #     client sends >500 (the plugin chunks at ≤100) — and stamps its
-  #     creates through the same @stamp_chunk grouping.
+  # batch_upsert_notes hard cap: each entry costs an encrypt + CRDT merge, so
+  # unbounded requests are a compute-DoS vector, and no client sends >500 (the
+  # plugin chunks at ≤100). Delete/move accept ANY size — the seq feed orders
+  # by (seq, id) and doesn't care how many rows share a timestamp.
   @max_batch_entries 500
-
-  # Rows per shared timestamp for bulk writes. STRICTLY below the retired
-  # feed's 500-row page: its inclusive `since` boundary meant a same-stamp run
-  # of EXACTLY page size re-served the same page forever. Removal is the
-  # chunk-stamping follow-up.
-  @stamp_chunk 400
-
-  @doc false
-  # Timestamp for the i-th row of a bulk write: base + one µs per
-  # @stamp_chunk rows. Distinct-by-construction even when consecutive
-  # utc_now() calls collide in the same microsecond.
-  def bulk_stamp(base, i), do: DateTime.add(base, div(i, @stamp_chunk), :microsecond)
 
   @doc """
   #590: maps Qdrant point ids → the owning note's decrypted display fields
@@ -2081,29 +2062,14 @@ defmodule Engram.Notes do
           case Enum.find(ids, &(not MapSet.member?(found, &1))) do
             nil ->
               seq = Engram.Vaults.next_seq!(vault.id)
-              base_now = DateTime.utc_now()
+              now = DateTime.utc_now()
 
-              # Stamp tombstones in @stamp_chunk-row chunks with DISTINCT
-              # timestamps: the legacy `updated_at >= since` feed pages by
-              # timestamp with an INCLUSIVE boundary, so a same-stamp run of
-              # page size or longer re-serves the same page forever
-              # (changes_server_time). +1 µs per chunk guarantees distinct
-              # stamps even when consecutive utc_now() calls collide.
-              updated =
-                notes
-                |> Enum.map(& &1.id)
-                |> Enum.chunk_every(@stamp_chunk)
-                |> Enum.with_index()
-                |> Enum.map(fn {chunk_ids, i} ->
-                  now_i = DateTime.add(base_now, i, :microsecond)
-
-                  {n, _} =
-                    from(n in Note, where: n.id in ^chunk_ids and is_nil(n.deleted_at))
-                    |> Repo.update_all(set: [deleted_at: now_i, updated_at: now_i, seq: seq])
-
-                  n
-                end)
-                |> Enum.sum()
+              # One shared timestamp for every tombstone — the seq feed orders
+              # by (seq, id), so same-stamp runs are harmless (the timestamp
+              # chunking that used to live here served the retired legacy feed).
+              {updated, _} =
+                from(n in Note, where: n.id in ^ids and is_nil(n.deleted_at))
+                |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
 
               :ok = UsageMeters.dec_notes_count(user.id, updated)
 
@@ -2487,14 +2453,11 @@ defmodule Engram.Notes do
 
     now = DateTime.utc_now()
 
-    # Per-entry bulk_stamp/2 instead of one shared `now`: a full 500-entry
-    # batch stamping one timestamp is EXACTLY the legacy page size, which
-    # wedges the inclusive `updated_at >= since` feed (changes_server_time).
+    # One shared `now` for the whole batch — the seq feed orders by (seq, id),
+    # so same-stamp runs are harmless.
     {entries, insert_rows} =
-      entries
-      |> Enum.with_index()
-      |> Enum.map_reduce([], fn {entry, i}, rows ->
-        process_batch_entry(entry, existing_by_hmac, user, vault, bulk_stamp(now, i), rows)
+      Enum.map_reduce(entries, [], fn entry, rows ->
+        process_batch_entry(entry, existing_by_hmac, user, vault, now, rows)
       end)
 
     # on_conflict: :nothing — a PK collision (client-supplied id already in
@@ -3579,10 +3542,7 @@ defmodule Engram.Notes do
   ]
 
   # Statement-size bound for the VALUES join: 500 rows × ≤16 params stays
-  # well under Postgres's 65535-bind-param protocol limit. Timestamp chunking
-  # is independent of this: each row carries its own bulk_stamp/2 updated_at
-  # (grouped @stamp_chunk rows per stamp), so SQL chunk size never creates a
-  # same-stamp run.
+  # well under Postgres's 65535-bind-param protocol limit.
   @rename_update_chunk 500
 
   defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows) do
@@ -3710,18 +3670,14 @@ defmodule Engram.Notes do
             end)
             |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
 
-          # Chunk-stamp every row this cascade writes — all three row-classes
-          # AND the old-path tombstones below — through bulk_stamp/2 under ONE
-          # global row counter, so no @stamp_chunk-crossing run shares an
-          # updated_at (a single shared `now` puts an unbounded cascade on one
-          # timestamp and wedges the legacy `updated_at >= since` feed, same
-          # class as batch_delete_notes' tombstone chunking). Only the
-          # timestamps vary: `seq` stays IDENTICAL for every row — the #614
+          # One shared `now` for every row this cascade writes — renamed rows
+          # AND tombstones. The seq feed orders by (seq, id), so same-stamp
+          # runs are harmless. `seq` stays IDENTICAL for every row — the #614
           # one-op-one-seq contract that keeps a cursor pull from splitting
           # the renamed rows from their tombstones.
-          {marker_rows, offset} = stamp_rename_rows(grouped[:marker] || [], now, 0)
-          {v2_rows, offset} = stamp_rename_rows(grouped[:v2] || [], now, offset)
-          {v1_rows, offset} = stamp_rename_rows(grouped[:v1] || [], now, offset)
+          marker_rows = stamp_rename_rows(grouped[:marker] || [], now)
+          v2_rows = stamp_rename_rows(grouped[:v2] || [], now)
+          v1_rows = stamp_rename_rows(grouped[:v1] || [], now)
 
           bulk_rename_update!(marker_rows, @marker_rename_cols, seq)
           bulk_rename_update!(v2_rows, @v2_rename_cols, seq)
@@ -3734,12 +3690,9 @@ defmodule Engram.Notes do
           # are full-row inserts so each must carry the encrypted
           # path/folder/tags fields too. Marker rows have no path to
           # tombstone — skip them. Built in-memory from `real_note_updates`,
-          # stamped with the same `seq` as the renamed rows; their timestamps
-          # continue the global bulk_stamp counter started above.
+          # stamped with the same `seq` and `now` as the renamed rows.
           tombstones =
-            real_note_updates
-            |> Enum.with_index(offset)
-            |> Enum.map(fn {{_note, old_path, _new_path, _new_folder, _title}, i} ->
+            Enum.map(real_note_updates, fn {_note, old_path, _new_path, _new_folder, _title} ->
               # T3.6 — pre-allocate the tombstone id so the AAD bind string can
               # be constructed before insert. Tombstones are full-row inserts
               # written with empty content/title/tags but the row-id-bound AAD
@@ -3747,7 +3700,6 @@ defmodule Engram.Notes do
               # from any other AAD-bound row at read time.
               tomb_id = mint_id()
               old_path_folder = Helpers.extract_folder(old_path)
-              stamp = bulk_stamp(now, i)
 
               full_kw =
                 full_aad_bound_kw(user, tomb_id, "", "", old_path, old_path_folder, [])
@@ -3758,9 +3710,9 @@ defmodule Engram.Notes do
                 mtime: mtime_float,
                 user_id: user.id,
                 vault_id: vault.id,
-                created_at: stamp,
-                updated_at: stamp,
-                deleted_at: stamp,
+                created_at: now,
+                updated_at: now,
+                deleted_at: now,
                 seq: seq
               }
 
@@ -4553,18 +4505,10 @@ defmodule Engram.Notes do
   defp rename_col_sql_type(:dek_version), do: "integer"
   defp rename_col_sql_type(_col), do: "bytea"
 
-  # Attaches a bulk_stamp/2 timestamp to each {id, kw} rename row, continuing
-  # a global row counter across the caller's row-classes (see
-  # do_rename_folder): row i gets `bulk_stamp(base, offset + local_i)`, and
-  # the returned offset lets the next class (or the tombstone builder) keep
-  # counting so no @stamp_chunk-sized run repeats across classes.
-  defp stamp_rename_rows(rows, base, offset) do
-    stamped =
-      rows
-      |> Enum.with_index(offset)
-      |> Enum.map(fn {{id, kw}, i} -> {id, bulk_stamp(base, i), kw} end)
-
-    {stamped, offset + length(rows)}
+  # Attaches the cascade's shared timestamp to each {id, kw} rename row,
+  # producing the [{id, stamp, kw}] shape bulk_rename_update! consumes.
+  defp stamp_rename_rows(rows, now) do
+    Enum.map(rows, fn {id, kw} -> {id, now, kw} end)
   end
 
   # One `UPDATE notes ... FROM (VALUES ...)` per ≤500-row chunk. Every row in a
@@ -4572,8 +4516,7 @@ defmodule Engram.Notes do
   # it must not be one UPDATE per note either (the N+1 this replaces). Runs
   # inside the caller's with_tenant transaction: the RLS role restricts the raw
   # UPDATE to the tenant's rows, and the shared `seq` keeps the #614
-  # one-op-one-seq contract (each row carries its OWN chunk-grouped updated_at
-  # stamp — see stamp_rename_rows). `rows` is [{note_id, stamp, kw}] where `kw`
+  # one-op-one-seq contract. `rows` is [{note_id, stamp, kw}] where `kw`
   # holds a value for every column in `cols`. A nested-collision unique
   # violation raises Postgrex.Error exactly like the per-note update_all did.
   defp bulk_rename_update!([], _cols, _seq), do: :ok
