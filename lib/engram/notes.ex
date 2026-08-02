@@ -87,6 +87,26 @@ defmodule Engram.Notes do
     from(n in Note, where: n.kind == "note")
   end
 
+  @doc """
+  Composable tenant-scope query: `Note` rows owned by `user` in `vault`
+  (struct or bare vault id). This predicate IS the multi-tenant isolation
+  boundary — note queries must compose from `scoped/2` / `scoped_live/2`;
+  `tenant_scope_lint_test.exs` flags hand-inlined `user_id == ^` predicates
+  so a dropped clause can't slip in.
+  """
+  @spec scoped(map(), map() | term()) :: Ecto.Query.t()
+  def scoped(user, %{id: vault_id}), do: scoped(user, vault_id)
+
+  def scoped(user, vault_id) do
+    from(n in Note, where: n.user_id == ^user.id and n.vault_id == ^vault_id)
+  end
+
+  @doc "`scoped/2` plus `is_nil(deleted_at)` — live (non-tombstoned) rows only."
+  @spec scoped_live(map(), map() | term()) :: Ecto.Query.t()
+  def scoped_live(user, vault) do
+    from(n in scoped(user, vault), where: is_nil(n.deleted_at))
+  end
+
   # 500 = the legacy change feed's convergence bound: >500 rows stamped on
   # one server timestamp can make a legacy `updated_at >= since` pull
   # re-serve the same page forever (see notes_controller.ex
@@ -236,12 +256,8 @@ defmodule Engram.Notes do
   defp find_folder_marker(user, vault, folder_hmac) do
     row =
       Repo.one(
-        from(n in Note,
-          where:
-            n.user_id == ^user.id and
-              n.vault_id == ^vault.id and
-              n.kind == "folder" and
-              n.folder_hmac == ^folder_hmac
+        from(n in scoped(user, vault),
+          where: n.kind == "folder" and n.folder_hmac == ^folder_hmac
         )
       )
 
@@ -1611,12 +1627,7 @@ defmodule Engram.Notes do
   """
   @spec note_in_vault?(map(), Ecto.UUID.t(), Ecto.UUID.t()) :: boolean()
   def note_in_vault?(user, vault_id, note_id) do
-    query =
-      from(n in Note,
-        where:
-          n.id == ^note_id and n.user_id == ^user.id and n.vault_id == ^vault_id and
-            is_nil(n.deleted_at)
-      )
+    query = from(n in scoped_live(user, vault_id), where: n.id == ^note_id)
 
     case Repo.with_tenant(user.id, fn -> Repo.exists?(query) end) do
       {:ok, exists?} -> exists?
@@ -1633,12 +1644,7 @@ defmodule Engram.Notes do
   # folder marker).
   defp fetch_note_by_id(user, vault, id, fields) when is_binary(id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
-      base =
-        from(n in Note,
-          where:
-            n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
-              is_nil(n.deleted_at) and n.kind == "note"
-        )
+      base = from(n in scoped_live(user, vault), where: n.id == ^id and n.kind == "note")
 
       query =
         case fields do
@@ -1679,12 +1685,7 @@ defmodule Engram.Notes do
     with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       hmac = Crypto.hmac_field(filter_key, path)
 
-      {:ok,
-       from(n in Note,
-         where:
-           n.user_id == ^user.id and n.vault_id == ^vault.id and n.path_hmac == ^hmac and
-             is_nil(n.deleted_at)
-       )}
+      {:ok, from(n in scoped_live(user, vault), where: n.path_hmac == ^hmac)}
     end
   end
 
@@ -1701,11 +1702,10 @@ defmodule Engram.Notes do
         cutoff = DateTime.add(DateTime.utc_now(), -@delete_tombstone_window_seconds, :second)
 
         Repo.exists?(
-          from(n in Note,
+          from(n in scoped(user, vault_id),
             where:
-              n.user_id == ^user.id and n.vault_id == ^vault_id and n.path_hmac == ^hmac and
-                n.kind == "note" and not is_nil(n.deleted_at) and n.deleted_at >= ^cutoff and
-                n.content_hash == ^content_hash
+              n.path_hmac == ^hmac and n.kind == "note" and not is_nil(n.deleted_at) and
+                n.deleted_at >= ^cutoff and n.content_hash == ^content_hash
           )
         )
 
@@ -2069,10 +2069,8 @@ defmodule Engram.Notes do
           # read as not_found, not tombstone the marker + crash on encode64.
           notes =
             Repo.all(
-              from(n in Note,
-                where:
-                  n.id in ^ids and n.user_id == ^user.id and n.vault_id == ^vault.id and
-                    is_nil(n.deleted_at) and n.kind == "note",
+              from(n in scoped_live(user, vault),
+                where: n.id in ^ids and n.kind == "note",
                 select: struct(n, @note_meta_fields)
               )
             )
@@ -2396,10 +2394,10 @@ defmodule Engram.Notes do
     cutoff = DateTime.add(DateTime.utc_now(), -@delete_tombstone_window_seconds, :second)
 
     Repo.all(
-      from(n in Note,
+      from(n in scoped(user, vault),
         where:
-          n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
-            n.path_hmac in ^hmacs and not is_nil(n.deleted_at) and n.deleted_at >= ^cutoff,
+          n.kind == "note" and n.path_hmac in ^hmacs and not is_nil(n.deleted_at) and
+            n.deleted_at >= ^cutoff,
         select: {n.path_hmac, n.content_hash}
       )
     )
@@ -2464,13 +2462,7 @@ defmodule Engram.Notes do
     hmacs = Enum.map(pending, & &1.path_hmac)
 
     existing_by_hmac =
-      Repo.all(
-        from(n in Note,
-          where:
-            n.user_id == ^user.id and n.vault_id == ^vault.id and n.path_hmac in ^hmacs and
-              is_nil(n.deleted_at)
-        )
-      )
+      Repo.all(from(n in scoped_live(user, vault), where: n.path_hmac in ^hmacs))
       |> Map.new(&{&1.path_hmac, &1})
 
     # Delete-wins for the batch path (same blind spot as the single upsert):
@@ -2482,7 +2474,7 @@ defmodule Engram.Notes do
 
     # vault_populated probe — must read BEFORE the insert_all below.
     was_empty =
-      not Repo.exists?(from(n in Note, where: n.user_id == ^user.id and n.vault_id == ^vault.id))
+      not Repo.exists?(scoped(user, vault))
 
     to_insert =
       Enum.count(
@@ -2969,10 +2961,8 @@ defmodule Engram.Notes do
 
     with {:ok, cursor} <- decode_changes_cursor(Keyword.get(opts, :cursor)) do
       base =
-        from(n in Note,
-          where:
-            n.user_id == ^user.id and n.vault_id == ^vault.id and n.updated_at >= ^since and
-              n.kind == "note",
+        from(n in scoped(user, vault),
+          where: n.updated_at >= ^since and n.kind == "note",
           order_by: [asc: n.updated_at, asc: n.id],
           limit: ^(limit + 1)
         )
@@ -3058,10 +3048,8 @@ defmodule Engram.Notes do
     after_id = Keyword.get(opts, :after_id)
 
     base =
-      from(n in Note,
-        where:
-          n.user_id == ^user.id and n.vault_id == ^vault.id and not is_nil(n.seq) and
-            n.kind != "folder",
+      from(n in scoped(user, vault),
+        where: not is_nil(n.seq) and n.kind != "folder",
         order_by: [asc: n.seq, asc: n.id],
         limit: ^(limit + 1)
       )
@@ -3181,10 +3169,8 @@ defmodule Engram.Notes do
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
-              from(n in Note,
-                where:
-                  n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                    not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
+              from(n in scoped_live(user, vault),
+                where: not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
                 select: {n.id, n.dek_version, n.tags_ciphertext, n.tags_nonce}
               )
             )
@@ -3219,10 +3205,8 @@ defmodule Engram.Notes do
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
-              from(n in Note,
-                where:
-                  n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                    not is_nil(n.folder_hmac) and n.folder_hmac != ^empty_hmac,
+              from(n in scoped_live(user, vault),
+                where: not is_nil(n.folder_hmac) and n.folder_hmac != ^empty_hmac,
                 distinct: n.folder_hmac,
                 select: {n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
               )
@@ -3259,10 +3243,8 @@ defmodule Engram.Notes do
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
-              from(n in Note,
-                where:
-                  n.user_id == ^user.id and n.vault_id == ^vault.id and
-                    is_nil(n.deleted_at) and n.kind == "folder",
+              from(n in scoped_live(user, vault),
+                where: n.kind == "folder",
                 select: {n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
               )
             )
@@ -3301,10 +3283,8 @@ defmodule Engram.Notes do
       {:ok, markers} =
         Repo.with_tenant(user.id, fn ->
           Repo.all(
-            from(n in Note,
-              where:
-                n.user_id == ^user.id and n.vault_id == ^vault.id and
-                  is_nil(n.deleted_at) and n.kind == "folder",
+            from(n in scoped_live(user, vault),
+              where: n.kind == "folder",
               select: %Note{
                 id: n.id,
                 dek_version: n.dek_version,
@@ -3342,11 +3322,10 @@ defmodule Engram.Notes do
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
-              from(n in Note,
+              from(n in scoped_live(user, vault),
                 where:
-                  n.user_id == ^user.id and n.vault_id == ^vault.id and
-                    is_nil(n.deleted_at) and n.kind == "note" and
-                    not is_nil(n.folder_hmac) and n.folder_hmac != ^empty_hmac,
+                  n.kind == "note" and not is_nil(n.folder_hmac) and
+                    n.folder_hmac != ^empty_hmac,
                 distinct: n.folder_hmac,
                 select: {n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
               )
@@ -3381,10 +3360,8 @@ defmodule Engram.Notes do
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
-              from(n in Note,
-                where:
-                  n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                    not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
+              from(n in scoped_live(user, vault),
+                where: not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
                 select: {n.id, n.dek_version, n.tags_ciphertext, n.tags_nonce}
               )
             )
@@ -3428,10 +3405,8 @@ defmodule Engram.Notes do
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
-              from(n in Note,
-                where:
-                  n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                    not is_nil(n.folder_hmac),
+              from(n in scoped_live(user, vault),
+                where: not is_nil(n.folder_hmac),
                 distinct: n.folder_hmac,
                 select: %{
                   id: n.id,
@@ -3509,11 +3484,8 @@ defmodule Engram.Notes do
         {:ok, notes} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
-              from(n in Note,
-                where:
-                  n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                    n.kind == "note" and
-                    n.folder_hmac == ^target_hmac,
+              from(n in scoped_live(user, vault),
+                where: n.kind == "note" and n.folder_hmac == ^target_hmac,
                 order_by: [asc: n.id],
                 select: struct(n, @note_meta_fields)
               )
@@ -3558,13 +3530,8 @@ defmodule Engram.Notes do
     {:ok, result} =
       Repo.with_tenant(user.id, fn ->
         case Repo.one(
-               from(n in Note,
-                 where:
-                   n.id == ^id and
-                     n.user_id == ^user.id and
-                     n.vault_id == ^vault.id and
-                     n.kind == "folder" and
-                     is_nil(n.deleted_at)
+               from(n in scoped_live(user, vault),
+                 where: n.id == ^id and n.kind == "folder"
                )
              ) do
           nil -> {:error, :not_found}
@@ -3648,13 +3615,7 @@ defmodule Engram.Notes do
     # Unwrap once so the caller can branch on a plain boolean.
     {:ok, exists?} =
       Repo.with_tenant(user.id, fn ->
-        Repo.exists?(
-          from(n in Note,
-            where:
-              n.user_id == ^user.id and n.vault_id == ^vault.id and
-                is_nil(n.deleted_at) and n.folder_hmac == ^target_hmac
-          )
-        )
+        Repo.exists?(from(n in scoped_live(user, vault), where: n.folder_hmac == ^target_hmac))
       end)
 
     exists?
@@ -3670,11 +3631,7 @@ defmodule Engram.Notes do
   # cascade) only need path/folder/kind; content decrypt is targeted per-id
   # where actually required (fetch_v1_contents).
   defp fetch_decrypted_live_rows(user, vault) do
-    query =
-      from(n in Note,
-        where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at),
-        select: struct(n, @note_meta_fields)
-      )
+    query = from(n in scoped_live(user, vault), select: struct(n, @note_meta_fields))
 
     {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
     {:ok, dek} = Crypto.get_dek(user)
@@ -4445,12 +4402,7 @@ defmodule Engram.Notes do
     # for a new vault's first note).
     {:ok, ids} =
       Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from n in Note,
-            where: n.user_id == ^user.id and n.vault_id == ^vault.id,
-            select: n.id,
-            limit: 2
-        )
+        Repo.all(from(n in scoped(user, vault), select: n.id, limit: 2))
       end)
 
     _ =

@@ -10,6 +10,25 @@ defmodule Engram.Vaults do
   alias Engram.Repo
   alias Engram.Vaults.Vault
 
+  @doc """
+  Composable tenant-scope query: `Vault` rows owned by the given user (struct
+  or bare user id). This predicate IS the multi-tenant isolation boundary —
+  vault queries must compose from `scoped/1` (plus `active/1` / `deleted/1`
+  for the soft-delete split); `tenant_scope_lint_test.exs` flags hand-inlined
+  `user_id == ^` predicates so a dropped clause can't slip in.
+  """
+  @spec scoped(map() | term()) :: Ecto.Query.t()
+  def scoped(%{id: user_id}), do: scoped(user_id)
+  def scoped(user_id), do: from(v in Vault, where: v.user_id == ^user_id)
+
+  @doc "Composer: restrict a vault query to non-deleted rows."
+  @spec active(Ecto.Queryable.t()) :: Ecto.Query.t()
+  def active(query), do: from(v in query, where: is_nil(v.deleted_at))
+
+  @doc "Composer: restrict a vault query to soft-deleted rows."
+  @spec deleted(Ecto.Queryable.t()) :: Ecto.Query.t()
+  def deleted(query), do: from(v in query, where: not is_nil(v.deleted_at))
+
   # ── Create ─────────────────────────────────────────────────────────────────
 
   @doc """
@@ -222,9 +241,9 @@ defmodule Engram.Vaults do
     {:ok, vaults} =
       Repo.with_tenant(user.id, fn ->
         Repo.all(
-          from v in Vault,
-            where: v.user_id == ^user.id and is_nil(v.deleted_at),
+          from(v in active(scoped(user)),
             order_by: [asc: fragment("created_at"), asc: v.id]
+          )
         )
       end)
 
@@ -240,9 +259,9 @@ defmodule Engram.Vaults do
     {:ok, vaults} =
       Repo.with_tenant(user.id, fn ->
         Repo.all(
-          from v in Vault,
-            where: v.user_id == ^user.id and not is_nil(v.deleted_at),
+          from(v in deleted(scoped(user)),
             order_by: [desc: v.deleted_at, desc: v.id]
+          )
         )
       end)
 
@@ -276,8 +295,9 @@ defmodule Engram.Vaults do
     if ids == [] do
       %{}
     else
-      Vault
-      |> where([v], v.user_id == ^user_id and v.id in ^ids and is_nil(v.deleted_at))
+      scoped(user_id)
+      |> active()
+      |> where([v], v.id in ^ids)
       |> Repo.all(skip_tenant_check: true)
       |> Map.new(fn v -> {to_string(v.id), v} end)
     end
@@ -291,7 +311,7 @@ defmodule Engram.Vaults do
   @spec count_for(Engram.Accounts.User.t()) :: non_neg_integer()
   def count_for(%Engram.Accounts.User{id: user_id}) do
     Repo.aggregate(
-      from(v in Vault, where: v.user_id == ^user_id and is_nil(v.deleted_at)),
+      active(scoped(user_id)),
       :count,
       :id,
       skip_tenant_check: true
@@ -376,10 +396,7 @@ defmodule Engram.Vaults do
 
     result =
       Repo.with_tenant(user.id, fn ->
-        Repo.one(
-          from v in Vault,
-            where: v.user_id == ^user.id and v.id == ^vault_id and is_nil(v.deleted_at)
-        )
+        Repo.one(from(v in active(scoped(user)), where: v.id == ^vault_id))
       end)
 
     case result do
@@ -397,10 +414,7 @@ defmodule Engram.Vaults do
 
     result =
       Repo.with_tenant(user.id, fn ->
-        Repo.one(
-          from v in Vault,
-            where: v.user_id == ^user.id and v.is_default == true and is_nil(v.deleted_at)
-        )
+        Repo.one(from(v in active(scoped(user)), where: v.is_default == true))
       end)
 
     case result do
@@ -666,11 +680,7 @@ defmodule Engram.Vaults do
   end
 
   defp count_vaults(user_id) do
-    Repo.one!(
-      from v in Vault,
-        where: v.user_id == ^user_id and is_nil(v.deleted_at),
-        select: count(v.id)
-    )
+    Repo.one!(from(v in active(scoped(user_id)), select: count(v.id)))
   end
 
   @doc """
@@ -681,40 +691,28 @@ defmodule Engram.Vaults do
   def has_vault?(user) do
     {:ok, exists} =
       Repo.with_tenant(user.id, fn ->
-        Repo.exists?(
-          from v in Vault,
-            where: v.user_id == ^user.id and is_nil(v.deleted_at)
-        )
+        Repo.exists?(active(scoped(user)))
       end)
 
     exists
   end
 
   defp fetch_active(user_id, vault_id) do
-    Repo.one(
-      from v in Vault,
-        where: v.user_id == ^user_id and v.id == ^vault_id and is_nil(v.deleted_at)
-    )
+    Repo.one(from(v in active(scoped(user_id)), where: v.id == ^vault_id))
   end
 
   defp fetch_deleted(user_id, vault_id) do
-    Repo.one(
-      from v in Vault,
-        where: v.user_id == ^user_id and v.id == ^vault_id and not is_nil(v.deleted_at)
-    )
+    Repo.one(from(v in deleted(scoped(user_id)), where: v.id == ^vault_id))
   end
 
   defp find_by_client_id(user_id, client_id) do
-    Repo.one(
-      from v in Vault,
-        where: v.user_id == ^user_id and v.client_id == ^client_id and is_nil(v.deleted_at)
-    )
+    Repo.one(from(v in active(scoped(user_id)), where: v.client_id == ^client_id))
   end
 
   defp clear_defaults(user_id, except_vault_id) do
     Repo.update_all(
-      from(v in Vault,
-        where: v.user_id == ^user_id and v.id != ^except_vault_id and v.is_default == true
+      from(v in scoped(user_id),
+        where: v.id != ^except_vault_id and v.is_default == true
       ),
       set: [is_default: false]
     )
@@ -723,10 +721,10 @@ defmodule Engram.Vaults do
   defp promote_next_default(user_id) do
     next =
       Repo.one(
-        from v in Vault,
-          where: v.user_id == ^user_id and is_nil(v.deleted_at),
+        from(v in active(scoped(user_id)),
           order_by: [asc: fragment("created_at")],
           limit: 1
+        )
       )
 
     if next do
@@ -765,10 +763,7 @@ defmodule Engram.Vaults do
   # Finds a slug that doesn't collide with any existing non-deleted vault for this user.
   # Optionally excludes `except_id` (for renames — the vault itself doesn't count).
   defp unique_slug(user_id, base_slug, except_id \\ nil) do
-    query =
-      from v in Vault,
-        where: v.user_id == ^user_id and is_nil(v.deleted_at),
-        select: v.slug
+    query = from(v in active(scoped(user_id)), select: v.slug)
 
     query =
       if except_id do
