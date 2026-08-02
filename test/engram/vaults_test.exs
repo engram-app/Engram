@@ -150,12 +150,13 @@ defmodule Engram.VaultsTest do
     end
 
     test "requires a name", %{user: user} do
-      # Phase B.3: name is virtual; the changeset surfaces the missing
-      # ciphertext/nonce/hmac instead. Empty input therefore lands as a
-      # "can't be blank" error on `name_ciphertext` and friends.
+      # Phase B.3: name is virtual — a missing name means the encrypted trio
+      # never gets injected, and the changeset surfaces that on the public
+      # `name` field (never the internal ciphertext/nonce/hmac column names).
       assert {:error, changeset} = Vaults.create_vault(user, %{})
       errors = errors_on(changeset)
-      assert "can't be blank" in (errors[:name_ciphertext] || [])
+      assert errors[:name] == ["can't be blank"]
+      refute Map.has_key?(errors, :name_ciphertext)
     end
   end
 
