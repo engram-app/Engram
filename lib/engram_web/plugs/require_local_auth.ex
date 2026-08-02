@@ -6,7 +6,7 @@ defmodule EngramWeb.Plugs.RequireLocalAuth do
   so they are unreachable in Clerk deployments regardless of compile-time config.
   """
 
-  import Plug.Conn
+  alias EngramWeb.Plugs.Halt
 
   def init(opts), do: opts
 
@@ -14,10 +14,7 @@ defmodule EngramWeb.Plugs.RequireLocalAuth do
     if Engram.Auth.supports_credentials?() do
       conn
     else
-      conn
-      |> put_resp_content_type("application/json")
-      |> send_resp(404, Jason.encode!(%{error: "not_found"}))
-      |> halt()
+      Halt.json(conn, 404, %{error: "not_found"})
     end
   end
 end

@@ -8,19 +8,17 @@ defmodule EngramWeb.Plugs.AccountDeleted do
   allowed and produces a fresh vault.
   """
 
-  import Plug.Conn
-  alias Phoenix.Controller
+  alias EngramWeb.Plugs.Halt
 
   def init(opts), do: opts
 
+  # Halt.json emits the identical wire response to the Phoenix.Controller.json
+  # this replaced (same content type incl. charset, same Jason-encoded body).
   def call(%Plug.Conn{assigns: %{current_user: %{deleted_at: %DateTime{}}}} = conn, _opts) do
-    conn
-    |> put_status(410)
-    |> Controller.json(%{
+    Halt.json(conn, 410, %{
       error: "account_deleted",
       message: "Your vault was auto-deleted after 90 days of inactivity. You can re-signup."
     })
-    |> halt()
   end
 
   def call(conn, _opts), do: conn

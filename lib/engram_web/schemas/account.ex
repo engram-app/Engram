@@ -68,22 +68,6 @@ defmodule EngramWeb.Schemas.OkFlag do
   })
 end
 
-defmodule EngramWeb.Schemas.ValidationError do
-  @moduledoc "422 body carrying a top-level message and a field→messages detail map."
-  alias OpenApiSpex.Schema
-  require OpenApiSpex
-
-  OpenApiSpex.schema(%{
-    title: "ValidationError",
-    type: :object,
-    properties: %{
-      error: %Schema{type: :string, example: "validation_failed"},
-      details: %Schema{type: :object, description: "field → [messages]"}
-    },
-    required: [:error]
-  })
-end
-
 defmodule EngramWeb.Schemas.StorageUsage do
   @moduledoc "Per-user attachment storage usage and caps (bytes)."
   alias OpenApiSpex.Schema

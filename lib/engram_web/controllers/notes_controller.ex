@@ -4,6 +4,7 @@ defmodule EngramWeb.NotesController do
   alias EngramWeb.Schemas
 
   alias Engram.Notes
+  alias EngramWeb.BatchOps
 
   require Logger
 
@@ -475,7 +476,7 @@ defmodule EngramWeb.NotesController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    case parse_uuid_list(ids) do
+    case BatchOps.parse_uuid_list(ids) do
       :error ->
         conn |> put_status(400) |> json(%{error: "invalid_ids"})
 
@@ -490,7 +491,7 @@ defmodule EngramWeb.NotesController do
               %{status: 200, body: body}
             )
 
-            broadcast_batch(user, vault, %{op: "delete", ids: ids})
+            BatchOps.broadcast_batch(user, vault, "notes.batch", %{op: "delete", ids: ids})
             json(conn, body)
 
           {:error, {:not_found, id}} ->
@@ -534,7 +535,7 @@ defmodule EngramWeb.NotesController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    case parse_uuid_list(ids) do
+    case BatchOps.parse_uuid_list(ids) do
       {:ok, ids} ->
         result = Notes.batch_move_notes(user, vault, ids, {:path, folder})
         send_move_result(conn, user, vault, ids, result, %{target_folder: folder})
@@ -548,8 +549,8 @@ defmodule EngramWeb.NotesController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    with {:ok, ids} <- parse_uuid_list(ids),
-         {:ok, tgt} <- parse_move_target(tgt) do
+    with {:ok, ids} <- BatchOps.parse_uuid_list(ids),
+         {:ok, tgt} <- BatchOps.parse_move_target(tgt) do
       result = Notes.batch_move_notes(user, vault, ids, tgt)
       send_move_result(conn, user, vault, ids, result, %{target_folder_id: tgt})
     else
@@ -575,7 +576,13 @@ defmodule EngramWeb.NotesController do
           body: body
         })
 
-        broadcast_batch(user, vault, Map.merge(%{op: "move", ids: ids}, broadcast_extra))
+        BatchOps.broadcast_batch(
+          user,
+          vault,
+          "notes.batch",
+          Map.merge(%{op: "move", ids: ids}, broadcast_extra)
+        )
+
         json(conn, body)
 
       {:error, {:not_found, id}} ->
@@ -661,34 +668,4 @@ defmodule EngramWeb.NotesController do
   # error logger crashing itself. error_kind/1 is total and leak-safe (only a
   # bounded atom escapes; a %Note{} buried in a reason tuple never does).
   defp classify_reason(reason), do: Engram.Telemetry.error_kind(reason)
-
-  defp parse_uuid_list(list) when is_list(list) do
-    Enum.reduce_while(list, {:ok, []}, fn item, {:ok, acc} ->
-      case parse_uuid(item) do
-        {:ok, n} -> {:cont, {:ok, [n | acc]}}
-        :error -> {:halt, :error}
-      end
-    end)
-    |> case do
-      {:ok, acc} -> {:ok, Enum.reverse(acc)}
-      :error -> :error
-    end
-  end
-
-  defp parse_uuid(s) when is_binary(s), do: Ecto.UUID.cast(s)
-  defp parse_uuid(_), do: :error
-
-  # Move target is either a folder-marker UUID or the literal "root" sentinel
-  # (vault root — no marker). "root" must bypass the UUID cast.
-  defp parse_move_target("root"), do: {:ok, "root"}
-  defp parse_move_target(s) when is_binary(s), do: parse_uuid(s)
-  defp parse_move_target(_), do: :error
-
-  defp broadcast_batch(user, vault, payload) do
-    EngramWeb.Endpoint.broadcast!(
-      "sync:#{user.id}:#{vault.id}",
-      "notes.batch",
-      payload
-    )
-  end
 end

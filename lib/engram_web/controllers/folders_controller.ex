@@ -4,6 +4,7 @@ defmodule EngramWeb.FoldersController do
 
   alias Engram.Folders
   alias Engram.Notes
+  alias EngramWeb.BatchOps
   alias EngramWeb.Schemas
 
   operation(:index,
@@ -155,7 +156,10 @@ defmodule EngramWeb.FoldersController do
       {:ok, marker} ->
         # Same event the batch ops emit — lets connected devices (plugin/web)
         # materialize the empty folder live instead of on the next pull.
-        broadcast_batch(user, vault, %{op: "create", folder: marker.folder})
+        BatchOps.broadcast_batch(user, vault, "folders.batch", %{
+          op: "create",
+          folder: marker.folder
+        })
 
         conn
         |> put_status(:created)
@@ -200,7 +204,7 @@ defmodule EngramWeb.FoldersController do
         # waiting for their next pull. Only on a REAL delete — broadcasting on a
         # no-op (:not_found) would fan out a phantom "delete folder" that triggers
         # spurious client resyncs (and, plugin-side, a folder-delete echo).
-        broadcast_batch(user, vault, %{op: "delete", folder: folder})
+        BatchOps.broadcast_batch(user, vault, "folders.batch", %{op: "delete", folder: folder})
 
         send_resp(conn, 204, "")
 
@@ -294,7 +298,7 @@ defmodule EngramWeb.FoldersController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    case parse_uuid_list(ids) do
+    case BatchOps.parse_uuid_list(ids) do
       :error ->
         conn |> put_status(400) |> json(%{error: "invalid_ids"})
 
@@ -309,7 +313,7 @@ defmodule EngramWeb.FoldersController do
               %{status: 200, body: body}
             )
 
-            broadcast_batch(user, vault, %{op: "delete", ids: ids})
+            BatchOps.broadcast_batch(user, vault, "folders.batch", %{op: "delete", ids: ids})
             json(conn, body)
 
           {:error, {:not_found, id}} ->
@@ -361,7 +365,7 @@ defmodule EngramWeb.FoldersController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    case parse_uuid_list(ids) do
+    case BatchOps.parse_uuid_list(ids) do
       {:ok, ids} ->
         result = Folders.batch_move(user, vault, ids, {:path, folder})
         send_move_result(conn, user, vault, ids, result, %{target_parent: folder})
@@ -375,8 +379,8 @@ defmodule EngramWeb.FoldersController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    with {:ok, ids} <- parse_uuid_list(ids),
-         {:ok, tgt} <- parse_move_target(tgt) do
+    with {:ok, ids} <- BatchOps.parse_uuid_list(ids),
+         {:ok, tgt} <- BatchOps.parse_move_target(tgt) do
       result = Folders.batch_move(user, vault, ids, tgt)
       send_move_result(conn, user, vault, ids, result, %{target_parent_id: tgt})
     else
@@ -402,7 +406,13 @@ defmodule EngramWeb.FoldersController do
           body: body
         })
 
-        broadcast_batch(user, vault, Map.merge(%{op: "move", ids: ids}, broadcast_extra))
+        BatchOps.broadcast_batch(
+          user,
+          vault,
+          "folders.batch",
+          Map.merge(%{op: "move", ids: ids}, broadcast_extra)
+        )
+
         json(conn, body)
 
       {:error, {:not_found, id}} ->
@@ -433,36 +443,6 @@ defmodule EngramWeb.FoldersController do
   defp format_error(atom) when is_atom(atom), do: Atom.to_string(atom)
   defp format_error(binary) when is_binary(binary), do: binary
   defp format_error(_), do: "internal_error"
-
-  defp parse_uuid_list(list) when is_list(list) do
-    Enum.reduce_while(list, {:ok, []}, fn item, {:ok, acc} ->
-      case parse_uuid(item) do
-        {:ok, n} -> {:cont, {:ok, [n | acc]}}
-        :error -> {:halt, :error}
-      end
-    end)
-    |> case do
-      {:ok, acc} -> {:ok, Enum.reverse(acc)}
-      :error -> :error
-    end
-  end
-
-  defp parse_uuid(s) when is_binary(s), do: Ecto.UUID.cast(s)
-  defp parse_uuid(_), do: :error
-
-  # Move target is either a folder-marker UUID or the literal "root" sentinel
-  # (top level — no parent marker). "root" must bypass the UUID cast.
-  defp parse_move_target("root"), do: {:ok, "root"}
-  defp parse_move_target(s) when is_binary(s), do: parse_uuid(s)
-  defp parse_move_target(_), do: :error
-
-  defp broadcast_batch(user, vault, payload) do
-    EngramWeb.Endpoint.broadcast!(
-      "sync:#{user.id}:#{vault.id}",
-      "folders.batch",
-      payload
-    )
-  end
 
   defp note_summary(note) do
     %{
