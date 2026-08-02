@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.6](https://github.com/engram-app/Engram/compare/0.12.5...0.12.6) (2026-08-02)
+
+
+### Bug Fixes
+
+* security & correctness fixes from backend-wide review ([#1188](https://github.com/engram-app/Engram/issues/1188)) ([60748f5](https://github.com/engram-app/Engram/commit/60748f53792c1d442b12d6d8c7ac503354fc3586))
+* **telemetry:** correct the profiler's sample rate + stop shipping a TLS cert on every log line ([#1196](https://github.com/engram-app/Engram/issues/1196)) ([728b99d](https://github.com/engram-app/Engram/commit/728b99dc7749a381fb86061b7d11014e160e70b6))
+
 ## [0.12.5](https://github.com/engram-app/Engram/compare/0.12.4...0.12.5) (2026-08-02)
 
 
