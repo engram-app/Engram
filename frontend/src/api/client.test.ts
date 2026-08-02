@@ -77,6 +77,22 @@ describe("api client 402 handling", () => {
 		await expect(api.get("/x")).rejects.toBeInstanceOf(ApiError);
 	});
 
+	it("derives the ApiError message from a 422 errors map when error is absent", async () => {
+		// The unified controller shape is %{errors: %{field => [messages]}} with
+		// no top-level `error` key — the message must surface the field detail,
+		// not degrade to the generic statusText.
+		globalThis.fetch = vi
+			.fn()
+			.mockResolvedValue(
+				new Response(
+					JSON.stringify({ errors: { display_name: ["should be at most 80 character(s)"] } }),
+					{ status: 422, statusText: "Unprocessable Entity" },
+				),
+			);
+
+		await expect(api.get("/x")).rejects.toThrow("display_name: should be at most 80 character(s)");
+	});
+
 	it("sends an X-Device-Id header on every request", async () => {
 		const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
 		globalThis.fetch = fetchMock;
