@@ -430,7 +430,21 @@ defmodule EngramWeb.CrdtChannel do
               captured_version: captured_version
             )
         rescue
-          _ -> :ok
+          e ->
+            # Still best-effort (timer checkpoint is the backstop), but never
+            # silent — this was the one unlogged rescue in this module. Only
+            # the bounded error_kind escapes: the checkpoint wraps crypto
+            # decrypt/encrypt calls, and their raw errors can carry secrets
+            # (same invariant as Engram.Logger.DecryptFailure).
+            Logger.warning(
+              "crdt create checkpoint materialize failed",
+              Metadata.with_category(:warning, :websocket,
+                doc_id: note_id,
+                error_kind: Engram.Telemetry.error_kind(e)
+              )
+            )
+
+            :ok
         end
       end
 

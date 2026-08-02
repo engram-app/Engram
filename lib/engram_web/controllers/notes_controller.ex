@@ -400,12 +400,13 @@ defmodule EngramWeb.NotesController do
   # inclusive (>=), so the next poll resumes exactly at the boundary (the
   # boundary row repeats once; applies are idempotent).
   #
-  # Bound: legacy convergence assumes fewer than `limit` rows share one
-  # updated_at microsecond — a longer same-usec run would re-serve the same
-  # page forever. Server-side bulk writes stamp at most 100 rows per `now`
-  # (batch upsert cap) and legacy clients can't lower the 500 default, so
-  # the run length stays well under the page size. Revisit if a bulk path
-  # ever writes >500 rows in one timestamp.
+  # Bound: legacy convergence assumes FEWER than `limit` rows share one
+  # updated_at microsecond — a same-usec run of page size or longer would
+  # re-serve the same page forever (the since boundary is inclusive).
+  # Server-side bulk writes enforce this via Engram.Notes' @stamp_chunk
+  # (400 rows per timestamp — batch delete chunks, batch upsert per-entry
+  # bulk_stamp/2), and legacy clients can't lower the 500 default. See
+  # docs/context/batch-write-caps-and-chunk-stamping.md.
   defp changes_server_time(changes, true) when changes != [] do
     changes |> List.last() |> Map.fetch!(:updated_at) |> DateTime.to_iso8601()
   end

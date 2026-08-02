@@ -42,6 +42,41 @@ defmodule Engram.AttachmentsTest do
     metas |> Enum.map(& &1.path) |> Enum.sort()
   end
 
+  describe "MIME whitelist enforcement at the context boundary" do
+    # The whitelist used to be enforced only in AttachmentsController — any
+    # non-HTTP caller (MCP tool, Oban job, console) bypassed it entirely.
+    test "rejects a blocklisted extension even with an allowlisted MIME", %{
+      user: user,
+      vault: vault
+    } do
+      assert {:error, {:extension_not_allowed, ".exe"}} =
+               Attachments.upsert_attachment(user, vault, %{
+                 "path" => "tools/evil.exe",
+                 "content_base64" => @valid_content,
+                 "mime_type" => "image/png"
+               })
+    end
+
+    test "rejects a disallowed MIME when no explicit mime_type is sent", %{
+      user: user,
+      vault: vault
+    } do
+      assert {:error, {:mime_not_allowed, "application/octet-stream"}} =
+               Attachments.upsert_attachment(user, vault, %{
+                 "path" => "data/blob.bin",
+                 "content_base64" => @valid_content
+               })
+    end
+  end
+
+  describe "batch_delete/3 size cap" do
+    test "rejects more than 500 paths per batch", %{user: user, vault: vault} do
+      paths = for i <- 1..501, do: "bulk/file-#{i}.png"
+
+      assert {:error, :batch_too_large} = Attachments.batch_delete(user, vault, paths)
+    end
+  end
+
   describe "concurrent upsert race (T3-audit H1)" do
     # T3-audit H1 — pre-fix, two concurrent upserts to the same path could
     # race: each reads "no existing row," allocates a fresh att_id, encrypts
@@ -406,7 +441,7 @@ defmodule Engram.AttachmentsTest do
 
       {:ok, _att} =
         Attachments.upsert_attachment(user, vault, %{
-          "path" => "secret.bin",
+          "path" => "secret.png",
           "content_base64" => b64,
           "mtime" => 0.0
         })
@@ -423,14 +458,14 @@ defmodule Engram.AttachmentsTest do
 
       {:ok, created} =
         Attachments.upsert_attachment(user, vault, %{
-          "path" => "Real/file.bin",
+          "path" => "Real/file.png",
           "content_base64" => Base.encode64("hello"),
           "mtime" => 0.0
         })
 
-      assert {:ok, fetched} = Attachments.get_attachment(user, vault, "Real/file.bin")
+      assert {:ok, fetched} = Attachments.get_attachment(user, vault, "Real/file.png")
       assert fetched.id == created.id
-      assert fetched.path == "Real/file.bin"
+      assert fetched.path == "Real/file.png"
     end
 
     test "list_changes returns decrypt-sourced path" do
@@ -458,12 +493,12 @@ defmodule Engram.AttachmentsTest do
 
       {:ok, _att} =
         Attachments.upsert_attachment(user, vault, %{
-          "path" => "rt.bin",
+          "path" => "rt.png",
           "content_base64" => b64,
           "mtime" => 0.0
         })
 
-      {:ok, fetched} = Attachments.get_attachment(user, vault, "rt.bin")
+      {:ok, fetched} = Attachments.get_attachment(user, vault, "rt.png")
       assert fetched.content == plaintext
       assert fetched.encryption_version == 1
       assert is_binary(fetched.content_nonce)
@@ -475,12 +510,12 @@ defmodule Engram.AttachmentsTest do
 
       {:ok, _real} =
         Attachments.upsert_attachment(user, vault, %{
-          "path" => "ghost.bin",
+          "path" => "ghost.png",
           "content_base64" => Base.encode64("real plaintext"),
           "mtime" => 0.0
         })
 
-      ghost = Engram.Fixtures.raw_attachment_by_path!(user, "ghost.bin")
+      ghost = Engram.Fixtures.raw_attachment_by_path!(user, "ghost.png")
 
       {:ok, _} =
         Engram.Repo.with_tenant(user.id, fn ->
@@ -488,13 +523,13 @@ defmodule Engram.AttachmentsTest do
           |> Engram.Repo.update_all(set: [content_nonce: :crypto.strong_rand_bytes(12)])
         end)
 
-      assert {:error, :decrypt_failed} = Attachments.get_attachment(user, vault, "ghost.bin")
+      assert {:error, :decrypt_failed} = Attachments.get_attachment(user, vault, "ghost.png")
     end
 
     test "logs and returns {:error, {:storage, :blob_missing}} when storage object is gone" do
       user = insert(:user) |> Engram.Repo.reload!()
       vault = insert(:vault, user: user)
-      path = "missing.bin"
+      path = "missing.png"
 
       {:ok, att} =
         Attachments.upsert_attachment(user, vault, %{

@@ -129,6 +129,15 @@ defmodule EngramWeb.AttachmentsController do
       {:error, {:storage, _reason}} ->
         conn |> put_status(502) |> json(%{error: "failed to upload to storage backend"})
 
+      # Defense in depth: the context now enforces the whitelist too. The
+      # pre-check above answers first on the HTTP path; these keep a context
+      # rejection from falling into the changeset clause below.
+      {:error, {:mime_not_allowed, mime}} ->
+        conn |> put_status(415) |> json(%{error: "mime_not_allowed", mime_type: mime})
+
+      {:error, {:extension_not_allowed, ext}} ->
+        conn |> put_status(415) |> json(%{error: "extension_not_allowed", extension: ext})
+
       {:error, changeset} ->
         conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
     end
@@ -269,16 +278,21 @@ defmodule EngramWeb.AttachmentsController do
   def batch_delete(conn, %{"paths" => paths}) when is_list(paths) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
-    # batch_delete/3 is total — its @spec returns {:ok, %{deleted: _}} only.
-    {:ok, %{deleted: n}} = Attachments.batch_delete(user, vault, paths)
-    body = %{deleted: n}
 
-    Engram.Idempotency.remember(conn.assigns.current_user, conn.assigns.idempotency_key, %{
-      status: 200,
-      body: body
-    })
+    case Attachments.batch_delete(user, vault, paths) do
+      {:ok, %{deleted: n}} ->
+        body = %{deleted: n}
 
-    json(conn, body)
+        Engram.Idempotency.remember(conn.assigns.current_user, conn.assigns.idempotency_key, %{
+          status: 200,
+          body: body
+        })
+
+        json(conn, body)
+
+      {:error, :batch_too_large} ->
+        conn |> put_status(422) |> json(%{error: "batch_too_large", max: 500})
+    end
   end
 
   def batch_delete(conn, _params) do

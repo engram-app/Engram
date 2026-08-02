@@ -87,6 +87,30 @@ defmodule Engram.Notes do
     from(n in Note, where: n.kind == "note")
   end
 
+  # 500 = the legacy change feed's convergence bound: >500 rows stamped on
+  # one server timestamp can make a legacy `updated_at >= since` pull
+  # re-serve the same page forever (see notes_controller.ex
+  # changes_server_time). Used two ways:
+  #   * batch_delete_notes chunk-stamps tombstones @stamp_chunk per
+  #     timestamp, so ANY request size is safe (e2e teardown legitimately
+  #     sends >1000 ids);
+  #   * batch_upsert_notes hard-caps at 500 — each entry costs an encrypt +
+  #     CRDT merge, so unbounded requests are a compute-DoS vector, and no
+  #     client sends >500 (the plugin chunks at ≤100) — and stamps its
+  #     creates through the same @stamp_chunk grouping.
+  @max_batch_entries 500
+
+  # Rows per shared timestamp for bulk writes. STRICTLY below the 500-row
+  # legacy page: the `since` boundary is inclusive, so a same-stamp run of
+  # EXACTLY page size re-serves the same page forever, not just >page.
+  @stamp_chunk 400
+
+  @doc false
+  # Timestamp for the i-th row of a bulk write: base + one µs per
+  # @stamp_chunk rows. Distinct-by-construction even when consecutive
+  # utc_now() calls collide in the same microsecond.
+  def bulk_stamp(base, i), do: DateTime.add(base, div(i, @stamp_chunk), :microsecond)
+
   @doc """
   #590: maps Qdrant point ids → the owning note's decrypted display fields
   (`source_path`, `tags`).
@@ -2012,7 +2036,6 @@ defmodule Engram.Notes do
   def batch_delete_notes(_user, _vault, []), do: {:ok, %{deleted: 0}}
 
   def batch_delete_notes(user, vault, ids) when is_list(ids) do
-    now = DateTime.utc_now()
     # Duplicate ids collapse to one delete (idempotent-delete semantics);
     # `deleted` counts DISTINCT notes, documented in the @doc above.
     ids = Enum.uniq(ids)
@@ -2038,12 +2061,29 @@ defmodule Engram.Notes do
           case Enum.find(ids, &(not MapSet.member?(found, &1))) do
             nil ->
               seq = Engram.Vaults.next_seq!(vault.id)
+              base_now = DateTime.utc_now()
 
-              {updated, _} =
-                from(n in Note,
-                  where: n.id in ^Enum.map(notes, & &1.id) and is_nil(n.deleted_at)
-                )
-                |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
+              # Stamp tombstones in @stamp_chunk-row chunks with DISTINCT
+              # timestamps: the legacy `updated_at >= since` feed pages by
+              # timestamp with an INCLUSIVE boundary, so a same-stamp run of
+              # page size or longer re-serves the same page forever
+              # (changes_server_time). +1 µs per chunk guarantees distinct
+              # stamps even when consecutive utc_now() calls collide.
+              updated =
+                notes
+                |> Enum.map(& &1.id)
+                |> Enum.chunk_every(@stamp_chunk)
+                |> Enum.with_index()
+                |> Enum.map(fn {chunk_ids, i} ->
+                  now_i = DateTime.add(base_now, i, :microsecond)
+
+                  {n, _} =
+                    from(n in Note, where: n.id in ^chunk_ids and is_nil(n.deleted_at))
+                    |> Repo.update_all(set: [deleted_at: now_i, updated_at: now_i, seq: seq])
+
+                  n
+                end)
+                |> Enum.sum()
 
               :ok = UsageMeters.dec_notes_count(user.id, updated)
 
@@ -2265,6 +2305,10 @@ defmodule Engram.Notes do
           | {:error, term()}
   def batch_upsert_notes(_user, _vault, []), do: {:ok, %{results: []}}
 
+  def batch_upsert_notes(_user, _vault, notes_params)
+      when is_list(notes_params) and length(notes_params) > @max_batch_entries,
+      do: {:error, :batch_too_large}
+
   def batch_upsert_notes(user, vault, notes_params) when is_list(notes_params) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
@@ -2429,9 +2473,14 @@ defmodule Engram.Notes do
 
     now = DateTime.utc_now()
 
+    # Per-entry bulk_stamp/2 instead of one shared `now`: a full 500-entry
+    # batch stamping one timestamp is EXACTLY the legacy page size, which
+    # wedges the inclusive `updated_at >= since` feed (changes_server_time).
     {entries, insert_rows} =
-      Enum.map_reduce(entries, [], fn entry, rows ->
-        process_batch_entry(entry, existing_by_hmac, user, vault, now, rows)
+      entries
+      |> Enum.with_index()
+      |> Enum.map_reduce([], fn {entry, i}, rows ->
+        process_batch_entry(entry, existing_by_hmac, user, vault, bulk_stamp(now, i), rows)
       end)
 
     # on_conflict: :nothing — a PK collision (client-supplied id already in

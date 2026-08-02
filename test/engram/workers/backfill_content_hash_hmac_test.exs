@@ -166,4 +166,64 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
                })
     end
   end
+
+  describe "decrypt-failure log redaction" do
+    # Security invariant (Engram.Logger.DecryptFailure): the raw decrypt
+    # reason can wrap Req/Postgrex terms carrying secrets and must never be
+    # interpolated into the message or metadata — only the bounded
+    # error_kind atom escapes. EmbedNote follows this; this worker didn't.
+    test "skip log carries no raw reason; telemetry reason is a bounded atom",
+         %{user: user, vault: vault} do
+      content = "# corrupt me"
+      legacy_md5 = :crypto.hash(:md5, content) |> Base.encode16(case: :lower)
+      note = insert_note!(user, vault, %{"content" => content, "content_hash" => legacy_md5})
+
+      # Corrupt the nonce so Envelope.decrypt fails with :decrypt_failed.
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          from(n in Note, where: n.id == ^note.id)
+          |> Repo.update_all(set: [content_nonce: :crypto.strong_rand_bytes(12)])
+        end)
+
+      handler_id = "backfill-skip-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:engram, :backfill, :content_hash_skipped],
+        fn _event, _meas, meta, _cfg -> send(parent, {:skip_meta, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok =
+                   perform_job(BackfillContentHashHmac, %{
+                     "user_id" => user.id,
+                     "vault_id" => vault.id,
+                     "cursor" => 0,
+                     "scope" => "notes"
+                   })
+        end)
+
+      # Scope to THIS worker's lines — capture_log sees concurrent async
+      # tests' output, and other modules legitimately log bounded reason=
+      # atoms (e.g. Engram.Vaults decrypt_or_log).
+      worker_lines =
+        log |> String.split("\n") |> Enum.filter(&String.contains?(&1, "BackfillContentHashHmac"))
+
+      assert Enum.any?(worker_lines, &String.contains?(&1, "skipping note"))
+
+      refute Enum.any?(worker_lines, &String.contains?(&1, "(:decrypt_failed)")),
+             "raw inspect(reason) must not reach the log message"
+
+      refute Enum.any?(worker_lines, &String.contains?(&1, " reason=")),
+             "raw reason must not reach the log metadata (only error_kind)"
+
+      assert_received {:skip_meta, meta}
+      assert is_atom(meta.reason), "telemetry reason must be the bounded error_kind atom"
+    end
+  end
 end
