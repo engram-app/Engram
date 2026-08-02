@@ -177,6 +177,11 @@ defmodule EngramWeb.ConnectionsController do
       connected_at: row.connected_at,
       first_user_agent: row.first_user_agent,
       first_ip: row.first_ip,
+      # Where this grant's code was actually delivered, vs. everything the
+      # client registered. Shown separately because the registered list is what
+      # #1204 abused: an attacker's grant listed Anthropic's callback among its
+      # redirects while the code went to their own loopback.
+      redirect_uri: row.redirect_uri,
       redirect_uris: row.redirect_uris,
       # A CIMD client's PUBLIC identifier is this URL; `client_id` is the internal
       # UUID the revoke button keys on. The UI shows the URL because it is the

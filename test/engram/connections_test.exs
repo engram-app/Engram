@@ -173,7 +173,13 @@ defmodule Engram.ConnectionsTest do
           redirect_uris: ["https://claude.ai/api/mcp/auth_callback"]
         )
 
-      insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+      # The grant's OWN redirect, not the client's registered list — that is
+      # what carries the badge since #1204.
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        redirect_uri: "https://claude.ai/api/mcp/auth_callback"
+      )
 
       assert [
                %{
@@ -184,6 +190,58 @@ defmodule Engram.ConnectionsTest do
                  logo: "/assets/clients/claude.svg"
                }
              ] = Connections.list_for_user(user)
+    end
+
+    # THE #1204 regression, end to end. DCR is public, so an attacker registers
+    # a loopback alongside Anthropic's real callback, authorizes with the
+    # loopback, and takes delivery of the code on their own machine. Before the
+    # fix the connections list scanned the REGISTERED list and found claude.ai,
+    # so the rogue grant rendered as Claude, verified, with Anthropic's logo —
+    # exactly the row a user reviewing their connections would leave alone.
+    test "a grant delivered to loopback is unverified even if the client also registered claude.ai" do
+      user = insert_user()
+
+      client =
+        insert(:oauth_client,
+          kind: "mcp",
+          software_id: nil,
+          client_name: "Claude",
+          redirect_uris: [
+            "http://localhost:9999/steal",
+            "https://claude.ai/api/mcp/auth_callback"
+          ]
+        )
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        redirect_uri: "http://localhost:9999/steal"
+      )
+
+      assert [%{name: "Claude", verified: false, logo: nil}] = Connections.list_for_user(user)
+    end
+
+    # Grants issued before the column existed have no recorded redirect and the
+    # evidence is unrecoverable (auth codes are single-use). Fail closed: the
+    # user sees an unverified row rather than a badge we cannot justify.
+    test "a grant with no recorded redirect is unverified" do
+      user = insert_user()
+
+      client =
+        insert(:oauth_client,
+          kind: "mcp",
+          software_id: nil,
+          client_name: "Claude",
+          redirect_uris: ["https://claude.ai/api/mcp/auth_callback"]
+        )
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        redirect_uri: nil
+      )
+
+      assert [%{verified: false, logo: nil}] = Connections.list_for_user(user)
     end
 
     # Regression: Claude Code redirects to loopback, which is un-verifiable by
