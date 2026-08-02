@@ -7,6 +7,8 @@ defmodule EngramWeb.AttachmentsController do
   alias Engram.Billing
   alias Engram.Storage.MimeWhitelist
 
+  action_fallback EngramWeb.FallbackController
+
   operation(:upload,
     operation_id: "attachments-upload",
     summary: "Upload an attachment (base64 JSON)",
@@ -138,8 +140,8 @@ defmodule EngramWeb.AttachmentsController do
       {:error, {:extension_not_allowed, ext}} ->
         conn |> put_status(415) |> json(%{error: "extension_not_allowed", extension: ext})
 
-      {:error, changeset} ->
-        conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
+      {:error, %Ecto.Changeset{}} = error ->
+        error
     end
   end
 
@@ -183,11 +185,8 @@ defmodule EngramWeb.AttachmentsController do
           nil
         )
 
-      {:error, :conflict} ->
-        conn |> put_status(409) |> json(%{error: "conflict"})
-
-      {:error, :not_found} ->
-        conn |> put_status(404) |> json(%{error: "not_found"})
+      {:error, reason} = error when reason in [:conflict, :not_found] ->
+        error
     end
   end
 
@@ -241,14 +240,17 @@ defmodule EngramWeb.AttachmentsController do
 
             json(conn, body)
 
+          # item_path shapes stay inline: the fallback's {:conflict, id}/
+          # {:not_found, id} clauses render item_id, and these carry file
+          # PATHS. Only the terminal 500 falls through.
           {:error, {:conflict, p}} ->
             conn |> put_status(409) |> json(%{error: "conflict", item_path: p})
 
           {:error, {:not_found, p}} ->
             conn |> put_status(404) |> json(%{error: "not_found", item_path: p})
 
-          {:error, _} ->
-            conn |> put_status(500) |> json(%{error: "internal"})
+          {:error, _} = error ->
+            error
         end
     end
   end
@@ -491,8 +493,6 @@ defmodule EngramWeb.AttachmentsController do
   def changes(conn, _params) do
     conn |> put_status(400) |> json(%{error: "since parameter is required"})
   end
-
-  defp format_errors(changeset), do: EngramWeb.format_errors(changeset)
 
   # Types safe to render inline in the browser on the API origin. Raster images
   # and PDFs are inert; SVG (script via <script>) and HTML/XML (script via

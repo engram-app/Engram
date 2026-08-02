@@ -5,6 +5,8 @@ defmodule EngramWeb.AuthController do
   alias Engram.Accounts
   alias EngramWeb.Schemas
 
+  action_fallback EngramWeb.FallbackController
+
   operation(:list_api_keys,
     operation_id: "apikeys-list",
     summary: "List API keys",
@@ -51,10 +53,8 @@ defmodule EngramWeb.AuthController do
       {:ok, raw_key, api_key} ->
         json(conn, %{key: raw_key, name: api_key.name, id: api_key.id})
 
-      {:error, changeset} ->
-        conn
-        |> put_status(422)
-        |> json(%{errors: format_errors(changeset)})
+      {:error, %Ecto.Changeset{}} = error ->
+        error
     end
   end
 
@@ -90,6 +90,4 @@ defmodule EngramWeb.AuthController do
         conn |> put_status(400) |> json(%{error: "invalid API key id"})
     end
   end
-
-  defp format_errors(changeset), do: EngramWeb.format_errors(changeset)
 end
