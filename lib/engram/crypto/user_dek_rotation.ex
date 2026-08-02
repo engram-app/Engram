@@ -34,7 +34,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Accounts.User
   alias Engram.Auth.SessionInvalidator
   alias Engram.Crypto
-  alias Engram.Crypto.{DekCache, Envelope, RotationLock}
+  alias Engram.Crypto.{DekCache, Envelope, MigrationRunner, RotationLock}
   alias Engram.Crypto.KeyProvider.Resolver
   alias Engram.Logger.Metadata
   alias Engram.Repo
@@ -60,15 +60,15 @@ defmodule Engram.Crypto.UserDekRotation do
 
     try do
       result = do_rotate(user_id)
-      emit_telemetry(user_id, result, duration_us_since(started_at))
+      emit_telemetry(user_id, result, MigrationRunner.duration_us_since(started_at))
       result
     rescue
       e ->
-        emit_telemetry(user_id, {:error, :crashed}, duration_us_since(started_at))
+        emit_telemetry(user_id, {:error, :crashed}, MigrationRunner.duration_us_since(started_at))
         reraise e, __STACKTRACE__
     catch
       kind, reason ->
-        emit_telemetry(user_id, {:error, :crashed}, duration_us_since(started_at))
+        emit_telemetry(user_id, {:error, :crashed}, MigrationRunner.duration_us_since(started_at))
         :erlang.raise(kind, reason, __STACKTRACE__)
     end
   end
@@ -1132,14 +1132,6 @@ defmodule Engram.Crypto.UserDekRotation do
       {:error, reason} ->
         {:error, reason}
     end
-  end
-
-  defp duration_us_since(started_at) do
-    System.convert_time_unit(
-      System.monotonic_time() - started_at,
-      :native,
-      :microsecond
-    )
   end
 
   defp emit_telemetry(user_id, :ok, duration_us) do

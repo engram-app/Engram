@@ -22,17 +22,33 @@ defmodule Engram.Observability.Pyroscope do
 
   ## How it samples
 
-  Every 10ms we walk `Process.list/0` and grab each process's
-  `:current_stacktrace`. For every sample we increment a counter
-  keyed by the collapsed stack (`mod:fun/arity;mod:fun/arity;...`).
-  After a configurable window (default 10s) we serialize the
-  accumulator as Pyroscope's `folded` (collapsed-stack) text format
-  and POST it to `${GRAFANA_PYROSCOPE_URL}/ingest`. Counters reset
-  on push.
+  Every `PYROSCOPE_SAMPLE_INTERVAL_MS` (prod: 2000) we walk
+  `Process.list/0` and grab each process's `:current_stacktrace`. For
+  every sample we increment a counter keyed by the collapsed stack
+  (`mod:fun/arity;mod:fun/arity;...`). After a configurable window
+  (default 10s) we serialize the accumulator as Pyroscope's `folded`
+  (collapsed-stack) text format and POST it to
+  `${GRAFANA_PYROSCOPE_URL}/ingest`. Counters reset on push.
 
-  Sampling at 100Hz across N processes yields N×100 samples/sec.
-  Pyroscope normalizes via the `sampleRate=100` query param so flame
-  widths read as wall-clock proportions, not raw counts.
+  ## Sample rate is measured, not assumed
+
+  We always declare `sampleRate=100` and rescale counts to match (see
+  `scale_counts/3`), rather than deriving the rate from the configured
+  interval. Two reasons, both of which produced wrong flame graphs:
+
+    * Pyroscope parses `sampleRate` as an **integer**. Prod samples at
+      0.5Hz, so the honest rate is not expressible — `div(1000, 2000)`
+      floors to `0`, and clamping that to `1` made every absolute time
+      read 2x low.
+    * The configured interval is not the achieved one. `schedule_sample/1`
+      fires *after* a pass completes, so the real period is
+      `interval + pass_duration`. At the old 50ms setting with a ~15ms
+      pass that is 15.4Hz, not the 20Hz the code claimed — a 23% error.
+
+  Scaling from `passes / measured_window` removes both. It also gives the
+  sampler implicit backpressure for free: if passes get slower, fewer land
+  in the window and the scale factor grows to compensate, instead of the
+  profiler silently drifting off its own stated units.
 
   ## What's profiled
 
@@ -67,10 +83,32 @@ defmodule Engram.Observability.Pyroscope do
 
   require Logger
 
-  # 100Hz CPU sampling — matches the convention every Pyroscope agent
-  # uses, so flame widths read directly as a fraction of wall-clock
-  # CPU time (1 sample ≈ 10ms of work).
-  @default_sample_interval_ms 10
+  # 1Hz. NOT the 100Hz Pyroscope-agent convention, deliberately: those
+  # agents sample via an OS signal timer and cost microseconds. We have no
+  # such hook from the BEAM, so a pass walks Process.list/0 and calls
+  # Process.info(:current_stacktrace) on every process — O(processes), and
+  # measured at ~15ms against ~745 live processes in prod.
+  #
+  # At a 10ms default (the old value) that is ~60% of a vCPU, and the
+  # sampler is slower than its own interval. A 2026-07-04 prod regression
+  # at 50ms already cost ~23% of a vCPU sustained (ECS avg CPU 3% -> 38%)
+  # and ran for hours. Prod now sets PYROSCOPE_SAMPLE_INTERVAL_MS=2000.
+  #
+  # This default only applies when the env var is absent, i.e. exactly the
+  # misconfiguration that would otherwise pin a scheduler. Start safe; an
+  # operator who wants resolution sets the env var deliberately.
+  @default_sample_interval_ms 1_000
+
+  # The sampleRate we DECLARE to Pyroscope, with counts scaled to match
+  # (see scale_counts/4). Pyroscope's ingest API parses sampleRate as an
+  # integer, so a sub-1Hz sampler cannot state its true rate — prod runs
+  # 0.5Hz, div(1000, 2000) floors to 0, and the old `max(1, ...)` clamp
+  # reported 1Hz. Every absolute time in the flame graph read 2x low.
+  #
+  # Declaring a fixed rate and scaling counts sidesteps the integer floor
+  # entirely, and lets us derive the scale from the rate we ACTUALLY
+  # achieved rather than the one we configured.
+  @declared_sample_rate 100
 
   # Push every 10s. Pyroscope's UI buckets profiles at this granularity
   # by default; shorter pushes increase ingest volume without UI win.
@@ -92,11 +130,15 @@ defmodule Engram.Observability.Pyroscope do
     :sample_interval_ms,
     :push_interval_ms,
     :spy_name,
-    :sample_rate,
     :window_started_at_ms,
     :sample_timer_ref,
     :push_timer_ref,
-    counters: %{}
+    counters: %{},
+    # Passes actually completed this window. Divided by the measured window
+    # duration at push time to get the achieved sample rate — which is never
+    # the configured one, because schedule_sample/1 fires AFTER the pass
+    # completes, so the real period is interval + pass_duration.
+    passes_in_window: 0
   ]
 
   # ── Public API ────────────────────────────────────────────────────
@@ -188,15 +230,11 @@ defmodule Engram.Observability.Pyroscope do
       sample_interval_ms: sample_interval,
       push_interval_ms: push_interval,
       spy_name: Keyword.get(cfg, :spy_name, @default_spy_name),
-      # Clamp to at least 1: an operator-supplied interval above 1000ms
-      # would otherwise floor to 0 and report a bogus sampleRate=0 to
-      # Pyroscope. Intended range is 10-50ms, so this only guards a
-      # fat-fingered env value.
-      sample_rate: max(1, div(1_000, sample_interval)),
       window_started_at_ms: now_ms(),
       sample_timer_ref: nil,
       push_timer_ref: nil,
-      counters: %{}
+      counters: %{},
+      passes_in_window: 0
     }
 
     Logger.debug(
@@ -209,8 +247,7 @@ defmodule Engram.Observability.Pyroscope do
 
   @impl true
   def handle_info(:sample, state) do
-    process_count = length(Process.list())
-    {duration_us, counters} = :timer.tc(fn -> take_sample(state.counters) end)
+    {duration_us, {counters, process_count}} = :timer.tc(fn -> take_sample(state.counters) end)
 
     :telemetry.execute(
       [:engram, :pyroscope, :sample],
@@ -218,21 +255,29 @@ defmodule Engram.Observability.Pyroscope do
       %{}
     )
 
-    {:noreply, %{state | counters: counters, sample_timer_ref: schedule_sample(state)}}
+    {:noreply,
+     %{
+       state
+       | counters: counters,
+         passes_in_window: state.passes_in_window + 1,
+         sample_timer_ref: schedule_sample(state)
+     }}
   end
 
   @impl true
   def handle_info(:push, state) do
     {counters_to_push, window_started_at_ms} = {state.counters, state.window_started_at_ms}
+    passes = state.passes_in_window
     push_window_end_ms = now_ms()
 
     spawn(fn ->
-      do_push(state, counters_to_push, window_started_at_ms, push_window_end_ms)
+      do_push(state, counters_to_push, passes, window_started_at_ms, push_window_end_ms)
     end)
 
     new_state = %{
       state
       | counters: %{},
+        passes_in_window: 0,
         window_started_at_ms: push_window_end_ms,
         push_timer_ref: schedule_push(state)
     }
@@ -246,24 +291,52 @@ defmodule Engram.Observability.Pyroscope do
   # Snapshot every process's current stacktrace and increment the
   # counter keyed by the collapsed stack. We skip our own pid so the
   # sampler doesn't profile itself dominating its own flame.
-  @spec take_sample(map()) :: map()
+  # Returns {counters, process_count}. The count rides out of the same
+  # Process.list/0 walk that does the sampling — computing it separately
+  # meant snapshotting the whole process table twice per pass purely to
+  # feed a telemetry gauge.
+  @spec take_sample(map()) :: {map(), non_neg_integer()}
   def take_sample(counters) do
     self_pid = self()
 
-    Enum.reduce(Process.list(), counters, fn pid, acc ->
+    Enum.reduce(Process.list(), {counters, 0}, fn pid, {acc, n} ->
       if pid == self_pid do
-        acc
+        {acc, n + 1}
       else
         case Process.info(pid, :current_stacktrace) do
           {:current_stacktrace, [_ | _] = stack} ->
             key = collapse(stack)
-            Map.update(acc, key, 1, &(&1 + 1))
+            {Map.update(acc, key, 1, &(&1 + 1)), n + 1}
 
           _ ->
-            acc
+            {acc, n + 1}
         end
       end
     end)
+  end
+
+  @doc false
+  # Rescale raw sample counts so `count / @declared_sample_rate` equals the
+  # real wall-clock time that stack was observed for.
+  #
+  # Necessary because Pyroscope's ingest API takes sampleRate as an integer
+  # and our real rate is often not one — prod samples at ~0.5Hz. Deriving
+  # the scale from `passes / window_ms` rather than from the configured
+  # interval also absorbs timer drift: schedule_sample/1 fires AFTER a pass
+  # completes, so a 50ms interval with a 15ms pass runs at 15.4Hz, not 20Hz,
+  # and the old code would have overstated the rate by 23%.
+  #
+  # max(1, ...) keeps a stack seen exactly once from rounding away to zero
+  # and vanishing from the flame graph entirely.
+  @spec scale_counts(map(), non_neg_integer(), integer()) :: map()
+  def scale_counts(counters, passes, window_ms)
+      when passes <= 0 or window_ms <= 0,
+      do: counters
+
+  def scale_counts(counters, passes, window_ms) do
+    factor = @declared_sample_rate * (window_ms / 1_000) / passes
+
+    Map.new(counters, fn {stack, count} -> {stack, max(1, round(count * factor))} end)
   end
 
   # Pyroscope "folded" / "collapsed stack" format: each *line* is one
@@ -297,15 +370,19 @@ defmodule Engram.Observability.Pyroscope do
     |> Enum.map(fn {stack, count} -> [stack, ?\s, Integer.to_string(count), ?\n] end)
   end
 
-  defp do_push(_state, counters, _from, _until) when map_size(counters) == 0 do
+  defp do_push(_state, counters, _passes, _from, _until) when map_size(counters) == 0 do
     # Empty window — nothing to push. Happens during startup before
     # the first sample fires, or if every Process.list/0 frame was
     # filtered (unlikely outside tests).
     :ok
   end
 
-  defp do_push(state, counters, from_ms, until_ms) do
-    body = render_folded(counters)
+  defp do_push(state, counters, passes, from_ms, until_ms) do
+    body =
+      counters
+      |> scale_counts(passes, until_ms - from_ms)
+      |> render_folded()
+
     name_with_tags = "#{state.app_name}{#{state.tags}}"
 
     query = [
@@ -314,7 +391,7 @@ defmodule Engram.Observability.Pyroscope do
       {"until", to_seconds(until_ms)},
       {"format", "folded"},
       {"spyName", state.spy_name},
-      {"sampleRate", state.sample_rate},
+      {"sampleRate", @declared_sample_rate},
       {"units", @default_units},
       {"aggregationType", "sum"},
       {"profileType", @profile_kind}

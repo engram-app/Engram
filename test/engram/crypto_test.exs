@@ -697,4 +697,19 @@ defmodule Engram.CryptoTest do
       assert first_count == second_count
     end
   end
+
+  describe "sha256_hex/1" do
+    test "matches the known SHA-256 vector for \"abc\", lowercase hex" do
+      # FIPS 180-2 test vector — pins both the digest and the hex casing so a
+      # helper regression (e.g. accidental uppercase) can't silently break
+      # every stored token/key fingerprint lookup.
+      assert Crypto.sha256_hex("abc") ==
+               "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    end
+
+    test "hashes the empty binary" do
+      assert Crypto.sha256_hex("") ==
+               "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    end
+  end
 end
