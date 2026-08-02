@@ -38,6 +38,7 @@ defmodule Engram.Crypto.MasterRotation do
   alias Engram.Accounts
   alias Engram.Accounts.User
   alias Engram.Crypto.KeyProvider.Resolver
+  alias Engram.Crypto.MigrationRunner
   alias Engram.Repo
 
   require Logger
@@ -65,7 +66,7 @@ defmodule Engram.Crypto.MasterRotation do
 
     started_at = System.monotonic_time()
     result = do_rotate(user_id, target_version)
-    duration_us = duration_us_since(started_at)
+    duration_us = MigrationRunner.duration_us_since(started_at)
     emit_telemetry(user_id, result, duration_us)
 
     case result do
@@ -86,16 +87,17 @@ defmodule Engram.Crypto.MasterRotation do
 
   Returns the aggregate `counts` map.
   """
-  @spec rotate_all(pos_integer(), keyword()) :: counts() | {:error, term()}
+  # No {:error, _} arm: per-user failures count into :failed (unchanged from
+  # the pre-MigrationRunner loop); the old spec's error arm was always dead —
+  # dialyzer can now prove it through MigrationRunner.drive/2's spec.
+  @spec rotate_all(pos_integer(), keyword()) :: counts()
   def rotate_all(target_version, opts \\ [])
       when is_integer(target_version) and target_version >= 1 do
     batch_size = Keyword.get(opts, :batch_size, 100)
 
-    drive_loop(
-      target_version,
-      "00000000-0000-0000-0000-000000000000",
-      batch_size,
-      %{ok: 0, skipped: 0, failed: 0}
+    MigrationRunner.drive(
+      &below_target_ids(target_version, &1, batch_size),
+      &rotate_user(&1, target_version)
     )
   end
 
@@ -137,15 +139,7 @@ defmodule Engram.Crypto.MasterRotation do
   end
 
   defp enqueue_loop(target_version, last_id, batch_size, total) do
-    ids =
-      from(u in User,
-        where: not is_nil(u.encrypted_dek) and u.dek_version < ^target_version,
-        where: u.id > ^last_id,
-        select: u.id,
-        order_by: u.id,
-        limit: ^batch_size
-      )
-      |> Repo.all(skip_tenant_check: true)
+    ids = below_target_ids(target_version, last_id, batch_size)
 
     case ids do
       [] ->
@@ -219,41 +213,17 @@ defmodule Engram.Crypto.MasterRotation do
     end
   end
 
-  defp drive_loop(target_version, last_id, batch_size, acc) do
-    ids =
-      from(u in User,
-        where: not is_nil(u.encrypted_dek) and u.dek_version < ^target_version,
-        where: u.id > ^last_id,
-        select: u.id,
-        order_by: u.id,
-        limit: ^batch_size
-      )
-      |> Repo.all(skip_tenant_check: true)
-
-    case ids do
-      [] ->
-        acc
-
-      _ ->
-        acc =
-          Enum.reduce(ids, acc, fn id, a ->
-            case rotate_user(id, target_version) do
-              :ok -> Map.update!(a, :ok, &(&1 + 1))
-              :skipped -> Map.update!(a, :skipped, &(&1 + 1))
-              {:error, _} -> Map.update!(a, :failed, &(&1 + 1))
-            end
-          end)
-
-        drive_loop(target_version, List.last(ids), batch_size, acc)
-    end
-  end
-
-  defp duration_us_since(started_at) do
-    System.convert_time_unit(
-      System.monotonic_time() - started_at,
-      :native,
-      :microsecond
+  # Next id-ordered page of users still below `target_version`. Shared by the
+  # in-process drive loop and the Oban enqueue loop — same fleet filter.
+  defp below_target_ids(target_version, last_id, batch_size) do
+    from(u in User,
+      where: not is_nil(u.encrypted_dek) and u.dek_version < ^target_version,
+      where: u.id > ^last_id,
+      select: u.id,
+      order_by: u.id,
+      limit: ^batch_size
     )
+    |> Repo.all(skip_tenant_check: true)
   end
 
   defp emit_telemetry(user_id, {:rotated, _}, duration_us) do

@@ -284,9 +284,7 @@ defmodule Engram.Auth.DeviceFlow do
     {raw, token_hash}
   end
 
-  defp hash_token(raw) do
-    :crypto.hash(:sha256, raw) |> Base.encode16(case: :lower)
-  end
+  defp hash_token(raw), do: Engram.Crypto.sha256_hex(raw)
 
   # User codes are typed by a human to authorize a device, so a predictable
   # PRNG (Enum.random/:rand) is a brute-force/guessing weakness. Draw each

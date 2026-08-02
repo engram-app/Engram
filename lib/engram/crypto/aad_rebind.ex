@@ -35,6 +35,7 @@ defmodule Engram.Crypto.AadRebind do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.KeyProvider.Resolver
+  alias Engram.Crypto.MigrationRunner
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vaults.Vault
@@ -58,7 +59,7 @@ defmodule Engram.Crypto.AadRebind do
   def rebind_all(opts \\ []) do
     batch_size = Keyword.get(opts, :batch_size, 100)
 
-    drive_loop("00000000-0000-0000-0000-000000000000", batch_size, %{ok: 0, skipped: 0, failed: 0})
+    MigrationRunner.drive(&provisioned_ids(&1, batch_size), &rebind_user/1)
   end
 
   @doc "Rebind a single user. Idempotent — already-rebound users return `:skipped`."
@@ -68,7 +69,7 @@ defmodule Engram.Crypto.AadRebind do
   def rebind_user(user_id) when is_binary(user_id) do
     started_at = System.monotonic_time()
     result = do_rebind(user_id)
-    duration_us = duration_us_since(started_at)
+    duration_us = MigrationRunner.duration_us_since(started_at)
     emit_telemetry(user_id, result, duration_us)
 
     case result do
@@ -337,40 +338,16 @@ defmodule Engram.Crypto.AadRebind do
     end
   end
 
-  defp drive_loop(last_id, batch_size, acc) do
-    ids =
-      from(u in User,
-        where: not is_nil(u.encrypted_dek) and u.id > ^last_id,
-        select: u.id,
-        order_by: u.id,
-        limit: ^batch_size
-      )
-      |> Repo.all(skip_tenant_check: true)
-
-    case ids do
-      [] ->
-        acc
-
-      _ ->
-        acc =
-          Enum.reduce(ids, acc, fn id, a ->
-            case rebind_user(id) do
-              :ok -> Map.update!(a, :ok, &(&1 + 1))
-              :skipped -> Map.update!(a, :skipped, &(&1 + 1))
-              {:error, _} -> Map.update!(a, :failed, &(&1 + 1))
-            end
-          end)
-
-        drive_loop(List.last(ids), batch_size, acc)
-    end
-  end
-
-  defp duration_us_since(started_at) do
-    System.convert_time_unit(
-      System.monotonic_time() - started_at,
-      :native,
-      :microsecond
+  # Next id-ordered page of users holding a wrapped DEK — every provisioned
+  # user is a rebind candidate; per-user idempotency lives in rebind_user/1.
+  defp provisioned_ids(last_id, batch_size) do
+    from(u in User,
+      where: not is_nil(u.encrypted_dek) and u.id > ^last_id,
+      select: u.id,
+      order_by: u.id,
+      limit: ^batch_size
     )
+    |> Repo.all(skip_tenant_check: true)
   end
 
   defp emit_telemetry(user_id, {:rebound, _}, duration_us) do

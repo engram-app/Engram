@@ -34,7 +34,6 @@ defmodule Engram.Workers.RepathNoteIndex do
   alias Engram.Logger.Metadata
   alias Engram.Notes.Enqueue
   alias Engram.Notes.Note
-  alias Engram.Repo
   alias Engram.Workers.EmbedNote
 
   require Logger
@@ -54,15 +53,11 @@ defmodule Engram.Workers.RepathNoteIndex do
     note_id = args["note_id"]
     old_path_hmac = args["old_path_hmac"]
 
-    # skip_tenant_check: trusted internal worker, scoped by note_id.
-    case Repo.get(Note, note_id, skip_tenant_check: true) do
-      nil ->
-        {:discard, "note #{note_id} not found"}
+    case Engram.Notes.fetch_note_for_worker(note_id) do
+      {:discard, _reason} = discard ->
+        discard
 
-      %Note{deleted_at: deleted_at} when deleted_at != nil ->
-        {:discard, "note #{note_id} is soft-deleted"}
-
-      note ->
+      {:ok, note} ->
         case Indexing.count_points_by_path_hmac(note, old_path_hmac) do
           {:ok, count} when count > 0 ->
             case Indexing.repath_points(note, old_path_hmac) do

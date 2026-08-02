@@ -496,9 +496,7 @@ defmodule Engram.Accounts do
   end
 
   @doc "SHA-256 hash a raw refresh token for storage/lookup."
-  def hash_refresh_token(raw_token) do
-    :crypto.hash(:sha256, raw_token) |> Base.encode16(case: :lower)
-  end
+  def hash_refresh_token(raw_token), do: Engram.Crypto.sha256_hex(raw_token)
 
   # ── Encryption ─────────────────────────────────────────────────
 
@@ -610,9 +608,7 @@ defmodule Engram.Accounts do
     end
   end
 
-  defp hash_api_key(raw_key) do
-    :crypto.hash(:sha256, raw_key) |> Base.encode16(case: :lower)
-  end
+  defp hash_api_key(raw_key), do: Engram.Crypto.sha256_hex(raw_key)
 
   # ── Admin user management (self-host) ──────────────────────────
 
