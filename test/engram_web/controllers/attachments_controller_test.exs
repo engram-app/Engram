@@ -403,64 +403,22 @@ defmodule EngramWeb.AttachmentsControllerTest do
   end
 
   # ---------------------------------------------------------------------------
-  # GET /attachments/changes — Changes since timestamp
+  # GET /attachments/changes — retired timestamp feed
   # ---------------------------------------------------------------------------
 
-  describe "GET /attachments/changes" do
-    test "returns changes since timestamp", %{conn: conn} do
-      post(conn, "/api/attachments", %{
-        path: "photos/change1.png",
-        content_base64: @sample_base64,
-        mtime: 1_000.0
-      })
+  describe "GET /attachments/changes (retired)" do
+    test "returns 410 Gone regardless of params", %{conn: conn} do
+      resp =
+        conn
+        |> get("/api/attachments/changes", %{since: "2000-01-01T00:00:00Z"})
+        |> json_response(410)
 
-      conn2 = get(conn, "/api/attachments/changes", %{since: "2020-01-01T00:00:00Z"})
-      body = json_response(conn2, 200)
+      assert %{"error" => "gone", "message" => message} = resp
+      assert message =~ "sync socket"
 
-      assert is_list(body["changes"])
-      assert body["changes"] != []
-      assert is_binary(body["server_time"])
-
-      change = hd(body["changes"])
-      assert change["path"] == "photos/change1.png"
-      assert is_binary(change["updated_at"])
-      assert is_boolean(change["deleted"])
-      # Changes should NOT include content
-      refute Map.has_key?(change, "content_base64")
-    end
-
-    test "includes deleted attachments in changes", %{conn: conn} do
-      post(conn, "/api/attachments", %{
-        path: "photos/del-change.png",
-        content_base64: @sample_base64,
-        mtime: 1_000.0
-      })
-
-      delete(conn, "/api/attachments/photos/del-change.png")
-
-      conn3 = get(conn, "/api/attachments/changes", %{since: "2020-01-01T00:00:00Z"})
-      body = json_response(conn3, 200)
-
-      deleted = Enum.find(body["changes"], &(&1["path"] == "photos/del-change.png"))
-      assert deleted["deleted"] == true
-    end
-
-    test "returns empty for future timestamp", %{conn: conn} do
-      post(conn, "/api/attachments", %{
-        path: "photos/future.png",
-        content_base64: @sample_base64,
-        mtime: 1_000.0
-      })
-
-      conn2 = get(conn, "/api/attachments/changes", %{since: "2099-01-01T00:00:00Z"})
-      body = json_response(conn2, 200)
-
-      assert body["changes"] == []
-    end
-
-    test "returns 400 for invalid timestamp", %{conn: conn} do
-      conn = get(conn, "/api/attachments/changes", %{since: "not-a-date"})
-      assert json_response(conn, 400)
+      # 410 must not depend on params
+      assert %{"error" => "gone"} =
+               conn |> get("/api/attachments/changes") |> json_response(410)
     end
   end
 
@@ -721,28 +679,6 @@ defmodule EngramWeb.AttachmentsControllerTest do
       # User B should not see user A's attachment
       conn_b_get = get(conn_b, "/api/attachments/photos/secret.png")
       assert json_response(conn_b_get, 404)
-    end
-
-    test "user B's changes don't include user A's attachments", %{conn: conn} do
-      post(conn, "/api/attachments", %{
-        path: "photos/private.png",
-        content_base64: @sample_base64,
-        mtime: 1_000.0
-      })
-
-      user_b = insert(:user)
-      insert(:vault, user: user_b, is_default: true)
-      {:ok, api_key_b, _} = Engram.Accounts.create_api_key(user_b, "b-key")
-      grant_api_write!(user_b)
-
-      conn_b =
-        build_conn()
-        |> put_req_header("authorization", "Bearer #{api_key_b}")
-
-      conn_b_changes = get(conn_b, "/api/attachments/changes", %{since: "2020-01-01T00:00:00Z"})
-      body = json_response(conn_b_changes, 200)
-
-      assert body["changes"] == []
     end
   end
 end

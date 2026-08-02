@@ -447,51 +447,29 @@ defmodule EngramWeb.AttachmentsController do
 
   operation(:changes,
     operation_id: "attachments-changes",
-    summary: "List attachment changes since a timestamp",
+    summary: "Retired timestamp change feed",
+    deprecated: true,
     description:
-      "Returns attachment changes (including deletions, flagged via `deleted`) updated at or " <>
-        "after the `since` ISO 8601 timestamp, plus a `server_time` watermark for the next poll. " <>
-        "A missing or invalid `since` returns 400.",
+      "Retired. The timestamp-based attachment change feed has been removed; this endpoint " <>
+        "always returns 410 Gone. Clients sync via the CRDT sync socket and `GET /sync/manifest` " <>
+        "(current plugin versions already do).",
     tags: ["Attachments"],
-    parameters: [
-      since: [in: :query, type: :string, required: true, description: "ISO 8601 timestamp cursor"]
-    ],
     responses: [
-      ok: {"Changes", "application/json", Schemas.AttachmentChangesResponse},
-      bad_request: {"Missing/invalid since", "application/json", Schemas.MessageError}
+      gone: {"Feed retired", "application/json", Schemas.Error}
     ]
   )
 
-  def changes(conn, %{"since" => since_str}) do
-    user = conn.assigns.current_user
-    vault = conn.assigns.current_vault
-
-    case DateTime.from_iso8601(since_str) do
-      {:ok, since, _offset} ->
-        {:ok, changes} = Attachments.list_changes(user, vault, since)
-
-        json(conn, %{
-          changes:
-            Enum.map(changes, fn c ->
-              %{
-                path: c.path,
-                mime_type: c.mime_type,
-                size_bytes: c.size_bytes,
-                mtime: c.mtime,
-                updated_at: c.updated_at,
-                deleted: c.deleted_at != nil
-              }
-            end),
-          server_time: DateTime.utc_now() |> DateTime.to_iso8601()
-        })
-
-      {:error, _} ->
-        conn |> put_status(400) |> json(%{error: "invalid ISO 8601 timestamp"})
-    end
-  end
-
+  # Retired timestamp feed (zero authenticated prod traffic). The route stays
+  # so old clients get an explicit 410 instead of a generic 404.
   def changes(conn, _params) do
-    conn |> put_status(400) |> json(%{error: "since parameter is required"})
+    conn
+    |> put_status(410)
+    |> json(%{
+      error: "gone",
+      message:
+        "The timestamp change feed was removed. Sync via the CRDT sync socket and " <>
+          "/sync/manifest (current plugin versions already do)."
+    })
   end
 
   # Types safe to render inline in the browser on the API origin. Raster images

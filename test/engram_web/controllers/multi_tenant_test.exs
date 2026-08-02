@@ -90,20 +90,20 @@ defmodule EngramWeb.MultiTenantTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Changes isolation
+  # Sync manifest isolation
   # ---------------------------------------------------------------------------
 
-  describe "changes isolation" do
-    test "user2 sees no changes", %{conn2: conn2} do
-      conn = get(conn2, "/api/notes/changes?since=2020-01-01T00:00:00Z")
-      assert %{"changes" => changes} = json_response(conn, 200)
-      assert changes == []
+  describe "sync manifest isolation" do
+    test "user2 sees no notes in the manifest", %{conn2: conn2} do
+      conn = get(conn2, "/api/sync/manifest")
+      assert %{"notes" => notes} = json_response(conn, 200)
+      assert notes == []
     end
 
-    test "user1 sees own changes", %{conn1: conn1} do
-      conn = get(conn1, "/api/notes/changes?since=2020-01-01T00:00:00Z")
-      assert %{"changes" => changes} = json_response(conn, 200)
-      assert length(changes) >= 2
+    test "user1 sees own notes in the manifest", %{conn1: conn1} do
+      conn = get(conn1, "/api/sync/manifest")
+      assert %{"notes" => notes} = json_response(conn, 200)
+      assert length(notes) >= 2
     end
   end
 

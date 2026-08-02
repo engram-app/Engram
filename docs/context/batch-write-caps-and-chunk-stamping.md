@@ -10,11 +10,15 @@ forever on one page; or, the day-one version of the trap, e2e teardown gets
 
 ## The invariant
 
-The legacy change feed (`GET /notes/changes`) pages by **timestamp** with an
-**inclusive** boundary: legacy clients advance `since = server_time` after
-every poll, and on a truncated page `server_time` is the last returned row's
-`updated_at` (see `changes_server_time` in
-`lib/engram_web/controllers/notes_controller.ex`). The `>= since` filter
+> **2026-08-02:** the legacy feed itself is RETIRED — `GET /notes/changes` /
+> `GET /attachments/changes` now always return 410 Gone. The chunk-stamping
+> mechanism below still exists (removing it is a follow-up PR); this section
+> is the historical WHY.
+
+The legacy change feed (`GET /notes/changes`) paged by **timestamp** with an
+**inclusive** boundary: legacy clients advanced `since = server_time` after
+every poll, and on a truncated page `server_time` was the last returned row's
+`updated_at`. The `>= since` filter
 re-serves the boundary row once; applies are idempotent, so that's fine —
 **unless a page-size (500) or longer run of rows shares one `updated_at`
 microsecond**. Because the boundary is inclusive, a run of EXACTLY 500 wedges

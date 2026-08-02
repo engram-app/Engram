@@ -111,27 +111,6 @@ defmodule EngramWeb.Schemas.AppendResponse do
   })
 end
 
-defmodule EngramWeb.Schemas.ChangesResponse do
-  @moduledoc false
-  alias OpenApiSpex.Schema
-  require OpenApiSpex
-
-  OpenApiSpex.schema(%{
-    title: "ChangesResponse",
-    type: :object,
-    properties: %{
-      changes: %Schema{
-        type: :array,
-        description: "Note objects (content present only when fields=all).",
-        items: EngramWeb.Schemas.Note
-      },
-      server_time: %Schema{type: :string, format: :"date-time"},
-      has_more: %Schema{type: :boolean},
-      next_cursor: %Schema{type: :string, nullable: true}
-    }
-  })
-end
-
 defmodule EngramWeb.Schemas.BatchIdsRequest do
   @moduledoc false
   alias OpenApiSpex.Schema

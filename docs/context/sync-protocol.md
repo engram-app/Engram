@@ -17,8 +17,8 @@ How the server lets a client (plugin or web SPA) converge a vault: a per-vault *
 |---|---|---|
 | `GET /sync/changes` | `SyncController.changes` | **Unified** ordered pull — merges the notes + attachments feeds into one `{seq,id}` page |
 | `GET /sync/manifest` | `SyncController.manifest` | Full vault snapshot (path ciphertext + `content_hash`) for bootstrap/reconcile |
-| `GET /notes/changes` | `NotesController.changes` | Notes-only seq feed |
-| `GET /attachments/changes` | `AttachmentsController.changes` | Attachments-only seq feed |
+| `GET /notes/changes` | `NotesController.changes` | **Retired** — always 410 Gone (timestamp feed removed 2026-08; route kept so it's 410, not 404) |
+| `GET /attachments/changes` | `AttachmentsController.changes` | **Retired** — always 410 Gone (same) |
 | `POST /notes/batch`, `/notes/batch-delete`, `/notes/batch-move`, `/folders/batch-*`, `/attachments/batch-*` | bulk | Idempotent bulk ops (require `X-Idempotency-Key`, enforced by the `IdempotencyKey` plug) |
 
 ## Unified change-log pull (`GET /sync/changes`)

@@ -4,7 +4,7 @@ defmodule EngramWeb.Plugs.AccountLifecycleTest do
   alias Engram.Accounts.User
   alias EngramWeb.Plugs.AccountLifecycle
 
-  defp run(conn, user, method \\ "GET", path \\ "/api/notes/changes") do
+  defp run(conn, user, method \\ "GET", path \\ "/api/sync/manifest") do
     %{conn | method: method, request_path: path}
     |> Plug.Conn.assign(:current_user, user)
     |> AccountLifecycle.call([])
@@ -46,7 +46,7 @@ defmodule EngramWeb.Plugs.AccountLifecycleTest do
     end
 
     test "403 on vault data", %{conn: conn, user: user} do
-      assert json_response(run(conn, user, "GET", "/api/notes/changes"), 403)["error"] ==
+      assert json_response(run(conn, user, "GET", "/api/sync/manifest"), 403)["error"] ==
                "account_suspended"
     end
 

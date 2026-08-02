@@ -655,8 +655,9 @@ defmodule Engram.Attachments do
   mid-loop failure still rolls the whole op back. Reusing `batch_delete/3` keeps
   one delete path instead of a bespoke single-seq `update_all`.
   """
-  # Shared with Engram.Notes' batch caps: 500 = the legacy change feed's
-  # convergence bound (>500 rows on one server timestamp can loop a pull).
+  # Shared with Engram.Notes' batch caps: 500 = the (now retired, 410) legacy
+  # change feed's convergence bound (>500 rows on one server timestamp could
+  # loop a pull).
   @max_batch_entries 500
 
   @spec delete_folder(map(), map(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
@@ -685,8 +686,9 @@ defmodule Engram.Attachments do
     end
   end
 
-  # Shared with Engram.Notes' batch caps: 500 = the legacy change feed's
-  # convergence bound (>500 rows on one server timestamp can loop a pull).
+  # Shared with Engram.Notes' batch caps: 500 = the (now retired, 410) legacy
+  # change feed's convergence bound (>500 rows on one server timestamp could
+  # loop a pull).
   @max_batch_entries 500
 
   @doc """
@@ -908,31 +910,6 @@ defmodule Engram.Attachments do
     case Path.dirname(path) do
       "." -> ""
       dir -> dir
-    end
-  end
-
-  @doc """
-  Lists attachment changes since a given timestamp. Returns metadata only (no content).
-  """
-  def list_changes(user, vault, since) do
-    user = fresh_user(user)
-    # Phase B.2.6 — load full Attachment rows so path can be decrypted from
-    # ciphertext. The previous select-shape preview returned `a.path` directly
-    # which won't survive B.3's column drop. Metadata-only output preserved.
-    Repo.with_tenant(user.id, fn ->
-      from(a in scoped(user, vault),
-        where: a.updated_at >= ^since,
-        order_by: [asc: a.updated_at]
-      )
-      |> Repo.all()
-    end)
-    |> unwrap_tenant()
-    |> case do
-      {:ok, atts} ->
-        {:ok, decrypt_each(atts, user, fn _att, meta -> meta end)}
-
-      err ->
-        err
     end
   end
 

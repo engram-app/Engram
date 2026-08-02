@@ -468,23 +468,6 @@ defmodule Engram.AttachmentsTest do
       assert fetched.path == "Real/file.png"
     end
 
-    test "list_changes returns decrypt-sourced path" do
-      user = insert(:user) |> Engram.Repo.reload!()
-      vault = insert(:vault, user: user)
-
-      {:ok, _created} =
-        Attachments.upsert_attachment(user, vault, %{
-          "path" => "Notes/img.png",
-          "content_base64" => Base.encode64("img"),
-          "mtime" => 0.0
-        })
-
-      assert {:ok, [change]} =
-               Attachments.list_changes(user, vault, ~U[2000-01-01 00:00:00.000000Z])
-
-      assert change.path == "Notes/img.png"
-    end
-
     test "round-trips encrypted attachment via get_attachment" do
       user = insert(:user) |> Engram.Repo.reload!()
       vault = insert(:vault, user: user)

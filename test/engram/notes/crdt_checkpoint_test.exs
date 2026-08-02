@@ -355,11 +355,11 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     {:ok, fresh} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
 
     # The content-write branch persists via update_all, which does NOT
-    # auto-manage timestamps. If updated_at is not set explicitly, a CRDT edit
-    # is invisible to GET /api/notes/changes (it filters + orders on updated_at)
-    # — silent non-propagation of committed CRDT content.
+    # auto-manage timestamps. updated_at must still be set explicitly so the
+    # row's recency stays truthful for everything ordering/filtering on it.
+    # (The retired /api/notes/changes timestamp feed was the original victim.)
     assert DateTime.compare(fresh.updated_at, before_updated_at) == :gt,
-           "checkpoint must bump updated_at or the /changes timestamp feed silently drops the edit"
+           "checkpoint must bump updated_at (row recency must track CRDT content writes)"
   end
 
   # ── Fence success path: captured_version == current still writes ───────────
