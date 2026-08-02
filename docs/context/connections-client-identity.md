@@ -1,6 +1,6 @@
 Title: Connections client identity: slug attribution, the three hosting classes, and the HTTPS trust model
 
-_Last verified: 2026-07-31 (CIMD shipped, #1148; guessed `software_id` entries deleted, #1156. Rewritten 2026-07-30 fixing connector attribution for loopback + self-hosted clients; originally 2026-06-15)_
+_Last verified: 2026-08-02 (`resolve/4` now takes the grant's single redirect, not the client's registered list, #1204/#1207. CIMD shipped 2026-07-31, #1148; guessed `software_id` entries deleted, #1156. Rewritten 2026-07-30 fixing connector attribution for loopback + self-hosted clients; originally 2026-06-15)_
 
 How `/settings/connections` cards and the onboarding checklist identify an OAuth/MCP client (logo, display_name, verified badge, checklist auto-check).
 
@@ -23,7 +23,7 @@ separately from identity by the host alone:
 | Precedence | Source | Grants | Why |
 |---|---|---|---|
 | 1 | **CIMD `client_id` host** | identity + `verified` | We fetched a metadata document from that host and it declared this exact `client_id`. The only proof available to a loopback client |
-| 2 | `redirect_uri` **host** allowlist | identity + `verified` | A vendor-owned HTTPS host is un-spoofable for grant delivery |
+| 2 | **the grant's** `redirect_uri` **host** | identity + `verified` | A vendor-owned HTTPS host is un-spoofable for grant delivery |
 | 3 | `software_id` allowlist | identity only | Self-asserted DCR body field. Since #1156 it contains ONLY our own plugin |
 | 4 | `client_name`, normalized | **slug only** | Self-asserted, so it may never grant `verified` or a logo |
 
@@ -40,6 +40,12 @@ loopback clients already use.
 > **ChatGPT** and carried a verified badge earned by Anthropic's host. If a
 > grant is delivered to a vendor, that vendor is who the user is connected to;
 > what the client *claims* cannot outrank it.
+
+> **`resolve/4` takes ONE redirect, not the registered list (#1204, 2026-08-02).**
+> The second argument is `String.t() | nil` — the redirect *this grant's code was
+> delivered to*, read from `oauth_refresh_tokens.redirect_uri`. It is deliberately
+> **not** `oauth_clients.redirect_uris`. Widening it back to a list re-opens #1204;
+> see "The registered list proves nothing" below.
 
 `slug` then flows `Connections.list_for_user/1` → `ConnectionsController.serialize/1` → `/api/connections` → React (`connectedSlugs.has(slug)` ticks the checklist row; `ToolMark slug={...}` renders the brand mark).
 
@@ -92,6 +98,62 @@ Nothing else may ever grant it.
 - **Why custom schemes / http are NOT:** `com.evil.app://claude.ai/cb` and `http://claude.ai/...` both parse to host `claude.ai` but deliver the code to an attacker-controlled handler. `lookup_by_host/1` enforces `%URI{scheme: "https", userinfo: nil}`. (Code review caught this; the naive host-only match was exploitable.)
 - **`client_name` grants `slug` and nothing else.** It is self-asserted and trivially spoofable, but ticking a row in your *own* checklist is not a security boundary. The logo and the verified badge, where spoofing actually matters, are host-gated only (since #1156 deleted the guessed `software_id` entries, no self-asserted field grants a vendor logo). `logo_allowlist_test.exs` pins this explicitly.
 - **A proven host outranks a claimed `software_id`** (reversed during review, 2026-07-30). Previously `software_id` won, so a client claiming `openai-chatgpt` while redirecting to `claude.ai` was listed as ChatGPT *and* verified via Anthropic's host. Whoever receives the code is who the user is connected to.
+
+### The registered list proves nothing (#1204, fixed 2026-08-02, PR #1207)
+
+Until this fix, verification scanned the client's **registered** `redirect_uris`
+for a vendor host. DCR is public and a client may register several redirects,
+choosing one per authorization, so *any* entry in the list carried the badge. An
+attacker registered:
+
+```json
+["http://localhost:9999/steal", "https://claude.ai/api/mcp/auth_callback"]
+```
+
+authorized with the loopback, took delivery of the code on their own machine, and
+still appeared in the victim's connections list as **Claude, verified, wearing
+Anthropic's logo** — the row a user auditing their connections is least likely to
+revoke.
+
+**The general shape, worth recognising elsewhere:** a predicate asserting a
+*proof* was computed from a *possibility*. Anything derived from a set of options
+rather than the option actually taken has this hole, because an attacker simply
+adds the honest option to their set.
+
+The redirect actually used was already validated against the registered list at
+`/authorize` and already stored on `oauth_authorization_codes.redirect_uri`. It
+was just dropped at exchange. It is now copied onto
+`oauth_refresh_tokens.redirect_uri` and carried across every rotation alongside
+`family_id` — a rotation successor is the *same* grant, and the grant was
+delivered once.
+
+**The load-bearing part is the type, not the check.** `resolve/4` takes a single
+`String.t()`, so `Enum.find_value` over a list cannot be written. Tightening the
+predicate while leaving a list parameter would have left the shape
+re-introducible by the next person who threads a list back in. The bug became
+unexpressible rather than fixed-for-now.
+
+- **NULL means unverified,** and fails closed. Grants predating the column cannot
+  be recovered: authorization codes are single-use and short-lived, so the
+  evidence is gone.
+- **The backfill filled only the unambiguous case** — clients that registered
+  exactly one redirect, where `/authorize` had nothing else to pick. Multi-entry
+  clients stayed NULL *on purpose*: that is precisely the attack shape, so
+  failing closed there is the point. A real multi-redirect vendor client
+  re-verifies for free on its next authorization; an impersonator never does.
+- **One legitimate any-match survives.** `OAuthRegisterController.attributed?/1`
+  still iterates the list, because registration has no grant yet and the only
+  answerable question is "will this client ever attribute?". It reads `slug`
+  only and cannot grant a badge. Keep it explicit rather than folding it back
+  into `resolve/4`.
+- **The UI now separates the two.** The connections detail panel shows
+  **"Delivered to"** (the grant's redirect) apart from **"Registered
+  redirects"**. Merging them is what let a rogue grant read as Claude: the
+  registered list displayed `https://claude.ai/...` right next to a badge it had
+  no right to.
+
+Severity was bounded by the consent screen showing no badge at all, so this aided
+*survival of review* rather than the initial phish — see "Known gap" below.
 
 > **Correction (2026-07-30).** This doc previously said custom schemes and localhost were *"identify-only: they may set icon/name but never grant verified."* That was the intended design; the code never implemented it, `lookup_by_host/1` returned the empty placeholder, so loopback clients got **no slug at all** and their checklist row could never tick. The doc/code mismatch is why the gap survived six weeks. Slug attribution for those clients now comes from `client_name`.
 
@@ -486,6 +548,18 @@ something up incorrectly. The chip is reserved for the case where it is
 **actionable**. Provenance for all three states is spelled out in the expanded
 row's `Identity:` line, so nothing is hidden. It just is not alarming.
 
+## Known gap: the consent screen shows no verification signal
+
+`/oauth/authorize` renders the raw self-asserted `client_name` and nothing else —
+no badge, no logo, no "unverified" chip. That is what bounded #1204 to *aiding
+survival of review* rather than enabling the phish outright: at the moment the
+user decides, an impersonator looks identical to the real thing.
+
+At consent time we know more than the connections list does, not less: the
+**requested** `redirect_uri` (already matched against the registered list) and
+`cimd_url` — exactly the inputs `resolve/4` takes, and it is already grant-shaped
+since #1207. Mostly wiring. Tracked in **#1208**.
+
 ## Other gotchas
 
 - **`ai_connected` is dead.** Defined in `onboarding/action.ex` and `frontend/src/api/queries.ts`, written by nothing. Tool rows derive from live connections, not from that action.
@@ -496,6 +570,9 @@ row's `Identity:` line, so nothing is hidden. It just is not alarming.
 
 - `lib/engram/connections/logo_allowlist.ex`: resolution + normalization
 - `lib/engram/connections.ex`: `list_for_user/1`, the only caller
+- `lib/engram/oauth/refresh_token.ex`: `redirect_uri`, the grant's delivered redirect
+- `test/engram/oauth_grant_redirect_test.exs`: #1204 regression, drives the real flow
+- Issues #1204 (badge from registered list) / #1208 (consent-screen signal); PR #1207
 - `lib/engram_web/controllers/oauth_register_controller.ex`: DCR + tripwire
 - `frontend/src/onboarding/checklist-widget.tsx`: row completion
 - `frontend/src/onboarding/tool-icon.tsx`: `ToolMark` / `ToolBadge`
