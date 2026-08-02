@@ -85,7 +85,23 @@ defmodule EngramWeb.Schemas.Connection do
       connected_at: %Schema{type: :string, format: :"date-time", nullable: true},
       first_user_agent: %Schema{type: :string, nullable: true},
       first_ip: %Schema{type: :string, nullable: true},
-      redirect_uris: %Schema{type: :array, nullable: true, items: %Schema{type: :string}},
+      redirect_uri: %Schema{
+        type: :string,
+        nullable: true,
+        description:
+          "The redirect this grant's authorization code was delivered to. This, " <>
+            "not `redirect_uris`, is what decides `verified`. Null for non-OAuth " <>
+            "connections and for grants issued before it was recorded."
+      },
+      redirect_uris: %Schema{
+        type: :array,
+        nullable: true,
+        items: %Schema{type: :string},
+        description:
+          "Every redirect the client registered. Informational only — a client " <>
+            "may register several and choose one per authorization, so a vendor " <>
+            "host appearing here proves nothing about this grant."
+      },
       cimd_url: %Schema{
         type: :string,
         nullable: true,

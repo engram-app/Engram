@@ -208,9 +208,20 @@ function ConnectionCard({
 							<dd className="break-all">{connection.first_user_agent}</dd>
 						</>
 					)}
+					{/* Two different things, deliberately labelled apart. "Delivered to"
+					    is where this grant's code actually went and is what the verified
+					    badge is computed from; the registered list is only what the
+					    client declared it might use. Merging them is what made a rogue
+					    grant look like Claude (#1204). */}
+					{Boolean(connection.redirect_uri) && (
+						<>
+							<dt>Delivered to:</dt>
+							<dd className="break-all font-mono">{connection.redirect_uri}</dd>
+						</>
+					)}
 					{connection.redirect_uris.length > 0 && (
 						<>
-							<dt>Redirects:</dt>
+							<dt>Registered redirects:</dt>
 							<dd className="break-all">{connection.redirect_uris.join(", ")}</dd>
 						</>
 					)}

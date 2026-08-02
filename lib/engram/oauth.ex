@@ -294,6 +294,11 @@ defmodule Engram.OAuth do
              user_id: code_row.user_id,
              vault_id: code_row.vault_id,
              scope: code_row.scope,
+             # Where the code was actually delivered — already matched against
+             # the client's registered list at /authorize. Carried onto the
+             # grant so the connections list can verify what happened rather
+             # than what the client declared possible. See #1204.
+             redirect_uri: code_row.redirect_uri,
              last_used_at: DateTime.utc_now(),
              last_used_ip: ip
            }) do
@@ -369,6 +374,9 @@ defmodule Engram.OAuth do
         user_id: rt.user_id,
         vault_id: rt.vault_id,
         scope: rt.scope,
+        # Immutable for the life of the family, like family_id: rotation mints
+        # a successor to the SAME grant, and the grant was delivered once.
+        redirect_uri: rt.redirect_uri,
         last_used_at: DateTime.utc_now(),
         last_used_ip: ip
       })

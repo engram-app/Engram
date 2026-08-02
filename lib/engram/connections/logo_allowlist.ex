@@ -42,6 +42,30 @@ defmodule Engram.Connections.LogoAllowlist do
   Loopback and custom schemes (Cursor desktop registers
   `cursor://anysphere.cursor-mcp/…`) never match the host map, so
   local-first clients are unverifiable by construction, not misconfigured.
+
+  ## One redirect, not a list
+
+  `resolve/4` takes the **single** redirect a grant actually used, never the
+  client's registered `redirect_uris`. The signature is the fix for #1204.
+
+  DCR is public, so a client may register several redirects and choose per
+  authorization. Resolving over the list meant *any* entry could carry the
+  badge, so an attacker registered
+
+      ["http://localhost:9999/steal", "https://claude.ai/api/mcp/auth_callback"]
+
+  authorized with the loopback, took delivery of the code on their own machine,
+  and still appeared in the victim's connections list as Claude, verified,
+  wearing Anthropic's logo. The proof the badge asserts — "the code went to a
+  host the vendor owns" — was never actually made; only a claim that it could
+  have been.
+
+  The used redirect is validated against the registered list at `/authorize`
+  and stored on `oauth_authorization_codes.redirect_uri`; it is now copied onto
+  `oauth_refresh_tokens.redirect_uri` at exchange and carried across rotation.
+  `nil` (grants predating that column, and every non-OAuth caller) resolves
+  unverified. Passing a list here is a type error, which is the point: the
+  any-match shape cannot be written again.
   """
 
   @empty %{verified: false, logo: nil, display_name: nil, slug: nil}
@@ -163,12 +187,16 @@ defmodule Engram.Connections.LogoAllowlist do
   Identity and verification are deliberately computed independently, because
   `software_id` and `client_name` both arrive in the DCR body and are equally
   self-asserted, so neither may ever grant the badge.
+
+  `redirect_uri` is the ONE redirect the grant used, not the registered list —
+  see "One redirect, not a list" above for why that distinction is the whole
+  security property.
   """
-  @spec resolve(String.t() | nil, [String.t()] | nil, String.t() | nil, String.t() | nil) ::
+  @spec resolve(String.t() | nil, String.t() | nil, String.t() | nil, String.t() | nil) ::
           entry()
-  def resolve(software_id, redirect_uris, client_name \\ nil, cimd_url \\ nil) do
+  def resolve(software_id, redirect_uri, client_name \\ nil, cimd_url \\ nil) do
     by_cimd = lookup_by_cimd(cimd_url)
-    by_host = lookup_by_host(redirect_uris)
+    by_host = lookup_by_host(redirect_uri)
     by_id = lookup(software_id)
 
     identity =
@@ -301,19 +329,20 @@ defmodule Engram.Connections.LogoAllowlist do
   # parses to host "claude.ai" but delivers the auth code to an attacker-
   # controlled handler, so the un-spoofability argument does not hold, reject
   # both. Hosts are case-insensitive (RFC 3986 §3.2.2).
-  defp lookup_by_host(uris) when is_list(uris) do
-    Enum.find_value(uris, @empty, fn uri ->
-      case URI.parse(uri) do
-        %URI{scheme: "https", host: host, userinfo: nil} when is_binary(host) ->
-          case Map.get(@redirect_host, String.downcase(host)) do
-            nil -> nil
-            entry -> Map.merge(%{verified: true}, entry)
-          end
+  #
+  # ONE URI, never a list. See the "One redirect" section of the moduledoc:
+  # scanning a registered list for any vendor host is what #1204 was.
+  defp lookup_by_host(uri) when is_binary(uri) do
+    case URI.parse(uri) do
+      %URI{scheme: "https", host: host, userinfo: nil} when is_binary(host) ->
+        case Map.get(@redirect_host, String.downcase(host)) do
+          nil -> @empty
+          entry -> Map.merge(@empty, Map.put(entry, :verified, true))
+        end
 
-        _ ->
-          nil
-      end
-    end)
+      _ ->
+        @empty
+    end
   end
 
   defp lookup_by_host(_), do: @empty

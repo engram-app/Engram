@@ -1139,6 +1139,13 @@ export interface Connection {
 	connected_at: string | null;
 	first_user_agent: string | null;
 	first_ip: string | null;
+	/** Where this grant's authorization code was actually delivered. This, not
+	 *  `redirect_uris`, decides `verified`. Null for non-OAuth connections and
+	 *  for grants issued before it was recorded. */
+	redirect_uri: string | null;
+	/** Every redirect the client registered. Informational only: a client may
+	 *  register several and pick one per authorization, so a vendor host here
+	 *  proves nothing about this grant. */
 	redirect_uris: string[];
 	/** CIMD metadata-document URL. Present only for clients that published one;
 	 *  it is the client's public identifier and the reason it can be verified

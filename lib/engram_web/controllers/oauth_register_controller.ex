@@ -87,9 +87,7 @@ defmodule EngramWeb.OAuthRegisterController do
   #     shipping whole URIs here would undercut that. Scheme + host is all the
   #     classification (vendor / loopback / self-hosted) actually needs.
   defp log_unattributed(%{kind: "mcp"} = client) do
-    identity = LogoAllowlist.resolve(client.software_id, client.redirect_uris, client.client_name)
-
-    if is_nil(identity.slug) do
+    if not attributed?(client) do
       Logger.info(
         "mcp_dcr_unattributed_client",
         Metadata.with_category(:info, :lifecycle,
@@ -102,6 +100,20 @@ defmodule EngramWeb.OAuthRegisterController do
   end
 
   defp log_unattributed(_), do: :ok
+
+  # `resolve/4` takes the ONE redirect a grant used, because verifying against a
+  # registered list is #1204. Registration has no grant yet, so this tripwire is
+  # the one place an any-match is right: the question is only "will this client
+  # ever attribute", and the answer is yes if any redirect it registered would.
+  # `nil` covers the software_id / client_name paths, which need no redirect.
+  #
+  # Only `slug` is read. Nothing here can grant a badge — that is decided per
+  # grant in `Engram.Connections`, from the redirect actually used.
+  defp attributed?(client) do
+    Enum.any?([nil | client.redirect_uris || []], fn uri ->
+      LogoAllowlist.resolve(client.software_id, uri, client.client_name).slug != nil
+    end)
+  end
 
   defp redirect_origins(uris) when is_list(uris) do
     Enum.map(uris, fn uri ->

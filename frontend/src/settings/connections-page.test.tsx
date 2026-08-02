@@ -71,6 +71,7 @@ const baseObs: import("../api/queries").Connection = {
 	connected_at: "2026-05-30T00:00:00Z",
 	first_user_agent: null,
 	first_ip: null,
+	redirect_uri: null,
 	redirect_uris: [],
 	cimd_url: null,
 };
@@ -92,6 +93,7 @@ const basePat: import("../api/queries").Connection = {
 	connected_at: "2026-05-30T00:00:00Z",
 	first_user_agent: null,
 	first_ip: null,
+	redirect_uri: null,
 	redirect_uris: [],
 	cimd_url: null,
 };
@@ -113,6 +115,7 @@ const baseMcp: import("../api/queries").Connection = {
 	connected_at: "2026-05-30T00:00:00Z",
 	first_user_agent: "Claude/1.2.0",
 	first_ip: "1.2.3.4",
+	redirect_uri: null,
 	redirect_uris: ["http://localhost:3000/callback"],
 	cimd_url: null,
 };
@@ -204,6 +207,7 @@ describe("ConnectionsPage", () => {
 			slug: "claude_code",
 			verified: true,
 			cimd_url: "https://claude.ai/.well-known/oauth-client",
+			redirect_uri: null,
 			redirect_uris: ["http://localhost:62184/callback"],
 		});
 		mockTier = "starter";
@@ -243,6 +247,7 @@ describe("ConnectionsPage", () => {
 			slug: "claude",
 			verified: true,
 			cimd_url: null,
+			redirect_uri: null,
 			redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
 		});
 		mockTier = "starter";
