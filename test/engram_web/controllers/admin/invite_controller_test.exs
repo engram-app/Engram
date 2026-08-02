@@ -38,4 +38,9 @@ defmodule EngramWeb.Admin.InviteControllerTest do
     assert json_response(conn, 200)["ok"] == true
     assert Engram.Invites.list_active() == []
   end
+
+  test "DELETE returns 404 for an unknown invite id", %{conn: conn, admin: admin} do
+    conn = conn |> authenticate(admin) |> delete(~p"/api/admin/invites/#{Ecto.UUID.generate()}")
+    assert json_response(conn, 404) == %{"error" => "not_found"}
+  end
 end

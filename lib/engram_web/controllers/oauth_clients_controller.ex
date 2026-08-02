@@ -15,20 +15,18 @@ defmodule EngramWeb.OAuthClientsController do
 
   alias Engram.OAuth
 
-  def show(conn, %{"client_id" => client_id}) do
-    case OAuth.get_client(client_id) do
-      {:ok, client} ->
-        # `kind` is "mcp" | "obsidian" — drives the proactive cap UI on
-        # /oauth/consent (each kind has its own cap key). DCR rejects
-        # "obsidian", but device-flow clients may carry that kind.
-        json(conn, %{
-          client_id: client.client_id,
-          client_name: client.client_name,
-          kind: client.kind
-        })
+  action_fallback EngramWeb.FallbackController
 
-      {:error, :not_found} ->
-        conn |> put_status(404) |> json(%{error: "not_found"})
+  def show(conn, %{"client_id" => client_id}) do
+    with {:ok, client} <- OAuth.get_client(client_id) do
+      # `kind` is "mcp" | "obsidian" — drives the proactive cap UI on
+      # /oauth/consent (each kind has its own cap key). DCR rejects
+      # "obsidian", but device-flow clients may carry that kind.
+      json(conn, %{
+        client_id: client.client_id,
+        client_name: client.client_name,
+        kind: client.kind
+      })
     end
   end
 end

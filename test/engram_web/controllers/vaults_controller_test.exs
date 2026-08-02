@@ -161,7 +161,14 @@ defmodule EngramWeb.VaultsControllerTest do
 
     test "returns 422 with missing name", %{conn: conn} do
       conn = post(conn, "/api/vaults", %{})
-      assert json_response(conn, 422)
+
+      assert json_response(conn, 422) == %{
+               "errors" => %{
+                 "name_ciphertext" => ["can't be blank"],
+                 "name_hmac" => ["can't be blank"],
+                 "name_nonce" => ["can't be blank"]
+               }
+             }
     end
   end
 
@@ -200,6 +207,12 @@ defmodule EngramWeb.VaultsControllerTest do
     test "returns 404 for non-existent vault", %{conn: conn} do
       conn = patch(conn, "/api/vaults/00000000-0000-0000-0000-000099999999", %{name: "X"})
       assert json_response(conn, 404)
+    end
+
+    test "returns 422 with changeset errors for an invalid is_default", %{conn: conn, user: user} do
+      {:ok, vault} = Vaults.create_vault(user, %{name: "Valid"})
+      conn = patch(conn, "/api/vaults/#{vault.id}", %{is_default: "banana"})
+      assert %{"errors" => %{"is_default" => [_ | _]}} = json_response(conn, 422)
     end
   end
 

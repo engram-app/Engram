@@ -13,6 +13,8 @@ defmodule EngramWeb.ConnectionsController do
   alias Engram.Connections
   alias EngramWeb.Schemas
 
+  action_fallback EngramWeb.FallbackController
+
   plug EngramWeb.Plugs.EnforcePatCreation when action in [:create_pat]
 
   operation(:index,
@@ -55,14 +57,8 @@ defmodule EngramWeb.ConnectionsController do
     user = conn.assigns.current_user
     vault_id = parse_vault_id(params["vault_id"])
 
-    case Connections.revoke_oauth_family(user.id, client_id, vault_id) do
-      :ok ->
-        send_resp(conn, 204, "")
-
-      {:error, :not_found} ->
-        conn
-        |> put_status(:not_found)
-        |> json(%{error: "not_found"})
+    with :ok <- Connections.revoke_oauth_family(user.id, client_id, vault_id) do
+      send_resp(conn, 204, "")
     end
   end
 
@@ -93,10 +89,8 @@ defmodule EngramWeb.ConnectionsController do
           |> put_status(:created)
           |> json(%{key: raw_key, id: api_key.id, name: api_key.name})
 
-        {:error, %Ecto.Changeset{} = changeset} ->
-          conn
-          |> put_status(:unprocessable_entity)
-          |> json(%{errors: EngramWeb.format_errors(changeset)})
+        {:error, %Ecto.Changeset{}} = error ->
+          error
       end
     end
   end
@@ -120,14 +114,8 @@ defmodule EngramWeb.ConnectionsController do
   def delete_device(conn, %{"family_id" => family_id}) do
     user = conn.assigns.current_user
 
-    case Connections.revoke_device_family(user.id, family_id) do
-      :ok ->
-        send_resp(conn, 204, "")
-
-      {:error, :not_found} ->
-        conn
-        |> put_status(:not_found)
-        |> json(%{error: "not_found"})
+    with :ok <- Connections.revoke_device_family(user.id, family_id) do
+      send_resp(conn, 204, "")
     end
   end
 
@@ -154,7 +142,7 @@ defmodule EngramWeb.ConnectionsController do
          :ok <- Engram.Accounts.revoke_api_key(user, id) do
       send_resp(conn, 204, "")
     else
-      {:error, :not_found} -> conn |> put_status(:not_found) |> json(%{error: "not_found"})
+      # Malformed UUID and revoke errors alike render the same 404.
       _ -> conn |> put_status(:not_found) |> json(%{error: "not_found"})
     end
   end
