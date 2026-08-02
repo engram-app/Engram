@@ -11,6 +11,8 @@ import clineMark from "@lobehub/icons-static-svg/icons/cline.svg?raw";
 import clineText from "@lobehub/icons-static-svg/icons/cline-text.svg?raw";
 import cursorMark from "@lobehub/icons-static-svg/icons/cursor.svg?raw";
 import cursorText from "@lobehub/icons-static-svg/icons/cursor-text.svg?raw";
+import devinColor from "@lobehub/icons-static-svg/icons/devin-color.svg?raw";
+import devinText from "@lobehub/icons-static-svg/icons/devin-text.svg?raw";
 import geminiMark from "@lobehub/icons-static-svg/icons/gemini.svg?raw";
 import geminiText from "@lobehub/icons-static-svg/icons/gemini-text.svg?raw";
 import githubCopilotMark from "@lobehub/icons-static-svg/icons/githubcopilot.svg?raw";
@@ -59,6 +61,11 @@ const BRANDS: Record<string, Brand> = {
 	// wordmarks. Fall through to plain "Claude Code" in our typography.
 	claude_code: { mark: claudeCodeColor },
 	cursor: { mark: cursorMark, wordmark: cursorText },
+	// Devin's CLOUD agent (`api.devin.ai`), not the IDE. Cognition acquired
+	// Windsurf in 2025 and renamed the IDE "Devin Desktop" on 2026-06-02, so
+	// `windsurf` below is the same vendor under its former brand — kept separate
+	// because it is a different client with a different redirect (loopback).
+	devin: { mark: devinColor, wordmark: devinText },
 	windsurf: { mark: windsurfMark, wordmark: windsurfText },
 	cline: { mark: clineMark, wordmark: clineText },
 	opencode: { mark: openCodeMark, wordmark: openCodeText },
