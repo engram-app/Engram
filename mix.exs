@@ -5,7 +5,7 @@ defmodule Engram.MixProject do
     [
       app: :engram,
       # x-release-please-start-version
-      version: "0.12.6",
+      version: "0.13.0",
       # x-release-please-end-version
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
