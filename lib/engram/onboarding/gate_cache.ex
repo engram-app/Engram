@@ -24,39 +24,33 @@ defmodule Engram.Onboarding.GateCache do
   synchronously, peers clear on the broadcast.
   """
 
-  use GenServer
+  # :version_evict_all — a terms (re)seed or publish can raise the required
+  # floor, flipping any passed user back to failing; drop every verdict and
+  # re-derive.
+  use Engram.Cache.NodeLocalEts,
+    table: :engram_onboarding_gate_cache,
+    cache_sync: true,
+    sync_evict: :onboarding_gate_evict,
+    sync_evict_all: [:version_evict_all]
 
   alias Engram.Cluster.CacheSync
 
-  @table :engram_onboarding_gate_cache
   @ttl_ms 60_000
-
-  def start_link(_opts) do
-    GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
-  end
 
   @spec passed?(Ecto.UUID.t()) :: boolean()
   def passed?(user_id) do
-    case :ets.lookup(@table, user_id) do
+    case ets_lookup(user_id) do
       [{^user_id, expires_at}] ->
         System.monotonic_time(:millisecond) < expires_at
 
       _ ->
         false
     end
-  rescue
-    # Table absent (cache process down) → behave as a miss; the plug falls
-    # through to the authoritative status derivation.
-    ArgumentError -> false
   end
 
   @spec mark_passed(Ecto.UUID.t(), non_neg_integer()) :: :ok
   def mark_passed(user_id, ttl_ms \\ @ttl_ms) do
-    expires_at = System.monotonic_time(:millisecond) + ttl_ms
-    :ets.insert(@table, {user_id, expires_at})
-    :ok
-  rescue
-    ArgumentError -> :ok
+    ets_insert({user_id, System.monotonic_time(:millisecond) + ttl_ms})
   end
 
   @doc """
@@ -71,46 +65,7 @@ defmodule Engram.Onboarding.GateCache do
 
   @spec evict_all() :: :ok
   def evict_all do
-    _ = :ets.delete_all_objects(@table)
+    _ = clear_local()
     :ok
-  rescue
-    ArgumentError -> :ok
   end
-
-  defp delete_local(user_id) do
-    :ets.delete(@table, user_id)
-  rescue
-    ArgumentError -> true
-  end
-
-  @impl true
-  def init(:ok) do
-    _ =
-      :ets.new(@table, [
-        :named_table,
-        :public,
-        :set,
-        read_concurrency: true,
-        write_concurrency: true
-      ])
-
-    :ok = CacheSync.subscribe()
-    {:ok, %{}}
-  end
-
-  @impl true
-  def handle_info({:cache_sync, {:onboarding_gate_evict, user_id}}, state) do
-    _ = delete_local(user_id)
-    {:noreply, state}
-  end
-
-  # A terms (re)seed or publish can raise the required floor, flipping any
-  # passed user back to failing — drop every verdict and re-derive.
-  def handle_info({:cache_sync, :version_evict_all}, state) do
-    _ = :ets.delete_all_objects(@table)
-    {:noreply, state}
-  end
-
-  # Ignore cache_sync messages addressed to other caches.
-  def handle_info({:cache_sync, _other}, state), do: {:noreply, state}
 end
