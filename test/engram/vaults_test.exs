@@ -253,6 +253,11 @@ defmodule Engram.VaultsTest do
       assert vault.client_id == "client-1"
     end
 
+    test "rejects a blank name", %{user: user} do
+      assert {:error, changeset} = Vaults.register_vault(user, "  ", "client-blank")
+      assert errors_on(changeset)[:name] == ["can't be blank"]
+    end
+
     test "is idempotent — same client_id returns existing vault with :existing", %{user: user} do
       {:ok, vault1, :created} = Vaults.register_vault(user, "My Vault", "client-1")
       {:ok, vault2, :existing} = Vaults.register_vault(user, "My Vault", "client-1")
