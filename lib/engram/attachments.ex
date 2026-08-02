@@ -22,6 +22,26 @@ defmodule Engram.Attachments do
   alias Engram.Sync.Broadcast
 
   @doc """
+  Composable tenant-scope query: `Attachment` rows owned by `user` in `vault`
+  (struct or bare vault id). This predicate IS the multi-tenant isolation
+  boundary — attachment queries must compose from `scoped/2` /
+  `scoped_live/2`; `tenant_scope_lint_test.exs` flags hand-inlined
+  `user_id == ^` predicates so a dropped clause can't slip in.
+  """
+  @spec scoped(map(), map() | term()) :: Ecto.Query.t()
+  def scoped(user, %{id: vault_id}), do: scoped(user, vault_id)
+
+  def scoped(user, vault_id) do
+    from(a in Attachment, where: a.user_id == ^user.id and a.vault_id == ^vault_id)
+  end
+
+  @doc "`scoped/2` plus `is_nil(deleted_at)` — live (non-tombstoned) rows only."
+  @spec scoped_live(map(), map() | term()) :: Ecto.Query.t()
+  def scoped_live(user, vault) do
+    from(a in scoped(user, vault), where: is_nil(a.deleted_at))
+  end
+
+  @doc """
   Upserts an attachment. Decodes base64 content, detects MIME type, computes hash.
   Returns {:ok, attachment} or {:error, reason}.
   """
@@ -134,13 +154,7 @@ defmodule Engram.Attachments do
 
   defp fetch_existing(user, vault_id, path_hmac) do
     Repo.with_tenant(user.id, fn ->
-      Repo.one(
-        from(a in Attachment,
-          where:
-            a.path_hmac == ^path_hmac and a.user_id == ^user.id and
-              a.vault_id == ^vault_id and is_nil(a.deleted_at)
-        )
-      )
+      Repo.one(from(a in scoped_live(user, vault_id), where: a.path_hmac == ^path_hmac))
     end)
     |> unwrap_tenant()
     |> case do
@@ -204,13 +218,7 @@ defmodule Engram.Attachments do
         path_hmac = Crypto.hmac_field(filter_key, path)
 
         Repo.with_tenant(user.id, fn ->
-          Repo.one(
-            from(a in Attachment,
-              where:
-                a.path_hmac == ^path_hmac and a.user_id == ^user.id and
-                  a.vault_id == ^vault.id and is_nil(a.deleted_at)
-            )
-          )
+          Repo.one(from(a in scoped_live(user, vault), where: a.path_hmac == ^path_hmac))
         end)
         |> unwrap_tenant()
       end
@@ -296,10 +304,8 @@ defmodule Engram.Attachments do
             seq = Engram.Vaults.next_seq!(vault.id)
 
             {count, keys} =
-              from(a in Attachment,
-                where:
-                  a.path_hmac == ^path_hmac and a.user_id == ^user.id and
-                    a.vault_id == ^vault.id and is_nil(a.deleted_at),
+              from(a in scoped_live(user, vault),
+                where: a.path_hmac == ^path_hmac,
                 select: a.storage_key
               )
               |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
@@ -487,11 +493,7 @@ defmodule Engram.Attachments do
   end
 
   defp live_by_hmac_query(user, vault, hmac) do
-    from(a in Attachment,
-      where:
-        a.path_hmac == ^hmac and a.user_id == ^user.id and
-          a.vault_id == ^vault.id and is_nil(a.deleted_at)
-    )
+    from(a in scoped_live(user, vault), where: a.path_hmac == ^hmac)
   end
 
   # Soft-deleted full-row insert at the vacated path. storage_key=nil (no blob),
@@ -763,10 +765,8 @@ defmodule Engram.Attachments do
 
     Repo.with_tenant(user.id, fn ->
       rows =
-        from(a in Attachment,
-          where:
-            a.path_hmac in ^hmacs and a.user_id == ^user.id and
-              a.vault_id == ^vault.id and is_nil(a.deleted_at),
+        from(a in scoped_live(user, vault),
+          where: a.path_hmac in ^hmacs,
           order_by: a.id,
           select: {a.id, a.path_hmac, a.storage_key}
         )
@@ -877,10 +877,7 @@ defmodule Engram.Attachments do
     user = fresh_user(user)
 
     Repo.with_tenant(user.id, fn ->
-      from(a in Attachment,
-        where: a.user_id == ^user.id and a.vault_id == ^vault.id and is_nil(a.deleted_at),
-        order_by: [asc: a.updated_at]
-      )
+      from(a in scoped_live(user, vault), order_by: [asc: a.updated_at])
       |> Repo.all()
     end)
     |> unwrap_tenant()
@@ -923,8 +920,8 @@ defmodule Engram.Attachments do
     # ciphertext. The previous select-shape preview returned `a.path` directly
     # which won't survive B.3's column drop. Metadata-only output preserved.
     Repo.with_tenant(user.id, fn ->
-      from(a in Attachment,
-        where: a.user_id == ^user.id and a.vault_id == ^vault.id and a.updated_at >= ^since,
+      from(a in scoped(user, vault),
+        where: a.updated_at >= ^since,
         order_by: [asc: a.updated_at]
       )
       |> Repo.all()
@@ -969,8 +966,8 @@ defmodule Engram.Attachments do
     after_id = Keyword.get(opts, :after_id)
 
     base =
-      from(a in Attachment,
-        where: a.user_id == ^user.id and a.vault_id == ^vault.id and not is_nil(a.seq),
+      from(a in scoped(user, vault),
+        where: not is_nil(a.seq),
         order_by: [asc: a.seq, asc: a.id],
         limit: ^(limit + 1)
       )
@@ -1017,8 +1014,7 @@ defmodule Engram.Attachments do
   """
   def storage_usage(user, vault) do
     Repo.with_tenant(user.id, fn ->
-      from(a in Attachment,
-        where: a.user_id == ^user.id and a.vault_id == ^vault.id and is_nil(a.deleted_at),
+      from(a in scoped_live(user, vault),
         select: %{
           used_bytes: type(coalesce(sum(a.size_bytes), 0), :integer),
           file_count: count(a.id)

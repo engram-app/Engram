@@ -5,6 +5,8 @@ defmodule EngramWeb.UsersController do
 
   alias Engram.Accounts
 
+  action_fallback EngramWeb.FallbackController
+
   operation(:me,
     operation_id: "account-me",
     summary: "Get the current user",
@@ -56,12 +58,8 @@ defmodule EngramWeb.UsersController do
           }
         })
 
-      {:error, %Ecto.Changeset{} = cs} ->
-        # Sibling-controller 422 shape (%{errors: field → messages}) — this was
-        # the one endpoint returning %{error: "validation_failed", details: ...}.
-        conn
-        |> put_status(422)
-        |> json(%{errors: EngramWeb.format_errors(cs)})
+      {:error, %Ecto.Changeset{}} = error ->
+        error
     end
   end
 
@@ -92,8 +90,8 @@ defmodule EngramWeb.UsersController do
       {:error, :invalid_password} ->
         conn |> put_status(403) |> json(%{error: "invalid_password"})
 
-      {:error, :last_admin} ->
-        conn |> put_status(409) |> json(%{error: "last_admin"})
+      {:error, :last_admin} = error ->
+        error
 
       {:error, _other} ->
         conn |> put_status(422) |> json(%{error: "delete_failed"})

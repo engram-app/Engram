@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.0](https://github.com/engram-app/Engram/compare/0.12.6...0.13.0) (2026-08-02)
+
+
+### Features
+
+* **connections:** give Devin its brand icon and an onboarding row ([#1197](https://github.com/engram-app/Engram/issues/1197)) ([c29a7f8](https://github.com/engram-app/Engram/commit/c29a7f85aec88c4bd133eb171d0fc14b2629773c))
+
+
+### Performance Improvements
+
+* batch attachment deletes, folder-rename writes, parallel creates ([#1194](https://github.com/engram-app/Engram/issues/1194)) ([1904e5a](https://github.com/engram-app/Engram/commit/1904e5a0abe25f9756868f170ce69b29c2a7c694))
+
 ## [0.12.6](https://github.com/engram-app/Engram/compare/0.12.5...0.12.6) (2026-08-02)
 
 
