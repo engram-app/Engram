@@ -130,6 +130,52 @@ defmodule Engram.Storage.S3Test do
     end
   end
 
+  describe "delete_many/1" do
+    test "returns the key count when the DeleteResult carries no errors", %{bypass: bypass} do
+      xml =
+        ~s(<?xml version="1.0"?><DeleteResult>) <>
+          ~s(<Deleted><Key>a</Key></Deleted><Deleted><Key>b</Key></Deleted>) <>
+          ~s(</DeleteResult>)
+
+      Bypass.expect(bypass, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/xml")
+        |> Plug.Conn.resp(200, xml)
+      end)
+
+      assert {:ok, 2} = S3.delete_many(["a", "b"])
+    end
+
+    test "surfaces per-key errors hidden in a 200 DeleteResult", %{bypass: bypass} do
+      # S3 DeleteObjects returns HTTP 200 even when individual keys fail —
+      # per-key failures ride the body as <Error> entries. Returning
+      # length(keys) unconditionally hides leaked blobs.
+      xml =
+        ~s(<?xml version="1.0"?><DeleteResult>) <>
+          ~s(<Deleted><Key>a</Key></Deleted>) <>
+          ~s(<Error><Key>b</Key><Code>InternalError</Code><Message>boom</Message></Error>) <>
+          ~s(</DeleteResult>)
+
+      Bypass.expect(bypass, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/xml")
+        |> Plug.Conn.resp(200, xml)
+      end)
+
+      {result, events} = LogCapture.with_events(fn -> S3.delete_many(["a", "b"]) end)
+
+      assert result == {:ok, 1}
+
+      event = Enum.find(events, fn e -> render_msg(e.msg) =~ "S3.delete_many partial failure" end)
+
+      assert event, "expected an S3.delete_many partial-failure log event"
+      assert event.level == :error
+      assert event.meta[:category] == :sync
+      assert event.meta[:key_count] == 2
+      assert event.meta[:error_count] == 1
+    end
+  end
+
   describe "exists?/1" do
     test "returns true when object exists", %{bypass: bypass} do
       Bypass.expect_once(bypass, "HEAD", "/#{@bucket}/#{@key}", fn conn ->
