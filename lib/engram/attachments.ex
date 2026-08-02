@@ -655,9 +655,8 @@ defmodule Engram.Attachments do
   mid-loop failure still rolls the whole op back. Reusing `batch_delete/3` keeps
   one delete path instead of a bespoke single-seq `update_all`.
   """
-  # Shared with Engram.Notes' batch caps: 500 = the (now retired, 410) legacy
-  # change feed's convergence bound (>500 rows on one server timestamp could
-  # loop a pull).
+  # Cheap request-size guard (chunk-stamping and the legacy feed it protected
+  # are gone; no bulk consumer exceeds this).
   @max_batch_entries 500
 
   @spec delete_folder(map(), map(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
@@ -686,9 +685,8 @@ defmodule Engram.Attachments do
     end
   end
 
-  # Shared with Engram.Notes' batch caps: 500 = the (now retired, 410) legacy
-  # change feed's convergence bound (>500 rows on one server timestamp could
-  # loop a pull).
+  # Cheap request-size guard (chunk-stamping and the legacy feed it protected
+  # are gone; no bulk consumer exceeds this).
   @max_batch_entries 500
 
   @doc """

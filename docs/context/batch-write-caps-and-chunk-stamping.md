@@ -1,19 +1,25 @@
 # Batch-write caps + chunk-stamped tombstones — the fewer-than-500-rows-per-TIMESTAMP invariant
 
-_Last verified: 2026-08-01_
+_Last verified: 2026-08-02_
 
-**Status:** shipped on PR #1188 (review-remediation bundle); #1194 (batch
-write-path perf rewrite) builds on the same mechanism.
-**Symptom class:** a legacy (pre-pagination) client's change-feed pull loops
-forever on one page; or, the day-one version of the trap, e2e teardown gets
-422 `batch_too_large` on a legitimate 1100-id bulk delete.
+**Status:** HISTORICAL. Chunk-stamping shipped on PR #1188 (review-remediation
+bundle), #1194 (batch write-path perf rewrite) built on it — and it was
+**removed entirely** once the feed it protected was retired (see banner).
+**Symptom class (historical):** a legacy (pre-pagination) client's change-feed
+pull loops forever on one page; or, the day-one version of the trap, e2e
+teardown gets 422 `batch_too_large` on a legitimate 1100-id bulk delete.
 
 ## The invariant
 
-> **2026-08-02:** the legacy feed itself is RETIRED — `GET /notes/changes` /
-> `GET /attachments/changes` now always return 410 Gone. The chunk-stamping
-> mechanism below still exists (removing it is a follow-up PR); this section
-> is the historical WHY.
+> **2026-08-02:** the legacy feed is RETIRED — `GET /notes/changes` /
+> `GET /attachments/changes` now always return 410 Gone (PR #1215) — and the
+> chunk-stamping mechanism below is **REMOVED** (the follow-up PR to #1215):
+> `Notes.bulk_stamp/2`, `@stamp_chunk`, and all per-chunk/per-row stamping are
+> gone. Bulk deletes, batch upserts, and folder-rename cascades now share ONE
+> `DateTime.utc_now()` per operation — the seq feed (`list_changes_by_seq`)
+> orders by `(seq, id)` and does not care about `updated_at` distinctness.
+> Only `@max_batch_entries 500` (the upsert compute-DoS cap) survives.
+> Everything below is the historical WHY.
 
 The legacy change feed (`GET /notes/changes`) paged by **timestamp** with an
 **inclusive** boundary: legacy clients advanced `since = server_time` after
@@ -54,7 +60,7 @@ The cap broke e2e on day one.
 contract (caps, status codes, param semantics), grep `e2e/` for usage — not
 just `frontend/` and the plugin.
 
-## The fix — chunk-stamp instead of reject
+## The fix — chunk-stamp instead of reject (historical)
 
 `batch_delete_notes/3` (`lib/engram/notes.ex`) now accepts any request size
 and enforces the invariant directly: tombstones are stamped in

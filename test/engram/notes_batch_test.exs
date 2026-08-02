@@ -583,13 +583,11 @@ defmodule Engram.NotesBatchSetBasedTest do
 
   describe "batch size limits (context boundary)" do
     # Delete/move accept ANY size — real consumers (e2e harness cleanup,
-    # test_77 bulk teardown) legitimately send >1000 ids in one request. The
-    # actual invariant is ≤500 rows per server TIMESTAMP (the legacy
-    # `updated_at >= since` feed re-serves the same page forever if a
-    # same-stamp run exceeds the page size — notes_controller.ex
-    # changes_server_time), so bulk deletes stamp tombstones in ≤500-row
-    # chunks with distinct timestamps instead of rejecting the request.
-    test "batch_delete_notes accepts >500 ids and chunk-stamps tombstones", %{
+    # test_77 bulk teardown) legitimately send >1000 ids in one request.
+    # Rows may share one timestamp: the seq feed orders by (seq, id), so
+    # same-stamp runs are harmless (the distinct-stamp invariant died with
+    # the legacy `updated_at >= since` feed, retired in #1215).
+    test "batch_delete_notes accepts >500 ids", %{
       user: user,
       vault: vault
     } do
@@ -597,44 +595,13 @@ defmodule Engram.NotesBatchSetBasedTest do
       ids = Enum.map(notes, & &1.id)
 
       assert {:ok, %{deleted: 501}} = Notes.batch_delete_notes(user, vault, ids)
-
-      stamp_runs = stamp_run_sizes(user, ids)
-
-      # STRICTLY fewer than the 500-row legacy page per stamp: the since
-      # boundary is inclusive, so a run of EXACTLY page-size wedges too.
-      assert length(stamp_runs) >= 2,
-             ">500 tombstones must not share one timestamp (legacy-feed wedge)"
-
-      assert Enum.max(stamp_runs) < 500,
-             "a same-stamp run of exactly page size (500) re-serves forever"
-    end
-
-    test "batch_upsert_notes stamps creates in <500-row timestamp runs", %{
-      user: user,
-      vault: vault
-    } do
-      params = for i <- 1..401, do: %{path: "stampchunk/n#{i}.md"}
-      assert {:ok, %{results: results}} = Notes.batch_upsert_notes(user, vault, params)
-      ids = results |> Enum.filter(&(&1.status == :ok)) |> Enum.map(& &1.id)
-      assert length(ids) == 401
-
-      stamp_runs = stamp_run_sizes(user, ids)
-
-      assert length(stamp_runs) >= 2,
-             "bulk creates must not all share one updated_at (legacy-feed wedge)"
-
-      assert Enum.max(stamp_runs) < 500
     end
 
     @tag timeout: 120_000
-    test "rename_folder chunk-stamps >500-row cascades (rows + tombstones)", %{
+    test "rename_folder handles >500-row cascades (rows + tombstones)", %{
       user: user,
       vault: vault
     } do
-      # do_rename_folder stamps EVERY touched row (marker + renamed rows +
-      # old-path tombstones) in one cascade; a single shared `now` puts >500
-      # rows on one timestamp and wedges the legacy `updated_at >= since`
-      # feed exactly like an unchunked batch delete would.
       {:ok, %{results: r1}} =
         Notes.batch_upsert_notes(user, vault, for(i <- 1..500, do: %{path: "BigStamp/n#{i}.md"}))
 
@@ -645,7 +612,7 @@ defmodule Engram.NotesBatchSetBasedTest do
 
       assert {:ok, _} = Notes.rename_folder(user, vault, "BigStamp", "BigStampMoved")
 
-      # Every note row in the vault now carries a rename-time stamp: the
+      # Every note row in the vault was touched by the cascade: the
       # marker + 501 renamed rows + 501 tombstones.
       {:ok, ids} =
         Repo.with_tenant(user.id, fn ->
@@ -655,14 +622,6 @@ defmodule Engram.NotesBatchSetBasedTest do
         end)
 
       assert length(ids) == 1003
-
-      stamp_runs = stamp_run_sizes(user, ids)
-
-      assert length(stamp_runs) >= 2,
-             "a >500-row rename cascade must not share one updated_at (legacy-feed wedge)"
-
-      assert Enum.max(stamp_runs) < 500,
-             "a same-stamp run of exactly page size (500) re-serves forever"
     end
 
     # Upsert keeps a hard cap: each entry costs an encrypt + CRDT merge, so
@@ -672,21 +631,5 @@ defmodule Engram.NotesBatchSetBasedTest do
       params = for i <- 1..501, do: %{path: "bulk/n#{i}.md"}
       assert {:error, :batch_too_large} = Notes.batch_upsert_notes(user, vault, params)
     end
-  end
-
-  # Sizes of each distinct-updated_at group among the given note ids.
-  defp stamp_run_sizes(user, ids) do
-    Repo.with_tenant(user.id, fn ->
-      import Ecto.Query
-
-      Repo.all(
-        from(n in Engram.Notes.Note,
-          where: n.id in ^ids,
-          group_by: n.updated_at,
-          select: count(n.id)
-        )
-      )
-    end)
-    |> elem(1)
   end
 end
