@@ -1486,7 +1486,15 @@
             "x-struct": null,
             "x-validate": null
           },
+          "redirect_uri": {
+            "description": "The redirect this grant's authorization code was delivered to. This, not `redirect_uris`, is what decides `verified`. Null for non-OAuth connections and for grants issued before it was recorded.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "redirect_uris": {
+            "description": "Every redirect the client registered. Informational only — a client may register several and choose one per authorization, so a vendor host appearing here proves nothing about this grant.",
             "items": {
               "type": "string",
               "x-struct": null,
