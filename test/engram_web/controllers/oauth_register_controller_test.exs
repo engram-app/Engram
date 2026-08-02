@@ -99,7 +99,7 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
       identity =
         Engram.Connections.LogoAllowlist.resolve(
           client.software_id,
-          client.redirect_uris,
+          hd(client.redirect_uris),
           client.client_name
         )
 

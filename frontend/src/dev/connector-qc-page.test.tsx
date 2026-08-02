@@ -4,8 +4,16 @@
 // white-screens and QC is done against nothing.
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import ConnectorQcPage from "./connector-qc-page";
+
+// Mounting three full pages costs ~1.5s of real work in jsdom — 13 connection
+// cards, the checklist and the FTUX picker, each injecting raw brand SVGs. That
+// is only 3x under the 5s default, and full-suite contention on a shared runner
+// eats the margin: measured 1.7s in isolation, >5s at 20-way parallelism.
+// Nothing is hanging or looping here, the budget is just wrong for a smoke test
+// that renders this much. Same treatment as markdown-reference-panel.test.tsx.
+vi.setConfig({ testTimeout: 20_000 });
 
 function renderGallery() {
 	return render(

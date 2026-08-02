@@ -31,10 +31,18 @@ defmodule Engram.OAuth.RefreshToken do
     # a custom Ecto type.
     field :last_used_ip, :string
 
+    # The redirect the grant ACTUALLY used, copied from the authorization code
+    # at exchange and carried across every rotation. Not the client's
+    # registered list: a client may register several redirects, and the badge
+    # in `Engram.Connections.LogoAllowlist` must reflect where the code was
+    # delivered, not where it could have been. NULL on grants predating the
+    # column, which resolve as unverified. See #1204.
+    field :redirect_uri, :string
+
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 
-  @cast ~w(token_hash family_id client_id user_id vault_id scope expires_at last_used_at last_used_ip)a
+  @cast ~w(token_hash family_id client_id user_id vault_id scope expires_at last_used_at last_used_ip redirect_uri)a
   @required ~w(token_hash family_id client_id user_id expires_at)a
 
   def changeset(token, attrs) do

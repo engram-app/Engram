@@ -13,7 +13,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
   # "Unverified client" chip instead of Anthropic's logo and name.
   test "a self-asserted vendor software_id buys no identity at all" do
     assert %{verified: false, display_name: nil, logo: nil, slug: nil} =
-             LogoAllowlist.resolve("anthropic-claude-desktop", ["http://localhost:1234/cb"])
+             LogoAllowlist.resolve("anthropic-claude-desktop", "http://localhost:1234/cb")
   end
 
   # The other three deleted guesses, same rule. Named individually so a
@@ -21,7 +21,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
   test "the deleted guessed software_ids resolve to the placeholder" do
     for id <- ~w(cursor.sh openai-chatgpt vscode-engram) do
       assert %{verified: false, display_name: nil, logo: nil, slug: nil} =
-               LogoAllowlist.resolve(id, ["http://localhost:1234/cb"]),
+               LogoAllowlist.resolve(id, "http://localhost:1234/cb"),
              "#{id} must not grant vendor identity from a self-asserted claim"
     end
   end
@@ -35,7 +35,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
   end
 
   test "resolve matches verified Claude by claude.ai redirect host" do
-    result = LogoAllowlist.resolve(nil, ["https://claude.ai/api/mcp/auth_callback"])
+    result = LogoAllowlist.resolve(nil, "https://claude.ai/api/mcp/auth_callback")
 
     assert %{
              verified: true,
@@ -51,7 +51,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
   # claiming one vendor while its grant is delivered to another must be listed
   # as the vendor that actually receives the code.
   test "resolve prefers the redirect host over a self-asserted software_id" do
-    result = LogoAllowlist.resolve("engram-vault-sync", ["https://claude.ai/x"])
+    result = LogoAllowlist.resolve("engram-vault-sync", "https://claude.ai/x")
 
     assert %{verified: true, slug: "claude", logo: "/assets/clients/claude.svg"} = result
   end
@@ -60,41 +60,66 @@ defmodule Engram.Connections.LogoAllowlistTest do
   # the case it exists for: our own Obsidian plugin redirects to a custom
   # scheme, so nothing else can name it.
   test "resolve falls back to software_id when there is no vendor host" do
-    result = LogoAllowlist.resolve("engram-vault-sync", ["obsidian://engram/cb"])
+    result = LogoAllowlist.resolve("engram-vault-sync", "obsidian://engram/cb")
 
     assert %{verified: false, slug: nil, logo: "/assets/clients/engram-vault-sync.svg"} = result
   end
 
   test "resolve ignores loopback and custom-scheme redirects" do
     assert %{verified: false, logo: nil, slug: nil} =
-             LogoAllowlist.resolve(nil, ["http://127.0.0.1:51234/cb"])
+             LogoAllowlist.resolve(nil, "http://127.0.0.1:51234/cb")
 
-    assert %{verified: false, slug: nil} = LogoAllowlist.resolve(nil, ["cursor://anyscheme"])
+    assert %{verified: false, slug: nil} = LogoAllowlist.resolve(nil, "cursor://anyscheme")
   end
 
   test "resolve does not verify a custom-scheme redirect pointing at a vendor host" do
     assert %{verified: false, slug: nil} =
-             LogoAllowlist.resolve(nil, ["com.evil.app://claude.ai/callback"])
+             LogoAllowlist.resolve(nil, "com.evil.app://claude.ai/callback")
   end
 
   test "resolve does not verify a non-https redirect to a vendor host" do
     assert %{verified: false, slug: nil} =
-             LogoAllowlist.resolve(nil, ["http://claude.ai/api/mcp/auth_callback"])
+             LogoAllowlist.resolve(nil, "http://claude.ai/api/mcp/auth_callback")
   end
 
   test "resolve does not verify when vendor host is in userinfo, not the host" do
     assert %{verified: false, slug: nil} =
-             LogoAllowlist.resolve(nil, ["https://claude.ai@evil.com/cb"])
+             LogoAllowlist.resolve(nil, "https://claude.ai@evil.com/cb")
   end
 
   test "resolve matches the vendor host case-insensitively" do
     assert %{verified: true, slug: "claude"} =
-             LogoAllowlist.resolve(nil, ["https://CLAUDE.AI/api/mcp/auth_callback"])
+             LogoAllowlist.resolve(nil, "https://CLAUDE.AI/api/mcp/auth_callback")
   end
 
-  test "resolve handles nil/empty redirect list" do
+  # nil is the normal case for a grant issued before #1204 added the column, and
+  # it must fail closed. Anything that is not a single URI string is nil-shaped.
+  test "resolve fails closed on a missing or non-string redirect" do
     assert %{verified: false, slug: nil} = LogoAllowlist.resolve(nil, nil)
-    assert %{verified: false, slug: nil} = LogoAllowlist.resolve(nil, [])
+    assert %{verified: false, slug: nil} = LogoAllowlist.resolve(nil, "")
+
+    # A list is a type error now, not an any-match. Asserted so the #1204 shape
+    # cannot come back by someone re-widening the argument and getting a pass.
+    assert %{verified: false, slug: nil} =
+             LogoAllowlist.resolve(nil, ["https://claude.ai/api/mcp/auth_callback"])
+  end
+
+  # THE #1204 regression. DCR is public and lets a client register several
+  # redirects, choosing one per authorization. Resolving over the list meant any
+  # entry could carry the badge, so an attacker registered a loopback next to
+  # Anthropic's callback, authorized with the loopback, took the code on their
+  # own machine, and still showed up in the victim's connections list as Claude,
+  # verified, wearing Anthropic's logo. Only the redirect the code was actually
+  # delivered to decides.
+  test "the redirect a grant USED decides the badge, not one the client also registered" do
+    stolen = "http://localhost:9999/steal"
+    vendor = "https://claude.ai/api/mcp/auth_callback"
+
+    assert %{verified: false, logo: nil, display_name: nil} =
+             LogoAllowlist.resolve(nil, stolen, "Claude")
+
+    assert %{verified: true, logo: "/assets/clients/claude.svg"} =
+             LogoAllowlist.resolve(nil, vendor, "Claude")
   end
 
   test "lookup result carries slug key" do
@@ -105,19 +130,20 @@ defmodule Engram.Connections.LogoAllowlistTest do
 
   test "resolve verifies ChatGPT by chatgpt.com redirect host" do
     assert %{verified: true, slug: "chatgpt", display_name: "ChatGPT"} =
-             LogoAllowlist.resolve(nil, ["https://chatgpt.com/connector/oauth/ig2N09X8ZQ6D"])
+             LogoAllowlist.resolve(nil, "https://chatgpt.com/connector/oauth/ig2N09X8ZQ6D")
   end
 
   test "resolve verifies Grok by grok.com redirect host" do
     assert %{verified: true, slug: "grok", display_name: "Grok"} =
-             LogoAllowlist.resolve(nil, ["https://grok.com/connectors-oauth-exchange-code/"])
+             LogoAllowlist.resolve(nil, "https://grok.com/connectors-oauth-exchange-code/")
   end
 
   test "resolve verifies Mistral by callback.mistral.ai redirect host" do
     assert %{verified: true, slug: "mistral", display_name: "Mistral"} =
-             LogoAllowlist.resolve(nil, [
+             LogoAllowlist.resolve(
+               nil,
                "https://callback.mistral.ai/v1/integrations_auth/oauth2_callback"
-             ])
+             )
   end
 
   # --- client_name slug fallback: loopback clients that can never verify ---
@@ -126,14 +152,14 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{slug: "claude_code"} =
              LogoAllowlist.resolve(
                nil,
-               ["http://localhost:62184/callback"],
+               "http://localhost:62184/callback",
                "Claude Code (engram)"
              )
   end
 
   test "client_name slug survives an arbitrary user-chosen server suffix" do
     for name <- ["Claude Code (engram)", "Claude Code (notes)", "Claude Code", "claude code  "] do
-      assert %{slug: "claude_code"} = LogoAllowlist.resolve(nil, ["http://127.0.0.1:1/cb"], name),
+      assert %{slug: "claude_code"} = LogoAllowlist.resolve(nil, "http://127.0.0.1:1/cb", name),
              "expected #{inspect(name)} to resolve to claude_code"
     end
   end
@@ -143,12 +169,12 @@ defmodule Engram.Connections.LogoAllowlistTest do
   # anyone can wear the Claude badge by naming their client "Claude".
   test "client_name grants slug only, never verified, never a logo" do
     assert %{verified: false, logo: nil, display_name: nil, slug: "claude_code"} =
-             LogoAllowlist.resolve(nil, ["http://localhost:9/cb"], "Claude Code (evil)")
+             LogoAllowlist.resolve(nil, "http://localhost:9/cb", "Claude Code (evil)")
   end
 
   test "client_name cannot upgrade a spoofed vendor host to verified" do
     assert %{verified: false, logo: nil} =
-             LogoAllowlist.resolve(nil, ["https://claude.ai@evil.com/cb"], "Claude Code (x)")
+             LogoAllowlist.resolve(nil, "https://claude.ai@evil.com/cb", "Claude Code (x)")
   end
 
   # Precedence is proven-over-claimed. software_id is a self-asserted DCR body
@@ -163,7 +189,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: true, slug: "claude", display_name: "Claude"} =
              LogoAllowlist.resolve(
                "engram-vault-sync",
-               ["https://claude.ai/api/mcp/auth_callback"],
+               "https://claude.ai/api/mcp/auth_callback",
                nil
              )
   end
@@ -172,7 +198,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: true, slug: "claude", display_name: "Claude"} =
              LogoAllowlist.resolve(
                nil,
-               ["https://claude.ai/api/mcp/auth_callback"],
+               "https://claude.ai/api/mcp/auth_callback",
                "Claude Code (engram)"
              )
   end
@@ -188,7 +214,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
           {"GitHub Copilot", "github_copilot"},
           {"LobeChat", "lobechat"}
         ] do
-      assert %{slug: ^slug} = LogoAllowlist.resolve(nil, ["http://127.0.0.1:1/cb"], name),
+      assert %{slug: ^slug} = LogoAllowlist.resolve(nil, "http://127.0.0.1:1/cb", name),
              "expected #{inspect(name)} to derive slug #{inspect(slug)}"
     end
   end
@@ -205,15 +231,15 @@ defmodule Engram.Connections.LogoAllowlistTest do
   # so none is provable. Unverified means "unprovable", not "suspect".
   test "attributes observed name-only connectors (Cline, OpenCode, Open WebUI)" do
     assert %{slug: "cline", verified: false} =
-             LogoAllowlist.resolve(nil, ["http://127.0.0.1:1456/mcp/oauth/callback"], "Cline")
+             LogoAllowlist.resolve(nil, "http://127.0.0.1:1456/mcp/oauth/callback", "Cline")
 
     assert %{slug: "opencode", verified: false} =
-             LogoAllowlist.resolve(nil, ["http://127.0.0.1:19876/mcp/oauth/callback"], "OpenCode")
+             LogoAllowlist.resolve(nil, "http://127.0.0.1:19876/mcp/oauth/callback", "OpenCode")
 
     assert %{slug: "open_webui", verified: false} =
              LogoAllowlist.resolve(
                nil,
-               ["https://ai.ras.band/oauth/clients/mcp:1/callback"],
+               "https://ai.ras.band/oauth/clients/mcp:1/callback",
                "Open WebUI"
              )
   end
@@ -226,13 +252,13 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: true, slug: "antigravity", display_name: "Antigravity"} =
              LogoAllowlist.resolve(
                nil,
-               ["https://antigravity.google/oauth-callback"],
+               "https://antigravity.google/oauth-callback",
                "antigravity-client"
              )
 
     # Prove the name alone would NOT have carried it.
     assert %{slug: nil} =
-             LogoAllowlist.resolve(nil, ["http://localhost:1/cb"], "antigravity-client")
+             LogoAllowlist.resolve(nil, "http://localhost:1/cb", "antigravity-client")
   end
 
   # Observed 2026-08-01 on staging, both previously rendering as "Unrecognized
@@ -246,7 +272,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: true, display_name: "Devin", slug: "devin"} =
              LogoAllowlist.resolve(
                nil,
-               ["https://api.devin.ai/mcp/oauth/callback"],
+               "https://api.devin.ai/mcp/oauth/callback",
                "Devin"
              )
   end
@@ -257,7 +283,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: true, slug: "devin"} =
              LogoAllowlist.resolve(
                nil,
-               ["https://api.devin.ai/mcp/oauth/callback"],
+               "https://api.devin.ai/mcp/oauth/callback",
                "something-else"
              )
   end
@@ -269,7 +295,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
   # That is the two-layer model working, not a leak: a name grants slug only.
   test "a loopback Devin derives its slug from the name but is never verified" do
     assert %{verified: false, slug: "devin", logo: nil, display_name: nil} =
-             LogoAllowlist.resolve(nil, ["http://localhost:1/cb"], "Devin")
+             LogoAllowlist.resolve(nil, "http://localhost:1/cb", "Devin")
   end
 
   # LobeHub is the cloud host, LobeChat the product and the catalog slug — so
@@ -280,13 +306,13 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: true, display_name: "LobeChat", slug: "lobechat"} =
              LogoAllowlist.resolve(
                nil,
-               ["https://app.lobehub.com/oauth/connector/callback"],
+               "https://app.lobehub.com/oauth/connector/callback",
                "LobeHub"
              )
 
     # Prove the name alone would NOT have carried the slug.
     assert %{slug: nil, verified: false} =
-             LogoAllowlist.resolve(nil, ["http://localhost:1/cb"], "LobeHub")
+             LogoAllowlist.resolve(nil, "http://localhost:1/cb", "LobeHub")
   end
 
   # Self-hosted LobeChat redirects to the operator's own domain, so it must stay
@@ -295,7 +321,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: false} =
              LogoAllowlist.resolve(
                nil,
-               ["https://lobe.mycompany.example/oauth/connector/callback"],
+               "https://lobe.mycompany.example/oauth/connector/callback",
                "LobeHub"
              )
   end
@@ -308,7 +334,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: false, logo: nil, slug: "open_webui"} =
              LogoAllowlist.resolve(
                nil,
-               ["https://ai.ras.band/oauth/clients/mcp:1/callback"],
+               "https://ai.ras.band/oauth/clients/mcp:1/callback",
                "Open WebUI"
              )
   end
@@ -316,24 +342,24 @@ defmodule Engram.Connections.LogoAllowlistTest do
   # `web_only` and `other_mcp` are questionnaire answers, not products. A client
   # claiming to be one would tick a row it has no business ticking.
   test "never derives the non-product catalog answers from a client_name" do
-    assert %{slug: nil} = LogoAllowlist.resolve(nil, ["http://127.0.0.1:1/cb"], "web only")
-    assert %{slug: nil} = LogoAllowlist.resolve(nil, ["http://127.0.0.1:1/cb"], "Other MCP")
+    assert %{slug: nil} = LogoAllowlist.resolve(nil, "http://127.0.0.1:1/cb", "web only")
+    assert %{slug: nil} = LogoAllowlist.resolve(nil, "http://127.0.0.1:1/cb", "Other MCP")
   end
 
   test "client_name normalization tolerates punctuation and empty residue" do
     assert %{slug: "github_copilot"} =
-             LogoAllowlist.resolve(nil, ["http://127.0.0.1:1/cb"], "GitHub-Copilot")
+             LogoAllowlist.resolve(nil, "http://127.0.0.1:1/cb", "GitHub-Copilot")
 
-    assert %{slug: nil} = LogoAllowlist.resolve(nil, ["http://127.0.0.1:1/cb"], "***")
-    assert %{slug: nil} = LogoAllowlist.resolve(nil, ["http://127.0.0.1:1/cb"], "")
+    assert %{slug: nil} = LogoAllowlist.resolve(nil, "http://127.0.0.1:1/cb", "***")
+    assert %{slug: nil} = LogoAllowlist.resolve(nil, "http://127.0.0.1:1/cb", "")
   end
 
   test "unknown or nil client_name stays empty" do
     assert %{verified: false, slug: nil} =
-             LogoAllowlist.resolve(nil, ["http://localhost:1/cb"], "Some Random Client")
+             LogoAllowlist.resolve(nil, "http://localhost:1/cb", "Some Random Client")
 
     assert %{verified: false, slug: nil} =
-             LogoAllowlist.resolve(nil, ["http://localhost:1/cb"], nil)
+             LogoAllowlist.resolve(nil, "http://localhost:1/cb", nil)
   end
 
   # --- CIMD: the only proof a loopback client can ever offer ---
@@ -345,7 +371,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: true, slug: "claude", display_name: "Claude"} =
              LogoAllowlist.resolve(
                nil,
-               ["http://127.0.0.1:51234/callback"],
+               "http://127.0.0.1:51234/callback",
                "Claude Code (engram)",
                "https://claude.ai/.well-known/oauth-client"
              )
@@ -358,7 +384,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: true, display_name: "newvendor.example", logo: nil} =
              LogoAllowlist.resolve(
                nil,
-               ["http://127.0.0.1:1/cb"],
+               "http://127.0.0.1:1/cb",
                nil,
                "https://newvendor.example/client"
              )
@@ -370,7 +396,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: true, slug: "cline"} =
              LogoAllowlist.resolve(
                nil,
-               ["http://127.0.0.1:1/cb"],
+               "http://127.0.0.1:1/cb",
                "Cline",
                "https://cline.example/client"
              )
@@ -380,7 +406,7 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: true, slug: "claude", display_name: "Claude"} =
              LogoAllowlist.resolve(
                nil,
-               ["https://chatgpt.com/connector/oauth/x"],
+               "https://chatgpt.com/connector/oauth/x",
                nil,
                "https://claude.ai/.well-known/oauth-client"
              )
@@ -398,16 +424,16 @@ defmodule Engram.Connections.LogoAllowlistTest do
           ""
         ] do
       assert %{verified: false} =
-               LogoAllowlist.resolve(nil, ["http://127.0.0.1:1/cb"], nil, url),
+               LogoAllowlist.resolve(nil, "http://127.0.0.1:1/cb", nil, url),
              "#{inspect(url)} must not verify"
     end
   end
 
   test "a nil cimd_url leaves existing behaviour untouched" do
     assert %{verified: true, slug: "claude"} =
-             LogoAllowlist.resolve(nil, ["https://claude.ai/cb"], nil, nil)
+             LogoAllowlist.resolve(nil, "https://claude.ai/cb", nil, nil)
 
     assert %{verified: false, slug: "cline"} =
-             LogoAllowlist.resolve(nil, ["http://127.0.0.1:1/cb"], "Cline", nil)
+             LogoAllowlist.resolve(nil, "http://127.0.0.1:1/cb", "Cline", nil)
   end
 end
