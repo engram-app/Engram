@@ -33,7 +33,7 @@ defmodule Engram.Onboarding do
   # slug can never reach a profile even if the UI is bypassed.
   @valid_tools ~w(
     claude chatgpt grok mistral open_webui lobechat
-    claude_code cursor windsurf cline continue opencode github_copilot antigravity
+    claude_code cursor devin windsurf cline continue opencode github_copilot antigravity
     web_only other_mcp
   )
 

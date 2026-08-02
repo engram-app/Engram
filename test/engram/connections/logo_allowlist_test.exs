@@ -236,17 +236,40 @@ defmodule Engram.Connections.LogoAllowlistTest do
   end
 
   # Observed 2026-08-01 on staging, both previously rendering as "Unrecognized
-  # client". Devin has no catalog slug: `Engram.Onboarding.valid_tools/0` has no
-  # `devin`, and adding one needs a /docs/integrations/devin/ page first
-  # (checklist-widget's #1157 parity test). Attribution and the badge do not
-  # depend on the slug, so the entry stands on its own.
-  test "resolve verifies Devin by its vendor host, with no catalog slug" do
-    assert %{verified: true, display_name: "Devin", slug: nil} =
+  # client". The slug matters for more than the checklist: the connections page
+  # resolves a brand mark by slug first, so `slug: nil` rendered Devin with no
+  # icon while every other `logo: nil` entry showed one. `devin` stays out of
+  # `Engram.Onboarding.valid_tools/0` on purpose — a connection slug only marks
+  # an EXISTING checklist row complete, it cannot create one, so this buys the
+  # icon without needing a /docs/integrations/devin/ page (#1157 parity test).
+  test "resolve verifies Devin by its vendor host and carries the devin slug" do
+    assert %{verified: true, display_name: "Devin", slug: "devin"} =
              LogoAllowlist.resolve(
                nil,
                ["https://api.devin.ai/mcp/oauth/callback"],
                "Devin"
              )
+  end
+
+  # The host carries the slug independently of the name, so the icon survives a
+  # client sending something unrecognisable.
+  test "Devin's slug comes from the host, not the client_name" do
+    assert %{verified: true, slug: "devin"} =
+             LogoAllowlist.resolve(
+               nil,
+               ["https://api.devin.ai/mcp/oauth/callback"],
+               "something-else"
+             )
+  end
+
+  # `devin` is in `Engram.Onboarding.valid_tools/0`, which makes it a DERIVABLE
+  # slug. So Cognition's loopback clients (Devin Desktop, the CLI) pick up the
+  # brand icon and tick the checklist row from their name alone, exactly as
+  # Claude Code does, while staying unverified because loopback proves nothing.
+  # That is the two-layer model working, not a leak: a name grants slug only.
+  test "a loopback Devin derives its slug from the name but is never verified" do
+    assert %{verified: false, slug: "devin", logo: nil, display_name: nil} =
+             LogoAllowlist.resolve(nil, ["http://localhost:1/cb"], "Devin")
   end
 
   # LobeHub is the cloud host, LobeChat the product and the catalog slug — so
