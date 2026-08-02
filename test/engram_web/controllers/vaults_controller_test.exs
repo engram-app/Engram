@@ -163,11 +163,7 @@ defmodule EngramWeb.VaultsControllerTest do
       conn = post(conn, "/api/vaults", %{})
 
       assert json_response(conn, 422) == %{
-               "errors" => %{
-                 "name_ciphertext" => ["can't be blank"],
-                 "name_hmac" => ["can't be blank"],
-                 "name_nonce" => ["can't be blank"]
-               }
+               "errors" => %{"name" => ["can't be blank"]}
              }
     end
   end
