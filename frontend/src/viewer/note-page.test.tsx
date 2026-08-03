@@ -72,7 +72,10 @@ vi.mock("../api/queries", () => ({
 // before initialization" at import time.
 const { navigateMock, locationMock } = vi.hoisted(() => ({
 	navigateMock: vi.fn(),
-	locationMock: vi.fn(() => ({ pathname: "/my-vault/note-1", state: null })),
+	locationMock: vi.fn<() => { pathname: string; state: { justCreated?: boolean } | null }>(() => ({
+		pathname: "/my-vault/note-1",
+		state: null,
+	})),
 }));
 vi.mock("react-router", () => ({
 	useParams: () => ({ itemId: "note-1", slug: "my-vault" }),
@@ -417,6 +420,42 @@ describe("NotePage (CRDT)", () => {
 			await openMenu();
 			fireEvent.click(screen.getByRole("menuitem", { name: "Add property" }));
 			expect(await screen.findByTestId("note-properties")).toHaveTextContent("new-property");
+		});
+	});
+
+	describe("new-note rename", () => {
+		it("opens the title in rename mode when navigated to as just-created", async () => {
+			locationMock.mockReturnValue({
+				pathname: "/my-vault/note-1",
+				state: { justCreated: true },
+			});
+			renderPage();
+			const input = (await screen.findByRole("textbox", {
+				name: "Rename file",
+			})) as HTMLInputElement;
+			expect(input.value).toBe("note");
+			expect(input.selectionStart).toBe(0);
+			expect(input.selectionEnd).toBe("note".length);
+		});
+
+		it("clears the flag so a back-navigation does not reopen the rename box", async () => {
+			locationMock.mockReturnValue({
+				pathname: "/my-vault/note-1",
+				state: { justCreated: true },
+			});
+			renderPage();
+			await screen.findByRole("textbox", { name: "Rename file" });
+			expect(navigateMock).toHaveBeenCalledWith("/my-vault/note-1", {
+				replace: true,
+				state: {},
+			});
+		});
+
+		it("does not start renaming on an ordinary navigation", async () => {
+			locationMock.mockReturnValue({ pathname: "/my-vault/note-1", state: null });
+			renderPage();
+			await screen.findByTestId("note-editor");
+			expect(screen.queryByRole("textbox", { name: "Rename file" })).not.toBeInTheDocument();
 		});
 	});
 });

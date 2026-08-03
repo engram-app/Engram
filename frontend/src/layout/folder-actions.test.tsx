@@ -118,7 +118,9 @@ describe("FolderActions", () => {
 			expect(crdtCreateNote).toHaveBeenCalled();
 		});
 		const mintedId = crdtCreateNote.mock.calls[0]?.[0];
-		expect(navigate).toHaveBeenCalledWith(`/note/${mintedId}`);
+		expect(navigate).toHaveBeenCalledWith(`/note/${mintedId}`, {
+			state: { justCreated: true },
+		});
 	});
 
 	it("opens the upload flow targeting the vault root when Upload is clicked", () => {

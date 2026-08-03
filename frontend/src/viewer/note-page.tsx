@@ -1,6 +1,6 @@
 import type { EditorView } from "@codemirror/view";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
@@ -134,6 +134,19 @@ export default function NotePage() {
 		setSlot("outline", <NoteToc content={liveContent} />);
 		return () => setSlot("outline", null);
 	}, [notePath, liveContent, setSlot]);
+
+	// Consume the just-created flag exactly once: start renaming, then strip the
+	// state so a later back-navigation to this history entry doesn't reopen the
+	// rename box on a note the user already named.
+	const location = useLocation();
+	const justCreated = Boolean((location.state as { justCreated?: boolean } | null)?.justCreated);
+	useEffect(() => {
+		if (!(justCreated && noteId)) {
+			return;
+		}
+		setRenamingFor(noteId);
+		navigate(location.pathname, { replace: true, state: {} });
+	}, [justCreated, noteId, navigate, location.pathname]);
 
 	// Publish the editor so right-sidebar tools (the markdown reference panel)
 	// can insert at the caret. Gated on the SAME condition that renders
