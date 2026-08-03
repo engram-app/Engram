@@ -32,6 +32,28 @@ describe("InlineTitle", () => {
 		expect(input.selectionEnd).toBe("My Note".length);
 	});
 
+	// Renaming should read as typing into the title, not as a form field
+	// appearing where the title was.
+	it("renders the rename box as the title itself, not as a boxed input", () => {
+		render(<InlineTitle {...props} renaming />);
+		const input = screen.getByRole("textbox");
+		const heading = render(<InlineTitle {...props} />).container.querySelector("h1");
+
+		// Same typography as the h1 it stands in for, from the same constant.
+		for (const cls of (heading?.className ?? "")
+			.split(" ")
+			.filter(
+				(c) =>
+					c.startsWith("text-3xl") || c.startsWith("font-semibold") || c.startsWith("tracking-"),
+			)) {
+			expect(input).toHaveClass(cls);
+		}
+		// No input chrome — twMerge must REPLACE the defaults, not append.
+		expect(input).toHaveClass("bg-transparent");
+		expect(input.className).not.toMatch(/\bbg-background\b/);
+		expect(input.className).not.toMatch(/\btext-sm\b/);
+	});
+
 	it("commits the typed name on Enter", () => {
 		const onCommitRename = vi.fn();
 		render(<InlineTitle {...props} renaming onCommitRename={onCommitRename} />);
