@@ -37,6 +37,7 @@ import type { ActionId, ViewMode } from "./tree-actions/action-list";
 import { DeleteConfirm } from "./tree-actions/delete-confirm";
 import { nextCopyName } from "./tree-actions/duplicate";
 import { MoveDialog } from "./tree-actions/move-dialog";
+import { RenameInput } from "./tree-actions/rename-input";
 import { renameBaseName } from "./tree-actions/rename-path";
 import { useLiveContent } from "./use-live-content";
 
@@ -67,7 +68,12 @@ export default function NotePage() {
 	// Which note the rename box belongs to, not a bare boolean: navigating to
 	// another note keeps this component mounted, and an id-keyed value closes
 	// the box on its own instead of carrying over onto the newly opened note.
-	const [renamingFor, setRenamingFor] = useState<string | null>(null);
+	//
+	// `at` names the surface because there are two of them — the header path and
+	// the inline title. Rendering a box in both would put two autofocusing
+	// inputs on screen, each committing the other's blur.
+	const [renaming, setRenaming] = useState<{ id: string; at: "header" | "title" } | null>(null);
+	const renamingAt = renaming && renaming.id === note?.id ? renaming.at : null;
 	const [handle, setHandle] = useState<DocHandle | null>(null);
 	const renameNote = useRenameNote();
 	const [syncStatus, setSyncStatus] = useState<CrdtSyncStatus>(getCrdtSyncStatus);
@@ -144,7 +150,7 @@ export default function NotePage() {
 		if (!(justCreated && noteId)) {
 			return;
 		}
-		setRenamingFor(noteId);
+		setRenaming({ id: noteId, at: "title" });
 		navigate(location.pathname, { replace: true, state: {} });
 	}, [justCreated, noteId, navigate, location.pathname]);
 
@@ -177,7 +183,7 @@ export default function NotePage() {
 	const name = noteName(note.path);
 	const titlePath = note.folder ? `${note.folder}/${name}` : name;
 	const commitRename = (next: string) => {
-		setRenamingFor(null);
+		setRenaming(null);
 		// Base-name rename: the header never shows the extension, so the user
 		// can't change the file type from here — the original one is always
 		// re-attached. (The tree's rename is the place to swap .md <-> .canvas.)
@@ -205,7 +211,7 @@ export default function NotePage() {
 				setMode("reading");
 				break;
 			case "rename":
-				setRenamingFor(note.id);
+				setRenaming({ id: note.id, at: "title" });
 				break;
 			case "move":
 				setDialog("move");
@@ -247,11 +253,39 @@ export default function NotePage() {
 					Not syncing - reconnecting...
 				</p>
 			)}
-			{/* Chrome is now just the breadcrumb and the view-mode control — the
-			    title moved into the document so it scrolls with the content. */}
+			{/* The big title moved into the document so it scrolls away, but the
+			    path stays pinned here — it is the only rename affordance still
+			    reachable once you have scrolled the title out of view. */}
 			<div className="flex shrink-0 items-center gap-2 border-border border-b px-4 py-2">
-				<p className="min-w-0 flex-1 truncate text-muted-foreground text-sm" title={titlePath}>
-					{note.folder ? `${note.folder}/` : ""}
+				<p className="flex min-w-0 flex-1 items-baseline gap-1 text-sm" title={titlePath}>
+					{Boolean(note.folder) && (
+						<span className="min-w-0 shrink truncate text-muted-foreground">{note.folder}/</span>
+					)}
+					{renamingAt === "header" ? (
+						<RenameInput
+							initial={name}
+							kind="file"
+							// This reads as a title field, not a modal edit: you click it,
+							// retype, and click into the document. Losing the rename because
+							// you did not press Enter is a surprise, so focus leaving saves.
+							// Escape still abandons.
+							commitOnBlur
+							onCommit={commitRename}
+							onCancel={() => setRenaming(null)}
+						/>
+					) : (
+						<button
+							type="button"
+							data-testid="header-note-name"
+							// -mx-1 cancels the padding so the hover target is roomier than
+							// the text without nudging the name off the folder crumb.
+							className="-mx-1 min-w-0 truncate rounded px-1 font-medium hover:bg-accent"
+							title="Click to rename"
+							onClick={() => setRenaming({ id: note.id, at: "header" })}
+						>
+							{name}
+						</button>
+					)}
 				</p>
 				<NoteMenu mode={mode} title={name} onPick={handleAction} />
 			</div>
@@ -266,10 +300,10 @@ export default function NotePage() {
 				<div className="w-full pb-5" data-tour="note-editor">
 					<InlineTitle
 						name={name}
-						renaming={renamingFor === note.id}
-						onStartRename={() => setRenamingFor(note.id)}
+						renaming={renamingAt === "title"}
+						onStartRename={() => setRenaming({ id: note.id, at: "title" })}
 						onCommitRename={commitRename}
-						onCancelRename={() => setRenamingFor(null)}
+						onCancelRename={() => setRenaming(null)}
 					/>
 
 					{handle && mode === "rendered" ? <PropertiesWidget doc={handle.doc} /> : null}

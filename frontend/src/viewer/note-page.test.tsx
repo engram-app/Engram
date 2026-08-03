@@ -140,7 +140,7 @@ describe("NotePage (CRDT)", () => {
 			error: null,
 		});
 		renderPage();
-		await waitFor(() => expect(screen.getByText("note")).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByTestId("header-note-name")).toBeInTheDocument());
 		expect(openDoc).not.toHaveBeenCalled();
 		expect(enroll).not.toHaveBeenCalled();
 	});
@@ -217,10 +217,40 @@ describe("NotePage (CRDT)", () => {
 	// Inline rename from the header — same semantics as the tree's rename
 	// (leaf-name edit, folder untouched, extension preserved), so the two
 	// entry points can't drift apart.
+	// The header keeps its own rename affordance: the full path is always
+	// visible even when the document is scrolled past the inline title, so it
+	// stays the reachable place to retitle a note.
+	describe("header path", () => {
+		it("shows the folder crumb and the file name", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			expect(screen.getByTestId("header-note-name")).toHaveTextContent("note");
+			expect(screen.getByText("folder/")).toBeInTheDocument();
+		});
+
+		it("renames from the header without also opening the inline title's box", async () => {
+			renderPage();
+			fireEvent.click(await screen.findByTestId("header-note-name"));
+			// Two boxes would mean two focus targets fighting over the same commit.
+			expect(screen.getAllByRole("textbox", { name: "Rename file" })).toHaveLength(1);
+			expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("note");
+		});
+
+		it("opens the inline title's box for a kebab rename, not the header's", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			await openMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+			expect(screen.getAllByRole("textbox", { name: "Rename file" })).toHaveLength(1);
+			// The header still shows its button; the h1 is the one that swapped.
+			expect(screen.getByTestId("header-note-name")).toBeInTheDocument();
+		});
+	});
+
 	describe("inline rename", () => {
 		const openRename = async () => {
 			renderPage();
-			fireEvent.click(await screen.findByRole("button", { name: "note" }));
+			fireEvent.click(await screen.findByTestId("header-note-name"));
 			return screen.getByRole("textbox", { name: "Rename file" });
 		};
 
