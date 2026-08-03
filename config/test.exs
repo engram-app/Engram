@@ -78,7 +78,31 @@ config :engram,
          #
          # Raising the checkout timeout instead would only lengthen the queue wait —
          # it hides the contention rather than removing it.
-         pool_size: System.schedulers_online() * 2 + 10
+         pool_size: System.schedulers_online() * 2 + 10,
+
+         # A DIFFERENT mechanism from the pool sizing above, and the pool_size
+         # knob cannot help it: processes a test spawns do not take their own
+         # connection, they share the OWNER's single checked-out one. So a batch
+         # that fans out to N processes (crdt_create_batch → one crdt_doc process
+         # per entry) serializes all N transactions through one connection, and
+         # queueing there is the designed behaviour rather than a shortage.
+         #
+         # DBConnection's defaults (queue_target 50ms / queue_interval 1000ms)
+         # are a PRODUCTION backpressure heuristic: once waits exceed the target
+         # it shirks requests instead of queueing them, so an overloaded pool
+         # sheds load rather than stalling. Against a shared sandbox connection
+         # that heuristic has nothing useful to shed — under full-suite load the
+         # honest serialization wait crosses 50ms and entries fail with
+         # "connection not available and request was dropped from queue after
+         # ~101ms", which surfaces as a flaky assertion about batch results.
+         #
+         # Verified as the mechanism, not a guess: forcing queue_target: 8
+         # reproduces that exact error with no load at all.
+         #
+         # Deliberately still bounded — the 15s checkout timeout is untouched, so
+         # a genuine deadlock or a leaked connection still fails the run.
+         queue_target: 5_000,
+         queue_interval: 30_000
        )
 
 # We don't run a server during test. If one is required,
