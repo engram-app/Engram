@@ -58,7 +58,12 @@ export function NoteMenu({ mode, title, onPick }: Props) {
 	}
 
 	return (
-		<DropdownMenu>
+		// modal={false} turns OFF Radix's focus trap. With it on, "Rename" opened
+		// the inline title's input, the still-mounted trap yanked focus back into
+		// the menu, and RenameInput's commit-or-cancel-on-blur closed the box in
+		// the same tick — rename from the kebab was unusable. A kebab does not
+		// need to trap focus or lock scroll.
+		<DropdownMenu modal={false}>
 			<DropdownMenuTrigger asChild>
 				<Button variant="ghost" size="icon" aria-label="Note options">
 					<MoreVertical className="size-4" />

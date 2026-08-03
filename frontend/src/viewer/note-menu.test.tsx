@@ -36,9 +36,7 @@ describe("NoteMenu", () => {
 			"aria-current",
 			"true",
 		);
-		expect(screen.getByRole("menuitem", { name: "Rendered" })).not.toHaveAttribute(
-			"aria-current",
-		);
+		expect(screen.getByRole("menuitem", { name: "Rendered" })).not.toHaveAttribute("aria-current");
 	});
 
 	it("uses the bottom-sheet drawer on mobile", () => {

@@ -50,12 +50,37 @@ vi.mock("../crdt/session", () => ({
 }));
 
 const useNoteMock = vi.fn();
-const { renameNoteMutate } = vi.hoisted(() => ({ renameNoteMutate: vi.fn() }));
+const { renameNoteMutate, deleteNoteMutate, duplicateNoteMutate, batchMoveMutate } = vi.hoisted(
+	() => ({
+		renameNoteMutate: vi.fn(),
+		deleteNoteMutate: vi.fn(),
+		duplicateNoteMutate: vi.fn(),
+		batchMoveMutate: vi.fn(),
+	}),
+);
 vi.mock("../api/queries", () => ({
 	useNote: (...a: unknown[]) => useNoteMock(...a),
 	useRenameNote: () => ({ mutate: renameNoteMutate, isPending: false }),
+	useDeleteNote: () => ({ mutate: deleteNoteMutate, isPending: false }),
+	useDuplicateNote: () => ({ mutateAsync: duplicateNoteMutate, isPending: false }),
+	useBatchMoveNotes: () => ({ mutate: batchMoveMutate, isPending: false }),
+	useFolders: () => ({ data: [{ name: "folder" }, { name: "other" }], isLoading: false }),
 }));
-vi.mock("react-router", () => ({ useParams: () => ({ itemId: "note-1" }) }));
+
+// Both must go through vi.hoisted — vi.mock factories are hoisted above plain
+// `const` declarations, so a non-hoisted locationMock throws "Cannot access
+// before initialization" at import time.
+const { navigateMock, locationMock } = vi.hoisted(() => ({
+	navigateMock: vi.fn(),
+	locationMock: vi.fn(() => ({ pathname: "/my-vault/note-1", state: null })),
+}));
+vi.mock("react-router", () => ({
+	useParams: () => ({ itemId: "note-1", slug: "my-vault" }),
+	useNavigate: () => navigateMock,
+	useLocation: () => locationMock(),
+}));
+
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const NOTE = {
 	id: "note-1",
@@ -68,8 +93,18 @@ const NOTE = {
 };
 
 describe("NotePage (CRDT)", () => {
+	// Radix DropdownMenu opens on pointerdown in happy-dom; the mobile drawer is
+	// a plain button, so sending both covers whichever branch the viewport picks.
+	const openMenu = async () => {
+		const trigger = await screen.findByRole("button", { name: "Note options" });
+		fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+		fireEvent.click(trigger);
+		await screen.findByRole("menuitem", { name: "Rendered" });
+	};
+
 	beforeEach(() => {
 		vi.clearAllMocks();
+		locationMock.mockReturnValue({ pathname: "/my-vault/note-1", state: null });
 		const doc = new Y.Doc();
 		openDoc.mockResolvedValue({
 			ytext: doc.getText("content"),
@@ -129,7 +164,8 @@ describe("NotePage (CRDT)", () => {
 		await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-1"));
 
 		// Switch to reading mode
-		fireEvent.click(screen.getByRole("button", { name: "Reading" }));
+		await openMenu();
+		fireEvent.click(screen.getByRole("menuitem", { name: "Reading" }));
 
 		// NoteView is mocked — assert on the content prop it receives.
 		// The live Y.Text content should be passed, not the stale REST "# hi".
@@ -150,10 +186,12 @@ describe("NotePage (CRDT)", () => {
 		// Reading mode swaps the editor out for NoteView — nothing to insert into,
 		// so the reference panel's Insert action must go disabled rather than
 		// silently no-op against a torn-down view.
-		fireEvent.click(screen.getByRole("button", { name: "Reading" }));
+		await openMenu();
+		fireEvent.click(screen.getByRole("menuitem", { name: "Reading" }));
 		await waitFor(() => expect(screen.getByTestId("has-editor")).toHaveTextContent("false"));
 
-		fireEvent.click(screen.getByRole("button", { name: "Rendered" }));
+		await openMenu();
+		fireEvent.click(screen.getByRole("menuitem", { name: "Rendered" }));
 		await waitFor(() => expect(screen.getByTestId("has-editor")).toHaveTextContent("true"));
 	});
 
@@ -258,13 +296,14 @@ describe("NotePage (CRDT)", () => {
 		await waitFor(() => expect(screen.getByText("status")).toBeInTheDocument());
 		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
 		expect(screen.queryByLabelText(/Frontmatter \(raw YAML\)/i)).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Rendered" })).toHaveAttribute(
-			"aria-pressed",
+		await openMenu();
+		expect(screen.getByRole("menuitem", { name: "Rendered" })).toHaveAttribute(
+			"aria-current",
 			"true",
 		);
 
 		// Switch to "raw": raw YAML region visible, pills hidden.
-		fireEvent.click(screen.getByRole("button", { name: "Raw" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "Raw" }));
 		await waitFor(() =>
 			expect(screen.getByLabelText(/Frontmatter \(raw YAML\)/i)).toBeInTheDocument(),
 		);
@@ -272,7 +311,8 @@ describe("NotePage (CRDT)", () => {
 		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
 
 		// Switch to "reading": NoteView visible, neither frontmatter surface shown.
-		fireEvent.click(screen.getByRole("button", { name: "Reading" }));
+		await openMenu();
+		fireEvent.click(screen.getByRole("menuitem", { name: "Reading" }));
 		await waitFor(() => expect(screen.getByTestId("note-view")).toBeInTheDocument());
 		expect(screen.queryByLabelText(/Frontmatter \(raw YAML\)/i)).not.toBeInTheDocument();
 		expect(screen.queryByText("status")).not.toBeInTheDocument();
@@ -300,6 +340,83 @@ describe("NotePage (CRDT)", () => {
 			await waitFor(() =>
 				expect(document.querySelector('[data-tour="note-editor"]')).toBeInTheDocument(),
 			);
+		});
+
+		it("shows the title in reading mode too", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			await openMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "Reading" }));
+			expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("note");
+		});
+	});
+
+	describe("kebab", () => {
+		it("switches view mode from the menu", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			await openMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "Reading" }));
+			expect(screen.getByTestId("note-view")).toBeInTheDocument();
+		});
+
+		it("no longer shows the old mode buttons in the header", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			expect(screen.queryByRole("button", { name: "Rendered" })).not.toBeInTheDocument();
+		});
+
+		it("starts a rename from the menu", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			await openMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+			expect(screen.getByRole("textbox", { name: "Rename file" })).toHaveValue("note");
+		});
+
+		it("duplicates with a collision-safe name", async () => {
+			duplicateNoteMutate.mockResolvedValue({ id: "n2", path: "folder/note 1.md" });
+			renderPage();
+			await screen.findByTestId("note-editor");
+			await openMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+			expect(duplicateNoteMutate).toHaveBeenCalledWith(
+				expect.objectContaining({ src_path: "folder/note.md" }),
+			);
+		});
+
+		it("moves the note to the folder picked in the dialog", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			await openMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "Move to…" }));
+			fireEvent.click(await screen.findByRole("option", { name: "other" }));
+			expect(batchMoveMutate).toHaveBeenCalledWith({
+				ids: ["note-1"],
+				target_folder: "other",
+				paths: { "note-1": "folder/note.md" },
+			});
+		});
+
+		it("deletes only after confirmation, then leaves the dead route", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			await openMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+			expect(deleteNoteMutate).not.toHaveBeenCalled();
+			fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+			expect(deleteNoteMutate).toHaveBeenCalledWith(
+				expect.objectContaining({ id: "note-1", path: "folder/note.md" }),
+			);
+			expect(navigateMock).toHaveBeenCalledWith("/my-vault");
+		});
+
+		it("adds a property to the frontmatter doc", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			await openMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "Add property" }));
+			expect(await screen.findByTestId("note-properties")).toHaveTextContent("new-property");
 		});
 	});
 });

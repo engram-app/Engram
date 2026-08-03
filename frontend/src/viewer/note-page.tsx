@@ -1,11 +1,19 @@
 import type { EditorView } from "@codemirror/view";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { useParams } from "react-router";
+import { useNavigate, useParams } from "react-router";
+import { toast } from "sonner";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
-import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { useNote, useRenameNote } from "../api/queries";
+import {
+	useBatchMoveNotes,
+	useDeleteNote,
+	useDuplicateNote,
+	useFolders,
+	useNote,
+	useRenameNote,
+} from "../api/queries";
+import { addKey } from "../crdt/frontmatter-doc";
 import {
 	type CrdtSyncStatus,
 	closeDoc,
@@ -21,20 +29,19 @@ import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
 import { EditorToolbar } from "./editor/toolbar";
 import { InlineTitle } from "./inline-title";
 import LoadingPane from "./loading-pane";
+import { NoteMenu } from "./note-menu";
 import NoteToc from "./note-toc";
 import NoteView from "./note-view";
 import { PropertiesWidget } from "./properties-widget";
+import type { ActionId, ViewMode } from "./tree-actions/action-list";
+import { DeleteConfirm } from "./tree-actions/delete-confirm";
+import { nextCopyName } from "./tree-actions/duplicate";
+import { MoveDialog } from "./tree-actions/move-dialog";
 import { renameBaseName } from "./tree-actions/rename-path";
 import { useLiveContent } from "./use-live-content";
 
 const NoteEditor = lazy(() => import("./note-editor"));
 
-type Mode = "rendered" | "raw" | "reading";
-const MODES: ReadonlyArray<{ value: Mode; label: string }> = [
-	{ value: "rendered", label: "Rendered" },
-	{ value: "raw", label: "Raw" },
-	{ value: "reading", label: "Reading" },
-];
 interface DocHandle {
 	ytext: Y.Text;
 	awareness: Awareness;
@@ -42,15 +49,21 @@ interface DocHandle {
 }
 
 export default function NotePage() {
-	const params = useParams();
-	const idStr = params.itemId;
+	const { itemId: idStr, slug } = useParams();
 	const validId = idStr && idStr.length > 0 ? idStr : null;
 
 	const { data: note, isLoading, error } = useNote(validId);
 	const { setSlot } = useRightTools();
 	const { setEditor } = useActiveEditor();
 
-	const [mode, setMode] = useState<Mode>("rendered");
+	const navigate = useNavigate();
+	const { data: folders } = useFolders();
+	const deleteNote = useDeleteNote();
+	const duplicateNote = useDuplicateNote();
+	const batchMoveNotes = useBatchMoveNotes();
+	const [dialog, setDialog] = useState<"move" | "delete" | null>(null);
+
+	const [mode, setMode] = useState<ViewMode>("rendered");
 	// Which note the rename box belongs to, not a bare boolean: navigating to
 	// another note keeps this component mounted, and an id-keyed value closes
 	// the box on its own instead of carrying over onto the newly opened note.
@@ -163,6 +176,57 @@ export default function NotePage() {
 		renameNote.mutate({ id: note.id, old_path: note.path, new_path });
 	};
 
+	// Deliberately NOT shared with folder-tree.tsx's handleActionPick: that one
+	// is welded to tree state (getItemInstance().startRenaming(), rowsFor, its
+	// own dialog reducer). The portable parts — the action list and the dialog
+	// components — are already reused. See the design spec.
+	const handleAction = (action: ActionId) => {
+		switch (action) {
+			case "view-rendered":
+				setMode("rendered");
+				break;
+			case "view-raw":
+				setMode("raw");
+				break;
+			case "view-reading":
+				setMode("reading");
+				break;
+			case "rename":
+				setRenamingFor(note.id);
+				break;
+			case "move":
+				setDialog("move");
+				break;
+			case "delete":
+				setDialog("delete");
+				break;
+			case "duplicate": {
+				// No reliable sibling-name set on hand — pass an empty Set and let the
+				// backend reject a collision; the toast surfaces it. Mirrors the tree.
+				const new_path = nextCopyName(note.path, new Set<string>());
+				duplicateNote
+					.mutateAsync({ src_path: note.path, new_path })
+					.then(() => toast.success("Duplicated"))
+					.catch(() => toast.error("Duplicate failed"));
+				break;
+			}
+			case "copy-wikilink":
+				// Wikilinks resolve by filename in Obsidian, never by H1 title.
+				navigator.clipboard
+					.writeText(`[[${name || note.path}]]`)
+					.then(() => toast.success("Copied wikilink"))
+					.catch(() => toast.error("Copy failed"));
+				break;
+			case "add-property":
+				if (handle) {
+					addKey(handle.doc, "new-property", "text");
+				}
+				break;
+			default:
+				break;
+		}
+	};
+
 	return (
 		<section className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]">
 			{syncStatus === "error" && (
@@ -176,25 +240,14 @@ export default function NotePage() {
 				<p className="min-w-0 flex-1 truncate text-muted-foreground text-sm" title={titlePath}>
 					{note.folder ? `${note.folder}/` : ""}
 				</p>
-				<fieldset className="m-0 flex shrink-0 gap-1 border-0 p-0">
-					<legend className="sr-only">View mode</legend>
-					{MODES.map(({ value, label }) => (
-						<Button
-							key={value}
-							variant={mode === value ? "secondary" : "ghost"}
-							size="sm"
-							aria-pressed={mode === value}
-							onClick={() => setMode(value)}
-						>
-							{label}
-						</Button>
-					))}
-				</fieldset>
+				<NoteMenu mode={mode} title={name} onPick={handleAction} />
 			</div>
 
 			{/* Pinned above the scroll area: a formatting toolbar that scrolled away
 			    would be unreachable exactly when you are typing further down. */}
-			{mode !== "reading" && handle ? <EditorToolbar getView={() => editorViewRef.current} /> : null}
+			{mode !== "reading" && handle ? (
+				<EditorToolbar getView={() => editorViewRef.current} />
+			) : null}
 
 			<ScrollArea className="min-h-0 flex-1">
 				<div className="w-full pb-5" data-tour="note-editor">
@@ -214,9 +267,7 @@ export default function NotePage() {
 							<NoteView content={liveContent} tags={note.tags} />
 						</div>
 					) : (
-						<Suspense
-							fallback={<p className="px-5 py-5 text-muted-foreground">Loading editor…</p>}
-						>
+						<Suspense fallback={<p className="px-5 py-5 text-muted-foreground">Loading editor…</p>}>
 							{handle ? (
 								<NoteEditor
 									ytext={handle.ytext}
@@ -234,6 +285,37 @@ export default function NotePage() {
 					)}
 				</div>
 			</ScrollArea>
+
+			{dialog === "move" ? (
+				<MoveDialog
+					folders={folders ?? []}
+					nodes={[{ kind: "file", path: note.path }]}
+					onPick={(folder) => {
+						setDialog(null);
+						batchMoveNotes.mutate({
+							ids: [note.id],
+							target_folder: folder,
+							paths: { [note.id]: note.path },
+						});
+					}}
+					onCancel={() => setDialog(null)}
+				/>
+			) : null}
+
+			{dialog === "delete" ? (
+				<DeleteConfirm
+					nodes={[{ kind: "file", path: note.path }]}
+					onConfirm={() => {
+						setDialog(null);
+						deleteNote.mutate({ id: note.id, path: note.path });
+						// useDeleteNote does not navigate — from the tree the deleted note
+						// usually isn't open, but here it is, so staying would strand the
+						// user on a dead route.
+						navigate(slug ? `/${slug}` : "/");
+					}}
+					onCancel={() => setDialog(null)}
+				/>
+			) : null}
 		</section>
 	);
 }
