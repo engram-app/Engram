@@ -15,6 +15,10 @@ import { PropertyField } from "./property-fields";
 import { PropertyTypeMenu } from "./property-type-menu";
 import { effectiveType, type PropertyType } from "./property-types";
 
+// Obsidian's --metadata-label-width is 9em against the 16px root, so 144px,
+// and it does NOT shrink — long values never squeeze the key column.
+const KEY_CELL = "flex min-h-7 w-36 min-w-36 shrink-0 items-center overflow-hidden rounded-md";
+
 interface Props {
 	doc: Y.Doc;
 	/**
@@ -48,6 +52,12 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 
 	const [newKey, setNewKey] = useState("");
 	const [newType, setNewType] = useState<PropertyType>("text");
+
+	const commitNewKey = () => {
+		if (addKey(doc, newKey, newType)) {
+			setNewKey("");
+		}
+	};
 
 	// The `---` gesture opens this with nothing in it, so the caret has to land
 	// in the name field — otherwise there is nothing to click away FROM.
@@ -94,22 +104,33 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 	}
 
 	return (
-		<div className="px-5 py-3" data-testid="note-properties" ref={rootRef}>
-			<dl className="grid grid-cols-[max-content_max-content_1fr_max-content] items-center gap-x-2 gap-y-1 text-xs">
+		// Geometry lifted from Obsidian's app.css: 8px block padding, a 2rem gap
+		// down to the body, 3px between rows, a 9em key column, 28px row height.
+		<section className="mb-8 px-5 py-2" data-testid="note-properties" ref={rootRef}>
+			<dl className="flex flex-col gap-[3px]">
 				{rows.map((row) => {
 					const type = effectiveType(row.value, row.typeOverride);
 					return (
-						<div key={row.key} className="contents" data-testid={`property-row-${row.key}`}>
-							<dt className="font-medium text-muted-foreground">{row.key}</dt>
-							<PropertyTypeMenu value={type} onChange={(t) => setType(doc, row.key, t)} />
-							<dd>
+						<div
+							key={row.key}
+							className="group flex items-start rounded-md"
+							data-testid={`property-row-${row.key}`}
+						>
+							<dt className={KEY_CELL}>
+								<PropertyTypeMenu value={type} onChange={(t) => setType(doc, row.key, t)} />
+								<span className="truncate px-1 text-muted-foreground text-sm">{row.key}</span>
+							</dt>
+							<dd className="flex min-h-7 flex-1 items-center gap-1">
 								<PropertyField
 									type={type}
 									value={row.value}
 									onCommit={(v) => setValue(doc, row.key, v)}
 								/>
 							</dd>
-							<div className="flex items-center gap-0.5 text-muted-foreground">
+							{/* Obsidian keeps row actions in a right-click menu, so the
+							    default view stays clean. We surface ours on hover/focus
+							    rather than dropping the capability. */}
+							<div className="flex min-h-7 items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
 								<button
 									type="button"
 									aria-label={`Move ${row.key} up`}
@@ -139,28 +160,35 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 					);
 				})}
 			</dl>
-			<div className="mt-2 flex items-center gap-2">
-				<input
-					ref={newKeyRef}
-					className="rounded border border-border bg-transparent px-2 py-1 text-foreground text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-					placeholder="Property name"
-					value={newKey}
-					onChange={(e) => setNewKey(e.target.value)}
-				/>
-				<PropertyTypeMenu value={newType} onChange={setNewType} />
+
+			{/* The adder wears the same row geometry, so a property being named
+			    looks like the row it is about to become. */}
+			<div className="mt-[3px] flex items-start">
+				<div className={KEY_CELL}>
+					<PropertyTypeMenu value={newType} onChange={setNewType} />
+					<input
+						ref={newKeyRef}
+						className="w-full min-w-0 border-0 bg-transparent px-1 text-muted-foreground text-sm outline-none placeholder:text-muted-foreground/60"
+						placeholder="Property name"
+						value={newKey}
+						onChange={(e) => setNewKey(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") {
+								e.preventDefault();
+								commitNewKey();
+							}
+						}}
+					/>
+				</div>
 				<button
 					type="button"
 					aria-label="Add property"
-					className="rounded border border-border px-2 py-1 text-muted-foreground text-xs hover:bg-muted"
-					onClick={() => {
-						if (addKey(doc, newKey, newType)) {
-							setNewKey("");
-						}
-					}}
+					className="min-h-7 rounded px-1.5 text-muted-foreground text-sm hover:text-foreground"
+					onClick={commitNewKey}
 				>
 					Add property
 				</button>
 			</div>
-		</div>
+		</section>
 	);
 }

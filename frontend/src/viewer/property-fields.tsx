@@ -10,8 +10,10 @@ interface FieldProps {
 	onFocusChange?: (focused: boolean) => void;
 }
 
+// Obsidian's value inputs carry no border and no fill, in any state — the
+// caret is the only affordance. See docs/context/obsidian-properties-parity.md.
 const inputCls =
-	"w-full rounded border border-border bg-transparent px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring";
+	"w-full rounded-md border-0 bg-transparent px-2 py-1 text-foreground text-sm outline-none";
 
 function ScalarField({ type, value, onCommit, onFocusChange }: FieldProps) {
 	const initial = value === null || value === undefined ? "" : String(value);
