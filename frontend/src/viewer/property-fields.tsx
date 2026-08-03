@@ -8,6 +8,8 @@ interface FieldProps {
 	value: unknown;
 	onCommit: (value: unknown) => void;
 	onFocusChange?: (focused: boolean) => void;
+	/** Property name, so the field announces as more than "edit text". */
+	label?: string;
 }
 
 // Obsidian's value inputs carry no border and no fill, in any state — the
@@ -15,7 +17,7 @@ interface FieldProps {
 const inputCls =
 	"w-full rounded-md border-0 bg-transparent px-2 py-1 text-foreground text-sm outline-none";
 
-function ScalarField({ type, value, onCommit, onFocusChange }: FieldProps) {
+function ScalarField({ type, value, onCommit, onFocusChange, label }: FieldProps) {
 	const initial = value === null || value === undefined ? "" : String(value);
 	const [draft, setDraft] = useState(initial);
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -47,6 +49,7 @@ function ScalarField({ type, value, onCommit, onFocusChange }: FieldProps) {
 		<input
 			ref={inputRef}
 			type={htmlType}
+			aria-label={label ? `${label} value` : undefined}
 			className={inputCls}
 			value={draft}
 			onChange={(e) => setDraft(e.target.value)}
@@ -63,9 +66,10 @@ interface ListFieldProps {
 	value: string[];
 	onCommit: (v: unknown) => void;
 	onFocusChange?: (focused: boolean) => void;
+	label?: string;
 }
 
-function ListField({ value, onCommit, onFocusChange }: ListFieldProps) {
+function ListField({ value, onCommit, onFocusChange, label }: ListFieldProps) {
 	const [pending, setPending] = useState("");
 
 	const add = () => {
@@ -97,6 +101,7 @@ function ListField({ value, onCommit, onFocusChange }: ListFieldProps) {
 				</span>
 			))}
 			<input
+				aria-label={label ? `${label} value` : undefined}
 				className={cn(inputCls, "w-24 flex-1")}
 				placeholder="Add item..."
 				value={pending}
@@ -114,13 +119,13 @@ function ListField({ value, onCommit, onFocusChange }: ListFieldProps) {
 	);
 }
 
-export function PropertyField({ type, value, onCommit, onFocusChange }: FieldProps) {
+export function PropertyField({ type, value, onCommit, onFocusChange, label }: FieldProps) {
 	if (type === "checkbox") {
 		return (
 			<Checkbox
 				checked={Boolean(value)}
 				onCheckedChange={(c) => onCommit(c === true)}
-				aria-label="Toggle value"
+				aria-label={label ? `${label} value` : "Toggle value"}
 			/>
 		);
 	}
@@ -130,10 +135,17 @@ export function PropertyField({ type, value, onCommit, onFocusChange }: FieldPro
 				value={Array.isArray(value) ? value.map(String) : []}
 				onCommit={onCommit}
 				onFocusChange={onFocusChange}
+				label={label}
 			/>
 		);
 	}
 	return (
-		<ScalarField type={type} value={value} onCommit={onCommit} onFocusChange={onFocusChange} />
+		<ScalarField
+			type={type}
+			value={value}
+			onCommit={onCommit}
+			onFocusChange={onFocusChange}
+			label={label}
+		/>
 	);
 }

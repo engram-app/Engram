@@ -7,6 +7,7 @@ import {
 	type PropertyRow,
 	readRows,
 	removeKey,
+	renameKey,
 	setType,
 	setValue,
 	sortRowsOkfFirst,
@@ -30,6 +31,54 @@ const ROW = "flex items-start rounded-md border border-border";
 // as "inside" for the click-away rule.
 const PORTALLED_SURFACES =
 	'[data-radix-popper-content-wrapper],[role="menu"],[role="listbox"],[role="dialog"]';
+
+/**
+ * The property's name, editable in place like Obsidian's key input.
+ *
+ * Keeps its own draft so a remote edit elsewhere in the doc cannot rewrite the
+ * text under the caret — the same guard the value fields use. A rejected
+ * rename (empty, unchanged, or a name already taken) snaps back rather than
+ * leaving the input showing a name the doc does not have.
+ */
+function PropertyKeyInput({ doc, name }: { doc: Y.Doc; name: string }) {
+	const [draft, setDraft] = useState(name);
+	const ref = useRef<HTMLInputElement>(null);
+	useEffect(() => {
+		if (document.activeElement !== ref.current) {
+			setDraft(name);
+		}
+	}, [name]);
+
+	const commit = () => {
+		if (draft.trim() === name) {
+			setDraft(name);
+			return;
+		}
+		if (!renameKey(doc, name, draft)) {
+			setDraft(name);
+		}
+	};
+
+	return (
+		<input
+			ref={ref}
+			aria-label={`Rename ${name}`}
+			className="w-full min-w-0 truncate border-0 bg-transparent px-1 text-muted-foreground text-sm outline-none"
+			value={draft}
+			onChange={(e) => setDraft(e.target.value)}
+			onBlur={commit}
+			onKeyDown={(e) => {
+				if (e.key === "Enter") {
+					e.preventDefault();
+					commit();
+				} else if (e.key === "Escape") {
+					e.preventDefault();
+					setDraft(name);
+				}
+			}}
+		/>
+	);
+}
 
 interface Props {
 	doc: Y.Doc;
@@ -170,12 +219,13 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 						<div key={row.key} className={`group ${ROW}`} data-testid={`property-row-${row.key}`}>
 							<dt className={KEY_CELL}>
 								<PropertyTypeMenu value={type} onChange={(t) => setType(doc, row.key, t)} />
-								<span className="truncate px-1 text-muted-foreground text-sm">{row.key}</span>
+								<PropertyKeyInput doc={doc} name={row.key} />
 							</dt>
 							<dd className="flex min-h-7 flex-1 items-center gap-1">
 								<PropertyField
 									type={type}
 									value={row.value}
+									label={row.key}
 									onCommit={(v) => setValue(doc, row.key, v)}
 								/>
 							</dd>

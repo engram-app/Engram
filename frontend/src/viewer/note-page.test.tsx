@@ -225,7 +225,7 @@ describe("NotePage (CRDT)", () => {
 		renderPage();
 
 		// Widget should appear in the default rendered mode
-		await waitFor(() => expect(screen.getByText("status")).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByDisplayValue("status")).toBeInTheDocument());
 	});
 
 	// Inline rename from the header — same semantics as the tree's rename
@@ -340,7 +340,7 @@ describe("NotePage (CRDT)", () => {
 		renderPage();
 
 		// Default "rendered" mode: pills visible, editor visible, no raw YAML region.
-		await waitFor(() => expect(screen.getByText("status")).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByDisplayValue("status")).toBeInTheDocument());
 		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
 		expect(screen.queryByLabelText(/Frontmatter \(raw YAML\)/i)).not.toBeInTheDocument();
 		await openMenu();
@@ -354,7 +354,7 @@ describe("NotePage (CRDT)", () => {
 		await waitFor(() =>
 			expect(screen.getByLabelText(/Frontmatter \(raw YAML\)/i)).toBeInTheDocument(),
 		);
-		expect(screen.queryByText("status")).not.toBeInTheDocument();
+		expect(screen.queryByDisplayValue("status")).not.toBeInTheDocument();
 		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
 
 		// Switch to "reading": NoteView visible, neither frontmatter surface shown.
@@ -362,7 +362,7 @@ describe("NotePage (CRDT)", () => {
 		fireEvent.click(screen.getByRole("menuitem", { name: "Reading" }));
 		await waitFor(() => expect(screen.getByTestId("note-view")).toBeInTheDocument());
 		expect(screen.queryByLabelText(/Frontmatter \(raw YAML\)/i)).not.toBeInTheDocument();
-		expect(screen.queryByText("status")).not.toBeInTheDocument();
+		expect(screen.queryByDisplayValue("status")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("note-editor")).not.toBeInTheDocument();
 	});
 
@@ -579,7 +579,7 @@ describe("NotePage (CRDT)", () => {
 			fireEvent.click(screen.getByRole("menuitem", { name: "Add property" }));
 
 			const row = await screen.findByTestId("property-row-new-property");
-			const value = within(row).getByRole("textbox");
+			const value = within(row).getByRole("textbox", { name: "new-property value" });
 			fireEvent.change(value, { target: { value: "hello" } });
 			fireEvent.blur(value);
 
@@ -593,7 +593,7 @@ describe("NotePage (CRDT)", () => {
 			await screen.findByTestId("note-editor");
 			await openMenu();
 			fireEvent.click(screen.getByRole("menuitem", { name: "Add property" }));
-			expect(await screen.findByTestId("note-properties")).toHaveTextContent("new-property");
+			expect(await screen.findByDisplayValue("new-property")).toBeInTheDocument();
 		});
 	});
 

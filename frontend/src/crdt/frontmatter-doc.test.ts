@@ -13,6 +13,7 @@ import {
 	readRaws,
 	readRows,
 	removeKey,
+	renameKey,
 	setType,
 	setValue,
 	sortRowsOkfFirst,
@@ -103,6 +104,40 @@ describe("frontmatter-doc mutations", () => {
 		expect(readRows(doc).map((r) => r.key)).toEqual(["b", "a"]);
 		moveKey(doc, "b", "up");
 		expect(readRows(doc).map((r) => r.key)).toEqual(["b", "a"]);
+	});
+
+	test("renameKey keeps the value, the type and the position", () => {
+		const doc = new Y.Doc();
+		addKey(doc, "a", "text");
+		addKey(doc, "status", "list");
+		addKey(doc, "z", "text");
+		setValue(doc, "status", ["draft"]);
+
+		expect(renameKey(doc, "status", "state")).toBe(true);
+
+		const rows = readRows(doc);
+		// Renaming is not remove-then-add: it must not fall to the end.
+		expect(rows.map((r) => r.key)).toEqual(["a", "state", "z"]);
+		const renamed = rows.find((r) => r.key === "state");
+		expect(renamed?.value).toEqual(["draft"]);
+		expect(renamed?.typeOverride).toBe("list");
+	});
+
+	test("renameKey refuses an empty, unchanged or colliding name", () => {
+		const doc = new Y.Doc();
+		addKey(doc, "a", "text");
+		addKey(doc, "b", "text");
+		expect(renameKey(doc, "a", "   ")).toBe(false);
+		expect(renameKey(doc, "a", "b")).toBe(false);
+		expect(renameKey(doc, "a", "a")).toBe(false);
+		expect(readRows(doc).map((r) => r.key)).toEqual(["a", "b"]);
+	});
+
+	test("renameKey trims, so a stray space cannot mint a second property", () => {
+		const doc = new Y.Doc();
+		addKey(doc, "a", "text");
+		expect(renameKey(doc, "a", "  b  ")).toBe(true);
+		expect(readRows(doc).map((r) => r.key)).toEqual(["b"]);
 	});
 
 	test("setType coerces the stored value", () => {

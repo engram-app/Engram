@@ -20,7 +20,61 @@ describe("PropertiesWidget", () => {
 		const doc = new Y.Doc();
 		render(<PropertiesWidget doc={doc} />);
 		addKey(doc, "author", "text"); // simulate remote mutation
-		await waitFor(() => expect(screen.getByText("author")).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByDisplayValue("author")).toBeInTheDocument());
+	});
+
+	describe("renaming a property", () => {
+		const openRow = async (doc: Y.Doc) => {
+			addKey(doc, "status", "text");
+			setValue(doc, "status", "draft");
+			render(<PropertiesWidget doc={doc} />);
+			return (await screen.findByDisplayValue("status")) as HTMLInputElement;
+		};
+
+		test("commits the new name on Enter, keeping the value", async () => {
+			const doc = new Y.Doc();
+			const key = await openRow(doc);
+			fireEvent.change(key, { target: { value: "state" } });
+			fireEvent.keyDown(key, { key: "Enter" });
+
+			await waitFor(() => expect(readRows(doc).map((r) => r.key)).toEqual(["state"]));
+			expect(readRows(doc)[0]?.value).toBe("draft");
+		});
+
+		test("commits on blur too, since a title field you click away from should save", async () => {
+			const doc = new Y.Doc();
+			const key = await openRow(doc);
+			fireEvent.change(key, { target: { value: "state" } });
+			fireEvent.blur(key);
+
+			await waitFor(() => expect(readRows(doc).map((r) => r.key)).toEqual(["state"]));
+		});
+
+		test("Escape puts the original name back", async () => {
+			const doc = new Y.Doc();
+			const key = await openRow(doc);
+			fireEvent.change(key, { target: { value: "state" } });
+			fireEvent.keyDown(key, { key: "Escape" });
+
+			expect(key.value).toBe("status");
+			expect(readRows(doc).map((r) => r.key)).toEqual(["status"]);
+		});
+
+		// A collision would silently destroy one of the two properties.
+		test("refuses a name another property already has", async () => {
+			const doc = new Y.Doc();
+			const key = await openRow(doc);
+			addKey(doc, "taken", "text");
+			fireEvent.change(key, { target: { value: "taken" } });
+			fireEvent.keyDown(key, { key: "Enter" });
+
+			await waitFor(() => expect(key.value).toBe("status"));
+			expect(
+				readRows(doc)
+					.map((r) => r.key)
+					.sort(),
+			).toEqual(["status", "taken"]);
+		});
 	});
 
 	// Obsidian shows no placeholder row — the list is exactly the properties you
@@ -29,7 +83,7 @@ describe("PropertiesWidget", () => {
 		const doc = new Y.Doc();
 		addKey(doc, "title", "text");
 		render(<PropertiesWidget doc={doc} />);
-		await screen.findByText("title");
+		await screen.findByDisplayValue("title");
 		expect(screen.queryByPlaceholderText("Property name")).not.toBeInTheDocument();
 
 		fireEvent.click(screen.getByRole("button", { name: /add property/i }));
@@ -42,7 +96,7 @@ describe("PropertiesWidget", () => {
 		const doc = new Y.Doc();
 		addKey(doc, "title", "text");
 		render(<PropertiesWidget doc={doc} />);
-		await screen.findByText("title");
+		await screen.findByDisplayValue("title");
 		fireEvent.click(screen.getByRole("button", { name: /add property/i }));
 
 		const name = screen.getByPlaceholderText("Property name");

@@ -94,6 +94,42 @@ export function removeKey(doc: Y.Doc, key: string): void {
 	});
 }
 
+/**
+ * Rename a property, keeping its value, its type and where it sits.
+ *
+ * Deliberately NOT removeKey + addKey: that would drop the value and push the
+ * property to the end of the order, so renaming a key would silently reshuffle
+ * the frontmatter. One transaction, so peers never observe the old and new
+ * names at once.
+ */
+export function renameKey(doc: Y.Doc, from: string, to: string): boolean {
+	const trimmed = to.trim();
+	const { values, order, types } = frontmatterMaps(doc);
+	if (trimmed === "" || trimmed === from || !values.has(from) || values.has(trimmed)) {
+		return false;
+	}
+	doc.transact(() => {
+		const value = values.get(from);
+		const type = types.get(from);
+		if (value !== undefined) {
+			values.set(trimmed, value);
+		}
+		if (type !== undefined) {
+			types.set(trimmed, type);
+		}
+		values.delete(from);
+		types.delete(from);
+		const idx = order.toArray().indexOf(from);
+		if (idx >= 0) {
+			order.delete(idx, 1);
+			order.insert(idx, [trimmed]);
+		} else {
+			order.push([trimmed]);
+		}
+	});
+	return true;
+}
+
 export function moveKey(doc: Y.Doc, key: string, dir: "up" | "down"): void {
 	const { order } = frontmatterMaps(doc);
 	const arr = order.toArray();
