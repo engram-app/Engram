@@ -1,10 +1,9 @@
-import { Plus } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type * as Y from "yjs";
 import {
 	addKey,
 	frontmatterMaps,
-	moveKey,
 	type PropertyRow,
 	readRows,
 	removeKey,
@@ -180,35 +179,17 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 									onCommit={(v) => setValue(doc, row.key, v)}
 								/>
 							</dd>
-							{/* Obsidian keeps row actions in a right-click menu, so the
-							    default view stays clean. We surface ours on hover/focus
-							    rather than dropping the capability. */}
-							<div className="flex min-h-7 items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-								<button
-									type="button"
-									aria-label={`Move ${row.key} up`}
-									onClick={() => moveKey(doc, row.key, "up")}
-									className="rounded px-1 hover:bg-muted"
-								>
-									^
-								</button>
-								<button
-									type="button"
-									aria-label={`Move ${row.key} down`}
-									onClick={() => moveKey(doc, row.key, "down")}
-									className="rounded px-1 hover:bg-muted"
-								>
-									v
-								</button>
-								<button
-									type="button"
-									aria-label={`Remove ${row.key}`}
-									onClick={() => removeKey(doc, row.key)}
-									className="rounded px-1 hover:bg-muted hover:text-destructive"
-								>
-									x
-								</button>
-							</div>
+							{/* Remove only. Reordering was two permanent buttons per row for
+							    something you do once in a while; `moveKey` is still there
+							    for a right-click menu, which is where Obsidian keeps it. */}
+							<button
+								type="button"
+								aria-label={`Remove ${row.key}`}
+								onClick={() => removeKey(doc, row.key)}
+								className="mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+							>
+								<X aria-hidden="true" className="size-3.5" />
+							</button>
 						</div>
 					);
 				})}
