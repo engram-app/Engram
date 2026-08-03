@@ -127,11 +127,17 @@ async function signInForNote(
 }
 
 /**
- * Wait for the PropertiesWidget to show the given key (the <dt> text) so we
- * know the CRDT frontmatter maps have been seeded from the backend.
+ * Wait for the PropertiesWidget to show the given key so we know the CRDT
+ * frontmatter maps have been seeded from the backend.
+ *
+ * Matched on the rename box's accessible name, NOT the <dt>'s text: the key is
+ * an editable input now, and an input's value is not text content, so a
+ * hasText filter over the <dt> matches nothing however well the widget works.
  */
 async function waitForProperty(page: Page, key: string): Promise<void> {
-	await expect(page.getByRole("term").filter({ hasText: key })).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByRole("textbox", { name: `Rename ${key}` })).toBeVisible({
+		timeout: 10_000,
+	});
 }
 
 test.describe("PropertiesWidget e2e", () => {
@@ -204,10 +210,11 @@ test.describe("PropertiesWidget e2e", () => {
 		// Wait for the PropertiesWidget to render the "due" property.
 		await waitForProperty(page, "due");
 
-		// Verify the initial inferred type is "text" (the trigger label shows the current type).
+		// Verify the initial inferred type is "text". The trigger is an icon now, so
+		// the current type rides in its accessible name rather than its text.
 		const row = page.getByTestId("property-row-due");
-		const typeButton = row.getByRole("button", { name: "Property type" });
-		await expect(typeButton).toHaveText("text", { timeout: 5000 });
+		const typeButton = row.getByRole("button", { name: /^Property type/ });
+		await expect(typeButton).toHaveAccessibleName("Property type: text", { timeout: 5000 });
 
 		// Open the type dropdown and select "date".
 		await typeButton.click();
@@ -215,7 +222,7 @@ test.describe("PropertiesWidget e2e", () => {
 
 		// After override: the type button should now read "date" and the value
 		// input should be type="date" (the ScalarField renders htmlType="date").
-		await expect(typeButton).toHaveText("date", { timeout: 5000 });
+		await expect(typeButton).toHaveAccessibleName("Property type: date", { timeout: 5000 });
 		const dateInput = row.locator('dd input[type="date"]');
 		await expect(dateInput).toBeVisible({ timeout: 5000 });
 
@@ -230,8 +237,10 @@ test.describe("PropertiesWidget e2e", () => {
 		// The type override stored in Y.Map("frontmatter_types") should still be "date".
 		// If this assertion fails it is a real persistence bug — do NOT weaken it.
 		const rowAfter = page.getByTestId("property-row-due");
-		const typeButtonAfter = rowAfter.getByRole("button", { name: "Property type" });
-		await expect(typeButtonAfter).toHaveText("date", { timeout: 10_000 });
+		const typeButtonAfter = rowAfter.getByRole("button", { name: /^Property type/ });
+		await expect(typeButtonAfter).toHaveAccessibleName("Property type: date", {
+			timeout: 10_000,
+		});
 		const dateInputAfter = rowAfter.locator('dd input[type="date"]');
 		await expect(dateInputAfter).toBeVisible({ timeout: 5000 });
 

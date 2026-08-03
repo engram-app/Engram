@@ -1057,7 +1057,12 @@ describe("useCreateNote — optimistic placeholder", () => {
 			await result.current.mutateAsync({ folder: "", id: MINTED_ID });
 		});
 
-		expect(navigateSpy).toHaveBeenCalledWith(`/work/${MINTED_ID}`);
+		// The `justCreated` state is what puts the note page's inline title into
+		// rename mode with "Untitled" selected — part of the create contract, not
+		// incidental, so assert it rather than loosening to the path alone.
+		expect(navigateSpy).toHaveBeenCalledWith(`/work/${MINTED_ID}`, {
+			state: { justCreated: true },
+		});
 	});
 
 	// `/api/folders` returns DERIVED folders (ones holding no note directly) with

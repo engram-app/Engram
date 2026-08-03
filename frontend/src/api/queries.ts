@@ -679,7 +679,12 @@ export function useCreateNote() {
 			const slug = qc
 				.getQueryData<{ vaults: Vault[] }>(["vaults"])
 				?.vaults?.find((v) => v.id === vaultId)?.slug;
-			navigate(slug ? `/${slug}/${id}` : `/note/${id}`);
+			// `justCreated` puts the note page's inline title straight into rename
+			// mode with "Untitled" selected. Carried as navigation state rather than
+			// a context because it must fire exactly once, and router state is
+			// already scoped to a single navigation. Both creation entry points (the
+			// tree's context menu and the sidebar button) route through here.
+			navigate(slug ? `/${slug}/${id}` : `/note/${id}`, { state: { justCreated: true } });
 		},
 		onError: (err, _vars, ctx) => {
 			if (ctx) {

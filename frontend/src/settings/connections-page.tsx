@@ -11,6 +11,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { useAutofocus } from "@/hooks/use-autofocus";
+import { copyToClipboard } from "@/lib/clipboard";
 import { SettingsSectionCard } from "@/settings/account/section-card";
 import { ApiError } from "../api/client";
 import {
@@ -523,34 +524,6 @@ function CopyIcon({ copied }: { copied: boolean }) {
 			<path d="M3 7a2 2 0 012-2h.5a.5.5 0 010 1H5a1 1 0 00-1 1v9a1 1 0 001 1h7a1 1 0 001-1v-.5a.5.5 0 011 0v.5a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
 		</svg>
 	);
-}
-
-async function copyToClipboard(text: string): Promise<boolean> {
-	if (navigator.clipboard?.writeText) {
-		try {
-			await navigator.clipboard.writeText(text);
-			return true;
-		} catch {
-			// fall through to legacy fallback
-		}
-	}
-
-	try {
-		const ta = document.createElement("textarea");
-		ta.value = text;
-		ta.setAttribute("readonly", "");
-		ta.style.position = "fixed";
-		ta.style.top = "0";
-		ta.style.left = "0";
-		ta.style.opacity = "0";
-		document.body.appendChild(ta);
-		ta.select();
-		const ok = document.execCommand("copy");
-		document.body.removeChild(ta);
-		return ok;
-	} catch {
-		return false;
-	}
 }
 
 function ConfirmRevokeModal({

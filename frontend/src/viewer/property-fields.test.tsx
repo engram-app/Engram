@@ -12,6 +12,46 @@ describe("PropertyField", () => {
 		expect(onCommit).toHaveBeenCalledWith("bye");
 	});
 
+	// Every other input in the properties widget takes Enter and Escape. The
+	// value field took neither, so the most obvious way to say "done" did
+	// nothing and there was no way to back out of a half-typed value.
+	test("Enter commits without needing the user to click elsewhere", () => {
+		const onCommit = vi.fn();
+		render(<PropertyField type="text" value="hi" onCommit={onCommit} />);
+		const input = screen.getByRole("textbox");
+		input.focus();
+		fireEvent.change(input, { target: { value: "bye" } });
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(onCommit).toHaveBeenCalledWith("bye");
+	});
+
+	test("Escape restores the old value and writes nothing", () => {
+		const onCommit = vi.fn();
+		render(<PropertyField type="text" value="hi" onCommit={onCommit} />);
+		const input = screen.getByRole("textbox");
+		input.focus();
+		fireEvent.change(input, { target: { value: "bye" } });
+		fireEvent.keyDown(input, { key: "Escape" });
+		expect(onCommit).not.toHaveBeenCalled();
+		expect(input).toHaveValue("hi");
+	});
+
+	// The cancel flag must not leak into the next edit: a field that was once
+	// escaped would otherwise refuse to ever commit again.
+	test("commits normally on the edit after an Escape", () => {
+		const onCommit = vi.fn();
+		render(<PropertyField type="text" value="hi" onCommit={onCommit} />);
+		const input = screen.getByRole("textbox");
+		input.focus();
+		fireEvent.change(input, { target: { value: "bye" } });
+		fireEvent.keyDown(input, { key: "Escape" });
+
+		input.focus();
+		fireEvent.change(input, { target: { value: "later" } });
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(onCommit).toHaveBeenCalledWith("later");
+	});
+
 	test("number commits a parsed number on blur, null when empty", () => {
 		const onCommit = vi.fn();
 		render(<PropertyField type="number" value={3} onCommit={onCommit} />);

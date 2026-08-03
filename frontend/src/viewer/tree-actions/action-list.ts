@@ -1,11 +1,15 @@
 import {
 	Copy,
+	Eye,
 	FilePlus,
+	FileText,
 	FolderInput,
 	FolderPlus,
 	Link2,
+	ListPlus,
 	type LucideIcon,
 	Pencil,
+	SquareCode,
 	Trash2,
 } from "lucide-react";
 
@@ -19,6 +23,10 @@ const ACTION_ICONS: Record<ActionId, LucideIcon> = {
 	duplicate: Copy,
 	"copy-wikilink": Link2,
 	delete: Trash2,
+	"add-property": ListPlus,
+	"view-rendered": FileText,
+	"view-raw": SquareCode,
+	"view-reading": Eye,
 };
 
 const FILE_ACTIONS: readonly Action[] = [
@@ -62,12 +70,18 @@ export type ActionId =
 	| "move"
 	| "duplicate"
 	| "copy-wikilink"
-	| "delete";
+	| "delete"
+	| "add-property"
+	| "view-rendered"
+	| "view-raw"
+	| "view-reading";
 
 export interface Action {
 	id: ActionId;
 	label: string;
 	destructive?: boolean;
+	/** Set by `noteMenuActions` for the current view mode. The tree omits it. */
+	active?: boolean;
 }
 
 // Every folder gets the same menu, derived or not. A derived folder has no id
@@ -90,6 +104,25 @@ export function actionsFor({
 		return ATTACHMENT_ACTIONS;
 	}
 	return FILE_ACTIONS;
+}
+
+export type ViewMode = "rendered" | "raw" | "reading";
+
+// The note page's kebab. Deliberately NOT part of `actionsFor` — that function
+// answers "what can you do to a tree node", and the view modes are a property
+// of the open editor, not of the file.
+export function noteMenuActions(mode: ViewMode): readonly Action[] {
+	return [
+		{ id: "view-rendered", label: "Rendered", active: mode === "rendered" },
+		{ id: "view-raw", label: "Raw", active: mode === "raw" },
+		{ id: "view-reading", label: "Reading", active: mode === "reading" },
+		{ id: "rename", label: "Rename" },
+		{ id: "move", label: "Move to…" },
+		{ id: "duplicate", label: "Duplicate" },
+		{ id: "copy-wikilink", label: "Copy wikilink" },
+		{ id: "add-property", label: "Add property" },
+		{ id: "delete", label: "Delete", destructive: true },
+	];
 }
 
 export { ACTION_ICONS };

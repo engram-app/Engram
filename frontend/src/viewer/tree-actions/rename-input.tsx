@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { cn } from "@/lib/utils";
 
 interface Props {
 	initial: string;
@@ -28,6 +29,13 @@ interface Props {
 	 * than as a side effect of this one.
 	 */
 	commitOnBlur?: boolean;
+	/**
+	 * Restyle the input. Merged with `cn`, so Tailwind conflicts REPLACE the
+	 * defaults rather than stacking — the inline title passes heading
+	 * typography and a transparent, borderless look so renaming reads as
+	 * typing into the title instead of a form field appearing in its place.
+	 */
+	className?: string;
 }
 
 export function RenameInput({
@@ -38,6 +46,7 @@ export function RenameInput({
 	onCommit,
 	onCancel,
 	commitOnBlur,
+	className,
 }: Props) {
 	const [value, setValue] = useState(initial);
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -106,7 +115,10 @@ export function RenameInput({
 				// wikilinks and sync. `settled` then latches, so it cannot be undone in
 				// place. Alt-tabbing away now leaves the edit open, exactly where it was.
 				onBlur={() => settle(Boolean(commitOnBlur) && document.hasFocus())}
-				className="w-full rounded border border-ring bg-background px-1 py-0.5 text-foreground text-sm outline-none"
+				className={cn(
+					"w-full rounded border border-ring bg-background px-1 py-0.5 text-foreground text-sm outline-none",
+					className,
+				)}
 			/>
 			{Boolean(error) && (
 				<span className="text-destructive text-xs" role="alert">
