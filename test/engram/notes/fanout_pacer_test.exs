@@ -20,6 +20,26 @@ defmodule Engram.Notes.FanoutPacerTest do
 
   defp payload(note_id), do: %{"note_id" => note_id, "b64" => "x", "head" => "h"}
 
+  # Block until the pacer has broadcast everything queued for `topic`.
+  #
+  # Polls a condition instead of sleeping a guessed interval: handle_info(:drain)
+  # broadcasts synchronously and then rebuilds its queue map without the emptied
+  # topics, so the topic key being absent means those frames are already out.
+  # Bounded so a pacer that never drains fails loudly instead of hanging.
+  defp await_drained(topic, tries \\ 200) do
+    cond do
+      not Map.has_key?(:sys.get_state(FanoutPacer).queues, topic) ->
+        :ok
+
+      tries == 0 ->
+        flunk("FanoutPacer never drained #{topic}")
+
+      true ->
+        Process.sleep(10)
+        await_drained(topic, tries - 1)
+    end
+  end
+
   test "when pacing disabled, emit/4 broadcasts inline immediately" do
     Application.put_env(:engram, :fanout_pacing_enabled, false)
     topic = "sync:u1:v1"
@@ -65,12 +85,23 @@ defmodule Engram.Notes.FanoutPacerTest do
     Application.put_env(:engram, :fanout_drain_interval_ms, 80)
 
     topic = "sync:u3:v3"
-    EngramWeb.Endpoint.subscribe(topic)
 
-    # Warm note "live" so it is HOT (seen within the window). This first frame is
-    # cold (paced), so drain it before asserting the bypass on the SECOND frame.
+    # Warm note "live" so it is HOT (seen within the window). Hotness is written
+    # by cold?/1 during emit, but this first frame is itself cold, so the pacer
+    # queues it and broadcasts it on a drain tick.
+    #
+    # Subscribe only AFTER that frame is gone. Waiting for it in the mailbox
+    # instead put a drain tick — load-variable work — inside a timed assert, and
+    # under full-suite concurrency it landed just past the window (this is the
+    # flake). Emitting before subscribing keeps the warm-up out of the mailbox
+    # entirely, so the assert below can only ever match the bypass frame.
+    #
+    # Note the warm-up MUST be paced: emit/4 short-circuits on
+    # `pacing_enabled?() and cold?(note_id)`, so warming with pacing disabled
+    # would skip cold?/1, never mark the note seen, and leave it COLD.
     FanoutPacer.emit(topic, "note_yjs_update", payload("live"), "live")
-    assert_receive(%Phoenix.Socket.Broadcast{payload: %{"note_id" => "live"}}, 300)
+    await_drained(topic)
+    EngramWeb.Endpoint.subscribe(topic)
 
     # A big genesis flood of distinct COLD notes.
     for i <- 1..20, do: FanoutPacer.emit(topic, "note_yjs_update", payload("g#{i}"), "g#{i}")
