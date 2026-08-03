@@ -67,19 +67,27 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 	const [newValue, setNewValue] = useState("");
 	const [newType, setNewType] = useState<PropertyType>("text");
 
-	const commitNewKey = () => {
+	const commitNewKey = ({ refocus = true } = {}) => {
 		const key = newKey.trim();
 		if (!addKey(doc, newKey, newType)) {
-			return;
+			return false;
 		}
 		if (newValue !== "") {
 			setValue(doc, key, coerceValue(newValue, newType));
 		}
 		setNewKey("");
 		setNewValue("");
-		// Straight back to the key field, ready for the next one.
-		newKeyRef.current?.focus();
+		if (refocus) {
+			// Straight back to the key field, ready for the next one.
+			newKeyRef.current?.focus();
+		}
+		return true;
 	};
+
+	// Read by the click-away effect, which must not re-subscribe on every
+	// keystroke just to see the latest draft text.
+	const commitOnLeave = useRef<() => boolean>(() => false);
+	commitOnLeave.current = () => commitNewKey({ refocus: false });
 
 	// The `---` gesture opens this with nothing in it, so the caret has to land
 	// in the name field — otherwise there is nothing to click away FROM.
@@ -111,9 +119,16 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 			if (target?.closest?.(PORTALLED_SURFACES)) {
 				return;
 			}
-			if (readRows(doc).length === 0) {
-				onAbandonDraft?.();
+			if (readRows(doc).length > 0) {
+				return;
 			}
+			// Nothing committed yet — but a half-filled row is still the user's
+			// work, so leaving saves it rather than throwing it away. Only a row
+			// with no key at all counts as "never mind".
+			if (commitOnLeave.current()) {
+				return;
+			}
+			onAbandonDraft?.();
 		};
 		document.addEventListener("pointerdown", dismiss);
 		document.addEventListener("focusin", dismiss);
@@ -227,7 +242,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 					type="button"
 					aria-label="Add property"
 					className="min-h-7 shrink-0 rounded px-1.5 text-muted-foreground text-sm hover:text-foreground"
-					onClick={commitNewKey}
+					onClick={() => commitNewKey()}
 				>
 					Add
 				</button>

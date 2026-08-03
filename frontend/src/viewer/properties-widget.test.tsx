@@ -105,6 +105,25 @@ describe("PropertiesWidget", () => {
 				expect(onAbandonDraft).toHaveBeenCalled();
 			});
 
+			// Clicking away from a property you just filled in should keep it. The
+			// draft has committed nothing yet, so a naive "is the doc empty?" check
+			// throws the typed key and value away.
+			test("commits what was typed instead of discarding it", () => {
+				const doc = new Y.Doc();
+				const onAbandonDraft = vi.fn();
+				render(<PropertiesWidget doc={doc} draft onAbandonDraft={onAbandonDraft} />);
+				fireEvent.change(screen.getByPlaceholderText("Property name"), {
+					target: { value: "status" },
+				});
+				fireEvent.change(screen.getByPlaceholderText("Value"), { target: { value: "draft" } });
+
+				fireEvent.pointerDown(document.body);
+
+				// Synchronous: the commit writes to the Y.Doc inside the handler.
+				expect(readRows(doc).find((r) => r.key === "status")?.value).toBe("draft");
+				expect(onAbandonDraft).not.toHaveBeenCalled();
+			});
+
 			test("abandons on tabbing away", () => {
 				const onAbandonDraft = vi.fn();
 				render(<PropertiesWidget doc={new Y.Doc()} draft onAbandonDraft={onAbandonDraft} />);
