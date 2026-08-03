@@ -45,6 +45,12 @@ function ScalarField({ type, value, onCommit, onFocusChange, label }: FieldProps
 		}
 	};
 
+	// Escape has to survive a round trip through blur. Reverting the draft and
+	// blurring in the same handler would not work: the state update is async, so
+	// the blur handler's `commit` still closes over the typed text and writes the
+	// value Escape was meant to throw away. The flag lets blur decide instead.
+	const cancelled = useRef(false);
+
 	return (
 		<input
 			ref={inputRef}
@@ -54,8 +60,28 @@ function ScalarField({ type, value, onCommit, onFocusChange, label }: FieldProps
 			value={draft}
 			onChange={(e) => setDraft(e.target.value)}
 			onFocus={() => onFocusChange?.(true)}
+			// Enter and Escape both leave the field, and blur is already the commit
+			// point — so they route through it rather than duplicating the write.
+			// Every other input in this widget (the list chips, the adder row, the
+			// key rename box) takes both keys; the value field was the one place
+			// where Enter did nothing at all.
+			onKeyDown={(e) => {
+				if (e.key === "Enter") {
+					e.preventDefault();
+					e.currentTarget.blur();
+				} else if (e.key === "Escape") {
+					e.preventDefault();
+					cancelled.current = true;
+					e.currentTarget.blur();
+				}
+			}}
 			onBlur={() => {
-				commit();
+				if (cancelled.current) {
+					cancelled.current = false;
+					setDraft(initial);
+				} else {
+					commit();
+				}
 				onFocusChange?.(false);
 			}}
 		/>
