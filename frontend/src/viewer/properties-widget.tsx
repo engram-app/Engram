@@ -209,9 +209,15 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 	}
 
 	return (
-		// Geometry lifted from Obsidian's app.css: 8px block padding, a 2rem gap
-		// down to the body, 3px between rows, a 9em key column, 28px row height.
-		<section className="mb-8 px-5 py-2" data-testid="note-properties" ref={rootRef}>
+		// Geometry lifted from Obsidian's app.css: 8px block padding, 3px between
+		// rows, a 9em key column, 28px row height.
+		//
+		// The gap down to the body is theirs (2rem) but NOT their margin value.
+		// Obsidian nests this block inside .cm-content, so the editor's 20px top
+		// padding sits above the whole thing; ours is a sibling above CodeMirror,
+		// so that 20px lands in this gap instead. 8px padding + 4px + 20px = the
+		// 2rem they intend, rather than stacking 2rem on top of it.
+		<section className="mb-1 px-5 py-2" data-testid="note-properties" ref={rootRef}>
 			<dl className="flex flex-col gap-[3px]">
 				{rows.map((row) => {
 					const type = effectiveType(row.value, row.typeOverride);
