@@ -52,9 +52,11 @@ export function InlineTitle({
 		<h1 className={`${FRAME} ${TITLE_TYPE}`}>
 			<button
 				type="button"
-				// -mx-1 cancels the padding so the hover target is roomier than the
-				// text without shifting the title off the left margin.
-				className="-mx-1 block w-full truncate rounded px-1 text-left hover:bg-accent"
+				// Deliberately undecorated: the whole line is the target, but nothing
+				// lights up under the pointer. cursor-text is the only affordance,
+				// which is the point — this should read as a line of text you can
+				// type into, not as a control that happens to look like a title.
+				className="block w-full cursor-text truncate text-left"
 				title="Click to rename"
 				onClick={onStartRename}
 			>

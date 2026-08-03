@@ -16,6 +16,16 @@ describe("InlineTitle", () => {
 		expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("My Note");
 	});
 
+	// The title should look like text you can type into, not like a control:
+	// the whole line is the target, but nothing lights up under the pointer —
+	// the caret cursor is the only affordance.
+	it("presents the whole line as an editable target with no hover chrome", () => {
+		render(<InlineTitle {...props} />);
+		const line = screen.getByRole("button", { name: "My Note" });
+		expect(line).toHaveClass("w-full", "cursor-text");
+		expect(line.className).not.toMatch(/hover:/);
+	});
+
 	it("starts a rename when clicked", () => {
 		const onStartRename = vi.fn();
 		render(<InlineTitle {...props} onStartRename={onStartRename} />);
