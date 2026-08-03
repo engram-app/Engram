@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import * as Y from "yjs";
 import { addKey, readRows, setValue } from "../crdt/frontmatter-doc";
 import { PropertiesWidget } from "./properties-widget";
@@ -51,6 +51,51 @@ describe("PropertiesWidget", () => {
 			expect(screen.queryByTestId("note-properties")).not.toBeInTheDocument();
 			addKey(doc, "status", "text");
 			await waitFor(() => expect(screen.getByTestId("note-properties")).toBeInTheDocument());
+		});
+
+		// The `---` gesture opens the editor before any property exists. That
+		// "open but empty" state is LOCAL — it must never reach the Y.Doc, or an
+		// empty properties block would sync to the user's other devices.
+		describe("draft mode", () => {
+			test("shows the empty editor and puts the caret in the name field", async () => {
+				render(<PropertiesWidget doc={new Y.Doc()} draft onAbandonDraft={() => {}} />);
+				expect(screen.getByTestId("note-properties")).toBeInTheDocument();
+				await waitFor(() => expect(screen.getByPlaceholderText("Property name")).toHaveFocus());
+			});
+
+			// Clicking dead space is the ordinary way out, and it focuses nothing —
+			// which is exactly the case a relatedTarget check would miss.
+			test("abandons on a click outside when nothing was added", () => {
+				const onAbandonDraft = vi.fn();
+				render(<PropertiesWidget doc={new Y.Doc()} draft onAbandonDraft={onAbandonDraft} />);
+				fireEvent.pointerDown(document.body);
+				expect(onAbandonDraft).toHaveBeenCalled();
+			});
+
+			test("abandons on tabbing away", () => {
+				const onAbandonDraft = vi.fn();
+				render(<PropertiesWidget doc={new Y.Doc()} draft onAbandonDraft={onAbandonDraft} />);
+				fireEvent.focusIn(document.body);
+				expect(onAbandonDraft).toHaveBeenCalled();
+			});
+
+			test("stays once a property was added", () => {
+				const onAbandonDraft = vi.fn();
+				render(<PropertiesWidget doc={new Y.Doc()} draft onAbandonDraft={onAbandonDraft} />);
+				fireEvent.change(screen.getByPlaceholderText("Property name"), {
+					target: { value: "status" },
+				});
+				fireEvent.click(screen.getByRole("button", { name: /add property/i }));
+				fireEvent.pointerDown(document.body);
+				expect(onAbandonDraft).not.toHaveBeenCalled();
+			});
+
+			test("does not abandon on interaction inside the editor", () => {
+				const onAbandonDraft = vi.fn();
+				render(<PropertiesWidget doc={new Y.Doc()} draft onAbandonDraft={onAbandonDraft} />);
+				fireEvent.pointerDown(screen.getByRole("button", { name: /add property/i }));
+				expect(onAbandonDraft).not.toHaveBeenCalled();
+			});
 		});
 
 		test("goes away again when the last property is removed", async () => {

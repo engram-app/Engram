@@ -15,7 +15,7 @@ import {
 	useNote,
 	useRenameNote,
 } from "../api/queries";
-import { addKey } from "../crdt/frontmatter-doc";
+import { addKey, readRows } from "../crdt/frontmatter-doc";
 import {
 	type CrdtSyncStatus,
 	closeDoc,
@@ -64,6 +64,10 @@ export default function NotePage() {
 	const duplicateNote = useDuplicateNote();
 	const batchMoveNotes = useBatchMoveNotes();
 	const [dialog, setDialog] = useState<"move" | "delete" | null>(null);
+	// Local-only: an "open but empty" properties block, from the `---` gesture.
+	// Never written to the Y.Doc — the other devices should not sprout an empty
+	// frontmatter section because someone typed three dashes here.
+	const [frontmatterDraft, setFrontmatterDraft] = useState(false);
 
 	const [mode, setMode] = useState<ViewMode>("rendered");
 	// Written only from the reading toggle's handler, never during render.
@@ -157,6 +161,16 @@ export default function NotePage() {
 		navigate(location.pathname, { replace: true, state: {} });
 	}, [justCreated, noteId, navigate, location.pathname]);
 
+	// The draft belongs to the note you are looking at, not to the page, which
+	// stays mounted across note switches. Adjusted during render rather than in
+	// an effect — React's documented pattern for resetting state on a prop
+	// change, and it avoids rendering the stale draft for one frame.
+	const [draftNoteId, setDraftNoteId] = useState(noteId);
+	if (draftNoteId !== noteId) {
+		setDraftNoteId(noteId);
+		setFrontmatterDraft(false);
+	}
+
 	// Publish the editor so right-sidebar tools (the markdown reference panel)
 	// can insert at the caret. Gated on the SAME condition that renders
 	// NoteEditor below, so "Insert" is disabled in reading mode and on
@@ -196,6 +210,18 @@ export default function NotePage() {
 		}
 		// `mutate`, not `mutateAsync` — the mutation's onError owns the toast.
 		renameNote.mutate({ id: note.id, old_path: note.path, new_path });
+	};
+
+	// `---` on the first line opens the properties editor instead of leaving a
+	// horizontal rule. Declined — so the fence survives as a real rule — when
+	// the note already has frontmatter (the editor is showing anyway) or when
+	// raw mode is up, where the YAML block is the frontmatter surface.
+	const handleFrontmatterShortcut = () => {
+		if (mode !== "rendered" || !handle || readRows(handle.doc).length > 0) {
+			return false;
+		}
+		setFrontmatterDraft(true);
+		return true;
 	};
 
 	// Obsidian's binary edit/read toggle, sitting beside the kebab that still
@@ -335,7 +361,13 @@ export default function NotePage() {
 						onCancelRename={() => setRenaming(null)}
 					/>
 
-					{handle && mode === "rendered" ? <PropertiesWidget doc={handle.doc} /> : null}
+					{handle && mode === "rendered" ? (
+						<PropertiesWidget
+							doc={handle.doc}
+							draft={frontmatterDraft}
+							onAbandonDraft={() => setFrontmatterDraft(false)}
+						/>
+					) : null}
 					{handle && mode === "raw" ? <RawFrontmatterEditor doc={handle.doc} /> : null}
 
 					{mode === "reading" ? (
@@ -353,6 +385,7 @@ export default function NotePage() {
 									awareness={handle.awareness}
 									mode={mode === "raw" ? "raw" : "rendered"}
 									resolveWikiLink={resolveWikiLink}
+									onFrontmatterShortcut={handleFrontmatterShortcut}
 									onView={(v) => {
 										editorViewRef.current = v;
 									}}

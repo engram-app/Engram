@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type * as Y from "yjs";
 import {
 	addKey,
@@ -15,8 +15,22 @@ import { PropertyField } from "./property-fields";
 import { PropertyTypeMenu } from "./property-type-menu";
 import { effectiveType, type PropertyType } from "./property-types";
 
-export function PropertiesWidget({ doc }: { doc: Y.Doc }) {
+interface Props {
+	doc: Y.Doc;
+	/**
+	 * Show the editor even with no properties yet, for the `---` gesture.
+	 * LOCAL-ONLY state: an "open but empty" block must never reach the Y.Doc,
+	 * or every other device would grow an empty properties section.
+	 */
+	draft?: boolean;
+	/** Focus left the editor with nothing added — the draft should close. */
+	onAbandonDraft?: () => void;
+}
+
+export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) {
 	const [rows, setRows] = useState<PropertyRow[]>(() => sortRowsOkfFirst(readRows(doc)));
+	const newKeyRef = useRef<HTMLInputElement>(null);
+	const rootRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
 		const refresh = () => setRows(sortRowsOkfFirst(readRows(doc)));
@@ -35,17 +49,52 @@ export function PropertiesWidget({ doc }: { doc: Y.Doc }) {
 	const [newKey, setNewKey] = useState("");
 	const [newType, setNewType] = useState<PropertyType>("text");
 
+	// The `---` gesture opens this with nothing in it, so the caret has to land
+	// in the name field — otherwise there is nothing to click away FROM.
+	useEffect(() => {
+		if (draft) {
+			newKeyRef.current?.focus();
+		}
+	}, [draft]);
+
+	// An empty draft closes as soon as the user goes elsewhere. Watched on the
+	// document rather than as an onBlur prop: clicking dead space blurs the
+	// input without focusing anything, so a relatedTarget check would miss the
+	// most ordinary way to dismiss this. pointerdown covers the mouse, focusin
+	// covers tabbing away. Reads the doc, not `rows`, so a key added in this
+	// same interaction already counts.
+	useEffect(() => {
+		if (!draft) {
+			return;
+		}
+		const dismiss = (event: Event) => {
+			const root = rootRef.current;
+			if (!root || root.contains(event.target as Node | null)) {
+				return;
+			}
+			if (readRows(doc).length === 0) {
+				onAbandonDraft?.();
+			}
+		};
+		document.addEventListener("pointerdown", dismiss);
+		document.addEventListener("focusin", dismiss);
+		return () => {
+			document.removeEventListener("pointerdown", dismiss);
+			document.removeEventListener("focusin", dismiss);
+		};
+	}, [draft, doc, onAbandonDraft]);
+
 	// A note with no frontmatter gets no bordered strip of nothing. Returning
 	// null keeps the component MOUNTED and its Yjs observers live, so the
 	// widget reappears the moment a key arrives — from the note menu's "Add
 	// property" or from a remote peer. Unmounting it at the call site instead
 	// would leave nobody listening for that.
-	if (rows.length === 0) {
+	if (rows.length === 0 && !draft) {
 		return null;
 	}
 
 	return (
-		<div className="border-border border-b px-5 py-3" data-testid="note-properties">
+		<div className="border-border border-b px-5 py-3" data-testid="note-properties" ref={rootRef}>
 			<dl className="grid grid-cols-[max-content_max-content_1fr_max-content] items-center gap-x-2 gap-y-1 text-xs">
 				{rows.map((row) => {
 					const type = effectiveType(row.value, row.typeOverride);
@@ -92,6 +141,7 @@ export function PropertiesWidget({ doc }: { doc: Y.Doc }) {
 			</dl>
 			<div className="mt-2 flex items-center gap-2">
 				<input
+					ref={newKeyRef}
 					className="rounded border border-border bg-transparent px-2 py-1 text-foreground text-xs focus:outline-none focus:ring-1 focus:ring-ring"
 					placeholder="Property name"
 					value={newKey}

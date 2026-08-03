@@ -10,6 +10,7 @@ import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { useTheme } from "../theme/theme-provider";
 import { indentKeymap } from "./editor/format-commands";
+import { frontmatterShortcut } from "./editor/frontmatter-shortcut";
 import { livePreviewExtensions } from "./editor/live-preview";
 
 // height:auto + overflow:visible hand scrolling to the page's ScrollArea, so
@@ -49,6 +50,12 @@ export interface NoteEditorProps {
 	resolveWikiLink: (name: string) => string;
 	/** Reaches the live EditorView out to a caller (e.g. the formatting toolbar). */
 	onView?: (view: EditorView | null) => void;
+	/**
+	 * `---` was typed on the first line. Return true to accept the gesture, in
+	 * which case the fence is removed from the body; false leaves it as an
+	 * ordinary horizontal rule. See `editor/frontmatter-shortcut`.
+	 */
+	onFrontmatterShortcut?: () => boolean;
 }
 
 // One shared compartment instance: reconfiguring it swaps the decoration layer
@@ -89,10 +96,12 @@ export function buildEditorState(
 	dark: boolean,
 	mode: EditorMode,
 	resolveWikiLink: (name: string) => string,
+	onFrontmatterShortcut?: () => boolean,
 ): EditorState {
 	return EditorState.create({
 		doc: ytext.toString(),
 		extensions: [
+			...(onFrontmatterShortcut ? [frontmatterShortcut(onFrontmatterShortcut)] : []),
 			drawSelection(),
 			EditorView.lineWrapping,
 			Prec.highest(keymap.of(yUndoManagerKeymap)),
@@ -136,6 +145,7 @@ export default function NoteEditor({
 	mode,
 	resolveWikiLink,
 	onView,
+	onFrontmatterShortcut,
 }: NoteEditorProps) {
 	const { resolved } = useTheme();
 	const hostRef = useRef<HTMLDivElement>(null);
@@ -145,6 +155,11 @@ export default function NoteEditor({
 	// recreates the view.
 	const onViewRef = useRef(onView);
 	onViewRef.current = onView;
+	// Same treatment: the extension is baked into the state at creation, so it
+	// must read through a ref or a new callback identity would force a rebuild
+	// and detach yCollab.
+	const onShortcutRef = useRef(onFrontmatterShortcut);
+	onShortcutRef.current = onFrontmatterShortcut;
 
 	// Create the view only when the bound doc or theme changes (NOT on mode).
 	// mode/resolveWikiLink intentionally excluded: a mode switch must reconfigure
@@ -161,7 +176,9 @@ export default function NoteEditor({
 			return;
 		}
 		const view = new EditorView({
-			state: buildEditorState(ytext, awareness, resolved === "dark", mode, resolveWikiLink),
+			state: buildEditorState(ytext, awareness, resolved === "dark", mode, resolveWikiLink, () =>
+				Boolean(onShortcutRef.current?.()),
+			),
 			parent,
 		});
 		viewRef.current = view;

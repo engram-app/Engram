@@ -30,9 +30,22 @@ vi.mock("./note-view", () => ({
 }));
 
 // NoteEditor is lazy-loaded and requires ThemeProvider context. Stub it so the
-// live-mode editor path doesn't crash the test environment.
+// live-mode editor path doesn't crash the test environment. The button stands
+// in for typing `---` on the first line, and records what the page answered —
+// the real gesture is covered in editor/frontmatter-shortcut.test.ts.
+const { shortcutAnswer } = vi.hoisted(() => ({ shortcutAnswer: vi.fn() }));
 vi.mock("./note-editor", () => ({
-	default: () => <div data-testid="note-editor" />,
+	default: ({ onFrontmatterShortcut }: { onFrontmatterShortcut?: () => boolean }) => (
+		<div data-testid="note-editor">
+			<button
+				type="button"
+				data-testid="type-frontmatter-fence"
+				onClick={() => shortcutAnswer(onFrontmatterShortcut?.())}
+			>
+				---
+			</button>
+		</div>
+	),
 }));
 
 const { openDoc, closeDoc, enroll } = vi.hoisted(() => ({
@@ -392,6 +405,53 @@ describe("NotePage (CRDT)", () => {
 			await openMenu();
 			fireEvent.click(screen.getByRole("menuitem", { name: "Reading" }));
 			expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("note");
+		});
+	});
+
+	describe("frontmatter shortcut", () => {
+		const withFrontmatter = () => {
+			const doc = new Y.Doc();
+			doc.getMap("frontmatter").set("status", JSON.stringify("draft"));
+			doc.getArray("frontmatter_order").insert(0, ["status"]);
+			openDoc.mockResolvedValue({
+				ytext: doc.getText("content"),
+				awareness: new Awareness(doc),
+				doc,
+			});
+		};
+
+		it("opens an empty properties editor on a note with no frontmatter", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			expect(screen.queryByTestId("note-properties")).not.toBeInTheDocument();
+
+			fireEvent.click(screen.getByTestId("type-frontmatter-fence"));
+
+			expect(await screen.findByTestId("note-properties")).toBeInTheDocument();
+			expect(shortcutAnswer).toHaveBeenCalledWith(true);
+		});
+
+		it("closes it again when focus leaves with nothing added", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			fireEvent.click(screen.getByTestId("type-frontmatter-fence"));
+			await screen.findByTestId("note-properties");
+
+			fireEvent.pointerDown(document.body);
+
+			await waitFor(() => expect(screen.queryByTestId("note-properties")).not.toBeInTheDocument());
+		});
+
+		// Declining is what leaves the typed `---` in the body as a real
+		// horizontal rule instead of silently eating it.
+		it("declines when the note already has frontmatter", async () => {
+			withFrontmatter();
+			renderPage();
+			await screen.findByTestId("note-properties");
+
+			fireEvent.click(screen.getByTestId("type-frontmatter-fence"));
+
+			expect(shortcutAnswer).toHaveBeenCalledWith(false);
 		});
 	});
 
