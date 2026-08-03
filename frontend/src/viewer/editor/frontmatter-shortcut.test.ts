@@ -74,6 +74,18 @@ describe("frontmatterShortcut", () => {
 		expect(v.state.doc.toString()).toBe("---\nbody!");
 	});
 
+	// Pressing Enter at the END of a legitimate horizontal rule is an insertion
+	// at the line's boundary, not an edit of it. Counting that as touching line
+	// 0 deleted the rule out from under the user.
+	it("ignores an insertion at the end of an existing fence line", async () => {
+		const onTrigger = vi.fn(() => true);
+		const v = mount("---\nsome text", onTrigger);
+		edit(v, 3, "\n");
+		await settle();
+		expect(onTrigger).not.toHaveBeenCalled();
+		expect(v.state.doc.toString()).toBe("---\n\nsome text");
+	});
+
 	it("ignores pasted text", async () => {
 		const onTrigger = vi.fn(() => true);
 		const v = mount("", onTrigger);

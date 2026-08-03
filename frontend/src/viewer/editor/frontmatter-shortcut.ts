@@ -34,8 +34,20 @@ export function frontmatterShortcut(onTrigger: () => boolean): Extension {
 		// A body that legitimately opens with a horizontal rule would otherwise
 		// lose it the moment you typed anywhere else in the note: the first line
 		// reads `---` on every keystroke. Only react when the edit actually
-		// landed on that line (range is in pre-change coordinates).
-		if (!update.changes.touchesRange(0, first.to)) {
+		// landed INSIDE that line.
+		//
+		// Not `touchesRange`: it takes pre-change coordinates while `first` is
+		// post-change, and it counts an insertion AT the endpoint as touching —
+		// so pressing Enter at the end of an existing `---` rule deleted it.
+		// iterChanges reports fromB/toB in the new document, and the comparison
+		// is exclusive at both ends.
+		let touchedFence = false;
+		update.changes.iterChanges((_fromA, _toA, fromB, toB) => {
+			if (fromB < first.to && toB > first.from) {
+				touchedFence = true;
+			}
+		});
+		if (!touchedFence) {
 			return;
 		}
 		if (!onTrigger()) {

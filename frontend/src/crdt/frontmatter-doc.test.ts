@@ -123,6 +123,31 @@ describe("frontmatter-doc mutations", () => {
 		expect(renamed?.typeOverride).toBe("list");
 	});
 
+	// A degraded key lives in `order` + the raw map and deliberately NOT in
+	// `values`, so a collision check that only consults `values` waves it
+	// through: `order` ends up with the name twice, the raw wins in
+	// emitFrontmatter, and the renamed property's value is gone from the note.
+	test("renameKey refuses a name held by a degraded key", () => {
+		const doc = new Y.Doc();
+		addKey(doc, "good", "text");
+		setValue(doc, "good", "keepme");
+		rawMap(doc).set("weird", "weird: !!binary |\n  Zm9v\n");
+		frontmatterMaps(doc).order.push(["weird"]);
+
+		expect(renameKey(doc, "good", "weird")).toBe(false);
+		expect(frontmatterMaps(doc).order.toArray()).toEqual(["good", "weird"]);
+		expect(readRows(doc).find((r) => r.key === "good")?.value).toBe("keepme");
+	});
+
+	test("addKey refuses a name held by a degraded key", () => {
+		const doc = new Y.Doc();
+		rawMap(doc).set("weird", "weird: !!binary |\n  Zm9v\n");
+		frontmatterMaps(doc).order.push(["weird"]);
+
+		expect(addKey(doc, "weird", "text")).toBe(false);
+		expect(frontmatterMaps(doc).order.toArray()).toEqual(["weird"]);
+	});
+
 	test("renameKey refuses an empty, unchanged or colliding name", () => {
 		const doc = new Y.Doc();
 		addKey(doc, "a", "text");

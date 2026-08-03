@@ -15,7 +15,7 @@ import {
 	useNote,
 	useRenameNote,
 } from "../api/queries";
-import { addKey, readRows } from "../crdt/frontmatter-doc";
+import { readRows } from "../crdt/frontmatter-doc";
 import {
 	type CrdtSyncStatus,
 	closeDoc,
@@ -217,7 +217,10 @@ export default function NotePage() {
 	// the note already has frontmatter (the editor is showing anyway) or when
 	// raw mode is up, where the YAML block is the frontmatter surface.
 	const handleFrontmatterShortcut = () => {
-		if (mode !== "rendered" || !handle || readRows(handle.doc).length > 0) {
+		// Declining when the editor is ALREADY open matters: accepting deletes the
+		// user's three characters, and setting an unchanged flag is a React
+		// bailout that would open nothing in exchange for them.
+		if (frontmatterDraft || mode !== "rendered" || !handle || readRows(handle.doc).length > 0) {
 			return false;
 		}
 		setFrontmatterDraft(true);
@@ -279,9 +282,13 @@ export default function NotePage() {
 					.catch(() => toast.error("Copy failed"));
 				break;
 			case "add-property":
-				if (handle) {
-					addKey(handle.doc, "new-property", "text");
-				}
+				// Opens the adder row rather than writing a key. Inventing a name
+				// meant a second use silently collided and did nothing, and from
+				// reading or raw mode — where this widget is not on screen — it wrote
+				// a property the user could not see but every other device received.
+				// Forcing rendered mode makes the row it opens actually visible.
+				setMode("rendered");
+				setFrontmatterDraft(true);
 				break;
 			default:
 				break;

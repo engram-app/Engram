@@ -1,5 +1,6 @@
 import { Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import type * as Y from "yjs";
 import {
 	addKey,
@@ -50,11 +51,18 @@ function PropertyKeyInput({ doc, name }: { doc: Y.Doc; name: string }) {
 	}, [name]);
 
 	const commit = () => {
-		if (draft.trim() === name) {
+		const next = draft.trim();
+		if (next === name) {
 			setDraft(name);
 			return;
 		}
 		if (!renameKey(doc, name, draft)) {
+			// Refusing is right; refusing in silence is not. In a chromeless input
+			// a value snapping back is easy to miss, and the user walks away
+			// believing the rename landed.
+			if (next !== "") {
+				toast.error(`A property named "${next}" already exists`);
+			}
 			setDraft(name);
 		}
 	};
@@ -123,23 +131,38 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 		setNewKey("");
 		setNewValue("");
 		setAdding(false);
+		// Always tell the parent the row is gone, committed or not. `draft` is a
+		// REQUEST to open, and the parent lowers its flag here; leaving it raised
+		// latches the editor shut, because asking again just sets an unchanged
+		// flag and React bails out. The `---` gesture would then eat the user's
+		// three characters and open nothing.
+		onAbandonDraft?.();
 	};
 
-	const commitNewKey = () => {
+	/**
+	 * `duplicate` is NOT a failure to discard — the user typed a real name that
+	 * happens to be taken. Collapsing it into "nothing was entered" threw away
+	 * both the key and the value they had just typed.
+	 */
+	const commitNewKey = (): "committed" | "empty" | "duplicate" => {
 		const key = newKey.trim();
+		if (key === "") {
+			return "empty";
+		}
 		if (!addKey(doc, newKey, newType)) {
-			return false;
+			toast.error(`A property named "${key}" already exists`);
+			return "duplicate";
 		}
 		if (newValue !== "") {
 			setValue(doc, key, coerceValue(newValue, newType));
 		}
 		cancelAdding();
-		return true;
+		return "committed";
 	};
 
 	// Read by the click-away effect, which must not re-subscribe on every
 	// keystroke just to see the latest text.
-	const leaving = useRef<{ commit: () => boolean; cancel: () => void } | null>(null);
+	const leaving = useRef<{ commit: typeof commitNewKey; cancel: () => void } | null>(null);
 	leaving.current = { commit: commitNewKey, cancel: cancelAdding };
 
 	// The `---` gesture means "I want a property", so it opens the new row
@@ -180,16 +203,13 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 			}
 			// A half-filled row is still the user's work, so leaving saves it
 			// rather than throwing it away. Only a row with no key at all counts
-			// as "never mind".
-			if (leaving.current?.commit()) {
+			// as "never mind"; a name that collides keeps the row open so the
+			// user can fix it instead of losing what they typed.
+			const outcome = leaving.current?.commit();
+			if (outcome !== "empty") {
 				return;
 			}
 			leaving.current?.cancel();
-			// Nothing typed and nothing stored: the `---` gesture opened an editor
-			// the user turned out not to want.
-			if (readRows(doc).length === 0) {
-				onAbandonDraft?.();
-			}
 		};
 		document.addEventListener("pointerdown", dismiss);
 		document.addEventListener("focusin", dismiss);
@@ -197,13 +217,16 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 			document.removeEventListener("pointerdown", dismiss);
 			document.removeEventListener("focusin", dismiss);
 		};
-	}, [adding, doc, onAbandonDraft]);
+		// `doc` and `onAbandonDraft` are reached through `leaving`, so they are
+		// deliberately not deps — re-subscribing on every keystroke would be
+		// churn for no behaviour change.
+	}, [adding]);
 
 	// A note with no frontmatter gets no bordered strip of nothing. Returning
 	// null keeps the component MOUNTED and its Yjs observers live, so the
-	// widget reappears the moment a key arrives — from the note menu's "Add
-	// property" or from a remote peer. Unmounting it at the call site instead
-	// would leave nobody listening for that.
+	// widget reappears the moment a key arrives from a remote peer or the raw
+	// editor. Unmounting it at the call site instead would leave nobody
+	// listening for that.
 	if (rows.length === 0 && !draft && !adding) {
 		return null;
 	}

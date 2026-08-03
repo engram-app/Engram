@@ -15,6 +15,20 @@ const EMPTY_DEFAULT: Record<PropertyType, unknown> = {
 // spec order. Custom keys follow in their user-defined order.
 const OKF_KEY_ORDER = ["type", "description", "resource", "timestamp", "created", "tags"] as const;
 
+/**
+ * Is this name already spoken for?
+ *
+ * Checking `values` alone is NOT enough: a DEGRADED key — one whose YAML we
+ * could not model, kept verbatim — lives in `order` and the raw map and
+ * deliberately never appears in `values`. Waving one of those through puts the
+ * name in `order` twice, and since `emitFrontmatter` gives raws precedence the
+ * other property's value stops being emitted at all. That corruption then
+ * materialises and syncs out to the vault.
+ */
+function isTaken(doc: Y.Doc, key: string): boolean {
+	return frontmatterMaps(doc).values.has(key) || rawMap(doc).has(key);
+}
+
 export const CONTENT_KEY = "content";
 export const FRONTMATTER_KEY = "frontmatter";
 export const ORDER_KEY = "frontmatter_order";
@@ -71,7 +85,7 @@ export function addKey(doc: Y.Doc, key: string, type: PropertyType): boolean {
 		return false;
 	}
 	const { values, order, types } = frontmatterMaps(doc);
-	if (values.has(trimmed)) {
+	if (isTaken(doc, trimmed)) {
 		return false;
 	}
 	doc.transact(() => {
@@ -105,7 +119,7 @@ export function removeKey(doc: Y.Doc, key: string): void {
 export function renameKey(doc: Y.Doc, from: string, to: string): boolean {
 	const trimmed = to.trim();
 	const { values, order, types } = frontmatterMaps(doc);
-	if (trimmed === "" || trimmed === from || !values.has(from) || values.has(trimmed)) {
+	if (trimmed === "" || trimmed === from || !values.has(from) || isTaken(doc, trimmed)) {
 		return false;
 	}
 	doc.transact(() => {

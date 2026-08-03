@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
@@ -443,6 +443,31 @@ describe("NotePage (CRDT)", () => {
 			await waitFor(() => expect(screen.queryByTestId("note-properties")).not.toBeInTheDocument());
 		});
 
+		// The gesture deletes the user's typed characters, so it must never
+		// report success without actually opening something — otherwise the
+		// three dashes vanish and nothing happens.
+		it("still works after the first attempt was abandoned", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+
+			fireEvent.click(screen.getByTestId("type-frontmatter-fence"));
+			fireEvent.keyDown(await screen.findByPlaceholderText("Property name"), { key: "Escape" });
+
+			fireEvent.click(screen.getByTestId("type-frontmatter-fence"));
+
+			expect(await screen.findByPlaceholderText("Property name")).toBeInTheDocument();
+		});
+
+		it("leaves nothing behind when the row is abandoned with Escape", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			fireEvent.click(screen.getByTestId("type-frontmatter-fence"));
+
+			fireEvent.keyDown(await screen.findByPlaceholderText("Property name"), { key: "Escape" });
+
+			await waitFor(() => expect(screen.queryByTestId("note-properties")).not.toBeInTheDocument());
+		});
+
 		// Declining is what leaves the typed `---` in the body as a real
 		// horizontal rule instead of silently eating it.
 		it("declines when the note already has frontmatter", async () => {
@@ -578,22 +603,62 @@ describe("NotePage (CRDT)", () => {
 			await openMenu();
 			fireEvent.click(screen.getByRole("menuitem", { name: "Add property" }));
 
-			const row = await screen.findByTestId("property-row-new-property");
-			const value = within(row).getByRole("textbox", { name: "new-property value" });
+			fireEvent.change(await screen.findByPlaceholderText("Property name"), {
+				target: { value: "status" },
+			});
+			const value = screen.getByPlaceholderText("Value");
 			fireEvent.change(value, { target: { value: "hello" } });
-			fireEvent.blur(value);
+			fireEvent.keyDown(value, { key: "Enter" });
 
 			await waitFor(() =>
-				expect(readRows(doc).find((r) => r.key === "new-property")?.value).toBe("hello"),
+				expect(readRows(doc).find((r) => r.key === "status")?.value).toBe("hello"),
 			);
 		});
 
-		it("adds a property to the frontmatter doc", async () => {
+		it("opens the property adder from the note menu", async () => {
 			renderPage();
 			await screen.findByTestId("note-editor");
 			await openMenu();
 			fireEvent.click(screen.getByRole("menuitem", { name: "Add property" }));
-			expect(await screen.findByDisplayValue("new-property")).toBeInTheDocument();
+			expect(await screen.findByPlaceholderText("Property name")).toBeInTheDocument();
+		});
+
+		// The menu used to write a key called "new-property" straight into the doc.
+		// A second use collided with the first, addKey refused it, and the menu item
+		// did nothing at all — no row, no error.
+		it("reopens the adder after a property has already been added", async () => {
+			const doc = new Y.Doc();
+			openDoc.mockResolvedValue({
+				ytext: doc.getText("content"),
+				awareness: new Awareness(doc),
+				doc,
+			});
+			renderPage();
+			await screen.findByTestId("note-editor");
+
+			await openMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "Add property" }));
+			fireEvent.change(await screen.findByPlaceholderText("Property name"), {
+				target: { value: "status" },
+			});
+			fireEvent.keyDown(screen.getByPlaceholderText("Value"), { key: "Enter" });
+			await screen.findByTestId("property-row-status");
+
+			await openMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "Add property" }));
+			expect(await screen.findByPlaceholderText("Property name")).toBeInTheDocument();
+		});
+
+		// The properties widget only renders in rendered mode, so from reading mode
+		// the old handler wrote a property the user could not see locally while it
+		// synced out to every other device.
+		it("switches to rendered mode so the adder it opens is on screen", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			fireEvent.click(screen.getByRole("button", { name: "Reading view" }));
+			await openMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "Add property" }));
+			expect(await screen.findByPlaceholderText("Property name")).toBeInTheDocument();
 		});
 	});
 

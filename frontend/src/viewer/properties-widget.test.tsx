@@ -4,6 +4,9 @@ import * as Y from "yjs";
 import { addKey, readRows, setValue } from "../crdt/frontmatter-doc";
 import { PropertiesWidget } from "./properties-widget";
 
+const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: toastError } }));
+
 describe("PropertiesWidget", () => {
 	test("renders rows from the doc and writes value edits back", async () => {
 		const doc = new Y.Doc();
@@ -194,6 +197,31 @@ describe("PropertiesWidget", () => {
 
 				// Synchronous: the commit writes to the Y.Doc inside the handler.
 				expect(readRows(doc).find((r) => r.key === "status")?.value).toBe("draft");
+				// Committed still closes the row, so the parent must hear about it —
+				// its `draft` flag is a request to open, and a flag left raised can
+				// never be raised again.
+				expect(onAbandonDraft).toHaveBeenCalled();
+			});
+
+			// A name that is taken is NOT "never mind" — the user typed something
+			// real. Collapsing it into the empty case destroyed both fields.
+			test("keeps a colliding row open instead of wiping what was typed", () => {
+				const doc = new Y.Doc();
+				addKey(doc, "status", "text");
+				const onAbandonDraft = vi.fn();
+				render(<PropertiesWidget doc={doc} draft onAbandonDraft={onAbandonDraft} />);
+				fireEvent.change(screen.getByPlaceholderText("Property name"), {
+					target: { value: "status" },
+				});
+				fireEvent.change(screen.getByPlaceholderText("Value"), {
+					target: { value: "IMPORTANT" },
+				});
+
+				fireEvent.pointerDown(document.body);
+
+				expect(screen.getByPlaceholderText("Property name")).toHaveValue("status");
+				expect(screen.getByPlaceholderText("Value")).toHaveValue("IMPORTANT");
+				expect(toastError).toHaveBeenCalled();
 				expect(onAbandonDraft).not.toHaveBeenCalled();
 			});
 
@@ -204,15 +232,22 @@ describe("PropertiesWidget", () => {
 				expect(onAbandonDraft).toHaveBeenCalled();
 			});
 
+			// Once a real property exists the widget is no longer a draft — it stays
+			// on screen off the doc's own contents, whatever the parent's flag says.
 			test("stays once a property was added", () => {
 				const onAbandonDraft = vi.fn();
-				render(<PropertiesWidget doc={new Y.Doc()} draft onAbandonDraft={onAbandonDraft} />);
+				const doc = new Y.Doc();
+				const { rerender } = render(
+					<PropertiesWidget doc={doc} draft onAbandonDraft={onAbandonDraft} />,
+				);
 				fireEvent.change(screen.getByPlaceholderText("Property name"), {
 					target: { value: "status" },
 				});
-				fireEvent.click(screen.getByRole("button", { name: /add property/i }));
 				fireEvent.pointerDown(document.body);
-				expect(onAbandonDraft).not.toHaveBeenCalled();
+
+				rerender(<PropertiesWidget doc={doc} draft={false} onAbandonDraft={onAbandonDraft} />);
+				expect(screen.getByTestId("note-properties")).toBeInTheDocument();
+				expect(screen.getByTestId("property-row-status")).toBeInTheDocument();
 			});
 
 			// Radix portals its menu to document.body, so a click on a type option
