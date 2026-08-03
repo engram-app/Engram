@@ -1,6 +1,11 @@
 # Context Doc: Environment Variables
 
-_Last verified: 2026-07-31 (regenerated from `config/runtime.exs` on 2026-06-18; no CIMD var — CIMD is unconditional, see `connections-client-identity.md`)_
+_Last verified: 2026-08-02 (regenerated from `config/runtime.exs` on 2026-06-18; no CIMD var — CIMD is unconditional, see `connections-client-identity.md`)_
+
+> **Line-number citations below are stale** — they date from the 2026-06-18
+> regeneration and runtime.exs has moved since. Treat them as hints, not
+> addresses; grep for the var name instead. Rows touched on 2026-08-02 had
+> their citations dropped rather than re-derived.
 
 ## Status
 Live. This is regenerated from `config/runtime.exs` (the ~90 vars it reads), with compile-time defaults pulled from `config/config.exs`, `config/dev.exs`, `config/test.exs`. Line numbers cite `config/runtime.exs` unless noted.
@@ -40,11 +45,9 @@ Live. This is regenerated from `config/runtime.exs` (the ~90 vars it reads), wit
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `ENGRAM_SAAS_FRONTEND_ORIGINS` | unset | Extra CORS/WS origins (comma-sep) for the Cloudflare Pages SPA + preview deploys (:661). |
-| `ENGRAM_HOST_REWRITE_ENABLED` | unset (`false`) | `true` enables `HostRewrite` plug for the dedicated `api.`/`mcp.engram.page` hosts. Self-host + current `app.` leave unset → strict no-op (:684). |
-| `ENGRAM_SAAS_ONLY` | unset | `true` → `reject_unknown_hosts` in HostRewrite (:685). |
-| `ENGRAM_HOST_REWRITE_API_HOST` | `api.engram.page` | API host for path rewrite (:695). |
-| `ENGRAM_HOST_REWRITE_MCP_HOST` | `mcp.engram.page` | MCP host for path rewrite (:696). |
-| `ENGRAM_ALLOWED_EXTRA_HOSTS` | unset | Comma-sep extra allowed hosts (:688). |
+| `ENGRAM_HOST_REWRITE_ENABLED` | unset (`false`) | `true` enables `HostRewrite` plug for the dedicated `api.`/`mcp.engram.page` hosts. Self-host leaves unset → strict no-op. The two hosts are hardcoded in runtime.exs (prod only ever set them to their defaults). |
+| `ENGRAM_SAAS_ONLY` | unset | `true` → `reject_unknown_hosts` in HostRewrite. |
+| `ENGRAM_ALLOWED_EXTRA_HOSTS` | unset | Comma-sep extra allowed hosts. |
 | `ENGRAM_FRONTEND_URL` | unset | Absolute SPA base URL for cross-origin OAuth `/authorize` 302 (post-eject) (:706). |
 | `ENGRAM_UPGRADE_URL` | `https://app.engram.page/#settings/billing` | Upgrade URL surfaced in 402 limit-exceeded responses (:198-200). |
 | `TRUST_CF_CONNECTING_IP` | `false` | Prod-only: trust `CF-Connecting-IP` for rate-limit client IP. Safe only under Cloudflare AOP `verify` (:534). |
@@ -160,12 +163,24 @@ Paddle is the Merchant-of-Record. Server keys gate API calls; the client token f
 |----------|---------|---------|
 | `ENGRAM_LIMITS_ENFORCED` | derived (`clerk` + Paddle key) | `true`/`false` override of plan-limit enforcement (:414). |
 | `ENGRAM_<TIER>_<KEY>` | unset | Per-tier limit overrides (e.g. `ENGRAM_FREE_MAX_NOTES`); names come from `LimitKeys.env_var_names/0` (:437). |
-| `REQUIRE_PHONE_FOR_EMBED` | off | Pricing v2 §A phone-verification gate on EmbedNote (:341). |
-| `ATTACHMENT_MIME_BYPASS` | off (gate ON) | `true` disables the MIME/extension whitelist (:351). |
-| `ATTACHMENT_MIME_ALLOWLIST_EXTRA` | unset | Comma-sep extra allowed MIMEs without disabling the gate (:355). |
-| `RATE_LIMIT_AUTH_OVERRIDE` | ignored unless `CI=true` | Auth-limiter override for CI/E2E only (:236). |
-| `PRE_AUTH_RATE_LIMIT_OVERRIDE` | ignored unless `CI=true` | Pre-auth (vault-pipeline) limiter override for CI/E2E only (:257). |
-| `CI` | unset | `true` unlocks the two rate-limit overrides above (:236). |
+| `ATTACHMENT_MIME_BYPASS` | off (gate ON) | `true` disables the MIME/extension whitelist. |
+| `ATTACHMENT_MIME_ALLOWLIST_EXTRA` | unset | Comma-sep extra allowed MIMEs without disabling the gate. |
+| `RATE_LIMIT_AUTH_OVERRIDE` | ignored unless `CI=true` | Auth-limiter override for CI/E2E only. |
+| `PRE_AUTH_RATE_LIMIT_OVERRIDE` | ignored unless `CI=true` | Pre-auth (vault-pipeline) limiter override for CI/E2E only. |
+| `CRDT_MSG_RATE_LIMIT_OVERRIDE` | ignored unless `CI=true` | `CrdtChannel` per-message budget override for CI/E2E only. |
+| `CRDT_HS_RATE_LIMIT_OVERRIDE` | ignored unless `CI=true` | `CrdtChannel` handshake budget override for CI/E2E only. |
+| `CI` | unset | `true` unlocks the four rate-limit overrides above. |
+
+> The canonical list of overridable limiters is
+> `Engram.RuntimeConfig.rate_limit_overrides/0` — runtime.exs walks it, and a
+> unit test pins the env var names. Add a limiter override there, not by
+> copying a block into runtime.exs.
+
+## Sync / CRDT fan-out
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `FANOUT_PACING_ENABLED` | unset (pacing **on**) | `false` falls back to unpaced inline broadcast per note — the instant-rollback lever for the vault-channel fan-out pacer (#1002). Read at call time by `Engram.Notes.FanoutPacer`, so a restart is not required. Keep until #1004 lands the cold-queue depth gauge; until then we are blind to the queue backing up. |
 
 ## Observability (Sentry / PostHog / Pyroscope / Metrics)
 
