@@ -3,6 +3,13 @@ import { Bold, Code, Heading, Italic, Link, List, Quote } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toggleLinePrefix, toggleWrap } from "./format-commands";
 
+/**
+ * PARKED — intentionally not mounted anywhere right now. Do not delete as
+ * dead code; the commands it drives (`./format-commands`) are tested and the
+ * component is the intended body of a mobile-only toolbar docked above the
+ * on-screen keyboard. Removing it from `note-page.tsx` was a placement
+ * decision, not a verdict on the feature.
+ */
 export function EditorToolbar({ getView }: { getView: () => EditorView | null }) {
 	const run = (fn: (v: EditorView) => void) => () => {
 		const v = getView();

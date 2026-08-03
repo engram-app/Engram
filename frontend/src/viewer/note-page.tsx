@@ -28,7 +28,6 @@ import { useRightTools } from "../layout/right-tools-context";
 import { noteName } from "../lib/note-name";
 import { useActiveEditor } from "./editor/active-editor-context";
 import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
-import { EditorToolbar } from "./editor/toolbar";
 import { InlineTitle } from "./inline-title";
 import LoadingPane from "./loading-pane";
 import { NoteMenu } from "./note-menu";
@@ -321,11 +320,10 @@ export default function NotePage() {
 				<NoteMenu mode={mode} title={name} onPick={handleAction} />
 			</div>
 
-			{/* Pinned above the scroll area: a formatting toolbar that scrolled away
-			    would be unreachable exactly when you are typing further down. */}
-			{mode !== "reading" && handle ? (
-				<EditorToolbar getView={() => editorViewRef.current} />
-			) : null}
+			{/* EditorToolbar is deliberately NOT mounted — see editor/toolbar.tsx.
+			    A desktop-width strip of format buttons earns little next to the
+			    markdown shortcuts, and the case it does earn is mobile, where it
+			    belongs above the keyboard rather than under the header. */}
 
 			<ScrollArea className="min-h-0 flex-1">
 				<div className="w-full pb-5" data-tour="note-editor">
