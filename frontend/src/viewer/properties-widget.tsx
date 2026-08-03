@@ -19,6 +19,11 @@ import { effectiveType, type PropertyType } from "./property-types";
 // and it does NOT shrink — long values never squeeze the key column.
 const KEY_CELL = "flex min-h-7 w-36 min-w-36 shrink-0 items-center overflow-hidden rounded-md";
 
+// Anything this editor opens that renders outside its own DOM subtree. Treated
+// as "inside" for the click-away rule.
+const PORTALLED_SURFACES =
+	'[data-radix-popper-content-wrapper],[role="menu"],[role="listbox"],[role="dialog"]';
+
 interface Props {
 	doc: Y.Doc;
 	/**
@@ -34,7 +39,11 @@ interface Props {
 export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) {
 	const [rows, setRows] = useState<PropertyRow[]>(() => sortRowsOkfFirst(readRows(doc)));
 	const newKeyRef = useRef<HTMLInputElement>(null);
-	const rootRef = useRef<HTMLDivElement>(null);
+	const rootRef = useRef<HTMLElement>(null);
+	// Keyed by property name rather than looked up by selector: property keys
+	// are user text and would need escaping in a querySelector.
+	const valueCells = useRef(new Map<string, HTMLElement | null>());
+	const [pendingValueFocus, setPendingValueFocus] = useState<string | null>(null);
 
 	useEffect(() => {
 		const refresh = () => setRows(sortRowsOkfFirst(readRows(doc)));
@@ -54,10 +63,26 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 	const [newType, setNewType] = useState<PropertyType>("text");
 
 	const commitNewKey = () => {
+		const key = newKey.trim();
 		if (addKey(doc, newKey, newType)) {
 			setNewKey("");
+			// Naming a property is half the job. The row does not exist until the
+			// Y.Doc observer fires, so record the intent and let the effect below
+			// move the caret once it has rendered.
+			setPendingValueFocus(key);
 		}
 	};
+
+	useEffect(() => {
+		if (!(pendingValueFocus && rows.some((r) => r.key === pendingValueFocus))) {
+			return;
+		}
+		valueCells.current
+			.get(pendingValueFocus)
+			?.querySelector<HTMLElement>("input, textarea")
+			?.focus();
+		setPendingValueFocus(null);
+	}, [pendingValueFocus, rows]);
 
 	// The `---` gesture opens this with nothing in it, so the caret has to land
 	// in the name field — otherwise there is nothing to click away FROM.
@@ -79,7 +104,14 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 		}
 		const dismiss = (event: Event) => {
 			const root = rootRef.current;
-			if (!root || root.contains(event.target as Node | null)) {
+			const target = event.target as Element | null;
+			if (!root || root.contains(target)) {
+				return;
+			}
+			// Radix portals menus to document.body, so a click on a type option is
+			// physically outside `root` while being very much inside this editor.
+			// Without this the type picker destroyed the draft it was opened from.
+			if (target?.closest?.(PORTALLED_SURFACES)) {
 				return;
 			}
 			if (readRows(doc).length === 0) {
@@ -120,7 +152,12 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 								<PropertyTypeMenu value={type} onChange={(t) => setType(doc, row.key, t)} />
 								<span className="truncate px-1 text-muted-foreground text-sm">{row.key}</span>
 							</dt>
-							<dd className="flex min-h-7 flex-1 items-center gap-1">
+							<dd
+								className="flex min-h-7 flex-1 items-center gap-1"
+								ref={(el) => {
+									valueCells.current.set(row.key, el);
+								}}
+							>
 								<PropertyField
 									type={type}
 									value={row.value}

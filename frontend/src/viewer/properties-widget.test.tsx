@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import * as Y from "yjs";
 import { addKey, readRows, setValue } from "../crdt/frontmatter-doc";
@@ -32,6 +32,20 @@ describe("PropertiesWidget", () => {
 		fireEvent.change(screen.getByPlaceholderText("Property name"), { target: { value: "status" } });
 		fireEvent.click(screen.getByRole("button", { name: /add property/i }));
 		await waitFor(() => expect(readRows(doc).map((r) => r.key)).toContain("status"));
+	});
+
+	// Naming a property is only half the job — the point of adding one is to
+	// give it a value, so the caret has to end up there.
+	test("adding a property leaves its value ready to type into", async () => {
+		const doc = new Y.Doc();
+		render(<PropertiesWidget doc={doc} />);
+		addKey(doc, "seed", "text"); // make the widget visible
+		const name = await screen.findByPlaceholderText("Property name");
+		fireEvent.change(name, { target: { value: "status" } });
+		fireEvent.keyDown(name, { key: "Enter" });
+
+		const row = await screen.findByTestId("property-row-status");
+		expect(within(row).getByRole("textbox")).toHaveFocus();
 	});
 
 	// An empty frontmatter block is a bordered strip of nothing above every
@@ -87,6 +101,21 @@ describe("PropertiesWidget", () => {
 				});
 				fireEvent.click(screen.getByRole("button", { name: /add property/i }));
 				fireEvent.pointerDown(document.body);
+				expect(onAbandonDraft).not.toHaveBeenCalled();
+			});
+
+			// Radix portals its menu to document.body, so a click on a type option
+			// lands OUTSIDE the widget's root — the dismissal must not read that
+			// as clicking away, or picking a type destroys the draft.
+			test("picking a property type does not abandon the draft", async () => {
+				const onAbandonDraft = vi.fn();
+				render(<PropertiesWidget doc={new Y.Doc()} draft onAbandonDraft={onAbandonDraft} />);
+				const trigger = screen.getByRole("button", { name: "Property type" });
+				fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+				fireEvent.click(trigger);
+				const option = await screen.findByRole("menuitem", { name: "number" });
+				fireEvent.pointerDown(option);
+				fireEvent.click(option);
 				expect(onAbandonDraft).not.toHaveBeenCalled();
 			});
 
