@@ -12,13 +12,18 @@ import { useTheme } from "../theme/theme-provider";
 import { indentKeymap } from "./editor/format-commands";
 import { livePreviewExtensions } from "./editor/live-preview";
 
-// Fill the parent so the editor spans the full pane height. 16px on .cm-content
-// prevents iOS Safari auto-zoom. Transparent background so the card shows through.
+// height:auto + overflow:visible hand scrolling to the page's ScrollArea, so
+// the inline title and properties scroll with the text instead of staying
+// pinned above it. CodeMirror still viewport-renders against the scrolling
+// ancestor. 16px on .cm-content prevents iOS Safari auto-zoom. Transparent
+// background so the card shows through.
 const editorTheme = EditorView.theme({
-	"&": { height: "100%", backgroundColor: "transparent" },
+	"&": { height: "auto", backgroundColor: "transparent" },
 	".cm-scroller": {
 		fontFamily: "inherit",
-		overflow: "auto",
+		// Inert while the page owns the scrollbar; the styling rules below are
+		// likewise inert but cost nothing and matter again if this is reverted.
+		overflow: "visible",
 		backgroundColor: "transparent",
 		scrollbarWidth: "thin",
 		scrollbarColor: "var(--border) transparent",
@@ -179,5 +184,5 @@ export default function NoteEditor({
 		});
 	}, [mode, resolveWikiLink]);
 
-	return <div ref={hostRef} className="h-full" />;
+	return <div ref={hostRef} />;
 }

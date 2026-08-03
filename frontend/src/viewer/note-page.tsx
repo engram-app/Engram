@@ -19,11 +19,11 @@ import { noteName } from "../lib/note-name";
 import { useActiveEditor } from "./editor/active-editor-context";
 import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
 import { EditorToolbar } from "./editor/toolbar";
+import { InlineTitle } from "./inline-title";
 import LoadingPane from "./loading-pane";
 import NoteToc from "./note-toc";
 import NoteView from "./note-view";
 import { PropertiesWidget } from "./properties-widget";
-import { RenameInput } from "./tree-actions/rename-input";
 import { renameBaseName } from "./tree-actions/rename-path";
 import { useLiveContent } from "./use-live-content";
 
@@ -170,36 +170,12 @@ export default function NotePage() {
 					Not syncing - reconnecting...
 				</p>
 			)}
+			{/* Chrome is now just the breadcrumb and the view-mode control — the
+			    title moved into the document so it scrolls with the content. */}
 			<div className="flex shrink-0 items-center gap-2 border-border border-b px-4 py-2">
-				<h2 className="flex min-w-0 flex-1 items-baseline gap-1 text-sm" title={titlePath}>
-					{Boolean(note.folder) && (
-						<span className="min-w-0 shrink truncate text-muted-foreground">{note.folder}/</span>
-					)}
-					{renamingFor === note.id ? (
-						<RenameInput
-							initial={name}
-							kind="file"
-							// This reads as a title field, not a modal edit: you click it,
-							// retype, and click into the document. Losing the rename because
-							// you did not press Enter is a surprise, so focus leaving saves.
-							// Escape still abandons.
-							commitOnBlur
-							onCommit={commitRename}
-							onCancel={() => setRenamingFor(null)}
-						/>
-					) : (
-						<button
-							type="button"
-							// -mx-1 cancels the padding so the hover target is roomier than
-							// the text without nudging the name off the folder crumb.
-							className="-mx-1 min-w-0 truncate rounded px-1 font-medium hover:bg-accent"
-							title="Click to rename"
-							onClick={() => setRenamingFor(note.id)}
-						>
-							{name}
-						</button>
-					)}
-				</h2>
+				<p className="min-w-0 flex-1 truncate text-muted-foreground text-sm" title={titlePath}>
+					{note.folder ? `${note.folder}/` : ""}
+				</p>
 				<fieldset className="m-0 flex shrink-0 gap-1 border-0 p-0">
 					<legend className="sr-only">View mode</legend>
 					{MODES.map(({ value, label }) => (
@@ -216,21 +192,32 @@ export default function NotePage() {
 				</fieldset>
 			</div>
 
-			{handle && mode === "rendered" ? <PropertiesWidget doc={handle.doc} /> : null}
-			{handle && mode === "raw" ? <RawFrontmatterEditor doc={handle.doc} /> : null}
+			{/* Pinned above the scroll area: a formatting toolbar that scrolled away
+			    would be unreachable exactly when you are typing further down. */}
+			{mode !== "reading" && handle ? <EditorToolbar getView={() => editorViewRef.current} /> : null}
 
-			{mode === "reading" ? (
-				<ScrollArea className="min-h-0 flex-1">
-					<div className="w-full px-5 py-5">
-						<NoteView content={liveContent} tags={note.tags} />
-					</div>
-				</ScrollArea>
-			) : (
-				<div className="min-h-0 flex-1 overflow-hidden" data-tour="note-editor">
-					<Suspense fallback={<p className="py-5 text-muted-foreground">Loading editor…</p>}>
-						{handle ? (
-							<>
-								<EditorToolbar getView={() => editorViewRef.current} />
+			<ScrollArea className="min-h-0 flex-1">
+				<div className="w-full pb-5" data-tour="note-editor">
+					<InlineTitle
+						name={name}
+						renaming={renamingFor === note.id}
+						onStartRename={() => setRenamingFor(note.id)}
+						onCommitRename={commitRename}
+						onCancelRename={() => setRenamingFor(null)}
+					/>
+
+					{handle && mode === "rendered" ? <PropertiesWidget doc={handle.doc} /> : null}
+					{handle && mode === "raw" ? <RawFrontmatterEditor doc={handle.doc} /> : null}
+
+					{mode === "reading" ? (
+						<div className="px-5 pt-2">
+							<NoteView content={liveContent} tags={note.tags} />
+						</div>
+					) : (
+						<Suspense
+							fallback={<p className="px-5 py-5 text-muted-foreground">Loading editor…</p>}
+						>
+							{handle ? (
 								<NoteEditor
 									ytext={handle.ytext}
 									awareness={handle.awareness}
@@ -240,13 +227,13 @@ export default function NotePage() {
 										editorViewRef.current = v;
 									}}
 								/>
-							</>
-						) : (
-							<p className="py-5 text-muted-foreground">Connecting…</p>
-						)}
-					</Suspense>
+							) : (
+								<p className="px-5 py-5 text-muted-foreground">Connecting…</p>
+							)}
+						</Suspense>
+					)}
 				</div>
-			)}
+			</ScrollArea>
 		</section>
 	);
 }

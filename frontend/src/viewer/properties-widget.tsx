@@ -36,7 +36,7 @@ export function PropertiesWidget({ doc }: { doc: Y.Doc }) {
 	const [newType, setNewType] = useState<PropertyType>("text");
 
 	return (
-		<div className="border-border border-b px-5 py-3">
+		<div className="border-border border-b px-5 py-3" data-testid="note-properties">
 			<dl className="grid grid-cols-[max-content_max-content_1fr_max-content] items-center gap-x-2 gap-y-1 text-xs">
 				{rows.map((row) => {
 					const type = effectiveType(row.value, row.typeOverride);

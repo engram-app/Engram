@@ -278,4 +278,28 @@ describe("NotePage (CRDT)", () => {
 		expect(screen.queryByText("status")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("note-editor")).not.toBeInTheDocument();
 	});
+
+	describe("layout", () => {
+		it("renders the note name as an inline h1, not just chrome text", async () => {
+			renderPage();
+			await waitFor(() =>
+				expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("note"),
+			);
+		});
+
+		it("puts the title above the properties widget in document order", async () => {
+			renderPage();
+			const title = await screen.findByRole("heading", { level: 1 });
+			const properties = await screen.findByTestId("note-properties");
+			// Node.compareDocumentPosition: 4 = "properties FOLLOWS title".
+			expect(title.compareDocumentPosition(properties)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+		});
+
+		it("keeps the onboarding tour anchor present", async () => {
+			renderPage();
+			await waitFor(() =>
+				expect(document.querySelector('[data-tour="note-editor"]')).toBeInTheDocument(),
+			);
+		});
+	});
 });
