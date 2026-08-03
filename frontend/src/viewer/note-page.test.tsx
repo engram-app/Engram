@@ -385,13 +385,23 @@ describe("NotePage (CRDT)", () => {
 	});
 
 	describe("reading toggle", () => {
-		it("switches to reading view and back", async () => {
+		// One stable name with aria-pressed, not a name that flips between
+		// "Edit"/"Reading view": the icon shows the CURRENT mode, so a label
+		// naming the next action would contradict it.
+		const toggle = () => screen.getByRole("button", { name: "Reading view" });
+
+		it("switches to reading view and back, reporting its state", async () => {
 			renderPage();
 			await screen.findByTestId("note-editor");
-			fireEvent.click(screen.getByRole("button", { name: "Reading view" }));
+			expect(toggle()).toHaveAttribute("aria-pressed", "false");
+
+			fireEvent.click(toggle());
 			expect(screen.getByTestId("note-view")).toBeInTheDocument();
-			fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+			expect(toggle()).toHaveAttribute("aria-pressed", "true");
+
+			fireEvent.click(toggle());
 			expect(screen.getByTestId("note-editor")).toBeInTheDocument();
+			expect(toggle()).toHaveAttribute("aria-pressed", "false");
 		});
 
 		// Raw is an edit mode, so a round trip through reading must not silently
@@ -403,16 +413,16 @@ describe("NotePage (CRDT)", () => {
 			fireEvent.click(screen.getByRole("menuitem", { name: "Raw" }));
 			await screen.findByLabelText(/Frontmatter \(raw YAML\)/i);
 
-			fireEvent.click(screen.getByRole("button", { name: "Reading view" }));
+			fireEvent.click(toggle());
 			expect(screen.getByTestId("note-view")).toBeInTheDocument();
-			fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+			fireEvent.click(toggle());
 			expect(await screen.findByLabelText(/Frontmatter \(raw YAML\)/i)).toBeInTheDocument();
 		});
 
 		it("stays in step with the kebab's active-mode marker", async () => {
 			renderPage();
 			await screen.findByTestId("note-editor");
-			fireEvent.click(screen.getByRole("button", { name: "Reading view" }));
+			fireEvent.click(toggle());
 			await openMenu();
 			expect(screen.getByRole("menuitem", { name: "Reading" })).toHaveAttribute(
 				"aria-current",

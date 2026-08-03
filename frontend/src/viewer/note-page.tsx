@@ -307,13 +307,16 @@ export default function NotePage() {
 				<Button
 					variant="ghost"
 					size="icon"
-					// The label names the DESTINATION, not the current state — the icon
-					// is the affordance you are about to use, same as Obsidian's.
-					aria-label={mode === "reading" ? "Edit" : "Reading view"}
-					title={mode === "reading" ? "Edit" : "Reading view"}
+					// The icon shows the mode you are IN — book while reading, pencil
+					// while editing — so the name has to stay put and let aria-pressed
+					// carry the state. A name that flipped to the next action would
+					// tell a screen reader the opposite of what the icon shows.
+					aria-label="Reading view"
+					aria-pressed={mode === "reading"}
+					title="Reading view"
 					onClick={toggleReading}
 				>
-					{mode === "reading" ? <Pencil className="size-4" /> : <BookOpen className="size-4" />}
+					{mode === "reading" ? <BookOpen className="size-4" /> : <Pencil className="size-4" />}
 				</Button>
 				<NoteMenu mode={mode} title={name} onPick={handleAction} />
 			</div>
