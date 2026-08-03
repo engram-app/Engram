@@ -269,10 +269,13 @@ export default function NotePage() {
 				// No reliable sibling-name set on hand — pass an empty Set and let the
 				// backend reject a collision; the toast surfaces it. Mirrors the tree.
 				const new_path = nextCopyName(note.path, new Set<string>());
-				duplicateNote
-					.mutateAsync({ src_path: note.path, new_path })
-					.then(() => toast.success("Duplicated"))
-					.catch(() => toast.error("Duplicate failed"));
+				// `mutate`, not `mutateAsync` — the hook's onError already toasts, and
+				// it distinguishes a name collision from a general failure. Catching
+				// here too put a second, vaguer toast on top of the useful one.
+				duplicateNote.mutate(
+					{ src_path: note.path, new_path },
+					{ onSuccess: () => toast.success("Duplicated") },
+				);
 				break;
 			}
 			case "copy-wikilink":

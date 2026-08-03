@@ -76,7 +76,7 @@ vi.mock("../api/queries", () => ({
 	useNote: (...a: unknown[]) => useNoteMock(...a),
 	useRenameNote: () => ({ mutate: renameNoteMutate, isPending: false }),
 	useDeleteNote: () => ({ mutate: deleteNoteMutate, isPending: false }),
-	useDuplicateNote: () => ({ mutateAsync: duplicateNoteMutate, isPending: false }),
+	useDuplicateNote: () => ({ mutate: duplicateNoteMutate, isPending: false }),
 	useBatchMoveNotes: () => ({ mutate: batchMoveMutate, isPending: false }),
 	useFolders: () => ({ data: [{ name: "folder" }, { name: "other" }], isLoading: false }),
 }));
@@ -551,15 +551,19 @@ describe("NotePage (CRDT)", () => {
 			expect(screen.getByRole("textbox", { name: "Rename file" })).toHaveValue("note");
 		});
 
-		it("duplicates with a collision-safe name", async () => {
-			duplicateNoteMutate.mockResolvedValue({ id: "n2", path: "folder/note 1.md" });
+		it("duplicates with a collision-safe name, leaving errors to the mutation", async () => {
 			renderPage();
 			await screen.findByTestId("note-editor");
 			await openMenu();
 			fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
 			expect(duplicateNoteMutate).toHaveBeenCalledWith(
 				expect.objectContaining({ src_path: "folder/note.md" }),
+				expect.objectContaining({ onSuccess: expect.any(Function) }),
 			);
+			// useDuplicateNote's onError already toasts, and it tells a name
+			// collision apart from a general failure. Reporting here as well
+			// stacked a second, vaguer toast on top of the useful one.
+			expect(duplicateNoteMutate.mock.calls[0]?.[1]).not.toHaveProperty("onError");
 		});
 
 		it("moves the note to the folder picked in the dialog", async () => {
