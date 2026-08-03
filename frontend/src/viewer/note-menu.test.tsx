@@ -29,6 +29,16 @@ describe("NoteMenu", () => {
 		expect(onPick).toHaveBeenCalledWith("duplicate");
 	});
 
+	// The menu hangs off a 32px icon button. Sizing to the trigger pinned it to
+	// the min-width floor and wrapped "Copy wikilink" onto two lines.
+	it("sizes to its content rather than to the icon trigger", async () => {
+		render(<NoteMenu mode="rendered" title="note" onPick={vi.fn()} />);
+		openMenu();
+		const menu = await screen.findByRole("menu");
+		expect(menu.className).not.toMatch(/radix-dropdown-menu-trigger-width/);
+		expect(menu).toHaveClass("whitespace-nowrap");
+	});
+
 	it("marks the active view mode", async () => {
 		render(<NoteMenu mode="raw" title="note" onPick={vi.fn()} />);
 		openMenu();
