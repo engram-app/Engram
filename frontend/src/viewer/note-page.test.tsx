@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
+import { readRows } from "../crdt/frontmatter-doc";
 import { RightToolsProvider } from "../layout/right-tools-context";
 import { ActiveEditorProvider, useActiveEditor } from "./editor/active-editor-context";
 import NotePage from "./note-page";
@@ -560,6 +561,31 @@ describe("NotePage (CRDT)", () => {
 				expect.objectContaining({ id: "note-1", path: "folder/note.md" }),
 			);
 			expect(navigateMock).toHaveBeenCalledWith("/my-vault");
+		});
+
+		// The reported symptom was "I can set keys but not values". Proves the
+		// write path end to end from the real note page, so a fix for it can't be
+		// mistaken for a styling change.
+		it("writes a value typed into a property row", async () => {
+			const doc = new Y.Doc();
+			openDoc.mockResolvedValue({
+				ytext: doc.getText("content"),
+				awareness: new Awareness(doc),
+				doc,
+			});
+			renderPage();
+			await screen.findByTestId("note-editor");
+			await openMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "Add property" }));
+
+			const row = await screen.findByTestId("property-row-new-property");
+			const value = within(row).getByRole("textbox");
+			fireEvent.change(value, { target: { value: "hello" } });
+			fireEvent.blur(value);
+
+			await waitFor(() =>
+				expect(readRows(doc).find((r) => r.key === "new-property")?.value).toBe("hello"),
+			);
 		});
 
 		it("adds a property to the frontmatter doc", async () => {

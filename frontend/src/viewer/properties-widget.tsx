@@ -16,8 +16,15 @@ import { PropertyTypeMenu } from "./property-type-menu";
 import { effectiveType, type PropertyType } from "./property-types";
 
 // Obsidian's --metadata-label-width is 9em against the 16px root, so 144px,
-// and it does NOT shrink — long values never squeeze the key column.
-const KEY_CELL = "flex min-h-7 w-36 min-w-36 shrink-0 items-center overflow-hidden rounded-md";
+// and it does NOT shrink — long values never squeeze the key column. The right
+// border is Obsidian's --metadata-divider turned on: stock Obsidian ships it
+// at 0 width, which leaves an empty value as an invisible target with no hint
+// that the row is even editable.
+const KEY_CELL =
+	"flex min-h-7 w-36 min-w-36 shrink-0 items-center overflow-hidden border-border border-r";
+
+// One box per row so the key/value boundary and the row boundary both read.
+const ROW = "flex items-start rounded-md border border-border";
 
 // Anything this editor opens that renders outside its own DOM subtree. Treated
 // as "inside" for the click-away rule.
@@ -143,11 +150,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 				{rows.map((row) => {
 					const type = effectiveType(row.value, row.typeOverride);
 					return (
-						<div
-							key={row.key}
-							className="group flex items-start rounded-md"
-							data-testid={`property-row-${row.key}`}
-						>
+						<div key={row.key} className={`group ${ROW}`} data-testid={`property-row-${row.key}`}>
 							<dt className={KEY_CELL}>
 								<PropertyTypeMenu value={type} onChange={(t) => setType(doc, row.key, t)} />
 								<span className="truncate px-1 text-muted-foreground text-sm">{row.key}</span>
@@ -200,7 +203,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 
 			{/* The adder wears the same row geometry, so a property being named
 			    looks like the row it is about to become. */}
-			<div className="mt-[3px] flex items-start">
+			<div className={`mt-[3px] ${ROW}`}>
 				<div className={KEY_CELL}>
 					<PropertyTypeMenu value={newType} onChange={setNewType} />
 					<input
