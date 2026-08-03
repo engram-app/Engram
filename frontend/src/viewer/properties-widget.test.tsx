@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import * as Y from "yjs";
 import { addKey, readRows, setValue } from "../crdt/frontmatter-doc";
@@ -34,18 +34,37 @@ describe("PropertiesWidget", () => {
 		await waitFor(() => expect(readRows(doc).map((r) => r.key)).toContain("status"));
 	});
 
-	// Naming a property is only half the job — the point of adding one is to
-	// give it a value, so the caret has to end up there.
-	test("adding a property leaves its value ready to type into", async () => {
+	// The row being filled in is the ONLY row on a note with no properties, so
+	// if it has nowhere to type a value there is nowhere to type one at all.
+	test("the new-property row has a value field, not just a key", () => {
+		render(<PropertiesWidget doc={new Y.Doc()} draft onAbandonDraft={() => {}} />);
+		expect(screen.getByPlaceholderText("Property name")).toBeInTheDocument();
+		expect(screen.getByPlaceholderText("Value")).toBeInTheDocument();
+	});
+
+	test("commits key and value together, then waits for the next property", async () => {
 		const doc = new Y.Doc();
-		render(<PropertiesWidget doc={doc} />);
-		addKey(doc, "seed", "text"); // make the widget visible
-		const name = await screen.findByPlaceholderText("Property name");
+		render(<PropertiesWidget doc={doc} draft onAbandonDraft={() => {}} />);
+		fireEvent.change(screen.getByPlaceholderText("Property name"), {
+			target: { value: "status" },
+		});
+		fireEvent.change(screen.getByPlaceholderText("Value"), { target: { value: "draft" } });
+		fireEvent.keyDown(screen.getByPlaceholderText("Value"), { key: "Enter" });
+
+		await waitFor(() => expect(readRows(doc).find((r) => r.key === "status")?.value).toBe("draft"));
+		expect(screen.getByPlaceholderText("Property name")).toHaveFocus();
+		expect(screen.getByPlaceholderText("Property name")).toHaveValue("");
+	});
+
+	test("Enter in the key field moves to the value rather than committing early", () => {
+		const doc = new Y.Doc();
+		render(<PropertiesWidget doc={doc} draft onAbandonDraft={() => {}} />);
+		const name = screen.getByPlaceholderText("Property name");
 		fireEvent.change(name, { target: { value: "status" } });
 		fireEvent.keyDown(name, { key: "Enter" });
 
-		const row = await screen.findByTestId("property-row-status");
-		expect(within(row).getByRole("textbox")).toHaveFocus();
+		expect(screen.getByPlaceholderText("Value")).toHaveFocus();
+		expect(readRows(doc)).toHaveLength(0);
 	});
 
 	// An empty frontmatter block is a bordered strip of nothing above every

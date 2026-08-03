@@ -13,7 +13,7 @@ import {
 } from "../crdt/frontmatter-doc";
 import { PropertyField } from "./property-fields";
 import { PropertyTypeMenu } from "./property-type-menu";
-import { effectiveType, type PropertyType } from "./property-types";
+import { coerceValue, effectiveType, type PropertyType } from "./property-types";
 
 // Obsidian's --metadata-label-width is 9em against the 16px root, so 144px,
 // and it does NOT shrink — long values never squeeze the key column. The right
@@ -46,11 +46,8 @@ interface Props {
 export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) {
 	const [rows, setRows] = useState<PropertyRow[]>(() => sortRowsOkfFirst(readRows(doc)));
 	const newKeyRef = useRef<HTMLInputElement>(null);
+	const newValueRef = useRef<HTMLInputElement>(null);
 	const rootRef = useRef<HTMLElement>(null);
-	// Keyed by property name rather than looked up by selector: property keys
-	// are user text and would need escaping in a querySelector.
-	const valueCells = useRef(new Map<string, HTMLElement | null>());
-	const [pendingValueFocus, setPendingValueFocus] = useState<string | null>(null);
 
 	useEffect(() => {
 		const refresh = () => setRows(sortRowsOkfFirst(readRows(doc)));
@@ -67,29 +64,22 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 	}, [doc]);
 
 	const [newKey, setNewKey] = useState("");
+	const [newValue, setNewValue] = useState("");
 	const [newType, setNewType] = useState<PropertyType>("text");
 
 	const commitNewKey = () => {
 		const key = newKey.trim();
-		if (addKey(doc, newKey, newType)) {
-			setNewKey("");
-			// Naming a property is half the job. The row does not exist until the
-			// Y.Doc observer fires, so record the intent and let the effect below
-			// move the caret once it has rendered.
-			setPendingValueFocus(key);
-		}
-	};
-
-	useEffect(() => {
-		if (!(pendingValueFocus && rows.some((r) => r.key === pendingValueFocus))) {
+		if (!addKey(doc, newKey, newType)) {
 			return;
 		}
-		valueCells.current
-			.get(pendingValueFocus)
-			?.querySelector<HTMLElement>("input, textarea")
-			?.focus();
-		setPendingValueFocus(null);
-	}, [pendingValueFocus, rows]);
+		if (newValue !== "") {
+			setValue(doc, key, coerceValue(newValue, newType));
+		}
+		setNewKey("");
+		setNewValue("");
+		// Straight back to the key field, ready for the next one.
+		newKeyRef.current?.focus();
+	};
 
 	// The `---` gesture opens this with nothing in it, so the caret has to land
 	// in the name field — otherwise there is nothing to click away FROM.
@@ -155,12 +145,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 								<PropertyTypeMenu value={type} onChange={(t) => setType(doc, row.key, t)} />
 								<span className="truncate px-1 text-muted-foreground text-sm">{row.key}</span>
 							</dt>
-							<dd
-								className="flex min-h-7 flex-1 items-center gap-1"
-								ref={(el) => {
-									valueCells.current.set(row.key, el);
-								}}
-							>
+							<dd className="flex min-h-7 flex-1 items-center gap-1">
 								<PropertyField
 									type={type}
 									value={row.value}
@@ -212,6 +197,24 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 						placeholder="Property name"
 						value={newKey}
 						onChange={(e) => setNewKey(e.target.value)}
+						// Enter moves along the row instead of committing: on a note with
+						// no properties this IS the only row, so committing from the key
+						// would close the one place a value can be typed.
+						onKeyDown={(e) => {
+							if (e.key === "Enter") {
+								e.preventDefault();
+								newValueRef.current?.focus();
+							}
+						}}
+					/>
+				</div>
+				<div className="flex min-h-7 flex-1 items-center gap-1">
+					<input
+						ref={newValueRef}
+						className="w-full min-w-0 border-0 bg-transparent px-2 py-1 text-foreground text-sm outline-none placeholder:text-muted-foreground/60"
+						placeholder="Value"
+						value={newValue}
+						onChange={(e) => setNewValue(e.target.value)}
 						onKeyDown={(e) => {
 							if (e.key === "Enter") {
 								e.preventDefault();
@@ -223,10 +226,10 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 				<button
 					type="button"
 					aria-label="Add property"
-					className="min-h-7 rounded px-1.5 text-muted-foreground text-sm hover:text-foreground"
+					className="min-h-7 shrink-0 rounded px-1.5 text-muted-foreground text-sm hover:text-foreground"
 					onClick={commitNewKey}
 				>
-					Add property
+					Add
 				</button>
 			</div>
 		</section>
