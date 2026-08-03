@@ -80,6 +80,11 @@ Live. This is regenerated from `config/runtime.exs` (the ~90 vars it reads), wit
 | `DOC_EMBED_MODEL` | falls back to `EMBED_MODEL` | Asymmetric: doc-indexing model (:107). |
 | `QUERY_EMBED_MODEL` | falls back to `EMBED_MODEL` | Asymmetric: query model (:111). |
 | `EMBED_429_SNOOZE_SECONDS` | `60` | Voyage-429 snooze (worker reschedules without burning an attempt) (:118). |
+| `EMBED_SETTLE_SECONDS` | `30` | Settle debounce — a note must sit unedited this long before it embeds, collapsing a burst of saves into one Voyage call. Higher = cheaper, staler index. |
+| `EMBED_SETTLE_MAX_WAIT_SECONDS` | `300` | Starvation ceiling — a continuously-edited note embeds at most this long after its first pending edit. Keep **>** `EMBED_SETTLE_SECONDS`. |
+| `EMBED_POISON_COOLDOWN_SECONDS` | `21600` (6h) | Cooldown parked on a note that exhausts its embed attempts, before `ReconcileEmbeddings` retries. Caps re-billing on permanently-failing notes. |
+| `EMBED_TRANSIENT_COOLDOWN_SECONDS` | `300` | Shorter cooldown for *transient* failures (upstream unreachable / 5xx) so a provider blip doesn't strand notes for the full poison window. Effective recovery is bounded below by the ~15min reconcile sweep. |
+| `EMBED_RECONCILE_BACKOFF_SECONDS` | `1800` (30m) | Preemptive cooldown stamped on every note `ReconcileEmbeddings` enqueues (#897) — makes backoff crash-independent (an OOM that skips the graceful poison stamp still can't re-enqueue immediately). **MUST exceed the 15-min reconcile cron interval.** |
 | `VOYAGE_RPM` | unset (no throttle) | Client-side cap — synthetic 429 before real call (:131). |
 | `VOYAGE_QUERY_RPM` | falls back to `VOYAGE_RPM` | Separate bucket for synchronous search (:135). |
 | `OLLAMA_URL` | (adapter default `http://localhost:11434`) | Ollama server (self-host). |
@@ -198,6 +203,11 @@ Each block is opt-in: unset → no-op (dev/test/self-host emit nothing).
 | `GRAFANA_AGENT_TOKEN` | — (required if Pyroscope URL set, :819) | Shared Grafana Cloud token (metrics/logs/traces/profiles write). |
 | `PYROSCOPE_APP_NAME` | `engram-saas-prod` | Pyroscope app label (:821). |
 | `HOSTNAME` / `ECS_TASK_ID` | `unknown` | Pyroscope instance label (:823). |
+| `PYROSCOPE_SAMPLE_INTERVAL_MS` | `10` | Profiler sample period. Lower = finer profiles, more CPU — this knob is why prod CPU jumped, see `pyroscope-cpu-profiler-prod-regression.md`. |
+| `PYROSCOPE_PUSH_INTERVAL_MS` | `10000` | How often collected profiles ship to Grafana Cloud. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | **Master switch for tracing** — unset → OTel is a no-op. Prod points it at the Alloy sidecar on loopback; Alloy forwards to Tempo. |
+| `ENGRAM_OTEL_SAMPLE_RATIO` | `1.0` | Head-sampling ratio, tunable without a code deploy. Applies *after* `Engram.Observability.TraceSampler` drops health-check/scrape traffic (~96% of span volume) at the root — under `:parent_based` a root `:drop` cascades, so probe traces never build children. |
+| `TELEMETRY_HMAC_KEY_USER_ID` | unset (per-boot random + warning) | HMAC key for hashing user ids in metric labels/logs — **distinct from any encryption key**. SaaS prod + staging set it via SOPS so `user_id_hmac` correlates across restarts; unset still never leaks plaintext ids, it just breaks correlation across reboots. |
 
 ## Notes on removed / migrated vars
 
