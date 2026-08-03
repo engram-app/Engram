@@ -9,14 +9,42 @@ defmodule Engram.RuntimeConfig do
   already calls the same way.
   """
 
-  @doc """
-  Decides whether the `RATE_LIMIT_AUTH_OVERRIDE` env var should loosen the auth
-  rate limit.
+  # Every rate limiter that CI/E2E stacks are allowed to loosen, as
+  # `{env var, application env key}`. runtime.exs walks this list, so adding a
+  # limiter override is a one-line change here rather than another copy of the
+  # case/log/apply block.
+  #
+  #   * RATE_LIMIT_AUTH_OVERRIDE      — auth limiter (EngramWeb.Plugs.RateLimit)
+  #   * PRE_AUTH_RATE_LIMIT_OVERRIDE  — 401-loop defense in front of /api/notes,
+  #     /api/search etc. (EngramWeb.Plugs.PreAuthRateLimit). test_77 bulk-sync
+  #     pushes ~1000 notes through the default 600 req/60s bucket.
+  #   * CRDT_MSG_RATE_LIMIT_OVERRIDE  — CrdtChannel per-message budget
+  #   * CRDT_HS_RATE_LIMIT_OVERRIDE   — CrdtChannel handshake (STEP1/STEP2) budget
+  #
+  # The e2e harness's compressed workload (rapid edits, resumed-device rejoins)
+  # legitimately exceeds budgets a real single user wouldn't, and the release
+  # build has no other runtime lever.
+  @rate_limit_overrides [
+    {"RATE_LIMIT_AUTH_OVERRIDE", :rate_limit_auth_override},
+    {"PRE_AUTH_RATE_LIMIT_OVERRIDE", :pre_auth_rate_limit_override},
+    {"CRDT_MSG_RATE_LIMIT_OVERRIDE", :crdt_msg_rate_limit_override},
+    {"CRDT_HS_RATE_LIMIT_OVERRIDE", :crdt_hs_rate_limit_override}
+  ]
 
-  The override exists only to stop CI/E2E stacks from 429-ing themselves; it
-  must never weaken the limiter in production. Production task definitions
-  never set `CI=true`, so gating on it makes a stray `RATE_LIMIT_AUTH_OVERRIDE`
-  (e.g. copy-pasted from a CI compose file) a no-op in prod.
+  @doc """
+  The `{env var, application env key}` pairs for every CI-gated rate-limit
+  override. See `ci_gated_int_override/2` for the gating rule.
+  """
+  @spec rate_limit_overrides() :: [{String.t(), atom()}]
+  def rate_limit_overrides, do: @rate_limit_overrides
+
+  @doc """
+  Decides whether an integer rate-limit override env var should be applied.
+
+  These overrides exist only to stop CI/E2E stacks from 429-ing themselves; they
+  must never weaken a limiter in production. Production task definitions never
+  set `CI=true`, so gating on it makes a stray override (e.g. copy-pasted from a
+  CI compose file into a prod task def) inert.
 
     * `{:ok, integer}`  — present and `CI=true`: apply it.
     * `{:ignored, raw}` — present but not in CI: do NOT apply; the caller logs.
@@ -24,64 +52,9 @@ defmodule Engram.RuntimeConfig do
 
   `getenv` is a `(String.t() -> String.t() | nil)` (e.g. `&System.get_env/1`).
   """
-  @spec rate_limit_auth_override((String.t() -> String.t() | nil)) ::
+  @spec ci_gated_int_override((String.t() -> String.t() | nil), String.t()) ::
           {:ok, integer()} | {:ignored, String.t()} | :none
-  def rate_limit_auth_override(getenv) when is_function(getenv, 1) do
-    ci_gated_int_override(getenv, "RATE_LIMIT_AUTH_OVERRIDE")
-  end
-
-  @doc """
-  Decides whether the `PRE_AUTH_RATE_LIMIT_OVERRIDE` env var should loosen the
-  pre-auth (vault-pipeline) rate limit — the 401-loop defense in front of
-  `/api/notes`, `/api/search`, etc. (`EngramWeb.Plugs.PreAuthRateLimit`).
-
-  Same contract and CI-gating as `rate_limit_auth_override/1`: the override only
-  exists so bulk/rapid E2E stacks don't 429 themselves (e.g. `test_77` bulk-sync
-  pushing ~1000 notes through the default 600 req/60s bucket). Gated on `CI=true`
-  so a stray `PRE_AUTH_RATE_LIMIT_OVERRIDE` in a prod task def can never weaken
-  the defense — production never sets `CI=true`.
-
-    * `{:ok, integer}`  — present and `CI=true`: apply it.
-    * `{:ignored, raw}` — present but not in CI: do NOT apply; the caller logs.
-    * `:none`           — absent or blank.
-  """
-  @spec pre_auth_rate_limit_override((String.t() -> String.t() | nil)) ::
-          {:ok, integer()} | {:ignored, String.t()} | :none
-  def pre_auth_rate_limit_override(getenv) when is_function(getenv, 1) do
-    ci_gated_int_override(getenv, "PRE_AUTH_RATE_LIMIT_OVERRIDE")
-  end
-
-  @doc """
-  CRDT channel per-message rate-limit override for CI/E2E stacks only.
-
-  The release image runs `EngramWeb.CrdtChannel` at its prod `@msg_limit`; the
-  e2e harness's compressed CRDT workload (rapid edits, resumed-device room
-  rejoins across the suite) legitimately exceeds a per-account budget a real
-  single user wouldn't. Gated on `CI=true` so a stray `CRDT_MSG_RATE_LIMIT_
-  OVERRIDE` in a prod task def can never weaken the channel limiter. Same
-  `{:ok, int} | {:ignored, raw} | :none` contract as the other overrides.
-  """
-  @spec crdt_msg_rate_limit_override((String.t() -> String.t() | nil)) ::
-          {:ok, integer()} | {:ignored, String.t()} | :none
-  def crdt_msg_rate_limit_override(getenv) when is_function(getenv, 1) do
-    ci_gated_int_override(getenv, "CRDT_MSG_RATE_LIMIT_OVERRIDE")
-  end
-
-  @doc """
-  CRDT channel handshake (STEP1/STEP2) rate-limit override for CI/E2E stacks
-  only. Companion to `crdt_msg_rate_limit_override/1` for the connect-time
-  handshake budget (`@hs_limit`); same `CI=true` gate and return contract.
-  """
-  @spec crdt_hs_rate_limit_override((String.t() -> String.t() | nil)) ::
-          {:ok, integer()} | {:ignored, String.t()} | :none
-  def crdt_hs_rate_limit_override(getenv) when is_function(getenv, 1) do
-    ci_gated_int_override(getenv, "CRDT_HS_RATE_LIMIT_OVERRIDE")
-  end
-
-  # Shared rule: an integer override env var is honored only when `CI=true`,
-  # so a stray copy into a prod task def is inert. Returns {:ok, int} in CI,
-  # {:ignored, raw} when present outside CI, or :none when absent/blank.
-  defp ci_gated_int_override(getenv, var) do
+  def ci_gated_int_override(getenv, var) when is_function(getenv, 1) and is_binary(var) do
     case getenv.(var) do
       nil -> :none
       "" -> :none

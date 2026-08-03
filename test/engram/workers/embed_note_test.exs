@@ -565,30 +565,14 @@ defmodule Engram.Workers.EmbedNoteTest do
     end
   end
 
-  describe "perform/1 — phone-verification gate (pricing v2 §A)" do
-    setup do
-      prev = Application.get_env(:engram, :require_phone_for_embed)
-      Application.put_env(:engram, :require_phone_for_embed, true)
-
-      on_exit(fn ->
-        if is_nil(prev),
-          do: Application.delete_env(:engram, :require_phone_for_embed),
-          else: Application.put_env(:engram, :require_phone_for_embed, prev)
-      end)
-
-      :ok
-    end
-
-    test "snoozes job when require_phone_for_embed=true and phone unverified",
-         %{note: note} do
-      assert {:snooze, 3600} = perform_job(EmbedNote, %{note_id: note.id})
-    end
-
-    test "proceeds when phone_verified_at is set",
+  # The pricing v2 §A phone-verification gate was removed along with
+  # REQUIRE_PHONE_FOR_EMBED: it never ran outside its own tests (prod pinned
+  # the flag to "false" for its whole life). An unverified phone must NOT
+  # affect embedding — this is the regression guard for that.
+  describe "perform/1 — phone verification" do
+    test "embeds normally for a user with no verified phone",
          %{bypass: bypass, note: note, user: user} do
-      user
-      |> Ecto.Changeset.change(%{phone_verified_at: DateTime.utc_now()})
-      |> Repo.update!(skip_tenant_check: true)
+      assert is_nil(user.phone_verified_at)
 
       Engram.MockEmbedder
       |> expect(:embed_texts, fn texts ->

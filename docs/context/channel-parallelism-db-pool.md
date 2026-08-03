@@ -1,6 +1,6 @@
 # Context Doc: Parallelising channel work against the DB pool
 
-_Last verified: 2026-08-02_
+_Last verified: 2026-08-03_
 
 ## Status
 
@@ -112,6 +112,44 @@ grep -oE "DBConnection[A-Za-z.]*|GenServer [^ ]+ terminating" docker-compose.log
   process: `SharedDoc.observe`/`Process.monitor` have to register the channel
   pid, and socket assigns are mutated there. A task pid would swallow the
   room's `{:yjs, ...}` fan-out.
+
+## The test-sandbox variant (different mechanism, near-identical error)
+
+The note above — "a unit test will not reproduce pool starvation" — is true, and
+that is exactly what makes this trap expensive. The unit suite *does* produce an
+error that reads like pool starvation, from an unrelated cause, so the reflex
+fix (raise `pool_size`) cannot work no matter how far you raise it.
+
+Under `Ecto.Adapters.SQL.Sandbox`, a process a test spawns does **not** check out
+its own connection — it shares the **owner's** single checked-out one. So
+`crdt_create_batch` fanning out to one `crdt_doc` process per entry serialises
+every transaction through one connection. Queueing there is the designed
+behaviour, not a shortage, and `pool_size` is not in the picture at all.
+
+What then fails is `DBConnection`'s **overload-shedding heuristic**. Its defaults
+(`queue_target: 50ms`, `queue_interval: 1000ms`) are meant for a production pool:
+once waits exceed the target it starts dropping requests so an overloaded pool
+degrades instead of stalling. Against a shared sandbox connection there is
+nothing useful to shed — under full-suite load (`max_cases: 20`) the honest
+serialisation wait crosses 50ms and entries die with:
+
+```
+** (DBConnection.ConnectionError) could not checkout the connection owned by
+   #PID<...> (:proc_lib). When using the sandbox, connections are shared, so
+   this may imply another process is using a connection. Reason: connection not
+   available and request was dropped from queue after 101ms
+```
+
+**The distinguishing tell is `could not checkout the connection owned by #PID`.**
+Pool starvation says the pool is empty; this says a specific owner's connection
+was contended. Same second sentence, completely different lever.
+
+Fixed in PR #1218 by raising `queue_target`/`queue_interval` to 5s/30s in
+`config/test.exs` — sandbox only. The 15s checkout timeout is deliberately left
+alone, so a genuine deadlock or leaked connection still fails the run rather than
+hanging. Confirmed as the mechanism rather than assumed: forcing
+`queue_target: 8` reproduces that exact error with no load at all, which is the
+cheapest way to re-verify it if this resurfaces.
 
 ## Failed Approaches / Dead Ends
 

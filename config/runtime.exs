@@ -265,83 +265,32 @@ if config_env() != :test do
   end
 end
 
-# Rate-limit override for CI/E2E stacks only, gated on CI=true so a stray
-# RATE_LIMIT_AUTH_OVERRIDE in a prod task def can never weaken the auth
-# limiter. CI stacks (ci/compose*.yml, the Playwright runner) set
-# CI=true; production never does. See Engram.RuntimeConfig.
-case Engram.RuntimeConfig.rate_limit_auth_override(&System.get_env/1) do
-  {:ok, limit} ->
-    config :engram, :rate_limit_auth_override, limit
+# Rate-limit overrides for CI/E2E stacks only, each gated on CI=true so a stray
+# copy in a prod task def can never weaken a limiter. CI stacks (ci/compose*.yml,
+# the Playwright runner) set CI=true; production never does. The list of
+# overridable limiters lives in Engram.RuntimeConfig.
+require Logger
 
-  {:ignored, raw} ->
-    require Logger
+rate_limit_overrides =
+  Enum.flat_map(Engram.RuntimeConfig.rate_limit_overrides(), fn {env_var, key} ->
+    case Engram.RuntimeConfig.ci_gated_int_override(&System.get_env/1, env_var) do
+      {:ok, limit} ->
+        [{key, limit}]
 
-    Logger.warning(
-      "RATE_LIMIT_AUTH_OVERRIDE=#{raw} ignored: the auth rate-limit override " <>
-        "is only honored when CI=true."
-    )
+      {:ignored, raw} ->
+        Logger.warning(
+          "#{env_var}=#{raw} ignored: rate-limit overrides are only honored when CI=true."
+        )
 
-  :none ->
-    :ok
-end
+        []
 
-# Pre-auth (vault-pipeline) rate-limit override for CI/E2E stacks only, gated on
-# CI=true. Mirrors RATE_LIMIT_AUTH_OVERRIDE: without it the release build runs
-# EngramWeb.Plugs.PreAuthRateLimit at its 600 req/60s default, which 429s bulk/
-# rapid E2E writes against /api/notes (test_77 bulk-sync, test_78 hash-update).
-# Gating on CI=true keeps the prod 401-loop defense intact.
-case Engram.RuntimeConfig.pre_auth_rate_limit_override(&System.get_env/1) do
-  {:ok, limit} ->
-    config :engram, :pre_auth_rate_limit_override, limit
+      :none ->
+        []
+    end
+  end)
 
-  {:ignored, raw} ->
-    require Logger
-
-    Logger.warning(
-      "PRE_AUTH_RATE_LIMIT_OVERRIDE=#{raw} ignored: the pre-auth rate-limit " <>
-        "override is only honored when CI=true."
-    )
-
-  :none ->
-    :ok
-end
-
-# CRDT channel per-message + handshake rate-limit overrides for CI/E2E stacks
-# only, gated on CI=true. The release image runs EngramWeb.CrdtChannel at its
-# prod @msg_limit/@hs_limit; the e2e harness's compressed CRDT workload (rapid
-# edits, resumed-device room rejoins across the suite) legitimately exceeds a
-# per-account budget a real single user wouldn't, and there is otherwise no
-# runtime lever in the release build. Gating on CI=true keeps prod limits intact.
-case Engram.RuntimeConfig.crdt_msg_rate_limit_override(&System.get_env/1) do
-  {:ok, limit} ->
-    config :engram, :crdt_msg_rate_limit_override, limit
-
-  {:ignored, raw} ->
-    require Logger
-
-    Logger.warning(
-      "CRDT_MSG_RATE_LIMIT_OVERRIDE=#{raw} ignored: the CRDT channel rate-limit " <>
-        "override is only honored when CI=true."
-    )
-
-  :none ->
-    :ok
-end
-
-case Engram.RuntimeConfig.crdt_hs_rate_limit_override(&System.get_env/1) do
-  {:ok, limit} ->
-    config :engram, :crdt_hs_rate_limit_override, limit
-
-  {:ignored, raw} ->
-    require Logger
-
-    Logger.warning(
-      "CRDT_HS_RATE_LIMIT_OVERRIDE=#{raw} ignored: the CRDT channel rate-limit " <>
-        "override is only honored when CI=true."
-    )
-
-  :none ->
-    :ok
+if rate_limit_overrides != [] do
+  config :engram, rate_limit_overrides
 end
 
 # Clerk auth (only required when AUTH_PROVIDER=clerk)
@@ -409,13 +358,6 @@ if auth_provider == :clerk do
   end
 end
 
-# Pricing v2 §A — phone-verification gate on EmbedNote worker. Default off so
-# self-host and pre-launch cloud aren't affected. Cloud ops flips to "true"
-# when ready to enforce.
-if System.get_env("REQUIRE_PHONE_FOR_EMBED") in ["1", "true"] do
-  config :engram, :require_phone_for_embed, true
-end
-
 # Pricing v2 §H — attachment MIME / extension whitelist self-host knobs.
 # Default: gate is ON. Operators who want to allow executables (e.g.
 # distributing an internal tool from a self-hosted vault) set
@@ -439,6 +381,12 @@ end
 # Vault-channel CRDT fan-out pacer (engram-app/Engram#1002) rollback knob.
 # Default is pacing ON; set to "false" to fall back to unpaced inline
 # broadcast for every note if the pacer ever needs to be disabled in prod.
+#
+# KEEP until #1004 is closed. This is deliberately a documented config path
+# rather than a per-node remote-console `Application.put_env` — that was the
+# explicit ask in #1004. Until the pacer telemetry gauge and cold-queue depth
+# alarm in that issue land, we are blind to the queue backing up, so the
+# rollback lever is more valuable, not less.
 if pacing = System.get_env("FANOUT_PACING_ENABLED") do
   config :engram, :fanout_pacing_enabled, pacing == "true"
 end
@@ -762,8 +710,8 @@ if config_env() == :prod do
       end
 
     config :engram, :host_rewrite,
-      api_host: System.get_env("ENGRAM_HOST_REWRITE_API_HOST", "api.engram.page"),
-      mcp_host: System.get_env("ENGRAM_HOST_REWRITE_MCP_HOST", "mcp.engram.page"),
+      api_host: "api.engram.page",
+      mcp_host: "mcp.engram.page",
       reject_unknown_hosts: saas_only?,
       allowed_extra_hosts: extra_hosts
   end
@@ -777,50 +725,9 @@ if config_env() == :prod do
     config :engram, :frontend_base_url, url
   end
 
-  # ## SSL Support
-  #
-  # To get SSL working, you will need to add the `https` key
-  # to your endpoint configuration:
-  #
-  #     config :engram, EngramWeb.Endpoint,
-  #       https: [
-  #         ...,
-  #         port: 443,
-  #         cipher_suite: :strong,
-  #         keyfile: System.get_env("SOME_APP_SSL_KEY_PATH"),
-  #         certfile: System.get_env("SOME_APP_SSL_CERT_PATH")
-  #       ]
-  #
-  # The `cipher_suite` is set to `:strong` to support only the
-  # latest and more secure SSL ciphers. This means old browsers
-  # and clients may not be supported. You can set it to
-  # `:compatible` for wider support.
-  #
-  # `:keyfile` and `:certfile` expect an absolute path to the key
-  # and cert in disk or a relative path inside priv, for example
-  # "priv/ssl/server.key". For all supported SSL configuration
-  # options, see https://hexdocs.pm/plug/Plug.SSL.html#configure/1
-  #
-  # We also recommend setting `force_ssl` in your config/prod.exs,
-  # ensuring no data is ever sent via http, always redirecting to https:
-  #
-  #     config :engram, EngramWeb.Endpoint,
-  #       force_ssl: [hsts: true]
-  #
-  # Check `Plug.SSL` for all available options in `force_ssl`.
-end
-
-if raw = System.get_env("RECONNECT_JITTER_MAX_MS") do
-  case Integer.parse(raw) do
-    {ms, ""} when ms >= 0 ->
-      config :engram, :reconnect_jitter_max_ms, ms
-
-    _ ->
-      IO.warn(
-        "RECONNECT_JITTER_MAX_MS=#{inspect(raw)} is not a non-negative integer; " <>
-          "keeping the configured :reconnect_jitter_max_ms default"
-      )
-  end
+  # No `https:`/`force_ssl` endpoint config by design: TLS terminates at the
+  # edge (ALB in SaaS prod, the operator's reverse proxy in self-host) and the
+  # app only ever listens plaintext on PORT behind it.
 end
 
 # Bearer token guarding the PromEx /metrics scrape endpoint. The Grafana
