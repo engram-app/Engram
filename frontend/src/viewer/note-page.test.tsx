@@ -384,6 +384,43 @@ describe("NotePage (CRDT)", () => {
 		});
 	});
 
+	describe("reading toggle", () => {
+		it("switches to reading view and back", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			fireEvent.click(screen.getByRole("button", { name: "Reading view" }));
+			expect(screen.getByTestId("note-view")).toBeInTheDocument();
+			fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+			expect(screen.getByTestId("note-editor")).toBeInTheDocument();
+		});
+
+		// Raw is an edit mode, so a round trip through reading must not silently
+		// demote it to rendered.
+		it("returns to raw when that was the editor in use", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			await openMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "Raw" }));
+			await screen.findByLabelText(/Frontmatter \(raw YAML\)/i);
+
+			fireEvent.click(screen.getByRole("button", { name: "Reading view" }));
+			expect(screen.getByTestId("note-view")).toBeInTheDocument();
+			fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+			expect(await screen.findByLabelText(/Frontmatter \(raw YAML\)/i)).toBeInTheDocument();
+		});
+
+		it("stays in step with the kebab's active-mode marker", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			fireEvent.click(screen.getByRole("button", { name: "Reading view" }));
+			await openMenu();
+			expect(screen.getByRole("menuitem", { name: "Reading" })).toHaveAttribute(
+				"aria-current",
+				"true",
+			);
+		});
+	});
+
 	describe("kebab", () => {
 		it("switches view mode from the menu", async () => {
 			renderPage();

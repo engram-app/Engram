@@ -1,9 +1,11 @@
 import type { EditorView } from "@codemirror/view";
+import { BookOpen, Pencil } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
+import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
 	useBatchMoveNotes,
@@ -65,6 +67,8 @@ export default function NotePage() {
 	const [dialog, setDialog] = useState<"move" | "delete" | null>(null);
 
 	const [mode, setMode] = useState<ViewMode>("rendered");
+	// Written only from the reading toggle's handler, never during render.
+	const lastEditMode = useRef<Exclude<ViewMode, "reading">>("rendered");
 	// Which note the rename box belongs to, not a bare boolean: navigating to
 	// another note keeps this component mounted, and an id-keyed value closes
 	// the box on its own instead of carrying over onto the newly opened note.
@@ -195,6 +199,19 @@ export default function NotePage() {
 		renameNote.mutate({ id: note.id, old_path: note.path, new_path });
 	};
 
+	// Obsidian's binary edit/read toggle, sitting beside the kebab that still
+	// carries all three modes. Raw counts as an EDIT mode, so returning from
+	// reading restores whichever editor you left rather than always landing on
+	// rendered — a round trip must not silently demote raw.
+	const toggleReading = () => {
+		if (mode === "reading") {
+			setMode(lastEditMode.current);
+			return;
+		}
+		lastEditMode.current = mode;
+		setMode("reading");
+	};
+
 	// Deliberately NOT shared with folder-tree.tsx's handleActionPick: that one
 	// is welded to tree state (getItemInstance().startRenaming(), rowsFor, its
 	// own dialog reducer). The portable parts — the action list and the dialog
@@ -287,6 +304,17 @@ export default function NotePage() {
 						</button>
 					)}
 				</p>
+				<Button
+					variant="ghost"
+					size="icon"
+					// The label names the DESTINATION, not the current state — the icon
+					// is the affordance you are about to use, same as Obsidian's.
+					aria-label={mode === "reading" ? "Edit" : "Reading view"}
+					title={mode === "reading" ? "Edit" : "Reading view"}
+					onClick={toggleReading}
+				>
+					{mode === "reading" ? <Pencil className="size-4" /> : <BookOpen className="size-4" />}
+				</Button>
 				<NoteMenu mode={mode} title={name} onPick={handleAction} />
 			</div>
 
