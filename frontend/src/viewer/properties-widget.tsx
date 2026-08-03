@@ -63,7 +63,7 @@ function PropertyKeyInput({ doc, name }: { doc: Y.Doc; name: string }) {
 		<input
 			ref={ref}
 			aria-label={`Rename ${name}`}
-			className="w-full min-w-0 truncate border-0 bg-transparent px-1 text-muted-foreground text-sm outline-none"
+			className="w-full min-w-0 truncate border-0 bg-transparent px-2 py-1 text-muted-foreground text-sm outline-none"
 			value={draft}
 			onChange={(e) => setDraft(e.target.value)}
 			onBlur={commit}
@@ -252,7 +252,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 							<PropertyTypeMenu value={newType} onChange={setNewType} />
 							<input
 								ref={newKeyRef}
-								className="w-full min-w-0 border-0 bg-transparent px-1 text-muted-foreground text-sm outline-none placeholder:text-muted-foreground/60"
+								className="w-full min-w-0 border-0 bg-transparent px-2 py-1 text-muted-foreground text-sm outline-none placeholder:text-muted-foreground/60"
 								placeholder="Property name"
 								value={newKey}
 								onChange={(e) => setNewKey(e.target.value)}

@@ -33,7 +33,9 @@ export function PropertyTypeMenu({
 		<DropdownMenu>
 			<DropdownMenuTrigger
 				aria-label="Property type"
-				className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+				// Obsidian's .metadata-property-icon: full row height, and a 4px
+				// leading gutter it fakes with a zero-width-space ::before.
+				className="ml-1 flex h-7 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
 			>
 				<Icon aria-hidden="true" className="size-4" />
 			</DropdownMenuTrigger>
