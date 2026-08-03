@@ -23,15 +23,34 @@ describe("PropertiesWidget", () => {
 		await waitFor(() => expect(screen.getByText("author")).toBeInTheDocument());
 	});
 
-	test("add property row appends a key", async () => {
+	// Obsidian shows no placeholder row — the list is exactly the properties you
+	// have, and the button appends one to author.
+	test("no row to author until Add property is clicked", async () => {
 		const doc = new Y.Doc();
-		// Seeded: the widget hides itself (and its adder) on a note with no
-		// frontmatter, so there has to be a row for the inline adder to exist.
 		addKey(doc, "title", "text");
 		render(<PropertiesWidget doc={doc} />);
-		fireEvent.change(screen.getByPlaceholderText("Property name"), { target: { value: "status" } });
+		await screen.findByText("title");
+		expect(screen.queryByPlaceholderText("Property name")).not.toBeInTheDocument();
+
 		fireEvent.click(screen.getByRole("button", { name: /add property/i }));
-		await waitFor(() => expect(readRows(doc).map((r) => r.key)).toContain("status"));
+
+		expect(screen.getByPlaceholderText("Property name")).toBeInTheDocument();
+		expect(screen.getByPlaceholderText("Value")).toBeInTheDocument();
+	});
+
+	test("Escape drops the row being authored without adding it", async () => {
+		const doc = new Y.Doc();
+		addKey(doc, "title", "text");
+		render(<PropertiesWidget doc={doc} />);
+		await screen.findByText("title");
+		fireEvent.click(screen.getByRole("button", { name: /add property/i }));
+
+		const name = screen.getByPlaceholderText("Property name");
+		fireEvent.change(name, { target: { value: "status" } });
+		fireEvent.keyDown(name, { key: "Escape" });
+
+		expect(screen.queryByPlaceholderText("Property name")).not.toBeInTheDocument();
+		expect(readRows(doc).map((r) => r.key)).not.toContain("status");
 	});
 
 	// The row being filled in is the ONLY row on a note with no properties, so
@@ -42,7 +61,7 @@ describe("PropertiesWidget", () => {
 		expect(screen.getByPlaceholderText("Value")).toBeInTheDocument();
 	});
 
-	test("commits key and value together, then waits for the next property", async () => {
+	test("commits key and value together, then closes the authoring row", async () => {
 		const doc = new Y.Doc();
 		render(<PropertiesWidget doc={doc} draft onAbandonDraft={() => {}} />);
 		fireEvent.change(screen.getByPlaceholderText("Property name"), {
@@ -51,9 +70,9 @@ describe("PropertiesWidget", () => {
 		fireEvent.change(screen.getByPlaceholderText("Value"), { target: { value: "draft" } });
 		fireEvent.keyDown(screen.getByPlaceholderText("Value"), { key: "Enter" });
 
-		await waitFor(() => expect(readRows(doc).find((r) => r.key === "status")?.value).toBe("draft"));
-		expect(screen.getByPlaceholderText("Property name")).toHaveFocus();
-		expect(screen.getByPlaceholderText("Property name")).toHaveValue("");
+		await waitFor(() => expect(screen.getByTestId("property-row-status")).toBeInTheDocument());
+		expect(readRows(doc).find((r) => r.key === "status")?.value).toBe("draft");
+		expect(screen.queryByPlaceholderText("Property name")).not.toBeInTheDocument();
 	});
 
 	test("Enter in the key field moves to the value rather than committing early", () => {

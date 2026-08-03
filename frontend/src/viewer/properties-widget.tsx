@@ -1,3 +1,4 @@
+import { Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type * as Y from "yjs";
 import {
@@ -66,8 +67,17 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 	const [newKey, setNewKey] = useState("");
 	const [newValue, setNewValue] = useState("");
 	const [newType, setNewType] = useState<PropertyType>("text");
+	// Obsidian shows no placeholder row: the list is exactly the properties you
+	// have, and "Add property" appends one to author. `adding` is that row.
+	const [adding, setAdding] = useState(false);
 
-	const commitNewKey = ({ refocus = true } = {}) => {
+	const cancelAdding = () => {
+		setNewKey("");
+		setNewValue("");
+		setAdding(false);
+	};
+
+	const commitNewKey = () => {
 		const key = newKey.trim();
 		if (!addKey(doc, newKey, newType)) {
 			return false;
@@ -75,27 +85,28 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 		if (newValue !== "") {
 			setValue(doc, key, coerceValue(newValue, newType));
 		}
-		setNewKey("");
-		setNewValue("");
-		if (refocus) {
-			// Straight back to the key field, ready for the next one.
-			newKeyRef.current?.focus();
-		}
+		cancelAdding();
 		return true;
 	};
 
 	// Read by the click-away effect, which must not re-subscribe on every
-	// keystroke just to see the latest draft text.
-	const commitOnLeave = useRef<() => boolean>(() => false);
-	commitOnLeave.current = () => commitNewKey({ refocus: false });
+	// keystroke just to see the latest text.
+	const leaving = useRef<{ commit: () => boolean; cancel: () => void } | null>(null);
+	leaving.current = { commit: commitNewKey, cancel: cancelAdding };
 
-	// The `---` gesture opens this with nothing in it, so the caret has to land
-	// in the name field — otherwise there is nothing to click away FROM.
+	// The `---` gesture means "I want a property", so it opens the new row
+	// directly rather than making the user find the button.
 	useEffect(() => {
 		if (draft) {
-			newKeyRef.current?.focus();
+			setAdding(true);
 		}
 	}, [draft]);
+
+	useEffect(() => {
+		if (adding) {
+			newKeyRef.current?.focus();
+		}
+	}, [adding]);
 
 	// An empty draft closes as soon as the user goes elsewhere. Watched on the
 	// document rather than as an onBlur prop: clicking dead space blurs the
@@ -104,7 +115,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 	// covers tabbing away. Reads the doc, not `rows`, so a key added in this
 	// same interaction already counts.
 	useEffect(() => {
-		if (!draft) {
+		if (!adding) {
 			return;
 		}
 		const dismiss = (event: Event) => {
@@ -119,16 +130,18 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 			if (target?.closest?.(PORTALLED_SURFACES)) {
 				return;
 			}
-			if (readRows(doc).length > 0) {
+			// A half-filled row is still the user's work, so leaving saves it
+			// rather than throwing it away. Only a row with no key at all counts
+			// as "never mind".
+			if (leaving.current?.commit()) {
 				return;
 			}
-			// Nothing committed yet — but a half-filled row is still the user's
-			// work, so leaving saves it rather than throwing it away. Only a row
-			// with no key at all counts as "never mind".
-			if (commitOnLeave.current()) {
-				return;
+			leaving.current?.cancel();
+			// Nothing typed and nothing stored: the `---` gesture opened an editor
+			// the user turned out not to want.
+			if (readRows(doc).length === 0) {
+				onAbandonDraft?.();
 			}
-			onAbandonDraft?.();
 		};
 		document.addEventListener("pointerdown", dismiss);
 		document.addEventListener("focusin", dismiss);
@@ -136,14 +149,14 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 			document.removeEventListener("pointerdown", dismiss);
 			document.removeEventListener("focusin", dismiss);
 		};
-	}, [draft, doc, onAbandonDraft]);
+	}, [adding, doc, onAbandonDraft]);
 
 	// A note with no frontmatter gets no bordered strip of nothing. Returning
 	// null keeps the component MOUNTED and its Yjs observers live, so the
 	// widget reappears the moment a key arrives — from the note menu's "Add
 	// property" or from a remote peer. Unmounting it at the call site instead
 	// would leave nobody listening for that.
-	if (rows.length === 0 && !draft) {
+	if (rows.length === 0 && !draft && !adding) {
 		return null;
 	}
 
@@ -199,54 +212,66 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 						</div>
 					);
 				})}
+
+				{/* The row being authored. Same geometry as a committed one, so
+				    naming a property looks like the row it is about to become. */}
+				{adding ? (
+					<div className={ROW}>
+						<dt className={KEY_CELL}>
+							<PropertyTypeMenu value={newType} onChange={setNewType} />
+							<input
+								ref={newKeyRef}
+								className="w-full min-w-0 border-0 bg-transparent px-1 text-muted-foreground text-sm outline-none placeholder:text-muted-foreground/60"
+								placeholder="Property name"
+								value={newKey}
+								onChange={(e) => setNewKey(e.target.value)}
+								// Enter moves ALONG the row rather than committing —
+								// committing from the key would close the row before its
+								// value could be typed.
+								onKeyDown={(e) => {
+									if (e.key === "Enter") {
+										e.preventDefault();
+										newValueRef.current?.focus();
+									} else if (e.key === "Escape") {
+										e.preventDefault();
+										cancelAdding();
+									}
+								}}
+							/>
+						</dt>
+						<dd className="flex min-h-7 flex-1 items-center gap-1">
+							<input
+								ref={newValueRef}
+								className="w-full min-w-0 border-0 bg-transparent px-2 py-1 text-foreground text-sm outline-none placeholder:text-muted-foreground/60"
+								placeholder="Value"
+								value={newValue}
+								onChange={(e) => setNewValue(e.target.value)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") {
+										e.preventDefault();
+										commitNewKey();
+									} else if (e.key === "Escape") {
+										e.preventDefault();
+										cancelAdding();
+									}
+								}}
+							/>
+						</dd>
+					</div>
+				) : null}
 			</dl>
 
-			{/* The adder wears the same row geometry, so a property being named
-			    looks like the row it is about to become. */}
-			<div className={`mt-[3px] ${ROW}`}>
-				<div className={KEY_CELL}>
-					<PropertyTypeMenu value={newType} onChange={setNewType} />
-					<input
-						ref={newKeyRef}
-						className="w-full min-w-0 border-0 bg-transparent px-1 text-muted-foreground text-sm outline-none placeholder:text-muted-foreground/60"
-						placeholder="Property name"
-						value={newKey}
-						onChange={(e) => setNewKey(e.target.value)}
-						// Enter moves along the row instead of committing: on a note with
-						// no properties this IS the only row, so committing from the key
-						// would close the one place a value can be typed.
-						onKeyDown={(e) => {
-							if (e.key === "Enter") {
-								e.preventDefault();
-								newValueRef.current?.focus();
-							}
-						}}
-					/>
-				</div>
-				<div className="flex min-h-7 flex-1 items-center gap-1">
-					<input
-						ref={newValueRef}
-						className="w-full min-w-0 border-0 bg-transparent px-2 py-1 text-foreground text-sm outline-none placeholder:text-muted-foreground/60"
-						placeholder="Value"
-						value={newValue}
-						onChange={(e) => setNewValue(e.target.value)}
-						onKeyDown={(e) => {
-							if (e.key === "Enter") {
-								e.preventDefault();
-								commitNewKey();
-							}
-						}}
-					/>
-				</div>
-				<button
-					type="button"
-					aria-label="Add property"
-					className="min-h-7 shrink-0 rounded px-1.5 text-muted-foreground text-sm hover:text-foreground"
-					onClick={() => commitNewKey()}
-				>
-					Add
-				</button>
-			</div>
+			<button
+				type="button"
+				aria-label="Add property"
+				// Obsidian's .metadata-add-button: 6px inline-start, 0.5em above,
+				// at the label's font size.
+				className="mt-2 flex items-center gap-1 pl-1.5 text-muted-foreground text-sm hover:text-foreground"
+				onClick={() => setAdding(true)}
+			>
+				<Plus aria-hidden="true" className="size-3.5" />
+				Add property
+			</button>
 		</section>
 	);
 }
