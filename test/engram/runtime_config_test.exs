@@ -5,92 +5,57 @@ defmodule Engram.RuntimeConfigTest do
 
   defp getenv(map), do: fn key -> Map.get(map, key) end
 
-  describe "rate_limit_auth_override/1" do
-    test "applies the override only when CI=true" do
+  describe "rate_limit_overrides/0" do
+    # Pins the exact env var names + application env keys. A typo in either half
+    # is a silent regression: the CI stack stops being able to loosen a limiter,
+    # or (worse) a limiter reads a key nothing ever sets.
+    test "lists every CI-overridable limiter" do
+      assert RuntimeConfig.rate_limit_overrides() == [
+               {"RATE_LIMIT_AUTH_OVERRIDE", :rate_limit_auth_override},
+               {"PRE_AUTH_RATE_LIMIT_OVERRIDE", :pre_auth_rate_limit_override},
+               {"CRDT_MSG_RATE_LIMIT_OVERRIDE", :crdt_msg_rate_limit_override},
+               {"CRDT_HS_RATE_LIMIT_OVERRIDE", :crdt_hs_rate_limit_override}
+             ]
+    end
+  end
+
+  describe "ci_gated_int_override/2" do
+    # Run the full gating contract against every override so no limiter can
+    # drift onto a different rule.
+    for {var, _key} <- RuntimeConfig.rate_limit_overrides() do
+      test "#{var} applies only when CI=true" do
+        env = getenv(%{unquote(var) => "100000", "CI" => "true"})
+        assert RuntimeConfig.ci_gated_int_override(env, unquote(var)) == {:ok, 100_000}
+      end
+
+      test "#{var} is ignored when CI is unset (e.g. a stray prod env var)" do
+        env = getenv(%{unquote(var) => "100000"})
+        assert RuntimeConfig.ci_gated_int_override(env, unquote(var)) == {:ignored, "100000"}
+      end
+
+      test "#{var} is ignored when CI is set to something other than true" do
+        env = getenv(%{unquote(var) => "100000", "CI" => "false"})
+        assert RuntimeConfig.ci_gated_int_override(env, unquote(var)) == {:ignored, "100000"}
+      end
+
+      test "#{var} returns :none when absent" do
+        assert RuntimeConfig.ci_gated_int_override(getenv(%{"CI" => "true"}), unquote(var)) ==
+                 :none
+      end
+
+      test "#{var} returns :none when blank" do
+        env = getenv(%{unquote(var) => "", "CI" => "true"})
+        assert RuntimeConfig.ci_gated_int_override(env, unquote(var)) == :none
+      end
+    end
+
+    test "each override reads only its own env var" do
       env = getenv(%{"RATE_LIMIT_AUTH_OVERRIDE" => "1000", "CI" => "true"})
-      assert RuntimeConfig.rate_limit_auth_override(env) == {:ok, 1000}
-    end
 
-    test "ignores the override when CI is not true (e.g. a stray prod env var)" do
-      env = getenv(%{"RATE_LIMIT_AUTH_OVERRIDE" => "1000"})
-      assert RuntimeConfig.rate_limit_auth_override(env) == {:ignored, "1000"}
-    end
-
-    test "ignores the override when CI is set to something other than true" do
-      env = getenv(%{"RATE_LIMIT_AUTH_OVERRIDE" => "1000", "CI" => "false"})
-      assert RuntimeConfig.rate_limit_auth_override(env) == {:ignored, "1000"}
-    end
-
-    test "returns :none when the override is absent" do
-      assert RuntimeConfig.rate_limit_auth_override(getenv(%{"CI" => "true"})) == :none
-    end
-
-    test "returns :none when the override is blank" do
-      env = getenv(%{"RATE_LIMIT_AUTH_OVERRIDE" => "", "CI" => "true"})
-      assert RuntimeConfig.rate_limit_auth_override(env) == :none
-    end
-  end
-
-  describe "pre_auth_rate_limit_override/1" do
-    test "applies the override only when CI=true" do
-      env = getenv(%{"PRE_AUTH_RATE_LIMIT_OVERRIDE" => "100000", "CI" => "true"})
-      assert RuntimeConfig.pre_auth_rate_limit_override(env) == {:ok, 100_000}
-    end
-
-    test "ignores the override when CI is not true (e.g. a stray prod env var)" do
-      env = getenv(%{"PRE_AUTH_RATE_LIMIT_OVERRIDE" => "100000"})
-      assert RuntimeConfig.pre_auth_rate_limit_override(env) == {:ignored, "100000"}
-    end
-
-    test "ignores the override when CI is set to something other than true" do
-      env = getenv(%{"PRE_AUTH_RATE_LIMIT_OVERRIDE" => "100000", "CI" => "false"})
-      assert RuntimeConfig.pre_auth_rate_limit_override(env) == {:ignored, "100000"}
-    end
-
-    test "returns :none when the override is absent" do
-      assert RuntimeConfig.pre_auth_rate_limit_override(getenv(%{"CI" => "true"})) == :none
-    end
-
-    test "returns :none when the override is blank" do
-      env = getenv(%{"PRE_AUTH_RATE_LIMIT_OVERRIDE" => "", "CI" => "true"})
-      assert RuntimeConfig.pre_auth_rate_limit_override(env) == :none
-    end
-
-    test "is independent of the auth override env var" do
-      env = getenv(%{"RATE_LIMIT_AUTH_OVERRIDE" => "1000", "CI" => "true"})
-      assert RuntimeConfig.pre_auth_rate_limit_override(env) == :none
-    end
-  end
-
-  describe "crdt_msg_rate_limit_override/1" do
-    test "applies the override only when CI=true" do
-      env = getenv(%{"CRDT_MSG_RATE_LIMIT_OVERRIDE" => "100000", "CI" => "true"})
-      assert RuntimeConfig.crdt_msg_rate_limit_override(env) == {:ok, 100_000}
-    end
-
-    test "ignores the override when CI is not true (e.g. a stray prod env var)" do
-      env = getenv(%{"CRDT_MSG_RATE_LIMIT_OVERRIDE" => "100000"})
-      assert RuntimeConfig.crdt_msg_rate_limit_override(env) == {:ignored, "100000"}
-    end
-
-    test "returns :none when the override is absent" do
-      assert RuntimeConfig.crdt_msg_rate_limit_override(getenv(%{"CI" => "true"})) == :none
-    end
-  end
-
-  describe "crdt_hs_rate_limit_override/1" do
-    test "applies the override only when CI=true" do
-      env = getenv(%{"CRDT_HS_RATE_LIMIT_OVERRIDE" => "100000", "CI" => "true"})
-      assert RuntimeConfig.crdt_hs_rate_limit_override(env) == {:ok, 100_000}
-    end
-
-    test "ignores the override when CI is not true (e.g. a stray prod env var)" do
-      env = getenv(%{"CRDT_HS_RATE_LIMIT_OVERRIDE" => "100000"})
-      assert RuntimeConfig.crdt_hs_rate_limit_override(env) == {:ignored, "100000"}
-    end
-
-    test "returns :none when the override is absent" do
-      assert RuntimeConfig.crdt_hs_rate_limit_override(getenv(%{"CI" => "true"})) == :none
+      assert RuntimeConfig.ci_gated_int_override(env, "RATE_LIMIT_AUTH_OVERRIDE") == {:ok, 1000}
+      assert RuntimeConfig.ci_gated_int_override(env, "PRE_AUTH_RATE_LIMIT_OVERRIDE") == :none
+      assert RuntimeConfig.ci_gated_int_override(env, "CRDT_MSG_RATE_LIMIT_OVERRIDE") == :none
+      assert RuntimeConfig.ci_gated_int_override(env, "CRDT_HS_RATE_LIMIT_OVERRIDE") == :none
     end
   end
 

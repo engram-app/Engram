@@ -231,7 +231,11 @@ config :opentelemetry,
 # On reconnect after a drop (e.g. a graceful node drain), clients wait
 # random(0, this) before reconnecting so a drained fleet doesn't stampede the
 # freshly-booted node. Client-side default + clamp guard a missing/bad value.
-# Runtime-overridable via RECONNECT_JITTER_MAX_MS (see runtime.exs).
+#
+# No env var: the RECONNECT_JITTER_MAX_MS override was never set in any deploy
+# and was dropped. SyncChannel reads this at call time, so an incident can
+# still widen the window per-node via `Application.put_env/3` from a remote
+# console; re-add the env read if it ever needs to be fleet-wide.
 config :engram, :reconnect_jitter_max_ms, 5_000
 
 # Retention for the client_logs plugin remote-log sink. Rows older than this
