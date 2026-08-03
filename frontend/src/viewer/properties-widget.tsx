@@ -35,6 +35,15 @@ export function PropertiesWidget({ doc }: { doc: Y.Doc }) {
 	const [newKey, setNewKey] = useState("");
 	const [newType, setNewType] = useState<PropertyType>("text");
 
+	// A note with no frontmatter gets no bordered strip of nothing. Returning
+	// null keeps the component MOUNTED and its Yjs observers live, so the
+	// widget reappears the moment a key arrives — from the note menu's "Add
+	// property" or from a remote peer. Unmounting it at the call site instead
+	// would leave nobody listening for that.
+	if (rows.length === 0) {
+		return null;
+	}
+
 	return (
 		<div className="border-border border-b px-5 py-3" data-testid="note-properties">
 			<dl className="grid grid-cols-[max-content_max-content_1fr_max-content] items-center gap-x-2 gap-y-1 text-xs">

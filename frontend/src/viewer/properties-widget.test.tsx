@@ -25,10 +25,41 @@ describe("PropertiesWidget", () => {
 
 	test("add property row appends a key", async () => {
 		const doc = new Y.Doc();
+		// Seeded: the widget hides itself (and its adder) on a note with no
+		// frontmatter, so there has to be a row for the inline adder to exist.
+		addKey(doc, "title", "text");
 		render(<PropertiesWidget doc={doc} />);
 		fireEvent.change(screen.getByPlaceholderText("Property name"), { target: { value: "status" } });
 		fireEvent.click(screen.getByRole("button", { name: /add property/i }));
 		await waitFor(() => expect(readRows(doc).map((r) => r.key)).toContain("status"));
+	});
+
+	// An empty frontmatter block is a bordered strip of nothing above every
+	// note that never got a property. Obsidian hides it; so do we.
+	describe("when the note has no frontmatter", () => {
+		test("renders nothing at all", () => {
+			const { container } = render(<PropertiesWidget doc={new Y.Doc()} />);
+			expect(screen.queryByTestId("note-properties")).not.toBeInTheDocument();
+			expect(container).toBeEmptyDOMElement();
+		});
+
+		// Hidden must mean "returns null while still observing", not
+		// "unmounted" — otherwise nothing is listening to bring it back.
+		test("appears as soon as a property arrives", async () => {
+			const doc = new Y.Doc();
+			render(<PropertiesWidget doc={doc} />);
+			expect(screen.queryByTestId("note-properties")).not.toBeInTheDocument();
+			addKey(doc, "status", "text");
+			await waitFor(() => expect(screen.getByTestId("note-properties")).toBeInTheDocument());
+		});
+
+		test("goes away again when the last property is removed", async () => {
+			const doc = new Y.Doc();
+			addKey(doc, "status", "text");
+			render(<PropertiesWidget doc={doc} />);
+			fireEvent.click(await screen.findByRole("button", { name: "Remove status" }));
+			await waitFor(() => expect(screen.queryByTestId("note-properties")).not.toBeInTheDocument());
+		});
 	});
 
 	test("does not clobber a field being actively edited by a remote update", async () => {

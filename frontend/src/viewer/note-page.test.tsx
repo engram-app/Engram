@@ -361,6 +361,17 @@ describe("NotePage (CRDT)", () => {
 		});
 
 		it("puts the title above the properties widget in document order", async () => {
+			// Seeded: the widget hides itself on a note with no frontmatter, so
+			// there has to be a property for it to be ordered against.
+			const doc = new Y.Doc();
+			doc.getMap("frontmatter").set("status", JSON.stringify("draft"));
+			doc.getArray("frontmatter_order").insert(0, ["status"]);
+			openDoc.mockResolvedValue({
+				ytext: doc.getText("content"),
+				awareness: new Awareness(doc),
+				doc,
+			});
+
 			renderPage();
 			const title = await screen.findByRole("heading", { level: 1 });
 			const properties = await screen.findByTestId("note-properties");
