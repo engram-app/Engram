@@ -343,6 +343,8 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Server-side sync protocol — seq change-log, cursor-pull, manifest, realtime channel (start here for sync work) → `docs/context/sync-protocol.md`
 - Phoenix Channel events, conflict flow, plugin integration → `docs/context/channel-event-contract.md`
 - Parallelising channel work (`Task.async_stream`) without starving the DB pool / killing the channel → `docs/context/channel-parallelism-db-pool.md`
+- Unit-suite flake `could not checkout the connection owned by #PID` (sandbox shares the owner's connection — `pool_size` is NOT the lever) → `docs/context/channel-parallelism-db-pool.md`
+- FanoutPacer hot/cold rules, why a note won't warm to HOT, testing it without flaking → `docs/context/fanout-pacer-hot-cold-and-testing.md`
 - CRDT lineage doubling — why the same edit must be encoded exactly once (PR #846) → `docs/context/crdt-lineage-doubling.md`
 - CRDT id-keyed rename old-path resurrection race (plugin #183) → `docs/context/crdt-id-keyed-rename-resurrection.md`
 - CRDT note_id-collision corruption incident, the id-keying cutover day (2026-07-06) → `docs/context/crdt-id-collision-corruption-2026-07-06.md`
