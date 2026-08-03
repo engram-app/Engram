@@ -29,6 +29,7 @@ import {
 } from "../api/queries";
 import { uuid7 } from "../crdt/uuid7";
 import { useFolderTreeState } from "../layout/folder-tree-context";
+import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";
 import {
 	isSyntheticFolderId,
@@ -522,10 +523,9 @@ export default function FolderTree() {
 				}
 				// Wikilinks resolve by filename in Obsidian, never by H1 title.
 				const label = noteName(note.path) || note.path;
-				navigator.clipboard
-					.writeText(`[[${label}]]`)
-					.then(() => toast.success("Copied wikilink"))
-					.catch(() => toast.error("Copy failed"));
+				copyToClipboard(`[[${label}]]`).then((ok) =>
+					ok ? toast.success("Copied wikilink") : toast.error("Copy failed"),
+				);
 				break;
 			}
 			default:

@@ -25,6 +25,7 @@ import {
 	subscribeToCrdtSyncStatus,
 } from "../crdt/session";
 import { useRightTools } from "../layout/right-tools-context";
+import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";
 import { useActiveEditor } from "./editor/active-editor-context";
 import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
@@ -276,10 +277,9 @@ export default function NotePage() {
 			}
 			case "copy-wikilink":
 				// Wikilinks resolve by filename in Obsidian, never by H1 title.
-				navigator.clipboard
-					.writeText(`[[${name || note.path}]]`)
-					.then(() => toast.success("Copied wikilink"))
-					.catch(() => toast.error("Copy failed"));
+				copyToClipboard(`[[${name || note.path}]]`).then((ok) =>
+					ok ? toast.success("Copied wikilink") : toast.error("Copy failed"),
+				);
 				break;
 			case "add-property":
 				// Opens the adder row rather than writing a key. Inventing a name
