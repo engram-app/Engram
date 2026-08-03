@@ -32,7 +32,11 @@ export function PropertyTypeMenu({
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger
-				aria-label="Property type"
+				// The name carries the CURRENT type, not just the control's purpose.
+				// Once the label became an icon the type was conveyed by pixels alone,
+				// so a screen reader could open the menu without ever being told what
+				// the property already is.
+				aria-label={`Property type: ${value}`}
 				// Obsidian's .metadata-property-icon: full row height, and a 4px
 				// leading gutter it fakes with a zero-width-space ::before.
 				className="ml-1 flex h-7 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"

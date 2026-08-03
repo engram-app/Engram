@@ -256,7 +256,7 @@ describe("PropertiesWidget", () => {
 			test("picking a property type does not abandon the draft", async () => {
 				const onAbandonDraft = vi.fn();
 				render(<PropertiesWidget doc={new Y.Doc()} draft onAbandonDraft={onAbandonDraft} />);
-				const trigger = screen.getByRole("button", { name: "Property type" });
+				const trigger = screen.getByRole("button", { name: /^Property type/ });
 				fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
 				fireEvent.click(trigger);
 				const option = await screen.findByRole("menuitem", { name: "number" });
