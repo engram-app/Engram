@@ -339,7 +339,10 @@ export default function NotePage() {
 					{handle && mode === "raw" ? <RawFrontmatterEditor doc={handle.doc} /> : null}
 
 					{mode === "reading" ? (
-						<div className="px-5 pt-2">
+						// pt matches .cm-content's 20px top padding in note-editor.tsx so
+						// the title sits the same distance above the body in reading mode
+						// as it does in the editor.
+						<div className="px-5 pt-5">
 							<NoteView content={liveContent} tags={note.tags} />
 						</div>
 					) : (

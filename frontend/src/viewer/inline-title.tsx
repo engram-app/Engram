@@ -9,7 +9,9 @@ interface Props {
 	onCancelRename: () => void;
 }
 
-const FRAME = "px-5 pt-6 pb-1";
+// pb sets the gap down to whatever follows — the properties widget, or the
+// body. Tune here; it is the single knob for all three view modes.
+const FRAME = "px-5 pt-6 pb-4";
 // One source for the heading's type so the rename box cannot drift out of
 // step with the h1 it stands in for.
 const TITLE_TYPE = "font-semibold text-3xl tracking-tight";
