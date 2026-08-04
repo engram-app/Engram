@@ -1880,6 +1880,23 @@ defmodule Engram.Notes do
             "repath_note_index"
           )
 
+        # #648/#1231 — server-side link rewrite for REST/MCP-origin renames.
+        # Plugin-origin renames never reach rename_note (Obsidian rewrites
+        # those itself): exactly one party rewrites. Fire-and-forget: a
+        # rewrite failure must never fail the rename.
+        _ =
+          Enqueue.enqueue(
+            Engram.Workers.RewriteNoteLinks.new_for(
+              user.id,
+              vault.id,
+              :note,
+              note.id,
+              old_path_hmac_b64!(user, old_path),
+              Base.encode64(Links.basename_hmac(user, Links.basename_key(old_path)))
+            ),
+            "rewrite_note_links"
+          )
+
         # #976 (same invariant as the folder-rename cascade): the note still
         # exists under the new path, so the old-path delete leg carries its id
         # for delete+upsert relocation correlation on receivers. Emit the
