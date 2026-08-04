@@ -1,6 +1,8 @@
 defmodule Engram.LinksTest do
   use Engram.DataCase, async: true
 
+  import ExUnit.CaptureLog
+
   alias Engram.Links
   alias Engram.Links.NoteLink
 
@@ -280,6 +282,39 @@ defmodule Engram.LinksTest do
       # b's outgoing edge is gone; a's edge to b is dangling again
       assert [%{source_note_id: source_id, target_note_id: nil}] = links
       assert source_id == a.id
+    end
+  end
+
+  describe "links_for_note/2 — decrypt failure logging" do
+    test "a corrupt field logs a decrypt failure instead of failing silently", %{
+      user: user,
+      vault: vault
+    } do
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "SourceCorruptAlias.md"})
+
+      :ok =
+        Links.replace_links(user, vault, source.id, [
+          %{target: "X", alias: "shown", anchor: nil, link_type: "wikilink", position: 0}
+        ])
+
+      {:ok, [edge]} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(from(l in NoteLink, where: l.source_note_id == ^source.id))
+        end)
+
+      Repo.update_all(
+        from(l in NoteLink, where: l.id == ^edge.id),
+        [set: [alias_ciphertext: <<0::128>>]],
+        skip_tenant_check: true
+      )
+
+      log =
+        capture_log(fn ->
+          [link] = Links.links_for_note(user, source.id)
+          assert is_nil(link.alias)
+        end)
+
+      assert log =~ "decrypt"
     end
   end
 

@@ -561,8 +561,17 @@ defmodule Engram.Links do
         else: <<>>
 
     case Envelope.decrypt(ciphertext, nonce, dek, aad) do
-      {:ok, plaintext} -> plaintext
-      :error -> nil
+      {:ok, plaintext} ->
+        plaintext
+
+      :error ->
+        DecryptFailure.log("links_decrypt_failed", :decrypt_failed,
+          table: table,
+          column: column,
+          row_id: id
+        )
+
+        nil
     end
   end
 end
