@@ -24,10 +24,14 @@ defmodule Engram.Workers.BackfillNoteLinks do
       docker exec engram-saas /app/bin/engram rpc 'Engram.Links.Backfill.enqueue_all()'
   """
 
-  use Oban.Worker,
-    queue: :crypto_backfill,
-    max_attempts: 5,
-    unique: [keys: [:user_id, :vault_id, :scope], states: :incomplete]
+  # No `unique`: a cursor worker re-enqueues its own successor mid-run, which
+  # collides with `:incomplete` uniqueness (the running job counts as an
+  # in-flight match) and would silently drop the successor, killing the loop
+  # after one batch. Idempotence instead comes from the per-scope filters
+  # (`is_nil(basename_hmac)` for the hmac scopes) and from
+  # `Engram.Links.replace_links/4` being delete+insert for the links scope —
+  # so a duplicate `enqueue_all/0` just does converging, harmless re-scans.
+  use Oban.Worker, queue: :crypto_backfill, max_attempts: 5
 
   import Ecto.Query
 
@@ -47,17 +51,13 @@ defmodule Engram.Workers.BackfillNoteLinks do
   @default_batch_size 100
   @start_cursor "00000000-0000-0000-0000-000000000000"
 
-  # Config-overridable so a test can exercise the cursor re-enqueue loop
-  # without inserting @default_batch_size+1 rows. Prod uses the default.
-  defp batch_size,
-    do: Application.get_env(:engram, :note_links_backfill_batch_size, @default_batch_size)
-
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
     user_id = args["user_id"]
     vault_id = args["vault_id"]
     cursor = normalize_cursor(args["cursor"])
     scope = args["scope"] || "note_hmacs"
+    batch_size = args["batch_size"] || @default_batch_size
 
     case RotationGate.check(user_id) do
       {:error, :rotation_in_progress} ->
@@ -73,17 +73,17 @@ defmodule Engram.Workers.BackfillNoteLinks do
         {:discard, :user_deleted}
 
       :ok ->
-        run_backfill(user_id, vault_id, cursor, scope)
+        run_backfill(user_id, vault_id, cursor, scope, batch_size)
     end
   end
 
-  defp run_backfill(user_id, vault_id, cursor, scope) do
+  defp run_backfill(user_id, vault_id, cursor, scope, batch_size) do
     with {:ok, user} <- load_user(user_id),
          {:ok, vault} <- Vaults.get_vault(user, vault_id) do
       Repo.with_tenant(user_id, fn ->
         {:ok, filter_key} = Crypto.dek_filter_key(user)
 
-        case process_batch(scope, user, vault, filter_key, cursor) do
+        case process_batch(scope, user, vault, filter_key, cursor, batch_size) do
           {:done, _last} ->
             case next_scope(scope) do
               nil ->
@@ -94,7 +94,8 @@ defmodule Engram.Workers.BackfillNoteLinks do
                   "user_id" => user_id,
                   "vault_id" => vault_id,
                   "cursor" => @start_cursor,
-                  "scope" => next
+                  "scope" => next,
+                  "batch_size" => batch_size
                 })
                 |> Oban.insert()
             end
@@ -104,7 +105,8 @@ defmodule Engram.Workers.BackfillNoteLinks do
               "user_id" => user_id,
               "vault_id" => vault_id,
               "cursor" => last_id,
-              "scope" => scope
+              "scope" => scope,
+              "batch_size" => batch_size
             })
             |> Oban.insert()
         end
@@ -135,7 +137,7 @@ defmodule Engram.Workers.BackfillNoteLinks do
     end
   end
 
-  defp process_batch("note_hmacs", user, vault, filter_key, cursor) do
+  defp process_batch("note_hmacs", user, vault, filter_key, cursor, batch_size) do
     notes =
       from(n in Note,
         where: n.vault_id == ^vault.id,
@@ -144,14 +146,16 @@ defmodule Engram.Workers.BackfillNoteLinks do
         where: is_nil(n.basename_hmac),
         where: not is_nil(n.path_ciphertext),
         order_by: [asc: n.id],
-        limit: ^batch_size()
+        limit: ^batch_size
       )
       |> Repo.all()
 
-    batch_result(notes, cursor, fn note -> stamp_note_basename_hmac(note, user, filter_key) end)
+    batch_result(notes, batch_size, fn note ->
+      stamp_note_basename_hmac(note, user, filter_key)
+    end)
   end
 
-  defp process_batch("attachment_hmacs", user, vault, filter_key, cursor) do
+  defp process_batch("attachment_hmacs", user, vault, filter_key, cursor, batch_size) do
     attachments =
       from(a in Attachment,
         where: a.vault_id == ^vault.id,
@@ -159,16 +163,16 @@ defmodule Engram.Workers.BackfillNoteLinks do
         where: is_nil(a.basename_hmac),
         where: not is_nil(a.path_ciphertext),
         order_by: [asc: a.id],
-        limit: ^batch_size()
+        limit: ^batch_size
       )
       |> Repo.all()
 
-    batch_result(attachments, cursor, fn att ->
+    batch_result(attachments, batch_size, fn att ->
       stamp_attachment_basename_hmac(att, user, filter_key)
     end)
   end
 
-  defp process_batch("links", user, vault, _filter_key, cursor) do
+  defp process_batch("links", user, vault, _filter_key, cursor, batch_size) do
     notes =
       from(n in Note,
         where: n.vault_id == ^vault.id,
@@ -176,23 +180,27 @@ defmodule Engram.Workers.BackfillNoteLinks do
         where: is_nil(n.deleted_at),
         where: n.id > ^cursor,
         order_by: [asc: n.id],
-        limit: ^batch_size()
+        limit: ^batch_size
       )
       |> Repo.all()
 
-    batch_result(notes, cursor, fn note -> backfill_links_for_note(note, user, vault) end)
+    batch_result(notes, batch_size, fn note -> backfill_links_for_note(note, user, vault) end)
   end
 
-  defp batch_result([], cursor, _fun), do: {:done, cursor}
+  defp batch_result(rows, batch_size, fun) do
+    case rows do
+      [] ->
+        {:done, nil}
 
-  defp batch_result(rows, _cursor, fun) do
-    Enum.each(rows, fun)
-    last_id = rows |> List.last() |> Map.fetch!(:id)
+      _ ->
+        Enum.each(rows, fun)
+        last_id = rows |> List.last() |> Map.fetch!(:id)
 
-    if length(rows) == batch_size() do
-      {:more, last_id}
-    else
-      {:done, last_id}
+        if length(rows) == batch_size do
+          {:more, last_id}
+        else
+          {:done, last_id}
+        end
     end
   end
 

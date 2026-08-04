@@ -170,9 +170,6 @@ defmodule Engram.Workers.BackfillNoteLinksTest do
       user: user,
       vault: vault
     } do
-      Application.put_env(:engram, :note_links_backfill_batch_size, 1)
-      on_exit(fn -> Application.delete_env(:engram, :note_links_backfill_batch_size) end)
-
       a = insert_note!(user, vault, %{path: "First.md"})
       b = insert_note!(user, vault, %{path: "Second.md"})
 
@@ -183,7 +180,8 @@ defmodule Engram.Workers.BackfillNoteLinksTest do
                  "user_id" => user.id,
                  "vault_id" => vault.id,
                  "cursor" => @zero_cursor,
-                 "scope" => "note_hmacs"
+                 "scope" => "note_hmacs",
+                 "batch_size" => 1
                })
 
       assert_enqueued(
@@ -192,9 +190,47 @@ defmodule Engram.Workers.BackfillNoteLinksTest do
           "user_id" => user.id,
           "vault_id" => vault.id,
           "cursor" => a.id,
-          "scope" => "note_hmacs"
+          "scope" => "note_hmacs",
+          "batch_size" => 1
         }
       )
+    end
+
+    # Regression for the reviewer-identified defect: with `unique:` present
+    # on the worker, a same-scope self-re-enqueue mid-run collides with its
+    # own still-"executing" row under a REAL Oban dispatch (unlike
+    # perform_job above, which never creates a DB row for the "currently
+    # running" job) and Oban's unique-insert silently returns the existing
+    # job instead of inserting the successor — the loop dies after batch 1
+    # and rows past @default_batch_size (or, here, batch_size) never get
+    # processed. `Oban.drain_queue/1` goes through the real fetch_jobs path
+    # (state -> "executing" before perform runs), so it reproduces this.
+    # Proof this test catches the regression: temporarily restoring
+    # `unique: [keys: [:user_id, :vault_id, :scope], states: :incomplete]`
+    # on the worker makes this test fail (only 1 of 3 notes gets a hmac,
+    # the second batch's self-re-enqueue is dropped) — see task-8-report.md.
+    test "survives multiple same-scope batches under real Oban dispatch (no unique collision)",
+         %{user: user, vault: vault} do
+      notes = for i <- 1..3, do: insert_note!(user, vault, %{path: "Real#{i}.md"})
+      Enum.each(notes, &null_basename_hmac!(user.id, &1))
+
+      {:ok, _job} =
+        BackfillNoteLinks.new(%{
+          "user_id" => user.id,
+          "vault_id" => vault.id,
+          "cursor" => @zero_cursor,
+          "scope" => "note_hmacs",
+          "batch_size" => 1
+        })
+        |> Oban.insert()
+
+      result = Oban.drain_queue(queue: :crypto_backfill, with_recursion: true)
+      assert result.failure == 0, "chain must not raise/fail: #{inspect(result)}"
+
+      Enum.each(notes, fn note ->
+        refute is_nil(reload_note(user, note.id).basename_hmac),
+               "note #{note.id} never got a basename_hmac — same-scope batch loop stalled"
+      end)
     end
   end
 
