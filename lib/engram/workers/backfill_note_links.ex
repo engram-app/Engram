@@ -198,8 +198,8 @@ defmodule Engram.Workers.BackfillNoteLinks do
 
   defp stamp_note_basename_hmac(note, user, filter_key) do
     case Crypto.maybe_decrypt_note_fields(note, user) do
-      {:ok, %{path: path}} when is_binary(path) ->
-        hmac = Crypto.hmac_field(filter_key, Links.basename_key(path))
+      {:ok, decrypted} when is_binary(decrypted.path) ->
+        hmac = Crypto.hmac_field(filter_key, Links.basename_key(decrypted.path))
 
         from(n in Note, where: n.id == ^note.id, where: n.kind == "note")
         |> Repo.update_all(set: [basename_hmac: hmac])
@@ -220,8 +220,8 @@ defmodule Engram.Workers.BackfillNoteLinks do
 
   defp stamp_attachment_basename_hmac(att, user, filter_key) do
     case Crypto.maybe_decrypt_attachment_fields(att, user) do
-      {:ok, %{path: path}} when is_binary(path) ->
-        hmac = Crypto.hmac_field(filter_key, Links.basename_key(path))
+      {:ok, decrypted} when is_binary(decrypted.path) ->
+        hmac = Crypto.hmac_field(filter_key, Links.basename_key(decrypted.path))
 
         from(a in Attachment, where: a.id == ^att.id)
         |> Repo.update_all(set: [basename_hmac: hmac])
