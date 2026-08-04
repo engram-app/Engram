@@ -283,6 +283,92 @@ defmodule Engram.Links do
   end
 
   @doc """
+  Live (non-deleted) notes + attachments in `vault` whose `basename_hmac`
+  matches `key` (a `basename_key/1` result). Drives the rename-rewrite form
+  rule: a bare `[[basename]]` may stay bare only when the new basename is
+  unambiguous (count == 1, the renamed row itself).
+  """
+  @spec live_basename_count(map(), map(), String.t()) :: non_neg_integer()
+  def live_basename_count(user, vault, key) do
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    hmac = Crypto.hmac_field(filter_key, key)
+
+    notes =
+      Repo.one(
+        from(n in Note,
+          where:
+            n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
+              n.basename_hmac == ^hmac and is_nil(n.deleted_at),
+          select: count(n.id)
+        ),
+        skip_tenant_check: true
+      )
+
+    attachments =
+      Repo.one(
+        from(a in Attachment,
+          where:
+            a.user_id == ^user.id and a.vault_id == ^vault.id and
+              a.basename_hmac == ^hmac and is_nil(a.deleted_at),
+          select: count(a.id)
+        ),
+        skip_tenant_check: true
+      )
+
+    notes + attachments
+  end
+
+  @doc """
+  Would `target` have resolved to the renamed row (`renamed_id`) at its OLD
+  path, under `resolve_target/4`'s rules? Reconstructs the pre-rename
+  candidate set: current live candidates for the target's basename hmac,
+  minus the renamed row's post-rename position, plus a synthetic candidate
+  `{renamed_id, old_path}`. Order-independent w.r.t. the RebindNoteLinks
+  jobs a rename enqueues — those rewrite edge target ids but never the
+  candidate tables this consults.
+  """
+  @spec pre_rename_winner?(map(), map(), String.t(), :note | :attachment, binary(), String.t()) ::
+          boolean()
+  def pre_rename_winner?(user, vault, target, kind, renamed_id, old_path) do
+    key = basename_key(target)
+
+    if key != basename_key(old_path) do
+      false
+    else
+      {:ok, filter_key} = Crypto.dek_filter_key(user)
+      hmac = Crypto.hmac_field(filter_key, key)
+
+      notes =
+        user
+        |> fetch_decrypted_candidates(vault, hmac, :notes)
+        |> Enum.reject(fn {id, _path} -> id == renamed_id end)
+
+      attachments =
+        user
+        |> fetch_decrypted_candidates(vault, hmac, :attachments)
+        |> Enum.reject(fn {id, _path} -> id == renamed_id end)
+
+      {notes, attachments} =
+        case kind do
+          :note -> {[{renamed_id, old_path} | notes], attachments}
+          :attachment -> {notes, [{renamed_id, old_path} | attachments]}
+        end
+
+      ext = target |> Path.basename() |> Path.extname() |> String.downcase()
+
+      case route_resolution(
+             ext,
+             fn -> resolve_from_candidates(notes, target, :note) end,
+             fn -> resolve_from_candidates(attachments, target, :attachment) end
+           ) do
+        {:note, ^renamed_id} -> true
+        {:attachment, ^renamed_id} -> true
+        _ -> false
+      end
+    end
+  end
+
+  @doc """
   Computes the HMAC for a `basename_key/1` result under `user`'s filter key.
   Callers that need to enqueue a rebind job (`RebindNoteLinks.new_for/3`)
   compute this from plaintext they already have in scope, so the job's
