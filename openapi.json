@@ -859,45 +859,7 @@
         "properties": {
           "backlinks": {
             "items": {
-              "properties": {
-                "alias": {
-                  "nullable": true,
-                  "type": "string",
-                  "x-struct": null,
-                  "x-validate": null
-                },
-                "anchor": {
-                  "nullable": true,
-                  "type": "string",
-                  "x-struct": null,
-                  "x-validate": null
-                },
-                "source_note_id": {
-                  "format": "uuid",
-                  "type": "string",
-                  "x-struct": null,
-                  "x-validate": null
-                },
-                "source_path": {
-                  "nullable": true,
-                  "type": "string",
-                  "x-struct": null,
-                  "x-validate": null
-                },
-                "source_title": {
-                  "nullable": true,
-                  "type": "string",
-                  "x-struct": null,
-                  "x-validate": null
-                }
-              },
-              "required": [
-                "source_note_id"
-              ],
-              "title": "Backlink",
-              "type": "object",
-              "x-struct": null,
-              "x-validate": null
+              "$ref": "#/components/schemas/Backlink"
             },
             "type": "array",
             "x-struct": null,
@@ -2452,7 +2414,7 @@
         ],
         "title": "Backlink",
         "type": "object",
-        "x-struct": null,
+        "x-struct": "Elixir.EngramWeb.Schemas.Backlink",
         "x-validate": null
       },
       "BatchItemError": {

@@ -101,6 +101,25 @@ defmodule EngramWeb.Schemas.NoteLink do
   })
 end
 
+defmodule EngramWeb.Schemas.Backlink do
+  @moduledoc "A resolved incoming edge (backlink) from another note."
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "Backlink",
+    type: :object,
+    properties: %{
+      source_note_id: %Schema{type: :string, format: :uuid},
+      source_path: %Schema{type: :string, nullable: true},
+      source_title: %Schema{type: :string, nullable: true},
+      alias: %Schema{type: :string, nullable: true},
+      anchor: %Schema{type: :string, nullable: true}
+    },
+    required: [:source_note_id]
+  })
+end
+
 defmodule EngramWeb.Schemas.Backlinks do
   @moduledoc "Inverse links (backlinks) pointing at a note."
   alias OpenApiSpex.Schema
@@ -110,21 +129,7 @@ defmodule EngramWeb.Schemas.Backlinks do
     title: "Backlinks",
     type: :object,
     properties: %{
-      backlinks: %Schema{
-        type: :array,
-        items: %Schema{
-          title: "Backlink",
-          type: :object,
-          properties: %{
-            source_note_id: %Schema{type: :string, format: :uuid},
-            source_path: %Schema{type: :string, nullable: true},
-            source_title: %Schema{type: :string, nullable: true},
-            alias: %Schema{type: :string, nullable: true},
-            anchor: %Schema{type: :string, nullable: true}
-          },
-          required: [:source_note_id]
-        }
-      }
+      backlinks: %Schema{type: :array, items: EngramWeb.Schemas.Backlink}
     },
     required: [:backlinks]
   })
