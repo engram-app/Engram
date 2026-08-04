@@ -821,9 +821,9 @@ defmodule Engram.Attachments do
         delete_external_many(storage_keys)
 
         # #591 — same edge-flip + sibling-rebind as the single-delete path,
-        # batched: one Links.on_attachment_soft_deleted/2 per deleted
-        # attachment, one rebind enqueue per unique basename in the batch.
-        Enum.each(deleted_ids, &Links.on_attachment_soft_deleted(user.id, &1))
+        # batched: one Links.on_attachments_soft_deleted/2 UPDATE for the
+        # whole batch, one rebind enqueue per unique basename in the batch.
+        :ok = Links.on_attachments_soft_deleted(user.id, deleted_ids)
 
         Enum.each(basename_hmacs, fn hmac ->
           _ =

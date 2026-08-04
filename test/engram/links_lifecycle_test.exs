@@ -351,4 +351,42 @@ defmodule Engram.LinksLifecycleTest do
     assert link.dangling
     assert is_nil(link.target_attachment_id)
   end
+
+  # Pins the batched edge-flip added for the batch_delete N+1 fix (finding
+  # #2 on PR #1229): two attachments soft-deleted in ONE batch_delete/3 call
+  # must each flip their own incoming edge, proving
+  # Links.on_attachments_soft_deleted/2 (plural, one UPDATE) covers every id
+  # in the batch rather than only the first/last.
+  test "batch-deleting two attachments flips both incoming edges", %{
+    user: user,
+    vault: vault,
+    bypass: bypass
+  } do
+    att_a = upload!(user, vault, "BatchA.png")
+    att_b = upload!(user, vault, "BatchB.png")
+
+    {:ok, source_a} =
+      Notes.upsert_note(user, vault, %{"path" => "SourceA.md", "content" => "![[BatchA.png]]"})
+
+    {:ok, source_b} =
+      Notes.upsert_note(user, vault, %{"path" => "SourceB.md", "content" => "![[BatchB.png]]"})
+
+    index!(bypass, source_a.id)
+    index!(bypass, source_b.id)
+
+    link_a = only_link(user, source_a.id)
+    link_b = only_link(user, source_b.id)
+    assert link_a.target_attachment_id == att_a.id
+    assert link_b.target_attachment_id == att_b.id
+
+    assert {:ok, %{deleted: 2}} =
+             Attachments.batch_delete(user, vault, ["BatchA.png", "BatchB.png"])
+
+    link_a = only_link(user, source_a.id)
+    link_b = only_link(user, source_b.id)
+    assert link_a.dangling
+    assert is_nil(link_a.target_attachment_id)
+    assert link_b.dangling
+    assert is_nil(link_b.target_attachment_id)
+  end
 end

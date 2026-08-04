@@ -348,9 +348,23 @@ defmodule Engram.Links do
   """
   @spec on_attachment_soft_deleted(binary(), binary()) :: :ok
   def on_attachment_soft_deleted(user_id, attachment_id) do
+    on_attachments_soft_deleted(user_id, [attachment_id])
+  end
+
+  @doc """
+  Batched form of `on_attachment_soft_deleted/2` — same semantics (flip
+  incoming edges to dangling, nothing to drop), one `UPDATE` for the whole
+  list instead of one per attachment. Used by `Attachments.batch_delete/3`
+  (#1194) to keep the N+1 the single-delete path can afford off the batch
+  path.
+  """
+  @spec on_attachments_soft_deleted(binary(), [binary()]) :: :ok
+  def on_attachments_soft_deleted(_user_id, []), do: :ok
+
+  def on_attachments_soft_deleted(user_id, attachment_ids) when is_list(attachment_ids) do
     Repo.update_all(
       from(l in NoteLink,
-        where: l.user_id == ^user_id and l.target_attachment_id == ^attachment_id
+        where: l.user_id == ^user_id and l.target_attachment_id in ^attachment_ids
       ),
       [set: [target_attachment_id: nil]],
       skip_tenant_check: true
