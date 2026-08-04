@@ -7,6 +7,7 @@ import { buildEditorState, decorationsCompartment, decorationsFor } from "./note
 
 const resolveWikiLink = (n: string) => `/w/wiki/${n}`;
 const openWikiLink = () => {};
+const wikiCompletionPaths = () => [];
 
 // happy-dom CAN render a real CodeMirror EditorView (verified 2026-06-29).
 // The earlier comment was a cautious assumption; the DOM stubs in test-setup.ts
@@ -25,6 +26,7 @@ describe("buildEditorState", () => {
 			"rendered",
 			resolveWikiLink,
 			openWikiLink,
+			wikiCompletionPaths,
 		);
 
 		expect(state.doc.toString()).toBe("# Seeded heading\n\nbody text");
@@ -42,6 +44,7 @@ describe("buildEditorState", () => {
 			"rendered",
 			resolveWikiLink,
 			openWikiLink,
+			wikiCompletionPaths,
 		);
 
 		expect(state.doc.toString()).toBe("");
@@ -61,6 +64,7 @@ describe("buildEditorState", () => {
 			"rendered",
 			resolveWikiLink,
 			openWikiLink,
+			wikiCompletionPaths,
 		);
 
 		expect(state.doc.toString()).toBe("first second");
@@ -79,6 +83,7 @@ describe("buildEditorState", () => {
 			"rendered",
 			resolveWikiLink,
 			openWikiLink,
+			wikiCompletionPaths,
 		);
 
 		// historyField is the StateField that @codemirror/commands history() adds.
@@ -101,8 +106,17 @@ describe("buildEditorState", () => {
 			"rendered",
 			resolveWikiLink,
 			openWikiLink,
+			wikiCompletionPaths,
 		);
-		const raw = buildEditorState(ytext, awareness, false, "raw", resolveWikiLink, openWikiLink);
+		const raw = buildEditorState(
+			ytext,
+			awareness,
+			false,
+			"raw",
+			resolveWikiLink,
+			openWikiLink,
+			wikiCompletionPaths,
+		);
 
 		// Both seed identical, unaltered doc bytes (view-only decorations).
 		expect(rendered.doc.toString()).toBe("# H\n\n**b**\n");
@@ -141,7 +155,15 @@ describe("CRDT undo behaviour (EditorView + yCollab)", () => {
 		parents.push(parent);
 
 		const view = new EditorView({
-			state: buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink, openWikiLink),
+			state: buildEditorState(
+				ytext,
+				awareness,
+				false,
+				"rendered",
+				resolveWikiLink,
+				openWikiLink,
+				wikiCompletionPaths,
+			),
 			parent,
 		});
 		views.push(view);
@@ -208,7 +230,15 @@ describe("mode switch via decorationsCompartment.reconfigure (yCollab must survi
 		parents.push(parent);
 
 		const view = new EditorView({
-			state: buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink, openWikiLink),
+			state: buildEditorState(
+				ytext,
+				awareness,
+				false,
+				"rendered",
+				resolveWikiLink,
+				openWikiLink,
+				wikiCompletionPaths,
+			),
 			parent,
 		});
 		views.push(view);
@@ -219,7 +249,7 @@ describe("mode switch via decorationsCompartment.reconfigure (yCollab must survi
 		// SAME view -- this must never recreate the view or detach yCollab.
 		view.dispatch({
 			effects: decorationsCompartment.reconfigure(
-				decorationsFor("raw", resolveWikiLink, openWikiLink),
+				decorationsFor("raw", resolveWikiLink, openWikiLink, wikiCompletionPaths),
 			),
 		});
 

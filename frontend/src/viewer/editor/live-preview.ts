@@ -16,6 +16,7 @@ import "./obsidian-theme.css";
 // Atomic's stylesheet so the depth-aware rules win the cascade.
 import "./blockquote-depth.css";
 import { ATOMIC_CODE_LANGUAGES } from "@atomic-editor/editor/code-languages";
+import { autocompletion } from "@codemirror/autocomplete";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { type Extension, Prec } from "@codemirror/state";
@@ -25,6 +26,7 @@ import { calloutDecoration } from "./callout-decoration";
 import { calloutMarker } from "./callout-marker";
 import { katexDecoration } from "./katex-decoration";
 import { mermaidDecoration, mermaidKeymap } from "./mermaid-decoration";
+import { wikiCompletionSource } from "./wiki-completion";
 
 /**
  * Token colours that must beat atomicMarkdownSyntax.
@@ -61,6 +63,8 @@ export interface LivePreviewOpts {
 	// and in dev an HMR-stamped duplicate of router.tsx (`?t=`) gets a fresh,
 	// never-installed module instance, so every click threw.
 	openWikiLink: (name: string) => void;
+	/** Vault-wide note paths for `[[` autocomplete (see editor/wiki-completion.ts). */
+	wikiCompletionPaths: () => string[];
 }
 
 /**
@@ -126,5 +130,13 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		// without this the block is reachable only by clicking.
 		mermaidKeymap,
 		blockquoteDepthPlugin,
+		// override replaces (not adds to) CM6's built-in keyword/language-server
+		// sources -- markdown has none of those, so this is the only source in
+		// play. defaultKeymap wires Tab/Enter/Escape/arrow-navigation of the
+		// completion popup.
+		autocompletion({
+			override: [wikiCompletionSource(opts.wikiCompletionPaths)],
+			defaultKeymap: true,
+		}),
 	];
 }

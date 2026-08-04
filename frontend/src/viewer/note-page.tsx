@@ -14,6 +14,7 @@ import {
 	useFolders,
 	useNote,
 	useRenameNote,
+	useSyncManifest,
 } from "../api/queries";
 import { readRows } from "../crdt/frontmatter-doc";
 import {
@@ -58,6 +59,7 @@ export default function NotePage() {
 	const validId = idStr && idStr.length > 0 ? idStr : null;
 
 	const { data: note, isLoading, error } = useNote(validId);
+	const { data: manifest } = useSyncManifest();
 	const { setSlot } = useRightTools();
 	const { setEditor } = useActiveEditor();
 
@@ -113,6 +115,15 @@ export default function NotePage() {
 		},
 		[navigate, slug, wikiMap],
 	);
+	// `[[` autocomplete's candidate list. Read through a ref, not a useMemo keyed
+	// on manifest, so this callback's identity NEVER changes -- the manifest
+	// query refetches on its own staleTime, and a new function identity there
+	// would fire NoteEditor's decorationsCompartment.reconfigure effect for
+	// every refetch with no UI change to show for it (same onView/onShortcutRef
+	// reasoning documented in note-editor.tsx).
+	const manifestPathsRef = useRef<string[]>([]);
+	manifestPathsRef.current = manifest?.notes.map((n) => n.path) ?? [];
+	const wikiCompletionPaths = useCallback(() => manifestPathsRef.current, []);
 
 	const path = note?.path ?? null;
 	const noteId = note?.id ?? null;
@@ -430,6 +441,7 @@ export default function NotePage() {
 									mode={mode === "raw" ? "raw" : "rendered"}
 									resolveWikiLink={resolveWikiLink}
 									openWikiLink={openWikiLink}
+									wikiCompletionPaths={wikiCompletionPaths}
 									onFrontmatterShortcut={handleFrontmatterShortcut}
 									onView={(v) => {
 										editorViewRef.current = v;

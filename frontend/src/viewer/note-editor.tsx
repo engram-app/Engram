@@ -50,6 +50,8 @@ export interface NoteEditorProps {
 	resolveWikiLink: (name: string) => string;
 	/** Click-to-open a wikilink target — router-navigates from the React tree. */
 	openWikiLink: (name: string) => void;
+	/** Vault-wide note paths for `[[` autocomplete (see editor/wiki-completion.ts). */
+	wikiCompletionPaths: () => string[];
 	/** Reaches the live EditorView out to a caller (e.g. the formatting toolbar). */
 	onView?: (view: EditorView | null) => void;
 	/**
@@ -78,9 +80,10 @@ export function decorationsFor(
 	mode: EditorMode,
 	resolveWikiLink: (name: string) => string,
 	openWikiLink: (name: string) => void,
+	wikiCompletionPaths: () => string[],
 ) {
 	return mode === "rendered"
-		? livePreviewExtensions({ resolveWikiLink, openWikiLink })
+		? livePreviewExtensions({ resolveWikiLink, openWikiLink, wikiCompletionPaths })
 		: [markdown({ base: markdownLanguage })];
 }
 
@@ -103,6 +106,7 @@ export function buildEditorState(
 	mode: EditorMode,
 	resolveWikiLink: (name: string) => string,
 	openWikiLink: (name: string) => void,
+	wikiCompletionPaths: () => string[],
 	onFrontmatterShortcut?: () => boolean,
 ): EditorState {
 	return EditorState.create({
@@ -131,7 +135,9 @@ export function buildEditorState(
 			Prec.highest(editorTheme),
 			// The ONLY source of the markdown language: swapping this compartment is
 			// what toggles Rendered vs Raw mode. See decorationsFor above.
-			decorationsCompartment.of(decorationsFor(mode, resolveWikiLink, openWikiLink)),
+			decorationsCompartment.of(
+				decorationsFor(mode, resolveWikiLink, openWikiLink, wikiCompletionPaths),
+			),
 			// yCollab keeps the view and Y.Text in sync AFTER this initial seed and
 			// wires local edits back into the Y.Text (→ CRDT channel). MUST stay in
 			// the base extensions (never in the compartment) -- reconfiguring the
@@ -152,6 +158,7 @@ export default function NoteEditor({
 	mode,
 	resolveWikiLink,
 	openWikiLink,
+	wikiCompletionPaths,
 	onView,
 	onFrontmatterShortcut,
 }: NoteEditorProps) {
@@ -177,7 +184,7 @@ export default function NoteEditor({
 	// hatch for the toolbar, not a doc/theme dependency -- including it would
 	// tear down and recreate the view (yCollab-detach hazard) whenever the
 	// caller passes a differently-identitied callback.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: mode/resolveWikiLink/openWikiLink/onView are intentionally excluded, see comment above.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: mode/resolveWikiLink/openWikiLink/wikiCompletionPaths/onView are intentionally excluded, see comment above.
 	useEffect(() => {
 		const parent = hostRef.current;
 		if (!parent) {
@@ -191,6 +198,7 @@ export default function NoteEditor({
 				mode,
 				resolveWikiLink,
 				openWikiLink,
+				wikiCompletionPaths,
 				() => Boolean(onShortcutRef.current?.()),
 			),
 			parent,
@@ -212,10 +220,10 @@ export default function NoteEditor({
 		}
 		view.dispatch({
 			effects: decorationsCompartment.reconfigure(
-				decorationsFor(mode, resolveWikiLink, openWikiLink),
+				decorationsFor(mode, resolveWikiLink, openWikiLink, wikiCompletionPaths),
 			),
 		});
-	}, [mode, resolveWikiLink, openWikiLink]);
+	}, [mode, resolveWikiLink, openWikiLink, wikiCompletionPaths]);
 
 	return <div ref={hostRef} />;
 }

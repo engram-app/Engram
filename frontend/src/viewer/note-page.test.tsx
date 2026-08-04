@@ -79,6 +79,7 @@ vi.mock("../api/queries", () => ({
 	useDuplicateNote: () => ({ mutate: duplicateNoteMutate, isPending: false }),
 	useBatchMoveNotes: () => ({ mutate: batchMoveMutate, isPending: false }),
 	useFolders: () => ({ data: [{ name: "folder" }, { name: "other" }], isLoading: false }),
+	useSyncManifest: () => ({ data: undefined }),
 }));
 
 // Both must go through vi.hoisted — vi.mock factories are hoisted above plain

@@ -36,6 +36,7 @@
 		"@atomic-editor/editor": "0.6.2",
 		"@clerk/react": "^6.12.8",
 		"@clerk/themes": "^2.4.57",
+		"@codemirror/autocomplete": "^6.20.3",
 		"@codemirror/commands": "^6.7.0",
 		"@codemirror/lang-cpp": "^6.0.3",
 		"@codemirror/lang-go": "^6.0.1",
