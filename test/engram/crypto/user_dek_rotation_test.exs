@@ -572,6 +572,157 @@ defmodule Engram.Crypto.UserDekRotationTest do
     end
   end
 
+  describe "rotate_user/1 — note_links sweep" do
+    setup %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "LinksVault")
+
+      target =
+        Engram.Fixtures.insert_note!(user, vault, %{path: "Target.md", content: "target body"})
+
+      attachment =
+        Engram.Fixtures.insert_attachment!(user, vault, %{path: "pics/Photo.png", content: "x"})
+
+      source =
+        Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md", content: "source body"})
+
+      parsed = [
+        %{target: "Target", alias: "shown", anchor: "H1", link_type: "wikilink", position: 0},
+        %{target: "Photo.png", alias: nil, anchor: nil, link_type: "embed", position: 1},
+        %{target: "Ghost", alias: nil, anchor: nil, link_type: "wikilink", position: 2}
+      ]
+
+      :ok = Engram.Links.replace_links(user, vault, source.id, parsed)
+
+      {:ok, vault: vault, source: source, target: target, attachment: attachment}
+    end
+
+    test "links_for_note decrypts target_text/alias/anchor post-rotation (nil and non-nil rows)",
+         %{user: user, source: source, target: target, attachment: attachment} do
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      links = Engram.Links.links_for_note(reloaded_user, source.id)
+
+      ghost = Enum.find(links, &(&1.target_text == "Ghost"))
+      assert ghost.alias == nil
+      assert ghost.anchor == nil
+      assert ghost.dangling == true
+
+      target_link = Enum.find(links, &(&1.target_text == "Target"))
+      assert target_link.alias == "shown"
+      assert target_link.anchor == "H1"
+      assert target_link.target_note_id == target.id
+
+      photo_link = Enum.find(links, &(&1.target_text == "Photo.png"))
+      assert photo_link.alias == nil
+      assert photo_link.anchor == nil
+      assert photo_link.target_attachment_id == attachment.id
+    end
+
+    test "target_basename_hmac equals hmac_field(new_filter_key, basename_key(target_text))",
+         %{user: user, source: source} do
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      {:ok, new_dek} = Crypto.get_dek(reloaded_user)
+      new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek)
+
+      edges =
+        Repo.all(from(l in Engram.Links.NoteLink, where: l.source_note_id == ^source.id),
+          skip_tenant_check: true
+        )
+
+      assert length(edges) == 3
+
+      Enum.each(edges, fn edge ->
+        assert {:ok, target_text} =
+                 Envelope.decrypt(
+                   edge.target_text_ciphertext,
+                   edge.target_text_nonce,
+                   new_dek,
+                   Crypto.aad_for_row(:note_links, :target_text, edge.id)
+                 )
+
+        expected = Crypto.hmac_field(new_filter_key, Engram.Links.basename_key(target_text))
+        assert edge.target_basename_hmac == expected
+      end)
+    end
+
+    test "notes + attachments basename_hmac recomputed under new filter key; post-rotation replace_links resolves to pre-rotation rows",
+         %{user: user, vault: vault, target: target, attachment: attachment} do
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      {:ok, new_dek} = Crypto.get_dek(reloaded_user)
+      new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek)
+
+      reloaded_target =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^target.id),
+          skip_tenant_check: true
+        )
+
+      expected_note_basename =
+        Crypto.hmac_field(new_filter_key, Engram.Links.basename_key("Target.md"))
+
+      assert reloaded_target.basename_hmac == expected_note_basename
+
+      reloaded_attachment =
+        Repo.one!(
+          from(a in Engram.Attachments.Attachment, where: a.id == ^attachment.id),
+          skip_tenant_check: true
+        )
+
+      expected_att_basename =
+        Crypto.hmac_field(new_filter_key, Engram.Links.basename_key("pics/Photo.png"))
+
+      assert reloaded_attachment.basename_hmac == expected_att_basename
+
+      # End-to-end resolution proof: a link written AFTER rotation must still
+      # resolve to the pre-rotation note/attachment — this only works if
+      # notes.basename_hmac / attachments.basename_hmac were rebuilt under the
+      # NEW filter key (otherwise the HMAC lookup in resolve_target/4 misses).
+      reloaded_vault =
+        Repo.one!(from(v in Engram.Vaults.Vault, where: v.id == ^vault.id),
+          skip_tenant_check: true
+        )
+
+      new_source =
+        Engram.Fixtures.insert_note!(reloaded_user, reloaded_vault, %{
+          path: "NewSource.md",
+          content: "new body"
+        })
+
+      :ok =
+        Engram.Links.replace_links(reloaded_user, reloaded_vault, new_source.id, [
+          %{target: "Target", alias: nil, anchor: nil, link_type: "wikilink", position: 0},
+          %{target: "Photo.png", alias: nil, anchor: nil, link_type: "embed", position: 1}
+        ])
+
+      new_edges =
+        Repo.all(from(l in Engram.Links.NoteLink, where: l.source_note_id == ^new_source.id),
+          skip_tenant_check: true
+        )
+
+      note_edge = Enum.find(new_edges, &(&1.target_note_id != nil))
+      att_edge = Enum.find(new_edges, &(&1.target_attachment_id != nil))
+
+      assert note_edge.target_note_id == target.id
+      assert att_edge.target_attachment_id == attachment.id
+    end
+  end
+
   describe "rotate_user/1 — Qdrant sweep" do
     setup %{user: user} do
       bypass = Bypass.open()

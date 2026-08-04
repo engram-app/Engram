@@ -16,6 +16,7 @@ import {
 	syntheticFolderId,
 	syntheticFolderPath,
 } from "../viewer/tree/synthesize-folders";
+import type { NoteLinkEdge } from "../viewer/wiki-link";
 import { reconcileActiveVault, useActiveVaultId } from "./active-vault";
 import { crdtCreateNote, crdtCreateNoteWithContent, crdtDeleteNote } from "./channel";
 import { ApiError, api } from "./client";
@@ -324,6 +325,8 @@ export interface NoteSummary {
 
 export interface Note extends NoteSummary {
 	content: string;
+	// Optional: older cached payloads (pre note-links backend rollout) lack it.
+	links?: NoteLinkEdge[];
 }
 
 export interface SearchResult {
@@ -467,6 +470,20 @@ export function useAttachments() {
 	return query;
 }
 
+// Wikilink resolution (wiki-link-redirect.tsx) needs the vault-wide path→id
+// inventory; the sync manifest is the one endpoint that has it. Also fetched
+// on note mount (note-page.tsx) to feed [[ autocomplete (wiki-completion.ts).
+// The 30s staleTime bounds both: link-hopping and repeated note mounts don't
+// re-pull a large vault's manifest more than once per that window.
+export function useSyncManifest() {
+	const vaultId = useActiveVaultId();
+	return useQuery({
+		queryKey: ["syncManifest", vaultId],
+		queryFn: () => api.get<{ notes: { id: string; path: string }[] }>("/sync/manifest"),
+		staleTime: 30_000,
+	});
+}
+
 export function useUploadAttachment() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
@@ -534,6 +551,38 @@ export function useNote(id: string | null) {
 	});
 }
 
+export interface Backlink {
+	source_note_id: string;
+	source_path: string;
+	source_title: string | null;
+	alias: string | null;
+	anchor: string | null;
+}
+
+// Backlinks panel (right rail). Task 1 stores the forward edges on the note
+// payload (`links`); this is the reverse lookup, so it needs its own request.
+export function useBacklinks(noteId: string | null) {
+	const vaultId = useActiveVaultId();
+	return useQuery({
+		queryKey: ["backlinks", vaultId, noteId],
+		queryFn: () => api.get<{ backlinks: Backlink[] }>(`/notes/by-id/${noteId}/backlinks`),
+		enabled: noteId !== null,
+		// The API returns one row per link EDGE, so a source note linking twice
+		// (e.g. plain + aliased) appears twice. The panel renders one row per
+		// source note, so dedupe here (keep the first edge per source).
+		select: (d) => {
+			const seen = new Set<string>();
+			return d.backlinks.filter((b) => {
+				if (seen.has(b.source_note_id)) {
+					return false;
+				}
+				seen.add(b.source_note_id);
+				return true;
+			});
+		},
+	});
+}
+
 export function useUpdateNote() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
@@ -554,6 +603,10 @@ export function useUpdateNote() {
 				qc.invalidateQueries({ queryKey: ["note", vaultId, id] });
 			}
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
+			// This edit may have changed the note's forward links, which changes
+			// what OTHER notes' backlinks panels show -- same reasoning as the
+			// note_changed handler in api/channel.ts.
+			qc.invalidateQueries({ queryKey: ["backlinks"] });
 		},
 	});
 }

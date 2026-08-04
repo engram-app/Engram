@@ -16,6 +16,7 @@ import "./obsidian-theme.css";
 // Atomic's stylesheet so the depth-aware rules win the cascade.
 import "./blockquote-depth.css";
 import { ATOMIC_CODE_LANGUAGES } from "@atomic-editor/editor/code-languages";
+import { autocompletion } from "@codemirror/autocomplete";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { type Extension, Prec } from "@codemirror/state";
@@ -25,6 +26,7 @@ import { calloutDecoration } from "./callout-decoration";
 import { calloutMarker } from "./callout-marker";
 import { katexDecoration } from "./katex-decoration";
 import { mermaidDecoration, mermaidKeymap } from "./mermaid-decoration";
+import { wikiCompletionSource } from "./wiki-completion";
 
 /**
  * Token colours that must beat atomicMarkdownSyntax.
@@ -56,15 +58,23 @@ const syntaxOverrides = HighlightStyle.define([
 
 export interface LivePreviewOpts {
 	resolveWikiLink: (name: string) => string;
+	// Click-to-open. Comes from the React tree (NotePage's useNavigate) — do
+	// NOT import getAppRouter here: this file lives in the lazy editor chunk,
+	// and in dev an HMR-stamped duplicate of router.tsx (`?t=`) gets a fresh,
+	// never-installed module instance, so every click threw.
+	openWikiLink: (name: string) => void;
+	/** Vault-wide note paths for `[[` autocomplete (see editor/wiki-completion.ts). */
+	wikiCompletionPaths: () => string[];
 }
 
 /**
  * The Rendered-mode decoration layer. Pure CM6 extensions (view-only): they
  * decorate the markdown source but never mutate EditorState.doc, so the yCollab
- * Y.Text binding (see note-editor.tsx) is untouched. Wire wikilinks to our SPA
- * routes; the click-to-open navigation is a hard `window.location` nav, matching
- * the plain `<a href>` wikilinks already rendered in Reading mode (note-view.tsx
- * hrefTemplate) rather than a router push. Callouts/KaTeX are sibling view-only
+ * Y.Text binding (see note-editor.tsx) is untouched. Wikilinks resolve through
+ * the same `/:slug/wiki/*` route as Reading mode (resolveWikiLink is NotePage's
+ * wikiHref closure); click-to-open goes through opts.openWikiLink (NotePage's
+ * useNavigate) — a hard `window.location` nav here full-page-reloaded the SPA
+ * on every editor-mode link hop. Callouts/KaTeX are sibling view-only
  * decoration extensions (see callout-decoration.ts, katex-decoration.ts).
  */
 export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
@@ -100,9 +110,7 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 			// existence check, so every link resolves (status "resolved");
 			// `label` stays the raw wikilink text.
 			resolve: (target) => Promise.resolve({ target: opts.resolveWikiLink(target), label: target }),
-			onOpen: (target) => {
-				window.location.assign(opts.resolveWikiLink(target));
-			},
+			onOpen: (target) => opts.openWikiLink(target),
 		}),
 		// Prec.highest is load-bearing, not tidiness. A callout's header line is
 		// replaced wholesale by our icon+title widget, and inlinePreview emits its
@@ -122,5 +130,13 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		// without this the block is reachable only by clicking.
 		mermaidKeymap,
 		blockquoteDepthPlugin,
+		// override replaces (not adds to) CM6's built-in keyword/language-server
+		// sources -- markdown has none of those, so this is the only source in
+		// play. defaultKeymap wires Tab/Enter/Escape/arrow-navigation of the
+		// completion popup.
+		autocompletion({
+			override: [wikiCompletionSource(opts.wikiCompletionPaths)],
+			defaultKeymap: true,
+		}),
 	];
 }

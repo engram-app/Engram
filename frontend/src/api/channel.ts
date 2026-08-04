@@ -332,6 +332,10 @@ export function handleNoteChanged(
 	}
 	// Legacy path-keyed key still in use by some hooks; keep invalidating it.
 	queryClient.invalidateQueries({ queryKey: ["note", activeVaultId, payload.path] });
+	// A note's edges (forward links and anyone's backlinks TO it) can change on
+	// any content edit -- invalidate the whole ["backlinks"] family rather than
+	// trying to compute which other notes' panels are affected.
+	queryClient.invalidateQueries({ queryKey: ["backlinks"] });
 
 	if (!pending) {
 		const batch: PendingBatch = {

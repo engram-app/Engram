@@ -92,6 +92,15 @@
             "x-struct": null,
             "x-validate": null
           },
+          "links": {
+            "description": "Outgoing wikilink/embed edges, resolved.",
+            "items": {
+              "$ref": "#/components/schemas/NoteLink"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
           "mtime": {
             "description": "Client mtime (epoch seconds)",
             "format": "float",
@@ -719,6 +728,72 @@
         "x-struct": "Elixir.EngramWeb.Schemas.LogsResponse",
         "x-validate": null
       },
+      "NoteLink": {
+        "properties": {
+          "alias": {
+            "description": "`[[target|alias]]` display text.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "anchor": {
+            "description": "`[[target#anchor]]` heading/block reference.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "dangling": {
+            "description": "True when the target could not be resolved.",
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "link_type": {
+            "description": "\"wikilink\" or \"embed\".",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "target_attachment_id": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "target_note_id": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "target_path": {
+            "description": "Resolved note path.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "target_text": {
+            "description": "The raw link target as written, e.g. `[[target_text]]`.",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "target_text",
+          "link_type",
+          "dangling"
+        ],
+        "title": "NoteLink",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.NoteLink",
+        "x-validate": null
+      },
       "UploadAttachmentRequest": {
         "example": {
           "content_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
@@ -778,6 +853,26 @@
         "title": "RenameRequest",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.RenameRequest",
+        "x-validate": null
+      },
+      "Backlinks": {
+        "properties": {
+          "backlinks": {
+            "description": "Capped at 200 edges, ordered oldest-first. Not paginated yet.",
+            "items": {
+              "$ref": "#/components/schemas/Backlink"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "backlinks"
+        ],
+        "title": "Backlinks",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.Backlinks",
         "x-validate": null
       },
       "FoldersResponse": {
@@ -2280,6 +2375,47 @@
         "title": "UserResponse",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.UserResponse",
+        "x-validate": null
+      },
+      "Backlink": {
+        "properties": {
+          "alias": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "anchor": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "source_note_id": {
+            "format": "uuid",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "source_path": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "source_title": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "source_note_id"
+        ],
+        "title": "Backlink",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.Backlink",
         "x-validate": null
       },
       "BatchItemError": {
@@ -4307,6 +4443,62 @@
         "summary": "List active connections",
         "tags": [
           "Connections"
+        ]
+      }
+    },
+    "/api/notes/by-id/{id}/backlinks": {
+      "get": {
+        "callbacks": {},
+        "description": "Returns every note that links to the given note UUID (the inverse of a note's own `links`). Returns 400 for a malformed UUID and 404 when no such note exists in the vault.",
+        "operationId": "notes-backlinks",
+        "parameters": [
+          {
+            "description": "Note UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Backlinks"
+                }
+              }
+            },
+            "description": "Backlinks"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid UUID"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such note"
+          }
+        },
+        "summary": "Get backlinks for a note",
+        "tags": [
+          "Notes"
         ]
       }
     },

@@ -1,4 +1,4 @@
-import { BookMarked, ListTree, type LucideIcon } from "lucide-react";
+import { BookMarked, Link2, ListTree, type LucideIcon } from "lucide-react";
 import {
 	createContext,
 	type ReactNode,
@@ -21,7 +21,7 @@ import {
 //   - always-on — rendered by the panel itself from a static component, valid
 //     on every route. The markdown reference is one of these.
 
-type RightToolId = "outline" | "reference";
+type RightToolId = "outline" | "backlinks" | "reference";
 
 interface RightToolDescriptor {
 	id: RightToolId;
@@ -33,6 +33,7 @@ interface RightToolDescriptor {
 
 const RIGHT_TOOLS: readonly RightToolDescriptor[] = [
 	{ id: "outline", label: "Outline", Icon: ListTree, contextual: true },
+	{ id: "backlinks", label: "Backlinks", Icon: Link2, contextual: true },
 	{ id: "reference", label: "Reference", Icon: BookMarked, contextual: false },
 ];
 

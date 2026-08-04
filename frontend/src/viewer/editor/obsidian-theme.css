@@ -137,3 +137,49 @@
 	--atomic-editor-hl-comment: #8b949e;
 	--atomic-editor-hl-invalid: #ffdcd7;
 }
+
+/* [[ autocomplete rows, Obsidian-style: bold filename on the first line,
+   muted folder path (sans filename) stacked below it. CM6 renders
+   label + detail as inline siblings by default; the column flex stacks them. */
+/* Taller menu than CM6's cramped default, Obsidian-ish row rhythm. */
+.cm-tooltip-autocomplete > ul {
+	max-height: 24em;
+	min-width: 16em;
+}
+
+.cm-tooltip-autocomplete > ul > li {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+	padding: 7px 10px;
+}
+
+.cm-tooltip-autocomplete .cm-completionLabel {
+	font-weight: 600;
+}
+
+.cm-tooltip-autocomplete .cm-completionDetail {
+	display: block;
+	margin-left: 0;
+	font-style: normal;
+	font-size: 0.85em;
+	color: var(--atomic-editor-fg-faint, #8b949e);
+}
+
+/* Wikilinks are internal navigation — Atomic's external-link ::after icon
+   (the open-in-new-tab affordance on .cm-atomic-link) is noise inside
+   [[...]] and rendered as "[[link]icon]". Scope-kill it via the wiki-link
+   wrapper states; genuine external URLs keep their icon. */
+.cm-atomic-wiki-link-active .cm-atomic-link::after,
+.cm-atomic-wiki-link-hidden-syntax .cm-atomic-link::after {
+	content: none;
+}
+
+/* Revealed-wikilink outer brackets are bare text nodes that inherit Atomic's
+   un-themed fallback gray (#abb2bf-ish), while the inner bracket marks get the
+   themed --atomic-editor-fg-faint via highlight classes — two mismatched
+   grays inside one [[...]]. Pin the wrapper to the same faint token. */
+.cm-atomic-wiki-link-active {
+	color: var(--atomic-editor-fg-faint);
+}

@@ -9,6 +9,7 @@ defmodule Engram.Notes do
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Links
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
 
@@ -29,7 +30,7 @@ defmodule Engram.Notes do
   alias Engram.Sync.Broadcast
   alias Engram.Telemetry
   alias Engram.UsageMeters
-  alias Engram.Workers.{DeleteNoteIndex, EmbedNote}
+  alias Engram.Workers.{DeleteNoteIndex, EmbedNote, RebindNoteLinks}
 
   require Logger
 
@@ -440,6 +441,19 @@ defmodule Engram.Notes do
             end
 
           if is_nil(prev_hash) do
+            # A brand-new note may be the exact target a dangling link (or an
+            # existing binding losing the shortest-path tiebreak) has been
+            # waiting on — re-resolve every edge sharing its basename (#591).
+            _ =
+              Enqueue.enqueue(
+                RebindNoteLinks.new_for(
+                  user.id,
+                  vault.id,
+                  Links.basename_hmac(user, Links.basename_key(note.path))
+                ),
+                "rebind_note_links"
+              )
+
             # FTUX vault page listens for this — fires when an empty vault
             # gets its first note (typical case: Obsidian plugin completes
             # its first sync push).
@@ -888,6 +902,34 @@ defmodule Engram.Notes do
                     )
                   )
 
+                  # #591 — same-id CRDT relocate IS a rename (the primary
+                  # rename path for web/plugin); re-resolve both basenames,
+                  # same dedup-when-equal rule as do_rename_note_inner.
+                  old_key = Links.basename_key(decrypted.path)
+                  new_key = Links.basename_key(sanitized_path)
+
+                  _ =
+                    Enqueue.enqueue(
+                      RebindNoteLinks.new_for(
+                        user.id,
+                        vault.id,
+                        Links.basename_hmac(user, new_key)
+                      ),
+                      "rebind_note_links"
+                    )
+
+                  _ =
+                    if new_key != old_key do
+                      Enqueue.enqueue(
+                        RebindNoteLinks.new_for(
+                          user.id,
+                          vault.id,
+                          Links.basename_hmac(user, old_key)
+                        ),
+                        "rebind_note_links"
+                      )
+                    end
+
                   # Carry the OLD path so the post-commit handler can fan an
                   # old-path delete to peers (a web receiver has no local mirror
                   # to drop the note from its old folder otherwise).
@@ -955,6 +997,19 @@ defmodule Engram.Notes do
         {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
           case Crypto.maybe_decrypt_note_fields(updated, user) do
             {:ok, decrypted} ->
+              # #591 — treat a resurrect like a create: the note is live again
+              # under sanitized_path, so danglers waiting on its basename can
+              # bind.
+              _ =
+                Enqueue.enqueue(
+                  RebindNoteLinks.new_for(
+                    user.id,
+                    decrypted.vault_id,
+                    Links.basename_hmac(user, Links.basename_key(sanitized_path))
+                  ),
+                  "rebind_note_links"
+                )
+
               # A rename-restore carries the OLD (tombstone) path so peers clear
               # it; a same-path resurrect just announces.
               tag = if renamed?, do: {:announce_moved, prior.path}, else: :announce
@@ -1018,6 +1073,19 @@ defmodule Engram.Notes do
       # on a concurrent-create race.
       case do_bare_insert(base_attrs, user, sanitized_path, folder, id, lookup_query) do
         {:inserted, inserted, _crdt} ->
+          # #591 — CRDT genesis create is the primary create path (web/plugin);
+          # mirror upsert_note's create-branch rebind so danglers waiting on
+          # this basename bind here too, not only on the REST path.
+          _ =
+            Enqueue.enqueue(
+              RebindNoteLinks.new_for(
+                user.id,
+                vault.id,
+                Links.basename_hmac(user, Links.basename_key(sanitized_path))
+              ),
+              "rebind_note_links"
+            )
+
           {:ok, decrypt_or_raise!(inserted, user), :announce}
 
         {:raced, existing} ->
@@ -1924,6 +1992,27 @@ defmodule Engram.Notes do
         )
       end
 
+      # #591 — re-resolve edges for BOTH basenames: the new name may bind
+      # danglers waiting on it, and the old name's remaining candidates
+      # (a same-basename sibling elsewhere) may need to inherit the edges
+      # this note is vacating.
+      old_key = Links.basename_key(old_path)
+      new_key = Links.basename_key(new_path)
+
+      _ =
+        Enqueue.enqueue(
+          RebindNoteLinks.new_for(user.id, note.vault_id, Links.basename_hmac(user, new_key)),
+          "rebind_note_links"
+        )
+
+      _ =
+        if new_key != old_key do
+          Enqueue.enqueue(
+            RebindNoteLinks.new_for(user.id, note.vault_id, Links.basename_hmac(user, old_key)),
+            "rebind_note_links"
+          )
+        end
+
       # Splice the freshly-encrypted ciphertext + dek_version=2
       # into the in-memory struct so callers (broadcast, MCP,
       # controllers) read the new plaintext without re-decrypting
@@ -1982,7 +2071,15 @@ defmodule Engram.Notes do
             :ok = UsageMeters.dec_notes_count(user.id, updated)
           end)
 
-        _ = Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
+        # `path` (the caller's own plaintext argument) is in scope here even
+        # though `note` itself is the raw undecrypted row — no extra decrypt
+        # needed to compute the basename hmac for DeleteNoteIndex's chained
+        # rebind (#591).
+        _ =
+          Enqueue.enqueue(
+            delete_note_index_job(note, Links.basename_hmac(user, Links.basename_key(path))),
+            "delete_note_index"
+          )
 
         broadcast_change(user.id, vault.id, "delete", path, note.id, opts)
       end
@@ -2077,6 +2174,16 @@ defmodule Engram.Notes do
               # the tombstones. insert_all trades Enqueue.enqueue's per-job
               # telemetry for one statement; {_count, _} match keeps failures
               # loud (insert_all raises on error).
+              #
+              # #591 — `notes` here is the pre-decrypt meta projection (no
+              # plaintext path in scope yet; decrypt happens post-commit below
+              # for the broadcast), so `delete_note_index_job/1` gets no
+              # basename_key — DeleteNoteIndex's chained rebind is skipped.
+              # `Links.on_note_soft_deleted/2` (edge-flip) still runs
+              # unconditionally inside DeleteNoteIndex regardless. The
+              # same-basename-sibling rebind itself is NOT skipped for batch
+              # delete though — it's enqueued directly post-commit below,
+              # once plaintext paths exist (reusing the broadcast's decrypt).
               jobs = Enum.map(notes, &delete_note_index_job/1)
               _ = if jobs != [], do: Oban.insert_all(jobs)
 
@@ -2091,10 +2198,9 @@ defmodule Engram.Notes do
         {:ok, %{deleted: deleted, notes: notes}} ->
           # Post-commit: same per-note delete events clients already handle.
           # Meta rows decrypt cheaply (path envelope only — no content).
-          notes
-          |> Crypto.decrypt_notes_batch(user)
-          |> Enum.zip(notes)
-          |> Enum.each(fn
+          zipped = notes |> Crypto.decrypt_notes_batch(user) |> Enum.zip(notes)
+
+          Enum.each(zipped, fn
             {{:ok, note}, raw} ->
               broadcast_change(user.id, vault.id, "delete", note.path, raw.id, [])
 
@@ -2114,6 +2220,25 @@ defmodule Engram.Notes do
               )
           end)
 
+          # #591 — plaintext paths are already decrypted right above for the
+          # broadcast; piggyback the same-basename-sibling rebind here rather
+          # than re-decrypting inside the transaction. Dedup within the batch
+          # (deleting several notes that share a basename should only enqueue
+          # one rebind per key).
+          zipped
+          |> Enum.flat_map(fn
+            {{:ok, note}, _raw} -> [Links.basename_key(note.path)]
+            {{:error, _}, _raw} -> []
+          end)
+          |> Enum.uniq()
+          |> Enum.each(fn key ->
+            _ =
+              Enqueue.enqueue(
+                RebindNoteLinks.new_for(user.id, vault.id, Links.basename_hmac(user, key)),
+                "rebind_note_links"
+              )
+          end)
+
           {:ok, %{deleted: deleted}}
 
         {:error, _} = err ->
@@ -2125,13 +2250,27 @@ defmodule Engram.Notes do
   # T3.2 — base64 path_hmac, never plaintext. Single builder shared by
   # delete_note/3, batch_delete_notes/3, and the folder-delete cascade so an
   # arg change cannot drift between sites (silently orphaning Qdrant points).
-  defp delete_note_index_job(note) do
-    DeleteNoteIndex.new(%{
+  #
+  # #591 — `basename_hmac` (base64, T3.2/H3 — see no_plaintext_args_test.exs)
+  # lets DeleteNoteIndex chain a rebind so a shadowed same-basename sibling
+  # can inherit this note's edges. Optional: a caller without plaintext in
+  # scope at this point (batch_delete_notes' pre-commit job build) passes nil
+  # and DeleteNoteIndex skips the rebind — `Links.on_note_soft_deleted/2`
+  # (edge-flip) still always runs.
+  defp delete_note_index_job(note, basename_hmac \\ nil) do
+    args = %{
       note_id: note.id,
       user_id: note.user_id,
       vault_id: note.vault_id,
       path_hmac: Base.encode64(note.path_hmac)
-    })
+    }
+
+    args =
+      if basename_hmac,
+        do: Map.put(args, :basename_hmac, Base.encode64(basename_hmac)),
+        else: args
+
+    DeleteNoteIndex.new(args)
   end
 
   @doc """
@@ -2240,6 +2379,7 @@ defmodule Engram.Notes do
     :path_ciphertext,
     :path_nonce,
     :path_hmac,
+    :basename_hmac,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac,
@@ -3520,6 +3660,7 @@ defmodule Engram.Notes do
     :path_ciphertext,
     :path_nonce,
     :path_hmac,
+    :basename_hmac,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac
@@ -3532,6 +3673,7 @@ defmodule Engram.Notes do
     :path_ciphertext,
     :path_nonce,
     :path_hmac,
+    :basename_hmac,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac,
@@ -3873,7 +4015,14 @@ defmodule Engram.Notes do
       # the update_all above rolled back. Qdrant cleanup + broadcasts.
       # Markers carry no embedding, so they skip the index-cleanup enqueue.
       Enum.each(real_notes, fn note ->
-        _ = Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
+        # `note.path` is already decrypted (fetch_decrypted_live_rows above),
+        # so the basename hmac for DeleteNoteIndex's chained rebind (#591) is
+        # free here.
+        _ =
+          Enqueue.enqueue(
+            delete_note_index_job(note, Links.basename_hmac(user, Links.basename_key(note.path))),
+            "delete_note_index"
+          )
 
         :ok = broadcast_change(user.id, vault.id, "delete", note.path, note.id, [])
       end)
@@ -4632,6 +4781,7 @@ defmodule Engram.Notes do
       path_ciphertext: path_ct,
       path_nonce: path_n,
       path_hmac: Crypto.hmac_field(filter_key, path),
+      basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path)),
       folder_ciphertext: folder_ct,
       folder_nonce: folder_n,
       folder_hmac: Crypto.hmac_field(filter_key, folder),
@@ -4657,6 +4807,7 @@ defmodule Engram.Notes do
       path_ciphertext: path_ct,
       path_nonce: path_n,
       path_hmac: Crypto.hmac_field(filter_key, path),
+      basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path)),
       folder_ciphertext: folder_ct,
       folder_nonce: folder_n,
       folder_hmac: Crypto.hmac_field(filter_key, folder)

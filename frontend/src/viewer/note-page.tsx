@@ -1,6 +1,6 @@
 import type { EditorView } from "@codemirror/view";
 import { BookOpen, Pencil } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import type { Awareness } from "y-protocols/awareness";
@@ -14,6 +14,7 @@ import {
 	useFolders,
 	useNote,
 	useRenameNote,
+	useSyncManifest,
 } from "../api/queries";
 import { readRows } from "../crdt/frontmatter-doc";
 import {
@@ -27,6 +28,7 @@ import {
 import { useRightTools } from "../layout/right-tools-context";
 import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";
+import BacklinksPanel from "./backlinks-panel";
 import { useActiveEditor } from "./editor/active-editor-context";
 import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
 import { InlineTitle } from "./inline-title";
@@ -42,6 +44,7 @@ import { MoveDialog } from "./tree-actions/move-dialog";
 import { RenameInput } from "./tree-actions/rename-input";
 import { renameBaseName } from "./tree-actions/rename-path";
 import { useLiveContent } from "./use-live-content";
+import { buildWikiMap, wikiHref } from "./wiki-link";
 
 const NoteEditor = lazy(() => import("./note-editor"));
 
@@ -56,6 +59,7 @@ export default function NotePage() {
 	const validId = idStr && idStr.length > 0 ? idStr : null;
 
 	const { data: note, isLoading, error } = useNote(validId);
+	const { data: manifest } = useSyncManifest();
 	const { setSlot } = useRightTools();
 	const { setEditor } = useActiveEditor();
 
@@ -86,10 +90,41 @@ export default function NotePage() {
 	const renameNote = useRenameNote();
 	const [syncStatus, setSyncStatus] = useState<CrdtSyncStatus>(getCrdtSyncStatus);
 	const editorViewRef = useRef<EditorView | null>(null);
-	// Mirrors NoteView's remark-wiki-link hrefTemplate. useCallback keeps a
-	// stable identity so passing it to NoteEditor doesn't re-fire the
-	// decorationsCompartment reconfigure effect on every render.
-	const resolveWikiLink = useCallback((permalink: string) => `/notes/${encodeURI(permalink)}`, []);
+	// Same lookup NoteView builds for its remark-wiki-link hrefTemplate — a
+	// resolved link routes straight to the note id instead of through the
+	// lazy /:slug/wiki/* resolver.
+	const wikiMap = useMemo(() => buildWikiMap(note?.links), [note?.links]);
+	// useCallback keeps a stable identity so passing it to NoteEditor doesn't
+	// re-fire the decorationsCompartment reconfigure effect on every render.
+	const resolveWikiLink = useCallback(
+		(permalink: string) => wikiHref(permalink, slug, wikiMap),
+		[slug, wikiMap],
+	);
+	// Editor-mode click-to-open. Router nav must come from the React tree —
+	// see LivePreviewOpts.openWikiLink for why the editor can't reach the
+	// router singleton itself.
+	const openWikiLink = useCallback(
+		(permalink: string) => {
+			const href = wikiHref(permalink, slug, wikiMap);
+			if (href.startsWith("/")) {
+				navigate(href);
+			} else if (href.startsWith("#")) {
+				// Same-page heading — hash assignment scrolls, no reload.
+				window.location.hash = href;
+			}
+		},
+		[navigate, slug, wikiMap],
+	);
+	// `[[` autocomplete's candidate list. Read through a ref, not a useMemo keyed
+	// on manifest, so this callback's identity NEVER changes -- the manifest
+	// query refetches on its own staleTime, and a new function identity there
+	// would fire NoteEditor's decorationsCompartment.reconfigure effect for
+	// every refetch with no UI change to show for it (same onView/onShortcutRef
+	// reasoning documented in note-editor.tsx).
+	const manifestPaths = useMemo(() => manifest?.notes.map((n) => n.path) ?? [], [manifest]);
+	const manifestPathsRef = useRef<string[]>([]);
+	manifestPathsRef.current = manifestPaths;
+	const wikiCompletionPaths = useCallback(() => manifestPathsRef.current, []);
 
 	const path = note?.path ?? null;
 	const noteId = note?.id ?? null;
@@ -148,6 +183,17 @@ export default function NotePage() {
 		setSlot("outline", <NoteToc content={liveContent} />);
 		return () => setSlot("outline", null);
 	}, [notePath, liveContent, setSlot]);
+
+	// Backlinks only need the note id (the panel fetches its own data), so this
+	// doesn't need to re-fire on every keystroke the way the ToC's effect does.
+	useEffect(() => {
+		if (noteId === null) {
+			setSlot("backlinks", null);
+			return;
+		}
+		setSlot("backlinks", <BacklinksPanel noteId={noteId} />);
+		return () => setSlot("backlinks", null);
+	}, [noteId, setSlot]);
 
 	// Consume the just-created flag exactly once: start renaming, then strip the
 	// state so a later back-navigation to this history entry doesn't reopen the
@@ -385,7 +431,7 @@ export default function NotePage() {
 						// the title sits the same distance above the body in reading mode
 						// as it does in the editor.
 						<div className="px-5 pt-5">
-							<NoteView content={liveContent} tags={note.tags} />
+							<NoteView content={liveContent} tags={note.tags} links={note.links} />
 						</div>
 					) : (
 						<Suspense fallback={<p className="px-5 py-5 text-muted-foreground">Loading editor…</p>}>
@@ -395,6 +441,8 @@ export default function NotePage() {
 									awareness={handle.awareness}
 									mode={mode === "raw" ? "raw" : "rendered"}
 									resolveWikiLink={resolveWikiLink}
+									openWikiLink={openWikiLink}
+									wikiCompletionPaths={wikiCompletionPaths}
 									onFrontmatterShortcut={handleFrontmatterShortcut}
 									onView={(v) => {
 										editorViewRef.current = v;

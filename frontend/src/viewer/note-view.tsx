@@ -2,6 +2,7 @@ import remarkCallouts from "@portaljs/remark-callouts";
 import matter from "gray-matter";
 import { type CSSProperties, memo, useMemo } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import { Link, useParams } from "react-router";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
@@ -15,10 +16,15 @@ import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { AttachmentFallback } from "./attachment-fallback";
 import AttachmentImg from "./attachment-img";
 import MermaidBlock from "./mermaid-block";
+import { buildWikiMap, type NoteLinkEdge, wikiHref } from "./wiki-link";
 
 interface NoteViewProps {
 	content: string;
 	tags: string[];
+	// Optional: the markdown reference panel's preview call site renders
+	// outside a note context and has no links to resolve — wikilinks there
+	// fall back to the lazy /:slug/wiki/* route same as before this prop existed.
+	links?: NoteLinkEdge[];
 }
 
 // Sentinel marks images rewritten from Obsidian `![[X]]` embed syntax. The
@@ -32,18 +38,23 @@ function rewriteEmbeds(raw: string): string {
 	});
 }
 
-const remarkPlugins = [
-	remarkGfm,
-	remarkMath,
-	remarkCallouts,
+// Slug-parameterized: wikilinks route through the vault-scoped resolver
+// (`/:slug/wiki/*`, see wiki-link.ts). pageResolver is identity — the default
+// would mangle names (`My Note` → `my_note`) before the resolver ever saw them.
+const remarkPluginsFor = (slug: string | undefined, map: Map<string, NoteLinkEdge>) =>
 	[
-		remarkWikiLink,
-		{
-			hrefTemplate: (permalink: string) => `/notes/${encodeURI(permalink)}`,
-			aliasDivider: "|",
-		},
-	],
-] as const;
+		remarkGfm,
+		remarkMath,
+		remarkCallouts,
+		[
+			remarkWikiLink,
+			{
+				pageResolver: (name: string) => [name],
+				hrefTemplate: (permalink: string) => wikiHref(permalink, slug, map),
+				aliasDivider: "|",
+			},
+		],
+	] as const;
 
 const rehypePlugins = [
 	rehypeSlug,
@@ -63,8 +74,11 @@ const TEXT_EMBED = /\.(?:md|canvas)$/iu;
 // the preview stays force-mounted with identical props; react-markdown has
 // no internal memoization, so an unmemoized NoteView re-ran the full
 // remark/rehype pipeline (gfm + KaTeX + highlight) per keystroke.
-function NoteView({ content, tags }: NoteViewProps) {
+function NoteView({ content, tags, links }: NoteViewProps) {
 	const isFreeTier = useIsFreeTier();
+	const { slug } = useParams();
+	const wikiMap = useMemo(() => buildWikiMap(links), [links]);
+	const remarkPlugins = useMemo(() => remarkPluginsFor(slug, wikiMap), [slug, wikiMap]);
 	const body = useMemo(() => {
 		try {
 			return rewriteEmbeds(matter(content).content);
@@ -100,6 +114,22 @@ function NoteView({ content, tags }: NoteViewProps) {
 						url.startsWith(ATTACHMENT_SCHEME) ? url : defaultUrlTransform(url)
 					}
 					components={{
+						// In-app hrefs (wikilinks) go through the router — a plain <a>
+						// would full-page-reload the SPA on every note hop.
+						a({ node: _node, href, children, ...rest }) {
+							if (href?.startsWith("/")) {
+								return (
+									<Link to={href} {...rest}>
+										{children}
+									</Link>
+								);
+							}
+							return (
+								<a href={href} {...rest}>
+									{children}
+								</a>
+							);
+						},
 						code({ node: _node, className, children, ...rest }) {
 							const lang = /language-(?<lang>\w+)/u.exec(className ?? "")?.[1];
 							const code = String(children).replace(/\n$/u, "");

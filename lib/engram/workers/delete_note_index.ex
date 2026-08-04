@@ -11,18 +11,24 @@ defmodule Engram.Workers.DeleteNoteIndex do
   use Oban.Worker, queue: :indexing, max_attempts: 3
 
   alias Engram.Indexing
+  alias Engram.Links
+  alias Engram.Notes.Enqueue
+  alias Engram.Workers.RebindNoteLinks
 
   # T3.7 — NO rotation gate needed here. `Indexing.delete_note_index/1` only
   # uses `path_hmac` as a filter key to delete Qdrant points and DB chunk rows;
-  # it does NOT decrypt or re-encrypt any payload. DEK access is never triggered.
+  # `Links.on_note_soft_deleted/2` is raw SQL (no decrypt). Neither touches
+  # the DEK. The chained `RebindNoteLinks` job (below) DOES need the DEK, so
+  # IT carries its own rotation gate rather than this worker gating for it.
   @impl Oban.Worker
   def perform(%Oban.Job{
-        args: %{
-          "note_id" => note_id,
-          "user_id" => user_id,
-          "vault_id" => vault_id,
-          "path_hmac" => path_hmac_b64
-        }
+        args:
+          %{
+            "note_id" => note_id,
+            "user_id" => user_id,
+            "vault_id" => vault_id,
+            "path_hmac" => path_hmac_b64
+          } = args
       }) do
     # `Indexing.delete_note_index/1` reads `note.path_hmac` directly. We
     # decode the base64 arg back into the raw HMAC bytes the function
@@ -33,6 +39,20 @@ defmodule Engram.Workers.DeleteNoteIndex do
       {:ok, path_hmac} ->
         note = %{id: note_id, user_id: user_id, vault_id: vault_id, path_hmac: path_hmac}
         _ = Indexing.delete_note_index(note)
+
+        # #591 — the note is gone: drop its outgoing edges and flip any
+        # incoming edges back to dangling.
+        :ok = Links.on_note_soft_deleted(user_id, note_id)
+
+        # Chain a rebind for the deleted note's OWN basename — a same-
+        # basename sibling elsewhere may now win the shortest-path tiebreak
+        # and should inherit the edges this note is vacating. Only possible
+        # when the enqueueing caller had plaintext in scope to compute the
+        # hmac (see `Notes.delete_note_index_job/2`); otherwise skip — the
+        # edge-flip above already ran regardless. `basename_hmac` (base64) —
+        # never plaintext, same T3.2/H3 invariant as `path_hmac` above.
+        _ = maybe_enqueue_rebind(user_id, vault_id, Map.get(args, "basename_hmac"))
+
         :ok
 
       :error ->
@@ -50,5 +70,20 @@ defmodule Engram.Workers.DeleteNoteIndex do
   # there is no scenario where we want to "process" such a job.
   def perform(%Oban.Job{args: args}) do
     {:discard, "T3.2 legacy or malformed args (keys=#{inspect(Map.keys(args))})"}
+  end
+
+  defp maybe_enqueue_rebind(_user_id, _vault_id, nil), do: :ok
+
+  defp maybe_enqueue_rebind(user_id, vault_id, basename_hmac_b64) do
+    case Base.decode64(basename_hmac_b64) do
+      {:ok, basename_hmac} ->
+        Enqueue.enqueue(
+          RebindNoteLinks.new_for(user_id, vault_id, basename_hmac),
+          "rebind_note_links"
+        )
+
+      :error ->
+        :ok
+    end
   end
 end

@@ -1,7 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import NoteView from "./note-view";
+import type { NoteLinkEdge } from "./wiki-link";
 
 let mockTier: "free" | "starter" | "pro" | "trial" | "none" = "free";
 // SaaS by default; self-host flips false (no billing → attachments ungated).
@@ -42,9 +44,68 @@ vi.mock("./mermaid-block", () => ({
 	default: () => null,
 }));
 
-function renderNote(content: string) {
-	return render(<NoteView content={content} tags={[]} />);
+function LocationProbe() {
+	const loc = useLocation();
+	return <output data-testid="loc">{`${loc.pathname}${loc.hash}`}</output>;
 }
+
+// NoteView reads the vault slug from the route to build wikilink hrefs.
+function renderNote(content: string, links?: NoteLinkEdge[]) {
+	return render(
+		<MemoryRouter initialEntries={["/work/n-1"]}>
+			<LocationProbe />
+			<Routes>
+				<Route
+					path="/:slug/:itemId"
+					element={<NoteView content={content} tags={[]} links={links} />}
+				/>
+			</Routes>
+		</MemoryRouter>,
+	);
+}
+
+describe("NoteView wikilinks", () => {
+	it("links [[Page]] into the vault wiki resolver, name unmangled", () => {
+		renderNote("See [[Folder/My Note]].");
+		const link = screen.getByRole("link", { name: "Folder/My Note" });
+		expect(link).toHaveAttribute("href", "/work/wiki/Folder/My%20Note");
+	});
+
+	it("renders the alias as the link text", () => {
+		renderNote("See [[My Note|the note]].");
+		const link = screen.getByRole("link", { name: "the note" });
+		expect(link).toHaveAttribute("href", "/work/wiki/My%20Note");
+	});
+
+	it("carries a heading as a slugged hash", () => {
+		renderNote("See [[My Note#Some Section]].");
+		const link = screen.getByRole("link", { name: "My Note#Some Section" });
+		expect(link).toHaveAttribute("href", "/work/wiki/My%20Note#some-section");
+	});
+
+	it("navigates in-app instead of a full page load", () => {
+		renderNote("See [[My Note]].");
+		fireEvent.click(screen.getByRole("link", { name: "My Note" }));
+		expect(screen.getByTestId("loc")).toHaveTextContent("/work/wiki/My%20Note");
+	});
+
+	it("links straight to the note id when the links prop resolves the target", () => {
+		renderNote("See [[My Note]].", [
+			{
+				target_text: "My Note",
+				target_note_id: "n-1",
+				target_attachment_id: null,
+				target_path: "My Note.md",
+				alias: null,
+				anchor: null,
+				link_type: "wikilink",
+				dangling: false,
+			},
+		]);
+		const link = screen.getByRole("link", { name: "My Note" });
+		expect(link).toHaveAttribute("href", "/work/n-1");
+	});
+});
 
 describe("NoteView frontmatter table removal", () => {
 	it("does not render the frontmatter dl table even when content has frontmatter", () => {

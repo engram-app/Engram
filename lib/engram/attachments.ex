@@ -14,12 +14,15 @@ defmodule Engram.Attachments do
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Links
   alias Engram.Logger.Metadata
+  alias Engram.Notes.Enqueue
   alias Engram.Notes.PathSanitizer
   alias Engram.Repo
   alias Engram.Storage
   alias Engram.Storage.MimeWhitelist
   alias Engram.Sync.Broadcast
+  alias Engram.Workers.RebindNoteLinks
 
   @doc """
   Composable tenant-scope query: `Attachment` rows owned by `user` in `vault`
@@ -59,6 +62,7 @@ defmodule Engram.Attachments do
          {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       path_hmac = Crypto.hmac_field(filter_key, path)
+      basename_hmac = Crypto.hmac_field(filter_key, Links.basename_key(path))
 
       # Pre-lock window: probable-id read, cap check, encrypt, and the S3
       # PUT all run WITHOUT holding a pool transaction or the advisory
@@ -81,7 +85,7 @@ defmodule Engram.Attachments do
                vault,
                att_id0,
                path,
-               path_hmac,
+               {path_hmac, basename_hmac},
                plaintext,
                mtime,
                explicit_mime
@@ -110,7 +114,7 @@ defmodule Engram.Attachments do
                            vault,
                            id,
                            path,
-                           path_hmac,
+                           {path_hmac, basename_hmac},
                            plaintext,
                            mtime,
                            explicit_mime
@@ -127,11 +131,14 @@ defmodule Engram.Attachments do
                  {:ok, att} <- write_row(user, existing, att_id0, changeset_attrs) do
               # Phase B.3: path is virtual — splice the plaintext we already
               # have onto the returned struct so callers can read att.path
-              # without a second decrypt round-trip.
-              {:ok, %{att | path: path}}
+              # without a second decrypt round-trip. `is_nil(existing)`
+              # (captured under the same lock that decided insert-vs-update
+              # in write_row/4) tells the caller below whether this was a
+              # CREATE, for the #591 create-only rebind hook.
+              {:ok, {%{att | path: path}, is_nil(existing)}}
             end
             |> case do
-              {:ok, att} -> att
+              {:ok, pair} -> pair
               {:error, reason} -> Repo.rollback(reason)
             end
           end)
@@ -143,11 +150,31 @@ defmodule Engram.Attachments do
         # — the plugin's WebSocket handler already fetches + materializes any
         # attachment "upsert" event (it's the same code path move's new-path
         # leg drives), so no plugin change is needed.
-        with {:ok, %Attachment{} = att} <- result do
+        with {:ok, {%Attachment{} = att, created?}} <- result do
           broadcast_attachment(user.id, vault.id, "upsert", path, att)
+
+          # #591 — a brand-new attachment may be the exact target a dangling
+          # embed/link (or an existing binding losing the shortest-path
+          # tiebreak) has been waiting on. Only on CREATE: an update never
+          # changes the basename other edges could bind to (moves go
+          # through move_attachment/4, which carries its own rebind hook).
+          if created? do
+            _ =
+              Enqueue.enqueue(
+                RebindNoteLinks.new_for(
+                  user.id,
+                  vault.id,
+                  Links.basename_hmac(user, Links.basename_key(path))
+                ),
+                "rebind_note_links"
+              )
+          end
         end
 
-        result
+        case result do
+          {:ok, {att, _created?}} -> {:ok, att}
+          {:error, _} = err -> err
+        end
       end
     end
   end
@@ -303,27 +330,34 @@ defmodule Engram.Attachments do
           Repo.with_tenant(user.id, fn ->
             seq = Engram.Vaults.next_seq!(vault.id)
 
-            {count, keys} =
+            {count, rows} =
               from(a in scoped_live(user, vault),
                 where: a.path_hmac == ^path_hmac,
-                select: a.storage_key
+                select: {a.id, a.storage_key, a.basename_hmac}
               )
               |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
 
-            {count, List.first(keys)}
+            {count, List.first(rows)}
           end)
           |> unwrap_tenant()
 
         # Best-effort blob cleanup — row is already soft-deleted so safe to retry.
-        deleted? =
+        # `edge_hook` carries {attachment_id, basename_hmac} for the #591
+        # edge-flip + sibling-rebind below, nil when no live row matched.
+        {deleted?, edge_hook} =
           case result do
-            {:ok, {count, key}} when is_binary(key) ->
-              delete_external(key)
-              count > 0
+            {:ok, {count, {id, key, basename_hmac}}} when count > 0 ->
+              if is_binary(key), do: delete_external(key)
+              {true, {id, basename_hmac}}
 
-            # {count, nil}: legacy row with no storage_key, or no row matched.
+            # {count, nil}: count is always 0 here — the select always returns
+            # the {id, storage_key, basename_hmac} 3-tuple (storage_key may
+            # itself be nil for a legacy row, but that still matches the
+            # first branch above and unpacks fine). List.first(rows) is only
+            # nil when rows == [], i.e. no live row matched path_hmac
+            # (absent or already-deleted path).
             {:ok, {count, _}} ->
-              count > 0
+              {count > 0, nil}
 
             {:error, reason} ->
               require Logger
@@ -333,7 +367,22 @@ defmodule Engram.Attachments do
                 Metadata.with_category(:warning, :sync, reason: inspect(reason))
               )
 
-              false
+              {false, nil}
+          end
+
+        # #591 — the attachment is gone: flip any incoming edges back to
+        # dangling, then chain a rebind for its OWN basename so a same-
+        # basename sibling elsewhere can inherit the edges it's vacating
+        # (same pattern as DeleteNoteIndex's chained rebind for notes).
+        _ =
+          if edge_hook do
+            {attachment_id, basename_hmac} = edge_hook
+            :ok = Links.on_attachment_soft_deleted(user.id, attachment_id)
+
+            Enqueue.enqueue(
+              RebindNoteLinks.new_for(user.id, vault.id, basename_hmac),
+              "rebind_note_links"
+            )
           end
 
         # Real-time notification — only when a live row actually transitioned to
@@ -409,6 +458,8 @@ defmodule Engram.Attachments do
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       old_hmac = Crypto.hmac_field(filter_key, old_path)
       new_hmac = Crypto.hmac_field(filter_key, new_path)
+      old_basename_hmac = Crypto.hmac_field(filter_key, Links.basename_key(old_path))
+      new_basename_hmac = Crypto.hmac_field(filter_key, Links.basename_key(new_path))
 
       Repo.transaction(fn ->
         Repo.with_tenant(user.id, fn ->
@@ -446,6 +497,7 @@ defmodule Engram.Attachments do
                     path_ciphertext: path_ct,
                     path_nonce: path_n,
                     path_hmac: new_hmac,
+                    basename_hmac: new_basename_hmac,
                     updated_at: now,
                     seq: seq
                   ]
@@ -455,7 +507,16 @@ defmodule Engram.Attachments do
               # ITS OWN id-AAD). Sole purpose: surface {old_path, deleted: true}
               # in the change feed so clients trash the old path.
               Repo.insert!(
-                tombstone_changeset(user, vault, dek, old_path, old_hmac, live, seq, now)
+                tombstone_changeset(
+                  user,
+                  vault,
+                  dek,
+                  old_path,
+                  {old_hmac, old_basename_hmac},
+                  live,
+                  seq,
+                  now
+                )
               )
 
               %{
@@ -464,6 +525,7 @@ defmodule Engram.Attachments do
                   path_ciphertext: path_ct,
                   path_nonce: path_n,
                   path_hmac: new_hmac,
+                  basename_hmac: new_basename_hmac,
                   updated_at: now,
                   seq: seq
               }
@@ -479,10 +541,31 @@ defmodule Engram.Attachments do
       end)
       |> case do
         {:ok, %Attachment{} = att} ->
-          if old_path != new_path do
-            broadcast_attachment(user.id, vault.id, "delete", old_path, att)
-            broadcast_attachment(user.id, vault.id, "upsert", new_path, att)
-          end
+          _ =
+            if old_path != new_path do
+              broadcast_attachment(user.id, vault.id, "delete", old_path, att)
+              broadcast_attachment(user.id, vault.id, "upsert", new_path, att)
+
+              # #591 — re-resolve edges for BOTH basenames: the new name may
+              # bind danglers waiting on it, and the old name's remaining
+              # candidates (a same-basename sibling elsewhere) may need to
+              # inherit the edges this attachment is vacating. Both hmacs are
+              # already computed above (needed for the repoint/tombstone
+              # writes), so no extra derivation here.
+              _ =
+                Enqueue.enqueue(
+                  RebindNoteLinks.new_for(user.id, vault.id, new_basename_hmac),
+                  "rebind_note_links"
+                )
+
+              _ =
+                if new_basename_hmac != old_basename_hmac do
+                  Enqueue.enqueue(
+                    RebindNoteLinks.new_for(user.id, vault.id, old_basename_hmac),
+                    "rebind_note_links"
+                  )
+                end
+            end
 
           {:ok, att}
 
@@ -501,7 +584,16 @@ defmodule Engram.Attachments do
   # requires content_nonce; the value is irrelevant — the row is deleted and
   # never decrypted). Path encrypted under the tombstone's OWN id-AAD so reads
   # of the (never-served) row stay AAD-consistent.
-  defp tombstone_changeset(user, vault, dek, old_path, old_hmac, live, seq, now) do
+  defp tombstone_changeset(
+         user,
+         vault,
+         dek,
+         old_path,
+         {old_hmac, old_basename_hmac},
+         live,
+         seq,
+         now
+       ) do
     tomb_id = Ecto.UUID.generate()
     path_aad = Crypto.aad_for_row(:attachments, :path, tomb_id)
     {path_ct, path_n} = Envelope.encrypt(old_path, dek, path_aad)
@@ -510,6 +602,7 @@ defmodule Engram.Attachments do
       path_ciphertext: path_ct,
       path_nonce: path_n,
       path_hmac: old_hmac,
+      basename_hmac: old_basename_hmac,
       content_hash: live.content_hash,
       mime_type: live.mime_type,
       size_bytes: live.size_bytes,
@@ -723,7 +816,7 @@ defmodule Engram.Attachments do
         # the WHOLE batch. All-or-nothing is deliberate — a change from the
         # old per-path independent transactions — and callers see the raise,
         # never a fake `deleted: 0` success.
-        {:ok, {deleted_hmacs, storage_keys}} =
+        {:ok, {deleted_ids, deleted_hmacs, basename_hmacs, storage_keys}} =
           batch_soft_delete_rows(user, vault, Map.values(hmac_by_path))
 
         # Post-commit side effects — batched blob cleanup (best-effort,
@@ -731,6 +824,19 @@ defmodule Engram.Attachments do
         # blob, exactly like the single-delete path), then one broadcast
         # per deleted path in input order.
         delete_external_many(storage_keys)
+
+        # #591 — same edge-flip + sibling-rebind as the single-delete path,
+        # batched: one Links.on_attachments_soft_deleted/2 UPDATE for the
+        # whole batch, one rebind enqueue per unique basename in the batch.
+        :ok = Links.on_attachments_soft_deleted(user.id, deleted_ids)
+
+        Enum.each(basename_hmacs, fn hmac ->
+          _ =
+            Enqueue.enqueue(
+              RebindNoteLinks.new_for(user.id, vault.id, hmac),
+              "rebind_note_links"
+            )
+        end)
 
         deleted_set = MapSet.new(deleted_hmacs)
 
@@ -757,8 +863,10 @@ defmodule Engram.Attachments do
   # soft-delete every row via a single VALUES-join UPDATE that stamps each row
   # its OWN seq (the `(seq, id)` keyset feed requires per-row-distinct,
   # monotonic seqs — N rows must never share one). Returns
-  # `{:ok, {deleted_path_hmacs, storage_keys}}` for the actually-deleted rows.
-  defp batch_soft_delete_rows(_user, _vault, []), do: {:ok, {[], []}}
+  # `{:ok, {deleted_ids, deleted_path_hmacs, basename_hmacs, storage_keys}}`
+  # for the actually-deleted rows — `deleted_ids` + `basename_hmacs` feed the
+  # #591 edge-flip + sibling-rebind in `batch_delete/3`.
+  defp batch_soft_delete_rows(_user, _vault, []), do: {:ok, {[], [], [], []}}
 
   defp batch_soft_delete_rows(user, vault, hmacs) do
     now = DateTime.utc_now(:second)
@@ -773,7 +881,7 @@ defmodule Engram.Attachments do
         |> Repo.all()
 
       if rows == [] do
-        {[], []}
+        {[], [], [], []}
       else
         n = length(rows)
 
@@ -816,14 +924,20 @@ defmodule Engram.Attachments do
             SET deleted_at = $1, updated_at = $1, seq = v.seq
             FROM (VALUES #{values_sql}) AS v(id, seq)
             WHERE a.id = v.id AND a.deleted_at IS NULL
-            RETURNING a.path_hmac, a.storage_key
+            RETURNING a.id, a.path_hmac, a.basename_hmac, a.storage_key
             """,
             params
           )
 
-        deleted_hmacs = returned |> Enum.map(fn [hmac, _key] -> hmac end) |> Enum.uniq()
-        storage_keys = for [_hmac, key] <- returned, is_binary(key), do: key
-        {deleted_hmacs, storage_keys}
+        # `a.id` comes back as raw 16-byte postgres uuid bytes via the
+        # low-level query (unlike the Ecto-typed `rows` select above) —
+        # load!/1 converts it back to the normal dashed string form other
+        # callers (Links.on_attachment_soft_deleted/2) expect.
+        deleted_ids = for [id, _hmac, _bn_hmac, _key] <- returned, do: Ecto.UUID.load!(id)
+        deleted_hmacs = returned |> Enum.map(fn [_id, hmac, _bn, _key] -> hmac end) |> Enum.uniq()
+        basename_hmacs = returned |> Enum.map(fn [_id, _hmac, bn, _key] -> bn end) |> Enum.uniq()
+        storage_keys = for [_id, _hmac, _bn, key] <- returned, is_binary(key), do: key
+        {deleted_ids, deleted_hmacs, basename_hmacs, storage_keys}
       end
     end)
     |> unwrap_tenant()
@@ -1050,7 +1164,16 @@ defmodule Engram.Attachments do
     end
   end
 
-  defp prepare_upload(user, vault, att_id, path, path_hmac, plaintext, mtime, explicit_mime) do
+  defp prepare_upload(
+         user,
+         vault,
+         att_id,
+         path,
+         {path_hmac, basename_hmac},
+         plaintext,
+         mtime,
+         explicit_mime
+       ) do
     mime = explicit_mime || MimeWhitelist.detect_mime(path)
     # was: key = Storage.key(user.id, vault.id, path)
     key = Storage.object_key(user.id, vault.id, att_id)
@@ -1077,7 +1200,8 @@ defmodule Engram.Attachments do
         content_nonce: nonce,
         path_ciphertext: path_ct,
         path_nonce: path_n,
-        path_hmac: path_hmac
+        path_hmac: path_hmac,
+        basename_hmac: basename_hmac
       }
 
       {:ok, key, attrs, ciphertext}

@@ -12,6 +12,7 @@ import {
 	useAcceptTerms,
 	useAppBootstrap,
 	useAttachments,
+	useBacklinks,
 	useBatchDeleteAttachments,
 	useBatchDeleteFolders,
 	useBatchDeleteNotes,
@@ -217,6 +218,47 @@ describe("useNote by id", () => {
 		const { result } = renderHook(() => useNote(null), { wrapper });
 		expect(result.current.fetchStatus).toBe("idle");
 		expect(get).not.toHaveBeenCalled();
+	});
+});
+
+describe("useBacklinks", () => {
+	// The API returns one row per EDGE — a source note linking twice (e.g. once
+	// plain, once aliased) shows up twice. The panel keys rows by
+	// source_note_id, so undeduped data renders duplicate rows / React key
+	// warnings. `select` collapses to one row per source note, keeping the
+	// first edge.
+	it("dedupes multiple edges from the same source note, keeping the first", async () => {
+		get.mockResolvedValue({
+			backlinks: [
+				{
+					source_note_id: "src-1",
+					source_path: "a.md",
+					source_title: "A",
+					alias: null,
+					anchor: null,
+				},
+				{
+					source_note_id: "src-1",
+					source_path: "a.md",
+					source_title: "A",
+					alias: "x",
+					anchor: "h1",
+				},
+				{
+					source_note_id: "src-2",
+					source_path: "b.md",
+					source_title: "B",
+					alias: null,
+					anchor: null,
+				},
+			],
+		});
+
+		const { result } = renderHook(() => useBacklinks("42"), { wrapper });
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+		expect(result.current.data?.map((b) => b.source_note_id)).toEqual(["src-1", "src-2"]);
+		expect(result.current.data?.[0]?.alias).toBeNull();
 	});
 });
 

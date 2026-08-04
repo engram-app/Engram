@@ -1,3 +1,4 @@
+import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -48,6 +49,10 @@ export interface NoteEditorProps {
 	awareness: Awareness;
 	mode: EditorMode;
 	resolveWikiLink: (name: string) => string;
+	/** Click-to-open a wikilink target — router-navigates from the React tree. */
+	openWikiLink: (name: string) => void;
+	/** Vault-wide note paths for `[[` autocomplete (see editor/wiki-completion.ts). */
+	wikiCompletionPaths: () => string[];
 	/** Reaches the live EditorView out to a caller (e.g. the formatting toolbar). */
 	onView?: (view: EditorView | null) => void;
 	/**
@@ -72,9 +77,14 @@ export const decorationsCompartment = new Compartment();
  * plain markdown language only, no decorations. Exported so tests can drive
  * `decorationsCompartment.reconfigure(...)` directly against a mounted view.
  */
-export function decorationsFor(mode: EditorMode, resolveWikiLink: (name: string) => string) {
+export function decorationsFor(
+	mode: EditorMode,
+	resolveWikiLink: (name: string) => string,
+	openWikiLink: (name: string) => void,
+	wikiCompletionPaths: () => string[],
+) {
 	return mode === "rendered"
-		? livePreviewExtensions({ resolveWikiLink })
+		? livePreviewExtensions({ resolveWikiLink, openWikiLink, wikiCompletionPaths })
 		: [markdown({ base: markdownLanguage })];
 }
 
@@ -96,6 +106,8 @@ export function buildEditorState(
 	dark: boolean,
 	mode: EditorMode,
 	resolveWikiLink: (name: string) => string,
+	openWikiLink: (name: string) => void,
+	wikiCompletionPaths: () => string[],
 	onFrontmatterShortcut?: () => boolean,
 ): EditorState {
 	return EditorState.create({
@@ -105,6 +117,19 @@ export function buildEditorState(
 			drawSelection(),
 			EditorView.lineWrapping,
 			Prec.highest(keymap.of(yUndoManagerKeymap)),
+			// Obsidian/VS Code-style bracket behavior: typing ( [ { ' " ` inserts
+			// the closer, typing the closer over an auto-inserted one skips it,
+			// and typing an opener with a selection SURROUNDS the selection
+			// instead of replacing it. The keymap makes Backspace delete an
+			// empty pair; it must sit before defaultKeymap to win the key.
+			closeBrackets(),
+			keymap.of(closeBracketsKeymap),
+			// closeBrackets reads its bracket set from languageData; markdown
+			// declares none, so provide one everywhere — the default set plus
+			// backtick (inline code is a first-class markdown pairing).
+			EditorState.languageData.of(() => [
+				{ closeBrackets: { brackets: ["(", "[", "{", "'", '"', "`"] } },
+			]),
 			keymap.of(defaultKeymap),
 			// Tab/Shift-Tab indent-dedent (Obsidian parity). Base, not the mode
 			// compartment, so it works in both rendered and raw mode.
@@ -124,7 +149,9 @@ export function buildEditorState(
 			Prec.highest(editorTheme),
 			// The ONLY source of the markdown language: swapping this compartment is
 			// what toggles Rendered vs Raw mode. See decorationsFor above.
-			decorationsCompartment.of(decorationsFor(mode, resolveWikiLink)),
+			decorationsCompartment.of(
+				decorationsFor(mode, resolveWikiLink, openWikiLink, wikiCompletionPaths),
+			),
 			// yCollab keeps the view and Y.Text in sync AFTER this initial seed and
 			// wires local edits back into the Y.Text (→ CRDT channel). MUST stay in
 			// the base extensions (never in the compartment) -- reconfiguring the
@@ -144,6 +171,8 @@ export default function NoteEditor({
 	awareness,
 	mode,
 	resolveWikiLink,
+	openWikiLink,
+	wikiCompletionPaths,
 	onView,
 	onFrontmatterShortcut,
 }: NoteEditorProps) {
@@ -169,15 +198,22 @@ export default function NoteEditor({
 	// hatch for the toolbar, not a doc/theme dependency -- including it would
 	// tear down and recreate the view (yCollab-detach hazard) whenever the
 	// caller passes a differently-identitied callback.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: mode/resolveWikiLink/onView are intentionally excluded, see comment above.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: mode/resolveWikiLink/openWikiLink/wikiCompletionPaths/onView are intentionally excluded, see comment above.
 	useEffect(() => {
 		const parent = hostRef.current;
 		if (!parent) {
 			return;
 		}
 		const view = new EditorView({
-			state: buildEditorState(ytext, awareness, resolved === "dark", mode, resolveWikiLink, () =>
-				Boolean(onShortcutRef.current?.()),
+			state: buildEditorState(
+				ytext,
+				awareness,
+				resolved === "dark",
+				mode,
+				resolveWikiLink,
+				openWikiLink,
+				wikiCompletionPaths,
+				() => Boolean(onShortcutRef.current?.()),
 			),
 			parent,
 		});
@@ -197,9 +233,11 @@ export default function NoteEditor({
 			return;
 		}
 		view.dispatch({
-			effects: decorationsCompartment.reconfigure(decorationsFor(mode, resolveWikiLink)),
+			effects: decorationsCompartment.reconfigure(
+				decorationsFor(mode, resolveWikiLink, openWikiLink, wikiCompletionPaths),
+			),
 		});
-	}, [mode, resolveWikiLink]);
+	}, [mode, resolveWikiLink, openWikiLink, wikiCompletionPaths]);
 
 	return <div ref={hostRef} />;
 }

@@ -17,7 +17,7 @@ defmodule Engram.Workers.NoPlaintextArgsTest do
   #   "path" =>          # JSON-string-keyed args
   #   path:              # atom-keyed args
   # Per audit T3.2.3.
-  @banned_keys ~w(path title content tags folder old_path name)
+  @banned_keys ~w(path title content tags folder old_path name basename_key basename)
 
   test "no Oban worker file uses banned plaintext arg keys" do
     offenders =
