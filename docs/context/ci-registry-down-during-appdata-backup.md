@@ -146,9 +146,21 @@ than a slow one.
 0 5 * * 0 .../startCustom.php ".../Prune CI Registry/script"
 ```
 
-Keeps 14 days of `engram-ci` tags, prunes the rest, then garbage-collects.
-Leaves the `ci-*` fingerprint pass-marker repos alone — they are ~220M total and
-deleting them only makes CI re-run jobs it would have skipped.
+Keeps 14 days of `ci-*` fingerprint markers and **15** days of `engram-ci`
+images, prunes the rest, then garbage-collects.
+
+**The marker window MUST be shorter than the image window.** A marker means
+"this content already went green", and CI skips `prebuild-ci-image` on that
+basis — so a marker that outlives its image makes CI skip the build and then
+fail pulling an image nobody rebuilt. That is not hypothetical: after the first
+prune, a re-run failed with `prebuild-ci-image  skipped` and e2e dying on
+`manifest unknown`, because the marker was still asserting a proof for an image
+that had been deleted. Markers are written *after* their image, so an equal
+window would let them outlive it — hence images get `KEEP_DAYS + 1`.
+
+Deleting a marker is safe in the other direction: CI reads its absence as
+"not cached" and simply re-runs the job. Marker repos fail open, image repos
+fail closed. When in doubt, expire the marker.
 
 First run: **829 tags -> 258, blobs 61G -> 27G** (63G before an initial
 `--delete-untagged`). Knobs: `KEEP_DAYS`, `MIN_IDLE_SEC`, `DRY_RUN=1`.
