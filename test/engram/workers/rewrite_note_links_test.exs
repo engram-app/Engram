@@ -67,16 +67,41 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
     end
   end
 
-  test "no unique option: two identical jobs both insert (cursor-chain regression)", %{
+  # Regression for the no-`unique:` invariant. `Oban.insert/1` called twice
+  # back-to-back never proves anything: both rows land in `available`, none
+  # is ever `executing`, so a `unique: [..., states: [:executing]]` option
+  # wouldn't even fire. The real trap is a self-re-enqueue racing its OWN
+  # still-`executing` row — reproduced here with `Oban.drain_queue/1`, which
+  # goes through the real fetch_jobs path (state -> "executing" before
+  # `perform/1` runs), same technique as
+  # BackfillNoteLinksTest."survives multiple same-scope batches under real
+  # Oban dispatch (no unique collision)".
+  #
+  # Proof this test catches the regression: temporarily restoring
+  # `unique: [keys: [:user_id, :vault_id, :target_kind, :target_id], states: [:executing]]`
+  # on the worker makes this test fail (only 1 of 3 sources gets rewritten —
+  # the batch-2/3 self-re-enqueues collide with the still-executing batch-1
+  # row and get silently dropped) — see task-5-report.md, "Fix round 1".
+  test "survives multiple batches under real Oban dispatch (no unique collision)", %{
     user: user,
     vault: vault
   } do
     {_old_id, renamed} = seed_rename!(user, vault)
-    args = args_for(user, vault, renamed)
+    sources = for i <- 1..3, do: seed_source!(user, vault, "S#{i}.md", "see [[Old]] #{i}")
 
-    assert {:ok, %Oban.Job{id: id1}} = Oban.insert(RewriteNoteLinks.new(args))
-    assert {:ok, %Oban.Job{id: id2, conflict?: false}} = Oban.insert(RewriteNoteLinks.new(args))
-    refute id1 == id2
+    {:ok, _job} =
+      args_for(user, vault, renamed)
+      |> Map.put("batch_size", 1)
+      |> RewriteNoteLinks.new()
+      |> Oban.insert()
+
+    result = Oban.drain_queue(queue: :indexing, with_recursion: true)
+    assert result.failure == 0, "chain must not raise/fail: #{inspect(result)}"
+
+    for {s, i} <- Enum.with_index(sources, 1) do
+      assert authoritative!(user, s.id) == "see [[Fresh]] #{i}",
+             "source #{s.id} never rewrote — same-batch-size cursor loop stalled"
+    end
   end
 
   test "per-source failure is isolated: the healthy sibling still rewrites", %{
