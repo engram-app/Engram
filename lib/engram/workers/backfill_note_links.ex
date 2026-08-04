@@ -139,6 +139,7 @@ defmodule Engram.Workers.BackfillNoteLinks do
     notes =
       from(n in Note,
         where: n.vault_id == ^vault.id,
+        where: n.kind == "note",
         where: n.id > ^cursor,
         where: is_nil(n.basename_hmac),
         where: not is_nil(n.path_ciphertext),
@@ -200,7 +201,7 @@ defmodule Engram.Workers.BackfillNoteLinks do
       {:ok, %{path: path}} when is_binary(path) ->
         hmac = Crypto.hmac_field(filter_key, Links.basename_key(path))
 
-        from(n in Note, where: n.id == ^note.id)
+        from(n in Note, where: n.id == ^note.id, where: n.kind == "note")
         |> Repo.update_all(set: [basename_hmac: hmac])
 
       {:ok, _no_path} ->
