@@ -35,6 +35,9 @@ defmodule EngramWeb.OAuthAuthorizeController do
       {:client_error, code} ->
         render_client_error(conn, code)
 
+      {:server_error, code} ->
+        render_server_error(conn, code)
+
       {:redirect_error, redirect_uri, error, state} ->
         redirect_with_error(conn, redirect_uri, error, state)
     end
@@ -64,6 +67,11 @@ defmodule EngramWeb.OAuthAuthorizeController do
       {:client_error, code} ->
         conn
         |> put_status(400)
+        |> json(%{error: code})
+
+      {:server_error, code} ->
+        conn
+        |> put_status(503)
         |> json(%{error: code})
 
       {:redirect_error, redirect_uri, error, state} ->
@@ -109,6 +117,26 @@ defmodule EngramWeb.OAuthAuthorizeController do
     conn
     |> put_resp_content_type("text/html")
     |> send_resp(400, body)
+  end
+
+  # Deliberately NOT the invalid_client page. That copy tells the user their app
+  # is not recognized, which is a lie when the truth is that we could not reach
+  # or store the client's metadata document — and it is the lie that sent the
+  # 2026-08-04 Claude outage looking for a misconfigured connector. 503 also
+  # tells well-behaved clients to try again, which is the actual remedy.
+  defp render_server_error(conn, code) do
+    body = """
+    <!doctype html>
+    <html><body>
+    <h1>Authorization temporarily unavailable</h1>
+    <p>Error: <code>#{html_escape(code)}</code>.</p>
+    <p>We could not verify this application's metadata just now. This is a problem on our side, not with the app — please try connecting again in a moment.</p>
+    </body></html>
+    """
+
+    conn
+    |> put_resp_content_type("text/html")
+    |> send_resp(503, body)
   end
 
   defp redirect_with_error(conn, redirect_uri, error, state) do

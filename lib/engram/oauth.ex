@@ -164,6 +164,10 @@ defmodule Engram.OAuth do
     * `{:client_error, code}` — bad client_id or redirect_uri; render an HTML
       error page rather than redirect (a redirect would let an attacker
       exfiltrate codes via a forged redirect_uri)
+    * `{:server_error, code}` — we could not resolve a CIMD client for a reason
+      that is ours and transient. Same "render, never redirect" rule (there is
+      no validated redirect_uri to trust yet), but a 503 rather than a 400, so
+      the client retries instead of writing the connector off.
   """
   def validate_authorization_request(params) when is_map(params) do
     with {:ok, client} <- fetch_client(params["client_id"]),
@@ -594,7 +598,7 @@ defmodule Engram.OAuth do
     if Cimd.url_shaped?(client_id) do
       case Cimd.ensure_client(client_id) do
         {:ok, client} -> {:ok, client}
-        {:error, _reason} -> {:client_error, "invalid_client"}
+        {:error, reason} -> cimd_error(reason)
       end
     else
       case get_client(client_id) do
@@ -603,6 +607,26 @@ defmodule Engram.OAuth do
       end
     end
   end
+
+  # "We could not resolve this client" is not "this client does not exist".
+  #
+  # `invalid_client` is terminal: the client stops retrying and the user sees a
+  # permanently dead connector. But our own fetch rate limiter, a vendor's 5xx,
+  # a transport blip and a lost insert race are all OUR side of the wire and all
+  # clear on their own. Reporting them as the vendor's fault is both wrong and
+  # self-concealing — `:rate_limited` is deliberately never logged (see
+  # `Engram.OAuth.Cimd`), so before this split a user in a retry loop produced a
+  # stream of `invalid_client` pages and not one line of evidence.
+  defp cimd_error(reason)
+       when reason in [:rate_limited, :fetch_failed, :store_conflict],
+       do: {:server_error, "temporarily_unavailable"}
+
+  defp cimd_error({:http_status, status}) when status >= 500 or status == 429,
+    do: {:server_error, "temporarily_unavailable"}
+
+  # A 4xx on the document URL is the vendor's to fix, as is a malformed or
+  # unbindable document. Those are genuinely terminal for this client_id.
+  defp cimd_error(_reason), do: {:client_error, "invalid_client"}
 
   defp match_redirect_uri(_client, nil), do: {:client_error, "invalid_redirect_uri"}
 
