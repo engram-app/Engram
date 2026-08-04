@@ -104,7 +104,7 @@
 	"devDependencies": {
 		"@biomejs/biome": "2.5.5",
 		"@clerk/testing": "^2.2.13",
-		"@playwright/test": "^1.60.0",
+		"@playwright/test": "^1.62.0",
 		"@resvg/resvg-js": "^2.6.2",
 		"@tailwindcss/vite": "^4.3.0",
 		"@testing-library/jest-dom": "^6.9.1",
