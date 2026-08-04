@@ -1,0 +1,487 @@
+defmodule Engram.Links do
+  @moduledoc """
+  Persistence + resolution for wikilink/embed edges (issue #591).
+
+  Consumes `Engram.Links.Parser.extract/1` output and turns it into
+  `note_links` rows: each target is resolved to a note/attachment id (or
+  left dangling) via an HMAC-indexed basename lookup, since Obsidian link
+  resolution is case-insensitive and path-agnostic when the link omits a
+  folder.
+
+  Every query here runs with `skip_tenant_check: true` and an explicit
+  `user_id`/`vault_id` filter — mirrors `Engram.Indexing.commit_index/1`.
+  Callers are trusted internal pipelines (note write path, backfill
+  workers); the RLS policy still protects ordinary tenant-scoped reads
+  (`Repo.with_tenant/2`) against cross-user access.
+  """
+
+  import Ecto.Query
+
+  alias Engram.Attachments.Attachment
+  alias Engram.Crypto
+  alias Engram.Crypto.Envelope
+  alias Engram.Links.NoteLink
+  alias Engram.Notes.Note
+  alias Engram.Repo
+
+  @note_exts ~w(.md .canvas)
+
+  @doc """
+  Lowercased basename with `.md`/`.canvas` stripped (other extensions kept).
+  Obsidian link resolution is case-insensitive and matches on basename
+  alone unless the link includes a folder path.
+  """
+  @spec basename_key(String.t()) :: String.t()
+  def basename_key(path_or_target) do
+    base = path_or_target |> String.split("/") |> List.last() |> String.downcase()
+    ext = Path.extname(base)
+    if ext in @note_exts, do: String.replace_suffix(base, ext, ""), else: base
+  end
+
+  @doc """
+  Deletes all outgoing edges for `source_note_id` and inserts fresh ones
+  from `parsed` (as produced by `Engram.Links.Parser.extract/1`), resolving
+  each target. Idempotent — safe to call on every note write.
+  """
+  @spec replace_links(map(), map(), binary(), [map()]) :: :ok
+  def replace_links(user, vault, source_note_id, parsed) do
+    {:ok, dek} = Crypto.get_dek(user)
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    now = DateTime.utc_now()
+
+    rows =
+      Enum.map(parsed, fn p ->
+        id = Engram.Notes.mint_id()
+
+        {tct, tnonce} =
+          Envelope.encrypt(p.target, dek, Crypto.aad_for_row(:note_links, :target_text, id))
+
+        {target_note_id, target_attachment_id} =
+          case resolve_target(user, vault, p.target, p.link_type) do
+            {:note, nid} -> {nid, nil}
+            {:attachment, aid} -> {nil, aid}
+            :dangling -> {nil, nil}
+          end
+
+        %{
+          id: id,
+          user_id: user.id,
+          vault_id: vault.id,
+          source_note_id: source_note_id,
+          target_note_id: target_note_id,
+          target_attachment_id: target_attachment_id,
+          target_text_ciphertext: tct,
+          target_text_nonce: tnonce,
+          target_basename_hmac: Crypto.hmac_field(filter_key, basename_key(p.target)),
+          link_type: p.link_type,
+          position: p.position,
+          dek_version: Crypto.row_version_aad_bound(),
+          inserted_at: now
+        }
+        |> put_optional_envelope(:alias, p.alias, dek, id)
+        |> put_optional_envelope(:anchor, p.anchor, dek, id)
+      end)
+
+    Repo.transaction(fn ->
+      Repo.delete_all(
+        from(l in NoteLink, where: l.source_note_id == ^source_note_id),
+        skip_tenant_check: true
+      )
+
+      if rows != [], do: Repo.insert_all(NoteLink, rows, skip_tenant_check: true)
+    end)
+
+    :ok
+  end
+
+  defp put_optional_envelope(row, field, nil, _dek, _id) do
+    {ct_key, nonce_key} = envelope_keys(field)
+    row |> Map.put(ct_key, nil) |> Map.put(nonce_key, nil)
+  end
+
+  defp put_optional_envelope(row, field, value, dek, id) do
+    {ct_key, nonce_key} = envelope_keys(field)
+    {ct, nonce} = Envelope.encrypt(value, dek, Crypto.aad_for_row(:note_links, field, id))
+    row |> Map.put(ct_key, ct) |> Map.put(nonce_key, nonce)
+  end
+
+  defp envelope_keys(:alias), do: {:alias_ciphertext, :alias_nonce}
+  defp envelope_keys(:anchor), do: {:anchor_ciphertext, :anchor_nonce}
+
+  @doc """
+  Resolves a raw link target to a note, an attachment, or `:dangling`.
+
+  Embeds whose target carries a non-note extension resolve against
+  attachments; everything else (extensionless targets, `.md`/`.canvas`
+  targets, and any non-embed link) resolves against notes. Candidates are
+  filtered to live rows (`deleted_at IS NULL`) matching the target's
+  basename HMAC; a target containing `/` is further narrowed to candidates
+  whose decrypted full path matches case-insensitively (trying the target
+  as given and with `.md`/`.canvas` appended). Among the survivors, the
+  shortest path wins; ties break lexicographically.
+  """
+  @spec resolve_target(map(), map(), String.t(), String.t()) ::
+          {:note, binary()} | {:attachment, binary()} | :dangling
+  def resolve_target(user, vault, target, link_type) do
+    key = basename_key(target)
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    hmac = Crypto.hmac_field(filter_key, key)
+    ext = target |> Path.basename() |> Path.extname() |> String.downcase()
+
+    if link_type == "embed" and ext != "" and ext not in @note_exts do
+      resolve_attachment_target(user, vault, target, hmac)
+    else
+      resolve_note_target(user, vault, target, hmac)
+    end
+  end
+
+  defp resolve_note_target(user, vault, target, hmac) do
+    Repo.all(
+      from(n in Note,
+        where:
+          n.user_id == ^user.id and n.vault_id == ^vault.id and
+            n.basename_hmac == ^hmac and is_nil(n.deleted_at),
+        select: %{
+          id: n.id,
+          path_ciphertext: n.path_ciphertext,
+          path_nonce: n.path_nonce,
+          dek_version: n.dek_version
+        }
+      ),
+      skip_tenant_check: true
+    )
+    |> resolve_candidates(user, target, :notes, :note)
+  end
+
+  defp resolve_attachment_target(user, vault, target, hmac) do
+    Repo.all(
+      from(a in Attachment,
+        where:
+          a.user_id == ^user.id and a.vault_id == ^vault.id and
+            a.basename_hmac == ^hmac and is_nil(a.deleted_at),
+        select: %{
+          id: a.id,
+          path_ciphertext: a.path_ciphertext,
+          path_nonce: a.path_nonce,
+          dek_version: a.dek_version
+        }
+      ),
+      skip_tenant_check: true
+    )
+    |> resolve_candidates(user, target, :attachments, :attachment)
+  end
+
+  defp resolve_candidates([], _user, _target, _table, _tag), do: :dangling
+
+  defp resolve_candidates(rows, user, target, table, tag) do
+    {:ok, dek} = Crypto.get_dek(user)
+
+    rows
+    |> Enum.map(fn row ->
+      path =
+        decrypt_field(
+          row.path_ciphertext,
+          row.path_nonce,
+          dek,
+          row.dek_version,
+          table,
+          :path,
+          row.id
+        )
+
+      {row.id, path}
+    end)
+    |> filter_by_path(target)
+    |> Enum.reject(fn {_id, path} -> is_nil(path) end)
+    |> Enum.sort_by(fn {_id, path} -> {String.length(path), path} end)
+    |> case do
+      [] -> :dangling
+      [{id, _path} | _] -> {tag, id}
+    end
+  end
+
+  # A target with a folder segment narrows candidates to a full-path match
+  # (case-insensitive); a bare basename target keeps every same-basename
+  # candidate so the shortest-path tiebreak below can pick a winner.
+  defp filter_by_path(candidates, target) do
+    if String.contains?(target, "/") do
+      variants =
+        [target | Enum.map(@note_exts, &(target <> &1))]
+        |> Enum.map(&String.downcase/1)
+
+      Enum.filter(candidates, fn {_id, path} ->
+        is_binary(path) and String.downcase(path) in variants
+      end)
+    else
+      candidates
+    end
+  end
+
+  @doc """
+  Re-resolves every edge (dangling or currently bound) in the vault whose
+  `target_basename_hmac` matches `basename_key`. Called after a note or
+  attachment is created/renamed so danglers can bind, and so an existing
+  binding can be stolen by a shorter-path newcomer (see resolution rules on
+  `resolve_target/4`).
+  """
+  @spec bind_danglers_for(map(), map(), String.t()) :: :ok
+  def bind_danglers_for(user, vault, basename_key) do
+    {:ok, dek} = Crypto.get_dek(user)
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    hmac = Crypto.hmac_field(filter_key, basename_key)
+
+    edges =
+      Repo.all(
+        from(l in NoteLink,
+          where:
+            l.user_id == ^user.id and l.vault_id == ^vault.id and l.target_basename_hmac == ^hmac
+        ),
+        skip_tenant_check: true
+      )
+
+    Enum.each(edges, fn edge ->
+      target_text =
+        decrypt_field(
+          edge.target_text_ciphertext,
+          edge.target_text_nonce,
+          dek,
+          edge.dek_version,
+          :note_links,
+          :target_text,
+          edge.id
+        )
+
+      {target_note_id, target_attachment_id} =
+        case resolve_target(user, vault, target_text, edge.link_type) do
+          {:note, id} -> {id, nil}
+          {:attachment, id} -> {nil, id}
+          :dangling -> {nil, nil}
+        end
+
+      if {target_note_id, target_attachment_id} !=
+           {edge.target_note_id, edge.target_attachment_id} do
+        Repo.update_all(
+          from(l in NoteLink, where: l.id == ^edge.id),
+          [set: [target_note_id: target_note_id, target_attachment_id: target_attachment_id]],
+          skip_tenant_check: true
+        )
+      end
+    end)
+
+    :ok
+  end
+
+  @doc """
+  A note was soft-deleted: drop its outgoing edges (they're meaningless
+  once the source is gone) and flip any incoming edges back to dangling
+  (the target no longer exists, but the edge — and its encrypted target
+  text — stays so it can re-bind if the note comes back).
+  """
+  @spec on_note_soft_deleted(binary(), binary()) :: :ok
+  def on_note_soft_deleted(user_id, note_id) do
+    Repo.delete_all(
+      from(l in NoteLink, where: l.user_id == ^user_id and l.source_note_id == ^note_id),
+      skip_tenant_check: true
+    )
+
+    Repo.update_all(
+      from(l in NoteLink, where: l.user_id == ^user_id and l.target_note_id == ^note_id),
+      [set: [target_note_id: nil]],
+      skip_tenant_check: true
+    )
+
+    :ok
+  end
+
+  @doc """
+  Decrypted outgoing links for a note, in parser order.
+  """
+  @spec links_for_note(map(), binary()) :: [map()]
+  def links_for_note(user, note_id) do
+    {:ok, dek} = Crypto.get_dek(user)
+
+    edges =
+      Repo.all(
+        from(l in NoteLink,
+          where: l.user_id == ^user.id and l.source_note_id == ^note_id,
+          order_by: l.position
+        ),
+        skip_tenant_check: true
+      )
+
+    target_paths =
+      decrypt_note_paths(dek, edges |> Enum.map(& &1.target_note_id) |> Enum.reject(&is_nil/1))
+
+    Enum.map(edges, fn edge ->
+      %{
+        target_text:
+          decrypt_field(
+            edge.target_text_ciphertext,
+            edge.target_text_nonce,
+            dek,
+            edge.dek_version,
+            :note_links,
+            :target_text,
+            edge.id
+          ),
+        target_note_id: edge.target_note_id,
+        target_attachment_id: edge.target_attachment_id,
+        target_path: edge.target_note_id && Map.get(target_paths, edge.target_note_id),
+        alias:
+          decrypt_field(
+            edge.alias_ciphertext,
+            edge.alias_nonce,
+            dek,
+            edge.dek_version,
+            :note_links,
+            :alias,
+            edge.id
+          ),
+        anchor:
+          decrypt_field(
+            edge.anchor_ciphertext,
+            edge.anchor_nonce,
+            dek,
+            edge.dek_version,
+            :note_links,
+            :anchor,
+            edge.id
+          ),
+        link_type: edge.link_type,
+        dangling: is_nil(edge.target_note_id) and is_nil(edge.target_attachment_id)
+      }
+    end)
+  end
+
+  @doc """
+  Decrypted incoming links (backlinks) for a note — one entry per edge
+  pointing at it, carrying the source note's decrypted path/title.
+  """
+  @spec backlinks_for_note(map(), binary()) :: [map()]
+  def backlinks_for_note(user, note_id) do
+    {:ok, dek} = Crypto.get_dek(user)
+
+    edges =
+      Repo.all(
+        from(l in NoteLink, where: l.user_id == ^user.id and l.target_note_id == ^note_id),
+        skip_tenant_check: true
+      )
+
+    source_ids = edges |> Enum.map(& &1.source_note_id) |> Enum.uniq()
+
+    sources =
+      if source_ids == [] do
+        %{}
+      else
+        Repo.all(
+          from(n in Note,
+            where: n.id in ^source_ids,
+            select: %{
+              id: n.id,
+              path_ciphertext: n.path_ciphertext,
+              path_nonce: n.path_nonce,
+              title_ciphertext: n.title_ciphertext,
+              title_nonce: n.title_nonce,
+              dek_version: n.dek_version
+            }
+          ),
+          skip_tenant_check: true
+        )
+        |> Map.new(fn n ->
+          {n.id,
+           %{
+             path:
+               decrypt_field(
+                 n.path_ciphertext,
+                 n.path_nonce,
+                 dek,
+                 n.dek_version,
+                 :notes,
+                 :path,
+                 n.id
+               ),
+             title:
+               decrypt_field(
+                 n.title_ciphertext,
+                 n.title_nonce,
+                 dek,
+                 n.dek_version,
+                 :notes,
+                 :title,
+                 n.id
+               )
+           }}
+        end)
+      end
+
+    Enum.map(edges, fn edge ->
+      source = Map.fetch!(sources, edge.source_note_id)
+
+      %{
+        source_note_id: edge.source_note_id,
+        source_path: source.path,
+        source_title: source.title,
+        alias:
+          decrypt_field(
+            edge.alias_ciphertext,
+            edge.alias_nonce,
+            dek,
+            edge.dek_version,
+            :note_links,
+            :alias,
+            edge.id
+          ),
+        anchor:
+          decrypt_field(
+            edge.anchor_ciphertext,
+            edge.anchor_nonce,
+            dek,
+            edge.dek_version,
+            :note_links,
+            :anchor,
+            edge.id
+          )
+      }
+    end)
+  end
+
+  defp decrypt_note_paths(_dek, []), do: %{}
+
+  defp decrypt_note_paths(dek, note_ids) do
+    Repo.all(
+      from(n in Note,
+        where: n.id in ^note_ids,
+        select: %{
+          id: n.id,
+          path_ciphertext: n.path_ciphertext,
+          path_nonce: n.path_nonce,
+          dek_version: n.dek_version
+        }
+      ),
+      skip_tenant_check: true
+    )
+    |> Map.new(fn n ->
+      {n.id,
+       decrypt_field(n.path_ciphertext, n.path_nonce, dek, n.dek_version, :notes, :path, n.id)}
+    end)
+  end
+
+  # Mirrors `Engram.Crypto`'s private dek_version dispatch (legacy rows =
+  # empty AAD, AAD-bound rows reconstruct the bind string from row
+  # identity). Kept local since that dispatch isn't part of Crypto's public
+  # API, and we only ever need it for a single ciphertext+nonce pair here
+  # rather than a whole-row decrypt.
+  defp decrypt_field(nil, _nonce, _dek, _dek_version, _table, _column, _id), do: nil
+
+  defp decrypt_field(ciphertext, nonce, dek, dek_version, table, column, id) do
+    aad =
+      if dek_version >= Crypto.row_version_aad_bound(),
+        do: Crypto.aad_for_row(table, column, id),
+        else: <<>>
+
+    case Envelope.decrypt(ciphertext, nonce, dek, aad) do
+      {:ok, plaintext} -> plaintext
+      :error -> nil
+    end
+  end
+end

@@ -107,7 +107,10 @@ defmodule Engram.Fixtures do
       folder_hmac: Engram.Crypto.hmac_field(filter_key, folder),
       tags_ciphertext: tags_ct,
       tags_nonce: tags_n,
-      tags_hmac: Enum.map(tags, &Engram.Crypto.hmac_field(filter_key, &1))
+      tags_hmac: Enum.map(tags, &Engram.Crypto.hmac_field(filter_key, &1)),
+      # Links foundation — mirrors what production writers (Task 4) will
+      # stamp, so link-resolution tests don't depend on a separate backfill.
+      basename_hmac: Engram.Crypto.hmac_field(filter_key, Engram.Links.basename_key(path))
     }
 
     # Pull through any caller-specified overrides for non-Phase-B fields so
@@ -275,6 +278,7 @@ defmodule Engram.Fixtures do
       path_ciphertext: path_ct,
       path_nonce: path_nonce,
       path_hmac: Engram.Crypto.hmac_field(filter_key, path),
+      basename_hmac: Engram.Crypto.hmac_field(filter_key, Engram.Links.basename_key(path)),
       content_hash: Engram.Crypto.hmac_content_hash(content_key, content),
       content_nonce: content_nonce,
       storage_key: storage_key,

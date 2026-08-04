@@ -12,6 +12,9 @@ defmodule Engram.Attachments.Attachment do
     field :path_ciphertext, :binary
     field :path_nonce, :binary
     field :path_hmac, :binary
+    # Links foundation (Task 1/4) — HMAC of the lowercased basename (no
+    # extension stripping for non-note files). Nullable until backfilled.
+    field :basename_hmac, :binary
     # Decoded plaintext is materialized into this virtual field by the read
     # path (`Engram.Attachments.get_attachment/3`). It never persists; the
     # actual ciphertext lives in S3-compatible object storage.
@@ -47,6 +50,7 @@ defmodule Engram.Attachments.Attachment do
       :path_ciphertext,
       :path_nonce,
       :path_hmac,
+      :basename_hmac,
       :content_hash,
       :mime_type,
       :size_bytes,

@@ -61,6 +61,11 @@ defmodule Engram.Notes.Note do
     field :folder_hmac, :binary
     field :tags_hmac, {:array, :binary}, default: []
 
+    # Links foundation (Task 1/4) — HMAC of the lowercased, .md/.canvas-
+    # stripped basename. Nullable until the Task 4/8 backfill populates
+    # existing rows; production writers (Task 4) stamp it on every write.
+    field :basename_hmac, :binary
+
     # CRDT (Yjs) document state for posture-C file-level sync. The full v1
     # `Yex.encode_state_as_update` snapshot, AES-256-GCM encrypted under the
     # per-user DEK with AAD `aad_for_row(:notes, :crdt_state, id)`. NULL until
@@ -114,6 +119,7 @@ defmodule Engram.Notes.Note do
     :folder_nonce,
     :folder_hmac,
     :tags_hmac,
+    :basename_hmac,
     :crdt_state_ciphertext,
     :crdt_state_nonce,
     :type_ciphertext,
