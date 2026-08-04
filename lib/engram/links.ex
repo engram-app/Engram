@@ -21,6 +21,7 @@ defmodule Engram.Links do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Links.NoteLink
+  alias Engram.Logger.DecryptFailure
   alias Engram.Notes.Note
   alias Engram.Repo
 
@@ -277,24 +278,41 @@ defmodule Engram.Links do
           edge.id
         )
 
-      {target_note_id, target_attachment_id} =
-        case resolve_target(user, vault, target_text, edge.link_type) do
-          {:note, id} -> {id, nil}
-          {:attachment, id} -> {nil, id}
-          :dangling -> {nil, nil}
-        end
-
-      if {target_note_id, target_attachment_id} !=
-           {edge.target_note_id, edge.target_attachment_id} do
-        Repo.update_all(
-          from(l in NoteLink, where: l.id == ^edge.id),
-          [set: [target_note_id: target_note_id, target_attachment_id: target_attachment_id]],
-          skip_tenant_check: true
+      # A decrypt failure (corrupt ciphertext, AAD-bind mismatch) yields nil
+      # here — `resolve_target/4` calls `basename_key/1` on it, which
+      # requires a binary and would crash the whole rebind job over one bad
+      # row. Skip it (it stays exactly as-is, still eligible to re-bind on a
+      # future pass) rather than let it take every other edge down with it.
+      if is_binary(target_text) do
+        rebind_edge(user, vault, edge, target_text)
+      else
+        DecryptFailure.log(
+          "bind_danglers_for_hmac: skipping undecryptable edge",
+          :decrypt_failed,
+          edge_id: edge.id
         )
       end
     end)
 
     :ok
+  end
+
+  defp rebind_edge(user, vault, edge, target_text) do
+    {target_note_id, target_attachment_id} =
+      case resolve_target(user, vault, target_text, edge.link_type) do
+        {:note, id} -> {id, nil}
+        {:attachment, id} -> {nil, id}
+        :dangling -> {nil, nil}
+      end
+
+    if {target_note_id, target_attachment_id} !=
+         {edge.target_note_id, edge.target_attachment_id} do
+      Repo.update_all(
+        from(l in NoteLink, where: l.id == ^edge.id),
+        [set: [target_note_id: target_note_id, target_attachment_id: target_attachment_id]],
+        skip_tenant_check: true
+      )
+    end
   end
 
   @doc """

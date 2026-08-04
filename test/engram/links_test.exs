@@ -207,6 +207,56 @@ defmodule Engram.LinksTest do
       {:ok, [l1]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
       assert l1.target_note_id == new.id
     end
+
+    test "a corrupt edge is skipped and logged; other edges still process", %{
+      user: user,
+      vault: vault
+    } do
+      source1 = Engram.Fixtures.insert_note!(user, vault, %{path: "Corrupt1.md"})
+      source2 = Engram.Fixtures.insert_note!(user, vault, %{path: "Healthy2.md"})
+
+      :ok =
+        Links.replace_links(user, vault, source1.id, [
+          %{target: "Later", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+        ])
+
+      :ok =
+        Links.replace_links(user, vault, source2.id, [
+          %{target: "Later", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+        ])
+
+      {:ok, [edge1]} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(from(l in NoteLink, where: l.source_note_id == ^source1.id))
+        end)
+
+      # Overwrite the ciphertext with garbage — AES-GCM auth-tag verification
+      # fails, so decrypt_field/7 returns nil (same shape as any at-rest
+      # corruption), which used to crash `basename_key(nil)`.
+      Repo.update_all(
+        from(l in NoteLink, where: l.id == ^edge1.id),
+        [set: [target_text_ciphertext: <<0::128>>]],
+        skip_tenant_check: true
+      )
+
+      target = Engram.Fixtures.insert_note!(user, vault, %{path: "Later.md"})
+
+      assert :ok =
+               Links.bind_danglers_for_hmac(user, vault, Links.basename_hmac(user, "later"))
+
+      # source2's healthy edge bound normally — the corrupt edge didn't
+      # crash the whole job.
+      [l2] = Links.links_for_note(user, source2.id)
+      assert l2.target_note_id == target.id
+
+      # source1's corrupt edge is untouched (still dangling), not crashed.
+      {:ok, [l1]} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(from(l in NoteLink, where: l.id == ^edge1.id))
+        end)
+
+      assert is_nil(l1.target_note_id)
+    end
   end
 
   describe "on_note_soft_deleted/2" do
