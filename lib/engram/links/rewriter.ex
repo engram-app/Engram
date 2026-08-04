@@ -27,8 +27,32 @@ defmodule Engram.Links.Rewriter do
   flip those ids.
   """
 
+  import Ecto.Query
+
+  alias Engram.Attachments.Attachment
+  alias Engram.{Crypto, Repo}
   alias Engram.Links
   alias Engram.Links.Parser
+  alias Engram.Logger.Metadata
+  alias Engram.Notes
+
+  alias Engram.Notes.{
+    CrdtBridge,
+    CrdtDeliver,
+    CrdtPersistence,
+    CrdtRegistry,
+    CrdtUpdateLog,
+    Enqueue,
+    Note
+  }
+
+  alias Yex.Sync.SharedDoc
+
+  require Logger
+
+  @max_persist_attempts 3
+  @start_cursor "00000000-0000-0000-0000-000000000000"
+  @walk_batch 100
 
   @note_exts ~w(.md .canvas)
 
@@ -98,5 +122,365 @@ defmodule Engram.Links.Rewriter do
     else
       base
     end
+  end
+
+  @doc """
+  Build the rewrite target spec for a renamed note/attachment. `old_path`
+  is the pre-rename vault-relative path (plaintext, resolved by the caller
+  — the worker recovers it from the rename tombstone; it never rides Oban
+  args). `new_path`/casing come from the row's CURRENT decrypted path, so
+  a rename-of-rename always rewrites toward the latest name.
+  """
+  @spec build_target(map(), map(), :note | :attachment, binary(), String.t()) ::
+          {:ok, map()} | {:error, :target_gone}
+  def build_target(user, vault, kind, id, old_path) do
+    with {:ok, new_path} <- current_path(user, vault, kind, id) do
+      {:ok,
+       %{
+         kind: kind,
+         id: id,
+         old_path: old_path,
+         new_path: new_path,
+         old_basename_hmac: Links.basename_hmac(user, Links.basename_key(old_path)),
+         collision?: Links.live_basename_count(user, vault, Links.basename_key(new_path)) > 1
+       }}
+    end
+  end
+
+  defp current_path(user, vault, :note, id) do
+    row =
+      Repo.one(
+        from(n in Note,
+          where:
+            n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
+              n.kind == "note" and is_nil(n.deleted_at)
+        ),
+        skip_tenant_check: true
+      )
+
+    with %Note{} = note <- row,
+         {:ok, %{path: path}} when is_binary(path) <- Crypto.maybe_decrypt_note_fields(note, user) do
+      {:ok, path}
+    else
+      _ -> {:error, :target_gone}
+    end
+  end
+
+  defp current_path(user, vault, :attachment, id) do
+    row =
+      Repo.one(
+        from(a in Attachment,
+          where:
+            a.id == ^id and a.user_id == ^user.id and a.vault_id == ^vault.id and
+              is_nil(a.deleted_at)
+        ),
+        skip_tenant_check: true
+      )
+
+    with %Attachment{} = att <- row,
+         {:ok, %{path: path}} when is_binary(path) <-
+           Crypto.maybe_decrypt_attachment_fields(att, user) do
+      {:ok, path}
+    else
+      _ -> {:error, :target_gone}
+    end
+  end
+
+  @doc """
+  Distinct source-note ids with an edge whose `target_basename_hmac`
+  matches the renamed row's OLD basename. Keyed on the hmac (indexed), not
+  on current edge target ids — `RebindNoteLinks` flips ids concurrently
+  but never rewrites the stored hmac/text, so this set is stable however
+  the rename-enqueued jobs interleave.
+  """
+  @spec source_note_ids(map(), map(), binary(), binary(), pos_integer()) :: [binary()]
+  def source_note_ids(user, vault, old_basename_hmac, cursor, limit) do
+    Repo.all(
+      from(l in Engram.Links.NoteLink,
+        where:
+          l.user_id == ^user.id and l.vault_id == ^vault.id and
+            l.target_basename_hmac == ^old_basename_hmac and
+            l.source_note_id > ^cursor,
+        distinct: true,
+        select: l.source_note_id,
+        order_by: [asc: l.source_note_id],
+        limit: ^limit
+      ),
+      skip_tenant_check: true
+    )
+  end
+
+  @doc "Synchronous full walk for a renamed note (spec entry point; the Oban worker chunks the same primitives)."
+  @spec rewrite_for_note_rename(map(), map(), binary(), String.t()) :: :ok | {:error, term()}
+  def rewrite_for_note_rename(user, vault, renamed_note_id, old_path) do
+    with {:ok, target} <- build_target(user, vault, :note, renamed_note_id, old_path) do
+      walk(user, vault, target, @start_cursor)
+    end
+  end
+
+  @doc "Attachment variant of `rewrite_for_note_rename/4`."
+  @spec rewrite_for_attachment_rename(map(), map(), binary(), String.t()) ::
+          :ok | {:error, term()}
+  def rewrite_for_attachment_rename(user, vault, attachment_id, old_path) do
+    with {:ok, target} <- build_target(user, vault, :attachment, attachment_id, old_path) do
+      walk(user, vault, target, @start_cursor)
+    end
+  end
+
+  defp walk(user, vault, target, cursor) do
+    case source_note_ids(user, vault, target.old_basename_hmac, cursor, @walk_batch) do
+      [] ->
+        :ok
+
+      ids ->
+        Enum.each(ids, fn id -> _ = rewrite_source_note(user, vault, id, target) end)
+        if length(ids) == @walk_batch, do: walk(user, vault, target, List.last(ids)), else: :ok
+    end
+  end
+
+  @doc """
+  Rewrite one source note. Loads the canonical doc (snapshot + tail),
+  plans edits, authors them as ONE Y-text transaction, and persists the
+  delta through the client-update path (live room when one exists, direct
+  `CrdtPersistence.update_v1/4` append otherwise). Bounded optimistic
+  retry when the tail head advances under a roomless append.
+
+  `opts[:before_persist]` — test seam, a 0-arity fun run between edit
+  authoring and the roomless head re-check.
+  """
+  @spec rewrite_source_note(map(), map(), binary(), map(), keyword()) ::
+          {:ok, :rewritten | :noop | :skipped} | {:error, term()}
+  def rewrite_source_note(user, vault, source_note_id, target, opts \\ []) do
+    before_persist = Keyword.get(opts, :before_persist, fn -> :ok end)
+    attempt(user, vault, source_note_id, target, before_persist, 1)
+  end
+
+  defp attempt(user, vault, source_note_id, target, before_persist, n) do
+    case load_doc(user, source_note_id) do
+      :skip ->
+        {:ok, :skipped}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      {:legacy, note, content} ->
+        rewrite_legacy(user, vault, note, content, target)
+
+      {:loaded, note, doc, head} ->
+        full = CrdtBridge.project_doc(doc)
+        body = CrdtBridge.body_of(doc)
+
+        case plan_edits(user, vault, full, body, target) do
+          [] ->
+            {:ok, :noop}
+
+          edits ->
+            sv_before = Yex.encode_state_vector!(doc)
+            :ok = apply_edits!(doc, body, edits)
+            delta = Yex.encode_state_as_update!(doc, sv_before)
+            _ = before_persist.()
+            rt = %{target: target, before_persist: before_persist, n: n}
+            persist(user, vault, note, doc, delta, head, rt)
+        end
+    end
+  end
+
+  # Snapshot + tail — bind/3's recipe, same as Notes.maybe_merge_crdt/4 and
+  # Workers.CheckpointNote.rebuild_detached/3. `head` is {tail row count,
+  # max inserted_at} captured in the SAME tenant transaction as the replay.
+  defp load_doc(user, note_id) do
+    {:ok, doc} = CrdtBridge.doc_from_state(nil)
+
+    {:ok, result} =
+      Repo.with_tenant(user.id, fn ->
+        case Repo.get(Note, note_id) do
+          nil ->
+            :skip
+
+          %Note{deleted_at: deleted_at} when deleted_at != nil ->
+            :skip
+
+          %Note{} = note ->
+            case Crypto.decrypt_crdt_state(note, user) do
+              {:error, reason} ->
+                {:error, reason}
+
+              {:ok, snapshot} ->
+                if is_binary(snapshot), do: :ok = Yex.apply_update(doc, snapshot)
+                applied = CrdtPersistence.replay_tail(doc, user, note_id)
+                head = tail_head(note_id)
+
+                if is_nil(snapshot) and applied == [] and CrdtBridge.project_doc(doc) == "" do
+                  case Crypto.maybe_decrypt_note_fields(note, user) do
+                    {:ok, decrypted} -> {:legacy, note, decrypted.content || ""}
+                    {:error, reason} -> {:error, reason}
+                  end
+                else
+                  {:loaded, note, doc, head}
+                end
+            end
+        end
+      end)
+
+    result
+  end
+
+  # Runs inside the caller's Repo.with_tenant (crdt_update_log is RLS-scoped).
+  defp tail_head(note_id) do
+    Repo.one(
+      from(l in CrdtUpdateLog,
+        where: l.note_id == ^note_id,
+        select: {count(l.id), max(l.inserted_at)}
+      )
+    )
+  end
+
+  @doc false
+  @spec apply_edits!(Yex.Doc.t(), String.t(), [map()]) :: :ok
+  def apply_edits!(doc, body, edits) do
+    text = Yex.Doc.get_text(doc, CrdtBridge.text_name())
+
+    Yex.Doc.transaction(doc, "link_rewrite", fn ->
+      edits
+      |> Enum.sort_by(& &1.rel_start, :desc)
+      |> Enum.each(fn e ->
+        off = utf16_len(binary_part(body, 0, e.rel_start))
+        len = utf16_len(binary_part(body, e.rel_start, e.len))
+        Yex.Text.delete(text, off, len)
+        Yex.Text.insert(text, off, e.new)
+      end)
+    end)
+
+    :ok
+  end
+
+  # The doc is offset_kind: :utf16 (CrdtBridge.new_doc/0) — Yex.Text
+  # indices are UTF-16 code units, not bytes.
+  defp utf16_len(s) do
+    s |> :unicode.characters_to_binary(:utf8, {:utf16, :big}) |> byte_size() |> div(2)
+  end
+
+  defp persist(user, vault, note, doc, delta, head_at_load, rt) do
+    case CrdtRegistry.lookup(note.id) do
+      nil ->
+        persist_roomless(user, vault, note, doc, delta, head_at_load, rt)
+
+      room ->
+        # The room owns the doc and serializes writes; its update_v1 hook
+        # appends the delta to the tail-log, broadcasts the frame to every
+        # observer, and fans out — the client-update path, verbatim.
+        room_apply(room, note.id, fn room_doc ->
+          _ = Yex.apply_update(room_doc, delta)
+          :ok
+        end)
+
+        finish(user, vault, note, doc)
+    end
+  end
+
+  defp persist_roomless(user, vault, note, doc, delta, head_at_load, rt) do
+    {:ok, head_now} = Repo.with_tenant(user.id, fn -> tail_head(note.id) end)
+
+    cond do
+      head_now == head_at_load ->
+        # Direct call on the documented bare-state-map path: encrypted
+        # tail-log append + crdt_head invalidation + FanoutPacer broadcast.
+        _ =
+          CrdtPersistence.update_v1(
+            %{user_id: user.id, vault_id: vault.id, note_id: note.id},
+            delta,
+            nil,
+            doc
+          )
+
+        # Roomless append leaves notes.content unmaterialized; the deduped
+        # checkpoint worker owns materialization (never a snapshot write here).
+        _ =
+          Enqueue.enqueue(
+            Engram.Workers.CheckpointNote.new(%{
+              user_id: user.id,
+              vault_id: vault.id,
+              note_id: note.id
+            }),
+            "crdt_checkpoint"
+          )
+
+        finish(user, vault, note, doc)
+
+      rt.n < @max_persist_attempts ->
+        attempt(user, vault, note.id, rt.target, rt.before_persist, rt.n + 1)
+
+      true ->
+        {:error, :head_advanced}
+    end
+  end
+
+  defp finish(user, vault, note, doc) do
+    new_full = CrdtBridge.project_doc(doc)
+    :ok = Links.replace_links(user, vault, note.id, Parser.extract(new_full))
+
+    _ =
+      case Crypto.maybe_decrypt_note_fields(note, user) do
+        {:ok, %{path: path}} when is_binary(path) ->
+          CrdtDeliver.announce_ready(user.id, vault.id, path, note.id)
+
+        _ ->
+          :ok
+      end
+
+    {:ok, :rewritten}
+  end
+
+  # Legacy/pre-CRDT row: no Y-text to edit positionally. Route the spliced
+  # plaintext through the established non-CRDT-origin write path
+  # (upsert_note = convergent diff-merge + broadcast + deliver-out) — a
+  # diff-based write, not a snapshot clobber.
+  defp rewrite_legacy(user, vault, note, content, target) do
+    case plan_edits(user, vault, content, content, target) do
+      [] ->
+        {:ok, :noop}
+
+      edits ->
+        new_text = splice(content, edits)
+
+        with {:ok, %{path: path}} when is_binary(path) <-
+               Crypto.maybe_decrypt_note_fields(note, user),
+             {:ok, _updated} <-
+               Notes.upsert_note(user, vault, %{"path" => path, "content" => new_text}) do
+          :ok = Links.replace_links(user, vault, note.id, Parser.extract(new_text))
+          {:ok, :rewritten}
+        else
+          {:ok, _no_path} -> {:error, :path_undecryptable}
+          {:error, reason} -> {:error, reason}
+          {:stale_base, _} -> {:error, :stale_base}
+        end
+    end
+  end
+
+  # Guarded room call — same exit taxonomy as CrdtDeliver.room_apply/3: a
+  # room mid auto-exit is benign (the tail append still happened? NO — on a
+  # dead room nothing was appended, so fall through to a fresh roomless
+  # attempt is NOT safe either; log and let the worker's per-source error
+  # isolation surface it. In practice :noproc means the room exited between
+  # lookup and call; the next job attempt re-runs cleanly.)
+  defp room_apply(room, note_id, fun) do
+    SharedDoc.update_doc(room, fun)
+  catch
+    :exit, {:noproc, _} ->
+      :ok
+
+    :exit, {:normal, _} ->
+      :ok
+
+    :exit, {:shutdown, _} ->
+      :ok
+
+    :exit, reason ->
+      Logger.error(
+        "link rewrite room push exited",
+        Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
+      )
+
+      :ok
   end
 end

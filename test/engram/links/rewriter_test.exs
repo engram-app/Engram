@@ -3,6 +3,8 @@ defmodule Engram.Links.RewriterTest do
 
   alias Engram.Links
   alias Engram.Links.{Parser, Rewriter}
+  alias Engram.Notes
+  alias Engram.Notes.Note
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
@@ -182,6 +184,176 @@ defmodule Engram.Links.RewriterTest do
         )
 
       assert [%{old: "Old", new: "Fresh"}] = Enum.map(edits, &Map.take(&1, [:old, :new]))
+    end
+  end
+
+  defp raw_note!(user, id) do
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get(Note, id) end)
+    raw
+  end
+
+  describe "rewrite_source_note/5" do
+    test "rewrites the doc via a tail-log Y-update and re-extracts edges", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+
+      content = "See [[Old]] and ![[Old|x]]."
+
+      {:ok, source} =
+        Notes.upsert_note(user, vault, %{"path" => "Source.md", "content" => content})
+
+      :ok = Links.replace_links(user, vault, source.id, Parser.extract(content))
+
+      {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
+      assert {:ok, :rewritten} = Rewriter.rewrite_source_note(user, vault, source.id, target)
+
+      {:ok, text} = Notes.authoritative_content(user, raw_note!(user, source.id))
+      assert text == "See [[Fresh]] and ![[Fresh|x]]."
+
+      # Edges re-extracted: both now bind to the renamed note under its new text.
+      links = Links.links_for_note(user, source.id)
+      assert Enum.map(links, & &1.target_text) == ["Fresh", "Fresh"]
+      assert Enum.all?(links, &(&1.target_note_id == renamed.id))
+    end
+
+    test "second run is a no-op (idempotent)", %{user: user, vault: vault} do
+      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+      {:ok, source} = Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => "[[Old]]"})
+      :ok = Links.replace_links(user, vault, source.id, Parser.extract("[[Old]]"))
+
+      {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
+      assert {:ok, :rewritten} = Rewriter.rewrite_source_note(user, vault, source.id, target)
+      assert {:ok, :noop} = Rewriter.rewrite_source_note(user, vault, source.id, target)
+    end
+
+    test "missing / deleted source note is skipped", %{user: user, vault: vault} do
+      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+      {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
+
+      assert {:ok, :skipped} =
+               Rewriter.rewrite_source_note(user, vault, Ecto.UUID.generate(), target)
+    end
+
+    test "head advancing between load and append triggers a bounded retry that converges", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+
+      {:ok, source} =
+        Notes.upsert_note(user, vault, %{"path" => "R.md", "content" => "keep [[Old]]"})
+
+      :ok = Links.replace_links(user, vault, source.id, Parser.extract("keep [[Old]]"))
+      {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
+
+      # Simulate a client edit landing in the race window exactly once:
+      # append a real tail update (an insert at offset 0) built from the
+      # note's current durable state.
+      {:ok, agent} = Agent.start_link(fn -> 0 end)
+
+      before_persist = fn ->
+        if Agent.get_and_update(agent, fn n -> {n, n + 1} end) == 0 do
+          raw = raw_note!(user, source.id)
+          {:ok, snapshot} = Engram.Crypto.decrypt_crdt_state(raw, user)
+          {:ok, doc} = Engram.Notes.CrdtBridge.doc_from_state(snapshot)
+
+          {:ok, _} =
+            Repo.with_tenant(user.id, fn ->
+              Engram.Notes.CrdtPersistence.replay_tail(doc, user, source.id)
+            end)
+
+          sv = Yex.encode_state_vector!(doc)
+          text = Yex.Doc.get_text(doc, Engram.Notes.CrdtBridge.text_name())
+          Yex.Text.insert(text, 0, "EDIT ")
+          delta = Yex.encode_state_as_update!(doc, sv)
+
+          _ =
+            Engram.Notes.CrdtPersistence.update_v1(
+              %{user_id: user.id, vault_id: vault.id, note_id: source.id},
+              delta,
+              nil,
+              doc
+            )
+        end
+
+        :ok
+      end
+
+      assert {:ok, :rewritten} =
+               Rewriter.rewrite_source_note(user, vault, source.id, target,
+                 before_persist: before_persist
+               )
+
+      {:ok, text} = Notes.authoritative_content(user, raw_note!(user, source.id))
+      # BOTH survive: the concurrent client edit and the rewrite.
+      assert text == "EDIT keep [[Fresh]]"
+    end
+
+    test "a head that advances on every attempt exhausts the retry budget", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+      {:ok, source} = Notes.upsert_note(user, vault, %{"path" => "R2.md", "content" => "[[Old]]"})
+      :ok = Links.replace_links(user, vault, source.id, Parser.extract("[[Old]]"))
+      {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
+
+      always_advance = fn ->
+        {:ok, _} =
+          Repo.with_tenant(user.id, fn ->
+            %Engram.Notes.CrdtUpdateLog{}
+            |> Engram.Notes.CrdtUpdateLog.changeset(%{
+              note_id: source.id,
+              user_id: user.id,
+              vault_id: vault.id,
+              update_ciphertext: <<0>>,
+              update_nonce: <<0>>
+            })
+            |> Repo.insert()
+          end)
+
+        :ok
+      end
+
+      assert {:error, :head_advanced} =
+               Rewriter.rewrite_source_note(user, vault, source.id, target,
+                 before_persist: always_advance
+               )
+    end
+
+    test "legacy row (no CRDT state) rewrites through upsert_note", %{user: user, vault: vault} do
+      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+      # A fixture-inserted note has content but NO crdt_state and NO tail.
+      legacy = Engram.Fixtures.insert_note!(user, vault, %{path: "L.md", content: "see [[Old]]"})
+      :ok = Links.replace_links(user, vault, legacy.id, Parser.extract("see [[Old]]"))
+
+      {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
+      assert {:ok, :rewritten} = Rewriter.rewrite_source_note(user, vault, legacy.id, target)
+
+      {:ok, note} = Notes.get_note(user, vault, "L.md")
+      assert note.content == "see [[Fresh]]"
+    end
+  end
+
+  describe "build_target/5" do
+    test "derives new_path and collision from the live row", %{user: user, vault: vault} do
+      {:ok, renamed} =
+        Notes.upsert_note(user, vault, %{"path" => "sub/Fresh.md", "content" => "x"})
+
+      {:ok, _dup} =
+        Notes.upsert_note(user, vault, %{"path" => "other/Fresh.md", "content" => "y"})
+
+      assert {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
+      assert target.new_path == "sub/Fresh.md"
+      assert target.collision?
+      assert is_binary(target.old_basename_hmac)
+    end
+
+    test "gone target row errors", %{user: user, vault: vault} do
+      assert {:error, :target_gone} =
+               Rewriter.build_target(user, vault, :note, Ecto.UUID.generate(), "Old.md")
     end
   end
 end
