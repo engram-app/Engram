@@ -182,6 +182,27 @@ Two follow-on lessons:
   "is it already in the registry?" checks lie. The script now sweeps those at
   the end so the next prebuild rebuilds instead.
 
+### Residual risk the guard does NOT cover
+
+`MIN_IDLE_SEC` gates the *start* of the window, but the sweep itself runs for
+minutes (6m20s on the first 61G run). A push landing mid-sweep hits the same
+race, and nothing can retroactively save it. The script re-checks the newest tag
+afterwards and logs a loud `WARNING` if one appeared, so a red build in that
+window is attributable rather than a mystery. The real fix, if this ever bites
+again, is putting the registry in read-only mode for the duration
+(`REGISTRY_STORAGE_MAINTENANCE_READONLY_ENABLED=true`) — which costs a restart,
+so it was not worth it for a Sunday-05:00 job.
+
+Also in the script, both learned the hard way in review:
+
+- It holds a `flock`. Two concurrent sweeps would each mark against a tag set the
+  other is deleting, so blobs still referenced by the loser get swept.
+- The `garbage-collect` exit status is checked. The first version piped it to
+  `grep -c ... || true`, which reported "blobs deleted: 0" and exited clean
+  whether GC had swept nothing or crashed — and by then the tag references were
+  already gone, so a silent failure would leave orphaned blobs forever with
+  nothing in the log to say so.
+
 ## Related
 
 - `runner-vm-setup.md` — the runners that push to this registry
