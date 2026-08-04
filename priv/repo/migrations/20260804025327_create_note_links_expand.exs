@@ -41,8 +41,13 @@ defmodule Engram.Repo.Migrations.CreateNoteLinksExpand do
 
     create unique_index(:note_links, [:source_note_id, :position])
     create index(:note_links, [:user_id, :vault_id, :source_note_id])
-    create index(:note_links, [:user_id, :vault_id, :target_note_id])
-    create index(:note_links, [:user_id, :vault_id, :target_attachment_id])
+
+    # FK column leads so each index also covers its foreign key (splinter
+    # unindexed_foreign_keys). All queries filter these columns by equality,
+    # so column order doesn't change lookup performance.
+    create index(:note_links, [:target_note_id, :user_id, :vault_id])
+    create index(:note_links, [:target_attachment_id, :user_id, :vault_id])
+    create index(:note_links, [:vault_id])
 
     # No WHERE clause — `Links.bind_danglers_for_hmac/3` deliberately scans
     # bound edges too (a shorter-path newcomer can steal an existing
