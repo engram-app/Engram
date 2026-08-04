@@ -12,6 +12,11 @@ function basename(path: string): string {
 
 const MAX_CANDIDATES = 50;
 
+function dirname(path: string): string {
+	const idx = path.lastIndexOf("/");
+	return idx === -1 ? "" : path.slice(0, idx);
+}
+
 export interface WikiCompletionCandidate {
 	/** Basename, extension stripped -- what the user sees and what apply() inserts. */
 	label: string;
@@ -21,11 +26,6 @@ export interface WikiCompletionCandidate {
 	 * notes in different folders.
 	 */
 	detail: string;
-}
-
-function dirname(path: string): string {
-	const idx = path.lastIndexOf("/");
-	return idx === -1 ? "" : path.slice(0, idx);
 }
 
 /**
