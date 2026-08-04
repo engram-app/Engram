@@ -1,6 +1,6 @@
 import type { EditorView } from "@codemirror/view";
 import { BookOpen, Pencil } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import type { Awareness } from "y-protocols/awareness";
@@ -42,7 +42,7 @@ import { MoveDialog } from "./tree-actions/move-dialog";
 import { RenameInput } from "./tree-actions/rename-input";
 import { renameBaseName } from "./tree-actions/rename-path";
 import { useLiveContent } from "./use-live-content";
-import { wikiHref } from "./wiki-link";
+import { buildWikiMap, wikiHref } from "./wiki-link";
 
 const NoteEditor = lazy(() => import("./note-editor"));
 
@@ -87,17 +87,22 @@ export default function NotePage() {
 	const renameNote = useRenameNote();
 	const [syncStatus, setSyncStatus] = useState<CrdtSyncStatus>(getCrdtSyncStatus);
 	const editorViewRef = useRef<EditorView | null>(null);
-	// Mirrors NoteView's remark-wiki-link hrefTemplate (same wikiHref → the
-	// /:slug/wiki/* resolver). useCallback keeps a stable identity so passing it
-	// to NoteEditor doesn't re-fire the decorationsCompartment reconfigure
-	// effect on every render.
-	const resolveWikiLink = useCallback((permalink: string) => wikiHref(permalink, slug), [slug]);
+	// Same lookup NoteView builds for its remark-wiki-link hrefTemplate — a
+	// resolved link routes straight to the note id instead of through the
+	// lazy /:slug/wiki/* resolver.
+	const wikiMap = useMemo(() => buildWikiMap(note?.links), [note?.links]);
+	// useCallback keeps a stable identity so passing it to NoteEditor doesn't
+	// re-fire the decorationsCompartment reconfigure effect on every render.
+	const resolveWikiLink = useCallback(
+		(permalink: string) => wikiHref(permalink, slug, wikiMap),
+		[slug, wikiMap],
+	);
 	// Editor-mode click-to-open. Router nav must come from the React tree —
 	// see LivePreviewOpts.openWikiLink for why the editor can't reach the
 	// router singleton itself.
 	const openWikiLink = useCallback(
 		(permalink: string) => {
-			const href = wikiHref(permalink, slug);
+			const href = wikiHref(permalink, slug, wikiMap);
 			if (href.startsWith("/")) {
 				void navigate(href);
 			} else if (href.startsWith("#")) {
@@ -105,7 +110,7 @@ export default function NotePage() {
 				window.location.hash = href;
 			}
 		},
-		[navigate, slug],
+		[navigate, slug, wikiMap],
 	);
 
 	const path = note?.path ?? null;
@@ -402,7 +407,7 @@ export default function NotePage() {
 						// the title sits the same distance above the body in reading mode
 						// as it does in the editor.
 						<div className="px-5 pt-5">
-							<NoteView content={liveContent} tags={note.tags} />
+							<NoteView content={liveContent} tags={note.tags} links={note.links} />
 						</div>
 					) : (
 						<Suspense fallback={<p className="px-5 py-5 text-muted-foreground">Loading editor…</p>}>

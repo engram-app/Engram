@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseWikiTarget, resolveWikiTarget, wikiHref } from "./wiki-link";
+import { buildWikiMap, parseWikiTarget, resolveWikiTarget, wikiHref } from "./wiki-link";
 
 describe("parseWikiTarget", () => {
 	test("plain path has no hash", () => {
@@ -80,5 +80,50 @@ describe("wikiHref", () => {
 
 	test("no vault slug renders an inert anchor", () => {
 		expect(wikiHref("My Note", undefined)).toBe("#");
+	});
+});
+
+describe("wikiHref with resolver map", () => {
+	const map = buildWikiMap([
+		{
+			target_text: "My Note",
+			target_note_id: "n-1",
+			target_attachment_id: null,
+			target_path: "a/My Note.md",
+			alias: null,
+			anchor: null,
+			link_type: "wikilink",
+			dangling: false,
+		},
+		{
+			target_text: "Ghost",
+			target_note_id: null,
+			target_attachment_id: null,
+			target_path: null,
+			alias: null,
+			anchor: null,
+			link_type: "wikilink",
+			dangling: true,
+		},
+	]);
+
+	test("resolved target links straight to the note id", () => {
+		expect(wikiHref("My Note", "v", map)).toBe("/v/n-1");
+	});
+
+	test("lookup is case-insensitive and keeps the heading hash", () => {
+		expect(wikiHref("my note#Some Heading", "v", map)).toBe("/v/n-1#some-heading");
+	});
+
+	test("dangling target falls back to the wiki resolver route", () => {
+		expect(wikiHref("Ghost", "v", map)).toBe("/v/wiki/Ghost");
+	});
+
+	test("target absent from the map falls back to the wiki resolver route", () => {
+		expect(wikiHref("Brand New", "v", map)).toBe("/v/wiki/Brand%20New");
+	});
+
+	test("no map behaves exactly as before", () => {
+		expect(wikiHref("My Note", "v")).toBe("/v/wiki/My%20Note");
 	});
 });

@@ -16,6 +16,7 @@ import {
 	syntheticFolderId,
 	syntheticFolderPath,
 } from "../viewer/tree/synthesize-folders";
+import type { NoteLinkEdge } from "../viewer/wiki-link";
 import { reconcileActiveVault, useActiveVaultId } from "./active-vault";
 import { crdtCreateNote, crdtCreateNoteWithContent, crdtDeleteNote } from "./channel";
 import { ApiError, api } from "./client";
@@ -324,6 +325,8 @@ export interface NoteSummary {
 
 export interface Note extends NoteSummary {
 	content: string;
+	// Optional: older cached payloads (pre note-links backend rollout) lack it.
+	links?: NoteLinkEdge[];
 }
 
 export interface SearchResult {

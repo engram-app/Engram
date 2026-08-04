@@ -11,6 +11,34 @@ export interface ManifestNote {
 	path: string;
 }
 
+// One entry per wikilink/embed the backend parsed out of a note's content
+// (`GET /api/notes/by-id/:id` → `links`). Resolved links carry the target's
+// note id; dangling ones (renamed/deleted/never-created target) don't.
+export interface NoteLinkEdge {
+	target_text: string;
+	target_note_id: string | null;
+	target_attachment_id: string | null;
+	target_path: string | null;
+	alias: string | null;
+	anchor: string | null;
+	link_type: "wikilink" | "embed";
+	dangling: boolean;
+}
+
+// Keyed by lowercased target_text so wikiHref's lookup matches Obsidian's
+// case-insensitive resolution. Dangling entries stay OUT of the map — a
+// missing key and a dangling key both fall back to the wiki resolver route,
+// so there's no reason to carry a target_note_id: null entry into the lookup.
+export function buildWikiMap(links: NoteLinkEdge[] | undefined): Map<string, NoteLinkEdge> {
+	const map = new Map<string, NoteLinkEdge>();
+	for (const link of links ?? []) {
+		if (!link.dangling && link.target_note_id) {
+			map.set(link.target_text.toLowerCase(), link);
+		}
+	}
+	return map;
+}
+
 // Split `Page#Heading` and slug the heading with the SAME slugger rehype-slug
 // uses in Reading mode, so the hash actually lands on the rendered anchor.
 export function parseWikiTarget(raw: string): { page: string; hash: string } {
@@ -41,14 +69,24 @@ export function resolveWikiTarget(page: string, notes: ManifestNote[]): Manifest
 }
 
 // No slug = rendered outside a vault route (markdown reference panel) —
-// nothing to resolve against, so the anchor stays inert.
-export function wikiHref(raw: string, slug: string | undefined): string {
+// nothing to resolve against, so the anchor stays inert. A resolved entry in
+// `map` (from buildWikiMap) short-circuits straight to the note id instead of
+// the lazy /:slug/wiki/* redirect; anything unresolved keeps that fallback.
+export function wikiHref(
+	raw: string,
+	slug: string | undefined,
+	map?: Map<string, NoteLinkEdge>,
+): string {
 	const { page, hash } = parseWikiTarget(raw);
 	if (!page) {
 		return hash || "#";
 	}
 	if (!slug) {
 		return "#";
+	}
+	const resolved = map?.get(page.toLowerCase());
+	if (resolved?.target_note_id) {
+		return `/${slug}/${resolved.target_note_id}${hash}`;
 	}
 	const encoded = page.split("/").map(encodeURIComponent).join("/");
 	return `/${slug}/wiki/${encoded}${hash}`;

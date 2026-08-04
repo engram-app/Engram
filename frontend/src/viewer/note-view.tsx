@@ -16,11 +16,15 @@ import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { AttachmentFallback } from "./attachment-fallback";
 import AttachmentImg from "./attachment-img";
 import MermaidBlock from "./mermaid-block";
-import { wikiHref } from "./wiki-link";
+import { buildWikiMap, type NoteLinkEdge, wikiHref } from "./wiki-link";
 
 interface NoteViewProps {
 	content: string;
 	tags: string[];
+	// Optional: the markdown reference panel's preview call site renders
+	// outside a note context and has no links to resolve — wikilinks there
+	// fall back to the lazy /:slug/wiki/* route same as before this prop existed.
+	links?: NoteLinkEdge[];
 }
 
 // Sentinel marks images rewritten from Obsidian `![[X]]` embed syntax. The
@@ -37,7 +41,7 @@ function rewriteEmbeds(raw: string): string {
 // Slug-parameterized: wikilinks route through the vault-scoped resolver
 // (`/:slug/wiki/*`, see wiki-link.ts). pageResolver is identity — the default
 // would mangle names (`My Note` → `my_note`) before the resolver ever saw them.
-const remarkPluginsFor = (slug: string | undefined) =>
+const remarkPluginsFor = (slug: string | undefined, map: Map<string, NoteLinkEdge>) =>
 	[
 		remarkGfm,
 		remarkMath,
@@ -46,7 +50,7 @@ const remarkPluginsFor = (slug: string | undefined) =>
 			remarkWikiLink,
 			{
 				pageResolver: (name: string) => [name],
-				hrefTemplate: (permalink: string) => wikiHref(permalink, slug),
+				hrefTemplate: (permalink: string) => wikiHref(permalink, slug, map),
 				aliasDivider: "|",
 			},
 		],
@@ -70,10 +74,11 @@ const TEXT_EMBED = /\.(?:md|canvas)$/iu;
 // the preview stays force-mounted with identical props; react-markdown has
 // no internal memoization, so an unmemoized NoteView re-ran the full
 // remark/rehype pipeline (gfm + KaTeX + highlight) per keystroke.
-function NoteView({ content, tags }: NoteViewProps) {
+function NoteView({ content, tags, links }: NoteViewProps) {
 	const isFreeTier = useIsFreeTier();
 	const { slug } = useParams();
-	const remarkPlugins = useMemo(() => remarkPluginsFor(slug), [slug]);
+	const wikiMap = useMemo(() => buildWikiMap(links), [links]);
+	const remarkPlugins = useMemo(() => remarkPluginsFor(slug, wikiMap), [slug, wikiMap]);
 	const body = useMemo(() => {
 		try {
 			return rewriteEmbeds(matter(content).content);

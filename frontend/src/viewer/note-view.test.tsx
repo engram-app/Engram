@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import NoteView from "./note-view";
+import type { NoteLinkEdge } from "./wiki-link";
 
 let mockTier: "free" | "starter" | "pro" | "trial" | "none" = "free";
 // SaaS by default; self-host flips false (no billing → attachments ungated).
@@ -49,12 +50,15 @@ function LocationProbe() {
 }
 
 // NoteView reads the vault slug from the route to build wikilink hrefs.
-function renderNote(content: string) {
+function renderNote(content: string, links?: NoteLinkEdge[]) {
 	return render(
 		<MemoryRouter initialEntries={["/work/n-1"]}>
 			<LocationProbe />
 			<Routes>
-				<Route path="/:slug/:itemId" element={<NoteView content={content} tags={[]} />} />
+				<Route
+					path="/:slug/:itemId"
+					element={<NoteView content={content} tags={[]} links={links} />}
+				/>
 			</Routes>
 		</MemoryRouter>,
 	);
@@ -83,6 +87,23 @@ describe("NoteView wikilinks", () => {
 		renderNote("See [[My Note]].");
 		fireEvent.click(screen.getByRole("link", { name: "My Note" }));
 		expect(screen.getByTestId("loc")).toHaveTextContent("/work/wiki/My%20Note");
+	});
+
+	it("links straight to the note id when the links prop resolves the target", () => {
+		renderNote("See [[My Note]].", [
+			{
+				target_text: "My Note",
+				target_note_id: "n-1",
+				target_attachment_id: null,
+				target_path: "My Note.md",
+				alias: null,
+				anchor: null,
+				link_type: "wikilink",
+				dangling: false,
+			},
+		]);
+		const link = screen.getByRole("link", { name: "My Note" });
+		expect(link).toHaveAttribute("href", "/work/n-1");
 	});
 });
 
