@@ -21,7 +21,10 @@ function mountCallout(anchor: number): EditorView {
 		state: EditorState.create({
 			doc: CALLOUT_DOC,
 			selection: { anchor },
-			extensions: livePreviewExtensions({ resolveWikiLink: (n) => `/w/wiki/${n}`, openWikiLink: () => {} }),
+			extensions: livePreviewExtensions({
+				resolveWikiLink: (n) => `/w/wiki/${n}`,
+				openWikiLink: () => {},
+			}),
 		}),
 		parent: document.body,
 	});
@@ -30,14 +33,20 @@ function mountCallout(anchor: number): EditorView {
 
 describe("livePreviewExtensions", () => {
 	test("is view-only: decorations never change the document text", () => {
-		const ext = livePreviewExtensions({ resolveWikiLink: (n) => `/w/wiki/${n}`, openWikiLink: () => {} });
+		const ext = livePreviewExtensions({
+			resolveWikiLink: (n) => `/w/wiki/${n}`,
+			openWikiLink: () => {},
+		});
 		const state = EditorState.create({ doc: MD, extensions: ext });
 		// Building state + reading facets must not alter doc bytes.
 		expect(state.doc.toString()).toBe(MD);
 	});
 
 	test("does not throw when composed with markdown language", () => {
-		const ext = livePreviewExtensions({ resolveWikiLink: (n) => `/w/wiki/${n}`, openWikiLink: () => {} });
+		const ext = livePreviewExtensions({
+			resolveWikiLink: (n) => `/w/wiki/${n}`,
+			openWikiLink: () => {},
+		});
 		expect(() => EditorState.create({ doc: MD, extensions: ext })).not.toThrow();
 	});
 

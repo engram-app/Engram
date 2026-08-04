@@ -104,7 +104,7 @@ export default function NotePage() {
 		(permalink: string) => {
 			const href = wikiHref(permalink, slug, wikiMap);
 			if (href.startsWith("/")) {
-				void navigate(href);
+				navigate(href);
 			} else if (href.startsWith("#")) {
 				// Same-page heading — hash assignment scrolls, no reload.
 				window.location.hash = href;

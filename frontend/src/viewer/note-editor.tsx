@@ -211,7 +211,9 @@ export default function NoteEditor({
 			return;
 		}
 		view.dispatch({
-			effects: decorationsCompartment.reconfigure(decorationsFor(mode, resolveWikiLink, openWikiLink)),
+			effects: decorationsCompartment.reconfigure(
+				decorationsFor(mode, resolveWikiLink, openWikiLink),
+			),
 		});
 	}, [mode, resolveWikiLink, openWikiLink]);
 
