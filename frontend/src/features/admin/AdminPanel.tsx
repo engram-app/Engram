@@ -2,6 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { useMe } from "@/api/queries";
 import { useConfig } from "@/config-context";
+import { copyToClipboard } from "@/lib/clipboard";
 import InvitesTab from "./InvitesTab";
 import MembersTab from "./MembersTab";
 import RegistrationTab from "./RegistrationTab";
@@ -17,8 +18,14 @@ export default function AdminPanel() {
 		if (!resetUrl) {
 			return;
 		}
-		await navigator.clipboard.writeText(resetUrl);
-		toast.success("Copied to clipboard");
+		// Self-host runs on a LAN box over plain http, where navigator.clipboard
+		// does not exist — reaching through it threw before any promise existed,
+		// and the success toast below fired for a copy that never happened.
+		if (await copyToClipboard(resetUrl)) {
+			toast.success("Copied to clipboard");
+		} else {
+			toast.error("Could not copy");
+		}
 	}
 
 	// Defensive gate — the nav entry is hidden when these don't hold, but a user
