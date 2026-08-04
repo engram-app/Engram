@@ -300,6 +300,7 @@ defmodule Engram.Links do
   """
   @spec links_for_note(map(), binary()) :: [map()]
   def links_for_note(user, note_id) do
+    user = reload_for_dek(user)
     {:ok, dek} = Crypto.get_dek(user)
 
     edges =
@@ -365,6 +366,7 @@ defmodule Engram.Links do
   """
   @spec backlinks_for_note(map(), binary()) :: [map()]
   def backlinks_for_note(user, note_id) do
+    user = reload_for_dek(user)
     {:ok, dek} = Crypto.get_dek(user)
 
     edges =
@@ -450,6 +452,15 @@ defmodule Engram.Links do
       }
     end)
   end
+
+  # Read paths (called straight from controllers with `conn.assigns.current_user`)
+  # can't trust that struct to carry a DEK: a same-request note write lazily
+  # provisions the DEK via `Crypto.ensure_user_dek/1` deep inside `Notes`, but
+  # that only updates the struct held *inside* that call — the controller's
+  # `current_user` is resolved by auth middleware before the write and never
+  # sees it. Same reload-fresh pattern `Indexing.index_note/2` uses (fetches by
+  # `note.user_id` rather than trusting a passed-in user).
+  defp reload_for_dek(%{id: id}), do: Engram.Accounts.get_user!(id)
 
   defp decrypt_note_paths(_user, _dek, []), do: %{}
 

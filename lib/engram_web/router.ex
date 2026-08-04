@@ -376,6 +376,7 @@ defmodule EngramWeb.Router do
     post "/notes", NotesController, :upsert
     get "/notes/changes", NotesController, :changes
     get "/notes/by-id/:id", NotesController, :show_by_id
+    get "/notes/by-id/:id/backlinks", NotesController, :backlinks
     delete "/notes/by-id/:id", NotesController, :delete_by_id
     # REST /notes/:id/updates + GET /vault/heads DELETED (Phase E3/#1088) — Yjs
     # deltas AND head discovery travel ONLY over the crdt: socket topic now.

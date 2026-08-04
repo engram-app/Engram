@@ -3,6 +3,7 @@ defmodule EngramWeb.NotesController do
   use OpenApiSpex.ControllerSpecs
   alias EngramWeb.Schemas
 
+  alias Engram.Links
   alias Engram.Notes
   alias EngramWeb.BatchOps
 
@@ -44,12 +45,12 @@ defmodule EngramWeb.NotesController do
 
       case Notes.upsert_note(user, vault, params) do
         {:ok, note} ->
-          json(conn, %{note: note_json(note)})
+          json(conn, %{note: note_json(note, user)})
 
         {:error, :version_conflict, server_note} ->
           conn
           |> put_status(409)
-          |> json(%{conflict: true, server_note: note_json(server_note)})
+          |> json(%{conflict: true, server_note: note_json(server_note, user)})
 
         {:error, %Ecto.Changeset{}} = error ->
           error
@@ -132,7 +133,7 @@ defmodule EngramWeb.NotesController do
                    "mtime" => note.mtime
                  }) do
               {:ok, updated} ->
-                json(conn, %{created: false, path: path, note: note_json(updated)})
+                json(conn, %{created: false, path: path, note: note_json(updated, user)})
 
               {:error, changeset} ->
                 conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
@@ -172,7 +173,7 @@ defmodule EngramWeb.NotesController do
                "mtime" => mtime
              }) do
           {:ok, note} ->
-            json(conn, %{created: true, path: path, note: note_json(note)})
+            json(conn, %{created: true, path: path, note: note_json(note, user)})
 
           {:error, :recently_deleted} ->
             # Delete-wins: append-as-create races an explicit delete of the same
@@ -208,7 +209,7 @@ defmodule EngramWeb.NotesController do
     path = Enum.join(List.wrap(path_parts), "/")
 
     case Notes.get_note(user, vault, path) do
-      {:ok, note} -> json(conn, note_json(note))
+      {:ok, note} -> json(conn, note_json(note, user))
       {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not found"})
     end
   end
@@ -235,7 +236,12 @@ defmodule EngramWeb.NotesController do
 
     case Notes.rename_note(user, vault, old_path, new_path) do
       {:ok, note} ->
-        json(conn, %{renamed: true, old_path: old_path, new_path: new_path, note: note_json(note)})
+        json(conn, %{
+          renamed: true,
+          old_path: old_path,
+          new_path: new_path,
+          note: note_json(note, user)
+        })
 
       {:error, :conflict} = error ->
         error
@@ -287,7 +293,35 @@ defmodule EngramWeb.NotesController do
 
     with {:ok, id} <- Ecto.UUID.cast(id_str),
          {:ok, note} <- Notes.get_note_by_id(user, vault, id) do
-      json(conn, note_json(note))
+      json(conn, note_json(note, user))
+    else
+      :error -> conn |> put_status(400) |> json(%{error: "invalid id"})
+      {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not found"})
+    end
+  end
+
+  operation(:backlinks,
+    operation_id: "notes-backlinks",
+    summary: "Get backlinks for a note",
+    description:
+      "Returns every note that links to the given note UUID (the inverse of a note's own " <>
+        "`links`). Returns 400 for a malformed UUID and 404 when no such note exists in the vault.",
+    tags: ["Notes"],
+    parameters: [id: [in: :path, type: :string, required: true, description: "Note UUID"]],
+    responses: [
+      ok: {"Backlinks", "application/json", Schemas.Backlinks},
+      bad_request: {"Invalid UUID", "application/json", Schemas.Error},
+      not_found: {"No such note", "application/json", Schemas.Error}
+    ]
+  )
+
+  def backlinks(conn, %{"id" => id_str}) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    with {:ok, id} <- Ecto.UUID.cast(id_str),
+         {:ok, _note} <- Notes.get_note_by_id(user, vault, id) do
+      json(conn, %{backlinks: Links.backlinks_for_note(user, id)})
     else
       :error -> conn |> put_status(400) |> json(%{error: "invalid id"})
       {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not found"})
@@ -496,7 +530,7 @@ defmodule EngramWeb.NotesController do
   # Private
   # ---------------------------------------------------------------------------
 
-  defp note_json(note) do
+  defp note_json(note, user) do
     %{
       id: note.id,
       path: note.path,
@@ -516,7 +550,10 @@ defmodule EngramWeb.NotesController do
       fm_timestamp: note.fm_timestamp,
       fm_created: note.fm_created,
       parse_status: note.parse_status,
-      parse_reason: note.parse_reason
+      parse_reason: note.parse_reason,
+      # Task 9 — outgoing wikilink/embed edges, resolved. Frontend keys its
+      # resolution map off `target_text`.
+      links: Links.links_for_note(user, note.id)
     }
     |> put_content(note.content)
   end

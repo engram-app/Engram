@@ -54,9 +54,79 @@ defmodule EngramWeb.Schemas.Note do
         type: :object,
         nullable: true,
         description: "Present when parse_status is \"degraded\": {code, message, detail}"
+      },
+      links: %Schema{
+        type: :array,
+        items: EngramWeb.Schemas.NoteLink,
+        description: "Outgoing wikilink/embed edges, resolved."
       }
     },
     required: [:path]
+  })
+end
+
+defmodule EngramWeb.Schemas.NoteLink do
+  @moduledoc "A resolved outgoing wikilink/embed edge from a note."
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "NoteLink",
+    type: :object,
+    properties: %{
+      target_text: %Schema{
+        type: :string,
+        description: "The raw link target as written, e.g. `[[target_text]]`."
+      },
+      target_note_id: %Schema{type: :string, format: :uuid, nullable: true},
+      target_attachment_id: %Schema{type: :string, format: :uuid, nullable: true},
+      target_path: %Schema{type: :string, nullable: true, description: "Resolved note path."},
+      alias: %Schema{
+        type: :string,
+        nullable: true,
+        description: "`[[target|alias]]` display text."
+      },
+      anchor: %Schema{
+        type: :string,
+        nullable: true,
+        description: "`[[target#anchor]]` heading/block reference."
+      },
+      link_type: %Schema{type: :string, description: "\"wikilink\" or \"embed\"."},
+      dangling: %Schema{
+        type: :boolean,
+        description: "True when the target could not be resolved."
+      }
+    },
+    required: [:target_text, :link_type, :dangling]
+  })
+end
+
+defmodule EngramWeb.Schemas.Backlinks do
+  @moduledoc "Inverse links (backlinks) pointing at a note."
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "Backlinks",
+    type: :object,
+    properties: %{
+      backlinks: %Schema{
+        type: :array,
+        items: %Schema{
+          title: "Backlink",
+          type: :object,
+          properties: %{
+            source_note_id: %Schema{type: :string, format: :uuid},
+            source_path: %Schema{type: :string, nullable: true},
+            source_title: %Schema{type: :string, nullable: true},
+            alias: %Schema{type: :string, nullable: true},
+            anchor: %Schema{type: :string, nullable: true}
+          },
+          required: [:source_note_id]
+        }
+      }
+    },
+    required: [:backlinks]
   })
 end
 
