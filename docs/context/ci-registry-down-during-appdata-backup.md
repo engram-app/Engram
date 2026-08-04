@@ -139,8 +139,10 @@ than a slow one.
 
 ## Done: scheduled retention (2026-08-03)
 
-`/boot/config/plugins/user.scripts/scripts/Prune CI Registry/script`, wired into
-`/etc/cron.d/root` via the User Scripts plugin, **Sundays 05:00**:
+Source of truth is **`ci/prune-ci-registry.sh`** in this repo — it sits beside
+`ci/fingerprint/`, which writes the markers it expires, so the two retention
+windows stay in step. It is copied up to the FastRaid host and wired into
+`/etc/cron.d/root` by the User Scripts plugin, **Sundays 05:00**:
 
 ```
 0 5 * * 0 .../startCustom.php ".../Prune CI Registry/script"
