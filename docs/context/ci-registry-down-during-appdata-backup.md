@@ -1,4 +1,9 @@
-# `prebuild-ci-image` fails ~04:00-04:30 local: the nightly appdata backup stopped the registry
+# `prebuild-ci-image` fails Mondays ~04:00: the appdata backup stopped the registry
+
+> **FIXED 2026-08-03** — `LocalCIRegistry` now has `skip: yes` + `dontStop: yes`
+> in the plugin config, matching the `DockerRegistry` entry that was already
+> there. Kept as a diagnosis record, and because the same shape recurs for any
+> container the backup stops.
 
 **Trigger:** CI fails with the image *built fine* and only the push failing:
 
@@ -11,7 +16,7 @@ Every e2e job (`e2e-browser`, `e2e-crdt`, `e2e-clerk`, `headless-protocol`) then
 
 ## Cause
 
-FastRaid (`10.0.20.214`) is Unraid, and the **Appdata Backup plugin** runs at **04:00 local**. It stops each container in turn, tars its appdata, and starts it again:
+FastRaid (`10.0.20.214`) is Unraid, and the **Appdata Backup plugin** runs **weekly on Mondays at 04:00 local** (`backupFrequency: weekly`, `backupFrequencyWeekday: 1` in `/boot/config/plugins/appdata.backup/config.json` — it is NOT nightly). It stops each container in turn, tars its appdata, and starts it again:
 
 ```
 04:00  php /usr/local/emhttp/plugins/appdata.backup/scripts/backup.php
@@ -64,16 +69,78 @@ AdGuard-Home                              64M
 
 Measured 2026-08-03: `:5001` went down at **04:05** and answered again at **04:56** — a **51-minute** outage from one container's tar. Every other container in the run finished in about a minute. Any CI push landing in that window fails, so an overnight or autonomous session will hit it.
 
-## Prevention
+## The fix that was applied
 
-The fix is configuration, not code. In order of value:
+`/boot/config/plugins/appdata.backup/config.json` had **no entry at all** for
+`LocalCIRegistry`, so it fell through to the defaults and got stopped + tarred.
+`DockerRegistry`, `Qdrant`, `Lancache` and `ollama` already had entries opting
+out — the policy existed, this container just predated nothing and was simply
+never added.
 
-1. **Exclude `local-ci-registry` from appdata backup.** It is 62G of *rebuildable* image layers — restoring it from a tarball is never the right recovery move (you re-push instead), so the backup buys nothing and costs a nightly CI outage plus ~90% of the backup window.
-2. Failing that, move the 04:00 window off the hours when overnight/autonomous CI runs.
+Added, copied verbatim from the `DockerRegistry` entry:
 
-Separately: 62G suggests the registry has **no garbage collection** — CI images from every branch accumulating since the runner pool was built. Worth a `registry garbage-collect` pass and a retention policy regardless of the backup question.
+```json
+"LocalCIRegistry": {
+    "skip": "yes",      // don't back it up: 62G of rebuildable layers
+    "dontStop": "yes",  // and don't stop it: this is what broke CI
+    "group": "", "backupExtVolumes": "no", "updateContainer": "",
+    "exclude": "", "skipBackup": "no", "verifyBackup": "",
+    "ignoreBackupErrors": ""
+}
+```
 
-Neither is done yet. Raise both before the next unattended overnight session.
+`dontStop` is the load-bearing half. `skip` alone would still stop the
+container during the run.
+
+Backup of the previous config: `config.json.bak-20260803-claude`.
+
+## Registry size and why GC alone will not help
+
+Measured 2026-08-03:
+
+```
+blobs/                                    63G     <- all of it
+repositories/  (all 10, metadata only)   ~220M
+engram-ci                                827 tags
+ci-pass                                  752 tags
+```
+
+One full app image is pushed per CI run and nothing ever prunes them.
+
+**A plain `registry garbage-collect` reclaims essentially nothing here:**
+
+```
+11582 blobs marked, 5 blobs and 0 manifests eligible for deletion
+```
+
+GC only removes blobs no manifest references, and every one of those 827
+manifests is still *tagged*. The lever is therefore **tag retention**, not GC —
+GC is only the second step, after old tags stop referencing their manifests.
+
+Also note `storage.delete.enabled` is **not set** in the registry config, so the
+DELETE API is refused; either enable it (`REGISTRY_STORAGE_DELETE_ENABLED=true`)
+or remove the tag directories under
+`repositories/engram-ci/_manifests/tags/<tag>` and let
+`garbage-collect --delete-untagged` sweep the now-unreferenced manifests.
+
+### Do it in a quiet window
+
+The distribution docs are explicit that a blob uploaded *while* GC runs can be
+deleted out from under the pusher. Stop the registry (or set it read-only) and
+confirm no CI is in flight first:
+
+```bash
+gh run list --limit 15 --json status --jq '.[] | select(.status!="completed")'
+```
+
+Everything in this registry is rebuildable, so the worst case is CI redoing
+work — but an in-flight run failing for a reason nobody can reproduce is worse
+than a slow one.
+
+Tracked as engram-app/Engram#1224. Deliberately NOT done as a one-off: at
+~1-2G per CI run a manual prune just resets the clock, and there is no disk
+pressure to justify hand-surgery (`/mnt/cache` is 1.5T of 5.0T). It wants a
+scheduled retention policy or nothing.
 
 ## Related
 
