@@ -8,11 +8,25 @@ defmodule Engram.Links do
   resolution is case-insensitive and path-agnostic when the link omits a
   folder.
 
-  Every query here runs with `skip_tenant_check: true` and an explicit
-  `user_id`/`vault_id` filter — mirrors `Engram.Indexing.commit_index/1`.
-  Callers are trusted internal pipelines (note write path, backfill
-  workers); the RLS policy still protects ordinary tenant-scoped reads
-  (`Repo.with_tenant/2`) against cross-user access.
+  Every query here runs with `skip_tenant_check: true` — callers are trusted
+  internal pipelines (note write path, backfill workers), not
+  request-scoped user input, so this module carries its own filters rather
+  than relying on `Repo.with_tenant/2` RLS. The actual invariant, by
+  function class:
+
+    * Row-id-scoped mutations (`replace_links/4`'s delete, `rebind_edge/4`'s
+      update) carry `user_id` (+ `vault_id` where it's in scope) alongside
+      the row id — belt-and-suspenders against a wrong/stale id, not the
+      only thing narrowing the query.
+    * Mutations driven by a list of ids (`on_note_soft_deleted/2`,
+      `on_attachment_soft_deleted/2` and its batched sibling) carry only
+      `user_id`: `vault_id` isn't in scope at those call sites, but the ids
+      themselves originate from tenant-scoped queries upstream (e.g.
+      `Notes.delete_note/4`, `Attachments.batch_delete/3`), so cross-tenant
+      rows can't reach them.
+    * Reads (`links_for_note/2`, `backlinks_for_note/2`) filter `user_id`
+      only, for the same reason — the note id passed in was already
+      resolved through a tenant-scoped lookup by the caller.
   """
 
   import Ecto.Query
@@ -85,7 +99,11 @@ defmodule Engram.Links do
 
     Repo.transaction(fn ->
       Repo.delete_all(
-        from(l in NoteLink, where: l.source_note_id == ^source_note_id),
+        from(l in NoteLink,
+          where:
+            l.source_note_id == ^source_note_id and l.user_id == ^user.id and
+              l.vault_id == ^vault.id
+        ),
         skip_tenant_check: true
       )
 
@@ -308,7 +326,9 @@ defmodule Engram.Links do
     if {target_note_id, target_attachment_id} !=
          {edge.target_note_id, edge.target_attachment_id} do
       Repo.update_all(
-        from(l in NoteLink, where: l.id == ^edge.id),
+        from(l in NoteLink,
+          where: l.id == ^edge.id and l.user_id == ^user.id and l.vault_id == ^vault.id
+        ),
         [set: [target_note_id: target_note_id, target_attachment_id: target_attachment_id]],
         skip_tenant_check: true
       )
