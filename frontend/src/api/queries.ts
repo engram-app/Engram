@@ -471,9 +471,10 @@ export function useAttachments() {
 }
 
 // Wikilink resolution (wiki-link-redirect.tsx) needs the vault-wide path→id
-// inventory; the sync manifest is the one endpoint that has it. Only fetched
-// when a wikilink is actually followed, and briefly cached so link-hopping
-// doesn't re-pull a large vault's manifest per click.
+// inventory; the sync manifest is the one endpoint that has it. Also fetched
+// on note mount (note-page.tsx) to feed [[ autocomplete (wiki-completion.ts).
+// The 30s staleTime bounds both: link-hopping and repeated note mounts don't
+// re-pull a large vault's manifest more than once per that window.
 export function useSyncManifest() {
 	const vaultId = useActiveVaultId();
 	return useQuery({

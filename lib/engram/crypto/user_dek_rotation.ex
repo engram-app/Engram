@@ -2,8 +2,8 @@ defmodule Engram.Crypto.UserDekRotation do
   @moduledoc """
   T3.7 — per-user DEK rotation orchestrator. Generates a new DEK for the
   target user, rewraps every ciphertext column on every owned row
-  (notes / vaults / attachments / Qdrant payloads) under the new key,
-  then atomically flips `users.encrypted_dek`.
+  (notes / vaults / attachments / note_links / Qdrant payloads) under the
+  new key, then atomically flips `users.encrypted_dek`.
 
   The user is locked (read + write) for the duration via
   `Engram.Crypto.RotationLock`; clients receive HTTP 503 with

@@ -350,7 +350,12 @@ defmodule Engram.Attachments do
               if is_binary(key), do: delete_external(key)
               {true, {id, basename_hmac}}
 
-            # {count, nil}: legacy row with no storage_key, or no row matched.
+            # {count, nil}: count is always 0 here — the select always returns
+            # the {id, storage_key, basename_hmac} 3-tuple (storage_key may
+            # itself be nil for a legacy row, but that still matches the
+            # first branch above and unpacks fine). List.first(rows) is only
+            # nil when rows == [], i.e. no live row matched path_hmac
+            # (absent or already-deleted path).
             {:ok, {count, _}} ->
               {count > 0, nil}
 
