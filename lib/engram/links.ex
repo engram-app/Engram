@@ -320,6 +320,28 @@ defmodule Engram.Links do
   end
 
   @doc """
+  An attachment was soft-deleted: attachments carry no outgoing edges (only
+  notes originate links, per `replace_links/4`), so there's nothing to drop
+  there — only flip any incoming edges back to dangling (the target no
+  longer exists, but the edge — and its encrypted target text — stays so it
+  can re-bind if the attachment reappears at the same path, or a
+  same-basename sibling can inherit it via the caller's paired
+  `RebindNoteLinks` enqueue).
+  """
+  @spec on_attachment_soft_deleted(binary(), binary()) :: :ok
+  def on_attachment_soft_deleted(user_id, attachment_id) do
+    Repo.update_all(
+      from(l in NoteLink,
+        where: l.user_id == ^user_id and l.target_attachment_id == ^attachment_id
+      ),
+      [set: [target_attachment_id: nil]],
+      skip_tenant_check: true
+    )
+
+    :ok
+  end
+
+  @doc """
   Decrypted outgoing links for a note, in parser order.
   """
   @spec links_for_note(map(), binary()) :: [map()]
