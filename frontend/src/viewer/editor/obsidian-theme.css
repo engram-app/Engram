@@ -166,3 +166,12 @@
 	font-size: 0.85em;
 	color: var(--atomic-editor-fg-faint, #8b949e);
 }
+
+/* Wikilinks are internal navigation — Atomic's external-link ::after icon
+   (the open-in-new-tab affordance on .cm-atomic-link) is noise inside
+   [[...]] and rendered as "[[link]icon]". Scope-kill it via the wiki-link
+   wrapper states; genuine external URLs keep their icon. */
+.cm-atomic-wiki-link-active .cm-atomic-link::after,
+.cm-atomic-wiki-link-hidden-syntax .cm-atomic-link::after {
+	content: none;
+}
