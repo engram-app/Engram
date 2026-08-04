@@ -35,9 +35,16 @@ defmodule Engram.Indexing do
   """
   def index_note(note, %Engram.Vaults.Vault{} = vault) do
     case prepare_index(note, vault) do
-      {:ok, :no_chunks} -> {:ok, 0}
-      {:ok, prepared} -> commit_index(prepared)
-      {:error, _} = err -> err
+      {:ok, {:no_chunks, link_rows}} ->
+        user = Engram.Accounts.get_user!(note.user_id)
+        :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
+        {:ok, 0}
+
+      {:ok, prepared} ->
+        commit_index(prepared)
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -49,15 +56,18 @@ defmodule Engram.Indexing do
   slow Voyage AI HTTP call run outside any Postgres connection.
 
   Returns:
-    * `{:ok, :no_chunks}` — note has no parseable chunks
+    * `{:ok, {:no_chunks, link_rows}}` — note has no parseable chunks; caller
+      must still persist `link_rows` (a note emptied to "" must clear its
+      stale outgoing edges, same as any other re-index)
     * `{:ok, prepared}` — ready to hand to `commit_index/1`
     * `{:error, reason}` — embed failed, encryption failed, etc.
   """
-  def prepare_index(note, %Engram.Vaults.Vault{} = _vault) do
+  def prepare_index(note, %Engram.Vaults.Vault{} = vault) do
+    link_rows = Engram.Links.Parser.extract(note.content || "")
     chunks = Markdown.parse(note.content || "", note.path)
 
     if chunks == [] do
-      {:ok, :no_chunks}
+      {:ok, {:no_chunks, link_rows}}
     else
       context_texts = Enum.map(chunks, & &1.context_text)
       dims = Application.get_env(:engram, :embed_dims, @default_dims)
@@ -67,7 +77,7 @@ defmodule Engram.Indexing do
            {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user),
            {:ok, vectors} <- embed_for_indexing(context_texts) do
         avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id)
-        build_prepared(note, user, chunks, vectors, filter_key, avgdl)
+        build_prepared(note, user, vault, chunks, vectors, filter_key, avgdl, link_rows)
       else
         {:error, :no_dek} = err ->
           :telemetry.execute(
@@ -99,7 +109,14 @@ defmodule Engram.Indexing do
 
   Returns `{:ok, chunk_count}` or `{:error, reason}`.
   """
-  def commit_index(%{note: note, chunk_rows: chunk_rows, qdrant_points: qdrant_points}) do
+  def commit_index(%{
+        note: note,
+        user: user,
+        vault: vault,
+        chunk_rows: chunk_rows,
+        qdrant_points: qdrant_points,
+        links: link_rows
+      }) do
     with :ok <-
            Qdrant.delete_by_note(
              collection(),
@@ -112,6 +129,8 @@ defmodule Engram.Indexing do
         Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
 
       _ = Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
+
+      :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
 
       # Bounded upsert bodies: thousands of 1024-dim float vectors as one
       # JSON PUT is tens of MB; Qdrant handles batches fine but the single
@@ -237,7 +256,7 @@ defmodule Engram.Indexing do
   # Encrypt-first: build payloads + encrypt in memory BEFORE any mutation.
   # If any chunk's encryption fails, no Postgres row or Qdrant point is touched
   # and prior state survives for the next Oban retry.
-  defp build_prepared(note, user, chunks, vectors, filter_key, avgdl) do
+  defp build_prepared(note, user, vault, chunks, vectors, filter_key, avgdl, link_rows) do
     now = DateTime.utc_now(:second)
 
     prepared =
@@ -315,7 +334,16 @@ defmodule Engram.Indexing do
 
     with {:ok, prepared_pairs} <- prepared do
       {chunk_rows, qdrant_points} = prepared_pairs |> Enum.reverse() |> Enum.unzip()
-      {:ok, %{note: note, chunk_rows: chunk_rows, qdrant_points: qdrant_points}}
+
+      {:ok,
+       %{
+         note: note,
+         user: user,
+         vault: vault,
+         chunk_rows: chunk_rows,
+         qdrant_points: qdrant_points,
+         links: link_rows
+       }}
     end
   end
 
