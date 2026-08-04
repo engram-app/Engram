@@ -20,6 +20,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { type Extension, Prec } from "@codemirror/state";
 import { tags } from "@lezer/highlight";
+import { getAppRouter } from "../../router";
 import { blockquoteDepthPlugin } from "./blockquote-depth";
 import { calloutDecoration } from "./callout-decoration";
 import { calloutMarker } from "./callout-marker";
@@ -63,10 +64,10 @@ export interface LivePreviewOpts {
  * decorate the markdown source but never mutate EditorState.doc, so the yCollab
  * Y.Text binding (see note-editor.tsx) is untouched. Wikilinks resolve through
  * the same `/:slug/wiki/*` route as Reading mode (resolveWikiLink is NotePage's
- * wikiHref closure); click-to-open here is a hard `window.location` nav —
- * ponytail: full reload per editor-mode link hop, switch to
- * getAppRouter().navigate if that ever grates. Callouts/KaTeX are sibling
- * view-only decoration extensions (see callout-decoration.ts, katex-decoration.ts).
+ * wikiHref closure); click-to-open navigates via the app router — a hard
+ * `window.location` nav here full-page-reloaded the SPA on every editor-mode
+ * link hop. Callouts/KaTeX are sibling view-only decoration extensions (see
+ * callout-decoration.ts, katex-decoration.ts).
  */
 export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 	return [
@@ -102,7 +103,13 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 			// `label` stays the raw wikilink text.
 			resolve: (target) => Promise.resolve({ target: opts.resolveWikiLink(target), label: target }),
 			onOpen: (target) => {
-				window.location.assign(opts.resolveWikiLink(target));
+				const href = opts.resolveWikiLink(target);
+				if (href.startsWith("/")) {
+					void getAppRouter().navigate(href);
+				} else if (href.startsWith("#")) {
+					// Same-page heading link — hash assignment scrolls, no reload.
+					window.location.hash = href;
+				}
 			},
 		}),
 		// Prec.highest is load-bearing, not tidiness. A callout's header line is

@@ -33,8 +33,13 @@ path or bare title. Bridging happens in three pieces, all in `frontend/src`:
   route; `wikiHref` returns `"#"` when there's no slug (inert anchor), so
   don't assume a slug exists where NoteView mounts.
 - Reading-mode internal anchors go through react-router `Link` (the `a`
-  component override in note-view.tsx) — a plain `<a>` full-page-reloads the
-  SPA. Editor-mode click-to-open still hard-navigates
-  (`window.location.assign`, see live-preview.ts `ponytail:` note).
+  component override in note-view.tsx); editor-mode click-to-open goes through
+  `getAppRouter().navigate` (live-preview.ts onOpen). A plain `<a>` /
+  `window.location.assign` full-page-reloads the SPA — both paths did exactly
+  that once; don't regress it.
+- An unresolved link 404s **nested inside the app layout** (NotFoundPage as a
+  child route) — looks odd but matches how the vault-slug 404 renders. Check
+  for a typo between the link target and the note name before suspecting the
+  resolver.
 - Create-note-on-unresolved-link (Obsidian's behavior) is deliberately NOT
   implemented; unresolved targets 404.
