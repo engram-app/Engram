@@ -48,9 +48,10 @@ defmodule Engram.Workers.DeleteNoteIndex do
         # basename sibling elsewhere may now win the shortest-path tiebreak
         # and should inherit the edges this note is vacating. Only possible
         # when the enqueueing caller had plaintext in scope to compute the
-        # key (see `Notes.delete_note_index_job/2`); otherwise skip — the
-        # edge-flip above already ran regardless.
-        _ = maybe_enqueue_rebind(user_id, vault_id, Map.get(args, "basename_key"))
+        # hmac (see `Notes.delete_note_index_job/2`); otherwise skip — the
+        # edge-flip above already ran regardless. `basename_hmac` (base64) —
+        # never plaintext, same T3.2/H3 invariant as `path_hmac` above.
+        _ = maybe_enqueue_rebind(user_id, vault_id, Map.get(args, "basename_hmac"))
 
         :ok
 
@@ -73,10 +74,16 @@ defmodule Engram.Workers.DeleteNoteIndex do
 
   defp maybe_enqueue_rebind(_user_id, _vault_id, nil), do: :ok
 
-  defp maybe_enqueue_rebind(user_id, vault_id, basename_key) do
-    Enqueue.enqueue(
-      RebindNoteLinks.new_for(user_id, vault_id, basename_key),
-      "rebind_note_links"
-    )
+  defp maybe_enqueue_rebind(user_id, vault_id, basename_hmac_b64) do
+    case Base.decode64(basename_hmac_b64) do
+      {:ok, basename_hmac} ->
+        Enqueue.enqueue(
+          RebindNoteLinks.new_for(user_id, vault_id, basename_hmac),
+          "rebind_note_links"
+        )
+
+      :error ->
+        :ok
+    end
   end
 end

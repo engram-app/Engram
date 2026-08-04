@@ -220,17 +220,28 @@ defmodule Engram.Links do
   end
 
   @doc """
-  Re-resolves every edge (dangling or currently bound) in the vault whose
-  `target_basename_hmac` matches `basename_key`. Called after a note or
-  attachment is created/renamed so danglers can bind, and so an existing
-  binding can be stolen by a shorter-path newcomer (see resolution rules on
-  `resolve_target/4`).
+  Computes the HMAC for a `basename_key/1` result under `user`'s filter key.
+  Callers that need to enqueue a rebind job (`RebindNoteLinks.new_for/3`)
+  compute this from plaintext they already have in scope, so the job's
+  `oban_jobs.args` carries only the opaque HMAC — never the plaintext
+  basename (T3.2/H3 invariant).
   """
-  @spec bind_danglers_for(map(), map(), String.t()) :: :ok
-  def bind_danglers_for(user, vault, basename_key) do
-    {:ok, dek} = Crypto.get_dek(user)
+  @spec basename_hmac(map(), String.t()) :: binary()
+  def basename_hmac(user, key) do
     {:ok, filter_key} = Crypto.dek_filter_key(user)
-    hmac = Crypto.hmac_field(filter_key, basename_key)
+    Crypto.hmac_field(filter_key, key)
+  end
+
+  @doc """
+  Re-resolves every edge (dangling or currently bound) in the vault whose
+  `target_basename_hmac` matches `hmac` (see `basename_hmac/2`). Called after
+  a note or attachment is created/renamed/deleted so danglers can bind, and
+  so an existing binding can be stolen by a shorter-path newcomer (see
+  resolution rules on `resolve_target/4`).
+  """
+  @spec bind_danglers_for_hmac(map(), map(), binary()) :: :ok
+  def bind_danglers_for_hmac(user, vault, hmac) do
+    {:ok, dek} = Crypto.get_dek(user)
 
     edges =
       Repo.all(

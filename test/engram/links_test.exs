@@ -131,7 +131,7 @@ defmodule Engram.LinksTest do
     end
   end
 
-  describe "bind_danglers_for/3" do
+  describe "bind_danglers_for_hmac/3" do
     test "binds a dangler when its target is created", %{user: user, vault: vault} do
       source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
 
@@ -141,7 +141,13 @@ defmodule Engram.LinksTest do
         ])
 
       target = Engram.Fixtures.insert_note!(user, vault, %{path: "deep/Later.md"})
-      :ok = Links.bind_danglers_for(user, vault, Links.basename_key("deep/Later.md"))
+
+      :ok =
+        Links.bind_danglers_for_hmac(
+          user,
+          vault,
+          Links.basename_hmac(user, Links.basename_key("deep/Later.md"))
+        )
 
       {:ok, [link]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
       assert link.target_note_id == target.id
@@ -160,7 +166,7 @@ defmodule Engram.LinksTest do
       assert l0.target_note_id == old.id
 
       new = Engram.Fixtures.insert_note!(user, vault, %{path: "Win.md"})
-      :ok = Links.bind_danglers_for(user, vault, "win")
+      :ok = Links.bind_danglers_for_hmac(user, vault, Links.basename_hmac(user, "win"))
 
       {:ok, [l1]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
       assert l1.target_note_id == new.id
