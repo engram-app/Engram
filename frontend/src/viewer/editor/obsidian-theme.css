@@ -175,3 +175,11 @@
 .cm-atomic-wiki-link-hidden-syntax .cm-atomic-link::after {
 	content: none;
 }
+
+/* Revealed-wikilink outer brackets are bare text nodes that inherit Atomic's
+   un-themed fallback gray (#abb2bf-ish), while the inner bracket marks get the
+   themed --atomic-editor-fg-faint via highlight classes — two mismatched
+   grays inside one [[...]]. Pin the wrapper to the same faint token. */
+.cm-atomic-wiki-link-active {
+	color: var(--atomic-editor-fg-faint);
+}
