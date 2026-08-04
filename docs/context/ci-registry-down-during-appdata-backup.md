@@ -117,11 +117,11 @@ GC only removes blobs no manifest references, and every one of those 827
 manifests is still *tagged*. The lever is therefore **tag retention**, not GC —
 GC is only the second step, after old tags stop referencing their manifests.
 
-Also note `storage.delete.enabled` is **not set** in the registry config, so the
-DELETE API is refused; either enable it (`REGISTRY_STORAGE_DELETE_ENABLED=true`)
-or remove the tag directories under
-`repositories/engram-ci/_manifests/tags/<tag>` and let
-`garbage-collect --delete-untagged` sweep the now-unreferenced manifests.
+`storage.delete.enabled` is **not set**, but that turns out not to matter:
+it gates the HTTP DELETE *API*, not the CLI. `registry garbage-collect` deletes
+blobs through the storage driver regardless — verified 2026-08-03. So the recipe
+is: remove tag directories under `repositories/engram-ci/_manifests/tags/<tag>`,
+then `garbage-collect --delete-untagged` sweeps the now-unreferenced manifests.
 
 ### Do it in a quiet window
 
@@ -137,10 +137,50 @@ Everything in this registry is rebuildable, so the worst case is CI redoing
 work — but an in-flight run failing for a reason nobody can reproduce is worse
 than a slow one.
 
-Tracked as engram-app/Engram#1224. Deliberately NOT done as a one-off: at
-~1-2G per CI run a manual prune just resets the clock, and there is no disk
-pressure to justify hand-surgery (`/mnt/cache` is 1.5T of 5.0T). It wants a
-scheduled retention policy or nothing.
+## Done: scheduled retention (2026-08-03)
+
+`/boot/config/plugins/user.scripts/scripts/Prune CI Registry/script`, wired into
+`/etc/cron.d/root` via the User Scripts plugin, **Sundays 05:00**:
+
+```
+0 5 * * 0 .../startCustom.php ".../Prune CI Registry/script"
+```
+
+Keeps 14 days of `engram-ci` tags, prunes the rest, then garbage-collects.
+Leaves the `ci-*` fingerprint pass-marker repos alone — they are ~220M total and
+deleting them only makes CI re-run jobs it would have skipped.
+
+First run: **829 tags -> 258, blobs 61G -> 27G** (63G before an initial
+`--delete-untagged`). Knobs: `KEEP_DAYS`, `MIN_IDLE_SEC`, `DRY_RUN=1`.
+
+### The race is real — I caused an outage proving it
+
+Do not relax `MIN_IDLE_SEC`.
+
+I checked "no CI runs in flight" via the GitHub API, saw `prebuild-ci-image` had
+already reported **completed**, and ran GC. It swept a manifest whose tag had
+been written **21 seconds earlier**, and the dependent jobs died three seconds
+later with:
+
+```
+Error response from daemon: manifest for 10.0.20.214:5001/engram-ci:<tag> not found: manifest unknown
+```
+
+Job status is a control-plane fact; the hazard is in the data plane. A push
+reports complete when the HTTP call returns, which is not when the tag link is
+durable and visible to GC's mark phase. The script therefore gates on the thing
+GC actually races — **the mtime of the newest tag on disk** — and refuses to run
+within `MIN_IDLE_SEC` (default 1800s) of any push.
+
+Two follow-on lessons:
+
+- **A `--failed` rerun does not repair this.** `prebuild-ci-image` already
+  succeeded, so it is not re-run, and the dependent jobs keep pulling the tag
+  that no longer exists. Use a **full** `gh run rerun <id>` so the image is
+  rebuilt and re-pushed.
+- **A swept manifest leaves a dangling tag** that serves 404s forever and makes
+  "is it already in the registry?" checks lie. The script now sweeps those at
+  the end so the next prebuild rebuilds instead.
 
 ## Related
 
