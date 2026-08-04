@@ -5,7 +5,8 @@ import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
 import { buildEditorState, decorationsCompartment, decorationsFor } from "./note-editor";
 
-const resolveWikiLink = (n: string) => `/notes/${n}`;
+const resolveWikiLink = (n: string) => `/w/wiki/${n}`;
+const openWikiLink = () => {};
 
 // happy-dom CAN render a real CodeMirror EditorView (verified 2026-06-29).
 // The earlier comment was a cautious assumption; the DOM stubs in test-setup.ts
@@ -17,7 +18,7 @@ describe("buildEditorState", () => {
 		ytext.insert(0, "# Seeded heading\n\nbody text");
 		const awareness = new Awareness(doc);
 
-		const state = buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink);
+		const state = buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink, openWikiLink);
 
 		expect(state.doc.toString()).toBe("# Seeded heading\n\nbody text");
 	});
@@ -27,7 +28,7 @@ describe("buildEditorState", () => {
 		const ytext = doc.getText("content");
 		const awareness = new Awareness(doc);
 
-		const state = buildEditorState(ytext, awareness, true, "rendered", resolveWikiLink);
+		const state = buildEditorState(ytext, awareness, true, "rendered", resolveWikiLink, openWikiLink);
 
 		expect(state.doc.toString()).toBe("");
 	});
@@ -39,7 +40,7 @@ describe("buildEditorState", () => {
 		ytext.insert(0, "first");
 		ytext.insert(ytext.length, " second");
 
-		const state = buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink);
+		const state = buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink, openWikiLink);
 
 		expect(state.doc.toString()).toBe("first second");
 	});
@@ -50,7 +51,7 @@ describe("buildEditorState", () => {
 		const ytext = doc.getText("content");
 		const awareness = new Awareness(doc);
 
-		const state = buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink);
+		const state = buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink, openWikiLink);
 
 		// historyField is the StateField that @codemirror/commands history() adds.
 		// When present it means Ctrl+Z routes to the offset-based native undo, which
@@ -65,8 +66,8 @@ describe("buildEditorState", () => {
 		ytext.insert(0, "# H\n\n**b**\n");
 		const awareness = new Awareness(doc);
 
-		const rendered = buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink);
-		const raw = buildEditorState(ytext, awareness, false, "raw", resolveWikiLink);
+		const rendered = buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink, openWikiLink);
+		const raw = buildEditorState(ytext, awareness, false, "raw", resolveWikiLink, openWikiLink);
 
 		// Both seed identical, unaltered doc bytes (view-only decorations).
 		expect(rendered.doc.toString()).toBe("# H\n\n**b**\n");
@@ -105,7 +106,7 @@ describe("CRDT undo behaviour (EditorView + yCollab)", () => {
 		parents.push(parent);
 
 		const view = new EditorView({
-			state: buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink),
+			state: buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink, openWikiLink),
 			parent,
 		});
 		views.push(view);
@@ -172,7 +173,7 @@ describe("mode switch via decorationsCompartment.reconfigure (yCollab must survi
 		parents.push(parent);
 
 		const view = new EditorView({
-			state: buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink),
+			state: buildEditorState(ytext, awareness, false, "rendered", resolveWikiLink, openWikiLink),
 			parent,
 		});
 		views.push(view);
@@ -182,7 +183,7 @@ describe("mode switch via decorationsCompartment.reconfigure (yCollab must survi
 		// Simulate the mode-switch effect: reconfigure the SAME compartment on the
 		// SAME view -- this must never recreate the view or detach yCollab.
 		view.dispatch({
-			effects: decorationsCompartment.reconfigure(decorationsFor("raw", resolveWikiLink)),
+			effects: decorationsCompartment.reconfigure(decorationsFor("raw", resolveWikiLink, openWikiLink)),
 		});
 
 		// (a) View-only: doc bytes are byte-identical after the switch.

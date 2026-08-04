@@ -92,6 +92,21 @@ export default function NotePage() {
 	// to NoteEditor doesn't re-fire the decorationsCompartment reconfigure
 	// effect on every render.
 	const resolveWikiLink = useCallback((permalink: string) => wikiHref(permalink, slug), [slug]);
+	// Editor-mode click-to-open. Router nav must come from the React tree —
+	// see LivePreviewOpts.openWikiLink for why the editor can't reach the
+	// router singleton itself.
+	const openWikiLink = useCallback(
+		(permalink: string) => {
+			const href = wikiHref(permalink, slug);
+			if (href.startsWith("/")) {
+				void navigate(href);
+			} else if (href.startsWith("#")) {
+				// Same-page heading — hash assignment scrolls, no reload.
+				window.location.hash = href;
+			}
+		},
+		[navigate, slug],
+	);
 
 	const path = note?.path ?? null;
 	const noteId = note?.id ?? null;
@@ -397,6 +412,7 @@ export default function NotePage() {
 									awareness={handle.awareness}
 									mode={mode === "raw" ? "raw" : "rendered"}
 									resolveWikiLink={resolveWikiLink}
+									openWikiLink={openWikiLink}
 									onFrontmatterShortcut={handleFrontmatterShortcut}
 									onView={(v) => {
 										editorViewRef.current = v;
