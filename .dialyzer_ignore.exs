@@ -17,5 +17,11 @@
   # binary-shape union from the leading three pattern matches, but the spec
   # has to remain `term()` so future callers don't fail type-check at the
   # boundary. Same pattern as the AAD helpers above.
-  {"lib/engram/crypto/key_provider.ex", :contract_supertype, 71}
+  {"lib/engram/crypto/key_provider.ex", :contract_supertype, 71},
+
+  # `Links.backlinks_limit/0` is intentionally specced as `pos_integer()`
+  # rather than the literal `200` dialyzer infers from the current
+  # `@backlinks_limit` value — the spec documents the contract callers (and
+  # tests) can rely on, not today's specific cap. Same pattern as above.
+  {"lib/engram/links.ex", :contract_supertype, 517}
 ]
