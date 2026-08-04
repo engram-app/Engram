@@ -31,11 +31,46 @@ defmodule Engram.Links.Parser do
       inner = binary_part(content, inner_start, inner_len)
 
       case parse_inner(inner) do
-        nil -> []
-        parsed -> [Map.merge(parsed, %{link_type: link_type(bang_len), position: start})]
+        nil ->
+          []
+
+        parsed ->
+          {t_start, t_len} = target_span(inner, inner_start)
+
+          [
+            Map.merge(parsed, %{
+              link_type: link_type(bang_len),
+              position: start,
+              target_start: t_start,
+              target_len: t_len
+            })
+          ]
       end
     end)
     |> Enum.reject(fn %{position: pos} -> in_ranges?(pos, excluded) end)
+  end
+
+  # Byte span of the TRIMMED target within the original (scrubbed) content.
+  # Mirrors parse_inner/1's split order: first `|` bounds the body, first `#`
+  # in the body bounds the target. do_extract/1 runs on already-scrubbed
+  # content, so clean/1's scrub inside parse_inner is an identity there and
+  # `binary_part(content, target_start, target_len) == parsed.target` holds.
+  defp target_span(inner, inner_start) do
+    body =
+      case :binary.match(inner, "|") do
+        {i, _} -> binary_part(inner, 0, i)
+        :nomatch -> inner
+      end
+
+    target_raw =
+      case :binary.match(body, "#") do
+        {i, _} -> binary_part(body, 0, i)
+        :nomatch -> body
+      end
+
+    lead = byte_size(target_raw) - byte_size(String.trim_leading(target_raw))
+    trimmed = String.trim(target_raw)
+    {inner_start + lead, byte_size(trimmed)}
   end
 
   defp link_type(0), do: "wikilink"
