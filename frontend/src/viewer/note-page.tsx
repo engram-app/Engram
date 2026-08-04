@@ -27,6 +27,7 @@ import {
 import { useRightTools } from "../layout/right-tools-context";
 import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";
+import BacklinksPanel from "./backlinks-panel";
 import { useActiveEditor } from "./editor/active-editor-context";
 import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
 import { InlineTitle } from "./inline-title";
@@ -170,6 +171,17 @@ export default function NotePage() {
 		setSlot("outline", <NoteToc content={liveContent} />);
 		return () => setSlot("outline", null);
 	}, [notePath, liveContent, setSlot]);
+
+	// Backlinks only need the note id (the panel fetches its own data), so this
+	// doesn't need to re-fire on every keystroke the way the ToC's effect does.
+	useEffect(() => {
+		if (noteId === null) {
+			setSlot("backlinks", null);
+			return;
+		}
+		setSlot("backlinks", <BacklinksPanel noteId={noteId} />);
+		return () => setSlot("backlinks", null);
+	}, [noteId, setSlot]);
 
 	// Consume the just-created flag exactly once: start renaming, then strip the
 	// state so a later back-navigation to this history entry doesn't reopen the

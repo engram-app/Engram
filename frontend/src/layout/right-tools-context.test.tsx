@@ -99,7 +99,7 @@ describe("RightToolsProvider", () => {
 	});
 
 	it("falls back to the outline for a stale id from an older build", () => {
-		window.localStorage.setItem("engram:right-tool", "backlinks");
+		window.localStorage.setItem("engram:right-tool", "does-not-exist");
 		const { result } = setup();
 		expect(result.current.activeId).toBe("outline");
 	});

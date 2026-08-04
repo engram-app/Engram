@@ -550,6 +550,26 @@ export function useNote(id: string | null) {
 	});
 }
 
+export interface Backlink {
+	source_note_id: string;
+	source_path: string;
+	source_title: string | null;
+	alias: string | null;
+	anchor: string | null;
+}
+
+// Backlinks panel (right rail). Task 1 stores the forward edges on the note
+// payload (`links`); this is the reverse lookup, so it needs its own request.
+export function useBacklinks(noteId: string | null) {
+	const vaultId = useActiveVaultId();
+	return useQuery({
+		queryKey: ["backlinks", vaultId, noteId],
+		queryFn: () => api.get<{ backlinks: Backlink[] }>(`/notes/by-id/${noteId}/backlinks`),
+		enabled: noteId !== null,
+		select: (d) => d.backlinks,
+	});
+}
+
 export function useUpdateNote() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
