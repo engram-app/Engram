@@ -1,3 +1,4 @@
+import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -116,6 +117,19 @@ export function buildEditorState(
 			drawSelection(),
 			EditorView.lineWrapping,
 			Prec.highest(keymap.of(yUndoManagerKeymap)),
+			// Obsidian/VS Code-style bracket behavior: typing ( [ { ' " ` inserts
+			// the closer, typing the closer over an auto-inserted one skips it,
+			// and typing an opener with a selection SURROUNDS the selection
+			// instead of replacing it. The keymap makes Backspace delete an
+			// empty pair; it must sit before defaultKeymap to win the key.
+			closeBrackets(),
+			keymap.of(closeBracketsKeymap),
+			// closeBrackets reads its bracket set from languageData; markdown
+			// declares none, so provide one everywhere — the default set plus
+			// backtick (inline code is a first-class markdown pairing).
+			EditorState.languageData.of(() => [
+				{ closeBrackets: { brackets: ["(", "[", "{", "'", '"', "`"] } },
+			]),
 			keymap.of(defaultKeymap),
 			// Tab/Shift-Tab indent-dedent (Obsidian parity). Base, not the mode
 			// compartment, so it works in both rendered and raw mode.
