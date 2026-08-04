@@ -13,7 +13,7 @@ defmodule Engram.Repo do
   # (Engram#788). Their access is already correct — onboarding_actions via
   # `skip_tenant_check`, crdt_update_log via `with_tenant` — so listing them
   # only tightens the guard, it doesn't change behavior.
-  @tenant_tables ~w(notes chunks attachments api_keys vaults user_agreements onboarding_actions crdt_update_log)a
+  @tenant_tables ~w(notes chunks attachments api_keys vaults user_agreements onboarding_actions crdt_update_log note_links)a
 
   @doc """
   The tables guarded by `prepare_query/3`, which must equal the set of tables
