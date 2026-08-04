@@ -590,6 +590,10 @@ export function useUpdateNote() {
 				qc.invalidateQueries({ queryKey: ["note", vaultId, id] });
 			}
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
+			// This edit may have changed the note's forward links, which changes
+			// what OTHER notes' backlinks panels show -- same reasoning as the
+			// note_changed handler in api/channel.ts.
+			qc.invalidateQueries({ queryKey: ["backlinks"] });
 		},
 	});
 }

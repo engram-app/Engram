@@ -46,6 +46,16 @@ describe("handleNoteChanged", () => {
 		expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["note", "7", "foo/bar.md"] });
 	});
 
+	// A note's edges (forward links AND anyone's backlinks TO it) can change on
+	// any content edit, so backlinks panels for OTHER notes go stale the same
+	// way folder/search lists do -- invalidate the whole ["backlinks"] family
+	// rather than trying to compute which note ids are affected.
+	it("invalidates the backlinks query family immediately alongside the note", () => {
+		const qc = mockQueryClient();
+		handleNoteChanged({ event_type: "upsert", path: "foo/bar.md", vault_id: "7" }, qc, "7");
+		expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["backlinks"] });
+	});
+
 	it("defers list invalidation to a coalescing window, then targets the changed folder", () => {
 		const qc = mockQueryClient();
 		handleNoteChanged(
