@@ -77,4 +77,8 @@ describe("wikiHref", () => {
 	test("bare heading links stay on the current page", () => {
 		expect(wikiHref("#Some Heading", "v")).toBe("#some-heading");
 	});
+
+	test("no vault slug renders an inert anchor", () => {
+		expect(wikiHref("My Note", undefined)).toBe("#");
+	});
 });

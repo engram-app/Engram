@@ -4,6 +4,8 @@ import GithubSlugger from "github-slugger";
 // the /:slug/wiki/* redirect route and both link producers (note-view's
 // remark-wiki-link config, note-page's editor resolveWikiLink) share it.
 
+const stripMd = (p: string) => p.replace(/\.md$/iu, "");
+
 export interface ManifestNote {
 	id: string;
 	path: string;
@@ -17,8 +19,6 @@ export function parseWikiTarget(raw: string): { page: string; hash: string } {
 	const hash = text ? `#${new GithubSlugger().slug(text)}` : "";
 	return { page: page.trim(), hash };
 }
-
-const stripMd = (p: string) => p.replace(/\.md$/iu, "");
 
 // Exact path first (with or without `.md`), then Obsidian's vault-wide
 // basename lookup — shortest path wins. All case-insensitive, like Obsidian.
@@ -40,10 +40,15 @@ export function resolveWikiTarget(page: string, notes: ManifestNote[]): Manifest
 	return byName[0] ?? null;
 }
 
-export function wikiHref(raw: string, slug: string): string {
+// No slug = rendered outside a vault route (markdown reference panel) —
+// nothing to resolve against, so the anchor stays inert.
+export function wikiHref(raw: string, slug: string | undefined): string {
 	const { page, hash } = parseWikiTarget(raw);
 	if (!page) {
 		return hash || "#";
+	}
+	if (!slug) {
+		return "#";
 	}
 	const encoded = page.split("/").map(encodeURIComponent).join("/");
 	return `/${slug}/wiki/${encoded}${hash}`;

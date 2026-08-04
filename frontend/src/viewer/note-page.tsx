@@ -42,6 +42,7 @@ import { MoveDialog } from "./tree-actions/move-dialog";
 import { RenameInput } from "./tree-actions/rename-input";
 import { renameBaseName } from "./tree-actions/rename-path";
 import { useLiveContent } from "./use-live-content";
+import { wikiHref } from "./wiki-link";
 
 const NoteEditor = lazy(() => import("./note-editor"));
 
@@ -86,10 +87,11 @@ export default function NotePage() {
 	const renameNote = useRenameNote();
 	const [syncStatus, setSyncStatus] = useState<CrdtSyncStatus>(getCrdtSyncStatus);
 	const editorViewRef = useRef<EditorView | null>(null);
-	// Mirrors NoteView's remark-wiki-link hrefTemplate. useCallback keeps a
-	// stable identity so passing it to NoteEditor doesn't re-fire the
-	// decorationsCompartment reconfigure effect on every render.
-	const resolveWikiLink = useCallback((permalink: string) => `/notes/${encodeURI(permalink)}`, []);
+	// Mirrors NoteView's remark-wiki-link hrefTemplate (same wikiHref → the
+	// /:slug/wiki/* resolver). useCallback keeps a stable identity so passing it
+	// to NoteEditor doesn't re-fire the decorationsCompartment reconfigure
+	// effect on every render.
+	const resolveWikiLink = useCallback((permalink: string) => wikiHref(permalink, slug), [slug]);
 
 	const path = note?.path ?? null;
 	const noteId = note?.id ?? null;
