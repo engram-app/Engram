@@ -3,7 +3,9 @@ defmodule Engram.Links.Parser do
   Pure extraction of Obsidian-style wikilinks/embeds from plaintext markdown.
   Positions are byte offsets into the ORIGINAL content (stable for snippet
   reconstruction), which is why exclusion works by range-filtering rather than
-  stripping (stripping would shift every downstream offset).
+  stripping (stripping would shift every downstream offset). For invalid-UTF-8
+  input, positions are byte offsets into the scrubbed content (what any reader
+  renders).
   """
 
   alias Engram.Notes.Helpers
@@ -17,6 +19,10 @@ defmodule Engram.Links.Parser do
 
   @spec extract(String.t()) :: [map()]
   def extract(content) when is_binary(content) do
+    do_extract(if String.valid?(content), do: content, else: Helpers.scrub_utf8(content, :write))
+  end
+
+  defp do_extract(content) do
     excluded = exclusion_ranges(content)
 
     @link_re
@@ -48,7 +54,7 @@ defmodule Engram.Links.Parser do
         [t, an] -> {clean(t), clean(an)}
       end
 
-    if target in [nil, ""] do
+    if is_nil(target) do
       nil
     else
       %{target: target, alias: alias_, anchor: anchor}

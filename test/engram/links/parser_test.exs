@@ -53,4 +53,10 @@ defmodule Engram.Links.ParserTest do
   test "empty content extracts nothing" do
     assert [] = Parser.extract("")
   end
+
+  test "does not crash on invalid UTF-8 content (#741 regression)" do
+    # Produce invalid UTF-8: pad with a lone continuation byte
+    content = "pad " <> <<0xFF>> <> " [[Real]]"
+    assert [%{target: "Real"}] = Parser.extract(content)
+  end
 end
