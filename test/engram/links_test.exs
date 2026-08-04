@@ -106,6 +106,42 @@ defmodule Engram.LinksTest do
       assert link.target_attachment_id == att.id
     end
 
+    test "a dotted note name resolves as a note when no same-basename attachment exists", %{
+      user: user,
+      vault: vault
+    } do
+      # Path.extname("Node.js") == ".js" — extension-routing alone would send
+      # this straight to the (empty) attachments table and never fall back.
+      target = Engram.Fixtures.insert_note!(user, vault, %{path: "Node.js.md"})
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
+
+      :ok =
+        Links.replace_links(user, vault, source.id, [
+          %{target: "Node.js", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+        ])
+
+      {:ok, [link]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
+      assert link.target_note_id == target.id
+      assert is_nil(link.target_attachment_id)
+    end
+
+    test "image.png still resolves to the attachment, not a note, when both tables miss", %{
+      user: user,
+      vault: vault
+    } do
+      att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "pics/image.png"})
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
+
+      :ok =
+        Links.replace_links(user, vault, source.id, [
+          %{target: "image.png", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+        ])
+
+      {:ok, [link]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
+      assert link.target_attachment_id == att.id
+      assert is_nil(link.target_note_id)
+    end
+
     test "replace is idempotent — re-running replaces, never duplicates", %{
       user: user,
       vault: vault

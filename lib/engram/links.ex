@@ -111,11 +111,20 @@ defmodule Engram.Links do
   @doc """
   Resolves a raw link target to a note, an attachment, or `:dangling`.
 
-  Extension alone decides which table: extensionless targets and
-  `.md`/`.canvas` targets resolve against notes; any other extension
-  resolves against attachments — for both wikilinks and embeds (`link_type`
-  does not gate this; `[[image.png]]` links to the attachment same as
-  `![[image.png]]` does in Obsidian). Candidates are filtered to live rows
+  Extension decides which table to try FIRST: extensionless targets and
+  `.md`/`.canvas` targets try notes first; any other extension tries
+  attachments first — for both wikilinks and embeds (`link_type` does not
+  gate this; `[[image.png]]` links to the attachment same as
+  `![[image.png]]` does in Obsidian). A target can still have a real
+  extension and be a note (`[[Node.js]]`, `[[Meeting 2026.08]]` — a bare
+  wikilink target's "extension" is just whatever follows the last dot in
+  its basename, and `Path.extname/1` doesn't know note titles from file
+  extensions): when the extension-preferred table comes back dangling, the
+  OTHER table is tried with the same hmac before giving up. Notes are the
+  preferred table for the common case (extensionless/`.md`/`.canvas`
+  targets), so this only ever falls back to attachments for those, and
+  falls back to notes for everything else — it does not re-check the
+  first table once it has a hit. Candidates are filtered to live rows
   (`deleted_at IS NULL`) matching the target's basename HMAC; a target
   containing `/` is further narrowed to candidates whose decrypted full
   path matches case-insensitively (trying the target as given and with
@@ -131,9 +140,13 @@ defmodule Engram.Links do
     ext = target |> Path.basename() |> Path.extname() |> String.downcase()
 
     if ext != "" and ext not in @note_exts do
-      resolve_attachment_target(user, vault, target, hmac)
+      with :dangling <- resolve_attachment_target(user, vault, target, hmac) do
+        resolve_note_target(user, vault, target, hmac)
+      end
     else
-      resolve_note_target(user, vault, target, hmac)
+      with :dangling <- resolve_note_target(user, vault, target, hmac) do
+        resolve_attachment_target(user, vault, target, hmac)
+      end
     end
   end
 
