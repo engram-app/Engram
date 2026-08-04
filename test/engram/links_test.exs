@@ -218,4 +218,71 @@ defmodule Engram.LinksTest do
     {:ok, links} = Repo.with_tenant(other.id, fn -> Repo.all(NoteLink) end)
     assert links == []
   end
+
+  # Task 4 — every production write path that sets path_hmac must also set
+  # basename_hmac, or links to notes/attachments created via that path
+  # silently never resolve. See task-4-brief.md.
+  describe "basename_hmac stamped by production write paths" do
+    test "upsert_note stamps basename_hmac", %{user: user, vault: vault} do
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "Deep/Cased NAME.md",
+          "content" => "x",
+          "mtime" => 1_000.0
+        })
+
+      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+      expected = Engram.Crypto.hmac_field(filter_key, "cased name")
+
+      {:ok, [note]} = Repo.with_tenant(user.id, fn -> Repo.all(Engram.Notes.Note) end)
+      assert note.basename_hmac == expected
+    end
+
+    test "rename_note recomputes basename_hmac for the new path", %{user: user, vault: vault} do
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "Old/Name.md",
+          "content" => "x",
+          "mtime" => 1_000.0
+        })
+
+      {:ok, _} = Engram.Notes.rename_note(user, vault, "Old/Name.md", "New/Renamed.md")
+
+      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+      expected = Engram.Crypto.hmac_field(filter_key, "renamed")
+
+      {:ok, [live]} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(from(n in Engram.Notes.Note, where: is_nil(n.deleted_at)))
+        end)
+
+      assert live.basename_hmac == expected
+    end
+
+    test "batch_upsert_notes stamps basename_hmac", %{user: user, vault: vault} do
+      {:ok, %{results: [%{status: :ok}]}} =
+        Engram.Notes.batch_upsert_notes(user, vault, [
+          %{"path" => "Batch/Cased NAME.md", "content" => "x", "mtime" => 1_000.0}
+        ])
+
+      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+      expected = Engram.Crypto.hmac_field(filter_key, "cased name")
+
+      {:ok, [note]} = Repo.with_tenant(user.id, fn -> Repo.all(Engram.Notes.Note) end)
+      assert note.basename_hmac == expected
+    end
+
+    test "upsert_attachment stamps basename_hmac", %{user: user, vault: vault} do
+      {:ok, att} =
+        Engram.Attachments.upsert_attachment(user, vault, %{
+          "path" => "pics/Cased NAME.PNG",
+          "content_base64" => Base.encode64("x")
+        })
+
+      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+      expected = Engram.Crypto.hmac_field(filter_key, "cased name.png")
+
+      assert att.basename_hmac == expected
+    end
+  end
 end

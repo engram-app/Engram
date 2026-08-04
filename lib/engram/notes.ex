@@ -9,6 +9,7 @@ defmodule Engram.Notes do
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Links
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
 
@@ -2240,6 +2241,7 @@ defmodule Engram.Notes do
     :path_ciphertext,
     :path_nonce,
     :path_hmac,
+    :basename_hmac,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac,
@@ -3520,6 +3522,7 @@ defmodule Engram.Notes do
     :path_ciphertext,
     :path_nonce,
     :path_hmac,
+    :basename_hmac,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac
@@ -3532,6 +3535,7 @@ defmodule Engram.Notes do
     :path_ciphertext,
     :path_nonce,
     :path_hmac,
+    :basename_hmac,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac,
@@ -4632,6 +4636,7 @@ defmodule Engram.Notes do
       path_ciphertext: path_ct,
       path_nonce: path_n,
       path_hmac: Crypto.hmac_field(filter_key, path),
+      basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path)),
       folder_ciphertext: folder_ct,
       folder_nonce: folder_n,
       folder_hmac: Crypto.hmac_field(filter_key, folder),
@@ -4657,6 +4662,7 @@ defmodule Engram.Notes do
       path_ciphertext: path_ct,
       path_nonce: path_n,
       path_hmac: Crypto.hmac_field(filter_key, path),
+      basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path)),
       folder_ciphertext: folder_ct,
       folder_nonce: folder_n,
       folder_hmac: Crypto.hmac_field(filter_key, folder)

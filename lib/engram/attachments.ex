@@ -14,6 +14,7 @@ defmodule Engram.Attachments do
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Links
   alias Engram.Logger.Metadata
   alias Engram.Notes.PathSanitizer
   alias Engram.Repo
@@ -59,6 +60,7 @@ defmodule Engram.Attachments do
          {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       path_hmac = Crypto.hmac_field(filter_key, path)
+      basename_hmac = Crypto.hmac_field(filter_key, Links.basename_key(path))
 
       # Pre-lock window: probable-id read, cap check, encrypt, and the S3
       # PUT all run WITHOUT holding a pool transaction or the advisory
@@ -81,7 +83,7 @@ defmodule Engram.Attachments do
                vault,
                att_id0,
                path,
-               path_hmac,
+               {path_hmac, basename_hmac},
                plaintext,
                mtime,
                explicit_mime
@@ -110,7 +112,7 @@ defmodule Engram.Attachments do
                            vault,
                            id,
                            path,
-                           path_hmac,
+                           {path_hmac, basename_hmac},
                            plaintext,
                            mtime,
                            explicit_mime
@@ -409,6 +411,8 @@ defmodule Engram.Attachments do
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       old_hmac = Crypto.hmac_field(filter_key, old_path)
       new_hmac = Crypto.hmac_field(filter_key, new_path)
+      old_basename_hmac = Crypto.hmac_field(filter_key, Links.basename_key(old_path))
+      new_basename_hmac = Crypto.hmac_field(filter_key, Links.basename_key(new_path))
 
       Repo.transaction(fn ->
         Repo.with_tenant(user.id, fn ->
@@ -446,6 +450,7 @@ defmodule Engram.Attachments do
                     path_ciphertext: path_ct,
                     path_nonce: path_n,
                     path_hmac: new_hmac,
+                    basename_hmac: new_basename_hmac,
                     updated_at: now,
                     seq: seq
                   ]
@@ -455,7 +460,16 @@ defmodule Engram.Attachments do
               # ITS OWN id-AAD). Sole purpose: surface {old_path, deleted: true}
               # in the change feed so clients trash the old path.
               Repo.insert!(
-                tombstone_changeset(user, vault, dek, old_path, old_hmac, live, seq, now)
+                tombstone_changeset(
+                  user,
+                  vault,
+                  dek,
+                  old_path,
+                  {old_hmac, old_basename_hmac},
+                  live,
+                  seq,
+                  now
+                )
               )
 
               %{
@@ -464,6 +478,7 @@ defmodule Engram.Attachments do
                   path_ciphertext: path_ct,
                   path_nonce: path_n,
                   path_hmac: new_hmac,
+                  basename_hmac: new_basename_hmac,
                   updated_at: now,
                   seq: seq
               }
@@ -501,7 +516,16 @@ defmodule Engram.Attachments do
   # requires content_nonce; the value is irrelevant — the row is deleted and
   # never decrypted). Path encrypted under the tombstone's OWN id-AAD so reads
   # of the (never-served) row stay AAD-consistent.
-  defp tombstone_changeset(user, vault, dek, old_path, old_hmac, live, seq, now) do
+  defp tombstone_changeset(
+         user,
+         vault,
+         dek,
+         old_path,
+         {old_hmac, old_basename_hmac},
+         live,
+         seq,
+         now
+       ) do
     tomb_id = Ecto.UUID.generate()
     path_aad = Crypto.aad_for_row(:attachments, :path, tomb_id)
     {path_ct, path_n} = Envelope.encrypt(old_path, dek, path_aad)
@@ -510,6 +534,7 @@ defmodule Engram.Attachments do
       path_ciphertext: path_ct,
       path_nonce: path_n,
       path_hmac: old_hmac,
+      basename_hmac: old_basename_hmac,
       content_hash: live.content_hash,
       mime_type: live.mime_type,
       size_bytes: live.size_bytes,
@@ -1050,7 +1075,16 @@ defmodule Engram.Attachments do
     end
   end
 
-  defp prepare_upload(user, vault, att_id, path, path_hmac, plaintext, mtime, explicit_mime) do
+  defp prepare_upload(
+         user,
+         vault,
+         att_id,
+         path,
+         {path_hmac, basename_hmac},
+         plaintext,
+         mtime,
+         explicit_mime
+       ) do
     mime = explicit_mime || MimeWhitelist.detect_mime(path)
     # was: key = Storage.key(user.id, vault.id, path)
     key = Storage.object_key(user.id, vault.id, att_id)
@@ -1077,7 +1111,8 @@ defmodule Engram.Attachments do
         content_nonce: nonce,
         path_ciphertext: path_ct,
         path_nonce: path_n,
-        path_hmac: path_hmac
+        path_hmac: path_hmac,
+        basename_hmac: basename_hmac
       }
 
       {:ok, key, attrs, ciphertext}
