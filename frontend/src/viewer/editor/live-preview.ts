@@ -56,15 +56,21 @@ const syntaxOverrides = HighlightStyle.define([
 
 export interface LivePreviewOpts {
 	resolveWikiLink: (name: string) => string;
+	// Click-to-open. Comes from the React tree (NotePage's useNavigate) — do
+	// NOT import getAppRouter here: this file lives in the lazy editor chunk,
+	// and in dev an HMR-stamped duplicate of router.tsx (`?t=`) gets a fresh,
+	// never-installed module instance, so every click threw.
+	openWikiLink: (name: string) => void;
 }
 
 /**
  * The Rendered-mode decoration layer. Pure CM6 extensions (view-only): they
  * decorate the markdown source but never mutate EditorState.doc, so the yCollab
- * Y.Text binding (see note-editor.tsx) is untouched. Wire wikilinks to our SPA
- * routes; the click-to-open navigation is a hard `window.location` nav, matching
- * the plain `<a href>` wikilinks already rendered in Reading mode (note-view.tsx
- * hrefTemplate) rather than a router push. Callouts/KaTeX are sibling view-only
+ * Y.Text binding (see note-editor.tsx) is untouched. Wikilinks resolve through
+ * the same `/:slug/wiki/*` route as Reading mode (resolveWikiLink is NotePage's
+ * wikiHref closure); click-to-open goes through opts.openWikiLink (NotePage's
+ * useNavigate) — a hard `window.location` nav here full-page-reloaded the SPA
+ * on every editor-mode link hop. Callouts/KaTeX are sibling view-only
  * decoration extensions (see callout-decoration.ts, katex-decoration.ts).
  */
 export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
@@ -100,9 +106,7 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 			// existence check, so every link resolves (status "resolved");
 			// `label` stays the raw wikilink text.
 			resolve: (target) => Promise.resolve({ target: opts.resolveWikiLink(target), label: target }),
-			onOpen: (target) => {
-				window.location.assign(opts.resolveWikiLink(target));
-			},
+			onOpen: (target) => opts.openWikiLink(target),
 		}),
 		// Prec.highest is load-bearing, not tidiness. A callout's header line is
 		// replaced wholesale by our icon+title widget, and inlinePreview emits its

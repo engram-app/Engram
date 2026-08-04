@@ -43,6 +43,8 @@ const VaultItemPage = lazy(() => import("./viewer/vault-item-page"));
 const VaultRoute = lazy(() => import("./viewer/vault-route"));
 const VaultRedirect = lazy(() => import("./viewer/vault-redirect"));
 const LegacyNoteRedirect = lazy(() => import("./viewer/legacy-note-redirect"));
+// Wikilink hrefs name notes by path/title; this resolves them to /:slug/:id.
+const WikiLinkRedirect = lazy(() => import("./viewer/wiki-link-redirect"));
 const ResetPasswordPage = lazy(() => import("./features/auth/ResetPasswordPage"));
 const DeviceLinkPage = lazy(() => import("./device/device-link-page"));
 const OAuthAuthorizePage = lazy(() => import("./oauth/oauth-authorize-page"));
@@ -210,6 +212,7 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 															element: suspended(<VaultRoute />),
 															children: [
 																{ index: true, element: suspended(<Dashboard />) },
+																{ path: "wiki/*", element: suspended(<WikiLinkRedirect />) },
 																{ path: ":itemId", element: suspended(<VaultItemPage />) },
 															],
 														},

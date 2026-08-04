@@ -2,6 +2,7 @@ import remarkCallouts from "@portaljs/remark-callouts";
 import matter from "gray-matter";
 import { type CSSProperties, memo, useMemo } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import { Link, useParams } from "react-router";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
@@ -15,6 +16,7 @@ import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { AttachmentFallback } from "./attachment-fallback";
 import AttachmentImg from "./attachment-img";
 import MermaidBlock from "./mermaid-block";
+import { wikiHref } from "./wiki-link";
 
 interface NoteViewProps {
 	content: string;
@@ -32,18 +34,23 @@ function rewriteEmbeds(raw: string): string {
 	});
 }
 
-const remarkPlugins = [
-	remarkGfm,
-	remarkMath,
-	remarkCallouts,
+// Slug-parameterized: wikilinks route through the vault-scoped resolver
+// (`/:slug/wiki/*`, see wiki-link.ts). pageResolver is identity — the default
+// would mangle names (`My Note` → `my_note`) before the resolver ever saw them.
+const remarkPluginsFor = (slug: string | undefined) =>
 	[
-		remarkWikiLink,
-		{
-			hrefTemplate: (permalink: string) => `/notes/${encodeURI(permalink)}`,
-			aliasDivider: "|",
-		},
-	],
-] as const;
+		remarkGfm,
+		remarkMath,
+		remarkCallouts,
+		[
+			remarkWikiLink,
+			{
+				pageResolver: (name: string) => [name],
+				hrefTemplate: (permalink: string) => wikiHref(permalink, slug),
+				aliasDivider: "|",
+			},
+		],
+	] as const;
 
 const rehypePlugins = [
 	rehypeSlug,
@@ -65,6 +72,8 @@ const TEXT_EMBED = /\.(?:md|canvas)$/iu;
 // remark/rehype pipeline (gfm + KaTeX + highlight) per keystroke.
 function NoteView({ content, tags }: NoteViewProps) {
 	const isFreeTier = useIsFreeTier();
+	const { slug } = useParams();
+	const remarkPlugins = useMemo(() => remarkPluginsFor(slug), [slug]);
 	const body = useMemo(() => {
 		try {
 			return rewriteEmbeds(matter(content).content);
@@ -100,6 +109,22 @@ function NoteView({ content, tags }: NoteViewProps) {
 						url.startsWith(ATTACHMENT_SCHEME) ? url : defaultUrlTransform(url)
 					}
 					components={{
+						// In-app hrefs (wikilinks) go through the router — a plain <a>
+						// would full-page-reload the SPA on every note hop.
+						a({ node: _node, href, children, ...rest }) {
+							if (href?.startsWith("/")) {
+								return (
+									<Link to={href} {...rest}>
+										{children}
+									</Link>
+								);
+							}
+							return (
+								<a href={href} {...rest}>
+									{children}
+								</a>
+							);
+						},
 						code({ node: _node, className, children, ...rest }) {
 							const lang = /language-(?<lang>\w+)/u.exec(className ?? "")?.[1];
 							const code = String(children).replace(/\n$/u, "");

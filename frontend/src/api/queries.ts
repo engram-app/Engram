@@ -467,6 +467,19 @@ export function useAttachments() {
 	return query;
 }
 
+// Wikilink resolution (wiki-link-redirect.tsx) needs the vault-wide path→id
+// inventory; the sync manifest is the one endpoint that has it. Only fetched
+// when a wikilink is actually followed, and briefly cached so link-hopping
+// doesn't re-pull a large vault's manifest per click.
+export function useSyncManifest() {
+	const vaultId = useActiveVaultId();
+	return useQuery({
+		queryKey: ["syncManifest", vaultId],
+		queryFn: () => api.get<{ notes: { id: string; path: string }[] }>("/sync/manifest"),
+		staleTime: 30_000,
+	});
+}
+
 export function useUploadAttachment() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
