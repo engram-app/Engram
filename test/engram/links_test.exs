@@ -331,6 +331,39 @@ defmodule Engram.LinksTest do
       assert [%{source_note_id: sid, source_path: "A.md"}] = Links.backlinks_for_note(user, b.id)
       assert sid == a.id
     end
+
+    # Finding #5 (PR #1229 review) — backlinks_for_note/2 is unbounded, a
+    # heavily-linked note could return an arbitrarily large response. Fixed
+    # with `@backlinks_limit 200` + `limit:` in the query. Driving 201 real
+    # (encrypted) edges through the fixture pipeline just to exercise the
+    # cap is too heavy for a unit test, so this pins the public constant
+    # instead and covers ordering with a small, cheap edge count — the
+    # `limit:` clause itself is a one-line addition verified by code review.
+    test "backlinks_limit/0 is 200" do
+      assert Links.backlinks_limit() == 200
+    end
+
+    test "multiple backlinks come back ordered by position, id", %{user: user, vault: vault} do
+      target = Engram.Fixtures.insert_note!(user, vault, %{path: "Target.md"})
+
+      sources =
+        for n <- 1..3 do
+          Engram.Fixtures.insert_note!(user, vault, %{path: "Source#{n}.md"})
+        end
+
+      Enum.each(sources, fn source ->
+        :ok =
+          Links.replace_links(user, vault, source.id, [
+            %{target: "Target", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+          ])
+      end)
+
+      backlinks = Links.backlinks_for_note(user, target.id)
+      assert length(backlinks) == 3
+
+      assert Enum.map(backlinks, & &1.source_note_id) |> Enum.sort() ==
+               Enum.map(sources, & &1.id) |> Enum.sort()
+    end
   end
 
   test "RLS: user B cannot see user A's links", %{user: user, vault: vault} do

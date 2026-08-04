@@ -858,6 +858,7 @@
       "Backlinks": {
         "properties": {
           "backlinks": {
+            "description": "Capped at 200 edges, ordered oldest-first. Not paginated yet.",
             "items": {
               "$ref": "#/components/schemas/Backlink"
             },

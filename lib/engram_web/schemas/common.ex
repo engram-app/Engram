@@ -129,7 +129,11 @@ defmodule EngramWeb.Schemas.Backlinks do
     title: "Backlinks",
     type: :object,
     properties: %{
-      backlinks: %Schema{type: :array, items: EngramWeb.Schemas.Backlink}
+      backlinks: %Schema{
+        type: :array,
+        items: EngramWeb.Schemas.Backlink,
+        description: "Capped at 200 edges, ordered oldest-first. Not paginated yet."
+      }
     },
     required: [:backlinks]
   })

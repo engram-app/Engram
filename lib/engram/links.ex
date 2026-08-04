@@ -40,6 +40,7 @@ defmodule Engram.Links do
   alias Engram.Repo
 
   @note_exts ~w(.md .canvas)
+  @backlinks_limit 200
 
   @doc """
   Lowercased basename with `.md`/`.canvas` stripped (other extensions kept).
@@ -509,8 +510,22 @@ defmodule Engram.Links do
   end
 
   @doc """
+  Max edges `backlinks_for_note/2` returns. Exposed so tests and callers
+  (e.g. the OpenAPI schema description) can assert against the real value
+  instead of hardcoding `200` a second place.
+  """
+  @spec backlinks_limit() :: pos_integer()
+  def backlinks_limit, do: @backlinks_limit
+
+  @doc """
   Decrypted incoming links (backlinks) for a note — one entry per edge
   pointing at it, carrying the source note's decrypted path/title.
+
+  Capped at #{@backlinks_limit} edges (see `backlinks_limit/0`) — a
+  heavily-linked note (e.g. a MOC/hub note) could otherwise return an
+  unbounded response. Ordered by `position, id` so the cap is stable
+  across calls; that same ordering is what a future keyset-paginated
+  version of this function would page on.
   """
   @spec backlinks_for_note(map(), binary()) :: [map()]
   def backlinks_for_note(user, note_id) do
@@ -519,7 +534,11 @@ defmodule Engram.Links do
 
     edges =
       Repo.all(
-        from(l in NoteLink, where: l.user_id == ^user.id and l.target_note_id == ^note_id),
+        from(l in NoteLink,
+          where: l.user_id == ^user.id and l.target_note_id == ^note_id,
+          order_by: [asc: l.position, asc: l.id],
+          limit: ^@backlinks_limit
+        ),
         skip_tenant_check: true
       )
 
