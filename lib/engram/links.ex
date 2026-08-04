@@ -111,24 +111,26 @@ defmodule Engram.Links do
   @doc """
   Resolves a raw link target to a note, an attachment, or `:dangling`.
 
-  Embeds whose target carries a non-note extension resolve against
-  attachments; everything else (extensionless targets, `.md`/`.canvas`
-  targets, and any non-embed link) resolves against notes. Candidates are
-  filtered to live rows (`deleted_at IS NULL`) matching the target's
-  basename HMAC; a target containing `/` is further narrowed to candidates
-  whose decrypted full path matches case-insensitively (trying the target
-  as given and with `.md`/`.canvas` appended). Among the survivors, the
-  shortest path wins; ties break lexicographically.
+  Extension alone decides which table: extensionless targets and
+  `.md`/`.canvas` targets resolve against notes; any other extension
+  resolves against attachments — for both wikilinks and embeds (`link_type`
+  does not gate this; `[[image.png]]` links to the attachment same as
+  `![[image.png]]` does in Obsidian). Candidates are filtered to live rows
+  (`deleted_at IS NULL`) matching the target's basename HMAC; a target
+  containing `/` is further narrowed to candidates whose decrypted full
+  path matches case-insensitively (trying the target as given and with
+  `.md`/`.canvas` appended). Among the survivors, the shortest path wins;
+  ties break lexicographically.
   """
   @spec resolve_target(map(), map(), String.t(), String.t()) ::
           {:note, binary()} | {:attachment, binary()} | :dangling
-  def resolve_target(user, vault, target, link_type) do
+  def resolve_target(user, vault, target, _link_type) do
     key = basename_key(target)
     {:ok, filter_key} = Crypto.dek_filter_key(user)
     hmac = Crypto.hmac_field(filter_key, key)
     ext = target |> Path.basename() |> Path.extname() |> String.downcase()
 
-    if link_type == "embed" and ext != "" and ext not in @note_exts do
+    if ext != "" and ext not in @note_exts do
       resolve_attachment_target(user, vault, target, hmac)
     else
       resolve_note_target(user, vault, target, hmac)
@@ -310,7 +312,11 @@ defmodule Engram.Links do
       )
 
     target_paths =
-      decrypt_note_paths(dek, edges |> Enum.map(& &1.target_note_id) |> Enum.reject(&is_nil/1))
+      decrypt_note_paths(
+        user,
+        dek,
+        edges |> Enum.map(& &1.target_note_id) |> Enum.reject(&is_nil/1)
+      )
 
     Enum.map(edges, fn edge ->
       %{
@@ -375,7 +381,7 @@ defmodule Engram.Links do
       else
         Repo.all(
           from(n in Note,
-            where: n.id in ^source_ids,
+            where: n.user_id == ^user.id and n.id in ^source_ids,
             select: %{
               id: n.id,
               path_ciphertext: n.path_ciphertext,
@@ -445,12 +451,12 @@ defmodule Engram.Links do
     end)
   end
 
-  defp decrypt_note_paths(_dek, []), do: %{}
+  defp decrypt_note_paths(_user, _dek, []), do: %{}
 
-  defp decrypt_note_paths(dek, note_ids) do
+  defp decrypt_note_paths(user, dek, note_ids) do
     Repo.all(
       from(n in Note,
-        where: n.id in ^note_ids,
+        where: n.user_id == ^user.id and n.id in ^note_ids,
         select: %{
           id: n.id,
           path_ciphertext: n.path_ciphertext,

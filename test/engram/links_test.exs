@@ -87,6 +87,25 @@ defmodule Engram.LinksTest do
       assert link.target_attachment_id == att.id
     end
 
+    test "wikilink with binary extension also resolves to an attachment", %{
+      user: user,
+      vault: vault
+    } do
+      # Extension alone decides notes-vs-attachments; link_type does not gate
+      # it. `[[image.png]]` is a plain wikilink in Obsidian, and it still
+      # resolves to the attachment.
+      att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "pics/image.png"})
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
+
+      :ok =
+        Links.replace_links(user, vault, source.id, [
+          %{target: "image.png", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+        ])
+
+      {:ok, [link]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
+      assert link.target_attachment_id == att.id
+    end
+
     test "replace is idempotent — re-running replaces, never duplicates", %{
       user: user,
       vault: vault
