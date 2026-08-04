@@ -536,30 +536,31 @@ defmodule Engram.Attachments do
       end)
       |> case do
         {:ok, %Attachment{} = att} ->
-          if old_path != new_path do
-            broadcast_attachment(user.id, vault.id, "delete", old_path, att)
-            broadcast_attachment(user.id, vault.id, "upsert", new_path, att)
+          _ =
+            if old_path != new_path do
+              broadcast_attachment(user.id, vault.id, "delete", old_path, att)
+              broadcast_attachment(user.id, vault.id, "upsert", new_path, att)
 
-            # #591 — re-resolve edges for BOTH basenames: the new name may
-            # bind danglers waiting on it, and the old name's remaining
-            # candidates (a same-basename sibling elsewhere) may need to
-            # inherit the edges this attachment is vacating. Both hmacs are
-            # already computed above (needed for the repoint/tombstone
-            # writes), so no extra derivation here.
-            _ =
-              Enqueue.enqueue(
-                RebindNoteLinks.new_for(user.id, vault.id, new_basename_hmac),
-                "rebind_note_links"
-              )
-
-            _ =
-              if new_basename_hmac != old_basename_hmac do
+              # #591 — re-resolve edges for BOTH basenames: the new name may
+              # bind danglers waiting on it, and the old name's remaining
+              # candidates (a same-basename sibling elsewhere) may need to
+              # inherit the edges this attachment is vacating. Both hmacs are
+              # already computed above (needed for the repoint/tombstone
+              # writes), so no extra derivation here.
+              _ =
                 Enqueue.enqueue(
-                  RebindNoteLinks.new_for(user.id, vault.id, old_basename_hmac),
+                  RebindNoteLinks.new_for(user.id, vault.id, new_basename_hmac),
                   "rebind_note_links"
                 )
-              end
-          end
+
+              _ =
+                if new_basename_hmac != old_basename_hmac do
+                  Enqueue.enqueue(
+                    RebindNoteLinks.new_for(user.id, vault.id, old_basename_hmac),
+                    "rebind_note_links"
+                  )
+                end
+            end
 
           {:ok, att}
 

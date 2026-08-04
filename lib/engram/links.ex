@@ -240,7 +240,7 @@ defmodule Engram.Links do
   `oban_jobs.args` carries only the opaque HMAC — never the plaintext
   basename (T3.2/H3 invariant).
   """
-  @spec basename_hmac(map(), String.t()) :: binary()
+  @spec basename_hmac(Engram.Accounts.User.t(), String.t()) :: binary()
   def basename_hmac(user, key) do
     {:ok, filter_key} = Crypto.dek_filter_key(user)
     Crypto.hmac_field(filter_key, key)
