@@ -61,8 +61,6 @@ defmodule Engram.Links.Parser do
     end
   end
 
-  defp clean(nil), do: nil
-
   defp clean(s) do
     case s |> String.trim() |> Helpers.scrub_utf8(:write) do
       "" -> nil

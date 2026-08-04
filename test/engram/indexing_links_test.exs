@@ -97,4 +97,33 @@ defmodule Engram.IndexingLinksTest do
                skip_tenant_check: true
              )
   end
+
+  test "no_chunks path returns {:error, :no_dek} instead of crashing when the user has no DEK" do
+    # Plain factory insert — no ensure_user_dek, unlike the top-level setup's
+    # user. upsert_note would auto-provision a DEK, so build the note struct
+    # directly (mirrors the old pre-Task-5 "skips embedding" test) to keep
+    # the user genuinely DEK-less.
+    user = insert(:user)
+    vault = insert(:vault, user: user)
+
+    note = %Engram.Notes.Note{
+      id: Ecto.UUID.generate(),
+      path: "Test/Empty.md",
+      content: "",
+      user_id: user.id,
+      vault_id: vault.id,
+      title: "Empty",
+      folder: "Test",
+      tags: [],
+      version: 1,
+      content_hash: ""
+    }
+
+    assert {:error, :no_dek} = Indexing.index_note(note, vault)
+
+    assert [] =
+             Repo.all(from(l in NoteLink, where: l.source_note_id == ^note.id),
+               skip_tenant_check: true
+             )
+  end
 end

@@ -37,8 +37,16 @@ defmodule Engram.Indexing do
     case prepare_index(note, vault) do
       {:ok, {:no_chunks, link_rows}} ->
         user = Engram.Accounts.get_user!(note.user_id)
-        :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
-        {:ok, 0}
+
+        case Engram.Crypto.get_dek(user) do
+          {:ok, _dek} ->
+            :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
+            {:ok, 0}
+
+          {:error, :no_dek} = err ->
+            emit_no_dek_telemetry(note)
+            err
+        end
 
       {:ok, prepared} ->
         commit_index(prepared)
@@ -80,23 +88,29 @@ defmodule Engram.Indexing do
         build_prepared(note, user, vault, chunks, vectors, filter_key, avgdl, link_rows)
       else
         {:error, :no_dek} = err ->
-          :telemetry.execute(
-            [:engram, :indexing, :encrypt_failed],
-            %{count: 1},
-            %{
-              user_id: note.user_id,
-              vault_id: note.vault_id,
-              note_id: note.id,
-              reason: :no_dek
-            }
-          )
-
+          emit_no_dek_telemetry(note)
           err
 
         other ->
           other
       end
     end
+  end
+
+  # Shared with index_note/2's no_chunks branch: same [:engram, :indexing,
+  # :encrypt_failed] counter either way, so "DEK missing at index time"
+  # doesn't undercount just because the note happened to have no chunks.
+  defp emit_no_dek_telemetry(note) do
+    :telemetry.execute(
+      [:engram, :indexing, :encrypt_failed],
+      %{count: 1},
+      %{
+        user_id: note.user_id,
+        vault_id: note.vault_id,
+        note_id: note.id,
+        reason: :no_dek
+      }
+    )
   end
 
   @doc """
