@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
+import { copyToClipboard } from "@/lib/clipboard";
 import { adminApi, type Invite } from "./api";
 
 export default function InvitesTab() {
@@ -62,8 +63,13 @@ export default function InvitesTab() {
 	}
 
 	async function copy(url: string) {
-		await navigator.clipboard.writeText(url);
-		toast.success("Copied to clipboard");
+		// Invites are the one flow an admin runs from a fresh self-host box, which
+		// is exactly where navigator.clipboard is missing (non-secure origin).
+		if (await copyToClipboard(url)) {
+			toast.success("Copied to clipboard");
+		} else {
+			toast.error("Could not copy");
+		}
 	}
 
 	return (
