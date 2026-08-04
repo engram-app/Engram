@@ -1960,13 +1960,13 @@ defmodule Engram.Notes do
           "rebind_note_links"
         )
 
-      if new_key != old_key do
-        _ =
+      _ =
+        if new_key != old_key do
           Enqueue.enqueue(
             RebindNoteLinks.new_for(user.id, note.vault_id, old_key),
             "rebind_note_links"
           )
-      end
+        end
 
       # Splice the freshly-encrypted ciphertext + dek_version=2
       # into the in-memory struct so callers (broadcast, MCP,
