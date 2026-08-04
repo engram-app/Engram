@@ -1,10 +1,17 @@
 defmodule Engram.Links.RewriterTest do
-  use Engram.DataCase, async: true
+  # async: false — some tests below start a real :global-registered CrdtDoc
+  # room (CrdtRegistry.ensure_started/3), which is the same sandbox hazard
+  # documented in Engram.DataCase.setup_sandbox/1 (#777): a room is a
+  # sandbox-using process not linked to the test, and only non-async mode
+  # synchronously stops live rooms before the sandbox owner tears down.
+  use Engram.DataCase, async: false
 
+  alias Ecto.Adapters.SQL.Sandbox
   alias Engram.Links
   alias Engram.Links.{Parser, Rewriter}
   alias Engram.Notes
-  alias Engram.Notes.Note
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry, Note}
+  alias Yex.Sync.SharedDoc
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
@@ -354,6 +361,152 @@ defmodule Engram.Links.RewriterTest do
     test "gone target row errors", %{user: user, vault: vault} do
       assert {:error, :target_gone} =
                Rewriter.build_target(user, vault, :note, Ecto.UUID.generate(), "Old.md")
+    end
+
+    test "attachment kind resolves via current_path/4's attachment clause", %{
+      user: user,
+      vault: vault
+    } do
+      attachment = Engram.Fixtures.insert_attachment!(user, vault, %{path: "img/new.png"})
+
+      assert {:ok, target} =
+               Rewriter.build_target(user, vault, :attachment, attachment.id, "img/old.png")
+
+      assert target.new_path == "img/new.png"
+    end
+  end
+
+  describe "rewrite_source_note/5 — UTF-16 offset correctness" do
+    test "an astral codepoint before the link converges via UTF-16 units, not codepoints", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+
+      # 😀 (U+1F600) is one codepoint but TWO UTF-16 code units. If utf16_len/1
+      # were swapped for a codepoint count (String.length/1), the computed
+      # offset into the doc's Y.Text would land one unit short and corrupt
+      # the rewrite instead of landing exactly on "Old".
+      content = "😀 see [[Old]]"
+
+      {:ok, source} =
+        Notes.upsert_note(user, vault, %{"path" => "Emoji.md", "content" => content})
+
+      :ok = Links.replace_links(user, vault, source.id, Parser.extract(content))
+
+      {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
+      assert {:ok, :rewritten} = Rewriter.rewrite_source_note(user, vault, source.id, target)
+
+      {:ok, text} = Notes.authoritative_content(user, raw_note!(user, source.id))
+      assert text == "😀 see [[Fresh]]"
+    end
+  end
+
+  describe "rewrite_source_note/5 — live room persistence" do
+    test "a live room applies the delta via SharedDoc.update_doc/2 and converges", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+
+      {:ok, source} =
+        Notes.upsert_note(user, vault, %{"path" => "Room.md", "content" => "[[Old]]"})
+
+      :ok = Links.replace_links(user, vault, source.id, Parser.extract("[[Old]]"))
+      {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
+
+      {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, source.id)
+      Sandbox.allow(Repo, self(), room)
+
+      # Skips the unbind checkpoint (no post-test Repo write against a torn
+      # down sandbox connection) — see CrdtRegistry.terminate_room/1.
+      on_exit(fn -> CrdtRegistry.terminate_room(source.id) end)
+
+      assert {:ok, :rewritten} = Rewriter.rewrite_source_note(user, vault, source.id, target)
+
+      # The room's OWN doc converged — proves the live-room branch ran
+      # (SharedDoc.update_doc/2), not a roomless fallback that happened to
+      # also succeed.
+      room_doc = SharedDoc.get_doc(room)
+      assert CrdtBridge.project_doc(room_doc) == "[[Fresh]]"
+
+      {:ok, text} = Notes.authoritative_content(user, raw_note!(user, source.id))
+      assert text == "[[Fresh]]"
+    end
+
+    test "a room that dies between lookup and the update call falls through to the roomless path",
+         %{user: user, vault: vault} do
+      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+
+      {:ok, source} =
+        Notes.upsert_note(user, vault, %{"path" => "Gone.md", "content" => "[[Old]]"})
+
+      :ok = Links.replace_links(user, vault, source.id, Parser.extract("[[Old]]"))
+      {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
+
+      # Register a pid that is genuinely ALIVE at lookup time (so
+      # CrdtRegistry.lookup/1 resolves it exactly like a real room) but exits
+      # the instant it receives the SharedDoc.update_doc/2 call — the same
+      # race as a room dying between lookup and the call landing, without
+      # depending on :global's own (racy, timing-dependent) dead-pid cleanup.
+      room =
+        spawn(fn ->
+          receive do
+            _ -> exit(:simulated_room_death)
+          end
+        end)
+
+      :yes = :global.register_name({:crdt_doc, source.id}, room)
+      on_exit(fn -> :global.unregister_name({:crdt_doc, source.id}) end)
+      assert CrdtRegistry.lookup(source.id) == room
+
+      assert {:ok, :rewritten} = Rewriter.rewrite_source_note(user, vault, source.id, target)
+
+      {:ok, text} = Notes.authoritative_content(user, raw_note!(user, source.id))
+      assert text == "[[Fresh]]"
+    end
+  end
+
+  describe "rewrite_for_note_rename/4 — end-to-end walk" do
+    test "rewrites every referring note found via source_note_ids/5's hmac lookup", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+      {:ok, s1} = Notes.upsert_note(user, vault, %{"path" => "S1.md", "content" => "[[Old]]"})
+
+      {:ok, s2} =
+        Notes.upsert_note(user, vault, %{"path" => "S2.md", "content" => "see [[Old]] too"})
+
+      :ok = Links.replace_links(user, vault, s1.id, Parser.extract("[[Old]]"))
+      :ok = Links.replace_links(user, vault, s2.id, Parser.extract("see [[Old]] too"))
+
+      assert :ok = Rewriter.rewrite_for_note_rename(user, vault, renamed.id, "Old.md")
+
+      {:ok, t1} = Notes.authoritative_content(user, raw_note!(user, s1.id))
+      {:ok, t2} = Notes.authoritative_content(user, raw_note!(user, s2.id))
+      assert t1 == "[[Fresh]]"
+      assert t2 == "see [[Fresh]] too"
+    end
+  end
+
+  describe "rewrite_for_attachment_rename/4" do
+    test "rewrites an embed target via build_target/5's attachment clause", %{
+      user: user,
+      vault: vault
+    } do
+      attachment = Engram.Fixtures.insert_attachment!(user, vault, %{path: "img/new.png"})
+
+      {:ok, source} =
+        Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "![[old.png]]"})
+
+      :ok = Links.replace_links(user, vault, source.id, Parser.extract("![[old.png]]"))
+
+      assert :ok =
+               Rewriter.rewrite_for_attachment_rename(user, vault, attachment.id, "img/old.png")
+
+      {:ok, text} = Notes.authoritative_content(user, raw_note!(user, source.id))
+      assert text == "![[new.png]]"
     end
   end
 end

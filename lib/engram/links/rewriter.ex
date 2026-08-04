@@ -369,12 +369,21 @@ defmodule Engram.Links.Rewriter do
         # The room owns the doc and serializes writes; its update_v1 hook
         # appends the delta to the tail-log, broadcasts the frame to every
         # observer, and fans out — the client-update path, verbatim.
-        room_apply(room, note.id, fn room_doc ->
-          _ = Yex.apply_update(room_doc, delta)
-          :ok
-        end)
+        case room_apply(room, note.id, fn room_doc ->
+               _ = Yex.apply_update(room_doc, delta)
+               :ok
+             end) do
+          :ok ->
+            finish(user, vault, note, doc)
 
-        finish(user, vault, note, doc)
+          {:error, :room_gone} ->
+            # The room died between lookup and this call — no room ever held
+            # the delta, so it was NOT persisted. Falling through to the
+            # roomless path is safe: the delta was authored against `doc`
+            # (still the same object), and persist_roomless/7 re-checks the
+            # tail head before its own append.
+            persist_roomless(user, vault, note, doc, delta, head_at_load, rt)
+        end
     end
   end
 
@@ -451,29 +460,28 @@ defmodule Engram.Links.Rewriter do
           {:ok, :rewritten}
         else
           {:ok, _no_path} -> {:error, :path_undecryptable}
+          {:error, :version_conflict, _existing} -> {:error, :version_conflict}
           {:error, reason} -> {:error, reason}
-          {:stale_base, _} -> {:error, :stale_base}
         end
     end
   end
 
-  # Guarded room call — same exit taxonomy as CrdtDeliver.room_apply/3: a
-  # room mid auto-exit is benign (the tail append still happened? NO — on a
-  # dead room nothing was appended, so fall through to a fresh roomless
-  # attempt is NOT safe either; log and let the worker's per-source error
-  # isolation surface it. In practice :noproc means the room exited between
-  # lookup and call; the next job attempt re-runs cleanly.)
+  # Guarded room call. UNLIKE CrdtDeliver.room_apply/3 (which pushes a
+  # broadcast AFTER a write already committed to the row — a dead room there
+  # only drops a notification), this call to SharedDoc.update_doc/2 IS the
+  # write: it's the only place the delta gets appended to the tail-log. A
+  # room can die between CrdtRegistry.lookup/1 and this call (auto-exit on
+  # last observer disconnect, deploy shutdown, a crash) or the call can time
+  # out — every one of those means the delta was NOT persisted, so every
+  # exit reason here returns `{:error, :room_gone}` and the caller falls
+  # through to a fresh roomless attempt. Silently swallowing and reporting
+  # success would durably desync note_links from the doc (see #1231 review).
   defp room_apply(room, note_id, fun) do
     SharedDoc.update_doc(room, fun)
+    :ok
   catch
-    :exit, {:noproc, _} ->
-      :ok
-
-    :exit, {:normal, _} ->
-      :ok
-
-    :exit, {:shutdown, _} ->
-      :ok
+    :exit, {reason, _} when reason in [:noproc, :normal, :shutdown] ->
+      {:error, :room_gone}
 
     :exit, reason ->
       Logger.error(
@@ -481,6 +489,6 @@ defmodule Engram.Links.Rewriter do
         Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
       )
 
-      :ok
+      {:error, :room_gone}
   end
 end
