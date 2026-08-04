@@ -29,4 +29,20 @@ describe("EmailReadonlySection", () => {
 
 		expect(writeText).toHaveBeenCalledWith("me@example.com");
 	});
+
+	// Self-host serves over plain http on the LAN, where the whole
+	// navigator.clipboard namespace is absent. Copy has to still work there.
+	it("falls back to execCommand when there is no clipboard namespace", async () => {
+		Object.defineProperty(navigator, "clipboard", {
+			value: undefined,
+			writable: true,
+			configurable: true,
+		});
+		const execCommand = vi.fn().mockReturnValue(true);
+		document.execCommand = execCommand;
+
+		render(<EmailReadonlySection />);
+		fireEvent.click(screen.getByRole("button", { name: /copy email/iu }));
+		await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
+	});
 });

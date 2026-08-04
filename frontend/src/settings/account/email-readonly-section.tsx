@@ -1,6 +1,7 @@
 import { Copy } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { copyToClipboard } from "@/lib/clipboard";
 import { useMe } from "../../api/queries";
 import { SettingsSectionCard } from "./section-card";
 
@@ -9,10 +10,12 @@ export function EmailReadonlySection() {
 	const email = data?.email ?? "";
 
 	async function copy() {
-		try {
-			await navigator.clipboard.writeText(email);
+		// This one already degraded politely — its try/catch caught the missing
+		// namespace — but it could never actually copy on a non-secure origin.
+		// The shared helper adds the execCommand fallback that can.
+		if (await copyToClipboard(email)) {
 			toast.success("Email copied");
-		} catch {
+		} else {
 			toast.error("Could not copy");
 		}
 	}
