@@ -30,6 +30,11 @@ describe("wikiCompletionCandidates", () => {
 		expect(wikiCompletionCandidates("GAMMA", paths)[0]?.label).toBe("Gamma Ray");
 	});
 
+	test("detail is the folder path minus filename, empty at root", () => {
+		expect(wikiCompletionCandidates("alpha", paths)[0]?.detail).toBe("Deep/Sub");
+		expect(wikiCompletionCandidates("gamma", paths)[0]?.detail).toBe("");
+	});
+
 	test("caps at 50 results", () => {
 		const many = Array.from({ length: 80 }, (_, i) => `note-${i}.md`);
 		expect(wikiCompletionCandidates("note", many)).toHaveLength(50);

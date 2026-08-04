@@ -15,8 +15,17 @@ const MAX_CANDIDATES = 50;
 export interface WikiCompletionCandidate {
 	/** Basename, extension stripped -- what the user sees and what apply() inserts. */
 	label: string;
-	/** Full vault path -- disambiguates same-named notes in different folders. */
+	/**
+	 * Folder path (path minus filename), empty for root notes. Rendered as the
+	 * muted second line of the row, Obsidian-style; disambiguates same-named
+	 * notes in different folders.
+	 */
 	detail: string;
+}
+
+function dirname(path: string): string {
+	const idx = path.lastIndexOf("/");
+	return idx === -1 ? "" : path.slice(0, idx);
 }
 
 /**
@@ -35,11 +44,11 @@ export function wikiCompletionCandidates(
 		const label = basename(path);
 		const labelLower = label.toLowerCase();
 		if (labelLower.startsWith(q)) {
-			prefix.push({ label, detail: path });
+			prefix.push({ label, detail: dirname(path) });
 		} else if (labelLower.includes(q)) {
-			basenameSubstring.push({ label, detail: path });
+			basenameSubstring.push({ label, detail: dirname(path) });
 		} else if (path.toLowerCase().includes(q)) {
-			pathSubstring.push({ label, detail: path });
+			pathSubstring.push({ label, detail: dirname(path) });
 		}
 	}
 	return [...prefix, ...basenameSubstring, ...pathSubstring].slice(0, MAX_CANDIDATES);
@@ -71,7 +80,8 @@ export function wikiCompletionSource(getPaths: () => string[]): CompletionSource
 			from,
 			options: candidates.map((c) => ({
 				label: c.label,
-				detail: c.detail,
+				// Root notes have no folder line; omit so CM6 renders no detail span.
+				...(c.detail ? { detail: c.detail } : {}),
 				apply: (view, completion, applyFrom, applyTo) => {
 					// Obsidian auto-pairs "[[" with "]]", so the closing brackets
 					// often already sit right after the cursor -- don't double them.
