@@ -158,56 +158,80 @@ defmodule Engram.Links do
     hmac = Crypto.hmac_field(filter_key, key)
     ext = target |> Path.basename() |> Path.extname() |> String.downcase()
 
+    route_resolution(
+      ext,
+      fn -> resolve_note_target(user, vault, target, hmac) end,
+      fn -> resolve_attachment_target(user, vault, target, hmac) end
+    )
+  end
+
+  # Extension-preference + cross-table-fallback rule, shared by the
+  # single-shot `resolve_target/4` path and the batch `rebind_edge/6` path
+  # (#591 finding — was forked into two copies of this same if/else before).
+  # `note_resolver`/`attachment_resolver` are zero-arg thunks so the
+  # single-shot caller keeps its lazy short-circuit (never queries the
+  # second table unless the first came back dangling) while the batch
+  # caller can pass thunks that just return already-fetched candidates.
+  defp route_resolution(ext, note_resolver, attachment_resolver) do
     if ext != "" and ext not in @note_exts do
-      with :dangling <- resolve_attachment_target(user, vault, target, hmac) do
-        resolve_note_target(user, vault, target, hmac)
+      with :dangling <- attachment_resolver.() do
+        note_resolver.()
       end
     else
-      with :dangling <- resolve_note_target(user, vault, target, hmac) do
-        resolve_attachment_target(user, vault, target, hmac)
+      with :dangling <- note_resolver.() do
+        attachment_resolver.()
       end
     end
   end
 
   defp resolve_note_target(user, vault, target, hmac) do
-    Repo.all(
-      from(n in Note,
-        where:
-          n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
-            n.basename_hmac == ^hmac and is_nil(n.deleted_at),
-        select: %{
-          id: n.id,
-          path_ciphertext: n.path_ciphertext,
-          path_nonce: n.path_nonce,
-          dek_version: n.dek_version
-        }
-      ),
-      skip_tenant_check: true
-    )
-    |> resolve_candidates(user, target, :notes, :note)
+    fetch_decrypted_candidates(user, vault, hmac, :notes)
+    |> resolve_from_candidates(target, :note)
   end
 
   defp resolve_attachment_target(user, vault, target, hmac) do
-    Repo.all(
-      from(a in Attachment,
-        where:
-          a.user_id == ^user.id and a.vault_id == ^vault.id and
-            a.basename_hmac == ^hmac and is_nil(a.deleted_at),
-        select: %{
-          id: a.id,
-          path_ciphertext: a.path_ciphertext,
-          path_nonce: a.path_nonce,
-          dek_version: a.dek_version
-        }
-      ),
-      skip_tenant_check: true
-    )
-    |> resolve_candidates(user, target, :attachments, :attachment)
+    fetch_decrypted_candidates(user, vault, hmac, :attachments)
+    |> resolve_from_candidates(target, :attachment)
   end
 
-  defp resolve_candidates([], _user, _target, _table, _tag), do: :dangling
+  # Query + decrypt only (no target-dependent filtering) — the part that's
+  # IDENTICAL for every edge sharing an hmac, so `bind_danglers_for_hmac/3`
+  # can call this once per table instead of once per edge.
+  defp fetch_decrypted_candidates(user, vault, hmac, :notes) do
+    from(n in Note,
+      where:
+        n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
+          n.basename_hmac == ^hmac and is_nil(n.deleted_at),
+      select: %{
+        id: n.id,
+        path_ciphertext: n.path_ciphertext,
+        path_nonce: n.path_nonce,
+        dek_version: n.dek_version
+      }
+    )
+    |> Repo.all(skip_tenant_check: true)
+    |> decrypt_candidate_paths(user, :notes)
+  end
 
-  defp resolve_candidates(rows, user, target, table, tag) do
+  defp fetch_decrypted_candidates(user, vault, hmac, :attachments) do
+    from(a in Attachment,
+      where:
+        a.user_id == ^user.id and a.vault_id == ^vault.id and
+          a.basename_hmac == ^hmac and is_nil(a.deleted_at),
+      select: %{
+        id: a.id,
+        path_ciphertext: a.path_ciphertext,
+        path_nonce: a.path_nonce,
+        dek_version: a.dek_version
+      }
+    )
+    |> Repo.all(skip_tenant_check: true)
+    |> decrypt_candidate_paths(user, :attachments)
+  end
+
+  defp decrypt_candidate_paths([], _user, _table), do: []
+
+  defp decrypt_candidate_paths(rows, user, table) do
     {:ok, dek} = Crypto.get_dek(user)
 
     rows
@@ -225,8 +249,14 @@ defmodule Engram.Links do
 
       {row.id, path}
     end)
-    |> filter_by_path(target)
     |> Enum.reject(fn {_id, path} -> is_nil(path) end)
+  end
+
+  # Target-dependent filter + tiebreak — the part that varies per edge even
+  # when the candidate set (fetched above) is shared.
+  defp resolve_from_candidates(candidates, target, tag) do
+    candidates
+    |> filter_by_path(target)
     |> Enum.sort_by(fn {_id, path} -> {String.length(path), path} end)
     |> case do
       [] -> :dangling
@@ -284,40 +314,60 @@ defmodule Engram.Links do
         skip_tenant_check: true
       )
 
-    Enum.each(edges, fn edge ->
-      target_text =
-        decrypt_field(
-          edge.target_text_ciphertext,
-          edge.target_text_nonce,
-          dek,
-          edge.dek_version,
-          :note_links,
-          :target_text,
-          edge.id
-        )
+    if edges != [] do
+      # Every edge here shares `hmac` (the WHERE clause above), so the
+      # candidate query + decrypt below is IDENTICAL for all of them —
+      # fetch once instead of once per edge (was N Repo.all + N decrypt
+      # passes per table). Only the per-edge target text varies the
+      # resolution (extension routing, path filter, tiebreak), which
+      # `rebind_edge/6` applies in memory against these shared lists via
+      # the same `route_resolution/3` + `resolve_from_candidates/3` rules
+      # `resolve_target/4` uses.
+      note_candidates = fetch_decrypted_candidates(user, vault, hmac, :notes)
+      attachment_candidates = fetch_decrypted_candidates(user, vault, hmac, :attachments)
 
-      # A decrypt failure (corrupt ciphertext, AAD-bind mismatch) yields nil
-      # here — `resolve_target/4` calls `basename_key/1` on it, which
-      # requires a binary and would crash the whole rebind job over one bad
-      # row. Skip it (it stays exactly as-is, still eligible to re-bind on a
-      # future pass) rather than let it take every other edge down with it.
-      if is_binary(target_text) do
-        rebind_edge(user, vault, edge, target_text)
-      else
-        DecryptFailure.log(
-          "bind_danglers_for_hmac: skipping undecryptable edge",
-          :decrypt_failed,
-          edge_id: edge.id
-        )
-      end
-    end)
+      Enum.each(edges, fn edge ->
+        target_text =
+          decrypt_field(
+            edge.target_text_ciphertext,
+            edge.target_text_nonce,
+            dek,
+            edge.dek_version,
+            :note_links,
+            :target_text,
+            edge.id
+          )
+
+        # A decrypt failure (corrupt ciphertext, AAD-bind mismatch) yields
+        # nil here — `rebind_edge/6` calls `Path.basename/1` on it, which
+        # requires a binary and would crash the whole rebind job over one
+        # bad row. Skip it (it stays exactly as-is, still eligible to
+        # re-bind on a future pass) rather than let it take every other
+        # edge down with it.
+        if is_binary(target_text) do
+          rebind_edge(user, vault, edge, target_text, note_candidates, attachment_candidates)
+        else
+          DecryptFailure.log(
+            "bind_danglers_for_hmac: skipping undecryptable edge",
+            :decrypt_failed,
+            edge_id: edge.id
+          )
+        end
+      end)
+    end
 
     :ok
   end
 
-  defp rebind_edge(user, vault, edge, target_text) do
+  defp rebind_edge(user, vault, edge, target_text, note_candidates, attachment_candidates) do
+    ext = target_text |> Path.basename() |> Path.extname() |> String.downcase()
+
     {target_note_id, target_attachment_id} =
-      case resolve_target(user, vault, target_text, edge.link_type) do
+      case route_resolution(
+             ext,
+             fn -> resolve_from_candidates(note_candidates, target_text, :note) end,
+             fn -> resolve_from_candidates(attachment_candidates, target_text, :attachment) end
+           ) do
         {:note, id} -> {id, nil}
         {:attachment, id} -> {nil, id}
         :dangling -> {nil, nil}
