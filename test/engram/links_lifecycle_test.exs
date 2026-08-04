@@ -150,4 +150,81 @@ defmodule Engram.LinksLifecycleTest do
 
     assert Links.links_for_note(user, target.id) == []
   end
+
+  # --- CRDT genesis path (Notes.genesis_crdt_note/4) — the primary
+  # web/plugin create+rename path; REST upsert_note/rename_note only serves
+  # the public API + MCP now. Fix report addendum (task-6 review). ---
+
+  test "CRDT genesis create binds existing danglers", %{user: user, vault: vault, bypass: bypass} do
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{
+        "path" => "CrdtSource1.md",
+        "content" => "See [[CrdtLater]]."
+      })
+
+    index!(bypass, source.id)
+    assert only_link(user, source.id).dangling
+
+    id = Ecto.UUID.generate()
+    assert {:ok, target} = Notes.genesis_crdt_note(user, vault, id, "x/CrdtLater.md")
+    drain_indexing!()
+
+    link = only_link(user, source.id)
+    refute link.dangling
+    assert link.target_note_id == target.id
+  end
+
+  test "CRDT relocate (rename-as-move, same id) re-resolves edges that pointed at the old name",
+       %{user: user, vault: vault, bypass: bypass} do
+    {:ok, a_short} =
+      Notes.upsert_note(user, vault, %{"path" => "CrdtA.md", "content" => "# A short"})
+
+    {:ok, a_long} =
+      Notes.upsert_note(user, vault, %{"path" => "b/CrdtA.md", "content" => "# A long"})
+
+    # Drain the two create-branch rebinds now — otherwise they'd sit queued
+    # and get swept up by the LATER drain_indexing! below, masking whether
+    # genesis_relocate_live's own rebind hook actually fires.
+    drain_indexing!()
+
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{"path" => "CrdtSource3.md", "content" => "See [[CrdtA]]."})
+
+    index!(bypass, source.id)
+    assert only_link(user, source.id).target_note_id == a_short.id
+
+    # Same id, different FREE path — genesis_crdt_note's Phase E2 relocate leg
+    # (genesis_relocate_live), not a REST rename_note call.
+    assert {:ok, _moved} = Notes.genesis_crdt_note(user, vault, a_short.id, "CrdtZ.md")
+    drain_indexing!()
+
+    link = only_link(user, source.id)
+    assert link.target_note_id == a_long.id
+  end
+
+  test "batch delete un-shadows a same-basename sibling", %{
+    user: user,
+    vault: vault,
+    bypass: bypass
+  } do
+    {:ok, short} = Notes.upsert_note(user, vault, %{"path" => "Dup.md", "content" => "# short"})
+    {:ok, long} = Notes.upsert_note(user, vault, %{"path" => "b/Dup.md", "content" => "# long"})
+
+    # Drain the two create-branch rebinds now — otherwise they'd sit queued
+    # and get swept up by the LATER drain_indexing! below, masking whether
+    # batch_delete_notes' own rebind actually fires.
+    drain_indexing!()
+
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{"path" => "Source5.md", "content" => "See [[Dup]]."})
+
+    index!(bypass, source.id)
+    assert only_link(user, source.id).target_note_id == short.id
+
+    assert {:ok, %{deleted: 1}} = Notes.batch_delete_notes(user, vault, [short.id])
+    drain_indexing!()
+
+    link = only_link(user, source.id)
+    assert link.target_note_id == long.id
+  end
 end

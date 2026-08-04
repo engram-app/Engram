@@ -898,6 +898,26 @@ defmodule Engram.Notes do
                     )
                   )
 
+                  # #591 — same-id CRDT relocate IS a rename (the primary
+                  # rename path for web/plugin); re-resolve both basenames,
+                  # same dedup-when-equal rule as do_rename_note_inner.
+                  old_key = Links.basename_key(decrypted.path)
+                  new_key = Links.basename_key(sanitized_path)
+
+                  _ =
+                    Enqueue.enqueue(
+                      RebindNoteLinks.new_for(user.id, vault.id, new_key),
+                      "rebind_note_links"
+                    )
+
+                  _ =
+                    if new_key != old_key do
+                      Enqueue.enqueue(
+                        RebindNoteLinks.new_for(user.id, vault.id, old_key),
+                        "rebind_note_links"
+                      )
+                    end
+
                   # Carry the OLD path so the post-commit handler can fan an
                   # old-path delete to peers (a web receiver has no local mirror
                   # to drop the note from its old folder otherwise).
@@ -1041,6 +1061,15 @@ defmodule Engram.Notes do
       # on a concurrent-create race.
       case do_bare_insert(base_attrs, user, sanitized_path, folder, id, lookup_query) do
         {:inserted, inserted, _crdt} ->
+          # #591 — CRDT genesis create is the primary create path (web/plugin);
+          # mirror upsert_note's create-branch rebind so danglers waiting on
+          # this basename bind here too, not only on the REST path.
+          _ =
+            Enqueue.enqueue(
+              RebindNoteLinks.new_for(user.id, vault.id, Links.basename_key(sanitized_path)),
+              "rebind_note_links"
+            )
+
           {:ok, decrypt_or_raise!(inserted, user), :announce}
 
         {:raced, existing} ->
@@ -2133,10 +2162,12 @@ defmodule Engram.Notes do
               # #591 — `notes` here is the pre-decrypt meta projection (no
               # plaintext path in scope yet; decrypt happens post-commit below
               # for the broadcast), so `delete_note_index_job/1` gets no
-              # basename_key. `Links.on_note_soft_deleted/2` (edge-flip) still
-              # runs unconditionally inside DeleteNoteIndex; only the
-              # "un-shadow a same-basename sibling" rebind is skipped for a
-              # batch delete. Known, accepted gap — see task-6 report.
+              # basename_key — DeleteNoteIndex's chained rebind is skipped.
+              # `Links.on_note_soft_deleted/2` (edge-flip) still runs
+              # unconditionally inside DeleteNoteIndex regardless. The
+              # same-basename-sibling rebind itself is NOT skipped for batch
+              # delete though — it's enqueued directly post-commit below,
+              # once plaintext paths exist (reusing the broadcast's decrypt).
               jobs = Enum.map(notes, &delete_note_index_job/1)
               _ = if jobs != [], do: Oban.insert_all(jobs)
 
@@ -2151,10 +2182,9 @@ defmodule Engram.Notes do
         {:ok, %{deleted: deleted, notes: notes}} ->
           # Post-commit: same per-note delete events clients already handle.
           # Meta rows decrypt cheaply (path envelope only — no content).
-          notes
-          |> Crypto.decrypt_notes_batch(user)
-          |> Enum.zip(notes)
-          |> Enum.each(fn
+          zipped = notes |> Crypto.decrypt_notes_batch(user) |> Enum.zip(notes)
+
+          Enum.each(zipped, fn
             {{:ok, note}, raw} ->
               broadcast_change(user.id, vault.id, "delete", note.path, raw.id, [])
 
@@ -2171,6 +2201,25 @@ defmodule Engram.Notes do
                   note_id: raw.id,
                   reason: inspect(reason)
                 )
+              )
+          end)
+
+          # #591 — plaintext paths are already decrypted right above for the
+          # broadcast; piggyback the same-basename-sibling rebind here rather
+          # than re-decrypting inside the transaction. Dedup within the batch
+          # (deleting several notes that share a basename should only enqueue
+          # one rebind per key).
+          zipped
+          |> Enum.flat_map(fn
+            {{:ok, note}, _raw} -> [Links.basename_key(note.path)]
+            {{:error, _}, _raw} -> []
+          end)
+          |> Enum.uniq()
+          |> Enum.each(fn key ->
+            _ =
+              Enqueue.enqueue(
+                RebindNoteLinks.new_for(user.id, vault.id, key),
+                "rebind_note_links"
               )
           end)
 
