@@ -21,6 +21,7 @@ defmodule Engram.Links do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Links.NoteLink
+  alias Engram.Logger.DecryptFailure
   alias Engram.Notes.Note
   alias Engram.Repo
 
@@ -111,11 +112,20 @@ defmodule Engram.Links do
   @doc """
   Resolves a raw link target to a note, an attachment, or `:dangling`.
 
-  Extension alone decides which table: extensionless targets and
-  `.md`/`.canvas` targets resolve against notes; any other extension
-  resolves against attachments — for both wikilinks and embeds (`link_type`
-  does not gate this; `[[image.png]]` links to the attachment same as
-  `![[image.png]]` does in Obsidian). Candidates are filtered to live rows
+  Extension decides which table to try FIRST: extensionless targets and
+  `.md`/`.canvas` targets try notes first; any other extension tries
+  attachments first — for both wikilinks and embeds (`link_type` does not
+  gate this; `[[image.png]]` links to the attachment same as
+  `![[image.png]]` does in Obsidian). A target can still have a real
+  extension and be a note (`[[Node.js]]`, `[[Meeting 2026.08]]` — a bare
+  wikilink target's "extension" is just whatever follows the last dot in
+  its basename, and `Path.extname/1` doesn't know note titles from file
+  extensions): when the extension-preferred table comes back dangling, the
+  OTHER table is tried with the same hmac before giving up. Notes are the
+  preferred table for the common case (extensionless/`.md`/`.canvas`
+  targets), so this only ever falls back to attachments for those, and
+  falls back to notes for everything else — it does not re-check the
+  first table once it has a hit. Candidates are filtered to live rows
   (`deleted_at IS NULL`) matching the target's basename HMAC; a target
   containing `/` is further narrowed to candidates whose decrypted full
   path matches case-insensitively (trying the target as given and with
@@ -131,9 +141,13 @@ defmodule Engram.Links do
     ext = target |> Path.basename() |> Path.extname() |> String.downcase()
 
     if ext != "" and ext not in @note_exts do
-      resolve_attachment_target(user, vault, target, hmac)
+      with :dangling <- resolve_attachment_target(user, vault, target, hmac) do
+        resolve_note_target(user, vault, target, hmac)
+      end
     else
-      resolve_note_target(user, vault, target, hmac)
+      with :dangling <- resolve_note_target(user, vault, target, hmac) do
+        resolve_attachment_target(user, vault, target, hmac)
+      end
     end
   end
 
@@ -220,17 +234,28 @@ defmodule Engram.Links do
   end
 
   @doc """
-  Re-resolves every edge (dangling or currently bound) in the vault whose
-  `target_basename_hmac` matches `basename_key`. Called after a note or
-  attachment is created/renamed so danglers can bind, and so an existing
-  binding can be stolen by a shorter-path newcomer (see resolution rules on
-  `resolve_target/4`).
+  Computes the HMAC for a `basename_key/1` result under `user`'s filter key.
+  Callers that need to enqueue a rebind job (`RebindNoteLinks.new_for/3`)
+  compute this from plaintext they already have in scope, so the job's
+  `oban_jobs.args` carries only the opaque HMAC — never the plaintext
+  basename (T3.2/H3 invariant).
   """
-  @spec bind_danglers_for(map(), map(), String.t()) :: :ok
-  def bind_danglers_for(user, vault, basename_key) do
-    {:ok, dek} = Crypto.get_dek(user)
+  @spec basename_hmac(Engram.Accounts.User.t(), String.t()) :: binary()
+  def basename_hmac(user, key) do
     {:ok, filter_key} = Crypto.dek_filter_key(user)
-    hmac = Crypto.hmac_field(filter_key, basename_key)
+    Crypto.hmac_field(filter_key, key)
+  end
+
+  @doc """
+  Re-resolves every edge (dangling or currently bound) in the vault whose
+  `target_basename_hmac` matches `hmac` (see `basename_hmac/2`). Called after
+  a note or attachment is created/renamed/deleted so danglers can bind, and
+  so an existing binding can be stolen by a shorter-path newcomer (see
+  resolution rules on `resolve_target/4`).
+  """
+  @spec bind_danglers_for_hmac(map(), map(), binary()) :: :ok
+  def bind_danglers_for_hmac(user, vault, hmac) do
+    {:ok, dek} = Crypto.get_dek(user)
 
     edges =
       Repo.all(
@@ -253,24 +278,41 @@ defmodule Engram.Links do
           edge.id
         )
 
-      {target_note_id, target_attachment_id} =
-        case resolve_target(user, vault, target_text, edge.link_type) do
-          {:note, id} -> {id, nil}
-          {:attachment, id} -> {nil, id}
-          :dangling -> {nil, nil}
-        end
-
-      if {target_note_id, target_attachment_id} !=
-           {edge.target_note_id, edge.target_attachment_id} do
-        Repo.update_all(
-          from(l in NoteLink, where: l.id == ^edge.id),
-          [set: [target_note_id: target_note_id, target_attachment_id: target_attachment_id]],
-          skip_tenant_check: true
+      # A decrypt failure (corrupt ciphertext, AAD-bind mismatch) yields nil
+      # here — `resolve_target/4` calls `basename_key/1` on it, which
+      # requires a binary and would crash the whole rebind job over one bad
+      # row. Skip it (it stays exactly as-is, still eligible to re-bind on a
+      # future pass) rather than let it take every other edge down with it.
+      if is_binary(target_text) do
+        rebind_edge(user, vault, edge, target_text)
+      else
+        DecryptFailure.log(
+          "bind_danglers_for_hmac: skipping undecryptable edge",
+          :decrypt_failed,
+          edge_id: edge.id
         )
       end
     end)
 
     :ok
+  end
+
+  defp rebind_edge(user, vault, edge, target_text) do
+    {target_note_id, target_attachment_id} =
+      case resolve_target(user, vault, target_text, edge.link_type) do
+        {:note, id} -> {id, nil}
+        {:attachment, id} -> {nil, id}
+        :dangling -> {nil, nil}
+      end
+
+    if {target_note_id, target_attachment_id} !=
+         {edge.target_note_id, edge.target_attachment_id} do
+      Repo.update_all(
+        from(l in NoteLink, where: l.id == ^edge.id),
+        [set: [target_note_id: target_note_id, target_attachment_id: target_attachment_id]],
+        skip_tenant_check: true
+      )
+    end
   end
 
   @doc """
@@ -289,6 +331,28 @@ defmodule Engram.Links do
     Repo.update_all(
       from(l in NoteLink, where: l.user_id == ^user_id and l.target_note_id == ^note_id),
       [set: [target_note_id: nil]],
+      skip_tenant_check: true
+    )
+
+    :ok
+  end
+
+  @doc """
+  An attachment was soft-deleted: attachments carry no outgoing edges (only
+  notes originate links, per `replace_links/4`), so there's nothing to drop
+  there — only flip any incoming edges back to dangling (the target no
+  longer exists, but the edge — and its encrypted target text — stays so it
+  can re-bind if the attachment reappears at the same path, or a
+  same-basename sibling can inherit it via the caller's paired
+  `RebindNoteLinks` enqueue).
+  """
+  @spec on_attachment_soft_deleted(binary(), binary()) :: :ok
+  def on_attachment_soft_deleted(user_id, attachment_id) do
+    Repo.update_all(
+      from(l in NoteLink,
+        where: l.user_id == ^user_id and l.target_attachment_id == ^attachment_id
+      ),
+      [set: [target_attachment_id: nil]],
       skip_tenant_check: true
     )
 
@@ -497,8 +561,17 @@ defmodule Engram.Links do
         else: <<>>
 
     case Envelope.decrypt(ciphertext, nonce, dek, aad) do
-      {:ok, plaintext} -> plaintext
-      :error -> nil
+      {:ok, plaintext} ->
+        plaintext
+
+      :error ->
+        DecryptFailure.log("links_decrypt_failed", :decrypt_failed,
+          table: table,
+          column: column,
+          row_id: id
+        )
+
+        nil
     end
   end
 end

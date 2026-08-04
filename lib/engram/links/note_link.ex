@@ -3,7 +3,7 @@ defmodule Engram.Links.NoteLink do
   One row per wikilink/embed occurrence in a note (issue #591). Edges are
   keyed by note UUIDs so renames never invalidate them; `target_note_id` /
   `target_attachment_id` both nil means a dangling link, resolvable later
-  via `target_basename_hmac` (see `Engram.Links.bind_danglers_for/3`).
+  via `target_basename_hmac` (see `Engram.Links.bind_danglers_for_hmac/3`).
   """
   use Engram.Schema
 

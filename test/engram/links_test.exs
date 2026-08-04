@@ -1,6 +1,8 @@
 defmodule Engram.LinksTest do
   use Engram.DataCase, async: true
 
+  import ExUnit.CaptureLog
+
   alias Engram.Links
   alias Engram.Links.NoteLink
 
@@ -106,6 +108,42 @@ defmodule Engram.LinksTest do
       assert link.target_attachment_id == att.id
     end
 
+    test "a dotted note name resolves as a note when no same-basename attachment exists", %{
+      user: user,
+      vault: vault
+    } do
+      # Path.extname("Node.js") == ".js" — extension-routing alone would send
+      # this straight to the (empty) attachments table and never fall back.
+      target = Engram.Fixtures.insert_note!(user, vault, %{path: "Node.js.md"})
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
+
+      :ok =
+        Links.replace_links(user, vault, source.id, [
+          %{target: "Node.js", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+        ])
+
+      {:ok, [link]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
+      assert link.target_note_id == target.id
+      assert is_nil(link.target_attachment_id)
+    end
+
+    test "image.png still resolves to the attachment, not a note, when both tables miss", %{
+      user: user,
+      vault: vault
+    } do
+      att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "pics/image.png"})
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
+
+      :ok =
+        Links.replace_links(user, vault, source.id, [
+          %{target: "image.png", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+        ])
+
+      {:ok, [link]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
+      assert link.target_attachment_id == att.id
+      assert is_nil(link.target_note_id)
+    end
+
     test "replace is idempotent — re-running replaces, never duplicates", %{
       user: user,
       vault: vault
@@ -131,7 +169,7 @@ defmodule Engram.LinksTest do
     end
   end
 
-  describe "bind_danglers_for/3" do
+  describe "bind_danglers_for_hmac/3" do
     test "binds a dangler when its target is created", %{user: user, vault: vault} do
       source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
 
@@ -141,7 +179,13 @@ defmodule Engram.LinksTest do
         ])
 
       target = Engram.Fixtures.insert_note!(user, vault, %{path: "deep/Later.md"})
-      :ok = Links.bind_danglers_for(user, vault, Links.basename_key("deep/Later.md"))
+
+      :ok =
+        Links.bind_danglers_for_hmac(
+          user,
+          vault,
+          Links.basename_hmac(user, Links.basename_key("deep/Later.md"))
+        )
 
       {:ok, [link]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
       assert link.target_note_id == target.id
@@ -160,10 +204,60 @@ defmodule Engram.LinksTest do
       assert l0.target_note_id == old.id
 
       new = Engram.Fixtures.insert_note!(user, vault, %{path: "Win.md"})
-      :ok = Links.bind_danglers_for(user, vault, "win")
+      :ok = Links.bind_danglers_for_hmac(user, vault, Links.basename_hmac(user, "win"))
 
       {:ok, [l1]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
       assert l1.target_note_id == new.id
+    end
+
+    test "a corrupt edge is skipped and logged; other edges still process", %{
+      user: user,
+      vault: vault
+    } do
+      source1 = Engram.Fixtures.insert_note!(user, vault, %{path: "Corrupt1.md"})
+      source2 = Engram.Fixtures.insert_note!(user, vault, %{path: "Healthy2.md"})
+
+      :ok =
+        Links.replace_links(user, vault, source1.id, [
+          %{target: "Later", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+        ])
+
+      :ok =
+        Links.replace_links(user, vault, source2.id, [
+          %{target: "Later", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+        ])
+
+      {:ok, [edge1]} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(from(l in NoteLink, where: l.source_note_id == ^source1.id))
+        end)
+
+      # Overwrite the ciphertext with garbage — AES-GCM auth-tag verification
+      # fails, so decrypt_field/7 returns nil (same shape as any at-rest
+      # corruption), which used to crash `basename_key(nil)`.
+      Repo.update_all(
+        from(l in NoteLink, where: l.id == ^edge1.id),
+        [set: [target_text_ciphertext: <<0::128>>]],
+        skip_tenant_check: true
+      )
+
+      target = Engram.Fixtures.insert_note!(user, vault, %{path: "Later.md"})
+
+      assert :ok =
+               Links.bind_danglers_for_hmac(user, vault, Links.basename_hmac(user, "later"))
+
+      # source2's healthy edge bound normally — the corrupt edge didn't
+      # crash the whole job.
+      [l2] = Links.links_for_note(user, source2.id)
+      assert l2.target_note_id == target.id
+
+      # source1's corrupt edge is untouched (still dangling), not crashed.
+      {:ok, [l1]} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(from(l in NoteLink, where: l.id == ^edge1.id))
+        end)
+
+      assert is_nil(l1.target_note_id)
     end
   end
 
@@ -188,6 +282,39 @@ defmodule Engram.LinksTest do
       # b's outgoing edge is gone; a's edge to b is dangling again
       assert [%{source_note_id: source_id, target_note_id: nil}] = links
       assert source_id == a.id
+    end
+  end
+
+  describe "links_for_note/2 — decrypt failure logging" do
+    test "a corrupt field logs a decrypt failure instead of failing silently", %{
+      user: user,
+      vault: vault
+    } do
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "SourceCorruptAlias.md"})
+
+      :ok =
+        Links.replace_links(user, vault, source.id, [
+          %{target: "X", alias: "shown", anchor: nil, link_type: "wikilink", position: 0}
+        ])
+
+      {:ok, [edge]} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(from(l in NoteLink, where: l.source_note_id == ^source.id))
+        end)
+
+      Repo.update_all(
+        from(l in NoteLink, where: l.id == ^edge.id),
+        [set: [alias_ciphertext: <<0::128>>]],
+        skip_tenant_check: true
+      )
+
+      log =
+        capture_log(fn ->
+          [link] = Links.links_for_note(user, source.id)
+          assert is_nil(link.alias)
+        end)
+
+      assert log =~ "decrypt"
     end
   end
 

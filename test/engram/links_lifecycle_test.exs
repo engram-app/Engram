@@ -12,6 +12,7 @@ defmodule Engram.LinksLifecycleTest do
 
   import Mox
 
+  alias Engram.Attachments
   alias Engram.Links
   alias Engram.Notes
   alias Engram.Workers.EmbedNote
@@ -226,5 +227,128 @@ defmodule Engram.LinksLifecycleTest do
 
     link = only_link(user, source.id)
     assert link.target_note_id == long.id
+  end
+
+  # --- Attachment lifecycle hooks (task 6 addendum) — attachments.ex had no
+  # edge hooks at all: an embed dangling on an attachment that gets uploaded
+  # later, an attachment rename, or an attachment delete never touched
+  # note_links. Mirrors the note hooks above. ---
+
+  defp upload!(user, vault, path) do
+    {:ok, att} =
+      Attachments.upsert_attachment(user, vault, %{
+        "path" => path,
+        "content_base64" => Base.encode64("fake bytes for " <> path)
+      })
+
+    att
+  end
+
+  test "embedding an attachment before it exists binds once it's uploaded", %{
+    user: user,
+    vault: vault,
+    bypass: bypass
+  } do
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{
+        "path" => "Source6.md",
+        "content" => "![[photo.png]]"
+      })
+
+    index!(bypass, source.id)
+    assert only_link(user, source.id).dangling
+
+    att = upload!(user, vault, "photo.png")
+    drain_indexing!()
+
+    link = only_link(user, source.id)
+    refute link.dangling
+    assert link.target_attachment_id == att.id
+  end
+
+  test "renaming an attachment re-dangles edges pointing at the old name", %{
+    user: user,
+    vault: vault,
+    bypass: bypass
+  } do
+    _att = upload!(user, vault, "Movable.png")
+
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{"path" => "Source7.md", "content" => "![[Movable.png]]"})
+
+    index!(bypass, source.id)
+    refute only_link(user, source.id).dangling
+
+    {:ok, _} = Attachments.move_attachment(user, vault, "Movable.png", "moved/Renamed.png")
+    drain_indexing!()
+
+    link = only_link(user, source.id)
+    assert link.dangling
+    assert is_nil(link.target_attachment_id)
+  end
+
+  test "an attachment rename binds a dangler waiting on its new name", %{
+    user: user,
+    vault: vault,
+    bypass: bypass
+  } do
+    _att = upload!(user, vault, "Stays.png")
+
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{"path" => "Source9.md", "content" => "![[Fresh.png]]"})
+
+    index!(bypass, source.id)
+    assert only_link(user, source.id).dangling
+
+    {:ok, moved} = Attachments.move_attachment(user, vault, "Stays.png", "Fresh.png")
+    drain_indexing!()
+
+    link = only_link(user, source.id)
+    refute link.dangling
+    assert link.target_attachment_id == moved.id
+  end
+
+  test "deleting an attachment flips the incoming edge to dangling", %{
+    user: user,
+    vault: vault,
+    bypass: bypass
+  } do
+    att = upload!(user, vault, "Gone.png")
+
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{"path" => "Source8.md", "content" => "![[Gone.png]]"})
+
+    index!(bypass, source.id)
+    link = only_link(user, source.id)
+    refute link.dangling
+    assert link.target_attachment_id == att.id
+
+    :ok = Attachments.delete_attachment(user, vault, "Gone.png")
+
+    link = only_link(user, source.id)
+    assert link.dangling
+    assert is_nil(link.target_attachment_id)
+  end
+
+  test "batch-deleting an attachment flips the incoming edge to dangling", %{
+    user: user,
+    vault: vault,
+    bypass: bypass
+  } do
+    att = upload!(user, vault, "GoneBatch.png")
+
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{"path" => "Source10.md", "content" => "![[GoneBatch.png]]"})
+
+    index!(bypass, source.id)
+    link = only_link(user, source.id)
+    refute link.dangling
+    assert link.target_attachment_id == att.id
+
+    assert {:ok, %{deleted: 1}} = Attachments.batch_delete(user, vault, ["GoneBatch.png"])
+
+    link = only_link(user, source.id)
+    assert link.dangling
+    assert is_nil(link.target_attachment_id)
   end
 end

@@ -44,9 +44,11 @@ defmodule Engram.Repo.Migrations.CreateNoteLinksExpand do
     create index(:note_links, [:user_id, :vault_id, :target_note_id])
     create index(:note_links, [:user_id, :vault_id, :target_attachment_id])
 
+    # No WHERE clause — `Links.bind_danglers_for_hmac/3` deliberately scans
+    # bound edges too (a shorter-path newcomer can steal an existing
+    # binding), so a dangling-only partial index would never serve that query.
     create index(:note_links, [:user_id, :vault_id, :target_basename_hmac],
-             where: "target_note_id IS NULL AND target_attachment_id IS NULL",
-             name: :note_links_dangling_basename_idx
+             name: :note_links_basename_idx
            )
 
     execute(

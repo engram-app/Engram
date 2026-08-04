@@ -446,7 +446,11 @@ defmodule Engram.Notes do
             # waiting on — re-resolve every edge sharing its basename (#591).
             _ =
               Enqueue.enqueue(
-                RebindNoteLinks.new_for(user.id, vault.id, Links.basename_key(note.path)),
+                RebindNoteLinks.new_for(
+                  user.id,
+                  vault.id,
+                  Links.basename_hmac(user, Links.basename_key(note.path))
+                ),
                 "rebind_note_links"
               )
 
@@ -906,14 +910,22 @@ defmodule Engram.Notes do
 
                   _ =
                     Enqueue.enqueue(
-                      RebindNoteLinks.new_for(user.id, vault.id, new_key),
+                      RebindNoteLinks.new_for(
+                        user.id,
+                        vault.id,
+                        Links.basename_hmac(user, new_key)
+                      ),
                       "rebind_note_links"
                     )
 
                   _ =
                     if new_key != old_key do
                       Enqueue.enqueue(
-                        RebindNoteLinks.new_for(user.id, vault.id, old_key),
+                        RebindNoteLinks.new_for(
+                          user.id,
+                          vault.id,
+                          Links.basename_hmac(user, old_key)
+                        ),
                         "rebind_note_links"
                       )
                     end
@@ -993,7 +1005,7 @@ defmodule Engram.Notes do
                   RebindNoteLinks.new_for(
                     user.id,
                     decrypted.vault_id,
-                    Links.basename_key(sanitized_path)
+                    Links.basename_hmac(user, Links.basename_key(sanitized_path))
                   ),
                   "rebind_note_links"
                 )
@@ -1066,7 +1078,11 @@ defmodule Engram.Notes do
           # this basename bind here too, not only on the REST path.
           _ =
             Enqueue.enqueue(
-              RebindNoteLinks.new_for(user.id, vault.id, Links.basename_key(sanitized_path)),
+              RebindNoteLinks.new_for(
+                user.id,
+                vault.id,
+                Links.basename_hmac(user, Links.basename_key(sanitized_path))
+              ),
               "rebind_note_links"
             )
 
@@ -1985,14 +2001,14 @@ defmodule Engram.Notes do
 
       _ =
         Enqueue.enqueue(
-          RebindNoteLinks.new_for(user.id, note.vault_id, new_key),
+          RebindNoteLinks.new_for(user.id, note.vault_id, Links.basename_hmac(user, new_key)),
           "rebind_note_links"
         )
 
       _ =
         if new_key != old_key do
           Enqueue.enqueue(
-            RebindNoteLinks.new_for(user.id, note.vault_id, old_key),
+            RebindNoteLinks.new_for(user.id, note.vault_id, Links.basename_hmac(user, old_key)),
             "rebind_note_links"
           )
         end
@@ -2057,11 +2073,11 @@ defmodule Engram.Notes do
 
         # `path` (the caller's own plaintext argument) is in scope here even
         # though `note` itself is the raw undecrypted row — no extra decrypt
-        # needed to compute the basename key for DeleteNoteIndex's chained
+        # needed to compute the basename hmac for DeleteNoteIndex's chained
         # rebind (#591).
         _ =
           Enqueue.enqueue(
-            delete_note_index_job(note, Links.basename_key(path)),
+            delete_note_index_job(note, Links.basename_hmac(user, Links.basename_key(path))),
             "delete_note_index"
           )
 
@@ -2218,7 +2234,7 @@ defmodule Engram.Notes do
           |> Enum.each(fn key ->
             _ =
               Enqueue.enqueue(
-                RebindNoteLinks.new_for(user.id, vault.id, key),
+                RebindNoteLinks.new_for(user.id, vault.id, Links.basename_hmac(user, key)),
                 "rebind_note_links"
               )
           end)
@@ -2235,13 +2251,13 @@ defmodule Engram.Notes do
   # delete_note/3, batch_delete_notes/3, and the folder-delete cascade so an
   # arg change cannot drift between sites (silently orphaning Qdrant points).
   #
-  # #591 — `basename_key` (lowercased basename, NOT the banned `path` shape —
-  # see no_plaintext_args_test.exs) lets DeleteNoteIndex chain a rebind so a
-  # shadowed same-basename sibling can inherit this note's edges. Optional:
-  # a caller without plaintext in scope at this point (batch_delete_notes'
-  # pre-commit job build) passes nil and DeleteNoteIndex skips the rebind —
-  # `Links.on_note_soft_deleted/2` (edge-flip) still always runs.
-  defp delete_note_index_job(note, basename_key \\ nil) do
+  # #591 — `basename_hmac` (base64, T3.2/H3 — see no_plaintext_args_test.exs)
+  # lets DeleteNoteIndex chain a rebind so a shadowed same-basename sibling
+  # can inherit this note's edges. Optional: a caller without plaintext in
+  # scope at this point (batch_delete_notes' pre-commit job build) passes nil
+  # and DeleteNoteIndex skips the rebind — `Links.on_note_soft_deleted/2`
+  # (edge-flip) still always runs.
+  defp delete_note_index_job(note, basename_hmac \\ nil) do
     args = %{
       note_id: note.id,
       user_id: note.user_id,
@@ -2249,7 +2265,10 @@ defmodule Engram.Notes do
       path_hmac: Base.encode64(note.path_hmac)
     }
 
-    args = if basename_key, do: Map.put(args, :basename_key, basename_key), else: args
+    args =
+      if basename_hmac,
+        do: Map.put(args, :basename_hmac, Base.encode64(basename_hmac)),
+        else: args
 
     DeleteNoteIndex.new(args)
   end
@@ -3997,11 +4016,11 @@ defmodule Engram.Notes do
       # Markers carry no embedding, so they skip the index-cleanup enqueue.
       Enum.each(real_notes, fn note ->
         # `note.path` is already decrypted (fetch_decrypted_live_rows above),
-        # so the basename key for DeleteNoteIndex's chained rebind (#591) is
+        # so the basename hmac for DeleteNoteIndex's chained rebind (#591) is
         # free here.
         _ =
           Enqueue.enqueue(
-            delete_note_index_job(note, Links.basename_key(note.path)),
+            delete_note_index_job(note, Links.basename_hmac(user, Links.basename_key(note.path))),
             "delete_note_index"
           )
 
