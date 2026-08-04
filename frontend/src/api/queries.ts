@@ -566,7 +566,19 @@ export function useBacklinks(noteId: string | null) {
 		queryKey: ["backlinks", vaultId, noteId],
 		queryFn: () => api.get<{ backlinks: Backlink[] }>(`/notes/by-id/${noteId}/backlinks`),
 		enabled: noteId !== null,
-		select: (d) => d.backlinks,
+		// The API returns one row per link EDGE, so a source note linking twice
+		// (e.g. plain + aliased) appears twice. The panel renders one row per
+		// source note, so dedupe here (keep the first edge per source).
+		select: (d) => {
+			const seen = new Set<string>();
+			return d.backlinks.filter((b) => {
+				if (seen.has(b.source_note_id)) {
+					return false;
+				}
+				seen.add(b.source_note_id);
+				return true;
+			});
+		},
 	});
 }
 

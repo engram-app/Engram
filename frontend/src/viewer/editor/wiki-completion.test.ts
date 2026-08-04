@@ -120,6 +120,43 @@ describe("wikiCompletionSource", () => {
 		expect(view.state.doc.toString()).toBe("see [[Alpha]]");
 		view.destroy();
 	});
+
+	test("apply inserts only the target when a |alias]] tail already follows the cursor", () => {
+		const source = wikiCompletionSource(() => paths);
+		const doc = "see [[Al|alias]]";
+		const cursorPos = doc.indexOf("Al") + "Al".length;
+		const ctx = contextAt(doc, cursorPos);
+		const result = callSource(source, ctx);
+		const option = result?.options[0];
+		expect(option).toBeDefined();
+		if (!option || typeof option.apply !== "function") {
+			throw new Error("expected a function apply");
+		}
+		const view = new EditorView({ state: EditorState.create({ doc }) });
+		option.apply(view, option, result?.from as number, cursorPos);
+		// Must NOT double-insert "]]" -- the alias/close tail is already there.
+		expect(view.state.doc.toString()).toBe("see [[Alpha|alias]]");
+		expect(view.state.selection.main.head).toBe("see [[Alpha".length);
+		view.destroy();
+	});
+
+	test("apply inserts only the target when a #heading]] tail already follows the cursor", () => {
+		const source = wikiCompletionSource(() => paths);
+		const doc = "see [[Al#heading]]";
+		const cursorPos = doc.indexOf("Al") + "Al".length;
+		const ctx = contextAt(doc, cursorPos);
+		const result = callSource(source, ctx);
+		const option = result?.options[0];
+		expect(option).toBeDefined();
+		if (!option || typeof option.apply !== "function") {
+			throw new Error("expected a function apply");
+		}
+		const view = new EditorView({ state: EditorState.create({ doc }) });
+		option.apply(view, option, result?.from as number, cursorPos);
+		expect(view.state.doc.toString()).toBe("see [[Alpha#heading]]");
+		expect(view.state.selection.main.head).toBe("see [[Alpha".length);
+		view.destroy();
+	});
 });
 
 describe("wikiCompletionSource composed into livePreviewExtensions", () => {

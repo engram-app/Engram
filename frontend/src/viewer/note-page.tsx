@@ -121,8 +121,9 @@ export default function NotePage() {
 	// would fire NoteEditor's decorationsCompartment.reconfigure effect for
 	// every refetch with no UI change to show for it (same onView/onShortcutRef
 	// reasoning documented in note-editor.tsx).
+	const manifestPaths = useMemo(() => manifest?.notes.map((n) => n.path) ?? [], [manifest]);
 	const manifestPathsRef = useRef<string[]>([]);
-	manifestPathsRef.current = manifest?.notes.map((n) => n.path) ?? [];
+	manifestPathsRef.current = manifestPaths;
 	const wikiCompletionPaths = useCallback(() => manifestPathsRef.current, []);
 
 	const path = note?.path ?? null;

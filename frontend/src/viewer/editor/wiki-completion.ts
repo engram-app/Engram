@@ -75,7 +75,13 @@ export function wikiCompletionSource(getPaths: () => string[]): CompletionSource
 				apply: (view, completion, applyFrom, applyTo) => {
 					// Obsidian auto-pairs "[[" with "]]", so the closing brackets
 					// often already sit right after the cursor -- don't double them.
-					const alreadyClosed = view.state.doc.sliceString(applyTo, applyTo + 2) === "]]";
+					// A directly-following "|alias]]" or "#heading]]" tail also means
+					// the link is already closed further along, just not immediately.
+					const nextChar = view.state.doc.sliceString(applyTo, applyTo + 1);
+					const alreadyClosed =
+						view.state.doc.sliceString(applyTo, applyTo + 2) === "]]" ||
+						nextChar === "|" ||
+						nextChar === "#";
 					const insert = alreadyClosed ? completion.label : `${completion.label}]]`;
 					view.dispatch({
 						changes: { from: applyFrom, to: applyTo, insert },
