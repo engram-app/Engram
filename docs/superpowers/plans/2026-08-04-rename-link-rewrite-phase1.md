@@ -592,7 +592,9 @@ end
 - [ ] Run: `mix test test/engram/links/rewriter_test.exs` — all pass.
 - [ ] Commit: `feat(links): rewriter planning core (occurrence selection + form rule)`
 
----### Task 4 — Rewriter: Y-doc edit, persist, broadcast (`rewrite_source_note/5`)
+---
+
+### Task 4 — Rewriter: Y-doc edit, persist, broadcast (`rewrite_source_note/5`)
 
 The write half. Load the canonical doc (snapshot + tail, inside `Repo.with_tenant`), apply the planned edits as ONE Y-transaction of positional `Yex.Text.delete/insert` calls (UTF-16 offsets — the doc is `offset_kind: :utf16`), encode the delta against the pre-edit state vector, then persist:
 
