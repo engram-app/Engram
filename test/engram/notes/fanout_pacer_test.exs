@@ -114,6 +114,47 @@ defmodule Engram.Notes.FanoutPacerTest do
     assert_receive(%Phoenix.Socket.Broadcast{payload: %{"note_id" => "live"}}, 150)
   end
 
+  # Pins the emitter side of the #1004 gauges. Engram.PromEx.Reliability reads
+  # these measurement keys by name, so renaming one here would leave the prod
+  # dashboards reporting nothing — silently, and exactly when a queue is
+  # backing up. The metric-shape test cannot catch that; only this can.
+  test "drain tick emits the cold-queue measurements the PromEx gauges read" do
+    Application.put_env(:engram, :fanout_pacing_enabled, true)
+    Application.put_env(:engram, :fanout_hot_window_ms, 60_000)
+    Application.put_env(:engram, :fanout_drain_batch, 1)
+    Application.put_env(:engram, :fanout_drain_interval_ms, 20)
+
+    ref = make_ref()
+    parent = self()
+
+    :telemetry.attach(
+      "pacer-drain-#{inspect(ref)}",
+      [:engram, :fanout_pacer, :drain],
+      fn _event, measurements, _meta, _cfg -> send(parent, {ref, measurements}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach("pacer-drain-#{inspect(ref)}") end)
+
+    topic = "sync:u6:v6"
+    for i <- 1..3, do: FanoutPacer.emit(topic, "note_yjs_update", payload("m#{i}"), "m#{i}")
+
+    assert_receive {^ref, measurements}, 1_000
+    assert %{queued: _, max_topic_depth: _, topics: _} = measurements
+
+    # A backlog is still pending on the first tick (3 frames, batch of 1), so
+    # this also proves the gauge reports a real level rather than a constant 0.
+    assert measurements.max_topic_depth > 0
+    assert measurements.topics > 0
+
+    # Drain fully before finishing. The module shares one named pacer, and the
+    # drain loop only stops rescheduling once its queues empty — leaving frames
+    # behind would keep a 20ms timer alive into the NEXT test, which sets a
+    # slower interval and asserts on tick spacing. That stale timer fires
+    # inside its refute window and fails it (observed, not hypothetical).
+    await_drained(topic)
+  end
+
   test "two topics drain independently (per-vault fairness)" do
     Application.put_env(:engram, :fanout_pacing_enabled, true)
     Application.put_env(:engram, :fanout_hot_window_ms, 60_000)

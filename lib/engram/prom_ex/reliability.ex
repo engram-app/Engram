@@ -22,12 +22,31 @@ defmodule Engram.PromEx.Reliability do
       terminal Oban discard.
     * `[:engram, :oban, :discarded]` → `..._oban_discarded_total`, tags
       `[:worker, :queue, :error_kind]` — jobs dropped after max_attempts.
+    * `[:engram, :fanout_pacer, :drain]` → `..._fanout_pacer_queue_depth`,
+      `..._fanout_pacer_queued`, `..._fanout_pacer_topics` (#1004) — the
+      vault-channel pacer's cold-queue state, sampled on every drain tick.
+      Untagged **on purpose**: the event's natural dimension is the topic,
+      which is per-vault and therefore unbounded cardinality.
+
+      `queue_depth` (deepest single vault) is the one to alert on — a genesis
+      flood of one large vault is the failure this pacer exists to absorb, and
+      a total across vaults would hide it. These are `last_value` gauges, not
+      counters: depth is a level, and a rate over it is meaningless.
+
+      No separate drain-lag series. Lag is derivable — the drain loop is a
+      fixed `fanout_drain_batch` every `fanout_drain_interval_ms`, so
+      `depth / batch * interval` is the wait at the back of the queue, and a
+      pacer that stalls outright stops emitting rather than reporting a low
+      number. Measuring per-frame lag would mean timestamping every queued
+      frame for a number Grafana can already compute.
 
   Cardinality contract: only the bounded tags above. NEVER user_id, vault_id,
   note_id, tenant_id, or job_id — those would explode the series count.
   """
 
   use PromEx.Plugin
+
+  @fanout_drain_event [:engram, :fanout_pacer, :drain]
 
   @impl true
   def event_metrics(opts) do
@@ -66,6 +85,24 @@ defmodule Engram.PromEx.Reliability do
           event_name: [:engram, :oban, :discarded],
           description: "Oban jobs discarded after max_attempts.",
           tags: [:worker, :queue, :error_kind]
+        ),
+        last_value(
+          metric_prefix ++ [:fanout_pacer, :queue_depth],
+          event_name: @fanout_drain_event,
+          measurement: :max_topic_depth,
+          description: "Deepest per-vault cold-queue seen at the last pacer drain tick."
+        ),
+        last_value(
+          metric_prefix ++ [:fanout_pacer, :queued],
+          event_name: @fanout_drain_event,
+          measurement: :queued,
+          description: "Total frames queued across all vaults at the last pacer drain tick."
+        ),
+        last_value(
+          metric_prefix ++ [:fanout_pacer, :topics],
+          event_name: @fanout_drain_event,
+          measurement: :topics,
+          description: "Vault topics with a non-empty cold queue at the last pacer drain tick."
         )
       ]
     )
