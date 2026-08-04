@@ -141,6 +141,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_notes(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_vaults(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_attachments(user, old_dek, new_dek, new_filter_key, new_dek_version),
+         :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
          :ok <- final_flip(user, new_dek_version, new_wrapped) do
       Logger.info(
@@ -650,14 +651,138 @@ defmodule Engram.Crypto.UserDekRotation do
           {:ok, plaintext} ->
             {new_ct, new_nonce} = Envelope.encrypt(plaintext, new_dek, new_aad)
 
+            # T4-deferred Critical (#591): same basename_hmac rebuild as
+            # notes' `path` column — attachments are link targets too
+            # (embeds), and their basename_hmac must track the new filter key.
+            basename_updates =
+              if column == :path and is_binary(plaintext) do
+                [
+                  {:basename_hmac,
+                   Crypto.hmac_field(new_filter_key, Engram.Links.basename_key(plaintext))}
+                ]
+              else
+                []
+              end
+
             [
               {ct_field, new_ct},
               {nonce_field, new_nonce},
               {hmac_field_key, Crypto.hmac_field(new_filter_key, plaintext)}
-            ]
+            ] ++ basename_updates
 
           :already_rotated ->
             # Already rotated — skip
+            []
+        end
+      end
+    end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # note_links sweep (#591 T7) — same cursor-batch shape as sweep_notes/5.
+  # Nullable alias/anchor columns are skipped like notes' description/resource;
+  # target_text also carries the basename HMAC used for link resolution.
+  # ---------------------------------------------------------------------------
+
+  defp sweep_note_links(%User{id: user_id}, old_dek, new_dek, new_filter_key, new_dek_version) do
+    sweep_table_loop(
+      user_id,
+      Engram.Links.NoteLink,
+      "00000000-0000-0000-0000-000000000000",
+      fn batch_ids ->
+        Repo.transaction(fn ->
+          links =
+            from(l in Engram.Links.NoteLink,
+              where: l.id in ^batch_ids,
+              lock: "FOR UPDATE"
+            )
+            |> Repo.all(skip_tenant_check: true)
+
+          Enum.each(links, fn link ->
+            updates =
+              rewrap_note_link_columns(link, old_dek, new_dek, new_filter_key, new_dek_version)
+
+            if updates != [] do
+              case from(l in Engram.Links.NoteLink, where: l.id == ^link.id)
+                   |> Repo.update_all(
+                     [set: updates ++ [dek_version: new_dek_version]],
+                     skip_tenant_check: true
+                   ) do
+                {1, _} ->
+                  :ok
+
+                {0, _} ->
+                  Logger.error(
+                    "T3.7 sweep_note_links: row vanished during rotation",
+                    Metadata.with_category(:error, :crypto,
+                      user_id: user_id,
+                      table: :note_links,
+                      row_id: link.id,
+                      phase: :sweep_note_links
+                    )
+                  )
+
+                  raise "T3.7 sweep_note_links: row vanished mid-rotation table=note_links row_id=#{link.id}"
+              end
+            end
+          end)
+        end)
+        |> case do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+      end
+    )
+  end
+
+  defp rewrap_note_link_columns(
+         %Engram.Links.NoteLink{} = link,
+         old_dek,
+         new_dek,
+         new_filter_key,
+         new_dek_version
+       ) do
+    [
+      {:target_text, :target_text_ciphertext, :target_text_nonce, :target_basename_hmac,
+       &Engram.Links.basename_key/1},
+      {:alias, :alias_ciphertext, :alias_nonce, nil, nil},
+      {:anchor, :anchor_ciphertext, :anchor_nonce, nil, nil}
+    ]
+    |> Enum.flat_map(fn {column, ct_field, nonce_field, hmac_key, hmac_transform} ->
+      ct = Map.get(link, ct_field)
+      nonce = Map.get(link, nonce_field)
+
+      if is_nil(ct) or is_nil(nonce) do
+        []
+      else
+        old_aad = old_aad_for(:note_links, column, link)
+        new_aad = Crypto.aad_for_row(:note_links, column, link.id)
+
+        case try_rewrap(ct, nonce, old_dek, new_dek, old_aad, new_aad,
+               table: :note_links,
+               phase: :sweep_note_links,
+               log: "T3.7 sweep_note_links: decrypt failed under both old and new DEK",
+               log_meta: [user_id: link.user_id, row_id: link.id, column: column],
+               on_both_failed:
+                 {:raise,
+                  "T3.7 sweep_note_links: decrypt failed under both old and new DEK " <>
+                    "for note_link id=#{link.id} column=#{column} new_dek_version=#{new_dek_version}"}
+             ) do
+          {:ok, plaintext} ->
+            {new_ct, new_nonce} = Envelope.encrypt(plaintext, new_dek, new_aad)
+
+            ct_updates = [{ct_field, new_ct}, {nonce_field, new_nonce}]
+
+            hmac_updates =
+              if hmac_key && is_binary(plaintext) do
+                [{hmac_key, Crypto.hmac_field(new_filter_key, hmac_transform.(plaintext))}]
+              else
+                []
+              end
+
+            ct_updates ++ hmac_updates
+
+          :already_rotated ->
             []
         end
       end
@@ -946,7 +1071,21 @@ defmodule Engram.Crypto.UserDekRotation do
                   []
                 end
 
-              ct_updates ++ hmac_updates
+              # T4-deferred Critical (#591): `path` also drives note_links
+              # resolution via `basename_hmac`. If this isn't rebuilt under
+              # the new filter key, every wikilink/embed pointing at this
+              # note silently stops resolving post-rotation.
+              basename_updates =
+                if column == :path and is_binary(plaintext) do
+                  [
+                    {:basename_hmac,
+                     Crypto.hmac_field(new_filter_key, Engram.Links.basename_key(plaintext))}
+                  ]
+                else
+                  []
+                end
+
+              ct_updates ++ hmac_updates ++ basename_updates
 
             :already_rotated ->
               # Already rotated under this run's new_dek — skip

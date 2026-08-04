@@ -141,7 +141,7 @@ defmodule Engram.Links do
     Repo.all(
       from(n in Note,
         where:
-          n.user_id == ^user.id and n.vault_id == ^vault.id and
+          n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
             n.basename_hmac == ^hmac and is_nil(n.deleted_at),
         select: %{
           id: n.id,
@@ -381,7 +381,7 @@ defmodule Engram.Links do
       else
         Repo.all(
           from(n in Note,
-            where: n.user_id == ^user.id and n.id in ^source_ids,
+            where: n.user_id == ^user.id and n.kind == "note" and n.id in ^source_ids,
             select: %{
               id: n.id,
               path_ciphertext: n.path_ciphertext,
@@ -456,7 +456,7 @@ defmodule Engram.Links do
   defp decrypt_note_paths(user, dek, note_ids) do
     Repo.all(
       from(n in Note,
-        where: n.user_id == ^user.id and n.id in ^note_ids,
+        where: n.user_id == ^user.id and n.kind == "note" and n.id in ^note_ids,
         select: %{
           id: n.id,
           path_ciphertext: n.path_ciphertext,
