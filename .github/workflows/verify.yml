@@ -552,6 +552,16 @@ jobs:
           # the job (issue #334, upstream docker/buildx bug). Plain writer = no
           # such goroutine.
           BUILDKIT_PROGRESS: plain
+          # `ci/compose.yml` declares these with the `:?` (required) form, which
+          # docker compose enforces while PARSING the file — so even
+          # `docker compose build engram`, which needs no object storage at all,
+          # dies on "required variable CI_MINIO_ACCESS_KEY is missing a value".
+          # #1267 added the requirement and wired the secrets into e2e-clerk,
+          # e2e-crdt and headless-protocol, but this job parses the same file
+          # and was missed. Any future job that touches ci/compose.yml needs
+          # them too, for parsing alone.
+          CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
+          CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
         run: |
           # Already published for this exact tree? Reuse — the registry is the
           # cross-host source of truth, so probe IT (not the local daemon, which
