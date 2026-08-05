@@ -4,7 +4,7 @@ import GithubSlugger from "github-slugger";
 // the /:slug/wiki/* redirect route and both link producers (note-view's
 // remark-wiki-link config, note-page's editor resolveWikiLink) share it.
 
-const stripMd = (p: string) => p.replace(/\.md$/iu, "");
+export const stripMd = (p: string) => p.replace(/\.md$/iu, "");
 
 export interface ManifestNote {
 	id: string;
@@ -66,6 +66,18 @@ export function resolveWikiTarget(page: string, notes: ManifestNote[]): Manifest
 		})
 		.sort((a, b) => a.path.length - b.path.length);
 	return byName[0] ?? null;
+}
+
+// Vault-root-relative create path for the unresolved-wikilink "create this
+// note" affordance. Strips #heading/|alias via parseWikiTarget and any
+// redundant .md, then splits on the last '/' — bare target creates at the
+// vault root, path-qualified target creates (and implicitly folders) along
+// that path, matching Obsidian's click-to-create behavior.
+export function wikiCreatePath(raw: string): { folder: string; name: string } {
+	const { page } = parseWikiTarget(raw);
+	const segments = stripMd(page).split("/");
+	const name = `${segments.pop() ?? ""}.md`;
+	return { folder: segments.join("/"), name };
 }
 
 // No slug = rendered outside a vault route (markdown reference panel) —
