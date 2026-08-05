@@ -67,7 +67,7 @@ export E2E_CLERK_SECRET_KEY=$(grep -E '^CLERK_SECRET_KEY=' \
   ~/documents/code-projects/engram/.env.local-saasdev | cut -d= -f2- | tr -d '"')
 E2E_ENABLE_CRDT=true ENGRAM_PLUGIN_SRC=~/documents/code-projects/engram-obsidian-sync \
   ENGRAM_API_URL=http://localhost:8100/api \
-  CI_POSTGRES_CONTAINER=engram-crdt-postgres-1 CI_MINIO_CONTAINER=engram-crdt-minio-1 \
+  CI_POSTGRES_CONTAINER=engram-crdt-postgres-1 \
   AUTH_PROVIDER=clerk \
   python3 -m pytest tests/test_48_oauth_reconnect_catchup.py -p no:cacheprovider \
   --reruns 0 --timeout=120 -q

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { buildWikiMap, parseWikiTarget, resolveWikiTarget, wikiHref } from "./wiki-link";
+import {
+	buildWikiMap,
+	parseWikiTarget,
+	resolveWikiTarget,
+	wikiCreatePath,
+	wikiHref,
+} from "./wiki-link";
 
 describe("parseWikiTarget", () => {
 	test("plain path has no hash", () => {
@@ -80,6 +86,31 @@ describe("wikiHref", () => {
 
 	test("no vault slug renders an inert anchor", () => {
 		expect(wikiHref("My Note", undefined)).toBe("#");
+	});
+});
+
+describe("wikiCreatePath", () => {
+	test("bare target creates at the vault root", () => {
+		expect(wikiCreatePath("songebobsss")).toEqual({ folder: "", name: "songebobsss.md" });
+	});
+
+	test("path-qualified target splits into folder + filename", () => {
+		expect(wikiCreatePath("folder/sub/Name")).toEqual({ folder: "folder/sub", name: "Name.md" });
+	});
+
+	test("strips a #heading segment before deriving the path", () => {
+		expect(wikiCreatePath("folder/Name#Some Heading")).toEqual({
+			folder: "folder",
+			name: "Name.md",
+		});
+	});
+
+	test("strips a redundant .md extension rather than doubling it", () => {
+		expect(wikiCreatePath("Name.md")).toEqual({ folder: "", name: "Name.md" });
+	});
+
+	test("trims surrounding whitespace", () => {
+		expect(wikiCreatePath("  Name  ")).toEqual({ folder: "", name: "Name.md" });
 	});
 });
 

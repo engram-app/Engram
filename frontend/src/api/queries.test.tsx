@@ -1229,6 +1229,21 @@ describe("useCreateNote — optimistic placeholder", () => {
 		expect(crdtCreateNote.mock.calls[1]![0]).toBe(MINTED_ID);
 	});
 
+	// The unresolved-wikilink "create this note" affordance passes a specific
+	// filename derived from the link target, instead of taking the "Untitled.md"
+	// default — same mutation/hook as the sidebar "New note" button.
+	it("creates at a caller-supplied name instead of Untitled.md", async () => {
+		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
+		crdtCreateNote.mockImplementation((docId: string) => Promise.resolve(docId));
+
+		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync({ folder: "", id: MINTED_ID, name: "songebobsss.md" });
+		});
+
+		expect(crdtCreateNote).toHaveBeenCalledWith(MINTED_ID, "songebobsss.md");
+	});
+
 	it("surfaces notes_cap_reached without retrying", async () => {
 		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
 		crdtCreateNote.mockRejectedValue(new CrdtOpError("notes_cap_reached", "crdt_create"));
