@@ -4437,6 +4437,36 @@ jobs:
           echo "$HOME/.aws-cli/bin" >> "$GITHUB_PATH"
           "$BIN" --version
 
+          # Reap superseded installs. `aws/install --update` creates a NEW
+          # versioned directory under v2/ and repoints `current` — it never
+          # removes the old one. Seven runner services share one $HOME on the
+          # SlowRaid VM, so the `[ ! -x "$BIN" ]` guard above does not prevent
+          # concurrent first-installs racing, and each race leaves another
+          # 268MB directory behind forever.
+          #
+          # By 2026-08-05 that was 23 versions / 6.0GB on a 76GB root with no
+          # free LVM extents, and it took the whole runner pool down twice in
+          # one day with "No space left on device" — surfacing as unrelated red
+          # CI, since all seven runners share the filesystem.
+          #
+          # Keeps the newest two: `current` plus one for rollback margin.
+          # Failures here must never fail the build — this is hygiene, not a
+          # dependency of the step.
+          if [ -d "$HOME/.aws-cli/v2" ]; then
+            # Keep set = newest two by version sort, PLUS whatever `current`
+            # actually resolves to. The union matters: if `current` ever points
+            # at something that is not among the newest two, a pure
+            # version-sort would delete the live install out from under the
+            # symlink. `[0-9]*` never matches the `current` symlink itself.
+            keep="$(ls -d "$HOME"/.aws-cli/v2/[0-9]* 2>/dev/null | sort -V | tail -2)"
+            live="$(readlink -f "$HOME/.aws-cli/v2/current" 2>/dev/null || true)"
+            [ -n "$live" ] && keep="$keep
+          $live"
+            for d in "$HOME"/.aws-cli/v2/[0-9]*; do
+              printf '%s\n' "$keep" | grep -qxF "$d" || rm -rf "$d" || true
+            done
+          fi
+
       - name: Configure AWS credentials (OIDC)
         if: steps.version.outputs.image_exists != 'true'
         # v6 (Node 24). v4 used Node 20, which GH deprecates 2026-09-16.
