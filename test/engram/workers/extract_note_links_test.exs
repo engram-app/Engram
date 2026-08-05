@@ -2,8 +2,10 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
-  alias Engram.Links
-  alias Engram.Notes
+  import Ecto.Query
+
+  alias Engram.{Crypto, Links, Notes, Repo}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note}
   alias Engram.Workers.ExtractNoteLinks
 
   setup do
@@ -57,5 +59,41 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
     assert job.args["note_id"] == note.id
     # Leading-edge: ~2s out, never immediate.
     assert DateTime.compare(job.scheduled_at, DateTime.utc_now()) == :gt
+  end
+
+  describe "wiring" do
+    test "REST upsert enqueues extraction on content change, not on no-op",
+         %{user: user, vault: vault} do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "W.md", "content" => "v1"})
+      assert [%{args: %{"note_id" => id}}] = all_enqueued(worker: ExtractNoteLinks)
+      assert id == note.id
+
+      Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
+
+      # Idempotent re-push of identical content: no version/seq persisted → no job.
+      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "W.md", "content" => "v1"})
+      assert [] == all_enqueued(worker: ExtractNoteLinks)
+    end
+
+    test "CRDT checkpoint content change enqueues extraction",
+         %{user: user, vault: vault} do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "C.md", "content" => "old"})
+      Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
+
+      {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+      {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+      {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+      :ok =
+        CrdtBridge.diff_into_text(
+          Yex.Doc.get_text(doc, CrdtBridge.text_name()),
+          "new [[Linked]]"
+        )
+
+      :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+      assert [%{args: %{"note_id" => id}}] = all_enqueued(worker: ExtractNoteLinks)
+      assert id == note.id
+    end
   end
 end
