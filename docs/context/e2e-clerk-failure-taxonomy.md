@@ -3,8 +3,10 @@
 _Last verified: 2026-08-05_
 
 ## Status
-Working (method valid). Produced the taxonomy below from 12 nights of ledger
-data on 2026-08-05. `test_34` remains unfixed — see "What is still open".
+Working. Taxonomy produced from 12 nights of ledger data on 2026-08-05.
+`test_34` is FIXED (Engram-obsidian#394). One diagnosis in the first draft of
+this doc was WRONG and is kept, corrected, under "MISDIAGNOSIS ON RECORD" —
+the point of that section is the check that would have caught it.
 
 ## What This Is
 
@@ -26,7 +28,7 @@ red e2e-clerk on your PR is ambient noise.
 
 | Test | Nights | Class |
 |---|---|---|
-| `test_34_folder_rename_propagation::test_folder_rename_new_paths` | **5/7** | **Real bug** — receiver ends with a 0-byte file |
+| `test_34_folder_rename_propagation::test_folder_rename_new_paths` | **5/7** | **Real bug — FIXED**, Engram-obsidian#394 |
 | `test_77_bulk_first_sync::test_bulk_first_sync_timing` | **5/7** | Load-sensitive throughput assert |
 | `test_30_sse_catch_up_multi::test_channel_catch_up_multi` | 3/7 | Uninvestigated |
 | `test_49`, `test_37`, `api_only/test_77_rename_repath_search` | 1/7 each | Uninvestigated |
@@ -37,17 +39,39 @@ rate roughly inverts.
 One red night (`30891054768`) had **no `FAILED` line at all** — a job-level
 failure, not a test failure. Don't assume a red suite has a failing test.
 
-### Not in the taxonomy: dependency regressions
+### Not in the taxonomy: the attachment-502 cluster (CI storage is down)
 
-A `dependabot/hex/mix-minor` run failed **6 attachment tests at once**
-(`test_33`, `test_79`, `test_80`, `api_only/test_19`) while main was green
-that same hour. That was not flake and not test_34's class — it was
-`req 0.6.3 → 0.7.1` breaking the ex_aws S3 adapter. See
-[[req-0x-ceiling]] below.
+A recurring, separate failure: **5 attachment tests fail together**
+(`test_33` ×2, `test_79` ×2, `test_80`), with
 
-**Heuristic: a whole *category* of tests going red together (all attachments,
-all search) on one branch is a dependency or infra regression, not a flake.**
-Flakes are scattered.
+```
+test_40_storage_endpoint::test_storage_endpoint   FAILED
+POST /api/attachments → 502
+```
+
+502 means the storage backend PUT/GET failed (see
+`attachment-502-storage-diagnosis.md`) — here the CI stack's MinIO
+(`CI_MINIO_CONTAINER: engram-ci-<run>-obsidian-minio-1`). `test_40` failing
+alongside is the tell that storage itself is down, not that any one code path
+regressed. Observed on **main** and on unrelated feature branches in the same
+window, so it is not branch-specific.
+
+> **MISDIAGNOSIS ON RECORD (2026-08-05).** This cluster first showed up on a
+> `dependabot/hex/mix-minor` PR that also bumped `req 0.6.3 → 0.7.1`, and I
+> attributed it to req breaking the ex_aws S3 adapter — the story fit
+> (`config :ex_aws, :http_client, ExAws.Request.Req`, and req 0.7.0 really
+> does carry breaking changes to that step API). It was wrong. The same
+> cluster then failed on **main at req 0.6.3**. The "asymmetric damage"
+> reading (PutObject fine, GetObject broken) came from ONE test's trace in
+> ONE run; `POST` 502s too.
+>
+> The lesson is the check I skipped: **before blaming a branch's diff for a
+> category failure, confirm the same category passes on main in the same
+> window.** One green main run from an hour earlier is not that check.
+
+**Heuristic that still holds: a whole *category* going red together (all
+attachments, all search) is a dependency or infra regression, not a flake —
+flakes are scattered.** Just don't assume *which*.
 
 ## How to mine the nightly data
 
@@ -136,17 +160,32 @@ vault:   create path=E2E/RenamedFolder34/Note1.md bytes=0     <- ends empty
 pull:    Id-keyed move: OLD -> NEW (id=019fa7cb-...)
 ```
 
-**HYPOTHESIS — NOT YET CONFIRMED.** Two code paths both claim the new path:
-CRDT discovery enrollment (`sync.ts:5697`) and the id-keyed move
-(`sync.ts:5113`). Discovery calls `flushFromCrdt(normalized, content)`; if
-that `content` is empty, the empty-write guard at `sync.ts:1300`
-(*"refused empty over Nb ... CRDT doc still holds content"*) **cannot fire,
-because it compares against existing content and the file does not exist
-yet**. Nothing protects the first write.
+**ROOT CAUSE (confirmed by code, fixed in Engram-obsidian#394).** Two paths
+race for the new path and each is defensible alone:
 
-This was not confirmed because pre-#1257 evidence could not be attributed to
-a device — the `bytes=22` and `bytes=0` lines above may be from different
-instances. **Do not act on the hypothesis without attributed evidence.**
+1. **CRDT discovery** (`sync.ts:5697`) calls `flushFromCrdt(newPath, content)`
+   for a note this device has never had on disk. `flushFromCrdt`'s
+   content-loss guard is gated on `file instanceof TFile`, so its **CREATE**
+   branch writes an empty body with no guard at all → 0-byte file.
+
+2. **`moveIfIdRelocated`** reads the OLD file's real body, then hits its
+   CREATE-ONLY GUARD — `if (getAbstractFileByPath(newPath))` → skip.
+
+The guard's own comment states its premise: an existing `newPath` means *"a
+CONCURRENT doc-triggered flush already wrote"* a body newer than ours. **That
+premise is false when the concurrent flush wrote an EMPTY one**, and the skip
+then discards the only copy of the content — which that path had just read off
+disk specifically to preserve.
+
+**"Exists" is not "has content".** The fix narrows the guard to yield only to
+a target that actually holds content. It was made there, not at discovery,
+because that is where content is *destroyed*: an empty placeholder is
+defensible (it makes the note visible pending STEP2 backfill), silently
+dropping a body you are holding is not.
+
+Note the diagnostic trap this sat behind: the nightly message read
+`received=yes materialized=no`, which was wrong on BOTH counts — see
+"Reading the delivery oracle" above.
 
 Related prior art: `folder-rename-mint-resurrection.md`,
 `crdt-wrong-mint-cross-file-overwrite.md`.
@@ -179,10 +218,13 @@ The real cause is a storage-layer failure. Chase it via
 ## req 0.x ceiling {#req-0x-ceiling}
 
 `config :ex_aws, :http_client, ExAws.Request.Req` routes every S3/KMS call
-through `req`. req 0.7.0 shipped three `(BREAKING CHANGE)` entries against
-that step API, and the damage is asymmetric and easy to misread: **PutObject
-kept returning 200 while GetObject 502'd**, so uploads look healthy and every
-download fails.
+through `req`, and req 0.7.0 shipped three `(BREAKING CHANGE)` entries against
+that step API.
+
+**This is precaution, not a diagnosed incident** — see the misdiagnosis note
+above. req 0.7 was never shown to break anything here; the attachment
+failures blamed on it were CI storage. The ceiling stands on the semver
+argument alone, which is enough.
 
 Two traps worth carrying elsewhere:
 
@@ -198,8 +240,16 @@ Two traps worth carrying elsewhere:
 
 ## What is still open
 
-- `test_34` — unfixed. Needs one nightly with #1257 merged, then read the
-  attributed `last_write=` verdict before touching `sync.ts`.
+- `test_34` — **FIXED** (Engram-obsidian#394), verified green in the
+  plugin-dispatched e2e run 31024858500 (91 passed; test_34 absent from the
+  failures). Root cause was NOT a delivery gap: `moveIfIdRelocated`'s
+  CREATE-ONLY GUARD treated "newPath exists" as "newPath has content" and
+  discarded the body it had just read off disk, because CRDT discovery had
+  already created a 0-byte placeholder there (`flushFromCrdt`'s content-loss
+  guard is gated on `file instanceof TFile`, so its CREATE branch has no
+  empty check).
+- **CI storage (MinIO) failing on main** — the attachment-502 cluster above.
+  Live and unowned as of 2026-08-05.
 - `test_77` — the assert is `1000 notes in 120s`; observed 826 in 122.4s on a
   saturated runner pool. The documented pattern for this class is *move
   load-variable cost OUT of the timed window, never loosen the assert*.
