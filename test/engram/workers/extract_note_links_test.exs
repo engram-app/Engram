@@ -95,5 +95,70 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       assert [%{args: %{"note_id" => id}}] = all_enqueued(worker: ExtractNoteLinks)
       assert id == note.id
     end
+
+    test "REST moved leg (rename resurrect) enqueues extraction on content change, not on same content",
+         %{user: user, vault: vault} do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "M1.md", "content" => "before"})
+      :ok = Notes.delete_note(user, vault, "M1.md")
+      Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
+
+      # Id-keyed rename resurrect (upsert_pathless -> move_note) with DIFFERENT
+      # content: hash changes, job enqueued.
+      assert {:ok, moved} =
+               Notes.upsert_note(user, vault, %{
+                 "id" => note.id,
+                 "path" => "M2.md",
+                 "content" => "after"
+               })
+
+      assert [%{args: %{"note_id" => id}}] = all_enqueued(worker: ExtractNoteLinks)
+      assert id == moved.id
+
+      Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
+      :ok = Notes.delete_note(user, vault, "M2.md")
+      Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
+
+      # Same rename resurrect shape, but SAME content as the tombstoned note:
+      # merge produces an identical hash, no job.
+      assert {:ok, _} =
+               Notes.upsert_note(user, vault, %{
+                 "id" => note.id,
+                 "path" => "M3.md",
+                 "content" => "after"
+               })
+
+      assert [] == all_enqueued(worker: ExtractNoteLinks)
+    end
+
+    test "batch upsert enqueues one extraction job per changed note", %{
+      user: user,
+      vault: vault
+    } do
+      notes = [
+        %{"path" => "ba.md", "content" => "alpha", "mtime" => 1.0},
+        %{"path" => "bb.md", "content" => "beta", "mtime" => 1.0}
+      ]
+
+      assert {:ok, %{results: results}} = Notes.batch_upsert_notes(user, vault, notes)
+      ids = Enum.map(results, & &1.id)
+
+      jobs = all_enqueued(worker: ExtractNoteLinks)
+      assert Enum.sort(Enum.map(jobs, & &1.args["note_id"])) == Enum.sort(ids)
+    end
+
+    test "batch upsert skips the extraction job when content is unchanged", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "bc.md", "content" => "same"})
+      Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
+
+      assert {:ok, %{results: [%{status: :ok}]}} =
+               Notes.batch_upsert_notes(user, vault, [
+                 %{"path" => "bc.md", "content" => "same", "mtime" => 2.0}
+               ])
+
+      assert [] == all_enqueued(worker: ExtractNoteLinks)
+    end
   end
 end
