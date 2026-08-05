@@ -44,6 +44,24 @@ services:
       DATABASE_URL: postgresql://engram:engram@postgres:5432/engram
       JWT_SECRET: ci-test-secret-not-for-production
       PHX_SERVER: "true"
+      # Tell the stack the URL it is actually reachable at. The container
+      # listens on 4000 but is published on CI_ENGRAM_PORT, and without these
+      # `EngramWeb.Endpoint.url()` falls back to config.exs's bare
+      # `http://localhost` — so every URL the server derives about ITSELF
+      # (OAuth discovery `resource`, the RFC 9728 metadata pointer, device-flow
+      # links) named a host nobody could reach.
+      #
+      # That is why this stack could never catch a URL-derivation bug — the
+      # class #634 and both 2026-08-05 discovery bugs live in. A server that
+      # misstates its own address cannot be tested for stating it correctly.
+      #
+      # Setting PHX_HOST also switches CORS/WS from permissive to the
+      # allowlist (runtime.exs). Safe here: Engram.HostOrigins always appends
+      # `app://obsidian.md`, `capacitor://localhost` and `http://localhost`,
+      # which covers the plugin, and the Python API clients send no Origin.
+      PHX_HOST: localhost
+      PHX_PORT: "${CI_ENGRAM_PORT:-8100}"
+      PHX_SCHEME: http
       OLLAMA_URL: http://10.0.20.214:11434
       QDRANT_URL: http://10.0.20.201:6333
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-ci_test_notes}
