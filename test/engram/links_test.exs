@@ -5,6 +5,8 @@ defmodule Engram.LinksTest do
 
   alias Engram.Links
   alias Engram.Links.NoteLink
+  alias Engram.Links.Parser
+  alias Engram.Notes
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
@@ -154,6 +156,16 @@ defmodule Engram.LinksTest do
       :ok = Links.replace_links(user, vault, source.id, parsed)
       {:ok, links} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
       assert length(links) == 1
+    end
+
+    test "replace_links called twice for the same note converges to the last parse",
+         %{user: user, vault: vault} do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => "x"})
+
+      :ok = Links.replace_links(user, vault, note.id, Parser.extract("a [[One]] b [[Two]]"))
+      :ok = Links.replace_links(user, vault, note.id, Parser.extract("a [[Three]]"))
+
+      assert [%{target_text: "Three"}] = Links.links_for_note(user, note.id)
     end
 
     test "empty parsed list clears all edges for the source", %{user: user, vault: vault} do

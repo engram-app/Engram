@@ -99,6 +99,15 @@ defmodule Engram.Links do
       end)
 
     Repo.transaction(fn ->
+      # Serialize concurrent extraction for one source note. Two writers
+      # (ExtractNoteLinks fast path + the embed pipeline's commit_index, or
+      # duplicate bulk jobs) interleaving this delete+insert under READ
+      # COMMITTED can violate unique_index([:source_note_id, :position]):
+      # B's DELETE cannot see A's uncommitted inserts. Both runs write a
+      # freshly-parsed row set, so strict last-writer-wins under this lock
+      # converges. Single lock per txn, taken first — no deadlock ordering.
+      lock_source_note!(source_note_id)
+
       Repo.delete_all(
         from(l in NoteLink,
           where:
@@ -110,6 +119,19 @@ defmodule Engram.Links do
 
       if rows != [], do: Repo.insert_all(NoteLink, rows, skip_tenant_check: true)
     end)
+
+    :ok
+  end
+
+  # Transaction-scoped advisory lock keyed on the source note id. Released
+  # automatically at commit/rollback; hashtextextended maps the UUID string
+  # to the bigint advisory-lock keyspace.
+  defp lock_source_note!(source_note_id) do
+    %{rows: [[_]]} =
+      Repo.query!(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [to_string(source_note_id)]
+      )
 
     :ok
   end
