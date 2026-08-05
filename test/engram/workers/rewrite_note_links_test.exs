@@ -148,4 +148,77 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
 
     assert {:discard, :old_path_unrecoverable} = perform_job(RewriteNoteLinks, args)
   end
+
+  # Phase 2: CRDT relocates leave NO tombstone at the old path (move_note is
+  # an in-place repoint) — the job carries the old path as user-DEK AES-GCM
+  # ciphertext instead, AAD-bound to the target row id.
+  defp ciphertext_args(user, vault, target, old_path) do
+    {:ok, dek} = Engram.Crypto.get_dek(user)
+    aad = Engram.Crypto.aad_for_row("oban_rewrite_note_links", "old_path", target.id)
+    {ct, nonce} = Engram.Crypto.Envelope.encrypt(old_path, dek, aad)
+
+    %{
+      "user_id" => user.id,
+      "vault_id" => vault.id,
+      "target_kind" => "note",
+      "target_id" => target.id,
+      "old_path_hmac" => old_path_hmac_b64(user, old_path),
+      "old_basename_hmac" =>
+        Base.encode64(Links.basename_hmac(user, Links.basename_key(old_path))),
+      "old_path_ciphertext" => Base.encode64(ct),
+      "old_path_nonce" => Base.encode64(nonce)
+    }
+  end
+
+  test "recovers old_path from encrypted args when NO tombstone exists (CRDT relocate)",
+       %{user: user, vault: vault} do
+    # Relocate via the CRDT genesis path, NOT rename_note — proves the
+    # no-tombstone premise instead of assuming it.
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+    source = seed_source!(user, vault, "S.md", "see [[Old]]")
+    {:ok, _moved} = Notes.genesis_crdt_note(user, vault, note.id, "Fresh.md")
+
+    # Premise pin: the relocate left no soft-deleted row anywhere.
+    tombs =
+      Repo.one(
+        from(n in Engram.Notes.Note,
+          where: n.user_id == ^user.id and not is_nil(n.deleted_at),
+          select: count(n.id)
+        ),
+        skip_tenant_check: true
+      )
+
+    assert tombs == 0
+
+    assert :ok = perform_job(RewriteNoteLinks, ciphertext_args(user, vault, note, "Old.md"))
+    assert authoritative!(user, source.id) =~ "[[Fresh]]"
+    refute authoritative!(user, source.id) =~ "[[Old]]"
+  end
+
+  test "AAD binds the ciphertext to the target id — foreign ciphertext discards",
+       %{user: user, vault: vault} do
+    {:ok, a} = Notes.upsert_note(user, vault, %{"path" => "A-old.md", "content" => "a"})
+    {:ok, b} = Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "b"})
+    {:ok, _} = Notes.genesis_crdt_note(user, vault, a.id, "A-new.md")
+
+    # Ciphertext minted for target A, replayed onto a job for target B.
+    args =
+      user
+      |> ciphertext_args(vault, a, "A-old.md")
+      |> Map.put("target_id", b.id)
+
+    assert {:discard, :old_path_unrecoverable} = perform_job(RewriteNoteLinks, args)
+  end
+
+  test "garbage ciphertext args discard without raising", %{user: user, vault: vault} do
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "G-old.md", "content" => "g"})
+    {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "G-new.md")
+
+    args =
+      user
+      |> ciphertext_args(vault, note, "G-old.md")
+      |> Map.put("old_path_ciphertext", Base.encode64("not a real ciphertext"))
+
+    assert {:discard, :old_path_unrecoverable} = perform_job(RewriteNoteLinks, args)
+  end
 end

@@ -16,8 +16,10 @@ defmodule Engram.Workers.RewriteNoteLinks do
 
   Args carry ids + base64 HMACs only (T3.2/H3 — plaintext in
   `oban_jobs.args` JSONB defeats at-rest encryption). The old plaintext
-  path is recovered at run time by decrypting the rename tombstone (the
-  soft-deleted row both rename paths insert at the old path).
+  path is recovered at run time from one of two sources: the rename
+  tombstone (the soft-deleted row REST/MCP renames insert at the old
+  path), or, for CRDT relocates which insert no tombstone, AAD-bound
+  ciphertext carried in the job args.
   """
 
   # No `unique`: a cursor worker re-enqueues its own successor mid-run,
@@ -32,6 +34,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
 
   alias Engram.Attachments.Attachment
   alias Engram.Crypto
+  alias Engram.Crypto.Envelope
   alias Engram.Crypto.RotationGate
   alias Engram.Links.Rewriter
   alias Engram.Logger.Metadata
@@ -49,10 +52,26 @@ defmodule Engram.Workers.RewriteNoteLinks do
   ALREADY base64 — every enqueue site computes them from plaintext it has
   in scope (T3.2: only the opaque encodings enter `oban_jobs.args`).
   """
-  @spec new_for(binary(), binary(), :note | :attachment, binary(), String.t(), String.t()) ::
+  @spec new_for(
+          binary(),
+          binary(),
+          :note | :attachment,
+          binary(),
+          String.t(),
+          String.t(),
+          keyword()
+        ) ::
           Ecto.Changeset.t()
-  def new_for(user_id, vault_id, kind, target_id, old_path_hmac_b64, old_basename_hmac_b64) do
-    new(%{
+  def new_for(
+        user_id,
+        vault_id,
+        kind,
+        target_id,
+        old_path_hmac_b64,
+        old_basename_hmac_b64,
+        opts \\ []
+      ) do
+    base = %{
       "user_id" => user_id,
       "vault_id" => vault_id,
       "target_kind" => Atom.to_string(kind),
@@ -60,7 +79,20 @@ defmodule Engram.Workers.RewriteNoteLinks do
       "old_path_hmac" => old_path_hmac_b64,
       "old_basename_hmac" => old_basename_hmac_b64,
       "cursor" => @start_cursor
-    })
+    }
+
+    args =
+      case Keyword.fetch(opts, :old_path_ciphertext) do
+        {:ok, ct_b64} ->
+          base
+          |> Map.put("old_path_ciphertext", ct_b64)
+          |> Map.put("old_path_nonce", Keyword.fetch!(opts, :old_path_nonce))
+
+        :error ->
+          base
+      end
+
+    new(args)
   end
 
   @impl Oban.Worker
@@ -90,7 +122,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
          {:ok, old_basename_hmac} <- decode_b64(old_basename_hmac_b64),
          {:ok, user} <- load_user(user_id),
          {:ok, vault} <- load_vault(user, vault_id),
-         {:ok, old_path} <- tombstone_old_path(user, vault, kind, old_path_hmac),
+         {:ok, old_path} <- recover_old_path(user, vault, kind, old_path_hmac, args),
          {:ok, target} <- build_target(user, vault, kind, target_id, old_path) do
       ids = Rewriter.source_note_ids(user, vault, old_basename_hmac, cursor, batch_size)
       rewrite_each(user, vault, ids, target)
@@ -173,6 +205,42 @@ defmodule Engram.Workers.RewriteNoteLinks do
     )
     |> decrypt_tombstone_path(user, &Crypto.maybe_decrypt_attachment_fields/2)
   end
+
+  # Old-path recovery, two sources in order:
+  #   1. The REST-rename tombstone at the old path (Phase 1 — do_rename_note_inner
+  #      inserts it; decrypt its path field).
+  #   2. Phase 2 (CRDT relocate): genesis_relocate_live/move_note repoints the
+  #      row IN PLACE — no tombstone exists — so the enqueue site rides the old
+  #      path in args as user-DEK AES-GCM ciphertext, AAD-bound to target_id
+  #      (T3.2: plaintext never enters oban_jobs.args; the AAD stops replaying
+  #      one job's ciphertext onto another). A DEK rotation between enqueue and
+  #      run makes the ciphertext undecryptable — that degrades to the same
+  #      {:discard, :old_path_unrecoverable} class (rare; any later rename
+  #      enqueues its own fresh job).
+  defp recover_old_path(user, vault, kind, old_path_hmac, args) do
+    case tombstone_old_path(user, vault, kind, old_path_hmac) do
+      {:ok, path} -> {:ok, path}
+      {:discard, :old_path_unrecoverable} -> args_old_path(user, args)
+    end
+  end
+
+  defp args_old_path(user, %{
+         "old_path_ciphertext" => ct_b64,
+         "old_path_nonce" => nonce_b64,
+         "target_id" => target_id
+       }) do
+    with {:ok, ct} <- decode_b64(ct_b64),
+         {:ok, nonce} <- decode_b64(nonce_b64),
+         {:ok, dek} <- Crypto.get_dek(user),
+         aad = Crypto.aad_for_row("oban_rewrite_note_links", "old_path", target_id),
+         {:ok, path} <- Envelope.decrypt(ct, nonce, dek, aad) do
+      {:ok, path}
+    else
+      _ -> {:discard, :old_path_unrecoverable}
+    end
+  end
+
+  defp args_old_path(_user, _args), do: {:discard, :old_path_unrecoverable}
 
   defp decrypt_tombstone_path(nil, _user, _decrypt), do: {:discard, :old_path_unrecoverable}
 
