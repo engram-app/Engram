@@ -246,7 +246,7 @@ config :engram, :client_logs_retention_days, 30
 # Finch pool, so the backend carries no hackney dependency. :req_opts sets the
 # per-request timeout, mirroring the old adapter's 30s recv_timeout. Req handles
 # body-less (HEAD) responses natively, so no shim is needed for S3.exists?.
-config :ex_aws, :http_client, ExAws.Request.Req
+config :ex_aws, :http_client, Engram.Aws.ReqClient
 config :ex_aws, :req_opts, receive_timeout: 30_000
 
 # joken_jwks drives its Tesla client with Erlang's built-in httpc adapter, so

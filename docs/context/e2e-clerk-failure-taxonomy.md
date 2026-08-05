@@ -71,6 +71,12 @@ window, so it is not branch-specific.
 > The lesson is the check I skipped: **before blaming a branch's diff for a
 > category failure, confirm the same category passes on main in the same
 > window.** One green main run from an hour earlier is not that check.
+>
+> **PARTLY RE-RETRACTED (#1272).** The e2e-502 half above is right: those were
+> CI storage. The "req is innocent" half is not — req 0.7 really does break
+> S3 GETs, just not via the step API and not visibly through the 502s. See
+> [req 0.7 rewrites bodyless GETs into POSTs](#req-0x-ceiling). Two unrelated
+> real failures were live at once.
 
 **Heuristic that still holds: a whole *category* going red together (all
 attachments, all search) is a dependency or infra regression, not a flake —
@@ -218,16 +224,43 @@ delete.
 The real cause is a storage-layer failure. Chase it via
 `attachment-502-storage-diagnosis.md`.
 
-## req 0.x ceiling {#req-0x-ceiling}
+## req 0.7 rewrites bodyless GETs into POSTs {#req-0x-ceiling}
 
-`config :ex_aws, :http_client, ExAws.Request.Req` routes every S3/KMS call
-through `req`, and req 0.7.0 shipped three `(BREAKING CHANGE)` entries against
-that step API.
+**RESOLVED 2026-08-05 (#1272). Now on req 0.7.2; there is no 0.6 ceiling any
+more.** Both earlier accounts of this were wrong, in opposite directions:
 
-**This is precaution, not a diagnosed incident** — see the misdiagnosis note
-above. req 0.7 was never shown to break anything here; the attachment
-failures blamed on it were CI storage. The ceiling stands on the semver
-argument alone, which is enough.
+- The original `mix.exs` comment blamed req 0.7's removal of the `run_finch` /
+  `put_plug` step API. `ExAws.Request.Req` never used those. It is twenty
+  lines of high-level `Req.request/1`.
+- The misdiagnosis note above then over-corrected to "req 0.7 was never shown
+  to break anything here." That is also false. It was never shown *by the e2e
+  502s*, which really were CI storage. It reproduces cleanly one layer down.
+
+The actual break, reproducible in `Engram.Storage.S3Test` against Bypass on
+localhost with no CI involved:
+
+```
+Req.request(method: :get, body: "",  ...)  -> wire method POST
+Req.request(method: :get, body: nil, ...)  -> wire method GET
+Req.request(method: :get, <no :body>, ...) -> wire method GET
+Req.request(method: :delete, body: "", ...) -> wire method DELETE
+```
+
+req 0.7 upgrades an explicit `method: :get` to `POST` whenever a non-nil
+`:body` is present. `:method` defaults to `:get`, so req cannot distinguish
+"the caller asked for GET" from "the caller said nothing", and reads a body as
+"you meant POST". Other verbs are left alone. `ExAws.Request.Req` always passes
+`""` rather than `nil`, so **every S3 GetObject left as a POST**: uploads kept
+returning 200 and every download failed. `Engram.Aws.ReqClient` normalises `""`
+to `nil` for `:get`/`:head` and delegates; `test/engram/aws/req_client_test.exs`
+asserts the verb on the wire.
+
+**Two real failures overlapped in the same window** — a genuine req break at
+unit level and a genuine MinIO outage at e2e level. Clearing one did not clear
+the other, and each in turn looked like the whole story. "Not proven by this
+evidence" is not "disproven"; when a retraction lands, re-derive at the
+cheapest layer that can still show the effect rather than concluding from the
+expensive one.
 
 Two traps worth carrying elsewhere:
 
