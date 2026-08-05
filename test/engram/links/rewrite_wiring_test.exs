@@ -3,6 +3,7 @@ defmodule Engram.Links.RewriteWiringTest do
   use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Attachments
+  alias Engram.Folders
   alias Engram.MCP.Handlers
   alias Engram.Notes
   alias Engram.Workers.RebindNoteLinks
@@ -208,6 +209,23 @@ defmodule Engram.Links.RewriteWiringTest do
 
       assert [job] = all_enqueued(worker: RewriteNoteLinks)
       assert job.args["target_id"] == note.id
+    end
+
+    test "folder rename cascades attachment rewrites via move_attachment (Phase 1 pin)", %{
+      user: user,
+      vault: vault
+    } do
+      _att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "media/img.png"})
+      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "media/N.md", "content" => "n"})
+
+      {:ok, %{notes: 1, attachments: 1}} = Folders.rename(user, vault, "media", "assets")
+
+      kinds =
+        all_enqueued(worker: RewriteNoteLinks)
+        |> Enum.map(& &1.args["target_kind"])
+        |> Enum.sort()
+
+      assert kinds == ["attachment", "note"]
     end
   end
 end
