@@ -1297,7 +1297,7 @@ jobs:
             echo "ERROR: Qdrant check timed out. Logs:"; cat "${MARKER_PREFIX}-qdrant.log" 2>/dev/null || true; exit 1
           fi
 
-      # test_79_mcp_conformance shells out to the pinned @mcpjam/cli via npx,
+      # test_88_mcp_conformance shells out to the pinned @mcpjam/cli via npx,
       # so the API-only tier now needs node. The test ASSERTS npx is present
       # rather than skipping, so if this step is ever removed the gate fails
       # loudly instead of quietly reporting green.
@@ -1465,9 +1465,14 @@ jobs:
           # stack starts, it fills DURING the run as concurrent stacks write.
           # A free-space probe up front reads healthy and tells you nothing --
           # measured 12% free on a box that still 507'd mid-run.
+          #
+          # SINCE 2026-08-05 THIS POINTS AT A DIFFERENT MACHINE. MinIO is no
+          # longer a sidecar on this runner, so `df -h /` here describes a host
+          # that has nothing to do with the 507 -- it would read healthy and
+          # send you to bisect the diff, which is the exact trap this block
+          # exists to prevent. The drive that matters is FastRaid's.
           if grep -q "XMinioStorageFull" ci-artifacts/docker-compose.log 2>/dev/null; then
-            echo "::error title=CI storage full::MinIO returned 507 XMinioStorageFull -- the runner drive crossed its minimum free threshold, so every attachment PUT failed and the attachment tests report 502. This is runner CAPACITY, not a code or dependency regression. Do not bisect the diff."
-            df -h / || true
+            echo "::error title=CI storage full::MinIO returned 507 XMinioStorageFull -- the CENTRAL FastRaid MinIO (10.0.20.214:9101) crossed its minimum free threshold, so every attachment PUT failed and the attachment tests report 502. This is FastRaid CAPACITY, not this runner's and not a code or dependency regression. Check FastRaid disk, not the diff. Expect every concurrent job to fail the same way."
           fi
           cp ${MARKER_PREFIX}-*.log ci-artifacts/ 2>/dev/null || true
           # Pytest detailed log (captures DEBUG+ from all helpers)
@@ -2206,6 +2211,21 @@ jobs:
       - name: Tear down
         if: always()
         run: |
+          # This job allocates two SHARED-host namespaces and, until 2026-08-05,
+          # released neither: its Qdrant collection leaked on SlowRaid from the
+          # day the job was added, and the bucket leak arrived with the move off
+          # the per-stack MinIO. `docker compose down` reclaims neither — they
+          # do not live on this runner. Same reaping the other two e2e jobs do.
+          curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
+          case "${CI_MINIO_BUCKET}" in
+            ci-*)
+              docker run --rm -e AK="$CI_MINIO_ACCESS_KEY" -e SK="$CI_MINIO_SECRET_KEY" \
+                --entrypoint sh minio/mc:latest -c \
+                "mc alias set c http://10.0.20.214:9101 \"\$AK\" \"\$SK\" >/dev/null && mc rb --force c/${CI_MINIO_BUCKET}" \
+                > /dev/null 2>&1 || true
+              ;;
+            *) echo "refusing to remove non-ci- bucket: ${CI_MINIO_BUCKET}" ;;
+          esac
           docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
           docker image prune -f 2>/dev/null || true
           docker volume prune -f 2>/dev/null || true
