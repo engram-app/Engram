@@ -59,4 +59,39 @@ defmodule Engram.Links.ParserTest do
     content = "pad " <> <<0xFF>> <> " [[Real]]"
     assert [%{target: "Real"}] = Parser.extract(content)
   end
+
+  describe "target offsets" do
+    test "offsets span exactly the trimmed target" do
+      content = "pre ![[ Folder/Note.md |shown]] post"
+      [occ] = Parser.extract(content)
+      assert occ.link_type == "embed"
+      assert occ.target == "Folder/Note.md"
+      assert binary_part(content, occ.target_start, occ.target_len) == "Folder/Note.md"
+    end
+
+    test "offsets stop before the anchor and alias" do
+      content = "[[Note#Head|shown]]"
+      [occ] = Parser.extract(content)
+      assert binary_part(content, occ.target_start, occ.target_len) == "Note"
+      assert occ.anchor == "Head"
+      assert occ.alias == "shown"
+    end
+
+    test "offsets are byte offsets, correct after multibyte text" do
+      content = "émoji 🎈 [[Café]]"
+      [occ] = Parser.extract(content)
+      assert binary_part(content, occ.target_start, occ.target_len) == "Café"
+    end
+
+    test "every occurrence in a multi-link line carries its own span" do
+      content = "[[A]] and ![[B|x]] and [[C#h]]"
+
+      spans =
+        content
+        |> Parser.extract()
+        |> Enum.map(&binary_part(content, &1.target_start, &1.target_len))
+
+      assert spans == ["A", "B", "C"]
+    end
+  end
 end

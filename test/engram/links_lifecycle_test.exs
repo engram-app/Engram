@@ -101,13 +101,16 @@ defmodule Engram.LinksLifecycleTest do
     assert link.target_note_id == old_note.id
   end
 
-  test "renaming AWAY re-resolves edges that pointed at the old name", %{
-    user: user,
-    vault: vault,
-    bypass: bypass
-  } do
+  test "renaming AWAY (REST) rewrites the link to follow its target instead of falling back to basename rebind",
+       %{
+         user: user,
+         vault: vault,
+         bypass: bypass
+       } do
     {:ok, a_short} = Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "# A short"})
-    {:ok, a_long} = Notes.upsert_note(user, vault, %{"path" => "b/A.md", "content" => "# A long"})
+
+    {:ok, _a_long} =
+      Notes.upsert_note(user, vault, %{"path" => "b/A.md", "content" => "# A long"})
 
     {:ok, source} =
       Notes.upsert_note(user, vault, %{"path" => "Source3.md", "content" => "See [[A]]."})
@@ -118,8 +121,18 @@ defmodule Engram.LinksLifecycleTest do
     {:ok, _renamed} = Notes.rename_note(user, vault, "A.md", "Z.md")
     drain_indexing!()
 
+    # Task 6: REST-origin renames route through RewriteNoteLinks, which
+    # mechanically rewrites "[[A]]" -> "[[Z]]" so the link keeps pointing at
+    # the SAME row it did pre-rename (a_short, now Z.md) — the
+    # exactly-one-rewriter, semantics-preserving policy in
+    # Engram.Links.Rewriter. It no longer falls through to basename-fallback
+    # rebinding onto the sibling a_long; that fallback-only behavior (the
+    # pre-rewriter semantics this test used to assert) is covered for the
+    # untouched CRDT/plugin origin by "CRDT relocate ..." below.
     link = only_link(user, source.id)
-    assert link.target_note_id == a_long.id
+    refute link.dangling
+    assert link.target_note_id == a_short.id
+    assert link.target_text == "Z"
   end
 
   test "delete flips incoming edges to dangling and drops outgoing", %{
@@ -266,12 +279,12 @@ defmodule Engram.LinksLifecycleTest do
     assert link.target_attachment_id == att.id
   end
 
-  test "renaming an attachment re-dangles edges pointing at the old name", %{
+  test "moving an attachment (REST) rewrites the link to follow it instead of dangling", %{
     user: user,
     vault: vault,
     bypass: bypass
   } do
-    _att = upload!(user, vault, "Movable.png")
+    att = upload!(user, vault, "Movable.png")
 
     {:ok, source} =
       Notes.upsert_note(user, vault, %{"path" => "Source7.md", "content" => "![[Movable.png]]"})
@@ -282,9 +295,16 @@ defmodule Engram.LinksLifecycleTest do
     {:ok, _} = Attachments.move_attachment(user, vault, "Movable.png", "moved/Renamed.png")
     drain_indexing!()
 
+    # Task 6: Attachments.move_attachment/4 also routes through
+    # RewriteNoteLinks, so "![[Movable.png]]" is mechanically rewritten to
+    # "![[Renamed.png]]" (id-stable move) — the link keeps pointing at the
+    # SAME attachment instead of dangling. Pre-rewriter this asserted the
+    # opposite (dangling); that fallback-only behavior belongs to the
+    # untouched CRDT/plugin origin (see the CRDT-prefixed tests above).
     link = only_link(user, source.id)
-    assert link.dangling
-    assert is_nil(link.target_attachment_id)
+    refute link.dangling
+    assert link.target_attachment_id == att.id
+    assert link.target_text == "Renamed.png"
   end
 
   test "an attachment rename binds a dangler waiting on its new name", %{
