@@ -49,4 +49,4 @@ updates:
     groups:
       gha-all:
         applies-to: version-updates
-        update-types: [patch, minor, major]
+        update-types: [patch, minor]
