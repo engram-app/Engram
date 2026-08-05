@@ -161,4 +161,121 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       assert [] == all_enqueued(worker: ExtractNoteLinks)
     end
   end
+
+  describe "bind-time rename repair (lever 2)" do
+    import Ecto.Query
+
+    defp clear_jobs!(worker) do
+      Repo.delete_all(from(j in Oban.Job, where: j.worker == ^worker))
+    end
+
+    test "late dangling edge re-enqueues the rename's rewrite as an immediate sweep",
+         %{user: user, vault: vault} do
+      {:ok, _note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+      {:ok, renamed} = Notes.rename_note(user, vault, "Old.md", "Fresh.md")
+      # The rename's own chain "already ran": leave its job ROW (the repair
+      # evidence) but no pending sweep, simulating rename+60s having passed.
+      [rename_job] = all_enqueued(worker: Engram.Workers.RewriteNoteLinks)
+      clear_jobs!("Engram.Workers.RewriteNoteLinks")
+      {:ok, _} = Oban.insert(Engram.Workers.RewriteNoteLinks.new(rename_job.args))
+      # Park the evidence row out of available state so drain-style helpers
+      # can't run it; the repair query matches any state within the window.
+      Repo.update_all(
+        from(j in Oban.Job, where: j.worker == "Engram.Workers.RewriteNoteLinks"),
+        set: [state: "completed", completed_at: DateTime.utc_now()]
+      )
+
+      # Offline device's note arrives NOW, still referencing the old name.
+      {:ok, late} =
+        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"})
+
+      assert :ok = perform_job(ExtractNoteLinks, %{note_id: late.id})
+
+      assert [repair] =
+               all_enqueued(worker: Engram.Workers.RewriteNoteLinks)
+
+      assert repair.args["sweep"] == true
+      assert repair.args["cursor"] == "00000000-0000-0000-0000-000000000000"
+      assert repair.args["target_id"] == renamed.id
+      assert repair.args["old_basename_hmac"] == rename_job.args["old_basename_hmac"]
+    end
+
+    test "repair converges: performing the repair rewrites the source and a re-extract enqueues nothing (loop-breaker)",
+         %{user: user, vault: vault} do
+      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+      {:ok, _renamed} = Notes.rename_note(user, vault, "Old.md", "Fresh.md")
+      [rename_job] = all_enqueued(worker: Engram.Workers.RewriteNoteLinks)
+      clear_jobs!("Engram.Workers.RewriteNoteLinks")
+      {:ok, _} = Oban.insert(Engram.Workers.RewriteNoteLinks.new(rename_job.args))
+
+      Repo.update_all(
+        from(j in Oban.Job, where: j.worker == "Engram.Workers.RewriteNoteLinks"),
+        set: [state: "completed", completed_at: DateTime.utc_now()]
+      )
+
+      {:ok, late} =
+        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"})
+
+      assert :ok = perform_job(ExtractNoteLinks, %{note_id: late.id})
+      [repair] = all_enqueued(worker: Engram.Workers.RewriteNoteLinks)
+
+      # Run the repair chain: the source note's text gets rewritten [[Old]]→[[Fresh]].
+      assert :ok = perform_job(Engram.Workers.RewriteNoteLinks, repair.args)
+      clear_jobs!("Engram.Workers.RewriteNoteLinks")
+
+      # Re-extraction (as the rewrite's own persistence hooks would trigger):
+      # edges now carry the NEW basename hmac → no prior-job match → NO repair.
+      assert :ok = perform_job(ExtractNoteLinks, %{note_id: late.id})
+      assert [] == all_enqueued(worker: Engram.Workers.RewriteNoteLinks)
+      assert [%{dangling: false}] = Links.links_for_note(user, late.id)
+    end
+
+    test "repair dedups against the rename's still-pending sweep",
+         %{user: user, vault: vault} do
+      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+      {:ok, _} = Notes.rename_note(user, vault, "Old.md", "Fresh.md")
+      # Keep the rename's enqueued job AS the pending work (scheduled/available).
+      assert [_pending] = all_enqueued(worker: Engram.Workers.RewriteNoteLinks)
+
+      {:ok, late} =
+        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"})
+
+      assert :ok = perform_job(ExtractNoteLinks, %{note_id: late.id})
+
+      # Still exactly one job: the repair insert deduped via unique keys
+      # [target_id, old_basename_hmac] over available/scheduled.
+      assert [_only] = all_enqueued(worker: Engram.Workers.RewriteNoteLinks)
+    end
+
+    test "dangling edge with NO recent rename enqueues nothing",
+         %{user: user, vault: vault} do
+      {:ok, late} =
+        Notes.upsert_note(user, vault, %{"path" => "L.md", "content" => "see [[NeverExisted]]"})
+
+      assert :ok = perform_job(ExtractNoteLinks, %{note_id: late.id})
+      assert [] == all_enqueued(worker: Engram.Workers.RewriteNoteLinks)
+    end
+
+    test "CRDT-origin rename (ciphertext args, no tombstone) is repairable — args ride verbatim",
+         %{user: user, vault: vault} do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+      {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Fresh.md", origin: "web")
+      [crdt_job] = all_enqueued(worker: Engram.Workers.RewriteNoteLinks)
+      assert Map.has_key?(crdt_job.args, "old_path_ciphertext")
+
+      Repo.update_all(
+        from(j in Oban.Job, where: j.worker == "Engram.Workers.RewriteNoteLinks"),
+        set: [state: "completed", completed_at: DateTime.utc_now()]
+      )
+
+      {:ok, late} =
+        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"})
+
+      assert :ok = perform_job(ExtractNoteLinks, %{note_id: late.id})
+
+      assert [repair] = all_enqueued(worker: Engram.Workers.RewriteNoteLinks)
+      assert repair.args["old_path_ciphertext"] == crdt_job.args["old_path_ciphertext"]
+      assert repair.args["sweep"] == true
+    end
+  end
 end

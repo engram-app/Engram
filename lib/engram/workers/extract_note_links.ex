@@ -42,15 +42,22 @@ defmodule Engram.Workers.ExtractNoteLinks do
     queue: :indexing,
     max_attempts: 3
 
+  import Ecto.Query
+
   alias Engram.Accounts
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Links
+  alias Engram.Links.NoteLink
   alias Engram.Links.Parser
   alias Engram.Logger.DecryptFailure
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vaults.Vault
+  alias Engram.Workers.RewriteNoteLinks
+
+  @repair_window_seconds 600
+  @start_cursor "00000000-0000-0000-0000-000000000000"
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
@@ -76,13 +83,23 @@ defmodule Engram.Workers.ExtractNoteLinks do
         {:discard, "vault #{note.vault_id} not found for note #{note.id}"}
 
       %Vault{} = vault ->
-        case Crypto.maybe_decrypt_note_fields(note, user) do
-          {:ok, decrypted} ->
-            :ok =
-              Links.replace_links(user, vault, note.id, Parser.extract(decrypted.content || ""))
-
-            :ok
-
+        # notes.content is the REST/search FACADE — since #1141 it's only
+        # materialized from the CRDT doc at checkpoint, so it lags a live doc
+        # write (same staleness class as #1159, see
+        # `Engram.Notes.authoritative_content/2` moduledoc and
+        # `NotesController.append/2`). A rewrite's `Rewriter.finish/4` writes
+        # the correct edges immediately via the CRDT-projected content but
+        # (deliberately) does not materialize the facade — reading it here
+        # would re-derive stale edges on the very next extraction and clobber
+        # what the rewrite just fixed. Decrypt first (still needed to recover
+        # a legacy/no-crdt-state row's plaintext as the fallback base), then
+        # resolve through the authority.
+        with {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user),
+             {:ok, content} <- Engram.Notes.authoritative_content(user, decrypted) do
+          :ok = Links.replace_links(user, vault, note.id, Parser.extract(content || ""))
+          :ok = repair_rename_danglers(user, vault, note.id)
+          :ok
+        else
           {:error, reason} ->
             DecryptFailure.log("extract_links_decrypt_failed", reason,
               user_id: note.user_id,
@@ -107,4 +124,87 @@ defmodule Engram.Workers.ExtractNoteLinks do
 
   defp extract_delay_seconds,
     do: Application.get_env(:engram, :link_extract_delay_seconds, 2)
+
+  # #648 lever 2 — bind-time rename repair. A freshly-extracted edge that
+  # lands DANGLING may be explained by a recent rename: the referrer's edge
+  # simply didn't exist when RewriteNoteLinks walked (and, for arrivals later
+  # than rename+60s, when its sweep re-walked). The durable evidence for
+  # every rewriting rename origin (REST tombstone-backed, CRDT
+  # ciphertext-backed, folder cascade, attachment move) is the original
+  # oban_jobs row — retained 7 days by the Pruner, args already in the exact
+  # T3.2 shape (ids + b64 HMACs/ciphertext). Re-enqueue those args verbatim
+  # with the cursor reset and "sweep" => true:
+  #   * "sweep" => true makes the repair chain terminate WITHOUT enqueueing
+  #     another sweep (RewriteNoteLinks.maybe_enqueue_sweep/1) — one walk.
+  #   * insert-time unique on [target_id, old_basename_hmac] over
+  #     available/scheduled collapses concurrent repairs AND defers to the
+  #     rename's own still-pending sweep (identical work, already scheduled).
+  #     Chain successors insert via plain new/1 and are unaffected — this is
+  #     a single-shot entry, not the self-re-enqueueing cursor-chain case the
+  #     worker's no-unique rule exists for.
+  # Loop-safety: a repair rewrite changes content → re-extraction produces
+  # edges under the NEW basename hmac → no window match → terminates. A no-op
+  # rewrite persists nothing → no re-extraction → no re-trigger.
+  # Plugin/Obsidian-origin renames never enqueued a rewrite (one-rewriter
+  # invariant) → no evidence row → correctly never repaired here.
+  defp repair_rename_danglers(user, vault, source_note_id) do
+    dangling_hmacs =
+      Repo.all(
+        from(l in NoteLink,
+          where:
+            l.source_note_id == ^source_note_id and l.user_id == ^user.id and
+              l.vault_id == ^vault.id and is_nil(l.target_note_id) and
+              is_nil(l.target_attachment_id),
+          distinct: true,
+          select: l.target_basename_hmac
+        ),
+        skip_tenant_check: true
+      )
+
+    Enum.each(dangling_hmacs, fn hmac ->
+      case recent_rename_job_args(user.id, vault.id, Base.encode64(hmac)) do
+        nil -> :ok
+        args -> enqueue_repair(args)
+      end
+    end)
+
+    :ok
+  end
+
+  # Newest rewrite-job row (ANY state — completed included) inside the window
+  # whose old_basename_hmac matches the dangler. oban_jobs is not a tenant
+  # table; user/vault are filtered as args. JSONB ->> precedent:
+  # EmbedNote.existing_burst_start/1.
+  defp recent_rename_job_args(user_id, vault_id, hmac_b64) do
+    cutoff = DateTime.add(DateTime.utc_now(), -@repair_window_seconds, :second)
+
+    Repo.one(
+      from(j in Oban.Job,
+        where: j.worker == "Engram.Workers.RewriteNoteLinks",
+        where: j.inserted_at > ^cutoff,
+        where: fragment("? ->> 'old_basename_hmac' = ?", j.args, ^hmac_b64),
+        where: fragment("? ->> 'user_id' = ?", j.args, ^to_string(user_id)),
+        where: fragment("? ->> 'vault_id' = ?", j.args, ^to_string(vault_id)),
+        order_by: [desc: j.inserted_at],
+        limit: 1,
+        select: j.args
+      )
+    )
+  end
+
+  defp enqueue_repair(args) do
+    :telemetry.execute([:engram, :links, :repair_enqueued], %{count: 1}, %{origin: :extract})
+
+    args
+    |> Map.put("cursor", @start_cursor)
+    |> Map.put("sweep", true)
+    |> RewriteNoteLinks.new(
+      unique: [
+        period: @repair_window_seconds,
+        keys: [:target_id, :old_basename_hmac],
+        states: [:available, :scheduled]
+      ]
+    )
+    |> Engram.Notes.Enqueue.enqueue("rewrite_note_links")
+  end
 end
