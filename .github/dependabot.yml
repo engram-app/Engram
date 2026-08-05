@@ -15,9 +15,9 @@ updates:
       semver-minor-days: 7
       semver-patch-days: 3
     groups:
-      mix-patches:
+      mix-minor:
         applies-to: version-updates
-        update-types: [patch]
+        update-types: [patch, minor]
       mix-dev-minor:
         applies-to: version-updates
         dependency-type: development
@@ -36,9 +36,9 @@ updates:
       semver-minor-days: 7
       semver-patch-days: 3
     groups:
-      frontend-patches:
+      frontend-minor:
         applies-to: version-updates
-        update-types: [patch]
+        update-types: [patch, minor]
 
   - package-ecosystem: github-actions
     directory: /
