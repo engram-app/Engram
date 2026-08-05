@@ -299,7 +299,9 @@ CRDT relocates leave no tombstone (see Architecture), so `RewriteNoteLinks` gain
 - [ ] Run `mix test test/engram/workers/no_plaintext_args_test.exs` — confirm the new arg keys do not trip the lint.
 - [ ] `mix format`; commit: `feat: RewriteNoteLinks recovers old_path from AAD-bound args ciphertext`.
 
----### Task 3 — Thread origin to `genesis_relocate_live` + gated enqueue
+---
+
+### Task 3 — Thread origin to `genesis_relocate_live` + gated enqueue
 
 `genesis_crdt_note/4` grows an opts arity (`origin:`); `genesis_relocate_live/5` grows an `origin` param and enqueues the rewrite next to its existing `RebindNoteLinks` enqueues when the Task 1 gate passes. The enqueue rides inside the same tenant transaction as the relocate — Oban insert in-txn commits atomically with the rename (strictly stronger than fire-and-forget; `Enqueue.enqueue/2` is still non-raising).
 
