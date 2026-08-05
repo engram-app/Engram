@@ -112,8 +112,10 @@ CONSENT_GATED = {
 # The distinguishing signal is the HTTP status our authorization endpoint
 # returned:
 #
-#   302 -> we accepted the client and sent it to consent. Healthy; the runner
-#          simply cannot go further without a human.
+#   200 -> we accepted the client and served the consent SPA. Healthy; the
+#          runner simply cannot go further without a human. (The CLI follows
+#          the redirect, so the status you see is the consent page's, not the
+#          302 that got it there — observed on both strategies 2026-08-05.)
 #   400 -> `render_client_error(conn, "invalid_client")`. THE BUG.
 #
 # So a consent-gated step is excused only when the server did not answer 4xx.
@@ -140,7 +142,23 @@ if problems:
         print(f"      {name} [HTTP {status}]: {msg[:150]}")
     sys.exit(1)
 
-reached = {s["step"] for s in doc.get("steps", []) if s.get("status") == "passed"}
+reached = {s.get("step") for s in doc.get("steps", []) if s.get("status") == "passed"}
+
+# An empty `problems` list is not the same as a healthy run. If the CLI renames
+# `steps`, changes the shape under it, or dies before emitting any, every loop
+# above iterates nothing and this reports a clean pass — the exact vacuous-green
+# this suite exists to prevent, in the suite itself. CLI_VERSION is pinned, so
+# this fires on a conscious bump rather than out of nowhere.
+#
+# `authorization_request` is the assertion because it is the last step before
+# the consent wall: reaching it means discovery, metadata, client registration
+# (either path) and PKCE all really ran.
+if "authorization_request" not in reached:
+    print(f"    NO SIGNAL — {strategy}: never reached authorization_request "
+          f"({len(reached)} steps passed). Suite is not grading the server; "
+          f"check the CLI output shape in {path}.")
+    sys.exit(1)
+
 print(f"    reached the consent gate cleanly ({len(reached)} steps passed)")
 sys.exit(0)
 PY
