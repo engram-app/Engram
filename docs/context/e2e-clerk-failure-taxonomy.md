@@ -53,8 +53,8 @@ POST /api/attachments → 502
 `attachment-502-storage-diagnosis.md`). Since 2026-08-05 that backend is the
 **central FastRaid MinIO** (`10.0.20.214:9101`), not a per-stack sidecar — so
 a 502 can now mean the shared host is down or full rather than anything
-run-specific, and it will hit every concurrent job at once. The run's own
-bucket is `CI_MINIO_BUCKET: ci-<run>-obsidian`. `test_40` failing
+run-specific, and it will hit every concurrent job at once. Every job shares
+the one permanent `ci-e2e` bucket. `test_40` failing
 alongside is the tell that storage itself is down, not that any one code path
 regressed. Observed on **main** and on unrelated feature branches in the same
 window, so it is not branch-specific.

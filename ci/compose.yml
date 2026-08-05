@@ -100,19 +100,33 @@ services:
       # POINTS AT THE CENTRAL FASTRAID MINIO, not a per-stack sidecar.
       #
       # The sidecar was a 400MB image + volume per concurrent stack, on runner
-      # VMs that ran out of disk twice on 2026-08-05. Same reasoning as Qdrant,
-      # which has always been central (10.0.20.201) with a per-run collection.
+      # VMs that ran out of disk twice on 2026-08-05.
       #
-      # THE BUCKET MUST BE PER-RUN AND MUST START WITH `ci-`. That MinIO also
-      # holds staging's live `engram-saas-attachments` and selfhost's
-      # `engram-selfhost-attachments`, and e2e teardown purges its bucket
-      # recursively. `cleanup_minio_bucket()` hard-refuses any bucket not
-      # matching `^ci-` precisely so a misconfigured value here cannot reach
-      # them — the guard is in code, not in this comment.
+      # ONE PERMANENT BUCKET, SHARED BY EVERY RUN. Not per-run — deliberately.
+      #
+      # The per-run design (#1267) had to CREATE a bucket per job and remember
+      # to delete it, across two best-effort teardown paths. Anything that must
+      # be remembered gets forgotten: a cancelled job or a dead runner leaked
+      # the bucket forever, which is precisely how Qdrant's per-run collections
+      # reached 297 orphans and crash-looped it into a CI-wide outage. Fixing
+      # that with another reaper would just add a third thing to forget.
+      #
+      # Runs do not collide, because the BUCKET was never what isolated them —
+      # object keys are `<user_id>/<vault_id>/objects/<uuid>` and every run
+      # mints fresh users, so keys are already globally unique. The per-run
+      # bucket bought isolation the key space provides for free.
+      #
+      # Expiry is a server-side MinIO ILM rule on the bucket (7 days), so
+      # nothing in CI deletes anything: no sidecar, no teardown, no cron. This
+      # is exactly how `gha-cache` works, and it is the one shared-host
+      # resource in this system that has never leaked.
+      #
+      # Because nothing here deletes, there is no longer any path by which a
+      # misconfigured bucket name could reach staging's live
+      # `engram-saas-attachments`. That hazard is gone structurally rather than
+      # guarded against.
       STORAGE_BACKEND: s3
-      # Default is namespaced rather than shared: a forgotten CI_MINIO_BUCKET
-      # collides with another local stack at worst, never with staging.
-      STORAGE_BUCKET: ${CI_MINIO_BUCKET:-ci-local}
+      STORAGE_BUCKET: ${CI_MINIO_BUCKET:-ci-e2e}
       STORAGE_ACCESS_KEY_ID: ${CI_MINIO_ACCESS_KEY:?CI_MINIO_ACCESS_KEY must be set (CI injects from secret; local dev sets it in .env)}
       STORAGE_SECRET_ACCESS_KEY: ${CI_MINIO_SECRET_KEY:?CI_MINIO_SECRET_KEY must be set (CI injects from secret; local dev sets it in .env)}
       STORAGE_SCHEME: "http://"
@@ -170,8 +184,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
     restart: "no"
 
   postgres:
@@ -189,27 +201,3 @@ services:
       retries: 30
     restart: "no"
 
-  # No `minio` server service — see the STORAGE_* block above. Attachments go
-  # to the central FastRaid MinIO; this sidecar only creates the run's bucket
-  # there and exits. Kept as a service (rather than a workflow step) so the
-  # app's `depends_on: service_completed_successfully` still guarantees the
-  # bucket exists before the first upload, and so local `make ci-up` works
-  # unchanged. mc is ~30MB against the server image's ~400MB.
-  minio-init:
-    image: minio/mc:latest
-    entrypoint: >
-      /bin/sh -c "
-      set -e;
-      case \"$${CI_MINIO_BUCKET:-ci-local}\" in ci-*) ;; *)
-        echo \"refusing to create non-ci- bucket: $${CI_MINIO_BUCKET:-ci-local}\" >&2; exit 1;;
-      esac;
-      mc alias set central http://$${CI_MINIO_HOST:-10.0.20.214}:$${CI_MINIO_PORT:-9101} \"$$CI_MINIO_ACCESS_KEY\" \"$$CI_MINIO_SECRET_KEY\";
-      mc mb --ignore-existing central/$${CI_MINIO_BUCKET:-ci-local};
-      "
-    environment:
-      CI_MINIO_BUCKET: ${CI_MINIO_BUCKET:-ci-local}
-      CI_MINIO_HOST: ${CI_MINIO_HOST:-10.0.20.214}
-      CI_MINIO_PORT: ${CI_MINIO_PORT:-9101}
-      CI_MINIO_ACCESS_KEY: ${CI_MINIO_ACCESS_KEY:?CI_MINIO_ACCESS_KEY must be set}
-      CI_MINIO_SECRET_KEY: ${CI_MINIO_SECRET_KEY:?CI_MINIO_SECRET_KEY must be set}
-    restart: "no"

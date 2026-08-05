@@ -94,10 +94,16 @@ export default function NotePage() {
 	// resolved link routes straight to the note id instead of through the
 	// lazy /:slug/wiki/* resolver.
 	const wikiMap = useMemo(() => buildWikiMap(note?.links), [note?.links]);
+	// Manifest layer for wikiHref, read through a ref (same identity-stability
+	// reasoning as manifestPathsRef below): edges lag behind fresh links, the
+	// manifest resolves them without the /wiki redirect flash, and a manifest
+	// refetch must not change these callbacks' identity.
+	const wikiManifestRef = useRef<{ id: string; path: string }[]>([]);
+	wikiManifestRef.current = manifest?.notes ?? [];
 	// useCallback keeps a stable identity so passing it to NoteEditor doesn't
 	// re-fire the decorationsCompartment reconfigure effect on every render.
 	const resolveWikiLink = useCallback(
-		(permalink: string) => wikiHref(permalink, slug, wikiMap),
+		(permalink: string) => wikiHref(permalink, slug, wikiMap, wikiManifestRef.current),
 		[slug, wikiMap],
 	);
 	// Editor-mode click-to-open. Router nav must come from the React tree —
@@ -105,7 +111,7 @@ export default function NotePage() {
 	// router singleton itself.
 	const openWikiLink = useCallback(
 		(permalink: string) => {
-			const href = wikiHref(permalink, slug, wikiMap);
+			const href = wikiHref(permalink, slug, wikiMap, wikiManifestRef.current);
 			if (href.startsWith("/")) {
 				navigate(href);
 			} else if (href.startsWith("#")) {
@@ -431,7 +437,12 @@ export default function NotePage() {
 						// the title sits the same distance above the body in reading mode
 						// as it does in the editor.
 						<div className="px-5 pt-5">
-							<NoteView content={liveContent} tags={note.tags} links={note.links} />
+							<NoteView
+								content={liveContent}
+								tags={note.tags}
+								links={note.links}
+								manifestNotes={manifest?.notes}
+							/>
 						</div>
 					) : (
 						<Suspense fallback={<p className="px-5 py-5 text-muted-foreground">Loading editor…</p>}>
