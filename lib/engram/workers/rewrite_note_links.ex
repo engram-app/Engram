@@ -1,11 +1,15 @@
 defmodule Engram.Workers.RewriteNoteLinks do
   @moduledoc """
   Oban worker: rewrite `[[wikilink]]`/`![[embed]]` occurrences in every
-  note referring to a just-renamed note/attachment (issues #648/#1231,
-  Phase 1). Enqueued by `Notes.rename_note/4` and
-  `Attachments.move_attachment/4` — REST/MCP origins only; plugin-origin
-  renames are rewritten by Obsidian itself and never reach these
-  functions, preserving the exactly-one-rewriter invariant.
+  note referring to a just-renamed note/attachment (issues #648/#1231).
+  Four enqueue origins: REST/MCP note rename (`Notes.do_rename_note`),
+  attachment move (`Attachments.move_attachment/4`), CRDT-origin relocate
+  (`Notes.genesis_relocate_live`, gated by `Notes.crdt_rename_rewrites?/1`
+  so only non-Obsidian origins — web/MCP — enqueue), and the folder-rename
+  cascade (`Notes.do_rename_folder`, one job per moved note). The gating
+  rule across all four: plugin/Obsidian-origin renames never enqueue —
+  Obsidian's "Automatically update internal links" rewrites those itself,
+  preserving the exactly-one-rewriter invariant.
 
   Chunked cursor chain over distinct source notes (batch #{100}), keyed on
   the OLD basename hmac of `note_links.target_basename_hmac` — stable
