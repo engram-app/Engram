@@ -5,8 +5,8 @@ defmodule EngramWeb.CrdtChannelOriginTest do
   use Oban.Testing, repo: Engram.Repo
 
   alias Ecto.Adapters.SQL.Sandbox
-  alias Engram.Notes.CrdtBridge
   alias Engram.{Crypto, Notes, Vaults}
+  alias Engram.Notes.CrdtBridge
   alias Engram.Repo
   alias Engram.Workers.RewriteNoteLinks
 
