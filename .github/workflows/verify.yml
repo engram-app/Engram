@@ -110,8 +110,18 @@ env:
   # had never needed before. Job-level wiring re-creates that trap for the
   # next job someone adds; workflow-level cannot.
   #
-  # Scoped `engram-ci` credential — s3:* on ci-* buckets only, never root.
-  CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
+  # Scoped `engram-ci` MinIO user — s3:* on ci-* buckets only, never root.
+  #
+  # The ACCESS KEY IS DELIBERATELY NOT A SECRET. It is a username, so making it
+  # one bought no security — and it actively broke CI: its value, `engram-ci`,
+  # is also the CI image repository name (`${LOCAL_REGISTRY}/engram-ci:<hash>`).
+  # GitHub redacts secret values from job OUTPUTS as well as logs, by substring.
+  # Once this was in scope for prebuild-ci-image, that job's `image` output was
+  # redacted away, ENGRAM_CI_IMAGE arrived empty in every downstream e2e job,
+  # and docker rejected the empty reference with `invalid reference format`.
+  #
+  # Only the secret key is a secret. Do not "helpfully" promote this one back.
+  CI_MINIO_ACCESS_KEY: engram-ci
   CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
   # One permanent shared bucket; objects expire via a server-side MinIO ILM
   # rule (7 days). Nothing per-run, so nothing to create or reap.
