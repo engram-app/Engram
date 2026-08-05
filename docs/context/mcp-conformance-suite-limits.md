@@ -3,7 +3,11 @@
 _Last verified: 2026-08-05_
 
 ## Status
-Working. `scripts/mcp-conformance.sh` runs daily (`cron.yml`, 05:40 UTC) against staging and opens a tracking issue on regression.
+`scripts/mcp-conformance.sh` works and is verified against staging, but is **not yet wired into CI** — run it by hand for now.
+
+It briefly rode a daily cron. That was wrong: a cron grades a *deployment*, and on a PR the deployment still runs `main`, so it can never gate the code under review — it reports a regression the morning after it merges. The target is a per-PR gate against the PR's own build; see "Getting it gating" below.
+
+The two spec violations this doc is about are **already covered by ExUnit** (`mcp_transport_test.exs`, `well_known_controller_test.exs`), which does gate every PR. What is missing is the third-party-client signal, not regression protection for these specific bugs.
 
 ## What This Is
 The MCPJam conformance runner is a **client compatibility tester**, not a spec auditor. It answers "can MCPJam connect to you", and it is deliberately generous about anything it can work around. Twice now that gap has let a real defect sit under a green suite. This doc records where the tool stops and what we assert ourselves, so the next person does not re-derive it.
@@ -52,6 +56,20 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://staging.engram.page/.well-know
 
 ## Gotcha: prod and staging legitimately differ
 `mcp.engram.page` advertises the **bare host** as the resource (HostRewrite serves MCP at `/`, see #634), so the *root* well-known is its spec-correct metadata location and the §3.1 path form does not apply. Every other host (staging, selfhost `engram.ax`, `app`/`api`) advertises the `/api/mcp` path and needs the §3.1 form. `EngramWeb.OAuthMetadata` derives both from one place so the document and the `WWW-Authenticate` pointer cannot drift — a mismatch there fails the client *after* it successfully fetches both, which is the least debuggable shape of this bug.
+
+## Getting it gating
+
+The blocker was never Playwright — it is that the suite must run against **the PR's own build**, not staging. The e2e stack already provides that, and the pieces are all present:
+
+- `e2e-browser` boots the PR's backend on a dynamic port, including a Clerk-enabled variant (`PW_CLERK_BACKEND_PORT`).
+- `e2e/tests/api_only/test_71_connections.py` already drives the **whole** OAuth flow headlessly — `register_client` → `consent(jwt_token, client_id)` → `_extract_code` → `exchange_code`. Consent is approved with a Clerk JWT against the consent endpoint. **No browser automation is required**, which was the assumption that made this look expensive.
+- `e2e/helpers/auth_provider.py` and `clerk_auth.py` mint a user plus an API key, so `ENGRAM_CONFORMANCE_TOKEN` does not need to exist as a repo secret at all — a local stack mints its own.
+
+Remaining work:
+
+1. Host the script as an `api_only` e2e test pointed at the local backend. Gates on every PR via `e2e-clerk`; stages 1–3 all grade, and the token secret disappears.
+2. Complete the flow past consent by driving the CLI with `--auth-mode interactive --print-url` and approving the emitted URL with the existing JWT helper. That un-skips `token_request`, `received_tokens`, `authenticated_mcp_request`, and restores the `--conformance-checks` negative checks (invalid client, invalid redirect, token format), which have never run.
+3. Make sure the fingerprint does not skip it for OAuth-relevant diffs (`lib/engram/oauth/**`, `lib/engram_web/controllers/oauth_*`, `well_known_controller`, `router.ex`, this script). A gating job that fingerprint-skips is gating in name only.
 
 ## Related
 - `docs/context/cimd-vs-dcr-validation-policy.md` — why DCR and CIMD validate differently
