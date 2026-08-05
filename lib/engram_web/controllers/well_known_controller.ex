@@ -15,6 +15,8 @@ defmodule EngramWeb.WellKnownController do
   """
   use EngramWeb, :controller
 
+  alias EngramWeb.OAuthMetadata
+
   def protected_resource(conn, _params) do
     base = base_url(conn)
 
@@ -34,21 +36,15 @@ defmodule EngramWeb.WellKnownController do
       #
       # Token `aud` is the fixed string "engram" (see Engram.Token), independent
       # of this URL, so either form breaks no server-side audience check.
-      resource: if(mcp_rewrite_host?(conn), do: base, else: base <> "/api/mcp"),
+      #
+      # Derived in OAuthMetadata, not here: Plugs.McpAuthChallenge points the
+      # RFC 9728 §5.1 challenge at the metadata URL for this same resource, and
+      # a client aborts if the two disagree. Shared derivation, no drift.
+      resource: OAuthMetadata.resource(conn),
       authorization_servers: [base],
       bearer_methods_supported: ["header"],
       resource_documentation: base <> "/docs"
     })
-  end
-
-  # True only when the dialed host is the saas dedicated MCP host that
-  # HostRewrite serves at the bare root (`:host_rewrite` config sets `mcp_host`).
-  # Selfhost leaves `:host_rewrite` unset → always false → path form.
-  defp mcp_rewrite_host?(conn) do
-    case Application.get_env(:engram, :host_rewrite, []) do
-      opts when is_list(opts) -> opts[:mcp_host] != nil and conn.host == opts[:mcp_host]
-      _ -> false
-    end
   end
 
   def authorization_server(conn, _params) do

@@ -567,7 +567,9 @@ jobs:
       || github.event.inputs.task == 'mcp-conformance'
     name: mcp-conformance
     runs-on: [self-hosted, linux, x64, isolated, light]
-    timeout-minutes: 15
+    # 30, not 15: the suite went from 2 CLI runs to 12 (both registration
+    # strategies x 4 protocol versions, then 4 protocol-conformance runs).
+    timeout-minutes: 30
     permissions:
       contents: read
       issues: write   # regressions open/update a tracking issue (see last step)
@@ -578,7 +580,7 @@ jobs:
         with:
           node-version: '20'
 
-      - name: OAuth conformance (DCR + CIMD)
+      - name: OAuth + protocol conformance
         id: conformance
         shell: bash
         # `set -o pipefail` is load-bearing. GitHub's default shell is `bash -e`
@@ -590,6 +592,11 @@ jobs:
         # inside `run:` is textual substitution.
         env:
           TARGET: ${{ github.event.inputs.target-url || 'https://staging.engram.page/api/mcp' }}
+          # Unlocks STAGE 3. Without it 29 of 32 protocol checks skip and the
+          # script fails on purpose rather than certify checks it never ran — so
+          # this secret is required, not optional. An Engram API key on the
+          # target works (`Plugs.Auth` accepts one as a Bearer).
+          ENGRAM_CONFORMANCE_TOKEN: ${{ secrets.ENGRAM_CONFORMANCE_TOKEN }}
         run: |
           set -o pipefail
           mkdir -p conformance-results
