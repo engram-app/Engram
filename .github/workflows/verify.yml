@@ -960,11 +960,9 @@ jobs:
     env:
       CI_PROJECT: engram-ci-${{ github.run_id }}-obsidian
       QDRANT_COLLECTION: ci_test_${{ github.run_id }}_obsidian
-      # Attachments go to the central FastRaid MinIO (see ci/compose.yml), so
-      # the bucket must be per-run exactly as QDRANT_COLLECTION is — that host
-      # also carries staging's live attachments. The `ci-` prefix is
-      # load-bearing: e2e teardown refuses to purge anything outside it.
-      CI_MINIO_BUCKET: ci-${{ github.run_id }}-obsidian
+      # One permanent shared bucket; objects expire via a server-side MinIO
+      # ILM rule. Nothing per-run, so nothing to reap. See ci/compose.yml.
+      CI_MINIO_BUCKET: ci-e2e
       CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
       CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
       MARKER_PREFIX: /tmp/ci-${{ github.run_id }}-obsidian
@@ -1497,23 +1495,6 @@ jobs:
         run: |
           # Delete this run's Qdrant collection on SlowRaid
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
-          # Delete this run's bucket on the central FastRaid MinIO. pytest
-          # teardown already does this on a normal finish; this is the path
-          # that matters when the job is CANCELLED or the suite crashes —
-          # nothing else ever reclaims the bucket, and it now accumulates on a
-          # shared host rather than dying with a per-stack container.
-          #
-          # The `ci-*` case is not decoration: this host also holds staging's
-          # engram-saas-attachments, and `mc rb --force` does not ask twice.
-          case "${CI_MINIO_BUCKET}" in
-            ci-*)
-              docker run --rm -e AK="$CI_MINIO_ACCESS_KEY" -e SK="$CI_MINIO_SECRET_KEY" \
-                --entrypoint sh minio/mc:latest -c \
-                "mc alias set c http://10.0.20.214:9101 \"\$AK\" \"\$SK\" >/dev/null && mc rb --force c/${CI_MINIO_BUCKET}" \
-                > /dev/null 2>&1 || true
-              ;;
-            *) echo "refusing to remove non-ci- bucket: ${CI_MINIO_BUCKET}" ;;
-          esac
           # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
           # Xvfb command line doesn't contain $E2E_CONFIG_PREFIX, so kill it
@@ -1579,7 +1560,7 @@ jobs:
       # e2e-clerk's engram-ci-<run_id> stack.
       CI_PROJECT: engram-ci-crdt-${{ github.run_id }}
       QDRANT_COLLECTION: ci_crdt_${{ github.run_id }}
-      CI_MINIO_BUCKET: ci-crdt-${{ github.run_id }}
+      CI_MINIO_BUCKET: ci-e2e
       CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
       CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
       MARKER_PREFIX: /tmp/ci-crdt-${{ github.run_id }}
@@ -2034,23 +2015,6 @@ jobs:
         run: |
           # Delete this run's Qdrant collection on SlowRaid
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
-          # Delete this run's bucket on the central FastRaid MinIO. pytest
-          # teardown already does this on a normal finish; this is the path
-          # that matters when the job is CANCELLED or the suite crashes —
-          # nothing else ever reclaims the bucket, and it now accumulates on a
-          # shared host rather than dying with a per-stack container.
-          #
-          # The `ci-*` case is not decoration: this host also holds staging's
-          # engram-saas-attachments, and `mc rb --force` does not ask twice.
-          case "${CI_MINIO_BUCKET}" in
-            ci-*)
-              docker run --rm -e AK="$CI_MINIO_ACCESS_KEY" -e SK="$CI_MINIO_SECRET_KEY" \
-                --entrypoint sh minio/mc:latest -c \
-                "mc alias set c http://10.0.20.214:9101 \"\$AK\" \"\$SK\" >/dev/null && mc rb --force c/${CI_MINIO_BUCKET}" \
-                > /dev/null 2>&1 || true
-              ;;
-            *) echo "refusing to remove non-ci- bucket: ${CI_MINIO_BUCKET}" ;;
-          esac
           # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
           # Xvfb command line doesn't contain $E2E_CONFIG_PREFIX, so kill it
@@ -2111,7 +2075,7 @@ jobs:
     env:
       CI_PROJECT: engram-ci-headless-${{ github.run_id }}
       QDRANT_COLLECTION: ci_headless_${{ github.run_id }}
-      CI_MINIO_BUCKET: ci-headless-${{ github.run_id }}
+      CI_MINIO_BUCKET: ci-e2e
       CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
       CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
       ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image || needs.fingerprint.outputs.image }}
@@ -2211,21 +2175,14 @@ jobs:
       - name: Tear down
         if: always()
         run: |
-          # This job allocates two SHARED-host namespaces and, until 2026-08-05,
-          # released neither: its Qdrant collection leaked on SlowRaid from the
-          # day the job was added, and the bucket leak arrived with the move off
-          # the per-stack MinIO. `docker compose down` reclaims neither — they
-          # do not live on this runner. Same reaping the other two e2e jobs do.
+          # This job allocates a Qdrant collection on the SHARED SlowRaid Qdrant
+          # and, until 2026-08-05, never released it — it leaked one per run from
+          # the day the job was added. `docker compose down` does not reclaim it;
+          # the collection does not live on this runner. Same reap the other two
+          # e2e jobs do. (Attachments need no equivalent: they share one
+          # permanent bucket with server-side expiry, so there is nothing here to
+          # release — see ci/compose.yml.)
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
-          case "${CI_MINIO_BUCKET}" in
-            ci-*)
-              docker run --rm -e AK="$CI_MINIO_ACCESS_KEY" -e SK="$CI_MINIO_SECRET_KEY" \
-                --entrypoint sh minio/mc:latest -c \
-                "mc alias set c http://10.0.20.214:9101 \"\$AK\" \"\$SK\" >/dev/null && mc rb --force c/${CI_MINIO_BUCKET}" \
-                > /dev/null 2>&1 || true
-              ;;
-            *) echo "refusing to remove non-ci- bucket: ${CI_MINIO_BUCKET}" ;;
-          esac
           docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
           docker image prune -f 2>/dev/null || true
           docker volume prune -f 2>/dev/null || true
