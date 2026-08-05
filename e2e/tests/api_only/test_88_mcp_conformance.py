@@ -1,4 +1,4 @@
-"""Test 79: MCP OAuth + protocol conformance against THIS build.
+"""Test 88: MCP OAuth + protocol conformance against THIS build.
 
 Runs `scripts/mcp-conformance.sh` — a real third-party client (MCPJam's CLI)
 plus our own RFC 9728 assertions — against the CI stack.
