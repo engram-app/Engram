@@ -18,6 +18,17 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
     # old_path from it): create at Old.md, rename to Fresh.md.
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
     {:ok, renamed} = Notes.rename_note(user, vault, "Old.md", "Fresh.md")
+
+    # rename_note's own wiring (Task 6, #648/#1231) fire-and-forget enqueues
+    # a RewriteNoteLinks job here. These tests drive the chain BY HAND
+    # (perform_job with a hand-picked batch_size, or a manually inserted job
+    # + drain_queue) and assert on queue contents / exact batch behavior, so
+    # they must start from an empty queue — otherwise the wiring job either
+    # breaks an `all_enqueued` count or (worse) silently rewrites everything
+    # itself in one big batch before the hand-driven chain under test ever
+    # runs, making the assertions vacuous.
+    Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.RewriteNoteLinks"))
+
     {note.id, renamed}
   end
 
