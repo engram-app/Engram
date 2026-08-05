@@ -19,6 +19,51 @@ defmodule EngramWeb.HealthControllerTest do
     assert is_binary(body["version"])
   end
 
+  describe "GET /health build_sha" do
+    # `version` comes from mix.exs, which release-please keeps STICKY between
+    # cuts — so it cannot change on a non-release deploy and is useless as a
+    # "did my merge ship?" probe. build_sha is baked into the image at build
+    # time (Dockerfile ARG RELEASE_SHA) precisely so that question is
+    # answerable over HTTP instead of `docker inspect` on the host.
+    setup do
+      original = System.get_env("RELEASE_SHA")
+
+      on_exit(fn ->
+        if original,
+          do: System.put_env("RELEASE_SHA", original),
+          else: System.delete_env("RELEASE_SHA")
+      end)
+
+      :ok
+    end
+
+    test "reports the baked build sha when set", %{conn: conn} do
+      System.put_env("RELEASE_SHA", "e998801abc")
+
+      body = conn |> get("/api/health") |> json_response(200)
+
+      assert body["build_sha"] == "e998801abc"
+    end
+
+    test "is nil when unset, so a local or self-host build reads as unknown", %{conn: conn} do
+      System.delete_env("RELEASE_SHA")
+
+      body = conn |> get("/api/health") |> json_response(200)
+
+      assert body["build_sha"] == nil
+    end
+
+    test "treats an empty value as unset rather than reporting an empty sha", %{conn: conn} do
+      # Mirrors the Sentry `release` coercion in config/runtime.exs: a blank
+      # env var is "not configured", not a real (empty) release identifier.
+      System.put_env("RELEASE_SHA", "")
+
+      body = conn |> get("/api/health") |> json_response(200)
+
+      assert body["build_sha"] == nil
+    end
+  end
+
   describe "GET /health/deep (ALB readiness — Postgres only)" do
     test "returns 200 with postgres ok when DB is running", %{conn: conn} do
       conn = get(conn, "/api/health/deep")

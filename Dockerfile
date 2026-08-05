@@ -169,6 +169,22 @@ EXPOSE 4000
 
 ENV PHX_SERVER=true
 
+# The commit this image was built from, baked in at build time so the image
+# knows what it is in EVERY environment. Previously RELEASE_SHA was injected
+# per-environment from Terraform (`var.engram_release_sha`), which prod set
+# and staging-fastraid did not — so there was no way to tell what code
+# staging was running short of `docker inspect` on the host. That blind spot
+# is how a broken staging deploy chain went unnoticed for weeks: /api/health
+# reports Application.spec(:engram, :vsn), which release-please keeps sticky
+# between cuts, so it cannot change on a non-release deploy.
+#
+# Baking it here also removes the lockstep requirement between the image and
+# a TF variable — the value can no longer drift from the bytes it describes.
+# Empty default keeps local `docker build` and self-host builds working; the
+# health endpoint and Sentry both treat "" as unset.
+ARG RELEASE_SHA=""
+ENV RELEASE_SHA=${RELEASE_SHA}
+
 # T3.0.3 — refuse to write erl_crash.dump on BEAM crash. The dump would
 # include plaintext DEKs (ETS) + master key (LocalKeyProvider state) from
 # process heap. Unraid templates also set this; this line is the defense-
