@@ -57,6 +57,28 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://staging.engram.page/.well-know
 ## Gotcha: prod and staging legitimately differ
 `mcp.engram.page` advertises the **bare host** as the resource (HostRewrite serves MCP at `/`, see #634), so the *root* well-known is its spec-correct metadata location and the §3.1 path form does not apply. Every other host (staging, selfhost `engram.ax`, `app`/`api`) advertises the `/api/mcp` path and needs the §3.1 form. `EngramWeb.OAuthMetadata` derives both from one place so the document and the `WWW-Authenticate` pointer cannot drift — a mismatch there fails the client *after* it successfully fetches both, which is the least debuggable shape of this bug.
 
+## Which stages can gate a PR (measured 2026-08-05)
+
+Established by running the suite against a CI stack built from the branch, not by reasoning about it. Two of three stages cannot gate, for different reasons, and neither is a preference.
+
+| Stage | Against a CI stack | Gates a PR |
+|---|---|---|
+| `spec` (our RFC 9728 assertions) | passes in ~4.5s | **yes** |
+| `oauth` (MCPJam matrix) | refused — loopback | no, structurally |
+| `protocol` (32 checks) | genuinely red | not yet — #1259 |
+
+**`oauth` cannot target a CI stack, ever.** MCPJam's SDK ships an SSRF guard, `assertOutboundOAuthUrlAllowed`, refusing outbound OAuth metadata fetches to RFC 6890 special-use addresses unless the caller opts in — and the CLI exposes no such flag in 3.18.0 or 3.19.0:
+
+```
+Refusing outbound OAuth fetch to loopback host "localhost" (no loopback opt-in)
+```
+
+It defends against a hostile MCP server steering a fetch at `169.254.169.254` or a LAN service, which is worth having. There is no workaround from our side: a private LAN address is equally refused, and a hostname resolving to loopback is caught by their DNS revalidation. This stage needs a publicly-addressed deployment.
+
+**`protocol` is red for real reasons** — `ping` unimplemented, no Host-rebinding rejection, and we announce protocol `2025-03-26`. Filed as #1259. It is excluded from the gate rather than having its failing checks excluded, because the latter is the exact silent-green this document is about.
+
+**Gotcha: the CLI writes advisories to STDOUT, ahead of the JSON.** `json.load` on the raw capture therefore fails and the run reports NO SIGNAL — a harness fault wearing a server verdict's clothes. `scripts/lib/report_io.py` locates the document and keeps the preamble (it often explains the failures beneath it). Redirecting stderr does not help; these are stdout.
+
 ## Getting it gating
 
 The blocker was never Playwright — it is that the suite must run against **the PR's own build**, not staging. The e2e stack already provides that, and the pieces are all present:

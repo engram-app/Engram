@@ -18,7 +18,7 @@ defmodule EngramWeb.WellKnownController do
   alias EngramWeb.OAuthMetadata
 
   def protected_resource(conn, _params) do
-    base = base_url(conn)
+    base = OAuthMetadata.base_url(conn)
 
     json(conn, %{
       # The advertised `resource` must be the URL at which THIS host actually
@@ -48,7 +48,7 @@ defmodule EngramWeb.WellKnownController do
   end
 
   def authorization_server(conn, _params) do
-    base = base_url(conn)
+    base = OAuthMetadata.base_url(conn)
 
     json(
       conn,
@@ -81,16 +81,5 @@ defmodule EngramWeb.WellKnownController do
         client_id_metadata_document_supported: true
       }
     )
-  end
-
-  defp base_url(conn) do
-    canonical = EngramWeb.Endpoint.url()
-    candidate = "#{URI.parse(canonical).scheme}://#{conn.host}"
-
-    if candidate in Application.get_env(:engram, :cors_origin, []) do
-      candidate
-    else
-      canonical
-    end
   end
 end

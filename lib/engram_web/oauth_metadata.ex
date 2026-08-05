@@ -25,14 +25,29 @@ defmodule EngramWeb.OAuthMetadata do
   """
   def base_url(conn) do
     canonical = EngramWeb.Endpoint.url()
-    candidate = "#{URI.parse(canonical).scheme}://#{conn.host}"
+    scheme = URI.parse(canonical).scheme
+    candidate = "#{scheme}://#{conn.host}"
 
     if candidate in Application.get_env(:engram, :cors_origin, []) do
-      candidate
+      # Matched WITHOUT the port on purpose: `:cors_origin` is built from
+      # PHX_HOST, which carries hostnames only, so a port-bearing candidate
+      # would never match and every deployment would fall back to canonical.
+      #
+      # The port goes back onto the RETURN value though. `conn.host` drops it,
+      # and advertising a port-less origin for a deployment reachable on :8080
+      # names somewhere the client never dialed — which strict clients
+      # self-check and abort on. Invisible on 80/443, wrong everywhere else:
+      # self-host on a custom port, and every port-mapped container.
+      with_port(candidate, scheme, conn.port)
     else
       canonical
     end
   end
+
+  defp with_port(base, "https", 443), do: base
+  defp with_port(base, "http", 80), do: base
+  defp with_port(base, _scheme, nil), do: base
+  defp with_port(base, _scheme, port), do: "#{base}:#{port}"
 
   @doc """
   The advertised RFC 9728 `resource`.
