@@ -60,7 +60,10 @@ defmodule Engram.PromEx.Indexing do
         counter(
           metric_prefix ++ [:link_rewrite, :failures, :total],
           event_name: @link_rewrite_failed_event,
-          description: "Per-source-note link-rewrite failures (rename propagation, #648/#1231).",
+          description:
+            "Per-source-note link-rewrite failures (rename propagation, #648/#1231). " <>
+              ":reason is a closed set — known pipeline error atoms plus " <>
+              ":exception/:other buckets (RewriteNoteLinks.telemetry_failure_reason/1).",
           tags: [:reason]
         )
       ]

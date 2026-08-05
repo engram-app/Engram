@@ -210,7 +210,44 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
     assert :ok = perform_job(RewriteNoteLinks, args_for(user, vault, renamed))
 
     assert authoritative!(user, good.id) == "see [[Fresh]]"
-    assert_receive {[:engram, :links, :rewrite, :failed], ^ref, %{count: 1}, %{reason: _}}
+
+    # The corrupt snapshot fails decrypt — and the emitted :reason is the
+    # closed-set atom, proving a real failure rides the bounded label.
+    assert_receive {[:engram, :links, :rewrite, :failed], ^ref, %{count: 1},
+                    %{reason: :decrypt_failed}}
+  end
+
+  # [:engram, :links, :rewrite, :failed]'s :reason feeds a Prometheus label
+  # (PromEx.Indexing) whose cardinality contract is "closed enums only" —
+  # Telemetry.error_kind/1 alone maps unknown exceptions to their struct
+  # module, an open set. Pin the emit-site bucketing.
+  describe "telemetry_failure_reason/1 — closed :reason label set (#1240 review)" do
+    test "known pipeline error atoms pass through" do
+      for reason <- [
+            :head_advanced,
+            :room_gone,
+            :target_gone,
+            :version_conflict,
+            :path_undecryptable,
+            :decrypt_failed,
+            :old_path_unrecoverable
+          ] do
+        assert RewriteNoteLinks.telemetry_failure_reason(reason) == reason
+      end
+    end
+
+    test "an unknown exception buckets to :exception, never its struct module" do
+      assert RewriteNoteLinks.telemetry_failure_reason(%RuntimeError{message: "boom"}) ==
+               :exception
+
+      assert RewriteNoteLinks.telemetry_failure_reason(%ArgumentError{}) == :exception
+    end
+
+    test "arbitrary shapes bucket to :other" do
+      assert RewriteNoteLinks.telemetry_failure_reason(:some_unknown_atom) == :other
+      assert RewriteNoteLinks.telemetry_failure_reason({:weird_tag, "x"}) == :other
+      assert RewriteNoteLinks.telemetry_failure_reason("string") == :other
+    end
   end
 
   test "missing tombstone discards without raising", %{user: user, vault: vault} do

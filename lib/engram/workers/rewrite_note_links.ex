@@ -51,6 +51,18 @@ defmodule Engram.Workers.RewriteNoteLinks do
   @default_batch_size 100
   @start_cursor "00000000-0000-0000-0000-000000000000"
 
+  # The tagged error atoms the rewrite pipeline actually produces
+  # (rewrite_source_note/attempt/persist + this worker's own path recovery).
+  @failure_reasons [
+    :head_advanced,
+    :room_gone,
+    :target_gone,
+    :version_conflict,
+    :path_undecryptable,
+    :decrypt_failed,
+    :old_path_unrecoverable
+  ]
+
   @doc """
   Build a rewrite job. `old_path_hmac_b64`/`old_basename_hmac_b64` are
   ALREADY base64 — every enqueue site computes them from plaintext it has
@@ -271,19 +283,35 @@ defmodule Engram.Workers.RewriteNoteLinks do
           :ok
 
         {:error, reason} ->
-          kind = Engram.Telemetry.error_kind(reason)
-
           Logger.warning(
             "link rewrite failed for source note",
             Metadata.with_category(:warning, :sync,
               note_id: source_id,
               target_id: target.id,
-              reason: inspect(kind)
+              # Full error_kind detail (exception module etc.) — logs are
+              # not cardinality-bound the way the metric label below is.
+              reason: inspect(Engram.Telemetry.error_kind(reason))
             )
           )
 
-          :telemetry.execute([:engram, :links, :rewrite, :failed], %{count: 1}, %{reason: kind})
+          :telemetry.execute([:engram, :links, :rewrite, :failed], %{count: 1}, %{
+            reason: telemetry_failure_reason(reason)
+          })
       end
     end)
+  end
+
+  @doc false
+  # This event's :reason becomes a Prometheus label (PromEx.Indexing), whose
+  # cardinality contract is "closed enums only". Telemetry.error_kind/1
+  # alone maps unknown exceptions to their struct module — an open set — so
+  # the emit site buckets here: known pipeline atoms pass through, any
+  # exception becomes :exception, everything else :other.
+  @spec telemetry_failure_reason(term()) :: atom()
+  def telemetry_failure_reason(reason) do
+    case Engram.Telemetry.error_kind(reason) do
+      kind when kind in @failure_reasons -> kind
+      _ -> if match?(%{__exception__: true}, reason), do: :exception, else: :other
+    end
   end
 end
