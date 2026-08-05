@@ -82,7 +82,19 @@ ENV MIX_ENV="prod"
 # calls below honor it. Hex still verifies package signatures against hex.pm's
 # key, so a caching mirror is safe (we never set unsafe_registry).
 ARG HEX_MIRROR=""
-ENV HEX_MIRROR=${HEX_MIRROR}
+# Fall back to upstream when the arg arrives EMPTY, not merely unset.
+# `ci/compose.yml` passes `HEX_MIRROR: ${HEX_MIRROR:-}` and its comment says
+# "empty for local dev = upstream" — but `ENV HEX_MIRROR=` SETS the variable to
+# an empty string rather than leaving it unset, and mix then parses "" as a URI:
+#
+#   ** (CaseClauseError) no case clause matching: :badpath
+#       (mix) lib/mix/tasks/local.hex.ex:72: Mix.Tasks.Local.Hex.run_install/2
+#
+# So `docker compose -f ci/compose.yml build` — the documented way to bring the
+# CI stack up locally — could not work off the LAN, while CI stayed green
+# because it always passes a real mirror. Defaulted here rather than in compose
+# so every caller is covered.
+ENV HEX_MIRROR=${HEX_MIRROR:-https://repo.hex.pm}
 # Persist hex + rebar package caches across builds (self-hosted runner disk).
 # Without these mounts, mix.exs invalidation re-downloads every hex tarball.
 RUN --mount=type=cache,target=/root/.hex,id=mix-hex \

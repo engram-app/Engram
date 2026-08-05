@@ -84,9 +84,18 @@ defmodule EngramWeb.CrdtChannel do
     if proto < Engram.Notes.CrdtBridge.doc_schema_version() do
       {:error, %{reason: "crdt_proto_too_old", min: Engram.Notes.CrdtBridge.doc_schema_version()}}
     else
-      join_authenticated("crdt:" <> ids, socket)
+      join_authenticated("crdt:" <> ids, assign(socket, :client_type, client_type(params)))
     end
   end
+
+  # Trust boundary: client_type is client-supplied and only ever feeds a
+  # string equality in Notes.crdt_rename_rewrites?/1. Bound the shape here;
+  # anything non-binary or oversized degrades to nil (= untagged, which takes
+  # the Notes.untagged_crdt_client_type/0 compromise default). Unknown-but-
+  # present strings pass through deliberately — a future client that tags
+  # itself anything other than "obsidian" gets server rewrites (safe default).
+  defp client_type(%{"client_type" => t}) when is_binary(t) and byte_size(t) <= 32, do: t
+  defp client_type(_params), do: nil
 
   defp join_authenticated("crdt:" <> ids, socket) do
     user = socket.assigns.current_user
@@ -220,7 +229,9 @@ defmodule EngramWeb.CrdtChannel do
       user = socket.assigns.current_user
       vault = socket.assigns.vault
 
-      case Notes.genesis_crdt_note(user, vault, note_id, path) do
+      case Notes.genesis_crdt_note(user, vault, note_id, path,
+             origin: socket.assigns[:client_type]
+           ) do
         {:ok, note} ->
           {:reply, {:ok, %{doc_id: note.id}}, socket}
 
@@ -291,12 +302,13 @@ defmodule EngramWeb.CrdtChannel do
         :ok ->
           user = socket.assigns.current_user
           vault = socket.assigns.vault
+          client_type = socket.assigns[:client_type]
 
           prepared =
             creates
             |> Task.async_stream(
               fn entry ->
-                entry_guard(entry, fn -> prepare_create(entry, user, vault) end)
+                entry_guard(entry, fn -> prepare_create(entry, user, vault, client_type) end)
               end,
               max_concurrency: batch_concurrency(),
               ordered: true,
@@ -517,12 +529,18 @@ defmodule EngramWeb.CrdtChannel do
   # Task.async_stream, so it must not touch socket assigns or the channel
   # mailbox. Returns `{:created, note_id, frame}` for phase 2/3, or
   # `{:result, map}` when this entry's result is already final.
-  defp prepare_create(%{"doc_id" => doc_id, "path" => path, "b64" => b64}, user, vault) do
+  defp prepare_create(
+         %{"doc_id" => doc_id, "path" => path, "b64" => b64},
+         user,
+         vault,
+         client_type
+       ) do
     with {:ok, note_id} <- cast_doc_id(doc_id),
          :ok <- validate_create_path(path),
          {:ok, frame} <- decode_frame(b64),
          :ok <- guard_frame(frame),
-         {:ok, _note} <- Notes.genesis_crdt_note(user, vault, note_id, path) do
+         {:ok, _note} <-
+           Notes.genesis_crdt_note(user, vault, note_id, path, origin: client_type) do
       {:created, note_id, frame}
     else
       {:error, :id_conflict, note} ->
@@ -555,7 +573,7 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   # Malformed entry (missing a required key) — never crash the batch.
-  defp prepare_create(entry, _user, _vault) do
+  defp prepare_create(entry, _user, _vault, _client_type) do
     doc_id = if is_map(entry), do: Map.get(entry, "doc_id"), else: nil
     {:result, %{doc_id: doc_id, status: "error", reason: "bad_frame"}}
   end

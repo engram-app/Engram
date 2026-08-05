@@ -1290,6 +1290,14 @@ jobs:
             echo "ERROR: Qdrant check timed out. Logs:"; cat "${MARKER_PREFIX}-qdrant.log" 2>/dev/null || true; exit 1
           fi
 
+      # test_79_mcp_conformance shells out to the pinned @mcpjam/cli via npx,
+      # so the API-only tier now needs node. The test ASSERTS npx is present
+      # rather than skipping, so if this step is ever removed the gate fails
+      # loudly instead of quietly reporting green.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
       # ------------------------------------------------------------------
       # API-only tests (absorbed from the deleted e2e-api job). Same Clerk
       # stack; needs only stack health, so it runs before the Obsidian

@@ -124,6 +124,15 @@ defmodule EngramWeb.Router do
 
     get "/oauth-protected-resource", WellKnownController, :protected_resource
     get "/oauth-authorization-server", WellKnownController, :authorization_server
+
+    # RFC 9728 §3.1 inserts the well-known segment BEFORE the resource's path,
+    # so a resource at `https://host/api/mcp` publishes here. A strict client
+    # derives this URL from the resource it dialed and tries it FIRST; we served
+    # only the bare form above, so this 404'd and only clients that also guess
+    # the root convention ever reached discovery. Same document either way — on
+    # the dedicated MCP host the resource is the bare host (#634), for which the
+    # bare form above is already the spec-correct location.
+    get "/oauth-protected-resource/api/mcp", WellKnownController, :protected_resource
   end
 
   # OAuth 2.1 endpoints — public + rate-limited per IP. Endpoint handlers
@@ -442,6 +451,11 @@ defmodule EngramWeb.Router do
   scope "/api", EngramWeb do
     pipe_through [
       :api,
+      # BEFORE :authed_api — it must register its before_send callback while the
+      # conn is still moving, since Plugs.Auth inside :authed_api halts. The
+      # callback runs on halted conns and keys off the status actually sent, so
+      # it covers OAuthScopeEnforce's 401s too, not just Auth's.
+      EngramWeb.Plugs.McpAuthChallenge,
       :authed_api,
       # No VaultPlug: McpController self-resolves the vault. TraceUserAttrs still
       # stamps app.user_id (app.vault_id stays nil — MCP is multi-vault per

@@ -565,6 +565,20 @@ defmodule Engram.Attachments do
                     "rebind_note_links"
                   )
                 end
+
+              # #648/#1231 — rewrite referring notes' ![[...]]/[[...]] targets.
+              _ =
+                Enqueue.enqueue(
+                  Engram.Workers.RewriteNoteLinks.new_for(
+                    user.id,
+                    vault.id,
+                    :attachment,
+                    att.id,
+                    Base.encode64(old_hmac),
+                    Base.encode64(old_basename_hmac)
+                  ),
+                  "rewrite_note_links"
+                )
             end
 
           {:ok, att}
