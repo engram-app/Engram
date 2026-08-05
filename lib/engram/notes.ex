@@ -874,6 +874,33 @@ defmodule Engram.Notes do
   # with the same greppable Loki tripwire as REST's upsert {:id_collision, live}
   # arm (a client-minted id reused at another OCCUPIED path is still the
   # 2026-07-06 wrong-mint corruption signature).
+  # ── Phase 2 (#648/#1231) — CRDT-origin rename rewrite gate ─────────────────
+  #
+  # TEMPORARY COMPROMISE — REMOVE BY FLIPPING TO "web" (one line, this
+  # attribute only): an UNTAGGED crdt socket is treated as plugin-origin so a
+  # version-skewed plugin that predates the client_type join tag never
+  # double-rewrites (Obsidian rewrites its own links; the server rewriting too
+  # would violate the one-rewriter invariant). Once the plugin release that
+  # tags itself "obsidian" has been out for one release cycle, flip this to
+  # "web" so untagged defaults to enqueue — the spec's safe default.
+  # Pinned by test/engram/notes_crdt_origin_gate_test.exs. Tracked in #648.
+  @untagged_crdt_client_type "obsidian"
+
+  @doc false
+  @spec untagged_crdt_client_type() :: String.t()
+  def untagged_crdt_client_type, do: @untagged_crdt_client_type
+
+  @doc """
+  ONE-REWRITER INVARIANT gate for CRDT-origin renames (relocates reached via
+  `genesis_crdt_note/5`): `"obsidian"` never triggers a server rewrite; any
+  other PRESENT tag does; an ABSENT tag (nil) takes the
+  `untagged_crdt_client_type/0` compromise default (see attribute comment).
+  """
+  @spec crdt_rename_rewrites?(String.t() | nil) :: boolean()
+  def crdt_rename_rewrites?(client_type) do
+    (client_type || @untagged_crdt_client_type) != "obsidian"
+  end
+
   defp genesis_relocate_live(live, user, vault, sanitized_path, folder) do
     with {:ok, query} <- note_by_path_query(user, vault, sanitized_path) do
       case Repo.one(query) do
