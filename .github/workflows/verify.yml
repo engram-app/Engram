@@ -628,6 +628,8 @@ jobs:
       deps-key: ${{ steps.keys.outputs.deps }}
       build-dev-key: ${{ steps.keys.outputs.build-dev }}
       build-test-key: ${{ steps.keys.outputs.build-test }}
+      build-dev-restore: ${{ steps.keys.outputs.build-dev-restore }}
+      build-test-restore: ${{ steps.keys.outputs.build-test-restore }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -703,12 +705,38 @@ jobs:
           # to ~0.2 MB/s from self-hosted runners). Downstream restores via the exact
           # key and `mix compile` recompiles the changed-module delta (cheap). The save
           # runs only when mix.lock changes. See spec 2026-06-29-lan-primary-ci-caching.
+          # deps/ genuinely depends only on the lockfile — leave it lock-scoped.
           DEPS_KEY="mix-deps-${BEAM}-${{ hashFiles('mix.lock') }}"
-          DEV_KEY="mix-build-dev-v2-${BEAM}-${{ hashFiles('mix.lock') }}"
-          TEST_KEY="mix-build-test-v2-${BEAM}-${{ hashFiles('mix.lock') }}"
+          # _build keys carry the COMMIT SHA. They used to stop at the lockfile
+          # hash, and actions/cache never re-saves on an exact hit — so the
+          # _build cache was written once, on the first run after the lockfile
+          # changed, and then frozen. mix.lock last moved 2026-07-22, so every
+          # run since restored a _build 114 commits stale; with `use`-macro
+          # fan-out (Phoenix/Ecto) that recompiled essentially all 355 lib files
+          # ("Compiling 367 files (.ex)") on EVERY unit-tests and lint run. That
+          # is what made the job compile-bound at ~5min, and why `mix test
+          # --stale` never narrowed anything: with all of lib recompiled every
+          # test is a stale compile-dependent, so --stale ran the whole suite
+          # (measured 4081 tests under --stale vs 4081 full for the same tree).
+          #
+          # With the sha in the key every run misses, so every run SAVES a fresh
+          # _build, and the restore-key prefix below picks up the most recent one.
+          DEV_PREFIX="mix-build-dev-v2-${BEAM}-${{ hashFiles('mix.lock') }}-"
+          TEST_PREFIX="mix-build-test-v2-${BEAM}-${{ hashFiles('mix.lock') }}-"
+          DEV_KEY="${DEV_PREFIX}${{ github.sha }}"
+          TEST_KEY="${TEST_PREFIX}${{ github.sha }}"
           echo "deps=$DEPS_KEY" >> "$GITHUB_OUTPUT"
           echo "build-dev=$DEV_KEY" >> "$GITHUB_OUTPUT"
           echo "build-test=$TEST_KEY" >> "$GITHUB_OUTPUT"
+          # The fallback prefixes INCLUDE the lockfile hash on purpose. A
+          # beam-only prefix would let a restore cross a mix.lock change and
+          # reuse a _build compiled against a different dependency set, which
+          # crashes protocol consolidation on the incremental compile — the
+          # hazard the "No restore-keys" comments below were guarding against.
+          # Scoping the prefix to the lockfile keeps that guarantee while still
+          # allowing fallback to an older commit's build of the SAME deps.
+          echo "build-dev-restore=$DEV_PREFIX"   >> "$GITHUB_OUTPUT"
+          echo "build-test-restore=$TEST_PREFIX" >> "$GITHUB_OUTPUT"
 
       # runs-on/cache (SHA-pinned fork of actions/cache) stores the Elixir
       # deps/ + _build caches on the FastRaid MinIO over LAN, not GitHub's Azure
@@ -732,10 +760,17 @@ jobs:
         uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
           path: _build/dev
-          # No restore-keys: the key is mix.lock-scoped, so a restore-key prefix
-          # hit would reuse a _build compiled against a DIFFERENT dependency set
-          # after a lockfile change. Incremental compile on such a stale _build
-          # crashes protocol consolidation (FunctionClauseError in
+          restore-keys: ${{ steps.keys.outputs.build-dev-restore }}
+          # The restore prefix is LOCKFILE-SCOPED (see "Compute cache keys"), so
+          # it can only fall back to an older commit's build of the same deps —
+          # never across a mix.lock change. That preserves the guarantee the
+          # original "No restore-keys" note was after, quoted here because the
+          # hazard is real and easy to reintroduce by widening the prefix:
+          #
+          #   a restore-key prefix hit would reuse a _build compiled against a
+          #   DIFFERENT dependency set after a lockfile change. Incremental
+          #   compile on such a stale _build crashes protocol consolidation
+          #   (FunctionClauseError in
           # :elixir_erl.dynamic_form/1). A lockfile change should cold-compile.
           key: ${{ steps.keys.outputs.build-dev }}
 
@@ -744,9 +779,10 @@ jobs:
         uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
           path: _build/test
-          # No restore-keys: see the _build/dev cache above. A restore-key hit
-          # across a mix.lock change reuses a _build built against different deps
-          # and crashes protocol consolidation on the incremental compile.
+          # Lockfile-scoped restore prefix — see the _build/dev cache above for
+          # why the scoping (not the absence of restore-keys) is what keeps a
+          # cross-lockfile _build from crashing protocol consolidation.
+          restore-keys: ${{ steps.keys.outputs.build-test-restore }}
           key: ${{ steps.keys.outputs.build-test }}
 
       - name: Fetch deps (if missing or lockfile changed)
@@ -2191,7 +2227,7 @@ jobs:
           path: _build/test
           key: ${{ needs.prebuild-mix.outputs.build-test-key }}
           restore-keys: |
-            mix-build-test-v2-${{ needs.prebuild-mix.outputs.beam-tag }}-
+            ${{ needs.prebuild-mix.outputs.build-test-restore }}
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
@@ -2451,7 +2487,7 @@ jobs:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
-            mix-build-dev-v2-${{ needs.prebuild-mix.outputs.beam-tag }}-
+            ${{ needs.prebuild-mix.outputs.build-dev-restore }}
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
@@ -3017,7 +3053,7 @@ jobs:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
-            mix-build-dev-v2-${{ needs.prebuild-mix.outputs.beam-tag }}-
+            ${{ needs.prebuild-mix.outputs.build-dev-restore }}
 
       - name: Install deps
         if: steps.gate.outputs.proceed == 'true' && steps.cache-deps.outputs.cache-hit != 'true'
@@ -3504,7 +3540,7 @@ jobs:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
-            mix-build-dev-v2-${{ needs.prebuild-mix.outputs.beam-tag }}-
+            ${{ needs.prebuild-mix.outputs.build-dev-restore }}
 
       - name: Allocate dynamic ports
         id: ports
