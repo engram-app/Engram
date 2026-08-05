@@ -22,6 +22,9 @@ defmodule Engram.Workers.ExtractNoteLinks do
 
   Bulk callers (batch upsert) enqueue via `Oban.insert_all`, which ignores
   `unique` — duplicate jobs for one note converge (idempotent, serialized).
+  Callers that want the debounce/coalescing guarantee MUST go through
+  `new_debounced/1` — the `unique` opt lives only there, not on the `use`
+  opts below, so a raw `new/1` call enqueues without dedup.
 
   `unique` is set per-call in `new_debounced/1`, not in the `use` opts below:
   Oban's compile-time linter (`Oban.Worker.__after_compile__/2`) unconditionally
@@ -50,8 +53,8 @@ defmodule Engram.Workers.ExtractNoteLinks do
   alias Engram.Vaults.Vault
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"note_id" => note_id}}) do
-    case Engram.Notes.fetch_note_for_worker(note_id) do
+  def perform(%Oban.Job{args: args}) do
+    case Engram.Notes.fetch_note_for_worker(args["note_id"]) do
       {:discard, _reason} = discard ->
         discard
 
@@ -92,7 +95,7 @@ defmodule Engram.Workers.ExtractNoteLinks do
   end
 
   @doc """
-  Leading-edge debounced job (~2s, `LINK_EXTRACT_DELAY_SECONDS` via app env).
+  Leading-edge debounced job (~2s, `:link_extract_delay_seconds` app env key).
   """
   @spec new_debounced(binary()) :: Ecto.Changeset.t()
   def new_debounced(note_id) do
