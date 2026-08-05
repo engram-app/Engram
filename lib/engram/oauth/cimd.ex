@@ -96,11 +96,15 @@ defmodule Engram.OAuth.Cimd do
           | :rate_limited
           | :client_id_mismatch
           | :missing_redirect_uris
+          | :missing_client_name
           | :confidential_not_supported
+          | :no_supported_grant_type
+          | :no_supported_response_type
           | :body_too_large
           | :not_json
           | :invalid_json
-          | :invalid_document
+          | {:invalid_document, keyword()}
+          | :store_conflict
           | :fetch_failed
           | {:http_status, pos_integer()}
           | SsrfGuard.reason()
@@ -172,13 +176,91 @@ defmodule Engram.OAuth.Cimd do
     with :ok <- rate_limit(url, existing),
          {:ok, document} <- Fetcher.impl().fetch(url),
          :ok <- validate_document(document, url),
-         {:ok, client} <- store(url, document, existing) do
+         {:ok, negotiated} <- negotiate(document),
+         {:ok, client} <- store(url, negotiated, existing) do
       {:ok, client}
     else
       {:error, reason} ->
         log_unless_rate_limited("mcp_cimd_rejected", url, reason)
         {:error, reason}
     end
+  end
+
+  # Capability metadata is NEGOTIATED, not enforced.
+  #
+  # `validate_document/2` above is about safety and binding, and it refuses.
+  # This is about what the two ends can do together, and it intersects. The
+  # distinction is the whole lesson of the 2026-08-04 incident: a fetched
+  # document was being run through `Client.registration_changeset/2`, which is
+  # DCR *registration policy* — subset allowlists, size caps, https-only
+  # decoration. Those are the right questions to ask an anonymous stranger
+  # POSTing to `/oauth/register`. They are the wrong questions to ask a document
+  # a vendor published for every authorization server in existence, and asking
+  # them cost every Claude user their connector over metadata we simply had no
+  # use for.
+  #
+  # RFC 7591 §3.2.1 is explicit that the server records what IT supports and
+  # reports back what it granted, rather than failing the registration.
+  #
+  # Redirect URIs are deliberately NOT negotiated here — they stay under the
+  # shared changeset validation, because an unsafe redirect is a code-leak
+  # vector, not a capability we can politely decline.
+  #
+  # KNOWN RESIDUAL: `validate_length(:redirect_uris, max: 10)` is DCR anti-abuse
+  # policy, not safety, and it still hard-rejects — so the split below is not
+  # total. A vendor publishing an eleventh redirect loses its connector the same
+  # way an extra grant_type used to. Left as-is on purpose: silently dropping the
+  # overflow could discard the very URI in use and fail later and worse, and the
+  # bound is already redundant for CIMD (the body is capped mid-stream). Revisit
+  # if a real document ever approaches it — Claude's publishes two.
+  defp negotiate(document) do
+    with {:ok, grants} <-
+           intersect(
+             document["grant_types"],
+             Client.supported_grant_types(),
+             :no_supported_grant_type
+           ),
+         {:ok, responses} <-
+           intersect(
+             document["response_types"],
+             Client.supported_response_types(),
+             :no_supported_response_type
+           ) do
+      {:ok,
+       document
+       |> Map.put("grant_types", grants)
+       |> Map.put("response_types", responses)
+       |> Map.put("client_name", truncate_name(document["client_name"]))
+       |> drop_undisplayable_uris()}
+    end
+  end
+
+  # Absent or malformed means "unstated", which the changeset's own defaults
+  # answer. Only an explicit list that shares nothing with us is fatal: at that
+  # point there is no flow left to run, and the refusal is a statement about us
+  # rather than about tidiness.
+  defp intersect(declared, supported, empty_error) when is_list(declared) do
+    case Enum.filter(supported, &(&1 in declared)) do
+      [] -> {:error, empty_error}
+      kept -> {:ok, kept}
+    end
+  end
+
+  defp intersect(_declared, _supported, _empty_error), do: {:ok, nil}
+
+  defp truncate_name(name) when is_binary(name),
+    do: String.slice(name, 0, Client.client_name_max_length())
+
+  defp truncate_name(other), do: other
+
+  defp drop_undisplayable_uris(document) do
+    Enum.reduce(Client.metadata_uri_fields(), document, fn field, acc ->
+      key = Atom.to_string(field)
+
+      if Map.has_key?(acc, key) and not Client.displayable_metadata_uri?(acc[key]),
+        do: Map.put(acc, key, nil),
+        else: acc
+    end)
   end
 
   # A rate-limit denial is deliberately NOT logged, on either path. The fetch is
@@ -250,6 +332,20 @@ defmodule Engram.OAuth.Cimd do
       not valid_redirect_uris?(document["redirect_uris"]) ->
         {:error, :missing_redirect_uris}
 
+      # MCP 2025-11-25: "The metadata document MUST include at least the
+      # following properties: client_id, client_name, redirect_uris." We enforced
+      # two of the three.
+      #
+      # This is a required field, not capability metadata, so it belongs here
+      # with the refusals rather than in negotiate/1 — but the line is worth
+      # drawing carefully given how this PR started. An unknown grant_type costs
+      # us nothing to ignore; a nameless client cannot be rendered on the consent
+      # screen at all, and "Authorize this app" is a worse outcome than a legible
+      # refusal. Both real documents in the test suite supply it, as does every
+      # client that reads the spec.
+      not valid_client_name?(document["client_name"]) ->
+        {:error, :missing_client_name}
+
       # A CIMD client never registered, so no secret was ever minted for it. If we
       # honoured a confidential method the client could never authenticate (its
       # stored hash is nil), and if we silently downgraded to `none` the client
@@ -267,13 +363,18 @@ defmodule Engram.OAuth.Cimd do
   defp valid_redirect_uris?([_ | _] = uris), do: Enum.all?(uris, &is_binary/1)
   defp valid_redirect_uris?(_), do: false
 
+  # Whitespace-only is absent with extra steps — it renders as nothing on the
+  # consent screen, which is the whole reason the field is required.
+  defp valid_client_name?(name) when is_binary(name), do: String.trim(name) != ""
+  defp valid_client_name?(_), do: false
+
   defp store(url, document, existing) do
     changeset = Client.cimd_changeset(existing || %Client{}, url, document)
 
     if existing do
       case Repo.update(changeset, skip_tenant_check: true) do
         {:ok, client} -> {:ok, client}
-        {:error, _changeset} -> {:error, :invalid_document}
+        {:error, failed} -> {:error, {:invalid_document, failed.errors}}
       end
     else
       insert_new(changeset, url)
@@ -294,12 +395,16 @@ defmodule Engram.OAuth.Cimd do
       {:error, %Ecto.Changeset{} = failed} ->
         if Keyword.has_key?(failed.errors, :cimd_url),
           do: get_by_url(url) |> normalize_race_result(),
-          else: {:error, :invalid_document}
+          else: {:error, {:invalid_document, failed.errors}}
     end
   end
 
   defp normalize_race_result({:ok, client}), do: {:ok, client}
-  defp normalize_race_result({:error, :not_found}), do: {:error, :invalid_document}
+
+  # Losing the insert race and then not finding the winner is OUR problem, not a
+  # statement about the vendor's document — the caller must be able to tell them
+  # apart, because one is retryable and the other is terminal.
+  defp normalize_race_result({:error, :not_found}), do: {:error, :store_conflict}
 
   # Host only, never the full URL or the reason's payload: `:lifecycle` ships to
   # Loki (`:auth` info does not — see Engram.Logger.Category), and the host is
@@ -310,8 +415,19 @@ defmodule Engram.OAuth.Cimd do
       event,
       Metadata.with_category(:warning, :lifecycle,
         cimd_host: URI.parse(url).host,
-        reason: inspect(reason)
+        reason: format_reason(reason)
       )
     )
   end
+
+  # Field NAMES, never the changeset messages. Several of those interpolate the
+  # offending value (`"missing scheme: #{uri}"`), which is attacker-supplied on
+  # an unauthenticated endpoint — the same reason the host, not the URL, is
+  # logged above. The names are ours, and they are the whole diagnosis: on
+  # 2026-08-04 a bare `:invalid_document` left us unable to say which field of a
+  # vendor's document had killed every Claude connection.
+  defp format_reason({:invalid_document, errors}),
+    do: "invalid_document fields=#{inspect(errors |> Keyword.keys() |> Enum.uniq())}"
+
+  defp format_reason(reason), do: inspect(reason)
 end

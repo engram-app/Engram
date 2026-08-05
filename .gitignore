@@ -52,3 +52,4 @@ frontend/test-results/
 frontend/playwright-report/
 frontend/e2e/.auth-state.json
 .superpowers/
+conformance-results/

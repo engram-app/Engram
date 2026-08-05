@@ -24,6 +24,7 @@ on:
     - cron: '17 13 * * 1'   # frontend-major-updates   (Mon 13:17 UTC)
     - cron: '0 14 * * 1'    # plan-triage              (Mon 14:00 UTC)
     - cron: '0 3 * * 6'     # dependency-submission    (Sat 03:00 UTC)
+    - cron: '40 5 * * *'    # mcp-conformance          (daily 05:40 UTC)
   workflow_dispatch:
     inputs:
       task:
@@ -38,10 +39,15 @@ on:
           - frontend-major-updates
           - runner-diagnostics
           - dependency-submission
+          - mcp-conformance
       force:
         description: '(obsidian-update only) Force re-download even if version matches'
         type: boolean
         default: false
+      target-url:
+        description: '(mcp-conformance only) MCP endpoint to test'
+        type: string
+        default: 'https://staging.engram.page/api/mcp'
 
 # No workflow-level permissions — each job grants what it actually needs.
 permissions: {}
@@ -537,3 +543,46 @@ jobs:
         uses: erlef/mix-dependency-submission@v1
         with:
           install-deps: true
+
+  # ── MCP OAuth conformance against a DEPLOYED authorization server.
+  #
+  # Deliberately here and not in verify.yml: this tests a running deployment,
+  # and on a PR the deployment still runs main, so a per-PR job would grade the
+  # wrong code. It is a post-deploy conformance check, so it rides the cron.
+  #
+  # It exists because on 2026-08-04 every Claude connect failed with
+  # `invalid_client` while the unit suite stayed 100% green — the CIMD fixture
+  # was authored alongside the validator it tested, so it could only assert that
+  # our code accepts what our code expects. This runs somebody else's real
+  # client (MCPJam's published metadata document, which declares a grant we do
+  # not implement and lists 14 redirect URIs) against us. Against pre-fix main
+  # it fails at exactly one step, HTTP 400 on the authorization request.
+  #
+  # Non-gating on purpose for now: it grades a deployment rather than a commit,
+  # so a red run means "staging is wrong", which is a page, not a merge block.
+  mcp-conformance:
+    if: |
+      github.event.schedule == '40 5 * * *'
+      || github.event.inputs.task == 'mcp-conformance'
+    name: mcp-conformance
+    runs-on: [self-hosted, linux, x64, isolated, light]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: OAuth conformance (DCR + CIMD)
+        run: ./scripts/mcp-conformance.sh "${{ github.event.inputs.target-url || 'https://staging.engram.page/api/mcp' }}"
+
+      - name: Upload conformance results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mcp-conformance-results
+          path: conformance-results/
+          retention-days: 14

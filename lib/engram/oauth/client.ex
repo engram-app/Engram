@@ -29,6 +29,18 @@ defmodule Engram.OAuth.Client do
   @valid_grant_types ~w(authorization_code refresh_token)
   @valid_response_types ~w(code)
   @loopback_hosts ~w(localhost 127.0.0.1 ::1)
+  @client_name_max_length 200
+
+  # Both bound row size; they answer to different threats.
+  #
+  # DCR is an anonymous POST, so the cap is anti-abuse and 10 is generous for a
+  # real registrant. A CIMD document is bounded already — the fetcher caps the
+  # body mid-stream — and belongs to a vendor supporting many surfaces at once.
+  # MCPJam's published document lists 14 (three ports x several paths, plus app
+  # and staging hosts) and is a perfectly ordinary client. Holding it to DCR's
+  # number rejects it for being popular.
+  @max_redirect_uris_dcr 10
+  @max_redirect_uris_cimd 50
 
   schema "oauth_clients" do
     field :client_secret_hash, :string
@@ -85,6 +97,40 @@ defmodule Engram.OAuth.Client do
   def confidential?(method), do: method in @confidential_auth_methods
 
   @doc """
+  The grant and response types this authorization server actually implements.
+
+  Exposed for `Engram.OAuth.Cimd`, which INTERSECTS a fetched document against
+  these rather than refusing a client for declaring more than we do. DCR keeps
+  using them as a `validate_subset` allowlist — a registration request is a
+  stranger asking our permission, a published metadata document is a vendor
+  describing itself to every authorization server in the world. Same lists, two
+  different questions; the lists live here so the two answers cannot drift.
+  """
+  @spec supported_grant_types() :: [String.t()]
+  def supported_grant_types, do: @valid_grant_types
+
+  @spec supported_response_types() :: [String.t()]
+  def supported_response_types, do: @valid_response_types
+
+  @doc "The optional RFC 7591 §2 metadata URIs, and the cap on `client_name`."
+  # No @spec on either: both return a compile-time constant, so any spec loose
+  # enough to be worth writing is a supertype of the success typing and dialyzer
+  # rejects it, while a spec tight enough to pass just restates the literal.
+  def metadata_uri_fields, do: @metadata_uri_fields
+
+  def client_name_max_length, do: @client_name_max_length
+
+  @doc """
+  True when an optional metadata URI is one we would actually render.
+
+  Shares `parse_https_uri/1` with `validate_metadata_uris/1` so the rule has one
+  implementation. DCR rejects a bad value (the registrant can fix it and retry);
+  CIMD drops it, because losing a logo must never cost a vendor its connector.
+  """
+  @spec displayable_metadata_uri?(term()) :: boolean()
+  def displayable_metadata_uri?(value), do: parse_https_uri(value) == :ok
+
+  @doc """
   True for the loopback hosts RFC 8252 §7.3 permits over plain `http`.
 
   Shared with `Engram.OAuth.match_redirect_uri/2`, which grants those hosts a
@@ -95,7 +141,7 @@ defmodule Engram.OAuth.Client do
   @spec loopback_host?(String.t() | nil) :: boolean()
   def loopback_host?(host), do: host in @loopback_hosts
 
-  def registration_changeset(client, attrs) do
+  def registration_changeset(client, attrs, opts \\ []) do
     client
     |> cast(attrs, @cast_fields)
     |> coerce_kind()
@@ -103,7 +149,9 @@ defmodule Engram.OAuth.Client do
     |> ensure_redirect_uris_present()
     # Attacker-controlled on a public, unauthenticated endpoint; bound the
     # array size so registration can't be used to store an unbounded blob.
-    |> validate_length(:redirect_uris, max: 10)
+    |> validate_length(:redirect_uris,
+      max: Keyword.get(opts, :max_redirect_uris, @max_redirect_uris_dcr)
+    )
     |> validate_redirect_uris()
     |> validate_subset(:grant_types, @valid_grant_types,
       message: "contains an unsupported grant_type"
@@ -114,7 +162,7 @@ defmodule Engram.OAuth.Client do
     |> validate_inclusion(:token_endpoint_auth_method, @valid_auth_methods,
       message: "must be one of: #{Enum.join(@valid_auth_methods, ", ")}"
     )
-    |> validate_length(:client_name, max: 200)
+    |> validate_length(:client_name, max: @client_name_max_length)
     # Attacker-controlled on a public, unauthenticated endpoint; cap to bound
     # row/metadata size.
     |> validate_length(:software_id, max: 255)
@@ -146,18 +194,21 @@ defmodule Engram.OAuth.Client do
   """
   def cimd_changeset(client, url, document) when is_binary(url) and is_map(document) do
     client
-    |> registration_changeset(%{
-      "redirect_uris" => document["redirect_uris"],
-      "client_name" => document["client_name"],
-      "scope" => document["scope"],
-      "grant_types" => document["grant_types"],
-      "response_types" => document["response_types"],
-      "logo_uri" => document["logo_uri"],
-      "tos_uri" => document["tos_uri"],
-      "policy_uri" => document["policy_uri"],
-      "kind" => "mcp",
-      "token_endpoint_auth_method" => "none"
-    })
+    |> registration_changeset(
+      %{
+        "redirect_uris" => document["redirect_uris"],
+        "client_name" => document["client_name"],
+        "scope" => document["scope"],
+        "grant_types" => document["grant_types"],
+        "response_types" => document["response_types"],
+        "logo_uri" => document["logo_uri"],
+        "tos_uri" => document["tos_uri"],
+        "policy_uri" => document["policy_uri"],
+        "kind" => "mcp",
+        "token_endpoint_auth_method" => "none"
+      },
+      max_redirect_uris: @max_redirect_uris_cimd
+    )
     |> put_change(:cimd_url, url)
     |> put_change(:cimd_fetched_at, DateTime.utc_now())
     |> validate_length(:cimd_url, max: 2048)
