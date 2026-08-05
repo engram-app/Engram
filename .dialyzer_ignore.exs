@@ -23,7 +23,7 @@
   # rather than the literal `200` dialyzer infers from the current
   # `@backlinks_limit` value — the spec documents the contract callers (and
   # tests) can rely on, not today's specific cap. Same pattern as above.
-  {"lib/engram/links.ex", :contract_supertype, 603},
+  {"lib/engram/links.ex", :contract_supertype, 647},
 
   # `Links.live_basename_count/3` sums two `Repo.one(select: count(...))`
   # results. SQL `count()` is always a non-negative integer at runtime, but

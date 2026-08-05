@@ -307,7 +307,16 @@ defmodule Engram.Workers.RewriteNoteLinks do
   # alone maps unknown exceptions to their struct module — an open set — so
   # the emit site buckets here: known pipeline atoms pass through, any
   # exception becomes :exception, everything else :other.
-  @spec telemetry_failure_reason(term()) :: atom()
+  @spec telemetry_failure_reason(term()) ::
+          :decrypt_failed
+          | :exception
+          | :head_advanced
+          | :old_path_unrecoverable
+          | :other
+          | :path_undecryptable
+          | :room_gone
+          | :target_gone
+          | :version_conflict
   def telemetry_failure_reason(reason) do
     case Engram.Telemetry.error_kind(reason) do
       kind when kind in @failure_reasons -> kind
