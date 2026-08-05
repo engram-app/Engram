@@ -98,6 +98,25 @@ env:
   # pull hex from the LAN instead of WAN. Signatures still verified client-side.
   HEX_MIRROR: "http://10.0.20.214:8090"
 
+  # Central FastRaid MinIO credentials for the attachment store, at WORKFLOW
+  # level for the same reason LOCAL_REGISTRY is: every job that so much as
+  # PARSES ci/compose.yml needs them, not just the ones that run the stack.
+  #
+  # These are `${VAR:?}`-required in compose, and compose interpolates the
+  # whole file even for `build`. prebuild-ci-image therefore needs them too —
+  # which is not obvious, and was missed: that job's step is "skip if already
+  # in registry", so it short-circuited on every run until a content-hash
+  # change made it actually build, and only then did it fail on a variable it
+  # had never needed before. Job-level wiring re-creates that trap for the
+  # next job someone adds; workflow-level cannot.
+  #
+  # Scoped `engram-ci` credential — s3:* on ci-* buckets only, never root.
+  CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
+  CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
+  # One permanent shared bucket; objects expire via a server-side MinIO ILM
+  # rule (7 days). Nothing per-run, so nothing to create or reap.
+  CI_MINIO_BUCKET: ci-e2e
+
   # CI-only encryption master key. Ephemeral — CI databases are recreated per run,
   # so the key does not protect persistent data. Production deploys must override
   # with a secret via `fly secrets set ENCRYPTION_MASTER_KEY=...`.
@@ -960,11 +979,6 @@ jobs:
     env:
       CI_PROJECT: engram-ci-${{ github.run_id }}-obsidian
       QDRANT_COLLECTION: ci_test_${{ github.run_id }}_obsidian
-      # One permanent shared bucket; objects expire via a server-side MinIO
-      # ILM rule. Nothing per-run, so nothing to reap. See ci/compose.yml.
-      CI_MINIO_BUCKET: ci-e2e
-      CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
-      CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
       MARKER_PREFIX: /tmp/ci-${{ github.run_id }}-obsidian
       E2E_VAULT_PREFIX: /tmp/e2e-vault-${{ github.run_id }}-obsidian
       E2E_CONFIG_PREFIX: /tmp/e2e-obsidian-config-${{ github.run_id }}-obsidian
@@ -1560,9 +1574,6 @@ jobs:
       # e2e-clerk's engram-ci-<run_id> stack.
       CI_PROJECT: engram-ci-crdt-${{ github.run_id }}
       QDRANT_COLLECTION: ci_crdt_${{ github.run_id }}
-      CI_MINIO_BUCKET: ci-e2e
-      CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
-      CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
       MARKER_PREFIX: /tmp/ci-crdt-${{ github.run_id }}
       E2E_VAULT_PREFIX: /tmp/e2e-crdt-vault-${{ github.run_id }}
       E2E_CONFIG_PREFIX: /tmp/e2e-crdt-obsidian-config-${{ github.run_id }}
@@ -2075,9 +2086,6 @@ jobs:
     env:
       CI_PROJECT: engram-ci-headless-${{ github.run_id }}
       QDRANT_COLLECTION: ci_headless_${{ github.run_id }}
-      CI_MINIO_BUCKET: ci-e2e
-      CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
-      CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
       ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image || needs.fingerprint.outputs.image }}
     steps:
       - name: Generate App token
