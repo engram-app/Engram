@@ -1003,27 +1003,44 @@ defmodule Engram.Notes do
   # CRDT relocates repoint the row in place (move_note) — no old-path
   # tombstone exists for the worker to decrypt, so the old path rides the
   # job args as user-DEK AES-GCM ciphertext, AAD-bound to the renamed row's
-  # id (T3.2: plaintext never enters oban_jobs.args). The {:ok, dek} match
-  # follows the RebindNoteLinks-enqueue precedent above: decrypt_or_raise!
-  # already proved this user's DEK usable in this very function.
+  # id (T3.2: plaintext never enters oban_jobs.args). get_dek should never
+  # fail here (decrypt_or_raise! already proved this user's DEK usable in
+  # this very function), but this runs INSIDE the relocate transaction and
+  # a rewrite failure must never fail the rename — so an error skips the
+  # enqueue (ids-only warning) instead of crashing the transaction.
   defp enqueue_crdt_rename_rewrite(user, vault, note_id, old_path) do
-    {:ok, dek} = Crypto.get_dek(user)
-    aad = Crypto.aad_for_row("oban_rewrite_note_links", "old_path", note_id)
-    {ct, nonce} = Envelope.encrypt(old_path, dek, aad)
+    case Crypto.get_dek(user) do
+      {:ok, dek} ->
+        aad = Crypto.aad_for_row("oban_rewrite_note_links", "old_path", note_id)
+        {ct, nonce} = Envelope.encrypt(old_path, dek, aad)
 
-    Enqueue.enqueue(
-      RewriteNoteLinks.new_for(
-        user.id,
-        vault.id,
-        :note,
-        note_id,
-        old_path_hmac_b64!(user, old_path),
-        Base.encode64(Links.basename_hmac(user, Links.basename_key(old_path))),
-        old_path_ciphertext: Base.encode64(ct),
-        old_path_nonce: Base.encode64(nonce)
-      ),
-      "rewrite_note_links"
-    )
+        Enqueue.enqueue(
+          RewriteNoteLinks.new_for(
+            user.id,
+            vault.id,
+            :note,
+            note_id,
+            old_path_hmac_b64!(user, old_path),
+            Base.encode64(Links.basename_hmac(user, Links.basename_key(old_path))),
+            old_path_ciphertext: Base.encode64(ct),
+            old_path_nonce: Base.encode64(nonce)
+          ),
+          "rewrite_note_links"
+        )
+
+      {:error, reason} ->
+        Logger.warning(
+          "crdt rename rewrite enqueue skipped: dek unavailable",
+          Metadata.with_category(:warning, :sync,
+            user_id: user.id,
+            vault_id: vault.id,
+            note_id: note_id,
+            reason: inspect(reason)
+          )
+        )
+
+        :ok
+    end
   end
 
   defp genesis_resurrect(prior, user, sanitized_path, folder) do
