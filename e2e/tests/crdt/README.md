@@ -32,6 +32,13 @@ Requires the CI stack (backend CRDT is unconditional — the old
 `E2E_ENABLE_CRDT=true`:
 
 ```bash
+# Attachments go to the central FastRaid MinIO, not a per-stack sidecar, so
+# the stack needs credentials for it plus a bucket of its own. The bucket MUST
+# start with `ci-`: teardown refuses to purge anything else, because that same
+# host also holds staging's live attachments.
+export CI_MINIO_BUCKET="ci-local-${USER}"
+export CI_MINIO_ACCESS_KEY=... CI_MINIO_SECRET_KEY=...   # ask an operator
+
 # Bring up the local-auth stack (the crdt: channel is always advertised)
 docker compose -f ci/compose.yml -f ci/compose.local.yml -p engram-crdt up -d --build --wait
 
@@ -39,7 +46,6 @@ cd e2e
 E2E_ENABLE_CRDT=true \
 ENGRAM_API_URL=http://localhost:8100/api \
 CI_POSTGRES_CONTAINER=engram-crdt-postgres-1 \
-CI_MINIO_CONTAINER=engram-crdt-minio-1 \
 python3 -m pytest tests/crdt/ -v
 ```
 
