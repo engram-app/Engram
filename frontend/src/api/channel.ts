@@ -534,7 +534,10 @@ export async function connectChannel({ userId, vaultId, getToken, queryClient }:
 		},
 	});
 	const crdtTopic = `crdt:${userId}:${vaultId}`;
-	crdtChannel = socket.channel(crdtTopic, { crdt_proto: 2 });
+	// client_type gates server-side rename link-rewrites (engram#648 Phase 2):
+	// "web" means the server rewrites [[wikilinks]] on our renames; Obsidian
+	// tags "obsidian" and rewrites its own.
+	crdtChannel = socket.channel(crdtTopic, { crdt_proto: 2, client_type: "web" });
 
 	// Durable outbound queue (#1030): create/delete ops route through here so a
 	// send issued while the topic isn't joined is HELD and delivered on join,
