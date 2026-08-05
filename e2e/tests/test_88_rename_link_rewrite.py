@@ -221,8 +221,9 @@ async def test_obsidian_rename_no_double_rewrite(
 
     api_sync.wait_for_note(moved)
 
-    # Obsidian rewrote A's referrer locally; the edit syncs to B.
-    a_content = wait_for_content(vault_a, referrer, new_base)
+    # Obsidian rewrote A's referrer locally; the edit syncs to B. (A's final
+    # text is re-read from disk below after the server-equality wait.)
+    wait_for_content(vault_a, referrer, new_base)
     b_content = wait_for_content(vault_b, referrer, new_base)
 
     # Server content equals the plugin's local content — the server accepted
