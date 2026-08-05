@@ -38,7 +38,7 @@ export default defineConfig({
 		{
 			name: "local",
 			testMatch:
-				/\/(?:local-auth|dark-mode|mobile|note-live-update|note-properties|tree-ops-sync)\.spec\.ts$/u,
+				/\/(?:local-auth|dark-mode|mobile|note-live-update|note-properties|tree-ops-sync|wiki-nav)\.spec\.ts$/u,
 			use: {
 				baseURL: `http://localhost:${LOCAL_VITE_PORT}`,
 			},
