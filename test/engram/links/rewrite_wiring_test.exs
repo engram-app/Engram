@@ -85,4 +85,46 @@ defmodule Engram.Links.RewriteWiringTest do
              m.event_name == [:engram, :links, :rewrite, :failed]
            end)
   end
+
+  describe "CRDT-origin gate (Phase 2, #648)" do
+    setup %{user: user, vault: vault} do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+      %{note: note}
+    end
+
+    test "web-origin relocate enqueues ONE job with encrypted old-path args",
+         %{user: user, vault: vault, note: note} do
+      {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Fresh.md", origin: "web")
+
+      assert [job] = all_enqueued(worker: RewriteNoteLinks)
+      assert job.args["target_kind"] == "note"
+      assert job.args["target_id"] == note.id
+      assert {:ok, _} = Base.decode64(job.args["old_path_hmac"])
+      assert {:ok, _} = Base.decode64(job.args["old_basename_hmac"])
+      assert {:ok, _} = Base.decode64(job.args["old_path_ciphertext"])
+      assert {:ok, _} = Base.decode64(job.args["old_path_nonce"])
+      refute Map.has_key?(job.args, "old_path")
+    end
+
+    test "obsidian-origin relocate enqueues NOTHING (one-rewriter invariant)",
+         %{user: user, vault: vault, note: note} do
+      {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Fresh.md", origin: "obsidian")
+      assert all_enqueued(worker: RewriteNoteLinks) == []
+    end
+
+    test "untagged relocate enqueues NOTHING while the compromise flag holds",
+         %{user: user, vault: vault, note: note} do
+      # Pinned to Notes.untagged_crdt_client_type/0 == "obsidian" (see
+      # notes_crdt_origin_gate_test.exs). When the flag flips to "web", this
+      # test flips to assert [_] = all_enqueued(...) in the same commit.
+      {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Fresh.md")
+      assert all_enqueued(worker: RewriteNoteLinks) == []
+    end
+
+    test "same-path idempotent re-genesis enqueues nothing even for web origin",
+         %{user: user, vault: vault, note: note} do
+      {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Old.md", origin: "web")
+      assert all_enqueued(worker: RewriteNoteLinks) == []
+    end
+  end
 end

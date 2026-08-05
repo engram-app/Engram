@@ -30,7 +30,7 @@ defmodule Engram.Notes do
   alias Engram.Sync.Broadcast
   alias Engram.Telemetry
   alias Engram.UsageMeters
-  alias Engram.Workers.{DeleteNoteIndex, EmbedNote, RebindNoteLinks}
+  alias Engram.Workers.{DeleteNoteIndex, EmbedNote, RebindNoteLinks, RewriteNoteLinks}
 
   require Logger
 
@@ -690,7 +690,7 @@ defmodule Engram.Notes do
   this never merges empty content against an existing row and never content-
   broadcasts. See docs spec 2026-07-15-crdt-create-genesis-bare-row-design.
   """
-  @spec genesis_crdt_note(map(), map(), String.t(), String.t()) ::
+  @spec genesis_crdt_note(map(), map(), String.t(), String.t(), keyword()) ::
           {:ok, Note.t()}
           | {:error, :invalid_id}
           | {:error, :recently_deleted}
@@ -703,7 +703,9 @@ defmodule Engram.Notes do
           # {:error, term}). Kept in the spec so the channel's create_failed
           # catch-all is reachable, not flagged unreachable by dialyzer.
           | {:error, term()}
-  def genesis_crdt_note(user, vault, id, path) do
+  def genesis_crdt_note(user, vault, id, path, opts \\ []) do
+    origin = Keyword.get(opts, :origin)
+
     with {:ok, canonical_id} <- Ecto.UUID.cast(id),
          {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, path} <- validate_path(path) do
@@ -732,7 +734,7 @@ defmodule Engram.Notes do
                      # removes the #970 delete-wins window from renames entirely.
                      # A target path OCCUPIED by a DIFFERENT live note stays a
                      # genuine conflict (the pre-E2 behavior).
-                     genesis_relocate_live(live, user, vault, sanitized_path, folder)
+                     genesis_relocate_live(live, user, vault, sanitized_path, folder, origin)
 
                    {:error, _} = err ->
                      err
@@ -901,7 +903,7 @@ defmodule Engram.Notes do
     (client_type || @untagged_crdt_client_type) != "obsidian"
   end
 
-  defp genesis_relocate_live(live, user, vault, sanitized_path, folder) do
+  defp genesis_relocate_live(live, user, vault, sanitized_path, folder, origin) do
     with {:ok, query} <- note_by_path_query(user, vault, sanitized_path) do
       case Repo.one(query) do
         nil ->
@@ -957,6 +959,17 @@ defmodule Engram.Notes do
                       )
                     end
 
+                  # #648/#1231 Phase 2 — server-side link rewrite for
+                  # NON-obsidian CRDT-origin renames (the primary web rename
+                  # path). Obsidian-origin relocates never enqueue: the plugin
+                  # rewrites its own links (exactly-one-rewriter invariant).
+                  # In-txn enqueue: the job commits atomically with the
+                  # relocate; Enqueue.enqueue never raises.
+                  _ =
+                    if crdt_rename_rewrites?(origin) do
+                      enqueue_crdt_rename_rewrite(user, vault, moved.id, decrypted.path)
+                    end
+
                   # Carry the OLD path so the post-commit handler can fan an
                   # old-path delete to peers (a web receiver has no local mirror
                   # to drop the note from its old folder otherwise).
@@ -985,6 +998,32 @@ defmodule Engram.Notes do
           {:error, :id_conflict, decrypt_or_raise!(live, user)}
       end
     end
+  end
+
+  # CRDT relocates repoint the row in place (move_note) — no old-path
+  # tombstone exists for the worker to decrypt, so the old path rides the
+  # job args as user-DEK AES-GCM ciphertext, AAD-bound to the renamed row's
+  # id (T3.2: plaintext never enters oban_jobs.args). The {:ok, dek} match
+  # follows the RebindNoteLinks-enqueue precedent above: decrypt_or_raise!
+  # already proved this user's DEK usable in this very function.
+  defp enqueue_crdt_rename_rewrite(user, vault, note_id, old_path) do
+    {:ok, dek} = Crypto.get_dek(user)
+    aad = Crypto.aad_for_row("oban_rewrite_note_links", "old_path", note_id)
+    {ct, nonce} = Envelope.encrypt(old_path, dek, aad)
+
+    Enqueue.enqueue(
+      RewriteNoteLinks.new_for(
+        user.id,
+        vault.id,
+        :note,
+        note_id,
+        old_path_hmac_b64!(user, old_path),
+        Base.encode64(Links.basename_hmac(user, Links.basename_key(old_path))),
+        old_path_ciphertext: Base.encode64(ct),
+        old_path_nonce: Base.encode64(nonce)
+      ),
+      "rewrite_note_links"
+    )
   end
 
   defp genesis_resurrect(prior, user, sanitized_path, folder) do

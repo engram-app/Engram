@@ -221,4 +221,20 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
 
     assert {:discard, :old_path_unrecoverable} = perform_job(RewriteNoteLinks, args)
   end
+
+  # Phase 2 (#648/#1231, task 3) — enqueue and perform live in different
+  # functions/modules (Notes.enqueue_crdt_rename_rewrite vs this worker's
+  # decrypt). Only a round trip through the real Oban args proves both sides
+  # agree on the AAD contract; a unit test of either side alone could pass
+  # with mismatched AAD and never notice.
+  test "web-origin relocate job round-trips: enqueue args alone recover the old path",
+       %{user: user, vault: vault} do
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Rt-old.md", "content" => "# t"})
+    source = seed_source!(user, vault, "RtSource.md", "see [[Rt-old]]")
+    {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Rt-new.md", origin: "web")
+
+    assert [job] = all_enqueued(worker: RewriteNoteLinks)
+    assert :ok = perform_job(RewriteNoteLinks, job.args)
+    assert authoritative!(user, source.id) =~ "[[Rt-new]]"
+  end
 end
