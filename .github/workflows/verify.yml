@@ -960,6 +960,13 @@ jobs:
     env:
       CI_PROJECT: engram-ci-${{ github.run_id }}-obsidian
       QDRANT_COLLECTION: ci_test_${{ github.run_id }}_obsidian
+      # Attachments go to the central FastRaid MinIO (see ci/compose.yml), so
+      # the bucket must be per-run exactly as QDRANT_COLLECTION is — that host
+      # also carries staging's live attachments. The `ci-` prefix is
+      # load-bearing: e2e teardown refuses to purge anything outside it.
+      CI_MINIO_BUCKET: ci-${{ github.run_id }}-obsidian
+      CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
+      CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
       MARKER_PREFIX: /tmp/ci-${{ github.run_id }}-obsidian
       E2E_VAULT_PREFIX: /tmp/e2e-vault-${{ github.run_id }}-obsidian
       E2E_CONFIG_PREFIX: /tmp/e2e-obsidian-config-${{ github.run_id }}-obsidian
@@ -1315,7 +1322,6 @@ jobs:
           E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
           AUTH_PROVIDER: clerk
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
-          CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
           CI_ENGRAM_CONTAINER: ${{ env.CI_PROJECT }}-engram-1
           QDRANT_URL: http://10.0.20.201:6333
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
@@ -1396,7 +1402,6 @@ jobs:
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
           ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
-          CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
           CI_ENGRAM_CONTAINER: ${{ env.CI_PROJECT }}-engram-1
           E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
           AUTH_PROVIDER: clerk
@@ -1487,6 +1492,23 @@ jobs:
         run: |
           # Delete this run's Qdrant collection on SlowRaid
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
+          # Delete this run's bucket on the central FastRaid MinIO. pytest
+          # teardown already does this on a normal finish; this is the path
+          # that matters when the job is CANCELLED or the suite crashes —
+          # nothing else ever reclaims the bucket, and it now accumulates on a
+          # shared host rather than dying with a per-stack container.
+          #
+          # The `ci-*` case is not decoration: this host also holds staging's
+          # engram-saas-attachments, and `mc rb --force` does not ask twice.
+          case "${CI_MINIO_BUCKET}" in
+            ci-*)
+              docker run --rm -e AK="$CI_MINIO_ACCESS_KEY" -e SK="$CI_MINIO_SECRET_KEY" \
+                --entrypoint sh minio/mc:latest -c \
+                "mc alias set c http://10.0.20.214:9101 \"\$AK\" \"\$SK\" >/dev/null && mc rb --force c/${CI_MINIO_BUCKET}" \
+                > /dev/null 2>&1 || true
+              ;;
+            *) echo "refusing to remove non-ci- bucket: ${CI_MINIO_BUCKET}" ;;
+          esac
           # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
           # Xvfb command line doesn't contain $E2E_CONFIG_PREFIX, so kill it
@@ -1552,6 +1574,9 @@ jobs:
       # e2e-clerk's engram-ci-<run_id> stack.
       CI_PROJECT: engram-ci-crdt-${{ github.run_id }}
       QDRANT_COLLECTION: ci_crdt_${{ github.run_id }}
+      CI_MINIO_BUCKET: ci-crdt-${{ github.run_id }}
+      CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
+      CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
       MARKER_PREFIX: /tmp/ci-crdt-${{ github.run_id }}
       E2E_VAULT_PREFIX: /tmp/e2e-crdt-vault-${{ github.run_id }}
       E2E_CONFIG_PREFIX: /tmp/e2e-crdt-obsidian-config-${{ github.run_id }}
@@ -1894,7 +1919,6 @@ jobs:
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
           AUTH_PROVIDER: local
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
-          CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
           CI_ENGRAM_CONTAINER: ${{ env.CI_PROJECT }}-engram-1
           QDRANT_URL: http://10.0.20.201:6333
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
@@ -1961,7 +1985,6 @@ jobs:
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
           ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
-          CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
           CI_ENGRAM_CONTAINER: ${{ env.CI_PROJECT }}-engram-1
           AUTH_PROVIDER: local
           E2E_ENABLE_CRDT: "true"
@@ -2006,6 +2029,23 @@ jobs:
         run: |
           # Delete this run's Qdrant collection on SlowRaid
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
+          # Delete this run's bucket on the central FastRaid MinIO. pytest
+          # teardown already does this on a normal finish; this is the path
+          # that matters when the job is CANCELLED or the suite crashes —
+          # nothing else ever reclaims the bucket, and it now accumulates on a
+          # shared host rather than dying with a per-stack container.
+          #
+          # The `ci-*` case is not decoration: this host also holds staging's
+          # engram-saas-attachments, and `mc rb --force` does not ask twice.
+          case "${CI_MINIO_BUCKET}" in
+            ci-*)
+              docker run --rm -e AK="$CI_MINIO_ACCESS_KEY" -e SK="$CI_MINIO_SECRET_KEY" \
+                --entrypoint sh minio/mc:latest -c \
+                "mc alias set c http://10.0.20.214:9101 \"\$AK\" \"\$SK\" >/dev/null && mc rb --force c/${CI_MINIO_BUCKET}" \
+                > /dev/null 2>&1 || true
+              ;;
+            *) echo "refusing to remove non-ci- bucket: ${CI_MINIO_BUCKET}" ;;
+          esac
           # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
           # Xvfb command line doesn't contain $E2E_CONFIG_PREFIX, so kill it
@@ -2066,6 +2106,9 @@ jobs:
     env:
       CI_PROJECT: engram-ci-headless-${{ github.run_id }}
       QDRANT_COLLECTION: ci_headless_${{ github.run_id }}
+      CI_MINIO_BUCKET: ci-headless-${{ github.run_id }}
+      CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
+      CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
       ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image || needs.fingerprint.outputs.image }}
     steps:
       - name: Generate App token

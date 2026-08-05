@@ -54,8 +54,23 @@ CONFIG_PATHS = [
 
 # CI compose project name — matches the directory name where ci/compose.yml lives
 CI_POSTGRES_CONTAINER = os.environ.get("CI_POSTGRES_CONTAINER", "engram-postgres-1")
-CI_MINIO_CONTAINER = os.environ.get("CI_MINIO_CONTAINER", "engram-ci-minio-1")
-CI_MINIO_BUCKET = os.environ.get("CI_MINIO_BUCKET", "engram-attachments")
+CI_MINIO_BUCKET = os.environ.get("CI_MINIO_BUCKET", "ci-local")
+CI_MINIO_HOST = os.environ.get("CI_MINIO_HOST", "10.0.20.214")
+CI_MINIO_PORT = os.environ.get("CI_MINIO_PORT", "9101")
+
+# Buckets this module is allowed to purge. NOT stylistic.
+#
+# Attachments moved off a per-stack MinIO sidecar onto the central FastRaid
+# MinIO (see ci/compose.yml). That host also holds staging's live
+# `engram-saas-attachments` and selfhost's `engram-selfhost-attachments`, and
+# the purge below is a recursive force-delete. Previously the blast radius was
+# a throwaway container; now a wrong CI_MINIO_BUCKET would take staging's
+# attachments with it.
+#
+# So the bucket name is validated here rather than trusted from the
+# environment: config can be wrong, a guard on the shared teardown path
+# cannot be bypassed by any caller.
+_CI_BUCKET_PATTERN = re.compile(r"^ci-[a-z0-9][a-z0-9-]*$")
 
 
 _SAFE_EMAIL_PATTERN = re.compile(r"^[a-zA-Z0-9._@%+-]+$")
@@ -225,30 +240,61 @@ def cleanup_vaults() -> None:
 
 
 def cleanup_minio_bucket() -> None:
-    """Best-effort purge of every object under the test bucket via `mc rm`.
+    """Best-effort removal of this run's bucket on the central MinIO.
 
-    Required since attachments now land in MinIO; without this, repeated
-    test runs accumulate orphan blobs across the bucket. No-op when the
-    MinIO container is absent (e.g., a stack run with storage disabled).
+    Attachments land in MinIO, so without this every run leaks its blobs —
+    and since the move off the per-stack sidecar, leaks now accumulate on a
+    shared host rather than dying with the container.
+
+    Refuses any bucket outside the `ci-` namespace: the same host holds
+    staging and selfhost attachments, and this is a recursive force-delete.
     """
-    # mc inside the minio container has no persistent alias config (the
-    # minio-init sidecar that set the alias has exited), so configure
-    # inline. `mc alias set` is idempotent.
+    if not _CI_BUCKET_PATTERN.match(CI_MINIO_BUCKET):
+        # Loud, and NOT best-effort. Reaching here means the environment
+        # pointed teardown at something it must never touch; skipping the
+        # purge silently would leave that misconfiguration live for the next
+        # caller, which might not have a guard.
+        raise ValueError(
+            f"refusing to purge MinIO bucket {CI_MINIO_BUCKET!r}: "
+            "e2e teardown may only delete buckets matching ^ci-. The central "
+            "MinIO also holds staging (engram-saas-attachments) and selfhost "
+            "(engram-selfhost-attachments) data."
+        )
+
+    access_key = os.environ.get("CI_MINIO_ACCESS_KEY", "")
+    secret_key = os.environ.get("CI_MINIO_SECRET_KEY", "")
+    if not access_key or not secret_key:
+        logger.debug("MinIO purge skipped — no central MinIO credentials in env")
+        return
+
+    # `mc rb --force` removes contents AND the bucket: the bucket is per-run,
+    # so leaving an empty one behind just accumulates a different kind of
+    # litter on the shared host.
     inline = (
-        "mc alias set local http://localhost:9000 minioadmin minioadmin >/dev/null && "
-        f"mc rm --recursive --force local/{CI_MINIO_BUCKET}/"
+        f"mc alias set central http://{CI_MINIO_HOST}:{CI_MINIO_PORT} "
+        f'"$CI_MINIO_ACCESS_KEY" "$CI_MINIO_SECRET_KEY" >/dev/null && '
+        f"mc rb --force central/{CI_MINIO_BUCKET}"
     )
-    cmd = ["docker", "exec", CI_MINIO_CONTAINER, "sh", "-c", inline]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    cmd = [
+        "docker", "run", "--rm",
+        "-e", "CI_MINIO_ACCESS_KEY",
+        "-e", "CI_MINIO_SECRET_KEY",
+        "--entrypoint", "sh",
+        "minio/mc:latest", "-c", inline,
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={**os.environ, "CI_MINIO_ACCESS_KEY": access_key, "CI_MINIO_SECRET_KEY": secret_key},
+    )
 
     if result.returncode != 0:
         stderr = result.stderr.strip()
-        if "No such container" in stderr or "not running" in stderr:
-            logger.debug("MinIO purge skipped — container %s not present", CI_MINIO_CONTAINER)
-            return
-        # `mc rm` on an empty prefix prints "Failed to remove ...: Object does not exist"
-        # but exits non-zero — treat as success.
-        if "Object does not exist" in stderr or not stderr:
+        # A run that uploaded nothing never had the bucket created, and a
+        # re-run of teardown finds it already gone — both are success.
+        if "does not exist" in stderr.lower():
             return
         logger.warning("MinIO purge non-fatal error: %s", stderr)
 
