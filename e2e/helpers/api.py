@@ -171,6 +171,19 @@ class ApiClient:
         )
         return resp.status_code
 
+    def get_backlinks(self, note_id: str) -> list[dict]:
+        """GET /notes/by-id/{id}/backlinks. Returns the backlink edge list.
+
+        Edges are written by the async indexing pipeline (EmbedNote →
+        commit_index → Links.replace_links), so callers polling this are
+        waiting on the embed pipeline, not the note upsert.
+        """
+        resp = self.session.get(
+            f"{self.base_url}/notes/by-id/{note_id}/backlinks", timeout=10
+        )
+        self._raise_for_status(resp)
+        return resp.json().get("backlinks", [])
+
     def append_note(self, path: str, text: str) -> int:
         """POST /notes/append. Returns HTTP status code."""
         resp = self.session.post(
