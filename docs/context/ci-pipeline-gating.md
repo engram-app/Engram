@@ -19,7 +19,17 @@ merge gate is now the **deterministic** layer:
   barriers, no Obsidian) — currently report-only, baking toward required.
 
 Flaky is no longer blocking, but flaky is still **visible** and still hard-gates
-`main`, the nightly run, and every release.
+the nightly run and every release.
+
+> **Updated 2026-08-05 (#1244).** "Hard-gates `main`" used to mean main
+> re-executed every suite from scratch. It no longer does: main replays the
+> branch's proof via the content-addressed marker store when the tree hash
+> matches, and only executes what **missed**. The proof is the same proof —
+> same content, same full run — it just is not repeated. The genuine
+> re-execution before ship is the release gate below, which dispatches with
+> `force_full=true` against the tagged commit. See
+> [ci-fingerprint-markers.md](ci-fingerprint-markers.md) for the invariant
+> that makes replaying safe.
 
 ## Triggers
 
@@ -129,12 +139,17 @@ fine — that control comparison is what isolates it.
 
 | Check | PR | main (post-merge) | nightly | release (`release-v*`) |
 |---|---|---|---|---|
-| Deterministic (unit/lint/migration/…) | 🔒 gate | 🔒 gate | runs | 🔒 gate |
-| Real-Obsidian e2e | 👁 report | 🔒 gate | 🔒 gate + logged | 🔒 **blocks deploy** |
+| Deterministic (unit/lint/migration/…) | 🔒 gate | 🔒 gate ♻️ | runs | 🔒 gate |
+| Real-Obsidian e2e | 👁 report | 🔒 gate ♻️ | 🔒 gate + logged | 🔒 **blocks deploy** |
 | `headless-protocol` | 👁 report | 👁 report | 👁 logged | — |
 | Flake ledger | — | — | ✍️ writes | — |
 
-🔒 blocks · 👁 runs but informational · ✍️ measures
+🔒 blocks · 👁 runs but informational · ✍️ measures · ♻️ replays the branch's
+proof when the content hash matches, executes on a miss
+
+Only the nightly and the release gate are guaranteed **re-executions**. main is
+a content-equality check, not a re-run — which is the point, since re-deriving a
+result the branch already established cost ~1039 runner-min/week.
 
 ## The release gate (deploy-prod.yml)
 
