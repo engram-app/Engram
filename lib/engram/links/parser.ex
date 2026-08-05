@@ -31,8 +31,18 @@ defmodule Engram.Links.Parser do
       inner = binary_part(content, inner_start, inner_len)
 
       case parse_inner(inner) do
-        nil -> []
-        parsed -> [Map.merge(parsed, %{link_type: link_type(bang_len), position: start})]
+        nil ->
+          []
+
+        parsed ->
+          [
+            parsed
+            |> Map.update!(:target_start, &(&1 + inner_start))
+            |> Map.merge(%{
+              link_type: link_type(bang_len),
+              position: start
+            })
+          ]
       end
     end)
     |> Enum.reject(fn %{position: pos} -> in_ranges?(pos, excluded) end)
@@ -41,6 +51,12 @@ defmodule Engram.Links.Parser do
   defp link_type(0), do: "wikilink"
   defp link_type(_), do: "embed"
 
+  # `target_start`/`target_len` are the byte span of the TRIMMED target
+  # within `inner` (do_extract/1 shifts by the match offset): the |-then-#
+  # split already isolates the raw target, so the offsets fall out here
+  # instead of being re-derived elsewhere. do_extract/1 runs on
+  # already-scrubbed content, so clean/1's scrub is an identity there and
+  # `binary_part(content, target_start, target_len) == target` holds.
   defp parse_inner(inner) do
     {body, alias_} =
       case String.split(inner, "|", parts: 2) do
@@ -48,16 +64,26 @@ defmodule Engram.Links.Parser do
         [body, a] -> {body, clean(a)}
       end
 
-    {target, anchor} =
+    {target_raw, anchor} =
       case String.split(body, "#", parts: 2) do
-        [t] -> {clean(t), nil}
-        [t, an] -> {clean(t), clean(an)}
+        [t] -> {t, nil}
+        [t, an] -> {t, clean(an)}
       end
 
-    if is_nil(target) do
-      nil
-    else
-      %{target: target, alias: alias_, anchor: anchor}
+    case clean(target_raw) do
+      nil ->
+        nil
+
+      target ->
+        lead = byte_size(target_raw) - byte_size(String.trim_leading(target_raw))
+
+        %{
+          target: target,
+          alias: alias_,
+          anchor: anchor,
+          target_start: lead,
+          target_len: byte_size(String.trim(target_raw))
+        }
     end
   end
 

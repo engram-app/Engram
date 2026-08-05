@@ -101,14 +101,14 @@ describe("crdt channel wiring", () => {
 		expect(sessionMock.enrollIfLive).toHaveBeenCalledWith("note-uuid-1");
 	});
 
-	it("joins the CRDT channel with crdt_proto: 2", async () => {
+	it("joins the CRDT channel with crdt_proto: 2 and client_type: web", async () => {
 		await connectChannel({
 			userId: "u1",
 			vaultId: "v1",
 			getToken: async () => "tok",
 			queryClient: {} as any,
 		});
-		expect(channelParams.get("crdt:u1:v1")).toEqual({ crdt_proto: 2 });
+		expect(channelParams.get("crdt:u1:v1")).toEqual({ crdt_proto: 2, client_type: "web" });
 	});
 
 	// The crdt_msg push's receive("error"/"timeout") branches map server reason

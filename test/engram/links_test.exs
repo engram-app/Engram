@@ -445,4 +445,70 @@ defmodule Engram.LinksTest do
       assert att.basename_hmac == expected
     end
   end
+
+  describe "live_basename_count/3" do
+    test "counts live notes and attachments sharing a basename key", %{user: user, vault: vault} do
+      Engram.Fixtures.insert_note!(user, vault, %{path: "a/Dup.md"})
+      Engram.Fixtures.insert_note!(user, vault, %{path: "b/Dup.md"})
+      Engram.Fixtures.insert_attachment!(user, vault, %{path: "c/Dup.png"})
+
+      assert Links.live_basename_count(user, vault, "dup") == 2
+      assert Links.live_basename_count(user, vault, "dup.png") == 1
+      assert Links.live_basename_count(user, vault, "ghost") == 0
+    end
+  end
+
+  describe "pre_rename_winner?/6" do
+    test "true when the renamed note at its old path wins the tiebreak", %{
+      user: user,
+      vault: vault
+    } do
+      _longer = Engram.Fixtures.insert_note!(user, vault, %{path: "deep/nested/Dup.md"})
+      renamed = Engram.Fixtures.insert_note!(user, vault, %{path: "Renamed.md"})
+
+      assert Links.pre_rename_winner?(user, vault, "Dup", :note, renamed.id, "Dup.md")
+    end
+
+    test "false when a shorter-path sibling won pre-rename", %{user: user, vault: vault} do
+      _sibling = Engram.Fixtures.insert_note!(user, vault, %{path: "Dup.md"})
+      renamed = Engram.Fixtures.insert_note!(user, vault, %{path: "Renamed.md"})
+
+      refute Links.pre_rename_winner?(user, vault, "Dup", :note, renamed.id, "x/Dup.md")
+    end
+
+    test "false when the target basename differs from the old basename", %{
+      user: user,
+      vault: vault
+    } do
+      renamed = Engram.Fixtures.insert_note!(user, vault, %{path: "Renamed.md"})
+
+      refute Links.pre_rename_winner?(user, vault, "Other", :note, renamed.id, "Dup.md")
+    end
+
+    test "path-qualified target must match the old path (case-insensitive)", %{
+      user: user,
+      vault: vault
+    } do
+      renamed = Engram.Fixtures.insert_note!(user, vault, %{path: "Renamed.md"})
+
+      assert Links.pre_rename_winner?(user, vault, "sub/Dup", :note, renamed.id, "Sub/Dup.md")
+      refute Links.pre_rename_winner?(user, vault, "other/Dup", :note, renamed.id, "Sub/Dup.md")
+    end
+
+    test "attachment kind: renamed attachment at old path wins for its extensioned target", %{
+      user: user,
+      vault: vault
+    } do
+      renamed = Engram.Fixtures.insert_attachment!(user, vault, %{path: "new/pic.png"})
+
+      assert Links.pre_rename_winner?(
+               user,
+               vault,
+               "pic.png",
+               :attachment,
+               renamed.id,
+               "old/pic.png"
+             )
+    end
+  end
 end
