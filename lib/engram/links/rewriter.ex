@@ -21,10 +21,11 @@ defmodule Engram.Links.Rewriter do
   (`CrdtPersistence.update_v1/4`, or the live room when one exists), so
   live editors converge and no content snapshot is ever written.
 
-  Occurrence membership is decided by `Links.pre_rename_winner?/6`
-  (pre-rename candidate reconstruction), NOT by current edge target ids —
-  the `RebindNoteLinks` jobs the same rename enqueues race this worker and
-  flip those ids.
+  Occurrence membership is decided by `Links.pre_rename_winner?/4`
+  (pre-rename candidate reconstruction, prefetched once per walk via
+  `Links.pre_rename_candidates/5` on the `build_target/5` map), NOT by
+  current edge target ids — the `RebindNoteLinks` jobs the same rename
+  enqueues race this worker and flip those ids.
   """
 
   import Ecto.Query
@@ -70,11 +71,16 @@ defmodule Engram.Links.Rewriter do
     body_start = byte_size(full_text) - byte_size(body)
     old_key = Links.basename_key(target.old_path)
 
-    full_text
-    |> Parser.extract()
+    occurrences =
+      full_text
+      |> Parser.extract()
+      |> Enum.filter(&(Links.basename_key(&1.target) == old_key))
+
+    candidates = if occurrences != [], do: pre_rename_candidates(user, vault, target)
+
+    occurrences
     |> Enum.filter(fn occ ->
-      Links.basename_key(occ.target) == old_key and
-        Links.pre_rename_winner?(user, vault, occ.target, target.kind, target.id, target.old_path)
+      Links.pre_rename_winner?(occ.target, target.old_path, target.id, candidates)
     end)
     |> Enum.flat_map(fn occ ->
       replacement = replacement_target(occ.target, target)
@@ -100,6 +106,15 @@ defmodule Engram.Links.Rewriter do
       binary_part(acc, 0, e.rel_start) <>
         e.new <>
         binary_part(acc, e.rel_start + e.len, byte_size(acc) - e.rel_start - e.len)
+    end)
+  end
+
+  # build_target/5 prefetches the candidate sets once per rename walk; a
+  # hand-built target (unit tests, spec callers) without the key falls back
+  # to a per-call fetch — still once per source note, never per occurrence.
+  defp pre_rename_candidates(user, vault, target) do
+    Map.get_lazy(target, :pre_rename_candidates, fn ->
+      Links.pre_rename_candidates(user, vault, target.kind, target.id, target.old_path)
     end)
   end
 
@@ -142,7 +157,11 @@ defmodule Engram.Links.Rewriter do
          old_path: old_path,
          new_path: new_path,
          old_basename_hmac: Links.basename_hmac(user, Links.basename_key(old_path)),
-         collision?: Links.live_basename_count(user, vault, Links.basename_key(new_path)) > 1
+         collision?: Links.live_basename_count(user, vault, Links.basename_key(new_path)) > 1,
+         # Prefetched ONCE per rename walk — plan_edits/5 consults these for
+         # every occurrence in every source note instead of re-querying +
+         # re-decrypting per occurrence (#1240 review).
+         pre_rename_candidates: Links.pre_rename_candidates(user, vault, kind, id, old_path)
        }}
     end
   end

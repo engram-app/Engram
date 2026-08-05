@@ -268,6 +268,49 @@ defmodule Engram.Links.RewriterTest do
     raw
   end
 
+  # Candidate fetches are the notes/attachments queries keyed on
+  # basename_hmac that select path_ciphertext (Links.fetch_decrypted_candidates).
+  defp candidate_query?(%{query: query}) do
+    query =~ "basename_hmac" and query =~ "path_ciphertext"
+  end
+
+  describe "pre-rename candidate memoization (#1240 review)" do
+    test "plan_edits runs ZERO candidate queries — build_target prefetched them once per walk",
+         %{user: user, vault: vault} do
+      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+      {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
+
+      # build_target carries the prefetched sets: the synthetic pre-rename
+      # candidate for the renamed row, and no attachments share the basename.
+      renamed_id = renamed.id
+      assert %{notes: [{^renamed_id, "Old.md"}], attachments: []} = target.pre_rename_candidates
+
+      test_pid = self()
+      handler = "candidate-queries-#{inspect(self())}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:engram, :repo, :query],
+          fn _event, _meas, meta, _cfg ->
+            if candidate_query?(meta), do: send(test_pid, {:candidate_query, meta.source})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      full = "a [[Old]] b [[Old]] c ![[Old|x]]"
+      edits = Rewriter.plan_edits(user, vault, full, full, target)
+
+      assert length(edits) == 3
+
+      refute_received {:candidate_query, _},
+                      "plan_edits re-fetched pre-rename candidates per occurrence " <>
+                        "(must ride target.pre_rename_candidates, fetched once per walk)"
+    end
+  end
+
   describe "rewrite_source_note/5" do
     test "rewrites the doc via a tail-log Y-update and re-extracts edges", %{
       user: user,
