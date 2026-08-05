@@ -211,7 +211,8 @@ defmodule Engram.Links.Rewriter do
   end
 
   @doc "Synchronous full walk for a renamed note (spec entry point; the Oban worker chunks the same primitives)."
-  @spec rewrite_for_note_rename(map(), map(), binary(), String.t()) :: :ok | {:error, term()}
+  @spec rewrite_for_note_rename(map(), map(), binary(), String.t()) ::
+          :ok | {:error, :target_gone}
   def rewrite_for_note_rename(user, vault, renamed_note_id, old_path) do
     with {:ok, target} <- build_target(user, vault, :note, renamed_note_id, old_path) do
       walk(user, vault, target, @start_cursor)
@@ -220,7 +221,7 @@ defmodule Engram.Links.Rewriter do
 
   @doc "Attachment variant of `rewrite_for_note_rename/4`."
   @spec rewrite_for_attachment_rename(map(), map(), binary(), String.t()) ::
-          :ok | {:error, term()}
+          :ok | {:error, :target_gone}
   def rewrite_for_attachment_rename(user, vault, attachment_id, old_path) do
     with {:ok, target} <- build_target(user, vault, :attachment, attachment_id, old_path) do
       walk(user, vault, target, @start_cursor)
