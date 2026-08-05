@@ -64,7 +64,10 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
   end
 
   # Drain every enqueued rewrite + rebind job, including cursor successors a
-  # rewrite job enqueues mid-run. Loops until the queues are quiet.
+  # rewrite job enqueues mid-run AND the delayed sweep job a terminating
+  # chain now enqueues (schedule_in: 60 -> state "scheduled", not
+  # "available" — must be swept up here too or this loop never quiesces).
+  # Loops until the queues are quiet.
   defp drain_link_jobs! do
     jobs =
       all_enqueued(worker: RewriteNoteLinks) ++ all_enqueued(worker: RebindNoteLinks)
@@ -83,7 +86,7 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
           from(j in Oban.Job,
             where:
               j.worker in ^["Engram.Workers.RewriteNoteLinks", "Engram.Workers.RebindNoteLinks"] and
-                j.state == "available"
+                j.state in ["available", "scheduled"]
           )
         )
 
@@ -150,6 +153,104 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
     for {s, i} <- Enum.with_index(sources, 1) do
       assert authoritative!(user, s.id) == "see [[Fresh]] #{i}"
     end
+  end
+
+  describe "delayed sweep (closes the late-index rewrite window, #1231 follow-up)" do
+    test "chain termination without a sweep marker enqueues one delayed sweep job, preserving identity/hmac/ciphertext args",
+         %{user: user, vault: vault} do
+      # CRDT-relocate style target so the round trip also proves the
+      # ciphertext args survive into the sweep job, not just the hmacs.
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+      _source = seed_source!(user, vault, "S.md", "see [[Old]]")
+      {:ok, _moved} = Notes.genesis_crdt_note(user, vault, note.id, "Fresh.md")
+      Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.RewriteNoteLinks"))
+
+      args = ciphertext_args(user, vault, note, "Old.md")
+      assert :ok = perform_job(RewriteNoteLinks, args)
+
+      assert [job] = all_enqueued(worker: RewriteNoteLinks)
+      assert job.args["sweep"] == true
+      assert job.args["cursor"] == "00000000-0000-0000-0000-000000000000"
+
+      for key <- Map.keys(args), key != "cursor" do
+        assert job.args[key] == args[key], "expected #{key} to be preserved on the sweep job"
+      end
+
+      diff = DateTime.diff(job.scheduled_at, DateTime.utc_now())
+      assert diff in 55..65, "expected ~60s delay, got #{diff}s"
+    end
+
+    test "a sweep-marked chain termination enqueues no further job (recursion guard)", %{
+      user: user,
+      vault: vault
+    } do
+      {_old_id, renamed} = seed_rename!(user, vault)
+      _source = seed_source!(user, vault, "S.md", "see [[Old]]")
+
+      args = args_for(user, vault, renamed) |> Map.put("sweep", true)
+      assert :ok = perform_job(RewriteNoteLinks, args)
+
+      assert all_enqueued(worker: RewriteNoteLinks) == []
+    end
+
+    test "a full-batch sweep job enqueues its successor with the sweep marker preserved", %{
+      user: user,
+      vault: vault
+    } do
+      {_old_id, renamed} = seed_rename!(user, vault)
+      _sources = for i <- 1..3, do: seed_source!(user, vault, "S#{i}.md", "see [[Old]] #{i}")
+
+      args =
+        args_for(user, vault, renamed)
+        |> Map.put("sweep", true)
+        |> Map.put("batch_size", 2)
+
+      assert :ok = perform_job(RewriteNoteLinks, args)
+
+      assert [job] = all_enqueued(worker: RewriteNoteLinks)
+      assert job.args["sweep"] == true
+      assert job.args["cursor"] > "00000000-0000-0000-0000-000000000000"
+    end
+
+    test "the bug itself: an edge that lands after the initial walk is caught by the delayed sweep",
+         %{user: user, vault: vault} do
+      {_old_id, renamed} = seed_rename!(user, vault)
+
+      # Simulate the pre-index state: the referring note exists, but its
+      # note_links edge has not been written yet (async indexing lag).
+      {:ok, source} =
+        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"})
+
+      args = args_for(user, vault, renamed)
+      assert :ok = perform_job(RewriteNoteLinks, args)
+
+      # No edge existed yet -> nothing found -> nothing rewritten.
+      assert authoritative!(user, source.id) == "see [[Old]]"
+      assert [sweep_job] = all_enqueued(worker: RewriteNoteLinks)
+      assert sweep_job.args["sweep"] == true
+
+      # Late indexing arrives: the edge is created now. Old.md is gone
+      # (renamed away), so this resolves dangling on insert.
+      :ok = Links.replace_links(user, vault, source.id, Parser.extract("see [[Old]]"))
+
+      assert dangling_target(user, source.id) == nil
+
+      # The delayed sweep re-walks from the start cursor and catches it.
+      assert :ok = perform_job(RewriteNoteLinks, sweep_job.args)
+
+      assert authoritative!(user, source.id) == "see [[Fresh]]"
+      assert dangling_target(user, source.id) == renamed.id
+    end
+  end
+
+  defp dangling_target(user, source_id) do
+    Repo.one(
+      from(l in Engram.Links.NoteLink,
+        where: l.user_id == ^user.id and l.source_note_id == ^source_id,
+        select: l.target_note_id
+      ),
+      skip_tenant_check: true
+    )
   end
 
   # Regression for the no-`unique:` invariant. `Oban.insert/1` called twice

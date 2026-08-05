@@ -18,6 +18,26 @@ defmodule Engram.Workers.RewriteNoteLinks do
   counts `[:engram, :links, :rewrite, :failed]` and the rest proceed.
   A rewrite failure never fails or rolls back the rename.
 
+  Delayed sweep (closes the late-index rewrite window): a source note's
+  `[[link]]` is only visible to this worker once async indexing has
+  written its `note_links` edge. If a note is created (or edited to add a
+  new link) and its target is renamed within that indexing lag (~30s
+  observed on staging), the initial walk finds zero sources — the edge
+  doesn't exist yet — and completes clean, leaving the late-arriving edge
+  permanently dangling with stale text. When a chain's FINAL chunk (this
+  module's terminating branch, batch came back short) belongs to a run
+  that is not itself a sweep, it enqueues ONE follow-up job: same args,
+  cursor reset to the start, `"sweep" => true`, scheduled ~60s out. A
+  sweep-marked chain terminates WITHOUT enqueueing another sweep (no
+  recursion) — mid-chain successors still preserve the marker so the
+  sweep's own chunking doesn't spawn a third pass. This is cheap and safe
+  to run unconditionally: the rewrite is idempotent (already-current
+  occurrences plan no edits, so a clean run's second walk is a no-op),
+  old-path recovery still works on the delayed job (tombstones persist;
+  CRDT-origin ciphertext args are carried through verbatim), and there is
+  no `unique:` on this worker (see below) so the extra insert can't
+  collide with an in-flight chain.
+
   Args carry ids + base64 HMACs only (T3.2/H3 — plaintext in
   `oban_jobs.args` JSONB defeats at-rest encryption). The old plaintext
   path is recovered at run time from one of two sources: the rename
@@ -50,6 +70,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
 
   @default_batch_size 100
   @start_cursor "00000000-0000-0000-0000-000000000000"
+  @sweep_delay_seconds 60
 
   # The tagged error atoms the rewrite pipeline actually produces
   # (rewrite_source_note/attempt/persist + this worker's own path recovery).
@@ -153,8 +174,25 @@ defmodule Engram.Workers.RewriteNoteLinks do
           {:error, reason} -> {:error, reason}
         end
       else
-        :ok
+        maybe_enqueue_sweep(args)
       end
+    end
+  end
+
+  # Chain terminated. A plain run schedules one delayed sweep to catch any
+  # edge that indexed in after this walk started (see moduledoc). A sweep
+  # run terminates quietly — no third pass.
+  defp maybe_enqueue_sweep(%{"sweep" => true}), do: :ok
+
+  defp maybe_enqueue_sweep(args) do
+    args
+    |> Map.put("cursor", @start_cursor)
+    |> Map.put("sweep", true)
+    |> new(schedule_in: @sweep_delay_seconds)
+    |> Oban.insert()
+    |> case do
+      {:ok, _job} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 
