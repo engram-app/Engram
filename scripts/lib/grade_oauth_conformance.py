@@ -11,8 +11,11 @@ Exit 1 = regression, or no signal.
 Exit 2 = combination not applicable (CLI refused it, e.g. CIMD on 2025-03-26).
 """
 
-import json
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from report_io import load_report  # noqa: E402
 
 # Everything from here on needs a human at a Clerk login form.
 CONSENT_GATED = {
@@ -31,10 +34,9 @@ def main():
     path, label = sys.argv[1], sys.argv[2]
 
     try:
-        with open(path) as fh:
-            doc = json.load(fh)
-    except Exception:
-        print(f"    could not parse output for {label} — see {path}")
+        doc, _preamble = load_report(path)
+    except Exception as exc:
+        print(f"    could not parse output for {label}: {exc}")
         return 1
 
     # The CLI refuses combinations that never existed — CIMD did not exist in

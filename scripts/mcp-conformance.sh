@@ -65,6 +65,24 @@ mkdir -p "$OUT_DIR"
 # less coverage rather than more. Clients in the wild negotiate all of these.
 PROTOCOL_VERSIONS=(2025-03-26 2025-06-18 2025-11-25 2026-07-28)
 
+# Which stages to run. `spec` and `protocol` work against any target including
+# a loopback CI stack, so they are the per-PR gate. `oauth` needs a publicly
+# addressed deployment (see STAGE 2's header) and runs against staging.
+#
+#   CONFORMANCE_STAGES=spec,protocol   per-PR gate (CI stack)
+#   CONFORMANCE_STAGES=all             everything (staging/prod)
+STAGES="${CONFORMANCE_STAGES:-all}"
+case ",$STAGES," in *,all,*|*,oauth,*) RUN_OAUTH_STAGE=1 ;; *) RUN_OAUTH_STAGE=0 ;; esac
+case ",$STAGES," in *,all,*|*,spec,*) RUN_SPEC_STAGE=1 ;; *) RUN_SPEC_STAGE=0 ;; esac
+case ",$STAGES," in *,all,*|*,protocol,*) RUN_PROTOCOL_STAGE=1 ;; *) RUN_PROTOCOL_STAGE=0 ;; esac
+
+# A stage list that selects nothing would exit 0 having graded nothing — the
+# vacuous pass this script exists to prevent, reachable by typo.
+if [ "$RUN_OAUTH_STAGE$RUN_SPEC_STAGE$RUN_PROTOCOL_STAGE" = "000" ]; then
+  echo "CONFORMANCE_STAGES='$STAGES' selected no stages. Valid: all, spec, oauth, protocol." >&2
+  exit 2
+fi
+
 # `--no-telemetry`: the CLI ships posthog-node and is opt-out, not opt-in. Their
 # docs say it excludes URLs, tokens and headers, and that reads honest — but CI
 # runs against our production-shaped auth server and does not need to phone
@@ -98,13 +116,15 @@ fi
 echo "    npm and $TARGET_URL reachable"
 
 # ── STAGE 1: our own spec assertions ───────────────────────────────────────
-# The things the MCP spec MANDATES and MCPJam tolerates. All unauthenticated, so
-# they run to completion regardless of the consent gate — which makes this the
-# only stage that grades fully today. Both were violated in production on
-# 2026-08-05 while the suite was green.
-echo "==> spec assertions (RFC 9728) against $TARGET_URL"
-
+# The things the MCP spec MANDATES and MCPJam tolerates. All unauthenticated and
+# plain curl, so they grade fully regardless of the consent gate AND against a
+# loopback target — the only stage true of both, which is what makes it the
+# backbone of the per-PR gate. All three 2026-08-05 discovery bugs were caught
+# here, and all three were live while the MCPJam matrix was green.
 spec_fail() { echo "    SPEC VIOLATION: $*"; FAILED=1; }
+
+if [ "$RUN_SPEC_STAGE" = "1" ]; then
+echo "==> spec assertions (RFC 9728) against $TARGET_URL"
 
 challenge=$(curl -sS -D - -o /dev/null --max-time 15 -X POST \
   -H 'Content-Type: application/json' \
@@ -158,6 +178,7 @@ if [ "$TARGET_URL" != "$ORIGIN" ]; then
 fi
 
 [ "$FAILED" -eq 0 ] && echo "    all spec assertions passed"
+fi  # RUN_SPEC_STAGE
 
 # ── STAGE 2: OAuth conformance, full matrix ────────────────────────────────
 # Both registration paths across every protocol version. DCR and CIMD are
@@ -166,7 +187,26 @@ fi
 # declares a device_code grant we do not implement and lists 14 redirect URIs.
 # Both were fatal before #1241, and neither has anything to do with whether
 # MCPJam can safely use us.
+#
+# CANNOT RUN AGAINST A LOOPBACK OR PRIVATE TARGET — and not by our choice.
+# MCPJam's SDK ships an SSRF guard (`assertOutboundOAuthUrlAllowed`) that
+# refuses outbound OAuth metadata fetches to RFC 6890 special-use addresses
+# unless the caller opts in, and the CLI exposes no such flag in 3.18.0 or
+# 3.19.0:
+#
+#   Refusing outbound OAuth fetch to loopback host "localhost" (no loopback opt-in)
+#
+# It is defending against a hostile MCP server steering a fetch at
+# 169.254.169.254 or a LAN service — a guard worth having. The consequence for
+# us is structural: this stage needs a real, publicly-addressed deployment, so
+# it cannot gate a PR against a CI stack. Stages 1 and 3 have no such
+# restriction and are the per-PR gate; this one runs against staging on deploy.
+if [ "$RUN_OAUTH_STAGE" != "1" ]; then
+  echo "==> oauth matrix SKIPPED (stages=$STAGES)"
+fi
+
 for strategy in dcr cimd; do
+  [ "$RUN_OAUTH_STAGE" = "1" ] || break
   # Cells the CLI declines (CIMD did not exist before 2025-11-25) are N/A, not
   # failures. But a strategy that graded NOTHING across the whole matrix means
   # we tested it nowhere — the same "reported on work it never did" hazard as a
@@ -213,7 +253,9 @@ done
 # skip without a bearer token, so unauthenticated this stage grades nothing —
 # and a stage reporting on checks it never ran is precisely the failure mode
 # this script exists to prevent.
-if [ -z "${ENGRAM_CONFORMANCE_TOKEN:-}" ]; then
+if [ "$RUN_PROTOCOL_STAGE" != "1" ]; then
+  echo "==> protocol SKIPPED (stages=$STAGES)"
+elif [ -z "${ENGRAM_CONFORMANCE_TOKEN:-}" ]; then
   echo "==> protocol: NO TOKEN"
   echo "    ENGRAM_CONFORMANCE_TOKEN is unset, so 29 of 32 protocol checks would"
   echo "    skip and this stage would grade nothing. Failing rather than"
@@ -221,18 +263,38 @@ if [ -z "${ENGRAM_CONFORMANCE_TOKEN:-}" ]; then
   echo "    target and set it as the ENGRAM_CONFORMANCE_TOKEN secret."
   FAILED=1
 else
+  graded=0
   for version in "${PROTOCOL_VERSIONS[@]}"; do
     echo "==> protocol @$version"
+    # stderr goes to its OWN file, not into the JSON. `2>&1` here corrupted the
+    # report: the CLI writes advisory lines ("server does not advertise
+    # resources capability...") that landed ahead of the document and made it
+    # unparseable, which the grader then reported as NO SIGNAL. The warnings are
+    # still kept — they are useful when a check fails — just not inline.
     npx -y "@mcpjam/cli@${CLI_VERSION}" protocol conformance \
         --url "$TARGET_URL" \
         --protocol-version "$version" \
         --access-token "$ENGRAM_CONFORMANCE_TOKEN" \
         --no-telemetry --reporter json-summary \
-        > "$OUT_DIR/protocol-$version.json" 2>&1 || true
+        > "$OUT_DIR/protocol-$version.json" \
+        2> "$OUT_DIR/protocol-$version.stderr.log" || true
 
+    rc=0
     python3 "$GRADERS/grade_protocol_conformance.py" \
-      "$OUT_DIR/protocol-$version.json" "$version" || FAILED=1
+      "$OUT_DIR/protocol-$version.json" "$version" || rc=$?
+
+    case "$rc" in
+      0) graded=$((graded + 1)) ;;
+      2) ;;                                   # N/A — we do not implement it
+      *) graded=$((graded + 1)); FAILED=1 ;;
+    esac
   done
+
+  if [ "$graded" -eq 0 ]; then
+    echo "    NO SIGNAL — protocol: no version produced a verdict, so this stage"
+    echo "    graded nothing at all."
+    FAILED=1
+  fi
 fi
 
 exit "$FAILED"

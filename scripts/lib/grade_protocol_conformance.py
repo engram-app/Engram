@@ -13,8 +13,11 @@ Usage: grade_protocol_conformance.py <results.json> <label>
 Exit 0 = every check ran and passed. Exit 1 = anything else.
 """
 
-import json
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from report_io import load_report  # noqa: E402
 
 
 def collect(doc):
@@ -38,11 +41,14 @@ def main():
     path, label = sys.argv[1], sys.argv[2]
 
     try:
-        with open(path) as fh:
-            doc = json.load(fh)
-    except Exception:
-        print(f"    could not parse protocol output for {label} — see {path}")
+        doc, preamble = load_report(path)
+    except Exception as exc:
+        print(f"    could not parse protocol output for {label}: {exc}")
         return 1
+
+    if preamble:
+        for line in preamble.splitlines():
+            print(f"    [cli] {line}")
 
     checks = collect(doc)
 
