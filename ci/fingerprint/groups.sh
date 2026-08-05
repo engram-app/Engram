@@ -4,7 +4,14 @@
 group_paths() {
   case "$1" in
     elixir-src)  echo "lib config mix.lock" ;;        # mix.exs handled separately (version-stripped)
-    unit-tests)  echo "test" ;;
+    # Not just test/: the unit-tests JOB also runs the OpenAPI drift gate
+    # (diffs the committed openapi.json against a fresh regen) and squawk
+    # (which auto-discovers .squawk.toml from cwd). Both were outside every
+    # hash, so a commit touching only one of them hit a stale marker and
+    # skipped the very check it should have re-run — and both fail OPEN
+    # (a loosened squawk rule / a stale spec rides in silently). Same class
+    # as .credo.exs living in lint-config.
+    unit-tests)  echo "test openapi.json .squawk.toml" ;;
     # Whole priv/, not just migrations: priv/legal (ToS manifests the legal
     # seeder loads at boot), priv/static (SPA assets), priv/gettext, seeds, and
     # structure.sql all affect unit-tests / the booted release. Legacy
