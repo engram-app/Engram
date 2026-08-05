@@ -16,7 +16,7 @@ import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { AttachmentFallback } from "./attachment-fallback";
 import AttachmentImg from "./attachment-img";
 import MermaidBlock from "./mermaid-block";
-import { buildWikiMap, type NoteLinkEdge, wikiHref } from "./wiki-link";
+import { buildWikiMap, type ManifestNote, type NoteLinkEdge, wikiHref } from "./wiki-link";
 
 interface NoteViewProps {
 	content: string;
@@ -25,6 +25,11 @@ interface NoteViewProps {
 	// outside a note context and has no links to resolve — wikilinks there
 	// fall back to the lazy /:slug/wiki/* route same as before this prop existed.
 	links?: NoteLinkEdge[];
+	// Optional second resolution layer (see wikiHref): the sync manifest covers
+	// freshly typed links whose server-indexed edge isn't in `links` yet.
+	// NotePage threads its already-subscribed useSyncManifest data; the
+	// reference panel omits it (no vault context to resolve against anyway).
+	manifestNotes?: ManifestNote[];
 }
 
 // Sentinel marks images rewritten from Obsidian `![[X]]` embed syntax. The
@@ -41,7 +46,11 @@ function rewriteEmbeds(raw: string): string {
 // Slug-parameterized: wikilinks route through the vault-scoped resolver
 // (`/:slug/wiki/*`, see wiki-link.ts). pageResolver is identity — the default
 // would mangle names (`My Note` → `my_note`) before the resolver ever saw them.
-const remarkPluginsFor = (slug: string | undefined, map: Map<string, NoteLinkEdge>) =>
+const remarkPluginsFor = (
+	slug: string | undefined,
+	map: Map<string, NoteLinkEdge>,
+	manifestNotes?: ManifestNote[],
+) =>
 	[
 		remarkGfm,
 		remarkMath,
@@ -50,7 +59,7 @@ const remarkPluginsFor = (slug: string | undefined, map: Map<string, NoteLinkEdg
 			remarkWikiLink,
 			{
 				pageResolver: (name: string) => [name],
-				hrefTemplate: (permalink: string) => wikiHref(permalink, slug, map),
+				hrefTemplate: (permalink: string) => wikiHref(permalink, slug, map, manifestNotes),
 				aliasDivider: "|",
 			},
 		],
@@ -74,11 +83,17 @@ const TEXT_EMBED = /\.(?:md|canvas)$/iu;
 // the preview stays force-mounted with identical props; react-markdown has
 // no internal memoization, so an unmemoized NoteView re-ran the full
 // remark/rehype pipeline (gfm + KaTeX + highlight) per keystroke.
-function NoteView({ content, tags, links }: NoteViewProps) {
+function NoteView({ content, tags, links, manifestNotes }: NoteViewProps) {
 	const isFreeTier = useIsFreeTier();
 	const { slug } = useParams();
 	const wikiMap = useMemo(() => buildWikiMap(links), [links]);
-	const remarkPlugins = useMemo(() => remarkPluginsFor(slug, wikiMap), [slug, wikiMap]);
+	// TanStack's structural sharing keeps manifestNotes referentially stable
+	// across no-change refetches, so this memo (and the memo(NoteView) above
+	// it) only re-runs when the manifest actually changed.
+	const remarkPlugins = useMemo(
+		() => remarkPluginsFor(slug, wikiMap, manifestNotes),
+		[slug, wikiMap, manifestNotes],
+	);
 	const body = useMemo(() => {
 		try {
 			return rewriteEmbeds(matter(content).content);

@@ -81,13 +81,17 @@ export function wikiCreatePath(raw: string): { folder: string; name: string } {
 }
 
 // No slug = rendered outside a vault route (markdown reference panel) —
-// nothing to resolve against, so the anchor stays inert. A resolved entry in
-// `map` (from buildWikiMap) short-circuits straight to the note id instead of
-// the lazy /:slug/wiki/* redirect; anything unresolved keeps that fallback.
+// nothing to resolve against, so the anchor stays inert. Layered resolution:
+// (1) a resolved entry in `map` (from buildWikiMap, server-indexed edges)
+// short-circuits straight to the note id; (2) a miss there tries the sync
+// manifest (client cache — covers freshly typed links whose edge isn't
+// indexed yet); (3) only then the lazy /:slug/wiki/* redirect, kept for deep
+// links and the create-affordance on truly nonexistent targets.
 export function wikiHref(
 	raw: string,
 	slug: string | undefined,
 	map?: Map<string, NoteLinkEdge>,
+	manifestNotes?: ManifestNote[],
 ): string {
 	const { page, hash } = parseWikiTarget(raw);
 	if (!page) {
@@ -99,6 +103,10 @@ export function wikiHref(
 	const resolved = map?.get(page.toLowerCase());
 	if (resolved?.target_note_id) {
 		return `/${slug}/${resolved.target_note_id}${hash}`;
+	}
+	const fromManifest = manifestNotes ? resolveWikiTarget(page, manifestNotes) : null;
+	if (fromManifest) {
+		return `/${slug}/${fromManifest.id}${hash}`;
 	}
 	const encoded = page.split("/").map(encodeURIComponent).join("/");
 	return `/${slug}/wiki/${encoded}${hash}`;

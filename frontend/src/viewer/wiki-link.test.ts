@@ -158,3 +158,46 @@ describe("wikiHref with resolver map", () => {
 		expect(wikiHref("My Note", "v")).toBe("/v/wiki/My%20Note");
 	});
 });
+
+describe("wikiHref layered manifest fallback", () => {
+	const map = buildWikiMap([
+		{
+			target_text: "My Note",
+			target_note_id: "edge-id",
+			target_attachment_id: null,
+			target_path: "a/My Note.md",
+			alias: null,
+			anchor: null,
+			link_type: "wikilink",
+			dangling: false,
+		},
+	]);
+	const notes = [
+		{ id: "manifest-id", path: "b/My Note.md" },
+		{ id: "fresh-id", path: "Fresh/Renamed Note.md" },
+	];
+
+	test("edge-map hit wins over a manifest match", () => {
+		expect(wikiHref("My Note", "v", map, notes)).toBe("/v/edge-id");
+	});
+
+	test("manifest-only target links straight to the note id", () => {
+		expect(wikiHref("Renamed Note", "v", map, notes)).toBe("/v/fresh-id");
+	});
+
+	test("unknown in both falls back to the wiki resolver route", () => {
+		expect(wikiHref("Brand New", "v", map, notes)).toBe("/v/wiki/Brand%20New");
+	});
+
+	test("heading hash preserved on edge-map hit", () => {
+		expect(wikiHref("My Note#A Heading", "v", map, notes)).toBe("/v/edge-id#a-heading");
+	});
+
+	test("heading hash preserved on manifest hit", () => {
+		expect(wikiHref("Renamed Note#A Heading", "v", map, notes)).toBe("/v/fresh-id#a-heading");
+	});
+
+	test("heading hash preserved on wiki fallback", () => {
+		expect(wikiHref("Brand New#A Heading", "v", map, notes)).toBe("/v/wiki/Brand%20New#a-heading");
+	});
+});
