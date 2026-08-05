@@ -33,10 +33,10 @@ Requires the CI stack (backend CRDT is unconditional — the old
 
 ```bash
 # Attachments go to the central FastRaid MinIO, not a per-stack sidecar, so
-# the stack needs credentials for it plus a bucket of its own. The bucket MUST
-# start with `ci-`: teardown refuses to purge anything else, because that same
-# host also holds staging's live attachments.
-export CI_MINIO_BUCKET="ci-local-${USER}"
+# the stack needs credentials for it. The bucket defaults to the shared
+# permanent `ci-e2e`; you do not create or clean one, and nothing you write is
+# visible to another run (object keys embed per-run user + vault ids). Objects
+# expire after 7 days via a server-side rule.
 export CI_MINIO_ACCESS_KEY=... CI_MINIO_SECRET_KEY=...   # ask an operator
 
 # Bring up the local-auth stack (the crdt: channel is always advertised)
