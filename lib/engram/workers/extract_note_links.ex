@@ -96,7 +96,7 @@ defmodule Engram.Workers.ExtractNoteLinks do
         # resolve through the authority.
         with {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user),
              {:ok, content} <- Engram.Notes.authoritative_content(user, decrypted) do
-          :ok = Links.replace_links(user, vault, note.id, Parser.extract(content || ""))
+          :ok = Links.replace_links(user, vault, note.id, Parser.extract(content))
           :ok = repair_rename_danglers(user, vault, note.id)
           :ok
         else
