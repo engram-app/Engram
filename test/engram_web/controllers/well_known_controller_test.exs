@@ -30,6 +30,33 @@ defmodule EngramWeb.WellKnownControllerTest do
     end
   end
 
+  # RFC 9728 §3.1: for a resource with a path (`https://host/api/mcp`), the
+  # metadata URL inserts `/.well-known/oauth-protected-resource` BEFORE that
+  # path. A strict client derives this from the resource it dialed and tries it
+  # FIRST. We served only the root form, so this 404'd and only clients with a
+  # fallback (MCPJam, Claude) ever reached discovery — the rest could not find
+  # the authorization server at all.
+  #
+  # The root form stays: on the dedicated MCP host the advertised resource IS
+  # the bare host (#634 / WellKnownHostTest), and for a root resource the root
+  # well-known is the spec-correct location.
+  describe "GET /.well-known/oauth-protected-resource/api/mcp (RFC 9728 §3.1)" do
+    test "serves the same metadata as the root form", %{conn: conn} do
+      path_scoped = json_response(get(conn, "/.well-known/oauth-protected-resource/api/mcp"), 200)
+      root = json_response(get(conn, "/.well-known/oauth-protected-resource"), 200)
+
+      assert path_scoped == root
+    end
+
+    test "advertises a resource matching the URL the client dialed", %{conn: conn} do
+      body = json_response(get(conn, "/.well-known/oauth-protected-resource/api/mcp"), 200)
+
+      # Strict clients abort when `resource` != the URL they resolved metadata
+      # for. In the selfhost/test shape that is the /api/mcp path form.
+      assert String.ends_with?(body["resource"], "/api/mcp")
+    end
+  end
+
   describe "GET /.well-known/oauth-authorization-server" do
     test "returns RFC 8414 server metadata with required fields", %{conn: conn} do
       conn = get(conn, "/.well-known/oauth-authorization-server")
