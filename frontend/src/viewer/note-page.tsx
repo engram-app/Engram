@@ -437,7 +437,12 @@ export default function NotePage() {
 						// the title sits the same distance above the body in reading mode
 						// as it does in the editor.
 						<div className="px-5 pt-5">
-							<NoteView content={liveContent} tags={note.tags} links={note.links} />
+							<NoteView
+								content={liveContent}
+								tags={note.tags}
+								links={note.links}
+								manifestNotes={manifest?.notes}
+							/>
 						</div>
 					) : (
 						<Suspense fallback={<p className="px-5 py-5 text-muted-foreground">Loading editor…</p>}>
