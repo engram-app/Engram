@@ -98,6 +98,15 @@ env:
   # pull hex from the LAN instead of WAN. Signatures still verified client-side.
   HEX_MIRROR: "http://10.0.20.214:8090"
 
+  # MinIO username for the central FastRaid instance, scoped by policy to
+  # `ci-*` buckets (engram-infra: SOPS + main/github/secrets.tf). A PLAIN value,
+  # deliberately not a secret: it is also the CI image repository name
+  # (`${LOCAL_REGISTRY}/engram-ci:<hash>`), and GitHub redacts secret values out
+  # of job OUTPUTS by substring — as a secret it blanked ENGRAM_CI_IMAGE for
+  # every downstream e2e job, which then failed with `invalid reference format`.
+  # Only the paired CI_MINIO_SECRET_KEY is a secret.
+  CI_MINIO_ACCESS_KEY: "engram-ci"
+
   # CI-only encryption master key. Ephemeral — CI databases are recreated per run,
   # so the key does not protect persistent data. Production deploys must override
   # with a secret via `fly secrets set ENCRYPTION_MASTER_KEY=...`.
@@ -546,6 +555,13 @@ jobs:
         env:
           HASH: ${{ steps.tag.outputs.hash }}
           IMAGE: ${{ steps.tag.outputs.image }}
+          # `docker compose build` interpolates the WHOLE file before it builds
+          # anything, so the `:?` required-guards on the minio-init/engram
+          # runtime env abort a build that never reads those values (#1267 added
+          # the guards; this job was not given the secret alongside them). The
+          # guards are deliberate — supply the value rather than weakening them.
+          # The paired access key is workflow-level env, not a secret (see there).
+          CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
           # Use buildx's plain progress writer instead of the fancy tty printer.
           # The latter races on `--load`/LoadImage: a progress goroutine writes
           # to a closed channel and panics *after* the image built fine, failing
@@ -965,7 +981,6 @@ jobs:
       # also carries staging's live attachments. The `ci-` prefix is
       # load-bearing: e2e teardown refuses to purge anything outside it.
       CI_MINIO_BUCKET: ci-${{ github.run_id }}-obsidian
-      CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
       CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
       MARKER_PREFIX: /tmp/ci-${{ github.run_id }}-obsidian
       E2E_VAULT_PREFIX: /tmp/e2e-vault-${{ github.run_id }}-obsidian
@@ -1580,7 +1595,6 @@ jobs:
       CI_PROJECT: engram-ci-crdt-${{ github.run_id }}
       QDRANT_COLLECTION: ci_crdt_${{ github.run_id }}
       CI_MINIO_BUCKET: ci-crdt-${{ github.run_id }}
-      CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
       CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
       MARKER_PREFIX: /tmp/ci-crdt-${{ github.run_id }}
       E2E_VAULT_PREFIX: /tmp/e2e-crdt-vault-${{ github.run_id }}
@@ -2112,7 +2126,6 @@ jobs:
       CI_PROJECT: engram-ci-headless-${{ github.run_id }}
       QDRANT_COLLECTION: ci_headless_${{ github.run_id }}
       CI_MINIO_BUCKET: ci-headless-${{ github.run_id }}
-      CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
       CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
       ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image || needs.fingerprint.outputs.image }}
     steps:
