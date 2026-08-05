@@ -194,6 +194,75 @@ defmodule Engram.Links.RewriterTest do
     end
   end
 
+  describe "plan_edits/5 — folder-only move (Phase 3, #1231)" do
+    # A folder rename is N note renames where ONLY the folder prefix changes.
+    # These pins prove the Phase 1 machinery already carries Phase 3:
+    # basename unchanged ⇒ bare links plan NO edit (replacement_target
+    # returns the identical text; the occ.target == replacement guard drops
+    # it), qualified links get the new prefix, collision qualifies bare.
+
+    test "bare occurrence plans NO edit when only the folder changed", %{
+      user: user,
+      vault: vault
+    } do
+      renamed = Engram.Fixtures.insert_note!(user, vault, %{path: "archive/Guide.md"})
+      full = "see [[Guide]] and ![[Guide|shown]]"
+
+      assert Rewriter.plan_edits(
+               user,
+               vault,
+               full,
+               full,
+               note_target(renamed, "docs/Guide.md", "archive/Guide.md", false)
+             ) == []
+    end
+
+    test "qualified occurrence gets the new folder prefix; bare sibling untouched", %{
+      user: user,
+      vault: vault
+    } do
+      renamed = Engram.Fixtures.insert_note!(user, vault, %{path: "archive/sub/Guide.md"})
+      full = "q [[docs/sub/Guide]] bare [[Guide]] anchored [[docs/sub/Guide#H|x]]"
+
+      edits =
+        Rewriter.plan_edits(
+          user,
+          vault,
+          full,
+          full,
+          note_target(renamed, "docs/sub/Guide.md", "archive/sub/Guide.md", false)
+        )
+
+      assert length(edits) == 2
+
+      assert Rewriter.splice(full, edits) ==
+               "q [[archive/sub/Guide]] bare [[Guide]] anchored [[archive/sub/Guide#H|x]]"
+    end
+
+    test "collision qualifies a bare occurrence toward the NEW folder path", %{
+      user: user,
+      vault: vault
+    } do
+      # Two live rows share the basename ⇒ collision? true. The bare link's
+      # shortest-path winner could silently flip after the move; qualifying
+      # pins the pre-move resolution (same rule as a note rename).
+      renamed = Engram.Fixtures.insert_note!(user, vault, %{path: "archive/Guide.md"})
+      _sibling = Engram.Fixtures.insert_note!(user, vault, %{path: "other/Guide.md"})
+      full = "see [[Guide]]"
+
+      edits =
+        Rewriter.plan_edits(
+          user,
+          vault,
+          full,
+          full,
+          note_target(renamed, "docs/Guide.md", "archive/Guide.md", true)
+        )
+
+      assert Rewriter.splice(full, edits) == "see [[archive/Guide]]"
+    end
+  end
+
   defp raw_note!(user, id) do
     {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get(Note, id) end)
     raw
