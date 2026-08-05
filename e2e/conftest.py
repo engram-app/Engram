@@ -889,9 +889,11 @@ def session_cleanup(request, auth_provider):
             cleanup_test_data(pattern)
         except Exception as e:
             logging.getLogger(__name__).error("DB cleanup failed for %s: %s", pattern, e)
-    # Blob cleanup — purge the MinIO bucket so per-session re-runs do not
-    # accumulate orphan attachment objects. Skips silently outside CI when
-    # the container name doesn't match.
+    # Blob cleanup — remove this run's bucket on the central FastRaid MinIO.
+    # Skips silently when no credentials are present (unit tiers, local runs
+    # with no storage). Raises rather than deleting if the bucket falls outside
+    # the `ci-` namespace; caught and logged here so a misconfiguration stays
+    # loud without masking the suite's actual result.
     try:
         cleanup_minio_bucket()
     except Exception as e:

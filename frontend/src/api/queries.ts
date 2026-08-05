@@ -619,10 +619,13 @@ export function useCreateNote() {
 	return useMutation<
 		{ path: string; id: string },
 		ApiError,
-		{ folder: string; id: string },
+		// `name` defaults to "Untitled.md" (the sidebar "New note" button) — the
+		// unresolved-wikilink "create this note" affordance passes the target's
+		// derived filename instead. Either way collideBump still guards a race.
+		{ folder: string; id: string; name?: string },
 		CreateNoteContext | undefined
 	>({
-		mutationFn: async ({ folder, id }) => {
+		mutationFn: async ({ folder, id, name: desiredName = "Untitled.md" }) => {
 			const folderId = folderIdForPath(qc, vaultId, folder);
 			const existingNotes = folderId
 				? (qc.getQueryData<NoteSummary[]>(["folder-notes-by-id", vaultId, folderId]) ?? [])
@@ -633,7 +636,7 @@ export function useCreateNote() {
 
 			const MAX_RACES = 5;
 			for (let attempt = 0; attempt < MAX_RACES; attempt++) {
-				const name = collideBump(existingNames, "Untitled.md", { cap: 1000 });
+				const name = collideBump(existingNames, desiredName, { cap: 1000 });
 				const path = folder ? `${folder}/${name}` : name;
 				try {
 					// crdt_create genesis over the live channel (replaces POST /notes);
@@ -661,7 +664,7 @@ export function useCreateNote() {
 		// Drop a placeholder row into the id-keyed list the tree reads so a new
 		// note shows instantly (on-disk feel), then swap it for the server row on
 		// success. Root and subfolders share one cache keyed by folder id.
-		onMutate: async ({ folder, id }) => {
+		onMutate: async ({ folder, id, name: desiredName = "Untitled.md" }) => {
 			const folderId = folderIdForPath(qc, vaultId, folder);
 			// Unknown non-root folder not in the cache yet — skip; surfaces on expand.
 			if (folderId === null) {
@@ -676,7 +679,7 @@ export function useCreateNote() {
 				return;
 			}
 
-			const name = collideBump(realFilenames(snapshot), "Untitled.md", { cap: 1000 });
+			const name = collideBump(realFilenames(snapshot), desiredName, { cap: 1000 });
 			const path = folder ? `${folder}/${name}` : name;
 			const now = new Date().toISOString();
 			const placeholder: NoteSummary = {
