@@ -17,7 +17,28 @@ defmodule EngramWeb.HealthController do
   )
 
   def index(conn, _params) do
-    json(conn, %{status: "ok", version: Application.spec(:engram, :vsn) |> to_string()})
+    json(conn, %{
+      status: "ok",
+      version: Application.spec(:engram, :vsn) |> to_string(),
+      build_sha: build_sha()
+    })
+  end
+
+  # `version` reads mix.exs, which release-please keeps STICKY between release
+  # cuts — so it does NOT change on a non-release deploy and cannot answer
+  # "did my merge actually ship?". That blind spot is how a broken staging
+  # deploy chain went unnoticed for weeks. build_sha is baked into the image
+  # at build time (Dockerfile `ARG RELEASE_SHA`), so it always describes the
+  # bytes actually running, in every environment.
+  #
+  # Blank coerces to nil to mirror config/runtime.exs's Sentry `release`
+  # handling: an empty env var means "not configured" (local build, self-host),
+  # not a real empty identifier.
+  defp build_sha do
+    case System.get_env("RELEASE_SHA") do
+      v when is_binary(v) and v != "" -> v
+      _ -> nil
+    end
   end
 
   operation(:deep,

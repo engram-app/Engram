@@ -2520,10 +2520,19 @@
       "HealthStatus": {
         "description": "Service health status.",
         "example": {
+          "build_sha": "e998801",
           "status": "ok",
           "version": "0.5.464"
         },
         "properties": {
+          "build_sha": {
+            "description": "Commit the running image was built from, baked in at build time. null on local/self-host builds where it was not supplied.",
+            "example": "e998801f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "checks": {
             "additionalProperties": {
               "type": "string",
@@ -2543,7 +2552,7 @@
             "x-validate": null
           },
           "version": {
-            "description": "Running app version",
+            "description": "Running app version from mix.exs. Sticky between release-please cuts, so it does NOT change on a non-release deploy — use build_sha to tell what code is actually running.",
             "example": "0.5.464",
             "type": "string",
             "x-struct": null,

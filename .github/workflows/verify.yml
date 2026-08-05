@@ -4448,6 +4448,12 @@ jobs:
           build-args: |
             VITE_SENTRY_DSN=${{ secrets.VITE_SENTRY_DSN }}
             VITE_GIT_SHA=${{ github.sha }}
+            # Backend counterpart to VITE_GIT_SHA. Baked into the image so
+            # /api/health can report what code is actually running: `version`
+            # reads mix.exs, which release-please keeps sticky between cuts,
+            # so it never moves on a non-release deploy. Same full 40-char
+            # SHA the frontend and Sentry use, so all three agree.
+            RELEASE_SHA=${{ github.sha }}
             SENTRY_ORG=${{ vars.SENTRY_ORG }}
             SENTRY_PROJECT=${{ vars.SENTRY_PROJECT_FRONTEND }}
             HEX_MIRROR=${{ env.HEX_MIRROR }}
