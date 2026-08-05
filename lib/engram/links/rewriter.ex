@@ -112,7 +112,8 @@ defmodule Engram.Links.Rewriter do
     end)
   end
 
-  # build_target/5 prefetches the candidate sets once per rename walk; a
+  # build_target/5 prefetches the candidate sets once per job batch (a large
+  # walk re-snapshots per cursor-chain job); a
   # hand-built target (unit tests, spec callers) without the key falls back
   # to a per-call fetch — still once per source note, never per occurrence.
   defp pre_rename_candidates(user, vault, target) do
@@ -161,7 +162,7 @@ defmodule Engram.Links.Rewriter do
          new_path: new_path,
          old_basename_hmac: Links.basename_hmac(user, Links.basename_key(old_path)),
          collision?: Links.live_basename_count(user, vault, Links.basename_key(new_path)) > 1,
-         # Prefetched ONCE per rename walk — plan_edits/5 consults these for
+         # Prefetched ONCE per job batch — plan_edits/5 consults these for
          # every occurrence in every source note instead of re-querying +
          # re-decrypting per occurrence (#1240 review).
          pre_rename_candidates: Links.pre_rename_candidates(user, vault, kind, id, old_path)

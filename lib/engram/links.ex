@@ -324,10 +324,16 @@ defmodule Engram.Links do
   post-rename position, plus a synthetic candidate `{renamed_id, old_path}`
   in the `kind` list. Everything here is CONSTANT across a whole rename
   walk (the hmac comes from `old_path`, not from any occurrence), so
-  callers fetch ONCE per walk — `Rewriter.build_target/5` stashes the
+  callers fetch ONCE per job batch — `Rewriter.build_target/5` stashes the
   result on the target map — and thread it through
   `pre_rename_winner?/4` per occurrence, mirroring
   `bind_danglers_for_hmac/3`'s prefetch shape.
+
+  Snapshot semantics: candidate-table changes AFTER the fetch (a concurrent
+  rename/create sharing the basename) aren't seen for the rest of the
+  batch. That's the walk's pre-existing eventual-consistency posture — no
+  transaction spans the batch, and later rebinds/renames self-heal — just
+  a wider window than the old per-occurrence refetch had.
   """
   @spec pre_rename_candidates(map(), map(), :note | :attachment, binary(), String.t()) ::
           %{notes: [{binary(), String.t()}], attachments: [{binary(), String.t()}]}
@@ -354,7 +360,7 @@ defmodule Engram.Links do
   @doc """
   Would `target` have resolved to the renamed row (`renamed_id`) at its OLD
   path, under `resolve_target/4`'s rules? `candidates` comes from
-  `pre_rename_candidates/5` — fetched once per rename walk and shared
+  `pre_rename_candidates/5` — fetched once per job batch and shared
   across every occurrence; only the per-occurrence `target` varies the
   resolution (extension routing, path filter, tiebreak), applied via the
   same `route_resolution/3` + `resolve_from_candidates/3` rules
