@@ -3964,17 +3964,45 @@ defmodule Engram.Notes do
       broadcast_contents =
         fetch_note_contents(user, Enum.map(real_note_updates, fn {n, _, _, _, _} -> n.id end))
 
-      # Side effects outside the transaction — broadcast + reindex.
-      # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
-      # Marker rows have no path / no embedding, skip the broadcast+enqueue.
+      # Side effects outside the transaction — broadcast + reindex + link
+      # rewrite fan-out. T3.2 — hmac-only args, never plaintext.
+      # Marker rows have no path / no embedding / no basename, skip everything.
       Enum.each(real_note_updates, fn {note, old_note_path, new_path, new_note_folder, _title} ->
+        old_path_hmac = old_path_hmac_b64!(user, old_note_path)
+
         _ =
           Enqueue.enqueue(
             Engram.Workers.RepathNoteIndex.new_debounced(note.id,
-              old_path_hmac: old_path_hmac_b64!(user, old_note_path)
+              old_path_hmac: old_path_hmac
             ),
             "repath_note_index"
           )
+
+        # #648/#1231 Phase 3 — a folder rename is N note renames (basename
+        # unchanged), so each moved note reuses the Phase 1 rewrite job
+        # verbatim: qualified [[old-folder/…]] occurrences get the new
+        # prefix; bare [[basename]] occurrences plan no edit (idempotence
+        # guard in Rewriter.plan_edits/5). Old-path recovery = the tombstone
+        # this very cascade inserted in the same transaction — no ciphertext
+        # args. Origin safety is by construction: the plugin never calls the
+        # folder-rename REST surface (it renames per-file over CRDT, which
+        # Phase 2 gates), so every caller here is web/MCP and must rewrite.
+        # Gated on a real move: the idempotent same-folder branch of
+        # rename_folder_gated reaches this loop with old == new.
+        _ =
+          if old_note_path != new_path do
+            Enqueue.enqueue(
+              RewriteNoteLinks.new_for(
+                user.id,
+                vault.id,
+                :note,
+                note.id,
+                old_path_hmac,
+                Base.encode64(Links.basename_hmac(user, Links.basename_key(old_note_path)))
+              ),
+              "rewrite_note_links"
+            )
+          end
 
         # #976: carry the moved note's id on the old-path delete leg. The note
         # still exists (same id, new path, upsert leg below), so receivers can
@@ -4008,6 +4036,22 @@ defmodule Engram.Notes do
           )
 
         :ok = broadcast_change(user.id, vault.id, "delete", old_note_path, note.id, [])
+      end)
+
+      # #1231 — bulk rebind fan-out: ONE RebindNoteLinks per DISTINCT moved
+      # basename (old and new basename keys are equal on a folder move, so
+      # this is do_rename_note_inner's dedup-when-equal rule at folder
+      # scale). Closes what the text rewrite can't: bare-link winners whose
+      # shortest-path tiebreak flipped with the move, and pre-typed danglers
+      # waiting on the NEW qualified path.
+      real_note_updates
+      |> Enum.filter(fn {_n, old_p, new_p, _f, _t} -> old_p != new_p end)
+      |> Enum.map(fn {_n, old_p, _np, _f, _t} ->
+        Links.basename_hmac(user, Links.basename_key(old_p))
+      end)
+      |> Enum.uniq()
+      |> Enum.each(fn hmac ->
+        _ = Enqueue.enqueue(RebindNoteLinks.new_for(user.id, vault.id, hmac), "rebind_note_links")
       end)
 
       {:ok, length(notes)}
