@@ -240,11 +240,14 @@ def cleanup_vaults() -> None:
 
 
 def cleanup_minio_bucket() -> None:
-    """Best-effort removal of this run's bucket on the central MinIO.
+    """Best-effort purge of this run's bucket CONTENTS on the central MinIO.
 
-    Attachments land in MinIO, so without this every run leaks its blobs —
-    and since the move off the per-stack sidecar, leaks now accumulate on a
-    shared host rather than dying with the container.
+    Attachments land in MinIO, so without this every session leaks its blobs —
+    and since the move off the per-stack sidecar, leaks accumulate on a shared
+    host rather than dying with the container.
+
+    Leaves the bucket itself in place; verify.yml's job-level teardown removes
+    it. See the comment on the `mc rm` call for why that split is mandatory.
 
     Refuses any bucket outside the `ci-` namespace: the same host holds
     staging and selfhost attachments, and this is a recursive force-delete.
@@ -267,13 +270,22 @@ def cleanup_minio_bucket() -> None:
         logger.debug("MinIO purge skipped — no central MinIO credentials in env")
         return
 
-    # `mc rb --force` removes contents AND the bucket: the bucket is per-run,
-    # so leaving an empty one behind just accumulates a different kind of
-    # litter on the shared host.
+    # Purge CONTENTS, never the bucket itself (`mc rm`, not `mc rb`).
+    #
+    # This runs at pytest SESSION teardown, and a job can have more than one
+    # session: e2e-clerk runs the API-only tier while Obsidian boots, then the
+    # full Obsidian suite against the SAME stack. `mc rb` removed the bucket
+    # when the first session ended, so every attachment write in the second
+    # session died on NoSuchBucket — 5 red tests whose logs pointed at sync,
+    # not storage (observed run 31043944743).
+    #
+    # Reclaiming the bucket is the WORKFLOW's job (verify.yml "Tear down",
+    # which runs once, at job end, even on cancel). Session teardown only has
+    # to stop objects accumulating between sessions.
     inline = (
         f"mc alias set central http://{CI_MINIO_HOST}:{CI_MINIO_PORT} "
         f'"$CI_MINIO_ACCESS_KEY" "$CI_MINIO_SECRET_KEY" >/dev/null && '
-        f"mc rb --force central/{CI_MINIO_BUCKET}"
+        f"mc rm --recursive --force central/{CI_MINIO_BUCKET}/"
     )
     cmd = [
         "docker", "run", "--rm",

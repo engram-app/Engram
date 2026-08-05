@@ -87,6 +87,39 @@ def test_guard_allows_run_scoped_ci_buckets(
     cleanup.cleanup_minio_bucket()  # must not raise
 
 
+def test_purges_contents_but_never_removes_the_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session teardown must use `mc rm`, NEVER `mc rb`.
+
+    A single CI job runs more than one pytest session against ONE stack:
+    e2e-clerk runs the API-only tier while Obsidian boots, then the Obsidian
+    suite. `mc rb` at the end of the first session removed the bucket out from
+    under the second, and every attachment write then died on NoSuchBucket —
+    surfacing as 5 red sync tests whose logs never mentioned storage
+    (run 31043944743).
+
+    Reclaiming the bucket belongs to verify.yml's job-level teardown, which
+    runs once, at the end, even on cancel.
+    """
+    monkeypatch.setattr(cleanup, "CI_MINIO_BUCKET", "ci-4242")
+    monkeypatch.setenv("CI_MINIO_ACCESS_KEY", "ak")
+    monkeypatch.setenv("CI_MINIO_SECRET_KEY", "sk")
+
+    captured: dict[str, list[str]] = {}
+
+    def _capture(cmd: list[str], **kwargs: object) -> object:
+        captured["cmd"] = cmd
+        return type("R", (), {"returncode": 0, "stderr": ""})()
+
+    monkeypatch.setattr(cleanup.subprocess, "run", _capture)
+    cleanup.cleanup_minio_bucket()
+
+    shell_cmd = captured["cmd"][-1]
+    assert "mc rm --recursive --force central/ci-4242/" in shell_cmd
+    assert "mc rb" not in shell_cmd, "must not remove the bucket at session teardown"
+
+
 def test_missing_credentials_is_a_quiet_skip_not_a_crash(
     monkeypatch: pytest.MonkeyPatch, _explode_on_subprocess: None
 ) -> None:
