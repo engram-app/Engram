@@ -181,6 +181,40 @@ defmodule Engram.LinksTest do
     end
   end
 
+  describe "concurrent replace_links race (Task 2)" do
+    # Task 2 — two writers (ExtractNoteLinks fast path + the embed pipeline's
+    # commit_index, or duplicate bulk jobs) interleaving replace_links/4's
+    # delete+insert under READ COMMITTED can violate
+    # unique_index([:source_note_id, :position]): a second writer's DELETE
+    # cannot see the first writer's uncommitted INSERT. Fix: serialize
+    # per-source-note writes via `pg_advisory_xact_lock`, taken as the first
+    # statement inside the existing transaction. Real cross-connection
+    # concurrency is untestable under the Ecto sandbox (single shared
+    # connection per test) — this source-string assertion is the accepted
+    # substitute already used for the identical problem in
+    # attachments_test.exs:88-98 (T3-audit H1).
+    test "replace_links/4 takes a per-source-note advisory lock inside its transaction" do
+      src = File.read!("lib/engram/links.ex")
+
+      # Scoped to the exact call site, not just "the SQL exists somewhere in
+      # the file" — the negative lookbehind excludes the `defp
+      # lock_source_note!(source_note_id) do` definition line itself (same
+      # substring), so this only matches an actual *call*. Deleting the call
+      # inside replace_links's transaction fails this test even if the
+      # lock_source_note! helper is left behind as dead code.
+      assert src =~ ~r/(?<!defp )lock_source_note!\(source_note_id\)/,
+             "replace_links must call lock_source_note!(source_note_id) to serialize " <>
+               "concurrent writers (Task 2)"
+
+      assert src =~ ~r/pg_advisory_xact_lock/,
+             "lock_source_note! must issue pg_advisory_xact_lock (Task 2)"
+
+      assert src =~ ~r/Repo\.transaction/,
+             "replace_links must wrap delete+insert in a transaction so the advisory " <>
+               "lock auto-releases on commit/rollback (Task 2)"
+    end
+  end
+
   describe "bind_danglers_for_hmac/3" do
     test "binds a dangler when its target is created", %{user: user, vault: vault} do
       source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
