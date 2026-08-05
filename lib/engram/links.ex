@@ -283,6 +283,136 @@ defmodule Engram.Links do
   end
 
   @doc """
+  Live (non-deleted) notes + attachments in `vault` whose `basename_hmac`
+  matches `key` (a `basename_key/1` result). Drives the rename-rewrite form
+  rule: a bare `[[basename]]` may stay bare only when the new basename is
+  unambiguous (count == 1, the renamed row itself).
+  """
+  @spec live_basename_count(map(), map(), String.t()) :: non_neg_integer()
+  def live_basename_count(user, vault, key) do
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    hmac = Crypto.hmac_field(filter_key, key)
+
+    notes =
+      Repo.one(
+        from(n in Note,
+          where:
+            n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
+              n.basename_hmac == ^hmac and is_nil(n.deleted_at),
+          select: count(n.id)
+        ),
+        skip_tenant_check: true
+      )
+
+    attachments =
+      Repo.one(
+        from(a in Attachment,
+          where:
+            a.user_id == ^user.id and a.vault_id == ^vault.id and
+              a.basename_hmac == ^hmac and is_nil(a.deleted_at),
+          select: count(a.id)
+        ),
+        skip_tenant_check: true
+      )
+
+    notes + attachments
+  end
+
+  @doc """
+  Reconstructed pre-rename candidate sets for a rename target: current live
+  candidates for `old_path`'s basename hmac, minus the renamed row's
+  post-rename position, plus a synthetic candidate `{renamed_id, old_path}`
+  in the `kind` list. Everything here is CONSTANT across a whole rename
+  walk (the hmac comes from `old_path`, not from any occurrence), so
+  callers fetch ONCE per job batch — `Rewriter.build_target/5` stashes the
+  result on the target map — and thread it through
+  `pre_rename_winner?/4` per occurrence, mirroring
+  `bind_danglers_for_hmac/3`'s prefetch shape.
+
+  Snapshot semantics: candidate-table changes AFTER the fetch (a concurrent
+  rename/create sharing the basename) aren't seen for the rest of the
+  batch. That's the walk's pre-existing eventual-consistency posture — no
+  transaction spans the batch, and later rebinds/renames self-heal — just
+  a wider window than the old per-occurrence refetch had.
+  """
+  @spec pre_rename_candidates(map(), map(), :note | :attachment, binary(), String.t()) ::
+          %{notes: [{binary(), String.t()}], attachments: [{binary(), String.t()}]}
+  def pre_rename_candidates(user, vault, kind, renamed_id, old_path) do
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    hmac = Crypto.hmac_field(filter_key, basename_key(old_path))
+
+    notes =
+      user
+      |> fetch_decrypted_candidates(vault, hmac, :notes)
+      |> Enum.reject(fn {id, _path} -> id == renamed_id end)
+
+    attachments =
+      user
+      |> fetch_decrypted_candidates(vault, hmac, :attachments)
+      |> Enum.reject(fn {id, _path} -> id == renamed_id end)
+
+    case kind do
+      :note -> %{notes: [{renamed_id, old_path} | notes], attachments: attachments}
+      :attachment -> %{notes: notes, attachments: [{renamed_id, old_path} | attachments]}
+    end
+  end
+
+  @doc """
+  Would `target` have resolved to the renamed row (`renamed_id`) at its OLD
+  path, under `resolve_target/4`'s rules? `candidates` comes from
+  `pre_rename_candidates/5` — fetched once per job batch and shared
+  across every occurrence; only the per-occurrence `target` varies the
+  resolution (extension routing, path filter, tiebreak), applied via the
+  same `route_resolution/3` + `resolve_from_candidates/3` rules
+  `resolve_target/4` uses. Order-independent w.r.t. the RebindNoteLinks
+  jobs a rename enqueues — those rewrite edge target ids but never the
+  candidate tables the prefetch consulted.
+  """
+  @spec pre_rename_winner?(String.t(), String.t(), binary(), %{
+          notes: [{binary(), String.t()}],
+          attachments: [{binary(), String.t()}]
+        }) :: boolean()
+  def pre_rename_winner?(target, old_path, renamed_id, %{notes: notes, attachments: attachments}) do
+    if basename_key(target) != basename_key(old_path) do
+      false
+    else
+      ext = target |> Path.basename() |> Path.extname() |> String.downcase()
+
+      case route_resolution(
+             ext,
+             fn -> resolve_from_candidates(notes, target, :note) end,
+             fn -> resolve_from_candidates(attachments, target, :attachment) end
+           ) do
+        {:note, ^renamed_id} -> true
+        {:attachment, ^renamed_id} -> true
+        _ -> false
+      end
+    end
+  end
+
+  @doc """
+  Convenience form of `pre_rename_winner?/4` that fetches the candidate
+  sets itself (via `pre_rename_candidates/5`) and delegates. One
+  fetch+decrypt pass per call — fine for a single question, wasteful in a
+  loop; walk-shaped callers (`Rewriter.plan_edits/5`) use the prefetched
+  form. Semantics are pinned by the unit tests against THIS arity.
+  """
+  @spec pre_rename_winner?(map(), map(), String.t(), :note | :attachment, binary(), String.t()) ::
+          boolean()
+  def pre_rename_winner?(user, vault, target, kind, renamed_id, old_path) do
+    if basename_key(target) != basename_key(old_path) do
+      false
+    else
+      pre_rename_winner?(
+        target,
+        old_path,
+        renamed_id,
+        pre_rename_candidates(user, vault, kind, renamed_id, old_path)
+      )
+    end
+  end
+
+  @doc """
   Computes the HMAC for a `basename_key/1` result under `user`'s filter key.
   Callers that need to enqueue a rebind job (`RebindNoteLinks.new_for/3`)
   compute this from plaintext they already have in scope, so the job's

@@ -30,7 +30,7 @@ defmodule Engram.Notes do
   alias Engram.Sync.Broadcast
   alias Engram.Telemetry
   alias Engram.UsageMeters
-  alias Engram.Workers.{DeleteNoteIndex, EmbedNote, RebindNoteLinks}
+  alias Engram.Workers.{DeleteNoteIndex, EmbedNote, RebindNoteLinks, RewriteNoteLinks}
 
   require Logger
 
@@ -690,7 +690,7 @@ defmodule Engram.Notes do
   this never merges empty content against an existing row and never content-
   broadcasts. See docs spec 2026-07-15-crdt-create-genesis-bare-row-design.
   """
-  @spec genesis_crdt_note(map(), map(), String.t(), String.t()) ::
+  @spec genesis_crdt_note(map(), map(), String.t(), String.t(), keyword()) ::
           {:ok, Note.t()}
           | {:error, :invalid_id}
           | {:error, :recently_deleted}
@@ -703,7 +703,9 @@ defmodule Engram.Notes do
           # {:error, term}). Kept in the spec so the channel's create_failed
           # catch-all is reachable, not flagged unreachable by dialyzer.
           | {:error, term()}
-  def genesis_crdt_note(user, vault, id, path) do
+  def genesis_crdt_note(user, vault, id, path, opts \\ []) do
+    origin = Keyword.get(opts, :origin)
+
     with {:ok, canonical_id} <- Ecto.UUID.cast(id),
          {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, path} <- validate_path(path) do
@@ -732,7 +734,7 @@ defmodule Engram.Notes do
                      # removes the #970 delete-wins window from renames entirely.
                      # A target path OCCUPIED by a DIFFERENT live note stays a
                      # genuine conflict (the pre-E2 behavior).
-                     genesis_relocate_live(live, user, vault, sanitized_path, folder)
+                     genesis_relocate_live(live, user, vault, sanitized_path, folder, origin)
 
                    {:error, _} = err ->
                      err
@@ -874,7 +876,34 @@ defmodule Engram.Notes do
   # with the same greppable Loki tripwire as REST's upsert {:id_collision, live}
   # arm (a client-minted id reused at another OCCUPIED path is still the
   # 2026-07-06 wrong-mint corruption signature).
-  defp genesis_relocate_live(live, user, vault, sanitized_path, folder) do
+  # ── Phase 2 (#648/#1231) — CRDT-origin rename rewrite gate ─────────────────
+  #
+  # TEMPORARY COMPROMISE — REMOVE BY FLIPPING TO "web" (one line, this
+  # attribute only): an UNTAGGED crdt socket is treated as plugin-origin so a
+  # version-skewed plugin that predates the client_type join tag never
+  # double-rewrites (Obsidian rewrites its own links; the server rewriting too
+  # would violate the one-rewriter invariant). Once the plugin release that
+  # tags itself "obsidian" has been out for one release cycle, flip this to
+  # "web" so untagged defaults to enqueue — the spec's safe default.
+  # Pinned by test/engram/notes_crdt_origin_gate_test.exs. Tracked in #648.
+  @untagged_crdt_client_type "obsidian"
+
+  @doc false
+  @spec untagged_crdt_client_type() :: String.t()
+  def untagged_crdt_client_type, do: @untagged_crdt_client_type
+
+  @doc """
+  ONE-REWRITER INVARIANT gate for CRDT-origin renames (relocates reached via
+  `genesis_crdt_note/5`): `"obsidian"` never triggers a server rewrite; any
+  other PRESENT tag does; an ABSENT tag (nil) takes the
+  `untagged_crdt_client_type/0` compromise default (see attribute comment).
+  """
+  @spec crdt_rename_rewrites?(String.t() | nil) :: boolean()
+  def crdt_rename_rewrites?(client_type) do
+    (client_type || @untagged_crdt_client_type) != "obsidian"
+  end
+
+  defp genesis_relocate_live(live, user, vault, sanitized_path, folder, origin) do
     with {:ok, query} <- note_by_path_query(user, vault, sanitized_path) do
       case Repo.one(query) do
         nil ->
@@ -930,6 +959,17 @@ defmodule Engram.Notes do
                       )
                     end
 
+                  # #648/#1231 Phase 2 — server-side link rewrite for
+                  # NON-obsidian CRDT-origin renames (the primary web rename
+                  # path). Obsidian-origin relocates never enqueue: the plugin
+                  # rewrites its own links (exactly-one-rewriter invariant).
+                  # In-txn enqueue: the job commits atomically with the
+                  # relocate; Enqueue.enqueue never raises.
+                  _ =
+                    if crdt_rename_rewrites?(origin) do
+                      enqueue_crdt_rename_rewrite(user, vault, moved.id, decrypted.path)
+                    end
+
                   # Carry the OLD path so the post-commit handler can fan an
                   # old-path delete to peers (a web receiver has no local mirror
                   # to drop the note from its old folder otherwise).
@@ -957,6 +997,49 @@ defmodule Engram.Notes do
 
           {:error, :id_conflict, decrypt_or_raise!(live, user)}
       end
+    end
+  end
+
+  # CRDT relocates repoint the row in place (move_note) — no old-path
+  # tombstone exists for the worker to decrypt, so the old path rides the
+  # job args as user-DEK AES-GCM ciphertext, AAD-bound to the renamed row's
+  # id (T3.2: plaintext never enters oban_jobs.args). get_dek should never
+  # fail here (decrypt_or_raise! already proved this user's DEK usable in
+  # this very function), but this runs INSIDE the relocate transaction and
+  # a rewrite failure must never fail the rename — so an error skips the
+  # enqueue (ids-only warning) instead of crashing the transaction.
+  defp enqueue_crdt_rename_rewrite(user, vault, note_id, old_path) do
+    case Crypto.get_dek(user) do
+      {:ok, dek} ->
+        aad = Crypto.aad_for_row("oban_rewrite_note_links", "old_path", note_id)
+        {ct, nonce} = Envelope.encrypt(old_path, dek, aad)
+
+        Enqueue.enqueue(
+          RewriteNoteLinks.new_for(
+            user.id,
+            vault.id,
+            :note,
+            note_id,
+            old_path_hmac_b64!(user, old_path),
+            Base.encode64(Links.basename_hmac(user, Links.basename_key(old_path))),
+            old_path_ciphertext: Base.encode64(ct),
+            old_path_nonce: Base.encode64(nonce)
+          ),
+          "rewrite_note_links"
+        )
+
+      {:error, reason} ->
+        Logger.warning(
+          "crdt rename rewrite enqueue skipped: dek unavailable",
+          Metadata.with_category(:warning, :sync,
+            user_id: user.id,
+            vault_id: vault.id,
+            note_id: note_id,
+            reason: inspect(reason)
+          )
+        )
+
+        :ok
     end
   end
 
@@ -1878,6 +1961,23 @@ defmodule Engram.Notes do
               old_path_hmac: old_path_hmac_b64!(user, old_path)
             ),
             "repath_note_index"
+          )
+
+        # #648/#1231 — server-side link rewrite for REST/MCP-origin renames.
+        # Plugin-origin renames never reach rename_note (Obsidian rewrites
+        # those itself): exactly one party rewrites. Fire-and-forget: a
+        # rewrite failure must never fail the rename.
+        _ =
+          Enqueue.enqueue(
+            Engram.Workers.RewriteNoteLinks.new_for(
+              user.id,
+              vault.id,
+              :note,
+              note.id,
+              old_path_hmac_b64!(user, old_path),
+              Base.encode64(Links.basename_hmac(user, Links.basename_key(old_path)))
+            ),
+            "rewrite_note_links"
           )
 
         # #976 (same invariant as the folder-rename cascade): the note still
@@ -3881,17 +3981,45 @@ defmodule Engram.Notes do
       broadcast_contents =
         fetch_note_contents(user, Enum.map(real_note_updates, fn {n, _, _, _, _} -> n.id end))
 
-      # Side effects outside the transaction — broadcast + reindex.
-      # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
-      # Marker rows have no path / no embedding, skip the broadcast+enqueue.
+      # Side effects outside the transaction — broadcast + reindex + link
+      # rewrite fan-out. T3.2 — hmac-only args, never plaintext.
+      # Marker rows have no path / no embedding / no basename, skip everything.
       Enum.each(real_note_updates, fn {note, old_note_path, new_path, new_note_folder, _title} ->
+        old_path_hmac = old_path_hmac_b64!(user, old_note_path)
+
         _ =
           Enqueue.enqueue(
             Engram.Workers.RepathNoteIndex.new_debounced(note.id,
-              old_path_hmac: old_path_hmac_b64!(user, old_note_path)
+              old_path_hmac: old_path_hmac
             ),
             "repath_note_index"
           )
+
+        # #648/#1231 Phase 3 — a folder rename is N note renames (basename
+        # unchanged), so each moved note reuses the Phase 1 rewrite job
+        # verbatim: qualified [[old-folder/…]] occurrences get the new
+        # prefix; bare [[basename]] occurrences plan no edit (idempotence
+        # guard in Rewriter.plan_edits/5). Old-path recovery = the tombstone
+        # this very cascade inserted in the same transaction — no ciphertext
+        # args. Origin safety is by construction: the plugin never calls the
+        # folder-rename REST surface (it renames per-file over CRDT, which
+        # Phase 2 gates), so every caller here is web/MCP and must rewrite.
+        # Gated on a real move: the idempotent same-folder branch of
+        # rename_folder_gated reaches this loop with old == new.
+        _ =
+          if old_note_path != new_path do
+            Enqueue.enqueue(
+              RewriteNoteLinks.new_for(
+                user.id,
+                vault.id,
+                :note,
+                note.id,
+                old_path_hmac,
+                Base.encode64(Links.basename_hmac(user, Links.basename_key(old_note_path)))
+              ),
+              "rewrite_note_links"
+            )
+          end
 
         # #976: carry the moved note's id on the old-path delete leg. The note
         # still exists (same id, new path, upsert leg below), so receivers can
@@ -3925,6 +4053,22 @@ defmodule Engram.Notes do
           )
 
         :ok = broadcast_change(user.id, vault.id, "delete", old_note_path, note.id, [])
+      end)
+
+      # #1231 — bulk rebind fan-out: ONE RebindNoteLinks per DISTINCT moved
+      # basename (old and new basename keys are equal on a folder move, so
+      # this is do_rename_note_inner's dedup-when-equal rule at folder
+      # scale). Closes what the text rewrite can't: bare-link winners whose
+      # shortest-path tiebreak flipped with the move, and pre-typed danglers
+      # waiting on the NEW qualified path.
+      real_note_updates
+      |> Enum.filter(fn {_n, old_p, new_p, _f, _t} -> old_p != new_p end)
+      |> Enum.map(fn {_n, old_p, _np, _f, _t} ->
+        Links.basename_hmac(user, Links.basename_key(old_p))
+      end)
+      |> Enum.uniq()
+      |> Enum.each(fn hmac ->
+        _ = Enqueue.enqueue(RebindNoteLinks.new_for(user.id, vault.id, hmac), "rebind_note_links")
       end)
 
       {:ok, length(notes)}
