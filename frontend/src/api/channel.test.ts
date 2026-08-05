@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { beacon, tracingEnabled } from "../observability/trace";
 import {
 	__resetNoteChangeBatch,
+	backfillStructural,
 	handleFoldersBatch,
 	handleNoteChanged,
 	handleNotesBatch,
@@ -78,6 +79,29 @@ describe("handleNoteChanged", () => {
 		// Untargeted folderNotes (whole-prefix) must not be used when the
 		// folder is known.
 		expect(keys).not.toContainEqual(["folderNotes", "7"]);
+	});
+
+	// The manifest is the vault-wide path→id inventory behind [[ autocomplete
+	// and /:slug/wiki/* resolution. Any note event can change it (create/
+	// rename/delete, incl. per-note events from folder ops), so it rides the
+	// same coalesced flush as the other list-level keys — it had ZERO
+	// invalidation sites before, leaving new/renamed notes invisible to
+	// autocomplete until an incidental refetch.
+	it("invalidates the sync manifest in the coalesced flush", () => {
+		const qc = mockQueryClient();
+		handleNoteChanged(
+			{ event_type: "upsert", path: "docs/a.md", folder: "docs", vault_id: "7" },
+			qc,
+			"7",
+		);
+
+		const syncKeys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
+		expect(syncKeys).not.toContainEqual(["syncManifest", "7"]);
+
+		vi.advanceTimersByTime(250);
+
+		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
+		expect(keys).toContainEqual(["syncManifest", "7"]);
 	});
 
 	it("coalesces a sync burst into one flush per distinct folder", () => {
@@ -307,6 +331,18 @@ describe("handleFoldersBatch", () => {
 		const qc = mockQueryClient();
 		handleFoldersBatch({ op: "create", folder: "New/Empty" }, qc, "7");
 		expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["folders", "7"] });
+	});
+});
+
+describe("backfillStructural", () => {
+	// A backgrounded/offline tab misses note events with no replay, so the
+	// reconnect backfill must also stale the manifest — otherwise notes
+	// created elsewhere during the gap stay missing from [[ autocomplete.
+	it("invalidates the sync manifest alongside the structural views", () => {
+		const qc = mockQueryClient();
+		backfillStructural(qc, "7");
+		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
+		expect(keys).toContainEqual(["syncManifest", "7"]);
 	});
 });
 

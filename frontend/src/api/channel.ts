@@ -151,6 +151,12 @@ function flushBatch(batch: PendingBatch): void {
 	const { queryClient, vaultId, folders } = batch;
 	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 	queryClient.invalidateQueries({ queryKey: ["search", vaultId] });
+	// The vault-wide path→id inventory behind [[ autocomplete + /:slug/wiki/*
+	// resolution (useSyncManifest). Every note event that reaches this flush can
+	// change it (create/rename/delete — folder ops emit per-note note_changed
+	// too), and it previously had ZERO invalidation sites, so a new/renamed note
+	// stayed missing from autocomplete until an incidental refetch.
+	queryClient.invalidateQueries({ queryKey: ["syncManifest", vaultId] });
 
 	// The by-id keys are keyed on folder-marker ids; resolve names through
 	// the cached tree. Unknown folders (just created, tree not refetched
@@ -234,6 +240,9 @@ export function backfillStructural(queryClient: QueryClient, vaultId: string): v
 	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 	queryClient.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 	queryClient.invalidateQueries({ queryKey: ["attachments", vaultId] });
+	// The wikilink path inventory misses events during the gap like everything
+	// else — stale it so autocomplete/wiki resolution converge on wake too.
+	queryClient.invalidateQueries({ queryKey: ["syncManifest", vaultId] });
 	// The sidebar tree renders note rows from the id-keyed family, not the
 	// name-keyed ["folderNotes"] above (that feeds the dashboard). Its expanded
 	// subfolders have no mounted observer, so a default ("active") invalidate
