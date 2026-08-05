@@ -62,6 +62,22 @@ services:
       PHX_HOST: localhost
       PHX_PORT: "${CI_ENGRAM_PORT:-8100}"
       PHX_SCHEME: http
+      # REQUIRED alongside PHX_HOST, not optional decoration.
+      #
+      # Setting PHX_HOST also switches `:websocket_check_origin` on
+      # (runtime.exs — it lives inside `if phx_hosts do`). `HostOrigins` then
+      # allowlists `http://localhost` WITHOUT a port, but the web SPA is served
+      # by Phoenix on CI_ENGRAM_PORT and opens its socket with
+      # `Origin: http://localhost:<port>`. That does not match, the socket is
+      # refused, and every web<->Obsidian CRDT live-sync test times out while
+      # the Obsidian-only tiers stay green (they send `app://obsidian.md`,
+      # which IS allowlisted).
+      #
+      # Observed exactly that on #1260: e2e-clerk green, e2e-crdt's four
+      # live-sync tests red. Prod is unaffected — `app.engram.page` is :443, so
+      # its Origin carries no port — which is precisely why it needed CI to
+      # surface it.
+      ENGRAM_SAAS_FRONTEND_ORIGINS: "http://localhost:${CI_ENGRAM_PORT:-8100}"
       OLLAMA_URL: http://10.0.20.214:11434
       QDRANT_URL: http://10.0.20.201:6333
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-ci_test_notes}
