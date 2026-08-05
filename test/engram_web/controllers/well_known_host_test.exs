@@ -79,4 +79,54 @@ defmodule EngramWeb.WellKnownHostTest do
       assert body["authorization_servers"] == ["http://mcp.engram.page"]
     end
   end
+
+  # `conn.host` carries no port, so reflecting the dialed host as
+  # "#{scheme}://#{conn.host}" silently drops it. Invisible on 80/443 — and
+  # wrong everywhere else. A self-host on `http://engram.ax:8080` advertised
+  # `http://engram.ax/api/mcp`, which a strict client self-checks against the
+  # URL it dialed and aborts on. Same failure class as the RFC 9728 §3.1 and
+  # §5.1 gaps: the server misstating where it lives.
+  #
+  # It also makes any port-mapped deployment untestable end to end, which is
+  # why the CI stack could never have caught a URL-derivation bug.
+  describe "non-default ports" do
+    test "keeps a non-default port when reflecting the dialed host", %{conn: conn} do
+      Application.put_env(:engram, :cors_origin, ["http://engram.ax", "https://engram.ax"])
+
+      body =
+        %{conn | host: "engram.ax", port: 8080}
+        |> get("/.well-known/oauth-protected-resource")
+        |> json_response(200)
+
+      assert body["resource"] == "http://engram.ax:8080/api/mcp"
+      assert body["authorization_servers"] == ["http://engram.ax:8080"]
+    end
+
+    test "omits the port when it is the scheme default", %{conn: conn} do
+      Application.put_env(:engram, :cors_origin, ["http://engram.ax"])
+
+      body =
+        %{conn | host: "engram.ax", port: 80}
+        |> get("/.well-known/oauth-protected-resource")
+        |> json_response(200)
+
+      # 80 is implicit for http — emitting it would itself be a mismatch
+      # against what the client dialed.
+      assert body["resource"] == "http://engram.ax/api/mcp"
+    end
+
+    test "the metadata pointer carries the port too", %{conn: conn} do
+      # The challenge and the document must agree; a pointer that drops the
+      # port resolves to a different origin than the one it describes.
+      Application.put_env(:engram, :cors_origin, ["http://engram.ax"])
+
+      challenge =
+        %{conn | host: "engram.ax", port: 8080}
+        |> post("/api/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
+        |> get_resp_header("www-authenticate")
+        |> hd()
+
+      assert challenge =~ "http://engram.ax:8080/.well-known/oauth-protected-resource/api/mcp"
+    end
+  end
 end
