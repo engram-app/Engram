@@ -393,12 +393,22 @@ jobs:
           ERTS=$(erl -eval 'io:format("~s",[erlang:system_info(version)]),halt()' -noshell)
           ELX=$(elixir --short-version)
           export BEAM_TAG="otp${OTP}-erts${ERTS}-elx${ELX}"
-          # is-full: main pushes, [ci-full]/force_full runs, and the nightly
-          # schedule validate everything (no skips). The schedule clause is
-          # belt-and-suspenders — GitHub always fires `schedule` against the
-          # default branch, so github.ref already reads refs/heads/main — but
-          # it documents intent and survives a future default-branch change.
-          if [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
+          # IS_MAIN is tracked separately from is-full. main is no longer a
+          # "full run": the marker store is content-addressed and ref-agnostic
+          # precisely so a squash-merge (same tree, new SHA) can reuse the
+          # branch's proof, and forcing skip=false on main threw that away —
+          # main re-ran the entire suite on ~61 pushes/week to re-derive a
+          # result the branch had already established. main still runs
+          # anything whose content hash MISSED, which is the real safety net;
+          # the 06:00 nightly (schedule) remains a genuine full run and is
+          # what bounds time-dependent checks like mix_audit's CVE database.
+          IS_MAIN=false
+          [ "${{ github.ref }}" = "refs/heads/main" ] && IS_MAIN=true
+          # is-full: the nightly schedule, [ci-full], and force_full validate
+          # everything with no skips. The schedule clause is belt-and-suspenders
+          # — GitHub always fires `schedule` against the default branch — but it
+          # documents intent and survives a future default-branch change.
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
             echo "is-full=true" >> "$GITHUB_OUTPUT"
             export IS_FULL_RUN=true
           else
@@ -410,10 +420,13 @@ jobs:
           # and marks the run NON-mergeable (the ci aggregate fails on a target).
           # suite is one of clerk|crdt|local|browser; pattern is a pytest -k expr.
           #
-          # IGNORED on full runs (main / [ci-full] / force_full): main must always
-          # run the full e2e matrix, and ignoring the tag here also stops
-          # record-job-markers from seeding a full-hash e2e marker off a single
-          # -k subset (a squash-merge whose body still carries the tag).
+          # IGNORED on full runs ([ci-full] / force_full / nightly) AND on main.
+          # main is checked EXPLICITLY (IS_MAIN), not via is-full: main is no
+          # longer a full run, but a squash-merge whose body still carries the
+          # feature branch's [e2e: ...] tag must not narrow main's e2e matrix
+          # to one -k subset — which would also let record-job-markers seed a
+          # full-hash e2e marker off that subset, and fail the ci aggregate on
+          # main (targeted runs are deliberately non-mergeable).
           #
           # SECURITY: the pattern is restricted to a pytest -k -safe charset
           # ([A-Za-z0-9_ .:/()-]) — anything with shell metacharacters (quotes,
@@ -424,7 +437,7 @@ jobs:
           # self-hosted runner. Only the four known suite names match, so prose /
           # placeholder text never accidentally triggers a (non-mergeable) run.
           E2E_SUITE=""; E2E_PATTERN=""
-          if [ "$IS_FULL_RUN" != true ]; then
+          if [ "$IS_FULL_RUN" != true ] && [ "$IS_MAIN" != true ]; then
             E2E_LINE=$(git log -1 --pretty=%B | grep -oiE '\[e2e:[[:space:]]*(clerk|crdt|local|browser)/[A-Za-z0-9_ .:/()-]+\]' | head -1 || true)
             if [ -n "$E2E_LINE" ]; then
               E2E_SUITE=$(printf '%s' "$E2E_LINE" | sed -E 's#.*\[e2e:[[:space:]]*(clerk|crdt|local|browser)/.*#\1#I' | tr 'A-Z' 'a-z')
@@ -2081,11 +2094,12 @@ jobs:
     # Skip on cross-repo plugin dispatch — plugin can't regress backend ExUnit.
     # Per-job fingerprint skip (skip-unit-tests) is safe here even though a coarse
     # cache-hit was historically NOT trusted (it once let a Repo-crashing test
-    # ride a green on main): markers seed ONLY on full runs and `is-full` forces
-    # skip=false on main, so unit-tests ALWAYS executes on main and can never
-    # silently stop. On a PR it skips only when this exact
-    # elixir-src+test+migrations content already passed full on main.
-    # (PR runs are further narrowed to `mix test --stale` in the run step below.)
+    # ride a green on main): a ci-unit-tests marker means the WHOLE suite passed
+    # for this exact elixir-src+test+priv+openapi+squawk-config content — every
+    # run is a full `mix test` (the PR-only `--stale` narrowing was removed for
+    # exactly this reason), and `record()` refuses to seed off a failed or
+    # skipped job. So a skip here is a replay of a full pass on identical
+    # content, on main as much as on a PR. Content that MISSED still runs.
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-unit-tests != 'true'
     # `heavy` (2 runners per VM): this job saturates a VM's CPU for minutes.
     # On a generic runner it can land NEXT TO two heavy e2e suites and starve
@@ -2215,19 +2229,21 @@ jobs:
           # --slowest 20 surfaces the slowest tests each run so async/serial
           # tuning stays data-driven (the suite is sync-pool-bound, not CPU-bound).
           #
-          # Phase 3: PRs run `mix test --stale` (only tests whose modules changed
-          # vs the restored _build/test manifest, plus their compile-dependents)
-          # for fast iteration; full runs (main / [ci-full] / force_full, via
-          # is-full) run the WHOLE suite as the safety net. ExUnit compile-tracking
-          # drives --stale; because main always re-validates everything, a
-          # mis-narrowed --stale set on a PR is caught at merge, never shipped.
-          if [ "${{ needs.fingerprint.outputs.is-full }}" = "true" ]; then
-            echo "::notice::Full run (is-full) — entire ExUnit suite"
-            mix test --warnings-as-errors --slowest 20
-          else
-            echo "::notice::PR run — mix test --stale (full suite runs on main)"
-            mix test --stale --warnings-as-errors --slowest 20
-          fi
+          # ALWAYS the whole suite. This used to run `mix test --stale` on PRs
+          # and the full suite only on main ("a mis-narrowed --stale set on a
+          # PR is caught at merge"). That premise died when main stopped being
+          # a forced full run: a ci-unit-tests marker has to mean "the WHOLE
+          # suite passed for this content hash", or main skipping on it would
+          # ship a merge no full run ever validated.
+          #
+          # Measured before removing: --stale runs came in at 4.1-5.3m against
+          # 5.0-5.8m for full, and one --stale run took 8.6m — LONGER than full.
+          # The suite is compile- and DB-setup-bound, not test-execution-bound
+          # (same reason --slowest exists), so --stale bought ~1min while
+          # costing the correctness premise of the entire marker system. The
+          # marker skip now saves far more than --stale ever did, because it
+          # skips the compile too.
+          mix test --warnings-as-errors --slowest 20
 
       - name: OpenAPI spec drift gate
         env:
@@ -2392,10 +2408,13 @@ jobs:
     # Skip on cross-repo plugin dispatch — plugin can't regress backend lints.
     # Per-job fingerprint skip (skip-lint) is safe even though a coarse cache-hit
     # was historically NOT trusted (it once let credo/sobelow regressions merge):
-    # markers seed ONLY on full runs and `is-full` forces skip=false on main, so
-    # lint ALWAYS executes on main. On a PR it skips only when this exact
-    # elixir-src+test+lint-config content (incl. .credo.exs/.sobelow-conf/.formatter.exs)
-    # already passed full on main.
+    # a ci-lint marker means lint passed in full for this exact
+    # elixir-src+test+lint-config content (incl. .credo.exs/.sobelow-conf/
+    # .formatter.exs/.dialyzer_ignore.exs — a loosened rule busts the hash).
+    # Skipping replays that pass on identical content, on main as much as on a
+    # PR. CAVEAT: mix_audit is time-dependent (same mix.lock, new CVE ⇒ new
+    # verdict), which no content hash can model — the 06:00 nightly is a
+    # genuine full run and bounds that exposure at 24h.
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-lint != 'true'
     # `heavy`: dialyzer is CPU+memory hungry (it crashed the BEAM outright in
     # the 2026-07-15 fully-parallel run). Same rationale as unit-tests.
@@ -3950,16 +3969,34 @@ jobs:
 
   # Fine-grained per-job markers (ci-<job>:<hash-job>) in LOCAL_REGISTRY — the
   # forward-looking replacement for the coarse ci-pass/ci-e2e-pass markers above
-  # (legacy record-pass retired in Phase 5). Recorded ONLY on full runs (main /
-  # [ci-full] / force_full): the whole job is gated on `is-full`, so a reduced-mode
-  # PR pass (future Phase 3 `--stale` unit, Phase 4 targeted e2e) can NEVER seed a
-  # marker. PRs consume these via the fingerprint job's skip-<job> lookup; they
-  # never produce. Each job seeds its own marker independently iff it ran to
-  # success this run; skipped/failed jobs are left unmarked. Hashes come straight
-  # from the fingerprint job (MARKER_HASH) so a recorded tag always matches the
-  # hash a later run looks up — no recompute, no BEAM-on-recorder-host dependency.
+  # (legacy record-pass retired in Phase 5).
+  #
+  # Branches now PRODUCE markers, not just consume them. This was gated on
+  # `is-full` (main only), which made the store write-only on main and
+  # read-only on branches: main seeded markers main would never read, and the
+  # squash-merge push — the exact case the ref-agnostic registry was built for
+  # — could never hit one, because nothing had ever seeded the merged tree's
+  # hash. Branch-seeds + main-consumes closes that loop.
+  #
+  # The invariant that makes seeding from a branch safe: a marker must mean
+  # "this job ran to FULL success for this content hash". Two reduced modes
+  # could violate it —
+  #   * `mix test --stale` on PRs: REMOVED (unit-tests always runs the whole
+  #     suite now; it bought ~1min and cost this invariant).
+  #   * targeted e2e (`[e2e: suite/pattern]`): still exists, so the whole job
+  #     is gated on e2e-target-suite being empty. A `pytest -k` subset must
+  #     never seed a full-hash e2e marker. Targeted runs are deliberately
+  #     non-mergeable anyway, so losing marker seeding there costs nothing.
+  # The nightly (schedule) still never seeds: its e2e results are measurement,
+  # explicitly non-gating, and tolerated-flaky (see ledger-append).
+  #
+  # Each job seeds its own marker independently iff it ran to success this run;
+  # skipped/failed jobs are left unmarked (see `record()` below). Hashes come
+  # straight from the fingerprint job (MARKER_HASH) so a recorded tag always
+  # matches the hash a later run looks up — no recompute, no
+  # BEAM-on-recorder-host dependency.
   record-job-markers:
-    if: always() && needs.fingerprint.outputs.is-full == 'true' && github.event_name != 'schedule'
+    if: always() && github.event_name != 'schedule' && needs.fingerprint.outputs.e2e-target-suite == ''
     # migration-gates is intentionally EXCLUDED: it has several early `exit 0` success
     # paths (no open PR, no phase/expand label, no new migrations) that return
     # green WITHOUT running the migration rollforward. Recording a marker off
