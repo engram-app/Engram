@@ -119,27 +119,26 @@ defmodule Engram.MixProject do
       {:mjml, "~> 6.0"},
 
       # HTTP client (Qdrant, Voyage AI) AND, via `config :ex_aws, :http_client,
-      # ExAws.Request.Req` (config.exs), every S3/KMS call.
+      # Engram.Aws.ReqClient` (config.exs), every S3/KMS call.
       #
-      # CEILING IS LOAD-BEARING. Note the THREE-component "~> 0.6.0": that means
-      # ">= 0.6.0 and < 0.7.0". A two-component "~> 0.6" would mean "< 1.0.0" and
-      # admit 0.7.x — i.e. it would NOT hold this line. (That is exactly the trap
-      # ex_aws 2.7.0 fell into: it declares `{:req, "~> 0.5.10 or ~> 0.6 or
-      # ~> 1.0"}`, which permits 0.7.x, so Hex resolves it happily and nothing
-      # upstream protects us.)
+      # On 0.7.x rather than 0.6.x as of #1252/#1256. The 0.6 ceiling that used
+      # to live here was justified by a WRONG diagnosis (it blamed req 0.7's
+      # removal of the `run_finch` / `put_plug` step API — `ExAws.Request.Req`
+      # never touched those; it is twenty lines of high-level `Req.request/1`).
       #
-      # Why hold at 0.6.x: req 0.7.0 shipped three documented BREAKING CHANGEs —
-      # it removed `Req.Request.current_request_steps` and replaced the
-      # `run_finch` and `put_plug`/`run_plug` steps with adapter modules. That is
-      # the step API `ExAws.Request.Req` is built on.
+      # The real break: req 0.7 upgrades an explicit `method: :get` to POST
+      # whenever a non-nil `:body` is present, and `ExAws.Request.Req` always
+      # passes "" rather than nil. So every S3 GetObject left as a POST —
+      # uploads kept returning 200 while every download failed. That asymmetry
+      # is why it read as a flake. `Engram.Aws.ReqClient` normalises "" to nil
+      # for :get/:head and delegates; see that module and its test.
       #
-      # Observed damage was asymmetric and easy to misread: with req 0.7.1,
-      # PutObject still returned 200 while GetObject 502'd — uploads looked fine
-      # and every attachment DOWNLOAD failed. Six e2e-clerk tests, PR #1252.
-      #
-      # Lift this to "~> 0.7.0" (or drop the ceiling) once ex_aws ships a release
-      # tested against req 0.7 — not before.
-      {:req, "~> 0.6.0"},
+      # THREE-component "~> 0.7.1" is deliberate: it means ">= 0.7.1 and
+      # < 0.8.0". A two-component "~> 0.7" would mean "< 1.0.0" and admit 0.8.x
+      # unreviewed. Nothing upstream protects us here — ex_aws 2.7.0 declares
+      # `{:req, "~> 0.5.10 or ~> 0.6 or ~> 1.0"}`, which permits almost
+      # anything, so the bound has to be ours.
+      {:req, "~> 0.7.1"},
 
       # Finch: the HTTP/2-capable client (Mint-based) that Req rides on. Used
       # directly by Engram.Observability.SentryFinchClient and by ex_aws via
