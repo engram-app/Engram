@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.14.0](https://github.com/engram-app/Engram/compare/0.13.0...0.14.0) (2026-08-06)
+
+
+### Features
+
+* **editor:** Obsidian-style note header, inline title, and Properties block ([#1219](https://github.com/engram-app/Engram/issues/1219)) ([f7415ae](https://github.com/engram-app/Engram/commit/f7415aed60d4f81f304ab586cb4b60e0e2cd962f))
+* event-driven link-extract fast path + bind-time rename repair ([#1280](https://github.com/engram-app/Engram/issues/1280)) ([b349787](https://github.com/engram-app/Engram/commit/b34978740b0ea1851c997e4319f2ad10a79243d5))
+* **health:** report the build sha so a deploy is observable over HTTP ([#1246](https://github.com/engram-app/Engram/issues/1246)) ([a3eb688](https://github.com/engram-app/Engram/commit/a3eb68839b6844ebd1f1ad3e70dba366f5991a88))
+* **observability:** export the fan-out pacer cold-queue gauges ([#1004](https://github.com/engram-app/Engram/issues/1004)) ([#1226](https://github.com/engram-app/Engram/issues/1226)) ([0c42d44](https://github.com/engram-app/Engram/commit/0c42d44d47b3af7e28a9f5397d8b922cabc2bfd6))
+* **otel:** name the RLS tenant spans ([#1205](https://github.com/engram-app/Engram/issues/1205)) ([627ae6d](https://github.com/engram-app/Engram/commit/627ae6d9468a415af6edd1cde1a88cb76d82134b))
+* server-side wikilink rewrite on rename ([#648](https://github.com/engram-app/Engram/issues/648)) — REST/MCP, web CRDT, and folder origins ([#1240](https://github.com/engram-app/Engram/issues/1240)) ([c2fd9a7](https://github.com/engram-app/Engram/commit/c2fd9a7a5b382b595f031deb9071041ee1f5fd0e))
+* **web:** create-on-click for unresolved wikilinks ([#1268](https://github.com/engram-app/Engram/issues/1268)) ([a595a87](https://github.com/engram-app/Engram/commit/a595a87c1243f54628c12e02bfd673899d647572))
+* wikilink graph — note_links edges, resolution, backlinks, [[ autocomplete ([#1229](https://github.com/engram-app/Engram/issues/1229)) ([0fb668b](https://github.com/engram-app/Engram/commit/0fb668be60a7c79cf6cfdd524824fd4a7bd8195c))
+
+
+### Bug Fixes
+
+* **admin:** build invite and reset links from the canonical URL ([#1283](https://github.com/engram-app/Engram/issues/1283)) ([de002b0](https://github.com/engram-app/Engram/commit/de002b0af853cf7e8863c60376e33a55b91a8e6e))
+* attachments 422 keys on public fields + reject blank vault names ([#1213](https://github.com/engram-app/Engram/issues/1213)) ([6d75c7d](https://github.com/engram-app/Engram/commit/6d75c7d049eb8110d5f6b191e40176c0bdbb6160))
+* **ci:** give prebuild-ci-image the MinIO vars compose parses ([#1277](https://github.com/engram-app/Engram/issues/1277)) ([c0d9837](https://github.com/engram-app/Engram/commit/c0d983760dc01f2494d12f1ef6fcc0bbbebde556)), closes [#1267](https://github.com/engram-app/Engram/issues/1267)
+* **ci:** one permanent attachments bucket, so nothing can leak ([#1272](https://github.com/engram-app/Engram/issues/1272)) ([62bdea4](https://github.com/engram-app/Engram/commit/62bdea4ae2c68acd3baf0ef238d2187f0bcc7de8))
+* **ci:** stop overriding the MinIO access key with an empty secret ([#1284](https://github.com/engram-app/Engram/issues/1284)) ([22d3775](https://github.com/engram-app/Engram/commit/22d37756723742cd50c8bc8e62ccad9dc3d801d6))
+* **crdt:** a checkpoint tick must survive the room exiting under it ([#1285](https://github.com/engram-app/Engram/issues/1285)) ([5ca0d2d](https://github.com/engram-app/Engram/commit/5ca0d2d8b4352bdaf5b47db5422d561e88525a2f))
+* **deps:** bandit 1.12.4 patches 3 WebSocket CVEs ([#1271](https://github.com/engram-app/Engram/issues/1271)) ([ceae58b](https://github.com/engram-app/Engram/commit/ceae58bf4e6b0396dcd938466ff27c2bc43ef68f)), closes [#1252](https://github.com/engram-app/Engram/issues/1252)
+* **deps:** ceiling req at 0.6.x — 0.7 breaks the ex_aws S3 adapter ([#1256](https://github.com/engram-app/Engram/issues/1256)) ([ab2628b](https://github.com/engram-app/Engram/commit/ab2628bbb389bd3c9516459f018c8781ad8fde12))
+* **deps:** req 0.7 rewrote S3 GETs into POSTs ([#1275](https://github.com/engram-app/Engram/issues/1275)) ([7d056f5](https://github.com/engram-app/Engram/commit/7d056f572905c4fd034e8d8759e5a86c079b2344)), closes [#1252](https://github.com/engram-app/Engram/issues/1252)
+* **e2e:** attribute delivery-oracle evidence to the receiving device ([#1257](https://github.com/engram-app/Engram/issues/1257)) ([ffdf304](https://github.com/engram-app/Engram/commit/ffdf3040ff6205b056852c6c104ec4af37b5c03d)), closes [#1178](https://github.com/engram-app/Engram/issues/1178)
+* **frontend:** dedupe @codemirror/view so minor bumps stop breaking tsc ([#1247](https://github.com/engram-app/Engram/issues/1247)) ([c7b16d2](https://github.com/engram-app/Engram/commit/c7b16d245ce552f6e7af6673ddac0f6e87da222e))
+* key vault-name validation errors on the public name field ([#1206](https://github.com/engram-app/Engram/issues/1206)) ([3fe2fa5](https://github.com/engram-app/Engram/commit/3fe2fa5bc98e76b24afeef0cabd458af557c5493))
+* **links:** delayed sweep closes the late-index rewrite window ([#1266](https://github.com/engram-app/Engram/issues/1266)) ([0c4da19](https://github.com/engram-app/Engram/commit/0c4da1963515f6723208542d59ad31bfbc63c771))
+* **mcp:** comply with RFC 9728 discovery, and make the suite prove it ([#1255](https://github.com/engram-app/Engram/issues/1255)) ([21e7a47](https://github.com/engram-app/Engram/commit/21e7a47eff6600ca5e775df0228bae1aba72f15b))
+* **mcp:** gate MCP conformance on every PR, and keep the port in derived URLs ([#1260](https://github.com/engram-app/Engram/issues/1260)) ([d0eb105](https://github.com/engram-app/Engram/commit/d0eb1052f85bf61e325a93f9b48878a3f1f37df6))
+* **oauth:** negotiate CIMD metadata instead of policing it ([#1241](https://github.com/engram-app/Engram/issues/1241)) ([2ad2865](https://github.com/engram-app/Engram/commit/2ad28658b57d893c233d7f18275f4e5bb93d1dc1)), closes [#1167](https://github.com/engram-app/Engram/issues/1167)
+* **oauth:** stop welding a proxy-supplied :80 onto every advertised URL ([#1278](https://github.com/engram-app/Engram/issues/1278)) ([a8d70b9](https://github.com/engram-app/Engram/commit/a8d70b97a952de80b1fdf27903dcdf9e04333c8b)), closes [#1260](https://github.com/engram-app/Engram/issues/1260)
+* **oauth:** verify the badge from the redirect a grant used ([#1207](https://github.com/engram-app/Engram/issues/1207)) ([8a2e71f](https://github.com/engram-app/Engram/commit/8a2e71f5c6e1ac073b0a203c8421de48820f803d))
+* **test:** delete the readiness wall-clock assertion, test the wiring instead ([#1214](https://github.com/engram-app/Engram/issues/1214)) ([f9825d5](https://github.com/engram-app/Engram/commit/f9825d544a10a70494c7e5e5f49fbdeaf5d75882))
+* **test:** root-cause the two suite-under-load flakes ([#1218](https://github.com/engram-app/Engram/issues/1218)) ([bd0e5f5](https://github.com/engram-app/Engram/commit/bd0e5f50ffca412d2b2f23b94246c4e481379645))
+* **ui:** guard the last three clipboard call sites ([#1222](https://github.com/engram-app/Engram/issues/1222)) ([fc38294](https://github.com/engram-app/Engram/commit/fc38294dc140f8af3c695772dcafe546c148bcb9))
+* **web:** invalidate sync manifest on note events so [[ autocomplete stays fresh ([#1269](https://github.com/engram-app/Engram/issues/1269)) ([b077935](https://github.com/engram-app/Engram/commit/b077935a25e32d6945623692e89208e4b7589e93))
+* **web:** resolve wikilinks via the manifest before the /wiki fallback ([#1273](https://github.com/engram-app/Engram/issues/1273)) ([1d58998](https://github.com/engram-app/Engram/commit/1d58998c953fe45b0e846758796eba948d9975c2))
+
+
+### Performance Improvements
+
+* **ci:** stop re-running main, and deploy merges to staging ([#1244](https://github.com/engram-app/Engram/issues/1244)) ([209a836](https://github.com/engram-app/Engram/commit/209a836384c62f607130a634f188f898d293474a))
+
 ## [0.13.0](https://github.com/engram-app/Engram/compare/0.12.6...0.13.0) (2026-08-02)
 
 
