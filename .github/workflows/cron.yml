@@ -795,3 +795,47 @@ jobs:
             --max-time 5 \
             --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" \
             "$WEBHOOK"
+
+  # Scheduled work fails silently by construction: nobody opens a cron run
+  # that nobody triggered. These jobs reap orphaned Clerk users and Qdrant
+  # collections, keep runner disks from filling, and check MCP conformance —
+  # all things that stay broken for weeks unless something says so.
+  #
+  # One aggregate rather than a step per job: `needs` every job, fire once if
+  # any of them failed, and name the failures in the message. A given cron
+  # expression only runs a subset (the rest skip), and `contains` ignores
+  # skipped, so this stays quiet unless something genuinely broke.
+  alert-cron-failure:
+    if: always() && contains(needs.*.result, 'failure')
+    needs:
+      - e2e-orphans
+      - runner-cleanup
+      - obsidian-update
+      - plan-triage
+      - frontend-major-updates
+      - runner-diagnostics
+      - dependency-submission
+      - mcp-conformance
+    runs-on: [self-hosted, linux, x64, isolated, light]
+    steps:
+      - name: Notify cron failure (alerts)
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -uo pipefail
+          [ -n "$WEBHOOK" ] || { echo "No alerts webhook configured — skipping."; exit 0; }
+          # Name the jobs that actually failed; a bare "cron failed" would
+          # send you to the run page to find out which of eight it was.
+          FAILED=$(printf '%s' "$RESULTS" | jq -r 'to_entries|map(select(.value.result=="failure"))|map(.key)|join(", ")')
+          CONTENT="**CRON FAILED** \`${GITHUB_REPOSITORY}\`
+          Jobs: ${FAILED:-unknown}
+          ${RUN_URL}"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            -H 'User-Agent: engram-ci/1.0 (+https://github.com/engram-app/Engram)' \
+            --max-time 10 \
+            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram CI' '{content:$c,username:$u}')" \
+            "$WEBHOOK") || code="000"
+          case "$code" in 2*) echo "Alert sent ($code)";; *) echo "::warning::Discord alert failed (HTTP $code)";; esac
