@@ -21,8 +21,7 @@ content is already stored, so there is nothing to save). So the duration of a
 That bimodality is why this hides. Most merges show 1s. Only the merges that roll the
 key pay, so the average looks fine and the tail is brutal.
 
-**2. This runner pool's uplink is asymmetric, and the GitHub cache backend is on the
-wrong side of it.**
+**2. Writes to the GitHub cache backend from this pool are pathologically slow.**
 
 Measured on `build-and-publish-image`, engram run 31057787877:
 
@@ -32,10 +31,38 @@ restore: 1m31s   -> ~13 MB/s   (download)
 save:   14m00s   -> ~1.4 MB/s  (upload)
 ```
 
-Roughly a 10x asymmetry, and ~10 Mbps up in absolute terms. The earlier `deps/` +
-`_build` migration measured the same thing even worse (~0.2 MB/s, a ~240 MB `_build`
-taking ~23 min/run), which is why those moved to `runs-on/cache` against the FastRaid
-MinIO over LAN at 200+ MB/s.
+The earlier `deps/` + `_build` migration measured the same shape even worse
+(~0.2 MB/s, a ~240 MB `_build` taking ~23 min/run), which is why those moved to
+`runs-on/cache` against the FastRaid MinIO over LAN.
+
+> **CORRECTION (2026-08-06).** The first version of this doc read that number as
+> "~10 Mbps up in absolute terms" and blamed the site's uplink. **That was wrong,
+> and it was an inference from CI timings rather than a measurement.** The link is
+> fine. Measured single-stream upload, 50 MB random payload:
+>
+> | machine | |
+> |---|---|
+> | FastRaid host (runs the registry proxy) | 9.8 MB/s |
+> | SlowRaid host | 12.5-16.1 MB/s |
+> | FastRaid runner VM | 16.8-21.3 MB/s |
+> | SlowRaid runner VM | 19.4 MB/s |
+>
+> RTT to ghcr.io is 52 ms with 0% loss, and `wmem_max` is 4 MB, so the TCP window
+> ceiling is ~77 MB/s. Nothing in the network or the stack is the constraint.
+>
+> Do NOT reason about CI transfer times as if bandwidth were scarce here. Two real
+> traps hide behind that assumption, and both were found only after the bad
+> inference was discarded:
+>
+> 1. **`speedtest-cli` lies on this network.** It geolocates the FirstDigital IP to
+>    the Pacific Northwest, picks a server ~1140 km away, and reports ~12 Mbps up.
+>    Ignore it; measure against a known-close endpoint and check wall-clock.
+> 2. **Summing per-stream `%{speed_upload}` across parallel curls overcounts**,
+>    because streams finish at different times. Time the whole batch instead:
+>    600 MB across 12 streams took 41s wall-clock (~117 Mbps aggregate).
+>
+> The GitHub-cache write path really is slow from here, which is why the fix below
+> still stands. But the cause is on GitHub's side of the wire, not ours.
 
 ## The rule
 
@@ -91,11 +118,33 @@ Secondary tell: the GitHub cache quota is 10 GB/repo. Seven near-identical 1.15 
 buildx entries were holding ~8 GB of it, which starves every other `actions/cache`
 consumer in the repo through eviction.
 
-## Not this doc's problem, but measured alongside it
+## The image push in the same job: a DIFFERENT bug, found by discarding the bad premise
 
-The same job pushes the same image over the uplink twice: GHCR 4m19s (FastRaid staging
-pulls `ghcr.io/engram-app/engram:${tag}`, plus self-host distribution) and ECR 5m33s
-(what ECS deploys). The ECR leg re-uploads bytes that are already sitting in GHCR by
-then. Fixing it needs a cloud-side registry copy so the transfer is GHCR->ECR rather
-than homelab->ECR; a `crane copy` run from the homelab does NOT help, because the
-bytes still transit the same uplink.
+The same job also pushed the image twice, GHCR 4m19s + ECR 5m33s, 149 MB each way, i.e.
+**0.58 MB/s**. Under the "slow uplink" story that looked like the same problem and the
+obvious fix was a cloud-side GHCR->ECR copy so the second upload never crossed the WAN.
+
+That would have been building infrastructure to work around a misconfiguration.
+
+The runner that pushed at 0.58 MB/s does **19.4 MB/s** on a plain upload — roughly 33x
+faster. The actual cause: the runners' rootless dockerd sets
+`HTTPS_PROXY=http://10.0.20.214:5000`, rpardini's **pull-through cache**, and only the
+LAN registry was ever in `NO_PROXY`. So every push to ghcr.io and ECR was crossing a
+proxy built for GETs, running on the slowest box in the rack.
+
+Forcing a push through it reproduces the failure directly:
+
+```
+Error: pushing image ... HEAD .../manifests/err:
+response did not include Docker-Content-Digest header
+```
+
+The same push direct: 100 MB in 7.07s (~14 MB/s). Fixed in homelab#16 by adding
+`ghcr.io`, `pkg-containers.githubusercontent.com`, `.dkr.ecr.us-east-1.amazonaws.com`
+and `.s3.us-east-1.amazonaws.com` to `NO_PROXY`. The blob hosts matter as much as the
+registry hostnames: blob traffic redirects there, so a registry-only exemption still
+sends the actual bytes through the proxy.
+
+**The lesson worth keeping:** an unmeasured "the network is slow" premise made a
+misconfiguration look like a law of physics, and pointed at building a whole copy
+pipeline. Measure the host before designing around its supposed limits.
