@@ -38,6 +38,15 @@ defmodule Engram.Workers.RewriteNoteLinks do
   no `unique:` on this worker (see below) so the extra insert can't
   collide with an in-flight chain.
 
+  With the #648 fast path (ExtractNoteLinks, ~2s extraction) and bind-time
+  repair (repair_rename_danglers/3) the sweep is a residual backstop for the
+  narrow gap where an edge extracts AFTER the walk but BEFORE its own repair
+  check could see a matching rename job (clock-skew/queue-latency slivers)
+  and for plugin-origin renames (never server-rewritten, so never repaired).
+  Re-evaluate shortening/removing it once prod shows
+  [:engram, :links, :repair_enqueued] absorbing the late-edge cases and the
+  sweep's second walks planning zero edits (rewrite failed=0, sweeps no-op).
+
   Args carry ids + base64 HMACs only (T3.2/H3 — plaintext in
   `oban_jobs.args` JSONB defeats at-rest encryption). The old plaintext
   path is recovered at run time from one of two sources: the rename
