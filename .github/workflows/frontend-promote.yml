@@ -112,6 +112,18 @@ jobs:
         run: |
           set -uo pipefail
           [ -n "$WEBHOOK" ] || { echo "No announcements webhook configured — skipping."; exit 0; }
+          # Refuse to announce a release we cannot name. The dispatcher used
+          # to send the literal string "unknown" when its tag lookup failed,
+          # which produced a stream of "Engram Cloud unknown is live" posts
+          # linking to /releases/tag/unknown — a 404. The promote itself is
+          # unaffected; it already happened in the step above. An announcement
+          # nobody can act on is worse than silence.
+          case "${TAG:-}" in
+            ""|unknown)
+              echo "::warning::No resolvable release tag (got '${TAG:-}') — promoted, but not announcing."
+              exit 0
+              ;;
+          esac
           RELEASE_URL="https://github.com/engram-app/Engram/releases/tag/$TAG"
           # Was `${NOTES:0:1600}` — a raw byte prefix. Our release body
           # OPENS with the SCHEMA-IMPACT block, so that window was spent
@@ -130,11 +142,13 @@ jobs:
               "Engram Cloud" "$TAG" "$RELEASE_URL") || CONTENT=""
           fi
           [ -n "$CONTENT" ] || CONTENT=$(printf '**Engram Cloud %s** is live\n%s' "$TAG" "$RELEASE_URL")
+          # flags:4 = SUPPRESS_EMBEDS. Discord auto-embeds every URL, so messages
+          # rendered as a stack of preview cards. Links stay clickable without them.
           code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
             -H 'Content-Type: application/json' \
             -H 'User-Agent: engram-ci/1.0 (+https://github.com/engram-app/Engram)' \
             --max-time 10 \
-            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram Releases' '{content:$c,username:$u}')" \
+            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram Releases' '{content:$c,username:$u,flags:4}')" \
             "$WEBHOOK") || code="000"
           case "$code" in 2*) echo "Announced ($code)";; *) echo "::warning::Discord announce failed (HTTP $code)";; esac
 
@@ -148,10 +162,12 @@ jobs:
           set -uo pipefail
           [ -n "$WEBHOOK" ] || { echo "No alerts webhook configured — skipping."; exit 0; }
           CONTENT=$(printf '**PROMOTE FAILED** `%s`\nThe release built but the frontend did not go to 100%%.\n%s' "$TAG" "$RUN_URL")
+          # flags:4 = SUPPRESS_EMBEDS. Discord auto-embeds every URL, so messages
+          # rendered as a stack of preview cards. Links stay clickable without them.
           code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
             -H 'Content-Type: application/json' \
             -H 'User-Agent: engram-ci/1.0 (+https://github.com/engram-app/Engram)' \
             --max-time 10 \
-            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram CI' '{content:$c,username:$u}')" \
+            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram CI' '{content:$c,username:$u,flags:4}')" \
             "$WEBHOOK") || code="000"
           case "$code" in 2*) echo "Alert sent ($code)";; *) echo "::warning::Discord alert failed (HTTP $code)";; esac
