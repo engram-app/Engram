@@ -874,4 +874,42 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     {:ok, reloaded} = Crypto.maybe_decrypt_note_fields(reloaded, user)
     assert reloaded.content == "IMPORTANT"
   end
+
+  # ── Timer tick racing the room's shutdown ─────────────────────────────────
+
+  # `do_checkpoint/1` reads the doc with `SharedDoc.get_doc/1`, a GenServer.call.
+  # A call to a process that terminates mid-call EXITS rather than raising, and
+  # `rescue` does not catch exits — so the timer died instead of degrading, even
+  # though its own comment says a read failure should fall through unfenced.
+  #
+  # The race is routine, not exotic: the room stops with a `:tick` already in the
+  # timer's mailbox, and the `{:EXIT, room_pid, _}` that stops us cleanly is
+  # behind that tick in the same queue. Observed in a full-suite run as
+  #
+  #     GenServer.call(#PID<...>, :get_doc, 5000) ** (EXIT) normal
+  #       crdt_checkpoint_timer.ex:182: CrdtCheckpointTimer.do_checkpoint/1
+  #
+  # Driving `handle_info/2` directly makes it deterministic — no sleeps, no
+  # scheduler luck — because a dead pid reproduces exactly the same exit.
+  test "a tick whose room has already exited degrades instead of killing the timer", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    dead_room = spawn(fn -> :ok end)
+    ref = Process.monitor(dead_room)
+    assert_receive {:DOWN, ^ref, :process, ^dead_room, _}
+
+    state = %{
+      room_pid: dead_room,
+      user_id: user.id,
+      vault_id: vault.id,
+      note_id: note.id,
+      first_dirty_at: 123,
+      settle_timer: nil
+    }
+
+    assert {:noreply, new_state} = CrdtCheckpointTimer.handle_info(:tick, state)
+    # Still reset the dirty anchor: the tick was handled, just with nothing to
+    # flush, and leaving it set would re-arm against a room that is gone.
+    assert new_state.first_dirty_at == nil
+  end
 end
