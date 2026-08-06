@@ -10,7 +10,7 @@ Two-stage pipeline. Image build lives in this repo; image-tag selection lives in
 
 1. **`build-and-publish-image` job in `verify.yml`** (this repo) — runs on every push to `main` (the former standalone `build-ecr.yml`, since folded into `verify.yml`). Builds the Docker image and pushes to ECR tagged `sha-<7>`. The image sits in ECR; **nothing rolls.**
 
-2. **`deploy-prod.yml`** (this repo) — runs only when a `release-v*` git tag is pushed. Opens a PR in engram-infra rewriting `engram_image_tag` default to the `sha-<7>` of the tagged commit, enables auto-merge.
+2. **`deploy-prod.yml`** (this repo) — runs only when a `release-v*` git tag is pushed. Opens a PR in engram-infra rewriting `engram_image_tag` default to the `sha-<7>` of the tagged commit, and **stops there — it does NOT merge and does NOT enable auto-merge** (#1155; see "Promotion gate" below). Prod does not move until a human merges that PR. The workflow prints the exact command in its step summary.
 
 3. **engram-infra `terraform (prod)`** (engram-infra `.github/workflows/ci.yml`, `matrix: env: [staging, prod]`) — runs `terraform apply -auto-approve` on push to main. The new image tag flows into `aws_ecs_task_definition.engram`; a new revision is registered; `aws_ecs_service.engram` rolls onto it.
 
