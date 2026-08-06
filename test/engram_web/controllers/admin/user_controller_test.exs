@@ -61,4 +61,25 @@ defmodule EngramWeb.Admin.UserControllerTest do
     # Path must match the frontend route (`/reset-password`).
     assert body["url"] =~ ~r{/reset-password\?token=}
   end
+
+  # This link carries a live credential in its query string and gets handed to a
+  # human, so its ORIGIN matters as much as its path. Built from the connection,
+  # it inherited two things it should never have: `conn.scheme`, which is :http
+  # on every saas deployment because TLS terminates at the edge — emitting a
+  # plaintext link with the token in the URL — and `conn.host`, whichever
+  # backend host the admin's request happened to land on. `api.engram.page`
+  # serves no SPA, so that link 404s as well as being plaintext.
+  test "the reset link is absolute against the canonical URL, not the dialed host",
+       %{conn: conn, admin: admin} do
+    m = insert(:user, role: "member")
+
+    body =
+      %{conn | host: "api.engram.page", scheme: :http}
+      |> authenticate(admin)
+      |> post(~p"/api/admin/users/#{m.id}/password-reset")
+      |> json_response(201)
+
+    assert body["url"] == EngramWeb.Endpoint.url() <> "/reset-password?token=#{body["token"]}"
+    refute body["url"] =~ "api.engram.page"
+  end
 end

@@ -23,6 +23,22 @@ defmodule EngramWeb.Admin.InviteControllerTest do
     assert body["invite"]["max_uses"] == 3
   end
 
+  # Same reasoning as the admin password-reset link: an invite URL carries a
+  # live token and is handed to a human, so it must not inherit `conn.scheme`
+  # (:http behind an edge that terminates TLS) or `conn.host` (a backend host
+  # that may serve no SPA).
+  test "the invite link is absolute against the canonical URL, not the dialed host",
+       %{conn: conn, admin: admin} do
+    body =
+      %{conn | host: "api.engram.page", scheme: :http}
+      |> authenticate(admin)
+      |> post(~p"/api/admin/invites", %{label: "Mom"})
+      |> json_response(201)
+
+    assert body["url"] == EngramWeb.Endpoint.url() <> "/sign-up?invite=#{body["token"]}"
+    refute body["url"] =~ "api.engram.page"
+  end
+
   test "GET lists active invites without exposing tokens", %{conn: conn, admin: admin} do
     {:ok, _} = Engram.Invites.create_invite(admin, %{label: "x"})
     conn = conn |> authenticate(admin) |> get(~p"/api/admin/invites")
