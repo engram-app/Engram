@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { makeUser } from "./account/section-test-helpers";
@@ -19,9 +20,21 @@ vi.mock("@/theme/theme-provider", () => ({
 	useTheme: () => ({ theme: "system", resolved: "dark", setTheme: vi.fn() }),
 }));
 
+// AccountPage now mounts ReportBugSection, whose dialog calls `useReportBug`
+// (a useMutation). Rendering bare throws "No QueryClient set", so the page needs
+// a provider the way connections-page.test.tsx already does it.
+function renderPage() {
+	const qc = new QueryClient();
+	return render(
+		<QueryClientProvider client={qc}>
+			<AccountPage />
+		</QueryClientProvider>,
+	);
+}
+
 describe("AccountPage", () => {
 	it("renders the section stack with no embedded Clerk UserProfile", () => {
-		render(<AccountPage />);
+		renderPage();
 		expect(screen.getByRole("heading", { name: "Account", level: 1 })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Profile photo" })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Appearance" })).toBeInTheDocument();

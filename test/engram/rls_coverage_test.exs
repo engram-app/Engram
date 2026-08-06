@@ -19,6 +19,7 @@ defmodule Engram.RlsCoverageTest do
     account_exports
     client_logs
     idempotency_keys
+    issue_reports
     client_origin_stats
     device_authorizations
     device_refresh_tokens
