@@ -44,20 +44,16 @@ defmodule Engram.Workers.EmbedNote do
     # T3.2 — `old_path_hmac` is a base64-encoded HMAC, never plaintext path.
     old_path_hmac_b64 = args["old_path_hmac"]
 
-    # skip_tenant_check: trusted internal worker — queries already scoped to note_id/user_id
-    case Repo.get(Note, note_id, skip_tenant_check: true) do
-      nil ->
-        {:discard, "note #{note_id} not found"}
+    case Engram.Notes.fetch_note_for_worker(note_id) do
+      {:discard, _reason} = discard ->
+        discard
 
-      %Note{deleted_at: deleted_at} when deleted_at != nil ->
-        {:discard, "note #{note_id} is soft-deleted"}
-
-      %Note{content_hash: hash, embed_hash: hash}
+      {:ok, %Note{content_hash: hash, embed_hash: hash}}
       when hash != nil and is_nil(old_path_hmac_b64) ->
         # Already embedded this exact content and no rename pending — skip
         :ok
 
-      note ->
+      {:ok, note} ->
         # T3.7 — gate writes during DEK rotation. The worker may have been
         # enqueued before the lock was acquired; re-check the live row.
         case RotationGate.check(note.user_id) do
@@ -74,26 +70,20 @@ defmodule Engram.Workers.EmbedNote do
             {:discard, :user_deleted}
 
           :ok ->
-            case phone_gate(note.user_id) do
+            case embed_budget_gate(note) do
               :ok ->
-                case embed_budget_gate(note) do
+                case run_embed(note, old_path_hmac_b64) do
                   :ok ->
-                    case run_embed(note, old_path_hmac_b64) do
-                      :ok ->
-                        _ = record_embed_tokens(note)
-                        :ok
+                    _ = record_embed_tokens(note)
+                    :ok
 
-                      other ->
-                        _ = maybe_mark_poison(note, other, job)
-                        other
-                    end
-
-                  {:cancel, reason} ->
-                    {:cancel, reason}
+                  other ->
+                    _ = maybe_mark_poison(note, other, job)
+                    other
                 end
 
-              {:snooze, secs} ->
-                {:snooze, secs}
+              {:cancel, reason} ->
+                {:cancel, reason}
             end
         end
     end
@@ -104,31 +94,6 @@ defmodule Engram.Workers.EmbedNote do
   # transport error (timeout/closed), which error_kind names by struct instead.
   defp embed_error_status({status, _body}) when is_integer(status), do: status
   defp embed_error_status(_), do: nil
-
-  # Pricing v2 §A — block embeds for unverified-phone users when the gate is
-  # enabled. Default false so self-host and pre-launch cloud are unaffected.
-  defp phone_gate(user_id) do
-    if Application.get_env(:engram, :require_phone_for_embed, false) do
-      case Accounts.get_user(user_id) do
-        %{phone_verified_at: nil} ->
-          :telemetry.execute(
-            [:engram, :abuse, :embed_blocked_no_phone],
-            %{count: 1},
-            %{user_id: user_id}
-          )
-
-          {:snooze, 3600}
-
-        %{} ->
-          :ok
-
-        nil ->
-          :ok
-      end
-    else
-      :ok
-    end
-  end
 
   # Pricing v2 §B — block embeds when the user has exhausted their lifetime
   # token budget. Resolver returns nil for Starter/Pro (unmetered), so this is

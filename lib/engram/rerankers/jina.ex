@@ -9,6 +9,7 @@ defmodule Engram.Rerankers.Jina do
   @behaviour Engram.Reranker
 
   alias Engram.Logger.Metadata
+  alias Engram.Rerankers.None
 
   require Logger
 
@@ -47,7 +48,9 @@ defmodule Engram.Rerankers.Jina do
           Metadata.with_category(:warning, :search, status: status)
         )
 
-        {:ok, candidates |> Enum.sort_by(& &1.score, :desc) |> Enum.take(top_n)}
+        # Vector-only fallback IS the None reranker's behavior — delegate so
+        # the sort/truncate semantics can't drift between the two modules.
+        None.rerank(query, candidates, top_n)
 
       {:error, reason} ->
         Logger.warning(
@@ -55,7 +58,7 @@ defmodule Engram.Rerankers.Jina do
           Metadata.with_category(:warning, :search, reason: inspect(reason))
         )
 
-        {:ok, candidates |> Enum.sort_by(& &1.score, :desc) |> Enum.take(top_n)}
+        None.rerank(query, candidates, top_n)
     end
   rescue
     e ->
@@ -67,7 +70,7 @@ defmodule Engram.Rerankers.Jina do
         )
       )
 
-      {:ok, candidates |> Enum.sort_by(& &1.score, :desc) |> Enum.take(top_n)}
+      None.rerank(query, candidates, top_n)
   end
 
   defp blend_scores(candidates, jina_results) do

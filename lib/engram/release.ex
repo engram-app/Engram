@@ -23,6 +23,37 @@ defmodule Engram.Release do
 
   Local dev / CI reach the same code path via the `ecto.setup` Mix
   alias (`mix.exs`).
+
+  ## How this code reaches an environment
+
+  Both paths end at `terraform apply` in engram-app/engram-infra, which
+  is the SOLE image-mover — nothing deploys by pushing to a container
+  directly. The two chains differ in what they key on and whether a
+  human is in the loop:
+
+    * **staging-fastraid** — a merge to `main` that touches a deployable
+      path (`lib`, `priv`, `config`, `frontend`, `Dockerfile`,
+      `entrypoint.sh`, `.dockerignore`, `rel`, `mix.exs`, `mix.lock`)
+      publishes `ghcr.io/engram-app/engram:<sha7>` and opens a
+      `chore(staging-fastraid)` PR bumping `engram_saas_image_tag`.
+      That PR auto-merges, and the apply recreates the container. A
+      merge touching only CI or docs deliberately does NOT move staging
+      — there are no new bytes to ship.
+
+      This is keyed on the commit SHA, not the `mix.exs` version:
+      release-please owns that version and keeps it sticky between
+      cuts, so a version-keyed bump wrote the same string on every
+      non-release merge, Terraform saw no diff, and staging could only
+      ever move on a release.
+
+    * **prod** — a `release-v*` tag runs `deploy-prod.yml`, which pushes
+      `sha-<7>` to ECR and opens a prod bump PR. That PR is
+      deliberately NOT auto-merged: it is the staging-first promotion
+      gate, so prod only advances behind a human click after staging
+      has been rolling on the same code.
+
+  A green `deploy-prod` run therefore means "a PR was opened", not
+  "prod moved" — check the infra PR, not this workflow's status.
   """
 
   alias Engram.Logger.Metadata

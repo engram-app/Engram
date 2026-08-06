@@ -1,3 +1,4 @@
+import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -10,15 +11,21 @@ import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { useTheme } from "../theme/theme-provider";
 import { indentKeymap } from "./editor/format-commands";
+import { frontmatterShortcut } from "./editor/frontmatter-shortcut";
 import { livePreviewExtensions } from "./editor/live-preview";
 
-// Fill the parent so the editor spans the full pane height. 16px on .cm-content
-// prevents iOS Safari auto-zoom. Transparent background so the card shows through.
+// height:auto + overflow:visible hand scrolling to the page's ScrollArea, so
+// the inline title and properties scroll with the text instead of staying
+// pinned above it. CodeMirror still viewport-renders against the scrolling
+// ancestor. 16px on .cm-content prevents iOS Safari auto-zoom. Transparent
+// background so the card shows through.
 const editorTheme = EditorView.theme({
-	"&": { height: "100%", backgroundColor: "transparent" },
+	"&": { height: "auto", backgroundColor: "transparent" },
 	".cm-scroller": {
 		fontFamily: "inherit",
-		overflow: "auto",
+		// Inert while the page owns the scrollbar; the styling rules below are
+		// likewise inert but cost nothing and matter again if this is reverted.
+		overflow: "visible",
 		backgroundColor: "transparent",
 		scrollbarWidth: "thin",
 		scrollbarColor: "var(--border) transparent",
@@ -42,8 +49,18 @@ export interface NoteEditorProps {
 	awareness: Awareness;
 	mode: EditorMode;
 	resolveWikiLink: (name: string) => string;
+	/** Click-to-open a wikilink target — router-navigates from the React tree. */
+	openWikiLink: (name: string) => void;
+	/** Vault-wide note paths for `[[` autocomplete (see editor/wiki-completion.ts). */
+	wikiCompletionPaths: () => string[];
 	/** Reaches the live EditorView out to a caller (e.g. the formatting toolbar). */
 	onView?: (view: EditorView | null) => void;
+	/**
+	 * `---` was typed on the first line. Return true to accept the gesture, in
+	 * which case the fence is removed from the body; false leaves it as an
+	 * ordinary horizontal rule. See `editor/frontmatter-shortcut`.
+	 */
+	onFrontmatterShortcut?: () => boolean;
 }
 
 // One shared compartment instance: reconfiguring it swaps the decoration layer
@@ -60,9 +77,14 @@ export const decorationsCompartment = new Compartment();
  * plain markdown language only, no decorations. Exported so tests can drive
  * `decorationsCompartment.reconfigure(...)` directly against a mounted view.
  */
-export function decorationsFor(mode: EditorMode, resolveWikiLink: (name: string) => string) {
+export function decorationsFor(
+	mode: EditorMode,
+	resolveWikiLink: (name: string) => string,
+	openWikiLink: (name: string) => void,
+	wikiCompletionPaths: () => string[],
+) {
 	return mode === "rendered"
-		? livePreviewExtensions({ resolveWikiLink })
+		? livePreviewExtensions({ resolveWikiLink, openWikiLink, wikiCompletionPaths })
 		: [markdown({ base: markdownLanguage })];
 }
 
@@ -84,13 +106,30 @@ export function buildEditorState(
 	dark: boolean,
 	mode: EditorMode,
 	resolveWikiLink: (name: string) => string,
+	openWikiLink: (name: string) => void,
+	wikiCompletionPaths: () => string[],
+	onFrontmatterShortcut?: () => boolean,
 ): EditorState {
 	return EditorState.create({
 		doc: ytext.toString(),
 		extensions: [
+			...(onFrontmatterShortcut ? [frontmatterShortcut(onFrontmatterShortcut)] : []),
 			drawSelection(),
 			EditorView.lineWrapping,
 			Prec.highest(keymap.of(yUndoManagerKeymap)),
+			// Obsidian/VS Code-style bracket behavior: typing ( [ { ' " ` inserts
+			// the closer, typing the closer over an auto-inserted one skips it,
+			// and typing an opener with a selection SURROUNDS the selection
+			// instead of replacing it. The keymap makes Backspace delete an
+			// empty pair; it must sit before defaultKeymap to win the key.
+			closeBrackets(),
+			keymap.of(closeBracketsKeymap),
+			// closeBrackets reads its bracket set from languageData; markdown
+			// declares none, so provide one everywhere — the default set plus
+			// backtick (inline code is a first-class markdown pairing).
+			EditorState.languageData.of(() => [
+				{ closeBrackets: { brackets: ["(", "[", "{", "'", '"', "`"] } },
+			]),
 			keymap.of(defaultKeymap),
 			// Tab/Shift-Tab indent-dedent (Obsidian parity). Base, not the mode
 			// compartment, so it works in both rendered and raw mode.
@@ -110,7 +149,9 @@ export function buildEditorState(
 			Prec.highest(editorTheme),
 			// The ONLY source of the markdown language: swapping this compartment is
 			// what toggles Rendered vs Raw mode. See decorationsFor above.
-			decorationsCompartment.of(decorationsFor(mode, resolveWikiLink)),
+			decorationsCompartment.of(
+				decorationsFor(mode, resolveWikiLink, openWikiLink, wikiCompletionPaths),
+			),
 			// yCollab keeps the view and Y.Text in sync AFTER this initial seed and
 			// wires local edits back into the Y.Text (→ CRDT channel). MUST stay in
 			// the base extensions (never in the compartment) -- reconfiguring the
@@ -130,7 +171,10 @@ export default function NoteEditor({
 	awareness,
 	mode,
 	resolveWikiLink,
+	openWikiLink,
+	wikiCompletionPaths,
 	onView,
+	onFrontmatterShortcut,
 }: NoteEditorProps) {
 	const { resolved } = useTheme();
 	const hostRef = useRef<HTMLDivElement>(null);
@@ -140,6 +184,11 @@ export default function NoteEditor({
 	// recreates the view.
 	const onViewRef = useRef(onView);
 	onViewRef.current = onView;
+	// Same treatment: the extension is baked into the state at creation, so it
+	// must read through a ref or a new callback identity would force a rebuild
+	// and detach yCollab.
+	const onShortcutRef = useRef(onFrontmatterShortcut);
+	onShortcutRef.current = onFrontmatterShortcut;
 
 	// Create the view only when the bound doc or theme changes (NOT on mode).
 	// mode/resolveWikiLink intentionally excluded: a mode switch must reconfigure
@@ -149,14 +198,23 @@ export default function NoteEditor({
 	// hatch for the toolbar, not a doc/theme dependency -- including it would
 	// tear down and recreate the view (yCollab-detach hazard) whenever the
 	// caller passes a differently-identitied callback.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: mode/resolveWikiLink/onView are intentionally excluded, see comment above.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: mode/resolveWikiLink/openWikiLink/wikiCompletionPaths/onView are intentionally excluded, see comment above.
 	useEffect(() => {
 		const parent = hostRef.current;
 		if (!parent) {
 			return;
 		}
 		const view = new EditorView({
-			state: buildEditorState(ytext, awareness, resolved === "dark", mode, resolveWikiLink),
+			state: buildEditorState(
+				ytext,
+				awareness,
+				resolved === "dark",
+				mode,
+				resolveWikiLink,
+				openWikiLink,
+				wikiCompletionPaths,
+				() => Boolean(onShortcutRef.current?.()),
+			),
 			parent,
 		});
 		viewRef.current = view;
@@ -175,9 +233,11 @@ export default function NoteEditor({
 			return;
 		}
 		view.dispatch({
-			effects: decorationsCompartment.reconfigure(decorationsFor(mode, resolveWikiLink)),
+			effects: decorationsCompartment.reconfigure(
+				decorationsFor(mode, resolveWikiLink, openWikiLink, wikiCompletionPaths),
+			),
 		});
-	}, [mode, resolveWikiLink]);
+	}, [mode, resolveWikiLink, openWikiLink, wikiCompletionPaths]);
 
-	return <div ref={hostRef} className="h-full" />;
+	return <div ref={hostRef} />;
 }

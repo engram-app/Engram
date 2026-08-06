@@ -5,6 +5,8 @@ defmodule EngramWeb.UsersController do
 
   alias Engram.Accounts
 
+  action_fallback EngramWeb.FallbackController
+
   operation(:me,
     operation_id: "account-me",
     summary: "Get the current user",
@@ -37,7 +39,7 @@ defmodule EngramWeb.UsersController do
       {"Profile fields", "application/json", Schemas.UpdateProfileRequest, required: true},
     responses: [
       ok: {"Updated user", "application/json", Schemas.UserResponse},
-      unprocessable_entity: {"Validation error", "application/json", Schemas.ValidationError}
+      unprocessable_entity: {"Validation error", "application/json", Schemas.Error}
     ]
   )
 
@@ -56,17 +58,8 @@ defmodule EngramWeb.UsersController do
           }
         })
 
-      {:error, %Ecto.Changeset{} = cs} ->
-        details =
-          Ecto.Changeset.traverse_errors(cs, fn {msg, opts} ->
-            Enum.reduce(opts, msg, fn {k, v}, acc ->
-              String.replace(acc, "%{#{k}}", to_string(v))
-            end)
-          end)
-
-        conn
-        |> put_status(422)
-        |> json(%{error: "validation_failed", details: details})
+      {:error, %Ecto.Changeset{}} = error ->
+        error
     end
   end
 
@@ -97,8 +90,8 @@ defmodule EngramWeb.UsersController do
       {:error, :invalid_password} ->
         conn |> put_status(403) |> json(%{error: "invalid_password"})
 
-      {:error, :last_admin} ->
-        conn |> put_status(409) |> json(%{error: "last_admin"})
+      {:error, :last_admin} = error ->
+        error
 
       {:error, _other} ->
         conn |> put_status(422) |> json(%{error: "delete_failed"})

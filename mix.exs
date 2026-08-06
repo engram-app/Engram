@@ -5,7 +5,7 @@ defmodule Engram.MixProject do
     [
       app: :engram,
       # x-release-please-start-version
-      version: "0.12.1",
+      version: "0.13.0",
       # x-release-please-end-version
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -118,8 +118,28 @@ defmodule Engram.MixProject do
       # Email template rendering (MJML → responsive HTML, via mrml Rust NIF)
       {:mjml, "~> 6.0"},
 
-      # HTTP client (Qdrant, Voyage AI)
-      {:req, "~> 0.5"},
+      # HTTP client (Qdrant, Voyage AI) AND, via `config :ex_aws, :http_client,
+      # ExAws.Request.Req` (config.exs), every S3/KMS call.
+      #
+      # CEILING IS LOAD-BEARING. Note the THREE-component "~> 0.6.0": that means
+      # ">= 0.6.0 and < 0.7.0". A two-component "~> 0.6" would mean "< 1.0.0" and
+      # admit 0.7.x — i.e. it would NOT hold this line. (That is exactly the trap
+      # ex_aws 2.7.0 fell into: it declares `{:req, "~> 0.5.10 or ~> 0.6 or
+      # ~> 1.0"}`, which permits 0.7.x, so Hex resolves it happily and nothing
+      # upstream protects us.)
+      #
+      # Why hold at 0.6.x: req 0.7.0 shipped three documented BREAKING CHANGEs —
+      # it removed `Req.Request.current_request_steps` and replaced the
+      # `run_finch` and `put_plug`/`run_plug` steps with adapter modules. That is
+      # the step API `ExAws.Request.Req` is built on.
+      #
+      # Observed damage was asymmetric and easy to misread: with req 0.7.1,
+      # PutObject still returned 200 while GetObject 502'd — uploads looked fine
+      # and every attachment DOWNLOAD failed. Six e2e-clerk tests, PR #1252.
+      #
+      # Lift this to "~> 0.7.0" (or drop the ceiling) once ex_aws ships a release
+      # tested against req 0.7 — not before.
+      {:req, "~> 0.6.0"},
 
       # Finch: the HTTP/2-capable client (Mint-based) that Req rides on. Used
       # directly by Engram.Observability.SentryFinchClient and by ex_aws via

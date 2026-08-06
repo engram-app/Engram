@@ -12,7 +12,8 @@ Covers the happy path a Free user walks from "just signed up" to
      with next_step shape) and idempotent second-call.
   3. POST /api/vaults — create the user's first (and only, on Free) vault.
   4. POST /api/notes — create hello.md under that vault.
-  5. GET /api/notes/changes — verify the note appears in the manifest.
+  5. GET /api/sync/manifest — verify the note appears in the manifest, and
+     that the retired GET /api/notes/changes feed answers 410 Gone.
   6. GET /api/billing/status — verify tier == "free".
 
 Why API-only, not driving Obsidian:
@@ -128,14 +129,27 @@ def test_free_signup_to_first_note():
         f"server returned wrong content: {server_note}"
     )
 
-    # ── 5. /notes/changes returns the new note ──────────────────────────
-    # The endpoint expects an ISO8601 `since`; epoch (2000-01-01) returns
-    # the full manifest. Response shape is {changes: [...], server_time}.
-    changes = api_v.get_changes(since="2000-01-01T00:00:00Z")
-    paths = [n.get("path") for n in changes.get("changes", [])]
+    # ── 5. /sync/manifest lists the new note ────────────────────────────
+    # Response shape is {notes: [{path, ...}], total_notes, attachments,
+    # total_attachments} (see test_35).
+    manifest = api_v.get_manifest()
+    paths = [n["path"] for n in manifest.get("notes", [])]
     assert note_path in paths, (
-        f"/notes/changes should list {note_path!r}; got paths: {paths}"
+        f"/sync/manifest should list {note_path!r}; got paths: {paths}"
     )
+
+    # The retired timestamp feed must answer 410 Gone (route kept so old
+    # clients get an explicit signal, not a 404).
+    gone = api_v.session.get(
+        f"{api_v.base_url}/notes/changes",
+        params={"since": "2000-01-01T00:00:00Z"},
+        timeout=10,
+    )
+    assert gone.status_code == 410, (
+        f"GET /notes/changes should be 410 Gone; got {gone.status_code}: "
+        f"{gone.text[:200]}"
+    )
+    assert gone.json().get("error") == "gone", gone.text[:200]
 
     # ── 6. /billing/status confirms Free tier ────────────────────────────
     status_resp = api.session.get(f"{api.base_url}/billing/status", timeout=10)

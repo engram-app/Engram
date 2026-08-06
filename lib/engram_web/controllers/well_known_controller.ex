@@ -15,8 +15,10 @@ defmodule EngramWeb.WellKnownController do
   """
   use EngramWeb, :controller
 
+  alias EngramWeb.OAuthMetadata
+
   def protected_resource(conn, _params) do
-    base = base_url(conn)
+    base = OAuthMetadata.base_url(conn)
 
     json(conn, %{
       # The advertised `resource` must be the URL at which THIS host actually
@@ -34,52 +36,50 @@ defmodule EngramWeb.WellKnownController do
       #
       # Token `aud` is the fixed string "engram" (see Engram.Token), independent
       # of this URL, so either form breaks no server-side audience check.
-      resource: if(mcp_rewrite_host?(conn), do: base, else: base <> "/api/mcp"),
+      #
+      # Derived in OAuthMetadata, not here: Plugs.McpAuthChallenge points the
+      # RFC 9728 §5.1 challenge at the metadata URL for this same resource, and
+      # a client aborts if the two disagree. Shared derivation, no drift.
+      resource: OAuthMetadata.resource(conn),
       authorization_servers: [base],
       bearer_methods_supported: ["header"],
       resource_documentation: base <> "/docs"
     })
   end
 
-  # True only when the dialed host is the saas dedicated MCP host that
-  # HostRewrite serves at the bare root (`:host_rewrite` config sets `mcp_host`).
-  # Selfhost leaves `:host_rewrite` unset → always false → path form.
-  defp mcp_rewrite_host?(conn) do
-    case Application.get_env(:engram, :host_rewrite, []) do
-      opts when is_list(opts) -> opts[:mcp_host] != nil and conn.host == opts[:mcp_host]
-      _ -> false
-    end
-  end
-
   def authorization_server(conn, _params) do
-    base = base_url(conn)
+    base = OAuthMetadata.base_url(conn)
 
-    json(conn, %{
-      issuer: base,
-      authorization_endpoint: base <> "/oauth/authorize",
-      token_endpoint: base <> "/oauth/token",
-      registration_endpoint: base <> "/oauth/register",
-      revocation_endpoint: base <> "/oauth/revoke",
-      response_types_supported: ["code"],
-      grant_types_supported: ["authorization_code", "refresh_token"],
-      code_challenge_methods_supported: ["S256"],
-      # `none` MUST stay first-class here, not merely present for legacy: Claude
-      # selects its CIMD flow only when this list contains "none", and would
-      # otherwise fall back to DCR. The secret-based methods are additive, for
-      # server-side connectors that cannot hold a public client.
-      token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
-      scopes_supported: ["mcp"]
-    })
-  end
-
-  defp base_url(conn) do
-    canonical = EngramWeb.Endpoint.url()
-    candidate = "#{URI.parse(canonical).scheme}://#{conn.host}"
-
-    if candidate in Application.get_env(:engram, :cors_origin, []) do
-      candidate
-    else
-      canonical
-    end
+    json(
+      conn,
+      %{
+        issuer: base,
+        authorization_endpoint: base <> "/oauth/authorize",
+        token_endpoint: base <> "/oauth/token",
+        registration_endpoint: base <> "/oauth/register",
+        revocation_endpoint: base <> "/oauth/revoke",
+        response_types_supported: ["code"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
+        code_challenge_methods_supported: ["S256"],
+        # `none` MUST stay first-class here, not merely present for legacy: Claude
+        # selects its CIMD flow only when this list contains "none", and would
+        # otherwise fall back to DCR. The secret-based methods are additive, for
+        # server-side connectors that cannot hold a public client.
+        token_endpoint_auth_methods_supported: [
+          "none",
+          "client_secret_post",
+          "client_secret_basic"
+        ],
+        scopes_supported: ["mcp"],
+        # CIMD (IETF draft-ietf-oauth-client-id-metadata-document). Not cosmetic
+        # capability signalling: Anthropic's docs say Claude picks CIMD only when
+        # the metadata advertises BOTH `"none"` above and this key, so this line
+        # is what moves Claude Code off DCR — and it does NOT silently fall back,
+        # so if `Engram.OAuth.Cimd` is broken, new Claude Code connections fail
+        # rather than degrade. Existing DCR grants are separate rows and keep
+        # working. Backing that out is a revert, not a config change.
+        client_id_metadata_document_supported: true
+      }
+    )
   end
 end

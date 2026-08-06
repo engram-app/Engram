@@ -185,11 +185,25 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
       captured_version: captured_version
     )
   rescue
-    err ->
-      Logger.warning(
-        "crdt checkpoint timer could not fetch doc note_id=#{state.note_id} reason=#{inspect(err)}",
-        Engram.Logger.Metadata.with_category(:warning, :sync, note_id: state.note_id)
-      )
+    err -> log_read_failure(state, err)
+  catch
+    # `get_doc/1` is a GenServer.call, and a call to a process that terminates
+    # mid-call EXITS rather than raising — `rescue` never sees it, so the timer
+    # died here instead of degrading the way the comment above intends.
+    #
+    # The race is routine: the room stops with a `:tick` already in our mailbox,
+    # and the `{:EXIT, room_pid, _}` that stops us cleanly is queued behind it.
+    # There is nothing to checkpoint once the room is gone — the doc it held is
+    # what we were trying to read — so falling through is the correct outcome,
+    # and the EXIT message right behind this tick shuts us down in order.
+    :exit, reason -> log_read_failure(state, {:exit, reason})
+  end
+
+  defp log_read_failure(state, reason) do
+    Logger.warning(
+      "crdt checkpoint timer could not fetch doc note_id=#{state.note_id} reason=#{inspect(reason)}",
+      Engram.Logger.Metadata.with_category(:warning, :sync, note_id: state.note_id)
+    )
   end
 
   defp monotonic_ms, do: System.monotonic_time(:millisecond)

@@ -126,42 +126,6 @@ defmodule EngramWeb.Schemas.AttachmentDeleted do
   })
 end
 
-defmodule EngramWeb.Schemas.AttachmentChange do
-  @moduledoc "One attachment delta from the changes feed."
-  alias OpenApiSpex.Schema
-  require OpenApiSpex
-
-  OpenApiSpex.schema(%{
-    title: "AttachmentChange",
-    type: :object,
-    properties: %{
-      path: %Schema{type: :string},
-      mime_type: %Schema{type: :string, nullable: true},
-      size_bytes: %Schema{type: :integer},
-      mtime: %Schema{type: :number, format: :float},
-      updated_at: %Schema{type: :string, format: :"date-time", nullable: true},
-      deleted: %Schema{type: :boolean}
-    },
-    required: [:path]
-  })
-end
-
-defmodule EngramWeb.Schemas.AttachmentChangesResponse do
-  @moduledoc false
-  alias OpenApiSpex.Schema
-  require OpenApiSpex
-
-  OpenApiSpex.schema(%{
-    title: "AttachmentChangesResponse",
-    type: :object,
-    properties: %{
-      changes: %Schema{type: :array, items: EngramWeb.Schemas.AttachmentChange},
-      server_time: %Schema{type: :string, format: :"date-time"}
-    },
-    required: [:changes]
-  })
-end
-
 defmodule EngramWeb.Schemas.AttachmentBatchMoveRequest do
   @moduledoc false
   alias OpenApiSpex.Schema

@@ -10,6 +10,19 @@ defmodule EngramWeb.Router do
     }
   end
 
+  # Same as `:api` minus content negotiation. Used only by the MCP
+  # method-not-allowed routes below: a Streamable-HTTP client opens the
+  # server→client stream with `Accept: text/event-stream`, which
+  # `plug :accepts, ["json"]` answers 406 — before the controller that would
+  # have told it "POST-only". Negotiating a representation for a request we are
+  # rejecting on method alone is meaningless, so this pipeline simply does not.
+  pipeline :api_any_accept do
+    plug :put_secure_browser_headers, %{
+      "x-content-type-options" => "nosniff",
+      "x-frame-options" => "DENY"
+    }
+  end
+
   pipeline :rate_limit_auth do
     plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
   end
@@ -111,6 +124,15 @@ defmodule EngramWeb.Router do
 
     get "/oauth-protected-resource", WellKnownController, :protected_resource
     get "/oauth-authorization-server", WellKnownController, :authorization_server
+
+    # RFC 9728 §3.1 inserts the well-known segment BEFORE the resource's path,
+    # so a resource at `https://host/api/mcp` publishes here. A strict client
+    # derives this URL from the resource it dialed and tries it FIRST; we served
+    # only the bare form above, so this 404'd and only clients that also guess
+    # the root convention ever reached discovery. Same document either way — on
+    # the dedicated MCP host the resource is the bare host (#634), for which the
+    # bare form above is already the spec-correct location.
+    get "/oauth-protected-resource/api/mcp", WellKnownController, :protected_resource
   end
 
   # OAuth 2.1 endpoints — public + rate-limited per IP. Endpoint handlers
@@ -368,6 +390,7 @@ defmodule EngramWeb.Router do
     post "/notes", NotesController, :upsert
     get "/notes/changes", NotesController, :changes
     get "/notes/by-id/:id", NotesController, :show_by_id
+    get "/notes/by-id/:id/backlinks", NotesController, :backlinks
     delete "/notes/by-id/:id", NotesController, :delete_by_id
     # REST /notes/:id/updates + GET /vault/heads DELETED (Phase E3/#1088) — Yjs
     # deltas AND head discovery travel ONLY over the crdt: socket topic now.
@@ -433,6 +456,11 @@ defmodule EngramWeb.Router do
   scope "/api", EngramWeb do
     pipe_through [
       :api,
+      # BEFORE :authed_api — it must register its before_send callback while the
+      # conn is still moving, since Plugs.Auth inside :authed_api halts. The
+      # callback runs on halted conns and keys off the status actually sent, so
+      # it covers OAuthScopeEnforce's 401s too, not just Auth's.
+      EngramWeb.Plugs.McpAuthChallenge,
       :authed_api,
       # No VaultPlug: McpController self-resolves the vault. TraceUserAttrs still
       # stamps app.user_id (app.vault_id stays nil — MCP is multi-vault per
@@ -450,8 +478,14 @@ defmodule EngramWeb.Router do
   # Allow here rather than letting GET/DELETE fall through to Phoenix's 404,
   # which clients treat as a missing endpoint and abort. Auth-free on
   # purpose: an unsupported method is a method-level fact, not an authz one.
+  #
+  # `:api_any_accept`, NOT `:api`: the GET that opens the stream carries
+  # `Accept: text/event-stream`, and `plug :accepts, ["json"]` 406s it before
+  # this controller runs. That made the 405 above unreachable for precisely the
+  # clients it exists to serve — observed with Cursor, which falls back to the
+  # legacy HTTP+SSE transport and aborts on the 406.
   scope "/api", EngramWeb do
-    pipe_through :api
+    pipe_through :api_any_accept
     get "/mcp", McpController, :unsupported_transport
     delete "/mcp", McpController, :unsupported_transport
   end

@@ -198,7 +198,12 @@ defmodule Engram.Connections do
           connected_at: DateTime.t() | nil,
           first_user_agent: String.t() | nil,
           first_ip: String.t() | nil,
-          redirect_uris: [String.t()]
+          # The redirect the grant was DELIVERED to (nil for non-OAuth rows and
+          # for grants predating #1204). Distinct from `redirect_uris`, which is
+          # everything the client registered and could have chosen from.
+          redirect_uri: String.t() | nil,
+          redirect_uris: [String.t()],
+          cimd_url: String.t() | nil
         }
 
   @spec list_for_user(User.t()) :: [connection_view()]
@@ -228,7 +233,12 @@ defmodule Engram.Connections do
     )
     |> Repo.all()
     |> Enum.map(fn {t, c} ->
-      identity = LogoAllowlist.resolve(c.software_id, c.redirect_uris, c.client_name)
+      # `t.redirect_uri` (the grant's), NOT `c.redirect_uris` (the client's
+      # registered list). A client may register several and pick per
+      # authorization, so only the one the code was delivered to proves
+      # anything. See #1204. NULL on pre-#1204 grants -> unverified.
+      identity =
+        LogoAllowlist.resolve(c.software_id, t.redirect_uri, c.client_name, c.cimd_url)
 
       %{
         kind: String.to_existing_atom(c.kind),
@@ -246,7 +256,9 @@ defmodule Engram.Connections do
         connected_at: t.inserted_at,
         first_user_agent: c.first_user_agent,
         first_ip: format_inet(c.first_ip),
-        redirect_uris: c.redirect_uris || []
+        redirect_uri: t.redirect_uri,
+        redirect_uris: c.redirect_uris || [],
+        cimd_url: c.cimd_url
       }
     end)
     |> Enum.sort_by(&(&1.last_used_at || &1.connected_at), {:desc, DateTime})
@@ -281,7 +293,9 @@ defmodule Engram.Connections do
         connected_at: k.created_at,
         first_user_agent: nil,
         first_ip: nil,
-        redirect_uris: []
+        redirect_uri: nil,
+        redirect_uris: [],
+        cimd_url: nil
       }
     end)
     |> Enum.sort_by(&(&1.last_used_at || &1.connected_at), {:desc, DateTime})
@@ -319,7 +333,9 @@ defmodule Engram.Connections do
         connected_at: rt.inserted_at,
         first_user_agent: nil,
         first_ip: nil,
-        redirect_uris: []
+        redirect_uri: nil,
+        redirect_uris: [],
+        cimd_url: nil
       }
     end)
   end

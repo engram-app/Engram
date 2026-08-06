@@ -6,6 +6,8 @@ defmodule EngramWeb.VaultsController do
   alias Engram.Auth.DeviceFlow
   alias Engram.Vaults
 
+  action_fallback EngramWeb.FallbackController
+
   @zero_counts %{notes: 0, attachments: 0}
 
   # ── index ──────────────────────────────────────────────────────────────────
@@ -114,10 +116,8 @@ defmodule EngramWeb.VaultsController do
           current
         )
 
-      {:error, changeset} ->
-        conn
-        |> put_status(422)
-        |> json(%{errors: format_errors(changeset)})
+      {:error, %Ecto.Changeset{}} = error ->
+        error
     end
   end
 
@@ -198,10 +198,8 @@ defmodule EngramWeb.VaultsController do
           {:error, :not_found} ->
             not_found(conn)
 
-          {:error, changeset} ->
-            conn
-            |> put_status(422)
-            |> json(%{errors: format_errors(changeset)})
+          {:error, %Ecto.Changeset{}} = error ->
+            error
         end
 
       :error ->
@@ -413,12 +411,4 @@ defmodule EngramWeb.VaultsController do
   end
 
   defp parse_id(id) when is_binary(id), do: Ecto.UUID.cast(id)
-
-  defp format_errors(changeset) do
-    Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
-      Enum.reduce(opts, msg, fn {key, value}, acc ->
-        String.replace(acc, "%{#{key}}", to_string(value))
-      end)
-    end)
-  end
 end

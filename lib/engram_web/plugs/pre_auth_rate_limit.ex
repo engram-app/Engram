@@ -53,6 +53,8 @@ defmodule EngramWeb.Plugs.PreAuthRateLimit do
 
   import Plug.Conn
 
+  alias EngramWeb.Plugs.Halt
+
   @default_limit 600
   @default_period_ms 60_000
 
@@ -86,9 +88,7 @@ defmodule EngramWeb.Plugs.PreAuthRateLimit do
         |> put_resp_header("x-ratelimit-limit", Integer.to_string(limit))
         |> put_resp_header("x-ratelimit-remaining", "0")
         |> put_resp_header("x-engram-error", "rate_limited")
-        |> put_resp_content_type("application/json")
-        |> send_resp(429, Jason.encode!(%{error: "rate_limited"}))
-        |> halt()
+        |> Halt.json(429, %{error: "rate_limited"})
     end
   end
 

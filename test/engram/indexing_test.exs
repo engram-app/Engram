@@ -165,19 +165,16 @@ defmodule Engram.IndexingTest do
       assert Enum.all?(batches, &(&1 <= 256)), "oversized upsert batch: #{inspect(batches)}"
     end
 
-    test "skips embedding for empty content", %{vault: vault} do
-      note = %Engram.Notes.Note{
-        id: 999,
-        path: "Test/Empty.md",
-        content: "",
-        user_id: 1,
-        vault_id: 1,
-        title: "Empty",
-        folder: "Test",
-        tags: [],
-        version: 1,
-        content_hash: ""
-      }
+    test "skips embedding for empty content", %{user: user, vault: vault} do
+      # Real fixtures (not a bare struct): the no_chunks path still fetches
+      # the user (to persist/clear links via Engram.Links.replace_links), so
+      # note.user_id must resolve to a real row.
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Test/Empty.md",
+          "content" => "",
+          "mtime" => 1_000.0
+        })
 
       assert {:ok, 0} = Indexing.index_note(note, vault)
     end

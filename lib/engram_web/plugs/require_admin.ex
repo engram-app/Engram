@@ -4,24 +4,20 @@ defmodule EngramWeb.Plugs.RequireAdmin do
   under Clerk). 403 unless current_user is an active (non-suspended) admin.
   Run AFTER EngramWeb.Plugs.Auth so current_user is loaded.
   """
-  import Plug.Conn
-  import Phoenix.Controller, only: [json: 2]
+  alias EngramWeb.Plugs.Halt
 
   def init(opts), do: opts
 
   def call(conn, _opts) do
     cond do
       not Engram.Auth.supports_credentials?() ->
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(404, Jason.encode!(%{error: "not_found"}))
-        |> halt()
+        Halt.json(conn, 404, %{error: "not_found"})
 
       admin?(conn.assigns[:current_user]) ->
         conn
 
       true ->
-        conn |> put_status(403) |> json(%{error: "forbidden"}) |> halt()
+        Halt.json(conn, 403, %{error: "forbidden"})
     end
   end
 

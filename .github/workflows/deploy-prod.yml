@@ -18,6 +18,12 @@ name: Deploy prod
 # Rollback recipe (forward-roll — no separate workflow):
 #   git tag release-v0.5.235 <last-known-good-sha-on-main>
 #   git push origin release-v0.5.235
+#
+# PROMOTION IS MANUAL (#1155). This workflow opens the engram-infra bump PR
+# but does NOT merge it, so staging can be verified before prod moves. The
+# job summary prints the one-line promote command. A rollback follows the
+# same path and is merged immediately — no reviewer, nothing queued behind
+# a review process, so incident response is not slowed.
 on:
   push:
     tags: ['release-v*']
@@ -298,7 +304,7 @@ jobs:
       # GitHub App, scoped to engram-app/engram-infra only. Required
       # permissions on engram-infra:
       #   - contents: read & write   (push branch)
-      #   - pull-requests: read & write   (open PR + auto-merge)
+      #   - pull-requests: read & write   (open PR; merge is manual, see #1155)
       # Same App + secrets already used by the staging `bump-infra-tfvars`
       # job in ci.yml.
       - name: Generate engram-infra App installation token
@@ -409,19 +415,30 @@ jobs:
             ## Review
 
             Auto-generated; if `variables.tf` has any non-image diff, treat as a regex regression and investigate before merging.
+
+            ## This PR is the prod promotion gate
+
+            It is deliberately NOT auto-merged (engram-app/Engram#1155). Staging is rolling to this
+            same release off the release-please merge — verify it carries this image tag and is
+            healthy, THEN merge here to move prod.
           labels: |
             automated
             tf-image-bump
 
-      - name: Enable auto-merge on bot PR
-        # Auto-merge queues the PR for merge once required checks pass.
-        # engram-infra has `allow_auto_merge=true` in repos.tf.
-        if: steps.open-pr.outputs.pull-request-number != ''
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          PR_NUMBER: ${{ steps.open-pr.outputs.pull-request-number }}
-        run: |
-          gh pr merge --auto --squash --repo engram-app/engram-infra "$PR_NUMBER"
+      # NO auto-merge. This is the staging-first promotion gate (#1155).
+      #
+      # Merging the release-please PR rolls staging and prod off the same
+      # event. When this step enabled auto-merge unconditionally, the prod PR
+      # merged as soon as its checks went green — which is well before anyone
+      # could look at staging. "Deploy to staging, smoke it, then promote" was
+      # not expressible; it had to be done by racing a watcher against this
+      # workflow to strip auto-merge before the checks passed. That is a stunt,
+      # not a gate.
+      #
+      # The PR now stays open until someone promotes it (command in the summary
+      # below). Rollback is NOT slowed: a forward-roll opens its PR the same way
+      # and the operator merges it immediately — one command, no reviewer
+      # required, nothing queued behind a review process.
 
       - name: Summary
         env:
@@ -429,13 +446,25 @@ jobs:
           PR_URL: ${{ steps.open-pr.outputs.pull-request-url }}
         run: |
           {
-            echo "## GitOps PR opened"
+            echo "## Prod bump PR opened — NOT merged"
             echo ""
             echo "- Release tag: \`${{ steps.tags.outputs.release }}\`"
             echo "- Commit: ${{ github.sha }}"
             echo "- Image tag: \`${{ steps.tags.outputs.image_tag }}\`"
             if [ -n "$PR_NUMBER" ]; then
-              echo "- engram-infra PR: [#${PR_NUMBER}](${PR_URL}) (auto-merge enabled)"
+              echo "- engram-infra PR: [#${PR_NUMBER}](${PR_URL})"
+              echo ""
+              echo "### Prod has NOT moved yet"
+              echo ""
+              echo "Staging is rolling to this same release off the release-please merge."
+              echo "Verify it carries \`${{ steps.tags.outputs.image_tag }}\` and is healthy, then promote:"
+              echo ""
+              echo '```'
+              echo "gh pr merge --squash --repo engram-app/engram-infra ${PR_NUMBER}"
+              echo '```'
+              echo ""
+              echo "Merging runs \`terraform (prod)\` in engram-infra, which rolls the ECS service."
+              echo "See \`docs/context/deploy-prod.md\` for what to check on staging first."
             else
               echo "- No PR opened (no diff — image already at this tag)."
             fi

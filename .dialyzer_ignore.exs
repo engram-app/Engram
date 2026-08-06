@@ -17,5 +17,18 @@
   # binary-shape union from the leading three pattern matches, but the spec
   # has to remain `term()` so future callers don't fail type-check at the
   # boundary. Same pattern as the AAD helpers above.
-  {"lib/engram/crypto/key_provider.ex", :contract_supertype, 71}
+  {"lib/engram/crypto/key_provider.ex", :contract_supertype, 71},
+
+  # `Links.backlinks_limit/0` is intentionally specced as `pos_integer()`
+  # rather than the literal `200` dialyzer infers from the current
+  # `@backlinks_limit` value — the spec documents the contract callers (and
+  # tests) can rely on, not today's specific cap. Same pattern as above.
+  {"lib/engram/links.ex", :contract_supertype, 647},
+
+  # `Links.live_basename_count/3` sums two `Repo.one(select: count(...))`
+  # results. SQL `count()` is always a non-negative integer at runtime, but
+  # `Repo.one/2` types as `term()`, so dialyzer widens the `+` to `number()`
+  # and flags `float()` as missing from the `non_neg_integer()` spec. The
+  # spec states the real contract.
+  {"lib/engram/links.ex", :missing_range, 291}
 ]

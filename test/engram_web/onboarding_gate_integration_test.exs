@@ -116,7 +116,7 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
       |> Ecto.Changeset.change(suspended_at: DateTime.utc_now())
       |> Engram.Repo.update()
 
-    resp = get(conn, "/api/notes/changes")
+    resp = get(conn, "/api/sync/manifest")
     body = json_response(resp, 402)
     assert body["error"] == "limit_exceeded"
     assert body["reason"] == "account_suspended"

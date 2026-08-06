@@ -127,7 +127,9 @@ class TestProfileUpdate:
             timeout=10,
         )
         assert patch.status_code == 422
-        assert patch.json()["error"] == "validation_failed"
+        # Sibling-controller 422 shape (errors map keyed by field) since the
+        # web-layer DRY pass unified PATCH /me with every other controller.
+        assert "display_name" in patch.json()["errors"]
 
 
 # ---------------------------------------------------------------------------

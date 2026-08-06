@@ -96,7 +96,7 @@ export function RawFrontmatterEditor({ doc }: { doc: Y.Doc }) {
 	}, [doc]);
 
 	return (
-		<section aria-label="Frontmatter (raw YAML)" className="border-b">
+		<section aria-label="Frontmatter (raw YAML)">
 			<div className="select-none px-3 pt-2 font-mono text-muted-foreground text-xs">---</div>
 			<div ref={hostRef} className="px-1" />
 			<div className="select-none px-3 pb-2 font-mono text-muted-foreground text-xs">---</div>

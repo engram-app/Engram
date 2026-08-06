@@ -15,13 +15,13 @@ How the server lets a client (plugin or web SPA) converge a vault: a per-vault *
 ## Endpoints (all under `/api`, vault-scoped pipeline)
 | Method/Path | Action | Purpose |
 |---|---|---|
-| `GET /sync/changes` | `SyncController.changes` | **Unified** ordered pull — merges the notes + attachments feeds into one `{seq,id}` page |
+| `GET /sync/changes` | *(removed — REST-purge #1036)* | The unified ordered pull now travels ONLY over the `crdt:` socket topics; no REST route exists |
 | `GET /sync/manifest` | `SyncController.manifest` | Full vault snapshot (path ciphertext + `content_hash`) for bootstrap/reconcile |
-| `GET /notes/changes` | `NotesController.changes` | Notes-only seq feed |
-| `GET /attachments/changes` | `AttachmentsController.changes` | Attachments-only seq feed |
-| `POST /notes/batch`, `/notes/batch-delete`, `/notes/batch-move`, `/folders/batch-*`, `/attachments/batch-*` | bulk | Idempotent bulk ops (require `X-Idempotency-Key`, enforced by the `IdempotencyKey` plug) |
+| `GET /notes/changes` | `NotesController.changes` | **Retired** — always 410 Gone (timestamp feed removed 2026-08; route kept so it's 410, not 404) |
+| `GET /attachments/changes` | `AttachmentsController.changes` | **Retired** — always 410 Gone (same) |
+| `POST /notes/batch-delete`, `/notes/batch-move`, `/folders/batch-*`, `/attachments/batch-*` | bulk | Idempotent bulk ops (require `X-Idempotency-Key`, enforced by the `IdempotencyKey` plug). `POST /notes/batch` itself was removed with the CRDT single-push path |
 
-## Unified change-log pull (`GET /sync/changes`)
+## Unified change-log pull (`GET /sync/changes`) — HISTORICAL (route removed, #1036)
 1. Decode `cursor` param → `{after_seq, after_id}` (absent = `{0, nil}` first pull; malformed → **400 `invalid_cursor`**).
 2. If `after_seq < retention_floor(vault)` → **410 `history_expired`** (forces a manifest re-sync; floor is 0 until compaction ships).
 3. Fetch **`limit + 1`** from EACH feed (`Notes.list_changes_by_seq`, `Attachments.list_changes_by_seq`) — the `+1` probe lets the merge detect "more exist".

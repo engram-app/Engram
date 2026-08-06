@@ -12,6 +12,9 @@ defmodule Engram.Attachments.Attachment do
     field :path_ciphertext, :binary
     field :path_nonce, :binary
     field :path_hmac, :binary
+    # Links foundation (Task 1/4) — HMAC of the lowercased basename (no
+    # extension stripping for non-note files). Nullable until backfilled.
+    field :basename_hmac, :binary
     # Decoded plaintext is materialized into this virtual field by the read
     # path (`Engram.Attachments.get_attachment/3`). It never persists; the
     # actual ciphertext lives in S3-compatible object storage.
@@ -47,6 +50,7 @@ defmodule Engram.Attachments.Attachment do
       :path_ciphertext,
       :path_nonce,
       :path_hmac,
+      :basename_hmac,
       :content_hash,
       :mime_type,
       :size_bytes,
@@ -67,15 +71,26 @@ defmodule Engram.Attachments.Attachment do
       :vault_id,
       :content_hash,
       :mime_type,
-      :size_bytes,
-      :path_ciphertext,
-      :path_nonce,
-      :path_hmac
+      :size_bytes
     ])
+    |> validate_encrypted(:path, [:path_ciphertext, :path_nonce, :path_hmac])
+    |> validate_encrypted(:content, [:content_nonce])
     |> validate_inclusion(:encryption_version, [1])
-    |> validate_required(:content_nonce)
     |> unique_constraint([:user_id, :vault_id, :path_hmac],
       name: :attachments_user_id_vault_id_path_hmac_index
     )
+  end
+
+  # Encryption invariant: the ciphertext columns for `public_field` must be
+  # populated. They are derived server-side from the client-supplied value, so
+  # a missing column means that value was absent — error on the public field
+  # name rather than leaking internal column names into 422 bodies (same
+  # contract as Engram.Vaults.Vault.validate_encrypted_name/1).
+  defp validate_encrypted(changeset, public_field, internal_fields) do
+    if Enum.all?(internal_fields, &(get_field(changeset, &1) not in [nil, ""])) do
+      changeset
+    else
+      add_error(changeset, public_field, "can't be blank", validation: :required)
+    end
   end
 end

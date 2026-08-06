@@ -97,7 +97,9 @@ defmodule Engram.Auth.DeviceFlow do
 
       auth ->
         case Repo.one(
-               from(v in Vaults.Vault, where: v.id == ^vault_id and v.user_id == ^user.id),
+               from(v in Vaults.Vault,
+                 where: v.id == ^vault_id and v.user_id == ^user.id and is_nil(v.deleted_at)
+               ),
                skip_tenant_check: true
              ) do
           nil ->
@@ -282,9 +284,7 @@ defmodule Engram.Auth.DeviceFlow do
     {raw, token_hash}
   end
 
-  defp hash_token(raw) do
-    :crypto.hash(:sha256, raw) |> Base.encode16(case: :lower)
-  end
+  defp hash_token(raw), do: Engram.Crypto.sha256_hex(raw)
 
   # User codes are typed by a human to authorize a device, so a predictable
   # PRNG (Enum.random/:rand) is a brute-force/guessing weakness. Draw each

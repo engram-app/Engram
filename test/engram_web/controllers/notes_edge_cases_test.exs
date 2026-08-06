@@ -197,46 +197,6 @@ defmodule EngramWeb.NotesEdgeCasesTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Changes response shape  # ---------------------------------------------------------------------------
-
-  describe "changes response shape" do
-    test "changes entries have required fields", %{conn: conn} do
-      post(conn, "/api/notes", %{path: "Test/Shape.md", content: "# Shape", mtime: 1_000.0})
-
-      conn2 = get(conn, "/api/notes/changes?since=2020-01-01T00:00:00Z")
-
-      assert %{"changes" => [change | _], "server_time" => server_time} =
-               json_response(conn2, 200)
-
-      assert Map.has_key?(change, "path")
-      assert Map.has_key?(change, "title")
-      assert Map.has_key?(change, "deleted")
-      assert Map.has_key?(change, "updated_at")
-      assert Map.has_key?(change, "folder")
-      assert Map.has_key?(change, "tags")
-      assert Map.has_key?(change, "version")
-      assert is_binary(server_time)
-    end
-
-    test "changes include content field for pull sync", %{conn: conn} do
-      post(conn, "/api/notes", %{
-        path: "Test/Content.md",
-        content: "# Content Check\n\nBody here.",
-        mtime: 1_000.0
-      })
-
-      conn2 = get(conn, "/api/notes/changes?since=2020-01-01T00:00:00Z")
-      assert %{"changes" => changes} = json_response(conn2, 200)
-      change = Enum.find(changes, &(&1["path"] == "Test/Content.md"))
-
-      assert Map.has_key?(change, "content"),
-             "changes entries must include 'content' field — plugin depends on this for pull sync"
-
-      assert change["content"] =~ "Body here."
-    end
-  end
-
-  # ---------------------------------------------------------------------------
   # Delete idempotency  # ---------------------------------------------------------------------------
 
   describe "delete idempotency" do

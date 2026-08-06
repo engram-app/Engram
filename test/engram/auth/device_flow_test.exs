@@ -390,4 +390,19 @@ defmodule Engram.Auth.DeviceFlowTest do
       assert deleted >= 1
     end
   end
+
+  describe "authorize_device/3 vault ownership" do
+    # The ownership lookup must reject soft-deleted vaults — OAuth's
+    # verify_vault_ownership/2 already filters deleted_at; the device flow
+    # used the same query without the filter and could bind a device to a
+    # vault the user had deleted.
+    test "rejects a soft-deleted vault" do
+      user = insert(:user)
+      vault = insert(:vault, user: user, deleted_at: DateTime.utc_now(:second))
+      {:ok, auth} = DeviceFlow.start_device_flow("client_softdel")
+
+      assert {:error, :vault_not_found} =
+               DeviceFlow.authorize_device(auth.user_code, user, vault.id)
+    end
+  end
 end

@@ -150,12 +150,29 @@ defmodule Engram.VaultsTest do
     end
 
     test "requires a name", %{user: user} do
-      # Phase B.3: name is virtual; the changeset surfaces the missing
-      # ciphertext/nonce/hmac instead. Empty input therefore lands as a
-      # "can't be blank" error on `name_ciphertext` and friends.
+      # Phase B.3: name is virtual — a missing name means the encrypted trio
+      # never gets injected, and the changeset surfaces that on the public
+      # `name` field (never the internal ciphertext/nonce/hmac column names).
       assert {:error, changeset} = Vaults.create_vault(user, %{})
       errors = errors_on(changeset)
-      assert "can't be blank" in (errors[:name_ciphertext] || [])
+      assert errors[:name] == ["can't be blank"]
+      refute Map.has_key?(errors, :name_ciphertext)
+    end
+
+    test "rejects a blank name", %{user: user} do
+      assert {:error, changeset} = Vaults.create_vault(user, %{name: "   "})
+      assert errors_on(changeset)[:name] == ["can't be blank"]
+    end
+
+    test "update_vault rejects a blank name without touching the slug", %{user: user} do
+      {:ok, vault} = Vaults.create_vault(user, %{name: "Keep Me"})
+
+      assert {:error, changeset} = Vaults.update_vault(user, vault.id, %{name: ""})
+      assert errors_on(changeset)[:name] == ["can't be blank"]
+
+      {:ok, reloaded} = Vaults.get_vault(user, vault.id)
+      assert reloaded.name == "Keep Me"
+      assert reloaded.slug == vault.slug
     end
   end
 
@@ -234,6 +251,11 @@ defmodule Engram.VaultsTest do
       assert {:ok, vault, :created} = Vaults.register_vault(user, "My Vault", "client-1")
       assert vault.name == "My Vault"
       assert vault.client_id == "client-1"
+    end
+
+    test "rejects a blank name", %{user: user} do
+      assert {:error, changeset} = Vaults.register_vault(user, "  ", "client-blank")
+      assert errors_on(changeset)[:name] == ["can't be blank"]
     end
 
     test "is idempotent — same client_id returns existing vault with :existing", %{user: user} do
@@ -600,6 +622,11 @@ defmodule Engram.VaultsTest do
 
       {:ok, promoted} = Vaults.get_default_vault(user)
       assert promoted.id == v2.id
+
+      # Exactly one, stated outright: get_default_vault/1 is a Repo.one, so a
+      # second is_default row makes it RAISE rather than return a wrong vault.
+      # Asserting the count fails with "2 != 1" instead of an Ecto stacktrace.
+      assert Enum.count(Vaults.list_vaults(user), & &1.is_default) == 1
     end
 
     test "does not promote when non-default vault is deleted", %{user: user} do

@@ -185,12 +185,10 @@ defmodule Engram.Workers.BackfillContentHashHmac do
       {:error, reason} ->
         emit_skip_telemetry(:note, note, reason)
 
-        Logger.error(
-          "BackfillContentHashHmac: skipping note #{note.id} (#{inspect(reason)})",
-          Engram.Logger.Metadata.with_category(:error, :crypto,
-            note_id: note.id,
-            reason: inspect(reason)
-          )
+        Engram.Logger.DecryptFailure.log(
+          "BackfillContentHashHmac: skipping note #{note.id}",
+          reason,
+          note_id: note.id
         )
     end
   end
@@ -212,12 +210,10 @@ defmodule Engram.Workers.BackfillContentHashHmac do
       err ->
         emit_skip_telemetry(:attachment, att, err)
 
-        Logger.error(
-          "BackfillContentHashHmac: skipping attachment #{att.id} (#{inspect(err)})",
-          Engram.Logger.Metadata.with_category(:error, :crypto,
-            attachment_id: att.id,
-            reason: inspect(err)
-          )
+        Engram.Logger.DecryptFailure.log(
+          "BackfillContentHashHmac: skipping attachment #{att.id}",
+          err,
+          attachment_id: att.id
         )
     end
   end
@@ -231,7 +227,9 @@ defmodule Engram.Workers.BackfillContentHashHmac do
         id: row.id,
         user_id: row.user_id,
         vault_id: row.vault_id,
-        reason: inspect(reason)
+        # Bounded atom only — the raw reason can wrap Req/Postgrex terms
+        # carrying secrets (same invariant as Engram.Logger.DecryptFailure).
+        reason: Engram.Telemetry.error_kind(reason)
       }
     )
   end

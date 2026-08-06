@@ -137,6 +137,10 @@ export default function ClerkAuthProvider({ children }: { children: React.ReactN
 		<ClerkProvider
 			publishableKey={clerkPubKey}
 			appearance={appearance}
+			// clerk-telemetry.com is not in our connect-src, so every event is a
+			// pair of CSP violations in the console. Turning the collector off beats
+			// widening the policy for a third-party host we get nothing back from.
+			telemetry={{ disabled: true }}
 			signInUrl={ROUTES.SIGN_IN}
 			signUpUrl={signUpUrl}
 			waitlistUrl={waitlistUrl}

@@ -22,14 +22,18 @@ defmodule Engram.PromEx.Indexing do
     * `engram_prom_ex_indexing_repath_points_total` — sum of `count` by
       `:outcome`. For `:ok` this is total points repathed = the zero-Voyage
       volume saved.
+    * `engram_prom_ex_indexing_link_rewrite_failures_total` — counter of
+      per-source-note link-rewrite failures from `RewriteNoteLinks`
+      (rename propagation, #648/#1231), tagged by `:reason`.
 
-  Cardinality contract: only `:outcome` (closed enum). NEVER add note_id,
-  user_id, or vault_id.
+  Cardinality contract: only `:outcome`/`:reason` (closed enums). NEVER add
+  note_id, user_id, or vault_id.
   """
 
   use PromEx.Plugin
 
   @repath_stop_event [:engram, :indexing, :repath, :stop]
+  @link_rewrite_failed_event [:engram, :links, :rewrite, :failed]
 
   @impl true
   def event_metrics(opts) do
@@ -52,6 +56,15 @@ defmodule Engram.PromEx.Indexing do
           description:
             "Qdrant points repathed in place by outcome (0-Voyage volume saved on :ok).",
           tags: [:outcome]
+        ),
+        counter(
+          metric_prefix ++ [:link_rewrite, :failures, :total],
+          event_name: @link_rewrite_failed_event,
+          description:
+            "Per-source-note link-rewrite failures (rename propagation, #648/#1231). " <>
+              ":reason is a closed set — known pipeline error atoms plus " <>
+              ":exception/:other buckets (RewriteNoteLinks.telemetry_failure_reason/1).",
+          tags: [:reason]
         )
       ]
     )

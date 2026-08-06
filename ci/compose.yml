@@ -44,6 +44,40 @@ services:
       DATABASE_URL: postgresql://engram:engram@postgres:5432/engram
       JWT_SECRET: ci-test-secret-not-for-production
       PHX_SERVER: "true"
+      # Tell the stack the URL it is actually reachable at. The container
+      # listens on 4000 but is published on CI_ENGRAM_PORT, and without these
+      # `EngramWeb.Endpoint.url()` falls back to config.exs's bare
+      # `http://localhost` — so every URL the server derives about ITSELF
+      # (OAuth discovery `resource`, the RFC 9728 metadata pointer, device-flow
+      # links) named a host nobody could reach.
+      #
+      # That is why this stack could never catch a URL-derivation bug — the
+      # class #634 and both 2026-08-05 discovery bugs live in. A server that
+      # misstates its own address cannot be tested for stating it correctly.
+      #
+      # Setting PHX_HOST also switches CORS/WS from permissive to the
+      # allowlist (runtime.exs). Safe here: Engram.HostOrigins always appends
+      # `app://obsidian.md`, `capacitor://localhost` and `http://localhost`,
+      # which covers the plugin, and the Python API clients send no Origin.
+      PHX_HOST: localhost
+      PHX_PORT: "${CI_ENGRAM_PORT:-8100}"
+      PHX_SCHEME: http
+      # REQUIRED alongside PHX_HOST, not optional decoration.
+      #
+      # Setting PHX_HOST also switches `:websocket_check_origin` on
+      # (runtime.exs — it lives inside `if phx_hosts do`). `HostOrigins` then
+      # allowlists `http://localhost` WITHOUT a port, but the web SPA is served
+      # by Phoenix on CI_ENGRAM_PORT and opens its socket with
+      # `Origin: http://localhost:<port>`. That does not match, the socket is
+      # refused, and every web<->Obsidian CRDT live-sync test times out while
+      # the Obsidian-only tiers stay green (they send `app://obsidian.md`,
+      # which IS allowlisted).
+      #
+      # Observed exactly that on #1260: e2e-clerk green, e2e-crdt's four
+      # live-sync tests red. Prod is unaffected — `app.engram.page` is :443, so
+      # its Origin carries no port — which is precisely why it needed CI to
+      # surface it.
+      ENGRAM_SAAS_FRONTEND_ORIGINS: "http://localhost:${CI_ENGRAM_PORT:-8100}"
       OLLAMA_URL: http://10.0.20.214:11434
       QDRANT_URL: http://10.0.20.201:6333
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-ci_test_notes}
@@ -57,18 +91,47 @@ services:
       KEY_PROVIDER: ${KEY_PROVIDER:-local}
       ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:?ENCRYPTION_MASTER_KEY must be set (CI workflow injects from secret, local dev sets via .env)}
       ENCRYPTION_MASTER_KEY_PREVIOUS: ${ENCRYPTION_MASTER_KEY_PREVIOUS:-}
-      # S3-compatible attachment storage (MinIO sidecar). This stack tests the
-      # S3 path, so STORAGE_BACKEND is pinned to s3 — the e2e ciphertext-at-rest
-      # probe expects a MinIO object. (The bytea `database` backend, #297, is
+      # S3-compatible attachment storage. This stack tests the S3 path, so
+      # STORAGE_BACKEND is pinned to s3 — the e2e ciphertext-at-rest probe
+      # expects a real object. (The bytea `database` backend, #297, is
       # exercised separately by the storage-database CI job; runtime.exs
       # defaults to s3.)
+      #
+      # POINTS AT THE CENTRAL FASTRAID MINIO, not a per-stack sidecar.
+      #
+      # The sidecar was a 400MB image + volume per concurrent stack, on runner
+      # VMs that ran out of disk twice on 2026-08-05.
+      #
+      # ONE PERMANENT BUCKET, SHARED BY EVERY RUN. Not per-run — deliberately.
+      #
+      # The per-run design (#1267) had to CREATE a bucket per job and remember
+      # to delete it, across two best-effort teardown paths. Anything that must
+      # be remembered gets forgotten: a cancelled job or a dead runner leaked
+      # the bucket forever, which is precisely how Qdrant's per-run collections
+      # reached 297 orphans and crash-looped it into a CI-wide outage. Fixing
+      # that with another reaper would just add a third thing to forget.
+      #
+      # Runs do not collide, because the BUCKET was never what isolated them —
+      # object keys are `<user_id>/<vault_id>/objects/<uuid>` and every run
+      # mints fresh users, so keys are already globally unique. The per-run
+      # bucket bought isolation the key space provides for free.
+      #
+      # Expiry is a server-side MinIO ILM rule on the bucket (7 days), so
+      # nothing in CI deletes anything: no sidecar, no teardown, no cron. This
+      # is exactly how `gha-cache` works, and it is the one shared-host
+      # resource in this system that has never leaked.
+      #
+      # Because nothing here deletes, there is no longer any path by which a
+      # misconfigured bucket name could reach staging's live
+      # `engram-saas-attachments`. That hazard is gone structurally rather than
+      # guarded against.
       STORAGE_BACKEND: s3
-      STORAGE_BUCKET: engram-attachments
-      STORAGE_ACCESS_KEY_ID: minioadmin
-      STORAGE_SECRET_ACCESS_KEY: minioadmin
+      STORAGE_BUCKET: ${CI_MINIO_BUCKET:-ci-e2e}
+      STORAGE_ACCESS_KEY_ID: ${CI_MINIO_ACCESS_KEY:?CI_MINIO_ACCESS_KEY must be set (CI injects from secret; local dev sets it in .env)}
+      STORAGE_SECRET_ACCESS_KEY: ${CI_MINIO_SECRET_KEY:?CI_MINIO_SECRET_KEY must be set (CI injects from secret; local dev sets it in .env)}
       STORAGE_SCHEME: "http://"
-      STORAGE_HOST: minio
-      STORAGE_PORT: "9000"
+      STORAGE_HOST: ${CI_MINIO_HOST:-10.0.20.214}
+      STORAGE_PORT: "${CI_MINIO_PORT:-9101}"
       STORAGE_REGION: us-east-1
       # Force plan-limit enforcement in CI. Without this, runtime.exs's
       # self-host bypass (PADDLE_API_KEY unset → :limits_enforced=false)
@@ -121,8 +184,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
     restart: "no"
 
   postgres:
@@ -140,28 +201,3 @@ services:
       retries: 30
     restart: "no"
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 1s
-      timeout: 3s
-      retries: 30
-    restart: "no"
-
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 minioadmin minioadmin;
-      mc mb --ignore-existing local/engram-attachments;
-      exit 0;
-      "
-    restart: "no"

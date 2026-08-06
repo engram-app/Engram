@@ -27,8 +27,7 @@ defmodule EngramWeb.Plugs.AccountLifecycle do
   Deleted takes precedence over suspended.
   """
 
-  import Plug.Conn
-  alias Phoenix.Controller
+  alias EngramWeb.Plugs.Halt
 
   def init(opts), do: opts
 
@@ -64,10 +63,10 @@ defmodule EngramWeb.Plugs.AccountLifecycle do
   defp suspension_exempt?(%Plug.Conn{request_path: path}),
     do: String.starts_with?(path, "/api/billing/")
 
+  # Halt.json (put_resp_content_type + send_resp) emits the identical wire
+  # response to the Phoenix.Controller.json this replaced: same
+  # `application/json; charset=utf-8` content type, same Jason-encoded body.
   defp deny(conn, status, error, message) do
-    conn
-    |> put_status(status)
-    |> Controller.json(%{error: error, message: message})
-    |> halt()
+    Halt.json(conn, status, %{error: error, message: message})
   end
 end

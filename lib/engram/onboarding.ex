@@ -33,7 +33,7 @@ defmodule Engram.Onboarding do
   # slug can never reach a profile even if the UI is bypassed.
   @valid_tools ~w(
     claude chatgpt grok mistral open_webui lobechat
-    claude_code cursor windsurf cline continue opencode github_copilot antigravity
+    claude_code cursor devin windsurf cline continue opencode github_copilot antigravity
     web_only other_mcp
   )
 
@@ -169,9 +169,12 @@ defmodule Engram.Onboarding do
     # Under the Free-tier model: paid tiers (:starter / :pro) pass on tier alone;
     # Free users must EXPLICITLY accept the Free tier via the onboarding wizard
     # (`free_tier_accepted_at` set). Self-host (`billing_enabled=false`)
-    # auto-passes without consulting the resolver.
+    # auto-passes without consulting the resolver. Reuses `billing_active`
+    # from above — this used to re-read the config key with the OPPOSITE
+    # default (true vs false), so an unset key produced self-host wizard
+    # steps but SaaS subscription gating in the same response.
     subscription_ok =
-      not Application.get_env(:engram, :billing_enabled, true) or
+      not billing_active or
         Engram.Billing.tier(user) in [:starter, :pro] or
         not is_nil(user.free_tier_accepted_at)
 

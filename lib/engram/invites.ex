@@ -117,5 +117,5 @@ defmodule Engram.Invites do
     )
   end
 
-  defp hash_token(raw), do: :crypto.hash(:sha256, raw) |> Base.encode16(case: :lower)
+  defp hash_token(raw), do: Engram.Crypto.sha256_hex(raw)
 end

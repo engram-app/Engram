@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type React from "react";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { syntheticFolderId } from "../viewer/tree/synthesize-folders";
+import { getActiveVaultId, setActiveVaultId } from "./active-vault";
 import { ApiError } from "./client";
 import { CrdtOpError } from "./crdt-ops";
 import {
@@ -11,6 +12,7 @@ import {
 	useAcceptTerms,
 	useAppBootstrap,
 	useAttachments,
+	useBacklinks,
 	useBatchDeleteAttachments,
 	useBatchDeleteFolders,
 	useBatchDeleteNotes,
@@ -22,6 +24,7 @@ import {
 	useCreateNote,
 	useDeleteFolder,
 	useDeleteNote,
+	useDeleteVault,
 	useDuplicateNote,
 	useFolderNotesById,
 	useFolders,
@@ -215,6 +218,47 @@ describe("useNote by id", () => {
 		const { result } = renderHook(() => useNote(null), { wrapper });
 		expect(result.current.fetchStatus).toBe("idle");
 		expect(get).not.toHaveBeenCalled();
+	});
+});
+
+describe("useBacklinks", () => {
+	// The API returns one row per EDGE — a source note linking twice (e.g. once
+	// plain, once aliased) shows up twice. The panel keys rows by
+	// source_note_id, so undeduped data renders duplicate rows / React key
+	// warnings. `select` collapses to one row per source note, keeping the
+	// first edge.
+	it("dedupes multiple edges from the same source note, keeping the first", async () => {
+		get.mockResolvedValue({
+			backlinks: [
+				{
+					source_note_id: "src-1",
+					source_path: "a.md",
+					source_title: "A",
+					alias: null,
+					anchor: null,
+				},
+				{
+					source_note_id: "src-1",
+					source_path: "a.md",
+					source_title: "A",
+					alias: "x",
+					anchor: "h1",
+				},
+				{
+					source_note_id: "src-2",
+					source_path: "b.md",
+					source_title: "B",
+					alias: null,
+					anchor: null,
+				},
+			],
+		});
+
+		const { result } = renderHook(() => useBacklinks("42"), { wrapper });
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+		expect(result.current.data?.map((b) => b.source_note_id)).toEqual(["src-1", "src-2"]);
+		expect(result.current.data?.[0]?.alias).toBeNull();
 	});
 });
 
@@ -1055,7 +1099,12 @@ describe("useCreateNote — optimistic placeholder", () => {
 			await result.current.mutateAsync({ folder: "", id: MINTED_ID });
 		});
 
-		expect(navigateSpy).toHaveBeenCalledWith(`/work/${MINTED_ID}`);
+		// The `justCreated` state is what puts the note page's inline title into
+		// rename mode with "Untitled" selected — part of the create contract, not
+		// incidental, so assert it rather than loosening to the path alone.
+		expect(navigateSpy).toHaveBeenCalledWith(`/work/${MINTED_ID}`, {
+			state: { justCreated: true },
+		});
 	});
 
 	// `/api/folders` returns DERIVED folders (ones holding no note directly) with
@@ -1178,6 +1227,21 @@ describe("useCreateNote — optimistic placeholder", () => {
 		// the optimistic row is already rendering under it.
 		expect(crdtCreateNote.mock.calls[0]![0]).toBe(MINTED_ID);
 		expect(crdtCreateNote.mock.calls[1]![0]).toBe(MINTED_ID);
+	});
+
+	// The unresolved-wikilink "create this note" affordance passes a specific
+	// filename derived from the link target, instead of taking the "Untitled.md"
+	// default — same mutation/hook as the sidebar "New note" button.
+	it("creates at a caller-supplied name instead of Untitled.md", async () => {
+		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
+		crdtCreateNote.mockImplementation((docId: string) => Promise.resolve(docId));
+
+		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync({ folder: "", id: MINTED_ID, name: "songebobsss.md" });
+		});
+
+		expect(crdtCreateNote).toHaveBeenCalledWith(MINTED_ID, "songebobsss.md");
 	});
 
 	it("surfaces notes_cap_reached without retrying", async () => {
@@ -2120,5 +2184,54 @@ describe("useAppBootstrap seeding useVaults", () => {
 		const vaults = renderHook(() => useVaults(), { wrapper });
 		await waitFor(() => expect(vaults.result.current.isFetching).toBe(false));
 		expect(vaults.result.current.data).toEqual([{ id: "42", slug: "work", name: "Work" }]);
+	});
+
+	// The reconcile has to happen HERE, inside the queryFn, and not in an effect
+	// on the gate: parent effects run after their children's, so by then the
+	// sidebar's folder/attachment queries have already gone out under the dead
+	// id and 404'd. Guards the wiring — the pick itself is covered in
+	// active-vault.test.ts.
+	it("re-points a stale persisted vault id at a vault the account owns", async () => {
+		setActiveVaultId("vault-deleted-elsewhere");
+		get.mockResolvedValueOnce({
+			onboarding: { enabled: false },
+			capabilities: { tier: "free", limits: {} },
+			vaults: { vaults: [{ id: "42", slug: "work", name: "Work", is_default: true }] },
+		});
+
+		const boot = renderHook(() => useAppBootstrap(), { wrapper });
+		await waitFor(() => expect(boot.result.current.isSuccess).toBe(true));
+
+		expect(getActiveVaultId()).toBe("42");
+	});
+
+	// Deleting the LAST vault has to re-run the onboarding gate: the backend
+	// answers `next_step: :vault` for an account owning none, but that verdict is
+	// only read at bootstrap. Without the ["bootstrap"] invalidation the user sits
+	// in an empty shell with no route out.
+	it("re-runs the onboarding gate after a vault delete, not just the vault list", async () => {
+		const spy = vi.spyOn(qc, "invalidateQueries");
+		del.mockResolvedValueOnce({ deleted: true });
+
+		const { result } = renderHook(() => useDeleteVault(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync("42");
+		});
+
+		expect(spy).toHaveBeenCalledWith({ queryKey: ["vaults"] });
+		expect(spy).toHaveBeenCalledWith({ queryKey: ["bootstrap"] });
+	});
+
+	// Deleting/purging a vault only invalidates ["vaults"], so the refetch is the
+	// only thing standing between "user deleted the vault they were in" and a
+	// store that keeps 404ing every request until a full page reload.
+	it("re-points a stale vault id on the /vaults refetch too", async () => {
+		setActiveVaultId("vault-deleted-in-session");
+		get.mockResolvedValueOnce({ vaults: [{ id: "42", slug: "work", name: "Work" }] });
+
+		const vaults = renderHook(() => useVaults(), { wrapper });
+		await waitFor(() => expect(vaults.result.current.isSuccess).toBe(true));
+
+		expect(getActiveVaultId()).toBe("42");
 	});
 });

@@ -2,8 +2,8 @@ defmodule Engram.Crypto.UserDekRotation do
   @moduledoc """
   T3.7 — per-user DEK rotation orchestrator. Generates a new DEK for the
   target user, rewraps every ciphertext column on every owned row
-  (notes / vaults / attachments / Qdrant payloads) under the new key,
-  then atomically flips `users.encrypted_dek`.
+  (notes / vaults / attachments / note_links / Qdrant payloads) under the
+  new key, then atomically flips `users.encrypted_dek`.
 
   The user is locked (read + write) for the duration via
   `Engram.Crypto.RotationLock`; clients receive HTTP 503 with
@@ -34,7 +34,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Accounts.User
   alias Engram.Auth.SessionInvalidator
   alias Engram.Crypto
-  alias Engram.Crypto.{DekCache, Envelope, RotationLock}
+  alias Engram.Crypto.{DekCache, Envelope, MigrationRunner, RotationLock}
   alias Engram.Crypto.KeyProvider.Resolver
   alias Engram.Logger.Metadata
   alias Engram.Repo
@@ -60,15 +60,15 @@ defmodule Engram.Crypto.UserDekRotation do
 
     try do
       result = do_rotate(user_id)
-      emit_telemetry(user_id, result, duration_us_since(started_at))
+      emit_telemetry(user_id, result, MigrationRunner.duration_us_since(started_at))
       result
     rescue
       e ->
-        emit_telemetry(user_id, {:error, :crashed}, duration_us_since(started_at))
+        emit_telemetry(user_id, {:error, :crashed}, MigrationRunner.duration_us_since(started_at))
         reraise e, __STACKTRACE__
     catch
       kind, reason ->
-        emit_telemetry(user_id, {:error, :crashed}, duration_us_since(started_at))
+        emit_telemetry(user_id, {:error, :crashed}, MigrationRunner.duration_us_since(started_at))
         :erlang.raise(kind, reason, __STACKTRACE__)
     end
   end
@@ -141,6 +141,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_notes(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_vaults(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_attachments(user, old_dek, new_dek, new_filter_key, new_dek_version),
+         :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
          :ok <- final_flip(user, new_dek_version, new_wrapped) do
       Logger.info(
@@ -287,9 +288,17 @@ defmodule Engram.Crypto.UserDekRotation do
         old_aad = old_aad_for(:vaults, column, vault)
         new_aad = Crypto.aad_for_row(:vaults, column, vault.id)
 
-        case Envelope.decrypt(ct, nonce, old_dek, old_aad) do
+        case try_rewrap(ct, nonce, old_dek, new_dek, old_aad, new_aad,
+               table: :vaults,
+               phase: :sweep_vaults,
+               log: "T3.7 sweep_vaults: decrypt failed under both old and new DEK",
+               log_meta: [user_id: vault.user_id, row_id: vault.id, column: column],
+               on_both_failed:
+                 {:raise,
+                  "T3.7 sweep_vaults: decrypt failed under both old and new DEK " <>
+                    "for vault id=#{vault.id} column=#{column} new_dek_version=#{new_dek_version}"}
+             ) do
           {:ok, plaintext} ->
-            # Row was under old DEK — re-encrypt with new DEK
             {new_ct, new_nonce} = Envelope.encrypt(plaintext, new_dek, new_aad)
 
             [
@@ -298,38 +307,72 @@ defmodule Engram.Crypto.UserDekRotation do
               {hmac_key, Crypto.hmac_field(new_filter_key, plaintext)}
             ]
 
-          :error ->
-            # Try new DEK — row may already be rotated from a prior crashed run
-            case Envelope.decrypt(ct, nonce, new_dek, new_aad) do
-              {:ok, _plaintext} ->
-                # Already rotated under this run's new_dek — skip
-                []
-
-              :error ->
-                Logger.error(
-                  "T3.7 sweep_vaults: decrypt failed under both old and new DEK",
-                  Metadata.with_category(:error, :crypto,
-                    user_id: vault.user_id,
-                    table: :vaults,
-                    row_id: vault.id,
-                    column: column,
-                    phase: :sweep_vaults,
-                    status: :both_deks_failed
-                  )
-                )
-
-                :telemetry.execute(
-                  [:engram, :crypto, :rotate, :dek, :row_failed],
-                  %{count: 1},
-                  %{table: :vaults, phase: :sweep_vaults, status: :both_deks_failed}
-                )
-
-                raise "T3.7 sweep_vaults: decrypt failed under both old and new DEK " <>
-                        "for vault id=#{vault.id} column=#{column} new_dek_version=#{new_dek_version}"
-            end
+          :already_rotated ->
+            # Already rotated under this run's new_dek — skip
+            []
         end
       end
     end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Shared dual-DEK rewrap discriminator
+  # ---------------------------------------------------------------------------
+  #
+  # Every rewrap site funnels through this. Decrypt order is load-bearing:
+  # OLD DEK first (row still under the old key — caller re-encrypts under the
+  # new DEK), then NEW DEK (row already rotated by a prior crashed run —
+  # caller skips). If BOTH fail the row is unrecoverable: structured log +
+  # [:engram, :crypto, :rotate, :dek, :row_failed] telemetry, then either
+  # raise (DB/S3 sweeps) or return {:error, reason} (Qdrant sweep) per
+  # `:on_both_failed`. Site-specific AAD pairs, log/raise text, and telemetry
+  # table/phase are passed in so no site is silently harmonized.
+  #
+  # Returns {:ok, plaintext} | :already_rotated | {:error, term()} (or raises,
+  # per :on_both_failed). No @spec: a hand-written one is a dialyzer
+  # contract_supertype against the inferred per-site success typing.
+  defp try_rewrap(ct, nonce, old_dek, new_dek, old_aad, new_aad, opts) do
+    case Envelope.decrypt(ct, nonce, old_dek, old_aad) do
+      {:ok, plaintext} ->
+        # Row was under old DEK — caller re-encrypts with the new DEK
+        {:ok, plaintext}
+
+      :error ->
+        # Try new DEK — row may already be rotated from a prior crashed run
+        case Envelope.decrypt(ct, nonce, new_dek, new_aad) do
+          {:ok, _plaintext} ->
+            :already_rotated
+
+          :error ->
+            both_deks_failed(opts)
+        end
+    end
+  end
+
+  defp both_deks_failed(opts) do
+    table = Keyword.fetch!(opts, :table)
+    phase = Keyword.fetch!(opts, :phase)
+
+    Logger.error(
+      Keyword.fetch!(opts, :log),
+      Metadata.with_category(
+        :error,
+        :crypto,
+        Keyword.fetch!(opts, :log_meta) ++
+          [table: table, phase: phase, status: :both_deks_failed]
+      )
+    )
+
+    :telemetry.execute(
+      [:engram, :crypto, :rotate, :dek, :row_failed],
+      %{count: 1},
+      %{table: table, phase: phase, status: :both_deks_failed}
+    )
+
+    case Keyword.fetch!(opts, :on_both_failed) do
+      {:raise, msg} -> raise msg
+      {:error, _reason} = err -> err
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -491,7 +534,16 @@ defmodule Engram.Crypto.UserDekRotation do
     old_aad = old_aad_for(:attachments, :content, attachment)
     new_aad = Crypto.aad_for_row(:attachments, :content, attachment.id)
 
-    case Envelope.decrypt(ct, attachment.content_nonce, old_dek, old_aad) do
+    case try_rewrap(ct, attachment.content_nonce, old_dek, new_dek, old_aad, new_aad,
+           table: :attachments,
+           phase: :sweep_attachments_blob,
+           log: "T3.7 sweep_attachments: S3 blob decrypt failed under both old and new DEK",
+           log_meta: [user_id: attachment.user_id, row_id: att_id, column: :content],
+           on_both_failed:
+             {:raise,
+              "T3.7 sweep_attachments: S3 blob decrypt failed under both old and new DEK " <>
+                "for att id=#{att_id} new_dek_version=#{new_dek_version}"}
+         ) do
       {:ok, plaintext} ->
         # Row was under old DEK — re-encrypt with new DEK and PUT to S3
         {new_ct, new_nonce} = Envelope.encrypt(plaintext, new_dek, new_aad)
@@ -503,35 +555,9 @@ defmodule Engram.Crypto.UserDekRotation do
           {:error, _} = err -> err
         end
 
-      :error ->
-        # Try new DEK — S3 blob may already be rotated from a prior crashed run
-        case Envelope.decrypt(ct, attachment.content_nonce, new_dek, new_aad) do
-          {:ok, _plaintext} ->
-            # Already rotated — skip the S3 PUT, just finalize the DB row
-            {:ok, attachment, :already_rotated}
-
-          :error ->
-            Logger.error(
-              "T3.7 sweep_attachments: S3 blob decrypt failed under both old and new DEK",
-              Metadata.with_category(:error, :crypto,
-                user_id: attachment.user_id,
-                table: :attachments,
-                row_id: att_id,
-                column: :content,
-                phase: :sweep_attachments_blob,
-                status: :both_deks_failed
-              )
-            )
-
-            :telemetry.execute(
-              [:engram, :crypto, :rotate, :dek, :row_failed],
-              %{count: 1},
-              %{table: :attachments, phase: :sweep_attachments_blob, status: :both_deks_failed}
-            )
-
-            raise "T3.7 sweep_attachments: S3 blob decrypt failed under both old and new DEK " <>
-                    "for att id=#{att_id} new_dek_version=#{new_dek_version}"
-        end
+      :already_rotated ->
+        # Already rotated — skip the S3 PUT, just finalize the DB row
+        {:ok, attachment, :already_rotated}
     end
   end
 
@@ -612,49 +638,152 @@ defmodule Engram.Crypto.UserDekRotation do
         old_aad = old_aad_for(:attachments, column, att)
         new_aad = Crypto.aad_for_row(:attachments, column, att.id)
 
-        case Envelope.decrypt(ct, nonce, old_dek, old_aad) do
+        case try_rewrap(ct, nonce, old_dek, new_dek, old_aad, new_aad,
+               table: :attachments,
+               phase: :sweep_attachments_metadata,
+               log: "T3.7 sweep_attachments: metadata decrypt failed under both old and new DEK",
+               log_meta: [user_id: att.user_id, row_id: att.id, column: column],
+               on_both_failed:
+                 {:raise,
+                  "T3.7 sweep_attachments: metadata decrypt failed under both old and new DEK " <>
+                    "for att id=#{att.id} column=#{column} new_dek_version=#{new_dek_version}"}
+             ) do
           {:ok, plaintext} ->
             {new_ct, new_nonce} = Envelope.encrypt(plaintext, new_dek, new_aad)
+
+            # T4-deferred Critical (#591): same basename_hmac rebuild as
+            # notes' `path` column — attachments are link targets too
+            # (embeds), and their basename_hmac must track the new filter key.
+            basename_updates =
+              if column == :path and is_binary(plaintext) do
+                [
+                  {:basename_hmac,
+                   Crypto.hmac_field(new_filter_key, Engram.Links.basename_key(plaintext))}
+                ]
+              else
+                []
+              end
 
             [
               {ct_field, new_ct},
               {nonce_field, new_nonce},
               {hmac_field_key, Crypto.hmac_field(new_filter_key, plaintext)}
-            ]
+            ] ++ basename_updates
 
-          :error ->
-            # Try new DEK — metadata may already be rotated from a prior crashed run
-            case Envelope.decrypt(ct, nonce, new_dek, new_aad) do
-              {:ok, _plaintext} ->
-                # Already rotated — skip
-                []
+          :already_rotated ->
+            # Already rotated — skip
+            []
+        end
+      end
+    end)
+  end
 
-              :error ->
-                Logger.error(
-                  "T3.7 sweep_attachments: metadata decrypt failed under both old and new DEK",
-                  Metadata.with_category(:error, :crypto,
-                    user_id: att.user_id,
-                    table: :attachments,
-                    row_id: att.id,
-                    column: column,
-                    phase: :sweep_attachments_metadata,
-                    status: :both_deks_failed
+  # ---------------------------------------------------------------------------
+  # note_links sweep (#591 T7) — same cursor-batch shape as sweep_notes/5.
+  # Nullable alias/anchor columns are skipped like notes' description/resource;
+  # target_text also carries the basename HMAC used for link resolution.
+  # ---------------------------------------------------------------------------
+
+  defp sweep_note_links(%User{id: user_id}, old_dek, new_dek, new_filter_key, new_dek_version) do
+    sweep_table_loop(
+      user_id,
+      Engram.Links.NoteLink,
+      "00000000-0000-0000-0000-000000000000",
+      fn batch_ids ->
+        Repo.transaction(fn ->
+          links =
+            from(l in Engram.Links.NoteLink,
+              where: l.id in ^batch_ids,
+              lock: "FOR UPDATE"
+            )
+            |> Repo.all(skip_tenant_check: true)
+
+          Enum.each(links, fn link ->
+            updates =
+              rewrap_note_link_columns(link, old_dek, new_dek, new_filter_key, new_dek_version)
+
+            if updates != [] do
+              case from(l in Engram.Links.NoteLink, where: l.id == ^link.id)
+                   |> Repo.update_all(
+                     [set: updates ++ [dek_version: new_dek_version]],
+                     skip_tenant_check: true
+                   ) do
+                {1, _} ->
+                  :ok
+
+                {0, _} ->
+                  Logger.error(
+                    "T3.7 sweep_note_links: row vanished during rotation",
+                    Metadata.with_category(:error, :crypto,
+                      user_id: user_id,
+                      table: :note_links,
+                      row_id: link.id,
+                      phase: :sweep_note_links
+                    )
                   )
-                )
 
-                :telemetry.execute(
-                  [:engram, :crypto, :rotate, :dek, :row_failed],
-                  %{count: 1},
-                  %{
-                    table: :attachments,
-                    phase: :sweep_attachments_metadata,
-                    status: :both_deks_failed
-                  }
-                )
-
-                raise "T3.7 sweep_attachments: metadata decrypt failed under both old and new DEK " <>
-                        "for att id=#{att.id} column=#{column} new_dek_version=#{new_dek_version}"
+                  raise "T3.7 sweep_note_links: row vanished mid-rotation table=note_links row_id=#{link.id}"
+              end
             end
+          end)
+        end)
+        |> case do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+      end
+    )
+  end
+
+  defp rewrap_note_link_columns(
+         %Engram.Links.NoteLink{} = link,
+         old_dek,
+         new_dek,
+         new_filter_key,
+         new_dek_version
+       ) do
+    [
+      {:target_text, :target_text_ciphertext, :target_text_nonce, :target_basename_hmac,
+       &Engram.Links.basename_key/1},
+      {:alias, :alias_ciphertext, :alias_nonce, nil, nil},
+      {:anchor, :anchor_ciphertext, :anchor_nonce, nil, nil}
+    ]
+    |> Enum.flat_map(fn {column, ct_field, nonce_field, hmac_key, hmac_transform} ->
+      ct = Map.get(link, ct_field)
+      nonce = Map.get(link, nonce_field)
+
+      if is_nil(ct) or is_nil(nonce) do
+        []
+      else
+        old_aad = old_aad_for(:note_links, column, link)
+        new_aad = Crypto.aad_for_row(:note_links, column, link.id)
+
+        case try_rewrap(ct, nonce, old_dek, new_dek, old_aad, new_aad,
+               table: :note_links,
+               phase: :sweep_note_links,
+               log: "T3.7 sweep_note_links: decrypt failed under both old and new DEK",
+               log_meta: [user_id: link.user_id, row_id: link.id, column: column],
+               on_both_failed:
+                 {:raise,
+                  "T3.7 sweep_note_links: decrypt failed under both old and new DEK " <>
+                    "for note_link id=#{link.id} column=#{column} new_dek_version=#{new_dek_version}"}
+             ) do
+          {:ok, plaintext} ->
+            {new_ct, new_nonce} = Envelope.encrypt(plaintext, new_dek, new_aad)
+
+            ct_updates = [{ct_field, new_ct}, {nonce_field, new_nonce}]
+
+            hmac_updates =
+              if hmac_key && is_binary(plaintext) do
+                [{hmac_key, Crypto.hmac_field(new_filter_key, hmac_transform.(plaintext))}]
+              else
+                []
+              end
+
+            ct_updates ++ hmac_updates
+
+          :already_rotated ->
+            []
         end
       end
     end)
@@ -808,7 +937,14 @@ defmodule Engram.Crypto.UserDekRotation do
           nonce_bin = Base.decode64!(nonce_b64)
           aad = Crypto.aad_for_qdrant(collection, to_string(qdrant_id), field)
 
-          case Envelope.decrypt(ct_bin, nonce_bin, old_dek, aad) do
+          # Qdrant payloads are always AAD-bound: same AAD for both DEK probes.
+          case try_rewrap(ct_bin, nonce_bin, old_dek, new_dek, aad, aad,
+                 table: :qdrant,
+                 phase: :sweep_qdrant,
+                 log: "T3.7 sweep_qdrant: decrypt failed under both old and new DEK",
+                 log_meta: [qdrant_id: qdrant_id, field: field],
+                 on_both_failed: {:error, {:qdrant_decrypt_failed, qdrant_id, field}}
+               ) do
             {:ok, plaintext} ->
               {new_ct_bin, new_nonce_bin} = Envelope.encrypt(plaintext, new_dek, aad)
 
@@ -819,32 +955,12 @@ defmodule Engram.Crypto.UserDekRotation do
 
               {:cont, {:ok, new_acc, true}}
 
-            :error ->
-              case Envelope.decrypt(ct_bin, nonce_bin, new_dek, aad) do
-                {:ok, _plaintext} ->
-                  # Already under new DEK from a prior crashed run — leave as-is
-                  {:cont, {:ok, acc, any_changed?}}
+            :already_rotated ->
+              # Already under new DEK from a prior crashed run — leave as-is
+              {:cont, {:ok, acc, any_changed?}}
 
-                :error ->
-                  Logger.error(
-                    "T3.7 sweep_qdrant: decrypt failed under both old and new DEK",
-                    Metadata.with_category(:error, :crypto,
-                      table: :qdrant,
-                      qdrant_id: qdrant_id,
-                      field: field,
-                      phase: :sweep_qdrant,
-                      status: :both_deks_failed
-                    )
-                  )
-
-                  :telemetry.execute(
-                    [:engram, :crypto, :rotate, :dek, :row_failed],
-                    %{count: 1},
-                    %{table: :qdrant, phase: :sweep_qdrant, status: :both_deks_failed}
-                  )
-
-                  {:halt, {:error, {:qdrant_decrypt_failed, qdrant_id, field}}}
-              end
+            {:error, _} = err ->
+              {:halt, err}
           end
         end
       end)
@@ -933,9 +1049,17 @@ defmodule Engram.Crypto.UserDekRotation do
           old_aad = old_aad_for(:notes, column, note)
           new_aad = Crypto.aad_for_row(:notes, column, note.id)
 
-          case Envelope.decrypt(ct, nonce, old_dek, old_aad) do
+          case try_rewrap(ct, nonce, old_dek, new_dek, old_aad, new_aad,
+                 table: :notes,
+                 phase: :sweep_notes,
+                 log: "T3.7 sweep_notes: decrypt failed under both old and new DEK",
+                 log_meta: [user_id: note.user_id, row_id: note.id, column: column],
+                 on_both_failed:
+                   {:raise,
+                    "T3.7 sweep_notes: decrypt failed under both old and new DEK " <>
+                      "for note id=#{note.id} column=#{column} new_dek_version=#{new_dek_version}"}
+               ) do
             {:ok, plaintext} ->
-              # Row was under old DEK — re-encrypt with new DEK
               {new_ct, new_nonce} = Envelope.encrypt(plaintext, new_dek, new_aad)
 
               ct_updates = [{ct_field, new_ct}, {nonce_field, new_nonce}]
@@ -947,37 +1071,25 @@ defmodule Engram.Crypto.UserDekRotation do
                   []
                 end
 
-              ct_updates ++ hmac_updates
-
-            :error ->
-              # Try new DEK — row may already be rotated from a prior crashed run
-              case Envelope.decrypt(ct, nonce, new_dek, new_aad) do
-                {:ok, _plaintext} ->
-                  # Already rotated under this run's new_dek — skip
+              # T4-deferred Critical (#591): `path` also drives note_links
+              # resolution via `basename_hmac`. If this isn't rebuilt under
+              # the new filter key, every wikilink/embed pointing at this
+              # note silently stops resolving post-rotation.
+              basename_updates =
+                if column == :path and is_binary(plaintext) do
+                  [
+                    {:basename_hmac,
+                     Crypto.hmac_field(new_filter_key, Engram.Links.basename_key(plaintext))}
+                  ]
+                else
                   []
+                end
 
-                :error ->
-                  Logger.error(
-                    "T3.7 sweep_notes: decrypt failed under both old and new DEK",
-                    Metadata.with_category(:error, :crypto,
-                      user_id: note.user_id,
-                      table: :notes,
-                      row_id: note.id,
-                      column: column,
-                      phase: :sweep_notes,
-                      status: :both_deks_failed
-                    )
-                  )
+              ct_updates ++ hmac_updates ++ basename_updates
 
-                  :telemetry.execute(
-                    [:engram, :crypto, :rotate, :dek, :row_failed],
-                    %{count: 1},
-                    %{table: :notes, phase: :sweep_notes, status: :both_deks_failed}
-                  )
-
-                  raise "T3.7 sweep_notes: decrypt failed under both old and new DEK " <>
-                          "for note id=#{note.id} column=#{column} new_dek_version=#{new_dek_version}"
-              end
+            :already_rotated ->
+              # Already rotated under this run's new_dek — skip
+              []
           end
         end
       end)
@@ -1008,8 +1120,19 @@ defmodule Engram.Crypto.UserDekRotation do
       old_aad = old_aad_for(:notes, :tags, note)
       new_aad = Crypto.aad_for_row(:notes, :tags, note.id)
 
-      case Envelope.decrypt(ct, nonce, old_dek, old_aad) do
+      case try_rewrap(ct, nonce, old_dek, new_dek, old_aad, new_aad,
+             table: :notes,
+             phase: :sweep_notes,
+             log: "T3.7 sweep_notes: decrypt failed under both old and new DEK",
+             log_meta: [user_id: note.user_id, row_id: note.id, column: :tags],
+             on_both_failed:
+               {:raise,
+                "T3.7 sweep_notes: decrypt failed under both old and new DEK " <>
+                  "for note id=#{note.id} column=tags new_dek_version=#{new_dek_version}"}
+           ) do
         {:ok, etf_bin} ->
+          # ETF special case: re-encode the decoded term and encrypt THAT,
+          # exactly as before (not the raw decrypted binary).
           tags = :erlang.binary_to_term(etf_bin, [:safe])
           new_etf = :erlang.term_to_binary(tags)
           {new_ct, new_nonce} = Envelope.encrypt(new_etf, new_dek, new_aad)
@@ -1026,35 +1149,9 @@ defmodule Engram.Crypto.UserDekRotation do
             {:tags_hmac, tags_hmac}
           ]
 
-        :error ->
-          # Try new DEK — tags may already be rotated from a prior crashed run
-          case Envelope.decrypt(ct, nonce, new_dek, new_aad) do
-            {:ok, _etf_bin} ->
-              # Already rotated — skip
-              []
-
-            :error ->
-              Logger.error(
-                "T3.7 sweep_notes: decrypt failed under both old and new DEK",
-                Metadata.with_category(:error, :crypto,
-                  user_id: note.user_id,
-                  table: :notes,
-                  row_id: note.id,
-                  column: :tags,
-                  phase: :sweep_notes,
-                  status: :both_deks_failed
-                )
-              )
-
-              :telemetry.execute(
-                [:engram, :crypto, :rotate, :dek, :row_failed],
-                %{count: 1},
-                %{table: :notes, phase: :sweep_notes, status: :both_deks_failed}
-              )
-
-              raise "T3.7 sweep_notes: decrypt failed under both old and new DEK " <>
-                      "for note id=#{note.id} column=tags new_dek_version=#{new_dek_version}"
-          end
+        :already_rotated ->
+          # Already rotated — skip
+          []
       end
     end
   end
@@ -1132,14 +1229,6 @@ defmodule Engram.Crypto.UserDekRotation do
       {:error, reason} ->
         {:error, reason}
     end
-  end
-
-  defp duration_us_since(started_at) do
-    System.convert_time_unit(
-      System.monotonic_time() - started_at,
-      :native,
-      :microsecond
-    )
   end
 
   defp emit_telemetry(user_id, :ok, duration_us) do

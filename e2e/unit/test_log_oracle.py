@@ -10,6 +10,8 @@ the "Harness unit tests" step; locally:
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from helpers.log_oracle import wait_for_binary_delivery, wait_for_delivery
@@ -183,3 +185,146 @@ def test_binary_timeout_reports_attachment_materialized(tmp_path):
     msg = str(exc.value)
     assert "materialized=yes" in msg
     assert rel in msg
+
+
+# ---------------------------------------------------------------------------
+# Device attribution + byte tracking
+#
+# The lines below are TRANSCRIBED FROM A REAL FAILURE (nightly run
+# 30341324024, job 90217503134, test_34_folder_rename_propagation). That run
+# reported "received=yes materialized=no", which was wrong twice over: the
+# receiver HAD written the path, and the reason the test failed is that its
+# last write was 0 bytes. Both instances log under one client_id, so the
+# sender's healthy "bytes=22" sat in the same evidence blob as the receiver's
+# empty write.
+# ---------------------------------------------------------------------------
+
+DEV_A = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+DEV_B = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
+
+
+def _vault_write(path, kind, nbytes, device=None):
+    row = {
+        "category": "vault",
+        "level": "diag",
+        "message": f"{kind} path={path} bytes={nbytes}",
+    }
+    if device:
+        row["device_id"] = device
+    return row
+
+
+def _crdt_discovery(path, device=None):
+    row = {
+        "category": "pull",
+        "level": "info",
+        "message": f"CRDT discovery: enrolling new note {path}",
+    }
+    if device:
+        row["device_id"] = device
+    return row
+
+
+def _write_device_id(vault_path, device_id):
+    d = vault_path / ".obsidian" / "plugins" / "engram-vault-sync"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "data.json").write_text(json.dumps({"deviceId": device_id}), encoding="utf-8")
+
+
+def test_crdt_materialize_is_no_longer_invisible(tmp_path):
+    """A CRDT-bound write emits no 'Created:'/'Applied:' — only a vault event.
+
+    Before byte/vault tracking this reported materialized=no on every
+    CRDT-managed note, which sent debugging after a delivery gap that wasn't
+    there.
+    """
+    rel = "E2E/RenamedFolder34/Note1.md"
+    api = _FakeApi(logs=[_channel_event(rel), _vault_write(rel, "create", 22)])
+
+    with pytest.raises(TimeoutError) as exc:
+        wait_for_delivery(tmp_path, rel, api, timeout=0.1, poll=0.02)
+
+    msg = str(exc.value)
+    assert "materialized=yes" in msg
+    assert "last_write=22B" in msg
+
+
+def test_zero_byte_clobber_is_named_not_reported_as_a_delivery_gap(tmp_path):
+    """The real test_34 shape: written with content, then overwritten empty."""
+    rel = "E2E/RenamedFolder34/Note1.md"
+    api = _FakeApi(
+        logs=[
+            _channel_event(rel),
+            _crdt_discovery(rel),
+            _vault_write(rel, "create", 22),
+            _vault_write(rel, "create", 0),
+            _vault_write(rel, "modify", 0),
+        ]
+    )
+
+    with pytest.raises(TimeoutError) as exc:
+        wait_for_delivery(tmp_path, rel, api, timeout=0.1, poll=0.02)
+
+    msg = str(exc.value)
+    assert "materialized=yes" in msg
+    assert "last_write=0B" in msg
+    assert "LEFT IT EMPTY" in msg
+
+
+def test_sender_writes_do_not_mask_an_empty_receiver(tmp_path):
+    """With a device id, only the RECEIVER's writes count.
+
+    A and B share a client_id, so A's healthy bytes=22 is in the same log
+    stream. Attributed to B, the verdict must still be 0 bytes.
+
+    Ordering is deliberate — the SENDER's line comes LAST. That is the case
+    where an unattributed oracle actively lies: it reports last_write=22B and
+    the empty file on B looks healthy. (With the sender first, "last write
+    wins" happens to land on B's 0 and the bug is named by luck, so that
+    ordering would not fail without the fix.)
+    """
+    rel = "E2E/RenamedFolder34/Note1.md"
+    _write_device_id(tmp_path, DEV_B)
+    api = _FakeApi(
+        logs=[
+            _channel_event(rel) | {"device_id": DEV_B},
+            _vault_write(rel, "create", 0, device=DEV_B),  # the RECEIVER, empty
+            _vault_write(rel, "create", 22, device=DEV_A),  # the SENDER, healthy
+        ]
+    )
+
+    with pytest.raises(TimeoutError) as exc:
+        wait_for_delivery(tmp_path, rel, api, timeout=0.1, poll=0.02)
+
+    msg = str(exc.value)
+    assert f"device={DEV_B[:8]}" in msg
+    assert "last_write=0B" in msg, "A's 22-byte write must not be credited to B"
+    assert "bytes=22" not in msg, (
+        "the sender's line must be filtered out of the evidence"
+    )
+
+
+def test_missing_data_json_degrades_to_unknown_and_says_so(tmp_path):
+    """No data.json → keep working, but flag that evidence may be cross-device."""
+    rel = "E2E/NoDeviceId.md"
+    api = _FakeApi(logs=[_channel_event(rel)])
+
+    with pytest.raises(TimeoutError) as exc:
+        wait_for_delivery(tmp_path, rel, api, timeout=0.1, poll=0.02)
+
+    msg = str(exc.value)
+    assert "device=UNKNOWN" in msg
+    assert "category heuristic" in msg
+
+
+def test_sibling_path_containing_rel_path_is_not_counted(tmp_path):
+    """`rel_path in message` also matches a longer sibling — parse, don't substring."""
+    rel = "E2E/Note.md"
+    api = _FakeApi(logs=[_vault_write("E2E/Note.md.backup", "create", 99)])
+
+    with pytest.raises(TimeoutError) as exc:
+        wait_for_delivery(tmp_path, rel, api, timeout=0.1, poll=0.02)
+
+    msg = str(exc.value)
+    assert "materialized=no" in msg
+    assert "last_write" not in msg

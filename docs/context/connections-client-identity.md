@@ -1,6 +1,6 @@
 Title: Connections client identity: slug attribution, the three hosting classes, and the HTTPS trust model
 
-_Last verified: 2026-07-30 (rewritten fixing connector attribution for loopback + self-hosted clients; originally 2026-06-15)_
+_Last verified: 2026-08-02 (`resolve/4` now takes the grant's single redirect, not the client's registered list, #1204/#1207. CIMD shipped 2026-07-31, #1148; guessed `software_id` entries deleted, #1156. Rewritten 2026-07-30 fixing connector attribution for loopback + self-hosted clients; originally 2026-06-15)_
 
 How `/settings/connections` cards and the onboarding checklist identify an OAuth/MCP client (logo, display_name, verified badge, checklist auto-check).
 
@@ -13,7 +13,7 @@ How `/settings/connections` cards and the onboarding checklist identify an OAuth
 
 So `lookup(nil)` never matched → generic `<Plug>` icon, "unverified" badge, no Claude mark, no checklist auto-check.
 
-## Resolution order: `LogoAllowlist.resolve/3`
+## Resolution order: `LogoAllowlist.resolve/4`
 
 Identity resolves in `lib/engram/connections/logo_allowlist.ex`:
 
@@ -22,9 +22,17 @@ separately from identity by the host alone:
 
 | Precedence | Source | Grants | Why |
 |---|---|---|---|
-| 1 | `redirect_uri` **host** allowlist | identity + the only thing that sets `verified` | A vendor-owned HTTPS host is un-spoofable for grant delivery |
-| 2 | `software_id` allowlist | identity only | Self-asserted DCR body field; explicit, but nearly nothing sends one |
-| 3 | `client_name`, normalized | **slug only** | Self-asserted, so it may never grant `verified` or a logo |
+| 1 | **CIMD `client_id` host** | identity + `verified` | We fetched a metadata document from that host and it declared this exact `client_id`. The only proof available to a loopback client |
+| 2 | **the grant's** `redirect_uri` **host** | identity + `verified` | A vendor-owned HTTPS host is un-spoofable for grant delivery |
+| 3 | `software_id` allowlist | identity only | Self-asserted DCR body field. Since #1156 it contains ONLY our own plugin |
+| 4 | `client_name`, normalized | **slug only** | Self-asserted, so it may never grant `verified` or a logo |
+
+**CIMD verification does not require recognising the host.** Fetching the
+document already established who serves it, so `verified: true` is granted for
+any well-formed CIMD URL. `@redirect_host` is consulted only to *dress* the row
+(logo, product name, catalog slug); an unrecognised vendor shows its host as the
+display name and takes its checklist slug from `client_name`, the same mechanism
+loopback clients already use.
 
 > **The host outranks `software_id` (reversed during review, 2026-07-30).** It
 > used to be the other way round, which meant a client registering
@@ -32,6 +40,12 @@ separately from identity by the host alone:
 > **ChatGPT** and carried a verified badge earned by Anthropic's host. If a
 > grant is delivered to a vendor, that vendor is who the user is connected to;
 > what the client *claims* cannot outrank it.
+
+> **`resolve/4` takes ONE redirect, not the registered list (#1204, 2026-08-02).**
+> The second argument is `String.t() | nil` — the redirect *this grant's code was
+> delivered to*, read from `oauth_refresh_tokens.redirect_uri`. It is deliberately
+> **not** `oauth_clients.redirect_uris`. Widening it back to a list re-opens #1204;
+> see "The registered list proves nothing" below.
 
 `slug` then flows `Connections.list_for_user/1` → `ConnectionsController.serialize/1` → `/api/connections` → React (`connectedSlugs.has(slug)` ticks the checklist row; `ToolMark slug={...}` renders the brand mark).
 
@@ -48,9 +62,16 @@ Classes 2 and 3 are the majority of the catalog. **Any design keying attribution
 ## Trust model (security-relevant, do not weaken)
 
 **Identity and verification are computed independently.** Identity (logo /
-display_name / slug) comes from the first match of host → `software_id` → name,
-**proven before claimed**. `verified: true` is granted by **one thing only**: a
-vendor-owned **HTTPS** redirect host, no userinfo, case-folded.
+display_name / slug) comes from the first match of CIMD host → redirect host →
+`software_id` → name, **proven before claimed**. `verified: true` is granted by
+**two** sources, and both are the same proof in different clothes — "this party
+controls a host the vendor owns":
+
+1. A vendor-owned **HTTPS redirect** host (no userinfo, case-folded).
+2. A **CIMD `client_id`** URL whose document we fetched and which declared that
+   same `client_id`.
+
+Nothing else may ever grant it.
 
 > **Tightened 2026-07-30.** `software_id` used to grant `verified: true`. It is
 > an RFC 7591 field the client sends *about itself* in the DCR body, exactly as
@@ -78,9 +99,65 @@ vendor-owned **HTTPS** redirect host, no userinfo, case-folded.
 - **`client_name` grants `slug` and nothing else.** It is self-asserted and trivially spoofable, but ticking a row in your *own* checklist is not a security boundary. The logo and the verified badge, where spoofing actually matters, are host-gated only (since #1156 deleted the guessed `software_id` entries, no self-asserted field grants a vendor logo). `logo_allowlist_test.exs` pins this explicitly.
 - **A proven host outranks a claimed `software_id`** (reversed during review, 2026-07-30). Previously `software_id` won, so a client claiming `openai-chatgpt` while redirecting to `claude.ai` was listed as ChatGPT *and* verified via Anthropic's host. Whoever receives the code is who the user is connected to.
 
+### The registered list proves nothing (#1204, fixed 2026-08-02, PR #1207)
+
+Until this fix, verification scanned the client's **registered** `redirect_uris`
+for a vendor host. DCR is public and a client may register several redirects,
+choosing one per authorization, so *any* entry in the list carried the badge. An
+attacker registered:
+
+```json
+["http://localhost:9999/steal", "https://claude.ai/api/mcp/auth_callback"]
+```
+
+authorized with the loopback, took delivery of the code on their own machine, and
+still appeared in the victim's connections list as **Claude, verified, wearing
+Anthropic's logo** — the row a user auditing their connections is least likely to
+revoke.
+
+**The general shape, worth recognising elsewhere:** a predicate asserting a
+*proof* was computed from a *possibility*. Anything derived from a set of options
+rather than the option actually taken has this hole, because an attacker simply
+adds the honest option to their set.
+
+The redirect actually used was already validated against the registered list at
+`/authorize` and already stored on `oauth_authorization_codes.redirect_uri`. It
+was just dropped at exchange. It is now copied onto
+`oauth_refresh_tokens.redirect_uri` and carried across every rotation alongside
+`family_id` — a rotation successor is the *same* grant, and the grant was
+delivered once.
+
+**The load-bearing part is the type, not the check.** `resolve/4` takes a single
+`String.t()`, so `Enum.find_value` over a list cannot be written. Tightening the
+predicate while leaving a list parameter would have left the shape
+re-introducible by the next person who threads a list back in. The bug became
+unexpressible rather than fixed-for-now.
+
+- **NULL means unverified,** and fails closed. Grants predating the column cannot
+  be recovered: authorization codes are single-use and short-lived, so the
+  evidence is gone.
+- **The backfill filled only the unambiguous case** — clients that registered
+  exactly one redirect, where `/authorize` had nothing else to pick. Multi-entry
+  clients stayed NULL *on purpose*: that is precisely the attack shape, so
+  failing closed there is the point. A real multi-redirect vendor client
+  re-verifies for free on its next authorization; an impersonator never does.
+- **One legitimate any-match survives.** `OAuthRegisterController.attributed?/1`
+  still iterates the list, because registration has no grant yet and the only
+  answerable question is "will this client ever attribute?". It reads `slug`
+  only and cannot grant a badge. Keep it explicit rather than folding it back
+  into `resolve/4`.
+- **The UI now separates the two.** The connections detail panel shows
+  **"Delivered to"** (the grant's redirect) apart from **"Registered
+  redirects"**. Merging them is what let a rogue grant read as Claude: the
+  registered list displayed `https://claude.ai/...` right next to a badge it had
+  no right to.
+
+Severity was bounded by the consent screen showing no badge at all, so this aided
+*survival of review* rather than the initial phish — see "Known gap" below.
+
 > **Correction (2026-07-30).** This doc previously said custom schemes and localhost were *"identify-only: they may set icon/name but never grant verified."* That was the intended design; the code never implemented it, `lookup_by_host/1` returned the empty placeholder, so loopback clients got **no slug at all** and their checklist row could never tick. The doc/code mismatch is why the gap survived six weeks. Slug attribution for those clients now comes from `client_name`.
 
-## Observed registrations (prod, 2026-07-30)
+## Observed registrations (prod 2026-07-30, staging 2026-08-01)
 
 Ground truth from real grants, not published docs:
 
@@ -91,15 +168,36 @@ Ground truth from real grants, not published docs:
 | Grok | `Grok` | `https://grok.com/connectors-oauth-exchange-code/` | host | yes |
 | Mistral | `mistral-mcp-client` | `https://callback.mistral.ai/v1/integrations_auth/oauth2_callback` | host | yes |
 | Antigravity | `antigravity-client` | `https://antigravity.google/oauth-callback` | host | yes |
-| Claude Code | `Claude Code (<server>)` | `http://localhost:<port>/callback` | name | no |
+| Devin | `Devin` | `https://api.devin.ai/mcp/oauth/callback` | host | yes |
+| LobeHub | `LobeHub` | `https://app.lobehub.com/oauth/connector/callback` | host | yes |
+| Claude Code | `Claude Code (<server>)` | `http://localhost:<port>/callback` | name, then CIMD | yes (CIMD) |
 | Open WebUI | `Open WebUI` | `https://<user-domain>/oauth/clients/mcp:1/callback` | name | no |
 | Cline | `Cline` | `http://127.0.0.1:<port>/mcp/oauth/callback` | name | no |
 | OpenCode | `OpenCode` | `http://127.0.0.1:<port>/mcp/oauth/callback` | name | no |
 
 Mistral and Antigravity are the cases where **name** derivation fails
 (`mistral_mcp_client` / `antigravity_client` are not catalog slugs) and the host
-saves it. Claude Code, Open WebUI, Cline and OpenCode are the exact inverse.
-Neither layer alone covers all nine, keep both.
+saves it. Open WebUI, Cline and OpenCode are the exact inverse. Neither layer
+alone covers all of them, keep both.
+
+**Devin and LobeHub added 2026-08-01** (staging), both by vendor host. Two
+things they illustrate:
+
+- **Devin carries `slug: nil`.** There is no `devin` in
+  `Engram.Onboarding.valid_tools/0`, and adding one is gated on a
+  `/docs/integrations/devin/` page existing — `checklist-widget.tsx` has a
+  parity test (#1157) requiring every selectable slug to own a doc URL, and that
+  page 404s today. Attribution and the badge do not depend on the slug, so the
+  entry is useful without a checklist row.
+- **LobeHub maps to the `lobechat` slug.** LobeHub is the cloud host, LobeChat
+  the product and the catalog slug. The observed `client_name` is `"LobeHub"`,
+  which does *not* derive to `lobechat`, so the host map carries it. This is
+  cloud-only: a **self-hosted** LobeChat redirects to the operator's own domain,
+  matches nothing, and stays unverified — same boundary as Open WebUI. There is
+  a test pinning that.
+
+**Claude Code is now verified via CIMD**, not by redirect (it is loopback, which
+can never prove anything). It is the worked example of why CIMD exists.
 
 > **Do not assume a client registers under its product name.** Three of nine
 > observed clients append a suffix (`-client`, `(<server>)`). The name layer is a
@@ -286,7 +384,7 @@ Catalog decisions that follow:
 - **No `gemini_cli` slug.** Adding a product Google is retiring would be new dead
   config. If an enterprise Gemini CLI user connects, the tripwire logs it.
 
-## The real fix for local clients: CIMD (not yet implemented, tracked in #1148)
+## The real fix for local clients: CIMD (SHIPPED 2026-07-31, #1148)
 
 **Client ID Metadata Documents** make the `client_id` an HTTPS URL owned by the
 client vendor; the authorization server fetches it to obtain the client's
@@ -302,54 +400,146 @@ Status and why it matters:
   deprecated path.**
 - **Claude Code supports CIMD** (`oauth_cimd`). Anthropic's docs state Claude
   picks it only when the AS metadata advertises **both**:
-  - `token_endpoint_auth_methods_supported` containing `"none"`, ✅ we already
-    do (`well_known_controller.ex:66`)
-  - `client_id_metadata_document_supported: true`, ❌ **we do not**
-  With the flag missing, Claude Code falls back to DCR, which is exactly why the
-  observed grant is an anonymous loopback client.
+  - `token_endpoint_auth_methods_supported` containing `"none"`, ✅
+  - `client_id_metadata_document_supported: true`, ✅ **advertised
+    unconditionally** in `well_known_controller.ex`
 - Claude Desktop / Web / Cowork appear to use CIMD too, via shared infra.
 - No MCP client sends an RFC 7591 `software_statement` (signed JWT), so that is
   not an alternative route to cryptographic vendor attribution today.
 
-Implementing it means: advertise the flag, accept URL-shaped `client_id`s at
-authorize/token, fetch + validate the document (HTTPS only, `application/json`,
-its `client_id` must equal its own URL), cache with refresh, derive the redirect
-allowlist from it, and guard the fetch against SSRF. Once shipped, Claude Code
-grants become genuinely `verified` and the "recognized, self-reported" tier
-below stops applying to them.
+### How it is built
 
-**Scoped in #1148** (~2 days, one PR). Three findings from that scoping worth
-having here, because they are the non-obvious parts:
+`Engram.OAuth.Cimd` + `Engram.OAuth.Cimd.HttpFetcher` + `Engram.Http.SsrfGuard`.
 
-- **DCR does not go away.** Seven of the nine observed connectors do not use
-  CIMD, and self-hosted clients never can (no vendor to publish a document).
-  The two paths are independent and both stay.
-- **Do not widen the `client_id` PK.** It is `:binary_id` and `get_client/1`
-  hard-casts UUID, but `oauth_authorization_codes.client_id` and
-  `oauth_refresh_tokens.client_id` have **no FK constraint** (checked in
-  `structure.sql`; only `user_id`/`vault_id` are constrained). So add a unique
-  `cimd_url` column, keep UUIDs internal, and resolve URL-shaped ids to the row.
-- **Advertising the flag is not reversible in-flight.** Claude Code stops
-  choosing DCR the moment it sees the flag and will *not* fall back if our CIMD
-  path is broken, so connections fail outright rather than degrading. Gate it on
-  config and verify against staging with a real client before flipping.
+- **DCR did not go away and will not.** Seven of the nine observed connectors do
+  not use CIMD, and self-hosted clients never can (no vendor to publish a
+  document). The two paths are independent: a CIMD client sends a URL-shaped
+  `client_id` and never touches `/oauth/register`.
+- **The PK was NOT widened.** `oauth_clients.client_id` stays a uuid; a unique
+  partial-indexed `cimd_url` column carries the wire identity. `structure.sql`
+  confirms `oauth_authorization_codes.client_id` and
+  `oauth_refresh_tokens.client_id` are bare uuid columns with **no FK**, so
+  nothing downstream needed touching.
+- **THE binding is one line of validation:** the document's own `client_id` MUST
+  equal the URL it was served from. Without it a vendor could serve a document
+  claiming any client_id. Everything else the document says is then attributable
+  to whoever controls that host, which is the point.
+- **The `oauth_clients` row IS the document cache**, with `cimd_fetched_at` as
+  its clock (24h TTL). No ETS cache: the redirect allowlist derives from the
+  document and must be durable anyway, so a second copy would only add a way for
+  the two to disagree.
+- **A failed refresh keeps serving the stale row**, including when the *new*
+  document fails validation. A vendor's five-minute outage must not lock out
+  every user of that client.
+- **Confidential auth methods in a document are refused, not downgraded.** A CIMD
+  client never registered, so no secret exists: honouring it leaves the client
+  unable to authenticate (nil hash), and downgrading to `none` makes it send a
+  secret that `authenticate_client/2` must then reject for being present at all.
+  Both failures are opaque; refusing the document is legible.
+- **Document metadata is validated by `registration_changeset/2`**, not a parallel
+  CIMD path, so the redirect-URI rules hardened in #1147 (the `https:///cb`
+  host-less trap, array bounds, unsafe schemes) apply verbatim and cannot drift.
+
+### The seam that was easy to get wrong
+
+The wire `client_id` is a URL but `oauth_authorization_codes.client_id` and
+`oauth_refresh_tokens.client_id` store the internal uuid. Three places compared
+them with a bare `==` and would have rejected the *legitimate* client:
+`check_code_client/2`, refresh rotation, and revocation. All three normalize
+through `Engram.OAuth.internal_client_id/2`, which short-circuits when the wire id
+already matches so the DCR path pays for no extra query.
+
+`get_client/1` is a pure DB lookup. **Only `/oauth/authorize` may fetch a
+document** — if token exchange or revocation could, a vendor outage would break
+already-granted access.
+
+### SSRF: most of the work (`Engram.Http.SsrfGuard`)
+
+`/oauth/authorize` is unauthenticated, so this is an unauthenticated-request-
+triggered outbound fetch: an SSRF primitive AND a traffic amplifier aimed at third
+parties. There was no SSRF guard anywhere in `lib/` before this.
+
+- https only, port 443 only, no userinfo, no fragment.
+- Every resolved address checked against the IANA special-purpose ranges,
+  including CGNAT `100.64/10`, link-local `169.254/16` (cloud metadata), IPv6
+  ULA/link-local, and the v4-embedding transition ranges 6to4 `2002::/16` and
+  Teredo `2001::/32` (a relay forwards those to an internal v4 host).
+- IPv4-mapped IPv6 is unwrapped and judged as its inner v4 address:
+  `::ffff:169.254.169.254` is the metadata service in a v6 costume.
+- If **any** address for a name is non-public, the whole name is refused — a
+  resolver answering with both a public and an internal address is either
+  split-horizon or hostile and we cannot tell which.
+- **Pinning**, the subtle one: the guard returns a URL with the host replaced by
+  the address it validated, and the caller connects to *that* while passing the
+  original hostname for SNI + certificate verification (Req's
+  `connect_options: [hostname: ...]`). Handing the *hostname* to the HTTP client
+  would re-resolve it, and the second answer is free to be `127.0.0.1` — DNS
+  rebinding, where the check and the connection disagree.
+- **Redirects are not followed.** A redirect is a new URL that would bypass the
+  guard that approved the first one. A vendor that redirects its metadata document
+  does not work, and that is the correct outcome.
+- Body capped mid-stream at 64 KB.
+- **Two rate-limit budgets, deliberately separate.** *Discovery* (a URL we have
+  never seen) is the attacker-reachable path and is capped per-host (10/min) AND
+  globally (60/min) — per-host alone does nothing against a caller varying the
+  host, which is the amplification case. *Refresh* of an already-known client
+  gets its own per-host bucket (10/min), because sharing one global budget would
+  let an attacker cycling hosts starve refreshes for vendors real users are
+  connected to, turning the anti-amplification control into a DoS vector against
+  our own clients. Pinned by a test.
+
+> **⚠ There is NO feature flag, deliberately.** An earlier revision gated this on
+> `ENGRAM_CIMD_ENABLED` (default off) so the capability could be advertised
+> staging-first. That was removed before merge: it was a knob that would be set to
+> `true` once and never touched again, and a default-off flag nobody remembers to
+> set is the worse failure — CIMD looks shipped, silently does nothing, and no
+> tripwire fires because no CIMD traffic ever arrives.
+>
+> What that means operationally: **CIMD goes live the moment this deploys.** Claude
+> Code stops choosing DCR as soon as it sees
+> `client_id_metadata_document_supported`, and it does **not** fall back if our
+> path is broken, so new Claude Code connections would fail rather than degrade.
+> Existing DCR grants are separate rows and are unaffected either way. Backing it
+> out is a revert of the advertisement line plus a deploy, not a config change.
+
+**Tripwires:** `mcp_cimd_rejected` (a document was refused — reason + host, host
+only because `:lifecycle` ships to Loki) and `mcp_cimd_stale_retained` (a refresh
+failed and we are serving yesterday's document). Since there is no flag to blame,
+these two are the first place to look if connectors start failing after a deploy.
 
 ## "Why is Claude Code unverified? Am I connected wrong?"
 
-No. Claude Code, and every local-first client, is unverifiable **by
-construction**, not by misconfiguration. It redirects to
-`http://localhost:<port>/callback`; anyone can claim a loopback URI, so it
-asserts nothing about who the client is. RFC 8252 *recommends* loopback for
-native apps precisely because it is the safest option for local software, but it
-carries no identity proof. There is no setting that changes this.
+**Since CIMD shipped, it can be verified — but only if it publishes a document.**
+A loopback *redirect* still proves nothing (anyone can claim a loopback URI), so
+absent a CIMD document the answer below stands unchanged: unverifiable **by
+construction**, not by misconfiguration, and no setting changes it. RFC 8252
+recommends loopback for native apps because it is the safest option for local
+software, not because it carries identity proof.
 
-The UI therefore shows **three** states, not two (`connections-page.tsx`):
+The UI shows **four** states (`connections-page.tsx`):
 
-| Condition | Chip | Meaning |
+| Condition | Chip | `Identity:` row says |
 |---|---|---|
-| `verified` | *(none)* | Redirect lands on a vendor-owned domain |
-| `!verified` and `slug` | *(none)* | Recognized, but local/self-hosted, unprovable, and fine |
-| `!verified` and no `slug` | `unverified` | Unrecognized client; check the redirect, consider revoking |
+| `verified` **and** `cimd_url` | *(none)* | "The app publishes its identity at a domain it owns" |
+| `verified`, no `cimd_url` | *(none)* | "Sign-in redirects to a domain the vendor owns" |
+| `!verified` and `slug` | *(none)* | "Self-reported. Local and self-hosted apps have no domain to check, so this is normal" |
+| `!verified` and no `slug` | `unverified` | "Unrecognized client. Revoke it if you don't recognize the redirect below" |
+
+**`verified` gates both "Verified." strings; `cimd_url` only chooses which proof
+to name.** Branching on `cimd_url` alone would restate the backend's verification
+rule in TypeScript with nothing keeping the two in sync, so loosening `SsrfGuard`
+or `lookup_by_cimd` could have the UI assert a proof the server never granted.
+The server stays the only thing that decides `verified`; a test pins the
+unreachable-today `verified: false` + `cimd_url` combination.
+
+**Keep the first two strings distinct.** They describe genuinely different proofs,
+and collapsing them makes one of the two a lie: Claude Code over CIMD does *not*
+"redirect to a domain the vendor owns" — it redirects to localhost. Both branches
+are pinned by tests in `connections-page.test.tsx`.
+
+The `Identifier:` row shows the `cimd_url` when there is one: it is the client's
+real public identifier and, unlike an opaque uuid, the user can check it by
+visiting it. `client_id` remains what the revoke button keys on.
 
 A recognized client is presented plainly, with its official brand mark: badging
 Claude Code as suspect is simply wrong, and collapsing it into "unverified"
@@ -357,6 +547,18 @@ alongside genuinely unknown clients is what made users ask whether they had set
 something up incorrectly. The chip is reserved for the case where it is
 **actionable**. Provenance for all three states is spelled out in the expanded
 row's `Identity:` line, so nothing is hidden. It just is not alarming.
+
+## Known gap: the consent screen shows no verification signal
+
+`/oauth/authorize` renders the raw self-asserted `client_name` and nothing else —
+no badge, no logo, no "unverified" chip. That is what bounded #1204 to *aiding
+survival of review* rather than enabling the phish outright: at the moment the
+user decides, an impersonator looks identical to the real thing.
+
+At consent time we know more than the connections list does, not less: the
+**requested** `redirect_uri` (already matched against the registered list) and
+`cimd_url` — exactly the inputs `resolve/4` takes, and it is already grant-shaped
+since #1207. Mostly wiring. Tracked in **#1208**.
 
 ## Other gotchas
 
@@ -368,6 +570,9 @@ row's `Identity:` line, so nothing is hidden. It just is not alarming.
 
 - `lib/engram/connections/logo_allowlist.ex`: resolution + normalization
 - `lib/engram/connections.ex`: `list_for_user/1`, the only caller
+- `lib/engram/oauth/refresh_token.ex`: `redirect_uri`, the grant's delivered redirect
+- `test/engram/oauth_grant_redirect_test.exs`: #1204 regression, drives the real flow
+- Issues #1204 (badge from registered list) / #1208 (consent-screen signal); PR #1207
 - `lib/engram_web/controllers/oauth_register_controller.ex`: DCR + tripwire
 - `frontend/src/onboarding/checklist-widget.tsx`: row completion
 - `frontend/src/onboarding/tool-icon.tsx`: `ToolMark` / `ToolBadge`

@@ -16,7 +16,8 @@ import {
 	syntheticFolderId,
 	syntheticFolderPath,
 } from "../viewer/tree/synthesize-folders";
-import { useActiveVaultId } from "./active-vault";
+import type { NoteLinkEdge } from "../viewer/wiki-link";
+import { reconcileActiveVault, useActiveVaultId } from "./active-vault";
 import { crdtCreateNote, crdtCreateNoteWithContent, crdtDeleteNote } from "./channel";
 import { ApiError, api } from "./client";
 import { CrdtOpError } from "./crdt-ops";
@@ -324,6 +325,8 @@ export interface NoteSummary {
 
 export interface Note extends NoteSummary {
 	content: string;
+	// Optional: older cached payloads (pre note-links backend rollout) lack it.
+	links?: NoteLinkEdge[];
 }
 
 export interface SearchResult {
@@ -467,6 +470,20 @@ export function useAttachments() {
 	return query;
 }
 
+// Wikilink resolution (wiki-link-redirect.tsx) needs the vault-wide path→id
+// inventory; the sync manifest is the one endpoint that has it. Also fetched
+// on note mount (note-page.tsx) to feed [[ autocomplete (wiki-completion.ts).
+// The 30s staleTime bounds both: link-hopping and repeated note mounts don't
+// re-pull a large vault's manifest more than once per that window.
+export function useSyncManifest() {
+	const vaultId = useActiveVaultId();
+	return useQuery({
+		queryKey: ["syncManifest", vaultId],
+		queryFn: () => api.get<{ notes: { id: string; path: string }[] }>("/sync/manifest"),
+		staleTime: 30_000,
+	});
+}
+
 export function useUploadAttachment() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
@@ -534,6 +551,38 @@ export function useNote(id: string | null) {
 	});
 }
 
+export interface Backlink {
+	source_note_id: string;
+	source_path: string;
+	source_title: string | null;
+	alias: string | null;
+	anchor: string | null;
+}
+
+// Backlinks panel (right rail). Task 1 stores the forward edges on the note
+// payload (`links`); this is the reverse lookup, so it needs its own request.
+export function useBacklinks(noteId: string | null) {
+	const vaultId = useActiveVaultId();
+	return useQuery({
+		queryKey: ["backlinks", vaultId, noteId],
+		queryFn: () => api.get<{ backlinks: Backlink[] }>(`/notes/by-id/${noteId}/backlinks`),
+		enabled: noteId !== null,
+		// The API returns one row per link EDGE, so a source note linking twice
+		// (e.g. plain + aliased) appears twice. The panel renders one row per
+		// source note, so dedupe here (keep the first edge per source).
+		select: (d) => {
+			const seen = new Set<string>();
+			return d.backlinks.filter((b) => {
+				if (seen.has(b.source_note_id)) {
+					return false;
+				}
+				seen.add(b.source_note_id);
+				return true;
+			});
+		},
+	});
+}
+
 export function useUpdateNote() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
@@ -554,6 +603,10 @@ export function useUpdateNote() {
 				qc.invalidateQueries({ queryKey: ["note", vaultId, id] });
 			}
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
+			// This edit may have changed the note's forward links, which changes
+			// what OTHER notes' backlinks panels show -- same reasoning as the
+			// note_changed handler in api/channel.ts.
+			qc.invalidateQueries({ queryKey: ["backlinks"] });
 		},
 	});
 }
@@ -566,10 +619,13 @@ export function useCreateNote() {
 	return useMutation<
 		{ path: string; id: string },
 		ApiError,
-		{ folder: string; id: string },
+		// `name` defaults to "Untitled.md" (the sidebar "New note" button) — the
+		// unresolved-wikilink "create this note" affordance passes the target's
+		// derived filename instead. Either way collideBump still guards a race.
+		{ folder: string; id: string; name?: string },
 		CreateNoteContext | undefined
 	>({
-		mutationFn: async ({ folder, id }) => {
+		mutationFn: async ({ folder, id, name: desiredName = "Untitled.md" }) => {
 			const folderId = folderIdForPath(qc, vaultId, folder);
 			const existingNotes = folderId
 				? (qc.getQueryData<NoteSummary[]>(["folder-notes-by-id", vaultId, folderId]) ?? [])
@@ -580,7 +636,7 @@ export function useCreateNote() {
 
 			const MAX_RACES = 5;
 			for (let attempt = 0; attempt < MAX_RACES; attempt++) {
-				const name = collideBump(existingNames, "Untitled.md", { cap: 1000 });
+				const name = collideBump(existingNames, desiredName, { cap: 1000 });
 				const path = folder ? `${folder}/${name}` : name;
 				try {
 					// crdt_create genesis over the live channel (replaces POST /notes);
@@ -608,7 +664,7 @@ export function useCreateNote() {
 		// Drop a placeholder row into the id-keyed list the tree reads so a new
 		// note shows instantly (on-disk feel), then swap it for the server row on
 		// success. Root and subfolders share one cache keyed by folder id.
-		onMutate: async ({ folder, id }) => {
+		onMutate: async ({ folder, id, name: desiredName = "Untitled.md" }) => {
 			const folderId = folderIdForPath(qc, vaultId, folder);
 			// Unknown non-root folder not in the cache yet — skip; surfaces on expand.
 			if (folderId === null) {
@@ -623,7 +679,7 @@ export function useCreateNote() {
 				return;
 			}
 
-			const name = collideBump(realFilenames(snapshot), "Untitled.md", { cap: 1000 });
+			const name = collideBump(realFilenames(snapshot), desiredName, { cap: 1000 });
 			const path = folder ? `${folder}/${name}` : name;
 			const now = new Date().toISOString();
 			const placeholder: NoteSummary = {
@@ -679,7 +735,12 @@ export function useCreateNote() {
 			const slug = qc
 				.getQueryData<{ vaults: Vault[] }>(["vaults"])
 				?.vaults?.find((v) => v.id === vaultId)?.slug;
-			navigate(slug ? `/${slug}/${id}` : `/note/${id}`);
+			// `justCreated` puts the note page's inline title straight into rename
+			// mode with "Untitled" selected. Carried as navigation state rather than
+			// a context because it must fire exactly once, and router state is
+			// already scoped to a single navigation. Both creation entry points (the
+			// tree's context menu and the sidebar button) route through here.
+			navigate(slug ? `/${slug}/${id}` : `/note/${id}`, { state: { justCreated: true } });
 		},
 		onError: (err, _vars, ctx) => {
 			if (ctx) {
@@ -1062,6 +1123,11 @@ export function useAppBootstrap() {
 			qc.setQueryData(["onboarding", "status"], data.onboarding);
 			qc.setQueryData(["capabilities"], data.capabilities);
 			qc.setQueryData(["vaults"], data.vaults);
+			// Runs here, not in an effect: parent effects fire AFTER their
+			// children's, so a gate-level effect would land one render too late and
+			// the sidebar's folder/attachment queries would already have gone out
+			// under a dead vault id. See reconcileActiveVault.
+			reconcileActiveVault(data.vaults.vaults);
 			if (data.billing) {
 				qc.setQueryData(["billing", "status"], data.billing);
 			}
@@ -1141,7 +1207,18 @@ export interface Connection {
 	connected_at: string | null;
 	first_user_agent: string | null;
 	first_ip: string | null;
+	/** Where this grant's authorization code was actually delivered. This, not
+	 *  `redirect_uris`, decides `verified`. Null for non-OAuth connections and
+	 *  for grants issued before it was recorded. */
+	redirect_uri: string | null;
+	/** Every redirect the client registered. Informational only: a client may
+	 *  register several and pick one per authorization, so a vendor host here
+	 *  proves nothing about this grant. */
 	redirect_uris: string[];
+	/** CIMD metadata-document URL. Present only for clients that published one;
+	 *  it is the client's public identifier and the reason it can be verified
+	 *  despite redirecting to loopback. */
+	cimd_url: string | null;
 }
 
 export interface CapErrorBody {
@@ -1238,7 +1315,15 @@ export function useVaults() {
 	const demo = useDemoVaultOptional();
 	const query = useQuery({
 		queryKey: ["vaults"],
-		queryFn: () => api.get<{ vaults: Vault[] }>("/vaults"),
+		queryFn: async () => {
+			const data = await api.get<{ vaults: Vault[] }>("/vaults");
+			// Second reconcile point, and the one that covers in-session death of
+			// the active vault: deleting/purging a vault only invalidates this key,
+			// so without this the store would keep pointing at the vault the user
+			// just deleted (404ing every request) until a full reload.
+			reconcileActiveVault(data.vaults);
+			return data;
+		},
 		select: (data) => data.vaults,
 		enabled: !demo?.active,
 		// Seeded fresh by useAppBootstrap on first load; vault mutations invalidate
@@ -1315,11 +1400,21 @@ export function useDeletedVaults() {
 	});
 }
 
+// Vault count is an onboarding input: the backend answers `next_step: :vault`
+// for an account that owns none, and OnboardingGate redirects there. That
+// verdict is computed once, at bootstrap — so a user who deletes their LAST
+// vault mid-session would otherwise sit in a shell with nothing to show and no
+// route out, every request 404ing on `no_default_vault` until a manual reload.
+// Invalidating ["bootstrap"] alongside ["vaults"] re-runs the gate.
 export function useDeleteVault() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (id: string) => api.del<{ deleted: boolean }>(`/vaults/${id}`),
-		onSuccess: () => qc.invalidateQueries({ queryKey: ["vaults"] }),
+		onSuccess: () =>
+			Promise.all([
+				qc.invalidateQueries({ queryKey: ["vaults"] }),
+				qc.invalidateQueries({ queryKey: ["bootstrap"] }),
+			]),
 	});
 }
 
@@ -1327,7 +1422,13 @@ export function useRestoreVault() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (id: string) => api.post<{ vault: Vault }>(`/vaults/${id}/restore`),
-		onSuccess: () => qc.invalidateQueries({ queryKey: ["vaults"] }),
+		// Restoring the only vault has to flip the gate back the other way
+		// (`:vault` -> `:done`), or the user is stuck on the wizard step.
+		onSuccess: () =>
+			Promise.all([
+				qc.invalidateQueries({ queryKey: ["vaults"] }),
+				qc.invalidateQueries({ queryKey: ["bootstrap"] }),
+			]),
 	});
 }
 
@@ -1335,7 +1436,11 @@ export function usePurgeVault() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (id: string) => api.post<{ purged: boolean }>(`/vaults/${id}/purge`),
-		onSuccess: () => qc.invalidateQueries({ queryKey: ["vaults"] }),
+		onSuccess: () =>
+			Promise.all([
+				qc.invalidateQueries({ queryKey: ["vaults"] }),
+				qc.invalidateQueries({ queryKey: ["bootstrap"] }),
+			]),
 	});
 }
 

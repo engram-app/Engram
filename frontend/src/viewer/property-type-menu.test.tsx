@@ -7,6 +7,10 @@ describe("PropertyTypeMenu", () => {
 		const onChange = vi.fn();
 		render(<PropertyTypeMenu value="text" onChange={onChange} />);
 		const trigger = screen.getByRole("button", { name: /property type/i });
+		// The trigger is an icon, so the name is the ONLY place the current type
+		// is stated — without this a screen reader is told a type picker exists
+		// but never which type the property already has.
+		expect(trigger).toHaveAccessibleName("Property type: text");
 		// Radix DropdownMenu opens on pointerdown in happy-dom
 		fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
 		fireEvent.click(trigger);

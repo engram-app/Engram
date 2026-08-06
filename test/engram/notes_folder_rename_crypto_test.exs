@@ -103,4 +103,107 @@ defmodule Engram.NotesFolderRenameCryptoTest do
     assert read.content == content
     assert read.dek_version == Engram.Crypto.row_version_aad_bound()
   end
+
+  # Pins the whole cascade write in one shot: a mixed folder (marker + several
+  # AAD-bound notes + a nested subfolder + a legacy v1 row) renames with every
+  # row's content intact at its new path, old-path tombstones present, and ONE
+  # shared seq across everything the op touched (#614).
+  test "mixed-folder rename: markers + v2 notes + nested + v1 all move intact", %{
+    user: user,
+    vault: vault
+  } do
+    import Ecto.Query
+
+    {:ok, _marker} = Notes.create_folder_marker(user, vault, "Old")
+    {:ok, _sub} = Notes.create_folder_marker(user, vault, "Old/Sub")
+
+    {:ok, n1} =
+      Notes.upsert_note(user, vault, %{"path" => "Old/a.md", "content" => "# A\nbody-a"})
+
+    {:ok, n2} =
+      Notes.upsert_note(user, vault, %{"path" => "Old/b.md", "content" => "# B\nbody-b"})
+
+    {:ok, n3} =
+      Notes.upsert_note(user, vault, %{"path" => "Old/Sub/c.md", "content" => "# C\nbody-c"})
+
+    # Legacy v1 row (empty AAD) — same fabrication as the test above.
+    {:ok, dek} = Engram.Crypto.get_dek(user)
+    {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+    {:ok, content_key} = Engram.Crypto.dek_content_hash_key(user)
+    alias Engram.Crypto.Envelope
+
+    legacy_content = "# Legacy\n\nold body"
+    {content_ct, content_n} = Envelope.encrypt(legacy_content, dek)
+    {title_ct, title_n} = Envelope.encrypt("Legacy", dek)
+    {path_ct, path_n} = Envelope.encrypt("Old/legacy.md", dek)
+    {folder_ct, folder_n} = Envelope.encrypt("Old", dek)
+    {tags_ct, tags_n} = Envelope.encrypt(:erlang.term_to_binary([]), dek)
+    legacy_id = Ecto.UUID.generate()
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.insert!(%Notes.Note{
+          id: legacy_id,
+          version: 1,
+          seq: Engram.Vaults.next_seq!(vault.id),
+          content_hash: Engram.Crypto.hmac_content_hash(content_key, legacy_content),
+          mtime: 0.0,
+          user_id: user.id,
+          vault_id: vault.id,
+          dek_version: 1,
+          content_ciphertext: content_ct,
+          content_nonce: content_n,
+          title_ciphertext: title_ct,
+          title_nonce: title_n,
+          path_ciphertext: path_ct,
+          path_nonce: path_n,
+          path_hmac: Engram.Crypto.hmac_field(filter_key, "Old/legacy.md"),
+          folder_ciphertext: folder_ct,
+          folder_nonce: folder_n,
+          folder_hmac: Engram.Crypto.hmac_field(filter_key, "Old"),
+          tags_ciphertext: tags_ct,
+          tags_nonce: tags_n,
+          tags_hmac: []
+        })
+      end)
+
+    {:ok, count} = Notes.rename_folder(user, vault, "Old", "New")
+    # 2 markers + 4 notes
+    assert count == 6
+
+    for {path, content} <- [
+          {"New/a.md", "# A\nbody-a"},
+          {"New/b.md", "# B\nbody-b"},
+          {"New/Sub/c.md", "# C\nbody-c"},
+          {"New/legacy.md", legacy_content}
+        ] do
+      {:ok, read} = Notes.get_note(user, vault, path)
+      assert read.content == content, "content mismatch at #{path}"
+    end
+
+    # Original ids survived as the live renamed rows.
+    for {id, path} <- [{n1.id, "New/a.md"}, {n2.id, "New/b.md"}, {n3.id, "New/Sub/c.md"}] do
+      {:ok, read} = Notes.get_note_by_id(user, vault, id)
+      assert read.path == path
+    end
+
+    # Old paths are gone.
+    for path <- ["Old/a.md", "Old/b.md", "Old/Sub/c.md", "Old/legacy.md"] do
+      assert {:error, :not_found} = Notes.get_note(user, vault, path)
+    end
+
+    # Tombstones exist for each old note path; renamed rows + tombstones
+    # share ONE seq.
+    {:ok, rows} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(from(n in Notes.Note, where: n.vault_id == ^vault.id))
+      end)
+
+    tombstones = Enum.filter(rows, &(&1.deleted_at != nil))
+    assert length(tombstones) == 4
+
+    renamed = Enum.filter(rows, &(&1.id in [n1.id, n2.id, n3.id, legacy_id]))
+    shared_seqs = (tombstones ++ renamed) |> Enum.map(& &1.seq) |> Enum.uniq()
+    assert length(shared_seqs) == 1
+  end
 end

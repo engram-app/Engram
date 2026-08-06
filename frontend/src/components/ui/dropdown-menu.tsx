@@ -32,7 +32,12 @@ function DropdownMenuContent({
 				sideOffset={sideOffset}
 				align={align}
 				className={cn(
-					"data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:fade-in-0 data-open:zoom-in-95 data-closed:fade-out-0 data-closed:zoom-out-95 z-50 max-h-(--radix-dropdown-menu-content-available-height) w-(--radix-dropdown-menu-trigger-width) min-w-32 origin-(--radix-dropdown-menu-content-transform-origin) overflow-y-auto overflow-x-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-closed:animate-out data-open:animate-in data-[state=closed]:overflow-hidden",
+					// No width pinned to the trigger: every menu here but the vault
+					// switcher hangs off an icon button, so matching the trigger left
+					// them all at the min-w-32 floor and wrapped any label longer than
+					// that. Menus size to their content; the switcher, which wants to
+					// line up with its full-width trigger, asks for that explicitly.
+					"data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:fade-in-0 data-open:zoom-in-95 data-closed:fade-out-0 data-closed:zoom-out-95 z-50 max-h-(--radix-dropdown-menu-content-available-height) min-w-32 origin-(--radix-dropdown-menu-content-transform-origin) overflow-y-auto overflow-x-hidden whitespace-nowrap rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-closed:animate-out data-open:animate-in data-[state=closed]:overflow-hidden",
 					className,
 				)}
 				{...props}

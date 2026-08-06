@@ -13,8 +13,7 @@ defmodule Engram.Notes.CrdtBridge do
   (spec §12a contract 4). NEVER use the `y_ex` default (`:bytes`).
   """
 
-  import Bitwise
-
+  alias Engram.Notes.CrdtTransport
   alias Engram.Notes.Frontmatter
 
   @text_name "content"
@@ -373,8 +372,16 @@ defmodule Engram.Notes.CrdtBridge do
   """
   @spec client_count(Yex.Doc.t()) :: non_neg_integer()
   def client_count(%Yex.Doc{} = doc) do
-    {count, _rest} = read_varint(Yex.encode_state_vector!(doc))
-    count
+    # Shares CrdtTransport's BOUNDED LEB128 reader — this module used to carry
+    # its own unbounded copy of the same decode (the input class that already
+    # needed a DoS cap once, in safe_wire_frame?/1).
+    case CrdtTransport.read_leb128_varuint(Yex.encode_state_vector!(doc)) do
+      {:ok, count, _rest} -> count
+      # Unreachable in practice (input is our own encode_state_vector!
+      # round-trip, always a well-formed varint); 0 just means "don't
+      # flatten yet", so silent degradation is the safe direction here.
+      :error -> 0
+    end
   end
 
   @doc """
@@ -413,14 +420,5 @@ defmodule Engram.Notes.CrdtBridge do
       <<code::utf8>> = cp
       acc + if code >= 0x10000, do: 2, else: 1
     end)
-  end
-
-  # Minimal LEB128 unsigned varint reader (lib0 v1 codec used by y-js).
-  # A single-byte varint has its MSB clear; multi-byte continues until MSB clear.
-  defp read_varint(<<byte, rest::binary>>) when (byte &&& 0x80) == 0, do: {byte, rest}
-
-  defp read_varint(<<byte, rest::binary>>) do
-    {next, tail} = read_varint(rest)
-    {(byte &&& 0x7F) ||| next <<< 7, tail}
   end
 end

@@ -1,11 +1,22 @@
 import type { EditorView } from "@codemirror/view";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { useParams } from "react-router";
+import { BookOpen, Pencil } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router";
+import { toast } from "sonner";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { useNote, useRenameNote } from "../api/queries";
+import {
+	useBatchMoveNotes,
+	useDeleteNote,
+	useDuplicateNote,
+	useFolders,
+	useNote,
+	useRenameNote,
+	useSyncManifest,
+} from "../api/queries";
+import { readRows } from "../crdt/frontmatter-doc";
 import {
 	type CrdtSyncStatus,
 	closeDoc,
@@ -15,26 +26,28 @@ import {
 	subscribeToCrdtSyncStatus,
 } from "../crdt/session";
 import { useRightTools } from "../layout/right-tools-context";
+import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";
+import BacklinksPanel from "./backlinks-panel";
 import { useActiveEditor } from "./editor/active-editor-context";
 import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
-import { EditorToolbar } from "./editor/toolbar";
+import { InlineTitle } from "./inline-title";
 import LoadingPane from "./loading-pane";
+import { NoteMenu } from "./note-menu";
 import NoteToc from "./note-toc";
 import NoteView from "./note-view";
 import { PropertiesWidget } from "./properties-widget";
+import type { ActionId, ViewMode } from "./tree-actions/action-list";
+import { DeleteConfirm } from "./tree-actions/delete-confirm";
+import { nextCopyName } from "./tree-actions/duplicate";
+import { MoveDialog } from "./tree-actions/move-dialog";
 import { RenameInput } from "./tree-actions/rename-input";
 import { renameBaseName } from "./tree-actions/rename-path";
 import { useLiveContent } from "./use-live-content";
+import { buildWikiMap, wikiHref } from "./wiki-link";
 
 const NoteEditor = lazy(() => import("./note-editor"));
 
-type Mode = "rendered" | "raw" | "reading";
-const MODES: ReadonlyArray<{ value: Mode; label: string }> = [
-	{ value: "rendered", label: "Rendered" },
-	{ value: "raw", label: "Raw" },
-	{ value: "reading", label: "Reading" },
-];
 interface DocHandle {
 	ytext: Y.Text;
 	awareness: Awareness;
@@ -42,27 +55,82 @@ interface DocHandle {
 }
 
 export default function NotePage() {
-	const params = useParams();
-	const idStr = params.itemId;
+	const { itemId: idStr, slug } = useParams();
 	const validId = idStr && idStr.length > 0 ? idStr : null;
 
 	const { data: note, isLoading, error } = useNote(validId);
+	const { data: manifest } = useSyncManifest();
 	const { setSlot } = useRightTools();
 	const { setEditor } = useActiveEditor();
 
-	const [mode, setMode] = useState<Mode>("rendered");
+	const navigate = useNavigate();
+	const { data: folders } = useFolders();
+	const deleteNote = useDeleteNote();
+	const duplicateNote = useDuplicateNote();
+	const batchMoveNotes = useBatchMoveNotes();
+	const [dialog, setDialog] = useState<"move" | "delete" | null>(null);
+	// Local-only: an "open but empty" properties block, from the `---` gesture.
+	// Never written to the Y.Doc — the other devices should not sprout an empty
+	// frontmatter section because someone typed three dashes here.
+	const [frontmatterDraft, setFrontmatterDraft] = useState(false);
+
+	const [mode, setMode] = useState<ViewMode>("rendered");
+	// Written only from the reading toggle's handler, never during render.
+	const lastEditMode = useRef<Exclude<ViewMode, "reading">>("rendered");
 	// Which note the rename box belongs to, not a bare boolean: navigating to
 	// another note keeps this component mounted, and an id-keyed value closes
 	// the box on its own instead of carrying over onto the newly opened note.
-	const [renamingFor, setRenamingFor] = useState<string | null>(null);
+	//
+	// `at` names the surface because there are two of them — the header path and
+	// the inline title. Rendering a box in both would put two autofocusing
+	// inputs on screen, each committing the other's blur.
+	const [renaming, setRenaming] = useState<{ id: string; at: "header" | "title" } | null>(null);
+	const renamingAt = renaming && renaming.id === note?.id ? renaming.at : null;
 	const [handle, setHandle] = useState<DocHandle | null>(null);
 	const renameNote = useRenameNote();
 	const [syncStatus, setSyncStatus] = useState<CrdtSyncStatus>(getCrdtSyncStatus);
 	const editorViewRef = useRef<EditorView | null>(null);
-	// Mirrors NoteView's remark-wiki-link hrefTemplate. useCallback keeps a
-	// stable identity so passing it to NoteEditor doesn't re-fire the
-	// decorationsCompartment reconfigure effect on every render.
-	const resolveWikiLink = useCallback((permalink: string) => `/notes/${encodeURI(permalink)}`, []);
+	// Same lookup NoteView builds for its remark-wiki-link hrefTemplate — a
+	// resolved link routes straight to the note id instead of through the
+	// lazy /:slug/wiki/* resolver.
+	const wikiMap = useMemo(() => buildWikiMap(note?.links), [note?.links]);
+	// Manifest layer for wikiHref, read through a ref (same identity-stability
+	// reasoning as manifestPathsRef below): edges lag behind fresh links, the
+	// manifest resolves them without the /wiki redirect flash, and a manifest
+	// refetch must not change these callbacks' identity.
+	const wikiManifestRef = useRef<{ id: string; path: string }[]>([]);
+	wikiManifestRef.current = manifest?.notes ?? [];
+	// useCallback keeps a stable identity so passing it to NoteEditor doesn't
+	// re-fire the decorationsCompartment reconfigure effect on every render.
+	const resolveWikiLink = useCallback(
+		(permalink: string) => wikiHref(permalink, slug, wikiMap, wikiManifestRef.current),
+		[slug, wikiMap],
+	);
+	// Editor-mode click-to-open. Router nav must come from the React tree —
+	// see LivePreviewOpts.openWikiLink for why the editor can't reach the
+	// router singleton itself.
+	const openWikiLink = useCallback(
+		(permalink: string) => {
+			const href = wikiHref(permalink, slug, wikiMap, wikiManifestRef.current);
+			if (href.startsWith("/")) {
+				navigate(href);
+			} else if (href.startsWith("#")) {
+				// Same-page heading — hash assignment scrolls, no reload.
+				window.location.hash = href;
+			}
+		},
+		[navigate, slug, wikiMap],
+	);
+	// `[[` autocomplete's candidate list. Read through a ref, not a useMemo keyed
+	// on manifest, so this callback's identity NEVER changes -- the manifest
+	// query refetches on its own staleTime, and a new function identity there
+	// would fire NoteEditor's decorationsCompartment.reconfigure effect for
+	// every refetch with no UI change to show for it (same onView/onShortcutRef
+	// reasoning documented in note-editor.tsx).
+	const manifestPaths = useMemo(() => manifest?.notes.map((n) => n.path) ?? [], [manifest]);
+	const manifestPathsRef = useRef<string[]>([]);
+	manifestPathsRef.current = manifestPaths;
+	const wikiCompletionPaths = useCallback(() => manifestPathsRef.current, []);
 
 	const path = note?.path ?? null;
 	const noteId = note?.id ?? null;
@@ -122,6 +190,40 @@ export default function NotePage() {
 		return () => setSlot("outline", null);
 	}, [notePath, liveContent, setSlot]);
 
+	// Backlinks only need the note id (the panel fetches its own data), so this
+	// doesn't need to re-fire on every keystroke the way the ToC's effect does.
+	useEffect(() => {
+		if (noteId === null) {
+			setSlot("backlinks", null);
+			return;
+		}
+		setSlot("backlinks", <BacklinksPanel noteId={noteId} />);
+		return () => setSlot("backlinks", null);
+	}, [noteId, setSlot]);
+
+	// Consume the just-created flag exactly once: start renaming, then strip the
+	// state so a later back-navigation to this history entry doesn't reopen the
+	// rename box on a note the user already named.
+	const location = useLocation();
+	const justCreated = Boolean((location.state as { justCreated?: boolean } | null)?.justCreated);
+	useEffect(() => {
+		if (!(justCreated && noteId)) {
+			return;
+		}
+		setRenaming({ id: noteId, at: "title" });
+		navigate(location.pathname, { replace: true, state: {} });
+	}, [justCreated, noteId, navigate, location.pathname]);
+
+	// The draft belongs to the note you are looking at, not to the page, which
+	// stays mounted across note switches. Adjusted during render rather than in
+	// an effect — React's documented pattern for resetting state on a prop
+	// change, and it avoids rendering the stale draft for one frame.
+	const [draftNoteId, setDraftNoteId] = useState(noteId);
+	if (draftNoteId !== noteId) {
+		setDraftNoteId(noteId);
+		setFrontmatterDraft(false);
+	}
+
 	// Publish the editor so right-sidebar tools (the markdown reference panel)
 	// can insert at the caret. Gated on the SAME condition that renders
 	// NoteEditor below, so "Insert" is disabled in reading mode and on
@@ -151,7 +253,7 @@ export default function NotePage() {
 	const name = noteName(note.path);
 	const titlePath = note.folder ? `${note.folder}/${name}` : name;
 	const commitRename = (next: string) => {
-		setRenamingFor(null);
+		setRenaming(null);
 		// Base-name rename: the header never shows the extension, so the user
 		// can't change the file type from here — the original one is always
 		// re-attached. (The tree's rename is the place to swap .md <-> .canvas.)
@@ -163,6 +265,91 @@ export default function NotePage() {
 		renameNote.mutate({ id: note.id, old_path: note.path, new_path });
 	};
 
+	// `---` on the first line opens the properties editor instead of leaving a
+	// horizontal rule. Declined — so the fence survives as a real rule — when
+	// the note already has frontmatter (the editor is showing anyway) or when
+	// raw mode is up, where the YAML block is the frontmatter surface.
+	const handleFrontmatterShortcut = () => {
+		// Declining when the editor is ALREADY open matters: accepting deletes the
+		// user's three characters, and setting an unchanged flag is a React
+		// bailout that would open nothing in exchange for them.
+		if (frontmatterDraft || mode !== "rendered" || !handle || readRows(handle.doc).length > 0) {
+			return false;
+		}
+		setFrontmatterDraft(true);
+		return true;
+	};
+
+	// Obsidian's binary edit/read toggle, sitting beside the kebab that still
+	// carries all three modes. Raw counts as an EDIT mode, so returning from
+	// reading restores whichever editor you left rather than always landing on
+	// rendered — a round trip must not silently demote raw.
+	const toggleReading = () => {
+		if (mode === "reading") {
+			setMode(lastEditMode.current);
+			return;
+		}
+		lastEditMode.current = mode;
+		setMode("reading");
+	};
+
+	// Deliberately NOT shared with folder-tree.tsx's handleActionPick: that one
+	// is welded to tree state (getItemInstance().startRenaming(), rowsFor, its
+	// own dialog reducer). The portable parts — the action list and the dialog
+	// components — are already reused. See the design spec.
+	const handleAction = (action: ActionId) => {
+		switch (action) {
+			case "view-rendered":
+				setMode("rendered");
+				break;
+			case "view-raw":
+				setMode("raw");
+				break;
+			case "view-reading":
+				setMode("reading");
+				break;
+			case "rename":
+				setRenaming({ id: note.id, at: "title" });
+				break;
+			case "move":
+				setDialog("move");
+				break;
+			case "delete":
+				setDialog("delete");
+				break;
+			case "duplicate": {
+				// No reliable sibling-name set on hand — pass an empty Set and let the
+				// backend reject a collision; the toast surfaces it. Mirrors the tree.
+				const new_path = nextCopyName(note.path, new Set<string>());
+				// `mutate`, not `mutateAsync` — the hook's onError already toasts, and
+				// it distinguishes a name collision from a general failure. Catching
+				// here too put a second, vaguer toast on top of the useful one.
+				duplicateNote.mutate(
+					{ src_path: note.path, new_path },
+					{ onSuccess: () => toast.success("Duplicated") },
+				);
+				break;
+			}
+			case "copy-wikilink":
+				// Wikilinks resolve by filename in Obsidian, never by H1 title.
+				copyToClipboard(`[[${name || note.path}]]`).then((ok) =>
+					ok ? toast.success("Copied wikilink") : toast.error("Copy failed"),
+				);
+				break;
+			case "add-property":
+				// Opens the adder row rather than writing a key. Inventing a name
+				// meant a second use silently collided and did nothing, and from
+				// reading or raw mode — where this widget is not on screen — it wrote
+				// a property the user could not see but every other device received.
+				// Forcing rendered mode makes the row it opens actually visible.
+				setMode("rendered");
+				setFrontmatterDraft(true);
+				break;
+			default:
+				break;
+		}
+	};
+
 	return (
 		<section className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]">
 			{syncStatus === "error" && (
@@ -170,12 +357,15 @@ export default function NotePage() {
 					Not syncing - reconnecting...
 				</p>
 			)}
+			{/* The big title moved into the document so it scrolls away, but the
+			    path stays pinned here — it is the only rename affordance still
+			    reachable once you have scrolled the title out of view. */}
 			<div className="flex shrink-0 items-center gap-2 border-border border-b px-4 py-2">
-				<h2 className="flex min-w-0 flex-1 items-baseline gap-1 text-sm" title={titlePath}>
+				<p className="flex min-w-0 flex-1 items-baseline gap-1 text-sm" title={titlePath}>
 					{Boolean(note.folder) && (
 						<span className="min-w-0 shrink truncate text-muted-foreground">{note.folder}/</span>
 					)}
-					{renamingFor === note.id ? (
+					{renamingAt === "header" ? (
 						<RenameInput
 							initial={name}
 							kind="file"
@@ -185,68 +375,128 @@ export default function NotePage() {
 							// Escape still abandons.
 							commitOnBlur
 							onCommit={commitRename}
-							onCancel={() => setRenamingFor(null)}
+							onCancel={() => setRenaming(null)}
 						/>
 					) : (
 						<button
 							type="button"
+							data-testid="header-note-name"
 							// -mx-1 cancels the padding so the hover target is roomier than
 							// the text without nudging the name off the folder crumb.
 							className="-mx-1 min-w-0 truncate rounded px-1 font-medium hover:bg-accent"
 							title="Click to rename"
-							onClick={() => setRenamingFor(note.id)}
+							onClick={() => setRenaming({ id: note.id, at: "header" })}
 						>
 							{name}
 						</button>
 					)}
-				</h2>
-				<fieldset className="m-0 flex shrink-0 gap-1 border-0 p-0">
-					<legend className="sr-only">View mode</legend>
-					{MODES.map(({ value, label }) => (
-						<Button
-							key={value}
-							variant={mode === value ? "secondary" : "ghost"}
-							size="sm"
-							aria-pressed={mode === value}
-							onClick={() => setMode(value)}
-						>
-							{label}
-						</Button>
-					))}
-				</fieldset>
+				</p>
+				<Button
+					variant="ghost"
+					size="icon"
+					// The icon shows the mode you are IN — book while reading, pencil
+					// while editing — so the name has to stay put and let aria-pressed
+					// carry the state. A name that flipped to the next action would
+					// tell a screen reader the opposite of what the icon shows.
+					aria-label="Reading view"
+					aria-pressed={mode === "reading"}
+					title="Reading view"
+					onClick={toggleReading}
+				>
+					{mode === "reading" ? <BookOpen className="size-4" /> : <Pencil className="size-4" />}
+				</Button>
+				<NoteMenu mode={mode} title={name} onPick={handleAction} />
 			</div>
 
-			{handle && mode === "rendered" ? <PropertiesWidget doc={handle.doc} /> : null}
-			{handle && mode === "raw" ? <RawFrontmatterEditor doc={handle.doc} /> : null}
+			{/* EditorToolbar is deliberately NOT mounted — see editor/toolbar.tsx.
+			    A desktop-width strip of format buttons earns little next to the
+			    markdown shortcuts, and the case it does earn is mobile, where it
+			    belongs above the keyboard rather than under the header. */}
 
-			{mode === "reading" ? (
-				<ScrollArea className="min-h-0 flex-1">
-					<div className="w-full px-5 py-5">
-						<NoteView content={liveContent} tags={note.tags} />
-					</div>
-				</ScrollArea>
-			) : (
-				<div className="min-h-0 flex-1 overflow-hidden" data-tour="note-editor">
-					<Suspense fallback={<p className="py-5 text-muted-foreground">Loading editor…</p>}>
-						{handle ? (
-							<>
-								<EditorToolbar getView={() => editorViewRef.current} />
+			<ScrollArea className="min-h-0 flex-1">
+				<div className="w-full pb-5" data-tour="note-editor">
+					<InlineTitle
+						name={name}
+						renaming={renamingAt === "title"}
+						onStartRename={() => setRenaming({ id: note.id, at: "title" })}
+						onCommitRename={commitRename}
+						onCancelRename={() => setRenaming(null)}
+					/>
+
+					{handle && mode === "rendered" ? (
+						<PropertiesWidget
+							doc={handle.doc}
+							draft={frontmatterDraft}
+							onAbandonDraft={() => setFrontmatterDraft(false)}
+						/>
+					) : null}
+					{handle && mode === "raw" ? <RawFrontmatterEditor doc={handle.doc} /> : null}
+
+					{mode === "reading" ? (
+						// pt matches .cm-content's 20px top padding in note-editor.tsx so
+						// the title sits the same distance above the body in reading mode
+						// as it does in the editor.
+						<div className="px-5 pt-5">
+							<NoteView
+								content={liveContent}
+								tags={note.tags}
+								links={note.links}
+								manifestNotes={manifest?.notes}
+							/>
+						</div>
+					) : (
+						<Suspense fallback={<p className="px-5 py-5 text-muted-foreground">Loading editor…</p>}>
+							{handle ? (
 								<NoteEditor
 									ytext={handle.ytext}
 									awareness={handle.awareness}
 									mode={mode === "raw" ? "raw" : "rendered"}
 									resolveWikiLink={resolveWikiLink}
+									openWikiLink={openWikiLink}
+									wikiCompletionPaths={wikiCompletionPaths}
+									onFrontmatterShortcut={handleFrontmatterShortcut}
 									onView={(v) => {
 										editorViewRef.current = v;
 									}}
 								/>
-							</>
-						) : (
-							<p className="py-5 text-muted-foreground">Connecting…</p>
-						)}
-					</Suspense>
+							) : (
+								<p className="px-5 py-5 text-muted-foreground">Connecting…</p>
+							)}
+						</Suspense>
+					)}
 				</div>
-			)}
+			</ScrollArea>
+
+			{dialog === "move" ? (
+				<MoveDialog
+					folders={folders ?? []}
+					nodes={[{ kind: "file", path: note.path }]}
+					onPick={(folder) => {
+						setDialog(null);
+						batchMoveNotes.mutate({
+							ids: [note.id],
+							target_folder: folder,
+							paths: { [note.id]: note.path },
+						});
+					}}
+					onCancel={() => setDialog(null)}
+				/>
+			) : null}
+
+			{dialog === "delete" ? (
+				<DeleteConfirm
+					nodes={[{ kind: "file", path: note.path }]}
+					onConfirm={() => {
+						setDialog(null);
+						deleteNote.mutate({ id: note.id, path: note.path });
+						// useDeleteNote does not navigate — from the tree the deleted note
+						// usually isn't open, but here it is, so staying would strand the
+						// user on a dead route.
+						navigate(slug ? `/${slug}` : "/");
+					}}
+					onCancel={() => setDialog(null)}
+				/>
+			) : null}
 		</section>
 	);
 }

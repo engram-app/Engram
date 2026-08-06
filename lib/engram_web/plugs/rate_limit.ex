@@ -4,7 +4,7 @@ defmodule EngramWeb.Plugs.RateLimit do
   Usage: `plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000`
   """
 
-  import Plug.Conn
+  alias EngramWeb.Plugs.Halt
 
   # Bake the build env into the module at compile time.
   # This ensures :rate_limit_override is structurally impossible in non-test builds.
@@ -28,10 +28,7 @@ defmodule EngramWeb.Plugs.RateLimit do
         conn
 
       {:deny, _retry_after_ms} ->
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(429, Jason.encode!(%{error: "rate_limited"}))
-        |> halt()
+        Halt.json(conn, 429, %{error: "rate_limited"})
     end
   end
 

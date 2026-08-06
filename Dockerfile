@@ -82,7 +82,19 @@ ENV MIX_ENV="prod"
 # calls below honor it. Hex still verifies package signatures against hex.pm's
 # key, so a caching mirror is safe (we never set unsafe_registry).
 ARG HEX_MIRROR=""
-ENV HEX_MIRROR=${HEX_MIRROR}
+# Fall back to upstream when the arg arrives EMPTY, not merely unset.
+# `ci/compose.yml` passes `HEX_MIRROR: ${HEX_MIRROR:-}` and its comment says
+# "empty for local dev = upstream" — but `ENV HEX_MIRROR=` SETS the variable to
+# an empty string rather than leaving it unset, and mix then parses "" as a URI:
+#
+#   ** (CaseClauseError) no case clause matching: :badpath
+#       (mix) lib/mix/tasks/local.hex.ex:72: Mix.Tasks.Local.Hex.run_install/2
+#
+# So `docker compose -f ci/compose.yml build` — the documented way to bring the
+# CI stack up locally — could not work off the LAN, while CI stayed green
+# because it always passes a real mirror. Defaulted here rather than in compose
+# so every caller is covered.
+ENV HEX_MIRROR=${HEX_MIRROR:-https://repo.hex.pm}
 # Persist hex + rebar package caches across builds (self-hosted runner disk).
 # Without these mounts, mix.exs invalidation re-downloads every hex tarball.
 RUN --mount=type=cache,target=/root/.hex,id=mix-hex \
@@ -168,6 +180,22 @@ USER nobody
 EXPOSE 4000
 
 ENV PHX_SERVER=true
+
+# The commit this image was built from, baked in at build time so the image
+# knows what it is in EVERY environment. Previously RELEASE_SHA was injected
+# per-environment from Terraform (`var.engram_release_sha`), which prod set
+# and staging-fastraid did not — so there was no way to tell what code
+# staging was running short of `docker inspect` on the host. That blind spot
+# is how a broken staging deploy chain went unnoticed for weeks: /api/health
+# reports Application.spec(:engram, :vsn), which release-please keeps sticky
+# between cuts, so it cannot change on a non-release deploy.
+#
+# Baking it here also removes the lockstep requirement between the image and
+# a TF variable — the value can no longer drift from the bytes it describes.
+# Empty default keeps local `docker build` and self-host builds working; the
+# health endpoint and Sentry both treat "" as unset.
+ARG RELEASE_SHA=""
+ENV RELEASE_SHA=${RELEASE_SHA}
 
 # T3.0.3 — refuse to write erl_crash.dump on BEAM crash. The dump would
 # include plaintext DEKs (ETS) + master key (LocalKeyProvider state) from

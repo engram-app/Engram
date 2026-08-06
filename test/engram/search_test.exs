@@ -1097,4 +1097,23 @@ defmodule Engram.SearchTest do
       assert log =~ "decrypt"
     end
   end
+
+  describe "input validation at the context boundary" do
+    test "returns {:error, :invalid_mode} instead of raising on unknown mode", %{
+      user: user,
+      vault: vault
+    } do
+      # Used to raise FunctionClauseError deep in run_legs/5.
+      assert {:error, :invalid_mode} = Search.search(user, vault, "q", mode: :bogus)
+    end
+
+    test "clamp_limit/1 bounds the caller-supplied limit" do
+      # The controller clamps to 50, but MCP/console callers hit the context
+      # directly — the context must bound its own fetch fan-out.
+      assert Search.clamp_limit(10_000) == 100
+      assert Search.clamp_limit(0) == 1
+      assert Search.clamp_limit(-5) == 1
+      assert Search.clamp_limit(7) == 7
+    end
+  end
 end

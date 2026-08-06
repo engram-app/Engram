@@ -39,7 +39,9 @@ function conn(over: Partial<Connection>): Connection {
 		connected_at: "2026-07-30T15:00:00Z",
 		first_user_agent: null,
 		first_ip: "::ffff:10.30.1.140",
+		redirect_uri: null,
 		redirect_uris: [],
+		cimd_url: null,
 		...over,
 	} as Connection;
 }
@@ -53,12 +55,14 @@ const CONNECTIONS: Connection[] = [
 		slug: "claude",
 		verified: true,
 		logo: "/assets/clients/claude.svg",
+		redirect_uri: "https://claude.ai/api/mcp/auth_callback",
 		redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
 	}),
 	conn({
 		name: "ChatGPT",
 		slug: "chatgpt",
 		verified: true,
+		redirect_uri: "https://chatgpt.com/connector/oauth/ig2N09X8ZQ6D",
 		redirect_uris: ["https://chatgpt.com/connector/oauth/ig2N09X8ZQ6D"],
 		first_user_agent: "Python/3.12 aiohttp/3.13.5",
 	}),
@@ -66,6 +70,7 @@ const CONNECTIONS: Connection[] = [
 		name: "Grok",
 		slug: "grok",
 		verified: true,
+		redirect_uri: "https://grok.com/connectors-oauth-exchange-code/",
 		redirect_uris: ["https://grok.com/connectors-oauth-exchange-code/"],
 		first_user_agent: "Grok",
 	}),
@@ -73,6 +78,7 @@ const CONNECTIONS: Connection[] = [
 		name: "Mistral",
 		slug: "mistral",
 		verified: true,
+		redirect_uri: "https://callback.mistral.ai/v1/integrations_auth/oauth2_callback",
 		redirect_uris: ["https://callback.mistral.ai/v1/integrations_auth/oauth2_callback"],
 		first_user_agent: "MistralAI-MCPClient/1.0",
 	}),
@@ -80,6 +86,7 @@ const CONNECTIONS: Connection[] = [
 		name: "Antigravity",
 		slug: "antigravity",
 		verified: true,
+		redirect_uri: "https://antigravity.google/oauth-callback",
 		redirect_uris: ["https://antigravity.google/oauth-callback"],
 		first_user_agent: "Go-http-client/2.0",
 	}),
@@ -87,6 +94,7 @@ const CONNECTIONS: Connection[] = [
 		name: "Claude Code (engram)",
 		slug: "claude_code",
 		verified: false,
+		redirect_uri: "http://localhost:62184/callback",
 		redirect_uris: ["http://localhost:62184/callback"],
 		first_user_agent: "Bun/1.4.0",
 	}),
@@ -94,14 +102,39 @@ const CONNECTIONS: Connection[] = [
 		name: "Open WebUI",
 		slug: "open_webui",
 		verified: false,
+		redirect_uri: "https://ai.ras.band/oauth/clients/mcp:1/callback",
 		redirect_uris: ["https://ai.ras.band/oauth/clients/mcp:1/callback"],
 		first_user_agent: "Python/3.11 aiohttp/3.13.5",
+	}),
+	// Not observed yet: the CIMD shape. Same loopback redirect as the Claude Code
+	// row above, but verified — the metadata document is the proof the redirect
+	// cannot supply. Worth eyeballing side by side, since the two rows differ only
+	// in whether a document exists.
+	conn({
+		name: "Claude Code (engram)",
+		slug: "claude_code",
+		verified: true,
+		redirect_uri: "http://localhost:62184/callback",
+		redirect_uris: ["http://localhost:62184/callback"],
+		cimd_url: "https://claude.ai/.well-known/oauth-client",
+		first_user_agent: "Bun/1.4.0",
+	}),
+	// Not observed: a CIMD vendor with no allowlist entry. Verified on the strength
+	// of the document alone, displaying the host it was served from.
+	conn({
+		name: "newvendor-client",
+		slug: null,
+		verified: true,
+		redirect_uri: "http://127.0.0.1:5000/cb",
+		redirect_uris: ["http://127.0.0.1:5000/cb"],
+		cimd_url: "https://newvendor.example/mcp-client",
 	}),
 	// Not observed, the unrecognized case, which must still look actionable.
 	conn({
 		name: "some-random-agent",
 		slug: null,
 		verified: false,
+		redirect_uri: "http://localhost:9999/cb",
 		redirect_uris: ["http://localhost:9999/cb"],
 	}),
 	// Not observed, device-flow Obsidian, verified via our own minted family_id.

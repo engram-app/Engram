@@ -13,20 +13,16 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
   no vault is resolved for users we'll 403.
   """
 
-  import Plug.Conn
-
   alias Engram.Onboarding
   alias Engram.Onboarding.GateCache
+  alias EngramWeb.Plugs.Halt
 
   def init(opts), do: opts
 
   def call(conn, _opts) do
     case conn.assigns[:current_user] do
       nil ->
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(401, Jason.encode!(%{error: "authentication_required"}))
-        |> halt()
+        Halt.json(conn, 401, %{error: "authentication_required"})
 
       user ->
         # Deriving status costs ~3 DB round-trips (profile re-read +
@@ -78,12 +74,11 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
       :ok = GateCache.mark_passed(user.id)
       conn
     else
-      body = %{error: "onboarding_required", missing: missing, next_step: next_step}
-
-      conn
-      |> put_resp_content_type("application/json")
-      |> send_resp(403, Jason.encode!(body))
-      |> halt()
+      Halt.json(conn, 403, %{
+        error: "onboarding_required",
+        missing: missing,
+        next_step: next_step
+      })
     end
   end
 end

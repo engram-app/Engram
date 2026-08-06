@@ -13,6 +13,15 @@ defmodule Engram.Storage do
   @callback delete(key :: String.t()) ::
               :ok | {:error, term()}
 
+  @doc """
+  Deletes many objects in one backend round trip where the backend supports
+  it (S3 `DeleteObjects`). Used by `Engram.Attachments.batch_delete/3` so a
+  500-path batch doesn't issue 500 sequential DELETE calls. Best-effort like
+  `delete/1` — callers treat failure as a zombie-blob warning, never data loss.
+  """
+  @callback delete_many(keys :: [String.t()]) ::
+              {:ok, non_neg_integer()} | {:error, term()}
+
   @callback exists?(key :: String.t()) ::
               boolean()
 

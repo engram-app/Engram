@@ -91,11 +91,10 @@ defmodule EngramWeb.ApiSpecTest do
       assert Enum.sort(Map.keys(op.responses)) == [201, 409, 413, 422]
     end
 
-    test "GET /api/notes/changes documents since/limit/fields/cursor", %{spec: spec} do
+    test "GET /api/notes/changes is documented as retired (deprecated, 410 only)", %{spec: spec} do
       op = spec.paths["/api/notes/changes"].get
-      names = Enum.map(op.parameters, & &1.name)
-      assert :since in names and :limit in names and :fields in names and :cursor in names
-      assert Map.has_key?(op.responses, 200) and Map.has_key?(op.responses, 400)
+      assert op.deprecated == true
+      assert Map.keys(op.responses) == [410]
     end
 
     test "by-id show documents id path param + 404", %{spec: spec} do
@@ -279,10 +278,12 @@ defmodule EngramWeb.ApiSpecTest do
       assert Map.has_key?(op.responses, 404)
     end
 
-    test "GET /api/attachments/changes documents since + 400", %{spec: spec} do
+    test "GET /api/attachments/changes is documented as retired (deprecated, 410 only)", %{
+      spec: spec
+    } do
       op = spec.paths["/api/attachments/changes"].get
-      assert Enum.any?(op.parameters, &(&1.name == :since and &1.required))
-      assert Map.has_key?(op.responses, 400)
+      assert op.deprecated == true
+      assert Map.keys(op.responses) == [410]
     end
 
     test "GET /api/sync/manifest documents 200", %{spec: spec} do

@@ -176,9 +176,20 @@ defmodule Engram.Search do
 
   defp emit_search_performed(_user, _other, _started_at, _cross_vault), do: :ok
 
+  # Context-boundary bound on the caller-supplied limit: the controller
+  # clamps to 50, but MCP/console callers hit this module directly and
+  # `limit` drives a 4x candidate-pool over-fetch into Qdrant.
+  @max_context_limit 100
+
+  @doc """
+  Clamps a caller-supplied result limit to 1..#{@max_context_limit}.
+  """
+  @spec clamp_limit(integer()) :: pos_integer()
+  def clamp_limit(n) when is_integer(n), do: n |> max(1) |> min(@max_context_limit)
+
   defp do_search(user, vault, query, opts) do
     mode = Keyword.get(opts, :mode, :vector)
-    limit = Keyword.get(opts, :limit, 5)
+    limit = opts |> Keyword.get(:limit, 5) |> clamp_limit()
     tags = Keyword.get(opts, :tags)
     folder = Keyword.get(opts, :folder)
     type = Keyword.get(opts, :type)
@@ -305,6 +316,11 @@ defmodule Engram.Search do
         end
     end
   end
+
+  # Caller-supplied :mode is external input (MCP/API) — an unknown mode must
+  # return an error tuple, not raise FunctionClauseError mid-pipeline.
+  defp run_legs(_invalid_mode, _user, _query, _search_opts, _profile),
+    do: {:error, :invalid_mode}
 
   defp sparse_query(user, query) do
     case Engram.Crypto.dek_filter_key(user) do

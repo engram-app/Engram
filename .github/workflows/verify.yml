@@ -98,6 +98,35 @@ env:
   # pull hex from the LAN instead of WAN. Signatures still verified client-side.
   HEX_MIRROR: "http://10.0.20.214:8090"
 
+  # Central FastRaid MinIO credentials for the attachment store, at WORKFLOW
+  # level for the same reason LOCAL_REGISTRY is: every job that so much as
+  # PARSES ci/compose.yml needs them, not just the ones that run the stack.
+  #
+  # These are `${VAR:?}`-required in compose, and compose interpolates the
+  # whole file even for `build`. prebuild-ci-image therefore needs them too —
+  # which is not obvious, and was missed: that job's step is "skip if already
+  # in registry", so it short-circuited on every run until a content-hash
+  # change made it actually build, and only then did it fail on a variable it
+  # had never needed before. Job-level wiring re-creates that trap for the
+  # next job someone adds; workflow-level cannot.
+  #
+  # Scoped `engram-ci` MinIO user — s3:* on ci-* buckets only, never root.
+  #
+  # The ACCESS KEY IS DELIBERATELY NOT A SECRET. It is a username, so making it
+  # one bought no security — and it actively broke CI: its value, `engram-ci`,
+  # is also the CI image repository name (`${LOCAL_REGISTRY}/engram-ci:<hash>`).
+  # GitHub redacts secret values from job OUTPUTS as well as logs, by substring.
+  # Once this was in scope for prebuild-ci-image, that job's `image` output was
+  # redacted away, ENGRAM_CI_IMAGE arrived empty in every downstream e2e job,
+  # and docker rejected the empty reference with `invalid reference format`.
+  #
+  # Only the secret key is a secret. Do not "helpfully" promote this one back.
+  CI_MINIO_ACCESS_KEY: engram-ci
+  CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
+  # One permanent shared bucket; objects expire via a server-side MinIO ILM
+  # rule (7 days). Nothing per-run, so nothing to create or reap.
+  CI_MINIO_BUCKET: ci-e2e
+
   # CI-only encryption master key. Ephemeral — CI databases are recreated per run,
   # so the key does not protect persistent data. Production deploys must override
   # with a secret via `fly secrets set ENCRYPTION_MASTER_KEY=...`.
@@ -155,6 +184,22 @@ jobs:
       hash-e2e-browser: ${{ steps.skips.outputs.hash-e2e-browser }}
       hash-n1-compat: ${{ steps.skips.outputs.hash-n1-compat }}
       hash-build-and-publish-image: ${{ steps.skips.outputs.hash-build-and-publish-image }}
+      # "This ref belongs to a bot whose PRs never run e2e." ONE definition,
+      # consumed by all four e2e job `if:`s — they each used to repeat both
+      # halves of it inline, so adding or removing a bot meant four edits to
+      # four already-unreadable expressions.
+      #
+      #   release-please--**: the release PR branch is main's tip plus a
+      #     changelog + version bump. main already ran the full suite on that
+      #     exact tree; re-running e2e proves nothing about a CHANGELOG.md diff.
+      #   dependabot[bot]: Dependabot-triggered runs are denied regular Actions
+      #     secrets, so the e2e stack (Clerk creds, App tokens) cannot come up.
+      #     They would fail on credentials, not on the dependency.
+      #
+      # No step needed — job `outputs:` are expressions with `github` in scope.
+      # A workflow-level `env:` var would NOT work: job-level `if:` cannot see
+      # the `env` context, which is why this has to route through an output.
+      bot-pr: ${{ startsWith(github.ref_name, 'release-please--') || github.actor == 'dependabot[bot]' }}
       # Phase 4 targeted e2e ([e2e: suite/pattern] in HEAD commit). Empty = full e2e.
       e2e-target-suite: ${{ steps.skips.outputs.e2e-target-suite }}
       e2e-target-pattern: ${{ steps.skips.outputs.e2e-target-pattern }}
@@ -393,12 +438,22 @@ jobs:
           ERTS=$(erl -eval 'io:format("~s",[erlang:system_info(version)]),halt()' -noshell)
           ELX=$(elixir --short-version)
           export BEAM_TAG="otp${OTP}-erts${ERTS}-elx${ELX}"
-          # is-full: main pushes, [ci-full]/force_full runs, and the nightly
-          # schedule validate everything (no skips). The schedule clause is
-          # belt-and-suspenders — GitHub always fires `schedule` against the
-          # default branch, so github.ref already reads refs/heads/main — but
-          # it documents intent and survives a future default-branch change.
-          if [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
+          # IS_MAIN is tracked separately from is-full. main is no longer a
+          # "full run": the marker store is content-addressed and ref-agnostic
+          # precisely so a squash-merge (same tree, new SHA) can reuse the
+          # branch's proof, and forcing skip=false on main threw that away —
+          # main re-ran the entire suite on ~61 pushes/week to re-derive a
+          # result the branch had already established. main still runs
+          # anything whose content hash MISSED, which is the real safety net;
+          # the 06:00 nightly (schedule) remains a genuine full run and is
+          # what bounds time-dependent checks like mix_audit's CVE database.
+          IS_MAIN=false
+          [ "${{ github.ref }}" = "refs/heads/main" ] && IS_MAIN=true
+          # is-full: the nightly schedule, [ci-full], and force_full validate
+          # everything with no skips. The schedule clause is belt-and-suspenders
+          # — GitHub always fires `schedule` against the default branch — but it
+          # documents intent and survives a future default-branch change.
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
             echo "is-full=true" >> "$GITHUB_OUTPUT"
             export IS_FULL_RUN=true
           else
@@ -410,10 +465,13 @@ jobs:
           # and marks the run NON-mergeable (the ci aggregate fails on a target).
           # suite is one of clerk|crdt|local|browser; pattern is a pytest -k expr.
           #
-          # IGNORED on full runs (main / [ci-full] / force_full): main must always
-          # run the full e2e matrix, and ignoring the tag here also stops
-          # record-job-markers from seeding a full-hash e2e marker off a single
-          # -k subset (a squash-merge whose body still carries the tag).
+          # IGNORED on full runs ([ci-full] / force_full / nightly) AND on main.
+          # main is checked EXPLICITLY (IS_MAIN), not via is-full: main is no
+          # longer a full run, but a squash-merge whose body still carries the
+          # feature branch's [e2e: ...] tag must not narrow main's e2e matrix
+          # to one -k subset — which would also let record-job-markers seed a
+          # full-hash e2e marker off that subset, and fail the ci aggregate on
+          # main (targeted runs are deliberately non-mergeable).
           #
           # SECURITY: the pattern is restricted to a pytest -k -safe charset
           # ([A-Za-z0-9_ .:/()-]) — anything with shell metacharacters (quotes,
@@ -424,7 +482,7 @@ jobs:
           # self-hosted runner. Only the four known suite names match, so prose /
           # placeholder text never accidentally triggers a (non-mergeable) run.
           E2E_SUITE=""; E2E_PATTERN=""
-          if [ "$IS_FULL_RUN" != true ]; then
+          if [ "$IS_FULL_RUN" != true ] && [ "$IS_MAIN" != true ]; then
             E2E_LINE=$(git log -1 --pretty=%B | grep -oiE '\[e2e:[[:space:]]*(clerk|crdt|local|browser)/[A-Za-z0-9_ .:/()-]+\]' | head -1 || true)
             if [ -n "$E2E_LINE" ]; then
               E2E_SUITE=$(printf '%s' "$E2E_LINE" | sed -E 's#.*\[e2e:[[:space:]]*(clerk|crdt|local|browser)/.*#\1#I' | tr 'A-Z' 'a-z')
@@ -523,6 +581,23 @@ jobs:
           # the job (issue #334, upstream docker/buildx bug). Plain writer = no
           # such goroutine.
           BUILDKIT_PROGRESS: plain
+          # `ci/compose.yml` declares these with the `:?` (required) form, which
+          # docker compose enforces while PARSING the file — so even
+          # `docker compose build engram`, which needs no object storage at all,
+          # dies on "required variable CI_MINIO_ACCESS_KEY is missing a value".
+          # #1267 added the requirement and wired the secrets into e2e-clerk,
+          # e2e-crdt and headless-protocol, but this job parses the same file
+          # and was missed. Any future job that touches ci/compose.yml needs
+          # them too, for parsing alone.
+          #
+          # Both now come from workflow-level env and must NOT be redeclared
+          # here. `CI_MINIO_ACCESS_KEY` is deliberately a plain value there, not
+          # a secret — it is also the CI image repository name
+          # (`${LOCAL_REGISTRY}/engram-ci:<hash>`), and GitHub redacts secret
+          # values out of job outputs by substring, which blanked
+          # ENGRAM_CI_IMAGE for every downstream e2e job. A step-level
+          # `${{ secrets.CI_MINIO_ACCESS_KEY }}` OVERRIDES the good value with
+          # the empty string, which is what re-broke the build.
         run: |
           # Already published for this exact tree? Reuse — the registry is the
           # cross-host source of truth, so probe IT (not the local daemon, which
@@ -615,6 +690,8 @@ jobs:
       deps-key: ${{ steps.keys.outputs.deps }}
       build-dev-key: ${{ steps.keys.outputs.build-dev }}
       build-test-key: ${{ steps.keys.outputs.build-test }}
+      build-dev-restore: ${{ steps.keys.outputs.build-dev-restore }}
+      build-test-restore: ${{ steps.keys.outputs.build-test-restore }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -690,12 +767,38 @@ jobs:
           # to ~0.2 MB/s from self-hosted runners). Downstream restores via the exact
           # key and `mix compile` recompiles the changed-module delta (cheap). The save
           # runs only when mix.lock changes. See spec 2026-06-29-lan-primary-ci-caching.
+          # deps/ genuinely depends only on the lockfile — leave it lock-scoped.
           DEPS_KEY="mix-deps-${BEAM}-${{ hashFiles('mix.lock') }}"
-          DEV_KEY="mix-build-dev-v2-${BEAM}-${{ hashFiles('mix.lock') }}"
-          TEST_KEY="mix-build-test-v2-${BEAM}-${{ hashFiles('mix.lock') }}"
+          # _build keys carry the COMMIT SHA. They used to stop at the lockfile
+          # hash, and actions/cache never re-saves on an exact hit — so the
+          # _build cache was written once, on the first run after the lockfile
+          # changed, and then frozen. mix.lock last moved 2026-07-22, so every
+          # run since restored a _build 114 commits stale; with `use`-macro
+          # fan-out (Phoenix/Ecto) that recompiled essentially all 355 lib files
+          # ("Compiling 367 files (.ex)") on EVERY unit-tests and lint run. That
+          # is what made the job compile-bound at ~5min, and why `mix test
+          # --stale` never narrowed anything: with all of lib recompiled every
+          # test is a stale compile-dependent, so --stale ran the whole suite
+          # (measured 4081 tests under --stale vs 4081 full for the same tree).
+          #
+          # With the sha in the key every run misses, so every run SAVES a fresh
+          # _build, and the restore-key prefix below picks up the most recent one.
+          DEV_PREFIX="mix-build-dev-v2-${BEAM}-${{ hashFiles('mix.lock') }}-"
+          TEST_PREFIX="mix-build-test-v2-${BEAM}-${{ hashFiles('mix.lock') }}-"
+          DEV_KEY="${DEV_PREFIX}${{ github.sha }}"
+          TEST_KEY="${TEST_PREFIX}${{ github.sha }}"
           echo "deps=$DEPS_KEY" >> "$GITHUB_OUTPUT"
           echo "build-dev=$DEV_KEY" >> "$GITHUB_OUTPUT"
           echo "build-test=$TEST_KEY" >> "$GITHUB_OUTPUT"
+          # The fallback prefixes INCLUDE the lockfile hash on purpose. A
+          # beam-only prefix would let a restore cross a mix.lock change and
+          # reuse a _build compiled against a different dependency set, which
+          # crashes protocol consolidation on the incremental compile — the
+          # hazard the "No restore-keys" comments below were guarding against.
+          # Scoping the prefix to the lockfile keeps that guarantee while still
+          # allowing fallback to an older commit's build of the SAME deps.
+          echo "build-dev-restore=$DEV_PREFIX"   >> "$GITHUB_OUTPUT"
+          echo "build-test-restore=$TEST_PREFIX" >> "$GITHUB_OUTPUT"
 
       # runs-on/cache (SHA-pinned fork of actions/cache) stores the Elixir
       # deps/ + _build caches on the FastRaid MinIO over LAN, not GitHub's Azure
@@ -719,10 +822,17 @@ jobs:
         uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
           path: _build/dev
-          # No restore-keys: the key is mix.lock-scoped, so a restore-key prefix
-          # hit would reuse a _build compiled against a DIFFERENT dependency set
-          # after a lockfile change. Incremental compile on such a stale _build
-          # crashes protocol consolidation (FunctionClauseError in
+          restore-keys: ${{ steps.keys.outputs.build-dev-restore }}
+          # The restore prefix is LOCKFILE-SCOPED (see "Compute cache keys"), so
+          # it can only fall back to an older commit's build of the same deps —
+          # never across a mix.lock change. That preserves the guarantee the
+          # original "No restore-keys" note was after, quoted here because the
+          # hazard is real and easy to reintroduce by widening the prefix:
+          #
+          #   a restore-key prefix hit would reuse a _build compiled against a
+          #   DIFFERENT dependency set after a lockfile change. Incremental
+          #   compile on such a stale _build crashes protocol consolidation
+          #   (FunctionClauseError in
           # :elixir_erl.dynamic_form/1). A lockfile change should cold-compile.
           key: ${{ steps.keys.outputs.build-dev }}
 
@@ -731,9 +841,10 @@ jobs:
         uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
           path: _build/test
-          # No restore-keys: see the _build/dev cache above. A restore-key hit
-          # across a mix.lock change reuses a _build built against different deps
-          # and crashes protocol consolidation on the incremental compile.
+          # Lockfile-scoped restore prefix — see the _build/dev cache above for
+          # why the scoping (not the absence of restore-keys) is what keeps a
+          # cross-lockfile _build from crashing protocol consolidation.
+          restore-keys: ${{ steps.keys.outputs.build-test-restore }}
           key: ${{ steps.keys.outputs.build-test }}
 
       - name: Fetch deps (if missing or lockfile changed)
@@ -882,11 +993,9 @@ jobs:
     # trigger — the one event that MUST run this suite), and a skipped need
     # would otherwise auto-skip this job. Trade-off: a failed prebuild no
     # longer auto-skips this job either; it fails at image pull instead.
-    # !startsWith(release-please--): the release PR branch is main's tip plus a
-    # version-bump commit — main just hard-gated the identical content on its
-    # own full run, and e2e is report-only on PRs anyway. Re-running the real-
-    # Obsidian suites there is pure duplicate spend (same guard on all e2e-*).
-    if: ${{ !cancelled() && !startsWith(github.ref_name, 'release-please--') && needs.fingerprint.outputs.skip-e2e-clerk != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'clerk') }}
+    # bot-pr: release-please + Dependabot refs, defined once on the fingerprint
+    # job (see its `outputs:` for why each is excluded). Same guard on all e2e-*.
+    if: ${{ !cancelled() && needs.fingerprint.outputs.bot-pr != 'true' && needs.fingerprint.outputs.skip-e2e-clerk != 'true' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'clerk') }}
     # `heavy` restricts placement to the 2 heavy-labeled runners per VM
     # (fastraid-1/2, slowraid runner-1/2): at most two heavy e2e suites can
     # co-tenant a 14-core VM, which is within budget — the #355 starvation
@@ -1227,6 +1336,14 @@ jobs:
             echo "ERROR: Qdrant check timed out. Logs:"; cat "${MARKER_PREFIX}-qdrant.log" 2>/dev/null || true; exit 1
           fi
 
+      # test_88_mcp_conformance shells out to the pinned @mcpjam/cli via npx,
+      # so the API-only tier now needs node. The test ASSERTS npx is present
+      # rather than skipping, so if this step is ever removed the gate fails
+      # loudly instead of quietly reporting green.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
       # ------------------------------------------------------------------
       # API-only tests (absorbed from the deleted e2e-api job). Same Clerk
       # stack; needs only stack health, so it runs before the Obsidian
@@ -1244,7 +1361,6 @@ jobs:
           E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
           AUTH_PROVIDER: clerk
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
-          CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
           CI_ENGRAM_CONTAINER: ${{ env.CI_PROJECT }}-engram-1
           QDRANT_URL: http://10.0.20.201:6333
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
@@ -1325,7 +1441,6 @@ jobs:
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
           ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
-          CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
           CI_ENGRAM_CONTAINER: ${{ env.CI_PROJECT }}-engram-1
           E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
           AUTH_PROVIDER: clerk
@@ -1373,6 +1488,31 @@ jobs:
         run: |
           mkdir -p ci-artifacts
           docker compose -f ci/compose.yml -p "$CI_PROJECT" logs > ci-artifacts/docker-compose.log 2>&1
+
+          # Name the storage-full failure mode instead of leaving it as
+          # `assert 502 == 200`. Once the drive crosses MinIO's minimum free
+          # threshold it refuses every PUT with 507 XMinioStorageFull, and the
+          # only symptom the suite shows is EVERY attachment test failing 502 —
+          # which reads like an application bug. It is not.
+          #
+          # Run 31024858500 lost 5 attachment tests exactly this way while the
+          # diff under test was unrelated, and the cluster was misattributed to
+          # a dependency bump (req 0.7.1) that had nothing to do with it. The
+          # proof was already in this very artifact; nobody grepped for it.
+          #
+          # Checked HERE, not at stack bring-up: the disk is not full when the
+          # stack starts, it fills DURING the run as concurrent stacks write.
+          # A free-space probe up front reads healthy and tells you nothing --
+          # measured 12% free on a box that still 507'd mid-run.
+          #
+          # SINCE 2026-08-05 THIS POINTS AT A DIFFERENT MACHINE. MinIO is no
+          # longer a sidecar on this runner, so `df -h /` here describes a host
+          # that has nothing to do with the 507 -- it would read healthy and
+          # send you to bisect the diff, which is the exact trap this block
+          # exists to prevent. The drive that matters is FastRaid's.
+          if grep -q "XMinioStorageFull" ci-artifacts/docker-compose.log 2>/dev/null; then
+            echo "::error title=CI storage full::MinIO returned 507 XMinioStorageFull -- the CENTRAL FastRaid MinIO (10.0.20.214:9101) crossed its minimum free threshold, so every attachment PUT failed and the attachment tests report 502. This is FastRaid CAPACITY, not this runner's and not a code or dependency regression. Check FastRaid disk, not the diff. Expect every concurrent job to fail the same way."
+          fi
           cp ${MARKER_PREFIX}-*.log ci-artifacts/ 2>/dev/null || true
           # Pytest detailed log (captures DEBUG+ from all helpers)
           cp e2e/pytest-e2e.log ci-artifacts/ 2>/dev/null || true
@@ -1452,8 +1592,8 @@ jobs:
     # of this job's two pytest steps; the non-targeted step skips.
     # !cancelled(): same repository_dispatch rationale as e2e-clerk —
     # prebuild-mix skips there and must not auto-skip this suite.
-    # release-please-- guard: see e2e-clerk.
-    if: ${{ !cancelled() && !startsWith(github.ref_name, 'release-please--') && needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
+    # bot-pr guard: see the fingerprint job's `bot-pr` output.
+    if: ${{ !cancelled() && needs.fingerprint.outputs.bot-pr != 'true' && needs.fingerprint.outputs.skip-e2e-crdt != 'true' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
     runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     env:
@@ -1803,7 +1943,6 @@ jobs:
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
           AUTH_PROVIDER: local
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
-          CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
           CI_ENGRAM_CONTAINER: ${{ env.CI_PROJECT }}-engram-1
           QDRANT_URL: http://10.0.20.201:6333
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
@@ -1870,7 +2009,6 @@ jobs:
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
           ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
-          CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
           CI_ENGRAM_CONTAINER: ${{ env.CI_PROJECT }}-engram-1
           AUTH_PROVIDER: local
           E2E_ENABLE_CRDT: "true"
@@ -1968,8 +2106,8 @@ jobs:
     # ENGRAM_PLUGIN_SRC) into a bun process. Same local-auth stack, so it rides
     # the skip-e2e-crdt fingerprint signal. Minutes-bounded (each scenario < 1s).
     needs: [fingerprint, prebuild-ci-image]
-    # release-please-- guard: see e2e-clerk.
-    if: ${{ !cancelled() && !startsWith(github.ref_name, 'release-please--') && needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
+    # bot-pr guard: see the fingerprint job's `bot-pr` output.
+    if: ${{ !cancelled() && needs.fingerprint.outputs.bot-pr != 'true' && needs.fingerprint.outputs.skip-e2e-crdt != 'true' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
     runs-on: [self-hosted, linux, x64, isolated]
     timeout-minutes: 8
     env:
@@ -2072,6 +2210,14 @@ jobs:
       - name: Tear down
         if: always()
         run: |
+          # This job allocates a Qdrant collection on the SHARED SlowRaid Qdrant
+          # and, until 2026-08-05, never released it — it leaked one per run from
+          # the day the job was added. `docker compose down` does not reclaim it;
+          # the collection does not live on this runner. Same reap the other two
+          # e2e jobs do. (Attachments need no equivalent: they share one
+          # permanent bucket with server-side expiry, so there is nothing here to
+          # release — see ci/compose.yml.)
+          curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
           docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
           docker image prune -f 2>/dev/null || true
           docker volume prune -f 2>/dev/null || true
@@ -2081,11 +2227,12 @@ jobs:
     # Skip on cross-repo plugin dispatch — plugin can't regress backend ExUnit.
     # Per-job fingerprint skip (skip-unit-tests) is safe here even though a coarse
     # cache-hit was historically NOT trusted (it once let a Repo-crashing test
-    # ride a green on main): markers seed ONLY on full runs and `is-full` forces
-    # skip=false on main, so unit-tests ALWAYS executes on main and can never
-    # silently stop. On a PR it skips only when this exact
-    # elixir-src+test+migrations content already passed full on main.
-    # (PR runs are further narrowed to `mix test --stale` in the run step below.)
+    # ride a green on main): a ci-unit-tests marker means the WHOLE suite passed
+    # for this exact elixir-src+test+priv+openapi+squawk-config content — every
+    # run is a full `mix test` (the PR-only `--stale` narrowing was removed for
+    # exactly this reason), and `record()` refuses to seed off a failed or
+    # skipped job. So a skip here is a replay of a full pass on identical
+    # content, on main as much as on a PR. Content that MISSED still runs.
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-unit-tests != 'true'
     # `heavy` (2 runners per VM): this job saturates a VM's CPU for minutes.
     # On a generic runner it can land NEXT TO two heavy e2e suites and starve
@@ -2177,7 +2324,7 @@ jobs:
           path: _build/test
           key: ${{ needs.prebuild-mix.outputs.build-test-key }}
           restore-keys: |
-            mix-build-test-v2-${{ needs.prebuild-mix.outputs.beam-tag }}-
+            ${{ needs.prebuild-mix.outputs.build-test-restore }}
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
@@ -2215,19 +2362,21 @@ jobs:
           # --slowest 20 surfaces the slowest tests each run so async/serial
           # tuning stays data-driven (the suite is sync-pool-bound, not CPU-bound).
           #
-          # Phase 3: PRs run `mix test --stale` (only tests whose modules changed
-          # vs the restored _build/test manifest, plus their compile-dependents)
-          # for fast iteration; full runs (main / [ci-full] / force_full, via
-          # is-full) run the WHOLE suite as the safety net. ExUnit compile-tracking
-          # drives --stale; because main always re-validates everything, a
-          # mis-narrowed --stale set on a PR is caught at merge, never shipped.
-          if [ "${{ needs.fingerprint.outputs.is-full }}" = "true" ]; then
-            echo "::notice::Full run (is-full) — entire ExUnit suite"
-            mix test --warnings-as-errors --slowest 20
-          else
-            echo "::notice::PR run — mix test --stale (full suite runs on main)"
-            mix test --stale --warnings-as-errors --slowest 20
-          fi
+          # ALWAYS the whole suite. This used to run `mix test --stale` on PRs
+          # and the full suite only on main ("a mis-narrowed --stale set on a
+          # PR is caught at merge"). That premise died when main stopped being
+          # a forced full run: a ci-unit-tests marker has to mean "the WHOLE
+          # suite passed for this content hash", or main skipping on it would
+          # ship a merge no full run ever validated.
+          #
+          # Measured before removing: --stale runs came in at 4.1-5.3m against
+          # 5.0-5.8m for full, and one --stale run took 8.6m — LONGER than full.
+          # The suite is compile- and DB-setup-bound, not test-execution-bound
+          # (same reason --slowest exists), so --stale bought ~1min while
+          # costing the correctness premise of the entire marker system. The
+          # marker skip now saves far more than --stale ever did, because it
+          # skips the compile too.
+          mix test --warnings-as-errors --slowest 20
 
       - name: OpenAPI spec drift gate
         env:
@@ -2392,10 +2541,13 @@ jobs:
     # Skip on cross-repo plugin dispatch — plugin can't regress backend lints.
     # Per-job fingerprint skip (skip-lint) is safe even though a coarse cache-hit
     # was historically NOT trusted (it once let credo/sobelow regressions merge):
-    # markers seed ONLY on full runs and `is-full` forces skip=false on main, so
-    # lint ALWAYS executes on main. On a PR it skips only when this exact
-    # elixir-src+test+lint-config content (incl. .credo.exs/.sobelow-conf/.formatter.exs)
-    # already passed full on main.
+    # a ci-lint marker means lint passed in full for this exact
+    # elixir-src+test+lint-config content (incl. .credo.exs/.sobelow-conf/
+    # .formatter.exs/.dialyzer_ignore.exs — a loosened rule busts the hash).
+    # Skipping replays that pass on identical content, on main as much as on a
+    # PR. CAVEAT: mix_audit is time-dependent (same mix.lock, new CVE ⇒ new
+    # verdict), which no content hash can model — the 06:00 nightly is a
+    # genuine full run and bounds that exposure at 24h.
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-lint != 'true'
     # `heavy`: dialyzer is CPU+memory hungry (it crashed the BEAM outright in
     # the 2026-07-15 fully-parallel run). Same rationale as unit-tests.
@@ -2432,7 +2584,7 @@ jobs:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
-            mix-build-dev-v2-${{ needs.prebuild-mix.outputs.beam-tag }}-
+            ${{ needs.prebuild-mix.outputs.build-dev-restore }}
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
@@ -2998,7 +3150,7 @@ jobs:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
-            mix-build-dev-v2-${{ needs.prebuild-mix.outputs.beam-tag }}-
+            ${{ needs.prebuild-mix.outputs.build-dev-restore }}
 
       - name: Install deps
         if: steps.gate.outputs.proceed == 'true' && steps.cache-deps.outputs.cache-hit != 'true'
@@ -3157,12 +3309,36 @@ jobs:
         id: pg
         run: |
           docker rm -f "$PG_CONTAINER" 2>/dev/null || true
-          docker run -d --name "$PG_CONTAINER" \
-            -e POSTGRES_USER=engram \
-            -e POSTGRES_PASSWORD=engram \
-            -e POSTGRES_DB=engram_n1 \
-            -P \
-            postgres:18.4
+
+          # Same port race as the unit-tests job's ephemeral postgres, and the
+          # same fix. `-P` lets docker auto-allocate a host port, but between
+          # resolving one and binding it another runner on this shared VM can
+          # claim it, and rootless docker surfaces that as a hard failure:
+          #
+          #   RootlessKit PortManager.AddPort(): listen tcp4 0.0.0.0:32814:
+          #   bind: address already in use
+          #
+          # That is a job-level red on a PR whose migrations are fine, which is
+          # the worst kind of red: it costs a human a full investigation to
+          # learn nothing. Observed on run 30662527833. Retry up to 5 times;
+          # each attempt gets a fresh allocation.
+          for attempt in 1 2 3 4 5; do
+            if docker run -d --name "$PG_CONTAINER" \
+                -e POSTGRES_USER=engram \
+                -e POSTGRES_PASSWORD=engram \
+                -e POSTGRES_DB=engram_n1 \
+                -P \
+                postgres:18.4; then
+              break
+            fi
+            echo "Attempt $attempt: docker run failed (likely port race) — cleaning up + retrying"
+            docker rm -f "$PG_CONTAINER" 2>/dev/null || true
+            sleep 1
+            if [ "$attempt" = "5" ]; then
+              echo "::error::Postgres container failed to start after 5 attempts"
+              exit 1
+            fi
+          done
           # Wait for ready
           for i in $(seq 1 30); do
             if docker exec "$PG_CONTAINER" pg_isready -U engram >/dev/null 2>&1; then
@@ -3418,10 +3594,9 @@ jobs:
     # Skip on cross-repo plugin dispatch — Playwright targets backend's React
     # frontend, which the plugin (separate repo) cannot affect.
     # Also skip via the per-job fingerprint (skip-e2e-browser =
-    # docker-image+elixir-src+e2e-harness+frontend; forced false on full runs), or
-    # on Dependabot PRs (Phoenix webServer needs Clerk secrets Dependabot can't access).
-    # release-please-- guard: see e2e-clerk.
-    if: ${{ github.event_name != 'repository_dispatch' && !startsWith(github.ref_name, 'release-please--') && needs.fingerprint.outputs.skip-e2e-browser != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'browser') }}
+    # docker-image+elixir-src+e2e-harness+frontend; forced false on full runs).
+    # bot-pr guard: see the fingerprint job's `bot-pr` output.
+    if: ${{ github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.bot-pr != 'true' && needs.fingerprint.outputs.skip-e2e-browser != 'true' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'browser') }}
     runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     env:
@@ -3461,7 +3636,7 @@ jobs:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
-            mix-build-dev-v2-${{ needs.prebuild-mix.outputs.beam-tag }}-
+            ${{ needs.prebuild-mix.outputs.build-dev-restore }}
 
       - name: Allocate dynamic ports
         id: ports
@@ -3926,16 +4101,34 @@ jobs:
 
   # Fine-grained per-job markers (ci-<job>:<hash-job>) in LOCAL_REGISTRY — the
   # forward-looking replacement for the coarse ci-pass/ci-e2e-pass markers above
-  # (legacy record-pass retired in Phase 5). Recorded ONLY on full runs (main /
-  # [ci-full] / force_full): the whole job is gated on `is-full`, so a reduced-mode
-  # PR pass (future Phase 3 `--stale` unit, Phase 4 targeted e2e) can NEVER seed a
-  # marker. PRs consume these via the fingerprint job's skip-<job> lookup; they
-  # never produce. Each job seeds its own marker independently iff it ran to
-  # success this run; skipped/failed jobs are left unmarked. Hashes come straight
-  # from the fingerprint job (MARKER_HASH) so a recorded tag always matches the
-  # hash a later run looks up — no recompute, no BEAM-on-recorder-host dependency.
+  # (legacy record-pass retired in Phase 5).
+  #
+  # Branches now PRODUCE markers, not just consume them. This was gated on
+  # `is-full` (main only), which made the store write-only on main and
+  # read-only on branches: main seeded markers main would never read, and the
+  # squash-merge push — the exact case the ref-agnostic registry was built for
+  # — could never hit one, because nothing had ever seeded the merged tree's
+  # hash. Branch-seeds + main-consumes closes that loop.
+  #
+  # The invariant that makes seeding from a branch safe: a marker must mean
+  # "this job ran to FULL success for this content hash". Two reduced modes
+  # could violate it —
+  #   * `mix test --stale` on PRs: REMOVED (unit-tests always runs the whole
+  #     suite now; it bought ~1min and cost this invariant).
+  #   * targeted e2e (`[e2e: suite/pattern]`): still exists, so the whole job
+  #     is gated on e2e-target-suite being empty. A `pytest -k` subset must
+  #     never seed a full-hash e2e marker. Targeted runs are deliberately
+  #     non-mergeable anyway, so losing marker seeding there costs nothing.
+  # The nightly (schedule) still never seeds: its e2e results are measurement,
+  # explicitly non-gating, and tolerated-flaky (see ledger-append).
+  #
+  # Each job seeds its own marker independently iff it ran to success this run;
+  # skipped/failed jobs are left unmarked (see `record()` below). Hashes come
+  # straight from the fingerprint job (MARKER_HASH) so a recorded tag always
+  # matches the hash a later run looks up — no recompute, no
+  # BEAM-on-recorder-host dependency.
   record-job-markers:
-    if: always() && needs.fingerprint.outputs.is-full == 'true' && github.event_name != 'schedule'
+    if: always() && github.event_name != 'schedule' && needs.fingerprint.outputs.e2e-target-suite == ''
     # migration-gates is intentionally EXCLUDED: it has several early `exit 0` success
     # paths (no open PR, no phase/expand label, no new migrations) that return
     # green WITHOUT running the migration rollforward. Recording a marker off
@@ -4131,12 +4324,13 @@ jobs:
 
           # Check whether this version already exists in GHCR.
           #
-          # Policy:
-          #   exists + cache-hit                     → SKIP build, jump to
+          # Policy (keyed on whether the DEPLOYABLE bytes changed, never on
+          # fingerprint cache state — see the NOTE at the branch below):
+          #   exists + nothing deployable changed    → SKIP build, jump to
           #                                            deploy (TF-driven push
           #                                            to .github/** or any
           #                                            file outside the
-          #                                            BACKEND_HASH input set
+          #                                            deployable path set
           #                                            — content unchanged, so
           #                                            the existing image IS
           #                                            the right one and no
@@ -4149,7 +4343,7 @@ jobs:
           #                                            IP-allowlist NAT
           #                                            issue, transient daemon
           #                                            outage)
-          #   first-attempt + exists + NOT cache-hit
+          #   first-attempt + exists
           #     + deployable changed                 → BUILD + PUSH anyway,
           #                                            keyed on sha-<7>.
           #                                            Under release-please,
@@ -4186,7 +4380,24 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin > /dev/null
           IMAGE_EXISTS=false
           if docker manifest inspect "${GHCR_IMAGE}:${VERSION}" > /dev/null 2>&1; then
-            if [ "${{ github.run_attempt }}" = "1" ] && [ "$CACHE_HIT_BOTH" != "true" ] && [ -n "$DEPLOYABLE" ]; then
+            # NOTE: deliberately does NOT consult CACHE_HIT_BOTH. It used to,
+            # and that made this branch unreachable for every normal merge:
+            # the fingerprints are content hashes and a squash-merge preserves
+            # the tree, so main's hash is byte-identical to the PR head that
+            # just went green and seeded the marker. Every green PR therefore
+            # poisoned its own merge's deploy — staging only ever moved on
+            # release cuts. Proven on main@2ad28658: backend/e2e hashes matched
+            # PR fix/cimd-spec-validation@fa775bbe exactly, and that PR's own
+            # record-pass wrote the markers. (The marker store is the FastRaid
+            # registry, which is ref-agnostic BY DESIGN — actions/cache ref
+            # scoping does not apply and cannot save us here.)
+            #
+            # $DEPLOYABLE already answers the real question — "did the shipped
+            # bytes change" — as a git diff over exactly the deployable path
+            # set. CACHE_HIT_BOTH answered a different question ("did these
+            # tests pass before") and overrode the right answer. A CI/docs-only
+            # merge still skips, because DEPLOYABLE is empty for it.
+            if [ "${{ github.run_attempt }}" = "1" ] && [ -n "$DEPLOYABLE" ]; then
               echo "::notice::Version ${VERSION} already exists in GHCR and deployable paths changed in this merge. mix.exs versions are sticky between release-please cuts (only release-please bumps it), so this is expected — building anyway, keyed on sha-${SHA_SHORT}."
               echo "::group::Deployable paths changed (HEAD~1..HEAD)"; echo "$DEPLOYABLE"; echo "::endgroup::"
             else
@@ -4206,6 +4417,7 @@ jobs:
             echo "version=$VERSION"
             echo "ghcr_image=$GHCR_IMAGE"
             echo "sha_short=$SHA_SHORT"
+            echo "deployable=$([ -n "$DEPLOYABLE" ] && echo true || echo false)"
             echo "sha_tag=$SHA_TAG"
             echo "vtag=$VTAG"
             echo "image_exists=$IMAGE_EXISTS"
@@ -4280,6 +4492,36 @@ jobs:
           echo "$HOME/.aws-cli/bin" >> "$GITHUB_PATH"
           "$BIN" --version
 
+          # Reap superseded installs. `aws/install --update` creates a NEW
+          # versioned directory under v2/ and repoints `current` — it never
+          # removes the old one. Seven runner services share one $HOME on the
+          # SlowRaid VM, so the `[ ! -x "$BIN" ]` guard above does not prevent
+          # concurrent first-installs racing, and each race leaves another
+          # 268MB directory behind forever.
+          #
+          # By 2026-08-05 that was 23 versions / 6.0GB on a 76GB root with no
+          # free LVM extents, and it took the whole runner pool down twice in
+          # one day with "No space left on device" — surfacing as unrelated red
+          # CI, since all seven runners share the filesystem.
+          #
+          # Keeps the newest two: `current` plus one for rollback margin.
+          # Failures here must never fail the build — this is hygiene, not a
+          # dependency of the step.
+          if [ -d "$HOME/.aws-cli/v2" ]; then
+            # Keep set = newest two by version sort, PLUS whatever `current`
+            # actually resolves to. The union matters: if `current` ever points
+            # at something that is not among the newest two, a pure
+            # version-sort would delete the live install out from under the
+            # symlink. `[0-9]*` never matches the `current` symlink itself.
+            keep="$(ls -d "$HOME"/.aws-cli/v2/[0-9]* 2>/dev/null | sort -V | tail -2)"
+            live="$(readlink -f "$HOME/.aws-cli/v2/current" 2>/dev/null || true)"
+            [ -n "$live" ] && keep="$keep
+          $live"
+            for d in "$HOME"/.aws-cli/v2/[0-9]*; do
+              printf '%s\n' "$keep" | grep -qxF "$d" || rm -rf "$d" || true
+            done
+          fi
+
       - name: Configure AWS credentials (OIDC)
         if: steps.version.outputs.image_exists != 'true'
         # v6 (Node 24). v4 used Node 20, which GH deprecates 2026-09-16.
@@ -4332,6 +4574,12 @@ jobs:
           build-args: |
             VITE_SENTRY_DSN=${{ secrets.VITE_SENTRY_DSN }}
             VITE_GIT_SHA=${{ github.sha }}
+            # Backend counterpart to VITE_GIT_SHA. Baked into the image so
+            # /api/health can report what code is actually running: `version`
+            # reads mix.exs, which release-please keeps sticky between cuts,
+            # so it never moves on a non-release deploy. Same full 40-char
+            # SHA the frontend and Sentry use, so all three agree.
+            RELEASE_SHA=${{ github.sha }}
             SENTRY_ORG=${{ vars.SENTRY_ORG }}
             SENTRY_PROJECT=${{ vars.SENTRY_PROJECT_FRONTEND }}
             HEX_MIRROR=${{ env.HEX_MIRROR }}
@@ -4417,11 +4665,17 @@ jobs:
       # step outputs between jobs without explicit `outputs:` plumbing.
       # Now both phases share `steps.version.outputs.version` directly.
       #
-      # Runs on BOTH the fresh-build path AND the cache-hit/rerun path:
-      # a TF-driven push to `.github/**` (image unchanged, bump is skipped
-      # by the early version step) still needs to fire an infra PR for
-      # the deploy chain to advance. Hence the bump steps below don't
-      # gate on `image_exists`.
+      # Gated on the sha tag being pullable (see "Check staging image tag is
+      # publishable"), NOT on `image_exists`. The rerun-recovery path must
+      # still fire an infra PR even though it skipped the build, because
+      # attempt 1 already pushed the tag — keying on the tag's existence
+      # rather than on whether THIS attempt built it covers that case and the
+      # docs-only case in one check.
+      #
+      # This used to write `steps.version.outputs.version`, which is why
+      # staging never moved between releases: release-please owns mix.exs and
+      # keeps it sticky, so every non-release merge rewrote the same string,
+      # TF saw no diff, and tf-apply had nothing to apply.
       #
       # `tf-apply` in engram-infra is the SOLE image-mover. The legacy
       # `/deploy` endpoint stays live as break-glass only; CI no longer
@@ -4438,7 +4692,40 @@ jobs:
       #   - pull-requests: read & write  (open PR)
       # Adjust at https://github.com/organizations/engram-app/settings/apps/engram-infra-tf
       # if a step below 403s.
+      # Staging pins a SHA, so that sha tag must actually be pullable from GHCR
+      # before TF points at it — otherwise the bump strands staging on a tag
+      # that does not exist. Three cases:
+      #   tag present                  → bump (normal deployable merge, and the
+      #                                  `gh run rerun` recovery path where
+      #                                  attempt 1 already pushed it)
+      #   absent + nothing deployable  → skip quietly. A docs/CI-only merge
+      #                                  publishes no image and has nothing to
+      #                                  deploy, so staging should not move.
+      #   absent + deployable changed  → HARD FAIL. The build/push was supposed
+      #                                  to run and did not; failing loudly
+      #                                  beats silently leaving staging behind,
+      #                                  which is the exact class of bug this
+      #                                  whole change exists to fix.
+      - name: Check staging image tag is publishable
+        id: staging-tag
+        env:
+          GHCR_IMAGE: ${{ steps.version.outputs.ghcr_image }}
+          SHA_SHORT: ${{ steps.version.outputs.sha_short }}
+          DEPLOYABLE: ${{ steps.version.outputs.deployable }}
+        run: |
+          if docker manifest inspect "${GHCR_IMAGE}:${SHA_SHORT}" >/dev/null 2>&1; then
+            echo "bump=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::staging will be pinned to ${SHA_SHORT}"
+          elif [ "$DEPLOYABLE" != "true" ]; then
+            echo "::notice::no deployable change and no ${SHA_SHORT} image; staging bump skipped"
+            echo "bump=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::deployable paths changed but ${GHCR_IMAGE}:${SHA_SHORT} is not in GHCR — the image publish did not happen"
+            exit 1
+          fi
+
       - name: Generate engram-infra App installation token
+        if: steps.staging-tag.outputs.bump == 'true'
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
@@ -4448,6 +4735,7 @@ jobs:
           repositories: engram-infra
 
       - name: Checkout engram-infra
+        if: steps.staging-tag.outputs.bump == 'true'
         uses: actions/checkout@v7
         with:
           repository: engram-app/engram-infra
@@ -4464,9 +4752,20 @@ jobs:
           persist-credentials: false
 
       - name: Rewrite image_tag defaults in variables.tf
+        if: steps.staging-tag.outputs.bump == 'true'
         id: rewrite
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          # The bare 7-char commit sha, NOT mix.exs's version. release-please
+          # owns mix.exs and it is deliberately sticky between release cuts, so
+          # bumping to $VERSION wrote the SAME string on every non-release
+          # merge — TF saw no diff, the infra PR was empty, tf-apply never
+          # fired, and staging could only ever move on a release. Prod already
+          # tracks a sha (`sha-*` in ECR); staging was the odd one out.
+          #
+          # Must be sha_short (bare) and not sha_tag (`sha-<7>`): the GHCR tag
+          # list this job pushes is latest/$VERSION/$SHA_SHORT, while `sha-<7>`
+          # is the ECR-side form. Staging pulls from GHCR.
+          IMAGE_TAG: ${{ steps.version.outputs.sha_short }}
         run: |
           # Python rewrite anchored on the variable block names — robust
           # against other `default = ` lines being added later in the file.
@@ -4486,7 +4785,7 @@ jobs:
           import re
 
           path = "engram-infra/main/envs/staging-fastraid/variables.tf"
-          version = os.environ["VERSION"]
+          image_tag = os.environ["IMAGE_TAG"]
           gh_output = os.environ["GITHUB_OUTPUT"]
 
           if not os.path.exists(path):
@@ -4500,16 +4799,23 @@ jobs:
               r'(variable\s+"engram_(?:saas|selfhost)_image_tag"[^}]*?default\s*=\s*)"[^"]+"',
               re.DOTALL,
           )
-          new, count = pattern.subn(rf'\g<1>"{version}"', text)
+          new, count = pattern.subn(rf'\g<1>"{image_tag}"', text)
           if count not in (1, 2):
               raise SystemExit(
                   f"expected 1 or 2 variable blocks to update, got {count}; "
                   "variables.tf shape changed — adjust the regex"
               )
+          if new == text:
+              # Same sha already pinned — a re-run on this commit, not a new
+              # merge. Emitting bumped=false keeps us from opening an empty PR.
+              print(f"::notice::staging already pinned to {image_tag}; no bump needed")
+              with open(gh_output, "a") as f:
+                  f.write("bumped=false\n")
+              raise SystemExit(0)
           open(path, "w").write(new)
           with open(gh_output, "a") as f:
               f.write("bumped=true\n")
-          print(f"rewrote {count} block(s) to {version}")
+          print(f"rewrote {count} block(s) to {image_tag}")
           PY
 
           if [ -f engram-infra/main/envs/staging-fastraid/variables.tf ]; then
@@ -4535,16 +4841,16 @@ jobs:
           # with "Commits must have verified signatures."
           sign-commits: true
           commit-message: |
-            chore(staging-fastraid): bump engram image to ${{ steps.version.outputs.version }}
+            chore(staging-fastraid): bump engram image to ${{ steps.version.outputs.sha_short }}
 
             Automated bump from engram-app/Engram release.
-          title: "chore(staging-fastraid): bump engram image to ${{ steps.version.outputs.version }}"
+          title: "chore(staging-fastraid): bump engram image to ${{ steps.version.outputs.sha_short }}"
           body: |
             Automated bump from engram-app/Engram release.
 
             Source commit: ${{ github.repository }}@${{ github.sha }}
 
-            Bumps `engram_saas_image_tag` (and `engram_selfhost_image_tag` once selfhost is imported into TF via Path E.3b) from current default to **${{ steps.version.outputs.version }}**.
+            Bumps `engram_saas_image_tag` (and `engram_selfhost_image_tag` once selfhost is imported into TF via Path E.3b) from current default to **${{ steps.version.outputs.sha_short }}**.
 
             ## What this triggers
 

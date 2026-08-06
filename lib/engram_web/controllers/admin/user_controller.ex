@@ -5,6 +5,8 @@ defmodule EngramWeb.Admin.UserController do
   alias Engram.Accounts.User
   alias Engram.Repo
 
+  action_fallback EngramWeb.FallbackController
+
   def index(conn, _params) do
     json(conn, %{users: Enum.map(Accounts.list_users(), &admin_view/1)})
   end
@@ -22,7 +24,7 @@ defmodule EngramWeb.Admin.UserController do
 
     case result do
       {:ok, u} -> json(conn, %{user: admin_view(u)})
-      {:error, :last_admin} -> conn |> put_status(409) |> json(%{error: "last_admin"})
+      {:error, :last_admin} = error -> error
       {:error, :no_op} -> conn |> put_status(422) |> json(%{error: "no_op"})
       {:error, :invalid_role} -> conn |> put_status(422) |> json(%{error: "invalid_role"})
       {:error, _} -> conn |> put_status(422) |> json(%{error: "update_failed"})
@@ -32,15 +34,12 @@ defmodule EngramWeb.Admin.UserController do
   def delete(conn, %{"id" => id}) do
     user = Repo.get!(User, id, skip_tenant_check: true)
 
-    case Accounts.soft_delete_user(user) do
-      {:ok, deleted} ->
-        # Spec §7: purge vault data, not just the user row.
-        Accounts.purge_user_vaults(deleted)
-        # 200 + JSON (not 204): the frontend `api.del` parses the body.
-        json(conn, %{ok: true})
-
-      {:error, :last_admin} ->
-        conn |> put_status(409) |> json(%{error: "last_admin"})
+    # {:error, :last_admin} falls through to the action_fallback (409).
+    with {:ok, deleted} <- Accounts.soft_delete_user(user) do
+      # Spec §7: purge vault data, not just the user row.
+      Accounts.purge_user_vaults(deleted)
+      # 200 + JSON (not 204): the frontend `api.del` parses the body.
+      json(conn, %{ok: true})
     end
   end
 
@@ -51,7 +50,13 @@ defmodule EngramWeb.Admin.UserController do
       {:ok, {raw, _tok}} ->
         conn
         |> put_status(:created)
-        |> json(%{token: raw, url: "#{conn.scheme}://#{conn.host}/reset-password?token=#{raw}"})
+        # Canonical URL, never the connection. `conn.scheme` is :http on every
+        # saas deployment (TLS terminates at the edge), which would emit a
+        # plaintext link carrying this live token in its query string; and
+        # `conn.host` is whichever backend host the admin happened to reach —
+        # `api.engram.page` serves no SPA, so that link 404s too. Same source
+        # the device-flow `verification_url` and account emails already use.
+        |> json(%{token: raw, url: EngramWeb.Endpoint.url() <> "/reset-password?token=#{raw}"})
 
       {:error, _cs} ->
         conn |> put_status(422) |> json(%{error: "reset_issue_failed"})

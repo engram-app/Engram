@@ -15,9 +15,8 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudget do
   `:unlimited` via `Billing.effective_limit/2` — no rate-limiter call.
   """
 
-  import Plug.Conn
-
   alias Engram.Billing
+  alias EngramWeb.Plugs.Halt
 
   @default_period_ms 1_000
 
@@ -61,16 +60,6 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudget do
   end
 
   defp deny(conn, limit) do
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(
-      429,
-      Jason.encode!(%{
-        error: "api_rps_exceeded",
-        limit: limit,
-        period_ms: period_ms()
-      })
-    )
-    |> halt()
+    Halt.json(conn, 429, %{error: "api_rps_exceeded", limit: limit, period_ms: period_ms()})
   end
 end

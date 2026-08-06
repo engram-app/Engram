@@ -12,9 +12,8 @@ defmodule EngramWeb.Plugs.EnforcePatCreation do
   `{"error": "pat_disabled_on_free", "upgrade_url": "/#settings/billing"}`.
   """
 
-  import Plug.Conn
-
   alias Engram.Billing
+  alias EngramWeb.Plugs.Halt
 
   @upgrade_url "/#settings/billing"
 
@@ -26,16 +25,7 @@ defmodule EngramWeb.Plugs.EnforcePatCreation do
         conn
 
       _ ->
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(
-          402,
-          Jason.encode!(%{
-            error: "pat_disabled_on_free",
-            upgrade_url: @upgrade_url
-          })
-        )
-        |> halt()
+        Halt.json(conn, 402, %{error: "pat_disabled_on_free", upgrade_url: @upgrade_url})
     end
   end
 

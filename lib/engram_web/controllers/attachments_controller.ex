@@ -7,6 +7,8 @@ defmodule EngramWeb.AttachmentsController do
   alias Engram.Billing
   alias Engram.Storage.MimeWhitelist
 
+  action_fallback EngramWeb.FallbackController
+
   operation(:upload,
     operation_id: "attachments-upload",
     summary: "Upload an attachment (base64 JSON)",
@@ -129,8 +131,17 @@ defmodule EngramWeb.AttachmentsController do
       {:error, {:storage, _reason}} ->
         conn |> put_status(502) |> json(%{error: "failed to upload to storage backend"})
 
-      {:error, changeset} ->
-        conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
+      # Defense in depth: the context now enforces the whitelist too. The
+      # pre-check above answers first on the HTTP path; these keep a context
+      # rejection from falling into the changeset clause below.
+      {:error, {:mime_not_allowed, mime}} ->
+        conn |> put_status(415) |> json(%{error: "mime_not_allowed", mime_type: mime})
+
+      {:error, {:extension_not_allowed, ext}} ->
+        conn |> put_status(415) |> json(%{error: "extension_not_allowed", extension: ext})
+
+      {:error, %Ecto.Changeset{}} = error ->
+        error
     end
   end
 
@@ -174,11 +185,8 @@ defmodule EngramWeb.AttachmentsController do
           nil
         )
 
-      {:error, :conflict} ->
-        conn |> put_status(409) |> json(%{error: "conflict"})
-
-      {:error, :not_found} ->
-        conn |> put_status(404) |> json(%{error: "not_found"})
+      {:error, reason} = error when reason in [:conflict, :not_found] ->
+        error
     end
   end
 
@@ -232,14 +240,17 @@ defmodule EngramWeb.AttachmentsController do
 
             json(conn, body)
 
+          # item_path shapes stay inline: the fallback's {:conflict, id}/
+          # {:not_found, id} clauses render item_id, and these carry file
+          # PATHS. Only the terminal 500 falls through.
           {:error, {:conflict, p}} ->
             conn |> put_status(409) |> json(%{error: "conflict", item_path: p})
 
           {:error, {:not_found, p}} ->
             conn |> put_status(404) |> json(%{error: "not_found", item_path: p})
 
-          {:error, _} ->
-            conn |> put_status(500) |> json(%{error: "internal"})
+          {:error, _} = error ->
+            error
         end
     end
   end
@@ -269,16 +280,21 @@ defmodule EngramWeb.AttachmentsController do
   def batch_delete(conn, %{"paths" => paths}) when is_list(paths) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
-    # batch_delete/3 is total — its @spec returns {:ok, %{deleted: _}} only.
-    {:ok, %{deleted: n}} = Attachments.batch_delete(user, vault, paths)
-    body = %{deleted: n}
 
-    Engram.Idempotency.remember(conn.assigns.current_user, conn.assigns.idempotency_key, %{
-      status: 200,
-      body: body
-    })
+    case Attachments.batch_delete(user, vault, paths) do
+      {:ok, %{deleted: n}} ->
+        body = %{deleted: n}
 
-    json(conn, body)
+        Engram.Idempotency.remember(conn.assigns.current_user, conn.assigns.idempotency_key, %{
+          status: 200,
+          body: body
+        })
+
+        json(conn, body)
+
+      {:error, :batch_too_large} ->
+        conn |> put_status(422) |> json(%{error: "batch_too_large", max: 500})
+    end
   end
 
   def batch_delete(conn, _params) do
@@ -431,54 +447,30 @@ defmodule EngramWeb.AttachmentsController do
 
   operation(:changes,
     operation_id: "attachments-changes",
-    summary: "List attachment changes since a timestamp",
+    summary: "Retired timestamp change feed",
+    deprecated: true,
     description:
-      "Returns attachment changes (including deletions, flagged via `deleted`) updated at or " <>
-        "after the `since` ISO 8601 timestamp, plus a `server_time` watermark for the next poll. " <>
-        "A missing or invalid `since` returns 400.",
+      "Retired. The timestamp-based attachment change feed has been removed; this endpoint " <>
+        "always returns 410 Gone. Clients sync via the CRDT sync socket and `GET /sync/manifest` " <>
+        "(current plugin versions already do).",
     tags: ["Attachments"],
-    parameters: [
-      since: [in: :query, type: :string, required: true, description: "ISO 8601 timestamp cursor"]
-    ],
     responses: [
-      ok: {"Changes", "application/json", Schemas.AttachmentChangesResponse},
-      bad_request: {"Missing/invalid since", "application/json", Schemas.MessageError}
+      gone: {"Feed retired", "application/json", Schemas.Error}
     ]
   )
 
-  def changes(conn, %{"since" => since_str}) do
-    user = conn.assigns.current_user
-    vault = conn.assigns.current_vault
-
-    case DateTime.from_iso8601(since_str) do
-      {:ok, since, _offset} ->
-        {:ok, changes} = Attachments.list_changes(user, vault, since)
-
-        json(conn, %{
-          changes:
-            Enum.map(changes, fn c ->
-              %{
-                path: c.path,
-                mime_type: c.mime_type,
-                size_bytes: c.size_bytes,
-                mtime: c.mtime,
-                updated_at: c.updated_at,
-                deleted: c.deleted_at != nil
-              }
-            end),
-          server_time: DateTime.utc_now() |> DateTime.to_iso8601()
-        })
-
-      {:error, _} ->
-        conn |> put_status(400) |> json(%{error: "invalid ISO 8601 timestamp"})
-    end
-  end
-
+  # Retired timestamp feed (zero authenticated prod traffic). The route stays
+  # so old clients get an explicit 410 instead of a generic 404.
   def changes(conn, _params) do
-    conn |> put_status(400) |> json(%{error: "since parameter is required"})
+    conn
+    |> put_status(410)
+    |> json(%{
+      error: "gone",
+      message:
+        "The timestamp change feed was removed. Sync via the CRDT sync socket and " <>
+          "/sync/manifest (current plugin versions already do)."
+    })
   end
-
-  defp format_errors(changeset), do: EngramWeb.format_errors(changeset)
 
   # Types safe to render inline in the browser on the API origin. Raster images
   # and PDFs are inert; SVG (script via <script>) and HTML/XML (script via

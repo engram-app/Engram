@@ -170,25 +170,25 @@ def test_vault_b_notes_not_visible_from_vault_a(vault_setup):
     assert note is None, "ISOLATION BREACH: Vault A can see vault B's note!"
 
 
-def test_vault_a_changes_isolated(vault_setup):
-    """GET /notes/changes from vault A should not include vault B notes."""
+def test_vault_a_manifest_isolated(vault_setup):
+    """GET /sync/manifest from vault A should not include vault B notes."""
     api_a = vault_setup["api_vault_a"]
 
-    changes = api_a.get_changes("2000-01-01T00:00:00Z")
-    paths = [c["path"] for c in changes.get("changes", [])]
+    manifest = api_a.get_manifest()
+    paths = [n["path"] for n in manifest.get("notes", [])]
     assert "E2E/VaultB-Secret.md" not in paths, (
-        "ISOLATION BREACH: Vault A changes include vault B note"
+        "ISOLATION BREACH: Vault A manifest includes vault B note"
     )
 
 
-def test_vault_b_changes_isolated(vault_setup):
-    """GET /notes/changes from vault B should not include vault A notes."""
+def test_vault_b_manifest_isolated(vault_setup):
+    """GET /sync/manifest from vault B should not include vault A notes."""
     api_b = vault_setup["api_vault_b"]
 
-    changes = api_b.get_changes("2000-01-01T00:00:00Z")
-    paths = [c["path"] for c in changes.get("changes", [])]
+    manifest = api_b.get_manifest()
+    paths = [n["path"] for n in manifest.get("notes", [])]
     assert "E2E/VaultA-Secret.md" not in paths, (
-        "ISOLATION BREACH: Vault B changes include vault A note"
+        "ISOLATION BREACH: Vault B manifest includes vault A note"
     )
 
 

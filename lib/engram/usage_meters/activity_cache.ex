@@ -17,17 +17,11 @@ defmodule Engram.UsageMeters.ActivityCache do
   the authoritative DB read instead of failing the request.
   """
 
-  use GenServer
-
-  @table :engram_activity_cache
+  use Engram.Cache.NodeLocalEts, table: :engram_activity_cache
 
   # Canonical home of the activity-stamp debounce window. BumpActivity reads it
   # via debounce_seconds/0 so the plug's debounce stays in sync.
   @debounce_seconds 3600
-
-  def start_link(_opts) do
-    GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
-  end
 
   @doc "The activity-stamp debounce window, in seconds (single source of truth)."
   # No @spec: the body returns a compile-time literal, so Dialyzer's success
@@ -36,39 +30,13 @@ defmodule Engram.UsageMeters.ActivityCache do
   def debounce_seconds, do: @debounce_seconds
 
   @spec get(user_id :: Ecto.UUID.t()) :: {:ok, DateTime.t()} | :miss
-  def get(user_id), do: ets_get(user_id)
-
-  @spec put(user_id :: Ecto.UUID.t(), last_active_at :: DateTime.t()) :: :ok
-  def put(user_id, %DateTime{} = last_active_at), do: ets_put(user_id, last_active_at)
-
-  defp ets_get(user_id) do
-    case :ets.lookup(@table, user_id) do
+  def get(user_id) do
+    case ets_lookup(user_id) do
       [{^user_id, %DateTime{} = ts}] -> {:ok, ts}
       [] -> :miss
     end
-  rescue
-    # Table absent (owner crashed/not yet started) → degrade to the DB path.
-    ArgumentError -> :miss
   end
 
-  defp ets_put(user_id, %DateTime{} = last_active_at) do
-    :ets.insert(@table, {user_id, last_active_at})
-    :ok
-  rescue
-    ArgumentError -> :ok
-  end
-
-  @impl true
-  def init(:ok) do
-    _ =
-      :ets.new(@table, [
-        :named_table,
-        :public,
-        :set,
-        read_concurrency: true,
-        write_concurrency: true
-      ])
-
-    {:ok, %{}}
-  end
+  @spec put(user_id :: Ecto.UUID.t(), last_active_at :: DateTime.t()) :: :ok
+  def put(user_id, %DateTime{} = last_active_at), do: ets_insert({user_id, last_active_at})
 end

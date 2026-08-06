@@ -71,7 +71,9 @@ const baseObs: import("../api/queries").Connection = {
 	connected_at: "2026-05-30T00:00:00Z",
 	first_user_agent: null,
 	first_ip: null,
+	redirect_uri: null,
 	redirect_uris: [],
+	cimd_url: null,
 };
 
 const basePat: import("../api/queries").Connection = {
@@ -91,7 +93,9 @@ const basePat: import("../api/queries").Connection = {
 	connected_at: "2026-05-30T00:00:00Z",
 	first_user_agent: null,
 	first_ip: null,
+	redirect_uri: null,
 	redirect_uris: [],
+	cimd_url: null,
 };
 
 const baseMcp: import("../api/queries").Connection = {
@@ -111,7 +115,9 @@ const baseMcp: import("../api/queries").Connection = {
 	connected_at: "2026-05-30T00:00:00Z",
 	first_user_agent: "Claude/1.2.0",
 	first_ip: "1.2.3.4",
+	redirect_uri: null,
 	redirect_uris: ["http://localhost:3000/callback"],
+	cimd_url: null,
 };
 
 // ── Render helper ─────────────────────────────────────────────
@@ -188,6 +194,82 @@ describe("ConnectionsPage", () => {
 		renderPage();
 
 		expect(screen.getByText("Some Unknown Client")).toBeInTheDocument();
+	});
+
+	// CIMD is the whole point of #1148: a loopback client CAN be verified, because
+	// the proof is a document at a domain the vendor owns rather than where the
+	// sign-in code lands. The copy must say that, not the redirect story — Claude
+	// Code redirects to localhost, so "redirects to a domain the vendor owns"
+	// would be plainly false.
+	it("explains a CIMD client's identity by its published document, not its redirect", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...baseMcp,
+			slug: "claude_code",
+			verified: true,
+			cimd_url: "https://claude.ai/.well-known/oauth-client",
+			redirect_uri: null,
+			redirect_uris: ["http://localhost:62184/callback"],
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText(/publishes its identity at a domain it owns/iu)).toBeInTheDocument();
+		expect(screen.queryByText(/sign-in redirects to a domain/iu)).toBeNull();
+		expect(screen.queryByText(/^unverified$/iu)).toBeNull();
+		expect(screen.queryByText(/self-reported/iu)).toBeNull();
+	});
+
+	// `verified` is the ONLY gate on claiming verification; cimd_url merely picks
+	// which proof to name. Branching on cimd_url alone would restate the backend's
+	// verification rule in TypeScript with nothing keeping them in sync, so a
+	// loosened SsrfGuard could have the UI assert a proof the server never granted.
+	// This state should be unreachable today — that is exactly why it is pinned.
+	it("never claims verification from cimd_url alone when the server says unverified", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...baseMcp,
+			slug: "claude_code",
+			verified: false,
+			cimd_url: "https://claude.ai/.well-known/oauth-client",
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.queryByText(/^verified\./iu)).toBeNull();
+		expect(screen.queryByText(/publishes its identity/iu)).toBeNull();
+		expect(screen.getByText(/self-reported/iu)).toBeInTheDocument();
+	});
+
+	// A redirect-verified client keeps the redirect wording. If both branches ever
+	// collapse to one string, one of the two will be a lie.
+	it("keeps the redirect wording for a client verified by its redirect host", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...baseMcp,
+			slug: "claude",
+			verified: true,
+			cimd_url: null,
+			redirect_uri: null,
+			redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText(/sign-in redirects to a domain the vendor owns/iu)).toBeInTheDocument();
+	});
+
+	// The URL is the client's public identifier and, unlike an opaque UUID, the
+	// user can check it by visiting it.
+	it("shows the CIMD URL as the identifier instead of the internal uuid", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...baseMcp,
+			client_id: "3f2b9c14-0000-4000-8000-000000000000",
+			verified: true,
+			cimd_url: "https://claude.ai/.well-known/oauth-client",
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText("https://claude.ai/.well-known/oauth-client")).toBeInTheDocument();
+		expect(screen.queryByText("3f2b9c14-0000-4000-8000-000000000000")).toBeNull();
 	});
 
 	it("still labels an unrecognized client unverified", () => {

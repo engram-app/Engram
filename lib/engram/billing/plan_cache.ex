@@ -14,6 +14,8 @@ defmodule Engram.Billing.PlanCache do
   read reloads from the DB.
   """
 
+  use Engram.Cache.PersistentTerm
+
   import Ecto.Query
   alias Engram.Billing.Plan
   alias Engram.Repo
@@ -23,23 +25,10 @@ defmodule Engram.Billing.PlanCache do
   miss. An unknown plan id resolves to an empty map (no limits).
   """
   @spec limits(plan_id :: Ecto.UUID.t()) :: map()
-  def limits(plan_id) do
-    case :persistent_term.get(key(plan_id), :__miss__) do
-      :__miss__ ->
-        loaded = load(plan_id)
-        :persistent_term.put(key(plan_id), loaded)
-        loaded
-
-      cached ->
-        cached
-    end
-  end
+  def limits(plan_id), do: pt_fetch(plan_id, fn -> load(plan_id) end)
 
   @spec invalidate(plan_id :: Ecto.UUID.t()) :: :ok
-  def invalidate(plan_id) do
-    _ = :persistent_term.erase(key(plan_id))
-    :ok
-  end
+  def invalidate(plan_id), do: pt_erase(plan_id)
 
   @doc """
   Drops every cached plan. Call after a bulk plan-limit change (e.g. re-running
@@ -47,13 +36,7 @@ defmodule Engram.Billing.PlanCache do
   cold cache, so this is only needed when limits change without a restart.
   """
   @spec invalidate_all() :: :ok
-  def invalidate_all do
-    for {{__MODULE__, _plan_id} = k, _v} <- :persistent_term.get() do
-      :persistent_term.erase(k)
-    end
-
-    :ok
-  end
+  def invalidate_all, do: pt_erase_all()
 
   defp load(plan_id) do
     case Repo.one(
@@ -67,6 +50,4 @@ defmodule Engram.Billing.PlanCache do
       _ -> %{}
     end
   end
-
-  defp key(plan_id), do: {__MODULE__, plan_id}
 end

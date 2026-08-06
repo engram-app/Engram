@@ -78,7 +78,31 @@ config :engram,
          #
          # Raising the checkout timeout instead would only lengthen the queue wait —
          # it hides the contention rather than removing it.
-         pool_size: System.schedulers_online() * 2 + 10
+         pool_size: System.schedulers_online() * 2 + 10,
+
+         # A DIFFERENT mechanism from the pool sizing above, and the pool_size
+         # knob cannot help it: processes a test spawns do not take their own
+         # connection, they share the OWNER's single checked-out one. So a batch
+         # that fans out to N processes (crdt_create_batch → one crdt_doc process
+         # per entry) serializes all N transactions through one connection, and
+         # queueing there is the designed behaviour rather than a shortage.
+         #
+         # DBConnection's defaults (queue_target 50ms / queue_interval 1000ms)
+         # are a PRODUCTION backpressure heuristic: once waits exceed the target
+         # it shirks requests instead of queueing them, so an overloaded pool
+         # sheds load rather than stalling. Against a shared sandbox connection
+         # that heuristic has nothing useful to shed — under full-suite load the
+         # honest serialization wait crosses 50ms and entries fail with
+         # "connection not available and request was dropped from queue after
+         # ~101ms", which surfaces as a flaky assertion about batch results.
+         #
+         # Verified as the mechanism, not a guess: forcing queue_target: 8
+         # reproduces that exact error with no load at all.
+         #
+         # Deliberately still bounded — the 15s checkout timeout is untouched, so
+         # a genuine deadlock or a leaked connection still fails the run.
+         queue_target: 5_000,
+         queue_interval: 30_000
        )
 
 # We don't run a server during test. If one is required,
@@ -140,6 +164,12 @@ config :engram, :paddle_pro_monthly_price_id, "pri_pro_monthly_test"
 config :engram, :paddle_pro_annual_price_id, "pri_pro_annual_test"
 config :engram, :paddle_env, "sandbox"
 config :engram, :paddle_client, Engram.Paddle.ClientMock
+
+# CIMD document transport. The mock keeps the CIMD policy tests (client_id
+# binding, TTL, stale retention, first-contact race) off the network; the real
+# transport is exercised directly against a local server in
+# cimd_http_fetcher_test.exs, and the SSRF guard has its own suite.
+config :engram, :cimd_fetcher, Engram.OAuth.Cimd.FetcherMock
 
 # Clerk webhook — svix-style HMAC signing. Secret is base64 of "clerk-test-secret"
 # (prefix `whsec_` is stripped before decoding per svix spec).

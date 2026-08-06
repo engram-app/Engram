@@ -9,6 +9,7 @@ defmodule Engram.Notes do
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Links
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
 
@@ -29,7 +30,7 @@ defmodule Engram.Notes do
   alias Engram.Sync.Broadcast
   alias Engram.Telemetry
   alias Engram.UsageMeters
-  alias Engram.Workers.{DeleteNoteIndex, EmbedNote}
+  alias Engram.Workers.{DeleteNoteIndex, EmbedNote, RebindNoteLinks, RewriteNoteLinks}
 
   require Logger
 
@@ -86,6 +87,32 @@ defmodule Engram.Notes do
   def notes_only do
     from(n in Note, where: n.kind == "note")
   end
+
+  @doc """
+  Composable tenant-scope query: `Note` rows owned by `user` in `vault`
+  (struct or bare vault id). This predicate IS the multi-tenant isolation
+  boundary — note queries must compose from `scoped/2` / `scoped_live/2`;
+  `tenant_scope_lint_test.exs` flags hand-inlined `user_id == ^` predicates
+  so a dropped clause can't slip in.
+  """
+  @spec scoped(map(), map() | term()) :: Ecto.Query.t()
+  def scoped(user, %{id: vault_id}), do: scoped(user, vault_id)
+
+  def scoped(user, vault_id) do
+    from(n in Note, where: n.user_id == ^user.id and n.vault_id == ^vault_id)
+  end
+
+  @doc "`scoped/2` plus `is_nil(deleted_at)` — live (non-tombstoned) rows only."
+  @spec scoped_live(map(), map() | term()) :: Ecto.Query.t()
+  def scoped_live(user, vault) do
+    from(n in scoped(user, vault), where: is_nil(n.deleted_at))
+  end
+
+  # batch_upsert_notes hard cap: each entry costs an encrypt + CRDT merge, so
+  # unbounded requests are a compute-DoS vector, and no client sends >500 (the
+  # plugin chunks at ≤100). Delete/move accept ANY size — the seq feed orders
+  # by (seq, id) and doesn't care how many rows share a timestamp.
+  @max_batch_entries 500
 
   @doc """
   #590: maps Qdrant point ids → the owning note's decrypted display fields
@@ -212,12 +239,8 @@ defmodule Engram.Notes do
   defp find_folder_marker(user, vault, folder_hmac) do
     row =
       Repo.one(
-        from(n in Note,
-          where:
-            n.user_id == ^user.id and
-              n.vault_id == ^vault.id and
-              n.kind == "folder" and
-              n.folder_hmac == ^folder_hmac
+        from(n in scoped(user, vault),
+          where: n.kind == "folder" and n.folder_hmac == ^folder_hmac
         )
       )
 
@@ -418,6 +441,19 @@ defmodule Engram.Notes do
             end
 
           if is_nil(prev_hash) do
+            # A brand-new note may be the exact target a dangling link (or an
+            # existing binding losing the shortest-path tiebreak) has been
+            # waiting on — re-resolve every edge sharing its basename (#591).
+            _ =
+              Enqueue.enqueue(
+                RebindNoteLinks.new_for(
+                  user.id,
+                  vault.id,
+                  Links.basename_hmac(user, Links.basename_key(note.path))
+                ),
+                "rebind_note_links"
+              )
+
             # FTUX vault page listens for this — fires when an empty vault
             # gets its first note (typical case: Obsidian plugin completes
             # its first sync push).
@@ -654,7 +690,7 @@ defmodule Engram.Notes do
   this never merges empty content against an existing row and never content-
   broadcasts. See docs spec 2026-07-15-crdt-create-genesis-bare-row-design.
   """
-  @spec genesis_crdt_note(map(), map(), String.t(), String.t()) ::
+  @spec genesis_crdt_note(map(), map(), String.t(), String.t(), keyword()) ::
           {:ok, Note.t()}
           | {:error, :invalid_id}
           | {:error, :recently_deleted}
@@ -667,7 +703,9 @@ defmodule Engram.Notes do
           # {:error, term}). Kept in the spec so the channel's create_failed
           # catch-all is reachable, not flagged unreachable by dialyzer.
           | {:error, term()}
-  def genesis_crdt_note(user, vault, id, path) do
+  def genesis_crdt_note(user, vault, id, path, opts \\ []) do
+    origin = Keyword.get(opts, :origin)
+
     with {:ok, canonical_id} <- Ecto.UUID.cast(id),
          {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, path} <- validate_path(path) do
@@ -696,7 +734,7 @@ defmodule Engram.Notes do
                      # removes the #970 delete-wins window from renames entirely.
                      # A target path OCCUPIED by a DIFFERENT live note stays a
                      # genuine conflict (the pre-E2 behavior).
-                     genesis_relocate_live(live, user, vault, sanitized_path, folder)
+                     genesis_relocate_live(live, user, vault, sanitized_path, folder, origin)
 
                    {:error, _} = err ->
                      err
@@ -838,7 +876,34 @@ defmodule Engram.Notes do
   # with the same greppable Loki tripwire as REST's upsert {:id_collision, live}
   # arm (a client-minted id reused at another OCCUPIED path is still the
   # 2026-07-06 wrong-mint corruption signature).
-  defp genesis_relocate_live(live, user, vault, sanitized_path, folder) do
+  # ── Phase 2 (#648/#1231) — CRDT-origin rename rewrite gate ─────────────────
+  #
+  # TEMPORARY COMPROMISE — REMOVE BY FLIPPING TO "web" (one line, this
+  # attribute only): an UNTAGGED crdt socket is treated as plugin-origin so a
+  # version-skewed plugin that predates the client_type join tag never
+  # double-rewrites (Obsidian rewrites its own links; the server rewriting too
+  # would violate the one-rewriter invariant). Once the plugin release that
+  # tags itself "obsidian" has been out for one release cycle, flip this to
+  # "web" so untagged defaults to enqueue — the spec's safe default.
+  # Pinned by test/engram/notes_crdt_origin_gate_test.exs. Tracked in #648.
+  @untagged_crdt_client_type "obsidian"
+
+  @doc false
+  @spec untagged_crdt_client_type() :: String.t()
+  def untagged_crdt_client_type, do: @untagged_crdt_client_type
+
+  @doc """
+  ONE-REWRITER INVARIANT gate for CRDT-origin renames (relocates reached via
+  `genesis_crdt_note/5`): `"obsidian"` never triggers a server rewrite; any
+  other PRESENT tag does; an ABSENT tag (nil) takes the
+  `untagged_crdt_client_type/0` compromise default (see attribute comment).
+  """
+  @spec crdt_rename_rewrites?(String.t() | nil) :: boolean()
+  def crdt_rename_rewrites?(client_type) do
+    (client_type || @untagged_crdt_client_type) != "obsidian"
+  end
+
+  defp genesis_relocate_live(live, user, vault, sanitized_path, folder, origin) do
     with {:ok, query} <- note_by_path_query(user, vault, sanitized_path) do
       case Repo.one(query) do
         nil ->
@@ -865,6 +930,45 @@ defmodule Engram.Notes do
                       server_version: moved.version
                     )
                   )
+
+                  # #591 — same-id CRDT relocate IS a rename (the primary
+                  # rename path for web/plugin); re-resolve both basenames,
+                  # same dedup-when-equal rule as do_rename_note_inner.
+                  old_key = Links.basename_key(decrypted.path)
+                  new_key = Links.basename_key(sanitized_path)
+
+                  _ =
+                    Enqueue.enqueue(
+                      RebindNoteLinks.new_for(
+                        user.id,
+                        vault.id,
+                        Links.basename_hmac(user, new_key)
+                      ),
+                      "rebind_note_links"
+                    )
+
+                  _ =
+                    if new_key != old_key do
+                      Enqueue.enqueue(
+                        RebindNoteLinks.new_for(
+                          user.id,
+                          vault.id,
+                          Links.basename_hmac(user, old_key)
+                        ),
+                        "rebind_note_links"
+                      )
+                    end
+
+                  # #648/#1231 Phase 2 — server-side link rewrite for
+                  # NON-obsidian CRDT-origin renames (the primary web rename
+                  # path). Obsidian-origin relocates never enqueue: the plugin
+                  # rewrites its own links (exactly-one-rewriter invariant).
+                  # In-txn enqueue: the job commits atomically with the
+                  # relocate; Enqueue.enqueue never raises.
+                  _ =
+                    if crdt_rename_rewrites?(origin) do
+                      enqueue_crdt_rename_rewrite(user, vault, moved.id, decrypted.path)
+                    end
 
                   # Carry the OLD path so the post-commit handler can fan an
                   # old-path delete to peers (a web receiver has no local mirror
@@ -893,6 +997,49 @@ defmodule Engram.Notes do
 
           {:error, :id_conflict, decrypt_or_raise!(live, user)}
       end
+    end
+  end
+
+  # CRDT relocates repoint the row in place (move_note) — no old-path
+  # tombstone exists for the worker to decrypt, so the old path rides the
+  # job args as user-DEK AES-GCM ciphertext, AAD-bound to the renamed row's
+  # id (T3.2: plaintext never enters oban_jobs.args). get_dek should never
+  # fail here (decrypt_or_raise! already proved this user's DEK usable in
+  # this very function), but this runs INSIDE the relocate transaction and
+  # a rewrite failure must never fail the rename — so an error skips the
+  # enqueue (ids-only warning) instead of crashing the transaction.
+  defp enqueue_crdt_rename_rewrite(user, vault, note_id, old_path) do
+    case Crypto.get_dek(user) do
+      {:ok, dek} ->
+        aad = Crypto.aad_for_row("oban_rewrite_note_links", "old_path", note_id)
+        {ct, nonce} = Envelope.encrypt(old_path, dek, aad)
+
+        Enqueue.enqueue(
+          RewriteNoteLinks.new_for(
+            user.id,
+            vault.id,
+            :note,
+            note_id,
+            old_path_hmac_b64!(user, old_path),
+            Base.encode64(Links.basename_hmac(user, Links.basename_key(old_path))),
+            old_path_ciphertext: Base.encode64(ct),
+            old_path_nonce: Base.encode64(nonce)
+          ),
+          "rewrite_note_links"
+        )
+
+      {:error, reason} ->
+        Logger.warning(
+          "crdt rename rewrite enqueue skipped: dek unavailable",
+          Metadata.with_category(:warning, :sync,
+            user_id: user.id,
+            vault_id: vault.id,
+            note_id: note_id,
+            reason: inspect(reason)
+          )
+        )
+
+        :ok
     end
   end
 
@@ -933,6 +1080,19 @@ defmodule Engram.Notes do
         {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
           case Crypto.maybe_decrypt_note_fields(updated, user) do
             {:ok, decrypted} ->
+              # #591 — treat a resurrect like a create: the note is live again
+              # under sanitized_path, so danglers waiting on its basename can
+              # bind.
+              _ =
+                Enqueue.enqueue(
+                  RebindNoteLinks.new_for(
+                    user.id,
+                    decrypted.vault_id,
+                    Links.basename_hmac(user, Links.basename_key(sanitized_path))
+                  ),
+                  "rebind_note_links"
+                )
+
               # A rename-restore carries the OLD (tombstone) path so peers clear
               # it; a same-path resurrect just announces.
               tag = if renamed?, do: {:announce_moved, prior.path}, else: :announce
@@ -996,6 +1156,19 @@ defmodule Engram.Notes do
       # on a concurrent-create race.
       case do_bare_insert(base_attrs, user, sanitized_path, folder, id, lookup_query) do
         {:inserted, inserted, _crdt} ->
+          # #591 — CRDT genesis create is the primary create path (web/plugin);
+          # mirror upsert_note's create-branch rebind so danglers waiting on
+          # this basename bind here too, not only on the REST path.
+          _ =
+            Enqueue.enqueue(
+              RebindNoteLinks.new_for(
+                user.id,
+                vault.id,
+                Links.basename_hmac(user, Links.basename_key(sanitized_path))
+              ),
+              "rebind_note_links"
+            )
+
           {:ok, decrypt_or_raise!(inserted, user), :announce}
 
         {:raced, existing} ->
@@ -1557,6 +1730,27 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Worker-side note fetch: loads by id with `skip_tenant_check` (trusted
+  internal workers scope by note_id, not tenant) and maps the two dead-end
+  states to an Oban `{:discard, reason}` — a vanished note or a soft-deleted
+  one is permanently un-processable, so retrying would only burn attempts.
+  Used by `Engram.Workers.EmbedNote` and `Engram.Workers.RepathNoteIndex`.
+  """
+  @spec fetch_note_for_worker(String.t()) :: {:ok, Note.t()} | {:discard, String.t()}
+  def fetch_note_for_worker(note_id) do
+    case Repo.get(Note, note_id, skip_tenant_check: true) do
+      nil ->
+        {:discard, "note #{note_id} not found"}
+
+      %Note{deleted_at: deleted_at} when deleted_at != nil ->
+        {:discard, "note #{note_id} is soft-deleted"}
+
+      note ->
+        {:ok, note}
+    end
+  end
+
+  @doc """
   True when a live note with `note_id` exists in `vault_id` for `user`.
 
   Ownership check for the CRDT channel: doc_id is now the note_id, so the
@@ -1566,12 +1760,7 @@ defmodule Engram.Notes do
   """
   @spec note_in_vault?(map(), Ecto.UUID.t(), Ecto.UUID.t()) :: boolean()
   def note_in_vault?(user, vault_id, note_id) do
-    query =
-      from(n in Note,
-        where:
-          n.id == ^note_id and n.user_id == ^user.id and n.vault_id == ^vault_id and
-            is_nil(n.deleted_at)
-      )
+    query = from(n in scoped_live(user, vault_id), where: n.id == ^note_id)
 
     case Repo.with_tenant(user.id, fn -> Repo.exists?(query) end) do
       {:ok, exists?} -> exists?
@@ -1588,12 +1777,7 @@ defmodule Engram.Notes do
   # folder marker).
   defp fetch_note_by_id(user, vault, id, fields) when is_binary(id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
-      base =
-        from(n in Note,
-          where:
-            n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
-              is_nil(n.deleted_at) and n.kind == "note"
-        )
+      base = from(n in scoped_live(user, vault), where: n.id == ^id and n.kind == "note")
 
       query =
         case fields do
@@ -1634,12 +1818,7 @@ defmodule Engram.Notes do
     with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       hmac = Crypto.hmac_field(filter_key, path)
 
-      {:ok,
-       from(n in Note,
-         where:
-           n.user_id == ^user.id and n.vault_id == ^vault.id and n.path_hmac == ^hmac and
-             is_nil(n.deleted_at)
-       )}
+      {:ok, from(n in scoped_live(user, vault), where: n.path_hmac == ^hmac)}
     end
   end
 
@@ -1656,11 +1835,10 @@ defmodule Engram.Notes do
         cutoff = DateTime.add(DateTime.utc_now(), -@delete_tombstone_window_seconds, :second)
 
         Repo.exists?(
-          from(n in Note,
+          from(n in scoped(user, vault_id),
             where:
-              n.user_id == ^user.id and n.vault_id == ^vault_id and n.path_hmac == ^hmac and
-                n.kind == "note" and not is_nil(n.deleted_at) and n.deleted_at >= ^cutoff and
-                n.content_hash == ^content_hash
+              n.path_hmac == ^hmac and n.kind == "note" and not is_nil(n.deleted_at) and
+                n.deleted_at >= ^cutoff and n.content_hash == ^content_hash
           )
         )
 
@@ -1785,6 +1963,23 @@ defmodule Engram.Notes do
             "repath_note_index"
           )
 
+        # #648/#1231 — server-side link rewrite for REST/MCP-origin renames.
+        # Plugin-origin renames never reach rename_note (Obsidian rewrites
+        # those itself): exactly one party rewrites. Fire-and-forget: a
+        # rewrite failure must never fail the rename.
+        _ =
+          Enqueue.enqueue(
+            Engram.Workers.RewriteNoteLinks.new_for(
+              user.id,
+              vault.id,
+              :note,
+              note.id,
+              old_path_hmac_b64!(user, old_path),
+              Base.encode64(Links.basename_hmac(user, Links.basename_key(old_path)))
+            ),
+            "rewrite_note_links"
+          )
+
         # #976 (same invariant as the folder-rename cascade): the note still
         # exists under the new path, so the old-path delete leg carries its id
         # for delete+upsert relocation correlation on receivers. Emit the
@@ -1897,6 +2092,27 @@ defmodule Engram.Notes do
         )
       end
 
+      # #591 — re-resolve edges for BOTH basenames: the new name may bind
+      # danglers waiting on it, and the old name's remaining candidates
+      # (a same-basename sibling elsewhere) may need to inherit the edges
+      # this note is vacating.
+      old_key = Links.basename_key(old_path)
+      new_key = Links.basename_key(new_path)
+
+      _ =
+        Enqueue.enqueue(
+          RebindNoteLinks.new_for(user.id, note.vault_id, Links.basename_hmac(user, new_key)),
+          "rebind_note_links"
+        )
+
+      _ =
+        if new_key != old_key do
+          Enqueue.enqueue(
+            RebindNoteLinks.new_for(user.id, note.vault_id, Links.basename_hmac(user, old_key)),
+            "rebind_note_links"
+          )
+        end
+
       # Splice the freshly-encrypted ciphertext + dek_version=2
       # into the in-memory struct so callers (broadcast, MCP,
       # controllers) read the new plaintext without re-decrypting
@@ -1955,7 +2171,15 @@ defmodule Engram.Notes do
             :ok = UsageMeters.dec_notes_count(user.id, updated)
           end)
 
-        _ = Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
+        # `path` (the caller's own plaintext argument) is in scope here even
+        # though `note` itself is the raw undecrypted row — no extra decrypt
+        # needed to compute the basename hmac for DeleteNoteIndex's chained
+        # rebind (#591).
+        _ =
+          Enqueue.enqueue(
+            delete_note_index_job(note, Links.basename_hmac(user, Links.basename_key(path))),
+            "delete_note_index"
+          )
 
         broadcast_change(user.id, vault.id, "delete", path, note.id, opts)
       end
@@ -2012,7 +2236,6 @@ defmodule Engram.Notes do
   def batch_delete_notes(_user, _vault, []), do: {:ok, %{deleted: 0}}
 
   def batch_delete_notes(user, vault, ids) when is_list(ids) do
-    now = DateTime.utc_now()
     # Duplicate ids collapse to one delete (idempotent-delete semantics);
     # `deleted` counts DISTINCT notes, documented in the @doc above.
     ids = Enum.uniq(ids)
@@ -2025,10 +2248,8 @@ defmodule Engram.Notes do
           # read as not_found, not tombstone the marker + crash on encode64.
           notes =
             Repo.all(
-              from(n in Note,
-                where:
-                  n.id in ^ids and n.user_id == ^user.id and n.vault_id == ^vault.id and
-                    is_nil(n.deleted_at) and n.kind == "note",
+              from(n in scoped_live(user, vault),
+                where: n.id in ^ids and n.kind == "note",
                 select: struct(n, @note_meta_fields)
               )
             )
@@ -2038,11 +2259,13 @@ defmodule Engram.Notes do
           case Enum.find(ids, &(not MapSet.member?(found, &1))) do
             nil ->
               seq = Engram.Vaults.next_seq!(vault.id)
+              now = DateTime.utc_now()
 
+              # One shared timestamp for every tombstone — the seq feed orders
+              # by (seq, id), so same-stamp runs are harmless (the timestamp
+              # chunking that used to live here served the retired legacy feed).
               {updated, _} =
-                from(n in Note,
-                  where: n.id in ^Enum.map(notes, & &1.id) and is_nil(n.deleted_at)
-                )
+                from(n in Note, where: n.id in ^ids and is_nil(n.deleted_at))
                 |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
 
               :ok = UsageMeters.dec_notes_count(user.id, updated)
@@ -2051,6 +2274,16 @@ defmodule Engram.Notes do
               # the tombstones. insert_all trades Enqueue.enqueue's per-job
               # telemetry for one statement; {_count, _} match keeps failures
               # loud (insert_all raises on error).
+              #
+              # #591 — `notes` here is the pre-decrypt meta projection (no
+              # plaintext path in scope yet; decrypt happens post-commit below
+              # for the broadcast), so `delete_note_index_job/1` gets no
+              # basename_key — DeleteNoteIndex's chained rebind is skipped.
+              # `Links.on_note_soft_deleted/2` (edge-flip) still runs
+              # unconditionally inside DeleteNoteIndex regardless. The
+              # same-basename-sibling rebind itself is NOT skipped for batch
+              # delete though — it's enqueued directly post-commit below,
+              # once plaintext paths exist (reusing the broadcast's decrypt).
               jobs = Enum.map(notes, &delete_note_index_job/1)
               _ = if jobs != [], do: Oban.insert_all(jobs)
 
@@ -2065,10 +2298,9 @@ defmodule Engram.Notes do
         {:ok, %{deleted: deleted, notes: notes}} ->
           # Post-commit: same per-note delete events clients already handle.
           # Meta rows decrypt cheaply (path envelope only — no content).
-          notes
-          |> Crypto.decrypt_notes_batch(user)
-          |> Enum.zip(notes)
-          |> Enum.each(fn
+          zipped = notes |> Crypto.decrypt_notes_batch(user) |> Enum.zip(notes)
+
+          Enum.each(zipped, fn
             {{:ok, note}, raw} ->
               broadcast_change(user.id, vault.id, "delete", note.path, raw.id, [])
 
@@ -2088,6 +2320,25 @@ defmodule Engram.Notes do
               )
           end)
 
+          # #591 — plaintext paths are already decrypted right above for the
+          # broadcast; piggyback the same-basename-sibling rebind here rather
+          # than re-decrypting inside the transaction. Dedup within the batch
+          # (deleting several notes that share a basename should only enqueue
+          # one rebind per key).
+          zipped
+          |> Enum.flat_map(fn
+            {{:ok, note}, _raw} -> [Links.basename_key(note.path)]
+            {{:error, _}, _raw} -> []
+          end)
+          |> Enum.uniq()
+          |> Enum.each(fn key ->
+            _ =
+              Enqueue.enqueue(
+                RebindNoteLinks.new_for(user.id, vault.id, Links.basename_hmac(user, key)),
+                "rebind_note_links"
+              )
+          end)
+
           {:ok, %{deleted: deleted}}
 
         {:error, _} = err ->
@@ -2099,13 +2350,27 @@ defmodule Engram.Notes do
   # T3.2 — base64 path_hmac, never plaintext. Single builder shared by
   # delete_note/3, batch_delete_notes/3, and the folder-delete cascade so an
   # arg change cannot drift between sites (silently orphaning Qdrant points).
-  defp delete_note_index_job(note) do
-    DeleteNoteIndex.new(%{
+  #
+  # #591 — `basename_hmac` (base64, T3.2/H3 — see no_plaintext_args_test.exs)
+  # lets DeleteNoteIndex chain a rebind so a shadowed same-basename sibling
+  # can inherit this note's edges. Optional: a caller without plaintext in
+  # scope at this point (batch_delete_notes' pre-commit job build) passes nil
+  # and DeleteNoteIndex skips the rebind — `Links.on_note_soft_deleted/2`
+  # (edge-flip) still always runs.
+  defp delete_note_index_job(note, basename_hmac \\ nil) do
+    args = %{
       note_id: note.id,
       user_id: note.user_id,
       vault_id: note.vault_id,
       path_hmac: Base.encode64(note.path_hmac)
-    })
+    }
+
+    args =
+      if basename_hmac,
+        do: Map.put(args, :basename_hmac, Base.encode64(basename_hmac)),
+        else: args
+
+    DeleteNoteIndex.new(args)
   end
 
   @doc """
@@ -2214,6 +2479,7 @@ defmodule Engram.Notes do
     :path_ciphertext,
     :path_nonce,
     :path_hmac,
+    :basename_hmac,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac,
@@ -2264,6 +2530,10 @@ defmodule Engram.Notes do
           | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
           | {:error, term()}
   def batch_upsert_notes(_user, _vault, []), do: {:ok, %{results: []}}
+
+  def batch_upsert_notes(_user, _vault, notes_params)
+      when is_list(notes_params) and length(notes_params) > @max_batch_entries,
+      do: {:error, :batch_too_large}
 
   def batch_upsert_notes(user, vault, notes_params) when is_list(notes_params) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
@@ -2331,10 +2601,10 @@ defmodule Engram.Notes do
     cutoff = DateTime.add(DateTime.utc_now(), -@delete_tombstone_window_seconds, :second)
 
     Repo.all(
-      from(n in Note,
+      from(n in scoped(user, vault),
         where:
-          n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
-            n.path_hmac in ^hmacs and not is_nil(n.deleted_at) and n.deleted_at >= ^cutoff,
+          n.kind == "note" and n.path_hmac in ^hmacs and not is_nil(n.deleted_at) and
+            n.deleted_at >= ^cutoff,
         select: {n.path_hmac, n.content_hash}
       )
     )
@@ -2399,13 +2669,7 @@ defmodule Engram.Notes do
     hmacs = Enum.map(pending, & &1.path_hmac)
 
     existing_by_hmac =
-      Repo.all(
-        from(n in Note,
-          where:
-            n.user_id == ^user.id and n.vault_id == ^vault.id and n.path_hmac in ^hmacs and
-              is_nil(n.deleted_at)
-        )
-      )
+      Repo.all(from(n in scoped_live(user, vault), where: n.path_hmac in ^hmacs))
       |> Map.new(&{&1.path_hmac, &1})
 
     # Delete-wins for the batch path (same blind spot as the single upsert):
@@ -2417,7 +2681,7 @@ defmodule Engram.Notes do
 
     # vault_populated probe — must read BEFORE the insert_all below.
     was_empty =
-      not Repo.exists?(from(n in Note, where: n.user_id == ^user.id and n.vault_id == ^vault.id))
+      not Repo.exists?(scoped(user, vault))
 
     to_insert =
       Enum.count(
@@ -2429,6 +2693,8 @@ defmodule Engram.Notes do
 
     now = DateTime.utc_now()
 
+    # One shared `now` for the whole batch — the seq feed orders by (seq, id),
+    # so same-stamp runs are harmless.
     {entries, insert_rows} =
       Enum.map_reduce(entries, [], fn entry, rows ->
         process_batch_entry(entry, existing_by_hmac, user, vault, now, rows)
@@ -2869,94 +3135,13 @@ defmodule Engram.Notes do
   @changes_page_max_limit 500
 
   @doc """
-  Keyset-paginated variant of `list_changes/4` (sync protocol rev).
-
-  Options:
-
-    * `limit:` — page size, clamped to 1..#{@changes_page_max_limit}
-      (default #{@changes_page_max_limit}).
-    * `cursor:` — opaque cursor from a previous page's `next_cursor`.
-      Encodes `(updated_at, id)`; rows are ordered by that pair so pages
-      never lose or duplicate rows even when timestamps collide.
-    * `fields: :meta` — skip the content column + its decrypt; entries carry
-      `content_hash` instead (`content: nil`). Clients fetch bodies
-      selectively for hashes they don't already hold.
-
-  Returns `{:ok, %{changes: [...], has_more: bool, next_cursor: binary | nil}}`
-  or `{:error, :invalid_cursor}`.
-  """
-  @spec list_changes_page(map(), map(), DateTime.t(), keyword()) ::
-          {:ok, %{changes: [map()], has_more: boolean(), next_cursor: binary() | nil}}
-          | {:error, :invalid_cursor}
-  def list_changes_page(user, vault, since, opts \\ []) do
-    limit =
-      opts
-      |> Keyword.get(:limit, @changes_page_max_limit)
-      |> min(@changes_page_max_limit)
-      |> max(1)
-
-    fields = Keyword.get(opts, :fields, :all)
-
-    with {:ok, cursor} <- decode_changes_cursor(Keyword.get(opts, :cursor)) do
-      base =
-        from(n in Note,
-          where:
-            n.user_id == ^user.id and n.vault_id == ^vault.id and n.updated_at >= ^since and
-              n.kind == "note",
-          order_by: [asc: n.updated_at, asc: n.id],
-          limit: ^(limit + 1)
-        )
-
-      base =
-        case cursor do
-          nil ->
-            base
-
-          {ts, id} ->
-            from(n in base,
-              where: n.updated_at > ^ts or (n.updated_at == ^ts and n.id > ^id)
-            )
-        end
-
-      query =
-        case fields do
-          :meta -> from(n in base, select: struct(n, @note_meta_fields))
-          :all -> base
-        end
-
-      {:ok, notes} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
-
-      {page, has_more} =
-        if length(notes) > limit do
-          {Enum.take(notes, limit), true}
-        else
-          {notes, false}
-        end
-
-      changes =
-        page
-        |> decrypt_or_raise!(user)
-        |> Enum.map(&change_map/1)
-
-      _ = log_changes_page(since, changes)
-
-      next_cursor =
-        if has_more do
-          last = List.last(page)
-          encode_changes_cursor(last.updated_at, last.id)
-        end
-
-      {:ok, %{changes: changes, has_more: has_more, next_cursor: next_cursor}}
-    end
-  end
-
-  @doc """
   Seq-cursor change feed: rows with `(seq, id) > (after_seq, after_id)`,
   ordered by `(seq, id)`, paginated.
 
-  Unlike `list_changes_page/4` (the timestamp feed) this carries the full
-  note change set including tombstones (no `deleted_at` filter) so deletes /
-  renames all flow through the unified `/sync/changes` pull. Folder-marker
+  Unlike the retired timestamp feed (`list_changes_page/4`, removed with
+  `GET /notes/changes`) this carries the full note change set including
+  tombstones (no `deleted_at` filter), so deletes and renames all flow
+  through the unified seq-feed pull. Folder-marker
   rows (`kind == "folder"`) are EXCLUDED (#976): they carry `path: nil`,
   which crashed tombstone apply on pre-#216 plugins, and clients sync
   markers via the dedicated folder-marker endpoint, never this feed.
@@ -2988,10 +3173,8 @@ defmodule Engram.Notes do
     after_id = Keyword.get(opts, :after_id)
 
     base =
-      from(n in Note,
-        where:
-          n.user_id == ^user.id and n.vault_id == ^vault.id and not is_nil(n.seq) and
-            n.kind != "folder",
+      from(n in scoped(user, vault),
+        where: not is_nil(n.seq) and n.kind != "folder",
         order_by: [asc: n.seq, asc: n.id],
         limit: ^(limit + 1)
       )
@@ -3032,33 +3215,6 @@ defmodule Engram.Notes do
     {:ok, %{changes: changes, has_more: has_more, next: next}}
   end
 
-  # Catch-up-pull breadcrumb: a reconnecting client pulls `/api/notes/changes`
-  # to recover notes missed while disconnected (e2e `test_23`). The flake is a
-  # note returning EMPTY (or absent) from the pull, so we log what the page
-  # actually delivered — count + per-note `id:content_len` — to prove
-  # present/empty/absent server-side. Only NON-empty pages log, so an idle poll
-  # (the common case) stays silent and prod is not spammed on every poll.
-  # Privacy: UUID + content BYTE-LENGTH only. Never the path or content.
-  @changes_trace_sample 20
-  defp log_changes_page(_since, []), do: :ok
-
-  defp log_changes_page(since, changes) do
-    sample =
-      changes
-      |> Enum.take(@changes_trace_sample)
-      |> Enum.map_join(",", fn c -> "#{c.id}:#{byte_size(c.content || "")}" end)
-
-    more =
-      if length(changes) > @changes_trace_sample,
-        do: "+#{length(changes) - @changes_trace_sample}",
-        else: ""
-
-    Logger.info(
-      "changes page since=#{DateTime.to_iso8601(since)} count=#{length(changes)} notes=#{sample}#{more}",
-      Metadata.with_category(:info, :sync)
-    )
-  end
-
   defp change_map(note) do
     %{
       id: note.id,
@@ -3077,24 +3233,6 @@ defmodule Engram.Notes do
     }
   end
 
-  defp encode_changes_cursor(updated_at, id),
-    do: Base.url_encode64("#{DateTime.to_iso8601(updated_at)}|#{id}", padding: false)
-
-  defp decode_changes_cursor(nil), do: {:ok, nil}
-
-  defp decode_changes_cursor(cursor) when is_binary(cursor) do
-    with {:ok, raw} <- Base.url_decode64(cursor, padding: false),
-         [ts_str, id_str] <- String.split(raw, "|", parts: 2),
-         {:ok, ts, _} <- DateTime.from_iso8601(ts_str),
-         {:ok, id} <- Ecto.UUID.cast(id_str) do
-      {:ok, {ts, id}}
-    else
-      _ -> {:error, :invalid_cursor}
-    end
-  end
-
-  defp decode_changes_cursor(_), do: {:error, :invalid_cursor}
-
   @doc """
   Returns unique tags across all non-deleted notes for a user.
 
@@ -3111,10 +3249,8 @@ defmodule Engram.Notes do
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
-              from(n in Note,
-                where:
-                  n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                    not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
+              from(n in scoped_live(user, vault),
+                where: not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
                 select: {n.id, n.dek_version, n.tags_ciphertext, n.tags_nonce}
               )
             )
@@ -3149,10 +3285,8 @@ defmodule Engram.Notes do
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
-              from(n in Note,
-                where:
-                  n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                    not is_nil(n.folder_hmac) and n.folder_hmac != ^empty_hmac,
+              from(n in scoped_live(user, vault),
+                where: not is_nil(n.folder_hmac) and n.folder_hmac != ^empty_hmac,
                 distinct: n.folder_hmac,
                 select: {n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
               )
@@ -3189,10 +3323,8 @@ defmodule Engram.Notes do
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
-              from(n in Note,
-                where:
-                  n.user_id == ^user.id and n.vault_id == ^vault.id and
-                    is_nil(n.deleted_at) and n.kind == "folder",
+              from(n in scoped_live(user, vault),
+                where: n.kind == "folder",
                 select: {n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
               )
             )
@@ -3231,10 +3363,8 @@ defmodule Engram.Notes do
       {:ok, markers} =
         Repo.with_tenant(user.id, fn ->
           Repo.all(
-            from(n in Note,
-              where:
-                n.user_id == ^user.id and n.vault_id == ^vault.id and
-                  is_nil(n.deleted_at) and n.kind == "folder",
+            from(n in scoped_live(user, vault),
+              where: n.kind == "folder",
               select: %Note{
                 id: n.id,
                 dek_version: n.dek_version,
@@ -3272,11 +3402,10 @@ defmodule Engram.Notes do
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
-              from(n in Note,
+              from(n in scoped_live(user, vault),
                 where:
-                  n.user_id == ^user.id and n.vault_id == ^vault.id and
-                    is_nil(n.deleted_at) and n.kind == "note" and
-                    not is_nil(n.folder_hmac) and n.folder_hmac != ^empty_hmac,
+                  n.kind == "note" and not is_nil(n.folder_hmac) and
+                    n.folder_hmac != ^empty_hmac,
                 distinct: n.folder_hmac,
                 select: {n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
               )
@@ -3311,10 +3440,8 @@ defmodule Engram.Notes do
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
-              from(n in Note,
-                where:
-                  n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                    not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
+              from(n in scoped_live(user, vault),
+                where: not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
                 select: {n.id, n.dek_version, n.tags_ciphertext, n.tags_nonce}
               )
             )
@@ -3358,10 +3485,8 @@ defmodule Engram.Notes do
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
-              from(n in Note,
-                where:
-                  n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                    not is_nil(n.folder_hmac),
+              from(n in scoped_live(user, vault),
+                where: not is_nil(n.folder_hmac),
                 distinct: n.folder_hmac,
                 select: %{
                   id: n.id,
@@ -3439,11 +3564,8 @@ defmodule Engram.Notes do
         {:ok, notes} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
-              from(n in Note,
-                where:
-                  n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                    n.kind == "note" and
-                    n.folder_hmac == ^target_hmac,
+              from(n in scoped_live(user, vault),
+                where: n.kind == "note" and n.folder_hmac == ^target_hmac,
                 order_by: [asc: n.id],
                 select: struct(n, @note_meta_fields)
               )
@@ -3488,13 +3610,8 @@ defmodule Engram.Notes do
     {:ok, result} =
       Repo.with_tenant(user.id, fn ->
         case Repo.one(
-               from(n in Note,
-                 where:
-                   n.id == ^id and
-                     n.user_id == ^user.id and
-                     n.vault_id == ^vault.id and
-                     n.kind == "folder" and
-                     is_nil(n.deleted_at)
+               from(n in scoped_live(user, vault),
+                 where: n.id == ^id and n.kind == "folder"
                )
              ) do
           nil -> {:error, :not_found}
@@ -3513,28 +3630,36 @@ defmodule Engram.Notes do
   @spec rename_folder(map(), map(), String.t(), String.t()) ::
           {:ok, integer()} | {:error, :conflict | term()}
   def rename_folder(user, vault, old_folder, new_folder) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      rename_folder_gated(user, vault, old_folder, new_folder, nil)
+    end
+  end
+
+  # Conflict-gated rename shared by the public entry point (rows = nil →
+  # do_rename_folder scans the vault itself) and the batch-move path (rows =
+  # the ONE decrypted scan shared across all K markers). Caller must have run
+  # `Crypto.ensure_user_dek/1` already.
+  defp rename_folder_gated(user, vault, old_folder, new_folder, rows) do
     new_folder = String.trim_trailing(new_folder, "/")
     old_prefix = old_folder <> "/"
 
-    with {:ok, user} <- Crypto.ensure_user_dek(user) do
-      cond do
-        # No-op rename: same folder. Skip the target conflict check so the
-        # call is idempotent rather than colliding with itself.
-        old_folder == new_folder ->
-          do_rename_folder(user, vault, old_folder, old_prefix, new_folder)
+    cond do
+      # No-op rename: same folder. Skip the target conflict check so the
+      # call is idempotent rather than colliding with itself.
+      old_folder == new_folder ->
+        do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows)
 
-        folder_target_exists?(user, vault, new_folder) ->
-          # Pre-check the unique (user, vault, path_hmac) constraint so
-          # the caller gets {:error, :conflict} instead of a Postgrex
-          # unique_violation crash deeper in the cascade. Matches by
-          # folder_hmac (exact match on the immediate folder) — covers
-          # the common case of renaming onto a populated folder or an
-          # existing folder marker.
-          {:error, :conflict}
+      folder_target_exists?(user, vault, new_folder) ->
+        # Pre-check the unique (user, vault, path_hmac) constraint so
+        # the caller gets {:error, :conflict} instead of a Postgrex
+        # unique_violation crash deeper in the cascade. Matches by
+        # folder_hmac (exact match on the immediate folder) — covers
+        # the common case of renaming onto a populated folder or an
+        # existing folder marker.
+        {:error, :conflict}
 
-        true ->
-          do_rename_folder(user, vault, old_folder, old_prefix, new_folder)
-      end
+      true ->
+        do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows)
     end
   end
 
@@ -3570,13 +3695,7 @@ defmodule Engram.Notes do
     # Unwrap once so the caller can branch on a plain boolean.
     {:ok, exists?} =
       Repo.with_tenant(user.id, fn ->
-        Repo.exists?(
-          from(n in Note,
-            where:
-              n.user_id == ^user.id and n.vault_id == ^vault.id and
-                is_nil(n.deleted_at) and n.folder_hmac == ^target_hmac
-          )
-        )
+        Repo.exists?(from(n in scoped_live(user, vault), where: n.folder_hmac == ^target_hmac))
       end)
 
     exists?
@@ -3592,11 +3711,7 @@ defmodule Engram.Notes do
   # cascade) only need path/folder/kind; content decrypt is targeted per-id
   # where actually required (fetch_v1_contents).
   defp fetch_decrypted_live_rows(user, vault) do
-    query =
-      from(n in Note,
-        where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at),
-        select: struct(n, @note_meta_fields)
-      )
+    query = from(n in scoped_live(user, vault), select: struct(n, @note_meta_fields))
 
     {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
     {:ok, dek} = Crypto.get_dek(user)
@@ -3636,14 +3751,51 @@ defmodule Engram.Notes do
     |> Map.new(fn n -> {n.id, n.content || ""} end)
   end
 
-  defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder) do
+  # Per-class column sets for the folder-rename batch UPDATE. Each list MUST
+  # equal the keys the matching kw builder returns (folder_only_aad_bound /
+  # phase_b_path_folder_for / full_aad_bound_kw) — values are fetched from the
+  # kw by these names when the VALUES rows are built.
+  @marker_rename_cols [:folder_ciphertext, :folder_nonce, :folder_hmac]
+  @v2_rename_cols [
+    :path_ciphertext,
+    :path_nonce,
+    :path_hmac,
+    :basename_hmac,
+    :folder_ciphertext,
+    :folder_nonce,
+    :folder_hmac
+  ]
+  @v1_rename_cols [
+    :content_ciphertext,
+    :content_nonce,
+    :title_ciphertext,
+    :title_nonce,
+    :path_ciphertext,
+    :path_nonce,
+    :path_hmac,
+    :basename_hmac,
+    :folder_ciphertext,
+    :folder_nonce,
+    :folder_hmac,
+    :tags_ciphertext,
+    :tags_nonce,
+    :tags_hmac,
+    :dek_version
+  ]
+
+  # Statement-size bound for the VALUES join: 500 rows × ≤16 params stays
+  # well under Postgres's 65535-bind-param protocol limit.
+  @rename_update_chunk 500
+
+  defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows) do
     # :meta scan (#863 review): the v2 branch below never reads content —
     # a folder rename preserves the basename so the title can't change and
     # content/tags AADs key on note_id. Decrypting every content blob in
     # the vault kept rename O(vault-content-size); only legacy v1 rows
     # (full AAD rebind, needs content + recomputed title) fetch content,
-    # targeted by id below.
-    decrypted = fetch_decrypted_live_rows(user, vault)
+    # targeted by id below. `rows` (batch-move path) reuses a scan the caller
+    # already holds instead of re-scanning per marker.
+    decrypted = rows || fetch_decrypted_live_rows(user, vault)
 
     notes =
       Enum.filter(decrypted, fn n ->
@@ -3716,64 +3868,71 @@ defmodule Engram.Notes do
         Repo.with_tenant(user.id, fn ->
           seq = Engram.Vaults.next_seq!(vault.id)
 
-          Enum.each(updates, fn {note, _old_path, new_path, new_note_folder, new_title} ->
-            case note.kind do
-              "folder" ->
-                {ct, nonce, hmac} =
-                  folder_only_aad_bound(user, note.id, new_note_folder, note.dek_version)
+          # Batched write side: the old shape issued one update_all PER NOTE
+          # (each row carries its own re-encrypted envelopes, so a plain
+          # update_all can't express it). Partition rows by the column set
+          # each class updates and apply each class as chunked
+          # `UPDATE ... FROM (VALUES ...)` statements — column sets are
+          # IDENTICAL to the old per-note set lists:
+          #   markers → folder envelope only;
+          #   AAD-bound v2 notes (#863) → path + folder envelopes only
+          #     (content/tags AADs key on note_id and the basename can't
+          #     change, so re-encrypting content was pure TOAST/WAL churn);
+          #   legacy v1 rows → full rebind (the rename is their upgrade to
+          #     AAD-bound encryption, dek_version stamped to 2).
+          grouped =
+            updates
+            |> Enum.map(fn {note, _old_path, new_path, new_note_folder, new_title} ->
+              case note.kind do
+                "folder" ->
+                  {ct, nonce, hmac} =
+                    folder_only_aad_bound(user, note.id, new_note_folder, note.dek_version)
 
-                from(n in Note, where: n.id == ^note.id)
-                |> Repo.update_all(
-                  set: [
-                    folder_ciphertext: ct,
-                    folder_nonce: nonce,
-                    folder_hmac: hmac,
-                    updated_at: now,
-                    seq: seq
-                  ]
-                )
+                  {:marker,
+                   {note.id, [folder_ciphertext: ct, folder_nonce: nonce, folder_hmac: hmac]}}
 
-              _ ->
-                # AAD-bound rows (#863): content/tags AADs key on note_id only
-                # and a folder rename preserves the basename (title cannot
-                # change), so only the path + folder envelopes need rotating.
-                # The old full re-encrypt rewrote the content blob (largest
-                # column) on every note in the folder — pure TOAST/WAL churn.
-                # Legacy v1 rows keep the full rebind: the rename is their
-                # upgrade to AAD-bound encryption.
-                kw =
+                _ ->
                   if note.dek_version == Crypto.row_version_aad_bound() do
-                    phase_b_path_folder_for(user, note.id, new_path, new_note_folder)
+                    {:v2,
+                     {note.id, phase_b_path_folder_for(user, note.id, new_path, new_note_folder)}}
                   else
-                    full_aad_bound_kw(
-                      user,
-                      note.id,
-                      Map.get(content_by_id, note.id, ""),
-                      new_title,
-                      new_path,
-                      new_note_folder,
-                      note.tags || []
-                    )
+                    {:v1,
+                     {note.id,
+                      full_aad_bound_kw(
+                        user,
+                        note.id,
+                        Map.get(content_by_id, note.id, ""),
+                        new_title,
+                        new_path,
+                        new_note_folder,
+                        note.tags || []
+                      )}}
                   end
+              end
+            end)
+            |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
 
-                from(n in Note, where: n.id == ^note.id)
-                |> Repo.update_all(
-                  set:
-                    [
-                      updated_at: now,
-                      seq: seq
-                    ] ++ kw
-                )
-            end
-          end)
+          # One shared `now` for every row this cascade writes — renamed rows
+          # AND tombstones. The seq feed orders by (seq, id), so same-stamp
+          # runs are harmless. `seq` stays IDENTICAL for every row — the #614
+          # one-op-one-seq contract that keeps a cursor pull from splitting
+          # the renamed rows from their tombstones.
+          marker_rows = stamp_rename_rows(grouped[:marker] || [], now)
+          v2_rows = stamp_rename_rows(grouped[:v2] || [], now)
+          v1_rows = stamp_rename_rows(grouped[:v1] || [], now)
 
-          # Insert soft-deleted tombstones for old paths so the HTTP changes
-          # feed includes delete signals. Without these, polling clients
-          # retain stale files at old paths after a folder rename. Tombstones
+          bulk_rename_update!(marker_rows, @marker_rename_cols, seq)
+          bulk_rename_update!(v2_rows, @v2_rename_cols, seq)
+          bulk_rename_update!(v1_rows, @v1_rename_cols, seq)
+
+          # Insert soft-deleted tombstones for old paths so the seq feed
+          # (list_changes_by_seq — no deleted_at filter) carries delete
+          # signals. Without these, catch-up clients retain stale files at
+          # old paths after a folder rename. Tombstones
           # are full-row inserts so each must carry the encrypted
           # path/folder/tags fields too. Marker rows have no path to
           # tombstone — skip them. Built in-memory from `real_note_updates`,
-          # stamped with the same `seq` as the renamed rows.
+          # stamped with the same `seq` and `now` as the renamed rows.
           tombstones =
             Enum.map(real_note_updates, fn {_note, old_path, _new_path, _new_folder, _title} ->
               # T3.6 — pre-allocate the tombstone id so the AAD bind string can
@@ -3822,17 +3981,45 @@ defmodule Engram.Notes do
       broadcast_contents =
         fetch_note_contents(user, Enum.map(real_note_updates, fn {n, _, _, _, _} -> n.id end))
 
-      # Side effects outside the transaction — broadcast + reindex.
-      # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
-      # Marker rows have no path / no embedding, skip the broadcast+enqueue.
+      # Side effects outside the transaction — broadcast + reindex + link
+      # rewrite fan-out. T3.2 — hmac-only args, never plaintext.
+      # Marker rows have no path / no embedding / no basename, skip everything.
       Enum.each(real_note_updates, fn {note, old_note_path, new_path, new_note_folder, _title} ->
+        old_path_hmac = old_path_hmac_b64!(user, old_note_path)
+
         _ =
           Enqueue.enqueue(
             Engram.Workers.RepathNoteIndex.new_debounced(note.id,
-              old_path_hmac: old_path_hmac_b64!(user, old_note_path)
+              old_path_hmac: old_path_hmac
             ),
             "repath_note_index"
           )
+
+        # #648/#1231 Phase 3 — a folder rename is N note renames (basename
+        # unchanged), so each moved note reuses the Phase 1 rewrite job
+        # verbatim: qualified [[old-folder/…]] occurrences get the new
+        # prefix; bare [[basename]] occurrences plan no edit (idempotence
+        # guard in Rewriter.plan_edits/5). Old-path recovery = the tombstone
+        # this very cascade inserted in the same transaction — no ciphertext
+        # args. Origin safety is by construction: the plugin never calls the
+        # folder-rename REST surface (it renames per-file over CRDT, which
+        # Phase 2 gates), so every caller here is web/MCP and must rewrite.
+        # Gated on a real move: the idempotent same-folder branch of
+        # rename_folder_gated reaches this loop with old == new.
+        _ =
+          if old_note_path != new_path do
+            Enqueue.enqueue(
+              RewriteNoteLinks.new_for(
+                user.id,
+                vault.id,
+                :note,
+                note.id,
+                old_path_hmac,
+                Base.encode64(Links.basename_hmac(user, Links.basename_key(old_note_path)))
+              ),
+              "rewrite_note_links"
+            )
+          end
 
         # #976: carry the moved note's id on the old-path delete leg. The note
         # still exists (same id, new path, upsert leg below), so receivers can
@@ -3866,6 +4053,22 @@ defmodule Engram.Notes do
           )
 
         :ok = broadcast_change(user.id, vault.id, "delete", old_note_path, note.id, [])
+      end)
+
+      # #1231 — bulk rebind fan-out: ONE RebindNoteLinks per DISTINCT moved
+      # basename (old and new basename keys are equal on a folder move, so
+      # this is do_rename_note_inner's dedup-when-equal rule at folder
+      # scale). Closes what the text rewrite can't: bare-link winners whose
+      # shortest-path tiebreak flipped with the move, and pre-typed danglers
+      # waiting on the NEW qualified path.
+      real_note_updates
+      |> Enum.filter(fn {_n, old_p, new_p, _f, _t} -> old_p != new_p end)
+      |> Enum.map(fn {_n, old_p, _np, _f, _t} ->
+        Links.basename_hmac(user, Links.basename_key(old_p))
+      end)
+      |> Enum.uniq()
+      |> Enum.each(fn hmac ->
+        _ = Enqueue.enqueue(RebindNoteLinks.new_for(user.id, vault.id, hmac), "rebind_note_links")
       end)
 
       {:ok, length(notes)}
@@ -3956,7 +4159,14 @@ defmodule Engram.Notes do
       # the update_all above rolled back. Qdrant cleanup + broadcasts.
       # Markers carry no embedding, so they skip the index-cleanup enqueue.
       Enum.each(real_notes, fn note ->
-        _ = Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
+        # `note.path` is already decrypted (fetch_decrypted_live_rows above),
+        # so the basename hmac for DeleteNoteIndex's chained rebind (#591) is
+        # free here.
+        _ =
+          Enqueue.enqueue(
+            delete_note_index_job(note, Links.basename_hmac(user, Links.basename_key(note.path))),
+            "delete_note_index"
+          )
 
         :ok = broadcast_change(user.id, vault.id, "delete", note.path, note.id, [])
       end)
@@ -4099,12 +4309,22 @@ defmodule Engram.Notes do
 
   # Shared move loop (runs inside a transaction): move each marker under
   # `target_folder` (a path), rolling the whole batch back on the first failure.
+  #
+  # ONE shared vault scan for the whole batch (mirrors do_delete_folders/3) —
+  # the old shape re-ran fetch_decrypted_live_rows (full-vault fetch + decrypt)
+  # inside EVERY marker's rename cascade. The scan is advanced IN MEMORY after
+  # each successful rename so a batch containing a parent and its own
+  # descendant still filters against post-move state (the per-marker re-scan
+  # got that for free by re-reading the DB inside the same transaction).
   defp reduce_move_folders(user, vault, marker_ids, target_folder, dek) do
+    rows = fetch_decrypted_live_rows(user, vault)
+
     marker_ids
-    |> Enum.reduce_while(%{moved: 0, pairs: []}, fn id, acc ->
-      case move_folder_into(user, vault, id, target_folder, dek) do
+    |> Enum.reduce_while({%{moved: 0, pairs: []}, rows}, fn id, {acc, rows} ->
+      case move_folder_into(user, vault, id, target_folder, dek, rows) do
         {:ok, {old_folder, new_folder}} ->
-          {:cont, %{acc | moved: acc.moved + 1, pairs: [{old_folder, new_folder} | acc.pairs]}}
+          acc = %{acc | moved: acc.moved + 1, pairs: [{old_folder, new_folder} | acc.pairs]}
+          {:cont, {acc, advance_renamed_rows(rows, old_folder, new_folder)}}
 
         {:error, :not_found} ->
           {:halt, {:rollback, {:not_found, id}}}
@@ -4114,28 +4334,60 @@ defmodule Engram.Notes do
 
         {:error, :cycle} ->
           {:halt, {:rollback, {:cycle, id}}}
-
-        {:error, reason} ->
-          {:halt, {:rollback, reason}}
       end
     end)
     |> case do
       {:rollback, reason} -> Repo.rollback(reason)
-      %{pairs: pairs} = acc -> %{acc | pairs: Enum.reverse(pairs)}
+      {%{pairs: pairs} = acc, _rows} -> %{acc | pairs: Enum.reverse(pairs)}
     end
   end
 
+  # In-memory mirror of what do_rename_folder/6 just committed, applied to the
+  # shared batch scan: rows under `old_folder` get folder/path rewritten and
+  # (real notes) dek_version bumped to AAD-bound — exactly the DB-visible
+  # outcome — so the next marker in the batch sees current state without a
+  # re-scan. Filter + rewrite arithmetic MUST match do_rename_folder/6.
+  defp advance_renamed_rows(rows, old_folder, new_folder) do
+    old_prefix = old_folder <> "/"
+    old_len = String.length(old_folder)
+
+    Enum.map(rows, fn n ->
+      folder = n.folder || ""
+
+      if folder == old_folder or String.starts_with?(folder, old_prefix) do
+        new_note_folder =
+          if folder == old_folder,
+            do: new_folder,
+            else: new_folder <> String.slice(folder, old_len..-1//1)
+
+        new_path =
+          case n.kind do
+            "folder" -> n.path
+            _ -> new_note_folder <> String.slice(n.path, String.length(folder)..-1//1)
+          end
+
+        dek_version =
+          if n.kind == "note", do: Crypto.row_version_aad_bound(), else: n.dek_version
+
+        %{n | folder: new_note_folder, path: new_path, dek_version: dek_version}
+      else
+        n
+      end
+    end)
+  end
+
   # Resolve source marker → compute new folder under target → delegate to
-  # rename_folder/4 (which cascades through descendants). Mirrors
-  # move_note_into_folder/4's contract: returns {:ok, _} or {:error, atom}.
-  defp move_folder_into(user, vault, id, target_folder, dek) do
+  # the gated rename (which cascades through descendants, reusing the shared
+  # batch scan). Mirrors move_note_into_folder/4's contract: returns {:ok, _}
+  # or {:error, atom}.
+  defp move_folder_into(user, vault, id, target_folder, dek, rows) do
     case get_folder_marker_by_id(user, vault, id) do
       {:ok, marker} ->
         source_folder = hydrate_folder_marker(marker, dek).folder
 
         # Cycle guard: moving a folder into itself or any descendant would
         # produce a path that's a strict suffix of the source, which both
-        # `do_rename_folder/5`'s prefix scan can't reason about and is
+        # `do_rename_folder/6`'s prefix scan can't reason about and is
         # semantically nonsense ("a" cannot live under "a/b"). Catch it
         # before the cascade runs so the caller gets a stable `:cycle`
         # signal instead of partial moves or a Postgrex crash.
@@ -4151,10 +4403,12 @@ defmodule Engram.Notes do
               tf -> tf <> "/" <> leaf
             end
 
-          case rename_folder(user, vault, source_folder, new_folder) do
+          # rename_folder_gated's only error is :conflict — the batch entry
+          # point already ran ensure_user_dek, so rename_folder/4's wider
+          # error surface can't arise here (dialyzer proves the coverage).
+          case rename_folder_gated(user, vault, source_folder, new_folder, rows) do
             {:ok, _count} -> {:ok, {source_folder, new_folder}}
             {:error, :conflict} -> {:error, :conflict}
-            {:error, reason} -> {:error, reason}
           end
         end
 
@@ -4271,12 +4525,7 @@ defmodule Engram.Notes do
     # for a new vault's first note).
     {:ok, ids} =
       Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from n in Note,
-            where: n.user_id == ^user.id and n.vault_id == ^vault.id,
-            select: n.id,
-            limit: 2
-        )
+        Repo.all(from(n in scoped(user, vault), select: n.id, limit: 2))
       end)
 
     _ =
@@ -4545,6 +4794,76 @@ defmodule Engram.Notes do
   # row-id-bound AAD and recomputes the folder_hmac. Returns
   # `{ciphertext, nonce, hmac}` — caller splices into Repo.update_all `set:`.
   # No content/title/path/tags work because markers have none of those.
+  defp rename_col_sql_type(:tags_hmac), do: "bytea[]"
+  defp rename_col_sql_type(:dek_version), do: "integer"
+  defp rename_col_sql_type(_col), do: "bytea"
+
+  # Attaches the cascade's shared timestamp to each {id, kw} rename row,
+  # producing the [{id, stamp, kw}] shape bulk_rename_update! consumes.
+  defp stamp_rename_rows(rows, now) do
+    Enum.map(rows, fn {id, kw} -> {id, now, kw} end)
+  end
+
+  # One `UPDATE notes ... FROM (VALUES ...)` per ≤500-row chunk. Every row in a
+  # class gets DISTINCT ciphertexts, so this can't be a single update_all — but
+  # it must not be one UPDATE per note either (the N+1 this replaces). Runs
+  # inside the caller's with_tenant transaction: the RLS role restricts the raw
+  # UPDATE to the tenant's rows, and the shared `seq` keeps the #614
+  # one-op-one-seq contract. `rows` is [{note_id, stamp, kw}] where `kw`
+  # holds a value for every column in `cols`. A nested-collision unique
+  # violation raises Postgrex.Error exactly like the per-note update_all did.
+  defp bulk_rename_update!([], _cols, _seq), do: :ok
+
+  defp bulk_rename_update!(rows, cols, seq) do
+    set_sql =
+      Enum.map_join(cols, ", ", &"#{&1} = v.#{&1}") <> ", updated_at = v.updated_at, seq = $1"
+
+    # id + updated_at + the class's columns, per VALUES row.
+    ncols = length(cols) + 2
+
+    rows
+    |> Enum.chunk_every(@rename_update_chunk)
+    |> Enum.each(fn chunk ->
+      values_sql =
+        chunk
+        |> Enum.with_index()
+        |> Enum.map_join(", ", fn {_row, i} ->
+          base = 2 + i * ncols
+
+          col_placeholders =
+            cols
+            |> Enum.with_index(2)
+            |> Enum.map_join(", ", fn {col, j} ->
+              "$#{base + j}::#{rename_col_sql_type(col)}"
+            end)
+
+          "($#{base}::uuid, $#{base + 1}::timestamp, #{col_placeholders})"
+        end)
+
+      params =
+        [seq] ++
+          Enum.flat_map(chunk, fn {id, stamp, kw} ->
+            [
+              Ecto.UUID.dump!(id),
+              DateTime.to_naive(stamp) | Enum.map(cols, &Keyword.fetch!(kw, &1))
+            ]
+          end)
+
+      _ =
+        Repo.query!(
+          """
+          UPDATE notes AS n
+          SET #{set_sql}
+          FROM (VALUES #{values_sql}) AS v(id, updated_at, #{Enum.join(cols, ", ")})
+          WHERE n.id = v.id
+          """,
+          params
+        )
+    end)
+
+    :ok
+  end
+
   defp folder_only_aad_bound(user, row_id, folder, _dek_version) do
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, filter_key} = Crypto.dek_filter_key(user)
@@ -4606,6 +4925,7 @@ defmodule Engram.Notes do
       path_ciphertext: path_ct,
       path_nonce: path_n,
       path_hmac: Crypto.hmac_field(filter_key, path),
+      basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path)),
       folder_ciphertext: folder_ct,
       folder_nonce: folder_n,
       folder_hmac: Crypto.hmac_field(filter_key, folder),
@@ -4631,6 +4951,7 @@ defmodule Engram.Notes do
       path_ciphertext: path_ct,
       path_nonce: path_n,
       path_hmac: Crypto.hmac_field(filter_key, path),
+      basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path)),
       folder_ciphertext: folder_ct,
       folder_nonce: folder_n,
       folder_hmac: Crypto.hmac_field(filter_key, folder)

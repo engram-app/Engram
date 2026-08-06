@@ -105,9 +105,12 @@ defmodule Engram.Observability.PyroscopeTest do
       # a unit test (any GenServer in the VM contributes a frame), so
       # we just assert the invariant: counter values are non-negative
       # integers and the keyset is non-empty when other processes exist.
-      counters = Pyroscope.take_sample(%{})
+      {counters, process_count} = Pyroscope.take_sample(%{})
       assert is_map(counters)
       assert map_size(counters) > 0
+      # The count rides out of the same walk that samples, so it must
+      # cover at least the processes we actually folded in.
+      assert process_count >= map_size(counters)
 
       Enum.each(counters, fn {k, v} ->
         assert is_binary(k)
@@ -116,7 +119,7 @@ defmodule Engram.Observability.PyroscopeTest do
 
       # Running another tick on top of the first should never decrease
       # any existing counter — it's monotonic until the next push.
-      counters2 = Pyroscope.take_sample(counters)
+      {counters2, _} = Pyroscope.take_sample(counters)
       assert map_size(counters2) >= map_size(counters)
     end
 
@@ -124,7 +127,7 @@ defmodule Engram.Observability.PyroscopeTest do
       # Drive a sample from a known pid. The collapsed stack for *that*
       # pid will mention this test process and ExUnit framework code;
       # it must NOT appear in the counters because we filter `self()`.
-      counters = Pyroscope.take_sample(%{})
+      {counters, _} = Pyroscope.take_sample(%{})
 
       # No counter key should contain the test module name in the leaf
       # position (the test runner's current frame at sample time).
@@ -210,8 +213,9 @@ defmodule Engram.Observability.PyroscopeTest do
       assert query =~ "name=engram-test"
       assert query =~ "format=folded"
       assert query =~ "spyName=elixirspy"
-      # 1000ms / 5ms sample = 200Hz
-      assert query =~ "sampleRate=200"
+      # sampleRate is now a DECLARED constant with counts scaled to match,
+      # not derived from the configured interval — see scale_counts/3.
+      assert query =~ "sampleRate=100"
       assert query =~ ~r/from=\d+/
       assert query =~ ~r/until=\d+/
 
@@ -250,6 +254,64 @@ defmodule Engram.Observability.PyroscopeTest do
       assert_receive {[:engram, :pyroscope, :sample], ^ref, measurements, _meta}, 1_000
       assert is_float(measurements.duration_ms) and measurements.duration_ms >= 0.0
       assert is_integer(measurements.process_count) and measurements.process_count > 0
+    end
+  end
+
+  describe "scale_counts/3 — sample rate is measured, not assumed" do
+    # Pyroscope computes time as `count / sampleRate`. We always declare
+    # sampleRate=100, so the invariant every case below checks is:
+    #
+    #     scaled_count / 100 == seconds that stack was actually observed
+    @declared 100
+
+    test "a sub-1Hz sampler reports true wall-clock time" do
+      # Prod shape: PYROSCOPE_SAMPLE_INTERVAL_MS=2000 over a 10s window
+      # => 5 passes, 2s per sample. A stack seen in 3 of them was live
+      # for 6 seconds.
+      #
+      # This is the regression that motivated scale_counts/3: the old code
+      # did `max(1, div(1_000, 2_000))` => sampleRate=1, so 3 counts read
+      # as 3 seconds instead of 6 — every absolute time 2x low.
+      scaled = Pyroscope.scale_counts(%{"a;b" => 3}, 5, 10_000)
+
+      assert scaled["a;b"] / @declared == 6.0
+    end
+
+    test "the achieved rate is used, not the configured one" do
+      # A 50ms configured interval with a ~15ms pass really runs at
+      # ~15.4Hz, not 20Hz, because schedule_sample/1 fires AFTER the pass.
+      # 154 passes in a 10s window => 64.9ms per sample.
+      scaled = Pyroscope.scale_counts(%{"hot" => 154}, 154, 10_000)
+
+      # 154 samples x 64.9ms each == the full 10s window.
+      assert_in_delta scaled["hot"] / @declared, 10.0, 0.01
+    end
+
+    test "a stack seen once never rounds away to zero" do
+      # Fast sampling makes the factor tiny (here 100 * 0.001 = 0.1).
+      # round/1 would take a single sighting to 0 and drop the stack from
+      # the flame graph entirely, which is worse than a rounding error.
+      scaled = Pyroscope.scale_counts(%{"rare" => 1}, 1_000, 1_000)
+
+      assert scaled["rare"] >= 1
+    end
+
+    test "relative proportions between stacks are preserved" do
+      scaled = Pyroscope.scale_counts(%{"hot" => 90, "cold" => 10}, 10, 10_000)
+
+      assert scaled["hot"] / scaled["cold"] == 9.0
+    end
+
+    test "degenerate windows pass counts through instead of dividing by zero" do
+      # Can happen if :push fires before any :sample has landed, or if the
+      # monotonic clock reports a zero-width window.
+      assert Pyroscope.scale_counts(%{"a" => 2}, 0, 10_000) == %{"a" => 2}
+      assert Pyroscope.scale_counts(%{"a" => 2}, 5, 0) == %{"a" => 2}
+      assert Pyroscope.scale_counts(%{"a" => 2}, 5, -1) == %{"a" => 2}
+    end
+
+    test "an empty counter map stays empty" do
+      assert Pyroscope.scale_counts(%{}, 5, 10_000) == %{}
     end
   end
 end

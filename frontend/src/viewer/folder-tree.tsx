@@ -29,6 +29,7 @@ import {
 } from "../api/queries";
 import { uuid7 } from "../crdt/uuid7";
 import { useFolderTreeState } from "../layout/folder-tree-context";
+import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";
 import {
 	isSyntheticFolderId,
@@ -505,10 +506,13 @@ export default function FolderTree() {
 				// No reliable sibling-name set on hand — pass an empty Set and let
 				// the backend reject if collision happens; the toast surfaces it.
 				const new_path = nextCopyName(note.path, new Set<string>());
-				duplicateNote
-					.mutateAsync({ src_path: note.path, new_path })
-					.then(() => toast.success("Duplicated"))
-					.catch(() => toast.error("Duplicate failed"));
+				// `mutate`, not `mutateAsync` — the hook's onError already toasts, and
+				// it distinguishes a name collision from a general failure. Catching
+				// here too put a second, vaguer toast on top of the useful one.
+				duplicateNote.mutate(
+					{ src_path: note.path, new_path },
+					{ onSuccess: () => toast.success("Duplicated") },
+				);
 				break;
 			}
 			case "copy-wikilink": {
@@ -522,10 +526,9 @@ export default function FolderTree() {
 				}
 				// Wikilinks resolve by filename in Obsidian, never by H1 title.
 				const label = noteName(note.path) || note.path;
-				navigator.clipboard
-					.writeText(`[[${label}]]`)
-					.then(() => toast.success("Copied wikilink"))
-					.catch(() => toast.error("Copy failed"));
+				copyToClipboard(`[[${label}]]`).then((ok) =>
+					ok ? toast.success("Copied wikilink") : toast.error("Copy failed"),
+				);
 				break;
 			}
 			default:

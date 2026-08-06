@@ -858,6 +858,20 @@ defmodule Engram.Crypto do
   defp safe_decode64(s) when is_binary(s), do: Base.decode64(s)
   defp safe_decode64(_), do: :error
 
+  @doc """
+  Lowercase-hex SHA-256 digest of `data`.
+
+  Canonical helper for secret-token fingerprints stored for indexed DB
+  lookup (refresh tokens, API keys, invite / password-reset / device-flow
+  tokens, OAuth authorization codes). The raw secret never touches the DB;
+  only this digest does. NOT for note-content hashing — that is per-user
+  keyed to defeat cross-user correlation (see `hmac_content_hash/2`).
+  """
+  @spec sha256_hex(iodata()) :: String.t()
+  def sha256_hex(data) do
+    :crypto.hash(:sha256, data) |> Base.encode16(case: :lower)
+  end
+
   @filter_key_info "engram-filter-v1"
   @content_hash_info "engram-content-hash-v1"
 

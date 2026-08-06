@@ -70,6 +70,7 @@ vi.mock("../api/queries", () => ({
 				connected_at: null,
 				first_user_agent: null,
 				first_ip: null,
+				redirect_uri: null,
 				redirect_uris: [],
 			},
 		],

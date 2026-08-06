@@ -29,7 +29,7 @@ from helpers.api import ApiClient
 from helpers.auth_provider import get_auth_provider, ClerkAuthProvider
 from helpers.billing import grant_test_plan
 from helpers.cdp import CdpClient
-from helpers.cleanup import cleanup_minio_bucket, cleanup_test_data, cleanup_vaults
+from helpers.cleanup import cleanup_test_data, cleanup_vaults
 from helpers.obsidian import ObsidianInstance
 from helpers.oauth import provision_oauth_tokens, swap_to_oauth, restore_auth, wait_for_stream
 
@@ -889,12 +889,11 @@ def session_cleanup(request, auth_provider):
             cleanup_test_data(pattern)
         except Exception as e:
             logging.getLogger(__name__).error("DB cleanup failed for %s: %s", pattern, e)
-    # Blob cleanup — purge the MinIO bucket so per-session re-runs do not
-    # accumulate orphan attachment objects. Skips silently outside CI when
-    # the container name doesn't match.
-    try:
-        cleanup_minio_bucket()
-    except Exception as e:
-        logging.getLogger(__name__).error("MinIO cleanup failed: %s", e)
+    # No blob cleanup step. Attachments go to one permanent bucket on the
+    # central FastRaid MinIO whose objects expire via a server-side ILM rule
+    # (7 days) — see ci/compose.yml. Deleting them from here is what created
+    # the leak this replaces: teardown that must be remembered gets skipped on
+    # cancel, and `mc rb` from one pytest session removed the bucket out from
+    # under the next session in the same job.
     # Vault cleanup
     cleanup_vaults()

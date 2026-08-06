@@ -507,7 +507,7 @@ defmodule EngramWeb.NotesControllerTest do
   # Serializer nil-content boundary (same class as the broadcast_change fix,
   # e2e test_34): a meta-projected struct whose content was never loaded must
   # OMIT the content key, never fabricate "" beside a real content_hash.
-  # nil cannot reach note_json/change_json through today's callers (all of
+  # nil cannot reach note_json through today's callers (all of
   # them full-load + decrypt), so this pins the boundary directly: a future
   # projection leak fails as a missing key (the plugin fetches on absence)
   # instead of a silent 0-byte file seeded as converged forever.
@@ -518,75 +518,32 @@ defmodule EngramWeb.NotesControllerTest do
       assert EngramWeb.NotesController.put_content(%{}, "# X") == %{content: "# X"}
     end
 
-    test "genuinely empty note keeps content == \"\" on GET and changes pages", %{
+    test "genuinely empty note keeps content == \"\" on GET", %{
       conn: conn
     } do
       post(conn, "/api/notes", %{path: "Test/Empty.md", content: "", mtime: 1_000.0})
 
       body = conn |> get("/api/notes/Test/Empty.md") |> json_response(200)
       assert body["content"] == ""
-
-      %{"changes" => changes} =
-        conn
-        |> get("/api/notes/changes?since=2020-01-01T00:00:00Z")
-        |> json_response(200)
-
-      change = Enum.find(changes, &(&1["path"] == "Test/Empty.md"))
-      assert change["content"] == ""
     end
   end
 
-  # GET /notes/changes
+  # GET /notes/changes — retired timestamp feed
   # ---------------------------------------------------------------------------
 
-  describe "GET /notes/changes" do
-    test "returns changes since timestamp", %{conn: conn} do
-      post(conn, "/api/notes", %{path: "Test/Recent.md", content: "# Recent", mtime: 1_000.0})
+  describe "GET /notes/changes (retired)" do
+    test "returns 410 Gone regardless of params", %{conn: conn} do
+      resp =
+        conn
+        |> get("/api/notes/changes?since=2000-01-01T00:00:00Z")
+        |> json_response(410)
 
-      conn = get(conn, "/api/notes/changes?since=2020-01-01T00:00:00Z")
-      assert %{"changes" => changes} = json_response(conn, 200)
-      assert Enum.any?(changes, &(&1["path"] == "Test/Recent.md"))
-    end
+      assert %{"error" => "gone", "message" => message} = resp
+      assert message =~ "sync socket"
 
-    test "change payload includes note id", %{conn: conn} do
-      post_conn =
-        post(conn, "/api/notes", %{path: "Test/IdShape.md", content: "# Id", mtime: 1_000.0})
-
-      assert %{"note" => %{"id" => note_id}} = json_response(post_conn, 200)
-      assert is_binary(note_id)
-
-      conn = get(conn, "/api/notes/changes?since=2020-01-01T00:00:00Z")
-      assert %{"changes" => changes} = json_response(conn, 200)
-
-      change = Enum.find(changes, &(&1["path"] == "Test/IdShape.md"))
-      assert change["id"] == note_id
-      assert is_binary(change["id"])
-    end
-
-    test "includes deleted notes with deleted=true flag", %{conn: conn} do
-      post(conn, "/api/notes", %{path: "Test/Deleted.md", content: "# Del", mtime: 1_000.0})
-      delete(conn, "/api/notes/Test/Deleted.md")
-
-      conn = get(conn, "/api/notes/changes?since=2020-01-01T00:00:00Z")
-      assert %{"changes" => changes} = json_response(conn, 200)
-
-      deleted = Enum.find(changes, &(&1["path"] == "Test/Deleted.md"))
-      assert deleted["deleted"] == true
-    end
-
-    test "returns empty list for future timestamp", %{conn: conn} do
-      conn = get(conn, "/api/notes/changes?since=2099-01-01T00:00:00Z")
-      assert %{"changes" => []} = json_response(conn, 200)
-    end
-
-    test "returns 400 for invalid timestamp", %{conn: conn} do
-      conn = get(conn, "/api/notes/changes?since=not-a-date")
-      assert json_response(conn, 400)
-    end
-
-    test "returns 400 when since param is missing", %{conn: conn} do
-      conn = get(conn, "/api/notes/changes")
-      assert json_response(conn, 400)
+      # 410 must not depend on params
+      assert %{"error" => "gone"} =
+               conn |> get("/api/notes/changes") |> json_response(410)
     end
   end
 
@@ -702,11 +659,6 @@ defmodule EngramWeb.NotesControllerTest do
 
       authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
       %{conn: authed, user: user, vault: vault}
-    end
-
-    test "GET /api/notes/changes still lists changes (read allowed)", %{conn: conn} do
-      conn = get(conn, ~p"/api/notes/changes?since=2020-01-01T00:00:00Z")
-      assert %{"changes" => _} = json_response(conn, 200)
     end
 
     test "GET /api/notes/*path still reads an existing note (read allowed)",

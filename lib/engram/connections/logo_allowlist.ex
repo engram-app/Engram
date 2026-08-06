@@ -4,14 +4,23 @@ defmodule Engram.Connections.LogoAllowlist do
 
   ## Two independent questions
 
-  **Who is this?** Three sources, in precedence order: the RFC 7591
-  `software_id` (most MCP clients omit it), the `redirect_uri` host, and the
-  normalized `client_name`.
+  **Who is this?** Four sources, in precedence order: the CIMD `client_id` host,
+  the `redirect_uri` host, the RFC 7591 `software_id` (which now names only our
+  own plugin), and the normalized `client_name`.
 
-  **Can we prove it?** Exactly one source: a vendor-owned HTTPS redirect host.
-  That is un-spoofable for grant delivery: a forger can claim
-  `redirect_uri=https://claude.ai/...`, but the auth code is then delivered to
-  Anthropic, not to them.
+  **Can we prove it?** Two sources, and both are the same proof in different
+  clothes — "this party controls a host the vendor owns":
+
+    * A vendor-owned HTTPS **redirect** host. A forger can claim
+      `redirect_uri=https://claude.ai/...`, but the auth code is then delivered
+      to Anthropic, not to them.
+    * A **CIMD** `client_id` URL. We fetched a metadata document from that exact
+      host and it declared the same `client_id`; nobody but Anthropic can serve a
+      document at `claude.ai`.
+
+  CIMD is the one that reaches local-first clients. Claude Code, Cline, Cursor
+  and OpenCode all redirect to loopback, so the redirect can never prove anything
+  about them — see `Engram.OAuth.Cimd`.
 
   `software_id` and `client_name` both arrive inside the DCR request body, so
   they are things the client *says about itself*. Neither may grant
@@ -33,6 +42,30 @@ defmodule Engram.Connections.LogoAllowlist do
   Loopback and custom schemes (Cursor desktop registers
   `cursor://anysphere.cursor-mcp/…`) never match the host map, so
   local-first clients are unverifiable by construction, not misconfigured.
+
+  ## One redirect, not a list
+
+  `resolve/4` takes the **single** redirect a grant actually used, never the
+  client's registered `redirect_uris`. The signature is the fix for #1204.
+
+  DCR is public, so a client may register several redirects and choose per
+  authorization. Resolving over the list meant *any* entry could carry the
+  badge, so an attacker registered
+
+      ["http://localhost:9999/steal", "https://claude.ai/api/mcp/auth_callback"]
+
+  authorized with the loopback, took delivery of the code on their own machine,
+  and still appeared in the victim's connections list as Claude, verified,
+  wearing Anthropic's logo. The proof the badge asserts — "the code went to a
+  host the vendor owns" — was never actually made; only a claim that it could
+  have been.
+
+  The used redirect is validated against the registered list at `/authorize`
+  and stored on `oauth_authorization_codes.redirect_uri`; it is now copied onto
+  `oauth_refresh_tokens.redirect_uri` at exchange and carried across rotation.
+  `nil` (grants predating that column, and every non-OAuth caller) resolves
+  unverified. Passing a list here is a type error, which is the point: the
+  any-match shape cannot be written again.
   """
 
   @empty %{verified: false, logo: nil, display_name: nil, slug: nil}
@@ -60,8 +93,12 @@ defmodule Engram.Connections.LogoAllowlist do
   }
 
   # Keyed on redirect_uri host. Vendor-owned HTTPS hosts only. Every entry here
-  # was observed on a real grant (prod, 2026-07-30). Do not add speculative
-  # hosts; an entry that never fires is dead config that reads as coverage.
+  # was observed on a real grant — the first five in prod on 2026-07-30, Devin
+  # and LobeHub on staging on 2026-08-01. Staging counts because what the rule
+  # is actually guarding is "a real client really redirected here", not which
+  # environment answered; a guessed host is the thing that must never land. Do
+  # not add speculative hosts; an entry that never fires is dead config that
+  # reads as coverage.
   # `logo: nil` where we have no asset yet; the UI falls back to a plug icon.
   @redirect_host %{
     "claude.ai" => %{
@@ -79,7 +116,30 @@ defmodule Engram.Connections.LogoAllowlist do
     # Antigravity registers as "antigravity-client", which does NOT derive to the
     # `antigravity` slug; the host is what carries it. Shared by Antigravity 2.0,
     # the IDE, and the CLI (one documented callback for all three).
-    "antigravity.google" => %{logo: nil, display_name: "Antigravity", slug: "antigravity"}
+    "antigravity.google" => %{logo: nil, display_name: "Antigravity", slug: "antigravity"},
+    # Devin's CLOUD agent. `slug` is not only the onboarding-checklist key — the
+    # connections page resolves a brand mark by slug FIRST (`ToolMark`), then the
+    # backend `logo`, then a generic icon. So `slug: nil` here meant no icon at
+    # all, unlike every other `logo: nil` entry above, which all pair with a slug
+    # that exists in the frontend BRANDS map.
+    #
+    # `devin` is deliberately NOT in `Engram.Onboarding.valid_tools/0`: a slug
+    # only *creates* a checklist row when the user picked that tool in the FTUX
+    # questionnaire, and connection slugs merely mark existing rows complete. So
+    # this buys the icon without inventing a row that would need a
+    # `/docs/integrations/devin/` page (that page 404s, and `checklist-widget`'s
+    # #1157 parity test requires one for every SELECTABLE slug).
+    #
+    # Vendor note: Cognition, which makes Devin, acquired Windsurf in 2025 and
+    # renamed that IDE "Devin Desktop" on 2026-06-02. Same vendor as the
+    # `windsurf` slug, but a different client — the IDE redirects to loopback,
+    # this is the server-side agent.
+    "api.devin.ai" => %{logo: nil, display_name: "Devin", slug: "devin"},
+    # LobeHub is the cloud host; LobeChat is the product and the catalog slug, so
+    # the row already exists in onboarding and this host ticks it. The observed
+    # `client_name` is "LobeHub", which is why the host map has to carry the
+    # mapping — the name does not derive to `lobechat`.
+    "app.lobehub.com" => %{logo: nil, display_name: "LobeChat", slug: "lobechat"}
   }
 
   # Slugs a client may self-report via `client_name`. `web_only` / `other_mcp`
@@ -106,33 +166,92 @@ defmodule Engram.Connections.LogoAllowlist do
   Resolve a client's identity, and separately decide whether it is verified.
 
   **Identity** (logo / display_name / slug) comes from the first source that
-  matches, **proven before claimed**: the redirect host, then `software_id`,
-  then the normalized `client_name`.
+  matches, **proven before claimed**: the CIMD `client_id` host, then the
+  redirect host, then `software_id`, then the normalized `client_name`.
 
-  The host leads because it is the only source that is not self-asserted. A
-  client claiming `software_id: "engram-vault-sync"` while redirecting to
-  `claude.ai` must not be listed as our plugin: the grant is delivered to
-  Anthropic, so Anthropic is who the user is actually connected to.
+  The two host sources lead because they are the only ones that are not
+  self-asserted. A client claiming `software_id: "engram-vault-sync"` while
+  redirecting to `claude.ai` must not be listed as our plugin: the grant is
+  delivered to Anthropic, so Anthropic is who the user is actually connected to.
 
-  **`verified`** is decided by exactly one thing: whether the redirect lands on
-  a vendor-owned HTTPS host. Identity and verification are deliberately
-  computed independently: `software_id` and `client_name` both arrive in the
-  DCR body and are equally self-asserted, so neither may grant the badge.
+  **`verified`** is decided by two sources, and by nothing else:
+
+    * the redirect landing on a vendor-owned HTTPS host, or
+    * a CIMD `client_id` whose metadata document we fetched from that host.
+
+  Both are the same argument — "this party controls a host the vendor owns" —
+  and CIMD is the one that reaches loopback clients, which no redirect can
+  prove. Note that CIMD grants the badge **without** the host having to appear
+  in `@redirect_host`: fetching the document already established who serves it.
+
+  Identity and verification are deliberately computed independently, because
+  `software_id` and `client_name` both arrive in the DCR body and are equally
+  self-asserted, so neither may ever grant the badge.
+
+  `redirect_uri` is the ONE redirect the grant used, not the registered list —
+  see "One redirect, not a list" above for why that distinction is the whole
+  security property.
   """
-  @spec resolve(String.t() | nil, [String.t()] | nil, String.t() | nil) :: entry()
-  def resolve(software_id, redirect_uris, client_name \\ nil) do
-    by_host = lookup_by_host(redirect_uris)
+  @spec resolve(String.t() | nil, String.t() | nil, String.t() | nil, String.t() | nil) ::
+          entry()
+  def resolve(software_id, redirect_uri, client_name \\ nil, cimd_url \\ nil) do
+    by_cimd = lookup_by_cimd(cimd_url)
+    by_host = lookup_by_host(redirect_uri)
     by_id = lookup(software_id)
 
     identity =
       cond do
+        by_cimd != @empty -> fill_slug(by_cimd, client_name)
         by_host != @empty -> by_host
         by_id != @empty -> by_id
         true -> lookup_by_name(client_name)
       end
 
-    %{identity | verified: by_host != @empty}
+    %{identity | verified: by_cimd != @empty or by_host != @empty}
   end
+
+  # A CIMD vendor we have no `@redirect_host` entry for still deserves its
+  # checklist row, and the name-derived slug is exactly the mechanism loopback
+  # clients already use. Safe for the same reason it is safe there: a slug ticks a
+  # row in the user's own checklist and grants neither logo nor badge. A CIMD
+  # client has *more* standing than a loopback one, not less.
+  defp fill_slug(%{slug: nil} = identity, client_name),
+    do: %{identity | slug: lookup_by_name(client_name).slug}
+
+  defp fill_slug(identity, _client_name), do: identity
+
+  # A CIMD `client_id` is an HTTPS URL whose document we fetched from that exact
+  # host, and the document's own `client_id` had to equal the URL. So the host
+  # owner authored this client, by the same argument that makes a vendor redirect
+  # host un-spoofable — and unlike the redirect, it works for loopback clients,
+  # which is the entire reason CIMD is worth implementing.
+  #
+  # Verification therefore does NOT depend on recognising the host: fetching the
+  # document already proved who serves it. `@redirect_host` is consulted only to
+  # dress the row (logo, product name, catalog slug) for vendors we know.
+  defp lookup_by_cimd(url) when is_binary(url) do
+    case URI.new(url) do
+      {:ok, %URI{scheme: "https", host: host, userinfo: nil}}
+      when is_binary(host) and host != "" ->
+        @empty
+        |> Map.merge(Map.get(@redirect_host, String.downcase(host), %{}))
+        |> Map.put(:verified, true)
+        |> put_host_display_name(host)
+
+      _ ->
+        @empty
+    end
+  end
+
+  defp lookup_by_cimd(_), do: @empty
+
+  # An unrecognised CIMD vendor shows its host as the display name. The host is
+  # proven (that is what fetching the document established), so this is honest,
+  # and it beats a blank name on a row the UI is about to call verified.
+  defp put_host_display_name(%{display_name: nil} = identity, host),
+    do: %{identity | display_name: host}
+
+  defp put_host_display_name(identity, _host), do: identity
 
   # Slug-only attribution from the self-asserted `client_name`. UNVERIFIED BY
   # CONSTRUCTION: this path may set `slug` and nothing else.
@@ -210,19 +329,20 @@ defmodule Engram.Connections.LogoAllowlist do
   # parses to host "claude.ai" but delivers the auth code to an attacker-
   # controlled handler, so the un-spoofability argument does not hold, reject
   # both. Hosts are case-insensitive (RFC 3986 §3.2.2).
-  defp lookup_by_host(uris) when is_list(uris) do
-    Enum.find_value(uris, @empty, fn uri ->
-      case URI.parse(uri) do
-        %URI{scheme: "https", host: host, userinfo: nil} when is_binary(host) ->
-          case Map.get(@redirect_host, String.downcase(host)) do
-            nil -> nil
-            entry -> Map.merge(%{verified: true}, entry)
-          end
+  #
+  # ONE URI, never a list. See the "One redirect" section of the moduledoc:
+  # scanning a registered list for any vendor host is what #1204 was.
+  defp lookup_by_host(uri) when is_binary(uri) do
+    case URI.parse(uri) do
+      %URI{scheme: "https", host: host, userinfo: nil} when is_binary(host) ->
+        case Map.get(@redirect_host, String.downcase(host)) do
+          nil -> @empty
+          entry -> Map.merge(@empty, Map.put(entry, :verified, true))
+        end
 
-        _ ->
-          nil
-      end
-    end)
+      _ ->
+        @empty
+    end
   end
 
   defp lookup_by_host(_), do: @empty

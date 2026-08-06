@@ -20,7 +20,7 @@ defmodule EngramWeb.Plugs.HostRewrite do
   When unset (default), the plug is a strict no-op — selfhost releases never
   touch the rewrite path.
   """
-  import Plug.Conn
+  alias EngramWeb.Plugs.Halt
 
   # Allowed top-level scopes that should pass through unmodified on
   # `api.engram.page`. Matched with `under?/2` (exact match OR followed
@@ -114,17 +114,11 @@ defmodule EngramWeb.Plugs.HostRewrite do
   end
 
   defp reject_unknown(conn, api_host) do
-    body =
-      Jason.encode!(%{
-        error: "gone",
-        message: "This host no longer serves the web app. Use #{api_host} for API access.",
-        api_host: api_host
-      })
-
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(410, body)
-    |> halt()
+    Halt.json(conn, 410, %{
+      error: "gone",
+      message: "This host no longer serves the web app. Use #{api_host} for API access.",
+      api_host: api_host
+    })
   end
 
   defp handle_api_host(conn) do
@@ -178,10 +172,9 @@ defmodule EngramWeb.Plugs.HostRewrite do
     %{conn | request_path: new_path, path_info: new_info}
   end
 
+  # Jason.encode!(%{error: "not_found"}) emits exactly the ~s({"error":"not_found"})
+  # literal this previously hand-rolled — same bytes on the wire.
   defp reject(conn) do
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(404, ~s({"error":"not_found"}))
-    |> halt()
+    Halt.json(conn, 404, %{error: "not_found"})
   end
 end

@@ -68,6 +68,20 @@ defmodule Engram.OnboardingTest do
       :ok
     end
 
+    test "an UNSET :billing_enabled key is treated as disabled everywhere in status/1" do
+      # status/1 used to read :billing_enabled twice with OPPOSITE defaults
+      # (false for the wizard steps, true for the subscription gate) — with
+      # the key unset that yields self-host wizard behavior but SaaS
+      # subscription gating in the same response.
+      Application.delete_env(:engram, :billing_enabled)
+
+      user = insert(:user, onboarding_profile: %{})
+      status = Onboarding.status(user)
+
+      assert status.terms_ok
+      assert status.subscription_ok
+    end
+
     test "fresh user lands on :tools (agreement + billing skipped)" do
       user = insert(:user, onboarding_profile: %{})
 

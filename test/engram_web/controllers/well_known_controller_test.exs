@@ -30,6 +30,33 @@ defmodule EngramWeb.WellKnownControllerTest do
     end
   end
 
+  # RFC 9728 §3.1: for a resource with a path (`https://host/api/mcp`), the
+  # metadata URL inserts `/.well-known/oauth-protected-resource` BEFORE that
+  # path. A strict client derives this from the resource it dialed and tries it
+  # FIRST. We served only the root form, so this 404'd and only clients with a
+  # fallback (MCPJam, Claude) ever reached discovery — the rest could not find
+  # the authorization server at all.
+  #
+  # The root form stays: on the dedicated MCP host the advertised resource IS
+  # the bare host (#634 / WellKnownHostTest), and for a root resource the root
+  # well-known is the spec-correct location.
+  describe "GET /.well-known/oauth-protected-resource/api/mcp (RFC 9728 §3.1)" do
+    test "serves the same metadata as the root form", %{conn: conn} do
+      path_scoped = json_response(get(conn, "/.well-known/oauth-protected-resource/api/mcp"), 200)
+      root = json_response(get(conn, "/.well-known/oauth-protected-resource"), 200)
+
+      assert path_scoped == root
+    end
+
+    test "advertises a resource matching the URL the client dialed", %{conn: conn} do
+      body = json_response(get(conn, "/.well-known/oauth-protected-resource/api/mcp"), 200)
+
+      # Strict clients abort when `resource` != the URL they resolved metadata
+      # for. In the selfhost/test shape that is the /api/mcp path form.
+      assert String.ends_with?(body["resource"], "/api/mcp")
+    end
+  end
+
   describe "GET /.well-known/oauth-authorization-server" do
     test "returns RFC 8414 server metadata with required fields", %{conn: conn} do
       conn = get(conn, "/.well-known/oauth-authorization-server")
@@ -95,6 +122,30 @@ defmodule EngramWeb.WellKnownControllerTest do
       conn = get(conn, "/.well-known/oauth-authorization-server")
 
       assert ["application/json" <> _] = get_resp_header(conn, "content-type")
+    end
+  end
+
+  # This key is not cosmetic capability signalling. Claude picks CIMD only when
+  # the metadata advertises BOTH "none" in token_endpoint_auth_methods_supported
+  # and this key, and once it does it stops choosing DCR with NO silent fallback.
+  # So this assertion is really about the contract: if the key is ever removed or
+  # gated, Claude Code stops using CIMD and silently reverts to anonymous DCR
+  # registrations — the exact gap #1148 existed to close, and nothing else would
+  # notice.
+  describe "client_id_metadata_document_supported" do
+    test "is advertised, unconditionally", %{conn: conn} do
+      body = conn |> get("/.well-known/oauth-authorization-server") |> json_response(200)
+
+      assert body["client_id_metadata_document_supported"] == true
+    end
+
+    # Both halves of the precondition have to hold together: Claude checks for
+    # "none" AND the CIMD key, so losing either one silently drops it back to DCR.
+    test "advertises both halves of the CIMD precondition together", %{conn: conn} do
+      body = conn |> get("/.well-known/oauth-authorization-server") |> json_response(200)
+
+      assert "none" in body["token_endpoint_auth_methods_supported"]
+      assert body["client_id_metadata_document_supported"] == true
     end
   end
 end

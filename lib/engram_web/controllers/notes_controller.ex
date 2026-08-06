@@ -3,7 +3,11 @@ defmodule EngramWeb.NotesController do
   use OpenApiSpex.ControllerSpecs
   alias EngramWeb.Schemas
 
+  alias Engram.Links
   alias Engram.Notes
+  alias EngramWeb.BatchOps
+
+  action_fallback EngramWeb.FallbackController
 
   require Logger
 
@@ -41,17 +45,15 @@ defmodule EngramWeb.NotesController do
 
       case Notes.upsert_note(user, vault, params) do
         {:ok, note} ->
-          json(conn, %{note: note_json(note)})
+          json(conn, %{note: note_json(note, user)})
 
         {:error, :version_conflict, server_note} ->
           conn
           |> put_status(409)
-          |> json(%{conflict: true, server_note: note_json(server_note)})
+          |> json(%{conflict: true, server_note: note_json(server_note, user)})
 
-        {:error, %Ecto.Changeset{} = changeset} ->
-          conn
-          |> put_status(422)
-          |> json(%{errors: format_errors(changeset)})
+        {:error, %Ecto.Changeset{}} = error ->
+          error
 
         {:error, {:notes_cap_reached, limit, current}} ->
           # Pricing v2 §G — Free notes_cap (and Starter at higher ceiling)
@@ -131,7 +133,7 @@ defmodule EngramWeb.NotesController do
                    "mtime" => note.mtime
                  }) do
               {:ok, updated} ->
-                json(conn, %{created: false, path: path, note: note_json(updated)})
+                json(conn, %{created: false, path: path, note: note_json(updated, user)})
 
               {:error, changeset} ->
                 conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
@@ -171,7 +173,7 @@ defmodule EngramWeb.NotesController do
                "mtime" => mtime
              }) do
           {:ok, note} ->
-            json(conn, %{created: true, path: path, note: note_json(note)})
+            json(conn, %{created: true, path: path, note: note_json(note, user)})
 
           {:error, :recently_deleted} ->
             # Delete-wins: append-as-create races an explicit delete of the same
@@ -207,7 +209,7 @@ defmodule EngramWeb.NotesController do
     path = Enum.join(List.wrap(path_parts), "/")
 
     case Notes.get_note(user, vault, path) do
-      {:ok, note} -> json(conn, note_json(note))
+      {:ok, note} -> json(conn, note_json(note, user))
       {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not found"})
     end
   end
@@ -234,10 +236,15 @@ defmodule EngramWeb.NotesController do
 
     case Notes.rename_note(user, vault, old_path, new_path) do
       {:ok, note} ->
-        json(conn, %{renamed: true, old_path: old_path, new_path: new_path, note: note_json(note)})
+        json(conn, %{
+          renamed: true,
+          old_path: old_path,
+          new_path: new_path,
+          note: note_json(note, user)
+        })
 
-      {:error, :conflict} ->
-        conn |> put_status(409) |> json(%{error: "conflict"})
+      {:error, :conflict} = error ->
+        error
 
       {:error, :not_found} ->
         conn |> put_status(404) |> json(%{error: "not found"})
@@ -286,7 +293,35 @@ defmodule EngramWeb.NotesController do
 
     with {:ok, id} <- Ecto.UUID.cast(id_str),
          {:ok, note} <- Notes.get_note_by_id(user, vault, id) do
-      json(conn, note_json(note))
+      json(conn, note_json(note, user))
+    else
+      :error -> conn |> put_status(400) |> json(%{error: "invalid id"})
+      {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not found"})
+    end
+  end
+
+  operation(:backlinks,
+    operation_id: "notes-backlinks",
+    summary: "Get backlinks for a note",
+    description:
+      "Returns every note that links to the given note UUID (the inverse of a note's own " <>
+        "`links`). Returns 400 for a malformed UUID and 404 when no such note exists in the vault.",
+    tags: ["Notes"],
+    parameters: [id: [in: :path, type: :string, required: true, description: "Note UUID"]],
+    responses: [
+      ok: {"Backlinks", "application/json", Schemas.Backlinks},
+      bad_request: {"Invalid UUID", "application/json", Schemas.Error},
+      not_found: {"No such note", "application/json", Schemas.Error}
+    ]
+  )
+
+  def backlinks(conn, %{"id" => id_str}) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    with {:ok, id} <- Ecto.UUID.cast(id_str),
+         {:ok, _note} <- Notes.get_note_by_id(user, vault, id) do
+      json(conn, %{backlinks: Links.backlinks_for_note(user, id)})
     else
       :error -> conn |> put_status(400) |> json(%{error: "invalid id"})
       {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not found"})
@@ -326,117 +361,30 @@ defmodule EngramWeb.NotesController do
 
   operation(:changes,
     operation_id: "notes-changes",
-    summary: "List note changes since a cursor (keyset pagination)",
+    summary: "Retired timestamp change feed",
+    deprecated: true,
     description:
-      "Returns one keyset-paginated page of note changes (creates, updates, deletes) updated at " <>
-        "or after the `since` timestamp, including `has_more` and `next_cursor`. `limit` is capped " <>
-        "at 500 and `fields=meta` omits note content. `server_time` is the high-water mark this page " <>
-        "is complete through, so legacy clients can advance `since` without skipping rows.",
+      "Retired. The timestamp-based change feed has been removed; this endpoint always " <>
+        "returns 410 Gone. Clients sync via the CRDT sync socket and `GET /sync/manifest` " <>
+        "(current plugin versions already do).",
     tags: ["Notes"],
-    parameters: [
-      since: [in: :query, type: :string, required: true, description: "ISO8601 timestamp cursor"],
-      limit: [in: :query, type: :integer, required: false, description: "Max rows (<=500)"],
-      fields: [in: :query, type: :string, required: false, description: "\"meta\" or \"all\""],
-      cursor: [
-        in: :query,
-        type: :string,
-        required: false,
-        description: "Opaque pagination cursor"
-      ]
-    ],
     responses: [
-      ok: {"Changes page", "application/json", Schemas.ChangesResponse},
-      bad_request: {"Invalid since/limit/fields/cursor", "application/json", Schemas.Error}
+      gone: {"Feed retired", "application/json", Schemas.Error}
     ]
   )
 
-  # Protocol rev — keyset pagination. Requests without `limit` are still
-  # capped at the server max (500) and gain `has_more`/`next_cursor`; old
-  # plugins see a truncated-but-valid page and converge over successive
-  # polls because they advance `since = server_time`.
-  def changes(conn, %{"since" => since_str} = params) do
-    user = conn.assigns.current_user
-    vault = conn.assigns.current_vault
-
-    with {:ok, since} <- parse_changes_since(since_str),
-         {:ok, limit} <- parse_changes_limit(params["limit"]),
-         {:ok, fields} <- parse_changes_fields(params["fields"]) do
-      opts = [limit: limit, fields: fields]
-      opts = if params["cursor"], do: Keyword.put(opts, :cursor, params["cursor"]), else: opts
-
-      case Notes.list_changes_page(user, vault, since, opts) do
-        {:ok, %{changes: changes, has_more: has_more, next_cursor: next_cursor}} ->
-          json(conn, %{
-            changes: Enum.map(changes, &change_json(&1, fields)),
-            server_time: changes_server_time(changes, has_more),
-            has_more: has_more,
-            next_cursor: next_cursor
-          })
-
-        {:error, :invalid_cursor} ->
-          conn |> put_status(400) |> json(%{error: "invalid_cursor"})
-      end
-    else
-      {:error, :invalid_since} ->
-        conn |> put_status(400) |> json(%{error: "invalid since timestamp"})
-
-      {:error, :invalid_limit} ->
-        conn |> put_status(400) |> json(%{error: "invalid_limit"})
-
-      {:error, :invalid_fields} ->
-        conn |> put_status(400) |> json(%{error: "invalid_fields"})
-    end
-  end
-
+  # Retired timestamp feed (zero authenticated prod traffic). The route stays
+  # so old clients get an explicit 410 instead of a generic 404.
   def changes(conn, _params) do
-    conn |> put_status(400) |> json(%{error: "missing required param: since"})
+    conn
+    |> put_status(410)
+    |> json(%{
+      error: "gone",
+      message:
+        "The timestamp change feed was removed. Sync via the CRDT sync socket and " <>
+          "/sync/manifest (current plugin versions already do)."
+    })
   end
-
-  # Legacy-client convergence: pre-pagination plugins advance
-  # `since = server_time` after every poll. On a truncated page, "now" would
-  # skip the un-fetched tail forever (silent loss) — so server_time is the
-  # high-water mark this response is COMPLETE through: the last returned
-  # change's updated_at when has_more, "now" otherwise. The since filter is
-  # inclusive (>=), so the next poll resumes exactly at the boundary (the
-  # boundary row repeats once; applies are idempotent).
-  #
-  # Bound: legacy convergence assumes fewer than `limit` rows share one
-  # updated_at microsecond — a longer same-usec run would re-serve the same
-  # page forever. Server-side bulk writes stamp at most 100 rows per `now`
-  # (batch upsert cap) and legacy clients can't lower the 500 default, so
-  # the run length stays well under the page size. Revisit if a bulk path
-  # ever writes >500 rows in one timestamp.
-  defp changes_server_time(changes, true) when changes != [] do
-    changes |> List.last() |> Map.fetch!(:updated_at) |> DateTime.to_iso8601()
-  end
-
-  defp changes_server_time(_changes, _has_more) do
-    DateTime.utc_now() |> DateTime.to_iso8601()
-  end
-
-  @changes_max_limit 500
-
-  defp parse_changes_since(since_str) do
-    case DateTime.from_iso8601(since_str) do
-      {:ok, since, _offset} -> {:ok, since}
-      {:error, _} -> {:error, :invalid_since}
-    end
-  end
-
-  defp parse_changes_limit(nil), do: {:ok, @changes_max_limit}
-
-  defp parse_changes_limit(limit) when is_binary(limit) do
-    case Integer.parse(limit) do
-      {n, ""} when n >= 1 -> {:ok, min(n, @changes_max_limit)}
-      _ -> {:error, :invalid_limit}
-    end
-  end
-
-  defp parse_changes_limit(_), do: {:error, :invalid_limit}
-
-  defp parse_changes_fields(nil), do: {:ok, :all}
-  defp parse_changes_fields("meta"), do: {:ok, :meta}
-  defp parse_changes_fields(_), do: {:error, :invalid_fields}
 
   # ---------------------------------------------------------------------------
   # Batch ops
@@ -474,32 +422,24 @@ defmodule EngramWeb.NotesController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    case parse_uuid_list(ids) do
+    case BatchOps.parse_uuid_list(ids) do
       :error ->
         conn |> put_status(400) |> json(%{error: "invalid_ids"})
 
       {:ok, ids} ->
-        case Notes.batch_delete_notes(user, vault, ids) do
-          {:ok, %{deleted: n}} ->
-            body = %{deleted: n}
+        # Error tuples ({:not_found, id}/{:conflict, id}/internal) fall
+        # through to the action_fallback.
+        with {:ok, %{deleted: n}} <- Notes.batch_delete_notes(user, vault, ids) do
+          body = %{deleted: n}
 
-            Engram.Idempotency.remember(
-              conn.assigns.current_user,
-              conn.assigns.idempotency_key,
-              %{status: 200, body: body}
-            )
+          Engram.Idempotency.remember(
+            conn.assigns.current_user,
+            conn.assigns.idempotency_key,
+            %{status: 200, body: body}
+          )
 
-            broadcast_batch(user, vault, %{op: "delete", ids: ids})
-            json(conn, body)
-
-          {:error, {:not_found, id}} ->
-            conn |> put_status(404) |> json(%{error: "not_found", item_id: id})
-
-          {:error, {:conflict, id}} ->
-            conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
-
-          {:error, _reason} ->
-            conn |> put_status(500) |> json(%{error: "internal"})
+          BatchOps.broadcast_batch(user, vault, "notes.batch", %{op: "delete", ids: ids})
+          json(conn, body)
         end
     end
   end
@@ -533,7 +473,7 @@ defmodule EngramWeb.NotesController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    case parse_uuid_list(ids) do
+    case BatchOps.parse_uuid_list(ids) do
       {:ok, ids} ->
         result = Notes.batch_move_notes(user, vault, ids, {:path, folder})
         send_move_result(conn, user, vault, ids, result, %{target_folder: folder})
@@ -547,8 +487,8 @@ defmodule EngramWeb.NotesController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    with {:ok, ids} <- parse_uuid_list(ids),
-         {:ok, tgt} <- parse_move_target(tgt) do
+    with {:ok, ids} <- BatchOps.parse_uuid_list(ids),
+         {:ok, tgt} <- BatchOps.parse_move_target(tgt) do
       result = Notes.batch_move_notes(user, vault, ids, tgt)
       send_move_result(conn, user, vault, ids, result, %{target_folder_id: tgt})
     else
@@ -564,27 +504,25 @@ defmodule EngramWeb.NotesController do
 
   # Shared response for both move variants. `broadcast_extra` carries the
   # destination (target_folder path or target_folder_id) to peer sessions.
+  # Error tuples ({:not_found, id}/{:conflict, id}/internal) fall through to
+  # the action_fallback.
   defp send_move_result(conn, user, vault, ids, result, broadcast_extra) do
-    case result do
-      {:ok, %{moved: n}} ->
-        body = %{moved: n}
+    with {:ok, %{moved: n}} <- result do
+      body = %{moved: n}
 
-        Engram.Idempotency.remember(conn.assigns.current_user, conn.assigns.idempotency_key, %{
-          status: 200,
-          body: body
-        })
+      Engram.Idempotency.remember(conn.assigns.current_user, conn.assigns.idempotency_key, %{
+        status: 200,
+        body: body
+      })
 
-        broadcast_batch(user, vault, Map.merge(%{op: "move", ids: ids}, broadcast_extra))
-        json(conn, body)
+      BatchOps.broadcast_batch(
+        user,
+        vault,
+        "notes.batch",
+        Map.merge(%{op: "move", ids: ids}, broadcast_extra)
+      )
 
-      {:error, {:not_found, id}} ->
-        conn |> put_status(404) |> json(%{error: "not_found", item_id: id})
-
-      {:error, {:conflict, id}} ->
-        conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
-
-      {:error, _reason} ->
-        conn |> put_status(500) |> json(%{error: "internal"})
+      json(conn, body)
     end
   end
 
@@ -592,7 +530,7 @@ defmodule EngramWeb.NotesController do
   # Private
   # ---------------------------------------------------------------------------
 
-  defp note_json(note) do
+  defp note_json(note, user) do
     %{
       id: note.id,
       path: note.path,
@@ -612,7 +550,10 @@ defmodule EngramWeb.NotesController do
       fm_timestamp: note.fm_timestamp,
       fm_created: note.fm_created,
       parse_status: note.parse_status,
-      parse_reason: note.parse_reason
+      parse_reason: note.parse_reason,
+      # Task 9 — outgoing wikilink/embed edges, resolved. Frontend keys its
+      # resolution map off `target_text`.
+      links: Links.links_for_note(user, note.id)
     }
     |> put_content(note.content)
   end
@@ -629,29 +570,6 @@ defmodule EngramWeb.NotesController do
   def put_content(map, content) when is_binary(content), do: Map.put(map, :content, content)
   def put_content(map, nil), do: map
 
-  defp change_json(change, :meta) do
-    %{
-      id: change.id,
-      path: change.path,
-      title: change.title,
-      folder: change.folder || "",
-      tags: change.tags || [],
-      version: change.version,
-      mtime: change.mtime,
-      content_hash: change.content_hash,
-      deleted: change.deleted,
-      updated_at: change.updated_at,
-      parse_status: change.parse_status,
-      parse_reason: change.parse_reason
-    }
-  end
-
-  defp change_json(change, :all) do
-    change
-    |> change_json(:meta)
-    |> put_content(change.content)
-  end
-
   defp format_errors(changeset), do: EngramWeb.format_errors(changeset)
 
   # Delegate to the bounded, total error classifier. The single is_atom clause
@@ -660,34 +578,4 @@ defmodule EngramWeb.NotesController do
   # error logger crashing itself. error_kind/1 is total and leak-safe (only a
   # bounded atom escapes; a %Note{} buried in a reason tuple never does).
   defp classify_reason(reason), do: Engram.Telemetry.error_kind(reason)
-
-  defp parse_uuid_list(list) when is_list(list) do
-    Enum.reduce_while(list, {:ok, []}, fn item, {:ok, acc} ->
-      case parse_uuid(item) do
-        {:ok, n} -> {:cont, {:ok, [n | acc]}}
-        :error -> {:halt, :error}
-      end
-    end)
-    |> case do
-      {:ok, acc} -> {:ok, Enum.reverse(acc)}
-      :error -> :error
-    end
-  end
-
-  defp parse_uuid(s) when is_binary(s), do: Ecto.UUID.cast(s)
-  defp parse_uuid(_), do: :error
-
-  # Move target is either a folder-marker UUID or the literal "root" sentinel
-  # (vault root — no marker). "root" must bypass the UUID cast.
-  defp parse_move_target("root"), do: {:ok, "root"}
-  defp parse_move_target(s) when is_binary(s), do: parse_uuid(s)
-  defp parse_move_target(_), do: :error
-
-  defp broadcast_batch(user, vault, payload) do
-    EngramWeb.Endpoint.broadcast!(
-      "sync:#{user.id}:#{vault.id}",
-      "notes.batch",
-      payload
-    )
-  end
 end

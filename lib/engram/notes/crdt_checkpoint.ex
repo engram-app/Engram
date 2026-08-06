@@ -391,9 +391,10 @@ defmodule Engram.Notes.CrdtCheckpoint do
         if captured, do: where(base_query, [n], n.version == ^captured), else: base_query
 
       # update_all does NOT auto-manage timestamps (Repo.update! does), and
-      # `updated_at` is never cast into changeset.changes. Set it explicitly —
-      # matching every sibling notes update_all — or the /api/notes/changes
-      # timestamp feed (filters + orders on updated_at) silently drops the edit.
+      # `updated_at` is never cast into changeset.changes. Set it explicitly,
+      # matching every sibling notes update_all, so the row's recency stays
+      # truthful for everything that orders/filters on updated_at. (The
+      # /api/notes/changes timestamp feed this originally guarded is retired.)
       set = changeset.changes |> Map.put(:updated_at, DateTime.utc_now()) |> Map.to_list()
 
       case Repo.update_all(fenced_query, set: set) do
