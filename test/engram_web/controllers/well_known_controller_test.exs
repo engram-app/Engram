@@ -28,6 +28,29 @@ defmodule EngramWeb.WellKnownControllerTest do
 
       assert ["application/json" <> _] = get_resp_header(conn, "content-type")
     end
+
+    # `resource_documentation` is where a developer is sent to learn how to use
+    # this resource, so a link that does not resolve is worse than the field
+    # being absent — RFC 9728 makes it optional precisely so you can omit it.
+    #
+    # Derived as `<base>/docs` it resolved nowhere on any deployment:
+    #   * mcp.engram.page/docs -> 404. HostRewrite admits only /api/mcp, /oauth
+    #     and /.well-known/oauth-* on that host.
+    #   * app.engram.page/docs -> 200, but it is the SPA shell. A 200 that is
+    #     not documentation is the worse failure: nothing reports it as broken.
+    #   * selfhost has no /docs route at all.
+    #
+    # The docs are published on the marketing site for every deployment, so the
+    # value is a fixed absolute URL rather than anything host-derived.
+    test "documentation link is absolute and not derived from the dialed host", %{conn: conn} do
+      body =
+        %{conn | host: "engram.ax"}
+        |> get("/.well-known/oauth-protected-resource")
+        |> json_response(200)
+
+      assert body["resource_documentation"] == "https://engram.page/docs/mcp"
+      refute body["resource_documentation"] =~ "engram.ax"
+    end
   end
 
   # RFC 9728 §3.1: for a resource with a path (`https://host/api/mcp`), the

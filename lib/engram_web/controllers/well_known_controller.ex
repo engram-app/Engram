@@ -17,6 +17,24 @@ defmodule EngramWeb.WellKnownController do
 
   alias EngramWeb.OAuthMetadata
 
+  # RFC 9728 `resource_documentation` — where a developer is sent to learn how
+  # to use this resource. Optional in the spec, which is exactly why a link that
+  # does not resolve is worse than no link: a client following it lands nowhere.
+  #
+  # NOT derived from the request. As `<base>/docs` it resolved nowhere on any
+  # deployment we run:
+  #
+  #   * `mcp.engram.page/docs` -> 404. `HostRewrite` admits only `/api/mcp`,
+  #     `/oauth` and `/.well-known/oauth-*` on the dedicated MCP host.
+  #   * `app.engram.page/docs` -> 200, but it is the SPA shell. A 200 that is
+  #     not documentation is the worse outcome — nothing reports it as broken.
+  #   * selfhost serves no `/docs` route at all.
+  #
+  # The docs are published on the marketing site for every deployment, self-host
+  # included, so this is a fixed absolute URL. No config knob: there is one set
+  # of Engram MCP docs, and a self-hoster's users want that same page.
+  @resource_documentation "https://engram.page/docs/mcp"
+
   def protected_resource(conn, _params) do
     base = OAuthMetadata.base_url(conn)
 
@@ -43,7 +61,7 @@ defmodule EngramWeb.WellKnownController do
       resource: OAuthMetadata.resource(conn),
       authorization_servers: [base],
       bearer_methods_supported: ["header"],
-      resource_documentation: base <> "/docs"
+      resource_documentation: @resource_documentation
     })
   end
 
