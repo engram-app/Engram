@@ -565,13 +565,41 @@ jobs:
     if: |
       github.event.schedule == '40 5 * * *'
       || github.event.inputs.task == 'mcp-conformance'
-    name: mcp-conformance
+    name: mcp-conformance (${{ matrix.label }})
     runs-on: [self-hosted, linux, x64, isolated, light]
     # 8 CLI runs (2 strategies x 4 protocol versions) plus the spec assertions.
     timeout-minutes: 25
     permissions:
       contents: read
       issues: write   # regressions open/update a tracking issue (see last step)
+    strategy:
+      # Independent deployments — one being red says nothing about the other,
+      # and finding out about both in one run is the point.
+      fail-fast: false
+      matrix:
+        include:
+          # Staging carries the full matrix: the OAuth stage performs real DCR
+          # and CIMD registrations, which write client rows, so it belongs on a
+          # deployment we are happy to dirty.
+          - label: staging
+            target: https://staging.engram.page/api/mcp
+            stages: spec,oauth
+
+          # Prod runs the spec stage ONLY — it is plain unauthenticated curl, so
+          # it writes nothing. Not thoroughness-limited by accident: the OAuth
+          # matrix would register throwaway clients in the production database
+          # every night.
+          #
+          # Prod is not redundant with staging, it is the only coverage that
+          # exists for a whole branch of the code. `ENGRAM_HOST_REWRITE_ENABLED`
+          # is prod-only, so `mcp_rewrite_host?/1` is FALSE everywhere else and
+          # the bare-root `resource`, its `resource_metadata_url`, and the
+          # MCP-host `/oauth` passthrough are unexercised by staging, by the CI
+          # stack, and by the unit suite. Dial the BARE host, because that is
+          # what the docs tell users to paste and what that branch produces.
+          - label: prod
+            target: https://mcp.engram.page
+            stages: spec
     steps:
       - uses: actions/checkout@v7
         with:
@@ -593,7 +621,7 @@ jobs:
         id: deployed
         shell: bash
         env:
-          TARGET: ${{ github.event.inputs.target-url || 'https://staging.engram.page/api/mcp' }}
+          TARGET: ${{ github.event.inputs.target-url || matrix.target }}
         run: |
           origin="${TARGET%/api/mcp}"
           sha=$(curl -fsS --max-time 15 "$origin/api/health" \
@@ -620,8 +648,8 @@ jobs:
         # script body — `target-url` is a workflow_dispatch input, and `${{ }}`
         # inside `run:` is textual substitution.
         env:
-          TARGET: ${{ github.event.inputs.target-url || 'https://staging.engram.page/api/mcp' }}
-          CONFORMANCE_STAGES: spec,oauth
+          TARGET: ${{ github.event.inputs.target-url || matrix.target }}
+          CONFORMANCE_STAGES: ${{ matrix.stages }}
         run: |
           set -o pipefail
           mkdir -p conformance-results
@@ -635,7 +663,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: mcp-conformance-results
+          # Per-target name: upload-artifact@v4+ ERRORS on a duplicate name
+          # rather than merging, so a bare `mcp-conformance-results` would make
+          # whichever matrix leg finished second fail on the upload — losing the
+          # evidence for the leg that may be the one that failed.
+          name: mcp-conformance-results-${{ matrix.label }}
           path: conformance-results/
           retention-days: 14
 
@@ -647,7 +679,7 @@ jobs:
         if: failure() && steps.conformance.outputs.rc == '1'
         uses: actions/github-script@v9
         env:
-          TARGET: ${{ github.event.inputs.target-url || 'https://staging.engram.page/api/mcp' }}
+          TARGET: ${{ github.event.inputs.target-url || matrix.target }}
           DEPLOYED_SHA: ${{ steps.deployed.outputs.sha }}
           DEPLOYED_DRIFT: ${{ steps.deployed.outputs.drift }}
         with:
@@ -721,3 +753,45 @@ jobs:
               })
               core.info(`Opened issue #${created.number}`)
             }
+
+      # Discord alert. The tracking issue above is the durable record; this is
+      # the push notification, because a prod OAuth regression is silent from
+      # the outside — every existing client keeps working on its issued token
+      # and only NEW connections fail, so nothing else surfaces it.
+      #
+      # Guarded on the secret being present so this is a no-op until the webhook
+      # consolidation lands (one `announce` + one `alert` channel, replacing the
+      # per-repo DISCORD_RELEASES_/DISCORD_DEPLOY_ sprawl). Same
+      # `env.WEBHOOK != ''` idiom deploy-prod.yml already uses.
+      #
+      # Fires for BOTH targets: staging red blocks the next release, prod red is
+      # user-facing. The host is in the message so severity is obvious at a
+      # glance rather than encoded in which channel it lands in.
+      - name: Alert Discord (conformance regression)
+        if: failure() && steps.conformance.outputs.rc == '1' && env.WEBHOOK != ''
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_ALERT_WEBHOOK_URL }}
+          TARGET: ${{ github.event.inputs.target-url || matrix.target }}
+          LABEL: ${{ matrix.label }}
+          DEPLOYED_SHA: ${{ steps.deployed.outputs.sha }}
+          DEPLOYED_DRIFT: ${{ steps.deployed.outputs.drift }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Deploy lag is the most common false alarm here — a stale deployment
+          # fails these assertions for a pipeline reason, not an OAuth one. Say
+          # so in the alert instead of making the reader go look.
+          case "${DEPLOYED_DRIFT}" in
+            0)       DRIFT_NOTE="deployed build is level with main" ;;
+            unknown) DRIFT_NOTE="could not determine the deployed build" ;;
+            *)       DRIFT_NOTE="deployed build is ${DEPLOYED_DRIFT} commit(s) BEHIND main — check deploy lag before reading this as a regression" ;;
+          esac
+
+          CONTENT="[MCP-CONFORMANCE] \`${LABEL}\` — OAuth conformance FAILED against ${TARGET}
+          Build: \`${DEPLOYED_SHA}\` (${DRIFT_NOTE})
+          A tracking issue has been opened or updated.
+          Run: ${RUN_URL}"
+
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --max-time 5 \
+            --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" \
+            "$WEBHOOK"

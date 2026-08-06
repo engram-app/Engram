@@ -619,13 +619,29 @@ jobs:
             # (#567) — a host/daemon event, not a build error. The build is
             # idempotent (cache-reused), so retry a few times before failing the
             # whole job; the daemon typically comes back within seconds.
+            # Classify the failure before retrying. A compose CONFIG error is
+            # deterministic: re-running re-parses the same file and fails
+            # identically, so all three attempts burn in under a second while
+            # the warning blames the daemon. That misattribution is not
+            # cosmetic — it is why the CI_MINIO_ACCESS_KEY break read as
+            # "registry down" and took three separate PRs to actually fix.
+            build_log="$(mktemp)"
             for attempt in 1 2 3; do
-              if ENGRAM_CI_IMAGE="$IMAGE_LOCAL" \
-                   docker compose -f ci/compose.yml build engram; then
-                break
+              ENGRAM_CI_IMAGE="$IMAGE_LOCAL" \
+                docker compose -f ci/compose.yml build engram 2>&1 | tee "$build_log"
+              # tee's exit status is not the build's, and GitHub's default shell
+              # is `bash -e` WITHOUT pipefail, so read the real one out of
+              # PIPESTATUS rather than setting a shell option mid-block.
+              rc=${PIPESTATUS[0]}
+              [ "$rc" -eq 0 ] && break
+
+              if grep -qE 'error while interpolating|required variable|^validating ' "$build_log"; then
+                echo "::error::ci/compose.yml CONFIG error — NOT retrying. This is deterministic (missing/invalid variable or malformed compose file), not a daemon event. Retries cannot help; fix the config. See the parse error above."
+                exit 1
               fi
+
               if [ "$attempt" = 3 ]; then
-                echo "::error::CI image build failed after 3 attempts"
+                echo "::error::CI image build failed after 3 attempts (transient-looking; no compose config error detected)"
                 exit 1
               fi
               echo "::warning::build attempt $attempt failed (daemon reclaimed?) — retrying in 15s"
