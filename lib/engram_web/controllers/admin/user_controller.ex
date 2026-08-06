@@ -50,7 +50,13 @@ defmodule EngramWeb.Admin.UserController do
       {:ok, {raw, _tok}} ->
         conn
         |> put_status(:created)
-        |> json(%{token: raw, url: "#{conn.scheme}://#{conn.host}/reset-password?token=#{raw}"})
+        # Canonical URL, never the connection. `conn.scheme` is :http on every
+        # saas deployment (TLS terminates at the edge), which would emit a
+        # plaintext link carrying this live token in its query string; and
+        # `conn.host` is whichever backend host the admin happened to reach —
+        # `api.engram.page` serves no SPA, so that link 404s too. Same source
+        # the device-flow `verification_url` and account emails already use.
+        |> json(%{token: raw, url: EngramWeb.Endpoint.url() <> "/reset-password?token=#{raw}"})
 
       {:error, _cs} ->
         conn |> put_status(422) |> json(%{error: "reset_issue_failed"})

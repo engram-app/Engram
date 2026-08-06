@@ -15,7 +15,7 @@ defmodule EngramWeb.Admin.InviteController do
       {:ok, {raw, invite}} ->
         conn
         |> put_status(:created)
-        |> json(%{token: raw, url: invite_url(conn, raw), invite: render_invite(invite)})
+        |> json(%{token: raw, url: invite_url(raw), invite: render_invite(invite)})
 
       {:error, _cs} ->
         conn |> put_status(422) |> json(%{error: "invalid_invite"})
@@ -44,8 +44,11 @@ defmodule EngramWeb.Admin.InviteController do
     }
   end
 
-  defp invite_url(conn, raw),
-    do: "#{conn.scheme}://#{conn.host}/sign-up?invite=#{raw}"
+  # Canonical URL, never the connection — see the admin password-reset link for
+  # the full reasoning. `conn.scheme` is :http behind an edge that terminates
+  # TLS, which would hand out a plaintext link carrying this live token, and
+  # `conn.host` may be a backend host that serves no SPA.
+  defp invite_url(raw), do: EngramWeb.Endpoint.url() <> "/sign-up?invite=#{raw}"
 
   defp parse_int(nil, default), do: default
   defp parse_int(v, _default) when is_integer(v), do: v

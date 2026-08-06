@@ -32,22 +32,39 @@ defmodule EngramWeb.OAuthMetadata do
       # Matched WITHOUT the port on purpose: `:cors_origin` is built from
       # PHX_HOST, which carries hostnames only, so a port-bearing candidate
       # would never match and every deployment would fall back to canonical.
-      #
-      # The port goes back onto the RETURN value though. `conn.host` drops it,
-      # and advertising a port-less origin for a deployment reachable on :8080
-      # names somewhere the client never dialed — which strict clients
-      # self-check and abort on. Invisible on 80/443, wrong everywhere else:
-      # self-host on a custom port, and every port-mapped container.
-      with_port(candidate, scheme, conn.port)
+      # `with_port/2` puts it back on the RETURN value — advertising a
+      # port-less origin for a deployment reachable on :8080 names somewhere
+      # the client never dialed, which strict clients self-check and abort on.
+      with_port(candidate, conn)
     else
       canonical
     end
   end
 
-  defp with_port(base, "https", 443), do: base
-  defp with_port(base, "http", 80), do: base
-  defp with_port(base, _scheme, nil), do: base
-  defp with_port(base, _scheme, port), do: "#{base}:#{port}"
+  # `conn.port` is not "the port the client dialed". When the Host header
+  # carries no port — the norm — the adapter substitutes the default for the
+  # scheme the SOCKET arrived on. Every saas deployment terminates TLS at the
+  # edge and speaks plain HTTP to us, so that substituted default is 80 while
+  # the advertised scheme is https.
+  #
+  # Deciding against ONE scheme's default is what broke: gated on the advertised
+  # scheme, 80 looked like a real dialed port and got welded onto every URL, and
+  # `https://host:80/oauth/token` is a TLS handshake against a plaintext port —
+  # not a mismatch a client recovers from, a connection it cannot make at all.
+  # Gating on the connection's scheme instead would fix that and break the
+  # mirror case, a proxy that forwards `Host: host:443` over a plaintext hop.
+  #
+  # Both defaults are therefore "no port", which is safe because 80 and 443 are
+  # the defaults for the only two schemes we ever serve: a deployment whose URL
+  # genuinely needs one of them in it does not exist. Everything else is a port
+  # really dialed and is preserved — self-host on `:8080`, a port-mapped
+  # container, a reverse proxy on `:8443`, the loopback CI stack on `:4000`.
+  #
+  # Guarding on `port > 0` covers both nil and the `%Plug.Conn{}` struct
+  # default, either of which would otherwise render a trailing bare colon.
+  defp with_port(base, %{port: port}) when port in [80, 443], do: base
+  defp with_port(base, %{port: port}) when is_integer(port) and port > 0, do: "#{base}:#{port}"
+  defp with_port(base, _conn), do: base
 
   @doc """
   The advertised RFC 9728 `resource`.
