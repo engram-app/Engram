@@ -807,8 +807,11 @@ jobs:
       # runner injects the S3 config via its environment, so no secret lives here;
       # absent that env the action falls back to the default GitHub cache. EVERY
       # deps/_build/PLT save + restore must stay on runs-on/cache (an S3 save paired
-      # with a GitHub restore is a guaranteed miss). buildx cache stays on
-      # actions/cache (separate Docker-layer concern).
+      # with a GitHub restore is a guaranteed miss). The buildx cache in
+      # build-and-publish-image is on runs-on/cache too, for the same reason: it was
+      # left on actions/cache as a "separate Docker-layer concern" and cost 14 min of
+      # post-step upload per lockfile change until that was fixed. Nothing large
+      # belongs on the GitHub cache backend from these runners.
       - name: Cache deps/
         id: cache-deps
         uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
@@ -4543,9 +4546,22 @@ jobs:
       # over HTTPS on every build; local cache is ~10× faster for cache hits.
       # Pre-fold, ECR built without this cache (cold every time); ECR push
       # now benefits from the same warm layers GHCR has used since #391.
+      #
+      # On runs-on/cache (LAN MinIO), NOT actions/cache, for exactly the
+      # reason deps/_build moved there (see "Cache deps/" above). This
+      # export is ~1.15GB at mode=max. The GitHub cache backend restored it
+      # at ~13 MB/s but SAVED at ~1.4 MB/s from these runners, and the save
+      # fires only when the key misses, so the cost was invisible on a
+      # normal merge and 14 MINUTES of post-step upload on any push that
+      # touched Dockerfile/mix.lock/bun.lock. The old note here carved buildx
+      # out of the MinIO migration as a "separate Docker-layer concern", but
+      # the bottleneck was never the content, it was the uplink: same bytes,
+      # same ~10 Mbps ceiling. Restore AND save must move together (an S3
+      # save paired with a GitHub restore is a guaranteed miss); they are the
+      # same action plus its post step, so swapping the `uses:` moves both.
       - name: Restore buildx cache
         if: steps.version.outputs.image_exists != 'true'
-        uses: actions/cache@v6
+        uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
           path: /tmp/buildx-cache
           key: buildx-${{ runner.os }}-${{ hashFiles('Dockerfile', 'mix.lock', 'frontend/bun.lock') }}
