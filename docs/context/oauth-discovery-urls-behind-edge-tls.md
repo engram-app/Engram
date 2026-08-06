@@ -118,8 +118,13 @@ Ruled out while hunting this, worth not re-deriving:
 
 - **Never pipe the conformance script.** `scripts/mcp-conformance.sh … | tail` reports
   `tail`'s exit code — it printed `SPEC VIOLATION` and exited 0 through a pipe, 1 without.
-- `resource_documentation` advertises `<base>/docs`, which **404s on the MCP host** —
-  `HostRewrite` admits only `/api/mcp`, `/oauth`, and `/.well-known/oauth-*`.
+- ~~`resource_documentation` advertises `<base>/docs`, which 404s on the MCP host.~~ **Fixed**
+  — it is now the fixed absolute `https://engram.page/docs/mcp`. Kept as a worked example of
+  a per-host derivation failing three different ways: `mcp.engram.page/docs` 404'd,
+  `app.engram.page/docs` returned **200 with the SPA shell** (a 200 that is not the document
+  — no monitor ever reports that broken), and selfhost had no `/docs` route. When a value is
+  derived per host, "does it resolve?" has to be asked once per host, and a 200 is not the
+  same question as "is this the right document?"
 - Clients that dial the path form `https://mcp.engram.page/api/mcp` (still in older docs)
   get `resource = https://mcp.engram.page` and can self-check-mismatch. The conformance
   script accepts either, which hides it; point it at the path form deliberately to see.
