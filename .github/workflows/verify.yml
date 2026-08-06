@@ -2816,6 +2816,15 @@ jobs:
         # without this a broken filter would hide until the next nightly.
         run: bash scripts/flake_ledger_rates_test.sh
 
+      - name: Discord release-notes formatter self-check
+        # Guards scripts/discord_release_notes.sh (section + scope filtering,
+        # link stripping, the 2000-char cap). Its only caller is the
+        # release-time announce step, so a regression would otherwise stay
+        # invisible until a release posted a broken or over-cap message —
+        # and an over-cap message 400s, which the announce step only warns
+        # about. Cheap to run here, expensive to discover later.
+        run: bash test/scripts/discord_release_notes_test.sh
+
       - name: Scan CLAUDE.md / AGENTS.md files for known-stale facts
         run: |
           set -euo pipefail

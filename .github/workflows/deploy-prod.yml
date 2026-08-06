@@ -185,21 +185,27 @@ jobs:
 
       # Gate-block is otherwise silent (open-infra-pr is skipped, so its
       # failure() Discord notice never fires). Mirror that notice here.
-      - name: Notify Discord (release e2e gate blocked)
-        if: failure() && env.WEBHOOK != ''
+      - name: Notify release e2e gate blocked (alerts)
+        if: failure()
         env:
-          WEBHOOK: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
+          WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK_URL }}
           RELEASE: ${{ github.ref_name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ACTOR: ${{ github.actor }}
         run: |
-          CONTENT="[DEPLOY-BLOCKED] \`${RELEASE}\` — release e2e gate FAILED (real-app proof red; prod not moving)
-          Run: ${RUN_URL}
-          Tagged by: ${ACTOR}"
-          curl -sS -X POST -H 'Content-Type: application/json' \
-            --max-time 5 \
-            --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" \
-            "$WEBHOOK"
+          set -uo pipefail
+          [ -n "$WEBHOOK" ] || { echo "No alerts webhook configured — skipping."; exit 0; }
+          CONTENT="**DEPLOY BLOCKED** \`${RELEASE}\`
+          Release e2e gate FAILED — real-app proof is red, prod is NOT moving.
+          Tagged by ${ACTOR}
+          ${RUN_URL}"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            -H 'User-Agent: engram-ci/1.0 (+https://github.com/engram-app/Engram)' \
+            --max-time 10 \
+            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram CI' '{content:$c,username:$u}')" \
+            "$WEBHOOK") || code="000"
+          case "$code" in 2*) echo "Alert sent ($code)";; *) echo "::warning::Discord alert failed (HTTP $code)";; esac
 
   open-infra-pr:
     # BLOCKED on the real-app proof gate: a red full-Obsidian e2e (or a failed
@@ -483,21 +489,27 @@ jobs:
 
       # Failure path — same webhook, different framing. `failure()`
       # fires when an earlier step exited non-zero.
-      - name: Notify Discord (deploy failed)
-        if: failure() && env.WEBHOOK != ''
+      - name: Notify deploy failed (alerts)
+        if: failure()
         env:
-          WEBHOOK: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
+          WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK_URL }}
           RELEASE: ${{ steps.tags.outputs.release || github.ref_name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ACTOR: ${{ github.actor }}
         run: |
-          CONTENT="[DEPLOY-FAILED] \`${RELEASE}\`
-          Run: ${RUN_URL}
-          Tagged by: ${ACTOR}"
-          curl -sS -X POST -H 'Content-Type: application/json' \
-            --max-time 5 \
-            --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" \
-            "$WEBHOOK"
+          set -uo pipefail
+          [ -n "$WEBHOOK" ] || { echo "No alerts webhook configured — skipping."; exit 0; }
+          CONTENT="**DEPLOY FAILED** \`${RELEASE}\`
+          The image-bump PR was not opened — prod has not moved.
+          Tagged by ${ACTOR}
+          ${RUN_URL}"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            -H 'User-Agent: engram-ci/1.0 (+https://github.com/engram-app/Engram)' \
+            --max-time 10 \
+            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram CI' '{content:$c,username:$u}')" \
+            "$WEBHOOK") || code="000"
+          case "$code" in 2*) echo "Alert sent ($code)";; *) echo "::warning::Discord alert failed (HTTP $code)";; esac
 
   create-release-notes:
     # BLOCKED on the real-app proof gate: a red full-Obsidian e2e fails
