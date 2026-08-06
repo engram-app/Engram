@@ -30,7 +30,14 @@ defmodule Engram.Notes do
   alias Engram.Sync.Broadcast
   alias Engram.Telemetry
   alias Engram.UsageMeters
-  alias Engram.Workers.{DeleteNoteIndex, EmbedNote, RebindNoteLinks, RewriteNoteLinks}
+
+  alias Engram.Workers.{
+    DeleteNoteIndex,
+    EmbedNote,
+    ExtractNoteLinks,
+    RebindNoteLinks,
+    RewriteNoteLinks
+  }
 
   require Logger
 
@@ -424,7 +431,10 @@ defmodule Engram.Notes do
         {:ok, {:ok, {prev_hash, note, _merged_text, _content_hash}}} ->
           _ =
             if prev_hash != note.content_hash do
-              Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
+              _ = Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
+              # #648 lever 1 — cheap edge extraction must not ride the embed
+              # debounce (30s) or the embed budget gate; ~2s leading edge.
+              Enqueue.enqueue(ExtractNoteLinks.new_debounced(note.id), "extract_note_links")
             end
 
           note = decrypt_or_raise!(note, user)
@@ -480,7 +490,10 @@ defmodule Engram.Notes do
           # new-path upsert until they next pull.
           _ =
             if prev_hash != note.content_hash do
-              Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
+              _ = Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
+              # #648 lever 1 — cheap edge extraction must not ride the embed
+              # debounce (30s) or the embed budget gate; ~2s leading edge.
+              Enqueue.enqueue(ExtractNoteLinks.new_debounced(note.id), "extract_note_links")
             end
 
           note = decrypt_or_raise!(note, user)
@@ -1687,8 +1700,10 @@ defmodule Engram.Notes do
   Tail replay is included for the same reason `maybe_merge_crdt/4` does it:
   ops committed since the last checkpoint are part of the current text.
 
-  Plain reads must keep using `get_note/3`; this is deliberately not on the hot
-  path, since it decrypts and rebuilds a Yjs doc.
+  Called per debounced extraction by the link-extraction worker
+  (`Engram.Workers.ExtractNoteLinks`), so it is no longer off the hot path —
+  it decrypts and rebuilds a Yjs doc, so plain reads should still use
+  `get_note/3` instead.
   """
   @spec authoritative_content(map(), Note.t()) :: {:ok, String.t()} | {:error, term()}
   def authoritative_content(user, %Note{} = note) do
@@ -2989,6 +3004,16 @@ defmodule Engram.Notes do
       end)
 
     _ = if embed_jobs != [], do: Oban.insert_all(embed_jobs)
+
+    # #648 lever 1 — same hash gate as embed_jobs; insert_all ignores
+    # `unique`, but duplicate jobs converge under the Task 2 advisory lock
+    # (same accepted posture as EmbedNote's `clamp: false` above).
+    extract_jobs =
+      ok_entries
+      |> Enum.filter(fn %{result: {:ok, info}} -> info.prev_hash != info.content_hash end)
+      |> Enum.map(fn %{result: {:ok, info}} -> ExtractNoteLinks.new_debounced(info.id) end)
+
+    _ = if extract_jobs != [], do: Oban.insert_all(extract_jobs)
 
     # Same hash gate as the embed jobs: entries whose update short-circuited
     # (idempotent re-push, no version/seq persisted) must not appear in the
