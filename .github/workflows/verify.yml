@@ -589,8 +589,15 @@ jobs:
           # e2e-crdt and headless-protocol, but this job parses the same file
           # and was missed. Any future job that touches ci/compose.yml needs
           # them too, for parsing alone.
-          CI_MINIO_ACCESS_KEY: ${{ secrets.CI_MINIO_ACCESS_KEY }}
-          CI_MINIO_SECRET_KEY: ${{ secrets.CI_MINIO_SECRET_KEY }}
+          #
+          # Both now come from workflow-level env and must NOT be redeclared
+          # here. `CI_MINIO_ACCESS_KEY` is deliberately a plain value there, not
+          # a secret — it is also the CI image repository name
+          # (`${LOCAL_REGISTRY}/engram-ci:<hash>`), and GitHub redacts secret
+          # values out of job outputs by substring, which blanked
+          # ENGRAM_CI_IMAGE for every downstream e2e job. A step-level
+          # `${{ secrets.CI_MINIO_ACCESS_KEY }}` OVERRIDES the good value with
+          # the empty string, which is what re-broke the build.
         run: |
           # Already published for this exact tree? Reuse — the registry is the
           # cross-host source of truth, so probe IT (not the local daemon, which
