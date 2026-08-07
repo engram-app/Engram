@@ -33,21 +33,30 @@ defmodule Engram.Links.Parser do
   # `!` optional (embed), lazy target up to `]]`; `u` flag is load-bearing (#741).
   @link_re ~r/(!?)\[\[([^\]\[]+?)\]\]/u
 
-  # Markdown link/embed. The label rejects `]` so a nested `[[wikilink]]`
-  # inside a label simply fails to match here and is left to @link_re.
-  # ponytail: the destination rejects `)` outright, so an unescaped paren in
-  # a path (`[x](My (file).md)`) is not matched. Markdown requires angle
-  # brackets or an escape there anyway, and `<...>` IS handled below; if
-  # real vaults turn out to contain bare parens, upgrade this group to a
-  # balanced-paren scan rather than widening it.
-  @md_link_re ~r/(!?)\[([^\]]*)\]\(([^)]*)\)/u
+  # Markdown link/embed.
+  #
+  # The label class excludes `[` as well as `]` — matching @link_re's shape,
+  # and NOT optional. With a bare `[^\]]*` a long run of unmatched `[` has no
+  # early exit, so Regex.scan re-scans from every one of them: measured 14.2s
+  # on a 100KB bracket run, against 37ms for @link_re on the same input.
+  # Excluding `[` also means a nested `[[wikilink]]` inside a label cannot
+  # match here, so it is left to @link_re — no double extraction.
+  #
+  # The destination admits one level of balanced parens so a real path like
+  # `My (file).md` is captured whole. A bare `[^)]*` truncated it to
+  # `My (file` and wrote THAT as a note_links target — a garbage edge, not a
+  # skip. The two alternation branches are disjoint on their first character
+  # (`[^()]` vs `\(`), so there is no ambiguity to backtrack through.
+  # ponytail: one level only. Deeper nesting needs a real balanced scan;
+  # CommonMark itself only guarantees balance, not depth.
+  @md_link_re ~r/(!?)\[([^\]\[]*)\]\(((?:[^()]|\([^()]*\))*)\)/u
 
   # Anything with a scheme (`https:`, `mailto:`), protocol-relative (`//cdn`),
   # or a bare same-page anchor is not a vault link.
   @external_re ~r/\A(?:[a-z][a-z0-9+.\-]*:|\/\/)/i
 
-  # A trailing markdown link title: `[x](Note.md "The Title")`.
-  @md_title_re ~r/\s+(?:"[^"]*"|'[^']*')\s*\z/u
+  # Whitespace that ends an unbracketed markdown destination.
+  @ws [" ", "\t", "\n", "\r"]
 
   # Ranges to exclude: fenced code, inline code. Frontmatter handled separately.
   @exclusion_res [~r/```.*?```/su, ~r/~~~.*?~~~/su, ~r/`[^`\n]*`/u]
@@ -132,37 +141,50 @@ defmodule Engram.Links.Parser do
   end
 
   # Narrows the raw `(...)` destination down to just the target's byte span,
-  # peeling — in this order — a trailing title, surrounding angle brackets,
-  # and a `#anchor` tail. Returns nil for anything that isn't a vault path.
-  # Every step adjusts start/len rather than rebuilding a string, so the
-  # returned span still indexes into the ORIGINAL content.
+  # then peels a `#anchor` tail. Returns nil for anything that isn't a vault
+  # path. Every step adjusts start/len rather than rebuilding a string, so
+  # the returned span still indexes into the ORIGINAL content.
   defp md_target_span(content, dest_start, dest_len) do
-    dest = binary_part(content, dest_start, dest_len)
-
-    {s, l} = strip_title(dest, dest_start, dest_len)
-    {s, l} = trim_span(content, s, l)
-    {s, l} = strip_angles(content, s, l)
-
-    target_part = binary_part(content, s, l)
-
-    {s, l, anchor} =
-      case :binary.match(target_part, "#") do
-        {idx, _} ->
-          {s, idx, clean(percent_decode(binary_part(target_part, idx + 1, l - idx - 1)))}
-
-        :nomatch ->
-          {s, l, nil}
-      end
+    {s, l} = trim_span(content, dest_start, dest_len)
+    {s, l} = destination_span(content, s, l)
+    {s, l, anchor} = split_anchor(content, s, l)
 
     if l == 0 or Regex.match?(@external_re, binary_part(content, s, l)),
       do: nil,
       else: {s, l, anchor}
   end
 
-  defp strip_title(dest, dest_start, dest_len) do
-    case Regex.run(@md_title_re, dest, return: :index) do
-      [{title_start, _} | _] -> {dest_start, title_start}
-      nil -> {dest_start, dest_len}
+  # CommonMark: a destination is either `<...>` (may contain spaces) or a run
+  # of NON-WHITESPACE characters, and whatever follows is the title. So the
+  # destination ends at the first whitespace — one `:binary.match`, linear.
+  #
+  # This replaced a `~r/\s+(?:"[^"]*"|'[^']*')\s*\z/u` title-stripper, which
+  # backtracked quadratically: an unanchored `\s+` retried from every offset
+  # in a whitespace run, measured 67s on 100KB of spaces. This parser runs
+  # synchronously on every note write, so that was reachable by accident (a
+  # pasted or corrupted destination), not just by malice. Taking the
+  # first-whitespace rule is simultaneously spec-correct AND linear.
+  defp destination_span(content, s, l) do
+    if l >= 1 and binary_part(content, s, 1) == "<" do
+      case :binary.match(binary_part(content, s + 1, l - 1), ">") do
+        {idx, _} -> {s + 1, idx}
+        # Unterminated `<` — not a bracketed destination, take it literally.
+        :nomatch -> {s, l}
+      end
+    else
+      case :binary.match(binary_part(content, s, l), @ws) do
+        {idx, _} -> {s, idx}
+        :nomatch -> {s, l}
+      end
+    end
+  end
+
+  defp split_anchor(content, s, l) do
+    part = binary_part(content, s, l)
+
+    case :binary.match(part, "#") do
+      {idx, _} -> {s, idx, clean(URI.decode(binary_part(part, idx + 1, l - idx - 1)))}
+      :nomatch -> {s, l, nil}
     end
   end
 
@@ -172,22 +194,14 @@ defmodule Engram.Links.Parser do
     {start + lead, byte_size(String.trim(slice))}
   end
 
-  defp strip_angles(content, start, len) do
-    if len >= 2 and binary_part(content, start, 1) == "<" and
-         binary_part(content, start + len - 1, 1) == ">" do
-      {start + 1, len - 2}
-    else
-      {start, len}
-    end
-  end
-
-  # Malformed escapes (`%ZZ`) are author text, not an error — keep the raw
-  # bytes so the span and the value stay consistent.
-  defp percent_decode(s) do
-    URI.decode(s)
-  rescue
-    ArgumentError -> s
-  end
+  # `URI.decode/1` never raises — its unpercent/3 re-emits a literal `%` for
+  # any malformed escape — so `%ZZ` survives as author text with no rescue
+  # needed. It CAN produce invalid UTF-8 though (`%FF`), and that must not
+  # escape this module: an unscrubbed target is encrypted, stored, then
+  # decrypted straight into a JSON response, where Jason.encode! raises and
+  # 500s every read of that note's backlinks — permanently, from one typed
+  # character. Scrub here, the same gate `clean/1` applies to alias/anchor.
+  defp percent_decode(s), do: s |> URI.decode() |> Helpers.scrub_utf8(:write)
 
   defp link_type(0), do: "wikilink"
   defp link_type(_), do: "embed"

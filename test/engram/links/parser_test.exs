@@ -200,11 +200,81 @@ defmodule Engram.Links.ParserTest do
 
     test "a wikilink nested in markdown-link label does not double-extract" do
       # Obsidian never writes this, but hand-authored notes can contain it.
-      # Whatever we do, the spans must stay valid.
+      # ONE written link must yield ONE edge. The count assertion is the
+      # point of this test: without it, widening the label class to allow
+      # `[` produces a second, spurious markdown edge and this test still
+      # passes (caught in review of this PR).
       content = "[see [[A]]](B.md)"
+      occs = Parser.extract(content)
 
-      for occ <- Parser.extract(content) do
+      assert length(occs) == 1
+      assert [%{target: "A", form: :wiki}] = occs
+
+      for occ <- occs do
         assert binary_part(content, occ.target_start, occ.target_len) == occ.target_raw
+      end
+    end
+
+    test "a path with balanced parens is captured whole, not truncated" do
+      # A bare `[^)]*` destination stopped at the first `)`, yielding the
+      # target "My(file" — a garbage note_links edge, not a skip.
+      content = "[x](My(file).md)"
+      [occ] = Parser.extract(content)
+
+      assert occ.target == "My(file).md"
+      assert binary_part(content, occ.target_start, occ.target_len) == "My(file).md"
+    end
+
+    test "parens survive alongside percent-encoding, which is what Obsidian writes" do
+      content = "[x](My%20(file).md)"
+      [occ] = Parser.extract(content)
+
+      assert occ.target == "My (file).md"
+      assert occ.target_raw == "My%20(file).md"
+    end
+
+    test "a LITERAL space before parens follows CommonMark: destination ends there" do
+      # `[x](My (file).md)` is not one link to any conforming renderer — an
+      # unbracketed destination cannot contain a space, so it is `My` with a
+      # malformed title after it. We match that rather than inventing a
+      # friendlier reading, and the angle-bracket form is the escape hatch.
+      assert [%{target: "My"}] = Parser.extract("[x](My (file).md)")
+      assert [%{target: "My (file).md"}] = Parser.extract("[x](<My (file).md>)")
+    end
+
+    test "a space ends the destination — no trailing space baked into the target" do
+      # CommonMark: an unbracketed destination runs to the first whitespace,
+      # and the rest is a (here malformed) title. Trimming only BEFORE the
+      # anchor split used to leave `"Note.md "` and silently dangle.
+      content = "[x](Note.md #anchor)"
+      [occ] = Parser.extract(content)
+
+      assert occ.target == "Note.md"
+      assert occ.anchor == nil
+    end
+
+    test "an escape decoding to invalid UTF-8 is scrubbed, never stored raw" do
+      # `%FF` decodes to a lone 0xFF. Unscrubbed it is encrypted, stored, then
+      # decrypted straight into a JSON response — Jason.encode! raises and
+      # 500s every read of that note's backlinks, permanently.
+      [occ] = Parser.extract("[bad](%FF.md)")
+
+      assert String.valid?(occ.target)
+      assert String.valid?(occ.target_raw)
+    end
+
+    # Both regexes previously had no early exit on these shapes: 67s on the
+    # whitespace run, 14.2s on the bracket run, measured, on the synchronous
+    # write path. Generous bounds — this pins the complexity class, not a
+    # throughput number, so it will not flake on a loaded CI box.
+    @tag timeout: 30_000
+    test "pathological input stays linear (ReDoS regression guard)" do
+      whitespace = "[x](Note.md" <> String.duplicate(" ", 100_000) <> ")"
+      brackets = String.duplicate("[", 100_000)
+
+      for content <- [whitespace, brackets] do
+        {micros, _} = :timer.tc(fn -> Parser.extract(content) end)
+        assert micros < 2_000_000, "took #{div(micros, 1000)}ms — backtracking regression"
       end
     end
 

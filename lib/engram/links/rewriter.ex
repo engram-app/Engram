@@ -1,10 +1,12 @@
 defmodule Engram.Links.Rewriter do
   @moduledoc """
-  Server-side wikilink/embed rewriter for rename/move propagation
-  (issues #648/#1231, Phase 1).
+  Server-side link rewriter for rename/move propagation
+  (issues #648/#1231, Phase 1; markdown syntax #1302).
 
   When a note or attachment is renamed via REST or MCP, referring notes'
-  `[[wikilink]]`/`![[embed]]` targets are rewritten to the new name. The
+  link targets are rewritten to the new name — both `[[wikilink]]`/
+  `![[embed]]` and the markdown `[label](target.md)` form, each occurrence
+  coming back in the syntax it was written in. The
   server is the SINGLE rewriter for every origin EXCEPT plugin-origin
   renames (Obsidian's "Automatically update internal links" owns those) —
   exactly one party rewrites, never both. Both CRDT rename legs are wired:
@@ -14,9 +16,22 @@ defmodule Engram.Links.Rewriter do
 
   POLICY: the server authors only mechanical, semantics-preserving
   transforms — the rewritten target resolves to the same row the old text
-  resolved to, and `!` embed markers, `|alias`, and `#anchor` segments are
-  preserved verbatim. The server never authors content the user didn't
-  write.
+  resolved to, and `!` embed markers, `|alias`, `[label]`, and `#anchor`
+  segments are preserved verbatim. The server never authors content the
+  user didn't write.
+
+  One stated exception (#1302 review): for a markdown occurrence the
+  replacement is built from the stored path and re-encoded by `md_encode/1`,
+  so the WHOLE target span is normalized to this module's minimal escaping —
+  not just the segment that changed. `[x](Old%2CFolder/Note.md)` renamed to
+  `Fresh.md` yields `[x](Old,Folder/Fresh.md)`: the folder was untouched but
+  its `%2C` is gone. The link resolves to the same row either way, and the
+  normalization is idempotent (encode/decode compose to identity, so the
+  second pass hits the no-op check), but it IS a byte-level change the user
+  did not ask for. Accepted deliberately: preserving per-segment encoding
+  would mean diffing the author's raw bytes against the new path segment by
+  segment — fiddly logic in the one place a mistake corrupts a note, to
+  save a cosmetic difference in a link that already works.
 
   Rewrites are authored as real Y-updates on the note's canonical doc
   (checkpoint snapshot + `crdt_update_log` tail — `bind/3`'s recipe) and
@@ -154,9 +169,11 @@ defmodule Engram.Links.Rewriter do
   end
 
   # Only the characters that would otherwise re-parse the `[..](..)` target
-  # into something else: whitespace and parens end it, `#`/`?` start an
-  # anchor/query, and a literal `%` would read as an escape. Everything else
-  # — `/`, `.`, unicode — stays literal, which is what Obsidian writes.
+  # into something else: whitespace ends an unbracketed destination, parens
+  # end or nest it, `<`/`>` would read as the bracketed-destination form,
+  # `#`/`?` start an anchor/query, and a literal `%` would read as an escape.
+  # Everything else — `/`, `.`, unicode — stays literal, which is what
+  # Obsidian writes.
   @md_escape ~c" ()<>#?%"
   defp md_encode(s), do: URI.encode(s, &(&1 not in @md_escape))
 

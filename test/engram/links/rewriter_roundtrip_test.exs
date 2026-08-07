@@ -54,6 +54,76 @@ defmodule Engram.Links.RewriterRoundtripTest do
     assert Enum.any?(edges_after, &(&1.target_text == "unrelated"))
   end
 
+  # #1302. The same end-to-end path for markdown syntax: extract -> persist
+  # note_links rows -> resolve to the target row -> rename -> rewrite. The
+  # per-function tests cover plan_edits/splice in isolation; this is the only
+  # thing that proves a markdown link actually becomes a resolved EDGE and
+  # survives a rename, which is the whole claim of the feature.
+  test "round trip: markdown-syntax links are graphed, resolved, and rewritten",
+       %{user: user, vault: vault} do
+    content = """
+    Intro [Old](Old.md) then ![pic](Old.md) then [x](Old.md#sec) and [other](Other.md).
+    `[nope](Old.md)` stays; so does the fence:
+    ```
+    [nope](Old.md)
+    ```
+    """
+
+    {:ok, old} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# target"})
+    {:ok, _other} = Notes.upsert_note(user, vault, %{"path" => "Other.md", "content" => "# o"})
+    {:ok, source} = Notes.upsert_note(user, vault, %{"path" => "Src.md", "content" => content})
+    :ok = Links.replace_links(user, vault, source.id, Parser.extract(content))
+
+    edges_before = Links.links_for_note(user, source.id)
+
+    # Four real links; the fenced and inline-code ones are excluded.
+    assert length(edges_before) == 4
+
+    # They RESOLVED — a markdown link is a real edge, not a dangling one.
+    assert length(Enum.filter(edges_before, &(&1.target_note_id == old.id))) == 3
+    assert Enum.all?(edges_before, &(&1.target_note_id != nil))
+
+    # Embed vs link is carried, and the label became the alias.
+    assert Enum.count(edges_before, &(&1.link_type == "embed")) == 1
+    assert Enum.any?(edges_before, &(&1.alias == "pic"))
+    assert Enum.any?(edges_before, &(&1.anchor == "sec"))
+
+    {:ok, renamed} = Notes.rename_note(user, vault, "Old.md", "sub/Fresh Note.md")
+    assert renamed.id == old.id
+
+    :ok = Rewriter.rewrite_for_note_rename(user, vault, renamed.id, "Old.md")
+
+    edges_after = Links.links_for_note(user, source.id)
+    assert length(edges_after) == length(edges_before)
+
+    rewritten = Enum.filter(edges_after, &(&1.target_note_id == renamed.id))
+    assert length(rewritten) == 3
+
+    # target_text is the DECODED path — the space is real, not %20.
+    assert Enum.all?(rewritten, &(&1.target_text == "Fresh Note.md"))
+
+    # And the note body carries the ENCODED form, still parseable as markdown
+    # and still markdown (never converted to [[wikilink]]). A roomless
+    # rewrite appends to the tail log and leaves notes.content
+    # unmaterialized on purpose — CheckpointNote owns that — so drain it
+    # before reading the column.
+    Oban.drain_queue(queue: :crdt_checkpoint)
+
+    {:ok, reread} = Notes.get_note(user, vault, "Src.md")
+    # Bare occurrences stay bare (the same form rule wikilinks follow), so the
+    # folder is NOT introduced — only the basename changes, percent-encoded.
+    assert reread.content =~ "[Old](Fresh%20Note.md)"
+    assert reread.content =~ "![pic](Fresh%20Note.md)"
+    assert reread.content =~ "[x](Fresh%20Note.md#sec)"
+
+    # Labels untouched, and never converted to wikilink syntax.
+    refute reread.content =~ "[["
+
+    # Excluded regions untouched, unrelated edge untouched.
+    assert reread.content =~ "`[nope](Old.md)`"
+    assert Enum.any?(edges_after, &(&1.target_text == "Other.md"))
+  end
+
   test "rewrite delta and a concurrent client update converge in both orders", %{
     user: user,
     vault: vault
