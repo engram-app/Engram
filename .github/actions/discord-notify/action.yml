@@ -1,0 +1,89 @@
+name: Discord notify
+description: >
+  POST a message to a Discord webhook. One place for the things every
+  hand-rolled `curl | discord` block got subtly wrong: the 2000-char
+  content cap, the descriptive User-Agent Discord's Cloudflare edge
+  requires, a per-message sender name so producers are distinguishable,
+  and consistent HTTP-code handling.
+
+  Notification is never a gate: a delivery failure warns, it does not fail
+  the job. The caller's own success/failure is the real signal.
+
+  This action lives in engram-app/Engram (a public repo) so private repos
+  in the org can consume it without an Actions access-policy change:
+    uses: engram-app/Engram/.github/actions/discord-notify@main
+
+inputs:
+  webhook:
+    description: >
+      Discord webhook URL. Pass the ALERTS webhook for anything that means
+      something is wrong or prod changed; pass the ANNOUNCEMENTS webhook
+      for successful releases. Empty = skip silently (lets callers wire the
+      step unconditionally and let an unset secret disable it).
+    required: false
+    default: ""
+  content:
+    description: Message body. Truncated at 2000 characters if needed.
+    required: true
+  username:
+    description: >
+      Per-message sender name. Without this every producer posts under the
+      webhook's own name (ours were all the Discord default "Spidey Bot"),
+      so you cannot tell a CI failure from a CloudWatch alarm at a glance.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: POST to Discord
+      shell: bash
+      env:
+        WEBHOOK: ${{ inputs.webhook }}
+        CONTENT: ${{ inputs.content }}
+        USERNAME: ${{ inputs.username }}
+      run: |
+        set -uo pipefail
+
+        if [ -z "${WEBHOOK}" ]; then
+          echo "discord-notify: no webhook configured — skipping."
+          exit 0
+        fi
+        if [ -z "${CONTENT}" ]; then
+          echo "::warning::discord-notify: empty content — nothing to post."
+          exit 0
+        fi
+
+        # Discord rejects content over 2000 chars with a 400 that is easy to
+        # miss (we only warn on failure). Cut at a line boundary so a URL
+        # can't be sliced in half, and mark that it happened.
+        body="$CONTENT"
+        if [ "${#body}" -gt 2000 ]; then
+          body="${body:0:1990}"
+          body="${body%$'\n'*}"$'\n'"…"
+          echo "::warning::discord-notify: content exceeded 2000 chars and was truncated."
+        fi
+
+        payload=$(jq -nc \
+          --arg c "$body" \
+          --arg u "$USERNAME" \
+          '{content:$c} + (if $u == "" then {} else {username:$u} end)')
+
+        # Discord (Cloudflare) 403s webhook POSTs whose User-Agent looks like
+        # a default scripting client, and the failure is silent-ish. See
+        # engram-infra docs/context/discord-relay-lambda.md — the relay Lambda
+        # lost 23 alerts to exactly this before PR #279 pinned a real UA.
+        code=$(curl -sS -o /dev/null -w '%{http_code}' \
+          -X POST \
+          -H 'Content-Type: application/json' \
+          -H 'User-Agent: engram-ci-discord-notify/1.0 (+https://github.com/engram-app/Engram)' \
+          --max-time 10 \
+          --retry 2 --retry-connrefused \
+          --data "$payload" \
+          "$WEBHOOK") || code="000"
+
+        case "$code" in
+          2*) echo "discord-notify: delivered (HTTP $code)" ;;
+          000) echo "::warning::discord-notify: request failed (network/timeout) — message not delivered." ;;
+          *)  echo "::warning::discord-notify: Discord rejected the message (HTTP $code) — not delivered." ;;
+        esac

@@ -101,34 +101,73 @@ jobs:
           VID: ${{ steps.v.outputs.vid || steps.rebuild.outputs.vid }}
         run: bunx wrangler versions deploy "${VID}@100%" --yes
 
-      - name: Announce release complete (#releases)
-        if: env.WEBHOOK != ''
+      # A shipped release is the ONE thing that belongs in announcements.
+      # Everything else this workflow can say is a failure, and failures go
+      # to alerts (below) — the two used to share one webhook, so "we
+      # shipped" and "the deploy broke" landed in the same channel.
+      - name: Announce release (announcements)
         env:
-          WEBHOOK: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
+          WEBHOOK: ${{ secrets.DISCORD_ANNOUNCEMENTS_WEBHOOK_URL }}
           TAG: ${{ env.RELEASE_TAG }}
         run: |
+          set -uo pipefail
+          [ -n "$WEBHOOK" ] || { echo "No announcements webhook configured — skipping."; exit 0; }
+          # Refuse to announce a release we cannot name. The dispatcher used
+          # to send the literal string "unknown" when its tag lookup failed,
+          # which produced a stream of "Engram Cloud unknown is live" posts
+          # linking to /releases/tag/unknown — a 404. The promote itself is
+          # unaffected; it already happened in the step above. An announcement
+          # nobody can act on is worse than silence.
+          case "${TAG:-}" in
+            ""|unknown)
+              echo "::warning::No resolvable release tag (got '${TAG:-}') — promoted, but not announcing."
+              exit 0
+              ;;
+          esac
           RELEASE_URL="https://github.com/engram-app/Engram/releases/tag/$TAG"
-          # Discord's content cap is 2000 chars. NOTES is the full release
-          # body and can blow past that on substantial releases — truncate
-          # and always link the full notes so the announce never 400s.
-          TRUNCATED="${NOTES:0:1600}"
-          if [ "${#NOTES}" -gt 1600 ]; then
-            TRUNCATED="$TRUNCATED …"
+          # Was `${NOTES:0:1600}` — a raw byte prefix. Our release body
+          # OPENS with the SCHEMA-IMPACT block, so that window was spent
+          # entirely on self-host upgrade steps and the actual changes never
+          # made it into Discord. The formatter selects by section + scope
+          # and owns the 2000-char cap; see scripts/discord_release_notes.sh.
+          # This job checks out `ref: env.SHA` — the commit being deployed —
+          # so on a re-run of a release older than this script the file is
+          # simply absent. Fall back to a bare announcement rather than
+          # posting an empty message (which Discord 400s) or failing the
+          # step, since failing here would raise a false PROMOTE FAILED
+          # alert for a promote that actually succeeded.
+          CONTENT=""
+          if [ -f scripts/discord_release_notes.sh ]; then
+            CONTENT=$(printf '%s' "$NOTES" | bash scripts/discord_release_notes.sh \
+              "Engram Cloud" "$TAG" "$RELEASE_URL") || CONTENT=""
           fi
-          CONTENT=$(printf '**Engram Cloud %s** is live.\n\n%s\n\nFull notes: %s' "$TAG" "$TRUNCATED" "$RELEASE_URL")
-          # Non-blocking, but loud on failure.
-          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --max-time 5 \
-            --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" "$WEBHOOK")
-          case "$code" in 2*) echo "Discord announced ($code)";; *) echo "::warning::Discord announce failed (HTTP $code)";; esac
+          [ -n "$CONTENT" ] || CONTENT=$(printf '**Engram Cloud %s** is live\n%s' "$TAG" "$RELEASE_URL")
+          # flags:4 = SUPPRESS_EMBEDS. Discord auto-embeds every URL, so messages
+          # rendered as a stack of preview cards. Links stay clickable without them.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            -H 'User-Agent: engram-ci/1.0 (+https://github.com/engram-app/Engram)' \
+            --max-time 10 \
+            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram Releases' '{content:$c,username:$u,flags:4}')" \
+            "$WEBHOOK") || code="000"
+          case "$code" in 2*) echo "Announced ($code)";; *) echo "::warning::Discord announce failed (HTTP $code)";; esac
 
-      - name: Announce promote failure (#releases)
-        if: failure() && env.WEBHOOK != ''
+      - name: Notify promote failure (alerts)
+        if: failure()
         env:
-          WEBHOOK: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
+          WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK_URL }}
           TAG: ${{ env.RELEASE_TAG }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          CONTENT=$(printf ':warning: frontend promote FAILED for `%s` — see %s' "$TAG" "$RUN_URL")
-          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --max-time 5 \
-            --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" "$WEBHOOK")
-          case "$code" in 2*) echo "Discord failure notice sent ($code)";; *) echo "::warning::Discord failure notice failed (HTTP $code)";; esac
+          set -uo pipefail
+          [ -n "$WEBHOOK" ] || { echo "No alerts webhook configured — skipping."; exit 0; }
+          CONTENT=$(printf '**PROMOTE FAILED** `%s`\nThe release built but the frontend did not go to 100%%.\n%s' "$TAG" "$RUN_URL")
+          # flags:4 = SUPPRESS_EMBEDS. Discord auto-embeds every URL, so messages
+          # rendered as a stack of preview cards. Links stay clickable without them.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            -H 'User-Agent: engram-ci/1.0 (+https://github.com/engram-app/Engram)' \
+            --max-time 10 \
+            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram CI' '{content:$c,username:$u,flags:4}')" \
+            "$WEBHOOK") || code="000"
+          case "$code" in 2*) echo "Alert sent ($code)";; *) echo "::warning::Discord alert failed (HTTP $code)";; esac

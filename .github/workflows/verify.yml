@@ -2816,6 +2816,26 @@ jobs:
         # without this a broken filter would hide until the next nightly.
         run: bash scripts/flake_ledger_rates_test.sh
 
+      - name: Workflow run-block shell lint
+        # YAML linting proves a workflow PARSES; it says nothing about the
+        # shell inside `run:`. Catches comment-after-line-continuation (which
+        # silently orphans the rest of a command and is NOT a syntax error, so
+        # bash -n misses it) plus genuine syntax errors. Cheap; the failure
+        # mode it guards only shows up on release/failure paths, i.e. exactly
+        # when you cannot afford it.
+        run: |
+          python3 scripts/lint_workflow_run_blocks.py .github/workflows/*.yml
+          bash test/scripts/lint_workflow_run_blocks_test.sh
+
+      - name: Discord release-notes formatter self-check
+        # Guards scripts/discord_release_notes.sh (section + scope filtering,
+        # link stripping, the 2000-char cap). Its only caller is the
+        # release-time announce step, so a regression would otherwise stay
+        # invisible until a release posted a broken or over-cap message —
+        # and an over-cap message 400s, which the announce step only warns
+        # about. Cheap to run here, expensive to discover later.
+        run: bash test/scripts/discord_release_notes_test.sh
+
       - name: Scan CLAUDE.md / AGENTS.md files for known-stale facts
         run: |
           set -euo pipefail
@@ -5052,3 +5072,41 @@ jobs:
           # `versions upload` publishes code WITHOUT shifting production traffic.
           # --tag ties the version to the commit so the promote step can find it.
           bunx wrangler versions upload --tag "sha-${GITHUB_SHA::7}"
+
+  # Alert on a genuinely-broken main/nightly.
+  #
+  # Scoped to the `ci` aggregate deliberately. The full-Obsidian suites
+  # (e2e-clerk/e2e-crdt/e2e-browser) are report-only and structurally flaky —
+  # see the `ci` job's own comment and docs/context/testing-architecture-
+  # migration.md — so alerting on THEM would fire most nights and train
+  # everyone to ignore the channel. `ci` only goes red when a deterministic
+  # gate (unit-tests, lint, static-checks, migration-gates, storage-database)
+  # actually broke, which is always worth knowing about.
+  #
+  # PRs are excluded: a red PR is already in front of the person who pushed
+  # it. This is for the runs nobody is watching.
+  alert-ci-failure:
+    if: always() && needs.ci.result == 'failure' && (github.ref == 'refs/heads/main' || github.event_name == 'schedule')
+    needs: [ci]
+    runs-on: [self-hosted, linux, x64, isolated, light]
+    steps:
+      - name: Notify deterministic gate failure (alerts)
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WHEN: ${{ github.event_name == 'schedule' && 'nightly' || 'main' }}
+        run: |
+          set -uo pipefail
+          [ -n "$WEBHOOK" ] || { echo "No alerts webhook configured — skipping."; exit 0; }
+          CONTENT="**CI RED on ${WHEN}** \`${GITHUB_REPOSITORY}\`
+          A deterministic gate failed — this is not e2e flake.
+          ${RUN_URL}"
+          # flags:4 = SUPPRESS_EMBEDS. Discord auto-embeds every URL, so messages
+          # rendered as a stack of preview cards. Links stay clickable without them.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            -H 'User-Agent: engram-ci/1.0 (+https://github.com/engram-app/Engram)' \
+            --max-time 10 \
+            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram CI' '{content:$c,username:$u,flags:4}')" \
+            "$WEBHOOK") || code="000"
+          case "$code" in 2*) echo "Alert sent ($code)";; *) echo "::warning::Discord alert failed (HTTP $code)";; esac
