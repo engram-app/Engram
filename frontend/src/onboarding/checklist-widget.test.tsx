@@ -381,6 +381,20 @@ describe("ChecklistWidget, hide when empty", () => {
 		const { container } = render(wrap(<ChecklistWidget />));
 		expect(container).toBeEmptyDOMElement();
 	});
+
+	// The FTUX wizard's "not connecting an AI tool yet" + "starting fresh" path
+	// lands exactly here: vault created, no tools picked, not an Obsidian user.
+	// Nothing is left to finish, so the widget unmounts with no dismissals
+	// involved. It only stayed mounted before because the removed tour row was
+	// permanently un-done — which is why an e2e oracle keyed on this widget
+	// ("the dashboard opened") silently depended on the tour existing.
+	it("renders nothing for the wizard cohort: vault created, no tools, not Obsidian", () => {
+		actionsList.push("first_vault_created");
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] };
+
+		const { container } = render(wrap(<ChecklistWidget />));
+		expect(container).toBeEmptyDOMElement();
+	});
 });
 
 describe("ChecklistWidget, completed rows stay visible (#604)", () => {

@@ -154,11 +154,17 @@ test.describe("Local auth provider", () => {
 
 		// Element-based oracle, not URL: during the bounce loop the URL flickers
 		// through "/" (which a URL wait can false-pass on) but the gate never
-		// renders its Outlet, so no dashboard chrome ever mounts. The checklist
-		// widget (open heading or its dismissed-state pill) proves the app opened.
-		const openHeading = page.getByRole("heading", { name: /finish setup/iu });
-		const closedPill = page.getByLabel(/open setup checklist/iu);
-		await expect(openHeading.or(closedPill).first()).toBeVisible({ timeout: 15_000 });
+		// renders its Outlet, so no dashboard chrome ever mounts.
+		//
+		// The rail, not the checklist widget. This user picked "not connecting an
+		// AI tool yet" + "starting fresh", so once the vault exists every checklist
+		// row is absent or done and the widget unmounts itself — it only survived
+		// here because the removed tour row was permanently un-done. The rail is
+		// unconditional in AppLayout and its label is unique in the app, so it
+		// cannot be emptied out by row state the way the checklist can.
+		await expect(page.getByRole("navigation", { name: "App navigation" })).toBeVisible({
+			timeout: 15_000,
+		});
 		expect(new URL(page.url()).pathname.startsWith("/onboard")).toBe(false);
 	});
 });
