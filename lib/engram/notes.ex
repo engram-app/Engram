@@ -754,7 +754,7 @@ defmodule Engram.Notes do
                  end
 
                {:tombstone, %Note{} = prior} ->
-                 genesis_resurrect(prior, user, sanitized_path, folder)
+                 genesis_resurrect(prior, user, vault, sanitized_path, folder, origin)
 
                :none ->
                  genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder)
@@ -1056,10 +1056,10 @@ defmodule Engram.Notes do
     end
   end
 
-  defp genesis_resurrect(prior, user, sanitized_path, folder) do
+  defp genesis_resurrect(prior, user, vault, sanitized_path, folder, origin) do
     case Crypto.maybe_decrypt_note_fields(prior, user) do
       {:ok, prior} ->
-        genesis_resurrect_decrypted(prior, user, sanitized_path, folder)
+        genesis_resurrect_decrypted(prior, user, vault, sanitized_path, folder, origin)
 
       {:error, reason} ->
         log_resurrect_decrypt_failure(reason, user, prior)
@@ -1067,7 +1067,7 @@ defmodule Engram.Notes do
     end
   end
 
-  defp genesis_resurrect_decrypted(prior, user, sanitized_path, folder) do
+  defp genesis_resurrect_decrypted(prior, user, vault, sanitized_path, folder, origin) do
     # FIX 1 — delete-wins (#970): a tombstone re-created at its OWN path within
     # the delete window is a stale device un-deleting a note another device
     # deleted. Mirror the REST upsert_pathless guard EXACTLY — refuse so the
@@ -1105,6 +1105,17 @@ defmodule Engram.Notes do
                   ),
                   "rebind_note_links"
                 )
+
+              # #648 Phase 2 — a resurrect-rename IS a rename (move_note over a
+              # tombstoned row), so it owes the same server-side link rewrite
+              # genesis_relocate_live enqueues, under the same one-rewriter
+              # gate. Same in-txn, never-raises discipline; the old path rides
+              # as AAD-bound ciphertext because move_note repointed the row and
+              # left no old-path tombstone for the worker to read.
+              _ =
+                if renamed? and crdt_rename_rewrites?(origin) do
+                  enqueue_crdt_rename_rewrite(user, vault, decrypted.id, prior.path)
+                end
 
               # A rename-restore carries the OLD (tombstone) path so peers clear
               # it; a same-path resurrect just announces.

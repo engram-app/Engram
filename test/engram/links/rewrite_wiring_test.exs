@@ -128,6 +128,41 @@ defmodule Engram.Links.RewriteWiringTest do
       {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Old.md", origin: "web")
       assert all_enqueued(worker: RewriteNoteLinks) == []
     end
+
+    # The resurrect-rename leg: the row is a TOMBSTONE when the crdt_create for
+    # its id lands at a new path. Same user-visible operation as a live
+    # relocate (a rename), so it owes the same rewrite — it just reaches
+    # move_note through genesis_resurrect instead of genesis_relocate_live.
+    test "web-origin resurrect-rename enqueues, same encrypted old-path args as a relocate",
+         %{user: user, vault: vault, note: note} do
+      :ok = Notes.delete_note(user, vault, "Old.md")
+      {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Fresh.md", origin: "web")
+
+      assert [job] = all_enqueued(worker: RewriteNoteLinks)
+      assert job.args["target_kind"] == "note"
+      assert job.args["target_id"] == note.id
+      assert {:ok, _} = Base.decode64(job.args["old_path_hmac"])
+      assert {:ok, _} = Base.decode64(job.args["old_basename_hmac"])
+      assert {:ok, _} = Base.decode64(job.args["old_path_ciphertext"])
+      assert {:ok, _} = Base.decode64(job.args["old_path_nonce"])
+      refute Map.has_key?(job.args, "old_path")
+    end
+
+    test "obsidian-origin resurrect-rename enqueues NOTHING (one-rewriter invariant)",
+         %{user: user, vault: vault, note: note} do
+      :ok = Notes.delete_note(user, vault, "Old.md")
+      {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Fresh.md", origin: "obsidian")
+      assert all_enqueued(worker: RewriteNoteLinks) == []
+    end
+
+    test "same-path resurrect (not a rename) enqueues nothing even for web origin",
+         %{user: user, vault: vault, note: note} do
+      :ok = Notes.delete_note(user, vault, "Old.md")
+      # Delete-wins refuses a same-path resurrect inside the window; either way
+      # nothing was renamed, so nothing may be rewritten.
+      _ = Notes.genesis_crdt_note(user, vault, note.id, "Old.md", origin: "web")
+      assert all_enqueued(worker: RewriteNoteLinks) == []
+    end
   end
 
   describe "folder rename fan-out (Phase 3, #648/#1231)" do
