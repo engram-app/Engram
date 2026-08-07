@@ -67,11 +67,17 @@ defmodule EngramWeb.CrdtChannelOriginTest do
     assert all_enqueued(worker: RewriteNoteLinks) == []
   end
 
-  test "untagged join (a pre-tag plugin): relocate enqueues nothing — compromise default",
+  test "untagged join: relocate enqueues — spec safe default",
        %{user: user, vault: vault, note: note} do
+    # Flipped with Notes.untagged_crdt_client_type/0 -> "web" in #1301. Was
+    # pinned to "enqueues nothing" while pre-1.20.0 plugins (which predate the
+    # client_type join param) were the majority and had to be assumed to be the
+    # sole rewriter. Untagged now means "a non-Obsidian client that didn't say",
+    # which must get the server rewrite. Obsidian opts out explicitly above.
     socket = join!(user, vault, %{"crdt_proto" => 2})
     relocate!(socket, note)
-    assert all_enqueued(worker: RewriteNoteLinks) == []
+    assert [job] = all_enqueued(worker: RewriteNoteLinks)
+    assert job.args["target_id"] == note.id
   end
 
   test "batch-path relocate carries the same origin",
