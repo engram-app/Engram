@@ -16,7 +16,13 @@ import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { AttachmentFallback } from "./attachment-fallback";
 import AttachmentImg from "./attachment-img";
 import MermaidBlock from "./mermaid-block";
-import { buildWikiMap, type ManifestNote, type NoteLinkEdge, wikiHref } from "./wiki-link";
+import {
+	buildWikiMap,
+	type ManifestNote,
+	markdownLinkHref,
+	type NoteLinkEdge,
+	wikiHref,
+} from "./wiki-link";
 
 interface NoteViewProps {
 	content: string;
@@ -129,12 +135,20 @@ function NoteView({ content, tags, links, manifestNotes }: NoteViewProps) {
 						url.startsWith(ATTACHMENT_SCHEME) ? url : defaultUrlTransform(url)
 					}
 					components={{
-						// In-app hrefs (wikilinks) go through the router — a plain <a>
-						// would full-page-reload the SPA on every note hop.
+						// In-app hrefs go through the router — a plain <a> would
+						// full-page-reload the SPA on every note hop. Wikilinks arrive
+						// already resolved to `/slug/id` by remarkWikiLink's
+						// hrefTemplate; markdown-syntax links ([label](Target.md), #1302)
+						// arrive as a raw relative path and resolve here through the
+						// same lookup. markdownLinkHref returns null for externals,
+						// anchors and unresolved targets, which stay plain anchors.
 						a({ node: _node, href, children, ...rest }) {
-							if (href?.startsWith("/")) {
+							const to = href?.startsWith("/")
+								? href
+								: markdownLinkHref(href, slug, wikiMap, manifestNotes);
+							if (to) {
 								return (
-									<Link to={href} {...rest}>
+									<Link to={to} {...rest}>
 										{children}
 									</Link>
 								);

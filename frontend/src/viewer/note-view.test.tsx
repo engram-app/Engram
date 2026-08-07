@@ -115,6 +115,51 @@ describe("NoteView wikilinks", () => {
 	});
 });
 
+// #1302 — a vault written with "Use [[Wikilinks]]" off gets markdown-syntax
+// links. The backend indexes them as note_links edges; these prove the viewer
+// routes them in-app instead of full-page-navigating to a non-route.
+describe("NoteView markdown-syntax links", () => {
+	const edge: NoteLinkEdge = {
+		target_text: "My Note.md",
+		target_note_id: "n-1",
+		target_attachment_id: null,
+		target_path: "My Note.md",
+		alias: "label",
+		anchor: null,
+		link_type: "wikilink",
+		dangling: false,
+	};
+
+	it("routes a resolved markdown link to the note id", () => {
+		renderNote("See [label](My%20Note.md).", [edge]);
+		expect(screen.getByRole("link", { name: "label" })).toHaveAttribute("href", "/work/n-1");
+	});
+
+	it("navigates in-app rather than reloading", () => {
+		renderNote("See [label](My%20Note.md).", [edge]);
+		fireEvent.click(screen.getByRole("link", { name: "label" }));
+		expect(screen.getByTestId("loc")).toHaveTextContent("/work/n-1");
+	});
+
+	it("resolves through the manifest when no edge is indexed yet", () => {
+		renderNote("See [x](Sub/Fresh%20Note.md).", [], [{ id: "m-9", path: "Sub/Fresh Note.md" }]);
+		expect(screen.getByRole("link", { name: "x" })).toHaveAttribute("href", "/work/m-9");
+	});
+
+	it("leaves an external link untouched", () => {
+		renderNote("See [ext](https://example.com).");
+		expect(screen.getByRole("link", { name: "ext" })).toHaveAttribute(
+			"href",
+			"https://example.com",
+		);
+	});
+
+	it("leaves an unresolved target as a plain anchor", () => {
+		renderNote("See [x](Nope.md).");
+		expect(screen.getByRole("link", { name: "x" })).toHaveAttribute("href", "Nope.md");
+	});
+});
+
 describe("NoteView frontmatter table removal", () => {
 	it("does not render the frontmatter dl table even when content has frontmatter", () => {
 		renderNote("---\nstatus: draft\nauthor: alice\n---\n\nBody paragraph here.");
