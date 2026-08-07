@@ -1046,12 +1046,16 @@ export interface OnboardingProfile {
 
 // Onboarding hooks
 
-export function useOnboardingStatus() {
+// `enabled: false` lets a consumer that mounts alongside useAppBootstrap (the
+// onboarding gate) wait for the bootstrap seed instead of racing it with its
+// own /onboarding/status fetch.
+export function useOnboardingStatus(opts: { enabled?: boolean } = {}) {
 	return useQuery({
 		queryKey: ["onboarding", "status"],
 		queryFn: () => api.get<OnboardingStatus>("/onboarding/status"),
 		staleTime: Number.POSITIVE_INFINITY,
 		refetchOnWindowFocus: true,
+		enabled: opts.enabled ?? true,
 	});
 }
 

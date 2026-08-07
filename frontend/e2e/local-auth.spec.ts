@@ -129,4 +129,45 @@ test.describe("Local auth provider", () => {
 
 		await expect(page).toHaveURL(/\/onboard\/tools/u, { timeout: 10_000 });
 	});
+
+	// Regression for the stale-bootstrap redirect loop (PR #1299): the wizard
+	// must complete in one SPA session and actually open the dashboard. Routing
+	// off the never-invalidated bootstrap payload bounced finished users back to
+	// the first wizard step in a loop only a full page reload escaped.
+	test("completing the wizard in one session lands on the dashboard", async ({ page }) => {
+		const email = testEmail("wizard");
+		await page.goto("/sign-up/");
+		await page.getByLabel("Email").fill(email);
+		await page.getByLabel("Password", { exact: true }).fill(TEST_PASSWORD);
+		await page.getByLabel("Confirm password").fill(TEST_PASSWORD);
+		await page.getByRole("button", { name: "Create account" }).click();
+
+		// Self-host chain: tools → vault (agreement/billing auto-pass).
+		await expect(page).toHaveURL(/\/onboard\/tools/u, { timeout: 10_000 });
+
+		// Prime the trigger: a full page load on "/" mid-wizard caches the
+		// bootstrap payload (staleTime Infinity) with next_step="tools" in the
+		// SPA session that will finish the wizard — same shape as the real
+		// incident's post-auth landing on "/". The gate bounces us straight
+		// back to the wizard; the poisoned cache stays behind.
+		await page.goto("/");
+		await expect(page).toHaveURL(/\/onboard\/tools/u, { timeout: 10_000 });
+
+		await page.getByLabel("I'm not connecting an AI tool yet").check();
+		await page.getByRole("button", { name: "Continue" }).click();
+
+		await expect(page).toHaveURL(/\/onboard\/vault/u, { timeout: 10_000 });
+		await page.getByRole("button", { name: /starting fresh/iu }).click();
+		await page.getByLabel("Vault name").fill("Wizard Vault");
+		await page.getByRole("button", { name: /create vault & continue/iu }).click();
+
+		// Element-based oracle, not URL: during the bounce loop the URL flickers
+		// through "/" (which a URL wait can false-pass on) but the gate never
+		// renders its Outlet, so no dashboard chrome ever mounts. The checklist
+		// widget (open heading or its dismissed-state pill) proves the app opened.
+		const openHeading = page.getByRole("heading", { name: /finish setup/iu });
+		const closedPill = page.getByLabel(/open setup checklist/iu);
+		await expect(openHeading.or(closedPill).first()).toBeVisible({ timeout: 15_000 });
+		expect(new URL(page.url()).pathname.startsWith("/onboard")).toBe(false);
+	});
 });

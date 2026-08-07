@@ -377,6 +377,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Folder-tree `rebuildTree()` triggers, optimistic move/delete/duplicate → `docs/context/folder-tree-optimistic-rebuild.md`
 - Frontend/backend deploy-trigger skew (different pipelines) — 2026-06-20 incident + fix → `docs/context/frontend-backend-deploy-skew-cors.md`
 - Writing a CM6 live-preview decoration (lezer reads `[!type]` as a Link; one highlight tag serves many nodes; `syntaxTree` is lazy) → `docs/context/codemirror-live-preview-extensions.md`
+- A route guard or view acts on state that mutations definitely updated (user bounced back to a completed onboarding/wizard step; loop only a full page reload escapes) → `docs/context/bootstrap-seed-cache-dual-authority.md`
 
 **Testing & CI**
 - Full test strategy, ExUnit tooling, CI pipeline → `docs/context/testing-strategy.md`
