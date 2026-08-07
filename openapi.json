@@ -93,7 +93,7 @@
             "x-validate": null
           },
           "links": {
-            "description": "Outgoing wikilink/embed edges, resolved.",
+            "description": "Outgoing link/embed edges, resolved. Wikilink and markdown syntax alike.",
             "items": {
               "$ref": "#/components/schemas/NoteLink"
             },
@@ -731,14 +731,14 @@
       "NoteLink": {
         "properties": {
           "alias": {
-            "description": "`[[target|alias]]` display text.",
+            "description": "Display text: `[[target|alias]]`'s alias, or `[label](target)`'s label.",
             "nullable": true,
             "type": "string",
             "x-struct": null,
             "x-validate": null
           },
           "anchor": {
-            "description": "`[[target#anchor]]` heading/block reference.",
+            "description": "Heading/block reference: `[[target#anchor]]` or `[x](target#anchor)`.",
             "nullable": true,
             "type": "string",
             "x-struct": null,
@@ -751,7 +751,7 @@
             "x-validate": null
           },
           "link_type": {
-            "description": "\"wikilink\" or \"embed\".",
+            "description": "\"wikilink\" or \"embed\" — whether the link EMBEDS its target. Not the source syntax; markdown-form links carry these same two values.",
             "type": "string",
             "x-struct": null,
             "x-validate": null
@@ -778,7 +778,7 @@
             "x-validate": null
           },
           "target_text": {
-            "description": "The raw link target as written, e.g. `[[target_text]]`.",
+            "description": "The link target, percent-DECODED. `[[Target]]` and `[x](Target.md)` both yield `Target`/`Target.md` here — not the literal source bytes.",
             "type": "string",
             "x-struct": null,
             "x-validate": null
