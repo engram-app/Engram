@@ -20,8 +20,8 @@ import LoadingPane from "./viewer/loading-pane";
 
 // The app-shell layouts all resolve through ONE barrel module so they share a
 // single async chunk (no gate → shell → layout chunk waterfall). This is what
-// keeps yjs / phoenix / react-joyride / react-resizable-panels / the folder
-// tree out of the eager bundle that gates the sign-in page.
+// keeps yjs / phoenix / react-resizable-panels / the folder tree out of the
+// eager bundle that gates the sign-in page.
 const AppLayout = lazy(() => import("./layout/app-shell").then((m) => ({ default: m.AppLayout })));
 const OnboardingGate = lazy(() =>
 	import("./layout/app-shell").then((m) => ({ default: m.OnboardingGate })),
@@ -187,9 +187,9 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 									element: suspendedScreen(<OnboardingGate />),
 									children: [
 										{
-											// OnboardingShell wraps the dashboard tree so the tour offer,
-											// first-vault modal, and checklist only mount on the main app
-											// surface — NOT on /settings/*, /device-link, or /oauth.
+											// OnboardingShell wraps the dashboard tree so the first-vault
+											// modal and checklist only mount on the main app surface —
+											// NOT on /settings/*, /device-link, or /oauth.
 											element: suspendedScreen(
 												<OnboardingShell>
 													<Outlet />

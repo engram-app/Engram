@@ -20,17 +20,7 @@ function railButtonClass(active: boolean): string {
 	}`;
 }
 
-function ViewButton({
-	id,
-	label,
-	dataTour,
-	Icon,
-}: {
-	id: RailView;
-	label: string;
-	dataTour?: string;
-	Icon: typeof Search;
-}) {
+function ViewButton({ id, label, Icon }: { id: RailView; label: string; Icon: typeof Search }) {
 	const { view, setView } = useRailView();
 	const location = useLocation();
 	const navigate = useNavigate();
@@ -48,7 +38,6 @@ function ViewButton({
 			type="button"
 			aria-label={label}
 			aria-current={active ? "page" : undefined}
-			data-tour={dataTour}
 			title={label}
 			onClick={onClick}
 			className={railButtonClass(active)}
@@ -96,7 +85,7 @@ export default function Rail() {
 			</NavLink>
 
 			<ViewButton id="files" label="Files" Icon={FolderTree} />
-			<ViewButton id="search" label="Search" dataTour="search" Icon={Search} />
+			<ViewButton id="search" label="Search" Icon={Search} />
 
 			<hr className="my-1 w-6 border-border border-t" />
 

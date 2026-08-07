@@ -1,6 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useFolders } from "@/api/queries";
-import { useDemoVaultOptional } from "../../onboarding/tour/demo-vault-provider";
 import { AttachmentUploadDialog } from "./upload-dialog";
 
 interface UploadApi {
@@ -30,35 +29,22 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 	const depth = useRef(0);
 	const pickerRef = useRef<HTMLInputElement>(null);
 	const folders = useFolders().data ?? [];
-	// Demo vaults are read-only previews (mirrors useAttachments); uploading would
-	// POST to the real backend with the demo vault's id. Gate the whole flow off.
-	const demoActive = useDemoVaultOptional()?.active === true;
 
 	// No files → open the OS picker (the dialog opens once files are chosen, so
 	// the button never flashes an empty dialog). Files present → open directly.
-	const openUpload = useCallback(
-		(dropped?: File[], defaultFolder = "") => {
-			if (demoActive) {
-				return;
-			}
-			setPendingFolder(defaultFolder);
-			if (dropped && dropped.length > 0) {
-				setFiles(dropped);
-			} else {
-				pickerRef.current?.click();
-			}
-		},
-		[demoActive],
-	);
+	const openUpload = useCallback((dropped?: File[], defaultFolder = "") => {
+		setPendingFolder(defaultFolder);
+		if (dropped && dropped.length > 0) {
+			setFiles(dropped);
+		} else {
+			pickerRef.current?.click();
+		}
+	}, []);
 
 	// Window-level drag handling. The hasFiles() guard means INTERNAL headless-tree
 	// note/folder drags (which carry no 'Files' type) never trip the overlay — the
-	// single most important invariant of this feature. Demo vaults register no
-	// listeners at all, so the overlay never appears mid-tour.
+	// single most important invariant of this feature.
 	useEffect(() => {
-		if (demoActive) {
-			return;
-		}
 		const onEnter = (e: DragEvent) => {
 			if (!hasFiles(e)) {
 				return;
@@ -107,7 +93,7 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 			window.removeEventListener("dragleave", onLeave);
 			window.removeEventListener("drop", onDrop);
 		};
-	}, [demoActive]);
+	}, []);
 
 	return (
 		<Ctx.Provider value={{ openUpload }}>

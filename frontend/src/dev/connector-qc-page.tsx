@@ -232,11 +232,7 @@ export default function ConnectorQcPage() {
 				note="Tools picked in FTUX vs live connections. claude/chatgpt/grok/mistral/open_webui/claude_code/antigravity should be struck through; cursor should still be actionable; 'another MCP client' ticks off the unrecognized grant."
 				connections={CONNECTIONS}
 			>
-				<ChecklistWidget
-					onStartTour={() => {
-						// The product tour is out of scope for connector QC.
-					}}
-				/>
+				<ChecklistWidget />
 			</Panel>
 
 			<Panel

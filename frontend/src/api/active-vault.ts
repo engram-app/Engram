@@ -1,5 +1,4 @@
 import { useSyncExternalStore } from "react";
-import { isDemoVaultId } from "../onboarding/tour/demo-vault-ids";
 import type { Vault } from "./queries";
 
 const STORAGE_KEY = "engram.activeVaultId";
@@ -7,26 +6,10 @@ const STORAGE_KEY = "engram.activeVaultId";
 let activeVaultId: string | null = readStored();
 const listeners = new Set<() => void>();
 
-// The onboarding tour renders fake vaults (`demo-vault-*`) and gates a step on
-// switching to one. Those ids are client-only fixtures: persisting one poisons
-// the real active vault across reloads (every request then ships
-// `X-Vault-Id: demo-vault-*` → backend 404s), so they update the in-memory
-// selection but must never reach localStorage (see setActiveVaultId).
-
 function readStored(): string | null {
 	try {
 		const raw = localStorage.getItem(STORAGE_KEY);
-		if (!raw) {
-			return null;
-		}
-		// Heal storage poisoned by a tour session that ran before the persistence
-		// guard shipped: drop the demo id and clear it so it cannot be re-adopted,
-		// otherwise those users 404 on every request with no self-recovery.
-		if (isDemoVaultId(raw)) {
-			localStorage.removeItem(STORAGE_KEY);
-			return null;
-		}
-		return raw.length > 0 ? raw : null;
+		return raw && raw.length > 0 ? raw : null;
 	} catch {
 		return null;
 	}
@@ -60,24 +43,7 @@ export function setActiveVaultId(id: string | null) {
 		return;
 	}
 	activeVaultId = id;
-	// Demo vault selections stay in memory only (see isDemoVaultId).
-	if (!isDemoVaultId(id)) {
-		writeStored(id);
-	}
-	listeners.forEach((l) => {
-		l();
-	});
-}
-
-// Restore the in-memory selection to the persisted (real) vault, dropping any
-// transient demo selection. Called when the tour deactivates so the app does
-// not keep sending a `demo-vault-*` id to the real API.
-export function resetActiveVaultToStored() {
-	const stored = readStored();
-	if (activeVaultId === stored) {
-		return;
-	}
-	activeVaultId = stored;
+	writeStored(id);
 	listeners.forEach((l) => {
 		l();
 	});
@@ -119,13 +85,11 @@ export function preferredVault(vaults: Vault[] | undefined, hintId: string | nul
  */
 export function reconcileActiveVault(vaults: Vault[] | undefined) {
 	const current = activeVaultId;
-	// A live demo selection is a tour fixture and never appears in the real
-	// list — reconciling it would yank the user out of the tour mid-step.
 	// `vaults` is optional so a payload missing the list can't throw from inside
 	// a queryFn: healing is best-effort, and taking the bootstrap query (and
 	// with it the whole authenticated shell) down over it would be a far worse
 	// failure than the 404s this exists to prevent.
-	if (!vaults || current === null || isDemoVaultId(current)) {
+	if (!vaults || current === null) {
 		return;
 	}
 	if (vaults.some((v) => v.id === current)) {
