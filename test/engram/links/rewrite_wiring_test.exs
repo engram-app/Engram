@@ -6,6 +6,7 @@ defmodule Engram.Links.RewriteWiringTest do
   alias Engram.Folders
   alias Engram.MCP.Handlers
   alias Engram.Notes
+  alias Engram.Notes.Note
   alias Engram.Workers.RebindNoteLinks
   alias Engram.Workers.RewriteNoteLinks
 
@@ -13,6 +14,16 @@ defmodule Engram.Links.RewriteWiringTest do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     vault = insert(:vault, user: user)
     %{user: user, vault: vault}
+  end
+
+  # Force a tombstone's deleted_at into the past so the delete-wins window
+  # (Notes @delete_tombstone_window_seconds) has expired, without sleeping.
+  # Same idiom as notes_delete_tombstone_test.exs.
+  defp backdate_delete(note_id, seconds_ago) do
+    past = DateTime.add(DateTime.utc_now(), -seconds_ago, :second)
+
+    from(n in Note, where: n.id == ^note_id)
+    |> Repo.update_all([set: [deleted_at: past]], skip_tenant_check: true)
   end
 
   test "REST-origin note rename enqueues a rewrite job with hmac-only args", %{
@@ -126,6 +137,59 @@ defmodule Engram.Links.RewriteWiringTest do
     test "same-path idempotent re-genesis enqueues nothing even for web origin",
          %{user: user, vault: vault, note: note} do
       {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Old.md", origin: "web")
+      assert all_enqueued(worker: RewriteNoteLinks) == []
+    end
+
+    # The resurrect-rename leg: the row is a TOMBSTONE when the crdt_create for
+    # its id lands at a new path. Same user-visible operation as a live
+    # relocate (a rename), so it owes the same rewrite — it just reaches
+    # move_note through genesis_resurrect instead of genesis_relocate_live.
+    test "web-origin resurrect-rename enqueues, same encrypted old-path args as a relocate",
+         %{user: user, vault: vault, note: note} do
+      :ok = Notes.delete_note(user, vault, "Old.md")
+      {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Fresh.md", origin: "web")
+
+      assert [job] = all_enqueued(worker: RewriteNoteLinks)
+      assert job.args["target_kind"] == "note"
+      assert job.args["target_id"] == note.id
+      assert {:ok, _} = Base.decode64(job.args["old_path_hmac"])
+      assert {:ok, _} = Base.decode64(job.args["old_basename_hmac"])
+      assert {:ok, _} = Base.decode64(job.args["old_path_ciphertext"])
+      assert {:ok, _} = Base.decode64(job.args["old_path_nonce"])
+      refute Map.has_key?(job.args, "old_path")
+    end
+
+    test "obsidian-origin resurrect-rename enqueues NOTHING (one-rewriter invariant)",
+         %{user: user, vault: vault, note: note} do
+      :ok = Notes.delete_note(user, vault, "Old.md")
+      {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Fresh.md", origin: "obsidian")
+      assert all_enqueued(worker: RewriteNoteLinks) == []
+    end
+
+    test "same-path resurrect (not a rename) enqueues nothing even for web origin",
+         %{user: user, vault: vault, note: note} do
+      :ok = Notes.delete_note(user, vault, "Old.md")
+
+      # Backdate past the delete-wins window so the resurrect actually SUCCEEDS.
+      # Without this the `recently_deleted` guard short-circuits before
+      # `renamed?` is ever computed, and the assertion below would pass
+      # vacuously — proving the guard, not the `renamed?` half of the gate.
+      backdate_delete(note.id, 120)
+
+      assert {:ok, resurrected} =
+               Notes.genesis_crdt_note(user, vault, note.id, "Old.md", origin: "web")
+
+      assert resurrected.id == note.id
+      assert all_enqueued(worker: RewriteNoteLinks) == []
+    end
+
+    test "delete-wins still refuses a same-path resurrect inside the window",
+         %{user: user, vault: vault, note: note} do
+      :ok = Notes.delete_note(user, vault, "Old.md")
+
+      assert {:error, :recently_deleted} =
+               Notes.genesis_crdt_note(user, vault, note.id, "Old.md", origin: "web")
+
       assert all_enqueued(worker: RewriteNoteLinks) == []
     end
   end

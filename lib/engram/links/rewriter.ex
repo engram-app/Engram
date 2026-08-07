@@ -7,10 +7,10 @@ defmodule Engram.Links.Rewriter do
   `[[wikilink]]`/`![[embed]]` targets are rewritten to the new name. The
   server is the SINGLE rewriter for every origin EXCEPT plugin-origin
   renames (Obsidian's "Automatically update internal links" owns those) —
-  exactly one party rewrites, never both. Known deliberate gap:
-  `genesis_resurrect`'s rename-restore leg (web-origin resurrect-rename)
-  currently enqueues no rewriter — deferred, tracked for the
-  untagged-default flip follow-up.
+  exactly one party rewrites, never both. Both CRDT rename legs are wired:
+  `genesis_relocate_live` (live row) and `genesis_resurrect`'s
+  rename-restore leg (tombstoned row), each behind
+  `Notes.crdt_rename_rewrites?/1`.
 
   POLICY: the server authors only mechanical, semantics-preserving
   transforms — the rewritten target resolves to the same row the old text
