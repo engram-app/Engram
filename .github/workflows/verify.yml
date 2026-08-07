@@ -4311,9 +4311,16 @@ jobs:
     concurrency:
       group: build-and-publish-image-${{ github.ref }}
       cancel-in-progress: false
+    # Consumed by mirror-image-to-ecr, which finishes the ECR half of the
+    # publish from a GitHub-hosted runner (#1290).
+    outputs:
+      image_exists: ${{ steps.version.outputs.image_exists }}
+      ghcr_image: ${{ steps.version.outputs.ghcr_image }}
+      sha_short: ${{ steps.version.outputs.sha_short }}
+      sha_tag: ${{ steps.version.outputs.sha_tag }}
+      vtag: ${{ steps.version.outputs.vtag }}
     permissions:
       packages: write   # GHCR push
-      id-token: write   # aws-actions/configure-aws-credentials OIDC for ECR
       contents: read
 
     steps:
@@ -4342,7 +4349,6 @@ jobs:
           # path TF-driven pushes to `.github/CODEOWNERS` (and any other
           # admin file outside the BACKEND_HASH input set) take.
           CACHE_HIT_BOTH: ${{ needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true' }}
-          ECR_REPO: ${{ vars.AWS_ECR_REPOSITORY }}
         run: |
           VERSION=$(grep 'version:' mix.exs | head -1 | sed 's/.*"\(.*\)".*/\1/')
           if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -4399,7 +4405,8 @@ jobs:
           #   first or rerun + missing               → BUILD + PUSH + DEPLOY
           #                                            as normal
           #
-          # When we SKIP, we skip ECR push too — re-running on the same
+          # When we SKIP, the ECR mirror skips too (mirror-image-to-ecr
+          # gates on this same image_exists output) — re-running on the same
           # commit produces a byte-identical image, and ECR's existing
           # `sha-` tag already serves the prod GitOps chain.
           #
@@ -4460,26 +4467,28 @@ jobs:
             echo "sha_tag=$SHA_TAG"
             echo "vtag=$VTAG"
             echo "image_exists=$IMAGE_EXISTS"
+            # GHCR ONLY (#1290). The ECR tags used to live in this same list,
+            # so buildx pushed every layer twice from a homelab runner whose
+            # outbound link is ~1 MB/s: 259s to GHCR, then 333s re-uploading
+            # the SAME bytes to ECR. The ECR copy now happens in
+            # mirror-image-to-ecr, GHCR->ECR from a GitHub-hosted runner, so
+            # those bytes never re-cross our uplink.
             echo "tags<<EOF"
             echo "${GHCR_IMAGE}:latest"
             echo "${GHCR_IMAGE}:${VERSION}"
             echo "${GHCR_IMAGE}:${SHA_SHORT}"
-            echo "${ECR_REPO}:${SHA_TAG}"
-            if [ -n "$VTAG" ]; then
-              echo "${ECR_REPO}:${VTAG}"
-            fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
           if [ "$IMAGE_EXISTS" = "true" ]; then
             echo "Version ${VERSION} already built; will skip build + push (both registries)."
           else
-            echo "Version ${VERSION} is new — proceeding with build + push to GHCR + ECR."
+            echo "Version ${VERSION} is new — proceeding with build + push to GHCR."
             echo "GHCR tags: latest, ${VERSION}, ${SHA_SHORT}"
             if [ -n "$VTAG" ]; then
-              echo "ECR  tags: ${SHA_TAG}, ${VTAG}"
+              echo "ECR tags (mirrored later by mirror-image-to-ecr): ${SHA_TAG}, ${VTAG}"
             else
-              echo "ECR  tags: ${SHA_TAG}"
+              echo "ECR tags (mirrored later by mirror-image-to-ecr): ${SHA_TAG}"
             fi
           fi
 
@@ -4500,82 +4509,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install AWS CLI v2 (idempotent)
-        # Self-hosted runner pool doesn't ship awscli + the runner user has no
-        # passwordless sudo. Install into $HOME/.aws-cli (userspace) and add
-        # the bin dir to GITHUB_PATH every run.
-        #
-        # The `[ ! -x "$BIN" ]` path-based check is more reliable than
-        # `command -v aws` — GITHUB_PATH additions don't persist across runs,
-        # so a PATH-shaped check fails even on a runner where awscli is
-        # already present at the expected $HOME/.aws-cli path.
-        #
-        # `--update` makes `aws/install` idempotent even when an existing
-        # install is present (otherwise it errors with "Found preexisting AWS
-        # CLI installation"). The path check above keeps the fast path;
-        # --update is the safety net for race conditions.
-        if: steps.version.outputs.image_exists != 'true'
-        run: |
-          BIN="$HOME/.aws-cli/bin/aws"
-          if [ ! -x "$BIN" ]; then
-            curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
-            rm -rf /tmp/awscli
-            unzip -q /tmp/awscliv2.zip -d /tmp/awscli
-            /tmp/awscli/aws/install \
-              --install-dir "$HOME/.aws-cli" \
-              --bin-dir "$HOME/.aws-cli/bin" \
-              --update
-            rm -rf /tmp/awscliv2.zip /tmp/awscli
-          fi
-          echo "$HOME/.aws-cli/bin" >> "$GITHUB_PATH"
-          "$BIN" --version
-
-          # Reap superseded installs. `aws/install --update` creates a NEW
-          # versioned directory under v2/ and repoints `current` — it never
-          # removes the old one. Seven runner services share one $HOME on the
-          # SlowRaid VM, so the `[ ! -x "$BIN" ]` guard above does not prevent
-          # concurrent first-installs racing, and each race leaves another
-          # 268MB directory behind forever.
-          #
-          # By 2026-08-05 that was 23 versions / 6.0GB on a 76GB root with no
-          # free LVM extents, and it took the whole runner pool down twice in
-          # one day with "No space left on device" — surfacing as unrelated red
-          # CI, since all seven runners share the filesystem.
-          #
-          # Keeps the newest two: `current` plus one for rollback margin.
-          # Failures here must never fail the build — this is hygiene, not a
-          # dependency of the step.
-          if [ -d "$HOME/.aws-cli/v2" ]; then
-            # Keep set = newest two by version sort, PLUS whatever `current`
-            # actually resolves to. The union matters: if `current` ever points
-            # at something that is not among the newest two, a pure
-            # version-sort would delete the live install out from under the
-            # symlink. `[0-9]*` never matches the `current` symlink itself.
-            keep="$(ls -d "$HOME"/.aws-cli/v2/[0-9]* 2>/dev/null | sort -V | tail -2)"
-            live="$(readlink -f "$HOME/.aws-cli/v2/current" 2>/dev/null || true)"
-            [ -n "$live" ] && keep="$keep
-          $live"
-            for d in "$HOME"/.aws-cli/v2/[0-9]*; do
-              printf '%s\n' "$keep" | grep -qxF "$d" || rm -rf "$d" || true
-            done
-          fi
-
-      - name: Configure AWS credentials (OIDC)
-        if: steps.version.outputs.image_exists != 'true'
-        # v6 (Node 24). v4 used Node 20, which GH deprecates 2026-09-16.
-        # Inputs `role-to-assume` and `aws-region` are stable across both.
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
-          aws-region: us-east-1
-
-      - name: Login to ECR
-        if: steps.version.outputs.image_exists != 'true'
-        run: |
-          aws ecr get-login-password --region us-east-1 \
-            | docker login --username AWS --password-stdin \
-              "${{ vars.AWS_ECR_REPOSITORY }}"
 
       # Local FS cache on the self-hosted runner — bounded by disk speed
       # instead of GHCR latency. The old registry cache fetched every layer
@@ -4931,6 +4864,128 @@ jobs:
           PR_NUMBER: ${{ steps.open-pr.outputs.pull-request-number }}
         run: |
           gh pr merge --auto --squash --repo engram-app/engram-infra "$PR_NUMBER"
+
+  # ---------------------------------------------------------------------------
+  # ECR half of the publish (#1290).
+  #
+  # Why this is a separate job on a GITHUB-HOSTED runner
+  # ---------------------------------------------------
+  # build-and-publish-image used to list the ECR tags alongside the GHCR ones
+  # in a single `docker/build-push-action`, so buildx uploaded every layer
+  # TWICE from a homelab runner whose outbound link is ~1 MB/s. Measured on
+  # run 31057787877: 259s pushing to GHCR, then 333s re-uploading the SAME
+  # bytes to ECR — ~10 minutes of a single job, on every merge that builds.
+  #
+  # By the time the ECR leg started, those exact layers were already sitting
+  # in GHCR. So the fix is to make the second hop cloud-to-cloud: GHCR ->
+  # ECR, executed from GitHub's own network, where our uplink is not in the
+  # path at all.
+  #
+  # THE TRAP (do not "simplify" this back onto the self-hosted pool): running
+  # the same copy from our own runners does NOT help. Every copy tool streams
+  # blobs through the client, so the bytes would just re-cross the same
+  # uplink in both directions. The GitHub-hosted runner IS the fix — it is
+  # not an incidental choice, and moving `runs-on` back to self-hosted
+  # silently restores the full cost while looking like a no-op diff.
+  #
+  # Why imagetools and not a pull-through cache
+  # -------------------------------------------
+  # An ECR pull-through cache rule with a GHCR upstream would also avoid the
+  # double upload, but it populates LAZILY on first pull. Three things now
+  # require the tag to be EAGERLY present in ECR and would break:
+  #   * the `check` block in engram-infra ecs.tf that fails the prod plan
+  #     when var.engram_image_tag is missing from ECR (#324 defense 2)
+  #   * the task def's digest pin, which resolves that tag via
+  #     `data.aws_ecr_image` at plan time (#324 defense 4)
+  #   * the post-apply `prod-deployed-*` promotion-tag mover
+  # `imagetools create` pushes eagerly, so all three keep working unchanged.
+  # It also ships preinstalled on GitHub runners, so this adds no action
+  # dependency to pin or audit.
+  mirror-image-to-ecr:
+    needs: [build-and-publish-image]
+    # Skip in lockstep with the build. When build-and-publish-image decides
+    # the image already exists, ECR's `sha-` tag is already serving the prod
+    # GitOps chain and there is nothing to mirror.
+    if: |
+      always()
+      && needs.build-and-publish-image.result == 'success'
+      && needs.build-and-publish-image.outputs.image_exists != 'true'
+    # GitHub-hosted ON PURPOSE — see the trap note above.
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read    # pull the just-pushed image from GHCR
+      id-token: write   # OIDC for the ECR push role
+      contents: read
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure AWS credentials (OIDC)
+        # The ecr_push role trusts on the OIDC `sub` claim only
+        # (repo:engram-app/Engram:ref:refs/heads/main | refs/tags/v*) with no
+        # aws:SourceIp condition, so a GitHub-hosted runner satisfies it
+        # exactly as the self-hosted one did. Verified against
+        # engram-infra main/envs/prod/ecr.tf before moving this leg.
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region us-east-1 \
+            | docker login --username AWS --password-stdin \
+              "${{ vars.AWS_ECR_REPOSITORY }}"
+
+      - name: Mirror GHCR -> ECR
+        env:
+          GHCR_IMAGE: ${{ needs.build-and-publish-image.outputs.ghcr_image }}
+          SHA_SHORT: ${{ needs.build-and-publish-image.outputs.sha_short }}
+          SHA_TAG: ${{ needs.build-and-publish-image.outputs.sha_tag }}
+          VTAG: ${{ needs.build-and-publish-image.outputs.vtag }}
+          ECR_REPO: ${{ vars.AWS_ECR_REPOSITORY }}
+        run: |
+          set -euo pipefail
+
+          SRC="${GHCR_IMAGE}:${SHA_SHORT}"
+          echo "::notice::Mirroring ${SRC} -> ${ECR_REPO}:${SHA_TAG}"
+
+          # One `create` per destination tag, each re-reading from GHCR.
+          # Blobs already present in ECR are skipped by the registry's
+          # cross-repo blob mount, so the vtag pass is manifest-only.
+          docker buildx imagetools create --tag "${ECR_REPO}:${SHA_TAG}" "${SRC}"
+
+          if [ -n "${VTAG}" ]; then
+            echo "::notice::Mirroring ${SRC} -> ${ECR_REPO}:${VTAG}"
+            docker buildx imagetools create --tag "${ECR_REPO}:${VTAG}" "${SRC}"
+          fi
+
+      - name: Verify the tag is resolvable in ECR
+        # Fail HERE rather than at `terraform plan` three steps downstream.
+        # The prod drift guard and digest pin both resolve this exact tag via
+        # data.aws_ecr_image; if the mirror silently no-opped, the first
+        # symptom would otherwise be a red prod plan with a confusing
+        # ImageNotFoundException. Also proves the eager-push property that
+        # rules out a lazy pull-through cache.
+        env:
+          SHA_TAG: ${{ needs.build-and-publish-image.outputs.sha_tag }}
+        run: |
+          set -euo pipefail
+          REPO_NAME="${{ vars.AWS_ECR_REPOSITORY }}"
+          REPO_NAME="${REPO_NAME##*/}"
+          DIGEST=$(aws ecr describe-images \
+            --repository-name "$REPO_NAME" \
+            --image-ids "imageTag=${SHA_TAG}" \
+            --query 'imageDetails[0].imageDigest' --output text)
+          if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
+            echo "::error::${SHA_TAG} is not resolvable in ECR after mirroring" >&2
+            exit 1
+          fi
+          echo "::notice::ECR ${SHA_TAG} -> ${DIGEST}"
 
   # Submit the Hex SBOM to GitHub's dependency-submission API after merge.
   # GitHub's static mix.lock parser silently fails on this repo (verified
