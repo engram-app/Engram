@@ -918,10 +918,11 @@ defmodule Engram.Notes do
   def untagged_crdt_client_type, do: @untagged_crdt_client_type
 
   @doc """
-  ONE-REWRITER INVARIANT gate for CRDT-origin renames (relocates reached via
-  `genesis_crdt_note/5`): `"obsidian"` never triggers a server rewrite; any
-  other PRESENT tag does; an ABSENT tag (nil) takes the
-  `untagged_crdt_client_type/0` compromise default (see attribute comment).
+  ONE-REWRITER INVARIANT gate for CRDT-origin renames — BOTH legs reached via
+  `genesis_crdt_note/5`: live relocates (`genesis_relocate_live`) and
+  resurrect-renames (`genesis_resurrect`). `"obsidian"` never triggers a
+  server rewrite; any other PRESENT tag does; an ABSENT tag (nil) takes the
+  `untagged_crdt_client_type/0` default (see attribute comment).
   """
   @spec crdt_rename_rewrites?(String.t() | nil) :: boolean()
   def crdt_rename_rewrites?(client_type) do
