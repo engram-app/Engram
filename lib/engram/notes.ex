@@ -891,15 +891,27 @@ defmodule Engram.Notes do
   # 2026-07-06 wrong-mint corruption signature).
   # ── Phase 2 (#648/#1231) — CRDT-origin rename rewrite gate ─────────────────
   #
-  # TEMPORARY COMPROMISE — REMOVE BY FLIPPING TO "web" (one line, this
-  # attribute only): an UNTAGGED crdt socket is treated as plugin-origin so a
-  # version-skewed plugin that predates the client_type join tag never
-  # double-rewrites (Obsidian rewrites its own links; the server rewriting too
-  # would violate the one-rewriter invariant). Once the plugin release that
-  # tags itself "obsidian" has been out for one release cycle, flip this to
-  # "web" so untagged defaults to enqueue — the spec's safe default.
+  # FLIPPED to "web" 2026-08-07 (#1301). The prior "obsidian" value was a
+  # deliberate skew compromise: while plugins predating the client_type join
+  # tag (< 1.20.0) were the majority, treating an untagged socket as
+  # plugin-origin kept Obsidian the sole rewriter. Flipping early would have
+  # had BOTH sides rewrite the same wikilinks — concurrent positional edits in
+  # one Y-doc, which is exactly what the one-rewriter invariant exists to
+  # prevent.
+  #
+  # "web" is the spec's safe default and is now the correct one: any NON-
+  # Obsidian client that omits the tag (an old web build, a future mobile
+  # client) previously got no rewrite at all and silently rotted links with no
+  # error surface. Obsidian still opts out explicitly by tagging itself.
+  #
+  # Skew gate at flip time: plugin 1.20.0 shipped 2026-08-05 and 1.20.1 on
+  # 2026-08-06, against a 2-5 day release cadence. Note the drain could not be
+  # evidenced directly — client_type was threaded into this gate but never
+  # logged, so "untagged joins in Loki" was unobservable. The join-time log now
+  # carries client_type (see EngramWeb.CrdtChannel) so a straggler is greppable:
+  #   {service_name="engram"} | json | metadata_client_type=`untagged`
   # Pinned by test/engram/notes_crdt_origin_gate_test.exs. Tracked in #648.
-  @untagged_crdt_client_type "obsidian"
+  @untagged_crdt_client_type "web"
 
   @doc false
   @spec untagged_crdt_client_type() :: String.t()

@@ -129,6 +129,21 @@ defmodule EngramWeb.CrdtChannel do
                         conn_id: socket.assigns[:conn_id],
                         device_id: socket.assigns[:device_id],
                         topic: socket.topic,
+                        # Skew tripwire for the Notes.untagged_crdt_client_type/0
+                        # default, flipped to "web" in #1301. An untagged socket
+                        # now gets a SERVER-side link rewrite on rename, which is
+                        # wrong for a pre-1.20.0 plugin (it rewrites its own links
+                        # — both sides editing one Y-doc is the double-rewrite the
+                        # one-rewriter invariant forbids). Before this field the
+                        # gate's own input was unobservable, so "has the skew
+                        # drained?" had no answer. nil is materialised as the
+                        # literal "untagged" rather than left absent: a MISSING
+                        # field is indistinguishable from a log line predating
+                        # this change, which would make the tripwire query lie.
+                        # Safe to echo — client_type/1 above already bounds it to
+                        # a ≤32-byte binary, and this is a JSON field, not a Loki
+                        # stream label, so an odd value costs no index cardinality.
+                        client_type: socket.assigns[:client_type] || "untagged",
                         user_id: HMAC.hash_user_id(to_string(user.id))
                       )
                     )
