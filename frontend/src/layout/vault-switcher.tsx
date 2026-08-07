@@ -66,13 +66,6 @@ function VaultSwitcher() {
 							// the new vault.
 							navigate(`/${target.slug}`);
 							qc.invalidateQueries();
-							// Onboarding tour gates step 0 on a real switch; emit a DOM
-							// event the controller can listen for without coupling layers.
-							window.dispatchEvent(
-								new CustomEvent("engram:vault-switched", {
-									detail: { from: active.id, to: next },
-								}),
-							);
 						}}
 					>
 						{vaults.map((v) => (

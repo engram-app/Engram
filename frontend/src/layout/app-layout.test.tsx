@@ -31,7 +31,6 @@ vi.mock("../api/queries", async () => {
 	};
 });
 vi.mock("../api/use-channel", () => ({ useChannel: () => {} }));
-vi.mock("../onboarding/tour/demo-vault-provider", () => ({ useDemoVaultOptional: () => null }));
 vi.mock("../auth/use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ user: { email: "t@example.com", imageUrl: null }, logout: vi.fn() }),
 }));

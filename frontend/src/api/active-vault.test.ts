@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-	getActiveVaultId,
-	reconcileActiveVault,
-	resetActiveVaultToStored,
-	setActiveVaultId,
-} from "./active-vault";
+import { getActiveVaultId, reconcileActiveVault, setActiveVaultId } from "./active-vault";
 import type { Vault } from "./queries";
 
 const KEY = "engram.activeVaultId";
@@ -13,11 +8,11 @@ function v(id: string, slug: string, is_default = false): Vault {
 	return { id, slug, is_default, name: slug } as Vault;
 }
 
-// resetActiveVaultToStored() re-reads localStorage into the module, so clearing
-// storage then calling it returns the module to a clean (null) baseline.
+// The store is module state, so each test has to return it to a clean (null)
+// baseline explicitly; selecting null also clears the persisted key.
 function reset() {
+	setActiveVaultId(null);
 	localStorage.clear();
-	resetActiveVaultToStored();
 }
 
 describe("active-vault persistence", () => {
@@ -28,50 +23,6 @@ describe("active-vault persistence", () => {
 		setActiveVaultId("42");
 		expect(getActiveVaultId()).toBe("42");
 		expect(localStorage.getItem(KEY)).toBe("42");
-	});
-
-	it("does not persist a demo-vault id, but updates the in-memory value", () => {
-		// The onboarding tour drives a real switch to a fake vault; it must reflect
-		// live (so the switcher + tour gate work) without touching localStorage.
-		setActiveVaultId("demo-vault-2");
-		expect(getActiveVaultId()).toBe("demo-vault-2");
-		expect(localStorage.getItem(KEY)).toBeNull();
-	});
-
-	it("leaves a previously-stored real vault id intact when a demo vault is selected", () => {
-		setActiveVaultId("42");
-		setActiveVaultId("demo-vault-2");
-		// In-memory follows the demo selection, but the persisted real vault survives.
-		expect(getActiveVaultId()).toBe("demo-vault-2");
-		expect(localStorage.getItem(KEY)).toBe("42");
-	});
-
-	it("heals storage already poisoned by a pre-fix tour session (drops + clears a demo id)", () => {
-		// A user who ran the tour before this fix shipped has a demo id persisted.
-		// On next load it must NOT be adopted, and must be cleared so it cannot
-		// re-poison later reads (otherwise they 404 forever with no self-recovery).
-		localStorage.setItem(KEY, "demo-vault-2");
-		resetActiveVaultToStored();
-		expect(getActiveVaultId()).toBeNull();
-		expect(localStorage.getItem(KEY)).toBeNull();
-	});
-});
-
-describe("resetActiveVaultToStored", () => {
-	beforeEach(reset);
-	afterEach(reset);
-
-	it("drops a transient demo selection and restores the persisted real vault", () => {
-		setActiveVaultId("42");
-		setActiveVaultId("demo-vault-2");
-		resetActiveVaultToStored();
-		expect(getActiveVaultId()).toBe("42");
-	});
-
-	it("resets to null when nothing is stored (new user leaving the demo)", () => {
-		setActiveVaultId("demo-vault-1");
-		resetActiveVaultToStored();
-		expect(getActiveVaultId()).toBeNull();
 	});
 });
 
@@ -128,13 +79,14 @@ describe("reconcileActiveVault", () => {
 		expect(localStorage.getItem(KEY)).toBeNull();
 	});
 
-	it("leaves a live demo selection alone", () => {
-		// The tour's fake vaults are never in the real list; reconciling against it
-		// would yank the user out of the demo mid-tour.
-		setActiveVaultId("id-a");
+	it("re-points a leftover demo-vault id from the removed onboarding tour", () => {
+		// Storage written by an early tour build persists a client-only fixture id
+		// that 404s every vault-scoped request. It is just an unowned id now, so
+		// the normal reconcile path heals it.
+		localStorage.setItem(KEY, "demo-vault-2");
 		setActiveVaultId("demo-vault-2");
 		reconcileActiveVault(owned);
-		expect(getActiveVaultId()).toBe("demo-vault-2");
-		expect(localStorage.getItem(KEY)).toBe("id-a");
+		expect(getActiveVaultId()).toBe("id-b");
+		expect(localStorage.getItem(KEY)).toBe("id-b");
 	});
 });

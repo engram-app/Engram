@@ -20,12 +20,6 @@ vi.mock("../viewer/attachment-upload/provider", () => ({
 	useAttachmentUpload: () => ({ openUpload }),
 }));
 
-// Controllable demo flag — null (not demo) by default; flip per test.
-let demoActive = false;
-vi.mock("../onboarding/tour/demo-vault-provider", () => ({
-	useDemoVaultOptional: () => (demoActive ? { active: true } : null),
-}));
-
 vi.mock("react-router", async () => {
 	const actual = await vi.importActual<typeof import("react-router")>("react-router");
 	return {
@@ -82,7 +76,6 @@ describe("FolderActions", () => {
 		toastError.mockReset();
 		openUpload.mockReset();
 		crdtCreateNote.mockReset().mockImplementation((docId: string) => Promise.resolve(docId));
-		demoActive = false;
 	});
 
 	// Obsidian's equivalent buttons always target the vault root; following the
@@ -128,12 +121,6 @@ describe("FolderActions", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Upload attachment" }));
 		// Seeded active note lives in folder "foo" (see renderWithProviders).
 		expect(openUpload).toHaveBeenCalledWith(undefined, "");
-	});
-
-	it("hides the Upload button on demo vaults", () => {
-		demoActive = true;
-		renderWithProviders();
-		expect(screen.queryByRole("button", { name: "Upload attachment" })).toBeNull();
 	});
 
 	it("uses the target folder label in the New note tooltip trigger", () => {

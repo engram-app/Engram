@@ -394,13 +394,6 @@ describe("NotePage (CRDT)", () => {
 			expect(title.compareDocumentPosition(properties)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 		});
 
-		it("keeps the onboarding tour anchor present", async () => {
-			renderPage();
-			await waitFor(() =>
-				expect(document.querySelector('[data-tour="note-editor"]')).toBeInTheDocument(),
-			);
-		});
-
 		it("shows the title in reading mode too", async () => {
 			renderPage();
 			await screen.findByTestId("note-editor");

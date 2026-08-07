@@ -1,14 +1,29 @@
 # Context Doc: Onboarding demo vault poisons `engram.activeVaultId` → prod 404 storm
 
-_Last verified: 2026-07-05_
+_Last verified: 2026-08-07_
 
 ## Status
-Diagnosed and FIXED 2026-07-05 (branch `fix/demo-vault-active-vault-poisoning`).
-Core fix shipped: `active-vault.ts` never persists a `demo-vault-*` id (in-memory
-only, so the tour switch still works), and `demo-vault-provider.tsx` `deactivate()`
-calls `resetActiveVaultToStored()` to drop the transient demo selection. Follow-ups
-still open: guard mutation hooks on `demo.active`, roll back optimistic inserts on
-write failure (see Fix Direction).
+OBSOLETE as of 2026-08-07 — the onboarding tour and its demo vault were removed
+from the web app entirely (`src/onboarding/tour/`, `public/demo-vault.json`, and
+every `demo-*` branch in `api/queries.ts` / `api/active-vault.ts` are gone). The
+specific guards described below no longer exist: `isDemoVaultId`,
+`resetActiveVaultToStored`, and the `readStored()` heal are all deleted. A
+leftover `demo-vault-*` id still in a user's localStorage is now just an id the
+account does not own, so `reconcileActiveVault` re-points it at a real vault on
+the next `/vaults` fetch — same recovery, no special case.
+
+Kept for the bug class, not the fix: a client-only sentinel id that reaches
+persisted state outlives the feature that minted it, and every request after
+that carries it. If you add fixture/demo ids again, keep them out of anything
+durable.
+
+Everything below describes the pre-removal system and is historical.
+
+Original status: diagnosed and FIXED 2026-07-05 (branch
+`fix/demo-vault-active-vault-poisoning`). Core fix shipped: `active-vault.ts`
+never persists a `demo-vault-*` id (in-memory only, so the tour switch still
+works), and `demo-vault-provider.tsx` `deactivate()` calls
+`resetActiveVaultToStored()` to drop the transient demo selection.
 
 ## What This Is
 The onboarding tour's demo vault leaks a `demo-vault-*` id into the real
