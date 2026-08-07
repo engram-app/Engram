@@ -63,11 +63,23 @@ defmodule EngramWeb.TelemetryControllerTest do
   test "rate-limits after too many requests", %{conn: conn} do
     enable_otel()
 
-    for _ <- 1..60 do
-      post(conn, ~p"/api/telemetry/spans", %{"spans" => [valid_span()]})
-    end
+    # The limiter is a FIXED window: 60 hits / 60_000 ms, Hammer ETS bucketed
+    # by div(now_ms, scale_ms). Firing exactly 60 requests and asserting the
+    # 61st denies assumes the whole loop lands in ONE bucket. When it straddles
+    # a minute boundary the counter resets mid-loop and the 61st request is
+    # legitimately allowed — so the test failed on a limiter that was working
+    # correctly. Allowing up to 2x the limit across a boundary is inherent to
+    # fixed windows, not a bug; the false assumption was in this test.
+    #
+    # Drive until the limiter actually denies. Bounded well above 2x the limit
+    # so a limiter that never denies fails the test instead of hanging.
+    denied =
+      Enum.reduce_while(1..200, nil, fn _, _ ->
+        resp = post(conn, ~p"/api/telemetry/spans", %{"spans" => [valid_span()]})
+        if resp.status == 429, do: {:halt, resp}, else: {:cont, nil}
+      end)
 
-    conn = post(conn, ~p"/api/telemetry/spans", %{"spans" => [valid_span()]})
-    assert json_response(conn, 429)
+    assert denied, "limiter never denied within 200 requests (limit is 60/min)"
+    assert json_response(denied, 429) == %{"error" => "rate_limited"}
   end
 end
