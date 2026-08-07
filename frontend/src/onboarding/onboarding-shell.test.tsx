@@ -23,7 +23,6 @@ vi.mock("./use-onboarding-actions", () => ({
 			return mockVaultCount;
 		},
 		has: () => false,
-		record: mockRecord,
 		recordAsync: mockRecord,
 	}),
 }));
