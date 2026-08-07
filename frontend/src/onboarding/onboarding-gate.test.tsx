@@ -2,22 +2,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { describe, expect, it, vi } from "vitest";
-import { useAppBootstrap } from "../api/queries";
+import { useAppBootstrap, useOnboardingStatus } from "../api/queries";
 import OnboardingGate from "./onboarding-gate";
 
 vi.mock("../api/queries", () => ({
 	useAppBootstrap: vi.fn(),
+	useOnboardingStatus: vi.fn(),
 }));
 
-// The gate reads onboarding state out of the consolidated bootstrap payload, so
-// wrap each onboarding status under `data.onboarding`.
-function renderWith(onboarding: unknown, rest: Record<string, unknown> = {}) {
-	vi.mocked(useAppBootstrap).mockReturnValue({
-		data: onboarding === null || onboarding === undefined ? undefined : { onboarding },
-		isLoading: false,
-		isError: false,
-		...rest,
-	} as never);
+function mountGate() {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	return render(
 		<QueryClientProvider client={qc}>
@@ -34,6 +27,22 @@ function renderWith(onboarding: unknown, rest: Record<string, unknown> = {}) {
 			</MemoryRouter>
 		</QueryClientProvider>,
 	);
+}
+
+// Steady state: the bootstrap payload and the granular ["onboarding","status"]
+// cache it seeds agree. The stale-bootstrap regression test below diverges them.
+function renderWith(onboarding: unknown, rest: Record<string, unknown> = {}) {
+	vi.mocked(useAppBootstrap).mockReturnValue({
+		data: onboarding === null || onboarding === undefined ? undefined : { onboarding },
+		isLoading: false,
+		isError: false,
+		...rest,
+	} as never);
+	vi.mocked(useOnboardingStatus).mockReturnValue({
+		data: onboarding ?? undefined,
+		isLoading: onboarding === null || onboarding === undefined,
+	} as never);
+	return mountGate();
 }
 
 describe("OnboardingGate", () => {
@@ -81,6 +90,26 @@ describe("OnboardingGate", () => {
 			profile_complete: false,
 		});
 		expect(screen.getByText("tools-step")).toBeInTheDocument();
+	});
+
+	// Regression: completing the wizard refetches ["onboarding","status"] but
+	// never touches the bootstrap payload (staleTime Infinity). Routing off
+	// bootstrap's own copy bounced finished users back to /onboard/agreement in
+	// a loop only a full page reload escaped.
+	it("routes from live onboarding status, not bootstrap's stale copy", () => {
+		vi.mocked(useAppBootstrap).mockReturnValue({
+			data: {
+				onboarding: { enabled: true, next_step: "agreement", terms_ok: false },
+			},
+			isLoading: false,
+			isError: false,
+		} as never);
+		vi.mocked(useOnboardingStatus).mockReturnValue({
+			data: { enabled: true, next_step: "done", terms_ok: true, subscription_ok: true },
+			isLoading: false,
+		} as never);
+		mountGate();
+		expect(screen.getByText("dashboard")).toBeInTheDocument();
 	});
 
 	it("redirects to /onboard/vault when next_step=vault", () => {
