@@ -297,7 +297,18 @@ export default function FolderTree() {
 	const { data: activeNote } = useNote(selectedNoteId);
 	const autoExpandedForNoteRef = useRef<string | null>(null);
 	useEffect(() => {
-		if (selectedNoteId === null || !folders || !activeNote?.folder) {
+		// `activeNote.id !== selectedNoteId` is the stale-note gate: useNote holds
+		// the PREVIOUS note on screen while the next one loads (so the editor pane
+		// doesn't blank on every click), so for one beat the routed id and the
+		// loaded note disagree. Spending this effect's one shot per note on the
+		// stale one would expand the folder you came FROM and latch the real one
+		// out — the ref below never fires twice for the same id.
+		if (
+			selectedNoteId === null ||
+			!folders ||
+			activeNote?.id !== selectedNoteId ||
+			!activeNote.folder
+		) {
 			return;
 		}
 		if (autoExpandedForNoteRef.current === selectedNoteId) {

@@ -548,6 +548,12 @@ export function useNote(id: string | null) {
 		queryKey: ["note", vaultId, id],
 		queryFn: () => fetchNoteById(id as string),
 		enabled: id !== null,
+		// Opening another note changes the key, which without this drops back to
+		// no-data → NotePage's `isLoading` branch → the whole pane (header, title,
+		// editor) replaced by a spinner for the length of one request, on every
+		// click. Hold the note you were reading until the next one lands; only a
+		// cold first open still shows the spinner.
+		placeholderData: keepPreviousData,
 	});
 }
 

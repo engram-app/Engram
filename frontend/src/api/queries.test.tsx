@@ -219,6 +219,42 @@ describe("useNote by id", () => {
 		expect(result.current.fetchStatus).toBe("idle");
 		expect(get).not.toHaveBeenCalled();
 	});
+
+	// Switching notes changes the query KEY, which normally drops straight back
+	// to no-data/isLoading — and NotePage renders a full-pane spinner on that,
+	// unmounting the header and the editor for the length of one request. The
+	// previous note's data has to stay on screen until the next one lands.
+	it("keeps the previous note's data while the next id loads", async () => {
+		const noteFor = (id: string): Note =>
+			({
+				id,
+				path: `${id}.md`,
+				title: id,
+				folder: "",
+				tags: [],
+				version: 1,
+				content: `# ${id}`,
+				mtime: "s",
+				created_at: "s",
+				updated_at: "s",
+			}) as Note;
+		get.mockImplementation((url: string) =>
+			Promise.resolve(noteFor(url.slice(url.lastIndexOf("/") + 1))),
+		);
+		const { result, rerender } = renderHook(({ id }) => useNote(id), {
+			wrapper,
+			initialProps: { id: "42" },
+		});
+		await waitFor(() => expect(result.current.data?.id).toBe("42"));
+
+		// Second fetch never settles: the whole window NotePage used to blank out.
+		get.mockImplementation(() => new Promise<Note>(() => {}));
+		rerender({ id: "43" });
+
+		expect(result.current.isLoading).toBe(false);
+		expect(result.current.data?.id).toBe("42");
+		expect(result.current.isPlaceholderData).toBe(true);
+	});
 });
 
 describe("useBacklinks", () => {

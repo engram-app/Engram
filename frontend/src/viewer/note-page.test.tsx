@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
@@ -14,15 +14,16 @@ function EditorProbe() {
 	return <span data-testid="has-editor">{String(hasEditor)}</span>;
 }
 
-const renderPage = () =>
-	render(
-		<RightToolsProvider>
-			<ActiveEditorProvider>
-				<NotePage />
-				<EditorProbe />
-			</ActiveEditorProvider>
-		</RightToolsProvider>,
-	);
+const pageTree = (
+	<RightToolsProvider>
+		<ActiveEditorProvider>
+			<NotePage />
+			<EditorProbe />
+		</ActiveEditorProvider>
+	</RightToolsProvider>
+);
+
+const renderPage = () => render(pageTree);
 
 // NoteView relies on ConfigProvider / billing context not available in this
 // test harness. Mock it so we can assert on the `content` prop directly.
@@ -92,8 +93,13 @@ const { navigateMock, locationMock } = vi.hoisted(() => ({
 		state: null,
 	})),
 }));
+// Mutable so a test can simulate router navigation to another note without
+// remounting the page — which is exactly what React Router does here.
+const { paramsMock } = vi.hoisted(() => ({
+	paramsMock: { itemId: "note-1", slug: "my-vault" } as { itemId?: string; slug?: string },
+}));
 vi.mock("react-router", () => ({
-	useParams: () => ({ itemId: "note-1", slug: "my-vault" }),
+	useParams: () => paramsMock,
 	useNavigate: () => navigateMock,
 	useLocation: () => locationMock(),
 }));
@@ -122,6 +128,8 @@ describe("NotePage (CRDT)", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
+		paramsMock.itemId = "note-1";
+		paramsMock.slug = "my-vault";
 		locationMock.mockReturnValue({ pathname: "/my-vault/note-1", state: null });
 		const doc = new Y.Doc();
 		openDoc.mockResolvedValue({
@@ -136,6 +144,66 @@ describe("NotePage (CRDT)", () => {
 		renderPage();
 		await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-1"));
 		expect(enroll).toHaveBeenCalledWith("note-1");
+	});
+
+	// Switching notes does NOT remount NotePage (React Router reuses the route
+	// element), so anything that empties the pane mid-switch reads as a flash.
+	// Tearing the handle down on the way out emptied it for the length of an
+	// openDoc — session wait + IndexedDB load — on every single note click.
+	it("keeps the open editor mounted while the next note's doc opens", async () => {
+		const { rerender } = renderPage();
+		await screen.findByTestId("note-editor");
+
+		let openNote2: (h: unknown) => void = () => {};
+		openDoc.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					openNote2 = resolve;
+				}),
+		);
+		paramsMock.itemId = "note-2";
+		useNoteMock.mockReturnValue({
+			data: { ...NOTE, id: "note-2", path: "folder/other.md", title: "other" },
+			isLoading: false,
+			error: null,
+		});
+		rerender(pageTree);
+
+		// Mid-switch. The previous doc must stay OPEN too, not just rendered: the
+		// mounted yCollab binding would otherwise be writing into a closed doc.
+		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
+		expect(screen.queryByText("Connecting…")).not.toBeInTheDocument();
+		expect(closeDoc).not.toHaveBeenCalled();
+
+		const doc2 = new Y.Doc();
+		await act(async () => {
+			openNote2({ ytext: doc2.getText("content"), awareness: new Awareness(doc2), doc: doc2 });
+		});
+
+		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
+		expect(enroll).toHaveBeenCalledWith("note-2");
+		await waitFor(() => expect(closeDoc).toHaveBeenCalledWith("note-1"));
+	});
+
+	// The other side of holding the previous editor: if the next doc never opens
+	// (session torn down mid-await), the stale body must NOT sit under the new
+	// note's header — that's a document you can type into by mistake.
+	it("drops the previous editor when the next note's doc fails to open", async () => {
+		const { rerender } = renderPage();
+		await screen.findByTestId("note-editor");
+
+		openDoc.mockResolvedValue(null);
+		paramsMock.itemId = "note-2";
+		useNoteMock.mockReturnValue({
+			data: { ...NOTE, id: "note-2", path: "folder/other.md", title: "other" },
+			isLoading: false,
+			error: null,
+		});
+		rerender(pageTree);
+
+		expect(await screen.findByText("Connecting…")).toBeInTheDocument();
+		expect(screen.queryByTestId("note-editor")).not.toBeInTheDocument();
+		expect(closeDoc).toHaveBeenCalledWith("note-1");
 	});
 
 	it("closes the doc on unmount, keyed by note_id", async () => {

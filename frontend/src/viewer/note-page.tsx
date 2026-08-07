@@ -144,24 +144,83 @@ export default function NotePage() {
 	// enroll for the STEP1 handshake; close on note switch / unmount. yCollab
 	// (in NoteEditor) owns convergence — there is no REST autosave, 3-way
 	// merge, or conflict UI on this path anymore.
+	//
+	// The handle swap is deliberately LATE: switching notes keeps this component
+	// mounted, so clearing it on the way out emptied the editor for the length of
+	// an openDoc (session wait + IndexedDB load) on every single note click. The
+	// outgoing note stays rendered AND open until the incoming one is live —
+	// closeDoc destroys the Y.Doc, so releasing it first would leave the mounted
+	// yCollab binding writing into a dead doc, which is worse than a flash.
+	// ponytail: the trade is a brief window where the header shows the new note
+	// over the old one's body. Freezing the editor read-only for that window is
+	// the upgrade path if it ever reads as wrong.
+	//
+	// `openIdRef` is what is currently open; `wantIdRef` is what the page wants
+	// open. A late openDoc closes its own doc only when the page has moved on —
+	// without that check StrictMode's mount/cleanup/mount would close the doc the
+	// second open just handed us.
+	const openIdRef = useRef<string | null>(null);
+	const wantIdRef = useRef<string | null>(null);
 	useEffect(() => {
 		if (!(noteId && isMarkdown)) {
+			// Non-markdown item (canvas, ...): there is no doc to swap in, so the
+			// previous note's body must not keep rendering under this one's header.
+			wantIdRef.current = null;
+			setHandle(null);
+			if (openIdRef.current) {
+				closeDoc(openIdRef.current);
+				openIdRef.current = null;
+			}
 			return;
 		}
+		wantIdRef.current = noteId;
 		let cancelled = false;
 		openDoc(noteId).then((h) => {
-			if (cancelled || !h) {
+			if (cancelled) {
+				// Navigated on before this landed — it never reached the screen, so
+				// close it here rather than leak it until unmount.
+				if (wantIdRef.current !== noteId) {
+					closeDoc(noteId);
+				}
 				return;
 			}
+			if (!h) {
+				// Open failed (session torn down mid-await). Fall back to the empty
+				// "Connecting…" state rather than leaving the previous note's body
+				// under this note's header for as long as the session stays down —
+				// long enough for someone to type into the wrong document.
+				if (openIdRef.current) {
+					closeDoc(openIdRef.current);
+					openIdRef.current = null;
+				}
+				setHandle(null);
+				return;
+			}
+			const prev = openIdRef.current;
+			openIdRef.current = noteId;
 			setHandle(h);
 			enroll(noteId);
+			if (prev && prev !== noteId) {
+				closeDoc(prev);
+			}
 		});
 		return () => {
 			cancelled = true;
-			setHandle(null);
-			closeDoc(noteId);
 		};
 	}, [noteId, isMarkdown]);
+
+	// Nothing above closes on the way out anymore, so the page owns the final
+	// release. Empty deps: this runs once, on unmount.
+	useEffect(
+		() => () => {
+			wantIdRef.current = null;
+			if (openIdRef.current) {
+				closeDoc(openIdRef.current);
+				openIdRef.current = null;
+			}
+		},
+		[],
+	);
 
 	// Subscribe to CRDT sync status changes (non-blocking -- editor still works offline).
 	useEffect(() => subscribeToCrdtSyncStatus(setSyncStatus), []);
