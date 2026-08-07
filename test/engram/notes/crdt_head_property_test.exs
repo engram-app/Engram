@@ -43,6 +43,18 @@ defmodule Engram.Notes.CrdtHeadPropertyTest do
 
   @max_runs if System.get_env("CI"), do: 50, else: 200
 
+  # Each run creates a note and drives real CRDT rooms, checkpoints and
+  # terminate/recreate cycles against Postgres, so 200 local runs do not fit
+  # ExUnit's 60s default once a full-suite run puts 20 cases in contention —
+  # it fails as an ExUnit.TimeoutError blocked in a normal sandbox query, with
+  # no ownership error and nothing wrong with the property itself (#1303).
+  # CI's 50 runs always fit, which is why this only ever went red locally.
+  # Measured ~55s for 200 runs in isolation — already at the 60s line before
+  # any contention, which is why load tips it over. Budget 2s/run: ~4x the
+  # observed 0.27s/run, and derived from @max_runs so raising the run count
+  # cannot silently walk back into the same wall.
+  @moduletag timeout: :timer.seconds(@max_runs * 2)
+
   setup do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
