@@ -1,7 +1,9 @@
 defmodule Engram.Workers.RewriteNoteLinks do
   @moduledoc """
-  Oban worker: rewrite `[[wikilink]]`/`![[embed]]` occurrences in every
-  note referring to a just-renamed note/attachment (issues #648/#1231).
+  Oban worker: rewrite link occurrences in every note referring to a
+  just-renamed note/attachment (issues #648/#1231) — both
+  `[[wikilink]]`/`![[embed]]` and markdown `[label](target.md)` syntax
+  (#1302), each rewritten back in the form it was written in.
   Five enqueue origins: REST/MCP note rename (`Notes.do_rename_note`),
   attachment move (`Attachments.move_attachment/4`), the two CRDT-origin
   rename legs — live relocate (`Notes.genesis_relocate_live`) and

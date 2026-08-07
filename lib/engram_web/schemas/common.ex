@@ -58,7 +58,7 @@ defmodule EngramWeb.Schemas.Note do
       links: %Schema{
         type: :array,
         items: EngramWeb.Schemas.NoteLink,
-        description: "Outgoing wikilink/embed edges, resolved."
+        description: "Outgoing link/embed edges, resolved. Wikilink and markdown syntax alike."
       }
     },
     required: [:path]
@@ -66,7 +66,7 @@ defmodule EngramWeb.Schemas.Note do
 end
 
 defmodule EngramWeb.Schemas.NoteLink do
-  @moduledoc "A resolved outgoing wikilink/embed edge from a note."
+  @moduledoc "A resolved outgoing link/embed edge from a note (wikilink or markdown syntax)."
   alias OpenApiSpex.Schema
   require OpenApiSpex
 
@@ -76,7 +76,9 @@ defmodule EngramWeb.Schemas.NoteLink do
     properties: %{
       target_text: %Schema{
         type: :string,
-        description: "The raw link target as written, e.g. `[[target_text]]`."
+        description:
+          "The link target, percent-DECODED. `[[Target]]` and `[x](Target.md)` " <>
+            "both yield `Target`/`Target.md` here — not the literal source bytes."
       },
       target_note_id: %Schema{type: :string, format: :uuid, nullable: true},
       target_attachment_id: %Schema{type: :string, format: :uuid, nullable: true},
@@ -84,14 +86,19 @@ defmodule EngramWeb.Schemas.NoteLink do
       alias: %Schema{
         type: :string,
         nullable: true,
-        description: "`[[target|alias]]` display text."
+        description: "Display text: `[[target|alias]]`'s alias, or `[label](target)`'s label."
       },
       anchor: %Schema{
         type: :string,
         nullable: true,
-        description: "`[[target#anchor]]` heading/block reference."
+        description: "Heading/block reference: `[[target#anchor]]` or `[x](target#anchor)`."
       },
-      link_type: %Schema{type: :string, description: "\"wikilink\" or \"embed\"."},
+      link_type: %Schema{
+        type: :string,
+        description:
+          ~s|"wikilink" or "embed" — whether the link EMBEDS its target. | <>
+            ~s|Not the source syntax; markdown-form links carry these same two values.|
+      },
       dangling: %Schema{
         type: :boolean,
         description: "True when the target could not be resolved."
