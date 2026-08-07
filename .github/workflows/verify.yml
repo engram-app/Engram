@@ -2816,6 +2816,17 @@ jobs:
         # without this a broken filter would hide until the next nightly.
         run: bash scripts/flake_ledger_rates_test.sh
 
+      - name: Workflow run-block shell lint
+        # YAML linting proves a workflow PARSES; it says nothing about the
+        # shell inside `run:`. Catches comment-after-line-continuation (which
+        # silently orphans the rest of a command and is NOT a syntax error, so
+        # bash -n misses it) plus genuine syntax errors. Cheap; the failure
+        # mode it guards only shows up on release/failure paths, i.e. exactly
+        # when you cannot afford it.
+        run: |
+          python3 scripts/lint_workflow_run_blocks.py .github/workflows/*.yml
+          bash test/scripts/lint_workflow_run_blocks_test.sh
+
       - name: Discord release-notes formatter self-check
         # Guards scripts/discord_release_notes.sh (section + scope filtering,
         # link stripping, the 2000-char cap). Its only caller is the
