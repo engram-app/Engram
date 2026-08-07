@@ -5,7 +5,7 @@ defmodule Engram.Workers.BackfillContentHashHmac do
   Walks notes (and attachments) for one (user, vault) pair, recomputes
   `content_hash` with the per-user HKDF-derived content-hash key, and writes
   the new 64-char hex digest in place. Cursor-driven, batched, re-enqueues
-  itself until the batch is shorter than `@batch_size`.
+  itself until the batch is shorter than the batch size.
 
   Invoked per-scope: `"scope" => "notes" | "attachments"`. The mix task
   `mix engram.content_hash_hmac` enqueues both scopes for every (user, vault)
@@ -18,10 +18,22 @@ defmodule Engram.Workers.BackfillContentHashHmac do
   re-embedding of unchanged content.
   """
 
+  # No `unique`: a cursor worker re-enqueues its own successor mid-run, which
+  # collides with `:incomplete` uniqueness (the still-"executing" job counts as
+  # an in-flight match on the same user_id/vault_id/scope, because `cursor` is
+  # not a unique key) and Oban's unique-insert silently returns the EXISTING
+  # job instead of inserting the successor. The loop then dies after the first
+  # batch and every row past @default_batch_size is left un-migrated, with no
+  # error anywhere — the insert "succeeds". This is #1230; the same defect was
+  # caught pre-merge on Engram.Workers.BackfillNoteLinks, which carries the
+  # matching comment.
+  #
+  # Idempotence comes from the scope filters instead — both scopes select only
+  # `length(content_hash) = 32` (legacy MD5 hex), so a re-run after a partial
+  # batch skips already-rehashed rows rather than double-hashing them.
   use Oban.Worker,
     queue: :crypto_backfill,
-    max_attempts: 5,
-    unique: [keys: [:user_id, :vault_id, :scope], states: :incomplete]
+    max_attempts: 5
 
   import Ecto.Query
 
@@ -36,7 +48,7 @@ defmodule Engram.Workers.BackfillContentHashHmac do
 
   require Logger
 
-  @batch_size 100
+  @default_batch_size 100
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
@@ -44,6 +56,9 @@ defmodule Engram.Workers.BackfillContentHashHmac do
     vault_id = args["vault_id"]
     cursor = normalize_cursor(args["cursor"])
     scope = args["scope"] || "notes"
+    # Overridable so the real-dispatch regression test can drive multiple
+    # batches without inserting 101 rows. Production never sets it.
+    batch_size = args["batch_size"] || @default_batch_size
 
     # T3.7 — gate DEK-accessing work during per-user rotation. The user_id
     # is available directly in args so we can check before acquiring a
@@ -62,15 +77,15 @@ defmodule Engram.Workers.BackfillContentHashHmac do
         {:discard, :user_deleted}
 
       :ok ->
-        run_backfill(user_id, vault_id, cursor, scope)
+        run_backfill(user_id, vault_id, cursor, scope, batch_size)
     end
   end
 
-  defp run_backfill(user_id, vault_id, cursor, scope) do
+  defp run_backfill(user_id, vault_id, cursor, scope, batch_size) do
     Repo.with_tenant(user_id, fn ->
       with {:ok, user} <- load_user(user_id),
            {:ok, content_key} <- Crypto.dek_content_hash_key(user) do
-        case process_batch(scope, user, content_key, vault_id, cursor) do
+        case process_batch(scope, user, content_key, vault_id, cursor, batch_size) do
           {:done, _last} ->
             :ok
 
@@ -79,7 +94,8 @@ defmodule Engram.Workers.BackfillContentHashHmac do
               "user_id" => user_id,
               "vault_id" => vault_id,
               "cursor" => last_id,
-              "scope" => scope
+              "scope" => scope,
+              "batch_size" => batch_size
             })
             |> Oban.insert()
         end
@@ -105,7 +121,7 @@ defmodule Engram.Workers.BackfillContentHashHmac do
     end
   end
 
-  defp process_batch("notes", user, content_key, vault_id, cursor) do
+  defp process_batch("notes", user, content_key, vault_id, cursor, batch_size) do
     notes =
       from(n in Note,
         where: n.vault_id == ^vault_id,
@@ -113,7 +129,7 @@ defmodule Engram.Workers.BackfillContentHashHmac do
         where: not is_nil(n.content_hash),
         where: fragment("length(?) = 32", n.content_hash),
         order_by: [asc: n.id],
-        limit: @batch_size
+        limit: ^batch_size
       )
       |> Repo.all()
 
@@ -128,7 +144,7 @@ defmodule Engram.Workers.BackfillContentHashHmac do
 
         last_id = notes |> List.last() |> Map.fetch!(:id)
 
-        if length(notes) == @batch_size do
+        if length(notes) == batch_size do
           {:more, last_id}
         else
           {:done, last_id}
@@ -136,7 +152,7 @@ defmodule Engram.Workers.BackfillContentHashHmac do
     end
   end
 
-  defp process_batch("attachments", user, content_key, vault_id, cursor) do
+  defp process_batch("attachments", user, content_key, vault_id, cursor, batch_size) do
     attachments =
       from(a in Attachment,
         where: a.vault_id == ^vault_id,
@@ -144,7 +160,7 @@ defmodule Engram.Workers.BackfillContentHashHmac do
         where: not is_nil(a.content_hash),
         where: fragment("length(?) = 32", a.content_hash),
         order_by: [asc: a.id],
-        limit: @batch_size
+        limit: ^batch_size
       )
       |> Repo.all()
 
@@ -159,7 +175,7 @@ defmodule Engram.Workers.BackfillContentHashHmac do
 
         last_id = attachments |> List.last() |> Map.fetch!(:id)
 
-        if length(attachments) == @batch_size do
+        if length(attachments) == batch_size do
           {:more, last_id}
         else
           {:done, last_id}
