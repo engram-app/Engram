@@ -66,7 +66,7 @@ defmodule EngramWeb.Schemas.Note do
 end
 
 defmodule EngramWeb.Schemas.NoteLink do
-  @moduledoc "A resolved outgoing wikilink/embed edge from a note."
+  @moduledoc "A resolved outgoing link/embed edge from a note (wikilink or markdown syntax)."
   alias OpenApiSpex.Schema
   require OpenApiSpex
 

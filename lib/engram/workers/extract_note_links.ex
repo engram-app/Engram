@@ -1,6 +1,7 @@
 defmodule Engram.Workers.ExtractNoteLinks do
   @moduledoc """
-  Oban worker: prompt `[[wikilink]]`/`![[embed]]` edge extraction, split off
+  Oban worker: prompt edge extraction — `[[wikilink]]`/`![[embed]]` and the
+  markdown `[label](target.md)` form (#1302) — split off
   the embed pipeline (#648 latency pair, lever 1).
 
   Historically `note_links` rows were written only inside the indexing pass

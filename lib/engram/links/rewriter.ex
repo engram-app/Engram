@@ -86,16 +86,18 @@ defmodule Engram.Links.Rewriter do
       Links.pre_rename_winner?(occ.target, target.old_path, target.id, candidates)
     end)
     |> Enum.flat_map(fn occ ->
-      replacement = replacement_target(occ.target, target)
+      replacement = replacement_target(occ, target)
       rel = occ.target_start - body_start
 
       cond do
-        # Already the new text — idempotent no-op.
-        occ.target == replacement -> []
+        # Already the new text — idempotent no-op. Compared against the RAW
+        # span (not the decoded target) because that is what gets spliced:
+        # for a markdown occurrence both sides are percent-encoded here.
+        occ.target_raw == replacement -> []
         # Occurrence sits before the body (frontmatter) — the parser already
         # excludes frontmatter, so this is belt-and-suspenders only.
         rel < 0 -> []
-        true -> [%{rel_start: rel, len: occ.target_len, old: occ.target, new: replacement}]
+        true -> [%{rel_start: rel, len: occ.target_len, old: occ.target_raw, new: replacement}]
       end
     end)
   end
@@ -128,7 +130,12 @@ defmodule Engram.Links.Rewriter do
   # the actual stored new path. The occurrence's extension form is
   # preserved: `[[Old.md]]` -> `[[Fresh.md]]`, `[[Old]]` -> `[[Fresh]]`;
   # non-note extensions (attachments) always keep theirs.
-  defp replacement_target(occ_target, %{new_path: new_path, collision?: collision?}) do
+  #
+  # Syntax is preserved too (#1302): a markdown occurrence comes back as a
+  # markdown target, percent-encoded. The server never converts one syntax
+  # to the other — that would be authoring content the user didn't write.
+  defp replacement_target(occ, %{new_path: new_path, collision?: collision?}) do
+    %{target: occ_target, form: form} = occ
     qualified? = String.contains?(occ_target, "/") or collision?
     occ_ext = occ_target |> Path.basename() |> Path.extname() |> String.downcase()
     keep_note_ext? = occ_ext in @note_exts
@@ -136,12 +143,22 @@ defmodule Engram.Links.Rewriter do
     base = if qualified?, do: new_path, else: Path.basename(new_path)
     new_ext = Path.extname(base)
 
-    if String.downcase(new_ext) in @note_exts and not keep_note_ext? do
-      String.replace_suffix(base, new_ext, "")
-    else
-      base
-    end
+    replacement =
+      if String.downcase(new_ext) in @note_exts and not keep_note_ext? do
+        String.replace_suffix(base, new_ext, "")
+      else
+        base
+      end
+
+    if form == :markdown, do: md_encode(replacement), else: replacement
   end
+
+  # Only the characters that would otherwise re-parse the `[..](..)` target
+  # into something else: whitespace and parens end it, `#`/`?` start an
+  # anchor/query, and a literal `%` would read as an escape. Everything else
+  # — `/`, `.`, unicode — stays literal, which is what Obsidian writes.
+  @md_escape ~c" ()<>#?%"
+  defp md_encode(s), do: URI.encode(s, &(&1 not in @md_escape))
 
   @doc """
   Build the rewrite target spec for a renamed note/attachment. `old_path`

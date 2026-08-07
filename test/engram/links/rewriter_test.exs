@@ -194,6 +194,156 @@ defmodule Engram.Links.RewriterTest do
     end
   end
 
+  # #1302 — same rename, but the source note is written in markdown-link
+  # syntax (Obsidian with "Use [[Wikilinks]]" off). A markdown occurrence
+  # must come back as markdown: the server never converts one syntax to the
+  # other, that would be authoring content the user didn't write.
+  describe "plan_edits/5 — markdown links (#1302)" do
+    test "markdown link and embed rewrite only the target segment", %{user: user, vault: vault} do
+      renamed = Engram.Fixtures.insert_note!(user, vault, %{path: "Fresh.md"})
+      full = "a [Old](Old.md) b ![shown](Old.md) c [x](Old.md#H1) d"
+
+      edits =
+        Rewriter.plan_edits(
+          user,
+          vault,
+          full,
+          full,
+          note_target(renamed, "Old.md", "Fresh.md", false)
+        )
+
+      assert length(edits) == 3
+      assert Enum.all?(edits, &(binary_part(full, &1.rel_start, &1.len) == "Old.md"))
+
+      assert Rewriter.splice(full, edits) ==
+               "a [Old](Fresh.md) b ![shown](Fresh.md) c [x](Fresh.md#H1) d"
+    end
+
+    test "the label is never touched, only the target", %{user: user, vault: vault} do
+      renamed = Engram.Fixtures.insert_note!(user, vault, %{path: "Fresh.md"})
+      full = "[Old](Old.md)"
+
+      edits =
+        Rewriter.plan_edits(
+          user,
+          vault,
+          full,
+          full,
+          note_target(renamed, "Old.md", "Fresh.md", false)
+        )
+
+      # The label still reads "Old" — renaming a file does not rewrite prose.
+      assert Rewriter.splice(full, edits) == "[Old](Fresh.md)"
+    end
+
+    test "a new path with a space is percent-encoded so the link still parses", %{
+      user: user,
+      vault: vault
+    } do
+      renamed = Engram.Fixtures.insert_note!(user, vault, %{path: "My Fresh.md"})
+      full = "[x](Old.md)"
+
+      edits =
+        Rewriter.plan_edits(
+          user,
+          vault,
+          full,
+          full,
+          note_target(renamed, "Old.md", "My Fresh.md", false)
+        )
+
+      assert Rewriter.splice(full, edits) == "[x](My%20Fresh.md)"
+    end
+
+    test "an already-encoded occurrence matches and rewrites", %{user: user, vault: vault} do
+      renamed = Engram.Fixtures.insert_note!(user, vault, %{path: "Fresh.md"})
+      full = "[x](My%20Old.md)"
+
+      edits =
+        Rewriter.plan_edits(
+          user,
+          vault,
+          full,
+          full,
+          note_target(renamed, "My Old.md", "Fresh.md", false)
+        )
+
+      assert Rewriter.splice(full, edits) == "[x](Fresh.md)"
+    end
+
+    test "idempotent: an occurrence already at the new path plans no edit", %{
+      user: user,
+      vault: vault
+    } do
+      renamed = Engram.Fixtures.insert_note!(user, vault, %{path: "My Fresh.md"})
+      full = "[x](My%20Fresh.md)"
+
+      assert [] =
+               Rewriter.plan_edits(
+                 user,
+                 vault,
+                 full,
+                 full,
+                 note_target(renamed, "My Fresh.md", "My Fresh.md", false)
+               )
+    end
+
+    test "wikilink and markdown occurrences in one note each keep their own syntax", %{
+      user: user,
+      vault: vault
+    } do
+      renamed = Engram.Fixtures.insert_note!(user, vault, %{path: "Fresh.md"})
+      full = "[[Old]] and [lbl](Old.md)"
+
+      edits =
+        Rewriter.plan_edits(
+          user,
+          vault,
+          full,
+          full,
+          note_target(renamed, "Old.md", "Fresh.md", false)
+        )
+
+      assert Rewriter.splice(full, edits) == "[[Fresh]] and [lbl](Fresh.md)"
+    end
+
+    test "markdown occurrences keep their extension; wikilink bare form stays bare", %{
+      user: user,
+      vault: vault
+    } do
+      renamed = Engram.Fixtures.insert_note!(user, vault, %{path: "sub/Fresh.md"})
+      full = "[[Old]] and [lbl](Old.md)"
+
+      edits =
+        Rewriter.plan_edits(
+          user,
+          vault,
+          full,
+          full,
+          note_target(renamed, "Old.md", "sub/Fresh.md", false)
+        )
+
+      assert Rewriter.splice(full, edits) == "[[Fresh]] and [lbl](Fresh.md)"
+    end
+
+    test "attachment move rewrites a markdown embed", %{user: user, vault: vault} do
+      att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "media/new.png"})
+      full = "![pic](media/old.png)"
+
+      edits =
+        Rewriter.plan_edits(user, vault, full, full, %{
+          kind: :attachment,
+          id: att.id,
+          old_path: "media/old.png",
+          new_path: "media/new.png",
+          old_basename_hmac: nil,
+          collision?: false
+        })
+
+      assert Rewriter.splice(full, edits) == "![pic](media/new.png)"
+    end
+  end
+
   describe "plan_edits/5 — folder-only move (Phase 3, #1231)" do
     # A folder rename is N note renames where ONLY the folder prefix changes.
     # These pins prove the Phase 1 machinery already carries Phase 3:
