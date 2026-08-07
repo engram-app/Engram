@@ -114,13 +114,13 @@ defmodule Engram.Links.RewriteWiringTest do
       assert all_enqueued(worker: RewriteNoteLinks) == []
     end
 
-    test "untagged relocate enqueues NOTHING while the compromise flag holds",
+    test "untagged relocate enqueues the rewrite (spec safe default)",
          %{user: user, vault: vault, note: note} do
-      # Pinned to Notes.untagged_crdt_client_type/0 == "obsidian" (see
-      # notes_crdt_origin_gate_test.exs). When the flag flips to "web", this
-      # test flips to assert [_] = all_enqueued(...) in the same commit.
+      # Flipped with Notes.untagged_crdt_client_type/0 -> "web" in #1301 (see
+      # notes_crdt_origin_gate_test.exs). Untagged is no longer assumed to be a
+      # skewed plugin, so the server owns the rewrite for it.
       {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Fresh.md")
-      assert all_enqueued(worker: RewriteNoteLinks) == []
+      assert [_] = all_enqueued(worker: RewriteNoteLinks)
     end
 
     test "same-path idempotent re-genesis enqueues nothing even for web origin",

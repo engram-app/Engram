@@ -17,14 +17,15 @@ defmodule Engram.NotesCrdtOriginGateTest do
     assert Notes.crdt_rename_rewrites?("mobile")
   end
 
-  test "untagged (nil) takes the flip flag — currently plugin-origin, NO enqueue" do
-    # TEMPORARY COMPROMISE PIN (#648 Phase 2): version-skewed plugins that
-    # predate the client_type join tag must not double-rewrite, so untagged
-    # defaults to "obsidian" until the tagged plugin release has been out one
-    # release cycle. The flip (this assertion changing to "web" / assert) is a
-    # ONE-LINE change to @untagged_crdt_client_type in Engram.Notes. If this
-    # test fails because the flag flipped, update BOTH asserts below together.
-    assert Notes.untagged_crdt_client_type() == "obsidian"
-    refute Notes.crdt_rename_rewrites?(nil)
+  test "untagged (nil) takes the spec safe default — server-origin, DOES enqueue" do
+    # FLIPPED 2026-08-07 (#1301). Was pinned to "obsidian" while plugins
+    # predating the client_type join tag (< 1.20.0) were the majority — an
+    # untagged socket had to be assumed plugin-origin so Obsidian stayed the
+    # sole rewriter. Now that the tagged release has circulated, untagged means
+    # "some non-Obsidian client that didn't say" (old web build, future mobile),
+    # which must get the server rewrite or its links silently rot. Obsidian opts
+    # out explicitly by tagging itself — see the "obsidian" case above.
+    assert Notes.untagged_crdt_client_type() == "web"
+    assert Notes.crdt_rename_rewrites?(nil)
   end
 end

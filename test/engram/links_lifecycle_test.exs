@@ -209,7 +209,19 @@ defmodule Engram.LinksLifecycleTest do
 
     # Same id, different FREE path — genesis_crdt_note's Phase E2 relocate leg
     # (genesis_relocate_live), not a REST rename_note call.
-    assert {:ok, _moved} = Notes.genesis_crdt_note(user, vault, a_short.id, "CrdtZ.md")
+    #
+    # origin: "obsidian" is LOAD-BEARING, not decoration (#1301). This test's
+    # subject is the rebind hook — proving [[CrdtA]] FALLS THROUGH to the
+    # b/CrdtA.md sibling once the root CrdtA.md vacates the basename. That
+    # fall-through is only correct for a non-rewriting client. A rewriting
+    # origin would rewrite the text to [[CrdtZ]] and keep it bound to a_short,
+    # which is the opposite outcome and a different feature (#648's rewrite,
+    # covered by rewrite_wiring_test + e2e test_88). This call previously
+    # inherited "obsidian" from the untagged default; that default flipped to
+    # "web", so the dependency is now explicit rather than silent.
+    assert {:ok, _moved} =
+             Notes.genesis_crdt_note(user, vault, a_short.id, "CrdtZ.md", origin: "obsidian")
+
     drain_indexing!()
 
     link = only_link(user, source.id)
