@@ -148,7 +148,7 @@ afterEach(() => {
 describe("ChecklistWidget, per-tool rows", () => {
 	it("renders one row per slug in profile.tools", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude", "cursor"] };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		expect(screen.getByText(/connect claude/iu)).toBeInTheDocument();
 		expect(screen.getByText(/connect cursor/iu)).toBeInTheDocument();
@@ -182,7 +182,7 @@ describe("ChecklistWidget, per-tool rows", () => {
 			],
 			isLoading: false,
 		};
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		// Completed row stays, checked off, struck through, no actions, rather
 		// than vanishing (#604).
@@ -196,25 +196,15 @@ describe("ChecklistWidget, per-tool rows", () => {
 
 	it("per-tool row CTA links to the mapped marketing doc URL", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		const link = screen.getByRole("link", { name: /setup guide/iu });
 		expect(link).toHaveAttribute("href", "https://engram.page/docs/integrations/claude-desktop/");
 	});
 
-	it("renders the tour row whenever the user has not completed the tour", () => {
-		// No tour_offered_skipped required anymore, the row is standing.
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] };
-		const onStart = vi.fn();
-		render(wrap(<ChecklistWidget onStartTour={onStart} />));
-
-		fireEvent.click(screen.getByRole("button", { name: /^start$/iu }));
-		expect(onStart).toHaveBeenCalled();
-	});
-
 	it("does not render a row for the web_only slug", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude", "web_only"] };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		expect(screen.getByText(/connect claude/iu)).toBeInTheDocument();
 		expect(screen.queryByText(/web.only/iu)).toBeNull();
@@ -226,7 +216,7 @@ describe("ChecklistWidget, per-tool rows", () => {
 	it("ticks the other_mcp row for an MCP client matching no known slug", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["other_mcp"] };
 		connectionsValue = { data: [mcpConn({ slug: null, name: "some-cli" })], isLoading: false };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		const row = screen.getByText(/connect another mcp client/iu);
 		expect(row).toHaveClass("line-through");
@@ -239,7 +229,7 @@ describe("ChecklistWidget, per-tool rows", () => {
 			tools: ["claude", "other_mcp"],
 		};
 		connectionsValue = { data: [mcpConn({ slug: "claude", name: "Claude" })], isLoading: false };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		expect(screen.getByText(/connect claude/iu)).toHaveClass("line-through");
 		expect(screen.getByText(/connect another mcp client/iu)).not.toHaveClass("line-through");
@@ -247,7 +237,7 @@ describe("ChecklistWidget, per-tool rows", () => {
 
 	it("falls back to /docs/integrations/ for an unmapped slug", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["some_brand_new_tool"] };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		const link = screen.getByRole("link", { name: /setup guide/iu });
 		expect(link).toHaveAttribute("href", "https://engram.page/docs/integrations/");
@@ -275,7 +265,7 @@ describe("ChecklistWidget, per-tool rows", () => {
 
 	it("per-tool CTA opens in a new tab with rel=noreferrer", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		const link = screen.getByRole("link", { name: /setup guide/iu });
 		expect(link).toHaveAttribute("target", "_blank");
@@ -286,7 +276,7 @@ describe("ChecklistWidget, per-tool rows", () => {
 describe("ChecklistWidget, Obsidian plugin row", () => {
 	it("renders the Obsidian plugin row when uses_obsidian is true", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: true, tools: [] };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		expect(screen.getByText(/install.*obsidian/iu)).toBeInTheDocument();
 
@@ -296,7 +286,7 @@ describe("ChecklistWidget, Obsidian plugin row", () => {
 
 	it("omits the Obsidian plugin row when uses_obsidian is false", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		expect(screen.queryByText(/install.*obsidian/iu)).toBeNull();
 	});
@@ -329,7 +319,7 @@ describe("ChecklistWidget, Obsidian plugin row", () => {
 			],
 			isLoading: false,
 		};
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		// Completed install row stays, struck through (#604).
 		const row = screen.getByText(/install.*obsidian/iu);
@@ -343,7 +333,7 @@ describe("ChecklistWidget, dismiss", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude", "cursor"] };
 		actionsList.push("dismissed:claude");
 
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		expect(screen.queryByText(/connect claude/iu)).toBeNull();
 		expect(screen.getByText(/connect cursor/iu)).toBeInTheDocument();
@@ -351,7 +341,7 @@ describe("ChecklistWidget, dismiss", () => {
 
 	it("clicking dismiss calls recordAsync with dismissed:<slug>", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		fireEvent.click(screen.getByLabelText(/dismiss connect claude/iu));
 
@@ -361,7 +351,7 @@ describe("ChecklistWidget, dismiss", () => {
 	it("optimistically hides the row before the mutation resolves", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
 		recordAsyncMock.mockImplementation(() => new Promise(() => {})); // stays pending
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		fireEvent.click(screen.getByLabelText(/dismiss connect claude/iu));
 
@@ -370,7 +360,7 @@ describe("ChecklistWidget, dismiss", () => {
 
 	it("dismisses the Obsidian row by writing dismissed:install_obsidian_plugin", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: true, tools: [] };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		fireEvent.click(screen.getByLabelText(/dismiss install the obsidian plugin/iu));
 
@@ -379,54 +369,18 @@ describe("ChecklistWidget, dismiss", () => {
 
 	it("does not render a dismiss button on the vault row", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		expect(screen.queryByLabelText(/dismiss create your first vault/iu)).toBeNull();
-	});
-
-	it("dismissing the tour row records dismissed:tour", () => {
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
-
-		fireEvent.click(screen.getByLabelText(/dismiss take the tour/iu));
-
-		expect(recordAsyncMock).toHaveBeenCalledWith("dismissed:tour");
-	});
-
-	it("hides the tour row when actions contain dismissed:tour", () => {
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] };
-		actionsList.push("dismissed:tour");
-
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
-
-		expect(screen.queryByText(/take the tour/iu)).toBeNull();
-	});
-
-	it("hides the tour row when actions contain tour_completed", () => {
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] };
-		actionsList.push("tour_completed");
-
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
-
-		expect(screen.queryByText(/take the tour/iu)).toBeNull();
-	});
-
-	it("omits the tour row on small viewports", () => {
-		const orig = window.innerWidth;
-		Object.defineProperty(window, "innerWidth", { configurable: true, value: 375 });
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
-		expect(screen.queryByText(/take the tour/iu)).toBeNull();
-		Object.defineProperty(window, "innerWidth", { configurable: true, value: orig });
 	});
 });
 
 describe("ChecklistWidget, hide when empty", () => {
 	it("renders nothing when every row is done or dismissed", () => {
-		actionsList.push("first_vault_created", "dismissed:claude", "dismissed:tour");
+		actionsList.push("first_vault_created", "dismissed:claude");
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
 
-		const { container } = render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		const { container } = render(wrap(<ChecklistWidget />));
 		expect(container).toBeEmptyDOMElement();
 	});
 });
@@ -460,7 +414,7 @@ describe("ChecklistWidget, completed rows stay visible (#604)", () => {
 			],
 			isLoading: false,
 		};
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		const claude = screen.getByText(/connect claude/iu);
 		expect(claude).toHaveClass("line-through");
@@ -501,10 +455,10 @@ describe("ChecklistWidget, completed rows stay visible (#604)", () => {
 			],
 			isLoading: false,
 		};
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
-		// vault + tour + claude + cursor = 4 items, claude done = 1.
-		expect(screen.getByText(/1 of 4 done/iu)).toBeInTheDocument();
+		// vault + claude + cursor = 3 items, claude done = 1.
+		expect(screen.getByText(/1 of 3 done/iu)).toBeInTheDocument();
 		expect(screen.getByText(/connect claude/iu)).toBeInTheDocument();
 	});
 });
@@ -512,7 +466,7 @@ describe("ChecklistWidget, completed rows stay visible (#604)", () => {
 describe("ChecklistWidget, chrome", () => {
 	it("shows the Finish setup pill when collapsed", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		// Header × → collapse to pill
 		fireEvent.click(screen.getByLabelText(/dismiss checklist/iu));
@@ -523,10 +477,10 @@ describe("ChecklistWidget, chrome", () => {
 
 	it("renders a progress readout showing completed vs total", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude", "cursor"] };
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
-		// vault + tour + claude + cursor = 4 items, none done.
-		expect(screen.getByText(/0 of 4 done/iu)).toBeInTheDocument();
+		// vault + claude + cursor = 3 items, none done.
+		expect(screen.getByText(/0 of 3 done/iu)).toBeInTheDocument();
 	});
 });
 
@@ -534,7 +488,7 @@ describe("ChecklistWidget, Free-tier reminder", () => {
 	it("renders Free reminder with Upgrade link to /onboard/billing when tier=free", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
 		billingStatusValue.data = { tier: "free", active: false } as Partial<BillingStatus>;
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		expect(screen.getByText(/free.*1 connection/iu)).toBeInTheDocument();
 		const link = screen.getByRole("link", { name: /upgrade/iu });
@@ -544,7 +498,7 @@ describe("ChecklistWidget, Free-tier reminder", () => {
 	it("does not render the reminder when tier=pro", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
 		billingStatusValue.data = { tier: "pro", active: true } as Partial<BillingStatus>;
-		render(wrap(<ChecklistWidget onStartTour={() => {}} />));
+		render(wrap(<ChecklistWidget />));
 
 		expect(screen.queryByText(/free.*1 connection/iu)).toBeNull();
 		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();

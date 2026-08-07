@@ -8,10 +8,6 @@ import { Button } from "../components/ui/button";
 import { Shimmer } from "../components/ui/shimmer";
 import { useOnboardingActions } from "./use-onboarding-actions";
 
-interface Props {
-	onStartTour: () => void;
-}
-
 interface Item {
 	key: string;
 	label: string;
@@ -21,7 +17,6 @@ interface Item {
 	done: boolean;
 	dismissed?: boolean;
 	docUrl?: string;
-	startTour?: () => void;
 	dismissible?: boolean;
 }
 
@@ -68,7 +63,7 @@ const TOOL_LABELS: Record<string, string> = {
 	other_mcp: "Connect another MCP client",
 };
 
-export function ChecklistWidget({ onStartTour }: Props) {
+export function ChecklistWidget() {
 	const [collapsed, setCollapsed] = useState(false);
 	const ob = useOnboardingActions();
 	const status = useOnboardingStatus();
@@ -81,7 +76,6 @@ export function ChecklistWidget({ onStartTour }: Props) {
 		return null;
 	}
 
-	const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
 	const actions = status.data?.actions ?? [];
 	const dismissed = new Set(
 		actions
@@ -151,20 +145,6 @@ export function ChecklistWidget({ onStartTour }: Props) {
 					} as Item,
 				]
 			: []),
-		...(isMobile || ob.has("tour_completed")
-			? []
-			: [
-					{
-						key: "tour",
-						label: "Take the tour",
-						// No in-row completion signal, `tour_completed` removes the row
-						// structurally (guard above). Only dismissal hides it here.
-						done: false,
-						dismissed: isDismissed("tour"),
-						startTour: onStartTour,
-						dismissible: true,
-					} as Item,
-				]),
 		...tools.map(
 			(slug): Item => ({
 				key: slug,
@@ -253,11 +233,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 						{/* Completed rows carry no actions, just the checked-off label. */}
 						{!i.done && (
 							<span className="flex items-center gap-1">
-								{i.startTour ? (
-									<Button size="sm" variant="outline" onClick={i.startTour}>
-										Start
-									</Button>
-								) : i.docUrl ? (
+								{i.docUrl ? (
 									<Button asChild size="sm" variant="outline">
 										<a href={i.docUrl} target="_blank" rel="noreferrer">
 											Setup guide ↗

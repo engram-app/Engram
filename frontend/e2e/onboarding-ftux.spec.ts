@@ -62,7 +62,7 @@ test.describe("FTUX happy path", () => {
 		await setupClerkTestingToken({ page });
 	});
 
-	test("tour offer → tour steps → create-vault modal → checklist", async ({ page }) => {
+	test("create-vault modal → checklist", async ({ page }) => {
 		await clerkSignIn(page, state.email);
 
 		// OnboardingGate redirects unfinished onboarding to /onboard/{agreement|billing}.
@@ -77,24 +77,6 @@ test.describe("FTUX happy path", () => {
 				`Onboarding wizard not pre-completed for test user (landed on ${new URL(page.url()).pathname}). ` +
 					"Complete TOS + billing trial for the Clerk test user once, then re-run.",
 			);
-		}
-
-		// TourOfferModal was removed — the tour now lives as a standing row
-		// inside the checklist widget instead of an auto-prompt modal. The
-		// tour-step interaction below stays behind the `tourVisible` check
-		// so the spec degrades gracefully if a future iteration restores
-		// some kind of pre-vault tour prompt; today the check is always
-		// false and the block is dead.
-		const tourHeading = page.getByRole("heading", { name: /quick tour/iu });
-		const tourVisible = await tourHeading.isVisible().catch(() => false);
-
-		if (tourVisible) {
-			await page.getByRole("button", { name: /take the tour/iu }).click();
-			await expect(page.getByText("Start here")).toBeVisible({ timeout: 10_000 });
-			for (let i = 0; i < 5; i++) {
-				await page.locator(".driver-popover-next-btn").click();
-			}
-			await page.getByRole("button", { name: /create my vault/iu }).click();
 		}
 
 		// Create-Vault modal — only shows when the user has zero real vaults.
@@ -174,11 +156,7 @@ test.describe("FTUX happy path", () => {
 			return;
 		}
 
-		// Ensure user has skipped tour + created vault (idempotent — no-op if done).
-		const skipBtn = page.getByRole("button", { name: /^skip$/iu });
-		if (await skipBtn.isVisible().catch(() => false)) {
-			await skipBtn.click();
-		}
+		// Ensure user has created a vault (idempotent — no-op if done).
 		const vaultHeading = page.getByRole("heading", { name: /first vault/iu });
 		if (await vaultHeading.isVisible().catch(() => false)) {
 			await page.getByPlaceholder("My notes").fill("Persist Vault");
@@ -187,7 +165,6 @@ test.describe("FTUX happy path", () => {
 		}
 
 		await page.reload();
-		await expect(page.getByRole("heading", { name: /quick tour/iu })).toHaveCount(0);
 		await expect(page.getByRole("heading", { name: /first vault/iu })).toHaveCount(0);
 	});
 
@@ -226,21 +203,5 @@ test.describe("FTUX happy path", () => {
 		// Reload and assert no first-vault modal.
 		await page.reload();
 		await expect(headingLocator).toHaveCount(0);
-	});
-
-	test("mobile viewport: tour offer suppressed", async ({ browser }) => {
-		const context = await browser.newContext({ viewport: { width: 375, height: 667 } });
-		const page = await context.newPage();
-
-		await setupClerkTestingToken({ page });
-		await clerkSignIn(page, state.email);
-		await page.waitForURL((url) => !url.pathname.startsWith("/sign-in"), { timeout: 15_000 });
-
-		// Tour offer suppressed on <768px (full mobile-FAB coverage would require
-		// shared-state setup across tests — the suppression assertion is the
-		// load-bearing check here).
-		await expect(page.getByRole("heading", { name: /quick tour/iu })).toHaveCount(0);
-
-		await context.close();
 	});
 });

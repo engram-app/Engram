@@ -166,14 +166,6 @@ export default function NotePage() {
 	// Subscribe to CRDT sync status changes (non-blocking -- editor still works offline).
 	useEffect(() => subscribeToCrdtSyncStatus(setSyncStatus), []);
 
-	// Signal the onboarding tour that the user opened a note.
-	useEffect(() => {
-		if (!note?.path) {
-			return;
-		}
-		window.dispatchEvent(new CustomEvent("engram:note-opened", { detail: { path: note.path } }));
-	}, [note?.path]);
-
 	// ToC reads the materialized REST content (refreshed by note_changed).
 	// Hoist the two primitives the effect actually depends on so the captured
 	// values match the dependency list (a new `note` object identity each
@@ -414,7 +406,7 @@ export default function NotePage() {
 			    belongs above the keyboard rather than under the header. */}
 
 			<ScrollArea className="min-h-0 flex-1">
-				<div className="w-full pb-5" data-tour="note-editor">
+				<div className="w-full pb-5">
 					<InlineTitle
 						name={name}
 						renaming={renamingAt === "title"}

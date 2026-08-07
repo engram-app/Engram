@@ -1,11 +1,9 @@
-import { useDemoVaultOptional } from "../onboarding/tour/demo-vault-provider";
 import FolderTree from "../viewer/folder-tree";
 import FolderActions from "./folder-actions";
 import { FolderTreeProvider } from "./folder-tree-context";
 import VaultSwitcher from "./vault-switcher";
 
 export default function FilesPanel() {
-	const demoActive = useDemoVaultOptional()?.active === true;
 	return (
 		<FolderTreeProvider>
 			<div className="flex h-full flex-col">
@@ -16,16 +14,7 @@ export default function FilesPanel() {
 				</header>
 				<FolderTree />
 				<FolderActions />
-				<section className="relative">
-					<VaultSwitcher />
-					{demoActive && (
-						<div
-							data-tour="sidebar-vaults"
-							aria-hidden
-							className="pointer-events-none absolute inset-x-0 -top-24 bottom-0"
-						/>
-					)}
-				</section>
+				<VaultSwitcher />
 			</div>
 		</FolderTreeProvider>
 	);

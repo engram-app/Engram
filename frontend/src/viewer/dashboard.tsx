@@ -104,7 +104,7 @@ export default function Dashboard() {
 
 	if (folder) {
 		return (
-			<section data-tour="dashboard-root">
+			<section>
 				<header className="mb-4">
 					<h2 className="font-semibold text-base text-gray-800 dark:text-gray-200">{folder}</h2>
 				</header>
@@ -118,7 +118,6 @@ export default function Dashboard() {
 		<section
 			aria-label="No note open"
 			className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]"
-			data-tour="dashboard-root"
 		>
 			<p className="m-auto text-muted-foreground text-sm">No note is open</p>
 		</section>

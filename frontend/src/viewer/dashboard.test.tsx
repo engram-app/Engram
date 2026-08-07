@@ -41,11 +41,6 @@ describe("Dashboard (no note open)", () => {
 		expect(screen.getByTestId("has-right").textContent).toBe("yes");
 	});
 
-	it("keeps the tour anchor", () => {
-		const { container } = renderDashboard();
-		expect(container.querySelector('[data-tour="dashboard-root"]')).not.toBeNull();
-	});
-
 	it("still shows the create-a-vault empty state when no vaults exist", () => {
 		useVaultsSpy.mockReturnValueOnce({ data: [] });
 		renderDashboard();

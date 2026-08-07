@@ -17,9 +17,8 @@ async function registerUser(baseURL: string, email: string) {
 	}
 
 	// Pre-complete onboarding so subsequent UI sign-in lands on the dashboard
-	// instead of being bounced to /onboard/vault by OnboardingGate; record a
-	// dismissed:tour action and seed a default vault so the dashboard's
-	// checklist tour row + CreateFirstVaultModal don't intercept every click.
+	// instead of being bounced to /onboard/vault by OnboardingGate, and seed a
+	// default vault so CreateFirstVaultModal doesn't intercept every click.
 	const { access_token: token } = await res.json();
 	const auth = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
 	const prof = await fetch(`${baseURL}/api/onboarding/profile`, {
@@ -29,14 +28,6 @@ async function registerUser(baseURL: string, email: string) {
 	});
 	if (!prof.ok) {
 		throw new Error(`Onboarding profile PATCH failed: ${prof.status} ${await prof.text()}`);
-	}
-	const act = await fetch(`${baseURL}/api/onboarding/actions`, {
-		method: "POST",
-		headers: auth,
-		body: JSON.stringify({ action: "dismissed:tour" }),
-	});
-	if (!act.ok) {
-		throw new Error(`Onboarding action POST failed: ${act.status} ${await act.text()}`);
 	}
 	const vault = await fetch(`${baseURL}/api/vaults`, {
 		method: "POST",
