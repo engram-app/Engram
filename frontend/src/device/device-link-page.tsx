@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
+import { useAutofocus } from "@/hooks/use-autofocus";
 import { destructiveAlert, fieldInput, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { setActiveVaultId } from "../api/active-vault";
@@ -30,6 +31,10 @@ function DeviceLinkPage() {
 	const location = useLocation();
 	const qc = useQueryClient();
 	const [step, setStep] = useState<Step>("enter-code");
+	// The code field is the only thing to do on this step, and the user usually
+	// arrives from the plugin specifically to type into it — land with focus
+	// already there. Keyed on the step so returning to it re-focuses.
+	const codeRef = useAutofocus<HTMLInputElement>(step === "enter-code");
 	// RFC 8628 verification_uri_complete: if the plugin sends the user to
 	// /link?code=ENGR-7X4K, prefill the field instead of forcing a re-type.
 	const [userCode, setUserCode] = useState(() => {
@@ -269,6 +274,7 @@ function DeviceLinkPage() {
 							Enter the code shown in your Obsidian plugin:
 						</p>
 						<input
+							ref={codeRef}
 							type="text"
 							value={userCode}
 							onChange={(e) => setUserCode(e.target.value.toUpperCase())}
