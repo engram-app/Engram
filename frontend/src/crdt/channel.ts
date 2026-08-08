@@ -3,6 +3,7 @@ import * as encoding from "lib0/encoding";
 import * as syncProtocol from "y-protocols/sync";
 import { rlog } from "../observability/remote-log";
 import { type CrdtManager, REMOTE_ORIGIN } from "./manager";
+import { crdtMark } from "./perf";
 
 /** Outer y-protocols message-type tag — we only speak `messageSync`. */
 const MESSAGE_SYNC = 0;
@@ -46,6 +47,7 @@ export class CrdtChannel {
 		encoding.writeVarUint(encoder, MESSAGE_SYNC);
 		syncProtocol.writeSyncStep1(encoder, doc);
 		this.transport(id, toB64(encoding.toUint8Array(encoder)));
+		crdtMark(path, "step1:sent");
 	}
 
 	resetSync(path: string): void {
@@ -81,6 +83,7 @@ export class CrdtChannel {
 			const replyEncoder = encoding.createEncoder();
 			encoding.writeVarUint(replyEncoder, MESSAGE_SYNC);
 			syncProtocol.readSyncMessage(decoder, replyEncoder, doc, REMOTE_ORIGIN);
+			crdtMark(path, "step1:reply");
 			if (encoding.length(replyEncoder) > 1) {
 				this.transport(this.mgr.docId(path), toB64(encoding.toUint8Array(replyEncoder)));
 			}
