@@ -25,7 +25,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
   require Logger
 
-  # Bound on the version-CAS re-union retry (see `retry_if_stale/9`). Each miss
+  # Bound on the version-CAS re-union retry (see `retry_if_stale/5`). Each miss
   # means another writer committed first; the re-union folds their state in, so
   # a small budget is enough for any realistic contention on ONE note. Exhausting
   # it writes nothing and prunes nothing, which is loss-free.
@@ -71,6 +71,18 @@ defmodule Engram.Notes.CrdtCheckpoint do
         :ok
 
       user ->
+        # Default-fence. Callers that snapshot the doc themselves pass their own
+        # `:captured_version` (captured BEFORE the snapshot, which is strictly
+        # better). The unbind and overflow-worker callers pass none, and used to
+        # fall through to an UNFENCED write — so the fence, and the re-union
+        # retry behind it, could never engage on exactly the path with no
+        # follow-up tick to self-heal. Capturing here makes every caller fenced;
+        # nil (read failure) still degrades to the prior unfenced behaviour.
+        opts =
+          Keyword.put_new_lazy(opts, :captured_version, fn ->
+            current_version(user_id, note_id)
+          end)
+
         do_checkpoint(user, user_id, vault_id, note_id, doc, opts)
     end
   rescue
@@ -252,8 +264,13 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # abort is fine for a live room — deliver_out re-merges and a later debounce
   # tick re-persists — but on unbind there IS no later tick, and inside the
   # commit→deliver window the winner's ops are not in crdt_update_log yet
-  # (update_v1 only fires once deliver_out pushes into the live room), so the
-  # dropped ops are unrecoverable. The re-union keeps both sides.
+  # (update_v1 only fires once deliver_out pushes into the live room), so an
+  # abort there drops the room's work for good. The re-union keeps both sides.
+  #
+  # That same asymmetry is why the exhaustion clause below settles for writing
+  # nothing: it is NOT a claim that the ops are recoverable (on unbind they may
+  # not be), only that not writing is strictly better than overwriting the
+  # winner. Retrying is the fix; giving up is the last resort.
   #
   # The union is monotone, so each retry strictly converges.
   # `ctx` carries the parts that never change across a retry (vault/note ids,
@@ -289,29 +306,40 @@ defmodule Engram.Notes.CrdtCheckpoint do
   end
 
   defp retry_if_stale(:stale, _note, ctx, opts, budget) when budget > 0 do
-    case Repo.get(Note, ctx.note_id) do
+    with %Note{} = raw_note <- Repo.get(Note, ctx.note_id),
+         {:ok, fresh} <- Crypto.maybe_decrypt_note_fields(raw_note, ctx.user),
+         # The winner may also have RENAMED the row. `do_checkpoint` picked the
+         # markdown branch from the ORIGINAL path, so re-entering it blindly
+         # would project markdown text into a row that is now structural
+         # (`.canvas`), which is precisely what `do_structural_checkpoint`
+         # exists to prevent. Hand a kind flip back as a skip; the next bind
+         # checkpoints it through the correct branch.
+         true <- markdown?(fresh.path) do
+      do_markdown_checkpoint(
+        fresh,
+        ctx,
+        Keyword.put(opts, :captured_version, fresh.version),
+        budget - 1
+      )
+    else
       # Purged mid-retry: same quiet skip the initial read uses.
-      nil ->
-        {:skip, :note_deleted}
-
-      raw_note ->
-        {:ok, fresh} = Crypto.maybe_decrypt_note_fields(raw_note, ctx.user)
-
-        do_markdown_checkpoint(
-          fresh,
-          ctx,
-          Keyword.put(opts, :captured_version, fresh.version),
-          budget - 1
-        )
+      nil -> {:skip, :note_deleted}
+      # Renamed off `.md` mid-retry.
+      false -> {:skip, :kind_changed}
+      # A decrypt blip must stay the benign no-op it is on the non-retry path.
+      # Hard-matching here would raise, roll back the tenant txn, and turn one
+      # transient KMS hiccup into an error+Sentry event per exiting room (#954).
+      {:error, reason} -> {:skip, {:row_unreadable_on_retry, reason}}
     end
   end
 
-  # Budget exhausted: write nothing and prune nothing. Loss-free — the ops are
-  # still in the live doc and the tail, so the next tick (or the next bind's
-  # replay_tail) re-checkpoints them. Equal hashes suppress embed + announce.
+  # Budget exhausted: write nothing and prune nothing. The ops stay in the live
+  # doc, so the next tick re-checkpoints them; on unbind the doc is going away,
+  # but losing an unwritable checkpoint is strictly better than overwriting the
+  # winner. Equal hashes suppress embed + announce.
   defp retry_if_stale(:stale, note, ctx, _opts, _budget) do
     Logger.warning(
-      "crdt checkpoint gave up after #{@fence_retries} stale fences note_id=#{ctx.note_id}",
+      "crdt checkpoint gave up after #{@fence_retries + 1} stale fences note_id=#{ctx.note_id}",
       Metadata.with_category(:warning, :sync, note_id: ctx.note_id)
     )
 
@@ -408,21 +436,33 @@ defmodule Engram.Notes.CrdtCheckpoint do
     %{text: text, tags: tags, content_hash: content_hash, ct: ct, nonce: nonce, user: user} = m
     prev = note.content_hash
 
+    captured = Keyword.get(opts, :captured_version)
+
     if prev == content_hash do
       # Text unchanged: compact the snapshot + prune, but do NOT touch
       # version/seq/content — legacy /changes pullers must not see phantom edits.
-      {1, _} =
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note_id and n.kind == "note"),
-          set: [
-            crdt_state_ciphertext: ct,
-            crdt_state_nonce: nonce,
-            dek_version: Crypto.row_version_aad_bound()
-          ]
-        )
+      #
+      # Fenced on the same version as the materialize branch. Compaction writes
+      # no content, but it DOES replace crdt_state; a write landing between our
+      # row read and here would otherwise have its ops dropped from the snapshot
+      # while notes.content keeps its text, and inside the commit->deliver window
+      # they are not in the tail yet either. Losing the compaction is free (the
+      # snapshot is an optimisation and the tail stays unpruned); losing the ops
+      # is not.
+      case Repo.update_all(fence(note_id, captured),
+             set: [
+               crdt_state_ciphertext: ct,
+               crdt_state_nonce: nonce,
+               dek_version: Crypto.row_version_aad_bound()
+             ]
+           ) do
+        {1, _} ->
+          prune_tail(note_id, prune)
+          {prev, content_hash, note.path}
 
-      prune_tail(note_id, prune)
-      {prev, content_hash, note.path}
+        {0, _} ->
+          :stale
+      end
     else
       # Re-derive title from the note's decrypted (sanitized-at-write) path.
       title = Helpers.extract_title(text, note.path)
@@ -447,50 +487,74 @@ defmodule Engram.Notes.CrdtCheckpoint do
       # #902 fence. When the caller captured the doc at a known row version,
       # persist only if the row is STILL at that version. A REST/MCP write
       # that committed after the snapshot bumped `version`, so the CAS matches
-      # zero rows and we ABORT — never overwriting the newer committed content
-      # with our stale encoding. `captured_version` nil (e.g. the unbind path)
-      # keeps the prior unfenced behaviour. The field set is derived through
-      # Note.changeset (identical casting to the previous Repo.update!) and
-      # applied via a version-fenced update_all, mirroring the compaction branch.
-      captured = Keyword.get(opts, :captured_version)
+      # zero rows and we hand back `:stale` — never overwriting the newer
+      # committed content with our stale encoding. `captured_version` nil (only
+      # a version-read failure now; every caller is default-fenced in
+      # `checkpoint/5`) keeps the prior unfenced behaviour. The field set is
+      # derived through Note.changeset (identical casting to the previous
+      # Repo.update!) and applied via a version-fenced update_all.
       fence_version = captured || note.version
 
-      changeset =
-        note
-        |> Note.changeset(Map.put(phase_b, :version, fence_version + 1))
-        |> Ecto.Changeset.put_change(:seq, Vaults.next_seq!(vault_id))
+      # Cheap re-read BEFORE `next_seq!`. That call is an
+      # `UPDATE vaults SET change_seq = change_seq + 1`, so it takes the
+      # vault-global row lock for the rest of this transaction and burns a seq
+      # that nothing will be stamped with if the CAS then misses. Bailing here
+      # keeps a lost race off the vault lock entirely and leaves no gap in the
+      # vault's change sequence. The CAS below is still the real guard — this
+      # only stops us paying for a race we have already lost.
+      if stale_version?(note_id, captured) do
+        :stale
+      else
+        changeset =
+          note
+          |> Note.changeset(Map.put(phase_b, :version, fence_version + 1))
+          |> Ecto.Changeset.put_change(:seq, Vaults.next_seq!(vault_id))
 
-      base_query = from(n in Note, where: n.id == ^note_id and n.kind == "note")
+        # update_all does NOT auto-manage timestamps (Repo.update! does), and
+        # `updated_at` is never cast into changeset.changes. Set it explicitly,
+        # matching every sibling notes update_all, so the row's recency stays
+        # truthful for everything that orders/filters on updated_at. (The
+        # /api/notes/changes timestamp feed this originally guarded is retired.)
+        set = changeset.changes |> Map.put(:updated_at, DateTime.utc_now()) |> Map.to_list()
 
-      fenced_query =
-        if captured, do: where(base_query, [n], n.version == ^captured), else: base_query
+        case Repo.update_all(fence(note_id, captured), set: set) do
+          {1, _} ->
+            prune_tail(note_id, prune)
+            {prev, content_hash, note.path}
 
-      # update_all does NOT auto-manage timestamps (Repo.update! does), and
-      # `updated_at` is never cast into changeset.changes. Set it explicitly,
-      # matching every sibling notes update_all, so the row's recency stays
-      # truthful for everything that orders/filters on updated_at. (The
-      # /api/notes/changes timestamp feed this originally guarded is retired.)
-      set = changeset.changes |> Map.put(:updated_at, DateTime.utc_now()) |> Map.to_list()
+          {0, _} ->
+            # The row advanced since we read it — a newer write is already
+            # committed, so the state we unioned against is stale. Do NOT prune
+            # (its tail rows may be unmerged) and do NOT revert. Signal the
+            # caller to re-read, re-union against the winner and re-fence; see
+            # `retry_if_stale/5` for why retrying beats aborting on unbind.
+            Logger.info(
+              "crdt checkpoint stale fence note_id=#{note_id} captured_version=#{fence_version}",
+              Metadata.with_category(:info, :sync, note_id: note_id)
+            )
 
-      case Repo.update_all(fenced_query, set: set) do
-        {1, _} ->
-          prune_tail(note_id, prune)
-          {prev, content_hash, note.path}
-
-        {0, _} ->
-          # The row advanced since we read it — a newer write is already
-          # committed, so the state we unioned against is stale. Do NOT prune
-          # (its tail rows may be unmerged) and do NOT revert. Signal the caller
-          # to re-read, re-union against the winner and re-fence; see
-          # `retry_if_stale/9` for why retrying beats aborting on unbind.
-          Logger.info(
-            "crdt checkpoint stale fence note_id=#{note_id} captured_version=#{fence_version}",
-            Metadata.with_category(:info, :sync, note_id: note_id)
-          )
-
-          :stale
+            :stale
+        end
       end
     end
+  end
+
+  # Version-fenced row query. `nil` (version read failed) degrades to unfenced,
+  # matching `current_version/2`'s documented failure mode.
+  defp fence(note_id, nil), do: from(n in Note, where: n.id == ^note_id and n.kind == "note")
+
+  defp fence(note_id, captured),
+    do: from(n in Note, where: n.id == ^note_id and n.kind == "note" and n.version == ^captured)
+
+  defp stale_version?(_note_id, nil), do: false
+
+  defp stale_version?(note_id, captured) do
+    current =
+      Repo.one(from(n in Note, where: n.id == ^note_id and n.kind == "note", select: n.version))
+
+    # A deleted row (nil) is not "stale" — let the fenced update decide, so the
+    # purge race keeps its existing quiet-skip shape rather than looping.
+    not is_nil(current) and current != captured
   end
 
   defp encode(doc) do
