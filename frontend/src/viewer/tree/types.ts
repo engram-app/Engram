@@ -1,6 +1,6 @@
 export type TreeItem =
 	| { kind: "folder"; id: string; path: string; name: string; count: number }
-	| { kind: "note"; id: string; path: string; title: string; ext: string | null }
+	| { kind: "note"; id: string; path: string; title: string; ext: string | null; pending?: boolean }
 	| { kind: "attachment"; id: string; path: string; mime: string; size: number };
 
 export type ItemId = string;

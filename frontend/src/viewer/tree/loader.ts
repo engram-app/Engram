@@ -185,7 +185,10 @@ function noteToTreeItem(n: NoteSummary): Extract<TreeItem, { kind: "note" }> {
 	const dot = last.lastIndexOf(".");
 	const ext = dot > 0 ? last.slice(dot + 1).toLowerCase() : null;
 	// Display name is always the filename, never the server-derived H1 title.
-	return { kind: "note", id: n.id, path: n.path, title: noteName(n.path), ext };
+	// `pending` rides along so hover-prefetch can skip rows the server has never
+	// seen. Their ids are uuid7 (we mint them client-side), so no id-shape check
+	// can tell them apart from an acked note.
+	return { kind: "note", id: n.id, path: n.path, title: noteName(n.path), ext, pending: n.pending };
 }
 
 export type SortKey =

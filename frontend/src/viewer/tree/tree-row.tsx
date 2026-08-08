@@ -24,6 +24,12 @@ interface Props {
 	menuOpenId?: string | null;
 	onContextMenu?: (itemId: string, x: number, y: number) => void;
 	onLongPress?: (itemId: string) => void;
+	// Pointer resting on a NOTE row. Separate from onFolderHover because a
+	// folder's prefetch is a cache derivation and a note's is a network read —
+	// the caller debounces this one.
+	onNoteHover?: (noteId: string) => void;
+	// Pointer left the row before the caller's debounce elapsed — cancel it.
+	onNoteHoverEnd?: () => void;
 	onFolderHover?: (folderId: string) => void;
 }
 
@@ -121,6 +127,8 @@ export function TreeRow({
 	onContextMenu,
 	onLongPress,
 	onFolderHover,
+	onNoteHover,
+	onNoteHoverEnd,
 }: Props) {
 	const itemId = instance.getId();
 	const slug = useActiveVaultSlug();
@@ -272,11 +280,21 @@ export function TreeRow({
 		e.dataTransfer.clearData("text/html");
 	};
 
+	// Only rows the server can actually answer for. An optimistic row's create
+	// has not been acked, so prefetching it buys a guaranteed 404 — and an id
+	// check cannot spot one, because we mint those ids ourselves as real uuid7s.
+	// The `pending` flag from NoteSummary is the only honest signal.
+	const noteHoverStart = onNoteHover && !item.pending ? () => onNoteHover(item.id) : undefined;
+
 	return (
 		<Link
 			to={slug ? `/${slug}/${item.id}` : `/note/${item.id}`}
 			{...htProps}
 			{...longPressProps}
+			onPointerEnter={noteHoverStart}
+			onFocus={noteHoverStart}
+			onPointerLeave={noteHoverStart ? onNoteHoverEnd : undefined}
+			onBlur={noteHoverStart ? onNoteHoverEnd : undefined}
 			onContextMenu={contextMenuHandler}
 			onDragStart={handleNoteDragStart}
 			aria-selected={instance.isSelected()}
