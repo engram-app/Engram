@@ -351,6 +351,33 @@ defmodule Engram.AttachmentsTest do
       :ok
     end
 
+    # Every other bulk path decrypt in the codebase is measured
+    # (:notes, :vault_tree_notes, :manifest_notes, :manifest_attachments).
+    # This one was the blind spot: /api/vault/tree delegates its attachment
+    # half here, so without a span the tree endpoint reports only half its
+    # decrypt cost. See PR #1316 review follow-up.
+    test "emits a decrypt_batch span sized to the rows decrypted", %{user: user, vault: vault} do
+      for name <- ["one.png", "two.png"] do
+        {:ok, _} =
+          Attachments.upsert_attachment(user, vault, %{
+            "path" => name,
+            "content_base64" => Base.encode64("PNGDATA"),
+            "mime_type" => "image/png"
+          })
+      end
+
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :decrypt_batch]])
+
+      {:ok, list} = Attachments.list_attachments(user, vault)
+      assert length(list) == 2
+
+      assert_receive {[:engram, :crypto, :decrypt_batch], ^ref, measurements,
+                      %{kind: :attachments}}
+
+      assert measurements.count == 2
+      assert is_integer(measurements.duration_us) and measurements.duration_us >= 0
+    end
+
     test "returns non-deleted attachment metadata for the vault", %{user: user, vault: vault} do
       {:ok, _} =
         Attachments.upsert_attachment(user, vault, %{
