@@ -3,6 +3,23 @@ import { describe, expect, it, vi } from "vitest";
 import type { AttachmentSummary, Folder, NoteSummary } from "../../api/queries";
 import { buildLoader, type SortKey } from "./loader";
 
+// A cache miss makes the loader load that folder's note list from the vault
+// tree. Tests that don't seed the tree would otherwise reach the real network;
+// the loader swallows the failure, but the attempt still logs. Fail it fast.
+vi.mock("../../api/client", async () => {
+	const actual = await vi.importActual<typeof import("../../api/client")>("../../api/client");
+	return {
+		...actual,
+		api: {
+			get: vi.fn(() => Promise.reject(new Error("no network in unit tests"))),
+			post: vi.fn(),
+			patch: vi.fn(),
+			del: vi.fn(),
+		},
+		setTokenGetter: vi.fn(),
+	};
+});
+
 const folders: Folder[] = [
 	{ id: "1", parent_id: null, name: "Projects", count: 2 },
 	{ id: "2", parent_id: "1", name: "Projects/Engram", count: 1 },
@@ -211,67 +228,47 @@ describe("buildLoader", () => {
 		expect(children.map((c) => c.itemId)).toEqual(["f:2", "n:100"]);
 	});
 
-	it("cache miss returns [] and triggers fetch via real fetcher", () => {
+	// On a miss the loader loads the folder's note list through the SAME options
+	// useFolderNotesById builds — one query, one queryFn, derived from the vault
+	// tree. A separately-shaped fetch here is what previously produced cache
+	// entries an invalidation could reach but never refetch.
+	it("cache miss returns [] and loads the folder through the shared derived query", async () => {
 		const qc = new QueryClient();
 		qc.setQueryData(["folder-notes-by-id", "v", "1"], notesByFolder["1"]);
-		// No data for folder id 2.
-		const fetchFolderNotes = vi.fn(() => Promise.resolve<NoteSummary[]>([]));
-		const fetchSpy = vi.spyOn(qc, "fetchQuery");
-		const loader = buildLoader({
-			folders,
-			qc,
-			vaultId: "v",
-			sort: "name-asc" as SortKey,
-			fetchFolderNotes,
+		// No data for folder id 2; the vault tree it derives from IS cached, so
+		// the load resolves without a request.
+		qc.setQueryData(["vault-tree", "v"], {
+			folders: [{ id: "2", name: "Projects/Sub", count: 1, parent_id: "1" }],
+			notes: [{ id: "200", path: "Projects/Sub/deep.md", created_at: "s", updated_at: "s" }],
+			attachments: [],
 		});
-		const children = loader.getChildren("f:2");
-		// Child folders for f:2 = none in fixture; notes not cached → returns []
-		expect(children).toEqual([]);
-		expect(fetchSpy).toHaveBeenCalledWith(
-			expect.objectContaining({
-				queryKey: ["folder-notes-by-id", "v", "2"],
-			}),
-		);
-		// The queryFn passed to fetchQuery must invoke our real fetcher with
-		// the folder id — guards against regressing back to a dummy queryFn.
-		const call = fetchSpy.mock.calls[0]?.[0] as unknown as {
-			queryFn: (ctx?: unknown) => Promise<NoteSummary[]>;
-		};
-		call.queryFn();
-		expect(fetchFolderNotes).toHaveBeenCalledWith("2");
-	});
-
-	it("root cache miss triggers a fetch for the root sentinel", () => {
-		const qc = new QueryClient();
-		const fetchFolderNotes = vi.fn(() => Promise.resolve<NoteSummary[]>([]));
-		const fetchSpy = vi.spyOn(qc, "fetchQuery");
-		const loader = buildLoader({
-			folders,
-			qc,
-			vaultId: "v",
-			sort: "name-asc" as SortKey,
-			fetchFolderNotes,
-		});
-		loader.getChildren("root");
-		expect(fetchSpy).toHaveBeenCalledWith(
-			expect.objectContaining({
-				queryKey: ["folder-notes-by-id", "v", "root"],
-			}),
-		);
-		const call = fetchSpy.mock.calls[0]?.[0] as unknown as {
-			queryFn: () => Promise<NoteSummary[]>;
-		};
-		call.queryFn();
-		expect(fetchFolderNotes).toHaveBeenCalledWith("root");
-	});
-
-	it("cache miss without fetcher returns [] and does not fetch", () => {
-		const qc = new QueryClient();
-		const fetchSpy = vi.spyOn(qc, "fetchQuery");
 		const loader = buildLoader({ folders, qc, vaultId: "v", sort: "name-asc" as SortKey });
-		const children = loader.getChildren("f:2");
-		expect(children).toEqual([]);
-		expect(fetchSpy).not.toHaveBeenCalled();
+
+		// Child folders for f:2 = none in fixture; notes not cached → returns []
+		expect(loader.getChildren("f:2")).toEqual([]);
+
+		await vi.waitFor(() => {
+			expect(qc.getQueryData(["folder-notes-by-id", "v", "2"])).toEqual([
+				expect.objectContaining({ id: "200", path: "Projects/Sub/deep.md" }),
+			]);
+		});
+	});
+
+	it("root cache miss loads the root sentinel from the tree", async () => {
+		const qc = new QueryClient();
+		qc.setQueryData(["vault-tree", "v"], {
+			folders: [],
+			notes: [{ id: "300", path: "top.md", created_at: "s", updated_at: "s" }],
+			attachments: [],
+		});
+		const loader = buildLoader({ folders, qc, vaultId: "v", sort: "name-asc" as SortKey });
+		loader.getChildren("root");
+
+		await vi.waitFor(() => {
+			expect(qc.getQueryData(["folder-notes-by-id", "v", "root"])).toEqual([
+				expect.objectContaining({ id: "300", path: "top.md" }),
+			]);
+		});
 	});
 
 	it("getItem returns shaped TreeItem for a folder id", () => {

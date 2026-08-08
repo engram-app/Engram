@@ -8,6 +8,7 @@ import {
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { collideBump } from "@/lib/collide-bump";
+import { noteName } from "@/lib/note-name";
 import { uuid7 } from "../crdt/uuid7";
 import {
 	isSyntheticFolderId,
@@ -262,6 +263,109 @@ interface BatchFoldersContext {
 	noteListSnapshots: Array<{ key: readonly unknown[]; data: NoteSummary[] | undefined }>;
 }
 
+// Bumped by `invalidateVaultTree` — the single chokepoint every tree
+// invalidation goes through, from `api/channel.ts` and from every mutation.
+// `fetchVaultTreeFresh` reads it to tell whether a change landed while its
+// request was in flight. Module-global rather than per-vault: a vault switch
+// costs at most one extra refetch, which is not worth a Map to avoid.
+let treeInvalidationGen = 0;
+
+// Cap on consecutive "the tree I just fetched is already out of date" retries.
+// ponytail: 3 is a backstop against a pathological event storm, not a tuning
+// knob — the loop's own exit condition is what normally ends it. Past the cap
+// we keep the newest snapshot we have; the NEXT invalidation then lands on a
+// query that HAS data, which query-core restarts properly (Query.fetch takes
+// the `cancel({silent:true})` branch when `cancelRefetch` is set, which
+// `refetchQueries` defaults to true). So exceeding the cap degrades to the
+// already-correct steady-state path, never to a hang.
+const MAX_STALE_TREE_REFETCHES = 3;
+
+/**
+ * Fetch the vault tree, re-fetching if an invalidation landed mid-flight.
+ *
+ * This closes the one window the derived-query redesign left open. On the
+ * FIRST-EVER fetch `state.data === undefined`, so `Query.fetch` takes the
+ * `return this.#retryer.promise` branch and COALESCES the invalidation onto
+ * the in-flight request instead of restarting it — and the `success` dispatch
+ * then sets `isInvalidated: false`. The result: a snapshot that predates the
+ * event lands marked fresh, and nothing ever asks again. Verified against
+ * @tanstack/query-core 5.101.4 `src/query.ts`.
+ *
+ * `change_seq` would be the natural detector, but no sync-channel event
+ * carries a seq to compare it against (see the `VaultTree` note), so we detect
+ * the invalidation itself rather than the staleness it implies.
+ *
+ * Convergence: `seen` is re-captured immediately BEFORE each retry request is
+ * issued, so the loop exits as soon as one request completes with no
+ * invalidation having arrived during it. The condition is equality against a
+ * monotonically increasing counter — never a comparison of payload contents —
+ * so it cannot oscillate between two states; each iteration strictly consumes
+ * the generation value that triggered it.
+ */
+async function fetchVaultTreeFresh(): Promise<VaultTree> {
+	let seen = treeInvalidationGen;
+	let tree = await api.get<VaultTree>("/vault/tree");
+	for (let i = 0; treeInvalidationGen !== seen && i < MAX_STALE_TREE_REFETCHES; i++) {
+		seen = treeInvalidationGen;
+		tree = await api.get<VaultTree>("/vault/tree");
+	}
+	return tree;
+}
+
+// Read the one vault-tree query every sidebar view derives from.
+//
+// `fetchQuery`, NOT `ensureQueryData`: ensureQueryData returns whatever is
+// cached the moment `state.data !== undefined` (verified in
+// @tanstack/query-core 5.101 — it only consults staleness to fire an OPTIONAL
+// background prefetch, and still resolves with the stale value). An invalidated
+// tree would therefore keep serving the pre-event snapshot to every derived
+// refetch, forever: silent staleness, which is the exact bug this seam was
+// rebuilt to remove. `fetchQuery` calls `query.isStaleByTime(...)` first, and
+// `isStaleByTime` returns true whenever the query is invalidated — so one
+// invalidation produces exactly ONE network fetch, and every derived refetch in
+// the same tick dedupes onto that in-flight promise (Query.fetch returns the
+// live retryer promise when a fetch is already running).
+function fetchVaultTree(qc: QueryClient, vaultId: string | null | undefined): Promise<VaultTree> {
+	return qc.fetchQuery(vaultTreeQueryOptions(vaultId));
+}
+
+// A `/vault/tree` note row in the `NoteSummary` shape every note-list cache
+// carries. `title`/`tags`/`version` are not on the wire — see the controller
+// moduledoc: the tree derives everything it renders from `path`.
+function treeNoteToSummary(n: VaultTreeNote): NoteSummary {
+	return {
+		id: n.id,
+		path: n.path,
+		title: noteName(n.path),
+		folder: folderOf(n.path),
+		tags: [],
+		version: 0,
+		// Type divergence, not a bug (nothing reads NoteSummary.mtime today):
+		// this is an ISO string, but a row fetched from /api/notes carries mtime
+		// as an epoch float (note.ex's `mtime` field is `:float`). Don't do
+		// arithmetic on this without normalizing first.
+		mtime: n.updated_at,
+		created_at: n.created_at,
+		updated_at: n.updated_at,
+	};
+}
+
+// Inverse of the id-keying every note-list cache uses: the vault root keys
+// under the ROOT_FOLDER_ID sentinel (it has no marker row), a folder the
+// backend returned with `id: null` — or one that only exists because a note
+// sits in it — keys under `syn:<path>` exactly as synthesize-folders.ts
+// derives, and everything else under its marker id. Null when the tree holds
+// no such folder; the tree is the whole inventory, so that folder has no notes.
+function folderPathForId(tree: VaultTree, folderId: string): string | null {
+	if (folderId === ROOT_FOLDER_ID) {
+		return "";
+	}
+	if (isSyntheticFolderId(folderId)) {
+		return syntheticFolderPath(folderId);
+	}
+	return tree.folders.find((f) => f.id === folderId)?.name ?? null;
+}
+
 // Resolve a folder PATH (a NoteSummary.folder, or '' for the vault root) to the
 // id its note list is cached under. Root maps to the sentinel without a lookup;
 // every other folder resolves through the folders cache marker. Returns null
@@ -351,18 +455,28 @@ export interface User {
 
 export function useFolders() {
 	const vaultId = useActiveVaultId();
+	const qc = useQueryClient();
 	return useQuery({
 		queryKey: ["folders", vaultId],
-		// Backend echoes a synthetic root row (`name === ""`, `id === null`) to
-		// expose the count of root-level notes. The tree owns root notes via
-		// `useFolderNotes('')`; drop the synthetic row so consumers only see real
-		// folder markers + the `Folder.id: string` contract holds.
-		queryFn: () => api.get<RawFoldersCache>("/folders"),
+		// Derived from the one vault-tree read, not a second HTTP request:
+		// `folders_payload/2` (lib/engram/notes.ex) is the same backend function
+		// behind /api/folders, so these rows are byte-identical to what that
+		// endpoint sent — including the synthetic root row (`name === ""`,
+		// `id === null`) that `selectFolders` drops so consumers only ever see
+		// real folder markers and the `Folder.id: string` contract holds.
+		queryFn: async (): Promise<RawFoldersCache> => ({
+			folders: (await fetchVaultTree(qc, vaultId)).folders,
+		}),
 		select: selectFolders,
+		// No vault id = nothing to scope the read to. Ungated, a deep link
+		// arriving before the bootstrap reconcile lands would fetch (and
+		// server-side decrypt) some other vault's whole inventory, then discard it.
+		enabled: Boolean(vaultId),
 		// Folder listing decrypts every marker row server-side; without a
-		// staleTime each remount/window-focus refetches it. Mutations and the
-		// sync channel (channel.ts) invalidate this key, so 60s of staleness
-		// only spans gaps nothing else would catch anyway.
+		// staleTime each remount/window-focus re-derives it (and, once the tree
+		// itself is stale, refetches). Mutations and the sync channel
+		// (channel.ts) invalidate this key AND the tree, so 60s of staleness only
+		// spans gaps nothing else would catch anyway.
 		staleTime: FOLDER_NOTES_STALE_MS,
 	});
 }
@@ -401,10 +515,17 @@ export interface AttachmentSummary {
 
 export function useAttachments() {
 	const vaultId = useActiveVaultId();
+	const qc = useQueryClient();
 	return useQuery({
 		queryKey: ["attachments", vaultId],
-		queryFn: () => api.get<{ attachments: AttachmentSummary[] }>("/attachments"),
+		// Derived from the vault tree — `VaultTreeAttachment` IS `AttachmentSummary`
+		// (same fields, same units), so the rows pass straight through. `mtime` and
+		// `updated_at` must stay the real values: loader.ts sorts attachments by
+		// `mtime` under a "modified-*" sort, and use-engram-tree.ts's
+		// `attachmentsFingerprint` reads `updated_at` to decide whether to rebuild.
+		queryFn: async () => ({ attachments: (await fetchVaultTree(qc, vaultId)).attachments }),
 		select: selectAttachments,
+		enabled: Boolean(vaultId),
 		staleTime: FOLDER_NOTES_STALE_MS,
 	});
 }
@@ -439,6 +560,7 @@ export function useUploadAttachment() {
 			// 402s (disabled / text-only / too-large / quota) throw LimitExceededError
 			// AND open the global UpgradeRequiredDialog via the client's
 			// upgradeHandler — nothing to handle here.
+			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 			qc.invalidateQueries({ queryKey: ["attachments", vaultId] });
@@ -452,33 +574,141 @@ export function useUploadAttachment() {
 // shape (`NoteSummary[]`), for every folder including root.
 export const ROOT_FOLDER_ID = "root";
 
-// Single fetcher behind every id-keyed note list. Root reads the path-keyed
-// list endpoint (the only one that accepts an empty folder); every other
-// folder reads its by-id endpoint. Both normalize to `NoteSummary[]`.
-export function fetchNotesForFolderId(folderId: string): Promise<NoteSummary[]> {
-	if (folderId === ROOT_FOLDER_ID) {
-		return api.get<{ notes: NoteSummary[] }>("/folders/list?folder=").then((r) => r.notes);
-	}
-	// Derived/synthesized folders have no backend marker row, so the by-id endpoint
-	// can't resolve them. They carry a `syn:<path>` id — list their notes by path
-	// through the same endpoint root uses.
-	if (isSyntheticFolderId(folderId)) {
-		const path = syntheticFolderPath(folderId);
-		return api
-			.get<{ notes: NoteSummary[] }>(`/folders/list?folder=${encodeURIComponent(path)}`)
-			.then((r) => r.notes);
-	}
-	return api.get<{ notes: NoteSummary[] }>(`/folders/by-id/${folderId}/notes`).then((r) => r.notes);
+/**
+ * Options for one folder's note list, derived from the vault tree.
+ *
+ * Shared (not inlined into the hook) because three call sites must build the
+ * SAME query — the mounted `useFolderNotesById`, the tree loader's expand path
+ * and the sidebar's hover prefetch. When they didn't, the loader's lazily
+ * fetched entries ended up with a different (or absent) queryFn from the
+ * hook's, which is how an invalidation could reach an entry that had no way to
+ * refetch itself.
+ */
+export function folderNotesByIdQueryOptions(
+	qc: QueryClient,
+	vaultId: string | null | undefined,
+	folderId: string,
+) {
+	return {
+		queryKey: ["folder-notes-by-id", vaultId, folderId] as const,
+		queryFn: async (): Promise<NoteSummary[]> => {
+			const tree = await fetchVaultTree(qc, vaultId);
+			const path = folderPathForId(tree, folderId);
+			// `[]` is an ANSWER, not a cache miss: the tree is the vault's whole
+			// note inventory, so "this folder holds no notes" is known without
+			// asking the server. Falling through to a per-folder request here is
+			// what made expanding an empty folder cost a round trip.
+			return path === null
+				? []
+				: tree.notes.filter((n) => folderOf(n.path) === path).map(treeNoteToSummary);
+		},
+		staleTime: FOLDER_NOTES_STALE_MS,
+	};
 }
 
 export function useFolderNotesById(folderId: string | null, opts: { enabled?: boolean } = {}) {
 	const vaultId = useActiveVaultId();
+	const qc = useQueryClient();
 	return useQuery({
-		queryKey: ["folder-notes-by-id", vaultId, folderId],
-		queryFn: () => fetchNotesForFolderId(folderId as string),
-		enabled: folderId !== null && (opts.enabled ?? true),
-		staleTime: FOLDER_NOTES_STALE_MS,
+		...folderNotesByIdQueryOptions(qc, vaultId, folderId as string),
+		enabled: folderId !== null && Boolean(vaultId) && (opts.enabled ?? true),
 	});
+}
+
+// GET /api/vault/tree row shapes (deliberately thin — see the controller's
+// moduledoc: title/tags/version/mtime are omitted, the tree derives them from
+// `path`). Distinct from `Folder`/`NoteSummary`/`AttachmentSummary`, which are
+// the shapes the REST-per-folder hooks (and their caches) already carry.
+export interface VaultTreeFolder {
+	id: string | null;
+	name: string;
+	count: number;
+	parent_id: string | null;
+}
+export interface VaultTreeNote {
+	id: string;
+	path: string;
+	created_at: string;
+	updated_at: string;
+}
+export interface VaultTreeAttachment {
+	id: string;
+	path: string;
+	mime_type: string;
+	size_bytes: number;
+	mtime: number;
+	updated_at: string;
+}
+// `change_seq` is deliberately NOT declared here even though the endpoint
+// returns it. It is the vault's monotonic write watermark, and it would be the
+// natural way to detect that a tree snapshot predates a change we already know
+// about — except no `sync:` channel event carries a seq to compare it against.
+// `note_changed` (upsert and delete), `notes.batch` and `folders.batch` all ship
+// without one, so the client never holds a second value to put it next to.
+// Declaring a field nothing can use invites exactly the wrong fix: comparing
+// two consecutive tree payloads' `change_seq` and skipping the refetch when
+// they match. See `fetchVaultTreeFresh` for what is used instead, and the
+// redesign report for what stamping a seq onto the broadcasts would cost.
+export interface VaultTree {
+	folders: VaultTreeFolder[];
+	notes: VaultTreeNote[];
+	attachments: VaultTreeAttachment[];
+}
+
+/**
+ * One request for the whole tree — see the controller moduledoc for why (this
+ * replaced one HTTP round-trip per folder, 20-33 on a real vault).
+ *
+ * This query IS the source for `useFolders`, `useAttachments` and
+ * `useFolderNotesById`: they derive their data from it instead of fetching
+ * their own. Nothing writes into those caches sideways, so there is exactly one
+ * place a stale sidebar can come from, and exactly one key to invalidate.
+ *
+ * Shared options rather than a hook alone, because the derived queryFns and the
+ * tree loader all have to reach the SAME Query object.
+ *
+ * `staleTime` matches the derived views (FOLDER_NOTES_STALE_MS) on purpose.
+ * Everything that can change the tree already invalidates this key —
+ * `api/channel.ts` (note_changed / notes.batch / folders.batch / reconnect
+ * backfill) and every mutation, via `invalidateVaultTree` — so 60s of
+ * staleness only spans gaps nothing else would catch, and it is what lets a
+ * folder expand (which fetches its derived note list) cost zero requests.
+ */
+export function vaultTreeQueryOptions(vaultId: string | null | undefined) {
+	return {
+		queryKey: ["vault-tree", vaultId] as const,
+		queryFn: fetchVaultTreeFresh,
+		staleTime: FOLDER_NOTES_STALE_MS,
+	};
+}
+
+/**
+ * Stale the vault tree, and with it every view derived from it.
+ *
+ * Call this wherever `["folders"]` / `["attachments"]` / `["folder-notes-by-id"]`
+ * are invalidated, BEFORE them. Those queries re-derive from the tree, so
+ * staling one without staling the tree re-derives byte-identical data — and
+ * worse, overwrites a just-applied optimistic patch with the pre-mutation
+ * snapshot. Over-calling is cheap: every derived refetch in the same tick
+ * dedupes onto a single network request.
+ *
+ * The generation bump is what makes this work against a tree request that is
+ * ALREADY in flight with no data yet — query-core coalesces that invalidation
+ * instead of restarting it, so `fetchVaultTreeFresh` detects it out-of-band and
+ * re-fetches. Bump BEFORE invalidating, so a fetch that completes between the
+ * two lines still sees the new generation.
+ */
+export function invalidateVaultTree(qc: QueryClient, vaultId: string | null | undefined): void {
+	treeInvalidationGen++;
+	qc.invalidateQueries({ queryKey: ["vault-tree", vaultId] });
+}
+
+export function useVaultTree() {
+	const vaultId = useActiveVaultId();
+	// `enabled`: ungated, a deep link landing before the bootstrap reconcile
+	// (see reconcileActiveVault) would fetch — and server-side decrypt — the
+	// wrong vault's entire inventory under a key nothing later reads.
+	return useQuery({ ...vaultTreeQueryOptions(vaultId), enabled: Boolean(vaultId) });
 }
 
 export function useNote(id: string | null) {
@@ -647,6 +877,10 @@ export function useCreateNote() {
 			return { key, snapshot, placeholderId: id };
 		},
 		onSuccess: ({ id, path }, vars, ctx) => {
+			// FIRST, before any derived key below is invalidated: those re-derive
+			// from the tree, and a tree fetched before this create would revert the
+			// optimistic row we just settled.
+			invalidateVaultTree(qc, vaultId);
 			// Swap the placeholder for the server-assigned id/path.
 			if (ctx) {
 				const filename = path.split("/").pop() ?? path;
@@ -738,6 +972,7 @@ export function useCreateFolder() {
 			throw new ApiError(500, "useCreateFolder: exceeded race retries");
 		},
 		onSuccess: () => {
+			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 		},
 		onError: (err) => {
@@ -1665,6 +1900,7 @@ export function useRenameNote() {
 			renameErrorToast(err, "file");
 		},
 		onSettled: () => {
+			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 			qc.invalidateQueries({ queryKey: ["note", vaultId] });
@@ -1771,6 +2007,7 @@ export function useRenameFolder() {
 			renameErrorToast(err, "folder");
 		},
 		onSettled: () => {
+			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 			qc.invalidateQueries({ queryKey: ["note", vaultId] });
@@ -1861,6 +2098,7 @@ export function useDeleteNote() {
 			deleteErrorToast(err, "file");
 		},
 		onSettled: () => {
+			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 		},
@@ -1919,6 +2157,7 @@ export function useDeleteFolder() {
 			deleteErrorToast(err, "folder");
 		},
 		onSettled: () => {
+			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 		},
@@ -2030,6 +2269,7 @@ export function useDuplicateNote() {
 			}
 		},
 		onSettled: () => {
+			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
@@ -2121,6 +2361,7 @@ export function useBatchDeleteNotes() {
 		onSettled: () => {
 			// Reconcile after success AND partial failure — Promise.all is not
 			// atomic, so onError's full restore can resurrect already-deleted rows.
+			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
@@ -2294,6 +2535,7 @@ export function useBatchMoveNotes() {
 			// crdt_create per id is non-atomic (Promise.all): a mid-batch reject
 			// leaves some ids moved server-side while onError restores every row,
 			// so reconcile must run on both paths.
+			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
@@ -2356,6 +2598,7 @@ export function useBatchDeleteFolders() {
 			// Reconcile on both paths: a lost ack (server committed, client saw a
 			// network error) or a non-transactional partial delete would otherwise
 			// leave onError's restore showing folders the server actually dropped.
+			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
@@ -2463,6 +2706,7 @@ export function useBatchMoveFolders() {
 			// Reconcile on both paths: a lost ack (server committed, client saw a
 			// network error) leaves onError's restore showing folders the server
 			// actually moved until an unrelated refetch.
+			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
@@ -2484,6 +2728,7 @@ export function useRenameAttachment() {
 				vars,
 			),
 		onSettled: () => {
+			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 			qc.invalidateQueries({ queryKey: ["attachments", vaultId] });
@@ -2505,6 +2750,7 @@ export function useBatchMoveAttachments() {
 			// Reconcile on both paths: a lost ack (server committed, client saw a
 			// network error) leaves the attachments shown at their old paths until
 			// an unrelated refetch.
+			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 			qc.invalidateQueries({ queryKey: ["attachments", vaultId] });
@@ -2527,6 +2773,7 @@ export function useBatchDeleteAttachments() {
 			// Reconcile on both paths: no optimistic removal here, so a lost ack
 			// (server committed, client saw a network error) would otherwise leave
 			// the deleted attachments visible until an unrelated refetch.
+			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 			qc.invalidateQueries({ queryKey: ["attachments", vaultId] });

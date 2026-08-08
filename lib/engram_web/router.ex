@@ -415,6 +415,10 @@ defmodule EngramWeb.Router do
     get "/folders", FoldersController, :index
     delete "/folders/*path", FoldersController, :delete
 
+    # One read for the whole web file tree. See VaultTreeController's moduledoc
+    # for why the per-folder endpoints could not serve this.
+    get "/vault/tree", VaultTreeController, :show
+
     # Search
     post "/search", SearchController, :search
 

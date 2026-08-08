@@ -11,7 +11,6 @@ import {
 	type Note,
 	useAcceptTerms,
 	useAppBootstrap,
-	useAttachments,
 	useBacklinks,
 	useBatchDeleteAttachments,
 	useBatchDeleteFolders,
@@ -27,7 +26,6 @@ import {
 	useDeleteVault,
 	useDuplicateNote,
 	useFolderNotesById,
-	useFolders,
 	useNote,
 	usePlanChangePreview,
 	useRenameAttachment,
@@ -819,34 +817,10 @@ describe("rename folder does NOT re-path cached child notes optimistically", () 
 // verbatim. `name` continues to carry the FULL folder path — that
 // shape is load-bearing for existing consumers and stays.
 
+// What these hooks READ (all three derive from one /vault/tree fetch, and the
+// convergence + no-fan-out invariants) lives in api/vault-tree.test.tsx, which
+// drives them against a real tree payload. Only the gating is asserted here.
 describe("useFolderNotesById", () => {
-	it("fetches notes for the given folder id", async () => {
-		get.mockResolvedValue({
-			notes: [
-				{
-					id: "100",
-					path: "foo/a.md",
-					title: "A",
-					folder: "foo",
-					tags: [],
-					version: 1,
-					mtime: "s",
-					created_at: "s",
-					updated_at: "s",
-				},
-			],
-		});
-
-		const { result } = renderHook(() => useFolderNotesById("42"), { wrapper });
-		await waitFor(() => expect(result.current.data).toBeDefined());
-
-		expect(get).toHaveBeenCalledWith("/folders/by-id/42/notes");
-		expect(result.current.data?.[0]).toMatchObject({
-			id: expect.any(String),
-			path: expect.any(String),
-		});
-	});
-
 	it("disabled when folderId is null", () => {
 		const { result } = renderHook(() => useFolderNotesById(null), { wrapper });
 		expect(result.current.fetchStatus).toBe("idle");
@@ -862,36 +836,6 @@ describe("Folder type", () => {
 			name: string;
 			count: number;
 		}>();
-	});
-});
-
-describe("useFolders", () => {
-	it("passes through id + parent_id from the backend response", async () => {
-		get.mockResolvedValue({
-			folders: [
-				{ id: "7", parent_id: null, name: "top", count: 2 },
-				{ id: "8", parent_id: "7", name: "top/sub", count: 1 },
-			],
-		});
-
-		const { result } = renderHook(() => useFolders(), { wrapper });
-		await waitFor(() => expect(result.current.data).toBeDefined());
-
-		expect(get).toHaveBeenCalledWith("/folders");
-		const folders = result.current.data ?? [];
-		expect(folders).toHaveLength(2);
-		expect(folders[0]).toMatchObject({
-			id: "7",
-			parent_id: null,
-			name: "top",
-			count: 2,
-		});
-		expect(folders[1]).toMatchObject({
-			id: "8",
-			parent_id: "7",
-			name: "top/sub",
-			count: 1,
-		});
 	});
 });
 
@@ -2005,29 +1949,6 @@ describe("useSearch", () => {
 				{ signal: expect.any(AbortSignal) },
 			),
 		);
-	});
-});
-
-describe("useAttachments", () => {
-	it("fetches /attachments and returns the attachments array", async () => {
-		get.mockResolvedValue({
-			attachments: [
-				{
-					id: "a-1",
-					path: "a.png",
-					mime_type: "image/png",
-					size_bytes: 10,
-					mtime: 1,
-					updated_at: "2026-06-10T00:00:00Z",
-				},
-			],
-		});
-
-		const { result } = renderHook(() => useAttachments(), { wrapper });
-		await waitFor(() => expect(result.current.data).toBeDefined());
-
-		expect(get).toHaveBeenCalledWith("/attachments");
-		expect(result.current.data?.[0]?.path).toBe("a.png");
 	});
 });
 

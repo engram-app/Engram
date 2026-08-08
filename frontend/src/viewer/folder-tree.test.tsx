@@ -14,6 +14,23 @@ vi.mock("sonner", () => ({
 	toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
+// The tree loader loads a folder's note list from the vault tree on a cache
+// miss. Nothing here seeds that tree, so without this the miss path reaches the
+// real network; the loader swallows the failure, but the attempt still logs.
+vi.mock("../api/client", async () => {
+	const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
+	return {
+		...actual,
+		api: {
+			get: vi.fn(() => Promise.reject(new Error("no network in unit tests"))),
+			post: vi.fn(),
+			patch: vi.fn(),
+			del: vi.fn(),
+		},
+		setTokenGetter: vi.fn(),
+	};
+});
+
 const DEFAULT_FOLDERS = [
 	{ id: "1", parent_id: null, name: "Projects", count: 1 },
 	{ id: "2", parent_id: null, name: "archive", count: 0 },
@@ -72,6 +89,20 @@ vi.mock("../api/queries", async () => {
 			isLoading: mock.loading,
 			isError: false,
 		}),
+		// `useVaultTree` is deliberately NOT stubbed. It used to be pinned to
+		// `{ data: undefined }`, which meant FolderTree's real call to it was never
+		// exercised anywhere and a broken tree seam sailed through this file into
+		// CI. It runs for real here (no active vault id in these tests, so it stays
+		// `enabled: false` and never fetches — FolderTree only mounts it for its
+		// observer, not its data).
+		//
+		// The hooks below ARE stubbed, so this file proves COMPOSITION only: no
+		// tree payload can reach a row through them. The end-to-end path —
+		// FolderTree rendering folder/note/attachment rows derived from a real
+		// /vault/tree payload, in one request — is exercised against the real
+		// hooks in api/vault-tree.test.tsx ("FolderTree renders from a real
+		// /vault/tree payload"). Do not let that be deleted and leave this file
+		// as the only coverage.
 		useAttachments: () => ({ data: mock.attachments, isLoading: false }),
 		useNote: () => ({ data: mock.activeNote, isLoading: false, error: null }),
 		useFolderNotesById: (folderId: string | null) => {
