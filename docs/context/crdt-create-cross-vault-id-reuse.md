@@ -26,7 +26,7 @@ permanently dropped**. Server-side error count for the same window: **zero**.
 
 ## Precondition (why this is easy to miss)
 It only fires when a new vault is populated with notes whose **ids already exist in another
-vault** — i.e. someone copies an existing vault's files into a fresh vault, so the plugin's
+vault**, i.e. someone copies an existing vault's files into a fresh vault, so the plugin's
 NoteIdMap / frontmatter ids carry over. A new vault filled with genuinely new notes is fine.
 
 ## Root cause
@@ -47,7 +47,7 @@ case Repo.insert(changeset, on_conflict: :nothing) do
 
 Sequence:
 
-1. `classify_by_id/2` (via `existing_by_client_id/2`) asks "does this id exist?" — but it is
+1. `classify_by_id/2` (via `existing_by_client_id/2`) asks "does this id exist?", but it is
    **vault-scoped**. The id lives in the *old* vault, so the new vault gets `:none` → "brand new
    note, insert it".
 2. `notes.id` is a **global** primary key. The insert collides with the old vault's row and
@@ -60,7 +60,7 @@ Sequence:
 The insert conflicts on **id**; the recovery looks up by **path**. Cross-vault id reuse is exactly
 the case where those two disagree.
 
-> The `DO NOTHING` was a deliberate choice — see the comment above `do_bare_insert/6`: it
+> The `DO NOTHING` was a deliberate choice. See the comment above `do_bare_insert/6`: it
 > "sidesteps the partial-index conflict_target fragment-matching footgun" of
 > `notes_user_vault_path_v2`. A workaround for one index problem opened a hole around a
 > different one. Any fix must keep the partial-index dodge.
@@ -78,11 +78,11 @@ id = Ecto.UUID.generate()
 {:error, cs} = Notes.genesis_crdt_note(user, vb, id, "A/Note.md", origin: "obsidian")
 # => %{path: ["insert raced and vanished"]}
 
-# Control — a FRESH id into the same new vault succeeds:
+# Control, a FRESH id into the same new vault succeeds:
 {:ok, _} = Notes.genesis_crdt_note(user, vb, Ecto.UUID.generate(), "A/Note.md", origin: "obsidian")
 ```
 
-Same id at a *different* path fails identically — it is the id collision, not the path.
+Same id at a *different* path fails identically: it is the id collision, not the path.
 
 ## Why it was undiagnosable from prod
 Two silent catch-alls in `lib/engram_web/channels/crdt_channel.ex` collapsed every unmodelled
@@ -93,16 +93,16 @@ error into the string `create_failed` and logged nothing:
   that replied without logging
 
 506 failures produced **zero** server-side explanation. Fixed on branch
-`fix/crdt-create-silent-failure` — both arms now log the underlying term with
+`fix/crdt-create-silent-failure`. Both arms now log the underlying term with
 `user_id`/`vault_id`/`doc_id`. The wire contract is unchanged; only the silence is gone.
 
 Note the asymmetry that caused this: `log_entry_failure/2` (the rescue/exit path, same file)
 carries the comment *"NOT a silent swallow: every occurrence is logged with the reason."* That
-discipline was applied to the dramatic failure mode and missed on the boring one — which is the
+discipline was applied to the dramatic failure mode and missed on the boring one, which is the
 one that actually fired.
 
 ## Why the test suite missed it
-`e2e/tests/test_77_bulk_first_sync.py` covers a 1,000-note bulk first sync — but it writes notes
+`e2e/tests/test_77_bulk_first_sync.py` covers a 1,000-note bulk first sync, but it writes notes
 with **freshly minted ids** into an **existing** vault. The failing case needs a *new vault* whose
 notes carry *pre-owned ids*. No test constructs that state.
 
@@ -116,7 +116,7 @@ Ruled out with evidence during the 2026-08-08 investigation:
   `validate_create_path/1`) only reject blank paths. `&`, commas, parens are all fine.
 - **Tuple-arity mismatch.** `genesis_insert_bare/6` returns `{:ok, note, :announce}`; it *is*
   correctly unwrapped to `{:ok, note}` at `notes.ex:771`.
-- **Crypto/KMS.** Prod runs AWS KMS, local runs `KeyProvider.Local` — but the bug reproduces on
+- **Crypto/KMS.** Prod runs AWS KMS, local runs `KeyProvider.Local`, but the bug reproduces on
   the Local provider, so the crypto class is not involved.
 - **Base64 framing.** The plugin uses standard padded `btoa` (`src/crdt/wire.ts:13`), which
   `Base.decode64/1` accepts.
@@ -124,16 +124,16 @@ Ruled out with evidence during the 2026-08-08 investigation:
 ## Fix shape (not yet implemented)
 Two halves:
 
-1. **Server** — when the insert no-ops and the path lookup returns `nil`, look the id up
+1. **Server:** when the insert no-ops and the path lookup returns `nil`, look the id up
    **globally**. If it belongs to a different vault, reply a distinct, actionable reason (e.g.
    `id_owned_by_other_vault`) rather than the generic `create_failed`. `"insert raced and
    vanished"` should be reserved for a genuine race.
-2. **Plugin** — re-mint note ids when enrolling a vault whose ids are already owned elsewhere. A
+2. **Plugin:** re-mint note ids when enrolling a vault whose ids are already owned elsewhere. A
    copied vault is a new vault; its notes need new identities.
 
-Add an e2e or integration case covering *new vault + pre-owned ids* — the gap `test_77` leaves.
+Add an e2e or integration case covering *new vault + pre-owned ids*, the gap `test_77` leaves.
 
 ## Related
-- `docs/context/worker-reads-stale-content-facade.md` — other `crdt_create`-adjacent trap
-- `../../docs/context/crdt-wrong-mint-cross-file-overwrite.md` (workspace) — the other
+- `docs/context/worker-reads-stale-content-facade.md` (another `crdt_create`-adjacent trap
+- `../../docs/context/crdt-wrong-mint-cross-file-overwrite.md` (workspace), the other
   id-identity failure class
