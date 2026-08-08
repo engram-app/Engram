@@ -143,10 +143,12 @@ describe("TreeRow", () => {
 		expect(onNoteHover).not.toHaveBeenCalled();
 	});
 
-	// An optimistic row's id has never reached the server.
-	it("does not prefetch a row whose id is not a server uuid", () => {
+	// An optimistic row's create has not been acked. Its id is a client-minted
+	// uuid7, indistinguishable by shape from an acked note's — `pending` is the
+	// only honest signal.
+	it("does not prefetch a row whose create has not been acked", () => {
 		const onNoteHover = vi.fn();
-		const instance = mockInstance({ data: { ...noteItem, id: "pending-local-1" } });
+		const instance = mockInstance({ data: { ...noteItem, pending: true } });
 		render(
 			<MemoryRouter>
 				<TreeRow instance={instance} onNoteHover={onNoteHover} />
@@ -154,6 +156,20 @@ describe("TreeRow", () => {
 		);
 		fireEvent.pointerEnter(screen.getByRole("link"));
 		expect(onNoteHover).not.toHaveBeenCalled();
+	});
+
+	// Keyboard tree navigation should get the same prefetch the pointer does —
+	// the folder branch already wires onFocus alongside onPointerEnter.
+	it("prefetches on keyboard focus too, not just pointer hover", () => {
+		const onNoteHover = vi.fn();
+		const instance = mockInstance({ data: noteItem });
+		render(
+			<MemoryRouter>
+				<TreeRow instance={instance} onNoteHover={onNoteHover} />
+			</MemoryRouter>,
+		);
+		fireEvent.focus(screen.getByRole("link"));
+		expect(onNoteHover).toHaveBeenCalledWith("100");
 	});
 
 	it("reports the pointer leaving a note row so the caller can cancel", () => {

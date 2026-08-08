@@ -2853,11 +2853,13 @@ export function prefetchNoteById(
 	vaultId: string | null | undefined,
 	id: string,
 ): void {
-	qc.prefetchQuery(noteQueryOptions(vaultId, id)).catch(() => {
-		// Drop the failed entry rather than leaving it cached under the key
-		// `useNote` reads: a speculative hover must never turn a later real click
-		// into the hard error pane. Removing it means the click starts a fresh
-		// fetch and gets the normal loading path.
+	// fetchQuery, NOT prefetchQuery: query-core implements prefetchQuery as
+	// `fetchQuery().then(noop).catch(noop)`, so its promise never rejects and a
+	// .catch on it is dead code. We need the rejection, because a speculative
+	// hover must not leave an errored entry cached under the key `useNote`
+	// reads — a later real click would render the hard error pane instead of
+	// loading. Removing it means the click starts a fresh fetch.
+	qc.fetchQuery(noteQueryOptions(vaultId, id)).catch(() => {
 		qc.removeQueries({ queryKey: ["note", vaultId, id], exact: true });
 	});
 }

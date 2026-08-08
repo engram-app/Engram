@@ -11,12 +11,6 @@ import { TREE_ROW_HEIGHT } from "./row-metrics";
 import { isSyntheticFolderId } from "./synthesize-folders";
 import type { TreeItem } from "./types";
 
-/** A real server id is a UUID. Optimistic rows and synthetic tree ids are not,
- *  and asking the API about them only ever produces an error. */
-function isServerId(id: string): boolean {
-	return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
-}
-
 interface Props {
 	instance: ItemInstance<LoaderItem>;
 	// Id of the file currently open in the editor (the route param). The
@@ -286,12 +280,11 @@ export function TreeRow({
 		e.dataTransfer.clearData("text/html");
 	};
 
-	// Only rows the server can actually answer for. An optimistic row whose
-	// create has not been acked carries a client-minted id the backend has never
-	// seen, so prefetching it buys a guaranteed error — the note-side twin of the
-	// folder branch's isSynthetic check.
-	const noteHoverStart =
-		onNoteHover && isServerId(item.id) ? () => onNoteHover(item.id) : undefined;
+	// Only rows the server can actually answer for. An optimistic row's create
+	// has not been acked, so prefetching it buys a guaranteed 404 — and an id
+	// check cannot spot one, because we mint those ids ourselves as real uuid7s.
+	// The `pending` flag from NoteSummary is the only honest signal.
+	const noteHoverStart = onNoteHover && !item.pending ? () => onNoteHover(item.id) : undefined;
 
 	return (
 		<Link
@@ -299,7 +292,9 @@ export function TreeRow({
 			{...htProps}
 			{...longPressProps}
 			onPointerEnter={noteHoverStart}
+			onFocus={noteHoverStart}
 			onPointerLeave={noteHoverStart ? onNoteHoverEnd : undefined}
+			onBlur={noteHoverStart ? onNoteHoverEnd : undefined}
 			onContextMenu={contextMenuHandler}
 			onDragStart={handleNoteDragStart}
 			aria-selected={instance.isSelected()}
