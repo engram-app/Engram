@@ -5,9 +5,8 @@ import { toast } from "sonner";
 import { useActiveVaultId } from "../api/active-vault";
 import {
 	type AttachmentSummary,
-	FOLDER_NOTES_STALE_MS,
 	type Folder,
-	fetchNotesForFolderId,
+	folderNotesByIdQueryOptions,
 	ROOT_FOLDER_ID,
 	useAttachments,
 	useBatchDeleteAttachments,
@@ -26,6 +25,7 @@ import {
 	useRenameAttachment,
 	useRenameFolder,
 	useRenameNote,
+	useVaultTree,
 } from "../api/queries";
 import { uuid7 } from "../crdt/uuid7";
 import { useFolderTreeState } from "../layout/folder-tree-context";
@@ -207,43 +207,21 @@ export default function FolderTree() {
 		}
 	};
 
-	// The loader fires this on cache-miss when a folder is expanded. Shares the
-	// single fetcher with `useFolderNotesById` so react-query treats both as the
-	// same query (cache key + fetcher shape) — and so a 'root' id routes to the
-	// path-keyed list endpoint instead of the non-existent by-id/root route.
-	const fetchFolderNotes = useCallback((folderId: string) => fetchNotesForFolderId(folderId), []);
-
-	// Prefetch on hover — by the time the user clicks, the notes are usually
-	// already cached, so expansion is instant. Uses the same key as the loader
-	// so we don't fetch twice if the user clicks before the hover resolves.
+	// Warm a folder's note list on hover, so expansion is instant. Same options
+	// the loader and `useFolderNotesById` build, so it's one query however it's
+	// reached — and a no-op read off the cached vault tree while that is fresh.
 	const prefetchFolderNotes = useCallback(
 		(folderId: string) => {
-			qc.prefetchQuery({
-				queryKey: ["folder-notes-by-id", vaultId, folderId],
-				queryFn: () => fetchFolderNotes(folderId),
-				staleTime: FOLDER_NOTES_STALE_MS,
-			});
+			qc.prefetchQuery(folderNotesByIdQueryOptions(qc, vaultId, folderId));
 		},
-		[qc, vaultId, fetchFolderNotes],
+		[qc, vaultId],
 	);
 
-	// Bulk prefetch every folder's notes once after `useFolders` lands. Trades
-	// a small burst of parallel requests at startup for zero-latency folder
-	// expansion thereafter. Skipped on every render — gated on folders length
-	// becoming non-zero — and `staleTime` keeps it idempotent on remount.
-	const bulkPrefetchedRef = useRef(false);
-	useEffect(() => {
-		if (bulkPrefetchedRef.current) {
-			return;
-		}
-		if (!folders || folders.length === 0) {
-			return;
-		}
-		bulkPrefetchedRef.current = true;
-		for (const f of folders) {
-			prefetchFolderNotes(f.id);
-		}
-	}, [folders, prefetchFolderNotes]);
+	// The one read every view above derives from (see `vaultTreeQueryOptions`).
+	// Mounted here for its OBSERVER, not its data: an observed query refetches
+	// the instant `api/channel.ts` invalidates it, and never gets garbage
+	// collected out from under the derived queries between events.
+	useVaultTree();
 
 	const { tree, virtualizer, items } = useEngramTree({
 		folders: allFolders,
@@ -254,7 +232,6 @@ export default function FolderTree() {
 		scrollParentRef: scrollRef,
 		onRenameCommit,
 		onMove,
-		fetchFolderNotes,
 	});
 
 	// Register the scroll container with BOTH the virtualizer (scrollRef) and

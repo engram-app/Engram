@@ -6,7 +6,7 @@ defmodule EngramWeb.SyncController do
 
   alias Engram.Attachments.Attachment
   alias Engram.Crypto
-  alias Engram.Crypto.Envelope
+  alias Engram.Crypto.PathCrypto
   alias Engram.Notes.Note
   alias Engram.Repo
   alias EngramWeb.Schemas
@@ -115,8 +115,8 @@ defmodule EngramWeb.SyncController do
     notes =
       Crypto.measure_decrypt_batch(:manifest_notes, length(note_rows), fn ->
         Enum.map(note_rows, fn {id, dek_version, path_ct, path_nonce, hash, seq, crdt_head} ->
-          aad = path_aad(:notes, id, dek_version)
-          path = decrypt_path!(path_ct, path_nonce, dek, aad)
+          aad = PathCrypto.aad(:notes, id, dek_version)
+          path = PathCrypto.decrypt!(path_ct, path_nonce, dek, aad)
           %{id: id, path: path, content_hash: hash, seq: seq, crdt_head: crdt_head}
         end)
       end)
@@ -125,8 +125,8 @@ defmodule EngramWeb.SyncController do
     attachments =
       Crypto.measure_decrypt_batch(:manifest_attachments, length(attachment_rows), fn ->
         Enum.map(attachment_rows, fn {id, dek_version, path_ct, path_nonce, hash, seq} ->
-          aad = path_aad(:attachments, id, dek_version)
-          path = decrypt_path!(path_ct, path_nonce, dek, aad)
+          aad = PathCrypto.aad(:attachments, id, dek_version)
+          path = PathCrypto.decrypt!(path_ct, path_nonce, dek, aad)
           %{id: id, path: path, content_hash: hash, seq: seq}
         end)
       end)
@@ -139,17 +139,5 @@ defmodule EngramWeb.SyncController do
       total_attachments: length(attachments),
       change_seq: current_seq
     })
-  end
-
-  defp path_aad(table, id, dek_version) when is_integer(dek_version) and dek_version >= 2,
-    do: Crypto.aad_for_row(table, :path, id)
-
-  defp path_aad(_table, _id, _v), do: <<>>
-
-  defp decrypt_path!(ciphertext, nonce, dek, aad) do
-    case Envelope.decrypt(ciphertext, nonce, dek, aad) do
-      {:ok, path} -> path
-      :error -> raise "manifest path decrypt failed — possible data corruption"
-    end
   end
 end
