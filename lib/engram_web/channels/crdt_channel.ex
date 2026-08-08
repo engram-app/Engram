@@ -265,19 +265,21 @@ defmodule EngramWeb.CrdtChannel do
           # copy on this reply instead of wedging on a resurrect forever.
           {:reply, {:error, %{reason: "recently_deleted"}}, socket}
 
-        {:error, %Ecto.Changeset{}} ->
+        {:error, %Ecto.Changeset{} = cs} ->
           # Covers the unique-constraint case (resurrecting a tombstoned id
           # onto a path already owned by a different live note) as well as
           # any other changeset validation failure — a clean reply either way.
+          log_create_failed(socket, note_id, "changeset: #{inspect(cs.errors)}")
           {:reply, {:error, %{reason: "create_failed"}}, socket}
 
-        {:error, _reason} ->
+        {:error, reason} ->
           # Catch-all for the crypto/KMS error class (a first-write user whose
           # DEK wrap fails, an encrypt or filter-key error): genesis_crdt_note/4
           # can return a bare {:error, term} that matches none of the arms above.
           # Without this the case raised CaseClauseError and crashed the channel.
           # {:error, term()} is in genesis_crdt_note/4's @spec, so dialyzer sees
           # this arm as reachable (it was wrongly removed before on a lying spec).
+          log_create_failed(socket, note_id, inspect(reason))
           {:reply, {:error, %{reason: "create_failed"}}, socket}
       end
     else
@@ -582,7 +584,19 @@ defmodule EngramWeb.CrdtChannel do
       {:error, :frame_too_large} ->
         {:result, %{doc_id: doc_id, status: "error", reason: "frame_too_large"}}
 
-      _ ->
+      other ->
+        # Never swallow the reason: this arm is the only thing standing between
+        # a genuine create failure and an unexplainable "create_failed" on the
+        # client. Same discipline as log_entry_failure/2 below.
+        Logger.warning(
+          "crdt_create_batch prepare failed: #{inspect(other)}",
+          Metadata.with_category(:warning, :websocket,
+            doc_id: doc_id,
+            user_id: user.id,
+            vault_id: vault.id
+          )
+        )
+
         {:result, %{doc_id: doc_id, status: "error", reason: "create_failed"}}
     end
   end
@@ -802,6 +816,21 @@ defmodule EngramWeb.CrdtChannel do
   # client and may be a real cleartext path — keep those under the redacted
   # :path key so nothing sensitive ever leaks. The message body never carries
   # the id either way.
+  # A create that fails for an unmodelled reason (crypto/KMS, changeset) still
+  # replies the generic "create_failed" the wire contract defines — but the
+  # REASON must reach the server log, or the client's retry loop is the only
+  # evidence anything went wrong and the cause is undiagnosable from prod.
+  defp log_create_failed(socket, note_id, reason) do
+    Logger.warning(
+      "crdt_create failed: #{reason}",
+      Metadata.with_category(:warning, :websocket,
+        note_id: note_id,
+        user_id: socket.assigns.current_user.id,
+        vault_id: socket.assigns.vault.id
+      )
+    )
+  end
+
   defp log_dropped(socket, doc_id, reason) do
     id_meta =
       case Ecto.UUID.cast(doc_id) do
