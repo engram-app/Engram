@@ -413,6 +413,55 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert tail_after == 0
   end
 
+  # ── Stale fence must RE-UNION, not drop the room's work (#847) ─────────────
+  # The #902 fence aborts on a stale captured_version. Aborting is safe for a
+  # LIVE room — deliver_out re-merges and a follow-up debounce tick re-persists.
+  # On UNBIND there is no follow-up tick: the room is exiting, so an abort
+  # discards the doc's ops permanently. They are not recoverable from the tail
+  # either, because a REST write only reaches crdt_update_log once deliver_out
+  # pushes it into the live room and fires update_v1 — inside the commit→deliver
+  # window there is no tail row at all.
+  #
+  # So a stale fence must fold the newer row state in and STILL write, keeping
+  # both sides. That is the only behaviour that satisfies both constraints the
+  # code documents: never revert a committed write, and always persist on exit.
+
+  test "a stale captured_version re-unions and still persists — the room's ops are not dropped",
+       ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    # Room snapshot taken at the current version, then edited locally.
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    captured_version = raw_note.version
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    :ok =
+      CrdtBridge.diff_into_text(
+        Yex.Doc.get_text(doc, CrdtBridge.text_name()),
+        "before ROOM EDIT"
+      )
+
+    # A REST write commits after the snapshot → the fence is now stale.
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "REST WINS"})
+
+    # Unbind-style checkpoint fires with the stale fence.
+    :ok =
+      CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc,
+        captured_version: captured_version
+      )
+
+    {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+
+    # The REST write must survive (the #902 guarantee).
+    assert fresh.content =~ "REST WINS",
+           "checkpoint reverted a committed REST write"
+
+    # ...and so must the room's ops, which an abort would have thrown away.
+    assert fresh.content =~ "ROOM EDIT",
+           "stale fence dropped the room's ops instead of re-unioning (#847)"
+  end
+
   # ── Virtual field integrity: title/path not corrupted ─────────────────────
 
   test "checkpoint does not corrupt title or path_hmac on a note with a non-trivial path", ctx do

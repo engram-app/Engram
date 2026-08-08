@@ -25,6 +25,12 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
   require Logger
 
+  # Bound on the version-CAS re-union retry (see `retry_if_stale/9`). Each miss
+  # means another writer committed first; the re-union folds their state in, so
+  # a small budget is enough for any realistic contention on ONE note. Exhausting
+  # it writes nothing and prunes nothing, which is loss-free.
+  @fence_retries 3
+
   @doc """
   Checkpoint the live doc into the `notes` row. Encrypts the full Yjs v1
   state, prunes the tail-log, and — when the projected text actually changed —
@@ -226,6 +232,36 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # degrade to a snapshot-compaction write. Returns the same {prev, new, path}
   # outcome tuple the caller's `case outcome` matches on.
   defp do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user) do
+    ctx = %{
+      vault_id: vault_id,
+      note_id: note_id,
+      live_state: live_state,
+      prune: prune,
+      user: user
+    }
+
+    do_markdown_checkpoint(note, ctx, opts, @fence_retries)
+  end
+
+  # `budget` bounds the CAS retry. A miss means a REST/MCP write committed
+  # between our row read and our write, so the row we unioned against is no
+  # longer current. Re-read (READ COMMITTED shows us the winner's commit),
+  # re-union against it, and re-fence on the version we just read.
+  #
+  # Retrying rather than aborting is what lets the UNBIND path stay safe. An
+  # abort is fine for a live room — deliver_out re-merges and a later debounce
+  # tick re-persists — but on unbind there IS no later tick, and inside the
+  # commit→deliver window the winner's ops are not in crdt_update_log yet
+  # (update_v1 only fires once deliver_out pushes into the live room), so the
+  # dropped ops are unrecoverable. The re-union keeps both sides.
+  #
+  # The union is monotone, so each retry strictly converges.
+  # `ctx` carries the parts that never change across a retry (vault/note ids,
+  # the doc snapshot, the prune boundary, the user); only `note`, `opts`
+  # (its `:captured_version`) and `budget` differ per attempt.
+  defp do_markdown_checkpoint(note, ctx, opts, budget) do
+    %{note_id: note_id, live_state: live_state, user: user} = ctx
+
     with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
          text = CrdtBridge.text_of(union_doc),
          :ok <- ensure_projection_safe(note, text),
@@ -236,7 +272,8 @@ defmodule Engram.Notes.CrdtCheckpoint do
       content_hash = Crypto.hmac_content_hash(key, text)
       tags = Helpers.extract_tags(text)
 
-      checkpoint_write(note, vault_id, note_id, prune, opts, %{
+      note
+      |> checkpoint_write(ctx.vault_id, note_id, ctx.prune, opts, %{
         text: text,
         tags: tags,
         content_hash: content_hash,
@@ -244,11 +281,44 @@ defmodule Engram.Notes.CrdtCheckpoint do
         nonce: nonce,
         user: user
       })
+      |> retry_if_stale(note, ctx, opts, budget)
     else
       {:skip, _} = skip -> skip
       err -> {:abort, err}
     end
   end
+
+  defp retry_if_stale(:stale, _note, ctx, opts, budget) when budget > 0 do
+    case Repo.get(Note, ctx.note_id) do
+      # Purged mid-retry: same quiet skip the initial read uses.
+      nil ->
+        {:skip, :note_deleted}
+
+      raw_note ->
+        {:ok, fresh} = Crypto.maybe_decrypt_note_fields(raw_note, ctx.user)
+
+        do_markdown_checkpoint(
+          fresh,
+          ctx,
+          Keyword.put(opts, :captured_version, fresh.version),
+          budget - 1
+        )
+    end
+  end
+
+  # Budget exhausted: write nothing and prune nothing. Loss-free — the ops are
+  # still in the live doc and the tail, so the next tick (or the next bind's
+  # replay_tail) re-checkpoints them. Equal hashes suppress embed + announce.
+  defp retry_if_stale(:stale, note, ctx, _opts, _budget) do
+    Logger.warning(
+      "crdt checkpoint gave up after #{@fence_retries} stale fences note_id=#{ctx.note_id}",
+      Metadata.with_category(:warning, :sync, note_id: ctx.note_id)
+    )
+
+    {note.content_hash, note.content_hash, note.path}
+  end
+
+  defp retry_if_stale(outcome, _note, _ctx, _opts, _budget), do: outcome
 
   # A row with NO persisted CRDT state whose doc projects nothing is the
   # "legacy note, not opened since the crdt_state wipe" case: bind produced an
@@ -408,17 +478,17 @@ defmodule Engram.Notes.CrdtCheckpoint do
           {prev, content_hash, note.path}
 
         {0, _} ->
-          # The row advanced since our snapshot — a newer write is already
-          # committed. Do NOT prune (its tail rows may be unmerged) and do NOT
-          # revert. Return equal hashes so the caller enqueues no embed for a
-          # write that did not happen; the next debounce tick re-captures the
-          # now-merged doc and checkpoints that.
+          # The row advanced since we read it — a newer write is already
+          # committed, so the state we unioned against is stale. Do NOT prune
+          # (its tail rows may be unmerged) and do NOT revert. Signal the caller
+          # to re-read, re-union against the winner and re-fence; see
+          # `retry_if_stale/9` for why retrying beats aborting on unbind.
           Logger.info(
-            "crdt checkpoint skipped stale write note_id=#{note_id} captured_version=#{fence_version}",
+            "crdt checkpoint stale fence note_id=#{note_id} captured_version=#{fence_version}",
             Metadata.with_category(:info, :sync, note_id: note_id)
           )
 
-          {content_hash, content_hash, note.path}
+          :stale
       end
     end
   end
