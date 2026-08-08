@@ -209,25 +209,27 @@ describe("NotePage (CRDT)", () => {
 		await waitFor(() => expect(closeDoc).toHaveBeenCalledWith("note-1"));
 	});
 
-	// The other side of holding the previous editor: if the next doc never opens
-	// (session torn down mid-await), the stale body must NOT sit under the new
-	// note's header — that's a document you can type into by mistake.
-	it("drops the previous editor when the next note's doc fails to open", async () => {
+	// The other side of holding the previous editor: if the next doc fails to
+	// open (session torn down mid-await), the previous note keeps the pane —
+	// ALL of it, header included. It used to drop to an empty "Connecting…"
+	// while leaving the new note's chrome up, which is the mismatch, not the
+	// cure for it.
+	it("keeps the previous note whole when the next note's doc fails to open", async () => {
+		openDoc.mockResolvedValue(docWith("one body"));
 		const { rerender } = renderPage();
 		await screen.findByTestId("note-editor");
 
 		openDoc.mockResolvedValue(null);
 		paramsMock.itemId = "note-2";
-		useNoteMock.mockReturnValue({
-			data: { ...NOTE, id: "note-2", path: "folder/other.md", title: "other" },
-			isLoading: false,
-			error: null,
-		});
+		useNoteMock.mockReturnValue({ data: NOTE2, isLoading: false, error: null });
 		rerender(pageTree());
+		await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-2"));
 
-		expect(await screen.findByText("Connecting…")).toBeInTheDocument();
-		expect(screen.queryByTestId("note-editor")).not.toBeInTheDocument();
-		expect(closeDoc).toHaveBeenCalledWith("note-1");
+		expect(screen.getByTestId("editor-text")).toHaveTextContent("one body");
+		expect(screen.getByTestId("header-note-name")).toHaveTextContent("note");
+		expect(screen.queryByText("Connecting…")).not.toBeInTheDocument();
+		// Nothing to release: note-1 is still the doc on screen.
+		expect(closeDoc).not.toHaveBeenCalled();
 	});
 
 	// ONE committed pair — note data + doc handle — advances only when both are
@@ -270,16 +272,25 @@ describe("NotePage (CRDT)", () => {
 		// navigating away and back, is the doc the mounted editor is bound to.
 		// Y.Doc.destroy() clears observers, so keystrokes are silently dropped.
 		it("does not close the doc the mounted editor is bound to", async () => {
-			const pending: Record<string, ((h: unknown) => void)[]> = {};
+			const pending: Record<string, ((h: unknown) => void)[]> = { "note-1": [], "note-2": [] };
 			openDoc.mockImplementation(
 				(id: string) =>
 					new Promise((resolve) => {
-						(pending[id] ??= []).push(resolve);
+						pending[id]?.push(resolve);
 					}),
 			);
+			// nth open of a note, still parked. Throws rather than silently no-op if
+			// the page never made that call — the whole point is the interleaving.
+			const parked = (id: string, n: number) => {
+				const resolve = pending[id]?.[n];
+				if (!resolve) {
+					throw new Error(`no open #${n} pending for ${id}`);
+				}
+				return resolve;
+			};
 			const { rerender } = renderPage();
 			await waitFor(() => expect(pending["note-1"]).toHaveLength(1));
-			await act(async () => pending["note-1"][0](docWith("one body")));
+			await act(async () => parked("note-1", 0)(docWith("one body")));
 			await screen.findByTestId("note-editor");
 
 			// note-1 → note-2 → note-1 → note-2, none of the later opens landing.
@@ -296,7 +307,7 @@ describe("NotePage (CRDT)", () => {
 			// The stale note-1 open lands. The page wants note-2 — but note-1 is
 			// what the editor on screen is bound to, so closing it destroys a live
 			// document out from under the binding.
-			await act(async () => pending["note-1"][1](docWith("one body")));
+			await act(async () => parked("note-1", 1)(docWith("one body")));
 
 			expect(closeDoc).not.toHaveBeenCalledWith("note-1");
 			expect(screen.getByTestId("editor-text")).toHaveTextContent("one body");
@@ -361,6 +372,24 @@ describe("NotePage (CRDT)", () => {
 				expect.objectContaining({ src_path: "folder/note.md" }),
 				expect.anything(),
 			);
+		});
+
+		// A non-markdown item has no doc to commit, so its pair is complete on
+		// data alone. The previous note's body must go with the previous note.
+		it("does not strand the previous note's body under a canvas item", async () => {
+			openDoc.mockResolvedValue(docWith("one body"));
+			const { rerender } = renderPage();
+			await screen.findByTestId("note-editor");
+
+			navTo({ ...NOTE2, path: "folder/board.canvas" });
+			rerender(pageTree());
+
+			await waitFor(() =>
+				expect(screen.getByTestId("header-note-name")).toHaveTextContent("board"),
+			);
+			expect(screen.queryByTestId("editor-text")).not.toBeInTheDocument();
+			await waitFor(() => expect(closeDoc).toHaveBeenCalledWith("note-1"));
+			expect(openDoc).not.toHaveBeenCalledWith("note-2");
 		});
 
 		// Defect 5. closeDoc destroys the Y.Doc. Running it in the same tick as

@@ -7,6 +7,7 @@ import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import type { Note } from "../api/queries";
 import {
 	useBatchMoveNotes,
 	useDeleteNote,
@@ -54,11 +55,55 @@ interface DocHandle {
 	doc: Y.Doc;
 }
 
+/** A note and the doc its body is being edited in — always the SAME note. */
+interface Displayed {
+	note: Note;
+	handle: DocHandle | null;
+}
+
 export default function NotePage() {
 	const { itemId: idStr, slug } = useParams();
 	const validId = idStr && idStr.length > 0 ? idStr : null;
 
-	const { data: note, isLoading, error } = useNote(validId);
+	const { data: fetchedNote, isLoading, error } = useNote(validId);
+
+	// ── The committed pair ───────────────────────────────────────────────────
+	// INVARIANT: this page NEVER renders one note's chrome over another note's
+	// document. `shown` is that pair — note data plus the doc handle its body is
+	// bound to — and it is the ONLY thing anything below may read. It advances
+	// solely when both halves are ready for the same note id; until then the
+	// PREVIOUS pair keeps rendering in full, chrome included, so a mismatch has
+	// nowhere to appear.
+	//
+	// `useNote` holds the note you were reading while the next one loads
+	// (placeholderData), so its `data` can name a note the URL no longer points
+	// at. That makes it unsafe as a source on its own — hence `routedNote`.
+	const routedNote = fetchedNote && fetchedNote.id === validId ? fetchedNote : null;
+	// CRDT manages MARKDOWN only — mirrors the server-side `.md` gate
+	// (crdt_deliver.ex). note_id carries no extension, so the check has to happen
+	// here, against the routed note's current path.
+	const openId = routedNote?.path.endsWith(".md") ? routedNote.id : null;
+	const [opened, setOpened] = useState<{ id: string; handle: DocHandle } | null>(null);
+	const ready: Displayed | null = routedNote
+		? openId === null
+			? // Non-markdown item (canvas, ...): there is no doc to wait for, so the
+				// pair is complete the moment its data is. The previous note's body
+				// must not linger under this one's header.
+				{ note: routedNote, handle: null }
+			: opened?.id === routedNote.id
+				? { note: routedNote, handle: opened.handle }
+				: null
+		: null;
+	const [displayed, setDisplayed] = useState<Displayed | null>(null);
+	if (ready && (ready.note !== displayed?.note || ready.handle !== displayed?.handle)) {
+		// React's documented "adjust state during render" (same pattern as
+		// draftNoteId below) — an effect would paint one frame of the stale pair
+		// first, which is the flash this page exists to avoid.
+		setDisplayed(ready);
+	}
+	const shown = ready ?? displayed;
+	const handle = shown?.handle ?? null;
+
 	const { data: manifest } = useSyncManifest();
 	const { setSlot } = useRightTools();
 	const { setEditor } = useActiveEditor();
@@ -85,15 +130,13 @@ export default function NotePage() {
 	// the inline title. Rendering a box in both would put two autofocusing
 	// inputs on screen, each committing the other's blur.
 	const [renaming, setRenaming] = useState<{ id: string; at: "header" | "title" } | null>(null);
-	const renamingAt = renaming && renaming.id === note?.id ? renaming.at : null;
-	const [handle, setHandle] = useState<DocHandle | null>(null);
 	const renameNote = useRenameNote();
 	const [syncStatus, setSyncStatus] = useState<CrdtSyncStatus>(getCrdtSyncStatus);
 	const editorViewRef = useRef<EditorView | null>(null);
 	// Same lookup NoteView builds for its remark-wiki-link hrefTemplate — a
 	// resolved link routes straight to the note id instead of through the
 	// lazy /:slug/wiki/* resolver.
-	const wikiMap = useMemo(() => buildWikiMap(note?.links), [note?.links]);
+	const wikiMap = useMemo(() => buildWikiMap(shown?.note.links), [shown?.note.links]);
 	// Manifest layer for wikiHref, read through a ref (same identity-stability
 	// reasoning as manifestPathsRef below): edges lag behind fresh links, the
 	// manifest resolves them without the /wiki redirect flash, and a manifest
@@ -132,92 +175,86 @@ export default function NotePage() {
 	manifestPathsRef.current = manifestPaths;
 	const wikiCompletionPaths = useCallback(() => manifestPathsRef.current, []);
 
-	const path = note?.path ?? null;
-	const noteId = note?.id ?? null;
-	// CRDT manages MARKDOWN only — mirrors the server-side `.md` gate
-	// (crdt_deliver.ex). note_id carries no extension, so the check has to
-	// happen here, at the one call site that still has the current path.
-	const isMarkdown = path?.endsWith(".md") ?? false;
-
-	// Open the CRDT doc on .md note mount, keyed by the note's stable note_id
-	// (NOT path — a rename/move must not tear down and rebuild the live doc);
-	// enroll for the STEP1 handshake; close on note switch / unmount. yCollab
-	// (in NoteEditor) owns convergence — there is no REST autosave, 3-way
-	// merge, or conflict UI on this path anymore.
+	// ── Doc lifecycle ────────────────────────────────────────────────────────
+	// Open the routed note's CRDT doc, keyed by its stable note_id (NOT path — a
+	// rename/move must not tear down and rebuild the live doc), and enroll for
+	// the STEP1 handshake. yCollab (in NoteEditor) owns convergence — there is no
+	// REST autosave, 3-way merge, or conflict UI on this path anymore.
 	//
-	// The handle swap is deliberately LATE: switching notes keeps this component
-	// mounted, so clearing it on the way out emptied the editor for the length of
-	// an openDoc (session wait + IndexedDB load) on every single note click. The
-	// outgoing note stays rendered AND open until the incoming one is live —
-	// closeDoc destroys the Y.Doc, so releasing it first would leave the mounted
-	// yCollab binding writing into a dead doc, which is worse than a flash.
-	// ponytail: the trade is a brief window where the header shows the new note
-	// over the old one's body. Freezing the editor read-only for that window is
-	// the upgrade path if it ever reads as wrong.
+	// Nothing here releases the note you came from: that belongs to the committed
+	// pair, below, because closeDoc DESTROYS the Y.Doc and the outgoing editor
+	// stays bound to it until React commits the swap.
 	//
-	// `openIdRef` is what is currently open; `wantIdRef` is what the page wants
-	// open. A late openDoc closes its own doc only when the page has moved on —
-	// without that check StrictMode's mount/cleanup/mount would close the doc the
-	// second open just handed us.
-	const openIdRef = useRef<string | null>(null);
+	// note_ids this page has open and has not released. At most two: the one on
+	// screen and the one being opened behind it.
+	const openedIdsRef = useRef<Set<string>>(new Set());
+	// The doc the MOUNTED editor is bound to. Written from an effect, never
+	// during render — a render React throws away must not be able to mark a live
+	// document as safe to destroy.
+	const boundIdRef = useRef<string | null>(null);
+	const release = useCallback((id: string) => {
+		if (openedIdsRef.current.delete(id)) {
+			closeDoc(id);
+		}
+	}, []);
+	// What the page wants open. A late openDoc releases its own doc only once the
+	// page has moved on — without that check StrictMode's mount/cleanup/mount
+	// would close the doc the second open just handed us.
 	const wantIdRef = useRef<string | null>(null);
 	useEffect(() => {
-		if (!(noteId && isMarkdown)) {
-			// Non-markdown item (canvas, ...): there is no doc to swap in, so the
-			// previous note's body must not keep rendering under this one's header.
-			wantIdRef.current = null;
-			setHandle(null);
-			if (openIdRef.current) {
-				closeDoc(openIdRef.current);
-				openIdRef.current = null;
-			}
+		wantIdRef.current = openId;
+		if (openId === null) {
 			return;
 		}
-		wantIdRef.current = noteId;
 		let cancelled = false;
-		openDoc(noteId).then((h) => {
-			if (cancelled) {
-				// Navigated on before this landed — it never reached the screen, so
-				// close it here rather than leak it until unmount.
-				if (wantIdRef.current !== noteId) {
-					closeDoc(noteId);
-				}
-				return;
-			}
+		openDoc(openId).then((h) => {
 			if (!h) {
-				// Open failed (session torn down mid-await). Fall back to the empty
-				// "Connecting…" state rather than leaving the previous note's body
-				// under this note's header for as long as the session stays down —
-				// long enough for someone to type into the wrong document.
-				if (openIdRef.current) {
-					closeDoc(openIdRef.current);
-					openIdRef.current = null;
-				}
-				setHandle(null);
+				// Open failed (session torn down mid-await). Nothing to commit, so the
+				// previous pair keeps rendering — whole, and honest about it.
 				return;
 			}
-			const prev = openIdRef.current;
-			openIdRef.current = noteId;
-			setHandle(h);
-			enroll(noteId);
-			if (prev && prev !== noteId) {
-				closeDoc(prev);
+			openedIdsRef.current.add(openId);
+			if (cancelled || wantIdRef.current !== openId) {
+				// Never reached the screen, so release it rather than leak it — UNLESS
+				// this is the doc the mounted editor is bound to, which happens when
+				// you navigate away and back: closeDoc would destroy a live document
+				// out from under the binding, silently dropping keystrokes. The pair
+				// swap below releases it at the right moment instead.
+				if (wantIdRef.current !== openId && boundIdRef.current !== openId) {
+					release(openId);
+				}
+				return;
 			}
+			setOpened({ id: openId, handle: h });
+			enroll(openId);
 		});
 		return () => {
 			cancelled = true;
 		};
-	}, [noteId, isMarkdown]);
+	}, [openId, release]);
 
-	// Nothing above closes on the way out anymore, so the page owns the final
-	// release. Empty deps: this runs once, on unmount.
+	// Release the outgoing doc only AFTER React has committed the swap. closeDoc
+	// destroys the Y.Doc; running it in the same tick as the state update leaves
+	// the outgoing EditorView holding a destroyed document for a render cycle.
+	const boundId = shown?.handle ? shown.note.id : null;
+	useEffect(() => {
+		const prev = boundIdRef.current;
+		boundIdRef.current = boundId;
+		if (prev && prev !== boundId) {
+			release(prev);
+		}
+	}, [boundId, release]);
+
+	// Nothing above closes on the way out, so the page owns the final release.
+	// Empty deps: this runs once, on unmount.
 	useEffect(
 		() => () => {
 			wantIdRef.current = null;
-			if (openIdRef.current) {
-				closeDoc(openIdRef.current);
-				openIdRef.current = null;
+			boundIdRef.current = null;
+			for (const id of openedIdsRef.current) {
+				closeDoc(id);
 			}
+			openedIdsRef.current.clear();
 		},
 		[],
 	);
@@ -225,20 +262,23 @@ export default function NotePage() {
 	// Subscribe to CRDT sync status changes (non-blocking -- editor still works offline).
 	useEffect(() => subscribeToCrdtSyncStatus(setSyncStatus), []);
 
-	// Signal the onboarding tour that the user opened a note.
+	// Signal the onboarding tour that the user opened a note. Fires for the note
+	// actually on screen, not the one being routed to.
+	const shownPath = shown?.note.path;
+	const shownId = shown?.note.id ?? null;
 	useEffect(() => {
-		if (!note?.path) {
+		if (!shownPath) {
 			return;
 		}
-		window.dispatchEvent(new CustomEvent("engram:note-opened", { detail: { path: note.path } }));
-	}, [note?.path]);
+		window.dispatchEvent(new CustomEvent("engram:note-opened", { detail: { path: shownPath } }));
+	}, [shownPath]);
 
 	// ToC reads the materialized REST content (refreshed by note_changed).
 	// Hoist the two primitives the effect actually depends on so the captured
 	// values match the dependency list (a new `note` object identity each
 	// render would otherwise rebuild the ToC needlessly).
-	const notePath = note?.path;
-	const noteContent = note?.content;
+	const notePath = shownPath;
+	const noteContent = shown?.note.content;
 	const liveContent = useLiveContent(handle?.ytext ?? null, noteContent ?? "");
 	useEffect(() => {
 		if (notePath === undefined) {
@@ -252,34 +292,39 @@ export default function NotePage() {
 	// Backlinks only need the note id (the panel fetches its own data), so this
 	// doesn't need to re-fire on every keystroke the way the ToC's effect does.
 	useEffect(() => {
-		if (noteId === null) {
+		if (shownId === null) {
 			setSlot("backlinks", null);
 			return;
 		}
-		setSlot("backlinks", <BacklinksPanel noteId={noteId} />);
+		setSlot("backlinks", <BacklinksPanel noteId={shownId} />);
 		return () => setSlot("backlinks", null);
-	}, [noteId, setSlot]);
+	}, [shownId, setSlot]);
 
 	// Consume the just-created flag exactly once: start renaming, then strip the
 	// state so a later back-navigation to this history entry doesn't reopen the
 	// rename box on a note the user already named.
+	//
+	// It has to wait for the NEW note to be the committed one. Spending it on
+	// whatever is still on screen opens a rename box holding the previous note's
+	// name and clears the flag, so Enter renames that note and the new one never
+	// enters rename mode at all.
 	const location = useLocation();
 	const justCreated = Boolean((location.state as { justCreated?: boolean } | null)?.justCreated);
 	useEffect(() => {
-		if (!(justCreated && noteId)) {
+		if (!(justCreated && shownId && shownId === validId)) {
 			return;
 		}
-		setRenaming({ id: noteId, at: "title" });
+		setRenaming({ id: shownId, at: "title" });
 		navigate(location.pathname, { replace: true, state: {} });
-	}, [justCreated, noteId, navigate, location.pathname]);
+	}, [justCreated, shownId, validId, navigate, location.pathname]);
 
 	// The draft belongs to the note you are looking at, not to the page, which
 	// stays mounted across note switches. Adjusted during render rather than in
 	// an effect — React's documented pattern for resetting state on a prop
 	// change, and it avoids rendering the stale draft for one frame.
-	const [draftNoteId, setDraftNoteId] = useState(noteId);
-	if (draftNoteId !== noteId) {
-		setDraftNoteId(noteId);
+	const [draftNoteId, setDraftNoteId] = useState(shownId);
+	if (draftNoteId !== shownId) {
+		setDraftNoteId(shownId);
 		setFrontmatterDraft(false);
 	}
 
@@ -299,16 +344,32 @@ export default function NotePage() {
 	if (validId === null) {
 		return <p className="p-6 text-destructive">Invalid note id.</p>;
 	}
-	if (isLoading) {
-		return <LoadingPane />;
-	}
 	if (error) {
+		// The ROUTED note failed — never paper over that with the held pair. The
+		// note may have just been deleted out from under this route (see
+		// useDeleteNote's invalidateQueries comment).
 		return <p className="p-6 text-destructive">Failed to load note: {error.message}</p>;
 	}
-	if (!note) {
-		return <p className="p-6 text-muted-foreground">Note not found</p>;
+	if (!shown) {
+		// Nothing has ever been committed: this is the cold first open, the one
+		// case where a spinner is the honest answer. A `routedNote` here means its
+		// data has landed and only its doc is outstanding — still a load, not a 404.
+		return routedNote || isLoading ? (
+			<LoadingPane />
+		) : (
+			<p className="p-6 text-muted-foreground">Note not found</p>
+		);
 	}
 
+	// From here down there is exactly ONE note: the committed one. Every
+	// consumer — header path, inline title, rename, kebab actions, properties,
+	// the editor — reads it, so none of them can act on a note whose document
+	// isn't the one on screen.
+	const { note } = shown;
+	// Id-keyed, not a bare boolean: the box belongs to a note, so it closes on
+	// its own when another note becomes the committed one instead of carrying
+	// over onto it.
+	const renamingAt = renaming && renaming.id === note.id ? renaming.at : null;
 	const name = noteName(note.path);
 	const titlePath = note.folder ? `${note.folder}/${name}` : name;
 	const commitRename = (next: string) => {
