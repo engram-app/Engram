@@ -68,7 +68,7 @@ export default function NotePage() {
 	const { itemId: idStr, slug } = useParams();
 	const validId = idStr && idStr.length > 0 ? idStr : null;
 
-	const { data: fetchedNote, isLoading, error } = useNote(validId);
+	const { data: fetchedNote, isLoading, isPlaceholderData, error } = useNote(validId);
 
 	// ── The committed pair ───────────────────────────────────────────────────
 	// INVARIANT: this page NEVER renders one note's chrome over another note's
@@ -99,8 +99,21 @@ export default function NotePage() {
 	//     bought a full-pane spinner on every refresh.
 	// Every SUBSEQUENT swap still demands both halves — that is where a mismatch
 	// could put keystrokes in the wrong note's document.
+	// ...and one way a committed pair may be REFRESHED rather than swapped: the
+	// same note id, with no doc committed yet. That is the vault-tree placeholder
+	// being replaced by the fetched note (content, tags, links), and without it
+	// the stub would spend the `displayed === null` allowance above and then hold
+	// the pane hostage — the real note could never commit until a handle opened,
+	// and never at all if openDoc stalled, with no spinner or stall notice to say
+	// so. Requiring `displayed.handle === null` keeps it a refresh and not a swap:
+	// same note, no live document to mismatch against.
+	const isSameNoteRefresh =
+		routedNote !== null && displayed !== null && displayed.handle === null
+			? displayed.note.id === routedNote.id
+			: false;
 	const ready: Displayed | null =
-		routedNote && (openedHandle !== null || openId === null || displayed === null)
+		routedNote &&
+		(openedHandle !== null || openId === null || displayed === null || isSameNoteRefresh)
 			? { note: routedNote, handle: openedHandle }
 			: null;
 	if (ready && (ready.note !== displayed?.note || ready.handle !== displayed?.handle)) {
@@ -111,6 +124,10 @@ export default function NotePage() {
 	}
 	const shown = ready ?? displayed;
 	const handle = shown?.handle ?? null;
+	// True while the pane is showing the vault-tree stub rather than fetched
+	// data: same note id as the route, but the query is still on placeholder
+	// data. Gates the path-keyed actions below.
+	const chromeIsPlaceholder = isPlaceholderData && shown?.note.id === validId && !shown.handle;
 
 	const { data: manifest } = useSyncManifest();
 	const { setSlot } = useRightTools();
@@ -467,6 +484,21 @@ export default function NotePage() {
 	// own dialog reducer). The portable parts — the action list and the dialog
 	// components — are already reused. See the design spec.
 	const handleAction = (action: ActionId) => {
+		// Path-keyed mutations must not fire off the vault-tree placeholder. Its
+		// `path` comes from a cache with no freshness guarantee, so if the note
+		// was renamed or moved on another device and the tree hasn't refetched,
+		// rename/move/duplicate would send a path the server no longer knows —
+		// a 404, or worse a rename computed from the wrong basename. The window
+		// is short (it closes when the REST note lands) but the menu is on
+		// screen for all of it. Id-keyed actions (delete, view modes, copy) are
+		// unaffected and stay live.
+		if (
+			chromeIsPlaceholder &&
+			(action === "rename" || action === "move" || action === "duplicate")
+		) {
+			toast.info("Still loading this note — try again in a moment");
+			return;
+		}
 		switch (action) {
 			case "view-rendered":
 				setMode("rendered");

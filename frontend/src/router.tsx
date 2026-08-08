@@ -38,9 +38,6 @@ const OnboardRedirect = lazy(() =>
 	import("./onboarding/onboard-entry").then((m) => ({ default: m.OnboardRedirect })),
 );
 const Dashboard = lazy(() => import("./viewer/dashboard"));
-// /:slug/:itemId resolves to the note OR attachment viewer (VaultItemPage owns
-// the lazy NotePage/AttachmentPage chunks).
-
 const VaultRoute = lazy(() => import("./viewer/vault-route"));
 const VaultRedirect = lazy(() => import("./viewer/vault-redirect"));
 const LegacyNoteRedirect = lazy(() => import("./viewer/legacy-note-redirect"));

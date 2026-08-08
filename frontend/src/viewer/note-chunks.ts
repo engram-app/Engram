@@ -1,4 +1,4 @@
-import { type ComponentType, createElement, use } from "react";
+import { type ComponentType, createElement, lazy, useState } from "react";
 
 /**
  * The lazy chunks on the path to reading a note, and one call to warm them.
@@ -22,23 +22,39 @@ import { type ComponentType, createElement, use } from "react";
  * This is not the same as calling `import()` next to a `React.lazy` with the
  * same specifier. `lazy` tracks its own status independently of the ES module
  * registry: it only records the component after IT invokes the factory during
- * render. So a bare preload leaves the module cached but `lazy` still
- * suspends on first render, paints its fallback, and re-renders — measured at
- * ~760ms of full-pane spinner even with the chunk already fetched (#1317).
+ * render, so a bare preload leaves the module cached and `lazy` still suspends
+ * on first render, paints its fallback and re-renders.
  *
- * Here the resolved component lives in a cache the preload fills, so once
- * warm the first render returns it synchronously and no boundary ever shows.
- * Cold, `use()` suspends exactly like `lazy` did — the Suspense boundaries
- * around these stay load-bearing for the cold path and for preload failures.
+ * How large that window is depends on the environment — the ~760ms of
+ * full-pane spinner that motivated this was measured against the Vite DEV
+ * server, where a chunk is a module graph served request-per-file; a
+ * production build with the chunk already evaluated should be far closer to a
+ * single tick. What this buys unconditionally is the GUARANTEE: a warmed
+ * component renders synchronously, so no fallback can appear at all, in any
+ * environment. That property is pinned by note-chunks.test.tsx.
+ *
+ * Cold, it IS `React.lazy` — the Suspense boundaries around these stay
+ * load-bearing for the cold path and for preload failures.
  */
 function preloadable<P extends object>(load: () => Promise<{ default: ComponentType<P> }>) {
 	let loaded: ComponentType<P> | null = null;
 	let inFlight: Promise<void> | null = null;
 
-	const start = (): Promise<void> => {
-		// Retry on a later render if the fetch failed (offline, stale deploy):
-		// clearing inFlight is what lets the Suspense path try again instead of
-		// re-throwing the same rejected promise forever.
+	// The cold path is plain React.lazy — no reason to reimplement suspense.
+	const Lazy = lazy(async () => {
+		const m = await load();
+		loaded = m.default;
+		return m;
+	});
+
+	const preload = (): Promise<void> => {
+		// Clearing inFlight on failure lets a later render call load() again
+		// rather than re-throwing one dead promise forever. Be honest about the
+		// ceiling: if the FETCH itself failed, the browser caches that failure in
+		// the module map and every retry rejects instantly from cache — only a
+		// document reload clears it, which is what main.tsx's stale-deploy
+		// self-heal is for. This retry only recovers the cases that fail after
+		// the module resolved.
 		inFlight ??= load()
 			.then((m) => {
 				loaded = m.default;
@@ -51,18 +67,15 @@ function preloadable<P extends object>(load: () => Promise<{ default: ComponentT
 	};
 
 	const Component = (props: P) => {
-		if (!loaded) {
-			// Conditional `use` is explicitly allowed, unlike a hook. On an
-			// already-resolved promise it returns synchronously without suspending.
-			use(start());
-		}
-		if (!loaded) {
-			throw new Error("preloadable: resolved without a component");
-		}
-		return createElement(loaded as ComponentType<P>, props);
+		// Decided ONCE per mount. Reading `loaded` on every render would swap the
+		// element type from Lazy to the concrete component the moment a preload
+		// landed mid-life, and React remounts the whole subtree on an element-type
+		// change — which for NotePage means tearing down a live editor.
+		const [Impl] = useState<ComponentType<P>>(() => loaded ?? (Lazy as ComponentType<P>));
+		return createElement(Impl, props);
 	};
 
-	return { Component, preload: start };
+	return { Component, preload };
 }
 
 const vaultItemPage = preloadable(() => import("./vault-item-page"));

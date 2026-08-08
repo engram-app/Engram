@@ -5,6 +5,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
+import { useCallback } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { collideBump } from "@/lib/collide-bump";
@@ -738,6 +739,10 @@ export function useVaultTree() {
 export function useNote(id: string | null) {
 	const vaultId = useActiveVaultId();
 	const qc = useQueryClient();
+	const placeholder = useCallback(
+		(prev: Note | undefined) => prev ?? noteFromVaultTree(qc, vaultId, id),
+		[qc, vaultId, id],
+	);
 	return useQuery({
 		queryKey: ["note", vaultId, id],
 		queryFn: () => fetchNoteById(id as string),
@@ -755,7 +760,12 @@ export function useNote(id: string | null) {
 		// nothing and the spinner won. The vault tree already knows this note's
 		// id, path and title, so the chrome can render immediately and only the
 		// body waits (#1317 — measured as a full-pane loading circle).
-		placeholderData: (prev: Note | undefined) => prev ?? noteFromVaultTree(qc, vaultId, id),
+		// useCallback, not an inline arrow: query-core reuses the previous
+		// placeholder only when this option is reference-equal to last render's,
+		// so a fresh arrow re-ran the whole-vault `notes.find` scan plus a
+		// deep-equal on EVERY render for the duration of the fetch — an O(notes)
+		// walk on the exact frame budget this is meant to protect.
+		placeholderData: placeholder,
 	});
 }
 

@@ -126,6 +126,20 @@ export default function AppLayout() {
 	// never competes with the initial render; setTimeout for Safari, which
 	// still lacks it.
 	useEffect(() => {
+		// Respect an explicit data-saver signal and genuinely slow links: the
+		// editor chunk alone is ~1.3 MB, and a user who signed in to check
+		// billing or settings never opens a note. On a slow link the preload
+		// would also contend with the bootstrap/vault-tree requests that gate
+		// the sidebar, making the tree paint LATER for exactly those users.
+		const conn = (
+			navigator as Navigator & {
+				connection?: { saveData?: boolean; effectiveType?: string };
+			}
+		).connection;
+		if (conn?.saveData || conn?.effectiveType === "slow-2g" || conn?.effectiveType === "2g") {
+			return;
+		}
+
 		const idle = window.requestIdleCallback;
 		if (typeof idle === "function") {
 			const handle = idle(() => preloadNoteChunks());
