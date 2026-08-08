@@ -41,8 +41,18 @@ vi.mock("./note-view", () => ({
 // the real gesture is covered in editor/frontmatter-shortcut.test.ts.
 const { shortcutAnswer } = vi.hoisted(() => ({ shortcutAnswer: vi.fn() }));
 vi.mock("./note-editor", () => ({
-	default: ({ onFrontmatterShortcut }: { onFrontmatterShortcut?: () => boolean }) => (
+	default: ({
+		ytext,
+		onFrontmatterShortcut,
+	}: {
+		ytext: { toString: () => string };
+		onFrontmatterShortcut?: () => boolean;
+	}) => (
 		<div data-testid="note-editor">
+			{/* The document this editable surface is actually bound to. The whole
+			    invariant is that it can never belong to a different note than the
+			    chrome above it, so the tests need to see it. */}
+			<span data-testid="editor-text">{ytext.toString()}</span>
 			<button
 				type="button"
 				data-testid="type-frontmatter-fence"
@@ -118,6 +128,16 @@ const NOTE = {
 	content: "# hi",
 	tags: [],
 	version: 1,
+};
+const NOTE2 = { ...NOTE, id: "note-2", path: "folder/other.md", title: "other" };
+
+// A doc whose text names the note it belongs to, so a test can tell WHICH
+// document the mounted editor is bound to.
+const docWith = (text: string) => {
+	const doc = new Y.Doc();
+	const ytext = doc.getText("content");
+	ytext.insert(0, text);
+	return { ytext, awareness: new Awareness(doc), doc };
 };
 
 describe("NotePage (CRDT)", () => {
@@ -208,6 +228,174 @@ describe("NotePage (CRDT)", () => {
 		expect(await screen.findByText("Connecting…")).toBeInTheDocument();
 		expect(screen.queryByTestId("note-editor")).not.toBeInTheDocument();
 		expect(closeDoc).toHaveBeenCalledWith("note-1");
+	});
+
+	// ONE committed pair — note data + doc handle — advances only when both are
+	// ready for the SAME note id. Until then the previous note keeps the pane
+	// whole, chrome included. Rendering note B's identity over note A's live,
+	// editable document is the class of bug these cover.
+	describe("committed pair invariant", () => {
+		// Router navigation without a remount, which is what React Router does to
+		// this page: the params change, the query serves whatever it has.
+		const navTo = (note: typeof NOTE) => {
+			paramsMock.itemId = note.id;
+			useNoteMock.mockReturnValue({ data: note, isLoading: false, error: null });
+		};
+
+		// Defect 1. openDoc parks in waitForSessionStart until a CRDT session
+		// starts, so after a vault switch / token refresh / sign-out it can hang
+		// FOREVER — the `if (!h)` fallback never fires because the promise never
+		// resolves. Showing B's chrome over A's editable doc for that whole time
+		// means every keystroke commits into A and is pushed as an edit to A.
+		it("keeps the previous note whole when the next note's doc never opens", async () => {
+			openDoc.mockResolvedValue(docWith("one body"));
+			const { rerender } = renderPage();
+			await screen.findByTestId("note-editor");
+
+			openDoc.mockImplementation(() => new Promise(() => {}));
+			navTo(NOTE2);
+			rerender(pageTree());
+			await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-2"));
+
+			// Chrome and document must name the same note. Honest and consistent:
+			// the pane is still note-1, all of it.
+			expect(screen.getByTestId("editor-text")).toHaveTextContent("one body");
+			expect(screen.getByTestId("header-note-name")).toHaveTextContent("note");
+			expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("note");
+			expect(screen.queryByText("other")).not.toBeInTheDocument();
+		});
+
+		// Defect 2. A late openDoc that the page has moved on from used to close
+		// its own doc checking only "what does the page want open" — which, after
+		// navigating away and back, is the doc the mounted editor is bound to.
+		// Y.Doc.destroy() clears observers, so keystrokes are silently dropped.
+		it("does not close the doc the mounted editor is bound to", async () => {
+			const pending: Record<string, ((h: unknown) => void)[]> = {};
+			openDoc.mockImplementation(
+				(id: string) =>
+					new Promise((resolve) => {
+						(pending[id] ??= []).push(resolve);
+					}),
+			);
+			const { rerender } = renderPage();
+			await waitFor(() => expect(pending["note-1"]).toHaveLength(1));
+			await act(async () => pending["note-1"][0](docWith("one body")));
+			await screen.findByTestId("note-editor");
+
+			// note-1 → note-2 → note-1 → note-2, none of the later opens landing.
+			navTo(NOTE2);
+			rerender(pageTree());
+			await waitFor(() => expect(pending["note-2"]).toHaveLength(1));
+			navTo(NOTE);
+			rerender(pageTree());
+			await waitFor(() => expect(pending["note-1"]).toHaveLength(2));
+			navTo(NOTE2);
+			rerender(pageTree());
+			await waitFor(() => expect(pending["note-2"]).toHaveLength(2));
+
+			// The stale note-1 open lands. The page wants note-2 — but note-1 is
+			// what the editor on screen is bound to, so closing it destroys a live
+			// document out from under the binding.
+			await act(async () => pending["note-1"][1](docWith("one body")));
+
+			expect(closeDoc).not.toHaveBeenCalledWith("note-1");
+			expect(screen.getByTestId("editor-text")).toHaveTextContent("one body");
+		});
+
+		// Defect 3. `justCreated` rides one navigation. Consuming it against the
+		// note the user navigated away FROM opens a rename box holding that note's
+		// name and clears the flag, so Enter renames the wrong note and the new
+		// one never enters rename mode at all.
+		it("fires justCreated for the new note, not the one still on screen", async () => {
+			openDoc.mockResolvedValue(docWith("one body"));
+			const { rerender } = renderPage();
+			await screen.findByTestId("note-editor");
+
+			// useCreateNote navigates to the new id with state; its data and doc are
+			// both still in flight.
+			openDoc.mockImplementation(() => new Promise(() => {}));
+			paramsMock.itemId = "note-2";
+			locationMock.mockReturnValue({
+				pathname: "/my-vault/note-2",
+				state: { justCreated: true },
+			});
+			rerender(pageTree());
+			// No openDoc to wait on: the new note's data has not landed, so there is
+			// no path to gate the markdown check on yet. Flush effects instead.
+			await act(async () => {});
+
+			expect(screen.queryByRole("textbox", { name: "Rename file" })).not.toBeInTheDocument();
+
+			// New note lands, doc and all — NOW the flag is spent, on it.
+			openDoc.mockResolvedValue(docWith("two body"));
+			navTo(NOTE2);
+			rerender(pageTree());
+
+			const input = await screen.findByRole("textbox", { name: "Rename file" });
+			expect(input).toHaveValue("other");
+			fireEvent.change(input, { target: { value: "named" } });
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(renameNoteMutate).toHaveBeenCalledWith({
+				id: "note-2",
+				old_path: "folder/other.md",
+				new_path: "folder/named.md",
+			});
+		});
+
+		// Defect 4. Kebab actions have no confirmation step (only Delete does), so
+		// running one against a note the user navigated away from is a silent
+		// wrong-target write.
+		it("runs kebab actions against the note whose document is on screen", async () => {
+			openDoc.mockResolvedValue(docWith("one body"));
+			const { rerender } = renderPage();
+			await screen.findByTestId("note-editor");
+
+			openDoc.mockImplementation(() => new Promise(() => {}));
+			navTo(NOTE2);
+			rerender(pageTree());
+			await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-2"));
+
+			await openMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+			expect(duplicateNoteMutate).toHaveBeenCalledWith(
+				expect.objectContaining({ src_path: "folder/note.md" }),
+				expect.anything(),
+			);
+		});
+
+		// Defect 5. closeDoc destroys the Y.Doc. Running it in the same tick as
+		// the state update that swaps the handle leaves the outgoing EditorView
+		// holding a destroyed doc until React commits.
+		it("closes the outgoing doc only after the swap is committed", async () => {
+			const boundAtClose: string[] = [];
+			closeDoc.mockImplementation((id: string) => {
+				if (id === "note-1") {
+					boundAtClose.push(
+						document.querySelector('[data-testid="editor-text"]')?.textContent ?? "",
+					);
+				}
+			});
+			openDoc.mockResolvedValue(docWith("one body"));
+			const { rerender } = renderPage();
+			await screen.findByTestId("note-editor");
+
+			let landNote2: (h: unknown) => void = () => {};
+			openDoc.mockImplementation(
+				() =>
+					new Promise((resolve) => {
+						landNote2 = resolve;
+					}),
+			);
+			navTo(NOTE2);
+			rerender(pageTree());
+			await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-2"));
+
+			await act(async () => landNote2(docWith("two body")));
+
+			await waitFor(() => expect(closeDoc).toHaveBeenCalledWith("note-1"));
+			// note-2 was already on screen when the old doc was released.
+			expect(boundAtClose).toEqual(["two body"]);
+		});
 	});
 
 	it("closes the doc on unmount, keyed by note_id", async () => {
