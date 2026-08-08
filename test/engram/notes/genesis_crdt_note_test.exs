@@ -233,6 +233,29 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200
   end
 
+  test "an id owned by ANOTHER vault is re-minted, not dropped", %{user: user, vault: vault} do
+    {:ok, other} = Vaults.create_vault(user, %{name: "GenesisTestB"})
+
+    {:ok, in_a} =
+      Notes.upsert_note(user, vault, %{"path" => "Notes/copied.md", "content" => "vault A"})
+
+    # The vault-copy scenario the user hit: switch the plugin to a fresh vault
+    # and push notes still carrying the ORIGINAL vault's ids. classify_by_id is
+    # vault-scoped so this reads as :none, the path is free in the new vault, and
+    # the insert lands on the GLOBAL primary key. It used to vanish here.
+    assert {:ok, created} = Notes.genesis_crdt_note(user, other, in_a.id, "Notes/copied.md")
+
+    refute created.id == in_a.id
+    assert Notes.note_in_vault?(user, other.id, created.id)
+    assert {:ok, in_b} = Notes.get_note(user, other, "Notes/copied.md")
+    assert in_b.id == created.id
+
+    # The owning vault keeps its note untouched.
+    {:ok, still_a} = Notes.get_note(user, vault, "Notes/copied.md")
+    assert still_a.id == in_a.id
+    assert still_a.content == "vault A"
+  end
+
   defp fetch_id_by_path(user, vault, path) do
     case Notes.get_note(user, vault, path) do
       {:ok, n} -> {:ok, n.id}

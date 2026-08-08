@@ -212,4 +212,54 @@ defmodule Engram.NotesClientMintTest do
       assert Engram.UsageMeters.notes_count(user.id) == 1
     end
   end
+
+  describe "an id already owned by ANOTHER vault" do
+    # Client ids are unique per VAULT by convention but the PK is global. Copy a
+    # vault (ids and all) and sync it into a fresh one and every push carries an
+    # id another vault already owns. Before the re-mint these inserts hit the PK,
+    # were swallowed by ON CONFLICT DO NOTHING, missed the vault-scoped path
+    # re-fetch, and returned "insert raced and vanished" -> a generic
+    # create_failed the client retried forever under the same colliding id. The
+    # notes were dropped, silently and permanently.
+    test "is re-minted so the note lands, leaving the owning vault untouched" do
+      user = insert(:user)
+      vault_a = insert(:vault, user: user)
+      vault_b = insert(:vault, user: user)
+      shared_id = UUIDv7.generate()
+
+      {:ok, in_a} =
+        Engram.Notes.upsert_note(user, vault_a, %{
+          "id" => shared_id,
+          "path" => "copied.md",
+          "content" => "vault A"
+        })
+
+      assert in_a.id == shared_id
+
+      log =
+        capture_log(fn ->
+          {:ok, in_b} =
+            Engram.Notes.upsert_note(user, vault_b, %{
+              "id" => shared_id,
+              "path" => "copied.md",
+              "content" => "vault B"
+            })
+
+          # Landed, under a server-minted id rather than the colliding one.
+          refute in_b.id == shared_id
+          assert {:ok, _} = Ecto.UUID.cast(in_b.id)
+          assert in_b.content =~ "vault B"
+        end)
+
+      # Greppable tripwire: a spike here means clients are pushing foreign ids.
+      assert log =~ "owned by another vault"
+
+      # The vault that owns the id still owns it. Checked by id rather than by
+      # path: this file's factory user has no DEK set up, so the path_hmac
+      # get_note/3 reads by never resolves here (it misses before the second
+      # upsert too) — a harness quirk, not the behaviour under test.
+      assert Engram.Notes.note_in_vault?(user, vault_a.id, shared_id)
+      refute Engram.Notes.note_in_vault?(user, vault_b.id, shared_id)
+    end
+  end
 end

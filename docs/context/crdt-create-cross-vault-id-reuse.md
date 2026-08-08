@@ -121,17 +121,55 @@ Ruled out with evidence during the 2026-08-08 investigation:
 - **Base64 framing.** The plugin uses standard padded `btoa` (`src/crdt/wire.ts:13`), which
   `Base.decode64/1` accepts.
 
-## Fix shape (not yet implemented)
-Two halves:
+## The fix (shipped)
+**Server-side re-mint, in `do_bare_insert` only.** `nil` on the post-insert re-fetch means "our
+insert no-op'd AND no live row owns this path", so the conflict was on the id, not the path. That
+branch now mints a fresh v7 uuid and retries once (a `remint?` flag bounds the recursion). The row
+returns through the normal success path, so the real id reaches the client in the `crdt_create`
+ack's `doc_id` and in the REST body.
 
-1. **Server:** when the insert no-ops and the path lookup returns `nil`, look the id up
-   **globally**. If it belongs to a different vault, reply a distinct, actionable reason (e.g.
-   `id_owned_by_other_vault`) rather than the generic `create_failed`. `"insert raced and
-   vanished"` should be reserved for a genuine race.
-2. **Plugin:** re-mint note ids when enrolling a vault whose ids are already owned elsewhere. A
-   copied vault is a new vault; its notes need new identities.
+Three things made this the right shape, and they are worth preserving if this code is touched
+again:
 
-Add an e2e or integration case covering *new vault + pre-owned ids*, the gap `test_77` leaves.
+- **One leg, every caller.** `do_bare_insert` is shared by REST/MCP/web *and* `crdt_create`. A fix
+  in `crdt_channel` would have left the REST path broken.
+- **No plugin change, and old plugins are repaired too.** The client already handles an ack whose
+  `doc_id` differs from the id it sent: `applyCrdtCreateAck` (`plugin/src/sync.ts`) remaps the
+  note, transfers live keystrokes out of the orphaned mint doc, retires it, and reseeds the body;
+  `pushFile` has the equivalent live adopt. A new error reason code (the original plan) would have
+  fixed only plugins shipped after it.
+- **It does not try to tell a PK collision from a genuine vanished-race**, because it cannot: an
+  id owned by *another user's* vault is invisible to this tenant-scoped connection. Re-minting is
+  correct for both, so the branch treats them the same.
+
+Note the untargeted `ON CONFLICT DO NOTHING` stays. It is load-bearing (it dodges the
+partial-index `conflict_target` fragment-matching footgun, and the transaction-abort class behind
+the test_24 replay flake). The comment above it used to claim `notes_user_vault_path_v2` was the
+only unique index a row could violate; the PK is the one it forgot.
+
+**Tripwire:** `note id already owned elsewhere; re-minting <old> -> <new>` (category `sync`,
+warning). A spike means clients are pushing foreign ids, which is worth understanding even though
+the note now lands.
+
+**Coverage:** `test/engram/notes_client_mint_test.exs` (REST leg) and
+`test/engram/notes/genesis_crdt_note_test.exs` (crdt_create leg) both assert the note lands under
+a new id and the owning vault is untouched. The `test_77` gap (a *new vault* whose notes carry
+*pre-owned ids*) is now covered at the context layer; an e2e over the real change-vault UI flow is
+still missing.
+
+## Still open: where the reused ids come from
+The server no longer loses notes, whatever the client sends, so this is no longer a data-loss
+question. But the client half is **not** explained, and the obvious theory is wrong:
+
+`SyncEngine.wipePerVaultState` **does** clear the note-id map on a vault change (`noteIdMap.clear()`,
+in-place so `main.ts`'s shared instance is really cleared), and both vault-change paths route
+through it: the explicit picker (`resetForVaultChange`) and the backstop
+(`invalidateIfVaultChanged`). After that clear, a push mints fresh uuids, which cannot collide. So
+"the change-vault path forgets to clear the id map" is **ruled out**; do not re-walk it.
+
+What is still unproven is why the reported "Change vault -> create new vault -> sync" run produced
+colliding ids at all. Getting that requires the reason logging in this same change to reach prod
+and a repeat of the flow.
 
 ## Related
 - `docs/context/worker-reads-stale-content-facade.md` (another `crdt_create`-adjacent trap

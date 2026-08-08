@@ -655,7 +655,38 @@ defmodule Engram.Notes do
   # notes_user_vault_path_v2; a bare DO NOTHING (matching the insert_all sites
   # elsewhere in this module) sidesteps the partial-index conflict_target
   # fragment-matching footgun.
-  defp do_bare_insert(base_attrs, user, sanitized_path, folder, note_id, lookup_query) do
+  #
+  # ...but notes_user_vault_path_v2 is NOT the only unique index a row can
+  # violate: the PRIMARY KEY on `id` is one too, and it is GLOBAL while every
+  # lookup here is vault-scoped. A client that pushes a note id already owned by
+  # another vault (copy a vault, keep its ids, sync into a fresh one) therefore
+  # took this route: classify_by_id scopes to the vault and says :none → the path
+  # lookup says nil → INSERT hits the PK → DO NOTHING swallows it → the re-fetch
+  # (path-keyed, vault-scoped) finds nothing → "insert raced and vanished" → a
+  # generic create_failed the client retries forever under the SAME colliding id.
+  # The note was dropped, silently and permanently.
+  #
+  # So `nil` here means "our insert no-op'd AND no live row owns this path" —
+  # the conflict was on the id, not the path. remint_own_id/7 decides from there;
+  # see its comment for which collisions re-mint and which still 422. When it does
+  # re-mint it recurses ONCE (`remint?` bounds it; a fresh v7 uuid cannot collide
+  # again), and the row returns through the normal success path, so the real id
+  # reaches the client in the crdt_create ack's doc_id / the REST body and the
+  # plugin's existing ADOPT path remaps the note to it (sync.ts
+  # applyCrdtCreateAck + pushFile's live adopt).
+  #
+  # Fixing it HERE rather than replying a new error reason is deliberate: this leg
+  # is shared by REST/MCP/web and crdt_create, and re-minting also repairs
+  # already-released plugins, which a new reason code could not.
+  defp do_bare_insert(
+         base_attrs,
+         user,
+         sanitized_path,
+         folder,
+         note_id,
+         lookup_query,
+         remint? \\ true
+       ) do
     with {:ok, crdt} <- maybe_merge_crdt(nil, base_attrs.content, user, note_id),
          merged_attrs = %{
            base_attrs
@@ -687,6 +718,17 @@ defmodule Engram.Notes do
             %Note{} = existing ->
               {:raced, existing}
 
+            nil when remint? ->
+              remint_own_id(
+                base_attrs,
+                user,
+                sanitized_path,
+                folder,
+                note_id,
+                lookup_query,
+                changeset
+              )
+
             nil ->
               {:error, Ecto.Changeset.add_error(changeset, :path, "insert raced and vanished")}
           end
@@ -694,6 +736,53 @@ defmodule Engram.Notes do
         {:error, changeset} ->
           {:error, changeset}
       end
+    end
+  end
+
+  # Reached only when the INSERT no-op'd AND no live row owns the path, i.e. the
+  # conflict was on the id. Whose id decides what happens, and RLS answers that
+  # for free: this connection is scoped to the CURRENT USER, and the lookups that
+  # already failed were scoped to the current VAULT. So a row visible to this
+  # unvaulted query is the same user's, in one of their OTHER vaults; a row that
+  # stays invisible belongs to somebody else.
+  #
+  #   * Another vault of THEIRS -> the vault-copy case. Their own note, a new
+  #     vault, a new identity: re-mint and retry once. Returning an error here is
+  #     what silently dropped 304 notes.
+  #   * Anyone else's -> keep the 422. Deliberate cross-tenant guard, asserted by
+  #     notes_controller_test "rejects a client-supplied id colliding with
+  #     another user's note": a caller must not be able to probe or adopt another
+  #     tenant's PK, and quietly minting them a row on the back of a hijack
+  #     attempt is not a favour worth doing.
+  #
+  # A genuine vanished-race (the winning row deleted between our INSERT and the
+  # re-fetch) leaves nothing visible either, so it takes the reject arm and keeps
+  # the pre-existing behaviour.
+  defp remint_own_id(
+         base_attrs,
+         user,
+         sanitized_path,
+         folder,
+         note_id,
+         lookup_query,
+         changeset
+       ) do
+    if Repo.exists?(from(n in Note, where: n.id == ^note_id)) do
+      fresh_id = mint_id()
+
+      Logger.warning(
+        "note id owned by another vault; re-minting #{note_id} -> #{fresh_id}",
+        Metadata.with_category(:warning, :sync,
+          user_id: user.id,
+          vault_id: base_attrs.vault_id,
+          note_id: note_id,
+          reminted_to: fresh_id
+        )
+      )
+
+      do_bare_insert(base_attrs, user, sanitized_path, folder, fresh_id, lookup_query, false)
+    else
+      {:error, Ecto.Changeset.add_error(changeset, :path, "insert raced and vanished")}
     end
   end
 
