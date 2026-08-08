@@ -14,7 +14,11 @@ function EditorProbe() {
 	return <span data-testid="has-editor">{String(hasEditor)}</span>;
 }
 
-const pageTree = (
+// A FRESH element every time, never one module-level object: re-rendering the
+// same element reference lets React bail out of the whole subtree (props are
+// reference-equal), so every `rerender` after the first is silently a no-op and
+// a navigation test proves nothing. Same trap as folder-tree.test.tsx.
+const pageTree = () => (
 	<RightToolsProvider>
 		<ActiveEditorProvider>
 			<NotePage />
@@ -23,7 +27,7 @@ const pageTree = (
 	</RightToolsProvider>
 );
 
-const renderPage = () => render(pageTree);
+const renderPage = () => render(pageTree());
 
 // NoteView relies on ConfigProvider / billing context not available in this
 // test harness. Mock it so we can assert on the `content` prop directly.
@@ -167,7 +171,7 @@ describe("NotePage (CRDT)", () => {
 			isLoading: false,
 			error: null,
 		});
-		rerender(pageTree);
+		rerender(pageTree());
 
 		// Mid-switch. The previous doc must stay OPEN too, not just rendered: the
 		// mounted yCollab binding would otherwise be writing into a closed doc.
@@ -199,7 +203,7 @@ describe("NotePage (CRDT)", () => {
 			isLoading: false,
 			error: null,
 		});
-		rerender(pageTree);
+		rerender(pageTree());
 
 		expect(await screen.findByText("Connecting…")).toBeInTheDocument();
 		expect(screen.queryByTestId("note-editor")).not.toBeInTheDocument();
