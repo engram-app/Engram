@@ -279,7 +279,11 @@ defmodule EngramWeb.CrdtChannel do
           # Without this the case raised CaseClauseError and crashed the channel.
           # {:error, term()} is in genesis_crdt_note/4's @spec, so dialyzer sees
           # this arm as reachable (it was wrongly removed before on a lying spec).
-          log_create_failed(socket, note_id, inspect(reason))
+          #
+          # error_kind/1, never inspect(reason): this is precisely the crypto/KMS
+          # class, whose error terms can embed a wrapped DEK or an AWS response
+          # body, and RedactFilter scrubs metadata keys only, never the message.
+          log_create_failed(socket, note_id, inspect(Engram.Telemetry.error_kind(reason)))
           {:reply, {:error, %{reason: "create_failed"}}, socket}
       end
     else
@@ -346,7 +350,14 @@ defmodule EngramWeb.CrdtChannel do
                   {:error, :room_limit} ->
                     {{:result, %{doc_id: note_id, status: "error", reason: "room_limit"}}, sock}
 
-                  _ ->
+                  other ->
+                    # Same discipline as prepare_create's catch-all: this arm is
+                    # the last thing between a room-enrollment failure and an
+                    # unexplainable create_failed on the client, and the row is
+                    # already committed by the time we get here, so a silent drop
+                    # leaves a 0-byte note nobody can account for.
+                    log_enroll_failed(sock, note_id, other)
+
                     {{:result, %{doc_id: note_id, status: "error", reason: "create_failed"}},
                      sock}
                 end
@@ -556,9 +567,16 @@ defmodule EngramWeb.CrdtChannel do
          :ok <- validate_create_path(path),
          {:ok, frame} <- decode_frame(b64),
          :ok <- guard_frame(frame),
-         {:ok, _note} <-
+         {:ok, note} <-
            Notes.genesis_crdt_note(user, vault, note_id, path, origin: client_type) do
-      {:created, note_id, frame}
+      # note.id, NOT the note_id we sent: genesis re-mints when the client's id is
+      # already owned by another of this user's vaults (the vault-copy case).
+      # Forwarding the sent id here stranded the whole batch leg of that fix --
+      # phase 2's ensure_room resolves by note_in_vault?, which is false for the
+      # foreign id, so every re-minted entry fell into the create_failed arm below,
+      # its content frame was dropped, and the row committed empty. The single
+      # crdt_create above always replied note.id; this leg has to match it.
+      {:created, note.id, frame}
     else
       {:error, :id_conflict, note} ->
         {:result, %{doc_id: note.id, status: "error", reason: "id_conflict"}}
@@ -588,8 +606,13 @@ defmodule EngramWeb.CrdtChannel do
         # Never swallow the reason: this arm is the only thing standing between
         # a genuine create failure and an unexplainable "create_failed" on the
         # client. Same discipline as log_entry_failure/2 below.
+        #
+        # Narrowed to error_kind/1 rather than inspect(other): `other` here is
+        # frequently {:error, %Ecto.Changeset{}}, and inspecting the changeset
+        # whole dumps its `changes` -- every ciphertext blob on the note -- into
+        # Loki. Only metadata keys are redacted, never the message body.
         Logger.warning(
-          "crdt_create_batch prepare failed: #{inspect(other)}",
+          "crdt_create_batch prepare failed: #{inspect(Engram.Telemetry.error_kind(other))}",
           Metadata.with_category(:warning, :websocket,
             doc_id: doc_id,
             user_id: user.id,
@@ -823,6 +846,27 @@ defmodule EngramWeb.CrdtChannel do
   defp log_create_failed(socket, note_id, reason) do
     Logger.warning(
       "crdt_create failed: #{reason}",
+      Metadata.with_category(:warning, :websocket,
+        note_id: note_id,
+        user_id: socket.assigns.current_user.id,
+        vault_id: socket.assigns.vault.id
+      )
+    )
+  end
+
+  # ensure_room/2 only ever fails as {:error, atom}, so that reason is safe to
+  # name verbatim. Anything else goes through error_kind/1 rather than inspect,
+  # per Engram.Telemetry's "never forward the raw reason": an arbitrary error
+  # term can carry key material, and only metadata keys are redacted.
+  defp log_enroll_failed(socket, note_id, error) do
+    reason =
+      case error do
+        {:error, atom} when is_atom(atom) -> atom
+        other -> Engram.Telemetry.error_kind(other)
+      end
+
+    Logger.warning(
+      "crdt_create_batch room enrollment failed: #{inspect(reason)}",
       Metadata.with_category(:warning, :websocket,
         note_id: note_id,
         user_id: socket.assigns.current_user.id,

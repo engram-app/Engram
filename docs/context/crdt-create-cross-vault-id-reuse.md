@@ -3,9 +3,10 @@
 _Last verified: 2026-08-08_
 
 ## Status
-Root cause proven with a minimal reproduction against local dev. Logging fix committed
-(`fix/crdt-create-silent-failure`). The behavioural fix (server reason + plugin re-mint) is
-NOT yet implemented.
+**Fixed** in PR #1318 (`fix/crdt-create-silent-failure`): root cause proven with a minimal
+reproduction against local dev, then closed server-side by re-minting a colliding note id. See
+"The fix (shipped)" below for the shape and for what is deliberately NOT covered. One question
+remains open (why the client sent colliding ids at all), and it is tracked at the end of this doc.
 
 ## Symptom
 A first-time full-vault sync into a **brand-new vault** fails for *every* note. The client logs,
@@ -126,15 +127,22 @@ Ruled out with evidence during the 2026-08-08 investigation:
 insert no-op'd AND no live row owns this path", so the conflict was on the id, not the path.
 `remint_own_id/7` then decides, and it does **not** re-mint unconditionally:
 
-- **Another vault of the SAME user** (the vault-copy case): mint a fresh v7 uuid and retry once (a
-  `remint?` flag bounds the recursion). The row returns through the normal success path, so the
-  real id reaches the client in the `crdt_create` ack's `doc_id` and in the REST body.
-- **Another USER's row, or a genuine vanished-race**: unchanged, still the 422.
+- **A row this user can see** (the vault-copy case, but see below): mint a fresh v7 uuid and retry
+  once (a `remint?` flag bounds the recursion). The row returns through the normal success path,
+  so the real id reaches the client in the `crdt_create` ack's `doc_id` and in the REST body.
+- **A row they cannot** (another USER's): unchanged, still the 422.
 
 RLS is what makes the two cheap to tell apart, and it is the whole trick: the connection is scoped
 to the current *user* while the lookups that already failed were scoped to the current *vault*. So
 one extra unvaulted `Repo.exists?` by id, run only in this rare branch, answers "is this mine?"
 without an RLS bypass and without a query on the hot path.
+
+**The probe filters on the id and nothing else, deliberately.** Not `kind`: an attachment or
+folder-marker row of theirs occupies the PK just as hard as a note does (the id space is shared),
+and the note still has to land. Not `deleted_at`: a tombstone still owns the PK. So a same-vault
+attachment collision, and a genuine vanished-race whose winner was tombstoned between the INSERT
+and the live-only re-fetch, both land in the re-mint arm too. Re-minting is the right outcome for
+all three, but it is why the tripwire says "already taken" rather than naming a cause.
 
 Four things made this the right shape, and they are worth preserving if this code is touched
 again:
@@ -142,10 +150,18 @@ again:
 - **One leg, every caller.** `do_bare_insert` is shared by REST/MCP/web *and* `crdt_create`. A fix
   in `crdt_channel` would have left the REST path broken.
 - **No plugin change, and old plugins are repaired too.** The client already handles an ack whose
-  `doc_id` differs from the id it sent: `applyCrdtCreateAck` (`plugin/src/sync.ts`) remaps the
-  note, transfers live keystrokes out of the orphaned mint doc, retires it, and reseeds the body;
-  `pushFile` has the equivalent live adopt. A new error reason code (the original plan) would have
-  fixed only plugins shipped after it.
+  `doc_id` differs from the id it sent, on BOTH create legs: `applyCrdtCreateAck` for a queued
+  create (remaps, transfers live keystrokes out of the orphaned mint doc, retires it, reseeds the
+  body), `pushFile` for the live one, and the batch leg via
+  `recordCrdtGenesisPushed -> adoptCreateAck`, which remaps `path -> serverId`. The batch leg needs
+  no doc retirement to go with that remap, unlike the other two: `encodeGenesisFrame` builds its
+  frame from a throwaway `Y.Doc` that `encodeGenesisUpdate` destroys in a `finally`, so no doc is
+  ever persisted under the local mint id and there is nothing to orphan. A new error reason code
+  (the original plan) would have fixed only plugins shipped after it.
+- **Both server create legs must forward the CREATED id, not the sent one.** `crdt_create` always
+  replied `note.id`; `crdt_create_batch`'s `prepare_create/4` bound `{:ok, _note}` and forwarded
+  the id it was given. That stranded the entire bulk path (see below) and code review caught it,
+  not the tests. If a third create leg is ever added, this is the invariant to check first.
 - **The cross-tenant guard is deliberate, not collateral.** `notes_controller_test` "rejects a
   client-supplied id colliding with another user's note" asserts the 422, and its comment
   explicitly rejects "silently falling back to a server-minted id". A first cut of this fix
@@ -159,15 +175,25 @@ partial-index `conflict_target` fragment-matching footgun, and the transaction-a
 the test_24 replay flake). The comment above it used to claim `notes_user_vault_path_v2` was the
 only unique index a row could violate; the PK is the one it forgot.
 
-**Tripwire:** `note id owned by another vault; re-minting <old> -> <new>` (category `sync`,
-warning). A spike means clients are pushing ids from a vault they no longer sync to, which is
-worth understanding even though the note now lands.
+**The bulk leg was the one that mattered, and it nearly shipped broken.** A first-time sync pushes
+notes through `crdt_create_batch`, not one-at-a-time `crdt_create`, so the batch leg IS the
+incident path. `prepare_create/4` re-minted correctly (the DB row landed) but returned the id the
+client sent. Phase 2's `ensure_room` resolves via `note_in_vault?`, which is false for the foreign
+id, so every re-minted entry fell into the `create_failed` arm, **its content frame was dropped,
+and the row committed empty** -- a 0-byte note that a peer then materialises over its own copy.
+Strictly worse than the original bug. Fixed by binding `{:ok, note}` and returning `note.id`.
 
-**Coverage:** `test/engram/notes_client_mint_test.exs` (REST leg) and
-`test/engram/notes/genesis_crdt_note_test.exs` (crdt_create leg) both assert the note lands under
-a new id and the owning vault is untouched. The `test_77` gap (a *new vault* whose notes carry
-*pre-owned ids*) is now covered at the context layer; an e2e over the real change-vault UI flow is
-still missing.
+**Tripwire:** `note id already taken; re-minting <old> -> <new>` (category `sync`, warning).
+Deliberately does not name a cause: see the probe note above for the three collisions that reach
+it. Worth understanding on a spike even though the note now lands.
+
+**Coverage:** `notes_client_mint_test.exs` (REST leg), `notes/genesis_crdt_note_test.exs`
+(`crdt_create` leg), and `crdt_channel_test.exs` "an id owned by another of the user's vaults is
+re-minted, with content" (the `crdt_create_batch` leg, over the real channel). The last one
+asserts the CONTENT, not just an `ok` status -- status alone passes against the empty-row bug
+above. Verified to fail with the fix reverted. Still missing: an e2e over the real change-vault UI
+flow, and `test_77_bulk_first_sync.py` still writes fresh ids into an existing vault, so it would
+not catch a regression here.
 
 ## Still open: where the reused ids come from
 The server no longer loses notes, whatever the client sends, so this is no longer a data-loss

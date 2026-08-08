@@ -746,18 +746,28 @@ defmodule Engram.Notes do
   # unvaulted query is the same user's, in one of their OTHER vaults; a row that
   # stays invisible belongs to somebody else.
   #
-  #   * Another vault of THEIRS -> the vault-copy case. Their own note, a new
-  #     vault, a new identity: re-mint and retry once. Returning an error here is
-  #     what silently dropped 304 notes.
-  #   * Anyone else's -> keep the 422. Deliberate cross-tenant guard, asserted by
-  #     notes_controller_test "rejects a client-supplied id colliding with
-  #     another user's note": a caller must not be able to probe or adopt another
-  #     tenant's PK, and quietly minting them a row on the back of a hijack
-  #     attempt is not a favour worth doing.
+  #   * Visible, so theirs -> re-mint and retry once. The headline case is the
+  #     vault copy (their own note, a new vault, a new identity); returning an
+  #     error here is what silently dropped 304 notes.
+  #   * Invisible, so someone else's -> keep the 422. Deliberate cross-tenant
+  #     guard, asserted by notes_controller_test "rejects a client-supplied id
+  #     colliding with another user's note": a caller must not be able to probe
+  #     or adopt another tenant's PK, and quietly minting them a row on the back
+  #     of a hijack attempt is not a favour worth doing.
   #
-  # A genuine vanished-race (the winning row deleted between our INSERT and the
-  # re-fetch) leaves nothing visible either, so it takes the reject arm and keeps
-  # the pre-existing behaviour.
+  # The probe filters on NOTHING but the id, and that is deliberate on both axes.
+  # It does not filter `kind`, because an attachment or folder-marker row of
+  # theirs occupies the PK just as hard as a note does (the id space is shared)
+  # and the note still has to land; classify_by_id's `kind == "note"` scope is
+  # why such a row reaches here as :none in the first place. It does not filter
+  # `deleted_at` either, because a tombstone still owns the PK.
+  #
+  # So the tripwire says "already taken", not "owned by another vault": a
+  # same-vault attachment collision and a genuine vanished-race (the winning row
+  # tombstoned between our INSERT and the live-only re-fetch) both land here and
+  # both re-mint. That is the right outcome for all three -- the caller's note
+  # lands under an id nobody owns -- but do not read a spike as proof that
+  # clients are pushing foreign vault ids.
   defp remint_own_id(
          base_attrs,
          user,
@@ -771,7 +781,7 @@ defmodule Engram.Notes do
       fresh_id = mint_id()
 
       Logger.warning(
-        "note id owned by another vault; re-minting #{note_id} -> #{fresh_id}",
+        "note id already taken; re-minting #{note_id} -> #{fresh_id}",
         Metadata.with_category(:warning, :sync,
           user_id: user.id,
           vault_id: base_attrs.vault_id,

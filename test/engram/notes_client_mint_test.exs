@@ -252,7 +252,7 @@ defmodule Engram.NotesClientMintTest do
         end)
 
       # Greppable tripwire: a spike here means clients are pushing foreign ids.
-      assert log =~ "owned by another vault"
+      assert log =~ "already taken"
 
       # The vault that owns the id still owns it. Checked by id rather than by
       # path: this file's factory user has no DEK set up, so the path_hmac
