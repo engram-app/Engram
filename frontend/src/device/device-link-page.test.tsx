@@ -107,6 +107,13 @@ describe("DeviceLinkPage", () => {
 		expect(screen.getByText(/sign in to link/iu)).toBeInTheDocument();
 	});
 
+	// The code field is the only thing to do on this step — you shouldn't have to
+	// click into it before typing the code you came here to type.
+	it("focuses the code field on arrival", () => {
+		renderPage();
+		expect(screen.getByPlaceholderText(/XXXX-XXXX/iu)).toHaveFocus();
+	});
+
 	it("rejects a code that is not 8 characters", () => {
 		renderPage();
 		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ABC" } });

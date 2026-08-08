@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FolderTreeProvider } from "../layout/folder-tree-context";
 import FolderTree from "./folder-tree";
@@ -56,6 +56,10 @@ const {
 		rootNotes: [] as unknown[],
 		loading: false,
 		attachments: [] as unknown[],
+		// What useNote hands back for the routed note id. `useNote` keeps the
+		// PREVIOUS note's data while the next one loads, so this can legitimately
+		// be a different note than the URL names — see the auto-expand test.
+		activeNote: undefined as unknown,
 	},
 }));
 
@@ -69,6 +73,7 @@ vi.mock("../api/queries", async () => {
 			isError: false,
 		}),
 		useAttachments: () => ({ data: mock.attachments, isLoading: false }),
+		useNote: () => ({ data: mock.activeNote, isLoading: false, error: null }),
 		useFolderNotesById: (folderId: string | null) => {
 			// Root notes share the one id-keyed cache under the 'root' sentinel.
 			if (folderId === "root") {
@@ -157,6 +162,7 @@ beforeEach(() => {
 	mock.rootNotes = [{ ...DEFAULT_ROOT_NOTE }];
 	mock.loading = false;
 	mock.attachments = [];
+	mock.activeNote = undefined;
 });
 
 describe("FolderTree (HT)", () => {
@@ -448,5 +454,65 @@ describe("FolderTree (HT)", () => {
 		renderTree();
 		// Base name only — the extension renders as a separate badge.
 		expect(await screen.findByText("cover")).toBeInTheDocument();
+	});
+
+	// The auto-expand effect fires ONCE per selected note id. `useNote` keeps the
+	// previous note's data on screen while the next one loads, so for a moment
+	// the routed id and the loaded note disagree — spending the one shot on the
+	// stale note expands the wrong ancestry and latches the right one out.
+	it("auto-expands the folder of the routed note, not of a stale one", async () => {
+		// The URL already points at Projects/spec.md; the loaded note is still the
+		// one the user came from, which lives somewhere else entirely.
+		mock.activeNote = { ...DEFAULT_ROOT_NOTE, id: "7", path: "archive/old.md", folder: "archive" };
+		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		qc.setQueryData(["folder-notes-by-id", "", "root"], mock.rootNotes);
+		// The loader reads note children from the cache, not from the hook — seed
+		// Projects' one note so an expand actually renders a row.
+		qc.setQueryData(
+			["folder-notes-by-id", "", "1"],
+			[{ ...DEFAULT_ROOT_NOTE, id: "99", path: "Projects/spec.md", title: "spec" }],
+		);
+		// A fresh element each time: re-rendering the SAME element object lets
+		// React bail out of the subtree entirely, so the effect would never see
+		// the arriving note.
+		const treeFor = () => (
+			<QueryClientProvider client={qc}>
+				<MemoryRouter initialEntries={["/my-vault/99"]}>
+					<Routes>
+						<Route
+							path="/:slug/:itemId"
+							element={
+								<FolderTreeProvider>
+									<FolderTree />
+								</FolderTreeProvider>
+							}
+						/>
+					</Routes>
+				</MemoryRouter>
+			</QueryClientProvider>
+		);
+		const { rerender } = render(treeFor());
+		await screen.findByRole("treeitem", { name: "Projects" });
+
+		// The real note lands. Its folder is the one that has to open.
+		mock.activeNote = {
+			...DEFAULT_ROOT_NOTE,
+			id: "99",
+			path: "Projects/spec.md",
+			folder: "Projects",
+		};
+		rerender(treeFor());
+
+		await waitFor(() =>
+			expect(screen.getByRole("treeitem", { name: "Projects" })).toHaveAttribute(
+				"aria-expanded",
+				"true",
+			),
+		);
+		// ...and the one it came from was never opened on its behalf.
+		expect(screen.getByRole("treeitem", { name: "archive" })).toHaveAttribute(
+			"aria-expanded",
+			"false",
+		);
 	});
 });
