@@ -1595,7 +1595,7 @@ class CdpClient:
     async def open_settings_tab(self, tab: str) -> None:
         """Open plugin settings and navigate to a sub-tab.
 
-        tab ∈ {'cloud','self-hosted','sync-center','advanced'}
+        tab ∈ {'about','connection','sync-center','advanced'}
         """
         await self.evaluate(
             "app.commands.executeCommandById("
