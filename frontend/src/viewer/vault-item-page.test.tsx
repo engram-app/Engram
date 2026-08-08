@@ -6,7 +6,17 @@ import VaultItemPage from "./vault-item-page";
 
 // Stub both heavy viewers — this suite only verifies the note-vs-attachment
 // routing decision, not their rendering.
-vi.mock("./note-page", () => ({ default: () => <div data-testid="note-page" /> }));
+//
+// NotePage comes through ./note-chunks (the preloadable wrapper), so stub it
+// there: mocking ./note-page alone leaves the wrapper resolving a real dynamic
+// import, which is neither what this suite is testing nor reliable under
+// happy-dom.
+vi.mock("./note-chunks", () => ({
+	NotePage: () => <div data-testid="note-page" />,
+	VaultItemPage: () => null,
+	NoteEditor: () => null,
+	preloadNoteChunks: () => {},
+}));
 vi.mock("./attachment-page", () => ({ default: () => <div data-testid="attachment-page" /> }));
 
 let mockAttachments: AttachmentSummary[] | undefined = [];

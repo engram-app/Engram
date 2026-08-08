@@ -9,6 +9,7 @@ defmodule Engram.Notes do
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Crypto.PathCrypto
   alias Engram.Links
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
@@ -3583,6 +3584,91 @@ defmodule Engram.Notes do
       Enum.map(markers, &hydrate_folder_marker(&1, dek))
     else
       {:error, :no_dek} -> []
+    end
+  end
+
+  @doc """
+  Folders with id/name/count/parent_id — the shape both `GET /folders`
+  (FoldersController) and `GET /vault/tree` (VaultTreeController) return.
+  Shared so the two never drift on parent-path semantics: root and
+  top-level folders get `parent_id: nil`, never `""` — a `""` parent_id
+  would make the root its own parent if a root marker ever exists, handing
+  a cycle to the tree renderer.
+  """
+  @spec folders_payload(map(), map()) :: [map()]
+  def folders_payload(user, vault) do
+    {:ok, folders} = list_folders_with_counts(user, vault)
+    markers = list_folder_markers(user, vault)
+    id_by_path = Map.new(markers, fn m -> {m.folder, m.id} end)
+
+    Enum.map(folders, fn f ->
+      %{
+        id: Map.get(id_by_path, f.folder),
+        name: f.folder,
+        count: f.count,
+        parent_id: Map.get(id_by_path, folder_parent_path(f.folder))
+      }
+    end)
+  end
+
+  @doc """
+  Every live `kind == "note"` row in a vault, with `id`, decrypted `path`,
+  and both timestamps — the notes leg of `GET /vault/tree`
+  (VaultTreeController). Folder markers are excluded: a marker's
+  `path_ciphertext` is nil, and `PathCrypto.decrypt!/4` would raise on that
+  regardless of what else is in the vault.
+
+  Unlike `Attachments.list_attachments/2`, a row whose path fails AAD-bound
+  decrypt is NOT skipped here — it raises. A note silently missing from the
+  sidebar reads as data loss to the user, with no code path today that
+  degrades a note listing gracefully (only attachments have that
+  precedent); a loud 500 is the more honest failure for primary content,
+  and the caller still has the per-folder fallback to fall back on. See PR
+  #1316 review finding 3.
+  """
+  @spec list_tree_notes(map(), map()) :: {:ok, [map()]}
+  def list_tree_notes(user, vault) do
+    {:ok, rows} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(
+          from(n in scoped_live(user, vault),
+            where: n.kind == "note",
+            select:
+              {n.id, n.dek_version, n.path_ciphertext, n.path_nonce, n.created_at, n.updated_at}
+          )
+        )
+      end)
+
+    {:ok, dek} = Crypto.get_dek(user)
+
+    # Sequential on purpose — SyncController measured path-sized decrypts at
+    # ~4µs each (10k in ~43ms) and found chunked parallel SLOWER, because
+    # copying results back to the caller's heap rivals the AES-GCM work.
+    notes =
+      Crypto.measure_decrypt_batch(:vault_tree_notes, length(rows), fn ->
+        Enum.map(rows, fn {id, dek_version, path_ct, path_nonce, created, updated} ->
+          aad = PathCrypto.aad(:notes, id, dek_version)
+
+          %{
+            id: id,
+            path: PathCrypto.decrypt!(path_ct, path_nonce, dek, aad),
+            created_at: created,
+            updated_at: updated
+          }
+        end)
+      end)
+
+    {:ok, notes}
+  end
+
+  # nil for top-level ("Projects") and root (""). Joined parent path for
+  # nested ("Projects/Engram" -> "Projects").
+  defp folder_parent_path(""), do: nil
+
+  defp folder_parent_path(folder) do
+    case folder |> String.split("/") |> Enum.drop(-1) do
+      [] -> nil
+      segments -> Enum.join(segments, "/")
     end
   end
 

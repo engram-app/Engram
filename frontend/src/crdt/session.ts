@@ -4,6 +4,7 @@ import { rlog } from "../observability/remote-log";
 import { CrdtChannel } from "./channel";
 import { CrdtEnrollment } from "./enrollment";
 import { CrdtManager } from "./manager";
+import { crdtMark } from "./perf";
 
 interface Session {
 	vaultId: string;
@@ -166,9 +167,11 @@ export function stopCrdtSession(): void {
 export async function openDoc(
 	noteId: string,
 ): Promise<{ ytext: Y.Text; awareness: Awareness; doc: Y.Doc } | null> {
+	crdtMark(noteId, "open:start");
 	const epoch = docEpochs.get(noteId) ?? 0;
 	const gen = sessionGeneration;
 	await waitForSessionStart();
+	crdtMark(noteId, "open:session-ready");
 	const s = session;
 	if (!s || sessionGeneration !== gen || (docEpochs.get(noteId) ?? 0) !== epoch) {
 		return null; // closed or torn down while waiting
@@ -187,6 +190,7 @@ export async function openDoc(
 		awareness = new Awareness(ytext.doc!);
 		s.awareness.set(noteId, awareness);
 	}
+	crdtMark(noteId, "open:resolved");
 	return { ytext, awareness, doc: ytext.doc! };
 }
 

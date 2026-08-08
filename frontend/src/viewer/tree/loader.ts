@@ -1,8 +1,8 @@
 import type { QueryClient } from "@tanstack/react-query";
 import {
 	type AttachmentSummary,
-	FOLDER_NOTES_STALE_MS,
 	type Folder,
+	folderNotesByIdQueryOptions,
 	type NoteSummary,
 	ROOT_FOLDER_ID,
 } from "../../api/queries";
@@ -16,7 +16,6 @@ interface LoaderDeps {
 	vaultId: string;
 	sort: SortKey;
 	attachments?: AttachmentSummary[];
-	fetchFolderNotes?: (folderId: string) => Promise<NoteSummary[]>;
 	onChildrenLoaded?: (folderId: string) => void;
 }
 
@@ -73,9 +72,14 @@ function folderLoaderItems(deps: LoaderDeps, parentId: string | null): LoaderIte
 }
 
 // Note children for a folder id (ROOT_FOLDER_ID for the vault root). Reads the
-// id-keyed cache; on a miss, lazily fetches and asks HT to refetch the branch.
+// id-keyed cache; on a miss, lazily loads it and asks HT to refetch the branch.
 // Returns null on a cache miss so callers can render folders + attachments
-// (but not notes) while the fetch is in flight.
+// (but not notes) while the load is in flight.
+//
+// The load builds the SAME options `useFolderNotesById` does, so this is one
+// query with one queryFn no matter which side reaches it first — and it costs
+// zero requests whenever the vault tree it derives from is still fresh,
+// including for a folder that holds no notes (the answer is `[]`, not a miss).
 function noteChildItems(deps: LoaderDeps, folderId: string): LoaderItem[] | null {
 	const cached = deps.qc.getQueryData<NoteSummary[]>([
 		"folder-notes-by-id",
@@ -83,22 +87,15 @@ function noteChildItems(deps: LoaderDeps, folderId: string): LoaderItem[] | null
 		folderId,
 	]);
 	if (!cached) {
-		if (deps.fetchFolderNotes) {
-			const fetcher = deps.fetchFolderNotes;
-			deps.qc
-				.fetchQuery({
-					queryKey: ["folder-notes-by-id", deps.vaultId, folderId],
-					queryFn: () => fetcher(folderId),
-					staleTime: FOLDER_NOTES_STALE_MS,
-				})
-				// The notes are now in the cache, but HT cached the empty children
-				// list when it first asked. Tell it to refetch this branch.
-				.then(() => deps.onChildrenLoaded?.(folderId))
-				.catch(() => {
-					// Best-effort background prefetch: a failed refetch just leaves the
-					// branch to load lazily on next expand, so swallow the error.
-				});
-		}
+		deps.qc
+			.fetchQuery(folderNotesByIdQueryOptions(deps.qc, deps.vaultId, folderId))
+			// The notes are now in the cache, but HT cached the empty children
+			// list when it first asked. Tell it to refetch this branch.
+			.then(() => deps.onChildrenLoaded?.(folderId))
+			.catch(() => {
+				// Best-effort background load: a failure just leaves the branch to
+				// load lazily on next expand, so swallow the error.
+			});
 		return null;
 	}
 	return sortNotes(cached, deps.sort).map((n) => ({

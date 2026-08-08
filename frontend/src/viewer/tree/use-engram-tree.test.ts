@@ -5,6 +5,23 @@ import type { Folder, NoteSummary } from "../../api/queries";
 import { formatItemId } from "./types";
 import { createTreeDataLoader, treeStructureKey, useEngramTree } from "./use-engram-tree";
 
+// The tree loader loads a folder's note list from the vault tree on a cache
+// miss. Nothing here seeds that tree, so without this the miss path reaches the
+// real network; the loader swallows the failure, but the attempt still logs.
+vi.mock("../../api/client", async () => {
+	const actual = await vi.importActual<typeof import("../../api/client")>("../../api/client");
+	return {
+		...actual,
+		api: {
+			get: vi.fn(() => Promise.reject(new Error("no network in unit tests"))),
+			post: vi.fn(),
+			patch: vi.fn(),
+			del: vi.fn(),
+		},
+		setTokenGetter: vi.fn(),
+	};
+});
+
 describe("createTreeDataLoader", () => {
 	// An `inner` that knows nothing — models the window where the folders query
 	// has been re-keyed or is refetching, so `deps.folders` cannot resolve an id

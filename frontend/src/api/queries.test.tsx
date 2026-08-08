@@ -11,7 +11,6 @@ import {
 	type Note,
 	useAcceptTerms,
 	useAppBootstrap,
-	useAttachments,
 	useBacklinks,
 	useBatchDeleteAttachments,
 	useBatchDeleteFolders,
@@ -27,7 +26,6 @@ import {
 	useDeleteVault,
 	useDuplicateNote,
 	useFolderNotesById,
-	useFolders,
 	useNote,
 	usePlanChangePreview,
 	useRenameAttachment,
@@ -218,6 +216,115 @@ describe("useNote by id", () => {
 		const { result } = renderHook(() => useNote(null), { wrapper });
 		expect(result.current.fetchStatus).toBe("idle");
 		expect(get).not.toHaveBeenCalled();
+	});
+
+	// Switching notes changes the query KEY, which normally drops straight back
+	// to no-data/isLoading — and NotePage renders a full-pane spinner on that,
+	// unmounting the header and the editor for the length of one request. The
+	// previous note's data has to stay on screen until the next one lands.
+	it("keeps the previous note's data while the next id loads", async () => {
+		const noteFor = (id: string): Note =>
+			({
+				id,
+				path: `${id}.md`,
+				title: id,
+				folder: "",
+				tags: [],
+				version: 1,
+				content: `# ${id}`,
+				mtime: "s",
+				created_at: "s",
+				updated_at: "s",
+			}) as Note;
+		get.mockImplementation((url: string) =>
+			Promise.resolve(noteFor(url.slice(url.lastIndexOf("/") + 1))),
+		);
+		const { result, rerender } = renderHook(({ id }) => useNote(id), {
+			wrapper,
+			initialProps: { id: "42" },
+		});
+		await waitFor(() => expect(result.current.data?.id).toBe("42"));
+
+		// Second fetch never settles: the whole window NotePage used to blank out.
+		get.mockImplementation(() => new Promise<Note>(() => {}));
+		rerender({ id: "43" });
+
+		expect(result.current.isLoading).toBe(false);
+		expect(result.current.data?.id).toBe("42");
+		expect(result.current.isPlaceholderData).toBe(true);
+	});
+
+	// The FIRST note opened in a session has no previous note to hold, so
+	// keepPreviousData has nothing to give and NotePage fell through to a
+	// full-pane spinner for the length of the fetch (measured: the whole main
+	// area wiped to a loading circle, #1317). But the vault tree already knows
+	// this note's id, path and title — enough to render the chrome instantly
+	// and leave only the body pending.
+	it("falls back to the vault tree for a first open with no previous note", async () => {
+		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		// "42" is the VAULT id here — useActiveVaultId is mocked to it above.
+		qc.setQueryData(["vault-tree", "42"], {
+			folders: [],
+			notes: [{ id: "cold-1", path: "folder/A.md", created_at: "s", updated_at: "s" }],
+			attachments: [],
+			change_seq: 1,
+		});
+		const treeWrapper = ({ children }: { children: React.ReactNode }) => (
+			<QueryClientProvider client={qc}>{children}</QueryClientProvider>
+		);
+
+		// Fetch never settles — the entire window that used to be a spinner.
+		get.mockImplementation(() => new Promise<Note>(() => {}));
+		const { result } = renderHook(() => useNote("cold-1"), { wrapper: treeWrapper });
+
+		expect(result.current.isLoading).toBe(false);
+		expect(result.current.isPlaceholderData).toBe(true);
+		expect(result.current.data?.id).toBe("cold-1");
+		expect(result.current.data?.path).toBe("folder/A.md");
+		// Derived from the path, same as every other tree-fed cache.
+		expect(result.current.data?.title).toBe("A");
+		// Body is genuinely unknown until the fetch lands — the placeholder must
+		// not pretend the note is empty in any way that could be written back.
+		expect(result.current.data?.content).toBe("");
+	});
+
+	it("prefers the previous note over the tree when navigating", async () => {
+		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		qc.setQueryData(["vault-tree", "42"], {
+			folders: [],
+			notes: [{ id: "43", path: "folder/B.md", created_at: "s", updated_at: "s" }],
+			attachments: [],
+			change_seq: 1,
+		});
+		const treeWrapper = ({ children }: { children: React.ReactNode }) => (
+			<QueryClientProvider client={qc}>{children}</QueryClientProvider>
+		);
+		get.mockResolvedValue({
+			id: "42",
+			path: "folder/A.md",
+			title: "A",
+			folder: "folder",
+			tags: [],
+			version: 1,
+			content: "# A",
+			mtime: "s",
+			created_at: "s",
+			updated_at: "s",
+		} as Note);
+		const { result, rerender } = renderHook(({ id }) => useNote(id), {
+			wrapper: treeWrapper,
+			initialProps: { id: "42" },
+		});
+		await waitFor(() => expect(result.current.data?.id).toBe("42"));
+
+		get.mockImplementation(() => new Promise<Note>(() => {}));
+		rerender({ id: "43" });
+
+		// Swapping to the tree stub here would drop the note the user is still
+		// reading — and NotePage's invariant would then have note 43's chrome
+		// over note 42's live document. Previous data wins.
+		expect(result.current.data?.id).toBe("42");
+		expect(result.current.data?.content).toBe("# A");
 	});
 });
 
@@ -783,34 +890,10 @@ describe("rename folder does NOT re-path cached child notes optimistically", () 
 // verbatim. `name` continues to carry the FULL folder path — that
 // shape is load-bearing for existing consumers and stays.
 
+// What these hooks READ (all three derive from one /vault/tree fetch, and the
+// convergence + no-fan-out invariants) lives in api/vault-tree.test.tsx, which
+// drives them against a real tree payload. Only the gating is asserted here.
 describe("useFolderNotesById", () => {
-	it("fetches notes for the given folder id", async () => {
-		get.mockResolvedValue({
-			notes: [
-				{
-					id: "100",
-					path: "foo/a.md",
-					title: "A",
-					folder: "foo",
-					tags: [],
-					version: 1,
-					mtime: "s",
-					created_at: "s",
-					updated_at: "s",
-				},
-			],
-		});
-
-		const { result } = renderHook(() => useFolderNotesById("42"), { wrapper });
-		await waitFor(() => expect(result.current.data).toBeDefined());
-
-		expect(get).toHaveBeenCalledWith("/folders/by-id/42/notes");
-		expect(result.current.data?.[0]).toMatchObject({
-			id: expect.any(String),
-			path: expect.any(String),
-		});
-	});
-
 	it("disabled when folderId is null", () => {
 		const { result } = renderHook(() => useFolderNotesById(null), { wrapper });
 		expect(result.current.fetchStatus).toBe("idle");
@@ -826,36 +909,6 @@ describe("Folder type", () => {
 			name: string;
 			count: number;
 		}>();
-	});
-});
-
-describe("useFolders", () => {
-	it("passes through id + parent_id from the backend response", async () => {
-		get.mockResolvedValue({
-			folders: [
-				{ id: "7", parent_id: null, name: "top", count: 2 },
-				{ id: "8", parent_id: "7", name: "top/sub", count: 1 },
-			],
-		});
-
-		const { result } = renderHook(() => useFolders(), { wrapper });
-		await waitFor(() => expect(result.current.data).toBeDefined());
-
-		expect(get).toHaveBeenCalledWith("/folders");
-		const folders = result.current.data ?? [];
-		expect(folders).toHaveLength(2);
-		expect(folders[0]).toMatchObject({
-			id: "7",
-			parent_id: null,
-			name: "top",
-			count: 2,
-		});
-		expect(folders[1]).toMatchObject({
-			id: "8",
-			parent_id: "7",
-			name: "top/sub",
-			count: 1,
-		});
 	});
 });
 
@@ -1969,29 +2022,6 @@ describe("useSearch", () => {
 				{ signal: expect.any(AbortSignal) },
 			),
 		);
-	});
-});
-
-describe("useAttachments", () => {
-	it("fetches /attachments and returns the attachments array", async () => {
-		get.mockResolvedValue({
-			attachments: [
-				{
-					id: "a-1",
-					path: "a.png",
-					mime_type: "image/png",
-					size_bytes: 10,
-					mtime: 1,
-					updated_at: "2026-06-10T00:00:00Z",
-				},
-			],
-		});
-
-		const { result } = renderHook(() => useAttachments(), { wrapper });
-		await waitFor(() => expect(result.current.data).toBeDefined());
-
-		expect(get).toHaveBeenCalledWith("/attachments");
-		expect(result.current.data?.[0]?.path).toBe("a.png");
 	});
 });
 

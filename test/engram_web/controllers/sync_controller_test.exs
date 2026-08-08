@@ -1,6 +1,8 @@
 defmodule EngramWeb.SyncControllerTest do
   use EngramWeb.ConnCase, async: true
 
+  import ExUnit.CaptureLog
+
   setup %{conn: conn} do
     user = insert(:user)
     # Free-tier launch §4.5 — attachment uploads now gate on attachments_enabled,
@@ -194,6 +196,32 @@ defmodule EngramWeb.SyncControllerTest do
 
       assert body["unchanged"] == true
       assert body["change_seq"] == 0
+    end
+  end
+
+  describe "GET /sync/manifest — DEK failures" do
+    # `{:error, :no_dek}` means a brand-new user with zero writes, and an
+    # empty manifest is the honest answer. Any OTHER crypto error is not
+    # "you have no notes" — and the manifest is the one endpoint where
+    # saying that is actively destructive: the plugin diffs the manifest
+    # against the local vault, so an empty one reads as "everything was
+    # deleted remotely". Fail loudly instead. See PR #1316 review follow-up.
+    test "unexpected crypto error raises rather than rendering an empty manifest", %{
+      conn: conn,
+      user: user
+    } do
+      # Same corruption technique as vault_tree_controller_test — a garbage
+      # encrypted_dek blob makes Crypto.get_dek/1 return
+      # {:error, :unrecognised_blob}.
+      corrupt = Ecto.Changeset.change(user, encrypted_dek: :crypto.strong_rand_bytes(32))
+      {:ok, _corrupt_user} = Engram.Repo.update(corrupt, skip_tenant_check: true)
+
+      log =
+        capture_log(fn ->
+          assert_error_sent(500, fn -> get(conn, "/api/sync/manifest") end)
+        end)
+
+      assert log =~ "sync manifest: DEK unavailable"
     end
   end
 end
