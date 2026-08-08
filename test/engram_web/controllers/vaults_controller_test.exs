@@ -322,6 +322,14 @@ defmodule EngramWeb.VaultsControllerTest do
       assert body["status"] == "created"
     end
 
+    test "returns 422 with blank name", %{conn: conn} do
+      conn = post(conn, "/api/vaults/register", %{name: "  ", client_id: "mac-blank"})
+
+      assert json_response(conn, 422) == %{
+               "errors" => %{"name" => ["can't be blank"]}
+             }
+    end
+
     test "returns existing vault on duplicate client_id (200)", %{conn: conn} do
       post(conn, "/api/vaults/register", %{name: "My Mac", client_id: "mac-dup"})
       conn2 = post(conn, "/api/vaults/register", %{name: "My Mac", client_id: "mac-dup"})
