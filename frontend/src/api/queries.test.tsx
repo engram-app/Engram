@@ -253,6 +253,79 @@ describe("useNote by id", () => {
 		expect(result.current.data?.id).toBe("42");
 		expect(result.current.isPlaceholderData).toBe(true);
 	});
+
+	// The FIRST note opened in a session has no previous note to hold, so
+	// keepPreviousData has nothing to give and NotePage fell through to a
+	// full-pane spinner for the length of the fetch (measured: the whole main
+	// area wiped to a loading circle, #1317). But the vault tree already knows
+	// this note's id, path and title — enough to render the chrome instantly
+	// and leave only the body pending.
+	it("falls back to the vault tree for a first open with no previous note", async () => {
+		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		// "42" is the VAULT id here — useActiveVaultId is mocked to it above.
+		qc.setQueryData(["vault-tree", "42"], {
+			folders: [],
+			notes: [{ id: "cold-1", path: "folder/A.md", created_at: "s", updated_at: "s" }],
+			attachments: [],
+			change_seq: 1,
+		});
+		const treeWrapper = ({ children }: { children: React.ReactNode }) => (
+			<QueryClientProvider client={qc}>{children}</QueryClientProvider>
+		);
+
+		// Fetch never settles — the entire window that used to be a spinner.
+		get.mockImplementation(() => new Promise<Note>(() => {}));
+		const { result } = renderHook(() => useNote("cold-1"), { wrapper: treeWrapper });
+
+		expect(result.current.isLoading).toBe(false);
+		expect(result.current.isPlaceholderData).toBe(true);
+		expect(result.current.data?.id).toBe("cold-1");
+		expect(result.current.data?.path).toBe("folder/A.md");
+		// Derived from the path, same as every other tree-fed cache.
+		expect(result.current.data?.title).toBe("A");
+		// Body is genuinely unknown until the fetch lands — the placeholder must
+		// not pretend the note is empty in any way that could be written back.
+		expect(result.current.data?.content).toBe("");
+	});
+
+	it("prefers the previous note over the tree when navigating", async () => {
+		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		qc.setQueryData(["vault-tree", "42"], {
+			folders: [],
+			notes: [{ id: "43", path: "folder/B.md", created_at: "s", updated_at: "s" }],
+			attachments: [],
+			change_seq: 1,
+		});
+		const treeWrapper = ({ children }: { children: React.ReactNode }) => (
+			<QueryClientProvider client={qc}>{children}</QueryClientProvider>
+		);
+		get.mockResolvedValue({
+			id: "42",
+			path: "folder/A.md",
+			title: "A",
+			folder: "folder",
+			tags: [],
+			version: 1,
+			content: "# A",
+			mtime: "s",
+			created_at: "s",
+			updated_at: "s",
+		} as Note);
+		const { result, rerender } = renderHook(({ id }) => useNote(id), {
+			wrapper: treeWrapper,
+			initialProps: { id: "42" },
+		});
+		await waitFor(() => expect(result.current.data?.id).toBe("42"));
+
+		get.mockImplementation(() => new Promise<Note>(() => {}));
+		rerender({ id: "43" });
+
+		// Swapping to the tree stub here would drop the note the user is still
+		// reading — and NotePage's invariant would then have note 43's chrome
+		// over note 42's live document. Previous data wins.
+		expect(result.current.data?.id).toBe("42");
+		expect(result.current.data?.content).toBe("# A");
+	});
 });
 
 describe("useBacklinks", () => {

@@ -271,7 +271,7 @@ export default function FolderTree() {
 	// `activeNote` or `folders` (e.g. a background refetch from an unrelated
 	// cross-tab edit) does not silently re-expand a folder the user has since
 	// collapsed by hand.
-	const { data: activeNote } = useNote(selectedNoteId);
+	const { data: activeNote, isPlaceholderData: activeNoteIsStub } = useNote(selectedNoteId);
 	const autoExpandedForNoteRef = useRef<string | null>(null);
 	useEffect(() => {
 		// `activeNote.id !== selectedNoteId` is the stale-note gate: useNote holds
@@ -280,9 +280,15 @@ export default function FolderTree() {
 		// loaded note disagree. Spending this effect's one shot per note on the
 		// stale one would expand the folder you came FROM and latch the real one
 		// out — the ref below never fires twice for the same id.
+		// The placeholder gate is the same argument one step further out: the
+		// vault-tree stub also satisfies the id check, but its folder comes from
+		// a cache that can be stale (moved on another device, or an in-flight
+		// move whose tree invalidation hasn't landed). Spending the one shot on
+		// it expands the OLD folder and latches the real one out for good.
 		if (
 			selectedNoteId === null ||
 			!folders ||
+			activeNoteIsStub ||
 			activeNote?.id !== selectedNoteId ||
 			!activeNote.folder
 		) {
@@ -303,7 +309,7 @@ export default function FolderTree() {
 				}
 			}
 		}
-	}, [selectedNoteId, folders, activeNote, tree]);
+	}, [selectedNoteId, folders, activeNote, activeNoteIsStub, tree]);
 
 	// A just-created folder opens straight in rename mode, so its placeholder
 	// name is never kept by accident. Runs on every render until it lands: the

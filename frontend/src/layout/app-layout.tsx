@@ -7,6 +7,7 @@ import { useBillingStatus } from "../api/queries";
 import { useChannel } from "../api/use-channel";
 import { AttachmentUploadProvider } from "../viewer/attachment-upload/provider";
 import { ActiveEditorProvider } from "../viewer/editor/active-editor-context";
+import { preloadNoteChunks } from "../viewer/note-chunks";
 import AppSidebarPanel, { Rail } from "./app-sidebar";
 import MobileLayout from "./mobile-layout";
 import { RailViewProvider } from "./rail-view-context";
@@ -119,6 +120,35 @@ function AppLayoutInner() {
 }
 
 export default function AppLayout() {
+	// Warm the note-viewing chunks while the user is still looking at the tree.
+	// Opening the first note otherwise walks three lazy boundaries in series,
+	// two of them behind a full-pane spinner (#1317). requestIdleCallback so it
+	// never competes with the initial render; setTimeout for Safari, which
+	// still lacks it.
+	useEffect(() => {
+		// Respect an explicit data-saver signal and genuinely slow links: the
+		// editor chunk alone is ~1.3 MB, and a user who signed in to check
+		// billing or settings never opens a note. On a slow link the preload
+		// would also contend with the bootstrap/vault-tree requests that gate
+		// the sidebar, making the tree paint LATER for exactly those users.
+		const conn = (
+			navigator as Navigator & {
+				connection?: { saveData?: boolean; effectiveType?: string };
+			}
+		).connection;
+		if (conn?.saveData || conn?.effectiveType === "slow-2g" || conn?.effectiveType === "2g") {
+			return;
+		}
+
+		const idle = window.requestIdleCallback;
+		if (typeof idle === "function") {
+			const handle = idle(() => preloadNoteChunks());
+			return () => window.cancelIdleCallback?.(handle);
+		}
+		const timer = setTimeout(preloadNoteChunks, 0);
+		return () => clearTimeout(timer);
+	}, []);
+
 	return (
 		<RightToolsProvider>
 			<RailViewProvider>

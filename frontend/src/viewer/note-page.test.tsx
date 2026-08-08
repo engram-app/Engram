@@ -576,6 +576,40 @@ describe("NotePage (CRDT)", () => {
 		expect(enroll).not.toHaveBeenCalled();
 	});
 
+	// The vault-tree placeholder renders the chrome instantly on a first open,
+	// but it carries no body. It commits as the first `displayed` pair, which
+	// spends the one-time `displayed === null` allowance — so without an
+	// explicit same-note refresh rule the REAL note could never replace it
+	// until a CRDT handle opened, and never at all if openDoc stalled. That is
+	// an empty document shown for a note that has content, with no spinner and
+	// no stall notice to admit it.
+	it("replaces the tree placeholder with the fetched note even if no doc ever opens", async () => {
+		// openDoc never settles — the degraded-socket case this guards.
+		openDoc.mockReturnValue(new Promise(() => {}));
+		useNoteMock.mockReturnValue({
+			data: { ...NOTE, content: "" },
+			isLoading: false,
+			isPlaceholderData: true,
+			error: null,
+		});
+
+		const { rerender } = render(pageTree());
+		await openMenu();
+		fireEvent.click(screen.getByRole("menuitem", { name: "Reading" }));
+		expect(screen.getByTestId("note-view")).toHaveTextContent("");
+
+		// REST lands. Same note id, still no handle.
+		useNoteMock.mockReturnValue({
+			data: { ...NOTE, content: "# real body" },
+			isLoading: false,
+			isPlaceholderData: false,
+			error: null,
+		});
+		rerender(pageTree());
+
+		await waitFor(() => expect(screen.getByTestId("note-view")).toHaveTextContent("# real body"));
+	});
+
 	it("reading view renders live Y.Text content, not stale REST content", async () => {
 		const doc = new Y.Doc();
 		const ytext = doc.getText("content");

@@ -5,6 +5,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
+import { useCallback } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { collideBump } from "@/lib/collide-bump";
@@ -327,6 +328,30 @@ async function fetchVaultTreeFresh(): Promise<VaultTree> {
 // live retryer promise when a fetch is already running).
 function fetchVaultTree(qc: QueryClient, vaultId: string | null | undefined): Promise<VaultTree> {
 	return qc.fetchQuery(vaultTreeQueryOptions(vaultId));
+}
+
+/**
+ * A Note-shaped stand-in built from the vault tree, for a note we have not
+ * fetched yet.
+ *
+ * The tree carries id/path/timestamps for every note in the vault, which is
+ * everything NotePage's chrome renders. `content` is deliberately `""` and
+ * `version` 0 (via `treeNoteToSummary`) — this value must never be written
+ * back anywhere. It is safe today because nothing mutating reads them: the
+ * duplicate mutation re-fetches its source over REST, and CRDT genesis seeds
+ * from the Y.Doc's own text, never from this. Keep it that way.
+ */
+function noteFromVaultTree(
+	qc: QueryClient,
+	vaultId: string | null | undefined,
+	id: string | null,
+): Note | undefined {
+	if (!id) {
+		return;
+	}
+	const tree = qc.getQueryData<VaultTree>(["vault-tree", vaultId]);
+	const row = tree?.notes.find((n) => n.id === id);
+	return row ? { ...treeNoteToSummary(row), content: "" } : undefined;
 }
 
 // A `/vault/tree` note row in the `NoteSummary` shape every note-list cache
@@ -713,16 +738,34 @@ export function useVaultTree() {
 
 export function useNote(id: string | null) {
 	const vaultId = useActiveVaultId();
+	const qc = useQueryClient();
+	const placeholder = useCallback(
+		(prev: Note | undefined) => prev ?? noteFromVaultTree(qc, vaultId, id),
+		[qc, vaultId, id],
+	);
 	return useQuery({
 		queryKey: ["note", vaultId, id],
 		queryFn: () => fetchNoteById(id as string),
 		enabled: id !== null,
-		// Opening another note changes the key, which without this drops back to
-		// no-data → NotePage's `isLoading` branch → the whole pane (header, title,
-		// editor) replaced by a spinner for the length of one request, on every
-		// click. Hold the note you were reading until the next one lands; only a
-		// cold first open still shows the spinner.
-		placeholderData: keepPreviousData,
+		// Two different blank-outs, one setting.
+		//
+		// Navigating: the key changes, which without a placeholder drops to
+		// no-data → NotePage's `isLoading` branch → the whole pane (header,
+		// title, editor) replaced by a spinner for the length of one request.
+		// Previous data wins here — swapping in the tree stub instead would put
+		// the incoming note's chrome over the outgoing note's live document,
+		// which is exactly the invariant NotePage exists to hold.
+		//
+		// First open of a session: there IS no previous note, so the above gave
+		// nothing and the spinner won. The vault tree already knows this note's
+		// id, path and title, so the chrome can render immediately and only the
+		// body waits (#1317 — measured as a full-pane loading circle).
+		// useCallback, not an inline arrow: query-core reuses the previous
+		// placeholder only when this option is reference-equal to last render's,
+		// so a fresh arrow re-ran the whole-vault `notes.find` scan plus a
+		// deep-equal on EVERY render for the duration of the fetch — an O(notes)
+		// walk on the exact frame budget this is meant to protect.
+		placeholderData: placeholder,
 	});
 }
 
