@@ -18,6 +18,7 @@ import {
 	useSyncManifest,
 } from "../api/queries";
 import { readRows } from "../crdt/frontmatter-doc";
+import { crdtMark } from "../crdt/perf";
 import {
 	type CrdtSyncStatus,
 	closeDoc,
@@ -632,6 +633,16 @@ export default function NotePage() {
 									onFrontmatterShortcut={handleFrontmatterShortcut}
 									onView={(v) => {
 										editorViewRef.current = v;
+										// The view existing is the first moment content is on
+										// screen. Delta from open:resolved is the CodeMirror
+										// construction cost, and on the first open of a page
+										// load it also carries the lazy chunk fetch (#1317).
+										if (v && shownId) {
+											crdtMark(shownId, "editor:construct-end");
+											if (handle && handle.ytext.length === 0) {
+												crdtMark(shownId, "editor:seeded-empty");
+											}
+										}
 									}}
 								/>
 							) : (
