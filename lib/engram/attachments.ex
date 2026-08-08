@@ -1011,9 +1011,17 @@ defmodule Engram.Attachments do
     |> unwrap_tenant()
     |> case do
       {:ok, atts} ->
+        # Measured like every other bulk path decrypt (:notes,
+        # :vault_tree_notes, :manifest_*). /api/vault/tree delegates its
+        # attachment half here rather than duplicating the query, so without
+        # this span that endpoint reports only its notes decrypt cost. Label
+        # is caller-agnostic because this function is: per-endpoint
+        # attribution comes from the OTel request span, not this tag.
         {:ok,
-         decrypt_each(atts, user, fn att, meta ->
-           meta |> Map.delete(:deleted_at) |> Map.put(:id, att.id)
+         Crypto.measure_decrypt_batch(:attachments, length(atts), fn ->
+           decrypt_each(atts, user, fn att, meta ->
+             meta |> Map.delete(:deleted_at) |> Map.put(:id, att.id)
+           end)
          end)}
 
       err ->
