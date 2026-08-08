@@ -256,6 +256,23 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     assert still_a.content == "vault A"
   end
 
+  test "re-minting a taken id costs one vault seq, not two", %{user: user, vault: vault} do
+    # classify_by_id already reads the row by PK, so it can prove the id is taken
+    # before genesis commits to it. Doing that avoids an INSERT that can only
+    # no-op on the PK -- and, with it, a crdt merge, an encrypt, and a vault seq
+    # consumed by a row that never lands. remint_own_id still backstops the REST
+    # leg; this pins that the socket leg no longer needs it.
+    {:ok, other} = Vaults.create_vault(user, %{name: "GenesisSeqB"})
+    {:ok, foreign} = Notes.upsert_note(user, other, %{"path" => "Notes/f.md", "content" => "x"})
+
+    {:ok, base} = Notes.upsert_note(user, vault, %{"path" => "Notes/base.md", "content" => "b"})
+
+    assert {:ok, created} = Notes.genesis_crdt_note(user, vault, foreign.id, "Notes/remint.md")
+
+    refute created.id == foreign.id
+    assert created.seq == base.seq + 1
+  end
+
   defp fetch_id_by_path(user, vault, path) do
     case Notes.get_note(user, vault, path) do
       {:ok, n} -> {:ok, n.id}

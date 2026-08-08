@@ -137,6 +137,15 @@ to the current *user* while the lookups that already failed were scoped to the c
 one extra unvaulted `Repo.exists?` by id, run only in this rare branch, answers "is this mine?"
 without an RLS bypass and without a query on the hot path.
 
+**There are two re-mint routes, and that is on purpose.** `classify_by_id/2` already reads the row
+by PK, so it can return `:taken` (a row of theirs the id is spoken for by, in another vault or
+under another `kind`) instead of collapsing that into `:none`. The socket genesis path re-mints
+right there, before it commits to an INSERT that could only no-op on the PK -- skipping a crdt
+merge, an encrypt, and a permanently-consumed vault seq. `remint_own_id/7` stays as the
+post-INSERT backstop for REST/MCP/web, which classify by their own route. Both log through
+`log_id_taken/4`, so one Loki query covers the class. Pinned by "re-minting a taken id costs one
+vault seq, not two".
+
 **The probe filters on the id and nothing else, deliberately.** Not `kind`: an attachment or
 folder-marker row of theirs occupies the PK just as hard as a note does (the id space is shared),
 and the note still has to land. Not `deleted_at`: a tombstone still owns the PK. So a same-vault
