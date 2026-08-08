@@ -64,10 +64,12 @@ vi.mock("./note-editor", () => ({
 	),
 }));
 
-const { openDoc, closeDoc, enroll } = vi.hoisted(() => ({
+const { openDoc, closeDoc, enroll, syncListeners } = vi.hoisted(() => ({
 	openDoc: vi.fn(),
 	closeDoc: vi.fn(),
 	enroll: vi.fn(),
+	// Live subscribers, so a test can drive a session recovery.
+	syncListeners: new Set<(s: string) => void>(),
 }));
 
 vi.mock("../crdt/session", () => ({
@@ -75,7 +77,10 @@ vi.mock("../crdt/session", () => ({
 	closeDoc,
 	enroll,
 	getCrdtSyncStatus: () => "connecting",
-	subscribeToCrdtSyncStatus: () => () => {},
+	subscribeToCrdtSyncStatus: (cb: (s: string) => void) => {
+		syncListeners.add(cb);
+		return () => syncListeners.delete(cb);
+	},
 }));
 
 const useNoteMock = vi.fn();
@@ -152,6 +157,7 @@ describe("NotePage (CRDT)", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
+		syncListeners.clear();
 		paramsMock.itemId = "note-1";
 		paramsMock.slug = "my-vault";
 		locationMock.mockReturnValue({ pathname: "/my-vault/note-1", state: null });
@@ -290,24 +296,28 @@ describe("NotePage (CRDT)", () => {
 			};
 			const { rerender } = renderPage();
 			await waitFor(() => expect(pending["note-1"]).toHaveLength(1));
-			await act(async () => parked("note-1", 0)(docWith("one body")));
+
+			// Two opens outstanding for the SAME note: the first is still parked
+			// when a session recovery re-asks for it.
+			await act(async () => {
+				for (const cb of syncListeners) {
+					cb("synced");
+				}
+			});
+			await waitFor(() => expect(pending["note-1"]).toHaveLength(2));
+
+			// The second one lands and becomes the bound document.
+			await act(async () => parked("note-1", 1)(docWith("one body")));
 			await screen.findByTestId("note-editor");
 
-			// note-1 → note-2 → note-1 → note-2, none of the later opens landing.
 			navTo(NOTE2);
 			rerender(pageTree());
 			await waitFor(() => expect(pending["note-2"]).toHaveLength(1));
-			navTo(NOTE);
-			rerender(pageTree());
-			await waitFor(() => expect(pending["note-1"]).toHaveLength(2));
-			navTo(NOTE2);
-			rerender(pageTree());
-			await waitFor(() => expect(pending["note-2"]).toHaveLength(2));
 
-			// The stale note-1 open lands. The page wants note-2 — but note-1 is
-			// what the editor on screen is bound to, so closing it destroys a live
-			// document out from under the binding.
-			await act(async () => parked("note-1", 1)(docWith("one body")));
+			// Now the FIRST one finally lands. The page wants note-2 — but note-1
+			// is what the editor on screen is bound to, so closing it destroys a
+			// live document out from under the binding.
+			await act(async () => parked("note-1", 0)(docWith("one body")));
 
 			expect(closeDoc).not.toHaveBeenCalledWith("note-1");
 			expect(screen.getByTestId("editor-text")).toHaveTextContent("one body");
@@ -390,6 +400,123 @@ describe("NotePage (CRDT)", () => {
 			expect(screen.queryByTestId("editor-text")).not.toBeInTheDocument();
 			await waitFor(() => expect(closeDoc).toHaveBeenCalledWith("note-1"));
 			expect(openDoc).not.toHaveBeenCalledWith("note-2");
+		});
+
+		// A first-ever load has no previous pair to protect, and a note's chrome
+		// over NO document breaks nothing — there is no other document a
+		// keystroke could land in, and the editor area has its own empty state.
+		// Waiting for both halves here just meant a full-pane spinner on every
+		// hard refresh.
+		it("shows the note's chrome on a first-ever load, before its doc exists", async () => {
+			openDoc.mockImplementation(() => new Promise(() => {}));
+			renderPage();
+
+			expect(await screen.findByTestId("header-note-name")).toHaveTextContent("note");
+			expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("note");
+			expect(screen.getByText("Connecting…")).toBeInTheDocument();
+			// Defect 1 cannot come back through this door: with no handle there is
+			// no mounted editable surface bound to any document at all.
+			expect(screen.queryByTestId("editor-text")).not.toBeInTheDocument();
+		});
+
+		// Guard, not a defect: green before the cold-start allowance and it must
+		// STAY green after. A cold-start rule that leaked into later navigations
+		// would blank the editor on every click — the original flash.
+		it("still demands both halves for a later swap", async () => {
+			openDoc.mockResolvedValue(docWith("one body"));
+			const { rerender } = renderPage();
+			await screen.findByTestId("editor-text");
+
+			openDoc.mockImplementation(() => new Promise(() => {}));
+			navTo(NOTE2);
+			rerender(pageTree());
+			await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-2"));
+
+			expect(screen.getByTestId("header-note-name")).toHaveTextContent("note");
+			expect(screen.getByTestId("editor-text")).toHaveTextContent("one body");
+		});
+
+		// A released doc is a DESTROYED doc. Holding on to its handle means a
+		// return visit commits it before the re-open lands. md → canvas → md is
+		// the reachable path: the canvas commit releases the doc without any new
+		// handle replacing it.
+		it("does not re-commit a doc that was released while a canvas item was open", async () => {
+			openDoc.mockResolvedValue(docWith("one body"));
+			const { rerender } = renderPage();
+			await screen.findByTestId("editor-text");
+
+			navTo({ ...NOTE2, path: "folder/board.canvas" });
+			rerender(pageTree());
+			await waitFor(() => expect(closeDoc).toHaveBeenCalledWith("note-1"));
+
+			openDoc.mockImplementation(() => new Promise(() => {}));
+			navTo(NOTE);
+			rerender(pageTree());
+			await act(async () => {});
+
+			expect(screen.queryByTestId("editor-text")).not.toBeInTheDocument();
+			expect(screen.getByTestId("header-note-name")).toHaveTextContent("board");
+		});
+
+		// Holding the previous note is honest about DATA but silent about INTENT:
+		// the user clicked a note and it never opened. Say so, without taking the
+		// readable note away.
+		it("says the routed note is still opening, and stops on navigation away", async () => {
+			vi.useFakeTimers({ shouldAdvanceTime: true });
+			try {
+				openDoc.mockResolvedValue(docWith("one body"));
+				const { rerender } = renderPage();
+				await screen.findByTestId("editor-text");
+
+				openDoc.mockImplementation(() => new Promise(() => {}));
+				navTo(NOTE2);
+				rerender(pageTree());
+				await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-2"));
+
+				// Not immediately — a normal open is quick, and a strip on every
+				// click is noise worse than the flash this page removed.
+				expect(screen.queryByText(/still opening/i)).not.toBeInTheDocument();
+
+				await act(async () => {
+					vi.advanceTimersByTime(2000);
+				});
+				expect(screen.getByText(/still opening/i)).toBeInTheDocument();
+				// The previous note stays readable — no spinner replacing the pane.
+				expect(screen.getByTestId("editor-text")).toHaveTextContent("one body");
+
+				// Navigating back to what IS on screen clears it.
+				navTo(NOTE);
+				rerender(pageTree());
+				await waitFor(() => expect(screen.queryByText(/still opening/i)).not.toBeInTheDocument());
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		// A session torn down MID-open makes openDoc SETTLE as a failure, so
+		// nothing asks again on its own. (A parked open is different — see
+		// startCrdtSession: it drains every waiter and only bumps the generation
+		// when a session was actually running, so a parked open self-heals.)
+		it("re-opens the routed doc when the session recovers from a failed open", async () => {
+			openDoc.mockResolvedValue(docWith("one body"));
+			const { rerender } = renderPage();
+			await screen.findByTestId("editor-text");
+
+			openDoc.mockResolvedValue(null);
+			navTo(NOTE2);
+			rerender(pageTree());
+			await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-2"));
+			expect(screen.getByTestId("editor-text")).toHaveTextContent("one body");
+
+			openDoc.mockResolvedValue(docWith("two body"));
+			await act(async () => {
+				for (const cb of syncListeners) {
+					cb("synced");
+				}
+			});
+
+			await waitFor(() => expect(screen.getByTestId("editor-text")).toHaveTextContent("two body"));
+			expect(screen.getByTestId("header-note-name")).toHaveTextContent("other");
 		});
 
 		// Defect 5. closeDoc destroys the Y.Doc. Running it in the same tick as

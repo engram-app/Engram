@@ -49,6 +49,9 @@ import { buildWikiMap, wikiHref } from "./wiki-link";
 
 const NoteEditor = lazy(() => import("./note-editor"));
 
+/** How long the routed note may fail to open before the pane explains itself. */
+const STALL_NOTICE_MS = 1500;
+
 interface DocHandle {
 	ytext: Y.Text;
 	awareness: Awareness;
@@ -84,17 +87,22 @@ export default function NotePage() {
 	// here, against the routed note's current path.
 	const openId = routedNote?.path.endsWith(".md") ? routedNote.id : null;
 	const [opened, setOpened] = useState<{ id: string; handle: DocHandle } | null>(null);
-	const ready: Displayed | null = routedNote
-		? openId === null
-			? // Non-markdown item (canvas, ...): there is no doc to wait for, so the
-				// pair is complete the moment its data is. The previous note's body
-				// must not linger under this one's header.
-				{ note: routedNote, handle: null }
-			: opened?.id === routedNote.id
-				? { note: routedNote, handle: opened.handle }
-				: null
-		: null;
 	const [displayed, setDisplayed] = useState<Displayed | null>(null);
+	const openedHandle = routedNote && opened?.id === routedNote.id ? opened.handle : null;
+	// Three ways a pair is complete:
+	//   - its doc is open (the ordinary case);
+	//   - it has no doc to wait for (canvas & co), so data alone completes it;
+	//   - nothing has EVER been committed — a first-ever load, hard refresh or
+	//     deep link. A note's chrome over NO document violates nothing: there is
+	//     no other document a keystroke could land in, and the editor area has
+	//     its own empty state. Making the cold case wait for both halves only
+	//     bought a full-pane spinner on every refresh.
+	// Every SUBSEQUENT swap still demands both halves — that is where a mismatch
+	// could put keystrokes in the wrong note's document.
+	const ready: Displayed | null =
+		routedNote && (openedHandle !== null || openId === null || displayed === null)
+			? { note: routedNote, handle: openedHandle }
+			: null;
 	if (ready && (ready.note !== displayed?.note || ready.handle !== displayed?.handle)) {
 		// React's documented "adjust state during render" (same pattern as
 		// draftNoteId below) — an effect would paint one frame of the stale pair
@@ -195,41 +203,70 @@ export default function NotePage() {
 	const release = useCallback((id: string) => {
 		if (openedIdsRef.current.delete(id)) {
 			closeDoc(id);
+			// Drop the handle with it. A released doc is a DESTROYED doc, and
+			// keeping it around meant a return visit (md → canvas → md, where the
+			// canvas commit releases without a new handle replacing it) committed
+			// the dead one before the re-open could land.
+			setOpened((cur) => (cur?.id === id ? null : cur));
 		}
 	}, []);
 	// What the page wants open. A late openDoc releases its own doc only once the
 	// page has moved on — without that check StrictMode's mount/cleanup/mount
 	// would close the doc the second open just handed us.
 	const wantIdRef = useRef<string | null>(null);
+	// Mirrors `opened` for the async callbacks below, which must not re-open a
+	// doc this page already holds (a redundant open also means a redundant
+	// `enroll`, and handshake starvation is a known bug class here).
+	const openedRef = useRef<typeof opened>(null);
+	useEffect(() => {
+		openedRef.current = opened;
+	}, [opened]);
 	useEffect(() => {
 		wantIdRef.current = openId;
 		if (openId === null) {
 			return;
 		}
 		let cancelled = false;
-		openDoc(openId).then((h) => {
-			if (!h) {
-				// Open failed (session torn down mid-await). Nothing to commit, so the
-				// previous pair keeps rendering — whole, and honest about it.
+		const attempt = () => {
+			if (cancelled || openedRef.current?.id === openId) {
 				return;
 			}
-			openedIdsRef.current.add(openId);
-			if (cancelled || wantIdRef.current !== openId) {
-				// Never reached the screen, so release it rather than leak it — UNLESS
-				// this is the doc the mounted editor is bound to, which happens when
-				// you navigate away and back: closeDoc would destroy a live document
-				// out from under the binding, silently dropping keystrokes. The pair
-				// swap below releases it at the right moment instead.
-				if (wantIdRef.current !== openId && boundIdRef.current !== openId) {
-					release(openId);
+			openDoc(openId).then((h) => {
+				if (!h) {
+					// Open failed. Nothing to commit, so the previous pair keeps
+					// rendering — whole, and honest about it.
+					return;
 				}
-				return;
-			}
-			setOpened({ id: openId, handle: h });
-			enroll(openId);
-		});
+				openedIdsRef.current.add(openId);
+				if (cancelled || wantIdRef.current !== openId) {
+					// Never reached the screen, so release it rather than leak it —
+					// UNLESS this is the doc the mounted editor is bound to, which
+					// happens when two opens for the same note are outstanding and the
+					// page moves on between them: closeDoc would destroy a live
+					// document out from under the binding, silently dropping
+					// keystrokes. The pair swap below releases it at the right moment.
+					if (wantIdRef.current !== openId && boundIdRef.current !== openId) {
+						release(openId);
+					}
+					return;
+				}
+				setOpened({ id: openId, handle: h });
+				enroll(openId);
+			});
+		};
+		attempt();
+		// A session torn down MID-open makes openDoc SETTLE as a failure (null),
+		// and nothing would ever ask again — the note stays unopenable until the
+		// user navigates away and back. A PARKED open is the opposite and needs no
+		// help: startCrdtSession drains every waiter and only bumps the generation
+		// when a session was actually running, so an open waiting on a session
+		// resolves by itself the moment one starts. So this is not a retry loop —
+		// it is one re-ask per sync-status transition, skipped entirely once we
+		// hold the routed doc.
+		const unsubscribe = subscribeToCrdtSyncStatus(attempt);
 		return () => {
 			cancelled = true;
+			unsubscribe();
 		};
 	}, [openId, release]);
 
@@ -327,6 +364,24 @@ export default function NotePage() {
 		setDraftNoteId(shownId);
 		setFrontmatterDraft(false);
 	}
+
+	// Holding the previous note is honest about DATA but silent about INTENT:
+	// the user clicked a note and it never opened. Say so — without taking the
+	// readable note away, because nothing is being lost by waiting. Derived, not
+	// stored, so it clears itself when the doc opens, when the user navigates
+	// elsewhere, and when the session recovers.
+	const stalled = shown !== null && shown.note.id !== validId;
+	const [stalledLong, setStalledLong] = useState(false);
+	useEffect(() => {
+		if (!stalled) {
+			setStalledLong(false);
+			return;
+		}
+		// Not immediately: an ordinary open takes a moment, and a strip on every
+		// click is noise worse than the flash this page removed.
+		const timer = setTimeout(() => setStalledLong(true), STALL_NOTICE_MS);
+		return () => clearTimeout(timer);
+	}, [stalled]);
 
 	// Publish the editor so right-sidebar tools (the markdown reference panel)
 	// can insert at the caret. Gated on the SAME condition that renders
@@ -477,6 +532,12 @@ export default function NotePage() {
 					Not syncing - reconnecting...
 				</p>
 			)}
+			{stalled && stalledLong ? (
+				<p role="status" className="shrink-0 bg-muted px-4 py-1 text-muted-foreground text-xs">
+					Still opening {routedNote ? `“${noteName(routedNote.path)}”` : "that note"} — showing “
+					{name}” until it does.
+				</p>
+			) : null}
 			{/* The big title moved into the document so it scrolls away, but the
 			    path stays pinned here — it is the only rename affordance still
 			    reachable once you have scrolled the title out of view. */}
