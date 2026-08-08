@@ -11,6 +11,7 @@ import LoadingScreen from "./layout/loading-screen";
 import RouteErrorBoundary from "./route-error-boundary";
 import { ROUTES } from "./routes";
 import LoadingPane from "./viewer/loading-pane";
+import { VaultItemPage } from "./viewer/note-chunks";
 
 // Route-level code splitting. The viewer stack alone (remark/rehype +
 // KaTeX wiring + CodeMirror behind NotePage) dominated a 1.78 MB main
@@ -39,7 +40,7 @@ const OnboardRedirect = lazy(() =>
 const Dashboard = lazy(() => import("./viewer/dashboard"));
 // /:slug/:itemId resolves to the note OR attachment viewer (VaultItemPage owns
 // the lazy NotePage/AttachmentPage chunks).
-const VaultItemPage = lazy(() => import("./viewer/vault-item-page"));
+
 const VaultRoute = lazy(() => import("./viewer/vault-route"));
 const VaultRedirect = lazy(() => import("./viewer/vault-redirect"));
 const LegacyNoteRedirect = lazy(() => import("./viewer/legacy-note-redirect"));

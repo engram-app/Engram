@@ -1,6 +1,6 @@
 import type { EditorView } from "@codemirror/view";
 import { BookOpen, Pencil } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import type { Awareness } from "y-protocols/awareness";
@@ -35,6 +35,7 @@ import { useActiveEditor } from "./editor/active-editor-context";
 import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
 import { InlineTitle } from "./inline-title";
 import LoadingPane from "./loading-pane";
+import { NoteEditor } from "./note-chunks";
 import { NoteMenu } from "./note-menu";
 import NoteToc from "./note-toc";
 import NoteView from "./note-view";
@@ -47,8 +48,6 @@ import { RenameInput } from "./tree-actions/rename-input";
 import { renameBaseName } from "./tree-actions/rename-path";
 import { useLiveContent } from "./use-live-content";
 import { buildWikiMap, wikiHref } from "./wiki-link";
-
-const NoteEditor = lazy(() => import("./note-editor"));
 
 /** How long the routed note may fail to open before the pane explains itself. */
 const STALL_NOTICE_MS = 1500;

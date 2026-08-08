@@ -7,6 +7,7 @@ import { useBillingStatus } from "../api/queries";
 import { useChannel } from "../api/use-channel";
 import { AttachmentUploadProvider } from "../viewer/attachment-upload/provider";
 import { ActiveEditorProvider } from "../viewer/editor/active-editor-context";
+import { preloadNoteChunks } from "../viewer/note-chunks";
 import AppSidebarPanel, { Rail } from "./app-sidebar";
 import MobileLayout from "./mobile-layout";
 import { RailViewProvider } from "./rail-view-context";
@@ -119,6 +120,21 @@ function AppLayoutInner() {
 }
 
 export default function AppLayout() {
+	// Warm the note-viewing chunks while the user is still looking at the tree.
+	// Opening the first note otherwise walks three lazy boundaries in series,
+	// two of them behind a full-pane spinner (#1317). requestIdleCallback so it
+	// never competes with the initial render; setTimeout for Safari, which
+	// still lacks it.
+	useEffect(() => {
+		const idle = window.requestIdleCallback;
+		if (typeof idle === "function") {
+			const handle = idle(() => preloadNoteChunks());
+			return () => window.cancelIdleCallback?.(handle);
+		}
+		const timer = setTimeout(preloadNoteChunks, 0);
+		return () => clearTimeout(timer);
+	}, []);
+
 	return (
 		<RightToolsProvider>
 			<RailViewProvider>
