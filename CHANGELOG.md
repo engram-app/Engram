@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.15.0](https://github.com/engram-app/Engram/compare/0.14.0...0.15.0) (2026-08-08)
+
+
+### Features
+
+* **ci:** split Discord notices into alerts vs announcements ([#1298](https://github.com/engram-app/Engram/issues/1298)) ([597cce6](https://github.com/engram-app/Engram/commit/597cce66ba8bc1d9095287a236e944c16337a8bc))
+
+
+### Bug Fixes
+
+* **api:** DEK-fault handling on the sync manifest + the missing attachment decrypt span ([#1321](https://github.com/engram-app/Engram/issues/1321)) ([9b8d1bf](https://github.com/engram-app/Engram/commit/9b8d1bf04ce2189e5da64e9c4061f560345d4ef2))
+* **backfill:** drop self-colliding unique from content-hash backfill ([#1230](https://github.com/engram-app/Engram/issues/1230)) ([#1310](https://github.com/engram-app/Engram/issues/1310)) ([a22c101](https://github.com/engram-app/Engram/commit/a22c10137b97161c8e44c543b9b231bf0e7485d9))
+* **frontend:** route onboarding gate off live status, not stale bootstrap ([#1299](https://github.com/engram-app/Engram/issues/1299)) ([135bb31](https://github.com/engram-app/Engram/commit/135bb31b5c56f3d77b6de4d7e1fbe7d42dda15fd))
+* **links:** rewrite links on resurrect-rename, not just live relocate ([#1304](https://github.com/engram-app/Engram/issues/1304)) ([3fe3c59](https://github.com/engram-app/Engram/commit/3fe3c596731a5657bbb51cd1a71c70a4b62918a7))
+* **mcp:** point resource_documentation at docs that exist ([#1292](https://github.com/engram-app/Engram/issues/1292)) ([d5a0fd4](https://github.com/engram-app/Engram/commit/d5a0fd4b98b10916079ed0aa64aca2e46e3721cc))
+* **sync:** flip untagged CRDT client default to "web" ([#1301](https://github.com/engram-app/Engram/issues/1301)) ([#1305](https://github.com/engram-app/Engram/issues/1305)) ([89fe0d8](https://github.com/engram-app/Engram/commit/89fe0d86bc98fbf9973a6bffab098fa8a510ae08)), closes [#648](https://github.com/engram-app/Engram/issues/648)
+* **sync:** stop dropping notes whose id belongs to another vault ([#1318](https://github.com/engram-app/Engram/issues/1318)) ([b359e77](https://github.com/engram-app/Engram/commit/b359e77a081ee1c31b46af2cfb29fb51598724aa))
+* **test:** budget crdt_head_property's timeout off its run count ([#1307](https://github.com/engram-app/Engram/issues/1307)) ([1fe6404](https://github.com/engram-app/Engram/commit/1fe6404a6e42bc60c9a181cf008804362f12075c)), closes [#1303](https://github.com/engram-app/Engram/issues/1303)
+* **test:** stop asserting a fixed-window limiter never rolls over ([#1300](https://github.com/engram-app/Engram/issues/1300)) ([0d3b5dd](https://github.com/engram-app/Engram/commit/0d3b5dddf1ffb7584bffb35baaf9196add719ff1))
+* **web:** stop the note pane flashing, without ever mixing two notes ([#1312](https://github.com/engram-app/Engram/issues/1312)) ([406cded](https://github.com/engram-app/Engram/commit/406cded175d878db83fe1e9f058d35152baa69f2))
+
+
+### Performance Improvements
+
+* **ci:** move buildx cache to LAN MinIO ([#1286](https://github.com/engram-app/Engram/issues/1286)) ([8f58896](https://github.com/engram-app/Engram/commit/8f5889608de212fb502a91a42d3adad9ad24fd26))
+* **web:** instrument the note-open path ([#1317](https://github.com/engram-app/Engram/issues/1317) step 0) ([#1323](https://github.com/engram-app/Engram/issues/1323)) ([f35de19](https://github.com/engram-app/Engram/commit/f35de192d155a1c51349523f0264bb73eb4aac8e))
+* **web:** no loading circle on the first note open ([#1324](https://github.com/engram-app/Engram/issues/1324)) ([de88eee](https://github.com/engram-app/Engram/commit/de88eeeb3344977886f26fbbda58aa6539a42a50))
+* **web:** one bulk vault-tree read for the sidebar ([#1316](https://github.com/engram-app/Engram/issues/1316)) ([60859f5](https://github.com/engram-app/Engram/commit/60859f5bcc84bc54cf56fc0dff15feaeb19848f1))
+
 ## [0.14.0](https://github.com/engram-app/Engram/compare/0.13.0...0.14.0) (2026-08-06)
 
 
