@@ -1,30 +1,30 @@
-import { useEffect, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import type * as Y from "yjs";
 
 /**
- * Whether a live Y.Text currently holds anything, tracked on every doc update.
+ * Whether a live Y.Text currently holds anything.
  *
- * Deliberately NOT `useLiveContent`, which debounces by 300ms: this drives the
- * swap from the read-only seed to the real editor, so a debounce here would
- * delay the moment the note becomes editable. It answers a boolean, so it
- * re-renders only on the empty↔non-empty transition rather than per keystroke.
+ * `useSyncExternalStore`, not state-in-an-effect: an effect only corrects the
+ * value AFTER the first commit, so a note switch would render one frame using
+ * the PREVIOUS note's doc state — long enough to flash the seed over a warm
+ * note, or the blank editor over a cold one. This reads the live doc during
+ * render, so the first frame is already right.
+ *
+ * Deliberately not `useLiveContent`, which debounces by 300ms: this drives the
+ * handover to the real editor, and a debounce would delay editability.
  */
 export function useDocHasContent(ytext: Y.Text | null): boolean {
-	const [hasContent, setHasContent] = useState(() => (ytext ? ytext.length > 0 : false));
-
-	useEffect(() => {
-		if (!ytext) {
-			setHasContent(false);
-			return;
-		}
-		setHasContent(ytext.length > 0);
-		const onUpdate = () => setHasContent(ytext.length > 0);
-		const { doc } = ytext;
-		doc?.on("update", onUpdate);
-		return () => {
-			doc?.off("update", onUpdate);
-		};
-	}, [ytext]);
-
-	return hasContent;
+	const subscribe = useCallback(
+		(onChange: () => void) => {
+			const doc = ytext?.doc;
+			if (!doc) {
+				return () => undefined;
+			}
+			doc.on("update", onChange);
+			return () => doc.off("update", onChange);
+		},
+		[ytext],
+	);
+	const getSnapshot = useCallback(() => (ytext ? ytext.length > 0 : false), [ytext]);
+	return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

@@ -14,6 +14,7 @@ interface Props {
 	onLongPress?: (itemId: string) => void;
 	onFolderHover?: (folderId: string) => void;
 	onNoteHover?: (noteId: string) => void;
+	onNoteHoverEnd?: () => void;
 }
 
 export function TreeRowVirtualized({
@@ -26,6 +27,7 @@ export function TreeRowVirtualized({
 	onLongPress,
 	onFolderHover,
 	onNoteHover,
+	onNoteHoverEnd,
 }: Props) {
 	const fallback = items[virtualItem.index];
 	if (!fallback) {
@@ -56,6 +58,7 @@ export function TreeRowVirtualized({
 				onLongPress={onLongPress}
 				onFolderHover={onFolderHover}
 				onNoteHover={onNoteHover}
+				onNoteHoverEnd={onNoteHoverEnd}
 			/>
 		</div>
 	);

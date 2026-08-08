@@ -292,6 +292,15 @@ export default function FolderTree() {
 		},
 		[],
 	);
+	// Without this the debounce never actually required a sustained hover: a
+	// pointer sweeping the list and leaving still fired a fetch 150ms after the
+	// last row it crossed.
+	const cancelNoteHover = useCallback(() => {
+		if (hoverTimerRef.current) {
+			clearTimeout(hoverTimerRef.current);
+			hoverTimerRef.current = null;
+		}
+	}, []);
 	const prefetchNoteOnHover = useCallback(
 		(noteId: string) => {
 			if (hoverTimerRef.current) {
@@ -710,6 +719,7 @@ export default function FolderTree() {
 							onLongPress={handleLongPress}
 							onFolderHover={prefetchFolderNotes}
 							onNoteHover={prefetchNoteOnHover}
+							onNoteHoverEnd={cancelNoteHover}
 						/>
 					))}
 				</div>

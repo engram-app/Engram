@@ -338,26 +338,45 @@ export default function NotePage() {
 	const liveContent = useLiveContent(handle?.ytext ?? null, noteContent ?? "");
 	// ── The handshake seed ───────────────────────────────────────────────────
 	// A cold local cache opens the doc in ~20ms but its Y.Text is EMPTY until
-	// the STEP1 reply lands ~345ms later, so CodeMirror was mounting over an
-	// empty document and the user watched a blank editor for a note that has
-	// content (#1317, the `editor:seeded-empty` mark). The REST payload already
-	// carries that content, so render it read-only for exactly that window.
+	// the STEP1 reply lands ~345ms later, so CodeMirror mounts over an empty
+	// document and the user watches a blank editor for a note that has content
+	// (#1317, the `editor:seeded-empty` mark). The REST payload already carries
+	// that content, so show it for exactly that window.
 	//
-	// Read-only is the whole point and not a limitation to fix later: this
-	// surface is NOT bound to the Y.Doc, so a keystroke here would be written
-	// into nothing and lost the moment the real editor mounts over it.
+	// LATCHED to the handshake, not to "the doc is empty". Those are different
+	// conditions: select-all + Backspace also empties the doc, while the REST
+	// cache still holds the old body for seconds until a checkpoint invalidates
+	// it — an unlatched gate puts the text the user just deleted back on screen.
+	// Once this note's doc has held content once, the seed is done for good.
 	const docHasContent = useDocHasContent(handle?.ytext ?? null);
 	const [seedExpired, setSeedExpired] = useState(false);
-	const seedingId = handle && !docHasContent && (noteContent?.length ?? 0) > 0 ? shownId : null;
+	const seenContentRef = useRef<string | null>(null);
+	if (docHasContent && shownId) {
+		seenContentRef.current = shownId;
+	}
+	const seedingId =
+		handle && !docHasContent && seenContentRef.current !== shownId && (noteContent?.length ?? 0) > 0
+			? shownId
+			: null;
 	useEffect(() => {
+		// The reset runs BEFORE the null check: bailing early left the flag set
+		// from a previous slow note, so the next note painted one frame of the
+		// blank editor this exists to remove.
+		setSeedExpired(false);
 		if (seedingId === null) {
 			return;
 		}
-		setSeedExpired(false);
 		const timer = setTimeout(() => setSeedExpired(true), SEED_MAX_MS);
 		return () => clearTimeout(timer);
 	}, [seedingId]);
-	const showSeed = seedingId !== null && !seedExpired;
+	// Rendered mode only. In raw mode the seed would show RENDERED markdown that
+	// the editor then replaces with literal source — content rewriting itself
+	// under the user in the one mode whose purpose is showing the source — and
+	// would pay a KaTeX/Mermaid render just to throw it away.
+	const showSeed = seedingId !== null && !seedExpired && mode === "rendered";
+	// Reading mode has the same blank window and no editor to seed, so it falls
+	// back to the REST body under the same latch.
+	const readingFallback = seedingId !== null && !seedExpired;
 	useEffect(() => {
 		if (notePath === undefined) {
 			setSlot("outline", null);
@@ -675,7 +694,7 @@ export default function NotePage() {
 						// as it does in the editor.
 						<div className="px-5 pt-5">
 							<NoteView
-								content={liveContent}
+								content={readingFallback ? (noteContent ?? "") : liveContent}
 								tags={note.tags}
 								links={note.links}
 								manifestNotes={manifest?.notes}
@@ -683,48 +702,61 @@ export default function NotePage() {
 						</div>
 					) : (
 						<Suspense fallback={<p className="px-5 py-5 text-muted-foreground">Loading editor…</p>}>
-							{/* The handshake seed: the note's REST content shown while the
+							<div className="relative">
+								{/* The handshake seed: the note's REST content shown while the
 							    live doc is still empty, so the pane isn't blank for the
 							    ~345ms STEP1 round trip (#1317). Rendered ALONGSIDE the
 							    editor, not instead of it — the doc is already bound, so the
 							    editor stays mounted and typing still lands in the Y.Doc.
 							    It unmounts the instant the doc has content. */}
-							{showSeed ? (
-								<div className="px-5 pt-5" aria-busy="true" data-testid="handshake-seed">
-									<NoteView
-										content={noteContent ?? ""}
-										tags={note.tags}
-										links={note.links}
-										manifestNotes={manifest?.notes}
-									/>
-								</div>
-							) : null}
-							{handle ? (
-								<NoteEditor
-									ytext={handle.ytext}
-									awareness={handle.awareness}
-									mode={mode === "raw" ? "raw" : "rendered"}
-									resolveWikiLink={resolveWikiLink}
-									openWikiLink={openWikiLink}
-									wikiCompletionPaths={wikiCompletionPaths}
-									onFrontmatterShortcut={handleFrontmatterShortcut}
-									onView={(v) => {
-										editorViewRef.current = v;
-										// The view existing is the first moment content is on
-										// screen. Delta from open:resolved is the CodeMirror
-										// construction cost, and on the first open of a page
-										// load it also carries the lazy chunk fetch (#1317).
-										if (v && shownId) {
-											crdtMark(shownId, "editor:construct-end");
-											if (handle && handle.ytext.length === 0) {
-												crdtMark(shownId, "editor:seeded-empty");
+								{showSeed ? (
+									// pointer-events-none + absolute: the seed is DECORATION for
+									// the handshake window, never a target. In flow it sat on top
+									// of a near-zero-height empty CodeMirror and swallowed the
+									// click that would have placed a caret, so anything typed
+									// during the window went nowhere. Clicks now fall through to
+									// the editor underneath. aria-hidden because the editor below
+									// already carries the same text for a screen reader.
+									<div
+										className="pointer-events-none absolute inset-x-0 top-0 px-5 pt-5"
+										aria-hidden="true"
+										data-testid="handshake-seed"
+									>
+										<NoteView
+											content={noteContent ?? ""}
+											tags={note.tags}
+											links={note.links}
+											manifestNotes={manifest?.notes}
+										/>
+									</div>
+								) : null}
+								{handle ? (
+									<NoteEditor
+										ytext={handle.ytext}
+										awareness={handle.awareness}
+										mode={mode === "raw" ? "raw" : "rendered"}
+										resolveWikiLink={resolveWikiLink}
+										openWikiLink={openWikiLink}
+										wikiCompletionPaths={wikiCompletionPaths}
+										onFrontmatterShortcut={handleFrontmatterShortcut}
+										onView={(v) => {
+											editorViewRef.current = v;
+											// The view existing is the first moment content is on
+											// screen. Delta from open:resolved is the CodeMirror
+											// construction cost, and on the first open of a page
+											// load it also carries the lazy chunk fetch (#1317).
+											if (v && shownId) {
+												crdtMark(shownId, "editor:construct-end");
+												if (handle && handle.ytext.length === 0) {
+													crdtMark(shownId, "editor:seeded-empty");
+												}
 											}
-										}
-									}}
-								/>
-							) : (
-								<p className="px-5 py-5 text-muted-foreground">Connecting…</p>
-							)}
+										}}
+									/>
+								) : (
+									<p className="px-5 py-5 text-muted-foreground">Connecting…</p>
+								)}
+							</div>
 						</Suspense>
 					)}
 				</div>

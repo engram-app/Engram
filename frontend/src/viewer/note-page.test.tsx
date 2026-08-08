@@ -657,6 +657,53 @@ describe("NotePage (CRDT)", () => {
 		expect(screen.getByTestId("editor-text")).toHaveTextContent("# from CRDT");
 	});
 
+	// The seed covers the HANDSHAKE, not "the doc is empty". Emptying a note by
+	// hand also empties the doc while the REST cache still holds the old body
+	// for seconds — an unlatched gate puts the deleted text back on screen.
+	it("does not resurrect content the user just deleted", async () => {
+		const doc = new Y.Doc();
+		const ytext = doc.getText("content");
+		ytext.insert(0, "# already here");
+		openDoc.mockResolvedValue({ ytext, awareness: new Awareness(doc), doc });
+		useNoteMock.mockReturnValue({
+			data: { ...NOTE, content: "# already here" },
+			isLoading: false,
+			error: null,
+		});
+
+		renderPage();
+		await waitFor(() => expect(screen.getByTestId("note-editor")).toBeInTheDocument());
+		expect(screen.queryByTestId("handshake-seed")).not.toBeInTheDocument();
+
+		// User selects all and deletes. REST still reports the old body.
+		act(() => {
+			ytext.delete(0, ytext.length);
+		});
+
+		expect(screen.queryByTestId("handshake-seed")).not.toBeInTheDocument();
+	});
+
+	// Raw mode exists to show literal source; a rendered seed would rewrite
+	// itself into source under the user.
+	it("does not seed in raw mode", async () => {
+		const doc = new Y.Doc();
+		const empty = doc.getText("content");
+		openDoc.mockResolvedValue({ ytext: empty, awareness: new Awareness(doc), doc });
+		useNoteMock.mockReturnValue({
+			data: { ...NOTE, content: "# from REST" },
+			isLoading: false,
+			error: null,
+		});
+
+		renderPage();
+		await waitFor(() => expect(screen.getByTestId("handshake-seed")).toBeInTheDocument());
+
+		await openMenu();
+		fireEvent.click(screen.getByRole("menuitem", { name: "Raw" }));
+
+		await waitFor(() => expect(screen.queryByTestId("handshake-seed")).not.toBeInTheDocument());
+	});
+
 	// The seed must never become a cage: if the doc really is empty while REST
 	// still reports content, the user has to be able to type eventually. Real
 	// timers on purpose — fake ones don't flush openDoc's promise chain, so the

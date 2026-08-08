@@ -11,6 +11,12 @@ import { TREE_ROW_HEIGHT } from "./row-metrics";
 import { isSyntheticFolderId } from "./synthesize-folders";
 import type { TreeItem } from "./types";
 
+/** A real server id is a UUID. Optimistic rows and synthetic tree ids are not,
+ *  and asking the API about them only ever produces an error. */
+function isServerId(id: string): boolean {
+	return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}
+
 interface Props {
 	instance: ItemInstance<LoaderItem>;
 	// Id of the file currently open in the editor (the route param). The
@@ -28,6 +34,8 @@ interface Props {
 	// folder's prefetch is a cache derivation and a note's is a network read —
 	// the caller debounces this one.
 	onNoteHover?: (noteId: string) => void;
+	// Pointer left the row before the caller's debounce elapsed — cancel it.
+	onNoteHoverEnd?: () => void;
 	onFolderHover?: (folderId: string) => void;
 }
 
@@ -126,6 +134,7 @@ export function TreeRow({
 	onLongPress,
 	onFolderHover,
 	onNoteHover,
+	onNoteHoverEnd,
 }: Props) {
 	const itemId = instance.getId();
 	const slug = useActiveVaultSlug();
@@ -239,7 +248,6 @@ export function TreeRow({
 				to={slug ? `/${slug}/${item.id}` : `/note/${item.id}`}
 				{...instance.getProps()}
 				{...longPressProps}
-				onPointerEnter={onNoteHover ? () => onNoteHover(item.id) : undefined}
 				onContextMenu={contextMenuHandler}
 				aria-selected={instance.isSelected()}
 				aria-current={active ? "page" : undefined}
@@ -278,12 +286,20 @@ export function TreeRow({
 		e.dataTransfer.clearData("text/html");
 	};
 
+	// Only rows the server can actually answer for. An optimistic row whose
+	// create has not been acked carries a client-minted id the backend has never
+	// seen, so prefetching it buys a guaranteed error — the note-side twin of the
+	// folder branch's isSynthetic check.
+	const noteHoverStart =
+		onNoteHover && isServerId(item.id) ? () => onNoteHover(item.id) : undefined;
+
 	return (
 		<Link
 			to={slug ? `/${slug}/${item.id}` : `/note/${item.id}`}
 			{...htProps}
 			{...longPressProps}
-			onPointerEnter={onNoteHover ? () => onNoteHover(item.id) : undefined}
+			onPointerEnter={noteHoverStart}
+			onPointerLeave={noteHoverStart ? onNoteHoverEnd : undefined}
 			onContextMenu={contextMenuHandler}
 			onDragStart={handleNoteDragStart}
 			aria-selected={instance.isSelected()}

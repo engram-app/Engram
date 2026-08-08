@@ -2853,5 +2853,11 @@ export function prefetchNoteById(
 	vaultId: string | null | undefined,
 	id: string,
 ): void {
-	qc.prefetchQuery(noteQueryOptions(vaultId, id)).catch(() => undefined);
+	qc.prefetchQuery(noteQueryOptions(vaultId, id)).catch(() => {
+		// Drop the failed entry rather than leaving it cached under the key
+		// `useNote` reads: a speculative hover must never turn a later real click
+		// into the hard error pane. Removing it means the click starts a fresh
+		// fetch and gets the normal loading path.
+		qc.removeQueries({ queryKey: ["note", vaultId, id], exact: true });
+	});
 }
