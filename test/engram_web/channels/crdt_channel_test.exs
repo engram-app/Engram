@@ -438,6 +438,49 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_note_content_eventually(user, vault, id2, "beta")
     end
 
+    test "an id owned by another of the user's vaults is re-minted, with content", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # The bulk leg of the vault-copy fix, and the leg the reported incident
+      # actually used. genesis_crdt_note re-mints a colliding id, but prepare_create
+      # used to forward the id we SENT rather than the one that was created: phase
+      # 2's ensure_room resolves via note_in_vault?, which is false for the foreign
+      # id, so every re-minted entry fell into the create_failed arm, its content
+      # frame was dropped, and the row committed EMPTY. Asserting the content (not
+      # just the status) is what makes this a real regression test.
+      {:ok, other_vault} = Vaults.create_vault(user, %{name: "CrdtChannelTestB"})
+
+      {:ok, foreign} =
+        Notes.upsert_note(user, other_vault, %{"path" => "Copied.md", "content" => "vault B body"})
+
+      creates = [
+        %{
+          "doc_id" => foreign.id,
+          "path" => "Copied.md",
+          "b64" => frame_for_content("copied-body")
+        }
+      ]
+
+      {new_id, log} =
+        with_log(fn ->
+          ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+          assert_reply ref, :ok, %{results: [%{status: "ok", doc_id: id}]}
+          id
+        end)
+
+      refute new_id == foreign.id, "the colliding id was not re-minted"
+      assert log =~ "already taken"
+
+      # Landed in THIS vault, under the new id, carrying the frame's content.
+      assert_note_content_eventually(user, vault, new_id, "copied-body")
+
+      # The vault that owns the id keeps its note and its content.
+      assert {:ok, untouched} = Notes.get_note_by_id(user, other_vault, foreign.id)
+      assert untouched.content =~ "vault B body"
+    end
+
     test "materializes content SYNCHRONOUSLY so the seq feed carries it immediately", %{
       socket: socket,
       user: user,
