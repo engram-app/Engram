@@ -19,6 +19,12 @@ const MAX_SAMPLES = 2000;
 type Phase =
 	| "open:start"
 	| "open:session-ready"
+	// NOTE when reading a report: `entry:warm` also fires from
+	// ChannelBridge.handleFrame's getDoc, so on an open that went through
+	// `entry:cold` you will see a LATER `entry:warm` stamped at the moment the
+	// first sync frame arrived. That is the frame handler, not the open path —
+	// do not read it as the open taking that long. It is also why `total` can
+	// exceed the real time-to-content.
 	| "entry:warm"
 	| "entry:cold"
 	| "idb:synced"
@@ -26,7 +32,13 @@ type Phase =
 	| "step1:sent"
 	| "step1:reply"
 	| "editor:construct-start"
-	| "editor:construct-end";
+	| "editor:construct-end"
+	// Emitted when the view is built over an EMPTY Y.Text: the local
+	// IndexedDB copy had nothing, so the user stares at a blank editor until
+	// step1:reply lands. Its presence is what separates "content was local"
+	// from "content came over the wire" — the two have wildly different
+	// times-to-content and want completely different fixes.
+	| "editor:seeded-empty";
 
 interface Sample {
 	t: number;

@@ -639,6 +639,9 @@ export default function NotePage() {
 										// load it also carries the lazy chunk fetch (#1317).
 										if (v && shownId) {
 											crdtMark(shownId, "editor:construct-end");
+											if (handle && handle.ytext.length === 0) {
+												crdtMark(shownId, "editor:seeded-empty");
+											}
 										}
 									}}
 								/>
