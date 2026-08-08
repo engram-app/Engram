@@ -1,80 +1,25 @@
 import { type ReactNode, useState } from "react";
-import { useNavigate } from "react-router";
-import { useCreateVault } from "../api/queries";
 import { ChecklistWidget } from "./checklist-widget";
 import { CreateFirstVaultModal } from "./create-first-vault-modal";
-import { TourController } from "./tour/controller";
-import { DemoVaultProvider, useDemoVault } from "./tour/demo-vault-provider";
 import { useOnboardingActions } from "./use-onboarding-actions";
 
-function ShellInner({ children }: { children: ReactNode }) {
+export function OnboardingShell({ children }: { children: ReactNode }) {
 	const ob = useOnboardingActions();
-	const demo = useDemoVault();
-	const createVault = useCreateVault();
-	const navigate = useNavigate();
-
-	const [tourActive, setTourActive] = useState(false);
-	const [tourReachedEnd, setTourReachedEnd] = useState(false);
 	const [vaultModalHandled, setVaultModalHandled] = useState(false);
 
 	if (ob.isLoading) {
 		return <>{children}</>;
 	}
 
-	const showVaultModal = !vaultModalHandled && ob.vaultCount === 0 && !tourActive;
-
-	const startTour = async () => {
-		await demo.activate();
-		setTourActive(true);
-		// Demo mode makes useVaults return ONLY the synthetic demo vaults, so any
-		// real vault slug in the URL stops resolving and VaultRoute 404s. Bounce
-		// through / so VaultRedirect re-picks from the demo list. Same batch, so
-		// this renders once. onTourExit does the mirror of this on the way out.
-		navigate("/", { replace: true });
-	};
-
-	const onTourExit = (reachedEnd: boolean) => {
-		if (reachedEnd) {
-			ob.record("tour_completed");
-		}
-		setTourActive(false);
-		demo.deactivate();
-		// The tour walks through a demo note (`/<slug>/<id>`) that doesn't exist
-		// in the real backend. Bounce back to the dashboard so useNote doesn't
-		// 404 once the demo wrap drops.
-		navigate("/", { replace: true });
-		// Tour CTA promised "Create my vault" — fulfill it. Spin up a default
-		// vault so the user lands on a real dashboard, not a blocking modal.
-		// User can rename it later in /settings/vaults.
-		if (reachedEnd && ob.vaultCount === 0) {
-			setVaultModalHandled(true);
-			createVault.mutate({ name: "My Vault" });
-		}
-	};
+	const showVaultModal = !vaultModalHandled && ob.vaultCount === 0;
 
 	return (
 		<>
 			{children}
-			{Boolean(tourActive) && (
-				<TourController
-					active={tourActive}
-					reachedEnd={tourReachedEnd}
-					setReachedEnd={setTourReachedEnd}
-					onExit={onTourExit}
-				/>
-			)}
 			{Boolean(showVaultModal) && (
 				<CreateFirstVaultModal onCreated={() => setVaultModalHandled(true)} />
 			)}
-			{!tourActive && <ChecklistWidget onStartTour={startTour} />}
+			<ChecklistWidget />
 		</>
-	);
-}
-
-export function OnboardingShell({ children }: { children: ReactNode }) {
-	return (
-		<DemoVaultProvider>
-			<ShellInner>{children}</ShellInner>
-		</DemoVaultProvider>
 	);
 }

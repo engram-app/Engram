@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
 	buildWikiMap,
+	markdownLinkHref,
 	parseWikiTarget,
 	resolveWikiTarget,
 	wikiCreatePath,
@@ -199,5 +200,64 @@ describe("wikiHref layered manifest fallback", () => {
 
 	test("heading hash preserved on wiki fallback", () => {
 		expect(wikiHref("Brand New#A Heading", "v", map, notes)).toBe("/v/wiki/Brand%20New#a-heading");
+	});
+});
+
+// #1302 — Obsidian writes `[label](Target.md)` when "Use [[Wikilinks]]" is
+// off. The backend indexes those as note_links edges just like wikilinks, so
+// the viewer resolves them through the same lookup instead of emitting a
+// plain <a> that full-page-navigates to a non-route.
+describe("markdownLinkHref", () => {
+	const map = buildWikiMap([
+		{
+			target_text: "My Note.md",
+			target_note_id: "n-1",
+			target_attachment_id: null,
+			target_path: "a/My Note.md",
+			alias: "label",
+			anchor: null,
+			link_type: "wikilink",
+			dangling: false,
+		},
+	]);
+
+	const notes = [{ id: "manifest-id", path: "Other Note.md" }];
+
+	test("resolves a vault-relative href to the note route", () => {
+		expect(markdownLinkHref("My Note.md", "v", map)).toBe("/v/n-1");
+	});
+
+	test("decodes percent-escapes before lookup — target_text is stored decoded", () => {
+		expect(markdownLinkHref("My%20Note.md", "v", map)).toBe("/v/n-1");
+	});
+
+	test("keeps the anchor as a slugged hash", () => {
+		expect(markdownLinkHref("My%20Note.md#Some%20Heading", "v", map)).toBe("/v/n-1#some-heading");
+	});
+
+	test("falls back to the sync manifest when no edge is indexed yet", () => {
+		expect(markdownLinkHref("Other Note.md", "v", map, notes)).toBe("/v/manifest-id");
+	});
+
+	test.each([
+		["https://example.com", "external scheme"],
+		["mailto:t@example.com", "mailto"],
+		["//cdn.example.com/x.png", "protocol-relative"],
+		["#just-a-heading", "bare anchor"],
+		["/v/already-routed", "already an app route"],
+		["", "empty"],
+	])("%s is left alone (%s)", (href) => {
+		expect(markdownLinkHref(href, "v", map, notes)).toBeNull();
+	});
+
+	test("an unresolved target stays a plain anchor, NOT the create route", () => {
+		// Deliberately unlike wikilinks: a markdown link can point at an
+		// attachment or a genuinely relative file, so hijacking it into the
+		// note-create affordance would be wrong.
+		expect(markdownLinkHref("Nope.md", "v", map, notes)).toBeNull();
+	});
+
+	test("no vault slug resolves nothing", () => {
+		expect(markdownLinkHref("My Note.md", undefined, map)).toBeNull();
 	});
 });

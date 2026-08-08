@@ -33,8 +33,8 @@ defmodule EngramWeb.Plugs.VaultPlug do
             Halt.json(conn, 403, %{error: "API key does not have access to this vault"})
         end
 
-      # A non-UUID X-Vault-ID (e.g. a client sending a stale/placeholder id like
-      # `demo-vault-2`) is distinct from a well-formed id that does not resolve.
+      # A non-UUID X-Vault-ID (e.g. a client sending a stale/placeholder id) is
+      # distinct from a well-formed id that does not resolve.
       # Both are 404 to the client, but the reason rides the existing request-stop
       # log (RequestLogger reads :reject_reason) so the difference is a one-line
       # Loki query without emitting a second log line per rejected request.

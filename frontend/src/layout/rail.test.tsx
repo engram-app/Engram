@@ -189,15 +189,6 @@ describe("Rail", () => {
 		expect(screen.getByRole("button", { name: "Files" })).not.toHaveAttribute("aria-current");
 	});
 
-	it('exposes data-tour="search" on the Search icon', () => {
-		render(
-			<Wrap>
-				<Rail />
-			</Wrap>,
-		);
-		expect(screen.getByRole("button", { name: "Search" })).toHaveAttribute("data-tour", "search");
-	});
-
 	it("clicking Files from the settings hash strips the hash and stays on /", () => {
 		render(
 			<Wrap initialEntries={["/#settings/account"]}>

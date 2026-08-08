@@ -9,8 +9,6 @@ import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { collideBump } from "@/lib/collide-bump";
 import { uuid7 } from "../crdt/uuid7";
-import { DEMO_VAULT_ID_PREFIX } from "../onboarding/tour/demo-vault-ids";
-import { useDemoVaultOptional } from "../onboarding/tour/demo-vault-provider";
 import {
 	isSyntheticFolderId,
 	syntheticFolderId,
@@ -353,8 +351,7 @@ export interface User {
 
 export function useFolders() {
 	const vaultId = useActiveVaultId();
-	const demo = useDemoVaultOptional();
-	const query = useQuery({
+	return useQuery({
 		queryKey: ["folders", vaultId],
 		// Backend echoes a synthetic root row (`name === ""`, `id === null`) to
 		// expose the count of root-level notes. The tree owns root notes via
@@ -362,71 +359,26 @@ export function useFolders() {
 		// folder markers + the `Folder.id: string` contract holds.
 		queryFn: () => api.get<RawFoldersCache>("/folders"),
 		select: selectFolders,
-		enabled: !demo?.active,
 		// Folder listing decrypts every marker row server-side; without a
 		// staleTime each remount/window-focus refetches it. Mutations and the
 		// sync channel (channel.ts) invalidate this key, so 60s of staleness
 		// only spans gaps nothing else would catch anyway.
 		staleTime: FOLDER_NOTES_STALE_MS,
 	});
-	if (demo?.active) {
-		// Demo folders use string ids; synthesize stable sentinel ids
-		// (1-based index, `demo-folder-N`) so the Folder contract is
-		// satisfied and ids don't collide with real backend uuids.
-		// parent_id is derived from the path prefix — root-level demo
-		// folders report `parent_id: null`.
-		const pathToId = new Map(demo.folders.map((f, i) => [f.path, `demo-folder-${i + 1}`]));
-		const data: Folder[] = demo.folders.map((f, i) => {
-			const slash = f.path.lastIndexOf("/");
-			const parentPath = slash < 0 ? null : f.path.slice(0, slash);
-			return {
-				id: `demo-folder-${i + 1}`,
-				parent_id: parentPath === null ? null : (pathToId.get(parentPath) ?? null),
-				name: f.path,
-				count: demo.notes.filter((n) => n.folder_id === f.id).length,
-			};
-		});
-		return { ...query, data, isLoading: false, isFetching: false, error: null };
-	}
-	return query;
 }
 
 export function useFolderNotes(folder: string, options?: { enabled?: boolean }) {
 	const vaultId = useActiveVaultId();
-	const demo = useDemoVaultOptional();
-	const query = useQuery({
+	return useQuery({
 		queryKey: ["folderNotes", vaultId, folder],
 		queryFn: () =>
 			api.get<{ notes: NoteSummary[] }>(`/folders/list?folder=${encodeURIComponent(folder)}`),
 		select: selectNotes,
-		enabled: !demo?.active && (options?.enabled ?? folder.length > 0),
+		enabled: options?.enabled ?? folder.length > 0,
 		// Same contract as useFolderNotesById: mutations + channel events
 		// invalidate; staleness only spans gaps those already don't cover.
 		staleTime: FOLDER_NOTES_STALE_MS,
 	});
-	if (demo?.active) {
-		const matchFolder = demo.folders.find((f) => f.path === folder);
-		const notes: NoteSummary[] = matchFolder
-			? demo.notes
-					.filter((n) => n.folder_id === matchFolder.id)
-					.map((n, i) => ({
-						// Demo notes have string ids; synthesize sentinel ids
-						// so they don't collide with real backend uuids and so the
-						// NoteSummary contract is satisfied (id: string).
-						id: `demo-note-${i + 1}`,
-						path: n.path,
-						title: n.title,
-						folder: matchFolder.path,
-						tags: [],
-						version: 1,
-						mtime: new Date().toISOString(),
-						created_at: new Date().toISOString(),
-						updated_at: new Date().toISOString(),
-					}))
-			: [];
-		return { ...query, data: notes, isLoading: false, isFetching: false, error: null };
-	}
-	return query;
 }
 
 // Headless-tree consumers key folder nodes by id and fetch their note
@@ -449,25 +401,12 @@ export interface AttachmentSummary {
 
 export function useAttachments() {
 	const vaultId = useActiveVaultId();
-	const demo = useDemoVaultOptional();
-	const query = useQuery({
+	return useQuery({
 		queryKey: ["attachments", vaultId],
 		queryFn: () => api.get<{ attachments: AttachmentSummary[] }>("/attachments"),
 		select: selectAttachments,
-		enabled: !demo?.active,
 		staleTime: FOLDER_NOTES_STALE_MS,
 	});
-	// Demo vaults carry no binary attachments.
-	if (demo?.active) {
-		return {
-			...query,
-			data: [] as AttachmentSummary[],
-			isLoading: false,
-			isFetching: false,
-			error: null,
-		};
-	}
-	return query;
 }
 
 // Wikilink resolution (wiki-link-redirect.tsx) needs the vault-wide path→id
@@ -1001,9 +940,6 @@ export function useBillingHistory(enabled: boolean) {
 // Onboarding types
 
 export type OnboardingAction =
-	| "tour_offered_taken"
-	| "tour_offered_skipped"
-	| "tour_completed"
 	| "first_vault_created"
 	| "plugin_connected"
 	| "ai_connected"
@@ -1034,7 +970,7 @@ export interface OnboardingStatus {
 	steps: OnboardingStep[];
 	// Post-wizard milestone log driving the persistent dashboard checklist.
 	actions: OnboardingAction[];
-	// Live vault count for checklist gating + tour decisions.
+	// Live vault count for checklist gating.
 	vault_count: number;
 }
 
@@ -1315,8 +1251,7 @@ export interface EncryptionProgress {
 // Vault hooks
 
 export function useVaults() {
-	const demo = useDemoVaultOptional();
-	const query = useQuery({
+	return useQuery({
 		queryKey: ["vaults"],
 		queryFn: async () => {
 			const data = await api.get<{ vaults: Vault[] }>("/vaults");
@@ -1328,51 +1263,11 @@ export function useVaults() {
 			return data;
 		},
 		select: (data) => data.vaults,
-		enabled: !demo?.active,
 		// Seeded fresh by useAppBootstrap on first load; vault mutations invalidate
 		// this key explicitly, so a short staleTime just suppresses the redundant
 		// refetch-on-mount of the seeded list.
 		staleTime: 60_000,
 	});
-	if (demo?.active && demo.vault) {
-		const base = {
-			description: null,
-			created_at: new Date(0).toISOString(),
-			encrypted: false,
-			encryption_status: "none" as const,
-			encrypted_at: null,
-			decrypt_requested_at: null,
-			last_toggle_at: null,
-			cooldown_days: null,
-			note_count: demo.notes.length,
-		};
-		// Two fake vaults so the VaultSwitcher renders its dropdown — the tour's
-		// first step is gated on a real switch between them. Notes are shared.
-		const vaults: Vault[] = [
-			{
-				...base,
-				id: `${DEMO_VAULT_ID_PREFIX}1`,
-				name: demo.vault.name,
-				slug: demo.vault.id,
-				is_default: true,
-			},
-			{
-				...base,
-				id: `${DEMO_VAULT_ID_PREFIX}2`,
-				name: "Personal",
-				slug: `${demo.vault.id}-personal`,
-				is_default: false,
-			},
-		];
-		return {
-			...query,
-			data: vaults,
-			isLoading: false,
-			isPending: false,
-			error: null,
-		} as typeof query;
-	}
-	return query;
 }
 
 export function useEncryptVault() {

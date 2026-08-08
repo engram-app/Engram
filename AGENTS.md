@@ -367,7 +367,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - MCP vault selection design — stateless `set_vault`, fate of the default vault → `docs/context/mcp-vault-selection.md`
 - Refresh-token rotation — leeway/overlap window, token-family reuse detection → `docs/context/refresh-token-reuse-detection.md`
 - How `/settings/connections` + the onboarding checklist identify an OAuth/MCP client (slug attribution, the three hosting classes, HTTPS trust model) → `docs/context/connections-client-identity.md`
-- Onboarding demo vault poisons `activeVaultId` → prod 404 storm (fixed) → `docs/context/demo-vault-activevaultid-poisoning.md`
+- A client-only fixture/sentinel id reaches persisted state and rides every later request (the removed demo vault's `activeVaultId` poisoning; feature gone, bug class kept) → `docs/context/demo-vault-activevaultid-poisoning.md`
 
 **Frontend / SPA**
 - Frontend SPA map — bootstrap chain, runtime router, api/sync/realtime layer, viewer/editor (start here for web-app work) → `docs/context/frontend-architecture.md`

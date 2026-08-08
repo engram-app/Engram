@@ -11,7 +11,8 @@ defmodule Engram.Workers.BackfillNoteLinks do
     * `"note_hmacs"`       — stamp `basename_hmac` on notes still missing it
     * `"attachment_hmacs"` — same, for attachments
     * `"links"`            — decrypt every live note's content, extract
-                              wikilinks/embeds, and persist edges
+                              every link occurrence (wikilink AND markdown
+                              syntax, #1302), and persist edges
 
   Cursor-driven and batched per scope, same shape as
   `Engram.Workers.BackfillContentHashHmac`. Idempotent: the hmac scopes

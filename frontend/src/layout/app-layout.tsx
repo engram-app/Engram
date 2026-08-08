@@ -56,10 +56,7 @@ function DesktopLayout() {
 				</ResizablePanel>
 				<ResizableHandle />
 				<ResizablePanel id="main" defaultSize="60%" minSize="30%">
-					<main
-						className="relative flex h-full flex-col overflow-hidden bg-muted/40 text-foreground"
-						data-tour="note-viewer"
-					>
+					<main className="relative flex h-full flex-col overflow-hidden bg-muted/40 text-foreground">
 						{/* Brand grid texture on the muted backdrop, behind the centered
                 document card. No corner glows — grid only. */}
 						<div

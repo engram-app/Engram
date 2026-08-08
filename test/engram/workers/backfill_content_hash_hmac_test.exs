@@ -1,5 +1,12 @@
 defmodule Engram.Workers.BackfillContentHashHmacTest do
-  use Engram.DataCase, async: true
+  # async: false — the #1230 regression test below drives a REAL Oban dispatch
+  # (`Oban.drain_queue/1`) rather than `perform_job/2`, which is the only way to
+  # reproduce the self-collision it guards. Real dispatch needs a stable sandbox
+  # connection owner; running it async invites the ownership flake class in
+  # docs/context/channel-parallelism-db-pool.md. Matches
+  # Engram.Workers.BackfillNoteLinksTest, which made the same call for the same
+  # test.
+  use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query, only: [from: 2]
@@ -224,6 +231,63 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
 
       assert_received {:skip_meta, meta}
       assert is_atom(meta.reason), "telemetry reason must be the bounded error_kind atom"
+    end
+  end
+
+  describe "cursor chain under real dispatch (#1230)" do
+    # Regression for #1230: the worker carried
+    # `unique: [keys: [:user_id, :vault_id, :scope], states: :incomplete]`.
+    # A cursor worker re-enqueues its OWN successor mid-run, and because
+    # `cursor` is not a unique key, that successor matched the still-
+    # "executing" job. Oban's unique-insert then silently returned the
+    # existing job instead of inserting the successor — no error, insert
+    # "succeeds" — so the chain died after batch 1 and every row past the
+    # batch size stayed on its legacy MD5 hash forever.
+    #
+    # `perform_job/2` CANNOT catch this: it never creates a DB row for the
+    # "currently running" job, so there is nothing for the successor to
+    # collide with and the insert always looks fine. Only `Oban.drain_queue/1`
+    # goes through the real fetch path (state -> "executing" before perform
+    # runs), which is what makes the collision observable.
+    #
+    # Proof this test catches the regression: re-adding the `unique:` option
+    # to the worker makes it fail with only the first note rehashed.
+    test "rehashes every row across multiple batches, not just the first",
+         %{user: user, vault: vault} do
+      contents = for i <- 1..3, do: "# Note #{i}\nbody"
+
+      notes =
+        for {content, i} <- Enum.with_index(contents, 1) do
+          legacy_md5 = :crypto.hash(:md5, content) |> Base.encode16(case: :lower)
+
+          insert_note!(user, vault, %{
+            "path" => "Chain#{i}.md",
+            "content" => content,
+            "content_hash" => legacy_md5
+          })
+        end
+
+      {:ok, _job} =
+        BackfillContentHashHmac.new(%{
+          "user_id" => user.id,
+          "vault_id" => vault.id,
+          "cursor" => 0,
+          "scope" => "notes",
+          "batch_size" => 1
+        })
+        |> Oban.insert()
+
+      result = Oban.drain_queue(queue: :crypto_backfill, with_recursion: true)
+      assert result.failure == 0, "chain must not fail: #{inspect(result)}"
+
+      {:ok, content_key} = Crypto.dek_content_hash_key(user)
+
+      for {note, content} <- Enum.zip(notes, contents) do
+        {:ok, reloaded} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+
+        assert reloaded.content_hash == Crypto.hmac_content_hash(content_key, content),
+               "note #{note.id} still on its legacy hash — the cursor chain stalled after the first batch"
+      end
     end
   end
 end
