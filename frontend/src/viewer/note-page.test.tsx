@@ -610,6 +610,77 @@ describe("NotePage (CRDT)", () => {
 		await waitFor(() => expect(screen.getByTestId("note-view")).toHaveTextContent("# real body"));
 	});
 
+	// A cold local cache opens the doc in ~20ms but its Y.Text stays EMPTY until
+	// the STEP1 reply lands ~345ms later, so CodeMirror mounted over an empty
+	// document and the user watched a blank editor for a note that HAS content
+	// (#1317). The REST payload already carries it.
+	it("shows the note's REST content while the live doc is still empty", async () => {
+		const doc = new Y.Doc();
+		const empty = doc.getText("content");
+		openDoc.mockResolvedValue({ ytext: empty, awareness: new Awareness(doc), doc });
+		useNoteMock.mockReturnValue({
+			data: { ...NOTE, content: "# from REST" },
+			isLoading: false,
+			error: null,
+		});
+
+		renderPage();
+		await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-1"));
+
+		// The seed covers the blank window. The editor stays mounted alongside it
+		// (the doc IS bound, just empty), so a keystroke still lands in the Y.Doc.
+		await waitFor(() =>
+			expect(screen.getByTestId("handshake-seed")).toHaveTextContent("# from REST"),
+		);
+		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
+	});
+
+	it("hands over to the editor the moment the doc has content", async () => {
+		const doc = new Y.Doc();
+		const ytext = doc.getText("content");
+		openDoc.mockResolvedValue({ ytext, awareness: new Awareness(doc), doc });
+		useNoteMock.mockReturnValue({
+			data: { ...NOTE, content: "# from REST" },
+			isLoading: false,
+			error: null,
+		});
+
+		renderPage();
+		await waitFor(() => expect(screen.getByTestId("handshake-seed")).toBeInTheDocument());
+
+		// STEP1 lands.
+		act(() => {
+			ytext.insert(0, "# from CRDT");
+		});
+
+		await waitFor(() => expect(screen.queryByTestId("handshake-seed")).not.toBeInTheDocument());
+		expect(screen.getByTestId("editor-text")).toHaveTextContent("# from CRDT");
+	});
+
+	// The seed must never become a cage: if the doc really is empty while REST
+	// still reports content, the user has to be able to type eventually. Real
+	// timers on purpose — fake ones don't flush openDoc's promise chain, so the
+	// seed never appears and the test would pass without proving anything.
+	it("drops the seed if the doc never fills, so the editor is never covered forever", async () => {
+		const doc = new Y.Doc();
+		const empty = doc.getText("content");
+		openDoc.mockResolvedValue({ ytext: empty, awareness: new Awareness(doc), doc });
+		useNoteMock.mockReturnValue({
+			data: { ...NOTE, content: "# from REST" },
+			isLoading: false,
+			error: null,
+		});
+
+		renderPage();
+		await waitFor(() => expect(screen.getByTestId("handshake-seed")).toBeInTheDocument());
+
+		// SEED_MAX_MS is 2500 — wait past it without ever filling the doc.
+		await waitFor(() => expect(screen.queryByTestId("handshake-seed")).not.toBeInTheDocument(), {
+			timeout: 5000,
+		});
+		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
+	});
+
 	it("reading view renders live Y.Text content, not stale REST content", async () => {
 		const doc = new Y.Doc();
 		const ytext = doc.getText("content");

@@ -46,11 +46,19 @@ import { nextCopyName } from "./tree-actions/duplicate";
 import { MoveDialog } from "./tree-actions/move-dialog";
 import { RenameInput } from "./tree-actions/rename-input";
 import { renameBaseName } from "./tree-actions/rename-path";
+import { useDocHasContent } from "./use-doc-has-content";
 import { useLiveContent } from "./use-live-content";
 import { buildWikiMap, wikiHref } from "./wiki-link";
 
 /** How long the routed note may fail to open before the pane explains itself. */
 const STALL_NOTICE_MS = 1500;
+
+/** How long the read-only seed may stand in for an empty live doc before the
+ *  editor mounts anyway. The seed exists to cover the handshake, not to gate
+ *  editing: if the doc legitimately IS empty while REST still reports content
+ *  (a divergence, or a note emptied elsewhere), the user must still be able to
+ *  type. Comfortably longer than the ~345ms STEP1 round trip it covers. */
+const SEED_MAX_MS = 2500;
 
 interface DocHandle {
 	ytext: Y.Text;
@@ -328,6 +336,28 @@ export default function NotePage() {
 	const notePath = shownPath;
 	const noteContent = shown?.note.content;
 	const liveContent = useLiveContent(handle?.ytext ?? null, noteContent ?? "");
+	// ── The handshake seed ───────────────────────────────────────────────────
+	// A cold local cache opens the doc in ~20ms but its Y.Text is EMPTY until
+	// the STEP1 reply lands ~345ms later, so CodeMirror was mounting over an
+	// empty document and the user watched a blank editor for a note that has
+	// content (#1317, the `editor:seeded-empty` mark). The REST payload already
+	// carries that content, so render it read-only for exactly that window.
+	//
+	// Read-only is the whole point and not a limitation to fix later: this
+	// surface is NOT bound to the Y.Doc, so a keystroke here would be written
+	// into nothing and lost the moment the real editor mounts over it.
+	const docHasContent = useDocHasContent(handle?.ytext ?? null);
+	const [seedExpired, setSeedExpired] = useState(false);
+	const seedingId = handle && !docHasContent && (noteContent?.length ?? 0) > 0 ? shownId : null;
+	useEffect(() => {
+		if (seedingId === null) {
+			return;
+		}
+		setSeedExpired(false);
+		const timer = setTimeout(() => setSeedExpired(true), SEED_MAX_MS);
+		return () => clearTimeout(timer);
+	}, [seedingId]);
+	const showSeed = seedingId !== null && !seedExpired;
 	useEffect(() => {
 		if (notePath === undefined) {
 			setSlot("outline", null);
@@ -653,6 +683,22 @@ export default function NotePage() {
 						</div>
 					) : (
 						<Suspense fallback={<p className="px-5 py-5 text-muted-foreground">Loading editor…</p>}>
+							{/* The handshake seed: the note's REST content shown while the
+							    live doc is still empty, so the pane isn't blank for the
+							    ~345ms STEP1 round trip (#1317). Rendered ALONGSIDE the
+							    editor, not instead of it — the doc is already bound, so the
+							    editor stays mounted and typing still lands in the Y.Doc.
+							    It unmounts the instant the doc has content. */}
+							{showSeed ? (
+								<div className="px-5 pt-5" aria-busy="true" data-testid="handshake-seed">
+									<NoteView
+										content={noteContent ?? ""}
+										tags={note.tags}
+										links={note.links}
+										manifestNotes={manifest?.notes}
+									/>
+								</div>
+							) : null}
 							{handle ? (
 								<NoteEditor
 									ytext={handle.ytext}

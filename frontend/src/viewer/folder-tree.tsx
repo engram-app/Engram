@@ -7,6 +7,7 @@ import {
 	type AttachmentSummary,
 	type Folder,
 	folderNotesByIdQueryOptions,
+	prefetchNoteById,
 	ROOT_FOLDER_ID,
 	useAttachments,
 	useBatchDeleteAttachments,
@@ -46,6 +47,10 @@ import { DeleteConfirm } from "./tree-actions/delete-confirm";
 import { nextCopyName } from "./tree-actions/duplicate";
 import { MoveDialog } from "./tree-actions/move-dialog";
 import { renameBaseName } from "./tree-actions/rename-path";
+
+/** Hover must be deliberate before it costs a request — a pointer crossing
+ *  the list should not fetch every row it passes over. */
+const HOVER_PREFETCH_MS = 150;
 
 // Row shapes that <DeleteConfirm> and <MoveDialog> accept.
 type DeleteRow =
@@ -272,6 +277,33 @@ export default function FolderTree() {
 	// cross-tab edit) does not silently re-expand a folder the user has since
 	// collapsed by hand.
 	const { data: activeNote, isPlaceholderData: activeNoteIsStub } = useNote(selectedNoteId);
+
+	// Warm a note's REST payload on a SUSTAINED hover. Debounced because a
+	// pointer sweeping the list crosses many rows and each of these is a network
+	// read (unlike the folder prefetch, which derives from the tree cache).
+	// The timer is cleared on unmount so a hover-then-navigate-away can't fire
+	// a request for a note nobody is going to open.
+	const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	useEffect(
+		() => () => {
+			if (hoverTimerRef.current) {
+				clearTimeout(hoverTimerRef.current);
+			}
+		},
+		[],
+	);
+	const prefetchNoteOnHover = useCallback(
+		(noteId: string) => {
+			if (hoverTimerRef.current) {
+				clearTimeout(hoverTimerRef.current);
+			}
+			hoverTimerRef.current = setTimeout(() => {
+				hoverTimerRef.current = null;
+				prefetchNoteById(qc, vaultId, noteId);
+			}, HOVER_PREFETCH_MS);
+		},
+		[qc, vaultId],
+	);
 	const autoExpandedForNoteRef = useRef<string | null>(null);
 	useEffect(() => {
 		// `activeNote.id !== selectedNoteId` is the stale-note gate: useNote holds
@@ -677,6 +709,7 @@ export default function FolderTree() {
 							onContextMenu={handleContextMenu}
 							onLongPress={handleLongPress}
 							onFolderHover={prefetchFolderNotes}
+							onNoteHover={prefetchNoteOnHover}
 						/>
 					))}
 				</div>

@@ -108,6 +108,32 @@ describe("TreeRow", () => {
 		expect(screen.getByRole("treeitem")).toHaveAttribute("aria-expanded", "true");
 	});
 
+	// The note fetch is ~240ms of the open path (#1317) and the gap between
+	// pointing at a row and clicking it usually covers it.
+	it("reports a pointer resting on a note row so the caller can prefetch", () => {
+		const onNoteHover = vi.fn();
+		const instance = mockInstance({ data: noteItem });
+		render(
+			<MemoryRouter>
+				<TreeRow instance={instance} onNoteHover={onNoteHover} />
+			</MemoryRouter>,
+		);
+		fireEvent.pointerEnter(screen.getByRole("link"));
+		expect(onNoteHover).toHaveBeenCalledWith("100");
+	});
+
+	it("does not report folder rows through the note hover hook", () => {
+		const onNoteHover = vi.fn();
+		const instance = mockInstance({ data: folderItem });
+		render(
+			<MemoryRouter>
+				<TreeRow instance={instance} onNoteHover={onNoteHover} />
+			</MemoryRouter>,
+		);
+		fireEvent.pointerEnter(screen.getByRole("treeitem"));
+		expect(onNoteHover).not.toHaveBeenCalled();
+	});
+
 	it("renders note as link to /note/:id", () => {
 		const instance = mockInstance({ data: noteItem });
 		render(

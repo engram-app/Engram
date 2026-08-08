@@ -330,6 +330,15 @@ function fetchVaultTree(qc: QueryClient, vaultId: string | null | undefined): Pr
 	return qc.fetchQuery(vaultTreeQueryOptions(vaultId));
 }
 
+/** The single definition of a note-by-id read, shared by `useNote` and the
+ *  hover prefetch so the two can never key or fetch differently. */
+function noteQueryOptions(vaultId: string | null | undefined, id: string | null) {
+	return {
+		queryKey: ["note", vaultId, id] as const,
+		queryFn: () => fetchNoteById(id as string),
+	};
+}
+
 /**
  * A Note-shaped stand-in built from the vault tree, for a note we have not
  * fetched yet.
@@ -744,8 +753,7 @@ export function useNote(id: string | null) {
 		[qc, vaultId, id],
 	);
 	return useQuery({
-		queryKey: ["note", vaultId, id],
-		queryFn: () => fetchNoteById(id as string),
+		...noteQueryOptions(vaultId, id),
 		enabled: id !== null,
 		// Two different blank-outs, one setting.
 		//
@@ -2825,4 +2833,25 @@ export function useBatchDeleteAttachments() {
 			toast.error("Batch delete failed.");
 		},
 	});
+}
+
+/**
+ * Warm a note's REST payload before it is opened.
+ *
+ * The fetch is ~240ms of the note-open path (#1317), and the gap between
+ * pointing at a row and clicking it is usually longer than that — so on a
+ * sustained hover this is free. `prefetchQuery` respects staleTime and dedupes
+ * against an in-flight fetch, so a hover over an already-warm note is a no-op
+ * rather than a duplicate request.
+ *
+ * Deliberately REST only. Warming the CRDT doc would also need `enroll`, which
+ * registers the note for server-side fan-out — paying that for every row the
+ * pointer crosses would put real load on the server for notes nobody opens.
+ */
+export function prefetchNoteById(
+	qc: QueryClient,
+	vaultId: string | null | undefined,
+	id: string,
+): void {
+	qc.prefetchQuery(noteQueryOptions(vaultId, id)).catch(() => undefined);
 }

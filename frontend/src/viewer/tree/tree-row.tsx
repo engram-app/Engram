@@ -24,6 +24,10 @@ interface Props {
 	menuOpenId?: string | null;
 	onContextMenu?: (itemId: string, x: number, y: number) => void;
 	onLongPress?: (itemId: string) => void;
+	// Pointer resting on a NOTE row. Separate from onFolderHover because a
+	// folder's prefetch is a cache derivation and a note's is a network read —
+	// the caller debounces this one.
+	onNoteHover?: (noteId: string) => void;
 	onFolderHover?: (folderId: string) => void;
 }
 
@@ -121,6 +125,7 @@ export function TreeRow({
 	onContextMenu,
 	onLongPress,
 	onFolderHover,
+	onNoteHover,
 }: Props) {
 	const itemId = instance.getId();
 	const slug = useActiveVaultSlug();
@@ -234,6 +239,7 @@ export function TreeRow({
 				to={slug ? `/${slug}/${item.id}` : `/note/${item.id}`}
 				{...instance.getProps()}
 				{...longPressProps}
+				onPointerEnter={onNoteHover ? () => onNoteHover(item.id) : undefined}
 				onContextMenu={contextMenuHandler}
 				aria-selected={instance.isSelected()}
 				aria-current={active ? "page" : undefined}
@@ -277,6 +283,7 @@ export function TreeRow({
 			to={slug ? `/${slug}/${item.id}` : `/note/${item.id}`}
 			{...htProps}
 			{...longPressProps}
+			onPointerEnter={onNoteHover ? () => onNoteHover(item.id) : undefined}
 			onContextMenu={contextMenuHandler}
 			onDragStart={handleNoteDragStart}
 			aria-selected={instance.isSelected()}
