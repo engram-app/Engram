@@ -123,12 +123,20 @@ Ruled out with evidence during the 2026-08-08 investigation:
 
 ## The fix (shipped)
 **Server-side re-mint, in `do_bare_insert` only.** `nil` on the post-insert re-fetch means "our
-insert no-op'd AND no live row owns this path", so the conflict was on the id, not the path. That
-branch now mints a fresh v7 uuid and retries once (a `remint?` flag bounds the recursion). The row
-returns through the normal success path, so the real id reaches the client in the `crdt_create`
-ack's `doc_id` and in the REST body.
+insert no-op'd AND no live row owns this path", so the conflict was on the id, not the path.
+`remint_own_id/7` then decides, and it does **not** re-mint unconditionally:
 
-Three things made this the right shape, and they are worth preserving if this code is touched
+- **Another vault of the SAME user** (the vault-copy case): mint a fresh v7 uuid and retry once (a
+  `remint?` flag bounds the recursion). The row returns through the normal success path, so the
+  real id reaches the client in the `crdt_create` ack's `doc_id` and in the REST body.
+- **Another USER's row, or a genuine vanished-race**: unchanged, still the 422.
+
+RLS is what makes the two cheap to tell apart, and it is the whole trick: the connection is scoped
+to the current *user* while the lookups that already failed were scoped to the current *vault*. So
+one extra unvaulted `Repo.exists?` by id, run only in this rare branch, answers "is this mine?"
+without an RLS bypass and without a query on the hot path.
+
+Four things made this the right shape, and they are worth preserving if this code is touched
 again:
 
 - **One leg, every caller.** `do_bare_insert` is shared by REST/MCP/web *and* `crdt_create`. A fix
@@ -138,18 +146,22 @@ again:
   note, transfers live keystrokes out of the orphaned mint doc, retires it, and reseeds the body;
   `pushFile` has the equivalent live adopt. A new error reason code (the original plan) would have
   fixed only plugins shipped after it.
-- **It does not try to tell a PK collision from a genuine vanished-race**, because it cannot: an
-  id owned by *another user's* vault is invisible to this tenant-scoped connection. Re-minting is
-  correct for both, so the branch treats them the same.
+- **The cross-tenant guard is deliberate, not collateral.** `notes_controller_test` "rejects a
+  client-supplied id colliding with another user's note" asserts the 422, and its comment
+  explicitly rejects "silently falling back to a server-minted id". A first cut of this fix
+  re-minted unconditionally and that test caught it. Do not widen the re-mint to all collisions:
+  a caller must not be able to probe or adopt another tenant's PK, and minting them a row off the
+  back of a hijack attempt is not a favour worth doing.
+- **The untargeted `ON CONFLICT DO NOTHING` stays.** It is load-bearing (see below).
 
 Note the untargeted `ON CONFLICT DO NOTHING` stays. It is load-bearing (it dodges the
 partial-index `conflict_target` fragment-matching footgun, and the transaction-abort class behind
 the test_24 replay flake). The comment above it used to claim `notes_user_vault_path_v2` was the
 only unique index a row could violate; the PK is the one it forgot.
 
-**Tripwire:** `note id already owned elsewhere; re-minting <old> -> <new>` (category `sync`,
-warning). A spike means clients are pushing foreign ids, which is worth understanding even though
-the note now lands.
+**Tripwire:** `note id owned by another vault; re-minting <old> -> <new>` (category `sync`,
+warning). A spike means clients are pushing ids from a vault they no longer sync to, which is
+worth understanding even though the note now lands.
 
 **Coverage:** `test/engram/notes_client_mint_test.exs` (REST leg) and
 `test/engram/notes/genesis_crdt_note_test.exs` (crdt_create leg) both assert the note lands under
