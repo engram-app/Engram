@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FolderTreeProvider } from "../layout/folder-tree-context";
 import FolderTree from "./folder-tree";
@@ -13,6 +13,23 @@ import FolderTree from "./folder-tree";
 vi.mock("sonner", () => ({
 	toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
+
+// The tree loader loads a folder's note list from the vault tree on a cache
+// miss. Nothing here seeds that tree, so without this the miss path reaches the
+// real network; the loader swallows the failure, but the attempt still logs.
+vi.mock("../api/client", async () => {
+	const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
+	return {
+		...actual,
+		api: {
+			get: vi.fn(() => Promise.reject(new Error("no network in unit tests"))),
+			post: vi.fn(),
+			patch: vi.fn(),
+			del: vi.fn(),
+		},
+		setTokenGetter: vi.fn(),
+	};
+});
 
 const DEFAULT_FOLDERS = [
 	{ id: "1", parent_id: null, name: "Projects", count: 1 },
@@ -56,6 +73,10 @@ const {
 		rootNotes: [] as unknown[],
 		loading: false,
 		attachments: [] as unknown[],
+		// What useNote hands back for the routed note id. `useNote` keeps the
+		// PREVIOUS note's data while the next one loads, so this can legitimately
+		// be a different note than the URL names — see the auto-expand test.
+		activeNote: undefined as unknown,
 	},
 }));
 
@@ -68,7 +89,22 @@ vi.mock("../api/queries", async () => {
 			isLoading: mock.loading,
 			isError: false,
 		}),
+		// `useVaultTree` is deliberately NOT stubbed. It used to be pinned to
+		// `{ data: undefined }`, which meant FolderTree's real call to it was never
+		// exercised anywhere and a broken tree seam sailed through this file into
+		// CI. It runs for real here (no active vault id in these tests, so it stays
+		// `enabled: false` and never fetches — FolderTree only mounts it for its
+		// observer, not its data).
+		//
+		// The hooks below ARE stubbed, so this file proves COMPOSITION only: no
+		// tree payload can reach a row through them. The end-to-end path —
+		// FolderTree rendering folder/note/attachment rows derived from a real
+		// /vault/tree payload, in one request — is exercised against the real
+		// hooks in api/vault-tree.test.tsx ("FolderTree renders from a real
+		// /vault/tree payload"). Do not let that be deleted and leave this file
+		// as the only coverage.
 		useAttachments: () => ({ data: mock.attachments, isLoading: false }),
+		useNote: () => ({ data: mock.activeNote, isLoading: false, error: null }),
 		useFolderNotesById: (folderId: string | null) => {
 			// Root notes share the one id-keyed cache under the 'root' sentinel.
 			if (folderId === "root") {
@@ -157,6 +193,7 @@ beforeEach(() => {
 	mock.rootNotes = [{ ...DEFAULT_ROOT_NOTE }];
 	mock.loading = false;
 	mock.attachments = [];
+	mock.activeNote = undefined;
 });
 
 describe("FolderTree (HT)", () => {
@@ -448,5 +485,65 @@ describe("FolderTree (HT)", () => {
 		renderTree();
 		// Base name only — the extension renders as a separate badge.
 		expect(await screen.findByText("cover")).toBeInTheDocument();
+	});
+
+	// The auto-expand effect fires ONCE per selected note id. `useNote` keeps the
+	// previous note's data on screen while the next one loads, so for a moment
+	// the routed id and the loaded note disagree — spending the one shot on the
+	// stale note expands the wrong ancestry and latches the right one out.
+	it("auto-expands the folder of the routed note, not of a stale one", async () => {
+		// The URL already points at Projects/spec.md; the loaded note is still the
+		// one the user came from, which lives somewhere else entirely.
+		mock.activeNote = { ...DEFAULT_ROOT_NOTE, id: "7", path: "archive/old.md", folder: "archive" };
+		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		qc.setQueryData(["folder-notes-by-id", "", "root"], mock.rootNotes);
+		// The loader reads note children from the cache, not from the hook — seed
+		// Projects' one note so an expand actually renders a row.
+		qc.setQueryData(
+			["folder-notes-by-id", "", "1"],
+			[{ ...DEFAULT_ROOT_NOTE, id: "99", path: "Projects/spec.md", title: "spec" }],
+		);
+		// A fresh element each time: re-rendering the SAME element object lets
+		// React bail out of the subtree entirely, so the effect would never see
+		// the arriving note.
+		const treeFor = () => (
+			<QueryClientProvider client={qc}>
+				<MemoryRouter initialEntries={["/my-vault/99"]}>
+					<Routes>
+						<Route
+							path="/:slug/:itemId"
+							element={
+								<FolderTreeProvider>
+									<FolderTree />
+								</FolderTreeProvider>
+							}
+						/>
+					</Routes>
+				</MemoryRouter>
+			</QueryClientProvider>
+		);
+		const { rerender } = render(treeFor());
+		await screen.findByRole("treeitem", { name: "Projects" });
+
+		// The real note lands. Its folder is the one that has to open.
+		mock.activeNote = {
+			...DEFAULT_ROOT_NOTE,
+			id: "99",
+			path: "Projects/spec.md",
+			folder: "Projects",
+		};
+		rerender(treeFor());
+
+		await waitFor(() =>
+			expect(screen.getByRole("treeitem", { name: "Projects" })).toHaveAttribute(
+				"aria-expanded",
+				"true",
+			),
+		);
+		// ...and the one it came from was never opened on its behalf.
+		expect(screen.getByRole("treeitem", { name: "archive" })).toHaveAttribute(
+			"aria-expanded",
+			"false",
+		);
 	});
 });

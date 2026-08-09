@@ -170,6 +170,21 @@ defmodule Engram.Crypto do
   end
 
   @doc """
+  Renders a `get_dek/1` error reason as a short, log-safe string.
+
+  The reasons `get_dek/1` returns are plain atoms defined in this codebase
+  (`:no_dek`, `:unrecognised_blob`, `:malformed_wrapped_blob`,
+  `:kms_access_denied`, ...) — safe to surface by name. Some KeyProvider
+  errors nest an arbitrary term (e.g. `{:kms_decrypt_failed, reason}`, where
+  `reason` can be a raw AWS SDK error carrying request context); the
+  catch-all keeps that out of logs and error messages instead of
+  `inspect/1`-ing it into them.
+  """
+  @spec format_dek_error(term()) :: String.t()
+  def format_dek_error(reason) when is_atom(reason), do: Atom.to_string(reason)
+  def format_dek_error(_reason), do: "dek_unwrap_failed"
+
+  @doc """
   Returns the plaintext DEK for a user, unwrapping via the provider if not cached.
   """
   @spec get_dek(User.t()) :: {:ok, <<_::256>>} | {:error, term()}

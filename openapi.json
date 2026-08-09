@@ -922,6 +922,43 @@
         "x-struct": "Elixir.EngramWeb.Schemas.FolderNamesResponse",
         "x-validate": null
       },
+      "VaultTreeNote": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "VaultTreeNote",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.VaultTreeNote",
+        "x-validate": null
+      },
       "LogIngestRequest": {
         "properties": {
           "logs": {
@@ -1216,6 +1253,56 @@
         "title": "FolderResponse",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.FolderResponse",
+        "x-validate": null
+      },
+      "VaultTreeAttachment": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "mime_type": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "mtime": {
+            "description": "Client mtime (epoch seconds)",
+            "format": "float",
+            "type": "number",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "size_bytes": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "size_bytes",
+          "mtime",
+          "updated_at"
+        ],
+        "title": "VaultTreeAttachment",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.VaultTreeAttachment",
         "x-validate": null
       },
       "ConnectionsList": {
@@ -2340,6 +2427,47 @@
         "title": "FolderNotesResponse",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.FolderNotesResponse",
+        "x-validate": null
+      },
+      "VaultTreeResponse": {
+        "properties": {
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/VaultTreeAttachment"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "change_seq": {
+            "description": "Current per-vault sequence watermark.",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "folders": {
+            "items": {
+              "$ref": "#/components/schemas/Folder"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "notes": {
+            "items": {
+              "$ref": "#/components/schemas/VaultTreeNote"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "change_seq"
+        ],
+        "title": "VaultTreeResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.VaultTreeResponse",
         "x-validate": null
       },
       "AppendResponse": {
@@ -4310,6 +4438,16 @@
               }
             },
             "description": "Vault cap reached"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Validation error"
           }
         },
         "summary": "Register or fetch a vault by client_id (idempotent)",
@@ -4606,6 +4744,30 @@
         "summary": "Rename / move an attachment",
         "tags": [
           "Attachments"
+        ]
+      }
+    },
+    "/api/vault/tree": {
+      "get": {
+        "callbacks": {},
+        "description": "Every folder, note and attachment the file tree renders, in one response.",
+        "operationId": "vault-tree",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultTreeResponse"
+                }
+              }
+            },
+            "description": "Vault tree"
+          }
+        },
+        "summary": "Get the whole vault tree in one read",
+        "tags": [
+          "Vaults"
         ]
       }
     },

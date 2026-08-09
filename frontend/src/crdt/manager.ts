@@ -2,6 +2,7 @@ import { IndexeddbPersistence } from "y-indexeddb";
 import * as Y from "yjs";
 import { frontmatterMaps } from "./frontmatter-doc";
 import { rememberCrdtDb } from "./idb-registry";
+import { crdtMark } from "./perf";
 
 interface Entry {
 	doc: Y.Doc;
@@ -153,9 +154,11 @@ export class CrdtManager {
 		const id = this.docId(noteId);
 		const cached = this.docs.get(id);
 		if (cached) {
+			crdtMark(noteId, "entry:warm");
 			await cached.ready;
 			return cached;
 		}
+		crdtMark(noteId, "entry:cold");
 		const doc = new Y.Doc();
 		const dbName = CRDT_IDB_PREFIX + id;
 		// Write the name down BEFORE opening it: on a browser with no
@@ -186,6 +189,7 @@ export class CrdtManager {
 		const entry: Entry = { doc, persistence, text, ready };
 		this.docs.set(id, entry);
 		await ready;
+		crdtMark(noteId, "idb:synced");
 		return entry;
 	}
 }

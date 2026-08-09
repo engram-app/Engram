@@ -348,6 +348,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - CRDT lineage doubling — why the same edit must be encoded exactly once (PR #846) → `docs/context/crdt-lineage-doubling.md`
 - CRDT id-keyed rename old-path resurrection race (plugin #183) → `docs/context/crdt-id-keyed-rename-resurrection.md`
 - CRDT note_id-collision corruption incident, the id-keying cutover day (2026-07-06) → `docs/context/crdt-id-collision-corruption-2026-07-06.md`
+- Every `crdt_create` returns `create_failed` on a NEW vault, or a create leg drops a re-minted note id → `docs/context/crdt-create-cross-vault-id-reuse.md`
 - `Repo.with_tenant/2` funs must return bare values, not `{:ok, _}` → `docs/context/with-tenant-return-wrapping.md`
 - `y-indexeddb` `whenSynced` never resolves after `destroy()` → `docs/context/y-indexeddb-whensynced-destroy-hang.md`
 
@@ -378,6 +379,9 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Frontend/backend deploy-trigger skew (different pipelines) — 2026-06-20 incident + fix → `docs/context/frontend-backend-deploy-skew-cors.md`
 - Writing a CM6 live-preview decoration (lezer reads `[!type]` as a Link; one highlight tag serves many nodes; `syntaxTree` is lazy) → `docs/context/codemirror-live-preview-extensions.md`
 - A route guard or view acts on state that mutations definitely updated (user bounced back to a completed onboarding/wizard step; loop only a full page reload escapes) → `docs/context/bootstrap-seed-cache-dual-authority.md`
+
+**Issue tracker**
+- An old issue's description contradicts the code, or you are triaging a stale backlog (`Refs #N` drift + the detection recipe) → `docs/context/backlog-refs-drift.md`
 
 **Testing & CI**
 - Full test strategy, ExUnit tooling, CI pipeline → `docs/context/testing-strategy.md`

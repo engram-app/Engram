@@ -13,12 +13,7 @@ import { useTree } from "@headless-tree/react";
 import type { QueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef } from "react";
-import {
-	type AttachmentSummary,
-	type Folder,
-	type NoteSummary,
-	ROOT_FOLDER_ID,
-} from "../../api/queries";
+import { type AttachmentSummary, type Folder, ROOT_FOLDER_ID } from "../../api/queries";
 import { resolveDropMove } from "./drop-redirect";
 import { buildLoader, type LoaderItem, type SortKey } from "./loader";
 import { TREE_SLOT_HEIGHT } from "./row-metrics";
@@ -33,7 +28,6 @@ interface Deps {
 	scrollParentRef: React.RefObject<HTMLDivElement | null>;
 	onRenameCommit: (itemId: string, newName: string) => void;
 	onMove: (sourceIds: string[], targetItemId: string) => void;
-	fetchFolderNotes?: (folderId: string) => Promise<NoteSummary[]>;
 }
 
 // Loader-side data: HT stores LoaderItem as the per-item `T`.
@@ -141,7 +135,6 @@ export function useEngramTree(deps: Deps) {
 				vaultId: deps.vaultId,
 				sort: deps.sort,
 				attachments: deps.attachments,
-				fetchFolderNotes: deps.fetchFolderNotes,
 				onChildrenLoaded: (folderId) => {
 					const t = treeRef.current;
 					if (!t) {
@@ -154,7 +147,7 @@ export function useEngramTree(deps: Deps) {
 					inst?.invalidateChildrenIds();
 				},
 			}),
-		[deps.folders, deps.qc, deps.vaultId, deps.sort, deps.attachments, deps.fetchFolderNotes],
+		[deps.folders, deps.qc, deps.vaultId, deps.sort, deps.attachments],
 	);
 
 	const dataLoader = useMemo(() => createTreeDataLoader(inner), [inner]);

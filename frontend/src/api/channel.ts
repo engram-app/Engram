@@ -29,7 +29,7 @@ import {
 	sendCrdtCreateBatch,
 	sendCrdtDelete,
 } from "./crdt-ops";
-import { folderIdForPath } from "./queries";
+import { folderIdForPath, invalidateVaultTree } from "./queries";
 
 // phoenix.js's own default reconnect steps — kept for the 2nd+ attempt. Only
 // the FIRST reconnect is full-jittered, to de-sync a drained fleet so the
@@ -149,6 +149,12 @@ function folderFromPath(path: string): string {
 
 function flushBatch(batch: PendingBatch): void {
 	const { queryClient, vaultId, folders } = batch;
+	// FIRST — this is the linchpin. `["folders"]`, `["attachments"]` and the
+	// whole `["folder-notes-by-id"]` family are DERIVED from the vault tree, so
+	// invalidating them while the tree is still fresh just re-derives the same
+	// pre-event bytes and nothing converges. Staling the tree first means the
+	// derived refetches below all resolve from one post-event fetch.
+	invalidateVaultTree(queryClient, vaultId);
 	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 	queryClient.invalidateQueries({ queryKey: ["search", vaultId] });
 	// The vault-wide path→id inventory behind [[ autocomplete + /:slug/wiki/*
@@ -237,6 +243,9 @@ export const RECONNECT_JITTER_MAX_MS = 60_000;
  * /sync/changes cursor feed (backend #1036).
  */
 export function backfillStructural(queryClient: QueryClient, vaultId: string): void {
+	// FIRST — folders/attachments/folder-notes-by-id all derive from it; see the
+	// same note in flushBatch.
+	invalidateVaultTree(queryClient, vaultId);
 	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 	queryClient.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 	queryClient.invalidateQueries({ queryKey: ["attachments", vaultId] });
@@ -439,6 +448,9 @@ export function handleFoldersBatch(
 	queryClient: QueryClient,
 	vaultId: string,
 ): void {
+	// The folders view derives from the vault tree — stale that first or the
+	// refetch below re-derives the pre-event folder list.
+	invalidateVaultTree(queryClient, vaultId);
 	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 }
 
