@@ -91,16 +91,48 @@ describe("crdt open-path timing", () => {
 	});
 
 	// StrictMode opens the same note twice; the first row then holds nothing
-	// and reads as a real open that took 0ms. It is not — it was superseded.
-	it("flags a row superseded by a later open of the same note", () => {
+	// and reads as a real open that took 0ms. Report the GAP rather than a
+	// verdict — a stalled open the user re-clicked looks identical except for
+	// the gap, and calling both "an artefact" throws the stall away.
+	it("records how long before a phase-less row was reopened", () => {
 		crdtMark("n1", "open:start");
 		crdtMark("n1", "open:start");
 		crdtMark("n1", "idb:synced");
 
 		const rows = report();
 		expect(rows).toHaveLength(2);
-		expect(rows[0]?.superseded).toBe(true);
-		expect(rows[1]?.superseded).toBeUndefined();
+		expect(rows[0]?.reopenedAfterMs).toBeGreaterThanOrEqual(0);
+		expect(rows[1]?.reopenedAfterMs).toBeUndefined();
+	});
+
+	// A row that recorded real phases was not superseded, however soon the note
+	// reopens — only phase-less rows carry the gap.
+	it("does not mark a row that recorded phases", () => {
+		crdtMark("n1", "open:start");
+		crdtMark("n1", "entry:cold");
+		crdtMark("n1", "open:start");
+
+		expect(report()[0]?.reopenedAfterMs).toBeUndefined();
+	});
+
+	// First-wins alone would silently discard the repeat. `crdtMark` carries
+	// only a note id, so the first value CAN belong to an abandoned open or to
+	// unrelated frame traffic — the reader has to be told it happened.
+	it("records a repeated phase's count and last value", () => {
+		crdtMark("n1", "open:start");
+		crdtMark("n1", "step1:reply");
+
+		const spin = performance.now() + 20;
+		while (performance.now() < spin) {
+			/* the frame actually carrying content arrives much later */
+		}
+		crdtMark("n1", "step1:reply");
+
+		const [row] = report();
+		expect(row?.repeats?.["step1:reply"]?.count).toBe(2);
+		// The late value is recoverable even though the phase kept the first.
+		expect(row?.repeats?.["step1:reply"]?.lastMs).toBeGreaterThanOrEqual(20);
+		expect(row?.["step1:reply"]).toBeLessThan(20);
 	});
 
 	it("keeps concurrent opens of different notes apart", () => {

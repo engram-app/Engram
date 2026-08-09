@@ -48,12 +48,34 @@ interface Sample {
 
 interface OpenBase {
 	noteId: string;
+	/** Span of this open's DISTINCT phases. Deliberately not "latest activity":
+	 *  marks keep arriving for a note long after its open finished, and letting
+	 *  them extend `total` made it unbounded. Late traffic shows up in
+	 *  `repeats` instead. */
 	total: number;
-	/** This open recorded no phases before the same note opened again — React
-	 *  StrictMode's mount/unmount/mount is the usual source. Present so those
-	 *  rows are legible as artefacts instead of reading as a real open that
-	 *  completed in 0ms. */
-	superseded?: true;
+	/** ms until the same note opened again, on a row that recorded NO phases.
+	 *
+	 *  Do not collapse this into a boolean "artefact" flag. Two very different
+	 *  things produce a phase-less row: StrictMode's mount/unmount/mount, which
+	 *  re-opens within a millisecond or two, and an open that STALLED (a hung
+	 *  session promise is one of the four costs #1317 exists to measure) which
+	 *  the user then re-clicked seconds later. Labelling both as noise throws
+	 *  away the only recorded evidence of the second. The gap separates them —
+	 *  read it, don't assume. */
+	reopenedAfterMs?: number;
+	/** Phases that fired more than once inside this open, with the LAST delta
+	 *  seen.
+	 *
+	 *  First-wins keeps the phase value honest for the common case, but it
+	 *  cannot be right in every case: `crdtMark` carries only a note id, so a
+	 *  late mark from an abandoned open is indistinguishable from a real one
+	 *  belonging to the current row. Rather than silently pick, record that the
+	 *  ambiguity happened — a row whose `step1:reply` repeats at 600ms is
+	 *  telling you not to trust its 5ms. Removing the ambiguity outright needs
+	 *  an open id threaded through session/manager/channel; `entry()` is
+	 *  reached from both the open path and the frame handler, so there is
+	 *  nowhere to infer it today. */
+	repeats?: Partial<Record<Phase, { count: number; lastMs: number }>>;
 }
 
 const samples: Sample[] = [];
@@ -117,11 +139,11 @@ export function report(): OpenRow[] {
 
 	for (const s of samples) {
 		if (s.phase === "open:start") {
-			// An open that recorded nothing before the note opened again never
-			// really happened — flag it rather than emit a 0ms row.
+			// A row that recorded nothing before the note re-opened: report the
+			// GAP, not a verdict. See `reopenedAfterMs`.
 			const prev = current.get(s.noteId);
 			if (prev && prev.phases === 0) {
-				prev.row.superseded = true;
+				prev.row.reopenedAfterMs = Math.round(s.t - prev.start);
 			}
 			const row: OpenRow = { noteId: s.noteId, total: 0 };
 			rows.push(row);
@@ -132,10 +154,17 @@ export function report(): OpenRow[] {
 		if (!cur) {
 			continue; // phase from before instrumentation was switched on
 		}
-		if (cur.row[s.phase] !== undefined) {
-			continue; // repeat of a phase already recorded for this open
-		}
 		const delta = Math.round(s.t - cur.start);
+		if (cur.row[s.phase] !== undefined) {
+			// Keep the first value, but never discard the fact that it repeated
+			// — that is the reader's signal the first value may not be theirs.
+			const seen = cur.row.repeats?.[s.phase];
+			cur.row.repeats = {
+				...cur.row.repeats,
+				[s.phase]: { count: (seen?.count ?? 1) + 1, lastMs: delta },
+			};
+			continue;
+		}
 		cur.row[s.phase] = delta;
 		cur.phases += 1;
 		cur.row.total = Math.max(cur.row.total, delta);
