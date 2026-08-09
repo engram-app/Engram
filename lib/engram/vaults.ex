@@ -178,9 +178,28 @@ defmodule Engram.Vaults do
   Returns:
     {:ok, vault, :created}   — new vault was inserted
     {:ok, vault, :existing}  — matched an existing vault
+    {:error, :invalid_client_id}  — client_id is not a non-blank string
     {:error, {:vault_limit_reached, limit, current}}
   """
+  def register_vault(_user, _name, client_id) when not is_binary(client_id),
+    do: {:error, :invalid_client_id}
+
   def register_vault(user, name, client_id) do
+    # A blank client_id cannot serve as this function's idempotency key, and
+    # fails in the worst direction: `Vault.changeset/2` casts `:client_id`, so
+    # Ecto's default `:empty_values` drops "" and the row stores NULL — which
+    # `find_by_client_id/2`'s `client_id == ^""` then never matches. Every
+    # retry would mint ANOTHER vault until `vaults_cap` rejected it. Reject it
+    # here rather than at the controller so any future caller inherits the
+    # guard along with the contract it protects.
+    if String.trim(client_id) == "" do
+      {:error, :invalid_client_id}
+    else
+      do_register_vault(user, name, client_id)
+    end
+  end
+
+  defp do_register_vault(user, name, client_id) do
     # Ensure user has a DEK before Phase B injection
     with {:ok, user} <- Engram.Crypto.ensure_user_dek(user) do
       result =
