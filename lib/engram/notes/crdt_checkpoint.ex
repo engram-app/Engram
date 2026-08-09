@@ -511,6 +511,33 @@ defmodule Engram.Notes.CrdtCheckpoint do
     |> Repo.one()
   end
 
+  # `Crypto.encrypt_crdt_state/3` ALWAYS binds the AAD to the row id, so writing
+  # crdt_state forces `dek_version` up to the AAD-bound version. On a legacy row
+  # that leaves content/title/path/folder/tags bound under the EMPTY AAD while
+  # the row claims bound: they never decrypt again, `list_tree_notes` raises
+  # through `PathCrypto.decrypt!` so ONE row 500s the WHOLE vault tree, and
+  # `AadRebind` (which selects on the legacy version) can no longer see the row
+  # to repair it. #1336.
+  #
+  # `<`, not `!=`: UserDekRotation stamps `user.dek_version + 1`, so a rotated
+  # row carries 3, 4, ... and is still AAD-bound. An equality test against 2
+  # would treat every rotated user's rows as legacy.
+  #
+  # Only the branches that write crdt_state WITHOUT re-encrypting the rest need
+  # this guard. The materialize branch re-encrypts every envelope, so it migrates
+  # the row wholesale and is the one path that may run on a legacy row.
+  defp legacy_row?(%Note{dek_version: v}) when is_integer(v),
+    do: v < Crypto.row_version_aad_bound()
+
+  # Unknown version => treat as legacy, i.e. SKIP. This is unreachable today
+  # (`dek_version` is NOT NULL DEFAULT 1 and the checkpoint always loads a full
+  # row), but it is the guard's only safety net, so it has to fail the safe way.
+  # `Crypto.decrypt_aad/3` makes the same call: its catch-all reads an unknown
+  # version as legacy. Answering `false` here would let a partially-selected
+  # `%Note{}` be READ as legacy and WRITTEN as bound — the exact half-migration
+  # above. Skipping costs one deferred compaction and cannot lose data.
+  defp legacy_row?(_note), do: true
+
   # Prune the consumed tail-log rows. Two boundary shapes:
   #
   #   * `{:ids, ids}` — delete EXACTLY these rows (detached callers). A concurrent
@@ -523,26 +550,6 @@ defmodule Engram.Notes.CrdtCheckpoint do
   #
   # Runs inside the same `Repo.with_tenant` transaction as the notes UPDATE for
   # atomicity.
-  # `Crypto.encrypt_crdt_state/3` ALWAYS binds the AAD to the row id, so writing
-  # crdt_state forces `dek_version` up to the AAD-bound version. On a legacy row
-  # that leaves content/title/path/folder/tags bound under the EMPTY AAD while
-  # the row claims bound: they never decrypt again, `list_tree_notes` raises
-  # through `PathCrypto.decrypt!` so ONE row 500s the WHOLE vault tree, and
-  # `AadRebind` (which selects on the legacy version) can no longer see the row
-  # to repair it. #1336.
-  #
-  # `>=`, not `==`: UserDekRotation stamps `user.dek_version + 1`, so a rotated
-  # row carries 3, 4, ... and is still AAD-bound. An equality test against 2
-  # would treat every rotated user's rows as legacy.
-  #
-  # Only the branches that write crdt_state WITHOUT re-encrypting the rest need
-  # this guard. The materialize branch re-encrypts every envelope, so it migrates
-  # the row wholesale and is the one path that may run on a legacy row.
-  defp legacy_row?(%Note{dek_version: v}) when is_integer(v),
-    do: v < Crypto.row_version_aad_bound()
-
-  defp legacy_row?(_note), do: false
-
   defp prune_tail(_note_id, {:ids, []}), do: :ok
 
   defp prune_tail(note_id, {:ids, ids}) do
