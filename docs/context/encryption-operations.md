@@ -407,3 +407,42 @@ Recovery steps:
 4. Re-run the rotation. Since the S3 blobs are now back at the pre-rotation state and `dek_version` was never bumped on those rows, the sweep proceeds normally under a fresh DEK.
 
 If S3 versioning is not available or the restore fails, the data is lost — the only recourse is to delete the affected attachment rows and notify the user. There is no way to recover the in-flight DEK from a dead BEAM heap.
+
+---
+
+## Content-hash MD5 → HMAC backfill (Phase A)
+
+`content_hash` moved from plain MD5 to a per-user HKDF-derived HMAC-SHA256 on
+2026-05-06. Rows written before that carry a 32-char MD5; everything the app
+recomputes today is 64-char HMAC, so a stale row never matches and sync/dedup
+sees it as perpetually changed.
+
+**When you need this:** a restore from a pre-2026-05-06 backup, or a self-host
+instance upgrading across that change. Prod does not need it — the
+`DROP SCHEMA public CASCADE` wipe on 2026-06-11 post-dates the HMAC path by
+five weeks, so every current row was already written with an HMAC hash.
+
+### Enqueue
+
+    docker exec engram-saas /app/bin/engram rpc 'Engram.ContentHash.Backfill.enqueue_all()'
+
+Returns `%{notes: N, attachments: M}` — the number of `BackfillContentHashHmac`
+jobs enqueued per scope, one per (user, vault) pair that still holds a legacy
+MD5. Each scope is enqueued atomically (`Oban.insert_all/1`), and the pair
+counts are logged before the insert, so a failure still tells you what was
+outstanding.
+
+**It must be `rpc`, not a Mix task.** `Mix` is not part of the release (see
+`releases/0` in `mix.exs`), so `Mix.Tasks.Engram.ContentHashHmac.run([])` raises
+`UndefinedFunctionError` in a container. The Mix task is a dev-only wrapper.
+This was #1311.
+
+### Verify
+
+Idempotent — the scan and the worker both filter on `length(content_hash) = 32`,
+so a re-run after a partial pass is a no-op. Completion is `enqueue_all()`
+returning `%{notes: 0, attachments: 0}`.
+
+Watch the `:crypto_backfill` queue for discarded jobs; the worker self-re-enqueues
+per batch until each vault is exhausted, and it snoozes 60s while a per-user DEK
+rotation holds the `RotationGate`.

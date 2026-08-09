@@ -29,8 +29,10 @@ defmodule Engram.RawSqlTenantTableLintTest do
   @allowlist [
     # Operator-run, intentionally cross-tenant backfill: seeds
     # onboarding_actions for every legacy user by scanning `FROM vaults`.
-    # Runs as a one-shot Mix task / release command, never on a request path.
-    "mix/tasks/engram.backfill_onboarding_actions.ex",
+    # Runs as a one-shot release rpc / Mix task, never on a request path.
+    # Lives in its own module (not on the Engram.Onboarding context) precisely
+    # so this file-scoped exemption stays narrow — see the moduledoc.
+    "engram/onboarding/backfill.ex",
     # Vaults.next_seq!/1 — atomic `UPDATE vaults SET change_seq = change_seq + 1
     # ... RETURNING change_seq` for the sync change-log seq allocator. MUST be
     # called inside the caller's existing `Repo.with_tenant/2` transaction (see
