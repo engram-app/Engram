@@ -330,7 +330,8 @@ defmodule EngramWeb.VaultsController do
       ok: {"Existing vault", "application/json", Schemas.RegisterVaultResponse},
       created: {"Newly created vault", "application/json", Schemas.RegisterVaultResponse},
       bad_request: {"name and client_id are required", "application/json", Schemas.MessageError},
-      payment_required: {"Vault cap reached", "application/json", Schemas.LimitError}
+      payment_required: {"Vault cap reached", "application/json", Schemas.LimitError},
+      unprocessable_entity: {"Validation error", "application/json", Schemas.Error}
     ]
   )
 
@@ -369,6 +370,11 @@ defmodule EngramWeb.VaultsController do
             limit,
             current
           )
+
+        # Reachable since blank names became rejectable (#1213): a blank
+        # `name` passes the is_nil guard above but fails the changeset.
+        {:error, %Ecto.Changeset{}} = error ->
+          error
       end
     end
   end
