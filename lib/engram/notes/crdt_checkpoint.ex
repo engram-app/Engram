@@ -221,6 +221,11 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # claim the ops are recoverable — on unbind they may not be — only that not
   # writing beats overwriting a committed write.
   defp attempt(user, user_id, vault_id, note_id, live_state, prune, opts, budget) do
+    # Sampled BEFORE with_tenant opens its transaction. Inside the fun we are
+    # always in one, so checking there answers the wrong question: what matters
+    # is whether the transaction is OURS to roll back or the caller's.
+    caller_owns_txn? = Repo.in_transaction?()
+
     result =
       Repo.with_tenant(user_id, fn ->
         # `note.path` / `note.folder` / `note.title` are VIRTUAL — a bare
@@ -252,8 +257,23 @@ defmodule Engram.Notes.CrdtCheckpoint do
               end
 
             case written do
-              :stale -> Repo.rollback(:stale)
-              other -> other
+              # `Repo.rollback/1` THROWS. That is what we want when this
+              # transaction is ours: the throw unwinds it, releasing the vault
+              # lock `next_seq!` took and undoing its increment.
+              #
+              # But `with_tenant/2` short-circuits to `{:ok, fun.()}` when the
+              # process is ALREADY in a tenant transaction, and on that path the
+              # throw would unwind the CALLER's transaction instead — rolling
+              # back their unrelated writes and escaping `checkpoint/5`'s
+              # never-raises contract (rescue does not catch throws). No caller
+              # does this today; degrade rather than leave the trap armed.
+              :stale ->
+                if caller_owns_txn?,
+                  do: {:skip, :stale_fence_no_rollback},
+                  else: Repo.rollback(:stale)
+
+              other ->
+                other
             end
         end
       end)
@@ -268,7 +288,22 @@ defmodule Engram.Notes.CrdtCheckpoint do
           Metadata.with_category(:info, :sync, note_id: note_id)
         )
 
-        attempt(user, user_id, vault_id, note_id, live_state, prune, opts, budget - 1)
+        # DROP `:captured_version`. It was captured before the caller's doc
+        # snapshot and is the value we just lost the CAS on, so carrying it
+        # forward fences every remaining attempt on a version the row will never
+        # hold again — the retry could not succeed, it would just burn the
+        # budget. Subsequent attempts fence on the version read inside their own
+        # transaction, which is what makes re-unioning against the winner work.
+        attempt(
+          user,
+          user_id,
+          vault_id,
+          note_id,
+          live_state,
+          prune,
+          Keyword.delete(opts, :captured_version),
+          budget - 1
+        )
 
       {:error, :stale} ->
         Logger.warning(
@@ -353,18 +388,26 @@ defmodule Engram.Notes.CrdtCheckpoint do
     with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
          {:ok, raw_state} <- encode(union_doc),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(raw_state, user, note_id) do
-      {1, _} =
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note_id and n.kind == "note"),
-          set: [
-            crdt_state_ciphertext: ct,
-            crdt_state_nonce: nonce,
-            dek_version: Crypto.row_version_aad_bound()
-          ]
-        )
+      # Fenced like the markdown branches. This writes no content, but it DOES
+      # replace crdt_state — and for a canvas that state IS the board, so an
+      # overwrite loses nodes/edges outright, and the prune below then deletes
+      # the tail rows that held the loser's ops. The old hard `{1, _} =` match
+      # also raised a MatchError on a force-purge race, where the markdown
+      # branch gets a deliberate quiet skip.
+      case Repo.update_all(fence(note_id, note.version),
+             set: [
+               crdt_state_ciphertext: ct,
+               crdt_state_nonce: nonce,
+               dek_version: Crypto.row_version_aad_bound()
+             ]
+           ) do
+        {1, _} ->
+          prune_tail(note_id, prune)
+          {note.content_hash, note.content_hash, note.path}
 
-      prune_tail(note_id, prune)
-      {note.content_hash, note.content_hash, note.path}
+        {0, _} ->
+          :stale
+      end
     else
       err -> {:abort, err}
     end
@@ -529,17 +572,22 @@ defmodule Engram.Notes.CrdtCheckpoint do
   the value fences the subsequent checkpoint write (`:captured_version`).
 
   Capturing version before the snapshot closes the dominant snapshot-then-commit
-  gap: a commit landing after the read bumps the version, so the CAS aborts. It
-  does NOT make a revert impossible — `version` bumps at REST commit while the
-  live room doc only converges later at `CrdtDeliver.deliver_out`, so a commit
-  inside that narrow commit→deliver window can still be captured-then-overwritten.
-  That residual self-heals: deliver_out applies the merged state, which fires
-  `update_v1` → a follow-up tick re-checkpoints the merged content.
+  gap: a commit landing after the read bumps the version, so the CAS misses. It
+  is an OPTIMISATION, not the safety property — passing it lets the first
+  attempt fail fast on a doc that was already stale when it was snapshotted.
 
-  Returns nil on read failure, which degrades to an UNfenced write (prior
-  behaviour). This is deliberate: nil is indistinguishable from the unbind
-  path's absent `captured_version` (which must stay unfenced to persist on room
-  exit), and a transient version-read blip is rare + self-heals on the next tick.
+  Returns nil on read failure. That is now harmless rather than a silent
+  downgrade: a nil `:captured_version` falls back to the row version read inside
+  the checkpoint's own transaction, so **every write is fenced** and there is no
+  unfenced path left. See `attempt/8`.
+
+  > Superseded: this used to say a nil result "degrades to an UNfenced write"
+  > and that the unbind path "must stay unfenced to persist on room exit". Both
+  > were true before the fence covered every caller, and both were load-bearing
+  > in the two failed attempts on #1325 — a reader who trusts the old wording
+  > concludes the unbind path cannot abort. It can: on three consecutive lost
+  > races `attempt/8` gives up and writes nothing, which is a deliberate trade
+  > (not writing beats overwriting a committed write) rather than an oversight.
   """
   @spec current_version(String.t(), String.t()) :: integer() | nil
   def current_version(user_id, note_id) do

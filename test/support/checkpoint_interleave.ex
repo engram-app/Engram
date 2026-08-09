@@ -39,19 +39,29 @@ defmodule Engram.CheckpointInterleave do
 
   ## Usage
 
-      CheckpointInterleave.arm(:after_row_read)
+      # arm/1 returns an uninstall closure — register it, or the hook stays
+      # global and parks unrelated checkpoints for @park_timeout each.
+      on_exit(CheckpointInterleave.arm(:after_row_read))
 
-      task = Task.async(fn -> CrdtCheckpoint.checkpoint(uid, vid, nid, doc) end)
+      task =
+        Task.async(fn ->
+          CheckpointInterleave.checkout_real!()
+          CrdtCheckpoint.checkpoint(uid, vid, nid, doc)
+        end)
 
-      # Blocks until the checkpoint is parked mid-transaction.
-      CheckpointInterleave.await_parked(:after_row_read)
+      # Blocks until the checkpoint is parked mid-transaction; returns the pid
+      # holding it, which release/2 needs.
+      parked = CheckpointInterleave.await_parked(:after_row_read)
 
       # Commits on a DIFFERENT real connection while the checkpoint holds its
       # transaction open. This is the write the checkpoint must not clobber.
       {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", ...})
 
-      CheckpointInterleave.release(:after_row_read)
+      CheckpointInterleave.release(:after_row_read, parked)
       Task.await(task)
+
+  The park is ONE-SHOT: a stale fence makes the checkpoint retry, and the retry
+  must not park again with nobody left to release it.
   """
 
   alias Ecto.Adapters.SQL
@@ -75,16 +85,28 @@ defmodule Engram.CheckpointInterleave do
     test_pid = self()
     prev = Application.get_env(:engram, @hook_key)
 
+    # ONE-SHOT. A stale fence makes the checkpoint retry, and the retry hits the
+    # same point again — with a re-arming hook it would park a second time with
+    # nobody left to release it, burn the full @park_timeout, and blow the
+    # caller's `Task.await`. The park is the thing being tested; the retry after
+    # it must run unimpeded.
+    armed = :counters.new(1, [:atomics])
+
     hook = fn
       ^point ->
-        send(test_pid, {:checkpoint_parked, point, self()})
+        if :counters.get(armed, 1) == 0 do
+          :counters.add(armed, 1, 1)
+          send(test_pid, {:checkpoint_parked, point, self()})
 
-        receive do
-          {:checkpoint_release, ^point} -> :ok
-        after
-          # Never block a real transaction indefinitely.
-          @park_timeout -> :ok
+          receive do
+            {:checkpoint_release, ^point} -> :ok
+          after
+            # Never block a real transaction indefinitely.
+            @park_timeout -> :ok
+          end
         end
+
+        :ok
 
       _other ->
         :ok
@@ -120,14 +142,21 @@ defmodule Engram.CheckpointInterleave do
   def release(point, pid) when is_pid(pid), do: send(pid, {:checkpoint_release, point})
 
   @doc """
-  Check out a REAL (non-sandbox) connection for this test.
+  Check out a REAL (non-sandbox) connection for the calling process.
 
-  Returns the ids to hand to `cleanup/1`. Call from `setup`, and register
-  `cleanup/1` with `on_exit` — these rows really commit, so nothing else
-  removes them.
+  Every process that touches the DB needs its own: the test, any `Task` it
+  spawns, and the `on_exit` callback (which runs in `ExUnit.OnExitHandler`, not
+  the test process). Register `cleanup/2` with `on_exit` BEFORE the first
+  committing write — these rows really commit, so nothing else removes them.
   """
   def checkout_real! do
-    :ok = Sandbox.checkout(Repo, sandbox: false)
+    # Idempotent. Two `on_exit` callbacks both run in the same OnExitHandler
+    # process, so the second would otherwise get `{:already, :owner}` and raise
+    # — turning a successful test into a failure during teardown.
+    case Sandbox.checkout(Repo, sandbox: false) do
+      :ok -> :ok
+      {:already, :owner} -> :ok
+    end
   end
 
   # `chunks`, `attachments`, `notes` and `vaults` reference `users` with NO

@@ -31,12 +31,23 @@ defmodule Engram.Notes.CrdtCheckpointInterleaveTest do
     # unique per process AND per wall-clock run.
     email = "interleave-#{System.unique_integer([:positive])}-#{System.os_time()}@test.com"
 
-    user = insert(:user, email: email)
+    # Registered BEFORE the first committing write. `insert(:user)` commits on a
+    # real connection, so if ensure_user_dek/create_vault/upsert_note then
+    # raises, a cleanup registered after them never runs and the orphan rows
+    # survive every later run — reproducing the cross-suite failures this
+    # module's docstring describes, with nothing pointing back here. The id is
+    # generated up front so the callback can close over it.
+    user_id = Ecto.UUID.generate()
+    on_exit(fn -> CheckpointInterleave.cleanup(user_id) end)
+
+    user = insert(:user, id: user_id, email: email)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
     {:ok, vault} = Vaults.create_vault(user, %{name: "InterleaveTest"})
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "before"})
 
+    # Now that the note exists, widen cleanup to its Oban jobs too (the earlier
+    # registration covers the user-keyed ones and every committed row).
     on_exit(fn -> CheckpointInterleave.cleanup(user.id, [note.id]) end)
 
     %{user: user, vault: vault, note: note}
@@ -89,6 +100,26 @@ defmodule Engram.Notes.CrdtCheckpointInterleaveTest do
            This is the #902/#847 loss class: the row was read before the commit,
            the projection was built from that stale read, and the unfenced
            UPDATE wrote it over the newer committed content.
+
+           got: #{inspect(fresh.content)}
+           """
+
+    # Asserting only the above would be VACUOUS: a checkpoint that did nothing
+    # at all satisfies it just as well — exhausted retry budget, a nil note
+    # lookup, or a future refactor that no-ops. `checkpoint/5` always returns
+    # `:ok` (including for skips and aborts), so the return value proves nothing
+    # either.
+    #
+    # `upsert_note` merges into crdt_state, so a checkpoint that actually
+    # retried and re-unioned must produce text containing BOTH sides. That is
+    # the assertion that distinguishes "the fence held and the retry merged"
+    # from "the checkpoint silently gave up" — the exact class of vacuous pass
+    # the two prior attempts on #1325 died of.
+    assert fresh.content =~ "ROOM EDIT",
+           """
+           the room's ops are missing, so the checkpoint did not converge — it
+           lost the fence and then gave up rather than re-unioning against the
+           committed write.
 
            got: #{inspect(fresh.content)}
            """
