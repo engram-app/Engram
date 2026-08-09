@@ -37,6 +37,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Crypto.{DekCache, Envelope, MigrationRunner, RotationLock}
   alias Engram.Crypto.KeyProvider.Resolver
   alias Engram.Logger.Metadata
+  alias Engram.Notes.CrdtUpdateLog
   alias Engram.Repo
   alias Engram.Vector.Qdrant
 
@@ -123,6 +124,50 @@ defmodule Engram.Crypto.UserDekRotation do
     end
   end
 
+  # Two things the sweep leaves behind, both repaired by workers that already
+  # exist and are both idempotent no-ops when there is nothing to do. #1341.
+  #
+  #   * crdt_head — the sweep is now a writer of crdt_state_ciphertext, which
+  #     trips the `notes_crdt_head_invalidate` BEFORE UPDATE trigger and NULLs
+  #     the cached head for every synced note. Left NULL, the plugin's
+  #     head-equality fast path can never hit and every live-bound note
+  #     re-handshakes on every manifest reconcile.
+  #   * crdt_state — `rewrap_crdt_state/3` NULLs a snapshot it cannot read
+  #     rather than aborting the rotation. That row must be re-seeded from its
+  #     (authoritative, freshly rewrapped) content, or the note opens blank.
+  #
+  # After the flip, so it runs against the new DEK. Best-effort: a failed
+  # enqueue must not fail a rotation that has already committed.
+  defp enqueue_post_rotation_repairs(user_id) do
+    vault_ids =
+      from(v in Engram.Vaults.Vault, where: v.user_id == ^user_id, select: v.id)
+      |> Repo.all(skip_tenant_check: true)
+
+    for vault_id <- vault_ids,
+        worker <- [Engram.Workers.BackfillCrdtState, Engram.Workers.BackfillCrdtHead] do
+      {vault_id, worker}
+    end
+    |> Enum.each(fn {vault_id, worker} ->
+      %{"user_id" => user_id, "vault_id" => vault_id}
+      |> worker.new()
+      |> Oban.insert()
+    end)
+
+    :ok
+  rescue
+    e ->
+      Logger.error(
+        "T3.7 post-rotation repair enqueue failed",
+        Metadata.with_category(:error, :crypto,
+          user_id: user_id,
+          phase: :post_rotation_repairs,
+          message: Exception.message(e)
+        )
+      )
+
+      :ok
+  end
+
   defp load_user(user_id) do
     case Repo.one(from(u in User, where: u.id == ^user_id, select: u), skip_tenant_check: true) do
       nil -> {:error, :not_found}
@@ -144,6 +189,8 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
          :ok <- final_flip(user, new_dek_version, new_wrapped) do
+      enqueue_post_rotation_repairs(user_id)
+
       Logger.info(
         "T3.7 per-user DEK rotation complete",
         Metadata.with_category(:info, :crypto,
@@ -178,6 +225,8 @@ defmodule Engram.Crypto.UserDekRotation do
             |> Repo.all(skip_tenant_check: true)
 
           Enum.each(notes, fn note ->
+            rewrap_crdt_tail(note, old_dek, new_dek)
+
             updates = rewrap_note_columns(note, old_dek, new_dek, new_filter_key, new_dek_version)
 
             if updates != [] do
@@ -1034,14 +1083,7 @@ defmodule Engram.Crypto.UserDekRotation do
       {:type, :type_ciphertext, :type_nonce, :type_hmac,
        &Engram.Notes.OkfFields.normalize_type/1},
       {:description, :description_ciphertext, :description_nonce, nil, nil},
-      {:resource, :resource_ciphertext, :resource_nonce, nil, nil},
-      # #1341. crdt_state was missing here while the sweep still stamped the new
-      # dek_version, so every note that had ever been synced kept its snapshot
-      # under the OLD DEK on a row claiming the new one. decrypt_crdt_state/2
-      # then failed and CrdtPersistence.bind/3 RAISED — the whole vault stopped
-      # opening and stopped syncing, in one sweep, on fully-migrated tenants too.
-      # Nullable, which the is_nil guard below already skips.
-      {:crdt_state, :crdt_state_ciphertext, :crdt_state_nonce, nil, nil}
+      {:resource, :resource_ciphertext, :resource_nonce, nil, nil}
     ]
 
     base_updates =
@@ -1105,7 +1147,48 @@ defmodule Engram.Crypto.UserDekRotation do
 
     # If every column is already rotated (all return []), don't touch the row at all.
     # The caller checks `updates != []` before issuing the UPDATE.
-    base_updates ++ tag_updates
+    base_updates ++ tag_updates ++ rewrap_crdt_state(note, old_dek, new_dek)
+  end
+
+  # crdt_state is handled apart from base_columns for two reasons. #1341.
+  #
+  # AAD: `Crypto.encrypt_crdt_state/3` binds to the row id UNCONDITIONALLY -- it
+  # has no empty-AAD branch -- so unlike every other column the bind string does
+  # NOT follow `dek_version`. Using the bound AAD on both sides is what lets a
+  # rotation HEAL a #1336 row (v1 stamped, snapshot already bound) instead of
+  # failing to read it.
+  #
+  # Failure: base_columns raises when neither DEK decrypts, which aborts the
+  # sweep after earlier batches have already committed under a new DEK that
+  # `final_flip/3` has not yet persisted -- unrecoverable. crdt_state is a
+  # DERIVED representation of `content`, so an unreadable one is dropped instead:
+  # the row keeps its authoritative body, `BackfillCrdtState` (enqueued after the
+  # flip) re-seeds the snapshot from it, and nothing is lost.
+  defp rewrap_crdt_state(%Engram.Notes.Note{crdt_state_ciphertext: nil}, _old_dek, _new_dek),
+    do: []
+
+  defp rewrap_crdt_state(%Engram.Notes.Note{crdt_state_nonce: nil}, _old_dek, _new_dek), do: []
+
+  defp rewrap_crdt_state(%Engram.Notes.Note{} = note, old_dek, new_dek) do
+    aad = Crypto.aad_for_row(:notes, :crdt_state, note.id)
+
+    case try_rewrap(note.crdt_state_ciphertext, note.crdt_state_nonce, old_dek, new_dek, aad, aad,
+           table: :notes,
+           phase: :sweep_notes,
+           log: "T3.7 sweep_notes: crdt_state decrypt failed under both old and new DEK",
+           log_meta: [user_id: note.user_id, row_id: note.id, column: :crdt_state],
+           on_both_failed: {:error, :both_deks_failed}
+         ) do
+      {:ok, plaintext} ->
+        {ct, nonce} = Envelope.encrypt(plaintext, new_dek, aad)
+        [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+
+      :already_rotated ->
+        []
+
+      {:error, _reason} ->
+        [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+    end
   end
 
   defp rewrap_tags(
@@ -1179,14 +1262,52 @@ defmodule Engram.Crypto.UserDekRotation do
           "(#{Engram.Crypto.row_version_aad_bound()})"
   end
 
-  # crdt_state has no legacy form. `Crypto.encrypt_crdt_state/3` binds the AAD to
-  # the row id UNCONDITIONALLY — there is no empty-AAD branch — so the bind
-  # string is the old AAD as well, whatever the row's dek_version claims. This
-  # clause must stay ABOVE the version-dispatched ones for that reason. (A v1 row
-  # therefore cannot have a readable crdt_state at all; that is #1336, and #1340
-  # stops the checkpoint creating any more of them.)
-  defp old_aad_for(table, :crdt_state, row),
-    do: Crypto.aad_for_row(table, :crdt_state, row.id)
+  # The tail log is the snapshot's sibling: `CrdtPersistence.update_v1` encrypts
+  # every uncheckpointed delta with `Crypto.encrypt_crdt_state/3` under the same
+  # DEK and the same NOTE-bound AAD (`replay_tail/3` shapes each row with the
+  # note's id to decrypt it). Rewrapping the snapshot without the tail is WORSE
+  # than rewrapping neither: `bind/3` then succeeds, `replay_tail/3` drops every
+  # undecryptable row with only a warning, the room converges to the stale
+  # snapshot, and the next checkpoint materializes it over the body — a loud
+  # outage turned into silent loss of every uncheckpointed edit. #1341.
+  #
+  # A tail row that decrypts under NEITHER dek is left alone rather than raised
+  # on: it is one delta, `replay_tail/3` already tolerates dropping it, and
+  # raising here would abort a rotation whose earlier batches have committed
+  # under a DEK that `final_flip/3` has not yet persisted.
+  defp rewrap_crdt_tail(%Engram.Notes.Note{id: note_id}, old_dek, new_dek) do
+    aad = Crypto.aad_for_row(:notes, :crdt_state, note_id)
+
+    from(l in CrdtUpdateLog, where: l.note_id == ^note_id, lock: "FOR UPDATE")
+    |> Repo.all(skip_tenant_check: true)
+    |> Enum.each(fn row ->
+      case try_rewrap(row.update_ciphertext, row.update_nonce, old_dek, new_dek, aad, aad,
+             table: :crdt_update_log,
+             phase: :sweep_notes,
+             log: "T3.7 sweep_notes: crdt tail row decrypt failed under both old and new DEK",
+             log_meta: [row_id: row.id, note_id: note_id],
+             on_both_failed: {:error, :both_deks_failed}
+           ) do
+        {:ok, plaintext} ->
+          {ct, nonce} = Envelope.encrypt(plaintext, new_dek, aad)
+
+          {1, _} =
+            from(l in CrdtUpdateLog, where: l.id == ^row.id)
+            |> Repo.update_all(
+              [set: [update_ciphertext: ct, update_nonce: nonce]],
+              skip_tenant_check: true
+            )
+
+          :ok
+
+        # Already under the new DEK (a prior crashed run), or unreadable. Either
+        # way there is nothing safe to write. Nothing stamps a version here --
+        # the log has no dek_version column; it inherits the note's.
+        _ ->
+          :ok
+      end
+    end)
+  end
 
   defp old_aad_for(table, column, %{dek_version: v} = row) when v >= @aad_version_bound,
     do: Crypto.aad_for_row(table, column, row.id)

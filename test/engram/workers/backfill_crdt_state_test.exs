@@ -230,8 +230,7 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
   # nothing can read back — the mirror image of #1336 — and this is the exact
   # population the backfill targets, so it was reachable from the documented
   # repair rpc.
-  test "leaves a legacy (dek_version = 1) row alone rather than seeding an unreadable state",
-       ctx do
+  test "migrates a legacy (dek_version = 1) row, then seeds it readably", ctx do
     %{user: user, vault: vault} = ctx
     note = legacy_v1_note(user, vault, "legacy-v1.md", "IMPORTANT BODY")
 
@@ -244,13 +243,26 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
 
     raw = reload(user, note.id)
 
-    # Whatever is on the row must be readable under the version the row claims.
-    # NULL (skipped) satisfies that; a bound ciphertext on a v1 row does not.
-    assert {:ok, _} = Crypto.decrypt_crdt_state(raw, user),
+    # The row must be migrated, not skipped. Skipping leaves crdt_state NULL,
+    # which is the blank-open failure this worker exists to fix.
+    assert raw.dek_version == Crypto.row_version_aad_bound()
+    refute is_nil(raw.crdt_state_ciphertext)
+
+    # And everything on it must be readable under the version it now claims —
+    # a bound ciphertext on a row still claiming v1 is the #1336 shape.
+    assert {:ok, state} = Crypto.decrypt_crdt_state(raw, user),
            """
            the backfill seeded an AAD-bound crdt_state onto a row still claiming
            dek_version=#{raw.dek_version}, so CrdtPersistence.bind/3 will raise
            and the note can no longer be opened or written at all.
            """
+
+    assert {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(raw, user)
+    assert decrypted.content == "IMPORTANT BODY"
+    assert decrypted.path == "legacy-v1.md"
+
+    # The seeded snapshot must project the real body, not an empty doc.
+    {:ok, doc} = CrdtBridge.doc_from_state(state)
+    assert CrdtBridge.text_of(doc) == "IMPORTANT BODY"
   end
 end

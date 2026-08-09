@@ -21,25 +21,37 @@ defmodule Engram.Workers.CheckpointNote do
     unique: [keys: [:note_id], states: :incomplete]
 
   alias Engram.{Accounts, Crypto, Repo}
+  alias Engram.Crypto.RotationGate
   alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, CrdtRegistry, Note}
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
     %{"user_id" => user_id, "vault_id" => vault_id, "note_id" => note_id} = args
 
-    # A live room re-opened for this note between enqueue and run — it owns
-    # materialization. Snooze rather than return :ok: skipping would DROP this
-    # deferred checkpoint, and if the reopened room is then torn down
-    # non-gracefully (crash / node kill) its edits would stay unmaterialized in
-    # notes.content until the next bind. Snoozing keeps the job alive so it runs
-    # once the room is gone (idempotent compaction; deduped by the unique key).
-    if CrdtRegistry.lookup(note_id) != nil do
-      {:snooze, 60}
-    else
-      case rebuild_detached(user_id, vault_id, note_id) do
-        {:ok, token} -> finalize(token)
-        :skip -> :ok
-      end
+    cond do
+      # #1341. This worker encrypts crdt_state, so running it mid-rotation writes
+      # a snapshot under the OLD DEK over one the sweep has already rewrapped —
+      # re-creating exactly the un-openable note the rotation fix exists to
+      # prevent. Every other DEK-touching worker already gates; this one did not.
+      # (The room-unbind checkpoint is a separate leg of the same race and is not
+      # reachable from here; tracked on the issue.)
+      RotationGate.check(user_id) == {:error, :rotation_in_progress} ->
+        {:snooze, 60}
+
+      # A live room re-opened for this note between enqueue and run — it owns
+      # materialization. Snooze rather than return :ok: skipping would DROP this
+      # deferred checkpoint, and if the reopened room is then torn down
+      # non-gracefully (crash / node kill) its edits would stay unmaterialized in
+      # notes.content until the next bind. Snoozing keeps the job alive so it runs
+      # once the room is gone (idempotent compaction; deduped by the unique key).
+      CrdtRegistry.lookup(note_id) != nil ->
+        {:snooze, 60}
+
+      true ->
+        case rebuild_detached(user_id, vault_id, note_id) do
+          {:ok, token} -> finalize(token)
+          :skip -> :ok
+        end
     end
   end
 

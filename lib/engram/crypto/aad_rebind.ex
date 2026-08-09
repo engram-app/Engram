@@ -182,12 +182,27 @@ defmodule Engram.Crypto.AadRebind do
     Enum.reduce_while(rows, {:ok, 0}, fn note, {:ok, n} ->
       case rebind_note(note, dek) do
         :ok -> {:cont, {:ok, n + 1}}
+        # Someone else migrated it between the select and the UPDATE. Not an
+        # error — the row is at target either way.
+        :stale -> {:cont, {:ok, n}}
         {:error, reason} -> {:halt, {:error, {:note, note.id, reason}}}
       end
     end)
   end
 
-  defp rebind_note(%Note{id: id} = note, dek) do
+  @doc """
+  Rebind ONE legacy note's envelopes to the row-bound AAD and stamp it
+  `dek_version = 2`. Public so a caller that already holds a legacy row --
+  `Engram.Workers.BackfillCrdtState`, which cannot seed a snapshot onto one --
+  can migrate it in place instead of skipping it (#1341).
+
+  Caller must already be inside a transaction scoped to the note's owner; the
+  UPDATE is fenced on the row still being legacy, so a concurrent migration
+  makes this a no-op rather than a double-rebind. Returns `:ok`, `:stale` when
+  the fence missed, or `{:error, reason}` when a column will not decrypt.
+  """
+  @spec rebind_note(Note.t(), binary()) :: :ok | :stale | {:error, term()}
+  def rebind_note(%Note{id: id} = note, dek) do
     with {:ok, content} <- decrypt_legacy(note.content_ciphertext, note.content_nonce, dek),
          {:ok, title} <- decrypt_legacy(note.title_ciphertext, note.title_nonce, dek),
          {:ok, path} <- decrypt_legacy(note.path_ciphertext, note.path_nonce, dek),
@@ -208,8 +223,10 @@ defmodule Engram.Crypto.AadRebind do
       {tags_ct, tags_n} =
         Envelope.encrypt(tags_bin, dek, Crypto.aad_for_row(:notes, :tags, id))
 
-      {1, _} =
-        from(n in Note, where: n.id == ^id)
+      legacy_version = Crypto.row_version_legacy()
+
+      {count, _} =
+        from(n in Note, where: n.id == ^id and n.dek_version == ^legacy_version)
         |> Repo.update_all(
           [
             set: [
@@ -229,7 +246,7 @@ defmodule Engram.Crypto.AadRebind do
           skip_tenant_check: true
         )
 
-      :ok
+      if count == 1, do: :ok, else: :stale
     end
   end
 
