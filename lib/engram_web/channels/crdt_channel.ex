@@ -250,6 +250,13 @@ defmodule EngramWeb.CrdtChannel do
         {:ok, note} ->
           {:reply, {:ok, %{doc_id: note.id}}, socket}
 
+        {:adopted, note} ->
+          # Unchanged behaviour for the single create: the client's crdtCreate
+          # promise resolves to the authoritative id and pushFile's ADOPT then
+          # transfers the local body onto that lineage. Only the BATCH leg has to
+          # distinguish this from a create (it reports frame-applied, not id).
+          {:reply, {:ok, %{doc_id: note.id}}, socket}
+
         {:error, :id_conflict, note} ->
           {:reply, {:error, %{reason: "id_conflict", doc_id: note.id}}, socket}
 
@@ -578,6 +585,15 @@ defmodule EngramWeb.CrdtChannel do
       # crdt_create above always replied note.id; this leg has to match it.
       {:created, note.id, frame}
     else
+      {:adopted, note} ->
+        # The path was already owned by a live note under a different id, so this
+        # entry's content frame was NOT applied to it. Reporting "ok" would have
+        # the plugin mark the file pushed (adoptCreateAck stamps the LOCAL body as
+        # the baseline) while the body never reached the server. id_conflict is
+        # the existing contract for exactly this, and the plugin already routes it
+        # to pushFile's full ADOPT, which transfers the body onto that lineage.
+        {:result, %{doc_id: note.id, status: "error", reason: "id_conflict"}}
+
       {:error, :id_conflict, note} ->
         {:result, %{doc_id: note.id, status: "error", reason: "id_conflict"}}
 
@@ -612,7 +628,7 @@ defmodule EngramWeb.CrdtChannel do
         # whole dumps its `changes` -- every ciphertext blob on the note -- into
         # Loki. Only metadata keys are redacted, never the message body.
         Logger.warning(
-          "crdt_create_batch prepare failed: #{inspect(Engram.Telemetry.error_kind(other))}",
+          "crdt_create_batch prepare failed: #{inspect(prepare_error_kind(other))}",
           Metadata.with_category(:warning, :websocket,
             doc_id: doc_id,
             user_id: user.id,
@@ -853,6 +869,16 @@ defmodule EngramWeb.CrdtChannel do
       )
     )
   end
+
+  # `other` in prepare_create's with/else is always a 2-tuple {:error, term}, so
+  # error_kind/1 applied to it returns the literal :error and every failure logs
+  # identically -- the swallow the arm exists to prevent. Unwrap first, then
+  # classify the INNER term, which is what carries the useful distinction (a
+  # changeset vs a KMS failure vs a filter-key error) without forwarding a raw
+  # term that could carry key material.
+  # Total by construction: every arm reaching prepare_create's else is a
+  # {:error, term} (dialyzer rejects a fallback clause here as uncoverable).
+  defp prepare_error_kind({:error, reason}), do: Engram.Telemetry.error_kind(reason)
 
   # ensure_room/2 only ever fails as {:error, atom}, so that reason is safe to
   # name verbatim. Anything else goes through error_kind/1 rather than inspect,
