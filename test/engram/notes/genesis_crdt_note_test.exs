@@ -43,7 +43,10 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
   } do
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/b.md", "content" => "world"})
     other = Ecto.UUID.generate()
-    assert {:ok, got} = Notes.genesis_crdt_note(user, vault, other, "Notes/b.md")
+    # Tagged :adopted rather than a plain {:ok, _}: the caller's content frame was
+    # NOT applied to this row, and the batch create leg has to be able to say so
+    # instead of reporting a create (a plain ok made it discard the client body).
+    assert {:adopted, got} = Notes.genesis_crdt_note(user, vault, other, "Notes/b.md")
     # adopted the server's id
     assert got.id == note.id
     refute Notes.note_in_vault?(user, vault.id, other)

@@ -813,6 +813,7 @@ defmodule Engram.Notes do
   """
   @spec genesis_crdt_note(map(), map(), String.t(), String.t(), keyword()) ::
           {:ok, Note.t()}
+          | {:adopted, Note.t()}
           | {:error, :invalid_id}
           | {:error, :recently_deleted}
           | {:error, :id_conflict, Note.t()}
@@ -917,6 +918,12 @@ defmodule Engram.Notes do
 
           {:ok, note}
 
+        {:ok, {:ok, note, :adopted}} ->
+          # Surfaced, not flattened to {:ok, note}: the batch create leg has to
+          # tell "we made this row" from "a different note already owned the
+          # path", because only the former means the caller's frame was applied.
+          {:adopted, note}
+
         {:ok, inner} ->
           inner
 
@@ -947,11 +954,32 @@ defmodule Engram.Notes do
       {:ok, lookup_query} ->
         case Repo.one(lookup_query) do
           %Note{} = live ->
-            {:ok, decrypt_or_raise!(live, user)}
+            # ADOPTED, not created: the path is already owned by a live note under
+            # a DIFFERENT id, and this caller's content frame was never applied to
+            # it. Tagged so the batch leg can say so instead of reporting a create
+            # (see crdt_channel prepare_create/4) -- a plain {:ok, note} here reads
+            # as success and silently discards the client's body.
+            {:ok, decrypt_or_raise!(live, user), :adopted}
 
           nil ->
-            if taken_id, do: log_id_taken(user, vault.id, taken_id, canonical_id)
-            genesis_insert_bare(user, vault, canonical_id, sanitized_path, folder, lookup_query)
+            # Logged AFTER the insert lands, not before: genesis_insert_bare can
+            # still fail on the notes cap or a changeset, and a tripwire naming a
+            # reminted_to id that never existed makes the Loki count lie.
+            case genesis_insert_bare(
+                   user,
+                   vault,
+                   canonical_id,
+                   sanitized_path,
+                   folder,
+                   lookup_query
+                 ) do
+              {:ok, _note, _tag} = ok ->
+                if taken_id, do: log_id_taken(user, vault.id, taken_id, canonical_id)
+                ok
+
+              other ->
+                other
+            end
         end
 
       {:error, _} = err ->
@@ -1498,18 +1526,18 @@ defmodule Engram.Notes do
       end
   end
 
+  # Row-or-nil view of classify_by_id/2, kept for upsert_pathless's legacy REST
+  # branching. A projection rather than a second copy of the rule: both used to
+  # spell out cast -> Repo.get -> vault+kind, so a change to what counts as
+  # "this vault's note" had to be made twice or the CRDT genesis path and the
+  # REST path would silently disagree.
   defp existing_by_client_id(nil, _vault), do: nil
 
   defp existing_by_client_id(client_id, vault) do
-    case Ecto.UUID.cast(client_id) do
-      {:ok, uuid} ->
-        case Repo.get(Note, uuid) do
-          %Note{vault_id: vault_id, kind: "note"} = note when vault_id == vault.id -> note
-          _ -> nil
-        end
-
-      :error ->
-        nil
+    case classify_by_id(vault, client_id) do
+      {:live, note} -> note
+      {:tombstone, note} -> note
+      _ -> nil
     end
   end
 

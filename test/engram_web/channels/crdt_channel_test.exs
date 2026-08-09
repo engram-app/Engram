@@ -438,6 +438,40 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_note_content_eventually(user, vault, id2, "beta")
     end
 
+    test "a path already owned by another note reports id_conflict, never ok", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # Genesis ADOPTS when the path is taken by a live note under a different id,
+      # and the entry's content frame is NOT applied to it. Reporting "ok" would
+      # have the client call adoptCreateAck, stamp its LOCAL body as the CRDT
+      # baseline and count the file pushed, while that body never reached the
+      # server -- a silent upload loss. id_conflict routes the file to pushFile's
+      # ADOPT, which actually transfers it.
+      {:ok, existing} =
+        Notes.upsert_note(user, vault, %{"path" => "Owned.md", "content" => "server body"})
+
+      creates = [
+        %{
+          "doc_id" => Ecto.UUID.generate(),
+          "path" => "Owned.md",
+          "b64" => frame_for_content("client body")
+        }
+      ]
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :ok, %{results: [result]}
+
+      assert result.status == "error"
+      assert result.reason == "id_conflict"
+      assert result.doc_id == existing.id
+
+      # And the adopted note is untouched -- the frame was not merged into it.
+      {:ok, still} = Notes.get_note(user, vault, "Owned.md")
+      assert still.content == "server body"
+    end
+
     test "an id owned by another of the user's vaults is re-minted, with content", %{
       socket: socket,
       user: user,
