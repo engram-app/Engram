@@ -191,22 +191,44 @@ defmodule Engram.Workers.BackfillCrdtState do
   #
   # A row that will not decrypt is left for the operator: `seed_note/2` logs it
   # and moves on, exactly as it does for any other unseedable note.
-  defp migrate_legacy_row(user, %Note{dek_version: v} = raw_note)
-       when is_integer(v) and v < 2 do
-    with {:ok, dek} <- Crypto.get_dek(user),
-         :ok <- AadRebind.rebind_note(raw_note, dek),
-         %Note{} = fresh <- Repo.get(Note, raw_note.id) do
-      {:ok, fresh}
+  defp migrate_legacy_row(user, %Note{} = raw_note) do
+    if legacy?(raw_note) do
+      do_migrate_legacy_row(user, raw_note)
     else
-      # `:stale` means a concurrent migration won the fence; re-read and use
-      # whatever is there now.
-      :stale -> {:ok, Repo.get(Note, raw_note.id)}
-      {:error, reason} -> {:error, {:legacy_rebind_failed, reason}}
-      nil -> {:error, :note_vanished}
+      {:ok, raw_note}
     end
   end
 
-  defp migrate_legacy_row(_user, raw_note), do: {:ok, raw_note}
+  defp legacy?(%Note{dek_version: v}) when is_integer(v),
+    do: v < Crypto.row_version_aad_bound()
+
+  # Unknown version reads as legacy everywhere else (Crypto.decrypt_aad/3's
+  # catch-all, CrdtCheckpoint.legacy_row?/1), so it does here too.
+  defp legacy?(_note), do: true
+
+  defp do_migrate_legacy_row(user, %Note{} = raw_note) do
+    with {:ok, dek} <- Crypto.get_dek(user),
+         :ok <- AadRebind.rebind_note(raw_note, dek) do
+      reread(raw_note.id)
+    else
+      # `:stale` means a concurrent migration won the fence. Re-read: whatever is
+      # there now is at least as migrated as what we would have written.
+      :stale -> reread(raw_note.id)
+      {:error, reason} -> {:error, {:legacy_rebind_failed, reason}}
+    end
+  end
+
+  # The row can vanish between the rebind and the re-read (vault purge). Return
+  # an error tuple, never `{:ok, nil}` — `maybe_decrypt_note_fields/2` has no nil
+  # clause, so a nil here would raise a FunctionClauseError straight through
+  # `seed_note/2`'s never-raise contract and strand the rest of the vault behind
+  # a cursor that never advances.
+  defp reread(note_id) do
+    case Repo.get(Note, note_id) do
+      %Note{} = fresh -> {:ok, fresh}
+      nil -> {:error, :note_vanished}
+    end
+  end
 
   defp do_seed(user, note_id, raw_note) do
     with {:ok, raw_note} <- migrate_legacy_row(user, raw_note),

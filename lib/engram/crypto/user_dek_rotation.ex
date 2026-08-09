@@ -124,32 +124,32 @@ defmodule Engram.Crypto.UserDekRotation do
     end
   end
 
-  # Two things the sweep leaves behind, both repaired by workers that already
-  # exist and are both idempotent no-ops when there is nothing to do. #1341.
+  # The sweep is now a writer of `crdt_state_ciphertext`, which trips the
+  # `notes_crdt_head_invalidate` BEFORE UPDATE trigger and NULLs the cached head
+  # for every synced note. Left NULL, the plugin's head-equality fast path can
+  # never hit and every live-bound note re-handshakes on every manifest
+  # reconcile. `BackfillCrdtHead` re-warms it and is an idempotent no-op when
+  # there is nothing to do. #1341.
   #
-  #   * crdt_head — the sweep is now a writer of crdt_state_ciphertext, which
-  #     trips the `notes_crdt_head_invalidate` BEFORE UPDATE trigger and NULLs
-  #     the cached head for every synced note. Left NULL, the plugin's
-  #     head-equality fast path can never hit and every live-bound note
-  #     re-handshakes on every manifest reconcile.
-  #   * crdt_state — `rewrap_crdt_state/3` NULLs a snapshot it cannot read
-  #     rather than aborting the rotation. That row must be re-seeded from its
-  #     (authoritative, freshly rewrapped) content, or the note opens blank.
+  # Enqueued right after `sweep_notes`, NOT after `final_flip`: the trigger has
+  # already fired by then, so hanging the repair off the all-phases-succeeded
+  # branch would skip it in exactly the case that needs it most — a later phase
+  # (attachments/S3, Qdrant) failing after every head was cleared. The worker's
+  # own RotationGate snoozes it until the lock clears, so enqueuing early is safe.
   #
-  # After the flip, so it runs against the new DEK. Best-effort: a failed
-  # enqueue must not fail a rotation that has already committed.
-  defp enqueue_post_rotation_repairs(user_id) do
-    vault_ids =
-      from(v in Engram.Vaults.Vault, where: v.user_id == ^user_id, select: v.id)
-      |> Repo.all(skip_tenant_check: true)
-
-    for vault_id <- vault_ids,
-        worker <- [Engram.Workers.BackfillCrdtState, Engram.Workers.BackfillCrdtHead] do
-      {vault_id, worker}
-    end
-    |> Enum.each(fn {vault_id, worker} ->
+  # Only the head. `BackfillCrdtState` is deliberately NOT enqueued: its writes
+  # would re-fire the same trigger and re-NULL the heads this job just warmed,
+  # and seeding is not something a rotation should trigger unsupervised — a note
+  # whose real state is an un-checkpointed tail would get a second, unrelated
+  # Yjs lineage seeded from content on top of it.
+  #
+  # Best-effort: a failed enqueue must not fail the rotation.
+  defp enqueue_crdt_head_rewarm(user_id) do
+    from(v in Engram.Vaults.Vault, where: v.user_id == ^user_id, select: v.id)
+    |> Repo.all(skip_tenant_check: true)
+    |> Enum.each(fn vault_id ->
       %{"user_id" => user_id, "vault_id" => vault_id}
-      |> worker.new()
+      |> Engram.Workers.BackfillCrdtHead.new()
       |> Oban.insert()
     end)
 
@@ -157,7 +157,7 @@ defmodule Engram.Crypto.UserDekRotation do
   rescue
     e ->
       Logger.error(
-        "T3.7 post-rotation repair enqueue failed",
+        "T3.7 crdt_head re-warm enqueue failed",
         Metadata.with_category(:error, :crypto,
           user_id: user_id,
           phase: :post_rotation_repairs,
@@ -184,13 +184,12 @@ defmodule Engram.Crypto.UserDekRotation do
            provider.rotate_dek(user.encrypted_dek, %{user_id: user_id}),
          new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek),
          :ok <- sweep_notes(user, old_dek, new_dek, new_filter_key, new_dek_version),
+         :ok <- enqueue_crdt_head_rewarm(user_id),
          :ok <- sweep_vaults(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_attachments(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
          :ok <- final_flip(user, new_dek_version, new_wrapped) do
-      enqueue_post_rotation_repairs(user_id)
-
       Logger.info(
         "T3.7 per-user DEK rotation complete",
         Metadata.with_category(:info, :crypto,
@@ -224,9 +223,9 @@ defmodule Engram.Crypto.UserDekRotation do
             )
             |> Repo.all(skip_tenant_check: true)
 
-          Enum.each(notes, fn note ->
-            rewrap_crdt_tail(note, old_dek, new_dek)
+          rewrap_crdt_tail(batch_ids, old_dek, new_dek)
 
+          Enum.each(notes, fn note ->
             updates = rewrap_note_columns(note, old_dek, new_dek, new_filter_key, new_dek_version)
 
             if updates != [] do
@@ -1158,12 +1157,20 @@ defmodule Engram.Crypto.UserDekRotation do
   # rotation HEAL a #1336 row (v1 stamped, snapshot already bound) instead of
   # failing to read it.
   #
-  # Failure: base_columns raises when neither DEK decrypts, which aborts the
+  # Failure: base_columns RAISES when neither DEK decrypts, which aborts the
   # sweep after earlier batches have already committed under a new DEK that
-  # `final_flip/3` has not yet persisted -- unrecoverable. crdt_state is a
-  # DERIVED representation of `content`, so an unreadable one is dropped instead:
-  # the row keeps its authoritative body, `BackfillCrdtState` (enqueued after the
-  # flip) re-seeds the snapshot from it, and nothing is lost.
+  # `final_flip/3` has not yet persisted -- unrecoverable. So an unreadable
+  # snapshot is LEFT ALONE, exactly as `rewrap_crdt_tail/3` leaves an unreadable
+  # delta alone.
+  #
+  # Left alone, NOT nulled. NULLing reads as the tidier "drop the derived column
+  # and let BackfillCrdtState re-seed it", and it is worse: the note's tail log
+  # survives -- and `rewrap_crdt_tail/3` has just made that tail READABLE -- so
+  # the next bind replays base-less deltas onto an empty doc and the checkpoint
+  # materializes that fragment over the body. Seeding from content instead just
+  # unions two unrelated Yjs lineages. A snapshot that decrypts under neither DEK
+  # was already unreadable before the rotation touched it; leaving it is the only
+  # option here that makes nothing worse.
   defp rewrap_crdt_state(%Engram.Notes.Note{crdt_state_ciphertext: nil}, _old_dek, _new_dek),
     do: []
 
@@ -1187,7 +1194,7 @@ defmodule Engram.Crypto.UserDekRotation do
         []
 
       {:error, _reason} ->
-        [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        []
     end
   end
 
@@ -1275,17 +1282,23 @@ defmodule Engram.Crypto.UserDekRotation do
   # on: it is one delta, `replay_tail/3` already tolerates dropping it, and
   # raising here would abort a rotation whose earlier batches have committed
   # under a DEK that `final_flip/3` has not yet persisted.
-  defp rewrap_crdt_tail(%Engram.Notes.Note{id: note_id}, old_dek, new_dek) do
-    aad = Crypto.aad_for_row(:notes, :crdt_state, note_id)
-
-    from(l in CrdtUpdateLog, where: l.note_id == ^note_id, lock: "FOR UPDATE")
+  #
+  # One query per BATCH, not per note. A tail row exists only for a note with
+  # uncheckpointed deltas, so per-note this is ~50k wasted round trips on a
+  # 50k-note vault — every one of them inside the window where the RotationLock
+  # is rejecting the user's writes. Covered by the existing
+  # [:note_id, :inserted_at] index.
+  defp rewrap_crdt_tail(batch_ids, old_dek, new_dek) do
+    from(l in CrdtUpdateLog, where: l.note_id in ^batch_ids, lock: "FOR UPDATE")
     |> Repo.all(skip_tenant_check: true)
     |> Enum.each(fn row ->
+      aad = Crypto.aad_for_row(:notes, :crdt_state, row.note_id)
+
       case try_rewrap(row.update_ciphertext, row.update_nonce, old_dek, new_dek, aad, aad,
              table: :crdt_update_log,
              phase: :sweep_notes,
              log: "T3.7 sweep_notes: crdt tail row decrypt failed under both old and new DEK",
-             log_meta: [row_id: row.id, note_id: note_id],
+             log_meta: [row_id: row.id, note_id: row.note_id],
              on_both_failed: {:error, :both_deks_failed}
            ) do
         {:ok, plaintext} ->

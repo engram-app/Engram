@@ -1,5 +1,6 @@
 defmodule Engram.Crypto.UserDekRotationTest do
   use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query, only: [from: 2]
   import Mox
@@ -475,6 +476,68 @@ defmodule Engram.Crypto.UserDekRotationTest do
              the new one. replay_tail drops undecryptable rows with only a
              warning, so this edit is gone the next time the note is opened.
              """
+    end
+
+    test "an unreadable crdt_state is left alone, not nulled and not raised on", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/junk.md", "content" => "body"})
+
+      # A snapshot that decrypts under NEITHER dek — the shape a rotation that
+      # died mid-sweep, or #1336, leaves behind.
+      junk_ct = :crypto.strong_rand_bytes(64)
+      junk_nonce = :crypto.strong_rand_bytes(12)
+
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        [set: [crdt_state_ciphertext: junk_ct, crdt_state_nonce: junk_nonce]],
+        skip_tenant_check: true
+      )
+
+      # Must NOT raise: base_columns' both-DEKs-failed arm aborts the sweep after
+      # earlier batches have committed under a DEK final_flip has not persisted.
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      # Must NOT be nulled: the note's tail log survives and has just been
+      # rewrapped, so an empty snapshot means the next bind replays base-less
+      # deltas and the checkpoint materializes that fragment over the body.
+      # Leaving the bytes exactly as they were is the only no-op.
+      assert raw.crdt_state_ciphertext == junk_ct
+      assert raw.crdt_state_nonce == junk_nonce
+
+      # And the rest of the row still rotated.
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      assert {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(raw, reloaded_user)
+      assert decrypted.content == "body"
+    end
+
+    test "the crdt_head re-warm is enqueued even when a LATER phase fails", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/head.md", "content" => "body"})
+
+      # sweep_notes writes crdt_state, which trips notes_crdt_head_invalidate and
+      # NULLs every head. That damage is committed by the FIRST phase, so the
+      # repair cannot hang off the all-phases-succeeded branch. Break the LAST
+      # phase (sweep_qdrant) by pointing it at a closed port.
+      dead = Bypass.open()
+      Bypass.down(dead)
+      Application.put_env(:engram, :qdrant_url, "http://localhost:#{dead.port}")
+
+      _ = UserDekRotation.rotate_user(user.id)
+
+      assert_enqueued(worker: Engram.Workers.BackfillCrdtHead, args: %{"vault_id" => vault.id})
     end
 
     test "a GENUINE legacy row rewraps its crdt_state alongside everything else", %{

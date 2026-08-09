@@ -181,11 +181,21 @@ defmodule Engram.Crypto.AadRebind do
 
     Enum.reduce_while(rows, {:ok, 0}, fn note, {:ok, n} ->
       case rebind_note(note, dek) do
-        :ok -> {:cont, {:ok, n + 1}}
-        # Someone else migrated it between the select and the UPDATE. Not an
-        # error — the row is at target either way.
-        :stale -> {:cont, {:ok, n}}
-        {:error, reason} -> {:halt, {:error, {:note, note.id, reason}}}
+        :ok ->
+          {:cont, {:ok, n + 1}}
+
+        # The row stopped being legacy between our SELECT and our fenced UPDATE.
+        # That is NOT benign here. The writer that flipped `dek_version` may have
+        # been a checkpoint stamping the bound version while rewriting only
+        # crdt_state (#1336), leaving the other envelopes under the empty AAD --
+        # permanently unreadable, and invisible to the next drain because it no
+        # longer matches the legacy filter. Halt so the operator sees it, which
+        # is what the previous `{1, _} = ...` match did by raising.
+        :stale ->
+          {:halt, {:error, {:note, note.id, :dek_version_changed_mid_rebind}}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:note, note.id, reason}}}
       end
     end)
   end
