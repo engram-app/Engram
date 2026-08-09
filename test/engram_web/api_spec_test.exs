@@ -199,10 +199,13 @@ defmodule EngramWeb.ApiSpecTest do
       assert Enum.sort(Map.keys(op.responses)) == [201, 402, 422]
     end
 
-    test "POST /api/vaults/register documents request + 200/201/400/402", %{spec: spec} do
+    test "POST /api/vaults/register documents request + 200/201/400/402/422", %{spec: spec} do
       op = spec.paths["/api/vaults/register"].post
       assert op.requestBody
-      assert Enum.sort(Map.keys(op.responses)) == [200, 201, 400, 402]
+      # 422 joins the set with the blank-name fix: a name that is present but
+      # blank clears the is_nil guard and fails the changeset, which the
+      # controller now surfaces instead of falling out of the case.
+      assert Enum.sort(Map.keys(op.responses)) == [200, 201, 400, 402, 422]
     end
 
     test "GET /api/vaults/{id} documents id path param + 404", %{spec: spec} do

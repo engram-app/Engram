@@ -4438,6 +4438,16 @@
               }
             },
             "description": "Vault cap reached"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Validation error"
           }
         },
         "summary": "Register or fetch a vault by client_id (idempotent)",
