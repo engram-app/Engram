@@ -16,6 +16,23 @@ defmodule Engram.FoldersTest do
     %{user: user, vault: vault}
   end
 
+  # Flips the last ciphertext byte of the user's wrapped DEK: the blob still
+  # carries its version tag (so the provider is identified) but AES-GCM
+  # authentication fails, so `get_dek/1` errors rather than returning :no_dek.
+  defp corrupt_user_dek!(user) do
+    blob = Engram.Repo.reload!(user).encrypted_dek
+    last_index = byte_size(blob) - 1
+    <<head::binary-size(last_index), last>> = blob
+
+    Engram.Repo.update_all(
+      from(u in Engram.Accounts.User, where: u.id == ^user.id),
+      [set: [encrypted_dek: <<head::binary, Bitwise.bxor(last, 0xFF)>>]],
+      skip_tenant_check: true
+    )
+
+    Engram.Crypto.DekCache.invalidate(user.id)
+  end
+
   defp att_paths(user, vault) do
     {:ok, metas} = Attachments.list_attachments(user, vault)
     metas |> Enum.map(& &1.path) |> Enum.sort()
@@ -310,6 +327,30 @@ defmodule Engram.FoldersTest do
       assert {:error, {:not_empty, %{notes: 1, attachments: 1}}} =
                Folders.delete(user, vault, "Docs")
 
+      assert {:ok, _} = Notes.get_note(user, vault, "Docs/a.md")
+    end
+
+    test "reports a fault instead of reading an unreadable vault as empty", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+
+      # The emptiness guard is the only thing standing between a non-recursive
+      # delete and a full folder, and it is built from two counters that both
+      # need the DEK. Corrupt the wrapped DEK so it still IDENTIFIES as a v2
+      # blob but fails to unwrap — the shape a KMS outage or a rotated-away
+      # master key takes. "I couldn't tell" must not render as 0.
+      corrupt_user_dek!(user)
+      broken = Engram.Accounts.get_user!(user.id)
+
+      assert {:error, reason} = Folders.delete(broken, vault, "Docs")
+      refute match?({:not_empty, _}, reason)
+
+      # Nothing was deleted: the note is readable again once the DEK is.
       assert {:ok, _} = Notes.get_note(user, vault, "Docs/a.md")
     end
 

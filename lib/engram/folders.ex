@@ -109,13 +109,14 @@ defmodule Engram.Folders do
       # between the count and the cascade is still visible to the delete but
       # not the count. Fully closing it would need REPEATABLE READ or an
       # inline delete-guard; not worth it for this single-user, RLS-scoped,
-      # AI-paced surface. `count_folder_attachments` is `with`-chained (not
-      # hard-matched) so a non-ok tenant-unwrap tuple propagates as an error
-      # instead of MatchError-ing.
+      # AI-paced surface. Both counters are `with`-chained (not hard-matched)
+      # so a crypto fault or a non-ok tenant-unwrap tuple propagates as an
+      # error instead of MatchError-ing — and, more importantly, so neither can
+      # answer 0 for "I couldn't tell" and let the guard below read an
+      # unreadable vault as an empty folder.
       atomic(fn ->
-        notes = Notes.count_folder_notes(user, vault, folder)
-
-        with {:ok, atts} <- count_folder_attachments(user, vault, folder) do
+        with {:ok, notes} <- Notes.count_folder_notes(user, vault, folder),
+             {:ok, atts} <- count_folder_attachments(user, vault, folder) do
           if notes + atts > 0 and not recursive do
             {:error, {:not_empty, %{notes: notes, attachments: atts}}}
           else

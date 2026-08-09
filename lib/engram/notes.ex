@@ -3842,23 +3842,40 @@ defmodule Engram.Notes do
   @doc """
   Counts live `kind == "note"` rows under `folder` (the folder itself and any
   nested subfolder), for the empty-folder gate in `Engram.Folders.delete/4`.
-  Folder markers and attachments are NOT counted. Returns 0 when the user has
-  no DEK yet (nothing encrypted, so nothing to count).
+  Folder markers and attachments are NOT counted. Returns `{:ok, 0}` when the
+  user has no DEK yet (nothing encrypted, so nothing to count), and
+  `{:error, reason}` when a DEK exists but cannot be unwrapped — an unreadable
+  vault is not an empty one, and the caller is about to delete something.
   """
-  @spec count_folder_notes(map(), map(), String.t()) :: non_neg_integer()
+  @spec count_folder_notes(map(), map(), String.t()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
   def count_folder_notes(user, vault, folder) do
     case Crypto.get_dek(user) do
       {:ok, _dek} ->
         prefix = folder <> "/"
 
-        fetch_decrypted_live_rows(user, vault)
-        |> Enum.count(fn r ->
-          f = r.folder || ""
-          r.kind == "note" and (f == folder or String.starts_with?(f, prefix))
-        end)
+        {:ok,
+         fetch_decrypted_live_rows(user, vault)
+         |> Enum.count(fn r ->
+           f = r.folder || ""
+           r.kind == "note" and (f == folder or String.starts_with?(f, prefix))
+         end)}
 
-      _ ->
-        0
+      # No DEK provisioned means the user has never written encrypted content,
+      # so zero is the TRUE answer rather than an unknown one. Same reading the
+      # folder-delete endpoint already applies to :no_dek.
+      {:error, :no_dek} ->
+        {:ok, 0}
+
+      # Anything else — a KMS outage, a rotated-away master key, a corrupt wrap
+      # — means the vault is UNREADABLE, not empty. This used to answer 0, the
+      # same answer a genuinely empty folder gives, to `delete/4`'s emptiness
+      # guard. Only a hard match further down (`fetch_decrypted_live_rows/2`)
+      # kept that from authorizing a cascade over content it couldn't see, so
+      # the guard was one tolerant-decrypt refactor away from deleting a full
+      # folder it had just called empty. Report the fault instead.
+      {:error, _} = err ->
+        err
     end
   end
 
