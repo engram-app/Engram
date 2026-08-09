@@ -25,6 +25,11 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
   require Logger
 
+  # Total checkpoint attempts, each its own transaction (see `attempt/8`). Every
+  # retry re-unions against the winner's state, so contention on ONE note
+  # converges fast; this is a runaway guard, not a tuning knob.
+  @attempts 3
+
   @doc """
   Checkpoint the live doc into the `notes` row. Encrypts the full Yjs v1
   state, prunes the tail-log, and — when the projected text actually changed —
@@ -130,29 +135,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
         # {:abort, reason} when the stored state is unreadable — overwriting a
         # state we cannot prove we contain could destroy data, so we write
         # nothing (unreadable ≠ absent).
-        {:ok, outcome} =
-          Repo.with_tenant(user_id, fn ->
-            # `note.path` / `note.folder` / `note.title` are VIRTUAL — a bare
-            # Repo.get! leaves them nil. Materialize through the decrypt path so
-            # they are populated BEFORE we re-derive title + re-HMAC path/folder.
-            # Without this, extract_title falls back to the UUID and
-            # inject_phase_b_fields_pub gets nil path/folder → corrupts
-            # path_hmac/folder_hmac so the row stops resolving by path.
-            case Repo.get(Note, note_id) do
-              # Deleted note (vault force-purge race): quiet skip, see checkpoint/5.
-              nil ->
-                {:skip, :note_deleted}
-
-              raw_note ->
-                {:ok, note} = Crypto.maybe_decrypt_note_fields(raw_note, user)
-
-                if markdown?(note.path) do
-                  do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user)
-                else
-                  do_structural_checkpoint(note, note_id, live_state, prune, user)
-                end
-            end
-          end)
+        outcome = attempt(user, user_id, vault_id, note_id, live_state, prune, opts, @attempts)
 
         case outcome do
           {prev_hash, new_hash, path} ->
@@ -214,6 +197,87 @@ defmodule Engram.Notes.CrdtCheckpoint do
       )
 
       :ok
+  end
+
+  # One checkpoint attempt = one transaction.
+  #
+  # The write is fenced on the row version read INSIDE this transaction, so a
+  # commit landing in the gap between that read and the UPDATE matches zero rows
+  # (#847/#902; `crdt_checkpoint_interleave_test` pins it). On a miss we
+  # `Repo.rollback/1` rather than retrying in place, which matters for three
+  # reasons the in-transaction alternative cannot give us:
+  #
+  #   * `Vaults.next_seq!/1` has already taken the vault-global row lock by
+  #     then, and a lock cannot be released without ending the transaction.
+  #     Retrying inside would hold it across another decrypt/union/encrypt
+  #     cycle, blocking every other write in the vault.
+  #   * Rolling back undoes that `next_seq!` increment, so a lost race leaves no
+  #     gap in the vault's change sequence.
+  #   * The next attempt re-reads the row, so it unions against the winner's
+  #     state instead of the stale snapshot. The Yjs union is monotone, so
+  #     attempts converge.
+  #
+  # Exhausting `@attempts` writes nothing and prunes nothing. That is not a
+  # claim the ops are recoverable — on unbind they may not be — only that not
+  # writing beats overwriting a committed write.
+  defp attempt(user, user_id, vault_id, note_id, live_state, prune, opts, budget) do
+    result =
+      Repo.with_tenant(user_id, fn ->
+        # `note.path` / `note.folder` / `note.title` are VIRTUAL — a bare
+        # Repo.get! leaves them nil. Materialize through the decrypt path so
+        # they are populated BEFORE we re-derive title + re-HMAC path/folder.
+        # Without this, extract_title falls back to the UUID and
+        # inject_phase_b_fields_pub gets nil path/folder → corrupts
+        # path_hmac/folder_hmac so the row stops resolving by path.
+        case Repo.get(Note, note_id) do
+          # Deleted note (vault force-purge race): quiet skip, see checkpoint/5.
+          nil ->
+            {:skip, :note_deleted}
+
+          raw_note ->
+            {:ok, note} = Crypto.maybe_decrypt_note_fields(raw_note, user)
+
+            # Test-only interleave seam (#1326). The gap between this read and
+            # the write below is where a committed REST/MCP write can be
+            # clobbered, and the ExUnit sandbox cannot produce it (one
+            # connection, one never-committed transaction — see
+            # Engram.CheckpointInterleave). Unset outside those tests.
+            interleave(:after_row_read)
+
+            written =
+              if markdown?(note.path) do
+                do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user)
+              else
+                do_structural_checkpoint(note, note_id, live_state, prune, user)
+              end
+
+            case written do
+              :stale -> Repo.rollback(:stale)
+              other -> other
+            end
+        end
+      end)
+
+    case result do
+      {:ok, outcome} ->
+        outcome
+
+      {:error, :stale} when budget > 1 ->
+        Logger.info(
+          "crdt checkpoint stale fence, retrying note_id=#{note_id} attempts_left=#{budget - 1}",
+          Metadata.with_category(:info, :sync, note_id: note_id)
+        )
+
+        attempt(user, user_id, vault_id, note_id, live_state, prune, opts, budget - 1)
+
+      {:error, :stale} ->
+        Logger.warning(
+          "crdt checkpoint gave up after #{@attempts} stale fences note_id=#{note_id}",
+          Metadata.with_category(:warning, :sync, note_id: note_id)
+        )
+
+        {:skip, :stale_fence_exhausted}
+    end
   end
 
   # A CRDT room only ever holds a markdown (`.md`) doc or a structural doc
@@ -338,21 +402,30 @@ defmodule Engram.Notes.CrdtCheckpoint do
     %{text: text, tags: tags, content_hash: content_hash, ct: ct, nonce: nonce, user: user} = m
     prev = note.content_hash
 
+    # Fence every write on the version we read in THIS transaction. An explicit
+    # `:captured_version` (timer / channel, captured before their doc snapshot)
+    # is tighter, so prefer it; otherwise the in-transaction read is what closes
+    # the read→write gap. There is no unfenced path any more.
+    fence_version = Keyword.get(opts, :captured_version) || note.version
+
     if prev == content_hash do
       # Text unchanged: compact the snapshot + prune, but do NOT touch
       # version/seq/content — legacy /changes pullers must not see phantom edits.
-      {1, _} =
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note_id and n.kind == "note"),
-          set: [
-            crdt_state_ciphertext: ct,
-            crdt_state_nonce: nonce,
-            dek_version: Crypto.row_version_aad_bound()
-          ]
-        )
-
-      prune_tail(note_id, prune)
-      {prev, content_hash, note.path}
+      #
+      # Fenced too: compaction writes no content but DOES replace crdt_state, so
+      # a write landing in the gap would have its ops dropped from the snapshot
+      # while notes.content keeps its text. Losing a compaction costs nothing
+      # (it is an optimisation, and the tail stays unpruned); losing ops does.
+      case Repo.update_all(fence(note_id, fence_version),
+             set: [
+               crdt_state_ciphertext: ct,
+               crdt_state_nonce: nonce,
+               dek_version: Crypto.row_version_aad_bound()
+             ]
+           ) do
+        {0, _} -> :stale
+        {1, _} -> compaction_done(note, note_id, prune, prev, content_hash)
+      end
     else
       # Re-derive title from the note's decrypted (sanitized-at-write) path.
       title = Helpers.extract_title(text, note.path)
@@ -374,26 +447,15 @@ defmodule Engram.Notes.CrdtCheckpoint do
         |> Map.put(:crdt_state_nonce, nonce)
         |> Map.put(:content_hash, content_hash)
 
-      # #902 fence. When the caller captured the doc at a known row version,
-      # persist only if the row is STILL at that version. A REST/MCP write
-      # that committed after the snapshot bumped `version`, so the CAS matches
-      # zero rows and we ABORT — never overwriting the newer committed content
-      # with our stale encoding. `captured_version` nil (e.g. the unbind path)
-      # keeps the prior unfenced behaviour. The field set is derived through
-      # Note.changeset (identical casting to the previous Repo.update!) and
-      # applied via a version-fenced update_all, mirroring the compaction branch.
-      captured = Keyword.get(opts, :captured_version)
-      fence_version = captured || note.version
-
+      # `next_seq!` takes the vault-global row lock for the rest of this
+      # transaction. That is fine here precisely BECAUSE a stale fence rolls the
+      # transaction back (see `attempt/8`) — the lock is released and this seq
+      # increment is undone, so a lost race costs no lock time and leaves no gap
+      # in the vault's change sequence.
       changeset =
         note
         |> Note.changeset(Map.put(phase_b, :version, fence_version + 1))
         |> Ecto.Changeset.put_change(:seq, Vaults.next_seq!(vault_id))
-
-      base_query = from(n in Note, where: n.id == ^note_id and n.kind == "note")
-
-      fenced_query =
-        if captured, do: where(base_query, [n], n.version == ^captured), else: base_query
 
       # update_all does NOT auto-manage timestamps (Repo.update! does), and
       # `updated_at` is never cast into changeset.changes. Set it explicitly,
@@ -402,24 +464,36 @@ defmodule Engram.Notes.CrdtCheckpoint do
       # /api/notes/changes timestamp feed this originally guarded is retired.)
       set = changeset.changes |> Map.put(:updated_at, DateTime.utc_now()) |> Map.to_list()
 
-      case Repo.update_all(fenced_query, set: set) do
+      case Repo.update_all(fence(note_id, fence_version), set: set) do
         {1, _} ->
           prune_tail(note_id, prune)
           {prev, content_hash, note.path}
 
+        # A newer write is already committed. `attempt/8` rolls back and
+        # re-reads, so the next pass unions against it rather than reverting it.
         {0, _} ->
-          # The row advanced since our snapshot — a newer write is already
-          # committed. Do NOT prune (its tail rows may be unmerged) and do NOT
-          # revert. Return equal hashes so the caller enqueues no embed for a
-          # write that did not happen; the next debounce tick re-captures the
-          # now-merged doc and checkpoints that.
-          Logger.info(
-            "crdt checkpoint skipped stale write note_id=#{note_id} captured_version=#{fence_version}",
-            Metadata.with_category(:info, :sync, note_id: note_id)
-          )
-
-          {content_hash, content_hash, note.path}
+          :stale
       end
+    end
+  end
+
+  # Every checkpoint write goes through this. There is deliberately no unfenced
+  # variant: an unfenced UPDATE is what let a committed REST/MCP write be
+  # overwritten (#847/#902).
+  defp fence(note_id, version) do
+    from(n in Note, where: n.id == ^note_id and n.kind == "note" and n.version == ^version)
+  end
+
+  defp compaction_done(note, note_id, prune, prev, content_hash) do
+    prune_tail(note_id, prune)
+    {prev, content_hash, note.path}
+  end
+
+  # See the call site. `nil` unless a test installs a hook.
+  defp interleave(point) do
+    case Application.get_env(:engram, :checkpoint_interleave_hook) do
+      fun when is_function(fun, 1) -> fun.(point)
+      _ -> :ok
     end
   end
 
