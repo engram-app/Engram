@@ -44,7 +44,6 @@ export class CrdtChannel {
 			return;
 		}
 		this.initiated.add(id);
-		this.step1Timed.delete(id); // fresh handshake: time its reply again
 		const doc = await this.mgr.getDoc(path);
 		if (!this.mgr.hasDoc(path)) {
 			this.initiated.delete(id); // closed mid-await: re-arm for the next open
@@ -53,13 +52,21 @@ export class CrdtChannel {
 		const encoder = encoding.createEncoder();
 		encoding.writeVarUint(encoder, MESSAGE_SYNC);
 		syncProtocol.writeSyncStep1(encoder, doc);
+		// Re-arm ONLY once STEP1 is actually on the wire. Clearing before the
+		// `await this.mgr.getDoc(path)` above left a window in which an inbound
+		// frame — a collaborator's edit queued during the await — was stamped as
+		// the handshake reply, timed from an origin that had not happened yet.
+		this.step1Timed.delete(id);
 		this.transport(id, toB64(encoding.toUint8Array(encoder)));
 		crdtMark(path, "step1:sent");
 	}
 
 	resetSync(path: string): void {
+		// Only `initiated` is cleared here. `step1Timed` is re-armed by
+		// `startSync` at the moment STEP1 is sent — clearing it here would
+		// re-open the same pre-STEP1 window, since resetSync is followed by an
+		// async re-enroll rather than an immediate send.
 		this.initiated.delete(this.mgr.docId(path));
-		this.step1Timed.delete(this.mgr.docId(path));
 	}
 
 	sendUpdateRaw(docId: string, update: Uint8Array): void {
