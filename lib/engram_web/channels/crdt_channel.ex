@@ -876,8 +876,9 @@ defmodule EngramWeb.CrdtChannel do
   # classify the INNER term, which is what carries the useful distinction (a
   # changeset vs a KMS failure vs a filter-key error) without forwarding a raw
   # term that could carry key material.
+  # Total by construction: every arm reaching prepare_create's else is a
+  # {:error, term} (dialyzer rejects a fallback clause here as uncoverable).
   defp prepare_error_kind({:error, reason}), do: Engram.Telemetry.error_kind(reason)
-  defp prepare_error_kind(other), do: Engram.Telemetry.error_kind(other)
 
   # ensure_room/2 only ever fails as {:error, atom}, so that reason is safe to
   # name verbatim. Anything else goes through error_kind/1 rather than inspect,
