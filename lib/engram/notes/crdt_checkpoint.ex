@@ -57,6 +57,36 @@ defmodule Engram.Notes.CrdtCheckpoint do
     :folder_hmac
   ]
 
+  # Location is only safe to leave alone when the row is ALREADY at the current
+  # AAD version. A legacy row must be migrated WHOLESALE or not at all: stamping
+  # `dek_version` while leaving path/folder bound under the old (empty) AAD makes
+  # those columns permanently undecryptable, and `list_tree_notes` uses
+  # `PathCrypto.decrypt!` — so one such row 500s the WHOLE vault tree, and
+  # AadRebind (which filters on the legacy dek_version) can no longer see it to
+  # repair it. do_rename_note_inner documents the same hazard and re-encrypts
+  # everything; this is the writer that must not become the exception.
+  defp drop_location_unless_migrating(attrs, %Note{dek_version: v}) do
+    if v == Crypto.row_version_aad_bound() do
+      Map.drop(attrs, @location_keys)
+    else
+      attrs
+    end
+  end
+
+  # `extract_title/2` falls back to the FILENAME when the text names no title,
+  # which is the normal Obsidian case. That fallback reads the path from this
+  # transaction's snapshot, so writing it reverts a rename that committed in the
+  # gap — the row lands at the new path carrying the old basename as its title,
+  # the same split identity @location_keys exists to prevent. The rename writers
+  # re-derive title themselves, so leaving it alone loses nothing.
+  defp drop_path_derived_title(attrs, title, path) do
+    if title == Path.rootname(Path.basename(path || "")) do
+      Map.drop(attrs, [:title_ciphertext, :title_nonce])
+    else
+      attrs
+    end
+  end
+
   @attempts 3
 
   @doc """
@@ -306,7 +336,8 @@ defmodule Engram.Notes.CrdtCheckpoint do
                   # loudly rather than degrading quietly.
                   Logger.error(
                     "crdt checkpoint stale fence inside a caller-owned transaction: " <>
-                      "no rollback, no retry, seq gap left behind note_id=#{note_id}",
+                      "no rollback, no retry, and any next_seq! taken on the " <>
+                      "materialize path stays committed note_id=#{note_id}",
                     Metadata.with_category(:error, :sync, note_id: note_id)
                   )
 
@@ -362,8 +393,13 @@ defmodule Engram.Notes.CrdtCheckpoint do
       # persisted, and the stacktrace names attempt/8 rather than the real
       # cause. Name it instead; the outcome is still a skip, not a false :ok.
       {:error, reason} ->
+        # error_kind/1, not inspect(reason): RedactFilter scrubs metadata keys and
+        # never the message body, and this arm is a catch-all for reasons that do
+        # not exist yet (a changeset, a Postgrex.Error carrying constraint
+        # detail). Same rule as every other log in the sync category.
         Logger.error(
-          "crdt checkpoint rolled back note_id=#{note_id} reason=#{inspect(reason)}",
+          "crdt checkpoint rolled back note_id=#{note_id} " <>
+            "reason=#{inspect(Engram.Telemetry.error_kind(reason))}",
           Metadata.with_category(:error, :sync, note_id: note_id)
         )
 
@@ -545,6 +581,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
       merged = %{content: text, title: title, tags: tags, content_hash: content_hash}
       {:ok, encrypted} = Crypto.encrypt_note_fields(merged, user, note_id)
+      encrypted = drop_path_derived_title(encrypted, title, note.path)
 
       phase_b =
         Notes.inject_phase_b_fields_pub(
@@ -556,7 +593,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
           tags
         )
         |> Notes.inject_okf_fields_pub(user, note_id, text)
-        |> Map.drop(@location_keys)
+        |> drop_location_unless_migrating(note)
         |> Map.put(:crdt_state_ciphertext, ct)
         |> Map.put(:crdt_state_nonce, nonce)
         |> Map.put(:content_hash, content_hash)

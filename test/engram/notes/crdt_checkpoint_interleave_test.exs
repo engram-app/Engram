@@ -84,6 +84,12 @@ defmodule Engram.Notes.CrdtCheckpointInterleaveTest do
     # the checkpoint has already read past and must not overwrite.
     {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "REST WINS"})
 
+    # Sampled AFTER the racing write so only the checkpoint's own attempts are
+    # counted. This is the one place a stale fence is guaranteed, which is why
+    # the seq assertion lives here: a sandboxed version could not force the
+    # fence to miss, so it silently measured the happy path instead.
+    seq_before = Vaults.current_seq(user.id, vault.id)
+
     CheckpointInterleave.release(:after_row_read, parked)
     assert :ok = Task.await(task, 15_000)
 
@@ -111,6 +117,14 @@ defmodule Engram.Notes.CrdtCheckpointInterleaveTest do
     # the assertion that distinguishes "the fence held and the retry merged"
     # from "the checkpoint silently gave up" — the exact class of vacuous pass
     # the two prior attempts on #1325 died of.
+    # The design's headline claim: a lost race rolls back, so the next_seq! it
+    # already took is undone and the vault's change sequence gains no hole. The
+    # checkpoint lost the fence at least once here, so an in-place retry (or the
+    # caller-owned degrade, which does not roll back) would show > 1.
+    assert Vaults.current_seq(user.id, vault.id) - seq_before == 1,
+           "a lost fence burned more than one vault seq: " <>
+             "#{Vaults.current_seq(user.id, vault.id) - seq_before}"
+
     assert fresh.content =~ "ROOM EDIT",
            """
            the room's ops are missing, so the checkpoint did not converge — it
@@ -171,6 +185,12 @@ defmodule Engram.Notes.CrdtCheckpointInterleaveTest do
     # above and still fails here.
     assert moved.path == "moved/q.md",
            "row resolved at the new path but decrypted to #{inspect(moved.path)} — path_hmac and path_ciphertext disagree"
+
+    # title falls back to the FILENAME when the text names no title, and that
+    # fallback reads this transaction's snapshot path -- so writing it reverts
+    # the rename's basename even though the path columns are now left alone.
+    assert moved.title == "q",
+           "checkpoint reverted the title to the pre-rename basename: #{inspect(moved.title)}"
 
     # And the room's ops still landed, so this is not passing by the checkpoint
     # having done nothing.
