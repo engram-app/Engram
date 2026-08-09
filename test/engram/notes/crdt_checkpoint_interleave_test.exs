@@ -120,4 +120,60 @@ defmodule Engram.Notes.CrdtCheckpointInterleaveTest do
            got: #{inspect(fresh.content)}
            """
   end
+
+  # Same gap, different victim. A checkpoint used to re-derive path/folder
+  # envelopes from the row it read, and the envelope nonce is random, so those
+  # columns landed in EVERY checkpoint write. The rename writers bump
+  # seq/updated_at but NOT version, so the fence cannot see them -- a rename
+  # committing in this gap was silently reverted.
+  #
+  # The corruption shape is the interesting part: path_hmac is deterministic
+  # over the path, so it matched our snapshot, stayed out of `changes`, and the
+  # row kept the rename's NEW hmac while path_ciphertext went back to the OLD
+  # path. The row then resolves by the new path but decrypts to the old one.
+  #
+  # Fixed by not writing location at all from a checkpoint (@location_keys).
+  test "a rename committing mid-checkpoint is not reverted", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+
+    restore = CheckpointInterleave.arm(:after_row_read)
+    on_exit(restore)
+
+    task =
+      Task.async(fn ->
+        CheckpointInterleave.checkout_real!()
+        {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+        :ok =
+          CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "ROOM EDIT")
+
+        CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+      end)
+
+    parked = CheckpointInterleave.await_parked(:after_row_read, task.pid)
+
+    # The note moves while the checkpoint sits parked on the old path.
+    {:ok, _} = Notes.rename_note(user, vault, "p.md", "moved/q.md")
+
+    CheckpointInterleave.release(:after_row_read, parked)
+    assert :ok = Task.await(task, 15_000)
+
+    assert {:ok, moved} = Notes.get_note(user, vault, "moved/q.md"),
+           "the checkpoint reverted a rename that committed mid-transaction"
+
+    assert {:error, :not_found} = Notes.get_note(user, vault, "p.md")
+
+    # Not split: what the row resolves BY must be what it decrypts TO. A row
+    # carrying the new path_hmac and the old path_ciphertext passes the lookup
+    # above and still fails here.
+    assert moved.path == "moved/q.md",
+           "row resolved at the new path but decrypted to #{inspect(moved.path)} — path_hmac and path_ciphertext disagree"
+
+    # And the room's ops still landed, so this is not passing by the checkpoint
+    # having done nothing.
+    assert moved.content =~ "ROOM EDIT"
+  end
 end

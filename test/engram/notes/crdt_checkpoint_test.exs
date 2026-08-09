@@ -505,6 +505,79 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert fresh.version == raw_note.version + 1
   end
 
+  # A checkpoint owns CONTENT, not LOCATION (#1330 review). The rename writers
+  # bump seq/updated_at but NOT version, so the fence cannot see them; if the
+  # checkpoint also wrote path/folder envelopes it would revert a rename that
+  # committed after its snapshot -- and split the row, because path_hmac is
+  # deterministic (stays out of `changes`, keeps the NEW value) while
+  # path_ciphertext would go back to the OLD path.
+  test "a checkpoint does not rewrite location, so a concurrent rename survives", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    :ok =
+      CrdtBridge.diff_into_text(
+        Yex.Doc.get_text(doc, CrdtBridge.text_name()),
+        "body after rename"
+      )
+
+    # The note moves while the room holds a doc snapshot of the OLD path.
+    {:ok, _} = Notes.rename_note(user, vault, "p.md", "moved/q.md")
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    # The rename stands: resolvable at the new path, gone from the old.
+    assert {:ok, moved} = Notes.get_note(user, vault, "moved/q.md")
+    assert {:error, :not_found} = Notes.get_note(user, vault, "p.md")
+
+    # ...and the row is not split: what it resolves by is what it decrypts to.
+    assert moved.path == "moved/q.md"
+    assert moved.content =~ "body after rename"
+  end
+
+  # The rollback design's headline claim: "a lost race leaves no gap in the
+  # vault's change sequence". Untested until now, and the caller_owns_txn?
+  # degrade violates it -- so pin it on the path that is supposed to hold.
+  test "a stale fence costs no vault change_seq", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    captured_version = raw_note.version
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "seq probe")
+
+    # A committed write moves the row on, staling the captured fence.
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "WINNER"})
+
+    seq_before = vault_change_seq(user, vault.id)
+
+    :ok =
+      CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc,
+        captured_version: captured_version
+      )
+
+    seq_after = vault_change_seq(user, vault.id)
+
+    # The successful attempt consumes exactly one. A rolled-back attempt must
+    # consume none -- if a lost race leaked one, this is > 1.
+    assert seq_after - seq_before == 1,
+           "a stale fence burned #{seq_after - seq_before} vault seqs, expected 1"
+  end
+
+  defp vault_change_seq(user, vault_id) do
+    {:ok, seq} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.one(from(v in Engram.Vaults.Vault, where: v.id == ^vault_id, select: v.change_seq))
+      end)
+
+    seq
+  end
+
   # ── Virtual field integrity: title/path not corrupted ─────────────────────
 
   test "checkpoint does not corrupt title or path_hmac on a note with a non-trivial path", ctx do

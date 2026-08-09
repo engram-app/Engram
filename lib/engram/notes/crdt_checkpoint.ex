@@ -28,6 +28,35 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # Total checkpoint attempts, each its own transaction (see `attempt/8`). Every
   # retry re-unions against the winner's state, so contention on ONE note
   # converges fast; this is a runaway guard, not a tuning knob.
+  # A checkpoint owns CONTENT; it must never rewrite LOCATION.
+  #
+  # inject_phase_b_fields_pub re-derives these from the path/folder read in this
+  # transaction, and the envelope nonce is random, so they land in
+  # `changeset.changes` on EVERY checkpoint even when the path did not change.
+  # That is only invisible while nothing else moves the note -- and the rename
+  # writers (Notes.rename_note, do_rename_folder, bulk_rename_update!) bump
+  # `seq`/`updated_at` but NOT `version`, so the fence cannot see them.
+  #
+  # A rename committing in the read->write gap was therefore reverted, and in the
+  # worst shape possible: path_hmac/basename_hmac are deterministic over the path,
+  # so they equal our snapshot's values, stay OUT of `changes`, and the row keeps
+  # the rename's NEW hmac while path_ciphertext goes back to the OLD path. The row
+  # then resolves by the new path but decrypts to the old one.
+  #
+  # Dropping them is the fix rather than widening the fence: location is simply
+  # not this writer's column set, and a writer that does not touch a column cannot
+  # lose a race for it. Rows are created with these set, so nothing depends on the
+  # checkpoint maintaining them.
+  @location_keys [
+    :path_ciphertext,
+    :path_nonce,
+    :path_hmac,
+    :basename_hmac,
+    :folder_ciphertext,
+    :folder_nonce,
+    :folder_hmac
+  ]
+
   @attempts 3
 
   @doc """
@@ -268,9 +297,23 @@ defmodule Engram.Notes.CrdtCheckpoint do
               # never-raises contract (rescue does not catch throws). No caller
               # does this today; degrade rather than leave the trap armed.
               :stale ->
-                if caller_owns_txn?,
-                  do: {:skip, :stale_fence_no_rollback},
-                  else: Repo.rollback(:stale)
+                if caller_owns_txn? do
+                  # No caller does this today. If one ever does, it silently
+                  # gets a ONE-SHOT checkpoint (the `{:error, :stale}` retry arm
+                  # never sees this) AND keeps next_seq!'s increment, gapping the
+                  # vault sequence -- both the opposite of what this design
+                  # promises. Neither is detectable from the outside, so say so
+                  # loudly rather than degrading quietly.
+                  Logger.error(
+                    "crdt checkpoint stale fence inside a caller-owned transaction: " <>
+                      "no rollback, no retry, seq gap left behind note_id=#{note_id}",
+                    Metadata.with_category(:error, :sync, note_id: note_id)
+                  )
+
+                  {:skip, :stale_fence_no_rollback}
+                else
+                  Repo.rollback(:stale)
+                end
 
               other ->
                 other
@@ -312,6 +355,19 @@ defmodule Engram.Notes.CrdtCheckpoint do
         )
 
         {:skip, :stale_fence_exhausted}
+
+      # Any OTHER rollback reason. Without this arm the case raises
+      # CaseClauseError, which do_checkpoint's rescue flattens into a generic
+      # "checkpoint raised" and returns :ok -- the room exits believing it
+      # persisted, and the stacktrace names attempt/8 rather than the real
+      # cause. Name it instead; the outcome is still a skip, not a false :ok.
+      {:error, reason} ->
+        Logger.error(
+          "crdt checkpoint rolled back note_id=#{note_id} reason=#{inspect(reason)}",
+          Metadata.with_category(:error, :sync, note_id: note_id)
+        )
+
+        {:skip, :rolled_back}
     end
   end
 
@@ -500,6 +556,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
           tags
         )
         |> Notes.inject_okf_fields_pub(user, note_id, text)
+        |> Map.drop(@location_keys)
         |> Map.put(:crdt_state_ciphertext, ct)
         |> Map.put(:crdt_state_nonce, nonce)
         |> Map.put(:content_hash, content_hash)
@@ -546,12 +603,20 @@ defmodule Engram.Notes.CrdtCheckpoint do
     {prev, content_hash, note.path}
   end
 
-  # See the call site. `nil` unless a test installs a hook.
-  defp interleave(point) do
-    case Application.get_env(:engram, :checkpoint_interleave_hook) do
-      fun when is_function(fun, 1) -> fun.(point)
-      _ -> :ok
+  # See the call site. Compiled to a no-op outside :test, so the hook cannot be
+  # armed in prod by a stray runtime.exs key, a remote-console put_env or a
+  # future config collision -- an arbitrary function running inside the
+  # checkpoint's open transaction (the harness's own hook parks for up to 10s)
+  # would pin a pooled connection for as long as it liked.
+  if Mix.env() == :test do
+    defp interleave(point) do
+      case Application.get_env(:engram, :checkpoint_interleave_hook) do
+        fun when is_function(fun, 1) -> fun.(point)
+        _ -> :ok
+      end
     end
+  else
+    defp interleave(_point), do: :ok
   end
 
   defp encode(doc) do
