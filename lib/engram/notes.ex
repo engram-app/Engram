@@ -3848,36 +3848,20 @@ defmodule Engram.Notes do
   vault is not an empty one, and the caller is about to delete something.
   """
   @spec count_folder_notes(map(), map(), String.t()) ::
-          {:ok, non_neg_integer()} | {:error, term()}
+          {:ok, non_neg_integer()} | {:error, {:dek_unavailable, String.t()}}
   def count_folder_notes(user, vault, folder) do
-    case Crypto.get_dek(user) do
-      {:ok, _dek} ->
-        prefix = folder <> "/"
-
-        {:ok,
-         fetch_decrypted_live_rows(user, vault)
-         |> Enum.count(fn r ->
-           f = r.folder || ""
-           r.kind == "note" and (f == folder or String.starts_with?(f, prefix))
-         end)}
-
-      # No DEK provisioned means the user has never written encrypted content,
-      # so zero is the TRUE answer rather than an unknown one. Same reading the
-      # folder-delete endpoint already applies to :no_dek.
-      {:error, :no_dek} ->
-        {:ok, 0}
-
-      # Anything else — a KMS outage, a rotated-away master key, a corrupt wrap
-      # — means the vault is UNREADABLE, not empty. This used to answer 0, the
-      # same answer a genuinely empty folder gives, to `delete/4`'s emptiness
-      # guard. Only a hard match further down (`fetch_decrypted_live_rows/2`)
-      # kept that from authorizing a cascade over content it couldn't see, so
-      # the guard was one tolerant-decrypt refactor away from deleting a full
-      # folder it had just called empty. Report the fault instead.
-      {:error, _} = err ->
-        err
+    with {:ok, matches} <- scan_folders(user, vault, [folder]) do
+      {:ok, Enum.count(matches, &(&1.kind == "note"))}
     end
   end
+
+  # `Crypto.get_dek/1` reads `encrypted_dek` off the passed struct, so a caller
+  # holding a pre-provisioning copy gets `:no_dek` for a user who has one.
+  # Mirrors `Attachments.fresh_user/1`.
+  defp reload_if_dekless(%Engram.Accounts.User{encrypted_dek: nil} = user),
+    do: Repo.reload!(user)
+
+  defp reload_if_dekless(user), do: user
 
   @doc """
   Returns all non-deleted notes in a specific folder for a user.
@@ -4456,14 +4440,72 @@ defmodule Engram.Notes do
   # batch names. Overlapping folders (parent + child in the same batch)
   # naturally dedupe through the union filter.
   defp do_delete_folders(user, vault, folders) do
-    prefixes = Enum.map(folders, &(&1 <> "/"))
-    decrypted = fetch_decrypted_live_rows(user, vault)
+    with {:ok, matches} <- scan_folders(user, vault, folders) do
+      delete_scanned(user, vault, matches)
+    end
+  end
 
-    matches =
-      Enum.filter(decrypted, fn r ->
-        f = r.folder || ""
-        f in folders or Enum.any?(prefixes, &String.starts_with?(f, &1))
-      end)
+  @doc """
+  One decrypt pass over the vault, returning the live rows under `folders` —
+  the folder markers themselves plus every descendant, at any depth.
+
+  Split out from the cascade so a caller that must DECIDE before deleting
+  (`Engram.Folders.delete/4`'s emptiness guard) can count and then delete from
+  the SAME row set. Counting via a separate scan cost a second full-vault
+  fetch + batch decrypt per side, and left a window — under READ COMMITTED
+  each statement takes its own snapshot — where a row committed between the
+  count and the cascade was deleted without ever being counted. Handing the
+  scanned rows straight to `delete_scanned/3` closes that gap outright: the
+  guard now decides on exactly the rows that will be deleted.
+
+  Returns `{:error, {:dek_unavailable, reason}}` rather than an empty list when
+  the vault cannot be read — an unreadable vault is not an empty folder, and
+  this feeds a delete guard.
+  """
+  @spec scan_folders(map(), map(), [String.t()]) :: {:ok, [map()]} | {:error, term()}
+  def scan_folders(user, vault, folders) do
+    user = reload_if_dekless(user)
+
+    case Crypto.get_dek(user) do
+      {:ok, _dek} ->
+        prefixes = Enum.map(folders, &(&1 <> "/"))
+
+        {:ok,
+         fetch_decrypted_live_rows(user, vault)
+         |> Enum.filter(fn r ->
+           f = r.folder || ""
+           f in folders or Enum.any?(prefixes, &String.starts_with?(f, &1))
+         end)}
+
+      {:error, :no_dek} ->
+        {:ok, []}
+
+      {:error, reason} ->
+        Logger.error(
+          "folder scan: DEK unavailable, refusing to report contents",
+          Metadata.with_category(:error, :crypto,
+            user_id: user.id,
+            vault_id: vault.id,
+            folder_count: length(folders),
+            reason: Crypto.format_dek_error(reason)
+          )
+        )
+
+        {:error, {:dek_unavailable, Crypto.format_dek_error(reason)}}
+    end
+  end
+
+  @doc """
+  Soft-deletes rows produced by `scan_folders/3`, with the usual meter
+  decrement, Qdrant cleanup enqueue and `note_changed` broadcasts.
+  """
+  # No error branch: every failure inside is a raise, not a tuple.
+  @spec delete_scanned(map(), map(), [map()]) :: {:ok, %{deleted: non_neg_integer()}}
+  def delete_scanned(user, vault, matches) do
+    # `Links.basename_hmac/2` below needs the DEK, and callers reach here with
+    # the struct they started with — the same staleness `scan_folders/3`
+    # reloads for. Reload rather than let a stale copy fail mid-cascade.
+    user = reload_if_dekless(user)
 
     if matches == [] do
       {:ok, %{deleted: 0}}
