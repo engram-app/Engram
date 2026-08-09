@@ -49,6 +49,11 @@ interface Sample {
 interface OpenBase {
 	noteId: string;
 	total: number;
+	/** This open recorded no phases before the same note opened again — React
+	 *  StrictMode's mount/unmount/mount is the usual source. Present so those
+	 *  rows are legible as artefacts instead of reading as a real open that
+	 *  completed in 0ms. */
+	superseded?: true;
 }
 
 const samples: Sample[] = [];
@@ -94,24 +99,45 @@ export function crdtMark(noteId: string, phase: Phase): void {
  *
  * Grouped by `open:start` boundary rather than by note id alone, so
  * reopening the same note yields separate rows instead of one row whose
- * phases came from two different opens. */
+ * phases came from two different opens.
+ *
+ * FIRST value wins for a repeated phase. Several marks fire more than once
+ * per open and none of them are stamped from a place that could know it:
+ * `step1:reply` sits in `ChannelBridge.handleFrame`, which runs for EVERY
+ * inbound sync frame; `entry:warm` fires from that same handler's `getDoc`;
+ * `editor:construct-end` re-fires on a theme toggle and on StrictMode's
+ * second mount. Under last-wins each of those overwrote a genuine open-path
+ * timing with the arrival of unrelated later traffic — silently, since a
+ * wrong number here looks exactly like a right one. Guarding at the read
+ * layer covers every such source at once, including ones added later, which
+ * a guard per call site would not. */
 export function report(): OpenRow[] {
 	const rows: OpenRow[] = [];
-	const current = new Map<string, { start: number; row: OpenRow }>();
+	const current = new Map<string, { start: number; row: OpenRow; phases: number }>();
 
 	for (const s of samples) {
 		if (s.phase === "open:start") {
+			// An open that recorded nothing before the note opened again never
+			// really happened — flag it rather than emit a 0ms row.
+			const prev = current.get(s.noteId);
+			if (prev && prev.phases === 0) {
+				prev.row.superseded = true;
+			}
 			const row: OpenRow = { noteId: s.noteId, total: 0 };
 			rows.push(row);
-			current.set(s.noteId, { start: s.t, row });
+			current.set(s.noteId, { start: s.t, row, phases: 0 });
 			continue;
 		}
 		const cur = current.get(s.noteId);
 		if (!cur) {
 			continue; // phase from before instrumentation was switched on
 		}
+		if (cur.row[s.phase] !== undefined) {
+			continue; // repeat of a phase already recorded for this open
+		}
 		const delta = Math.round(s.t - cur.start);
 		cur.row[s.phase] = delta;
+		cur.phases += 1;
 		cur.row.total = Math.max(cur.row.total, delta);
 	}
 	return rows;
@@ -119,4 +145,7 @@ export function report(): OpenRow[] {
 
 export function reset(): void {
 	samples.length = 0;
+	// Re-read the flag on the next mark: `on()` caches, so without this a
+	// session that flips localStorage stays stuck at whatever it read first.
+	enabled = null;
 }
