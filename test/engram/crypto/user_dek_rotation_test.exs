@@ -7,6 +7,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
   alias Engram.Attachments
   alias Engram.Crypto
   alias Engram.Crypto.{DekCache, Envelope, UserDekRotation}
+  alias Engram.Notes.CrdtBridge
   alias Engram.Repo
   alias Engram.Test.LogCapture
   alias Engram.Vector.Qdrant
@@ -303,6 +304,100 @@ defmodule Engram.Crypto.UserDekRotationTest do
       expected = Crypto.hmac_field(new_filter_key, "")
 
       assert reloaded_note.folder_hmac == expected
+    end
+  end
+
+  # #1341. crdt_state is a ciphertext column like any other, but it was missing
+  # from rewrap_note_columns/5 entirely while the sweep still stamped the new
+  # dek_version. Every note that had ever been synced therefore kept a snapshot
+  # under the OLD DEK on a row claiming the new one, so decrypt_crdt_state/2
+  # failed and CrdtPersistence.bind/3 RAISED — the whole vault stopped opening
+  # in the editor and stopped syncing, in one sweep.
+  describe "rotate_user/1 - crdt_state" do
+    setup %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "CrdtVault")
+      {:ok, vault: vault}
+    end
+
+    test "rotation rewraps crdt_state so a synced note still opens", %{user: user, vault: vault} do
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/synced.md", "content" => "body"})
+
+      # Stand in for a checkpoint: a real Yjs state blob, encrypted the only way
+      # Crypto.encrypt_crdt_state/3 knows how (AAD always bound to the row id).
+      {:ok, doc} = CrdtBridge.doc_from_state(nil)
+
+      :ok =
+        CrdtBridge.diff_into_text(
+          Yex.Doc.get_text(doc, CrdtBridge.text_name()),
+          "body"
+        )
+
+      {:ok, state} = Yex.encode_state_as_update(doc)
+      {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(state, user, note.id)
+
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        [set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]],
+        skip_tenant_check: true
+      )
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      assert {:ok, ^state} = Crypto.decrypt_crdt_state(raw, reloaded_user),
+             """
+             rotation stamped dek_version=#{raw.dek_version} but left crdt_state
+             encrypted under the OLD DEK, so every already-synced note in this
+             vault is now un-openable and un-syncable.
+             """
+    end
+
+    test "a legacy row's other columns still rewrap alongside crdt_state", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/both.md", "content" => "body"})
+
+      {:ok, doc} = CrdtBridge.doc_from_state(nil)
+
+      :ok =
+        CrdtBridge.diff_into_text(
+          Yex.Doc.get_text(doc, CrdtBridge.text_name()),
+          "body"
+        )
+
+      {:ok, state} = Yex.encode_state_as_update(doc)
+      {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(state, user, note.id)
+
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        [set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]],
+        skip_tenant_check: true
+      )
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      # Adding a column to the rewrap set must not disturb the rest of the row.
+      assert {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(raw, reloaded_user)
+      assert decrypted.content == "body"
+      assert decrypted.path == "rot/both.md"
     end
   end
 

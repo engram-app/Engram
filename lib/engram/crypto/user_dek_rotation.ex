@@ -1034,7 +1034,14 @@ defmodule Engram.Crypto.UserDekRotation do
       {:type, :type_ciphertext, :type_nonce, :type_hmac,
        &Engram.Notes.OkfFields.normalize_type/1},
       {:description, :description_ciphertext, :description_nonce, nil, nil},
-      {:resource, :resource_ciphertext, :resource_nonce, nil, nil}
+      {:resource, :resource_ciphertext, :resource_nonce, nil, nil},
+      # #1341. crdt_state was missing here while the sweep still stamped the new
+      # dek_version, so every note that had ever been synced kept its snapshot
+      # under the OLD DEK on a row claiming the new one. decrypt_crdt_state/2
+      # then failed and CrdtPersistence.bind/3 RAISED — the whole vault stopped
+      # opening and stopped syncing, in one sweep, on fully-migrated tenants too.
+      # Nullable, which the is_nil guard below already skips.
+      {:crdt_state, :crdt_state_ciphertext, :crdt_state_nonce, nil, nil}
     ]
 
     base_updates =
@@ -1171,6 +1178,15 @@ defmodule Engram.Crypto.UserDekRotation do
           "drifted from Engram.Crypto.row_version_aad_bound() " <>
           "(#{Engram.Crypto.row_version_aad_bound()})"
   end
+
+  # crdt_state has no legacy form. `Crypto.encrypt_crdt_state/3` binds the AAD to
+  # the row id UNCONDITIONALLY — there is no empty-AAD branch — so the bind
+  # string is the old AAD as well, whatever the row's dek_version claims. This
+  # clause must stay ABOVE the version-dispatched ones for that reason. (A v1 row
+  # therefore cannot have a readable crdt_state at all; that is #1336, and #1340
+  # stops the checkpoint creating any more of them.)
+  defp old_aad_for(table, :crdt_state, row),
+    do: Crypto.aad_for_row(table, :crdt_state, row.id)
 
   defp old_aad_for(table, column, %{dek_version: v} = row) when v >= @aad_version_bound,
     do: Crypto.aad_for_row(table, column, row.id)
