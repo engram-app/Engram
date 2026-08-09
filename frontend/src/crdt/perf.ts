@@ -19,12 +19,12 @@ const MAX_SAMPLES = 2000;
 type Phase =
 	| "open:start"
 	| "open:session-ready"
-	// NOTE when reading a report: `entry:warm` also fires from
-	// ChannelBridge.handleFrame's getDoc, so on an open that went through
-	// `entry:cold` you will see a LATER `entry:warm` stamped at the moment the
-	// first sync frame arrived. That is the frame handler, not the open path —
-	// do not read it as the open taking that long. It is also why `total` can
-	// exceed the real time-to-content.
+	// `entry:warm`/`entry:cold`/`idb:synced` are stamped ONLY from the open
+	// path (`CrdtManager.getSharedText`). They used to fire from every
+	// `entry()` caller, including ChannelBridge.handleFrame's getDoc, so an
+	// open that went through `entry:cold` also showed a later `entry:warm`
+	// timed from a collaborator's frame — which is what let `total` exceed the
+	// real time-to-content.
 	| "entry:warm"
 	| "entry:cold"
 	| "idb:synced"
@@ -123,16 +123,19 @@ export function crdtMark(noteId: string, phase: Phase): void {
  * reopening the same note yields separate rows instead of one row whose
  * phases came from two different opens.
  *
- * FIRST value wins for a repeated phase. Several marks fire more than once
- * per open and none of them are stamped from a place that could know it:
- * `step1:reply` sits in `ChannelBridge.handleFrame`, which runs for EVERY
- * inbound sync frame; `entry:warm` fires from that same handler's `getDoc`;
- * `editor:construct-end` re-fires on a theme toggle and on StrictMode's
- * second mount. Under last-wins each of those overwrote a genuine open-path
- * timing with the arrival of unrelated later traffic — silently, since a
- * wrong number here looks exactly like a right one. Guarding at the read
- * layer covers every such source at once, including ones added later, which
- * a guard per call site would not. */
+ * FIRST value wins for a repeated phase, and a repeat is recorded rather than
+ * dropped (see `repeats`).
+ *
+ * The marks that used to repeat spuriously have been fixed AT SOURCE, which is
+ * where they belonged: `step1:reply` now fires only on the first frame after
+ * our STEP1 (`ChannelBridge.step1Timed`) instead of on every inbound sync
+ * frame, and `entry:warm`/`entry:cold`/`idb:synced` fire only from the open
+ * path (`CrdtManager.getSharedText`) instead of from every `entry()` caller.
+ * This guard remains for what source fixes cannot reach: `editor:construct-end`
+ * re-firing on a theme toggle, and StrictMode's two genuine opens of the same
+ * note. Distinguishing THOSE needs an open id carried on the mark — `crdtMark`
+ * takes only a note id today — so where it cannot be certain this reports the
+ * ambiguity instead of hiding it. */
 export function report(): OpenRow[] {
 	const rows: OpenRow[] = [];
 	const current = new Map<string, { start: number; row: OpenRow; phases: number }>();

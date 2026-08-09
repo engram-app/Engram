@@ -26,6 +26,12 @@ export class CrdtChannel {
 	private readonly mgr: CrdtManager;
 	private readonly transport: (docId: string, frame: string) => void;
 	private readonly initiated = new Set<string>();
+	/** docIds whose STEP1 reply has already been timed. `handleFrame` runs for
+	 *  EVERY inbound sync frame, so stamping `step1:reply` there unguarded
+	 *  measured whatever frame arrived last — a collaborator's edit minutes
+	 *  later — and reported it as the handshake round-trip. Only the first
+	 *  frame after our STEP1 is the reply. */
+	private readonly step1Timed = new Set<string>();
 
 	constructor(opts: CrdtChannelOptions) {
 		this.mgr = opts.manager;
@@ -38,6 +44,7 @@ export class CrdtChannel {
 			return;
 		}
 		this.initiated.add(id);
+		this.step1Timed.delete(id); // fresh handshake: time its reply again
 		const doc = await this.mgr.getDoc(path);
 		if (!this.mgr.hasDoc(path)) {
 			this.initiated.delete(id); // closed mid-await: re-arm for the next open
@@ -52,6 +59,7 @@ export class CrdtChannel {
 
 	resetSync(path: string): void {
 		this.initiated.delete(this.mgr.docId(path));
+		this.step1Timed.delete(this.mgr.docId(path));
 	}
 
 	sendUpdateRaw(docId: string, update: Uint8Array): void {
@@ -83,7 +91,12 @@ export class CrdtChannel {
 			const replyEncoder = encoding.createEncoder();
 			encoding.writeVarUint(replyEncoder, MESSAGE_SYNC);
 			syncProtocol.readSyncMessage(decoder, replyEncoder, doc, REMOTE_ORIGIN);
-			crdtMark(path, "step1:reply");
+			// FIRST frame after our STEP1 only — see `step1Timed`.
+			const docId = this.mgr.docId(path);
+			if (!this.step1Timed.has(docId)) {
+				this.step1Timed.add(docId);
+				crdtMark(path, "step1:reply");
+			}
 			if (encoding.length(replyEncoder) > 1) {
 				this.transport(this.mgr.docId(path), toB64(encoding.toUint8Array(replyEncoder)));
 			}
