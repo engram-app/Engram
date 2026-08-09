@@ -129,12 +129,12 @@ defmodule Engram.Notes.CrdtCheckpoint do
     # mid-checkpoint race window.
     case encode(doc) do
       {:ok, live_state} ->
-        # with_tenant wraps the fun's return in {:ok, _} (Ecto transaction). The
-        # fun returns {prev_hash, path} on a write (prev_hash drives the
-        # embed/deliver guard, path feeds the post-commit announce) or
-        # {:abort, reason} when the stored state is unreadable — overwriting a
-        # state we cannot prove we contain could destroy data, so we write
-        # nothing (unreadable ≠ absent).
+        # `attempt/8` owns the transaction (and the fence-miss retry). It hands
+        # back `{prev_hash, new_hash, path}` on a write — prev drives the
+        # embed/deliver guard, path feeds the post-commit announce — or a
+        # `{:skip, _}` / `{:abort, _}`. Abort means the stored state was
+        # unreadable: overwriting a state we cannot prove we contain could
+        # destroy data, so we write nothing (unreadable ≠ absent).
         outcome = attempt(user, user_id, vault_id, note_id, live_state, prune, opts, @attempts)
 
         case outcome do
@@ -388,25 +388,39 @@ defmodule Engram.Notes.CrdtCheckpoint do
     with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
          {:ok, raw_state} <- encode(union_doc),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(raw_state, user, note_id) do
-      # Fenced like the markdown branches. This writes no content, but it DOES
-      # replace crdt_state — and for a canvas that state IS the board, so an
-      # overwrite loses nodes/edges outright, and the prune below then deletes
-      # the tail rows that held the loser's ops. The old hard `{1, _} =` match
-      # also raised a MatchError on a force-purge race, where the markdown
-      # branch gets a deliberate quiet skip.
-      case Repo.update_all(fence(note_id, note.version),
-             set: [
-               crdt_state_ciphertext: ct,
-               crdt_state_nonce: nonce,
-               dek_version: Crypto.row_version_aad_bound()
-             ]
-           ) do
-        {1, _} ->
-          prune_tail(note_id, prune)
-          {note.content_hash, note.content_hash, note.path}
+      # DELIBERATELY UNFENCED — see #1333.
+      #
+      # A version CAS is the wrong instrument here and was briefly tried: this
+      # branch never bumps `version` (that is the point of it — canvas must not
+      # churn seq/version), so fencing on `version` is fencing on a counter this
+      # writer does not own. It cannot see the only contention that matters on a
+      # canvas — another structural checkpoint, which also leaves `version`
+      # alone — while it DOES abort on bumps that have nothing to do with the
+      # board: a rename, a folder move, a tag edit. Net effect was strictly
+      # worse than no fence: the real race stayed open and a previously
+      # unconditional write started giving up.
+      #
+      # Fencing this path needs something the structural writer actually owns
+      # (a crdt_state digest CAS, or a dedicated counter). Tracked in #1333
+      # rather than approximated here.
+      {n, _} =
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note_id and n.kind == "note"),
+          set: [
+            crdt_state_ciphertext: ct,
+            crdt_state_nonce: nonce,
+            dek_version: Crypto.row_version_aad_bound()
+          ]
+        )
 
-        {0, _} ->
-          :stale
+      # 0 rows means the row was force-purged mid-transaction. The markdown
+      # branch treats that as a quiet skip; matching `{1, _}` here turned it
+      # into a MatchError instead.
+      if n == 1 do
+        prune_tail(note_id, prune)
+        {note.content_hash, note.content_hash, note.path}
+      else
+        {:skip, :note_deleted}
       end
     else
       err -> {:abort, err}

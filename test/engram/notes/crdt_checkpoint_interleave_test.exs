@@ -46,10 +46,6 @@ defmodule Engram.Notes.CrdtCheckpointInterleaveTest do
     {:ok, vault} = Vaults.create_vault(user, %{name: "InterleaveTest"})
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "before"})
 
-    # Now that the note exists, widen cleanup to its Oban jobs too (the earlier
-    # registration covers the user-keyed ones and every committed row).
-    on_exit(fn -> CheckpointInterleave.cleanup(user.id, [note.id]) end)
-
     %{user: user, vault: vault, note: note}
   end
 
@@ -82,7 +78,7 @@ defmodule Engram.Notes.CrdtCheckpointInterleaveTest do
       end)
 
     # The checkpoint is now parked INSIDE its transaction, past the row read.
-    parked = CheckpointInterleave.await_parked(:after_row_read)
+    parked = CheckpointInterleave.await_parked(:after_row_read, task.pid)
 
     # This commits on a different real connection, in the gap. It is the write
     # the checkpoint has already read past and must not overwrite.

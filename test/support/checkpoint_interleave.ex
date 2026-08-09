@@ -127,10 +127,24 @@ defmodule Engram.CheckpointInterleave do
   Fails the test rather than returning if it never parks — a silent pass here
   would mean the interleave never happened and the assertion proved nothing.
   """
-  def await_parked(point) do
+  def await_parked(point, expected_pid) do
     receive do
-      {:checkpoint_parked, ^point, pid} ->
-        pid
+      {:checkpoint_parked, ^point, ^expected_pid} ->
+        expected_pid
+
+      # The hook lives in `Application` env, which is node-global, and the park
+      # is first-come. A checkpoint from an earlier module's room unbinding
+      # inline can reach the point first and consume it. Without this clause
+      # `await_parked` would hand back the foreign pid, the test would commit
+      # its competing write while the checkpoint under test is NOT parked, and
+      # both assertions would be decided by an ordinary unsynchronised race —
+      # a vacuous pass of exactly the kind this harness exists to prevent, and
+      # one the never-parked raise below could not catch because a park DID
+      # happen.
+      {:checkpoint_parked, ^point, other} ->
+        raise "a foreign process (#{inspect(other)}) consumed the park at " <>
+                "#{inspect(point)}; expected #{inspect(expected_pid)}. The interleave " <>
+                "did not happen for the checkpoint under test."
     after
       @park_timeout ->
         raise "checkpoint never parked at #{inspect(point)} — the interleave did not happen, " <>
@@ -184,7 +198,7 @@ defmodule Engram.CheckpointInterleave do
   tests), the leak surfaced as **27 unrelated failures** elsewhere in the suite.
   A cleanup that cannot be trusted is worse than one that fails loudly.
   """
-  def cleanup(user_id, note_ids \\ []) do
+  def cleanup(user_id) do
     uuid = Ecto.UUID.dump!(user_id)
 
     # `on_exit` callbacks run in ExUnit.OnExitHandler, NOT the test process, so
@@ -198,15 +212,23 @@ defmodule Engram.CheckpointInterleave do
     # they break every suite that asserts on the job queue — 14 failures across
     # EmbedNote/ExtractNoteLinks/ReconcileEmbeddings/RepathNoteIndex before this
     # was added, none of which touch the checkpoint path.
-    SQL.query!(Repo, "DELETE FROM oban_jobs WHERE args->>'user_id' = $1", [
-      user_id
-    ])
-
-    for note_id <- note_ids do
-      SQL.query!(Repo, "DELETE FROM oban_jobs WHERE args->>'note_id' = $1", [
-        note_id
-      ])
-    end
+    # Note-keyed jobs are found by SUBQUERY rather than from a caller-supplied
+    # id list. An explicit list is only as complete as the caller's knowledge at
+    # registration time — and cleanup has to be registered BEFORE the note
+    # exists (see the test's setup), so any list it could pass would be empty
+    # exactly when a mid-setup raise makes cleanup matter most. Reading the ids
+    # back from `notes` covers whatever actually got committed.
+    #
+    # Runs BEFORE the notes are deleted, or the subquery finds nothing.
+    SQL.query!(
+      Repo,
+      """
+      DELETE FROM oban_jobs
+      WHERE args->>'user_id' = $1
+         OR args->>'note_id' IN (SELECT id::text FROM notes WHERE user_id = $2)
+      """,
+      [user_id, uuid]
+    )
 
     {:ok, _} =
       Repo.with_tenant(user_id, fn ->

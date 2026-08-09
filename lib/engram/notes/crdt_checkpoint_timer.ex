@@ -176,8 +176,14 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   defp do_checkpoint(%{room_pid: room_pid} = state) do
     # Capture the row version BEFORE snapshotting the doc so it never exceeds the
     # version the snapshot reflects (#902 fence). A REST/MCP write committing
-    # after this read bumps the version, so the fenced checkpoint write aborts
-    # instead of reverting the committed content. nil on read failure → unfenced.
+    # after this read bumps the version, so the fenced checkpoint write misses
+    # instead of reverting the committed content.
+    #
+    # nil on read failure is HARMLESS, not an unfenced downgrade: checkpoint
+    # falls back to the row version it reads inside its own transaction, and
+    # there is no unfenced write path left. (This comment used to say
+    # "nil → unfenced", which was true before the fence covered every caller and
+    # was load-bearing in two failed attempts on #1325.)
     captured_version = CrdtCheckpoint.current_version(state.user_id, state.note_id)
     doc = Yex.Sync.SharedDoc.get_doc(room_pid)
 
