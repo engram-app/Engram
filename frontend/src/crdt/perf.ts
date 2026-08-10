@@ -19,12 +19,12 @@ const MAX_SAMPLES = 2000;
 type Phase =
 	| "open:start"
 	| "open:session-ready"
-	// NOTE when reading a report: `entry:warm` also fires from
-	// ChannelBridge.handleFrame's getDoc, so on an open that went through
-	// `entry:cold` you will see a LATER `entry:warm` stamped at the moment the
-	// first sync frame arrived. That is the frame handler, not the open path —
-	// do not read it as the open taking that long. It is also why `total` can
-	// exceed the real time-to-content.
+	// `entry:warm`/`entry:cold`/`idb:synced` are stamped ONLY from the open
+	// path (`CrdtManager.getSharedText`). They used to fire from every
+	// `entry()` caller, including ChannelBridge.handleFrame's getDoc, so an
+	// open that went through `entry:cold` also showed a later `entry:warm`
+	// timed from a collaborator's frame — which is what let `total` exceed the
+	// real time-to-content.
 	| "entry:warm"
 	| "entry:cold"
 	| "idb:synced"
@@ -48,7 +48,34 @@ interface Sample {
 
 interface OpenBase {
 	noteId: string;
+	/** Span of this open's DISTINCT phases. Deliberately not "latest activity":
+	 *  marks keep arriving for a note long after its open finished, and letting
+	 *  them extend `total` made it unbounded. Late traffic shows up in
+	 *  `repeats` instead. */
 	total: number;
+	/** ms until the same note opened again, on a row that recorded NO phases.
+	 *
+	 *  Do not collapse this into a boolean "artefact" flag. Two very different
+	 *  things produce a phase-less row: StrictMode's mount/unmount/mount, which
+	 *  re-opens within a millisecond or two, and an open that STALLED (a hung
+	 *  session promise is one of the four costs #1317 exists to measure) which
+	 *  the user then re-clicked seconds later. Labelling both as noise throws
+	 *  away the only recorded evidence of the second. The gap separates them —
+	 *  read it, don't assume. */
+	reopenedAfterMs?: number;
+	/** Phases that fired more than once inside this open, with the LAST delta
+	 *  seen.
+	 *
+	 *  First-wins keeps the phase value honest for the common case, but it
+	 *  cannot be right in every case: `crdtMark` carries only a note id, so a
+	 *  late mark from an abandoned open is indistinguishable from a real one
+	 *  belonging to the current row. Rather than silently pick, record that the
+	 *  ambiguity happened — a row whose `step1:reply` repeats at 600ms is
+	 *  telling you not to trust its 5ms. Removing the ambiguity outright needs
+	 *  an open id threaded through session/manager/channel; `entry()` is
+	 *  reached from both the open path and the frame handler, so there is
+	 *  nowhere to infer it today. */
+	repeats?: Partial<Record<Phase, { count: number; lastMs: number }>>;
 }
 
 const samples: Sample[] = [];
@@ -94,16 +121,36 @@ export function crdtMark(noteId: string, phase: Phase): void {
  *
  * Grouped by `open:start` boundary rather than by note id alone, so
  * reopening the same note yields separate rows instead of one row whose
- * phases came from two different opens. */
+ * phases came from two different opens.
+ *
+ * FIRST value wins for a repeated phase, and a repeat is recorded rather than
+ * dropped (see `repeats`).
+ *
+ * The marks that used to repeat spuriously have been fixed AT SOURCE, which is
+ * where they belonged: `step1:reply` now fires only on the first frame after
+ * our STEP1 (`ChannelBridge.step1Timed`) instead of on every inbound sync
+ * frame, and `entry:warm`/`entry:cold`/`idb:synced` fire only from the open
+ * path (`CrdtManager.getSharedText`) instead of from every `entry()` caller.
+ * This guard remains for what source fixes cannot reach: `editor:construct-end`
+ * re-firing on a theme toggle, and StrictMode's two genuine opens of the same
+ * note. Distinguishing THOSE needs an open id carried on the mark — `crdtMark`
+ * takes only a note id today — so where it cannot be certain this reports the
+ * ambiguity instead of hiding it. */
 export function report(): OpenRow[] {
 	const rows: OpenRow[] = [];
-	const current = new Map<string, { start: number; row: OpenRow }>();
+	const current = new Map<string, { start: number; row: OpenRow; phases: number }>();
 
 	for (const s of samples) {
 		if (s.phase === "open:start") {
+			// A row that recorded nothing before the note re-opened: report the
+			// GAP, not a verdict. See `reopenedAfterMs`.
+			const prev = current.get(s.noteId);
+			if (prev && prev.phases === 0) {
+				prev.row.reopenedAfterMs = Math.round(s.t - prev.start);
+			}
 			const row: OpenRow = { noteId: s.noteId, total: 0 };
 			rows.push(row);
-			current.set(s.noteId, { start: s.t, row });
+			current.set(s.noteId, { start: s.t, row, phases: 0 });
 			continue;
 		}
 		const cur = current.get(s.noteId);
@@ -111,7 +158,18 @@ export function report(): OpenRow[] {
 			continue; // phase from before instrumentation was switched on
 		}
 		const delta = Math.round(s.t - cur.start);
+		if (cur.row[s.phase] !== undefined) {
+			// Keep the first value, but never discard the fact that it repeated
+			// — that is the reader's signal the first value may not be theirs.
+			const seen = cur.row.repeats?.[s.phase];
+			cur.row.repeats = {
+				...cur.row.repeats,
+				[s.phase]: { count: (seen?.count ?? 1) + 1, lastMs: delta },
+			};
+			continue;
+		}
 		cur.row[s.phase] = delta;
+		cur.phases += 1;
 		cur.row.total = Math.max(cur.row.total, delta);
 	}
 	return rows;
@@ -119,4 +177,7 @@ export function report(): OpenRow[] {
 
 export function reset(): void {
 	samples.length = 0;
+	// Re-read the flag on the next mark: `on()` caches, so without this a
+	// session that flips localStorage stays stuck at whatever it read first.
+	enabled = null;
 }

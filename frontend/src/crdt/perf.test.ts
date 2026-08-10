@@ -49,6 +49,92 @@ describe("crdt open-path timing", () => {
 		expect(report()).toHaveLength(0);
 	});
 
+	// The whole point of the file is to size fixes against each other, so a
+	// phase that fires more than once must not be able to inflate its own
+	// number. `step1:reply` is stamped in ChannelBridge.handleFrame, which runs
+	// for EVERY inbound sync frame — a later collaborator edit would otherwise
+	// overwrite the handshake timing with its own arrival. Same shape for
+	// `entry:warm` (fires from handleFrame's getDoc) and `editor:construct-end`
+	// (re-fires on theme toggle and on StrictMode's second mount).
+	it("keeps the FIRST value for a repeated phase, not the last", () => {
+		crdtMark("n1", "open:start");
+		crdtMark("n1", "step1:reply");
+		const rows0 = report();
+		const first = rows0[0]?.["step1:reply"];
+
+		// Simulate a much later frame for the same still-open note.
+		const spin = performance.now() + 20;
+		while (performance.now() < spin) {
+			/* burn ~20ms so a last-wins bug is unmistakable */
+		}
+		crdtMark("n1", "step1:reply");
+
+		const rows = report();
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.["step1:reply"]).toBe(first);
+	});
+
+	// A repeated phase must not drag `total` up either — `total` fed the
+	// "which phase dominates" comparison in #1317.
+	it("does not let a repeated phase inflate total", () => {
+		crdtMark("n1", "open:start");
+		crdtMark("n1", "editor:construct-end");
+		const settled = report()[0]?.total;
+
+		const spin = performance.now() + 20;
+		while (performance.now() < spin) {
+			/* later theme toggle rebuilds the editor */
+		}
+		crdtMark("n1", "editor:construct-end");
+
+		expect(report()[0]?.total).toBe(settled);
+	});
+
+	// StrictMode opens the same note twice; the first row then holds nothing
+	// and reads as a real open that took 0ms. Report the GAP rather than a
+	// verdict — a stalled open the user re-clicked looks identical except for
+	// the gap, and calling both "an artefact" throws the stall away.
+	it("records how long before a phase-less row was reopened", () => {
+		crdtMark("n1", "open:start");
+		crdtMark("n1", "open:start");
+		crdtMark("n1", "idb:synced");
+
+		const rows = report();
+		expect(rows).toHaveLength(2);
+		expect(rows[0]?.reopenedAfterMs).toBeGreaterThanOrEqual(0);
+		expect(rows[1]?.reopenedAfterMs).toBeUndefined();
+	});
+
+	// A row that recorded real phases was not superseded, however soon the note
+	// reopens — only phase-less rows carry the gap.
+	it("does not mark a row that recorded phases", () => {
+		crdtMark("n1", "open:start");
+		crdtMark("n1", "entry:cold");
+		crdtMark("n1", "open:start");
+
+		expect(report()[0]?.reopenedAfterMs).toBeUndefined();
+	});
+
+	// First-wins alone would silently discard the repeat. `crdtMark` carries
+	// only a note id, so the first value CAN belong to an abandoned open or to
+	// unrelated frame traffic — the reader has to be told it happened.
+	it("records a repeated phase's count and last value", () => {
+		crdtMark("n1", "open:start");
+		crdtMark("n1", "step1:reply");
+
+		const spin = performance.now() + 20;
+		while (performance.now() < spin) {
+			/* the frame actually carrying content arrives much later */
+		}
+		crdtMark("n1", "step1:reply");
+
+		const [row] = report();
+		expect(row?.repeats?.["step1:reply"]?.count).toBe(2);
+		// The late value is recoverable even though the phase kept the first.
+		expect(row?.repeats?.["step1:reply"]?.lastMs).toBeGreaterThanOrEqual(20);
+		expect(row?.["step1:reply"]).toBeLessThan(20);
+	});
+
 	it("keeps concurrent opens of different notes apart", () => {
 		crdtMark("a", "open:start");
 		crdtMark("b", "open:start");
