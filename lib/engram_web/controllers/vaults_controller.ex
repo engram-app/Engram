@@ -340,7 +340,9 @@ defmodule EngramWeb.VaultsController do
     name = params["name"]
     client_id = params["client_id"]
 
-    if is_nil(name) or is_nil(client_id) do
+    # Type check, not just presence: JSON gives us whatever the client sent,
+    # and a non-string `name` reached `slugify/1` and raised into a 500.
+    if not is_binary(name) or not is_binary(client_id) do
       conn
       |> put_status(400)
       |> json(%{error: "name and client_id are required"})
@@ -371,9 +373,21 @@ defmodule EngramWeb.VaultsController do
             current
           )
 
+        {:error, :invalid_client_id} ->
+          conn
+          |> put_status(400)
+          |> json(%{error: "client_id must be a non-blank string"})
+
         # Reachable since blank names became rejectable (#1213): a blank
-        # `name` passes the is_nil guard above but fails the changeset.
+        # `name` passes the type guard above but fails the changeset.
         {:error, %Ecto.Changeset{}} = error ->
+          error
+
+        # Residual error space collapses to the fallback's 500 rather than a
+        # CaseClauseError. Everything this action wants to render differently
+        # is matched above, which is the condition FallbackController documents
+        # for delegating here.
+        {:error, _reason} = error ->
           error
       end
     end

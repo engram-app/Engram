@@ -258,6 +258,16 @@ defmodule Engram.VaultsTest do
       assert errors_on(changeset)[:name] == ["can't be blank"]
     end
 
+    test "rejects a blank client_id rather than minting a vault per retry", %{user: user} do
+      # `cast/3` drops "" via Ecto's default `:empty_values`, so a blank
+      # client_id would persist as NULL — and `where: v.client_id == ^""`
+      # never matches NULL. Each retry would then create ANOTHER vault until
+      # `vaults_cap` rejected it, inverting this function's whole contract.
+      assert {:error, :invalid_client_id} = Vaults.register_vault(user, "My Vault", "")
+      assert {:error, :invalid_client_id} = Vaults.register_vault(user, "My Vault", "   ")
+      assert {:error, :invalid_client_id} = Vaults.register_vault(user, "My Vault", 123)
+    end
+
     test "is idempotent — same client_id returns existing vault with :existing", %{user: user} do
       {:ok, vault1, :created} = Vaults.register_vault(user, "My Vault", "client-1")
       {:ok, vault2, :existing} = Vaults.register_vault(user, "My Vault", "client-1")

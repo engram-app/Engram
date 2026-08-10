@@ -1,7 +1,7 @@
-defmodule Mix.Tasks.Engram.PreflightTest do
+defmodule Engram.Release.PreflightTest do
   use ExUnit.Case, async: true
 
-  alias Mix.Tasks.Engram.Preflight
+  alias Engram.Release.Preflight
 
   defmodule FakeRepo do
     def __adapter__, do: Ecto.Adapters.Postgres
@@ -187,5 +187,17 @@ defmodule Mix.Tasks.Engram.PreflightTest do
 
     result = Preflight.report(FakeRepo, migrations_dir: dir, applied_versions: [])
     assert Enum.at(result.pending, 0).lock_risk == :high
+  end
+
+  # Every other test passes :migrations_dir explicitly, so the DEFAULT — the
+  # only path a release actually takes — would otherwise never be exercised.
+  # It used to be the relative "priv/repo/migrations", which raises File.Error
+  # anywhere but a Mix project root; this asserts it resolves through the
+  # application instead.
+  test "report/2 resolves the real migrations dir when :migrations_dir is omitted" do
+    result = Preflight.report(FakeRepo, applied_versions: [])
+
+    refute result.pending == []
+    assert Enum.all?(result.pending, &String.starts_with?(&1.file, Application.app_dir(:engram)))
   end
 end

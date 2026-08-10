@@ -16,6 +16,40 @@ defmodule Engram.FoldersTest do
     %{user: user, vault: vault}
   end
 
+  # Flips the last ciphertext byte of the user's wrapped DEK: the blob still
+  # carries its version tag (so the provider is identified) but AES-GCM
+  # authentication fails, so `get_dek/1` errors rather than returning :no_dek.
+  defp corrupt_user_dek!(user) do
+    blob = Engram.Repo.reload!(user).encrypted_dek
+    last_index = byte_size(blob) - 1
+    <<head::binary-size(last_index), last>> = blob
+
+    Engram.Repo.update_all(
+      from(u in Engram.Accounts.User, where: u.id == ^user.id),
+      [set: [encrypted_dek: <<head::binary, Bitwise.bxor(last, 0xFF)>>]],
+      skip_tenant_check: true
+    )
+
+    Engram.Crypto.DekCache.invalidate(user.id)
+  end
+
+  # Flips a byte of the attachment's encrypted path so AES-GCM auth fails for
+  # THAT ROW only — the user DEK still unwraps fine. This is the case
+  # `decrypt_each/3` swallows: a partial rebind, or a row written under a
+  # rotated-away dek_version.
+  defp corrupt_attachment_metadata!(att_id) do
+    row = Engram.Repo.get!(Engram.Attachments.Attachment, att_id, skip_tenant_check: true)
+    ct = row.path_ciphertext
+    last_index = byte_size(ct) - 1
+    <<head::binary-size(last_index), last>> = ct
+
+    Engram.Repo.update_all(
+      from(a in Engram.Attachments.Attachment, where: a.id == ^att_id),
+      [set: [path_ciphertext: <<head::binary, Bitwise.bxor(last, 0xFF)>>]],
+      skip_tenant_check: true
+    )
+  end
+
   defp att_paths(user, vault) do
     {:ok, metas} = Attachments.list_attachments(user, vault)
     metas |> Enum.map(& &1.path) |> Enum.sort()
@@ -311,6 +345,99 @@ defmodule Engram.FoldersTest do
                Folders.delete(user, vault, "Docs")
 
       assert {:ok, _} = Notes.get_note(user, vault, "Docs/a.md")
+    end
+
+    test "reports a fault instead of reading an unreadable vault as empty", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+
+      # The emptiness guard is the only thing standing between a non-recursive
+      # delete and a full folder, and it is built from two counters that both
+      # need the DEK. Corrupt the wrapped DEK so it still IDENTIFIES as a v2
+      # blob but fails to unwrap — the shape a KMS outage or a rotated-away
+      # master key takes. "I couldn't tell" must not render as 0.
+      corrupt_user_dek!(user)
+      broken = Engram.Accounts.get_user!(user.id)
+
+      assert {:error, reason} = Folders.delete(broken, vault, "Docs")
+      refute match?({:not_empty, _}, reason)
+
+      # Nothing was deleted: the note is readable again once the DEK is.
+      assert {:ok, _} = Notes.get_note(user, vault, "Docs/a.md")
+    end
+
+    # `Crypto.get_dek/1` reads `encrypted_dek` off the STRUCT, so a caller
+    # holding a pre-provisioning copy got `:no_dek` -> count 0 -> "empty" —
+    # while `Notes.delete_folder/3`'s own `ensure_user_dek/1` reloads under FOR
+    # UPDATE, finds the real blob, and cascades happily. That combination
+    # deletes a full folder and reports it as empty.
+    test "a stale user struct cannot make a full folder look empty", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+
+      stale = %{user | encrypted_dek: nil}
+
+      assert {:error, {:not_empty, %{notes: 1}}} = Folders.delete(stale, vault, "Docs")
+      assert {:ok, _} = Notes.get_note(user, vault, "Docs/a.md")
+    end
+
+    # The tolerant listing drops undecryptable rows, so a folder holding only
+    # unreadable attachments counted as empty and was cascaded — leaving live
+    # rows orphaned under a path the user was told had been deleted.
+    test "an undecryptable attachment is not counted as an empty folder", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "Docs/p.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      corrupt_attachment_metadata!(att.id)
+
+      assert {:error, {:unverifiable, %{undecryptable_attachments: 1}}} =
+               Folders.delete(user, vault, "Docs")
+
+      # Still on disk — the guard refused rather than cascading over it. The
+      # strict listing erroring IS the proof: the row is present and unreadable.
+      assert {:error, {:undecryptable_attachments, 1}} =
+               Attachments.list_attachments_strict(user, vault)
+    end
+
+    # The first attempt at the fix above applied the fail-closed check to the
+    # WHOLE vault before filtering by folder, so one corrupt row anywhere made
+    # every folder delete in the vault fail — including recursive. Worse than
+    # the bug it replaced.
+    test "one unreadable attachment elsewhere does not block other deletes", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "Photos/old.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      corrupt_attachment_metadata!(att.id)
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Drafts")
+
+      # `Drafts` is genuinely empty and the corrupt row is under `Photos`.
+      assert {:error, {:unverifiable, _}} = Folders.delete(user, vault, "Drafts")
+
+      # ...and recursive must always have a way through.
+      assert {:ok, %{notes: 0}} = Folders.delete(user, vault, "Drafts", recursive: true)
     end
 
     test "recursive deletes notes + attachments under the folder", %{user: user, vault: vault} do

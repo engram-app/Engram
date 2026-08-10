@@ -362,6 +362,21 @@ defmodule EngramWeb.VaultsControllerTest do
       conn = post(conn, "/api/vaults/register", %{name: "No ID"})
       assert json_response(conn, 400)
     end
+
+    # A blank client_id used to slip the is_nil guard, persist as NULL, and
+    # miss its own lookup — so a client retrying with one got a NEW vault
+    # every call instead of the same one.
+    test "returns 400 for a blank client_id", %{conn: conn} do
+      conn = post(conn, "/api/vaults/register", %{name: "My Mac", client_id: ""})
+      assert json_response(conn, 400)
+    end
+
+    # `slugify/1` assumed a binary: a JSON number for `name` passed the old
+    # is_nil guard and raised on the way to a 500.
+    test "returns 400 for a non-string name", %{conn: conn} do
+      conn = post(conn, "/api/vaults/register", %{name: 123, client_id: "mac-num"})
+      assert json_response(conn, 400)
+    end
   end
 
   # Free-tier launch §4.5 — standardized 402 shape via LimitResponse.halt/5
