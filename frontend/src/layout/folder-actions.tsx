@@ -58,7 +58,10 @@ export default function FolderActions() {
 	return (
 		<section
 			aria-label="File actions"
-			className="flex items-center justify-around border-border border-t bg-card px-4 py-0.5"
+			// No horizontal padding: justify-around already yields edge gaps that
+			// scale with the panel, so the spacing breathes as the sidebar widens
+			// and collapses to flush at the 200px floor instead of clipping.
+			className="flex items-center justify-around border-border border-t bg-card py-0.5"
 		>
 			<TooltipProvider delayDuration={300}>
 				<Tooltip>
