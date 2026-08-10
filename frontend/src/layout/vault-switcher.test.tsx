@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import VaultSwitcher from "./vault-switcher";
 
 // Switching vaults must NAVIGATE (VaultRoute owns writing the active-vault
@@ -23,12 +23,16 @@ vi.mock("../api/active-vault", () => ({
 	setActiveVaultId,
 }));
 
-const vaults = [
-	{ id: "id-a", slug: "work", is_default: true, name: "Work" },
-	{ id: "id-b", slug: "personal", is_default: false, name: "Personal" },
+const allVaults = [
+	{ id: "id-a", slug: "work", is_default: true, name: "Work", encrypted: true },
+	{ id: "id-b", slug: "personal", is_default: false, name: "Personal", encrypted: false },
 ];
+let vaults = allVaults;
+
+const { createMutate } = vi.hoisted(() => ({ createMutate: vi.fn() }));
 vi.mock("../api/queries", () => ({
 	useVaults: () => ({ data: vaults, isLoading: false }),
+	useCreateVault: () => ({ mutate: createMutate, isPending: false }),
 }));
 
 function renderSwitcher() {
@@ -44,13 +48,24 @@ function renderSwitcher() {
 	);
 }
 
+function openMenu() {
+	const trigger = screen.getByRole("button", { name: /vault/i });
+	// Radix DropdownMenu opens on pointerdown in happy-dom.
+	fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+	fireEvent.click(trigger);
+	return trigger;
+}
+
+beforeEach(() => {
+	vaults = allVaults;
+	navigate.mockClear();
+	createMutate.mockClear();
+});
+
 describe("VaultSwitcher", () => {
 	it("navigates to the target vault's root instead of writing the store", async () => {
 		renderSwitcher();
-		const trigger = screen.getByRole("button", { name: /vault/i });
-		// Radix DropdownMenu opens on pointerdown in happy-dom.
-		fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
-		fireEvent.click(trigger);
+		openMenu();
 		const item = await screen.findByRole("menuitemradio", { name: "Personal" });
 		fireEvent.click(item);
 
@@ -60,13 +75,54 @@ describe("VaultSwitcher", () => {
 
 	it("does not carry the previous vault's note id into the target URL", async () => {
 		renderSwitcher();
-		const trigger = screen.getByRole("button", { name: /vault/i });
-		fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
-		fireEvent.click(trigger);
+		openMenu();
 		const item = await screen.findByRole("menuitemradio", { name: "Personal" });
 		fireEvent.click(item);
 
 		const target = navigate.mock.calls[0]?.[0];
 		expect(target).not.toContain("old-note-id");
+	});
+
+	// The lock icon read as "this vault is locked / you can't get in" when it
+	// only ever meant "encrypted at rest". Encryption state belongs in settings,
+	// not on every render of the switcher.
+	it("renders no lock icon for an encrypted vault", async () => {
+		const { container } = renderSwitcher();
+		openMenu();
+		await screen.findByRole("menuitemradio", { name: "Personal" });
+
+		expect(container.querySelector(".lucide-lock")).toBeNull();
+		expect(document.querySelector(".lucide-lock")).toBeNull();
+	});
+
+	// A single vault used to render as dead text, so there was no way to reach
+	// the menu — and therefore no way to create a second vault from the sidebar.
+	it("opens the menu when only one vault exists", async () => {
+		vaults = [allVaults[0]!];
+		renderSwitcher();
+		openMenu();
+
+		expect(await screen.findByRole("menuitemradio", { name: "Work" })).toBeTruthy();
+		expect(await screen.findByRole("menuitem", { name: /new vault/i })).toBeTruthy();
+	});
+
+	it("creates a vault from the menu and navigates to it", async () => {
+		renderSwitcher();
+		openMenu();
+		fireEvent.click(await screen.findByRole("menuitem", { name: /new vault/i }));
+
+		const input = await screen.findByLabelText("Vault name");
+		fireEvent.change(input, { target: { value: "Archive" } });
+		fireEvent.submit(input.closest("form")!);
+
+		expect(createMutate).toHaveBeenCalledWith(
+			{ name: "Archive" },
+			expect.objectContaining({ onSuccess: expect.any(Function) }),
+		);
+		// Land in the vault that was just created, by slug.
+		createMutate.mock.calls[0]![1].onSuccess({
+			vault: { id: "id-c", slug: "archive", name: "Archive" },
+		});
+		expect(navigate).toHaveBeenCalledWith("/archive");
 	});
 });

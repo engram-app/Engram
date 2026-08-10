@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { useCreateVault } from "@/api/queries";
+import { useCreateVault, type Vault } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import { useAutofocus } from "@/hooks/use-autofocus";
 
@@ -8,7 +8,9 @@ const inputClass =
 	"mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
 
 interface Props {
-	onCreated?: (vaultId: string) => void;
+	// The whole vault, not just the id — callers that navigate on create need
+	// the server-assigned slug, which is not derivable client-side.
+	onCreated?: (vault: Vault) => void;
 	onCancel?: () => void;
 	submitLabel?: string;
 	autoFocus?: boolean;
@@ -38,7 +40,7 @@ export function VaultCreateForm({
 				onSuccess: (res) => {
 					toast.success("Vault created");
 					setName("");
-					onCreated?.(res.vault.id);
+					onCreated?.(res.vault);
 				},
 				onError: (err) => {
 					// 402 cap errors are already surfaced by UpgradeDialogProvider via
