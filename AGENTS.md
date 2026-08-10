@@ -299,7 +299,12 @@ Operators can preview what the next upgrade will do via:
 
 Inside a running container:
 
-    docker compose exec engram bin/engram eval 'Mix.Tasks.Engram.Preflight.run([])'
+    docker compose exec engram bin/engram rpc 'Engram.Release.Preflight.run()'
+
+`Mix` is not part of the release, so this must go through
+`Engram.Release.Preflight` — the older
+`eval 'Mix.Tasks.Engram.Preflight.run([])'` form raised
+`UndefinedFunctionError` and never worked in a container (#1311).
 
 The output lists pending migrations, their phase tag, whether each is
 reversible, an estimated lock impact (`:low` / `:medium` / `:high`), and

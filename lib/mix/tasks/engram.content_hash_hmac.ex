@@ -2,73 +2,32 @@ defmodule Mix.Tasks.Engram.ContentHashHmac do
   @shortdoc "Enqueue content_hash MD5→HMAC backfill jobs"
 
   @moduledoc """
-  Phase A — enqueue content_hash MD5 → HMAC-SHA256 backfill jobs.
+  Phase A — enqueue content_hash MD5 → HMAC-SHA256 backfill jobs for every
+  (user, vault) pair that still holds legacy MD5 hashes, via
+  `Engram.ContentHash.Backfill.enqueue_all/0`.
 
-  Walks `notes` and `attachments`, gathers every (user_id, vault_id) pair
-  that has at least one row with a legacy MD5 (`length(content_hash) = 32`)
-  hash, and enqueues one `Engram.Workers.BackfillContentHashHmac` job per
-  (pair, scope) tuple. The worker batches and self-re-enqueues until each
-  vault's stragglers are exhausted.
+  Thin wrapper only — `Mix.Task` is unavailable in a release, so the actual
+  enqueue logic lives in `Engram.ContentHash.Backfill`, which release rpc calls
+  directly instead of going through this task:
 
-  Run on prod via release rpc once the new code is deployed:
+      docker exec engram-saas /app/bin/engram rpc 'Engram.ContentHash.Backfill.enqueue_all()'
 
-      docker exec engram-saas /app/bin/engram rpc 'Mix.Tasks.Engram.ContentHashHmac.run([])'
+  Local/dev use:
+
+      mix engram.content_hash_hmac
 
   Idempotent: re-runs only enqueue pairs that still have legacy MD5 rows.
   """
 
   use Mix.Task
 
-  import Ecto.Query
-
-  alias Engram.Attachments.Attachment
-  alias Engram.Notes.Note
-  alias Engram.Repo
-  alias Engram.Workers.BackfillContentHashHmac
+  alias Engram.ContentHash.Backfill
 
   @impl Mix.Task
   def run(_args) do
     Mix.Task.run("app.start")
 
-    note_pairs = gather_pairs(Note)
-    att_pairs = gather_pairs(Attachment)
-
-    IO.puts("notes pairs needing backfill: #{length(note_pairs)}")
-    IO.puts("attachments pairs needing backfill: #{length(att_pairs)}")
-
-    note_count =
-      Enum.reduce(note_pairs, 0, fn {user_id, vault_id}, acc ->
-        _ = enqueue!(user_id, vault_id, "notes")
-        acc + 1
-      end)
-
-    att_count =
-      Enum.reduce(att_pairs, 0, fn {user_id, vault_id}, acc ->
-        _ = enqueue!(user_id, vault_id, "attachments")
-        acc + 1
-      end)
-
+    %{notes: note_count, attachments: att_count} = Backfill.enqueue_all()
     IO.puts("enqueued: #{note_count} note jobs + #{att_count} attachment jobs")
-  end
-
-  defp gather_pairs(schema) do
-    from(r in schema,
-      where: not is_nil(r.content_hash),
-      where: fragment("length(?) = 32", r.content_hash),
-      group_by: [r.user_id, r.vault_id],
-      select: {r.user_id, r.vault_id}
-    )
-    |> Repo.all(skip_tenant_check: true)
-  end
-
-  defp enqueue!(user_id, vault_id, scope) do
-    {:ok, _job} =
-      BackfillContentHashHmac.new(%{
-        "user_id" => user_id,
-        "vault_id" => vault_id,
-        "cursor" => "00000000-0000-0000-0000-000000000000",
-        "scope" => scope
-      })
-      |> Oban.insert()
   end
 end
