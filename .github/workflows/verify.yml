@@ -1033,6 +1033,17 @@ jobs:
     steps:
       - name: Generate App token
         id: app-token
+        # Skipped on Dependabot for the same reason as `fingerprint` above:
+        # Dependabot PRs receive no workflow secrets, and create-github-app-token
+        # ERRORS (rather than skips) on an empty private-key.
+        #
+        # "Checkout plugin" below is unaffected: Engram-obsidian is public, and
+        # git accepts the resulting empty credential and serves it anonymously
+        # (verified: `git ls-remote https://x-access-token:@github.com/...` → 200).
+        # The branch-probe curl does 401 on an empty Bearer, so it falls to
+        # BRANCH="main" — which is the right answer on a Dependabot PR regardless,
+        # since no plugin branch is ever named `dependabot/...`.
+        if: github.actor != 'dependabot[bot]'
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.ENGRAM_CI_CLIENT_ID }}
@@ -1628,6 +1639,8 @@ jobs:
     steps:
       - name: Generate App token
         id: app-token
+        # Skipped on Dependabot — see e2e-clerk's App-token step.
+        if: github.actor != 'dependabot[bot]'
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.ENGRAM_CI_CLIENT_ID }}
@@ -2136,6 +2149,8 @@ jobs:
     steps:
       - name: Generate App token
         id: app-token
+        # Skipped on Dependabot — see e2e-clerk's App-token step.
+        if: github.actor != 'dependabot[bot]'
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.ENGRAM_CI_CLIENT_ID }}
