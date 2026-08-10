@@ -13,6 +13,7 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
   import Engram.Fixtures
 
   alias Engram.Accounts.User
+  alias Engram.Attachments.Attachment
   alias Engram.Crypto
   alias Engram.Notes.Note
   alias Engram.Repo
@@ -140,6 +141,109 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
   # ---------------------------------------------------------------------------
   # T3.7 — RotationGate
   # ---------------------------------------------------------------------------
+
+  # The attachments scope had NO coverage at all until #1343's review — every
+  # test above drives `"scope" => "notes"`. It is not a mirror of the notes
+  # path: `rehash_attachment/3` reads the blob back out of storage and
+  # decrypts it with an AAD that depends on `dek_version`, none of which the
+  # notes path does.
+  describe "perform/1 — attachments scope" do
+    test "rehashes an attachment whose content_hash is legacy MD5", %{user: user, vault: vault} do
+      content = <<9, 8, 7, 6, 5>>
+      att = insert_legacy_attachment!(user, vault, content)
+
+      assert :ok = perform_attachments_job(user, vault)
+
+      {:ok, content_key} = Crypto.dek_content_hash_key(user)
+      expected = Crypto.hmac_content_hash(content_key, content)
+
+      reloaded = reload_attachment(user, att)
+      assert reloaded.content_hash == expected
+      assert String.length(reloaded.content_hash) == 64
+    end
+
+    test "skips attachments that already have HMAC-format content_hash", %{
+      user: user,
+      vault: vault
+    } do
+      att = insert_attachment!(user, vault, %{"content" => <<1, 2, 3>>})
+      before = reload_attachment(user, att).content_hash
+
+      assert :ok = perform_attachments_job(user, vault)
+
+      assert reload_attachment(user, att).content_hash == before
+    end
+
+    # The skip branch is the dangerous one: it must leave the legacy hash in
+    # place rather than writing a hash of whatever it managed to read. A row
+    # left at 32 chars gets retried on the next run; a row written wrong is
+    # silently corrupt forever, because the `length = 32` filter will never
+    # select it again.
+    test "leaves the legacy hash intact and emits bounded telemetry when the blob is gone",
+         %{user: user, vault: vault} do
+      content = <<4, 4, 4, 4>>
+      att = insert_legacy_attachment!(user, vault, content)
+      legacy_hash = reload_attachment(user, att).content_hash
+
+      # Point the row at a key that was never written.
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          from(a in Attachment, where: a.id == ^att.id)
+          |> Repo.update_all(set: [storage_key: "999/#{Ecto.UUID.generate()}/missing.bin"])
+        end)
+
+      handler_id = "backfill-att-skip-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:engram, :backfill, :content_hash_skipped],
+        fn _event, _meas, meta, _cfg -> send(parent, {:skip_meta, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok = perform_attachments_job(user, vault)
+        end)
+
+      assert reload_attachment(user, att).content_hash == legacy_hash,
+             "a row it could not read must keep its legacy hash, not gain a wrong one"
+
+      assert_received {:skip_meta, meta}
+      assert meta.scope == :attachment
+      assert is_atom(meta.reason), "telemetry reason must be the bounded error_kind atom"
+
+      worker_lines =
+        log |> String.split("\n") |> Enum.filter(&String.contains?(&1, "BackfillContentHashHmac"))
+
+      assert Enum.any?(worker_lines, &String.contains?(&1, "skipping attachment"))
+
+      refute Enum.any?(worker_lines, &String.contains?(&1, " reason=")),
+             "raw reason must not reach the log metadata (only error_kind)"
+    end
+
+    test "re-enqueues itself when the batch is full, carrying the cursor forward", %{
+      user: user,
+      vault: vault
+    } do
+      for _ <- 1..3, do: insert_legacy_attachment!(user, vault, :crypto.strong_rand_bytes(8))
+
+      # batch_size 2 with 3 legacy rows ⇒ first batch is full ⇒ {:more, last_id}.
+      assert {:ok, %Oban.Job{}} =
+               perform_job(BackfillContentHashHmac, %{
+                 "user_id" => user.id,
+                 "vault_id" => vault.id,
+                 "cursor" => 0,
+                 "scope" => "attachments",
+                 "batch_size" => 2
+               })
+
+      assert_enqueued(worker: BackfillContentHashHmac, args: %{"scope" => "attachments"})
+    end
+  end
 
   describe "perform/1 — T3.7 rotation gate" do
     test "snoozes for 60 seconds when user's DEK rotation is in progress", %{
@@ -289,5 +393,34 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
                "note #{note.id} still on its legacy hash — the cursor chain stalled after the first batch"
       end
     end
+  end
+
+  defp perform_attachments_job(user, vault) do
+    perform_job(BackfillContentHashHmac, %{
+      "user_id" => user.id,
+      "vault_id" => vault.id,
+      "cursor" => 0,
+      "scope" => "attachments"
+    })
+  end
+
+  # insert_attachment! always writes an HMAC hash (it has the content key in
+  # hand), so the legacy state has to be written back over it.
+  defp insert_legacy_attachment!(user, vault, content) do
+    att = insert_attachment!(user, vault, %{"content" => content})
+    md5 = :crypto.hash(:md5, content) |> Base.encode16(case: :lower)
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        from(a in Attachment, where: a.id == ^att.id)
+        |> Repo.update_all(set: [content_hash: md5])
+      end)
+
+    att
+  end
+
+  defp reload_attachment(user, att) do
+    {:ok, reloaded} = Repo.with_tenant(user.id, fn -> Repo.get!(Attachment, att.id) end)
+    reloaded
   end
 end
