@@ -9,6 +9,7 @@ defmodule Engram.Notes do
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Crypto.PathCrypto
   alias Engram.Links
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
@@ -655,7 +656,38 @@ defmodule Engram.Notes do
   # notes_user_vault_path_v2; a bare DO NOTHING (matching the insert_all sites
   # elsewhere in this module) sidesteps the partial-index conflict_target
   # fragment-matching footgun.
-  defp do_bare_insert(base_attrs, user, sanitized_path, folder, note_id, lookup_query) do
+  #
+  # ...but notes_user_vault_path_v2 is NOT the only unique index a row can
+  # violate: the PRIMARY KEY on `id` is one too, and it is GLOBAL while every
+  # lookup here is vault-scoped. A client that pushes a note id already owned by
+  # another vault (copy a vault, keep its ids, sync into a fresh one) therefore
+  # took this route: classify_by_id scopes to the vault and says :none → the path
+  # lookup says nil → INSERT hits the PK → DO NOTHING swallows it → the re-fetch
+  # (path-keyed, vault-scoped) finds nothing → "insert raced and vanished" → a
+  # generic create_failed the client retries forever under the SAME colliding id.
+  # The note was dropped, silently and permanently.
+  #
+  # So `nil` here means "our insert no-op'd AND no live row owns this path" —
+  # the conflict was on the id, not the path. remint_own_id/7 decides from there;
+  # see its comment for which collisions re-mint and which still 422. When it does
+  # re-mint it recurses ONCE (`remint?` bounds it; a fresh v7 uuid cannot collide
+  # again), and the row returns through the normal success path, so the real id
+  # reaches the client in the crdt_create ack's doc_id / the REST body and the
+  # plugin's existing ADOPT path remaps the note to it (sync.ts
+  # applyCrdtCreateAck + pushFile's live adopt).
+  #
+  # Fixing it HERE rather than replying a new error reason is deliberate: this leg
+  # is shared by REST/MCP/web and crdt_create, and re-minting also repairs
+  # already-released plugins, which a new reason code could not.
+  defp do_bare_insert(
+         base_attrs,
+         user,
+         sanitized_path,
+         folder,
+         note_id,
+         lookup_query,
+         remint? \\ true
+       ) do
     with {:ok, crdt} <- maybe_merge_crdt(nil, base_attrs.content, user, note_id),
          merged_attrs = %{
            base_attrs
@@ -687,6 +719,17 @@ defmodule Engram.Notes do
             %Note{} = existing ->
               {:raced, existing}
 
+            nil when remint? ->
+              remint_own_id(
+                base_attrs,
+                user,
+                sanitized_path,
+                folder,
+                note_id,
+                lookup_query,
+                changeset
+              )
+
             nil ->
               {:error, Ecto.Changeset.add_error(changeset, :path, "insert raced and vanished")}
           end
@@ -694,6 +737,71 @@ defmodule Engram.Notes do
         {:error, changeset} ->
           {:error, changeset}
       end
+    end
+  end
+
+  # Reached only when the INSERT no-op'd AND no live row owns the path, i.e. the
+  # conflict was on the id. Whose id decides what happens, and RLS answers that
+  # for free: this connection is scoped to the CURRENT USER, and the lookups that
+  # already failed were scoped to the current VAULT. So a row visible to this
+  # unvaulted query is the same user's, in one of their OTHER vaults; a row that
+  # stays invisible belongs to somebody else.
+  #
+  #   * Visible, so theirs -> re-mint and retry once. The headline case is the
+  #     vault copy (their own note, a new vault, a new identity); returning an
+  #     error here is what silently dropped 304 notes.
+  #   * Invisible, so someone else's -> keep the 422. Deliberate cross-tenant
+  #     guard, asserted by notes_controller_test "rejects a client-supplied id
+  #     colliding with another user's note": a caller must not be able to probe
+  #     or adopt another tenant's PK, and quietly minting them a row on the back
+  #     of a hijack attempt is not a favour worth doing.
+  #
+  # The probe filters on NOTHING but the id, and that is deliberate on both axes.
+  # It does not filter `kind`, because an attachment or folder-marker row of
+  # theirs occupies the PK just as hard as a note does (the id space is shared)
+  # and the note still has to land; classify_by_id's `kind == "note"` scope is
+  # why such a row reaches here as :none in the first place. It does not filter
+  # `deleted_at` either, because a tombstone still owns the PK.
+  #
+  # So the tripwire says "already taken", not "owned by another vault": a
+  # same-vault attachment collision and a genuine vanished-race (the winning row
+  # tombstoned between our INSERT and the live-only re-fetch) both land here and
+  # both re-mint. That is the right outcome for all three -- the caller's note
+  # lands under an id nobody owns -- but do not read a spike as proof that
+  # clients are pushing foreign vault ids.
+  # One message for both re-mint sites (classify_by_id's early :taken route and
+  # remint_own_id's post-INSERT backstop) so a single Loki query covers the whole
+  # class. Deliberately does not name a cause: see remint_own_id for the three
+  # different collisions that can land here.
+  defp log_id_taken(user, vault_id, old_id, new_id) do
+    Logger.warning(
+      "note id already taken; re-minting #{old_id} -> #{new_id}",
+      Metadata.with_category(:warning, :sync,
+        user_id: user.id,
+        vault_id: vault_id,
+        note_id: old_id,
+        reminted_to: new_id
+      )
+    )
+  end
+
+  defp remint_own_id(
+         base_attrs,
+         user,
+         sanitized_path,
+         folder,
+         note_id,
+         lookup_query,
+         changeset
+       ) do
+    if Repo.exists?(from(n in Note, where: n.id == ^note_id)) do
+      fresh_id = mint_id()
+
+      log_id_taken(user, base_attrs.vault_id, note_id, fresh_id)
+
+      do_bare_insert(base_attrs, user, sanitized_path, folder, fresh_id, lookup_query, false)
+    else
+      {:error, Ecto.Changeset.add_error(changeset, :path, "insert raced and vanished")}
     end
   end
 
@@ -705,6 +813,7 @@ defmodule Engram.Notes do
   """
   @spec genesis_crdt_note(map(), map(), String.t(), String.t(), keyword()) ::
           {:ok, Note.t()}
+          | {:adopted, Note.t()}
           | {:error, :invalid_id}
           | {:error, :recently_deleted}
           | {:error, :id_conflict, Note.t()}
@@ -756,6 +865,24 @@ defmodule Engram.Notes do
                {:tombstone, %Note{} = prior} ->
                  genesis_resurrect(prior, user, vault, sanitized_path, folder, origin)
 
+               :taken ->
+                 # The id is already spoken for by a row of theirs that this
+                 # vault's genesis cannot use, so an INSERT under it is doomed:
+                 # it would no-op on the PK and be recovered by remint_own_id one
+                 # layer down, AFTER burning a crdt merge, an encrypt (KMS/DEK
+                 # work) and a permanently-consumed vault seq. Re-mint here, where
+                 # classify_by_id has already paid for the read that proves it.
+                 # An OCCUPIED path still adopts the note living there, exactly
+                 # like :none, so the fresh id is only reached on the insert leg.
+                 genesis_adopt_or_insert(
+                   user,
+                   vault,
+                   mint_id(),
+                   sanitized_path,
+                   folder,
+                   canonical_id
+                 )
+
                :none ->
                  genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder)
              end
@@ -791,6 +918,12 @@ defmodule Engram.Notes do
 
           {:ok, note}
 
+        {:ok, {:ok, note, :adopted}} ->
+          # Surfaced, not flattened to {:ok, note}: the batch create leg has to
+          # tell "we made this row" from "a different note already owned the
+          # path", because only the former means the caller's frame was applied.
+          {:adopted, note}
+
         {:ok, inner} ->
           inner
 
@@ -810,15 +943,43 @@ defmodule Engram.Notes do
   # so a filter-key error crashed the channel with a MatchError. Handling the
   # error cleanly turns it into a create_failed reply (via the channel catch-all).
   # Runs inside the caller's Repo.with_tenant txn (tenant-scoped reads/writes).
-  defp genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder) do
+  #
+  # `taken_id` is the id the CLIENT sent when classify_by_id found it already
+  # spoken for and the caller substituted a fresh mint, and nil otherwise. It
+  # exists only so the re-mint is logged on the leg that actually inserts: an
+  # OCCUPIED path adopts the note living there and never uses the fresh id, so
+  # announcing a re-mint up at the call site would cry wolf on every adopt.
+  defp genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder, taken_id \\ nil) do
     case note_by_path_query(user, vault, sanitized_path) do
       {:ok, lookup_query} ->
         case Repo.one(lookup_query) do
           %Note{} = live ->
-            {:ok, decrypt_or_raise!(live, user)}
+            # ADOPTED, not created: the path is already owned by a live note under
+            # a DIFFERENT id, and this caller's content frame was never applied to
+            # it. Tagged so the batch leg can say so instead of reporting a create
+            # (see crdt_channel prepare_create/4) -- a plain {:ok, note} here reads
+            # as success and silently discards the client's body.
+            {:ok, decrypt_or_raise!(live, user), :adopted}
 
           nil ->
-            genesis_insert_bare(user, vault, canonical_id, sanitized_path, folder, lookup_query)
+            # Logged AFTER the insert lands, not before: genesis_insert_bare can
+            # still fail on the notes cap or a changeset, and a tripwire naming a
+            # reminted_to id that never existed makes the Loki count lie.
+            case genesis_insert_bare(
+                   user,
+                   vault,
+                   canonical_id,
+                   sanitized_path,
+                   folder,
+                   lookup_query
+                 ) do
+              {:ok, _note, _tag} = ok ->
+                if taken_id, do: log_id_taken(user, vault.id, taken_id, canonical_id)
+                ok
+
+              other ->
+                other
+            end
         end
 
       {:error, _} = err ->
@@ -826,18 +987,41 @@ defmodule Engram.Notes do
     end
   end
 
-  # Classifies a client-supplied note id against this vault: :none (no row at
-  # all, or the row belongs to a different vault), {:live, note} (a live row
-  # — same-path is a no-op re-genesis, different-path is an id collision), or
-  # {:tombstone, note} (a soft-deleted row — routes to resurrect). Wraps
-  # existing_by_client_id/2 (row-or-nil) rather than replacing it — that
-  # helper is also used by upsert_pathless's own id-collision/resurrect
-  # branching for the legacy REST path.
+  # Classifies a client-supplied note id against this vault:
+  #
+  #   {:live, note}      a live note of THIS vault — same-path is a no-op
+  #                      re-genesis, different-path is a rename or a collision
+  #   {:tombstone, note} a soft-deleted note of this vault — routes to resurrect
+  #   :taken             a row of THEIRS the id is already spoken for by, but
+  #                      not one this vault's genesis can use: another of their
+  #                      vaults (the vault-copy case) or another `kind` in this
+  #                      one (the id space is shared with attachments and folder
+  #                      markers). The PK is occupied, so genesis must re-mint.
+  #   :none              no row at all, anywhere this connection can see. RLS
+  #                      scopes it to the current user, so another USER's row
+  #                      reads as :none and stays that way (see remint_own_id).
+  #
+  # This inlines the Repo.get that existing_by_client_id/2 does rather than
+  # wrapping it, because that helper collapses :taken and :none into one `nil`
+  # by filtering on vault + kind, and :taken is exactly what lets genesis skip
+  # a doomed INSERT. It is the SAME single read either way, not an extra one.
+  # existing_by_client_id/2 stays as-is for upsert_pathless's legacy REST
+  # branching, which only needs the row-or-nil answer.
   defp classify_by_id(vault, id) do
-    case existing_by_client_id(id, vault) do
-      nil -> :none
-      %Note{deleted_at: nil} = live -> {:live, live}
-      %Note{} = tombstone -> {:tombstone, tombstone}
+    with {:ok, uuid} <- Ecto.UUID.cast(id),
+         %Note{} = row <- Repo.get(Note, uuid) do
+      case row do
+        %Note{vault_id: vid, kind: "note", deleted_at: nil} = live when vid == vault.id ->
+          {:live, live}
+
+        %Note{vault_id: vid, kind: "note"} = tombstone when vid == vault.id ->
+          {:tombstone, tombstone}
+
+        %Note{} ->
+          :taken
+      end
+    else
+      _ -> :none
     end
   end
 
@@ -1342,18 +1526,18 @@ defmodule Engram.Notes do
       end
   end
 
+  # Row-or-nil view of classify_by_id/2, kept for upsert_pathless's legacy REST
+  # branching. A projection rather than a second copy of the rule: both used to
+  # spell out cast -> Repo.get -> vault+kind, so a change to what counts as
+  # "this vault's note" had to be made twice or the CRDT genesis path and the
+  # REST path would silently disagree.
   defp existing_by_client_id(nil, _vault), do: nil
 
   defp existing_by_client_id(client_id, vault) do
-    case Ecto.UUID.cast(client_id) do
-      {:ok, uuid} ->
-        case Repo.get(Note, uuid) do
-          %Note{vault_id: vault_id, kind: "note"} = note when vault_id == vault.id -> note
-          _ -> nil
-        end
-
-      :error ->
-        nil
+    case classify_by_id(vault, client_id) do
+      {:live, note} -> note
+      {:tombstone, note} -> note
+      _ -> nil
     end
   end
 
@@ -3432,6 +3616,91 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Folders with id/name/count/parent_id — the shape both `GET /folders`
+  (FoldersController) and `GET /vault/tree` (VaultTreeController) return.
+  Shared so the two never drift on parent-path semantics: root and
+  top-level folders get `parent_id: nil`, never `""` — a `""` parent_id
+  would make the root its own parent if a root marker ever exists, handing
+  a cycle to the tree renderer.
+  """
+  @spec folders_payload(map(), map()) :: [map()]
+  def folders_payload(user, vault) do
+    {:ok, folders} = list_folders_with_counts(user, vault)
+    markers = list_folder_markers(user, vault)
+    id_by_path = Map.new(markers, fn m -> {m.folder, m.id} end)
+
+    Enum.map(folders, fn f ->
+      %{
+        id: Map.get(id_by_path, f.folder),
+        name: f.folder,
+        count: f.count,
+        parent_id: Map.get(id_by_path, folder_parent_path(f.folder))
+      }
+    end)
+  end
+
+  @doc """
+  Every live `kind == "note"` row in a vault, with `id`, decrypted `path`,
+  and both timestamps — the notes leg of `GET /vault/tree`
+  (VaultTreeController). Folder markers are excluded: a marker's
+  `path_ciphertext` is nil, and `PathCrypto.decrypt!/4` would raise on that
+  regardless of what else is in the vault.
+
+  Unlike `Attachments.list_attachments/2`, a row whose path fails AAD-bound
+  decrypt is NOT skipped here — it raises. A note silently missing from the
+  sidebar reads as data loss to the user, with no code path today that
+  degrades a note listing gracefully (only attachments have that
+  precedent); a loud 500 is the more honest failure for primary content,
+  and the caller still has the per-folder fallback to fall back on. See PR
+  #1316 review finding 3.
+  """
+  @spec list_tree_notes(map(), map()) :: {:ok, [map()]}
+  def list_tree_notes(user, vault) do
+    {:ok, rows} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(
+          from(n in scoped_live(user, vault),
+            where: n.kind == "note",
+            select:
+              {n.id, n.dek_version, n.path_ciphertext, n.path_nonce, n.created_at, n.updated_at}
+          )
+        )
+      end)
+
+    {:ok, dek} = Crypto.get_dek(user)
+
+    # Sequential on purpose — SyncController measured path-sized decrypts at
+    # ~4µs each (10k in ~43ms) and found chunked parallel SLOWER, because
+    # copying results back to the caller's heap rivals the AES-GCM work.
+    notes =
+      Crypto.measure_decrypt_batch(:vault_tree_notes, length(rows), fn ->
+        Enum.map(rows, fn {id, dek_version, path_ct, path_nonce, created, updated} ->
+          aad = PathCrypto.aad(:notes, id, dek_version)
+
+          %{
+            id: id,
+            path: PathCrypto.decrypt!(path_ct, path_nonce, dek, aad),
+            created_at: created,
+            updated_at: updated
+          }
+        end)
+      end)
+
+    {:ok, notes}
+  end
+
+  # nil for top-level ("Projects") and root (""). Joined parent path for
+  # nested ("Projects/Engram" -> "Projects").
+  defp folder_parent_path(""), do: nil
+
+  defp folder_parent_path(folder) do
+    case folder |> String.split("/") |> Enum.drop(-1) do
+      [] -> nil
+      segments -> Enum.join(segments, "/")
+    end
+  end
+
+  @doc """
   Returns the distinct set of cleartext folder paths *implied* by
   non-folder notes (kind="note") in this vault. Folder marker rows are
   intentionally excluded — this is the "where do notes live" view.
@@ -3567,29 +3836,6 @@ defmodule Engram.Notes do
 
       {:error, :no_dek} ->
         {:ok, []}
-    end
-  end
-
-  @doc """
-  Counts live `kind == "note"` rows under `folder` (the folder itself and any
-  nested subfolder), for the empty-folder gate in `Engram.Folders.delete/4`.
-  Folder markers and attachments are NOT counted. Returns 0 when the user has
-  no DEK yet (nothing encrypted, so nothing to count).
-  """
-  @spec count_folder_notes(map(), map(), String.t()) :: non_neg_integer()
-  def count_folder_notes(user, vault, folder) do
-    case Crypto.get_dek(user) do
-      {:ok, _dek} ->
-        prefix = folder <> "/"
-
-        fetch_decrypted_live_rows(user, vault)
-        |> Enum.count(fn r ->
-          f = r.folder || ""
-          r.kind == "note" and (f == folder or String.starts_with?(f, prefix))
-        end)
-
-      _ ->
-        0
     end
   end
 
@@ -4170,14 +4416,72 @@ defmodule Engram.Notes do
   # batch names. Overlapping folders (parent + child in the same batch)
   # naturally dedupe through the union filter.
   defp do_delete_folders(user, vault, folders) do
-    prefixes = Enum.map(folders, &(&1 <> "/"))
-    decrypted = fetch_decrypted_live_rows(user, vault)
+    with {:ok, matches} <- scan_folders(user, vault, folders) do
+      delete_scanned(user, vault, matches)
+    end
+  end
 
-    matches =
-      Enum.filter(decrypted, fn r ->
-        f = r.folder || ""
-        f in folders or Enum.any?(prefixes, &String.starts_with?(f, &1))
-      end)
+  @doc """
+  One decrypt pass over the vault, returning the live rows under `folders` —
+  the folder markers themselves plus every descendant, at any depth.
+
+  Split out from the cascade so a caller that must DECIDE before deleting
+  (`Engram.Folders.delete/4`'s emptiness guard) can count and then delete from
+  the SAME row set. Counting via a separate scan cost a second full-vault
+  fetch + batch decrypt per side, and left a window — under READ COMMITTED
+  each statement takes its own snapshot — where a row committed between the
+  count and the cascade was deleted without ever being counted. Handing the
+  scanned rows straight to `delete_scanned/3` closes that gap outright: the
+  guard now decides on exactly the rows that will be deleted.
+
+  Returns `{:error, {:dek_unavailable, reason}}` rather than an empty list when
+  the vault cannot be read — an unreadable vault is not an empty folder, and
+  this feeds a delete guard.
+  """
+  @spec scan_folders(map(), map(), [String.t()]) :: {:ok, [map()]} | {:error, term()}
+  def scan_folders(user, vault, folders) do
+    user = Crypto.fresh_user(user)
+
+    case Crypto.get_dek(user) do
+      {:ok, _dek} ->
+        prefixes = Enum.map(folders, &(&1 <> "/"))
+
+        {:ok,
+         fetch_decrypted_live_rows(user, vault)
+         |> Enum.filter(fn r ->
+           f = r.folder || ""
+           f in folders or Enum.any?(prefixes, &String.starts_with?(f, &1))
+         end)}
+
+      {:error, :no_dek} ->
+        {:ok, []}
+
+      {:error, reason} ->
+        Logger.error(
+          "folder scan: DEK unavailable, refusing to report contents",
+          Metadata.with_category(:error, :crypto,
+            user_id: user.id,
+            vault_id: vault.id,
+            folder_count: length(folders),
+            reason: Crypto.format_dek_error(reason)
+          )
+        )
+
+        {:error, {:dek_unavailable, Crypto.format_dek_error(reason)}}
+    end
+  end
+
+  @doc """
+  Soft-deletes rows produced by `scan_folders/3`, with the usual meter
+  decrement, Qdrant cleanup enqueue and `note_changed` broadcasts.
+  """
+  # No error branch: every failure inside is a raise, not a tuple.
+  @spec delete_scanned(map(), map(), [map()]) :: {:ok, %{deleted: non_neg_integer()}}
+  def delete_scanned(user, vault, matches) do
+    # `Links.basename_hmac/2` below needs the DEK, and callers reach here with
+    # the struct they started with — the same staleness `scan_folders/3`
+    # reloads for. Reload rather than let a stale copy fail mid-cascade.
+    user = Crypto.fresh_user(user)
 
     if matches == [] do
       {:ok, %{deleted: 0}}
@@ -4283,8 +4587,15 @@ defmodule Engram.Notes do
             Repo.rollback(reason)
 
           folders ->
-            {:ok, %{deleted: n}} = do_delete_folders(user, vault, folders)
-            %{deleted: n, folders: folders}
+            # do_delete_folders/3 can now return {:error, {:dek_unavailable, _}}
+            # (scan_folders re-checks the DEK, and a rotation can land between
+            # this function's own get_dek and that one). Hard-matching turned
+            # that into a MatchError + 500 instead of the clean rollback this
+            # transaction is shaped to give.
+            case do_delete_folders(user, vault, folders) do
+              {:ok, %{deleted: n}} -> %{deleted: n, folders: folders}
+              {:error, reason} -> Repo.rollback(reason)
+            end
         end
       else
         {:error, reason} -> Repo.rollback(reason)

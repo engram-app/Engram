@@ -43,7 +43,10 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
   } do
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/b.md", "content" => "world"})
     other = Ecto.UUID.generate()
-    assert {:ok, got} = Notes.genesis_crdt_note(user, vault, other, "Notes/b.md")
+    # Tagged :adopted rather than a plain {:ok, _}: the caller's content frame was
+    # NOT applied to this row, and the batch create leg has to be able to say so
+    # instead of reporting a create (a plain ok made it discard the client body).
+    assert {:adopted, got} = Notes.genesis_crdt_note(user, vault, other, "Notes/b.md")
     # adopted the server's id
     assert got.id == note.id
     refute Notes.note_in_vault?(user, vault.id, other)
@@ -231,6 +234,46 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     }
 
     refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200
+  end
+
+  test "an id owned by ANOTHER vault is re-minted, not dropped", %{user: user, vault: vault} do
+    {:ok, other} = Vaults.create_vault(user, %{name: "GenesisTestB"})
+
+    {:ok, in_a} =
+      Notes.upsert_note(user, vault, %{"path" => "Notes/copied.md", "content" => "vault A"})
+
+    # The vault-copy scenario the user hit: switch the plugin to a fresh vault
+    # and push notes still carrying the ORIGINAL vault's ids. classify_by_id is
+    # vault-scoped so this reads as :none, the path is free in the new vault, and
+    # the insert lands on the GLOBAL primary key. It used to vanish here.
+    assert {:ok, created} = Notes.genesis_crdt_note(user, other, in_a.id, "Notes/copied.md")
+
+    refute created.id == in_a.id
+    assert Notes.note_in_vault?(user, other.id, created.id)
+    assert {:ok, in_b} = Notes.get_note(user, other, "Notes/copied.md")
+    assert in_b.id == created.id
+
+    # The owning vault keeps its note untouched.
+    {:ok, still_a} = Notes.get_note(user, vault, "Notes/copied.md")
+    assert still_a.id == in_a.id
+    assert still_a.content == "vault A"
+  end
+
+  test "re-minting a taken id costs one vault seq, not two", %{user: user, vault: vault} do
+    # classify_by_id already reads the row by PK, so it can prove the id is taken
+    # before genesis commits to it. Doing that avoids an INSERT that can only
+    # no-op on the PK -- and, with it, a crdt merge, an encrypt, and a vault seq
+    # consumed by a row that never lands. remint_own_id still backstops the REST
+    # leg; this pins that the socket leg no longer needs it.
+    {:ok, other} = Vaults.create_vault(user, %{name: "GenesisSeqB"})
+    {:ok, foreign} = Notes.upsert_note(user, other, %{"path" => "Notes/f.md", "content" => "x"})
+
+    {:ok, base} = Notes.upsert_note(user, vault, %{"path" => "Notes/base.md", "content" => "b"})
+
+    assert {:ok, created} = Notes.genesis_crdt_note(user, vault, foreign.id, "Notes/remint.md")
+
+    refute created.id == foreign.id
+    assert created.seq == base.seq + 1
   end
 
   defp fetch_id_by_path(user, vault, path) do

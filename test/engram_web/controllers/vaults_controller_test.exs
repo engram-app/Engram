@@ -322,6 +322,14 @@ defmodule EngramWeb.VaultsControllerTest do
       assert body["status"] == "created"
     end
 
+    test "returns 422 with blank name", %{conn: conn} do
+      conn = post(conn, "/api/vaults/register", %{name: "  ", client_id: "mac-blank"})
+
+      assert json_response(conn, 422) == %{
+               "errors" => %{"name" => ["can't be blank"]}
+             }
+    end
+
     test "returns existing vault on duplicate client_id (200)", %{conn: conn} do
       post(conn, "/api/vaults/register", %{name: "My Mac", client_id: "mac-dup"})
       conn2 = post(conn, "/api/vaults/register", %{name: "My Mac", client_id: "mac-dup"})
@@ -352,6 +360,21 @@ defmodule EngramWeb.VaultsControllerTest do
 
     test "returns 400 when name or client_id missing", %{conn: conn} do
       conn = post(conn, "/api/vaults/register", %{name: "No ID"})
+      assert json_response(conn, 400)
+    end
+
+    # A blank client_id used to slip the is_nil guard, persist as NULL, and
+    # miss its own lookup — so a client retrying with one got a NEW vault
+    # every call instead of the same one.
+    test "returns 400 for a blank client_id", %{conn: conn} do
+      conn = post(conn, "/api/vaults/register", %{name: "My Mac", client_id: ""})
+      assert json_response(conn, 400)
+    end
+
+    # `slugify/1` assumed a binary: a JSON number for `name` passed the old
+    # is_nil guard and raised on the way to a 500.
+    test "returns 400 for a non-string name", %{conn: conn} do
+      conn = post(conn, "/api/vaults/register", %{name: 123, client_id: "mac-num"})
       assert json_response(conn, 400)
     end
   end

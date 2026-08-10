@@ -3,6 +3,7 @@ import * as encoding from "lib0/encoding";
 import * as syncProtocol from "y-protocols/sync";
 import { rlog } from "../observability/remote-log";
 import { type CrdtManager, REMOTE_ORIGIN } from "./manager";
+import { crdtMark } from "./perf";
 
 /** Outer y-protocols message-type tag — we only speak `messageSync`. */
 const MESSAGE_SYNC = 0;
@@ -25,6 +26,12 @@ export class CrdtChannel {
 	private readonly mgr: CrdtManager;
 	private readonly transport: (docId: string, frame: string) => void;
 	private readonly initiated = new Set<string>();
+	/** docIds whose STEP1 reply has already been timed. `handleFrame` runs for
+	 *  EVERY inbound sync frame, so stamping `step1:reply` there unguarded
+	 *  measured whatever frame arrived last — a collaborator's edit minutes
+	 *  later — and reported it as the handshake round-trip. Only the first
+	 *  frame after our STEP1 is the reply. */
+	private readonly step1Timed = new Set<string>();
 
 	constructor(opts: CrdtChannelOptions) {
 		this.mgr = opts.manager;
@@ -45,10 +52,20 @@ export class CrdtChannel {
 		const encoder = encoding.createEncoder();
 		encoding.writeVarUint(encoder, MESSAGE_SYNC);
 		syncProtocol.writeSyncStep1(encoder, doc);
+		// Re-arm ONLY once STEP1 is actually on the wire. Clearing before the
+		// `await this.mgr.getDoc(path)` above left a window in which an inbound
+		// frame — a collaborator's edit queued during the await — was stamped as
+		// the handshake reply, timed from an origin that had not happened yet.
+		this.step1Timed.delete(id);
 		this.transport(id, toB64(encoding.toUint8Array(encoder)));
+		crdtMark(path, "step1:sent");
 	}
 
 	resetSync(path: string): void {
+		// Only `initiated` is cleared here. `step1Timed` is re-armed by
+		// `startSync` at the moment STEP1 is sent — clearing it here would
+		// re-open the same pre-STEP1 window, since resetSync is followed by an
+		// async re-enroll rather than an immediate send.
 		this.initiated.delete(this.mgr.docId(path));
 	}
 
@@ -81,6 +98,12 @@ export class CrdtChannel {
 			const replyEncoder = encoding.createEncoder();
 			encoding.writeVarUint(replyEncoder, MESSAGE_SYNC);
 			syncProtocol.readSyncMessage(decoder, replyEncoder, doc, REMOTE_ORIGIN);
+			// FIRST frame after our STEP1 only — see `step1Timed`.
+			const docId = this.mgr.docId(path);
+			if (!this.step1Timed.has(docId)) {
+				this.step1Timed.add(docId);
+				crdtMark(path, "step1:reply");
+			}
 			if (encoding.length(replyEncoder) > 1) {
 				this.transport(this.mgr.docId(path), toB64(encoding.toUint8Array(replyEncoder)));
 			}

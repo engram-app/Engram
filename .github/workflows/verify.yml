@@ -2544,6 +2544,39 @@ jobs:
           echo "$OUT"
           echo "$OUT" | grep -q STORAGE_DATABASE_ROUNDTRIP_OK
 
+      # Piggybacks on this job purely because it already has a booted RELEASE
+      # container — the check costs ~2s here versus minutes for a job that
+      # boots its own. It is unrelated to STORAGE_BACKEND (none of these three
+      # touch the storage adapter); if this job is ever deleted, this step
+      # needs a new home rather than deletion.
+      #
+      # Why it exists (#1311): `Mix` is not in the release, so anything we
+      # document as `bin/engram rpc '...'` must be a plain module. Nothing
+      # caught the three broken entrypoints because boot only ever invokes
+      # Engram.Release.migrate/prepare_database — code that already had the
+      # right shape. Documentation that names a command is not an invocation,
+      # so this step turns each documented entrypoint into a real one.
+      #
+      # Deliberately asserts the RETURN VALUES, not just absence of a crash:
+      # on a fresh CI database every one of these is a zero/no-op, which is
+      # what makes the check safe to run and still meaningful.
+      - name: Documented release rpc entrypoints are callable
+        run: |
+          OUT=$(docker compose -f ci/compose.database.yml -p "$CI_PROJECT" exec -T engram \
+            /app/bin/engram rpc '
+              # Empty CI DB: no legacy-MD5 rows, so both scopes enqueue nothing.
+              %{notes: 0, attachments: 0} = Engram.ContentHash.Backfill.enqueue_all()
+              # No vaults, so no onboarding rows to seed.
+              0 = Engram.Onboarding.Backfill.first_vault_created()
+              # Migrations already ran at boot, so this reports "up to date".
+              # Also proves the migrations dir resolves OUTSIDE a Mix project
+              # root — the relative path this used to carry raised File.Error.
+              :ok = Engram.Release.Preflight.run()
+              IO.puts("RELEASE_ENTRYPOINTS_OK")
+            ')
+          echo "$OUT"
+          echo "$OUT" | grep -q RELEASE_ENTRYPOINTS_OK
+
       - name: Collect logs on failure
         if: failure()
         run: docker compose -f ci/compose.database.yml -p "$CI_PROJECT" logs || true

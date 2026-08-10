@@ -6,10 +6,13 @@ defmodule EngramWeb.SyncController do
 
   alias Engram.Attachments.Attachment
   alias Engram.Crypto
-  alias Engram.Crypto.Envelope
+  alias Engram.Crypto.PathCrypto
+  alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Repo
   alias EngramWeb.Schemas
+
+  require Logger
 
   operation(:manifest,
     operation_id: "sync-manifest",
@@ -55,8 +58,30 @@ defmodule EngramWeb.SyncController do
       # possible without a DEK (every upsert provisions one), so short-circuit
       # to an empty manifest instead of crashing on `{:ok, dek}` match.
       case Crypto.get_dek(user) do
-        {:ok, dek} -> render_manifest(conn, user, vault, dek, current)
-        {:error, :no_dek} -> render_empty_manifest(conn, current)
+        {:ok, dek} ->
+          render_manifest(conn, user, vault, dek, current)
+
+        {:error, :no_dek} ->
+          render_empty_manifest(conn, current)
+
+        {:error, reason} ->
+          # Anything else (:unrecognised_blob, a propagated unwrap_dek/2
+          # failure) is a real crypto fault, not "this vault is empty".
+          # Reaching render_empty_manifest here would be worse than a 500:
+          # the plugin diffs this manifest against the local vault, so an
+          # empty one reads as "every note was deleted remotely". Fail
+          # loudly. Previously fell through to a CaseClauseError — same
+          # 500, but with nothing logged to diagnose it.
+          Logger.error(
+            "sync manifest: DEK unavailable, refusing to render",
+            Metadata.with_category(:error, :crypto,
+              user_id: user.id,
+              vault_id: vault.id,
+              reason: Crypto.format_dek_error(reason)
+            )
+          )
+
+          raise "sync manifest: DEK unavailable (#{Crypto.format_dek_error(reason)})"
       end
     end
   end
@@ -115,8 +140,8 @@ defmodule EngramWeb.SyncController do
     notes =
       Crypto.measure_decrypt_batch(:manifest_notes, length(note_rows), fn ->
         Enum.map(note_rows, fn {id, dek_version, path_ct, path_nonce, hash, seq, crdt_head} ->
-          aad = path_aad(:notes, id, dek_version)
-          path = decrypt_path!(path_ct, path_nonce, dek, aad)
+          aad = PathCrypto.aad(:notes, id, dek_version)
+          path = PathCrypto.decrypt!(path_ct, path_nonce, dek, aad)
           %{id: id, path: path, content_hash: hash, seq: seq, crdt_head: crdt_head}
         end)
       end)
@@ -125,8 +150,8 @@ defmodule EngramWeb.SyncController do
     attachments =
       Crypto.measure_decrypt_batch(:manifest_attachments, length(attachment_rows), fn ->
         Enum.map(attachment_rows, fn {id, dek_version, path_ct, path_nonce, hash, seq} ->
-          aad = path_aad(:attachments, id, dek_version)
-          path = decrypt_path!(path_ct, path_nonce, dek, aad)
+          aad = PathCrypto.aad(:attachments, id, dek_version)
+          path = PathCrypto.decrypt!(path_ct, path_nonce, dek, aad)
           %{id: id, path: path, content_hash: hash, seq: seq}
         end)
       end)
@@ -139,17 +164,5 @@ defmodule EngramWeb.SyncController do
       total_attachments: length(attachments),
       change_seq: current_seq
     })
-  end
-
-  defp path_aad(table, id, dek_version) when is_integer(dek_version) and dek_version >= 2,
-    do: Crypto.aad_for_row(table, :path, id)
-
-  defp path_aad(_table, _id, _v), do: <<>>
-
-  defp decrypt_path!(ciphertext, nonce, dek, aad) do
-    case Envelope.decrypt(ciphertext, nonce, dek, aad) do
-      {:ok, path} -> path
-      :error -> raise "manifest path decrypt failed — possible data corruption"
-    end
   end
 end

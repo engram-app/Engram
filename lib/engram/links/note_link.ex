@@ -1,6 +1,7 @@
 defmodule Engram.Links.NoteLink do
   @moduledoc """
-  One row per wikilink/embed occurrence in a note (issue #591). Edges are
+  One row per link occurrence in a note (issue #591) — both `[[wikilink]]`
+  and markdown `[label](target.md)` syntax (#1302). Edges are
   keyed by note UUIDs so renames never invalidate them; `target_note_id` /
   `target_attachment_id` both nil means a dangling link, resolvable later
   via `target_basename_hmac` (see `Engram.Links.bind_danglers_for_hmac/3`).

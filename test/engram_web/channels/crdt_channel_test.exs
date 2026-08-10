@@ -438,6 +438,83 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_note_content_eventually(user, vault, id2, "beta")
     end
 
+    test "a path already owned by another note reports id_conflict, never ok", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # Genesis ADOPTS when the path is taken by a live note under a different id,
+      # and the entry's content frame is NOT applied to it. Reporting "ok" would
+      # have the client call adoptCreateAck, stamp its LOCAL body as the CRDT
+      # baseline and count the file pushed, while that body never reached the
+      # server -- a silent upload loss. id_conflict routes the file to pushFile's
+      # ADOPT, which actually transfers it.
+      {:ok, existing} =
+        Notes.upsert_note(user, vault, %{"path" => "Owned.md", "content" => "server body"})
+
+      creates = [
+        %{
+          "doc_id" => Ecto.UUID.generate(),
+          "path" => "Owned.md",
+          "b64" => frame_for_content("client body")
+        }
+      ]
+
+      ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+      assert_reply ref, :ok, %{results: [result]}
+
+      assert result.status == "error"
+      assert result.reason == "id_conflict"
+      assert result.doc_id == existing.id
+
+      # And the adopted note is untouched -- the frame was not merged into it.
+      {:ok, still} = Notes.get_note(user, vault, "Owned.md")
+      assert still.content == "server body"
+    end
+
+    test "an id owned by another of the user's vaults is re-minted, with content", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # The bulk leg of the vault-copy fix, and the leg the reported incident
+      # actually used. genesis_crdt_note re-mints a colliding id, but prepare_create
+      # used to forward the id we SENT rather than the one that was created: phase
+      # 2's ensure_room resolves via note_in_vault?, which is false for the foreign
+      # id, so every re-minted entry fell into the create_failed arm, its content
+      # frame was dropped, and the row committed EMPTY. Asserting the content (not
+      # just the status) is what makes this a real regression test.
+      {:ok, other_vault} = Vaults.create_vault(user, %{name: "CrdtChannelTestB"})
+
+      {:ok, foreign} =
+        Notes.upsert_note(user, other_vault, %{"path" => "Copied.md", "content" => "vault B body"})
+
+      creates = [
+        %{
+          "doc_id" => foreign.id,
+          "path" => "Copied.md",
+          "b64" => frame_for_content("copied-body")
+        }
+      ]
+
+      {new_id, log} =
+        with_log(fn ->
+          ref = push(socket, "crdt_create_batch", %{"creates" => creates})
+          assert_reply ref, :ok, %{results: [%{status: "ok", doc_id: id}]}
+          id
+        end)
+
+      refute new_id == foreign.id, "the colliding id was not re-minted"
+      assert log =~ "already taken"
+
+      # Landed in THIS vault, under the new id, carrying the frame's content.
+      assert_note_content_eventually(user, vault, new_id, "copied-body")
+
+      # The vault that owns the id keeps its note and its content.
+      assert {:ok, untouched} = Notes.get_note_by_id(user, other_vault, foreign.id)
+      assert untouched.content =~ "vault B body"
+    end
+
     test "materializes content SYNCHRONOUSLY so the seq feed carries it immediately", %{
       socket: socket,
       user: user,

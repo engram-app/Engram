@@ -2,6 +2,7 @@ import { IndexeddbPersistence } from "y-indexeddb";
 import * as Y from "yjs";
 import { frontmatterMaps } from "./frontmatter-doc";
 import { rememberCrdtDb } from "./idb-registry";
+import { crdtMark } from "./perf";
 
 interface Entry {
 	doc: Y.Doc;
@@ -52,9 +53,12 @@ export class CrdtManager {
 		return (await this.entry(noteId)).doc;
 	}
 
-	/** The shared Y.Text bound to CodeMirror via yCollab. */
+	/** The shared Y.Text bound to CodeMirror via yCollab.
+	 *
+	 *  The ONLY `entry()` caller on the note-open path, and therefore the only
+	 *  one that times it — see `entry`'s `timed` parameter. */
 	async getSharedText(noteId: string): Promise<Y.Text> {
-		return (await this.entry(noteId)).text;
+		return (await this.entry(noteId, true)).text;
 	}
 
 	/** Apply a binary Yjs update from the server (suppresses re-send). */
@@ -149,12 +153,23 @@ export class CrdtManager {
 		return true;
 	}
 
-	private async entry(noteId: string): Promise<Entry> {
+	/** `timed` gates the open-path perf marks. Every other caller — `getDoc`
+	 *  from the channel bridge, `applyRemoteUpdate` from the frame handler,
+	 *  the state-vector helpers — runs on inbound TRAFFIC, not on an open, and
+	 *  stamping there attributed a collaborator's edit to whatever open was
+	 *  last seen for that note. Marks belong where they mean what they say. */
+	private async entry(noteId: string, timed = false): Promise<Entry> {
 		const id = this.docId(noteId);
 		const cached = this.docs.get(id);
 		if (cached) {
+			if (timed) {
+				crdtMark(noteId, "entry:warm");
+			}
 			await cached.ready;
 			return cached;
+		}
+		if (timed) {
+			crdtMark(noteId, "entry:cold");
 		}
 		const doc = new Y.Doc();
 		const dbName = CRDT_IDB_PREFIX + id;
@@ -186,6 +201,9 @@ export class CrdtManager {
 		const entry: Entry = { doc, persistence, text, ready };
 		this.docs.set(id, entry);
 		await ready;
+		if (timed) {
+			crdtMark(noteId, "idb:synced");
+		}
 		return entry;
 	}
 }

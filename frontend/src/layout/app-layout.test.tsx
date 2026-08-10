@@ -31,6 +31,15 @@ vi.mock("../api/queries", async () => {
 	};
 });
 vi.mock("../api/use-channel", () => ({ useChannel: () => {} }));
+
+const { preloadNoteChunks } = vi.hoisted(() => ({ preloadNoteChunks: vi.fn() }));
+vi.mock("../viewer/note-chunks", () => ({
+	preloadNoteChunks,
+	// The layout never renders these; the pages import them from here.
+	NoteEditor: () => null,
+	NotePage: () => null,
+	VaultItemPage: () => null,
+}));
 vi.mock("../auth/use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ user: { email: "t@example.com", imageUrl: null }, logout: vi.fn() }),
 }));
@@ -78,5 +87,16 @@ describe("AppLayout", () => {
 	it("renders the outlet content in the main pane", () => {
 		renderLayout();
 		expect(screen.getByText("main-content")).toBeInTheDocument();
+	});
+
+	// The editor chunk is ~1358 ms on the first note open (#1317) and the user
+	// spends that time staring at a spinner. Fetching it while they are still
+	// picking a file costs nothing — the network is idle and the layout is
+	// already painted.
+	it("warms the note-viewing chunks once the layout is up", async () => {
+		renderLayout();
+		// happy-dom has no requestIdleCallback, so this exercises the setTimeout
+		// fallback — the same branch Safari takes. waitFor covers the tick.
+		await vi.waitFor(() => expect(preloadNoteChunks).toHaveBeenCalled());
 	});
 });

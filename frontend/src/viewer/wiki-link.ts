@@ -111,3 +111,55 @@ export function wikiHref(
 	const encoded = page.split("/").map(encodeURIComponent).join("/");
 	return `/${slug}/wiki/${encoded}${hash}`;
 }
+
+// Markdown-syntax link resolution (#1302). Obsidian writes
+// `[label](Target.md)` instead of `[[Target]]` when "Use [[Wikilinks]]" is
+// off, and the backend indexes both as note_links edges — so the viewer
+// resolves them through the SAME two layers wikiHref uses (indexed edge,
+// then sync manifest) rather than emitting a plain <a> that full-page
+// navigates to a path which isn't a route.
+//
+// Two deliberate differences from wikiHref:
+//   * the href arrives percent-encoded (`My%20Note.md`) while `target_text`
+//     and manifest paths are decoded, so it is decoded before lookup;
+//   * an UNRESOLVED target returns null (caller leaves the plain <a>) rather
+//     than falling through to the /:slug/wiki/* create affordance. A markdown
+//     link can legitimately point at an attachment or a relative file, and
+//     offering to create a note for those would be wrong.
+//
+// Returns null for anything that isn't a vault-relative note reference.
+export function markdownLinkHref(
+	href: string | undefined,
+	slug: string | undefined,
+	map?: Map<string, NoteLinkEdge>,
+	manifestNotes?: ManifestNote[],
+): string | null {
+	if (!(href && slug)) {
+		return null;
+	}
+	// Absolute app route, external scheme, protocol-relative, or same-page
+	// anchor — all already correct as plain hrefs.
+	if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/|#)/iu.test(href)) {
+		return null;
+	}
+
+	let decoded: string;
+	try {
+		decoded = decodeURI(href);
+	} catch {
+		// Malformed escape — treat the href as literal rather than throwing.
+		decoded = href;
+	}
+
+	const { page, hash } = parseWikiTarget(decoded);
+	if (!page) {
+		return null;
+	}
+
+	const resolved = map?.get(page.toLowerCase());
+	if (resolved?.target_note_id) {
+		return `/${slug}/${resolved.target_note_id}${hash}`;
+	}
+	const fromManifest = manifestNotes ? resolveWikiTarget(page, manifestNotes) : null;
+	return fromManifest ? `/${slug}/${fromManifest.id}${hash}` : null;
+}

@@ -1,5 +1,6 @@
 defmodule Engram.Crypto.UserDekRotationTest do
   use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query, only: [from: 2]
   import Mox
@@ -7,6 +8,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
   alias Engram.Attachments
   alias Engram.Crypto
   alias Engram.Crypto.{DekCache, Envelope, UserDekRotation}
+  alias Engram.Notes.CrdtBridge
   alias Engram.Repo
   alias Engram.Test.LogCapture
   alias Engram.Vector.Qdrant
@@ -303,6 +305,281 @@ defmodule Engram.Crypto.UserDekRotationTest do
       expected = Crypto.hmac_field(new_filter_key, "")
 
       assert reloaded_note.folder_hmac == expected
+    end
+  end
+
+  # #1341. crdt_state is a ciphertext column like any other, but it was missing
+  # from rewrap_note_columns/5 entirely while the sweep still stamped the new
+  # dek_version. Every note that had ever been synced therefore kept a snapshot
+  # under the OLD DEK on a row claiming the new one, so decrypt_crdt_state/2
+  # failed and CrdtPersistence.bind/3 RAISED — the whole vault stopped opening
+  # in the editor and stopped syncing, in one sweep.
+  describe "rotate_user/1 - crdt_state" do
+    setup %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "CrdtVault")
+      {:ok, vault: vault}
+    end
+
+    # One uncheckpointed delta, written exactly the way CrdtPersistence.update_v1
+    # writes them: same DEK, same note-bound AAD as the snapshot. Returns the
+    # plaintext so the caller can assert it survives the rotation byte-for-byte.
+    defp seed_tail_update!(user, vault, note_id, text) do
+      {:ok, doc} = CrdtBridge.doc_from_state(nil)
+      :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), text)
+      {:ok, update} = Yex.encode_state_as_update(doc)
+      {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(update, user, note_id)
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          %Engram.Notes.CrdtUpdateLog{}
+          |> Engram.Notes.CrdtUpdateLog.changeset(%{
+            note_id: note_id,
+            user_id: user.id,
+            vault_id: vault.id,
+            update_ciphertext: ct,
+            update_nonce: nonce
+          })
+          |> Repo.insert!()
+        end)
+
+      update
+    end
+
+    # A genuine pre-T3.6 row: every envelope under the EMPTY AAD, stamped
+    # dek_version = 1. Mirrors crypto/aad_rebind_test.exs. Stamping v1 onto a row
+    # whose envelopes are already bound is a DIFFERENT (broken) shape and proves
+    # nothing about the legacy path.
+    defp insert_legacy_note!(user, vault, path, content) do
+      {:ok, dek} = Crypto.get_dek(user)
+      {:ok, filter_key} = Crypto.dek_filter_key(user)
+      {:ok, hash_key} = Crypto.dek_content_hash_key(user)
+
+      {content_ct, content_n} = Envelope.encrypt(content, dek)
+      {title_ct, title_n} = Envelope.encrypt("legacy title", dek)
+      {path_ct, path_n} = Envelope.encrypt(path, dek)
+      {folder_ct, folder_n} = Envelope.encrypt("rot", dek)
+      {tags_ct, tags_n} = Envelope.encrypt(:erlang.term_to_binary([]), dek)
+
+      attrs = %{
+        kind: "note",
+        content_hash: Crypto.hmac_content_hash(hash_key, content),
+        seq: 1,
+        mtime: 0.0,
+        version: 1,
+        user_id: user.id,
+        vault_id: vault.id,
+        content_ciphertext: content_ct,
+        content_nonce: content_n,
+        title_ciphertext: title_ct,
+        title_nonce: title_n,
+        path_ciphertext: path_ct,
+        path_nonce: path_n,
+        path_hmac: Crypto.hmac_field(filter_key, path),
+        folder_ciphertext: folder_ct,
+        folder_nonce: folder_n,
+        folder_hmac: Crypto.hmac_field(filter_key, "rot"),
+        tags_ciphertext: tags_ct,
+        tags_nonce: tags_n,
+        tags_hmac: [],
+        dek_version: Crypto.row_version_legacy()
+      }
+
+      {:ok, note} =
+        Repo.with_tenant(user.id, fn ->
+          %Engram.Notes.Note{}
+          |> Ecto.Changeset.cast(attrs, Map.keys(attrs))
+          |> Repo.insert!()
+        end)
+
+      note
+    end
+
+    test "rotation rewraps crdt_state so a synced note still opens", %{user: user, vault: vault} do
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/synced.md", "content" => "body"})
+
+      # Stand in for a checkpoint: a real Yjs state blob, encrypted the only way
+      # Crypto.encrypt_crdt_state/3 knows how (AAD always bound to the row id).
+      {:ok, doc} = CrdtBridge.doc_from_state(nil)
+
+      :ok =
+        CrdtBridge.diff_into_text(
+          Yex.Doc.get_text(doc, CrdtBridge.text_name()),
+          "body"
+        )
+
+      {:ok, state} = Yex.encode_state_as_update(doc)
+      {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(state, user, note.id)
+
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        [set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]],
+        skip_tenant_check: true
+      )
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      assert {:ok, ^state} = Crypto.decrypt_crdt_state(raw, reloaded_user),
+             """
+             rotation stamped dek_version=#{raw.dek_version} but left crdt_state
+             encrypted under the OLD DEK, so every already-synced note in this
+             vault is now un-openable and un-syncable.
+             """
+    end
+
+    test "the crdt_update_log tail rewraps too, so uncheckpointed edits survive", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/tail.md", "content" => "body"})
+
+      # An edit that has NOT been checkpointed yet lives only in the tail log,
+      # encrypted with the same DEK and the same note-bound AAD as the snapshot.
+      # Rewrapping the snapshot without the tail is WORSE than rewrapping
+      # neither: bind/3 then succeeds and replay_tail drops every row with only
+      # a warning, so the room converges to the stale snapshot and the next
+      # checkpoint materializes it over the body. Loud outage becomes silent
+      # data loss.
+      update = seed_tail_update!(user, vault, note.id, "unsaved edit")
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      row =
+        Repo.one!(from(l in Engram.Notes.CrdtUpdateLog, where: l.note_id == ^note.id),
+          skip_tenant_check: true
+        )
+
+      shaped = %Engram.Notes.Note{
+        id: note.id,
+        dek_version: Crypto.row_version_aad_bound(),
+        crdt_state_ciphertext: row.update_ciphertext,
+        crdt_state_nonce: row.update_nonce
+      }
+
+      assert {:ok, ^update} = Crypto.decrypt_crdt_state(shaped, reloaded_user),
+             """
+             the tail log was left under the OLD DEK while the snapshot moved to
+             the new one. replay_tail drops undecryptable rows with only a
+             warning, so this edit is gone the next time the note is opened.
+             """
+    end
+
+    test "an unreadable crdt_state is left alone, not nulled and not raised on", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/junk.md", "content" => "body"})
+
+      # A snapshot that decrypts under NEITHER dek — the shape a rotation that
+      # died mid-sweep, or #1336, leaves behind.
+      junk_ct = :crypto.strong_rand_bytes(64)
+      junk_nonce = :crypto.strong_rand_bytes(12)
+
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        [set: [crdt_state_ciphertext: junk_ct, crdt_state_nonce: junk_nonce]],
+        skip_tenant_check: true
+      )
+
+      # Must NOT raise: base_columns' both-DEKs-failed arm aborts the sweep after
+      # earlier batches have committed under a DEK final_flip has not persisted.
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      # Must NOT be nulled: the note's tail log survives and has just been
+      # rewrapped, so an empty snapshot means the next bind replays base-less
+      # deltas and the checkpoint materializes that fragment over the body.
+      # Leaving the bytes exactly as they were is the only no-op.
+      assert raw.crdt_state_ciphertext == junk_ct
+      assert raw.crdt_state_nonce == junk_nonce
+
+      # And the rest of the row still rotated.
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      assert {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(raw, reloaded_user)
+      assert decrypted.content == "body"
+    end
+
+    test "the crdt_head re-warm is enqueued even when a LATER phase fails", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/head.md", "content" => "body"})
+
+      # sweep_notes writes crdt_state, which trips notes_crdt_head_invalidate and
+      # NULLs every head. That damage is committed by the FIRST phase, so the
+      # repair cannot hang off the all-phases-succeeded branch. Break the LAST
+      # phase (sweep_qdrant) by pointing it at a closed port.
+      dead = Bypass.open()
+      Bypass.down(dead)
+      Application.put_env(:engram, :qdrant_url, "http://localhost:#{dead.port}")
+
+      _ = UserDekRotation.rotate_user(user.id)
+
+      assert_enqueued(worker: Engram.Workers.BackfillCrdtHead, args: %{"vault_id" => vault.id})
+    end
+
+    test "a GENUINE legacy row rewraps its crdt_state alongside everything else", %{
+      user: user,
+      vault: vault
+    } do
+      # dek_version = 1 carrying an AAD-BOUND crdt_state is the #1336 shape: the
+      # checkpoint stamped the snapshot bound while the row still claimed legacy.
+      # Rotation is the path that heals it, and it can only do so because
+      # old_aad_for/3 pins crdt_state to the bound AAD instead of dispatching on
+      # dek_version like every other column. Building this row with upsert_note
+      # (v2) would exercise none of that -- the previous version of this test did
+      # exactly that and passed with the fix reverted.
+      note = insert_legacy_note!(user, vault, "rot/legacy.md", "body")
+
+      {:ok, doc} = CrdtBridge.doc_from_state(nil)
+      :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "body")
+      {:ok, state} = Yex.encode_state_as_update(doc)
+      {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(state, user, note.id)
+
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        [set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]],
+        skip_tenant_check: true
+      )
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      assert {:ok, ^state} = Crypto.decrypt_crdt_state(raw, reloaded_user)
+
+      # Adding a column to the rewrap set must not disturb the rest of the row.
+      assert {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(raw, reloaded_user)
+      assert decrypted.content == "body"
+      assert decrypted.path == "rot/legacy.md"
     end
   end
 

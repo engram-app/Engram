@@ -30,9 +30,13 @@ defmodule Engram.Folders do
   """
 
   alias Engram.Attachments
+  alias Engram.Crypto
+  alias Engram.Logger.Metadata
   alias Engram.Notes
   alias Engram.Repo
   alias Engram.Sync.Broadcast
+
+  require Logger
 
   @type counts :: %{notes: non_neg_integer(), attachments: non_neg_integer()}
 
@@ -100,44 +104,92 @@ defmodule Engram.Folders do
     if folder == "" do
       {:error, :root_delete_refused}
     else
-      # The empty-check counts and the cascade both run INSIDE the same
-      # transaction (was: counted before `atomic/1`, cascaded inside it, a
-      # TOCTOU gap where content created between the two could be deleted
-      # without `recursive: true`). This NARROWS the window rather than
-      # closing it: under Postgres READ COMMITTED each statement takes its
-      # own snapshot, so a row a concurrent same-user txn commits in the gap
-      # between the count and the cascade is still visible to the delete but
-      # not the count. Fully closing it would need REPEATABLE READ or an
-      # inline delete-guard; not worth it for this single-user, RLS-scoped,
-      # AI-paced surface. `count_folder_attachments` is `with`-chained (not
-      # hard-matched) so a non-ok tenant-unwrap tuple propagates as an error
-      # instead of MatchError-ing.
-      atomic(fn ->
-        notes = Notes.count_folder_notes(user, vault, folder)
+      # SCAN ONCE, then decide and delete from that same row set.
+      #
+      # This closes the TOCTOU gap outright rather than narrowing it. The old
+      # shape counted and cascaded through separate full-vault scans: even
+      # inside one transaction, READ COMMITTED gives each statement its own
+      # snapshot, so a row a concurrent same-user txn committed between them
+      # was visible to the delete but not to the count — deleted without
+      # `recursive: true` ever having covered it. The guard now decides on
+      # EXACTLY the rows `delete_scanned`/`delete_scanned_paths` will remove,
+      # so there is no second observation to disagree with the first. It also
+      # halves the work: each side previously ran two full fetch+batch-decrypt
+      # passes over the vault per delete.
+      #
+      # Both scans are `with`-chained (not hard-matched) so a crypto fault or a
+      # non-ok tenant-unwrap tuple propagates as an error instead of
+      # MatchError-ing — and, more importantly, so neither can answer "empty"
+      # for "I couldn't tell". The notes leg guards that via `get_dek` plus a
+      # reload for a stale user struct; the attachment leg reports how many
+      # rows it could not read, which the guard below treats as "unknown"
+      # rather than "absent".
+      #
+      # Reload ONCE here: both scan and apply need a DEK-bearing struct, and
+      # each reloads defensively. Doing it up front makes those no-ops.
+      user = Crypto.fresh_user(user)
 
-        with {:ok, atts} <- count_folder_attachments(user, vault, folder) do
-          if notes + atts > 0 and not recursive do
-            {:error, {:not_empty, %{notes: notes, attachments: atts}}}
-          else
-            with {:ok, %{deleted: _}} <- Notes.delete_folder(user, vault, folder),
-                 {:ok, a} <- Attachments.delete_folder(user, vault, folder) do
-              # Notes.delete_folder's `deleted` includes folder markers; report
-              # the content-note count already computed so the caller sees
-              # notes, not markers.
-              {:ok, %{notes: notes, attachments: a}}
-            end
+      atomic(fn ->
+        with {:ok, note_rows} <- Notes.scan_folders(user, vault, [folder]),
+             {:ok, %{paths: att_paths, undecryptable: unreadable}} <-
+               Attachments.scan_folder_paths(user, vault, folder) do
+          # Markers are not content: an empty folder matches only its own
+          # marker row, which must not make it look non-empty.
+          notes = Enum.count(note_rows, &(&1.kind == "note"))
+          atts = length(att_paths)
+
+          cond do
+            notes + atts > 0 and not recursive ->
+              {:error, {:not_empty, %{notes: notes, attachments: atts}}}
+
+            # We cannot PROVE this folder is empty. An unreadable row has no
+            # decryptable path, so it may or may not live here — and the
+            # non-recursive delete exists precisely to refuse when content
+            # might be present. `recursive: true` is an explicit "remove
+            # whatever is under here", so it proceeds (and logs the orphans
+            # below) rather than leaving the user with no way to delete
+            # anything at all.
+            unreadable > 0 and not recursive ->
+              {:error, {:unverifiable, %{undecryptable_attachments: unreadable}}}
+
+            true ->
+              log_orphaned_attachments(user, vault, folder, unreadable)
+              delete_scanned(user, vault, note_rows, att_paths, notes)
           end
         end
       end)
     end
   end
 
-  defp count_folder_attachments(user, vault, folder) do
-    prefix = folder_prefix(folder)
-
-    with {:ok, metas} <- Attachments.list_attachments(user, vault) do
-      {:ok, Enum.count(metas, &String.starts_with?(&1.path, prefix))}
+  defp delete_scanned(user, vault, note_rows, att_paths, notes) do
+    with {:ok, %{deleted: _}} <- Notes.delete_scanned(user, vault, note_rows),
+         {:ok, a} <- Attachments.delete_scanned_paths(user, vault, att_paths) do
+      # Notes.delete_folder's `deleted` includes folder markers; report
+      # the content-note count already computed so the caller sees
+      # notes, not markers.
+      {:ok, %{notes: notes, attachments: a}}
     end
+  end
+
+  # A recursive/batch delete removes what it can READ. Rows whose path will not
+  # decrypt are invisible to both the scan and the delete, so they survive as
+  # live rows under a path whose folder marker is gone. That is the safe
+  # direction — better an orphan than a silent destruction — but it must not be
+  # silent, or the user is told a folder is gone while its storage still bills.
+  defp log_orphaned_attachments(_user, _vault, _folder, 0), do: :ok
+
+  defp log_orphaned_attachments(user, vault, folder, count) do
+    Logger.warning(
+      "folder delete: undecryptable attachments left orphaned",
+      Metadata.with_category(:warning, :crypto,
+        user_id: user.id,
+        vault_id: vault.id,
+        folder_depth: length(String.split(folder, "/")),
+        orphaned: count
+      )
+    )
+
+    :ok
   end
 
   @spec batch_delete(map(), map(), [String.t()]) :: {:ok, counts()} | {:error, term()}
@@ -178,13 +230,21 @@ defmodule Engram.Folders do
   defp delete_attachments_for(_user, _vault, []), do: {:ok, 0}
 
   defp delete_attachments_for(user, vault, folders) do
-    with {:ok, metas} <- Attachments.list_attachments(user, vault) do
+    # Batch delete is recursive by nature — it removes the named folders and
+    # everything under them — so it takes the same reading as `recursive: true`
+    # above: delete what is readable, and LOG what is not. Silently returning
+    # `attachments: 0` while live rows survive under a deleted marker is the
+    # orphaning this whole change exists to stop, and it reached here through
+    # the tolerant listing.
+    with {:ok, metas, unreadable} <- Attachments.scan_with_drops(user, vault) do
       prefixes = Enum.map(folders, &folder_prefix/1)
 
       paths =
         metas
         |> Enum.map(& &1.path)
         |> Enum.filter(fn path -> Enum.any?(prefixes, &String.starts_with?(path, &1)) end)
+
+      log_orphaned_attachments(user, vault, Enum.join(folders, ","), unreadable)
 
       {:ok, %{deleted: n}} = Attachments.batch_delete(user, vault, paths)
       {:ok, n}

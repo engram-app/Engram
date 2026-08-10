@@ -712,4 +712,22 @@ defmodule Engram.CryptoTest do
                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     end
   end
+
+  describe "format_dek_error/1" do
+    test "surfaces known atom reasons by name" do
+      assert Crypto.format_dek_error(:no_dek) == "no_dek"
+      assert Crypto.format_dek_error(:unrecognised_blob) == "unrecognised_blob"
+    end
+
+    # The whole point of the helper: a nested provider error can carry a raw
+    # SDK term with request context in it, and inspect/1-ing that into a log
+    # line or a raised message is how that context leaks.
+    test "collapses nested provider errors instead of inspecting them" do
+      assert Crypto.format_dek_error({:kms_decrypt_failed, %{secret: "sk-live-abc123"}}) ==
+               "dek_unwrap_failed"
+
+      refute Crypto.format_dek_error({:kms_decrypt_failed, %{secret: "sk-live-abc123"}}) =~
+               "sk-live"
+    end
+  end
 end

@@ -19,6 +19,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
   import Ecto.Query
 
   alias Engram.{Accounts, Crypto, Notes, Repo, Vaults}
+  alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtBridge, CrdtDeliver, CrdtUpdateLog, Enqueue, Helpers, Note}
   alias Engram.Workers.{EmbedNote, ExtractNoteLinks}
@@ -65,7 +66,33 @@ defmodule Engram.Notes.CrdtCheckpoint do
         :ok
 
       user ->
-        do_checkpoint(user, user_id, vault_id, note_id, doc, opts)
+        # #1341. A checkpoint encrypts crdt_state with the user's CURRENT DEK.
+        # Run one mid-rotation and it writes an old-DEK snapshot over a row the
+        # sweep has already rewrapped, or over one the flip is about to move to
+        # the new generation — either way the note can never be bound again.
+        #
+        # The gate lives HERE, not in the callers, because all four legs funnel
+        # through this function: the room-unbind path (which
+        # `SessionInvalidator.disconnect_user/1` triggers at the TOP of a
+        # rotation, so it is the likeliest one to race), the debounce timer, the
+        # channel, and the CheckpointNote worker. Gating only the worker leg
+        # left the one that actually fires open.
+        #
+        # `check_user/1`, not `check/1`: `user` was just read from the DB one
+        # line above, so re-reading buys nothing. Skipping prunes nothing, so
+        # every edit stays in the tail-WAL and replays on the next bind.
+        case RotationGate.check_user(user) do
+          {:error, :rotation_in_progress} ->
+            Logger.warning(
+              "crdt checkpoint skipped — dek rotation in progress note_id=#{note_id}",
+              Metadata.with_category(:warning, :sync, note_id: note_id)
+            )
+
+            :ok
+
+          _ ->
+            do_checkpoint(user, user_id, vault_id, note_id, doc, opts)
+        end
     end
   rescue
     # The user-resolve above is the ONE DB call outside do_checkpoint's rescue.
@@ -286,6 +313,14 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # ceiling keeps its full state vector; add a structural (nodes/edges-preserving)
   # flatten in Phase 2 if a real board ever hits it.
   defp do_structural_checkpoint(note, note_id, live_state, prune, user) do
+    if legacy_row?(note) do
+      {:skip, :legacy_row_needs_rebind}
+    else
+      do_structural_checkpoint_bound(note, note_id, live_state, prune, user)
+    end
+  end
+
+  defp do_structural_checkpoint_bound(note, note_id, live_state, prune, user) do
     with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
          {:ok, raw_state} <- encode(union_doc),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(raw_state, user, note_id) do
@@ -338,88 +373,98 @@ defmodule Engram.Notes.CrdtCheckpoint do
     %{text: text, tags: tags, content_hash: content_hash, ct: ct, nonce: nonce, user: user} = m
     prev = note.content_hash
 
-    if prev == content_hash do
-      # Text unchanged: compact the snapshot + prune, but do NOT touch
-      # version/seq/content — legacy /changes pullers must not see phantom edits.
-      {1, _} =
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note_id and n.kind == "note"),
-          set: [
-            crdt_state_ciphertext: ct,
-            crdt_state_nonce: nonce,
-            dek_version: Crypto.row_version_aad_bound()
-          ]
-        )
+    cond do
+      prev == content_hash and legacy_row?(note) ->
+        # Compaction writes crdt_state and NOTHING else, so on a legacy row it
+        # can only half-migrate (see legacy_row?/1). It is an optimisation --
+        # the tail stays unpruned and the next bind re-checkpoints -- so
+        # skipping costs nothing, while writing costs the whole vault's
+        # decryptability.
+        {:skip, :legacy_row_needs_rebind}
 
-      prune_tail(note_id, prune)
-      {prev, content_hash, note.path}
-    else
-      # Re-derive title from the note's decrypted (sanitized-at-write) path.
-      title = Helpers.extract_title(text, note.path)
-
-      merged = %{content: text, title: title, tags: tags, content_hash: content_hash}
-      {:ok, encrypted} = Crypto.encrypt_note_fields(merged, user, note_id)
-
-      phase_b =
-        Notes.inject_phase_b_fields_pub(
-          encrypted,
-          user,
-          note_id,
-          note.path,
-          note.folder,
-          tags
-        )
-        |> Notes.inject_okf_fields_pub(user, note_id, text)
-        |> Map.put(:crdt_state_ciphertext, ct)
-        |> Map.put(:crdt_state_nonce, nonce)
-        |> Map.put(:content_hash, content_hash)
-
-      # #902 fence. When the caller captured the doc at a known row version,
-      # persist only if the row is STILL at that version. A REST/MCP write
-      # that committed after the snapshot bumped `version`, so the CAS matches
-      # zero rows and we ABORT — never overwriting the newer committed content
-      # with our stale encoding. `captured_version` nil (e.g. the unbind path)
-      # keeps the prior unfenced behaviour. The field set is derived through
-      # Note.changeset (identical casting to the previous Repo.update!) and
-      # applied via a version-fenced update_all, mirroring the compaction branch.
-      captured = Keyword.get(opts, :captured_version)
-      fence_version = captured || note.version
-
-      changeset =
-        note
-        |> Note.changeset(Map.put(phase_b, :version, fence_version + 1))
-        |> Ecto.Changeset.put_change(:seq, Vaults.next_seq!(vault_id))
-
-      base_query = from(n in Note, where: n.id == ^note_id and n.kind == "note")
-
-      fenced_query =
-        if captured, do: where(base_query, [n], n.version == ^captured), else: base_query
-
-      # update_all does NOT auto-manage timestamps (Repo.update! does), and
-      # `updated_at` is never cast into changeset.changes. Set it explicitly,
-      # matching every sibling notes update_all, so the row's recency stays
-      # truthful for everything that orders/filters on updated_at. (The
-      # /api/notes/changes timestamp feed this originally guarded is retired.)
-      set = changeset.changes |> Map.put(:updated_at, DateTime.utc_now()) |> Map.to_list()
-
-      case Repo.update_all(fenced_query, set: set) do
-        {1, _} ->
-          prune_tail(note_id, prune)
-          {prev, content_hash, note.path}
-
-        {0, _} ->
-          # The row advanced since our snapshot — a newer write is already
-          # committed. Do NOT prune (its tail rows may be unmerged) and do NOT
-          # revert. Return equal hashes so the caller enqueues no embed for a
-          # write that did not happen; the next debounce tick re-captures the
-          # now-merged doc and checkpoints that.
-          Logger.info(
-            "crdt checkpoint skipped stale write note_id=#{note_id} captured_version=#{fence_version}",
-            Metadata.with_category(:info, :sync, note_id: note_id)
+      prev == content_hash ->
+        # Text unchanged: compact the snapshot + prune, but do NOT touch
+        # version/seq/content — legacy /changes pullers must not see phantom edits.
+        {1, _} =
+          Repo.update_all(
+            from(n in Note, where: n.id == ^note_id and n.kind == "note"),
+            set: [
+              crdt_state_ciphertext: ct,
+              crdt_state_nonce: nonce,
+              dek_version: Crypto.row_version_aad_bound()
+            ]
           )
 
-          {content_hash, content_hash, note.path}
-      end
+        prune_tail(note_id, prune)
+        {prev, content_hash, note.path}
+
+      true ->
+        # Re-derive title from the note's decrypted (sanitized-at-write) path.
+        title = Helpers.extract_title(text, note.path)
+
+        merged = %{content: text, title: title, tags: tags, content_hash: content_hash}
+        {:ok, encrypted} = Crypto.encrypt_note_fields(merged, user, note_id)
+
+        phase_b =
+          Notes.inject_phase_b_fields_pub(
+            encrypted,
+            user,
+            note_id,
+            note.path,
+            note.folder,
+            tags
+          )
+          |> Notes.inject_okf_fields_pub(user, note_id, text)
+          |> Map.put(:crdt_state_ciphertext, ct)
+          |> Map.put(:crdt_state_nonce, nonce)
+          |> Map.put(:content_hash, content_hash)
+
+        # #902 fence. When the caller captured the doc at a known row version,
+        # persist only if the row is STILL at that version. A REST/MCP write
+        # that committed after the snapshot bumped `version`, so the CAS matches
+        # zero rows and we ABORT — never overwriting the newer committed content
+        # with our stale encoding. `captured_version` nil (e.g. the unbind path)
+        # keeps the prior unfenced behaviour. The field set is derived through
+        # Note.changeset (identical casting to the previous Repo.update!) and
+        # applied via a version-fenced update_all, mirroring the compaction branch.
+        captured = Keyword.get(opts, :captured_version)
+        fence_version = captured || note.version
+
+        changeset =
+          note
+          |> Note.changeset(Map.put(phase_b, :version, fence_version + 1))
+          |> Ecto.Changeset.put_change(:seq, Vaults.next_seq!(vault_id))
+
+        base_query = from(n in Note, where: n.id == ^note_id and n.kind == "note")
+
+        fenced_query =
+          if captured, do: where(base_query, [n], n.version == ^captured), else: base_query
+
+        # update_all does NOT auto-manage timestamps (Repo.update! does), and
+        # `updated_at` is never cast into changeset.changes. Set it explicitly,
+        # matching every sibling notes update_all, so the row's recency stays
+        # truthful for everything that orders/filters on updated_at. (The
+        # /api/notes/changes timestamp feed this originally guarded is retired.)
+        set = changeset.changes |> Map.put(:updated_at, DateTime.utc_now()) |> Map.to_list()
+
+        case Repo.update_all(fenced_query, set: set) do
+          {1, _} ->
+            prune_tail(note_id, prune)
+            {prev, content_hash, note.path}
+
+          {0, _} ->
+            # The row advanced since our snapshot — a newer write is already
+            # committed. Do NOT prune (its tail rows may be unmerged) and do NOT
+            # revert. Return equal hashes so the caller enqueues no embed for a
+            # write that did not happen; the next debounce tick re-captures the
+            # now-merged doc and checkpoints that.
+            Logger.info(
+              "crdt checkpoint skipped stale write note_id=#{note_id} captured_version=#{fence_version}",
+              Metadata.with_category(:info, :sync, note_id: note_id)
+            )
+
+            {content_hash, content_hash, note.path}
+        end
     end
   end
 
@@ -492,6 +537,33 @@ defmodule Engram.Notes.CrdtCheckpoint do
     |> select([l], max(l.inserted_at))
     |> Repo.one()
   end
+
+  # `Crypto.encrypt_crdt_state/3` ALWAYS binds the AAD to the row id, so writing
+  # crdt_state forces `dek_version` up to the AAD-bound version. On a legacy row
+  # that leaves content/title/path/folder/tags bound under the EMPTY AAD while
+  # the row claims bound: they never decrypt again, `list_tree_notes` raises
+  # through `PathCrypto.decrypt!` so ONE row 500s the WHOLE vault tree, and
+  # `AadRebind` (which selects on the legacy version) can no longer see the row
+  # to repair it. #1336.
+  #
+  # `<`, not `!=`: UserDekRotation stamps `user.dek_version + 1`, so a rotated
+  # row carries 3, 4, ... and is still AAD-bound. An equality test against 2
+  # would treat every rotated user's rows as legacy.
+  #
+  # Only the branches that write crdt_state WITHOUT re-encrypting the rest need
+  # this guard. The materialize branch re-encrypts every envelope, so it migrates
+  # the row wholesale and is the one path that may run on a legacy row.
+  defp legacy_row?(%Note{dek_version: v}) when is_integer(v),
+    do: v < Crypto.row_version_aad_bound()
+
+  # Unknown version => treat as legacy, i.e. SKIP. This is unreachable today
+  # (`dek_version` is NOT NULL DEFAULT 1 and the checkpoint always loads a full
+  # row), but it is the guard's only safety net, so it has to fail the safe way.
+  # `Crypto.decrypt_aad/3` makes the same call: its catch-all reads an unknown
+  # version as legacy. Answering `false` here would let a partially-selected
+  # `%Note{}` be READ as legacy and WRITTEN as bound — the exact half-migration
+  # above. Skipping costs one deferred compaction and cannot lose data.
+  defp legacy_row?(_note), do: true
 
   # Prune the consumed tail-log rows. Two boundary shapes:
   #

@@ -763,38 +763,68 @@ defmodule Engram.Attachments do
   one delete path instead of a bespoke single-seq `update_all`.
   """
   # Cheap request-size guard (chunk-stamping and the legacy feed it protected
-  # are gone; no bulk consumer exceeds this).
+  # are gone; no bulk consumer exceeds this). Defined once, above every use:
+  # Elixir reads module attributes at their point of use, so a second
+  # definition would silently give the chunker and the batch_delete guard
+  # different limits.
   @max_batch_entries 500
 
-  @spec delete_folder(map(), map(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  @spec delete_folder(Engram.Accounts.User.t(), map(), String.t()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
   def delete_folder(user, vault, folder) do
-    prefix = String.trim_trailing(folder, "/") <> "/"
-
-    case list_attachments(user, vault) do
-      {:ok, metas} ->
-        paths = metas |> Enum.map(& &1.path) |> Enum.filter(&String.starts_with?(&1, prefix))
-
-        # The @max_batch_entries cap on batch_delete/3 is a REQUEST-boundary
-        # guard; this folder cascade is server-internal, so chunk under the
-        # cap instead of crashing on a >500-attachment folder.
-        deleted =
-          paths
-          |> Enum.chunk_every(@max_batch_entries)
-          |> Enum.reduce(0, fn chunk, acc ->
-            {:ok, %{deleted: n}} = batch_delete(user, vault, chunk)
-            acc + n
-          end)
-
-        {:ok, deleted}
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, %{paths: paths}} <- scan_folder_paths(user, vault, folder) do
+      delete_scanned_paths(user, vault, paths)
     end
   end
 
-  # Cheap request-size guard (chunk-stamping and the legacy feed it protected
-  # are gone; no bulk consumer exceeds this).
-  @max_batch_entries 500
+  @doc """
+  Live attachment paths under `folder`, plus how many rows could NOT be read.
+
+  Returns `%{paths: [...], undecryptable: n}` from ONE scan, so the
+  folder-delete guard can count and then delete the same rows.
+
+  `undecryptable` is vault-wide and CANNOT be narrowed to the folder: a row
+  whose path fails to decrypt has no readable path, so there is no way to tell
+  whether it lives here. That is the whole point — it is unknown, not absent.
+  Reporting the count lets the caller decide, which is the only correct split
+  of responsibility. An earlier revision refused outright whenever any row in
+  the vault was unreadable, which bricked EVERY folder delete (including
+  `recursive: true`) over one corrupt row somewhere else entirely.
+  """
+  @spec scan_folder_paths(map(), map(), String.t()) ::
+          {:ok, %{paths: [String.t()], undecryptable: non_neg_integer()}} | {:error, term()}
+  def scan_folder_paths(user, vault, folder) do
+    prefix = String.trim_trailing(folder, "/") <> "/"
+
+    with {:ok, rows, metas} <- scan_attachments(user, vault) do
+      {:ok,
+       %{
+         paths: metas |> Enum.map(& &1.path) |> Enum.filter(&String.starts_with?(&1, prefix)),
+         undecryptable: length(rows) - length(metas)
+       }}
+    end
+  end
+
+  @doc """
+  Soft-deletes the paths produced by `scan_folder_paths/3`. Returns the count.
+  """
+  # No error branch: `batch_delete/3` is hard-matched below, so this either
+  # returns a count or raises.
+  @spec delete_scanned_paths(map(), map(), [String.t()]) :: {:ok, non_neg_integer()}
+  def delete_scanned_paths(user, vault, paths) do
+    # The @max_batch_entries cap on batch_delete/3 is a REQUEST-boundary
+    # guard; this folder cascade is server-internal, so chunk under the
+    # cap instead of crashing on a >500-attachment folder.
+    deleted =
+      paths
+      |> Enum.chunk_every(@max_batch_entries)
+      |> Enum.reduce(0, fn chunk, acc ->
+        {:ok, %{deleted: n}} = batch_delete(user, vault, chunk)
+        acc + n
+      end)
+
+    {:ok, deleted}
+  end
 
   @doc """
   Soft-deletes each attachment by path. Idempotent. `:deleted` counts paths that
@@ -1002,6 +1032,47 @@ defmodule Engram.Attachments do
   Lists non-deleted attachment metadata for a vault (no content).
   """
   def list_attachments(user, vault) do
+    with {:ok, _rows, metas} <- scan_attachments(user, vault), do: {:ok, metas}
+  end
+
+  @doc """
+  Like `list_attachments/2`, but refuses to answer when any row fails to decrypt.
+
+  `decrypt_each/3` is deliberately tolerant — one corrupt attachment must not
+  make a whole vault unlistable. That is right for DISPLAY and wrong for a
+  caller about to make a destructive decision from the result: a short list is
+  indistinguishable from a short folder, so the folder-delete emptiness guard
+  read "N rows I cannot decrypt" as "empty" and cascaded over them. Callers
+  that count in order to decide whether to delete use this instead.
+  """
+  @spec list_attachments_strict(map(), map()) ::
+          {:ok, [map()]} | {:error, {:undecryptable_attachments, pos_integer()} | term()}
+  def list_attachments_strict(user, vault) do
+    with {:ok, rows, metas} <- scan_attachments(user, vault) do
+      case length(rows) - length(metas) do
+        0 -> {:ok, metas}
+        dropped -> {:error, {:undecryptable_attachments, dropped}}
+      end
+    end
+  end
+
+  @doc """
+  One scan: decrypted metas plus the number of rows that would not decrypt.
+
+  `{:ok, metas, dropped}`. For callers that must not mistake "could not read
+  it" for "it is not there" — see `list_attachments_strict/2`.
+  """
+  @spec scan_with_drops(map(), map()) :: {:ok, [map()], non_neg_integer()} | {:error, term()}
+  def scan_with_drops(user, vault) do
+    with {:ok, rows, metas} <- scan_attachments(user, vault) do
+      {:ok, metas, length(rows) - length(metas)}
+    end
+  end
+
+  # Returns the raw rows alongside the decrypted metas so a caller can tell
+  # whether `decrypt_each/3` dropped any of them. Each skip is already logged
+  # there; this only makes the drop visible in the return value.
+  defp scan_attachments(user, vault) do
     user = fresh_user(user)
 
     Repo.with_tenant(user.id, fn ->
@@ -1011,9 +1082,17 @@ defmodule Engram.Attachments do
     |> unwrap_tenant()
     |> case do
       {:ok, atts} ->
-        {:ok,
-         decrypt_each(atts, user, fn att, meta ->
-           meta |> Map.delete(:deleted_at) |> Map.put(:id, att.id)
+        # Measured like every other bulk path decrypt (:notes,
+        # :vault_tree_notes, :manifest_*). /api/vault/tree delegates its
+        # attachment half here rather than duplicating the query, so without
+        # this span that endpoint reports only its notes decrypt cost. Label
+        # is caller-agnostic because this function is: per-endpoint
+        # attribution comes from the OTel request span, not this tag.
+        {:ok, atts,
+         Crypto.measure_decrypt_batch(:attachments, length(atts), fn ->
+           decrypt_each(atts, user, fn att, meta ->
+             meta |> Map.delete(:deleted_at) |> Map.put(:id, att.id)
+           end)
          end)}
 
       err ->
@@ -1248,8 +1327,7 @@ defmodule Engram.Attachments do
   # Reload the user from DB if the in-memory struct doesn't reflect a DEK that
   # was provisioned by an earlier write (the writer's user struct doesn't
   # mutate the caller's). Read paths use this before any DEK derivation.
-  defp fresh_user(%Engram.Accounts.User{encrypted_dek: nil} = user), do: Repo.reload!(user)
-  defp fresh_user(%Engram.Accounts.User{} = user), do: user
+  defp fresh_user(user), do: Crypto.fresh_user(user)
 
   defp decrypt(%Attachment{content_nonce: nonce} = att, ciphertext, user) do
     aad =

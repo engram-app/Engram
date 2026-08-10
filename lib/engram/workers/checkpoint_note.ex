@@ -21,25 +21,40 @@ defmodule Engram.Workers.CheckpointNote do
     unique: [keys: [:note_id], states: :incomplete]
 
   alias Engram.{Accounts, Crypto, Repo}
+  alias Engram.Crypto.RotationGate
+  alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, CrdtRegistry, Note}
+
+  require Logger
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
     %{"user_id" => user_id, "vault_id" => vault_id, "note_id" => note_id} = args
 
-    # A live room re-opened for this note between enqueue and run — it owns
-    # materialization. Snooze rather than return :ok: skipping would DROP this
-    # deferred checkpoint, and if the reopened room is then torn down
-    # non-gracefully (crash / node kill) its edits would stay unmaterialized in
-    # notes.content until the next bind. Snoozing keeps the job alive so it runs
-    # once the room is gone (idempotent compaction; deduped by the unique key).
-    if CrdtRegistry.lookup(note_id) != nil do
-      {:snooze, 60}
-    else
-      case rebuild_detached(user_id, vault_id, note_id) do
-        {:ok, token} -> finalize(token)
-        :skip -> :ok
-      end
+    cond do
+      # #1341. This worker encrypts crdt_state, so running it mid-rotation writes
+      # a snapshot under the OLD DEK over one the sweep has already rewrapped —
+      # re-creating exactly the un-openable note the rotation fix exists to
+      # prevent. Every other DEK-touching worker already gates; this one did not.
+      # (The room-unbind checkpoint is a separate leg of the same race and is not
+      # reachable from here; tracked on the issue.)
+      RotationGate.check(user_id) == {:error, :rotation_in_progress} ->
+        {:snooze, 60}
+
+      # A live room re-opened for this note between enqueue and run — it owns
+      # materialization. Snooze rather than return :ok: skipping would DROP this
+      # deferred checkpoint, and if the reopened room is then torn down
+      # non-gracefully (crash / node kill) its edits would stay unmaterialized in
+      # notes.content until the next bind. Snoozing keeps the job alive so it runs
+      # once the room is gone (idempotent compaction; deduped by the unique key).
+      CrdtRegistry.lookup(note_id) != nil ->
+        {:snooze, 60}
+
+      true ->
+        case rebuild_detached(user_id, vault_id, note_id) do
+          {:ok, token} -> finalize(token)
+          :skip -> :ok
+        end
     end
   end
 
@@ -77,18 +92,40 @@ defmodule Engram.Workers.CheckpointNote do
                 {false, []}
 
               %Note{} = note ->
-                from_snapshot? =
-                  case Crypto.decrypt_crdt_state(note, user) do
-                    {:ok, snapshot} when is_binary(snapshot) ->
-                      :ok = Yex.apply_update(doc, snapshot)
-                      true
+                case Crypto.decrypt_crdt_state(note, user) do
+                  {:ok, snapshot} when is_binary(snapshot) ->
+                    :ok = Yex.apply_update(doc, snapshot)
+                    applied_ids = CrdtPersistence.replay_tail(doc, user, note_id)
+                    {true, applied_ids}
 
-                    _ ->
-                      false
-                  end
+                  # No snapshot at all — legitimate for a note that has never
+                  # been checkpointed. bind/3 documents the same case: the tail
+                  # IS the doc's whole history, so replaying it is complete.
+                  {:ok, nil} ->
+                    applied_ids = CrdtPersistence.replay_tail(doc, user, note_id)
+                    {applied_ids != [], applied_ids}
 
-                applied_ids = CrdtPersistence.replay_tail(doc, user, note_id)
-                {from_snapshot? or applied_ids != [], applied_ids}
+                  # A snapshot that will not decrypt is NOT the same as no
+                  # snapshot, and treating it as one is how a note loses its
+                  # body. The tail holds deltas that sit ON TOP of that
+                  # snapshot; replaying them onto an empty doc yields a
+                  # base-less fragment, and this worker would then materialize
+                  # that fragment over notes.content and prune the tail that
+                  # proved it wrong. bind/3 raises on this exact signal
+                  # (unreadable != absent); the detached path used to swallow
+                  # it. Skip: nothing is written, nothing is pruned, and the
+                  # row keeps every byte it had. #1341.
+                  {:error, reason} ->
+                    Logger.warning(
+                      "crdt checkpoint skipped — unreadable snapshot note_id=#{note_id} reason=#{inspect(reason)}",
+                      Metadata.with_category(:warning, :sync,
+                        note_id: note_id,
+                        reason: inspect(reason)
+                      )
+                    )
+
+                    {:unreadable, []}
+                end
             end
           end)
 
@@ -96,17 +133,20 @@ defmodule Engram.Workers.CheckpointNote do
         # but never edited has no snapshot and no tail, so the doc rebuilds
         # EMPTY; checkpointing an empty doc would blank notes.content. In that
         # case notes.content is already authoritative, so there is nothing to do.
-        if has_state? do
-          {:ok,
-           %{
-             user_id: user_id,
-             vault_id: vault_id,
-             note_id: note_id,
-             doc: doc,
-             prune_ids: applied_ids
-           }}
-        else
-          :skip
+        # `:unreadable` is a THIRD state, not a falsy one — see above.
+        case has_state? do
+          true ->
+            {:ok,
+             %{
+               user_id: user_id,
+               vault_id: vault_id,
+               note_id: note_id,
+               doc: doc,
+               prune_ids: applied_ids
+             }}
+
+          _ ->
+            :skip
         end
     end
   end
