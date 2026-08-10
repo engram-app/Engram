@@ -3840,30 +3840,6 @@ defmodule Engram.Notes do
   end
 
   @doc """
-  Counts live `kind == "note"` rows under `folder` (the folder itself and any
-  nested subfolder), for the empty-folder gate in `Engram.Folders.delete/4`.
-  Folder markers and attachments are NOT counted. Returns `{:ok, 0}` when the
-  user has no DEK yet (nothing encrypted, so nothing to count), and
-  `{:error, reason}` when a DEK exists but cannot be unwrapped — an unreadable
-  vault is not an empty one, and the caller is about to delete something.
-  """
-  @spec count_folder_notes(map(), map(), String.t()) ::
-          {:ok, non_neg_integer()} | {:error, {:dek_unavailable, String.t()}}
-  def count_folder_notes(user, vault, folder) do
-    with {:ok, matches} <- scan_folders(user, vault, [folder]) do
-      {:ok, Enum.count(matches, &(&1.kind == "note"))}
-    end
-  end
-
-  # `Crypto.get_dek/1` reads `encrypted_dek` off the passed struct, so a caller
-  # holding a pre-provisioning copy gets `:no_dek` for a user who has one.
-  # Mirrors `Attachments.fresh_user/1`.
-  defp reload_if_dekless(%Engram.Accounts.User{encrypted_dek: nil} = user),
-    do: Repo.reload!(user)
-
-  defp reload_if_dekless(user), do: user
-
-  @doc """
   Returns all non-deleted notes in a specific folder for a user.
   Pass "" for root-level notes.
   """
@@ -4464,7 +4440,7 @@ defmodule Engram.Notes do
   """
   @spec scan_folders(map(), map(), [String.t()]) :: {:ok, [map()]} | {:error, term()}
   def scan_folders(user, vault, folders) do
-    user = reload_if_dekless(user)
+    user = Crypto.fresh_user(user)
 
     case Crypto.get_dek(user) do
       {:ok, _dek} ->
@@ -4505,7 +4481,7 @@ defmodule Engram.Notes do
     # `Links.basename_hmac/2` below needs the DEK, and callers reach here with
     # the struct they started with — the same staleness `scan_folders/3`
     # reloads for. Reload rather than let a stale copy fail mid-cascade.
-    user = reload_if_dekless(user)
+    user = Crypto.fresh_user(user)
 
     if matches == [] do
       {:ok, %{deleted: 0}}
@@ -4611,8 +4587,15 @@ defmodule Engram.Notes do
             Repo.rollback(reason)
 
           folders ->
-            {:ok, %{deleted: n}} = do_delete_folders(user, vault, folders)
-            %{deleted: n, folders: folders}
+            # do_delete_folders/3 can now return {:error, {:dek_unavailable, _}}
+            # (scan_folders re-checks the DEK, and a rotation can land between
+            # this function's own get_dek and that one). Hard-matching turned
+            # that into a MatchError + 500 instead of the clean rollback this
+            # transaction is shaped to give.
+            case do_delete_folders(user, vault, folders) do
+              {:ok, %{deleted: n}} -> %{deleted: n, folders: folders}
+              {:error, reason} -> Repo.rollback(reason)
+            end
         end
       else
         {:error, reason} -> Repo.rollback(reason)

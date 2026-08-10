@@ -405,13 +405,39 @@ defmodule Engram.FoldersTest do
 
       corrupt_attachment_metadata!(att.id)
 
-      assert {:error, reason} = Folders.delete(user, vault, "Docs")
-      refute reason == {:not_empty, %{notes: 0, attachments: 0}}
+      assert {:error, {:unverifiable, %{undecryptable_attachments: 1}}} =
+               Folders.delete(user, vault, "Docs")
 
       # Still on disk — the guard refused rather than cascading over it. The
       # strict listing erroring IS the proof: the row is present and unreadable.
       assert {:error, {:undecryptable_attachments, 1}} =
                Attachments.list_attachments_strict(user, vault)
+    end
+
+    # The first attempt at the fix above applied the fail-closed check to the
+    # WHOLE vault before filtering by folder, so one corrupt row anywhere made
+    # every folder delete in the vault fail — including recursive. Worse than
+    # the bug it replaced.
+    test "one unreadable attachment elsewhere does not block other deletes", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "Photos/old.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      corrupt_attachment_metadata!(att.id)
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Drafts")
+
+      # `Drafts` is genuinely empty and the corrupt row is under `Photos`.
+      assert {:error, {:unverifiable, _}} = Folders.delete(user, vault, "Drafts")
+
+      # ...and recursive must always have a way through.
+      assert {:ok, %{notes: 0}} = Folders.delete(user, vault, "Drafts", recursive: true)
     end
 
     test "recursive deletes notes + attachments under the folder", %{user: user, vault: vault} do

@@ -763,32 +763,45 @@ defmodule Engram.Attachments do
   one delete path instead of a bespoke single-seq `update_all`.
   """
   # Cheap request-size guard (chunk-stamping and the legacy feed it protected
-  # are gone; no bulk consumer exceeds this).
+  # are gone; no bulk consumer exceeds this). Defined once, above every use:
+  # Elixir reads module attributes at their point of use, so a second
+  # definition would silently give the chunker and the batch_delete guard
+  # different limits.
   @max_batch_entries 500
 
   @spec delete_folder(Engram.Accounts.User.t(), map(), String.t()) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def delete_folder(user, vault, folder) do
-    with {:ok, paths} <- scan_folder_paths(user, vault, folder) do
+    with {:ok, %{paths: paths}} <- scan_folder_paths(user, vault, folder) do
       delete_scanned_paths(user, vault, paths)
     end
   end
 
   @doc """
-  Paths of live attachments under `folder`, from ONE strict listing.
+  Live attachment paths under `folder`, plus how many rows could NOT be read.
 
-  Split out from `delete_folder/3` so the folder-delete guard can count and
-  then delete from the same scan instead of listing the vault twice — and so
-  the rows it counted are exactly the rows it deletes. Strict by construction:
-  see `list_attachments_strict/2` for why a counter that feeds a destructive
-  decision must not silently drop undecryptable rows.
+  Returns `%{paths: [...], undecryptable: n}` from ONE scan, so the
+  folder-delete guard can count and then delete the same rows.
+
+  `undecryptable` is vault-wide and CANNOT be narrowed to the folder: a row
+  whose path fails to decrypt has no readable path, so there is no way to tell
+  whether it lives here. That is the whole point — it is unknown, not absent.
+  Reporting the count lets the caller decide, which is the only correct split
+  of responsibility. An earlier revision refused outright whenever any row in
+  the vault was unreadable, which bricked EVERY folder delete (including
+  `recursive: true`) over one corrupt row somewhere else entirely.
   """
-  @spec scan_folder_paths(map(), map(), String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  @spec scan_folder_paths(map(), map(), String.t()) ::
+          {:ok, %{paths: [String.t()], undecryptable: non_neg_integer()}} | {:error, term()}
   def scan_folder_paths(user, vault, folder) do
     prefix = String.trim_trailing(folder, "/") <> "/"
 
-    with {:ok, metas} <- list_attachments_strict(user, vault) do
-      {:ok, metas |> Enum.map(& &1.path) |> Enum.filter(&String.starts_with?(&1, prefix))}
+    with {:ok, rows, metas} <- scan_attachments(user, vault) do
+      {:ok,
+       %{
+         paths: metas |> Enum.map(& &1.path) |> Enum.filter(&String.starts_with?(&1, prefix)),
+         undecryptable: length(rows) - length(metas)
+       }}
     end
   end
 
@@ -812,10 +825,6 @@ defmodule Engram.Attachments do
 
     {:ok, deleted}
   end
-
-  # Cheap request-size guard (chunk-stamping and the legacy feed it protected
-  # are gone; no bulk consumer exceeds this).
-  @max_batch_entries 500
 
   @doc """
   Soft-deletes each attachment by path. Idempotent. `:deleted` counts paths that
@@ -1044,6 +1053,19 @@ defmodule Engram.Attachments do
         0 -> {:ok, metas}
         dropped -> {:error, {:undecryptable_attachments, dropped}}
       end
+    end
+  end
+
+  @doc """
+  One scan: decrypted metas plus the number of rows that would not decrypt.
+
+  `{:ok, metas, dropped}`. For callers that must not mistake "could not read
+  it" for "it is not there" — see `list_attachments_strict/2`.
+  """
+  @spec scan_with_drops(map(), map()) :: {:ok, [map()], non_neg_integer()} | {:error, term()}
+  def scan_with_drops(user, vault) do
+    with {:ok, rows, metas} <- scan_attachments(user, vault) do
+      {:ok, metas, length(rows) - length(metas)}
     end
   end
 
@@ -1305,8 +1327,7 @@ defmodule Engram.Attachments do
   # Reload the user from DB if the in-memory struct doesn't reflect a DEK that
   # was provisioned by an earlier write (the writer's user struct doesn't
   # mutate the caller's). Read paths use this before any DEK derivation.
-  defp fresh_user(%Engram.Accounts.User{encrypted_dek: nil} = user), do: Repo.reload!(user)
-  defp fresh_user(%Engram.Accounts.User{} = user), do: user
+  defp fresh_user(user), do: Crypto.fresh_user(user)
 
   defp decrypt(%Attachment{content_nonce: nonce} = att, ciphertext, user) do
     aad =
