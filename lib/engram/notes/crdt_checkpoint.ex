@@ -19,6 +19,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
   import Ecto.Query
 
   alias Engram.{Accounts, Crypto, Notes, Repo, Vaults}
+  alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtBridge, CrdtDeliver, CrdtUpdateLog, Enqueue, Helpers, Note}
   alias Engram.Workers.{EmbedNote, ExtractNoteLinks}
@@ -65,7 +66,33 @@ defmodule Engram.Notes.CrdtCheckpoint do
         :ok
 
       user ->
-        do_checkpoint(user, user_id, vault_id, note_id, doc, opts)
+        # #1341. A checkpoint encrypts crdt_state with the user's CURRENT DEK.
+        # Run one mid-rotation and it writes an old-DEK snapshot over a row the
+        # sweep has already rewrapped, or over one the flip is about to move to
+        # the new generation — either way the note can never be bound again.
+        #
+        # The gate lives HERE, not in the callers, because all four legs funnel
+        # through this function: the room-unbind path (which
+        # `SessionInvalidator.disconnect_user/1` triggers at the TOP of a
+        # rotation, so it is the likeliest one to race), the debounce timer, the
+        # channel, and the CheckpointNote worker. Gating only the worker leg
+        # left the one that actually fires open.
+        #
+        # `check_user/1`, not `check/1`: `user` was just read from the DB one
+        # line above, so re-reading buys nothing. Skipping prunes nothing, so
+        # every edit stays in the tail-WAL and replays on the next bind.
+        case RotationGate.check_user(user) do
+          {:error, :rotation_in_progress} ->
+            Logger.warning(
+              "crdt checkpoint skipped — dek rotation in progress note_id=#{note_id}",
+              Metadata.with_category(:warning, :sync, note_id: note_id)
+            )
+
+            :ok
+
+          _ ->
+            do_checkpoint(user, user_id, vault_id, note_id, doc, opts)
+        end
     end
   rescue
     # The user-resolve above is the ONE DB call outside do_checkpoint's rescue.
