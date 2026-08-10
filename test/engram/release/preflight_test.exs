@@ -200,4 +200,71 @@ defmodule Engram.Release.PreflightTest do
     refute result.pending == []
     assert Enum.all?(result.pending, &String.starts_with?(&1.file, Application.app_dir(:engram)))
   end
+
+  # print/1 had no coverage at all — it was `Mix.shell().info` until #1343 and
+  # is the entire operator-facing surface of this module. The irreversible
+  # branch in particular is the only thing that tells a self-host operator to
+  # take a backup before an upgrade they cannot roll back.
+  describe "print/1" do
+    import ExUnit.CaptureIO
+
+    test "reports the up-to-date case" do
+      out = capture_io(fn -> Preflight.print(%{pending: [], already_run: 12}) end)
+
+      assert out =~ "No pending migrations"
+      assert out =~ "12"
+    end
+
+    test "lists each pending migration with phase, irreversibility and lock risk" do
+      out =
+        capture_io(fn ->
+          Preflight.print(%{
+            pending: [
+              %{
+                version: "20260101000000",
+                name: "add_thing",
+                phase: :expand,
+                irreversible: false,
+                lock_risk: :low
+              }
+            ],
+            already_run: 3,
+            rollback_command: "bin/engram eval 'x'",
+            warnings: []
+          })
+        end)
+
+      assert out =~ "PENDING MIGRATIONS (1)"
+      assert out =~ "20260101000000"
+      assert out =~ "add_thing"
+      assert out =~ "phase: expand"
+      assert out =~ "irreversible: false"
+      assert out =~ "lock_risk: low"
+      assert out =~ "bin/engram eval 'x'"
+    end
+
+    test "warns to take a backup when no rollback command is available" do
+      out =
+        capture_io(fn ->
+          Preflight.print(%{
+            pending: [
+              %{
+                version: "20260101000000",
+                name: "drop_thing",
+                phase: :contract,
+                irreversible: true,
+                lock_risk: :high
+              }
+            ],
+            already_run: 3,
+            rollback_command: nil,
+            warnings: []
+          })
+        end)
+
+      assert out =~ "Rollback unavailable"
+      assert out =~ "backup"
+      refute out =~ "Rollback command (if needed"
+    end
+  end
 end
