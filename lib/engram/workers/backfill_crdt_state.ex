@@ -37,6 +37,14 @@ defmodule Engram.Workers.BackfillCrdtState do
   mid-run (a concurrent write, a room checkpoint) is never overwritten. That
   matters — re-seeding a live note would discard its CRDT history.
 
+  Legacy rows are migrated, not skipped (#1341). `Crypto.encrypt_crdt_state/3`
+  binds the AAD to the row id unconditionally while `decrypt_crdt_state/2` picks
+  its AAD from the row's `dek_version`, so seeding a `dek_version = 1` row writes
+  a ciphertext nothing can read back — and `CrdtPersistence.bind/3` is fail-loud,
+  so the note stops opening at all. Skipping is no better: a NULL-state note
+  opens blank, which is the very failure above. So the row is rebound in place
+  via `AadRebind.rebind_note/2` and then seeded, in one tenant transaction.
+
   Enqueue post-deploy via release rpc (no Mix in the release — plain function):
 
       docker exec engram-saas /app/bin/engram rpc 'Engram.Workers.BackfillCrdtState.enqueue_all()'
@@ -52,6 +60,7 @@ defmodule Engram.Workers.BackfillCrdtState do
 
   alias Engram.Accounts
   alias Engram.Crypto
+  alias Engram.Crypto.AadRebind
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtBridge, Note}
@@ -168,8 +177,62 @@ defmodule Engram.Workers.BackfillCrdtState do
     :ok
   end
 
+  # #1341. A legacy row cannot simply be seeded: `Crypto.encrypt_crdt_state/3`
+  # binds the AAD unconditionally while `decrypt_crdt_state/2` picks its AAD from
+  # `dek_version`, so seeding a v1 row writes a snapshot nothing can read back --
+  # and `CrdtPersistence.bind/3` is fail-loud, so the note stops opening at all.
+  #
+  # Skipping the row is not the safe alternative it looks like: a NULL-state note
+  # opens BLANK (see the moduledoc), and the first keystroke lets the checkpoint
+  # materialize that keystroke over the whole body. So migrate it instead --
+  # `AadRebind.rebind_note/2` is the same rebind the operator task performs,
+  # fenced on the row still being legacy, and we are already inside this note's
+  # tenant transaction so the read and the write cannot race.
+  #
+  # A row that will not decrypt is left for the operator: `seed_note/2` logs it
+  # and moves on, exactly as it does for any other unseedable note.
+  defp migrate_legacy_row(user, %Note{} = raw_note) do
+    if legacy?(raw_note) do
+      do_migrate_legacy_row(user, raw_note)
+    else
+      {:ok, raw_note}
+    end
+  end
+
+  defp legacy?(%Note{dek_version: v}) when is_integer(v),
+    do: v < Crypto.row_version_aad_bound()
+
+  # Unknown version reads as legacy everywhere else (Crypto.decrypt_aad/3's
+  # catch-all, CrdtCheckpoint.legacy_row?/1), so it does here too.
+  defp legacy?(_note), do: true
+
+  defp do_migrate_legacy_row(user, %Note{} = raw_note) do
+    with {:ok, dek} <- Crypto.get_dek(user),
+         :ok <- AadRebind.rebind_note(raw_note, dek) do
+      reread(raw_note.id)
+    else
+      # `:stale` means a concurrent migration won the fence. Re-read: whatever is
+      # there now is at least as migrated as what we would have written.
+      :stale -> reread(raw_note.id)
+      {:error, reason} -> {:error, {:legacy_rebind_failed, reason}}
+    end
+  end
+
+  # The row can vanish between the rebind and the re-read (vault purge). Return
+  # an error tuple, never `{:ok, nil}` — `maybe_decrypt_note_fields/2` has no nil
+  # clause, so a nil here would raise a FunctionClauseError straight through
+  # `seed_note/2`'s never-raise contract and strand the rest of the vault behind
+  # a cursor that never advances.
+  defp reread(note_id) do
+    case Repo.get(Note, note_id) do
+      %Note{} = fresh -> {:ok, fresh}
+      nil -> {:error, :note_vanished}
+    end
+  end
+
   defp do_seed(user, note_id, raw_note) do
-    with {:ok, note} <- Crypto.maybe_decrypt_note_fields(raw_note, user),
+    with {:ok, raw_note} <- migrate_legacy_row(user, raw_note),
+         {:ok, note} <- Crypto.maybe_decrypt_note_fields(raw_note, user),
          {:ok, %{state: state}} <- CrdtBridge.merge_plaintext(nil, note.content || ""),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id) do
       # Re-assert is_nil in the UPDATE: the read above and this write are not

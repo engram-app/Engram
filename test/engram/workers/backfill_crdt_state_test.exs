@@ -5,6 +5,7 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
   import Ecto.Query
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
+  alias Engram.Crypto.Envelope
   alias Engram.Notes.{CrdtBridge, CrdtPersistence, Note}
   alias Engram.Workers.BackfillCrdtState
 
@@ -26,6 +27,56 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
           from(n in Note, where: n.id == ^note.id),
           set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
         )
+      end)
+
+    note
+  end
+
+  # A GENUINE pre-T3.6 row: every envelope written with the EMPTY AAD and the
+  # row stamped dek_version = 1, mirroring crypto/aad_rebind_test.exs. Stamping
+  # v1 onto a row whose envelopes are already BOUND is not the same thing — such
+  # a row fails maybe_decrypt_note_fields outright, so do_seed bails before it
+  # can write anything and the test proves nothing.
+  defp legacy_v1_note(user, vault, path, content) do
+    {:ok, dek} = Crypto.get_dek(user)
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    {:ok, hash_key} = Crypto.dek_content_hash_key(user)
+
+    {content_ct, content_n} = Envelope.encrypt(content, dek)
+    {title_ct, title_n} = Envelope.encrypt("legacy title", dek)
+    {path_ct, path_n} = Envelope.encrypt(path, dek)
+    {folder_ct, folder_n} = Envelope.encrypt("", dek)
+    {tags_ct, tags_n} = Envelope.encrypt(:erlang.term_to_binary([]), dek)
+
+    attrs = %{
+      kind: "note",
+      content_hash: Crypto.hmac_content_hash(hash_key, content),
+      seq: 1,
+      mtime: 0.0,
+      version: 1,
+      user_id: user.id,
+      vault_id: vault.id,
+      content_ciphertext: content_ct,
+      content_nonce: content_n,
+      title_ciphertext: title_ct,
+      title_nonce: title_n,
+      path_ciphertext: path_ct,
+      path_nonce: path_n,
+      path_hmac: Crypto.hmac_field(filter_key, path),
+      folder_ciphertext: folder_ct,
+      folder_nonce: folder_n,
+      folder_hmac: Crypto.hmac_field(filter_key, ""),
+      tags_ciphertext: tags_ct,
+      tags_nonce: tags_n,
+      tags_hmac: [],
+      dek_version: Crypto.row_version_legacy()
+    }
+
+    {:ok, note} =
+      Repo.with_tenant(user.id, fn ->
+        %Note{}
+        |> Ecto.Changeset.cast(attrs, Map.keys(attrs))
+        |> Repo.insert!()
       end)
 
     note
@@ -171,5 +222,47 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
       )
 
     assert CrdtBridge.text_of(healed) == "IMPORTANT BODY"
+  end
+
+  # #1341. Crypto.encrypt_crdt_state/3 binds the AAD to the row id
+  # unconditionally, but decrypt_crdt_state/2 picks its AAD from the row's
+  # dek_version. Seeding a dek_version = 1 row therefore wrote a ciphertext
+  # nothing can read back — the mirror image of #1336 — and this is the exact
+  # population the backfill targets, so it was reachable from the documented
+  # repair rpc.
+  test "migrates a legacy (dek_version = 1) row, then seeds it readably", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_v1_note(user, vault, "legacy-v1.md", "IMPORTANT BODY")
+
+    assert :ok =
+             perform_job(BackfillCrdtState, %{
+               "user_id" => user.id,
+               "vault_id" => vault.id,
+               "cursor" => "00000000-0000-0000-0000-000000000000"
+             })
+
+    raw = reload(user, note.id)
+
+    # The row must be migrated, not skipped. Skipping leaves crdt_state NULL,
+    # which is the blank-open failure this worker exists to fix.
+    assert raw.dek_version == Crypto.row_version_aad_bound()
+    refute is_nil(raw.crdt_state_ciphertext)
+
+    # And everything on it must be readable under the version it now claims —
+    # a bound ciphertext on a row still claiming v1 is the #1336 shape.
+    assert {:ok, state} = Crypto.decrypt_crdt_state(raw, user),
+           """
+           the backfill seeded an AAD-bound crdt_state onto a row still claiming
+           dek_version=#{raw.dek_version}, so CrdtPersistence.bind/3 will raise
+           and the note can no longer be opened or written at all.
+           """
+
+    assert {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(raw, user)
+    assert decrypted.content == "IMPORTANT BODY"
+    assert decrypted.path == "legacy-v1.md"
+
+    # The seeded snapshot must project the real body, not an empty doc.
+    {:ok, doc} = CrdtBridge.doc_from_state(state)
+    assert CrdtBridge.text_of(doc) == "IMPORTANT BODY"
   end
 end
