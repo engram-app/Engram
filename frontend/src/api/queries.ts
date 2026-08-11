@@ -10,6 +10,7 @@ import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { collideBump } from "@/lib/collide-bump";
 import { noteName } from "@/lib/note-name";
+import { randomUuid } from "@/lib/random-uuid";
 import { uuid7 } from "../crdt/uuid7";
 import {
 	isSyntheticFolderId,
@@ -221,7 +222,7 @@ interface DuplicateNoteContext {
 }
 
 function idempotencyHeaders(): { headers: Record<string, string> } {
-	return { headers: { "X-Idempotency-Key": uuid7() } };
+	return { headers: { "X-Idempotency-Key": randomUuid() } };
 }
 
 interface BatchNotesContext {
@@ -1885,7 +1886,7 @@ export function useRenameNote() {
 						next = [
 							...next,
 							{
-								id: `optimistic-${uuid7()}`,
+								id: `optimistic-${randomUuid()}`,
 								parent_id: null,
 								name: newFolder,
 								count: 1,
@@ -2243,7 +2244,7 @@ export function useDuplicateNote() {
 			// Placeholder id — the real one arrives with the crdt_create reply.
 			// `optimistic-` prefix avoids collisions with real backend uuids;
 			// onSuccess swaps it for the server-assigned id in the cached list.
-			const placeholderId = `optimistic-${uuid7()}`;
+			const placeholderId = `optimistic-${randomUuid()}`;
 			const ctx: DuplicateNoteContext = { placeholderId };
 
 			// Seed metadata from the source row if we have it cached — gives

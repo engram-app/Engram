@@ -9,11 +9,11 @@
  * won't do. No `uuid` package is in package.json, so this stays a small
  * self-contained generator instead of a new dependency.
  *
- * It is also the app's ONLY id source that works off a secure context:
- * crypto.randomUUID is secure-context-gated and undefined over plain http from
- * a LAN address, whereas crypto.getRandomValues below is not. Device ids,
- * idempotency keys and optimistic placeholder ids all mint through here for
- * that reason — reach for this, not randomUUID.
+ * It is also the app's only id source that works off a secure context —
+ * crypto.getRandomValues below is not gated, whereas crypto.randomUUID is —
+ * which is why `lib/random-uuid` falls back to this. For a plain random id,
+ * call randomUuid() rather than crypto.randomUUID directly; reserve this for
+ * ids that genuinely need to be time-ordered, like note ids.
  *
  * ponytail: "roughly" ordered — same-ms ties fall back to pure randomness (no
  * monotonic counter), fine for a note_id nonce. Swap for a lib if strict per-ms
