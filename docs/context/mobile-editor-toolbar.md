@@ -2,10 +2,10 @@
 
 The strip of editor actions docked above the on-screen keyboard in the web app:
 `frontend/src/viewer/editor/keyboard-bar.tsx`, mounted from `note-page.tsx`.
-Four things about it are non-obvious enough that they were each found the hard
-way, in the browser, after code that looked right did nothing.
+Several things about it are non-obvious enough that they were each found the
+hard way, in the browser, after code that looked right did nothing.
 
-## Gate on FOCUS, never on the keyboard inset
+## The visibility gate is NOT the keyboard inset
 
 `use-keyboard-inset.ts` measures `innerHeight - (visualViewport.height +
 visualViewport.offsetTop)`. That is the keyboard height **only on browsers that
@@ -16,10 +16,38 @@ amount and the inset is legitimately **0 with the keyboard fully open**.
 
 Gating visibility on a non-zero inset therefore hides the bar outright on
 exactly those browsers, which is why it never appeared on a real Android phone
-while working fine in the `?keyboard` dev-flag harness. `use-editor-focused.ts`
-(document-level `focusin`/`focusout` + `activeElement.closest(".cm-editor")`)
-means the same thing everywhere. The inset is used **only to position**;
-`bottom-0` with no lift is already correct where the inset reads 0.
+while working fine in the `?keyboard` dev-flag harness. The inset is used
+**only to position**; `bottom-0` with no lift is already correct where it reads
+0.
+
+Two conditions gate visibility instead, and both are load-bearing:
+
+1. **Focus** — `use-editor-focused.ts`, a document-level `focusin`/`focusout`
+   pair plus `activeElement.closest(".cm-editor")`.
+2. **Keyboard actually up** — `useKeyboardOpen()`, which compares the current
+   `visualViewport.height` against the tallest height seen *at the current
+   width* (keyed by width so a rotation starts a fresh baseline). The viewport
+   shrinks under **both** browser models, so this is the one signal that means
+   "keyboard" everywhere.
+
+Focus alone was the first implementation and left the bar stranded over the
+document whenever the keyboard was dismissed with the platform's own hide
+button, which does not blur the editor. `KEYBOARD_MIN_PX = 120` keeps a
+collapsing mobile address bar (~60-90px) from reading as a keyboard.
+
+## Other bottom-anchored UI has to be told to move
+
+The setup-checklist FAB is `position: fixed` on the same bottom edge and landed
+on top of the toolbar as soon as the keyboard opened. `KeyboardBar` publishes
+the space it occupies as the CSS variable `--editor-toolbar-offset` (a
+`useLayoutEffect` with no dependency array, so it re-measures whenever the bar
+grows a second row), and the FAB clears it with
+`bottom-[calc(var(--editor-toolbar-offset,0px)+var(--spacing)*4)]`.
+
+A CSS variable rather than React context: the consumers are unrelated subtrees
+that only need a number, and the variable defaults to `0px`, so every other
+context is unchanged. **Measured, not a constant** — a hardcoded single-row
+height puts the FAB back under the heading picker exactly when it opens.
 
 ## `ySyncFacet(...).undoManager` is a decoy
 
@@ -73,6 +101,22 @@ Call `startCompletion(view)` after the insert; it runs the same
 The button itself is just `toggleWrap(view, "[[", "]]")` — two insertions at the
 same position, with the caret mapped between them, and a selection wrapped for
 free.
+
+## Headings SET a level, they do not prepend
+
+`toggleLinePrefix(view, "### ")` on an existing `# title` line produces
+`### # title`: the line does not start with `### `, so the guard does not fire.
+`setHeading(view, level)` replaces the whole existing ATX marker including its
+trailing spaces. Tapping the level a line already has removes it — the way back
+to plain text without a seventh button.
+
+The `HEADING` regex requires the trailing space CommonMark demands, which is
+what keeps `#tag` from reading as an empty h1 and having its hash eaten.
+
+The picker row lives **inside the toolbar `nav`**, not in a portalled popover.
+The nav's `onPointerDown` preventDefault is what keeps a tap from blurring the
+editor; a portalled row escapes it, drops the keyboard, and unmounts the whole
+bar mid-tap.
 
 ## Testing it
 
