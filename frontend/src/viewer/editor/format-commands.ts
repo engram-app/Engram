@@ -5,6 +5,17 @@ import { type EditorView, keymap } from "@codemirror/view";
 /** Opens with a line of only `-` or `=` — what CommonMark reads as a setext heading underline. */
 const SETEXT_UNDERLINE = /^[-=]+[ \t]*(?:\n|$)/;
 
+/**
+ * Splits a line into its leading whitespace and the rest. Indentation carries
+ * list nesting, so every checkbox rewrite has to put it back verbatim —
+ * rebuilding from column 0 would flatten a sub-task to top level.
+ */
+const LINE_PARTS = /^(?<indent>[ \t]*)(?<body>.*)$/u;
+/** `- [ ] `, `* [x] `, `+ [X] ` — any bullet marker, either checked state. */
+const TASK = /^(?<marker>[-*+] )\[(?<state>[ xX])\] ?(?<rest>.*)$/u;
+/** A bare list item: `- foo`, with no checkbox yet. */
+const BULLET = /^(?<marker>[-*+] )(?<rest>.*)$/u;
+
 /** Tab indents / Shift-Tab dedents the selected lines (Obsidian parity). */
 export const indentKeymap: Extension = keymap.of([indentWithTab]);
 
@@ -80,6 +91,52 @@ export function insertSnippet(
 		selection: { anchor: from + before.length + snippet.length },
 		scrollIntoView: true,
 	});
+	view.focus();
+}
+
+/**
+ * Obsidian's "toggle checkbox status" on every line the selection touches:
+ * plain text and bare bullets become an unchecked task, an existing task flips
+ * state. Flips rather than removing, because unchecking is the common action
+ * and losing the task entirely is not recoverable by tapping again.
+ */
+export function toggleCheckbox(view: EditorView): void {
+	const { state } = view;
+	const changes: ChangeSpec[] = [];
+	const seen = new Set<number>();
+	for (const range of state.selection.ranges) {
+		// Same boundary rule as toggleLinePrefix: a selection ending exactly at a
+		// line start does not select any character of that line.
+		const endPos =
+			!range.empty && state.doc.lineAt(range.to).from === range.to ? range.to - 1 : range.to;
+		let pos = range.from;
+		while (pos <= endPos) {
+			const line = state.doc.lineAt(pos);
+			if (!seen.has(line.number) && line.text.trim() !== "") {
+				seen.add(line.number);
+				const { indent = "", body = "" } = LINE_PARTS.exec(line.text)?.groups ?? {};
+				const task = TASK.exec(body)?.groups;
+				const bullet = BULLET.exec(body)?.groups;
+				let next: string;
+				if (task) {
+					const checked = task.state?.toLowerCase() === "x";
+					next = `${task.marker}[${checked ? " " : "x"}] ${task.rest}`;
+				} else if (bullet) {
+					next = `${bullet.marker}[ ] ${bullet.rest}`;
+				} else {
+					next = `- [ ] ${body}`;
+				}
+				changes.push({ from: line.from, to: line.to, insert: `${indent}${next}` });
+			}
+			pos = line.to + 1;
+			if (line.to >= state.doc.length) {
+				break;
+			}
+		}
+	}
+	if (changes.length > 0) {
+		view.dispatch({ changes });
+	}
 	view.focus();
 }
 

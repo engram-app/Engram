@@ -1,7 +1,7 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, test } from "vitest";
-import { insertSnippet, toggleLinePrefix, toggleWrap } from "./format-commands";
+import { insertSnippet, toggleCheckbox, toggleLinePrefix, toggleWrap } from "./format-commands";
 
 let view: EditorView;
 afterEach(() => view?.destroy());
@@ -118,6 +118,62 @@ describe("format-commands", () => {
 			mount("ab", 1, 1);
 			insertSnippet(view, "`c`");
 			expect(view.state.doc.toString()).toBe("a`c`b");
+		});
+	});
+
+	// Obsidian's "toggle checkbox status": plain text and bare bullets become an
+	// unchecked task, and an existing task flips state rather than being removed.
+	describe("toggleCheckbox", () => {
+		test("turns a plain line into an unchecked task", () => {
+			mount("buy milk", 0, 0);
+			toggleCheckbox(view);
+			expect(view.state.doc.toString()).toBe("- [ ] buy milk");
+		});
+
+		test("turns a bare bullet into an unchecked task without doubling the marker", () => {
+			mount("- buy milk", 0, 0);
+			toggleCheckbox(view);
+			expect(view.state.doc.toString()).toBe("- [ ] buy milk");
+		});
+
+		test("checks an unchecked task", () => {
+			mount("- [ ] buy milk", 0, 0);
+			toggleCheckbox(view);
+			expect(view.state.doc.toString()).toBe("- [x] buy milk");
+		});
+
+		test("unchecks a checked task rather than deleting it", () => {
+			mount("- [x] buy milk", 0, 0);
+			toggleCheckbox(view);
+			expect(view.state.doc.toString()).toBe("- [ ] buy milk");
+		});
+
+		// Indentation carries list nesting; rewriting from column 0 would flatten
+		// a sub-task into a top-level one.
+		test("preserves leading indentation", () => {
+			mount("\t\t- [ ] nested", 0, 0);
+			toggleCheckbox(view);
+			expect(view.state.doc.toString()).toBe("\t\t- [x] nested");
+		});
+
+		test("applies to every line the selection touches", () => {
+			mount("one\ntwo", 0, 7);
+			toggleCheckbox(view);
+			expect(view.state.doc.toString()).toBe("- [ ] one\n- [ ] two");
+		});
+
+		// An uppercase X is valid task syntax and means done; treating it as
+		// unrecognised would prepend a second checkbox.
+		test("treats an uppercase X as checked", () => {
+			mount("- [X] done", 0, 0);
+			toggleCheckbox(view);
+			expect(view.state.doc.toString()).toBe("- [ ] done");
+		});
+
+		test("leaves a blank line alone", () => {
+			mount("", 0, 0);
+			toggleCheckbox(view);
+			expect(view.state.doc.toString()).toBe("");
 		});
 	});
 });
