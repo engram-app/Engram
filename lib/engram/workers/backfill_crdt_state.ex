@@ -59,6 +59,7 @@ defmodule Engram.Workers.BackfillCrdtState do
   import Ecto.Query
 
   alias Engram.Accounts
+  alias Engram.Backfill.TenantScan
   alias Engram.Crypto
   alias Engram.Crypto.AadRebind
   alias Engram.Crypto.RotationGate
@@ -80,13 +81,20 @@ defmodule Engram.Workers.BackfillCrdtState do
   @doc "Enqueue one job per (user, vault) that still has a NULL-crdt_state note. Returns the count."
   @spec enqueue_all() :: non_neg_integer()
   def enqueue_all do
+    # Per-user inside each tenant's RLS context. A single cross-tenant read
+    # with `skip_tenant_check: true` returns zero rows on prod under FORCE ROW
+    # LEVEL SECURITY and enqueues nothing while reporting success (#1349).
     pairs =
-      from(n in Note,
-        where: n.kind == "note" and is_nil(n.crdt_state_ciphertext) and is_nil(n.deleted_at),
-        group_by: [n.user_id, n.vault_id],
-        select: {n.user_id, n.vault_id}
-      )
-      |> Repo.all(skip_tenant_check: true)
+      TenantScan.flat_map_users(fn user_id ->
+        from(n in Note,
+          where: n.kind == "note" and is_nil(n.crdt_state_ciphertext) and is_nil(n.deleted_at),
+          where: n.user_id == ^user_id,
+          group_by: n.vault_id,
+          select: n.vault_id
+        )
+        |> Repo.all()
+        |> Enum.map(&{user_id, &1})
+      end)
 
     Enum.each(pairs, fn {user_id, vault_id} ->
       %{"user_id" => user_id, "vault_id" => vault_id, "cursor" => @start_cursor}

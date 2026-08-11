@@ -15,6 +15,7 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
   alias Engram.Accounts.User
   alias Engram.Attachments.Attachment
   alias Engram.Crypto
+  alias Engram.Crypto.Envelope
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Workers.BackfillContentHashHmac
@@ -166,12 +167,26 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
       user: user,
       vault: vault
     } do
+      # The stored hash is an HMAC of DIFFERENT bytes than the blob holds.
+      # Storing the blob's own hash (what insert_attachment! does) would make
+      # this a tautology: the worker recomputes exactly that value, so
+      # "unchanged" would hold whether or not the length=32 filter skipped it.
+      # With a decoy, any rehash visibly overwrites it.
       att = insert_attachment!(user, vault, %{"content" => <<1, 2, 3>>})
-      before = reload_attachment(user, att).content_hash
+      {:ok, content_key} = Crypto.dek_content_hash_key(user)
+      decoy = Crypto.hmac_content_hash(content_key, "not what the blob holds")
+
+      {1, _} =
+        Repo.with_tenant(user.id, fn ->
+          from(a in Attachment, where: a.id == ^att.id)
+          |> Repo.update_all(set: [content_hash: decoy])
+        end)
+        |> then(fn {:ok, r} -> r end)
 
       assert :ok = perform_attachments_job(user, vault)
 
-      assert reload_attachment(user, att).content_hash == before
+      assert reload_attachment(user, att).content_hash == decoy,
+             "a 64-char hash must be skipped by the length=32 filter, not rehashed"
     end
 
     # The skip branch is the dangerous one: it must leave the legacy hash in
@@ -214,7 +229,13 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
 
       assert_received {:skip_meta, meta}
       assert meta.scope == :attachment
-      assert is_atom(meta.reason), "telemetry reason must be the bounded error_kind atom"
+
+      # Asserting the SPECIFIC kind, not is_atom/1: before #1350 the whole
+      # {:error, reason} tuple was forwarded and error_kind/1's elem(0) made
+      # every attachment failure report :error, so a missing blob and a
+      # decrypt failure were indistinguishable. is_atom/1 passed on both.
+      assert meta.reason == :not_found,
+             "a missing blob must report :not_found, not a collapsed :error"
 
       worker_lines =
         log |> String.split("\n") |> Enum.filter(&String.contains?(&1, "BackfillContentHashHmac"))
@@ -223,6 +244,50 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
 
       refute Enum.any?(worker_lines, &String.contains?(&1, " reason=")),
              "raw reason must not reach the log metadata (only error_kind)"
+
+      # The metadata refute above cannot fail on its own — Logger's default
+      # formatter silently drops tuple-valued metadata, and the raw term here
+      # is always a tuple. This message-body refute is the one with teeth, and
+      # it was present on the sibling notes test but not carried over.
+      refute Enum.any?(worker_lines, &String.contains?(&1, "(:not_found)")),
+             "raw inspect(reason) must not reach the log message"
+    end
+
+    # insert_attachment! hardcodes dek_version: 1, so every other test here
+    # takes the `else: <<>>` arm and Crypto.aad_for_row/3 is never called. If
+    # that call regressed to the wrong table/field/id, AAD verification would
+    # fail for every v2-encrypted attachment in prod with the suite still green.
+    test "decrypts a v2 (AAD-bound) attachment using the row-bound AAD", %{
+      user: user,
+      vault: vault
+    } do
+      content = <<7, 7, 7, 7, 7, 7>>
+      att = insert_attachment!(user, vault, %{"content" => <<0>>})
+
+      {:ok, dek} = Crypto.get_dek(user)
+      aad = Crypto.aad_for_row(:attachments, :content, att.id)
+      {ct, nonce} = Envelope.encrypt(content, dek, aad)
+
+      :ok =
+        Engram.Storage.adapter().put(att.storage_key, ct,
+          content_type: "application/octet-stream"
+        )
+
+      {:ok, {1, _}} =
+        Repo.with_tenant(user.id, fn ->
+          from(a in Attachment, where: a.id == ^att.id)
+          |> Repo.update_all(
+            set: [content_nonce: nonce, dek_version: 2, content_hash: md5(content)]
+          )
+        end)
+
+      assert :ok = perform_attachments_job(user, vault)
+
+      {:ok, content_key} = Crypto.dek_content_hash_key(user)
+
+      assert reload_attachment(user, att).content_hash ==
+               Crypto.hmac_content_hash(content_key, content),
+             "v2 attachment must decrypt under aad_for_row and rehash from the plaintext"
     end
 
     test "re-enqueues itself when the batch is full, carrying the cursor forward", %{
@@ -241,7 +306,20 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
                  "batch_size" => 2
                })
 
-      assert_enqueued(worker: BackfillContentHashHmac, args: %{"scope" => "attachments"})
+      # The cursor is asserted explicitly: assert_enqueued subset-matches args,
+      # so without this a successor carrying the batch's STARTING cursor (an
+      # easy copy-paste regression that never advances) would pass.
+      [%{args: args}] = all_enqueued(worker: BackfillContentHashHmac)
+      assert args["scope"] == "attachments"
+
+      expected_cursor =
+        Repo.with_tenant(user.id, fn ->
+          from(a in Attachment, order_by: [asc: a.id], limit: 2, select: a.id) |> Repo.all()
+        end)
+        |> then(fn {:ok, ids} -> List.last(ids) end)
+
+      assert args["cursor"] == expected_cursor,
+             "successor must resume from the last id of the batch just processed"
     end
   end
 
@@ -334,7 +412,13 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
              "raw reason must not reach the log metadata (only error_kind)"
 
       assert_received {:skip_meta, meta}
-      assert is_atom(meta.reason), "telemetry reason must be the bounded error_kind atom"
+
+      # The SPECIFIC kind, not is_atom/1: error_kind/1 takes elem(0), so if
+      # rehash_note/3 regressed to forwarding the whole {:error, reason} tuple
+      # — the bug just fixed on rehash_attachment/3 — this would collapse to
+      # :error, and is_atom(:error) is true.
+      assert meta.reason == :decrypt_failed,
+             "a corrupt nonce must report :decrypt_failed, not a collapsed :error"
     end
   end
 
@@ -408,16 +492,17 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
   # hand), so the legacy state has to be written back over it.
   defp insert_legacy_attachment!(user, vault, content) do
     att = insert_attachment!(user, vault, %{"content" => content})
-    md5 = :crypto.hash(:md5, content) |> Base.encode16(case: :lower)
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
         from(a in Attachment, where: a.id == ^att.id)
-        |> Repo.update_all(set: [content_hash: md5])
+        |> Repo.update_all(set: [content_hash: md5(content)])
       end)
 
     att
   end
+
+  defp md5(content), do: :crypto.hash(:md5, content) |> Base.encode16(case: :lower)
 
   defp reload_attachment(user, att) do
     {:ok, reloaded} = Repo.with_tenant(user.id, fn -> Repo.get!(Attachment, att.id) end)

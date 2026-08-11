@@ -87,11 +87,10 @@ defmodule Engram.Release.Preflight do
           nil
 
         true ->
-          prev = applied |> Enum.sort(:desc) |> List.first()
-
-          if prev,
-            do: "bin/engram eval 'Engram.Release.rollback(Engram.Repo, #{prev})'",
-            else: nil
+          case applied |> Enum.sort(:desc) |> List.first() do
+            nil -> nil
+            prev -> "bin/engram eval 'Engram.Release.rollback(Engram.Repo, #{prev})'"
+          end
       end
 
     %{
@@ -193,14 +192,29 @@ defmodule Engram.Release.Preflight do
     IO.puts("")
     IO.puts("Already-run: #{result.already_run}")
 
-    if result.rollback_command do
-      IO.puts("")
-      IO.puts("Rollback command (if needed AFTER upgrade):")
-      IO.puts("  #{result.rollback_command}")
-    else
-      IO.puts("")
-      IO.puts("⚠️  Rollback unavailable — at least one pending migration is marked irreversible.")
-      IO.puts("    Take a database backup before upgrading.")
+    IO.puts("")
+
+    # A nil rollback_command has TWO causes and this used to explain only one,
+    # telling a fresh install with all-reversible migrations that "at least one
+    # pending migration is marked irreversible" — false, and a tool that cries
+    # wolf stops being believed on the upgrade where the warning is real.
+    # Derived here rather than carried on the map: report/2 already ships
+    # everything needed, and a second field could contradict the first.
+    cond do
+      is_binary(result.rollback_command) ->
+        IO.puts("Rollback command (if needed AFTER upgrade):")
+        IO.puts("  #{result.rollback_command}")
+
+      Enum.any?(result.pending, & &1.irreversible) ->
+        IO.puts(
+          "⚠️  Rollback unavailable — at least one pending migration is marked irreversible."
+        )
+
+        IO.puts("    Take a database backup before upgrading.")
+
+      true ->
+        IO.puts("Rollback unavailable — no migration has been applied yet, so there is")
+        IO.puts("no earlier version to roll back to. The pending migrations are reversible.")
     end
   end
 end

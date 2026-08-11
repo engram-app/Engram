@@ -21,6 +21,7 @@ defmodule Engram.ContentHash.Backfill do
   import Ecto.Query
 
   alias Engram.Attachments.Attachment
+  alias Engram.Backfill.TenantScan
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Workers.BackfillContentHashHmac
@@ -70,13 +71,24 @@ defmodule Engram.ContentHash.Backfill do
     |> length()
   end
 
+  # Per-user inside each tenant's RLS context, NOT one cross-tenant query with
+  # `skip_tenant_check: true` — that reads zero rows on prod and reports
+  # "nothing to migrate" on a database full of legacy hashes (#1349). See
+  # Engram.Backfill.TenantScan for the mechanism.
   defp legacy_pairs(schema) do
-    from(r in schema,
-      where: not is_nil(r.content_hash),
-      where: fragment("length(?) = 32", r.content_hash),
-      group_by: [r.user_id, r.vault_id],
-      select: {r.user_id, r.vault_id}
-    )
-    |> Repo.all(skip_tenant_check: true)
+    TenantScan.flat_map_users(fn user_id ->
+      from(r in schema,
+        # Explicit, though with_tenant already scopes it: the correlation the
+        # replaced SQL carried should not depend solely on ambient RLS, which
+        # is absent on installs predating the policies or on a restored copy.
+        where: r.user_id == ^user_id,
+        where: not is_nil(r.content_hash),
+        where: fragment("length(?) = 32", r.content_hash),
+        group_by: r.vault_id,
+        select: r.vault_id
+      )
+      |> Repo.all()
+      |> Enum.map(&{user_id, &1})
+    end)
   end
 end
