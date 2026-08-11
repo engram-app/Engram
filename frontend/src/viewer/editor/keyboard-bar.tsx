@@ -206,43 +206,26 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 					))}
 				</section>
 			) : null}
-			{/* Eleven buttons at a 44px target (WCAG 2.5.5) are ~580px wide, so the
+			{/* A dozen buttons at a 44px target (WCAG 2.5.5) run past 600px, so the
 			    row pans under a finger rather than shrinking below thumb size --
 			    a phone gets full-size icons and scrolls, instead of a full set of
 			    cramped ones. The scrollbar is hidden because a visible track on a
 			    56px strip is noise; the partially-visible last button is the
 			    affordance. touch-action keeps the pan working despite the nav's
-			    pointerdown preventDefault, which governs focus, not scrolling. */}
+			    pointerdown preventDefault, which governs focus, not scrolling.
+			    Order is grouped by kind, since half the row is always off screen. */}
 			<section
 				aria-label="Editor commands"
 				className="flex touch-pan-x items-center gap-2 overflow-x-auto px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>button]:size-11 [&>button]:shrink-0"
 			>
+				{/* History */}
 				<Button variant="ghost" size="icon" aria-label="Undo" onClick={run(undoEdit)}>
 					<Undo2 className="size-6" />
 				</Button>
 				<Button variant="ghost" size="icon" aria-label="Redo" onClick={run(redoEdit)}>
 					<Redo2 className="size-6" />
 				</Button>
-				<Button
-					variant="ghost"
-					size="icon"
-					aria-label="Outdent"
-					onClick={run((v) => {
-						indentLess(v);
-					})}
-				>
-					<IndentDecrease className="size-6" />
-				</Button>
-				<Button
-					variant="ghost"
-					size="icon"
-					aria-label="Indent"
-					onClick={run((v) => {
-						indentMore(v);
-					})}
-				>
-					<IndentIncrease className="size-6" />
-				</Button>
+				{/* Inline marks */}
 				<Button
 					variant="ghost"
 					size="icon"
@@ -267,14 +250,10 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 				>
 					<Strikethrough className="size-6" />
 				</Button>
-				<Button
-					variant="ghost"
-					size="icon"
-					aria-label="Toggle checkbox"
-					onClick={run(toggleCheckbox)}
-				>
-					<SquareCheckBig className="size-6" />
-				</Button>
+				{/* Block structure, then everything that acts on a list item. Indent
+				    and outdent live HERE rather than next to undo: on a phone their
+				    only real use is nesting a list item, so they belong beside the
+				    lists and the checkbox they operate on. */}
 				<Button
 					variant="ghost"
 					size="icon"
@@ -283,9 +262,6 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 					onClick={() => setHeadingsOpen((open) => !open)}
 				>
 					<Heading className="size-6" />
-				</Button>
-				<Button variant="ghost" size="icon" aria-label="Wiki link" onClick={run(insertWikiLink)}>
-					<Brackets className="size-6" />
 				</Button>
 				<Button
 					variant="ghost"
@@ -302,6 +278,38 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 					onClick={run((v) => toggleList(v, true))}
 				>
 					<ListOrdered className="size-6" />
+				</Button>
+				<Button
+					variant="ghost"
+					size="icon"
+					aria-label="Toggle checkbox"
+					onClick={run(toggleCheckbox)}
+				>
+					<SquareCheckBig className="size-6" />
+				</Button>
+				<Button
+					variant="ghost"
+					size="icon"
+					aria-label="Outdent"
+					onClick={run((v) => {
+						indentLess(v);
+					})}
+				>
+					<IndentDecrease className="size-6" />
+				</Button>
+				<Button
+					variant="ghost"
+					size="icon"
+					aria-label="Indent"
+					onClick={run((v) => {
+						indentMore(v);
+					})}
+				>
+					<IndentIncrease className="size-6" />
+				</Button>
+				{/* Insert */}
+				<Button variant="ghost" size="icon" aria-label="Wiki link" onClick={run(insertWikiLink)}>
+					<Brackets className="size-6" />
 				</Button>
 			</section>
 		</nav>

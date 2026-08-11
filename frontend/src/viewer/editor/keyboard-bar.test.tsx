@@ -275,6 +275,31 @@ describe("KeyboardBar", () => {
 		expect(row.className).toContain("[scrollbar-width:none]");
 	});
 
+	// Order is grouped by what the buttons DO, because half of them are off
+	// screen at any time: history, then inline marks, then block structure, then
+	// everything that acts on a list item — indent/outdent belong with the lists
+	// and the checkbox, not stranded next to undo.
+	it("groups the commands by kind", () => {
+		mount("hello");
+		const labels = [
+			...screen.getByRole("region", { name: "Editor commands" }).querySelectorAll("button"),
+		].map((b) => b.getAttribute("aria-label"));
+		expect(labels).toEqual([
+			"Undo",
+			"Redo",
+			"Bold",
+			"Italic",
+			"Strikethrough",
+			"Heading",
+			"Bullet list",
+			"Numbered list",
+			"Toggle checkbox",
+			"Outdent",
+			"Indent",
+			"Wiki link",
+		]);
+	});
+
 	// The reason the row scrolls at all: full 44px tap targets (WCAG 2.5.5)
 	// rather than eleven cramped ones squeezed into the width.
 	it("keeps thumb-sized tap targets instead of shrinking to fit", () => {
