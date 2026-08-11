@@ -216,13 +216,24 @@ describe("KeyboardBar", () => {
 		});
 	});
 
-	// Eleven buttons do not fit a phone, so the row pans under a finger. The
-	// scrollbar is hidden because a visible track on a 44px-tall strip is noise.
+	// Eleven buttons do not fit a phone, so the row pans under a finger rather
+	// than shrinking the targets. The scrollbar is hidden because a visible
+	// track on a 56px-tall strip is noise. happy-dom has no layout engine, so
+	// this asserts the contract rather than measured geometry.
 	it("lets the command row pan horizontally without showing a track", () => {
 		mount("hello");
 		const row = screen.getByRole("region", { name: "Editor commands" });
 		expect(row.className).toContain("overflow-x-auto");
 		expect(row.className).toContain("[scrollbar-width:none]");
+	});
+
+	// The reason the row scrolls at all: full 44px tap targets (WCAG 2.5.5)
+	// rather than eleven cramped ones squeezed into the width.
+	it("keeps thumb-sized tap targets instead of shrinking to fit", () => {
+		mount("hello");
+		expect(screen.getByRole("region", { name: "Editor commands" }).className).toContain(
+			"[&>button]:size-11",
+		);
 	});
 
 	describe("heading picker", () => {

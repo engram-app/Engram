@@ -155,7 +155,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 			{headingsOpen ? (
 				<section
 					aria-label="Heading level"
-					className="flex items-center justify-around border-border border-b px-2 py-1.5"
+					className="flex items-center justify-around border-border border-b px-2 py-1.5 [&>button]:size-11"
 				>
 					{HEADING_LEVELS.map((level) => (
 						<Button
@@ -168,26 +168,27 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 								setHeadingsOpen(false);
 							})}
 						>
-							<span className="font-semibold text-sm">H{level}</span>
+							<span className="font-semibold text-base">H{level}</span>
 						</Button>
 					))}
 				</section>
 			) : null}
-			{/* Eleven buttons do not fit a phone, so the row pans under a finger
-			    instead of shrinking them below a thumb-sized target. The scrollbar
-			    is hidden because a visible track on a 44px strip is noise; the
-			    partially-visible last button is the affordance. touch-action keeps
-			    the pan working despite the nav's pointerdown preventDefault, which
-			    governs focus, not scrolling. */}
+			{/* Eleven buttons at a 44px target (WCAG 2.5.5) are ~580px wide, so the
+			    row pans under a finger rather than shrinking below thumb size --
+			    a phone gets full-size icons and scrolls, instead of a full set of
+			    cramped ones. The scrollbar is hidden because a visible track on a
+			    56px strip is noise; the partially-visible last button is the
+			    affordance. touch-action keeps the pan working despite the nav's
+			    pointerdown preventDefault, which governs focus, not scrolling. */}
 			<section
 				aria-label="Editor commands"
-				className="flex touch-pan-x items-center gap-1 overflow-x-auto px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>button]:shrink-0"
+				className="flex touch-pan-x items-center gap-2 overflow-x-auto px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>button]:size-11 [&>button]:shrink-0"
 			>
 				<Button variant="ghost" size="icon" aria-label="Undo" onClick={run(undoEdit)}>
-					<Undo2 className="size-5" />
+					<Undo2 className="size-6" />
 				</Button>
 				<Button variant="ghost" size="icon" aria-label="Redo" onClick={run(redoEdit)}>
-					<Redo2 className="size-5" />
+					<Redo2 className="size-6" />
 				</Button>
 				<Button
 					variant="ghost"
@@ -197,7 +198,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 						indentLess(v);
 					})}
 				>
-					<IndentDecrease className="size-5" />
+					<IndentDecrease className="size-6" />
 				</Button>
 				<Button
 					variant="ghost"
@@ -207,7 +208,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 						indentMore(v);
 					})}
 				>
-					<IndentIncrease className="size-5" />
+					<IndentIncrease className="size-6" />
 				</Button>
 				<Button
 					variant="ghost"
@@ -215,7 +216,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 					aria-label="Bold"
 					onClick={run((v) => toggleWrap(v, "**"))}
 				>
-					<Bold className="size-5" />
+					<Bold className="size-6" />
 				</Button>
 				<Button
 					variant="ghost"
@@ -223,7 +224,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 					aria-label="Italic"
 					onClick={run((v) => toggleWrap(v, "*"))}
 				>
-					<Italic className="size-5" />
+					<Italic className="size-6" />
 				</Button>
 				<Button
 					variant="ghost"
@@ -231,7 +232,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 					aria-label="Strikethrough"
 					onClick={run((v) => toggleWrap(v, "~~"))}
 				>
-					<Strikethrough className="size-5" />
+					<Strikethrough className="size-6" />
 				</Button>
 				<Button
 					variant="ghost"
@@ -239,7 +240,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 					aria-label="Toggle checkbox"
 					onClick={run(toggleCheckbox)}
 				>
-					<SquareCheckBig className="size-5" />
+					<SquareCheckBig className="size-6" />
 				</Button>
 				<Button
 					variant="ghost"
@@ -248,10 +249,10 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 					aria-expanded={headingsOpen}
 					onClick={() => setHeadingsOpen((open) => !open)}
 				>
-					<Heading className="size-5" />
+					<Heading className="size-6" />
 				</Button>
 				<Button variant="ghost" size="icon" aria-label="Wiki link" onClick={run(insertWikiLink)}>
-					<Brackets className="size-5" />
+					<Brackets className="size-6" />
 				</Button>
 				<Button
 					variant="ghost"
@@ -259,7 +260,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 					aria-label="Bullet list"
 					onClick={run((v) => toggleLinePrefix(v, "- "))}
 				>
-					<List className="size-5" />
+					<List className="size-6" />
 				</Button>
 			</section>
 		</nav>
