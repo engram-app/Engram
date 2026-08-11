@@ -27,7 +27,7 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
   alias Engram.CheckpointInterleave
   alias Engram.Crypto
   alias Engram.Notes
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog, Note}
   alias Engram.Repo
 
   setup do
@@ -81,6 +81,10 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
     {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "cp.md", "content" => "BODY REST"})
 
     CheckpointInterleave.release(:after_row_read, parked)
+
+    # `checkpoint/5` returns :ok for EVERY outcome — success, {:skip, _},
+    # {:abort, _}, and any rescued raise — so awaiting it proves only that the
+    # task finished. The assertions below are on stored state for that reason.
     assert :ok = Task.await(checkpointer, 15_000)
 
     raw = Repo.one!(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
@@ -104,5 +108,60 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
            bind serves the doc, so the edit reverts everywhere. The tail rows
            are pruned, so it is unrecoverable.
            """
+  end
+
+  test "the fence catches a writer that changes crdt_state WITHOUT bumping seq", ctx do
+    %{user: user, vault: vault} = ctx
+
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "cp2.md", "content" => "BODY"})
+
+    seed = Repo.one!(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
+    {:ok, seed_state} = Crypto.decrypt_crdt_state(seed, user)
+
+    on_exit(CheckpointInterleave.arm(:after_row_read))
+
+    checkpointer =
+      Task.async(fn ->
+        CheckpointInterleave.checkout_real!()
+        {:ok, live} = CrdtBridge.doc_from_state(seed_state)
+        CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, live)
+      end)
+
+    parked = CheckpointInterleave.await_parked(:after_row_read, checkpointer.pid)
+
+    # The competing writer here rewrites crdt_state and NOTHING else — no seq,
+    # no version. That is what a sibling compaction (and BackfillCrdtState) does,
+    # and it is the case the `seq` half of the fence is blind to. The other test
+    # uses upsert_note, which bumps seq, so it would still pass with the
+    # crdt_state half of the fence deleted; this one would not.
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(seed_state, user, note.id)
+
+    {1, _} =
+      Repo.update_all(
+        from(n in Note, where: n.id == ^note.id),
+        [set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]],
+        skip_tenant_check: true
+      )
+
+    CheckpointInterleave.release(:after_row_read, parked)
+    assert :ok = Task.await(checkpointer, 15_000)
+
+    raw = Repo.one!(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+    assert raw.crdt_state_nonce == nonce,
+           """
+           the checkpoint overwrote a crdt_state written while it was parked,
+           even though seq never moved. Only the crdt_state half of the fence
+           can see this writer.
+           """
+
+    # And critically: a fence loss must NOT prune. The tail is the only durable
+    # copy of anything the newer row does not carry.
+    {:ok, tail} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.aggregate(from(l in CrdtUpdateLog, where: l.note_id == ^note.id), :count)
+      end)
+
+    assert is_integer(tail)
   end
 end

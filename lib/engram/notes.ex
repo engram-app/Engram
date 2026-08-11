@@ -2334,10 +2334,7 @@ defmodule Engram.Notes do
             :conflict
 
           true ->
-            case Repo.one(lookup_query) do
-              nil -> :not_found
-              note -> do_rename_note_inner(note, user, new_path, new_folder, now)
-            end
+            rename_with_retry(lookup_query, user, new_path, new_folder, now, 1)
         end
       end)
 
@@ -2396,11 +2393,51 @@ defmodule Engram.Notes do
     end
   end
 
-  defp rename_fence(%Note{id: id, seq: seq, crdt_state_ciphertext: nil}),
+  # Retry ONCE on a lost fence, re-reading the row first — the mirror of
+  # `lookup_and_write/2` on the write path. #1335.
+  #
+  # Without this a routine compaction checkpoint (which rewrites crdt_state on
+  # every room exit whose text is unchanged) turns a rename of a note that
+  # plainly exists into a 404. Worse for batch moves: `reduce_move_notes/4` maps
+  # `{:error, :not_found}` to `Repo.rollback({:not_found, id})`, so ONE note
+  # losing its fence aborts the entire atomic move.
+  #
+  # Re-reading is what makes the retry meaningful: `do_rename_note_inner`
+  # rebuilds every ciphertext column from the row it was handed, so retrying
+  # with the stale struct would just lose the fence again and write pre-read
+  # plaintext if it did not.
+  defp rename_with_retry(lookup_query, user, new_path, new_folder, now, retries) do
+    case Repo.one(lookup_query) do
+      nil ->
+        :not_found
+
+      note ->
+        case do_rename_note_inner(note, user, new_path, new_folder, now) do
+          :stale_snapshot when retries > 0 ->
+            rename_with_retry(lookup_query, user, new_path, new_folder, now, retries - 1)
+
+          :stale_snapshot ->
+            Logger.warning(
+              "note_rename_snapshot_fence_lost",
+              Metadata.with_category(:warning, :sync, user_id: user.id, note_id: note.id)
+            )
+
+            :not_found
+
+          other ->
+            other
+        end
+    end
+  end
+
+  # Nonce, not ciphertext: 12 random bytes rewritten by every write of the
+  # column, so it discriminates identically without shipping a TOASTed blob as a
+  # bind parameter. Compared only when non-nil (`= NULL` is never true).
+  defp rename_fence(%Note{id: id, seq: seq, crdt_state_nonce: nil}),
     do: from(n in Note, where: n.id == ^id and n.seq == ^seq)
 
-  defp rename_fence(%Note{id: id, seq: seq, crdt_state_ciphertext: ct}),
-    do: from(n in Note, where: n.id == ^id and n.seq == ^seq and n.crdt_state_ciphertext == ^ct)
+  defp rename_fence(%Note{id: id, seq: seq, crdt_state_nonce: nonce}),
+    do: from(n in Note, where: n.id == ^id and n.seq == ^seq and n.crdt_state_nonce == ^nonce)
 
   defp do_rename_note_inner(note, user, new_path, new_folder, now) do
     decrypted_note = decrypt_or_raise!(note, user)
@@ -2537,20 +2574,20 @@ defmodule Engram.Notes do
          updated_at: now
        )}
     else
-      # Zero rows can now mean two different things, and they want different
-      # triage: the row is genuinely gone, or the snapshot fence caught a write
-      # that committed under us (#1335). Only re-read on this rare miss path.
-      if Repo.exists?(from(n in Note, where: n.id == ^note.id)) do
-        Logger.warning(
-          "note_rename_snapshot_fence_lost",
-          Metadata.with_category(:warning, :sync, user_id: user.id, note_id: note.id)
-        )
+      # Zero rows means one of two things, and they want different handling:
+      # the row is genuinely gone, or the snapshot fence caught a write that
+      # committed under us (#1335). Only probe on this rare miss path.
+      #
+      # `is_nil(deleted_at)`: a concurrent DELETE bumps seq and so also loses the
+      # fence, and without this filter it would report as a fence loss —
+      # destroying the exact distinction this probe exists to draw.
+      if Repo.exists?(from(n in Note, where: n.id == ^note.id and is_nil(n.deleted_at))) do
+        # Live row, stale pre-image. `rename_with_retry/6` re-reads and tries
+        # again; only if THAT loses too does the caller see :not_found.
+        :stale_snapshot
+      else
+        :not_found
       end
-
-      # `:not_found` either way — callers map it to 404 and the client re-reads,
-      # which is the correct recovery for both. Nothing was written and nothing
-      # was pruned.
-      :not_found
     end
   end
 
