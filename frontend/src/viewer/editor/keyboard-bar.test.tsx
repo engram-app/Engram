@@ -10,11 +10,19 @@ vi.mock("./use-keyboard-inset", () => ({ useKeyboardInset: () => insetValue.curr
 let view: EditorView;
 afterEach(() => view?.destroy());
 
-function mount(doc: string, at = 0) {
+// The bar is gated on editor focus, so the harness has to focus for real —
+// creating a view is not enough.
+function mountEditor(doc: string, at = 0) {
 	view = new EditorView({
 		state: EditorState.create({ doc, selection: { anchor: at, head: at } }),
 		parent: document.body,
 	});
+	view.focus();
+	return view;
+}
+
+function mount(doc: string, at = 0) {
+	mountEditor(doc, at);
 	return render(<KeyboardBar getView={() => view} />);
 }
 
@@ -39,10 +47,24 @@ describe("KeyboardBar", () => {
 	});
 
 	// Pinned to the bottom with no keyboard under it, the bar is just lost height.
-	it("is absent while the keyboard is down", () => {
+	it("is absent while the editor is unfocused", () => {
+		render(<KeyboardBar getView={() => null} />);
+		expect(screen.queryByRole("toolbar", { name: "Editor actions" })).toBeNull();
+	});
+
+	// The bug that made the bar never appear on a real phone. Browsers that
+	// resize the LAYOUT viewport for the keyboard (older Chrome, or
+	// interactive-widget=resizes-content) drop window.innerHeight by the same
+	// amount the visual viewport lost, so the inset reads 0 with the keyboard
+	// fully open. Gating visibility on a non-zero inset hid the bar outright on
+	// exactly those browsers; focus is the portable signal.
+	it("shows with the keyboard up even when the inset reads 0", () => {
 		insetValue.current = 0;
 		mount("hello");
-		expect(screen.queryByRole("toolbar", { name: "Editor actions" })).toBeNull();
+		const bar = screen.getByRole("toolbar", { name: "Editor actions" });
+		expect(bar).toBeInTheDocument();
+		// bottom-0 with no lift is already correct there: the viewport shrank.
+		expect(bar.style.transform).toBe("translateY(-0px)");
 	});
 
 	it("rides above the keyboard by the measured inset", () => {
@@ -86,7 +108,10 @@ describe("KeyboardBar", () => {
 		expect(view.state.doc.toString()).toBe("- thing");
 	});
 
-	it("does nothing when no editor is mounted", () => {
+	// getView can return null between a route swap and the next editor mounting,
+	// while focus is still inside the outgoing one.
+	it("does nothing when the view accessor returns null", () => {
+		mountEditor("hello");
 		render(<KeyboardBar getView={() => null} />);
 		fireEvent.click(screen.getByRole("button", { name: "Indent" }));
 		expect(screen.getByRole("toolbar", { name: "Editor actions" })).toBeInTheDocument();
