@@ -1,3 +1,4 @@
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, test } from "vitest";
@@ -12,9 +13,17 @@ import {
 let view: EditorView;
 afterEach(() => view?.destroy());
 
+// The real editor loads the markdown grammar, and toggleWrap now asks the
+// parser whether the selection is already emphasised -- string matching cannot
+// tell `*` from the inner half of `**`. Mounting a bare view here would leave
+// the tree empty and silently exercise only the wrap half.
 function mount(doc: string, from: number, to: number): EditorView {
 	view = new EditorView({
-		state: EditorState.create({ doc, selection: { anchor: from, head: to } }),
+		state: EditorState.create({
+			doc,
+			selection: { anchor: from, head: to },
+			extensions: [markdown({ base: markdownLanguage })],
+		}),
 		parent: document.body,
 	});
 	return view;
@@ -25,6 +34,72 @@ describe("format-commands", () => {
 		mount("hello world", 0, 5); // "hello"
 		toggleWrap(view, "**");
 		expect(view.state.doc.toString()).toBe("**hello** world");
+	});
+
+	// Tapping the bold button twice has to undo it — otherwise the second tap
+	// produces "****hello****", which is what a wrap-only command does.
+	describe("toggleWrap unwraps what it wrapped", () => {
+		test("strips the markers when the selection is already wrapped", () => {
+			mount("**hello**", 2, 7);
+			toggleWrap(view, "**");
+			expect(view.state.doc.toString()).toBe("hello");
+		});
+
+		test("keeps the same text selected after unwrapping", () => {
+			mount("**hello**", 2, 7);
+			toggleWrap(view, "**");
+			expect(
+				view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to),
+			).toBe("hello");
+		});
+
+		test("collapses an empty pair the caret sits inside", () => {
+			mount("****", 2, 2);
+			toggleWrap(view, "**");
+			expect(view.state.doc.toString()).toBe("");
+		});
+
+		// `*` is a prefix of `**`, so a naive check sees bold text as italic and
+		// "italicising" it would silently downgrade it to plain italic.
+		test("nests italic inside bold rather than downgrading it", () => {
+			mount("**bold**", 2, 6);
+			toggleWrap(view, "*");
+			expect(view.state.doc.toString()).toBe("***bold***");
+		});
+
+		test("still unwraps bold when the run is exactly the marker", () => {
+			mount("**bold**", 2, 6);
+			toggleWrap(view, "**");
+			expect(view.state.doc.toString()).toBe("bold");
+		});
+
+		// The other direction, which a rule patched only to protect the case above
+		// gets wrong: un-bolding bold-italic has to leave the italic behind.
+		test("un-bolds bold-italic down to italic", () => {
+			mount("***both***", 3, 7);
+			toggleWrap(view, "**");
+			expect(view.state.doc.toString()).toBe("*both*");
+		});
+
+		test("un-italicises bold-italic down to bold", () => {
+			mount("***both***", 3, 7);
+			toggleWrap(view, "*");
+			expect(view.state.doc.toString()).toBe("**both**");
+		});
+
+		// Obsidian toggles off from anywhere inside the emphasis, not just when
+		// the whole span is selected.
+		test("unwraps from a caret sitting inside the emphasis", () => {
+			mount("**bold**", 4, 4);
+			toggleWrap(view, "**");
+			expect(view.state.doc.toString()).toBe("bold");
+		});
+
+		test("leaves an unmatched leading marker alone", () => {
+			mount("**hello", 2, 7);
+			toggleWrap(view, "**");
+			expect(view.state.doc.toString()).toBe("****hello**");
+		});
 	});
 
 	// What the toolbar's wikilink button relies on: two insertions at the SAME

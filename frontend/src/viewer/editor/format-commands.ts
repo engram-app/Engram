@@ -1,4 +1,5 @@
 import { indentWithTab } from "@codemirror/commands";
+import { syntaxTree } from "@codemirror/language";
 import {
 	type ChangeSpec,
 	EditorSelection,
@@ -7,6 +8,7 @@ import {
 	type Line,
 } from "@codemirror/state";
 import { type EditorView, keymap } from "@codemirror/view";
+import type { SyntaxNode } from "@lezer/common";
 
 /** Opens with a line of only `-` or `=` — what CommonMark reads as a setext heading underline. */
 const SETEXT_UNDERLINE = /^[-=]+[ \t]*(?:\n|$)/;
@@ -73,19 +75,87 @@ function dispatchKeepingCaretAfterInsert(view: EditorView, changes: ChangeSpec[]
 	view.dispatch({ changes: changeSet, selection: view.state.selection.map(changeSet, 1) });
 }
 
+/** Marker -> the syntax node the markdown grammar produces for it. */
+const EMPHASIS_NODES: Record<string, string> = {
+	"*": "Emphasis",
+	_: "Emphasis",
+	"**": "StrongEmphasis",
+	__: "StrongEmphasis",
+	"~~": "Strikethrough",
+};
+
+/**
+ * The span of the emphasis of `marker`'s kind enclosing `[from, to)`, or null.
+ *
+ * Asks the PARSER rather than comparing the neighbouring characters, because
+ * `*` is a prefix of `**` and string matching gets this wrong in both
+ * directions: it reads `**bold**` as italic (so italicising would silently
+ * downgrade it to `*bold*` instead of nesting to `***bold***`), and a rule
+ * patched to avoid that then refuses to un-bold `***text***`. The grammar
+ * already distinguishes Emphasis from StrongEmphasis; nothing here has to.
+ *
+ * Falls back to wrapping in an editor with no markdown language loaded, since
+ * the tree is empty there.
+ */
+function enclosingEmphasis(state: EditorState, from: number, to: number, marker: string) {
+	const len = marker.length;
+	// The degenerate empty pair that wrapping itself produces: `**|**` is not
+	// emphasis to the parser — CommonMark needs content — so a second tap of the
+	// same button has to recognise it by text or it doubles to `****|****`.
+	if (
+		from === to &&
+		from >= len &&
+		to + len <= state.doc.length &&
+		state.doc.sliceString(from - len, from) === marker &&
+		state.doc.sliceString(to, to + len) === marker
+	) {
+		return { from: from - len, to: to + len };
+	}
+	const name = EMPHASIS_NODES[marker];
+	if (!name) {
+		return null;
+	}
+	let node: SyntaxNode | null = syntaxTree(state).resolveInner(from, 1);
+	for (; node; node = node.parent) {
+		if (node.name === name && node.from + len <= from && to <= node.to - len) {
+			return { from: node.from, to: node.to };
+		}
+	}
+	return null;
+}
+
 /** Tab indents / Shift-Tab dedents the selected lines (Obsidian parity). */
 export const indentKeymap: Extension = keymap.of([indentWithTab]);
 
-/** Wrap each selection range with `before`/`after` markers (e.g. ** for bold). */
+/**
+ * Wrap each selection range with `before`/`after` markers (e.g. `**` for bold),
+ * or strip them when they are already there.
+ *
+ * The unwrap half matters because these are BUTTONS: a wrap-only command turns
+ * a second tap of "bold" into `****text****` rather than undoing the first.
+ */
 export function toggleWrap(view: EditorView, before: string, after: string = before): void {
 	view.dispatch(
-		view.state.changeByRange((range) => ({
-			changes: [
-				{ from: range.from, insert: before },
-				{ from: range.to, insert: after },
-			],
-			range: EditorSelection.range(range.from + before.length, range.to + before.length),
-		})),
+		view.state.changeByRange((range) => {
+			const wrapping =
+				before === after ? enclosingEmphasis(view.state, range.from, range.to, before) : null;
+			if (wrapping) {
+				return {
+					changes: [
+						{ from: wrapping.from, to: wrapping.from + before.length },
+						{ from: wrapping.to - after.length, to: wrapping.to },
+					],
+					range: EditorSelection.range(range.from - before.length, range.to - before.length),
+				};
+			}
+			return {
+				changes: [
+					{ from: range.from, insert: before },
+					{ from: range.to, insert: after },
+				],
+				range: EditorSelection.range(range.from + before.length, range.to + before.length),
+			};
+		}),
 	);
 	view.focus();
 }

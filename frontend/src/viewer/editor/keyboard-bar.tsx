@@ -2,13 +2,16 @@ import { startCompletion } from "@codemirror/autocomplete";
 import { indentLess, indentMore } from "@codemirror/commands";
 import type { EditorView } from "@codemirror/view";
 import {
+	Bold,
 	Brackets,
 	Heading,
 	IndentDecrease,
 	IndentIncrease,
+	Italic,
 	List,
 	Redo2,
 	SquareCheckBig,
+	Strikethrough,
 	Undo2,
 } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
@@ -78,10 +81,9 @@ const TOOLBAR_OFFSET_VAR = "--editor-toolbar-offset";
  * The strip of editor actions docked above the on-screen keyboard, Obsidian's
  * mobile toolbar in miniature.
  *
- * Scope is deliberately the commands a soft keyboard CANNOT otherwise reach:
- * indent and outdent have no Tab key to bind to on a phone, and toggling a
- * checkbox by hand means typing six characters mid-line. Bold/italic are
- * omitted on purpose — `**` is two taps and already works.
+ * Scope is the commands a soft keyboard cannot reach or makes tedious: indent
+ * and outdent have no Tab key to bind to on a phone, and every marker-based
+ * format means hunting the symbol layer for characters that come in pairs.
  *
  * Mobile only, and only while the keyboard is actually up: on desktop the
  * markdown shortcuts and Tab/Shift-Tab already cover this, and a bar pinned
@@ -171,12 +173,15 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 					))}
 				</section>
 			) : null}
-			{/* justify-around, not a fixed gap: eight buttons at a fixed gap overflow
-			    a 320px phone, and letting the row distribute its own slack keeps the
-			    edge buttons reachable without a horizontal scroll. */}
+			{/* Eleven buttons do not fit a phone, so the row pans under a finger
+			    instead of shrinking them below a thumb-sized target. The scrollbar
+			    is hidden because a visible track on a 44px strip is noise; the
+			    partially-visible last button is the affordance. touch-action keeps
+			    the pan working despite the nav's pointerdown preventDefault, which
+			    governs focus, not scrolling. */}
 			<section
 				aria-label="Editor commands"
-				className="flex items-center justify-around px-2 py-1.5"
+				className="flex touch-pan-x items-center gap-1 overflow-x-auto px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>button]:shrink-0"
 			>
 				<Button variant="ghost" size="icon" aria-label="Undo" onClick={run(undoEdit)}>
 					<Undo2 className="size-5" />
@@ -203,6 +208,30 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 					})}
 				>
 					<IndentIncrease className="size-5" />
+				</Button>
+				<Button
+					variant="ghost"
+					size="icon"
+					aria-label="Bold"
+					onClick={run((v) => toggleWrap(v, "**"))}
+				>
+					<Bold className="size-5" />
+				</Button>
+				<Button
+					variant="ghost"
+					size="icon"
+					aria-label="Italic"
+					onClick={run((v) => toggleWrap(v, "*"))}
+				>
+					<Italic className="size-5" />
+				</Button>
+				<Button
+					variant="ghost"
+					size="icon"
+					aria-label="Strikethrough"
+					onClick={run((v) => toggleWrap(v, "~~"))}
+				>
+					<Strikethrough className="size-5" />
 				</Button>
 				<Button
 					variant="ghost"

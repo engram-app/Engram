@@ -1,3 +1,4 @@
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { fireEvent, render, screen } from "@testing-library/react";
@@ -40,7 +41,10 @@ function mountEditor(doc: string, at = 0) {
 		state: EditorState.create({
 			doc: ytext.toString(),
 			selection: { anchor: at, head: at },
-			extensions: [yCollab(ytext, null)],
+			// The markdown grammar is not decoration here: toggleWrap asks the
+			// parser whether the selection is already emphasised, so without it the
+			// emphasis buttons only ever wrap and never toggle off.
+			extensions: [yCollab(ytext, null), markdown({ base: markdownLanguage })],
 		}),
 		parent: document.body,
 	});
@@ -189,6 +193,36 @@ describe("KeyboardBar", () => {
 			mount("hello");
 			expect(offset()).toBe("");
 		});
+	});
+
+	describe("inline emphasis", () => {
+		it.each([
+			["Bold", "**thing**"],
+			["Italic", "*thing*"],
+			["Strikethrough", "~~thing~~"],
+		])("%s wraps the selection", (label, expected) => {
+			mount("thing");
+			view.dispatch({ selection: { anchor: 0, head: 5 } });
+			fireEvent.click(screen.getByRole("button", { name: label }));
+			expect(view.state.doc.toString()).toBe(expected);
+		});
+
+		it("un-bolds on a second tap instead of doubling the markers", () => {
+			mount("thing");
+			view.dispatch({ selection: { anchor: 0, head: 5 } });
+			fireEvent.click(screen.getByRole("button", { name: "Bold" }));
+			fireEvent.click(screen.getByRole("button", { name: "Bold" }));
+			expect(view.state.doc.toString()).toBe("thing");
+		});
+	});
+
+	// Eleven buttons do not fit a phone, so the row pans under a finger. The
+	// scrollbar is hidden because a visible track on a 44px-tall strip is noise.
+	it("lets the command row pan horizontally without showing a track", () => {
+		mount("hello");
+		const row = screen.getByRole("region", { name: "Editor commands" });
+		expect(row.className).toContain("overflow-x-auto");
+		expect(row.className).toContain("[scrollbar-width:none]");
 	});
 
 	describe("heading picker", () => {
