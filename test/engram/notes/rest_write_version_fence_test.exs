@@ -33,8 +33,6 @@ defmodule Engram.Notes.RestWriteVersionFenceTest do
   """
   use Engram.DataCase, async: false
 
-  import Ecto.Query, only: [from: 2]
-
   alias Engram.Crypto
   alias Engram.Crypto.DekCache
   alias Engram.Notes
@@ -93,13 +91,5 @@ defmodule Engram.Notes.RestWriteVersionFenceTest do
   defp reload(user, note_id) do
     {:ok, note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note_id) end)
     note
-  end
-
-  defp bump_version!(note_id) do
-    Repo.update_all(
-      from(n in Note, where: n.id == ^note_id),
-      [inc: [version: 1]],
-      skip_tenant_check: true
-    )
   end
 end
