@@ -18,6 +18,7 @@ defmodule Engram.Links.Backfill do
   import Ecto.Query
 
   alias Engram.Attachments.Attachment
+  alias Engram.Backfill.TenantScan
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Workers.BackfillNoteLinks
@@ -43,8 +44,14 @@ defmodule Engram.Links.Backfill do
     MapSet.size(pairs)
   end
 
+  # Per-user inside each tenant's RLS context, NOT one cross-tenant query with
+  # `skip_tenant_check: true` — that reads zero rows on prod and enqueues
+  # nothing while reporting success (#1349). See Engram.Backfill.TenantScan.
   defp distinct_pairs(schema) do
-    from(r in schema, distinct: true, select: {r.user_id, r.vault_id})
-    |> Repo.all(skip_tenant_check: true)
+    TenantScan.flat_map_users(fn user_id ->
+      from(r in schema, where: r.user_id == ^user_id, distinct: true, select: r.vault_id)
+      |> Repo.all()
+      |> Enum.map(&{user_id, &1})
+    end)
   end
 end

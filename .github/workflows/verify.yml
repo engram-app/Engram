@@ -2572,9 +2572,13 @@ jobs:
       # right shape. Documentation that names a command is not an invocation,
       # so this step turns each documented entrypoint into a real one.
       #
-      # Deliberately asserts the RETURN VALUES, not just absence of a crash:
-      # on a fresh CI database every one of these is a zero/no-op, which is
-      # what makes the check safe to run and still meaningful.
+      # SCOPE, honestly stated: this proves each entrypoint is CALLABLE in a
+      # release (no Mix, no CWD-relative paths) — the #1311 failure mode. It
+      # does NOT prove they find work. On a fresh CI database the correct
+      # answer is zero, which is also what the #1349 RLS bug returned, so these
+      # numbers cannot distinguish the two. The guard for THAT is
+      # test/engram/backfill/tenant_scan_test.exs, which asserts structurally
+      # (no cross-tenant read) because CI's superuser bypasses RLS entirely.
       - name: Documented release rpc entrypoints are callable
         run: |
           OUT=$(docker compose -f ci/compose.database.yml -p "$CI_PROJECT" exec -T engram \
@@ -2583,9 +2587,21 @@ jobs:
               %{notes: 0, attachments: 0} = Engram.ContentHash.Backfill.enqueue_all()
               # No vaults, so no onboarding rows to seed.
               0 = Engram.Onboarding.Backfill.first_vault_created()
-              # Migrations already ran at boot, so this reports "up to date".
-              # Also proves the migrations dir resolves OUTSIDE a Mix project
-              # root — the relative path this used to carry raised File.Error.
+              # Same enqueue-on-empty shape; regressed to the #1311 mode before.
+              0 = Engram.Links.Backfill.enqueue_all()
+              # Migrations already ran at boot, so `pending` must be empty.
+              %{pending: []} =
+                Engram.Release.Preflight.report(Engram.Repo,
+                  applied_versions: Ecto.Migrator.migrated_versions(Engram.Repo)
+                )
+              # ...but `pending: []` ALONE cannot prove the dir was read: an
+              # empty directory yields [] too, and already_run comes from the
+              # database rather than the filesystem. Re-running with NO applied
+              # versions makes every migration pending, so a non-empty result is
+              # positive proof that priv/repo/migrations resolved to real files
+              # inside the release — the #1311 packaging failure mode.
+              %{pending: [_ | _]} =
+                Engram.Release.Preflight.report(Engram.Repo, applied_versions: [])
               :ok = Engram.Release.Preflight.run()
               IO.puts("RELEASE_ENTRYPOINTS_OK")
             ')
