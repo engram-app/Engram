@@ -67,6 +67,13 @@
 	 * while staying visibly distinct from the white page. */
 	--atomic-editor-selection-bg: #b3d7ff;
 	--atomic-editor-border: #e2e2e4;
+	/* Popup/tooltip surface — the [[ ]] autocomplete menu, chiefly. The package
+	 * paints .cm-tooltip with var(--atomic-editor-bg-surface, #2d2d2d), and that
+	 * fallback is a DARK charcoal. Leaving this unset meant light mode drew the
+	 * menu on #2d2d2d while .cm-tooltip's colour followed the theme to #222222 —
+	 * near-black text on near-black panel, 1.06:1, effectively invisible. White
+	 * puts body text at 15.91:1 and the muted detail line at 5.10:1. */
+	--atomic-editor-bg-surface: #ffffff;
 	--atomic-editor-code-bg: rgba(0, 0, 0, 0.045);
 	--atomic-editor-code-rail: rgba(124, 92, 255, 0.35);
 
@@ -117,6 +124,12 @@
 	 * and more visible against the page than the purple it replaces. */
 	--atomic-editor-selection-bg: #143d79;
 	--atomic-editor-border: #333333;
+	/* Popup/tooltip surface. Matches the package's own dark fallback, so dark
+	 * mode looks unchanged — it was the one theme the unset var happened to
+	 * suit. Declared explicitly anyway: the light block has to set this, and a
+	 * token that exists in only one theme is how this drifted in the first
+	 * place. Body text 10.11:1, muted detail 4.83:1. */
+	--atomic-editor-bg-surface: #2d2d2d;
 	--atomic-editor-code-bg: rgba(255, 255, 255, 0.06);
 	--atomic-editor-code-rail: rgba(139, 108, 239, 0.5);
 
@@ -159,12 +172,25 @@
 	font-weight: 600;
 }
 
+/* The folder path under each filename. --fg-faint is tuned for revealed syntax
+ * markers sitting on the EDITOR background; on the lighter tooltip surface it
+ * measures 3.68:1 in dark mode, under AA for text this size. --fg-muted is the
+ * same visual role one step darker and clears AA on both surfaces (5.10:1
+ * light, 4.83:1 dark). */
 .cm-tooltip-autocomplete .cm-completionDetail {
 	display: block;
 	margin-left: 0;
 	font-style: normal;
 	font-size: 0.85em;
-	color: var(--atomic-editor-fg-faint, #8b949e);
+	color: var(--atomic-editor-fg-muted, #999999);
+}
+
+/* The selected row paints its own accent background, so a fixed grey detail
+ * line lands on the wrong surface — it measured 2.03:1 there. Inherit the
+ * row's own foreground and lean on opacity for the de-emphasis instead. */
+.cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionDetail {
+	color: inherit;
+	opacity: 0.8;
 }
 
 /* Wikilinks are internal navigation — Atomic's external-link ::after icon
