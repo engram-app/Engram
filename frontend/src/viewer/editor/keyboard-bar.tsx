@@ -1,10 +1,19 @@
+import { startCompletion } from "@codemirror/autocomplete";
 import { indentLess, indentMore } from "@codemirror/commands";
 import type { EditorView } from "@codemirror/view";
-import { IndentDecrease, IndentIncrease, List, Redo2, SquareCheckBig, Undo2 } from "lucide-react";
+import {
+	Brackets,
+	IndentDecrease,
+	IndentIncrease,
+	List,
+	Redo2,
+	SquareCheckBig,
+	Undo2,
+} from "lucide-react";
 import { yUndoManagerKeymap } from "y-codemirror.next";
 import { Button } from "@/components/ui/button";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { toggleCheckbox, toggleLinePrefix } from "./format-commands";
+import { toggleCheckbox, toggleLinePrefix, toggleWrap } from "./format-commands";
 import { useEditorFocused } from "./use-editor-focused";
 import { useKeyboardInset } from "./use-keyboard-inset";
 
@@ -32,6 +41,21 @@ function undoEdit(view: EditorView): void {
 
 function redoEdit(view: EditorView): void {
 	runBinding("Mod-y", view);
+}
+
+/**
+ * `[[ ]]` around the selection (or an empty pair with the caret inside), then
+ * open the note picker.
+ *
+ * The picker does not open by itself: CM6's autocompletion activates on
+ * transactions it recognises as typing, and a programmatic dispatch is not one
+ * — so the button would otherwise leave you with empty brackets and no list.
+ * startCompletion runs the same wikiCompletionSource `[[` typed by hand does,
+ * and its apply() already handles the closing brackets being there ahead of it.
+ */
+function insertWikiLink(view: EditorView): void {
+	toggleWrap(view, "[[", "]]");
+	startCompletion(view);
 }
 
 /**
@@ -117,6 +141,9 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 				onClick={run(toggleCheckbox)}
 			>
 				<SquareCheckBig className="size-5" />
+			</Button>
+			<Button variant="ghost" size="icon" aria-label="Wiki link" onClick={run(insertWikiLink)}>
+				<Brackets className="size-5" />
 			</Button>
 			<Button
 				variant="ghost"

@@ -142,6 +142,22 @@ describe("KeyboardBar", () => {
 		expect(view.state.doc.toString()).toBe("- hello");
 	});
 
+	// The whole point of the button is landing INSIDE the brackets: a caret left
+	// outside them means typing a note name produces "[[]]name".
+	it("inserts an empty wikilink with the caret between the brackets", () => {
+		mount("");
+		fireEvent.click(screen.getByRole("button", { name: "Wiki link" }));
+		expect(view.state.doc.toString()).toBe("[[]]");
+		expect(view.state.selection.main.head).toBe(2);
+	});
+
+	it("wraps a selected word in a wikilink instead of replacing it", () => {
+		mount("gamma", 0);
+		view.dispatch({ selection: { anchor: 0, head: 5 } });
+		fireEvent.click(screen.getByRole("button", { name: "Wiki link" }));
+		expect(view.state.doc.toString()).toBe("[[gamma]]");
+	});
+
 	it("turns the caret line into a bullet", () => {
 		mount("thing");
 		fireEvent.click(screen.getByRole("button", { name: "Bullet list" }));

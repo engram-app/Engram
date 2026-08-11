@@ -21,6 +21,15 @@ describe("format-commands", () => {
 		expect(view.state.doc.toString()).toBe("**hello** world");
 	});
 
+	// What the toolbar's wikilink button relies on: two insertions at the SAME
+	// position, with the caret mapped between them rather than to either edge.
+	test("toggleWrap on an empty selection leaves the caret between the markers", () => {
+		mount("", 0, 0);
+		toggleWrap(view, "[[", "]]");
+		expect(view.state.doc.toString()).toBe("[[]]");
+		expect(view.state.selection.main.head).toBe(2);
+	});
+
 	test("toggleLinePrefix adds a heading prefix to the caret line", () => {
 		mount("title", 0, 0);
 		toggleLinePrefix(view, "# ");
