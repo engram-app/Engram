@@ -1,3 +1,5 @@
+import { uuid7 } from "../crdt/uuid7";
+
 const STORAGE_KEY = "engram.deviceId";
 
 let deviceId: string | null = null;
@@ -29,7 +31,15 @@ export function getDeviceId(): string {
 	if (deviceId) {
 		return deviceId;
 	}
-	deviceId = readStored() ?? crypto.randomUUID();
+	// uuid7(), not crypto.randomUUID(): randomUUID is a SECURE-CONTEXT-only API,
+	// so it is undefined whenever the app is served over plain http from
+	// anything but localhost — a phone hitting the dev server at
+	// http://<lan-ip>:5173, or a self-hoster on their own network. This is the
+	// first call after sign-in (it stamps X-Device-Id), so the TypeError showed
+	// up as a permanent loading screen with no client log, because the log
+	// shipper needs the device id too. uuid7 builds from crypto.getRandomValues,
+	// which is NOT gated.
+	deviceId = readStored() ?? uuid7();
 	writeStored(deviceId);
 	return deviceId;
 }

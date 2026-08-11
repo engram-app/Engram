@@ -221,7 +221,7 @@ interface DuplicateNoteContext {
 }
 
 function idempotencyHeaders(): { headers: Record<string, string> } {
-	return { headers: { "X-Idempotency-Key": crypto.randomUUID() } };
+	return { headers: { "X-Idempotency-Key": uuid7() } };
 }
 
 interface BatchNotesContext {
@@ -1885,7 +1885,7 @@ export function useRenameNote() {
 						next = [
 							...next,
 							{
-								id: `optimistic-${crypto.randomUUID()}`,
+								id: `optimistic-${uuid7()}`,
 								parent_id: null,
 								name: newFolder,
 								count: 1,
@@ -2243,7 +2243,7 @@ export function useDuplicateNote() {
 			// Placeholder id — the real one arrives with the crdt_create reply.
 			// `optimistic-` prefix avoids collisions with real backend uuids;
 			// onSuccess swaps it for the server-assigned id in the cached list.
-			const placeholderId = `optimistic-${crypto.randomUUID()}`;
+			const placeholderId = `optimistic-${uuid7()}`;
 			const ctx: DuplicateNoteContext = { placeholderId };
 
 			// Seed metadata from the source row if we have it cached — gives
