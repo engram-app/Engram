@@ -112,7 +112,19 @@ function wrap(ui: ReactNode) {
 	);
 }
 
+// happy-dom ships no matchMedia, so useMediaQuery would read false — i.e.
+// MOBILE — for every test in this file. Default to desktop so the existing
+// expectations keep describing the surface they were written against.
+function setViewport(kind: "desktop" | "mobile") {
+	window.matchMedia = vi.fn().mockReturnValue({
+		matches: kind === "desktop",
+		addEventListener: vi.fn(),
+		removeEventListener: vi.fn(),
+	}) as unknown as typeof window.matchMedia;
+}
+
 beforeEach(() => {
+	setViewport("desktop");
 	actionsList = [];
 	recordAsyncMock = vi.fn().mockResolvedValue({ status: "ok" });
 	onboardingActionsValue = {
@@ -493,6 +505,54 @@ describe("ChecklistWidget, chrome", () => {
 
 		// vault + claude + cursor = 3 items, none done.
 		expect(screen.getByText(/0 of 3 done/iu)).toBeInTheDocument();
+	});
+});
+
+describe("ChecklistWidget, mobile", () => {
+	beforeEach(() => setViewport("mobile"));
+
+	// Auto-opening a bottom sheet over the app on load is the "in the way"
+	// complaint in its worst form, so mobile starts collapsed. Desktop keeps
+	// opening expanded — covered by the tests above, which run as desktop.
+	it("starts collapsed as a compact badge rather than the text pill", () => {
+		render(wrap(<ChecklistWidget />));
+
+		const badge = screen.getByLabelText(/open setup checklist/iu);
+		expect(badge).toBeInTheDocument();
+		expect(badge).not.toHaveTextContent(/finish setup/iu);
+	});
+
+	it("shows the number of items still to do on the badge", () => {
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude", "cursor"] };
+		render(wrap(<ChecklistWidget />));
+
+		// vault + claude + cursor, none done.
+		expect(screen.getByLabelText(/open setup checklist/iu)).toHaveTextContent("3");
+	});
+
+	it("opens the checklist in a sheet when the badge is tapped", () => {
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
+		render(wrap(<ChecklistWidget />));
+
+		fireEvent.click(screen.getByLabelText(/open setup checklist/iu));
+
+		expect(screen.getByRole("dialog")).toBeInTheDocument();
+		expect(screen.getByText(/connect claude/iu)).toBeInTheDocument();
+	});
+});
+
+describe("ChecklistWidget, desktop panel height", () => {
+	// A user who picked ten tools produced a panel taller than the viewport,
+	// running the last rows off the bottom of the screen with no way to reach
+	// them. Same latent bug the mobile sheet fixes, just harder to hit.
+	it("caps the panel height so a long list scrolls instead of overflowing", () => {
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude", "cursor"] };
+		render(wrap(<ChecklistWidget />));
+
+		const panel = screen.getByLabelText(/onboarding checklist/iu);
+		expect(panel.className).toMatch(/max-h-/u);
+		const list = panel.querySelector("ul");
+		expect(list?.className).toMatch(/overflow-y-auto/u);
 	});
 });
 
