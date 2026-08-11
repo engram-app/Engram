@@ -329,12 +329,16 @@ defmodule Engram.Vaults do
   """
   @spec count_for(Engram.Accounts.User.t()) :: non_neg_integer()
   def count_for(%Engram.Accounts.User{id: user_id}) do
-    Repo.aggregate(
-      active(scoped(user_id)),
-      :count,
-      :id,
-      skip_tenant_check: true
-    )
+    # Inside with_tenant, matching has_vault?/1 twenty lines down (#1354).
+    # `vaults` is FORCE-RLS, so the unscoped form counted 0 for every user on
+    # prod even though `scoped(user_id)` makes the app-level predicate correct
+    # — RLS filters first. "The query looks right" is not evidence here.
+    {:ok, count} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.aggregate(active(scoped(user_id)), :count, :id)
+      end)
+
+    count
   end
 
   # ── Content counts ───────────────────────────────────────────────────────
