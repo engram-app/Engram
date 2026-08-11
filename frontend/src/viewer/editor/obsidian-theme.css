@@ -154,10 +154,55 @@
 /* [[ autocomplete rows, Obsidian-style: bold filename on the first line,
    muted folder path (sans filename) stacked below it. CM6 renders
    label + detail as inline siblings by default; the column flex stacks them. */
+/* Read as a floating panel, matching DropdownMenuContent — the app's own menus
+ * are rounded-lg + shadow-md over a hairline ring, and this popup is the same
+ * kind of chrome, so it borrows that recipe rather than inventing a shadow.
+ *
+ * The border is a mix of --foreground into the panel rather than --border: the
+ * plain token measures 1.27:1 against white and 1.47:1 against the dark
+ * surface, which is the faintness this is meant to fix. Mixing toward
+ * TRANSPARENT means it composites over whatever surface it sits on, so one
+ * declaration lands at a comparable weight in both themes instead of needing a
+ * hand-picked grey per block — the failure mode that left bg-surface unset. */
+.cm-tooltip.cm-tooltip-autocomplete {
+	border-color: color-mix(in oklab, var(--foreground) 30%, transparent);
+	border-radius: var(--radius-lg, 0.5rem);
+	box-shadow:
+		0 4px 6px -1px rgb(0 0 0 / 0.1),
+		0 2px 4px -2px rgb(0 0 0 / 0.1);
+}
+
 /* Taller menu than CM6's cramped default, Obsidian-ish row rhythm. */
 .cm-tooltip-autocomplete > ul {
 	max-height: 24em;
 	min-width: 16em;
+	/* Round the inner list with the panel, or its corners square off the shadow. */
+	border-radius: inherit;
+
+	/* shadcn's ScrollBar in CSS form: CodeMirror renders this <ul> itself, so a
+	 * React <ScrollArea> can't wrap it. Values mirror components/ui/scroll-area
+	 * — w-2.5 track, rounded-full bg-border thumb, p-px inset — the same
+	 * translation note-editor.tsx already applies to .cm-scroller. */
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) transparent;
+}
+
+.cm-tooltip-autocomplete > ul::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+
+.cm-tooltip-autocomplete > ul::-webkit-scrollbar-track {
+	background-color: transparent;
+}
+
+.cm-tooltip-autocomplete > ul::-webkit-scrollbar-thumb {
+	background-color: var(--border);
+	border-radius: 9999px;
+	/* The 1px transparent border + padding-box clip is how p-px insets the thumb
+	 * from the track edge without a second element. */
+	border: 1px solid transparent;
+	background-clip: padding-box;
 }
 
 .cm-tooltip-autocomplete > ul > li {
