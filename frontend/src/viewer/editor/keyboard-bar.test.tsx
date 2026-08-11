@@ -2,19 +2,40 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { yCollab } from "y-codemirror.next";
+import * as Y from "yjs";
 import { KeyboardBar } from "./keyboard-bar";
 
 const { insetValue } = vi.hoisted(() => ({ insetValue: { current: 300 } }));
 vi.mock("./use-keyboard-inset", () => ({ useKeyboardInset: () => insetValue.current }));
 
+// History lives in Yjs, not CodeMirror, and the failure mode is a DEAD button
+// rather than a crash — so these tests run a real yCollab with a real
+// Y.UndoManager instead of stubbing one. A stub would have happily passed
+// while the buttons drove the wrong manager, which is exactly the bug this
+// caught: YSyncConfig mints its own decoy UndoManager that nothing tracks.
+let ydoc: Y.Doc;
+
 let view: EditorView;
-afterEach(() => view?.destroy());
+afterEach(() => {
+	view?.destroy();
+	ydoc?.destroy();
+});
 
 // The bar is gated on editor focus, so the harness has to focus for real —
 // creating a view is not enough.
 function mountEditor(doc: string, at = 0) {
+	// Seed the Y.Text first: ySync drives the view from the Y doc, so a view
+	// created with content the Y.Text lacks is immediately emptied.
+	ydoc = new Y.Doc();
+	const ytext = ydoc.getText("content");
+	ytext.insert(0, doc);
 	view = new EditorView({
-		state: EditorState.create({ doc, selection: { anchor: at, head: at } }),
+		state: EditorState.create({
+			doc: ytext.toString(),
+			selection: { anchor: at, head: at },
+			extensions: [yCollab(ytext, null)],
+		}),
 		parent: document.body,
 	});
 	view.focus();
@@ -100,6 +121,25 @@ describe("KeyboardBar", () => {
 		mount("buy milk");
 		fireEvent.click(screen.getByRole("button", { name: "Toggle checkbox" }));
 		expect(view.state.doc.toString()).toBe("- [ ] buy milk");
+	});
+
+	it("undoes a toolbar edit through the Yjs history", () => {
+		mount("hello");
+		fireEvent.click(screen.getByRole("button", { name: "Bullet list" }));
+		expect(view.state.doc.toString()).toBe("- hello");
+
+		fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+		expect(view.state.doc.toString()).toBe("hello");
+	});
+
+	it("redoes what it undid", () => {
+		mount("hello");
+		fireEvent.click(screen.getByRole("button", { name: "Bullet list" }));
+		fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+		expect(view.state.doc.toString()).toBe("hello");
+
+		fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+		expect(view.state.doc.toString()).toBe("- hello");
 	});
 
 	it("turns the caret line into a bullet", () => {
