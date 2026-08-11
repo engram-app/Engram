@@ -1,7 +1,7 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { yCollab } from "y-codemirror.next";
 import * as Y from "yjs";
@@ -142,6 +142,39 @@ describe("KeyboardBar", () => {
 
 		fireEvent.pointerUp(bar);
 		expect(view.hasFocus).toBe(true);
+	});
+
+	// A tap on the row BACKGROUND moves focus to <body>, not onto a toolbar
+	// element, so useEditorFocused's toolbar tolerance cannot save it. Without a
+	// hold the bar unmounts on that blur and the gesture ends on a detached
+	// node — so the handler that would put focus back never runs at all.
+	it("stays mounted through a gesture even if focus is lost entirely", () => {
+		mount("hello");
+		const bar = screen.getByRole("toolbar", { name: "Editor actions" });
+		fireEvent.pointerDown(bar);
+		act(() => view.contentDOM.blur());
+		expect(screen.queryByRole("toolbar", { name: "Editor actions" })).toBeInTheDocument();
+	});
+
+	// A pan that the browser takes over ends in pointercancel, NOT pointerup.
+	it("restores focus when the browser cancels the pointer to pan", () => {
+		mount("hello");
+		const bar = screen.getByRole("toolbar", { name: "Editor actions" });
+		fireEvent.pointerDown(bar);
+		act(() => view.contentDOM.blur());
+		expect(view.hasFocus).toBe(false);
+
+		fireEvent.pointerCancel(bar);
+		expect(view.hasFocus).toBe(true);
+	});
+
+	it("releases the hold once the gesture ends", () => {
+		mount("hello");
+		const bar = screen.getByRole("toolbar", { name: "Editor actions" });
+		fireEvent.pointerDown(bar);
+		fireEvent.pointerCancel(bar);
+		act(() => view.contentDOM.blur());
+		expect(screen.queryByRole("toolbar", { name: "Editor actions" })).toBeNull();
 	});
 
 	it("indents the caret line", () => {

@@ -95,6 +95,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 	const inset = useKeyboardInset();
 	const keyboardOpen = useKeyboardOpen();
 	const [headingsOpen, setHeadingsOpen] = useState(false);
+	const [gesturing, setGesturing] = useState(false);
 	const barRef = useRef<HTMLElement>(null);
 
 	// Both conditions are load-bearing, and neither can be the inset. Focus alone
@@ -104,7 +105,13 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 	// viewport, where the inset is 0 with the keyboard fully open — so
 	// useKeyboardOpen compares viewport heights instead, and the inset is used
 	// only to position.
-	const visible = !isDesktop && focused && keyboardOpen;
+	//
+	// `gesturing` overrides both for the duration of a touch. Panning the command
+	// row blurs the editor on browsers where pointerdown is not cancelable, which
+	// closes the keyboard and fails BOTH conditions at once — and unmounting
+	// mid-gesture detaches the very handler that would put focus back, so the
+	// hold is what makes the repair below reachable at all.
+	const visible = !isDesktop && (gesturing || (focused && keyboardOpen));
 
 	// No dependency array: the bar's height changes with the heading row, and
 	// re-measuring on every render is a single getBoundingClientRect on an
@@ -133,6 +140,14 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 		}
 	};
 
+	// Put the caret — and with it the keyboard — back when the gesture ends.
+	// Still inside the user gesture, which is what lets a programmatic focus()
+	// re-open the on-screen keyboard rather than being ignored.
+	const endGesture = () => {
+		getView()?.focus();
+		setGesturing(false);
+	};
+
 	return (
 		<nav
 			ref={barRef}
@@ -158,12 +173,16 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 			// command row is what lets it scroll, and it also makes pointerdown
 			// non-cancelable for touch in Chrome — the browser reserves the right
 			// to start a pan — so preventDefault silently becomes a no-op there and
-			// the drag blurs the editor anyway. Hence the pointerup below.
-			onPointerDown={(e) => e.preventDefault()}
-			// Put the caret (and the keyboard) back when the gesture ends. pointerup
-			// is still inside the user gesture, which is what lets a programmatic
-			// focus re-open the on-screen keyboard.
-			onPointerUp={() => getView()?.focus()}
+			// the drag blurs the editor anyway. Hence the hold and the repair.
+			onPointerDown={(e) => {
+				e.preventDefault();
+				setGesturing(true);
+			}}
+			// BOTH endings are needed: a tap ends in pointerup, but a pan the
+			// browser takes over ends in pointercancel and never fires pointerup —
+			// which is why repairing focus on pointerup alone did not help.
+			onPointerUp={endGesture}
+			onPointerCancel={endGesture}
 		>
 			{headingsOpen ? (
 				<section
