@@ -88,8 +88,12 @@ const MARKER_NODES: Record<string, string> = {
 	"`": "InlineCode",
 };
 
-/** A blockquote marker, with the space CommonMark treats as optional. */
-const QUOTE = /^(?<marker>[ \t]*> ?)/u;
+/**
+ * A blockquote marker, with the space CommonMark treats as optional. Indent is
+ * captured separately so unquoting strips only the marker — the indentation
+ * carries nesting, and removing it would be an outdent, not an unquote.
+ */
+const QUOTE = /^(?<indent>[ \t]*)(?<marker>> ?)/u;
 
 /**
  * The span of the emphasis of `marker`'s kind enclosing `[from, to)`, or null.
@@ -104,24 +108,32 @@ const QUOTE = /^(?<marker>[ \t]*> ?)/u;
  * Falls back to wrapping in an editor with no markdown language loaded, since
  * the tree is empty there.
  */
-function enclosingEmphasis(state: EditorState, from: number, to: number, marker: string) {
-	const len = marker.length;
+function enclosingEmphasis(
+	state: EditorState,
+	from: number,
+	to: number,
+	before: string,
+	after: string,
+) {
 	// The degenerate empty pair that wrapping itself produces: `**|**` is not
 	// emphasis to the parser — CommonMark needs content — so a second tap of the
 	// same button has to recognise it by text or it doubles to `****|****`.
+	// Handled before the node lookup so it covers asymmetric markers too, where
+	// there is no node to find: `[[|]]` would otherwise become `[[[[]]]]`.
 	if (
 		from === to &&
-		from >= len &&
-		to + len <= state.doc.length &&
-		state.doc.sliceString(from - len, from) === marker &&
-		state.doc.sliceString(to, to + len) === marker
+		from >= before.length &&
+		to + after.length <= state.doc.length &&
+		state.doc.sliceString(from - before.length, from) === before &&
+		state.doc.sliceString(to, to + after.length) === after
 	) {
-		return { from: from - len, to: to + len };
+		return { from: from - before.length, to: to + after.length };
 	}
-	const name = MARKER_NODES[marker];
+	const name = before === after ? MARKER_NODES[before] : undefined;
 	if (!name) {
 		return null;
 	}
+	const len = before.length;
 	let node: SyntaxNode | null = syntaxTree(state).resolveInner(from, 1);
 	for (; node; node = node.parent) {
 		if (node.name === name && node.from + len <= from && to <= node.to - len) {
@@ -144,8 +156,7 @@ export const indentKeymap: Extension = keymap.of([indentWithTab]);
 export function toggleWrap(view: EditorView, before: string, after: string = before): void {
 	view.dispatch(
 		view.state.changeByRange((range) => {
-			const wrapping =
-				before === after ? enclosingEmphasis(view.state, range.from, range.to, before) : null;
+			const wrapping = enclosingEmphasis(view.state, range.from, range.to, before, after);
 			if (wrapping) {
 				return {
 					changes: [
@@ -274,7 +285,13 @@ export function toggleCheckbox(view: EditorView): void {
  */
 export function setHeading(view: EditorView, level: number): void {
 	const changes: ChangeSpec[] = [];
-	for (const line of selectedLines(view.state)) {
+	const lines = selectedLines(view.state);
+	// A marker on a blank line renders as an empty heading, and blank lines are
+	// exactly what separate the paragraphs a multi-line selection spans. Same
+	// rule as toggleList. A lone blank line is still marked: that is someone
+	// starting a heading before typing it.
+	const targets = lines.length === 1 ? lines : lines.filter((line) => line.text.trim() !== "");
+	for (const line of targets) {
 		const { indent = "", body = "" } = LINE_PARTS.exec(line.text)?.groups ?? {};
 		const from = line.from + indent.length;
 		const existing = HEADING.exec(body);
@@ -301,16 +318,22 @@ export function setHeading(view: EditorView, level: number): void {
  */
 export function toggleCode(view: EditorView): void {
 	const { from, to } = view.state.selection.main;
-	const selected = view.state.sliceDoc(from, to);
-	if (!selected.includes("\n")) {
+	if (!view.state.sliceDoc(from, to).includes("\n")) {
 		toggleWrap(view, "`");
 		return;
 	}
+	// Whole lines, like every other block command here. A fence only opens a
+	// code block when it STARTS a line, so fencing the raw selection turned
+	// "text one" selected from column 5 into "text ```" — markdown that renders
+	// as prose with stray backticks, not as code.
+	const start = view.state.doc.lineAt(from).from;
+	const end = view.state.doc.lineAt(to).to;
+	const body = view.state.sliceDoc(start, end);
 	view.dispatch({
-		changes: { from, to, insert: `\`\`\`\n${selected}\n\`\`\`` },
+		changes: { from: start, to: end, insert: `\`\`\`\n${body}\n\`\`\`` },
 		// Select the fenced body so the next keystroke can replace it, and so the
 		// caret is not stranded after the closing fence.
-		selection: EditorSelection.range(from + 4, from + 4 + selected.length),
+		selection: EditorSelection.range(start + 4, start + 4 + body.length),
 	});
 	view.focus();
 }
@@ -321,10 +344,9 @@ export function toggleQuote(view: EditorView): void {
 	// A mixed selection is being quoted, not unquoted — same rule as toggleList.
 	const removing = lines.length > 0 && lines.every((line) => QUOTE.test(line.text));
 	const changes = lines.map((line) => {
-		const marker = QUOTE.exec(line.text)?.groups?.marker ?? "";
-		return removing
-			? { from: line.from, to: line.from + marker.length, insert: "" }
-			: { from: line.from, insert: "> " };
+		const { indent = "", marker = "" } = QUOTE.exec(line.text)?.groups ?? {};
+		const at = line.from + indent.length;
+		return removing ? { from: at, to: at + marker.length, insert: "" } : { from: at, insert: "> " };
 	});
 	if (changes.length > 0) {
 		dispatchKeepingCaretAfterInsert(view, changes);

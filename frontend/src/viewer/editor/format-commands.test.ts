@@ -115,6 +115,15 @@ describe("format-commands", () => {
 		expect(view.state.selection.main.head).toBe(2);
 	});
 
+	// Asymmetric markers have no syntax node to look up, but the empty-pair check
+	// still applies to them — without it a second tap gave "[[[[]]]]".
+	test("toggleWrap collapses an empty asymmetric pair too", () => {
+		mount("", 0, 0);
+		toggleWrap(view, "[[", "]]");
+		toggleWrap(view, "[[", "]]");
+		expect(view.state.doc.toString()).toBe("");
+	});
+
 	test("toggleLinePrefix adds a heading prefix to the caret line", () => {
 		mount("title", 0, 0);
 		toggleLinePrefix(view, "# ");
@@ -300,6 +309,15 @@ describe("format-commands", () => {
 			expect(view.state.selection.main.head).toBe(2);
 		});
 
+		// "## " on a blank line renders as an empty heading, and a blank line is
+		// what separates the paragraphs you just selected. toggleList already
+		// skips them; this has to as well.
+		test("skips blank lines inside a multi-line selection", () => {
+			mount("one\n\ntwo", 0, 8);
+			setHeading(view, 2);
+			expect(view.state.doc.toString()).toBe("## one\n\n## two");
+		});
+
 		test("keeps the caret next to the same word when changing level", () => {
 			// Caret before "title" in "# title" -> still before it once H3.
 			mount("# title", 2, 2);
@@ -336,6 +354,28 @@ describe("format-commands", () => {
 			mount("one\ntwo", 0, 7);
 			toggleCode(view);
 			expect(view.state.doc.toString()).toBe("```\none\ntwo\n```");
+		});
+
+		// A fence only opens a code block when it STARTS a line, so fencing the
+		// raw selection produced "text ```" — markdown that renders as prose.
+		// Like every other block command here, it works on whole lines.
+		test("fences whole lines when the selection starts mid-line", () => {
+			mount("text one\ntwo", 5, 12);
+			toggleCode(view);
+			expect(view.state.doc.toString()).toBe("```\ntext one\ntwo\n```");
+		});
+
+		test("fences whole lines when the selection ends mid-line", () => {
+			mount("one\ntwo tail", 0, 7);
+			toggleCode(view);
+			expect(view.state.doc.toString()).toBe("```\none\ntwo tail\n```");
+		});
+
+		test("selects the fenced body so it can be replaced or indented", () => {
+			mount("one\ntwo", 0, 7);
+			toggleCode(view);
+			const { from, to } = view.state.selection.main;
+			expect(view.state.sliceDoc(from, to)).toBe("one\ntwo");
 		});
 
 		test("leaves the caret inside an empty inline pair", () => {
@@ -377,6 +417,13 @@ describe("format-commands", () => {
 			mount(">one", 0, 0);
 			toggleQuote(view);
 			expect(view.state.doc.toString()).toBe("one");
+		});
+
+		// Indentation carries nesting; unquoting is not the same as outdenting.
+		test("keeps leading indentation when unquoting", () => {
+			mount("\t> nested", 0, 0);
+			toggleQuote(view);
+			expect(view.state.doc.toString()).toBe("\tnested");
 		});
 	});
 
