@@ -417,16 +417,24 @@ defmodule Engram.Onboarding do
   end
 
   def record_action(user_id, action) when is_binary(user_id) and is_binary(action) do
-    %Action{}
-    |> Action.changeset(%{user_id: user_id, action: action})
-    |> Repo.insert(
-      on_conflict: :nothing,
-      conflict_target: [:user_id, :action],
-      skip_tenant_check: true
-    )
+    # Inside with_tenant, not `skip_tenant_check: true` alone (#1354).
+    # `onboarding_actions` carries FORCE ROW LEVEL SECURITY and prod's role
+    # (`engram_admin`, verified rolbypassrls=false) is bound by it even as the
+    # table owner, so with no `app.current_tenant` the policy's WITH CHECK
+    # fails and this INSERT RAISES on prod. skip_tenant_check only silences
+    # Engram's own guard; it does not set the tenant.
+    Repo.with_tenant(user_id, fn ->
+      %Action{}
+      |> Action.changeset(%{user_id: user_id, action: action})
+      |> Repo.insert(on_conflict: :nothing, conflict_target: [:user_id, :action])
+      |> case do
+        {:ok, _} -> :ok
+        {:error, %Ecto.Changeset{} = cs} -> {:error, cs}
+      end
+    end)
     |> case do
-      {:ok, _} -> :ok
-      {:error, %Ecto.Changeset{} = cs} -> {:error, cs}
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -437,7 +445,16 @@ defmodule Engram.Onboarding do
   def list_actions(user_id) when is_binary(user_id) do
     import Ecto.Query
 
-    from(a in Action, where: a.user_id == ^user_id, select: a.action)
-    |> Repo.all(skip_tenant_check: true)
+    # Inside with_tenant (#1354): the unscoped form returned [] for EVERY user
+    # on prod under FORCE RLS, so the onboarding wizard showed nobody's
+    # completed steps. Locally it looked fine — dev/CI connect as a superuser,
+    # which bypasses RLS regardless of FORCE.
+    {:ok, actions} =
+      Repo.with_tenant(user_id, fn ->
+        from(a in Action, where: a.user_id == ^user_id, select: a.action)
+        |> Repo.all()
+      end)
+
+    actions
   end
 end
