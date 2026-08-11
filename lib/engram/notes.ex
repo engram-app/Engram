@@ -2396,6 +2396,12 @@ defmodule Engram.Notes do
     end
   end
 
+  defp rename_fence(%Note{id: id, seq: seq, crdt_state_ciphertext: nil}),
+    do: from(n in Note, where: n.id == ^id and n.seq == ^seq)
+
+  defp rename_fence(%Note{id: id, seq: seq, crdt_state_ciphertext: ct}),
+    do: from(n in Note, where: n.id == ^id and n.seq == ^seq and n.crdt_state_ciphertext == ^ct)
+
   defp do_rename_note_inner(note, user, new_path, new_folder, now) do
     decrypted_note = decrypt_or_raise!(note, user)
     new_title = Helpers.extract_title(decrypted_note.content || "", new_path)
@@ -2421,8 +2427,19 @@ defmodule Engram.Notes do
 
     seq = Engram.Vaults.next_seq!(note.vault_id)
 
+    # Fenced on the row pre-image this rename derived from. #1335, same class.
+    # `full_kw` rebuilds ALL five ciphertext columns from `decrypted_note`,
+    # which was read at the top of this function, so anything committing in
+    # between — a checkpoint materializing live text, or a concurrent
+    # `upsert_note` — was overwritten by that pre-read plaintext under the old
+    # primary-key-only WHERE.
+    #
+    # `seq` is the always-present half; `crdt_state_ciphertext` catches the
+    # checkpoint branches that rewrite the snapshot without touching seq, and is
+    # only compared when non-nil because `= NULL` is never true.
     {count, _} =
-      from(n in Note, where: n.id == ^note.id)
+      note
+      |> rename_fence()
       |> Repo.update_all(
         set:
           [
@@ -2520,6 +2537,19 @@ defmodule Engram.Notes do
          updated_at: now
        )}
     else
+      # Zero rows can now mean two different things, and they want different
+      # triage: the row is genuinely gone, or the snapshot fence caught a write
+      # that committed under us (#1335). Only re-read on this rare miss path.
+      if Repo.exists?(from(n in Note, where: n.id == ^note.id)) do
+        Logger.warning(
+          "note_rename_snapshot_fence_lost",
+          Metadata.with_category(:warning, :sync, user_id: user.id, note_id: note.id)
+        )
+      end
+
+      # `:not_found` either way — callers map it to 404 and the client re-reads,
+      # which is the correct recovery for both. Nothing was written and nothing
+      # was pruned.
       :not_found
     end
   end

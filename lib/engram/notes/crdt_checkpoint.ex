@@ -173,6 +173,13 @@ defmodule Engram.Notes.CrdtCheckpoint do
               raw_note ->
                 {:ok, note} = Crypto.maybe_decrypt_note_fields(raw_note, user)
 
+                # Test-only seam, mirroring the one Notes calls at
+                # :after_note_read. Parks here, between the row read and the
+                # fenced write, so a competing REST/MCP write can commit in the
+                # gap. `nil` in every environment that does not set it, which is
+                # all of them outside test/support/checkpoint_interleave.ex.
+                interleave_hook(:after_row_read)
+
                 if markdown?(note.path) do
                   do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user)
                 else
@@ -324,18 +331,20 @@ defmodule Engram.Notes.CrdtCheckpoint do
     with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
          {:ok, raw_state} <- encode(union_doc),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(raw_state, user, note_id) do
-      {1, _} =
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note_id and n.kind == "note"),
-          set: [
-            crdt_state_ciphertext: ct,
-            crdt_state_nonce: nonce,
-            dek_version: Crypto.row_version_aad_bound()
-          ]
-        )
+      case Repo.update_all(snapshot_fence(note_id, note),
+             set: [
+               crdt_state_ciphertext: ct,
+               crdt_state_nonce: nonce,
+               dek_version: Crypto.row_version_aad_bound()
+             ]
+           ) do
+        {1, _} ->
+          prune_tail(note_id, prune)
+          {note.content_hash, note.content_hash, note.path}
 
-      prune_tail(note_id, prune)
-      {note.content_hash, note.content_hash, note.path}
+        {0, _} ->
+          {:skip, :stale_snapshot}
+      end
     else
       err -> {:abort, err}
     end
@@ -385,18 +394,20 @@ defmodule Engram.Notes.CrdtCheckpoint do
       prev == content_hash ->
         # Text unchanged: compact the snapshot + prune, but do NOT touch
         # version/seq/content — legacy /changes pullers must not see phantom edits.
-        {1, _} =
-          Repo.update_all(
-            from(n in Note, where: n.id == ^note_id and n.kind == "note"),
-            set: [
-              crdt_state_ciphertext: ct,
-              crdt_state_nonce: nonce,
-              dek_version: Crypto.row_version_aad_bound()
-            ]
-          )
+        case Repo.update_all(snapshot_fence(note_id, note),
+               set: [
+                 crdt_state_ciphertext: ct,
+                 crdt_state_nonce: nonce,
+                 dek_version: Crypto.row_version_aad_bound()
+               ]
+             ) do
+          {1, _} ->
+            prune_tail(note_id, prune)
+            {prev, content_hash, note.path}
 
-        prune_tail(note_id, prune)
-        {prev, content_hash, note.path}
+          {0, _} ->
+            {:skip, :stale_snapshot}
+        end
 
       true ->
         # Re-derive title from the note's decrypted (sanitized-at-write) path.
@@ -553,6 +564,49 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # Only the branches that write crdt_state WITHOUT re-encrypting the rest need
   # this guard. The materialize branch re-encrypts every envelope, so it migrates
   # the row wholesale and is the one path that may run on a legacy row.
+  defp interleave_hook(point) do
+    case Application.get_env(:engram, :checkpoint_interleave_hook) do
+      nil -> :ok
+      fun when is_function(fun, 1) -> _ = fun.(point)
+    end
+
+    :ok
+  end
+
+  # Pin the write to the row pre-image this checkpoint derived from. #1335,
+  # mirror direction.
+  #
+  # Both branches above write `crdt_state` and then PRUNE THE TAIL, with what
+  # used to be a primary-key-only WHERE. A REST/MCP write committing between
+  # this checkpoint's row read and its update therefore had its `crdt_state`
+  # overwritten by a union of the PRE-REST row, while `notes.content` kept the
+  # REST text: doc and facade diverge, the next bind projects the older doc, and
+  # the REST edit reverts on every device — with the tail rows that held it
+  # already pruned.
+  #
+  # `seq` is the always-present half (NOT NULL, and every committing writer
+  # allocates a fresh one, including delete_note). `crdt_state_ciphertext` is
+  # added only when non-nil so a never-checkpointed row is fenced on seq alone
+  # rather than on `= NULL`, which is never true.
+  #
+  # On a miss we skip WITHOUT pruning. That is the whole safety property: the
+  # tail is the only durable copy of anything this doc holds that the newer row
+  # does not, so a checkpoint that cannot prove it read the current row must not
+  # delete it. The next debounce tick re-reads and checkpoints normally.
+  defp snapshot_fence(note_id, %Note{crdt_state_ciphertext: nil, seq: seq}) do
+    from(n in Note,
+      where: n.id == ^note_id and n.kind == "note" and n.seq == ^seq
+    )
+  end
+
+  defp snapshot_fence(note_id, %Note{crdt_state_ciphertext: ct, seq: seq}) do
+    from(n in Note,
+      where:
+        n.id == ^note_id and n.kind == "note" and n.seq == ^seq and
+          n.crdt_state_ciphertext == ^ct
+    )
+  end
+
   defp legacy_row?(%Note{dek_version: v}) when is_integer(v),
     do: v < Crypto.row_version_aad_bound()
 
