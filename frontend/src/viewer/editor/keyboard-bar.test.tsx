@@ -129,6 +129,21 @@ describe("KeyboardBar", () => {
 		expect(evt.defaultPrevented).toBe(true);
 	});
 
+	// `touch-action: pan-x` is what makes the row scrollable, and it also makes
+	// pointerdown NON-cancelable for touch in Chrome — so the preventDefault
+	// guard above silently stops working there and the pan blurs the editor,
+	// closing the keyboard. Restoring focus when the gesture ends puts the caret
+	// and the keyboard back, inside the same user gesture.
+	it("returns focus to the editor when a gesture on the bar ends", () => {
+		mount("hello");
+		const bar = screen.getByRole("toolbar", { name: "Editor actions" });
+		view.contentDOM.blur();
+		expect(view.hasFocus).toBe(false);
+
+		fireEvent.pointerUp(bar);
+		expect(view.hasFocus).toBe(true);
+	});
+
 	it("indents the caret line", () => {
 		mount("item");
 		fireEvent.click(screen.getByRole("button", { name: "Indent" }));

@@ -1,6 +1,16 @@
 import { useEffect, useState } from "react";
 
 /**
+ * Focus inside either of these counts as "the editor is being used".
+ *
+ * The toolbar is included because a touch pan across the command row moves
+ * focus onto the bar itself on browsers where pointerdown is not cancelable
+ * (see keyboard-bar.tsx), and treating that as a blur unmounted the toolbar out
+ * from under the finger mid-drag.
+ */
+const FOCUS_HOLDERS = ".cm-editor, [data-editor-toolbar]";
+
+/**
  * True while focus is inside a CodeMirror editor — i.e. while the on-screen
  * keyboard is up on a touch device.
  *
@@ -17,7 +27,7 @@ export function useEditorFocused(): boolean {
 	const [focused, setFocused] = useState(false);
 
 	useEffect(() => {
-		const isInEditor = () => Boolean(document.activeElement?.closest(".cm-editor"));
+		const isInEditor = () => Boolean(document.activeElement?.closest(FOCUS_HOLDERS));
 		const sync = () => setFocused(isInEditor());
 		sync();
 		// focusin/focusout bubble (focus/blur do not), so one document-level pair

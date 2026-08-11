@@ -145,12 +145,25 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 			// sitting on top of the keyboard. One expression covers both.
 			className="fixed inset-x-0 bottom-0 z-40 flex flex-col border-border border-t bg-card"
 			style={{ transform: `translateY(-${inset}px)` }}
+			// Marks this subtree as still "the editor" for useEditorFocused, so a
+			// pan that lands focus on the bar does not unmount it mid-drag.
+			data-editor-toolbar=""
 			// Keep the keyboard up. A pointerdown that reaches the document blurs
 			// the editor, iOS dismisses the keyboard, and the bar this lives on
 			// slides away mid-tap — so the press must never move focus. The heading
 			// row lives INSIDE this nav rather than in a portalled popover so it is
 			// covered by the same guard.
+			//
+			// This is NOT sufficient on its own. `touch-action: pan-x` on the
+			// command row is what lets it scroll, and it also makes pointerdown
+			// non-cancelable for touch in Chrome — the browser reserves the right
+			// to start a pan — so preventDefault silently becomes a no-op there and
+			// the drag blurs the editor anyway. Hence the pointerup below.
 			onPointerDown={(e) => e.preventDefault()}
+			// Put the caret (and the keyboard) back when the gesture ends. pointerup
+			// is still inside the user gesture, which is what lets a programmatic
+			// focus re-open the on-screen keyboard.
+			onPointerUp={() => getView()?.focus()}
 		>
 			{headingsOpen ? (
 				<section
