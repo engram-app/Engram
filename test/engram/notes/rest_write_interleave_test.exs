@@ -37,7 +37,7 @@ defmodule Engram.Notes.RestWriteInterleaveTest do
   alias Engram.CheckpointInterleave
   alias Engram.Crypto
   alias Engram.Notes
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note}
   alias Engram.Repo
 
   setup do
@@ -62,7 +62,10 @@ defmodule Engram.Notes.RestWriteInterleaveTest do
     %{user: user, vault: vault}
   end
 
-  @tag :interleave
+  # Deliberately NOT tagged. test_helper.exs excludes :qdrant_integration,
+  # :cluster and :integration by default, and a tag here would be one edit away
+  # from joining them — an interleave test that silently stops running is worse
+  # than no interleave test, which is the exact history #1335 records.
   test "a checkpoint that commits mid-write is not clobbered", %{user: user, vault: vault} do
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "race.md", "content" => "BODY"})
 
