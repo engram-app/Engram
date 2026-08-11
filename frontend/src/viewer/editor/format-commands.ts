@@ -65,17 +65,47 @@ function selectedLines(state: EditorState): Line[] {
 }
 
 /**
- * Apply `changes` and map the selection with assoc = 1.
+ * The lines a line command should act on: everything the selection touches,
+ * minus the blank ones — unless a blank line is all there is.
+ *
+ * A marker on a blank line is wrong in every direction: it renders as an empty
+ * heading, and it ENDS a list in markdown, so numbering one would split the
+ * list and consume an ordinal besides. Blank lines are also exactly what
+ * separate the paragraphs a multi-line selection spans. A lone blank line is
+ * the opposite case: someone starting a list or a heading before typing it.
+ *
+ * Shared because it drifted once already — setHeading kept marking blank lines
+ * after toggleList learned not to.
+ */
+function targetLines(state: EditorState): Line[] {
+	const lines = selectedLines(state);
+	return lines.length === 1 ? lines : lines.filter((line) => line.text.trim() !== "");
+}
+
+/** A line's leading whitespace and the rest, which every marker rewrite needs. */
+function splitIndent(line: Line): { indent: string; body: string } {
+	const { indent = "", body = "" } = LINE_PARTS.exec(line.text)?.groups ?? {};
+	return { indent, body };
+}
+
+/**
+ * Apply `changes`, mapping the selection with assoc = 1, then refocus.
  *
  * CodeMirror maps a caret sitting exactly ON an insertion point to BEFORE the
  * inserted text by default. For a line marker that is always wrong: tapping
  * the list button on an empty line left the caret to the left of the "- ", so
  * the next keystroke landed in front of the bullet and you had to move the
  * cursor by hand before typing. assoc = 1 pushes it to the far side instead.
+ *
+ * Refocusing is part of the same step because a toolbar command that edits
+ * without returning focus leaves the keyboard closing on a phone.
  */
-function dispatchKeepingCaretAfterInsert(view: EditorView, changes: ChangeSpec[]): void {
-	const changeSet = view.state.changes(changes);
-	view.dispatch({ changes: changeSet, selection: view.state.selection.map(changeSet, 1) });
+function applyLineChanges(view: EditorView, changes: ChangeSpec[]): void {
+	if (changes.length > 0) {
+		const changeSet = view.state.changes(changes);
+		view.dispatch({ changes: changeSet, selection: view.state.selection.map(changeSet, 1) });
+	}
+	view.focus();
 }
 
 /** Marker -> the syntax node the markdown grammar produces for it. */
@@ -251,7 +281,7 @@ export function toggleCheckbox(view: EditorView): void {
 		if (line.text.trim() === "") {
 			continue;
 		}
-		const { indent = "", body = "" } = LINE_PARTS.exec(line.text)?.groups ?? {};
+		const { indent, body } = splitIndent(line);
 		// Edit only the marker, never the whole line. Rewriting the line
 		// wholesale maps the caret to the line start — tap the button mid-word
 		// and you lose your place.
@@ -269,10 +299,7 @@ export function toggleCheckbox(view: EditorView): void {
 			changes.push({ from: bodyStart, insert: "- [ ] " });
 		}
 	}
-	if (changes.length > 0) {
-		dispatchKeepingCaretAfterInsert(view, changes);
-	}
-	view.focus();
+	applyLineChanges(view, changes);
 }
 
 /**
@@ -285,14 +312,8 @@ export function toggleCheckbox(view: EditorView): void {
  */
 export function setHeading(view: EditorView, level: number): void {
 	const changes: ChangeSpec[] = [];
-	const lines = selectedLines(view.state);
-	// A marker on a blank line renders as an empty heading, and blank lines are
-	// exactly what separate the paragraphs a multi-line selection spans. Same
-	// rule as toggleList. A lone blank line is still marked: that is someone
-	// starting a heading before typing it.
-	const targets = lines.length === 1 ? lines : lines.filter((line) => line.text.trim() !== "");
-	for (const line of targets) {
-		const { indent = "", body = "" } = LINE_PARTS.exec(line.text)?.groups ?? {};
+	for (const line of targetLines(view.state)) {
+		const { indent, body } = splitIndent(line);
 		const from = line.from + indent.length;
 		const existing = HEADING.exec(body);
 		const hashes = existing?.groups?.hashes ?? "";
@@ -304,8 +325,7 @@ export function setHeading(view: EditorView, level: number): void {
 			insert: hashes.length === level ? "" : `${"#".repeat(level)} `,
 		});
 	}
-	dispatchKeepingCaretAfterInsert(view, changes);
-	view.focus();
+	applyLineChanges(view, changes);
 }
 
 /**
@@ -348,10 +368,7 @@ export function toggleQuote(view: EditorView): void {
 		const at = line.from + indent.length;
 		return removing ? { from: at, to: at + marker.length, insert: "" } : { from: at, insert: "> " };
 	});
-	if (changes.length > 0) {
-		dispatchKeepingCaretAfterInsert(view, changes);
-	}
-	view.focus();
+	applyLineChanges(view, changes);
 }
 
 /**
@@ -387,13 +404,8 @@ export function insertLink(view: EditorView): void {
  * but the source is what you look at in live preview.
  */
 export function toggleList(view: EditorView, ordered: boolean): void {
-	const lines = selectedLines(view.state);
-	// A blank line ends a list in markdown, so numbering one mid-selection would
-	// split the list AND consume an ordinal. A lone blank line is different: that
-	// is someone starting a list before typing anything.
-	const targets = lines.length === 1 ? lines : lines.filter((line) => line.text.trim() !== "");
-	const items = targets.map((line) => {
-		const { indent = "", body = "" } = LINE_PARTS.exec(line.text)?.groups ?? {};
+	const items = targetLines(view.state).map((line) => {
+		const { indent, body } = splitIndent(line);
 		return {
 			at: line.from + indent.length,
 			marker: LIST_MARKER.exec(body)?.groups?.marker ?? "",
@@ -409,10 +421,7 @@ export function toggleList(view: EditorView, ordered: boolean): void {
 		to: item.at + item.marker.length,
 		insert: removing ? "" : ordered ? `${index + 1}. ` : "- ",
 	}));
-	if (changes.length > 0) {
-		dispatchKeepingCaretAfterInsert(view, changes);
-	}
-	view.focus();
+	applyLineChanges(view, changes);
 }
 
 /** Prepend `prefix` (e.g. "# ", "> ", "- ") to each line the selection touches. */
@@ -423,8 +432,5 @@ export function toggleLinePrefix(view: EditorView, prefix: string): void {
 			changes.push({ from: line.from, insert: prefix });
 		}
 	}
-	if (changes.length > 0) {
-		dispatchKeepingCaretAfterInsert(view, changes);
-	}
-	view.focus();
+	applyLineChanges(view, changes);
 }

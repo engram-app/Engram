@@ -1,6 +1,7 @@
 import { startCompletion } from "@codemirror/autocomplete";
 import { indentLess, indentMore } from "@codemirror/commands";
 import type { EditorView } from "@codemirror/view";
+import type { LucideIcon } from "lucide-react";
 import {
 	Bold,
 	Brackets,
@@ -78,6 +79,60 @@ function insertWikiLink(view: EditorView): void {
 const HEADING_LEVELS = [1, 2, 3, 4, 5, 6];
 
 /**
+ * The command row, grouped by kind: history, inline marks, block structure and
+ * everything that acts on a list item, then inserts.
+ *
+ * The grouping is nested arrays rather than comments between JSX blocks so that
+ * the order IS the data — half the row is off screen at any time, so where a
+ * button sits is a decision worth being able to read at a glance. `Indent` and
+ * `Outdent` sit in the third group deliberately: on a phone their only real use
+ * is nesting a list item, so beside `Undo` they read as history controls.
+ */
+const COMMAND_GROUPS: ReadonlyArray<
+	ReadonlyArray<{ label: string; Icon: LucideIcon; act?: (view: EditorView) => void }>
+> = [
+	[
+		{ label: "Undo", Icon: Undo2, act: undoEdit },
+		{ label: "Redo", Icon: Redo2, act: redoEdit },
+	],
+	[
+		{ label: "Bold", Icon: Bold, act: (v) => toggleWrap(v, "**") },
+		{ label: "Italic", Icon: Italic, act: (v) => toggleWrap(v, "*") },
+		{ label: "Strikethrough", Icon: Strikethrough, act: (v) => toggleWrap(v, "~~") },
+		{ label: "Code", Icon: Code, act: toggleCode },
+	],
+	[
+		// No `act`: this is the one button that opens a panel — the level row —
+		// rather than editing the document.
+		{ label: "Heading", Icon: Heading },
+		{ label: "Quote", Icon: Quote, act: toggleQuote },
+		{ label: "Bullet list", Icon: List, act: (v) => toggleList(v, false) },
+		{ label: "Numbered list", Icon: ListOrdered, act: (v) => toggleList(v, true) },
+		{ label: "Toggle checkbox", Icon: SquareCheckBig, act: toggleCheckbox },
+		{
+			label: "Outdent",
+			Icon: IndentDecrease,
+			act: (v) => {
+				indentLess(v);
+			},
+		},
+		{
+			label: "Indent",
+			Icon: IndentIncrease,
+			act: (v) => {
+				indentMore(v);
+			},
+		},
+	],
+	[
+		// Two link buttons on purpose: the wikilink one opens the note picker,
+		// the other is for an external URL you are about to paste.
+		{ label: "Wiki link", Icon: Brackets, act: insertWikiLink },
+		{ label: "Link", Icon: Link, act: insertLink },
+	],
+];
+
+/**
  * How much bottom-edge space the toolbar is currently eating, published for the
  * other things anchored to that edge — today the setup-checklist FAB, which was
  * landing on top of the bar as soon as the keyboard opened.
@@ -125,21 +180,33 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 	// hold is what makes the repair below reachable at all.
 	const visible = !isDesktop && (gesturing || (focused && keyboardOpen));
 
-	// No dependency array: the bar's height changes with the heading row, and
-	// re-measuring on every render is a single getBoundingClientRect on an
-	// element that is already in the layout.
+	// Observes the bar instead of re-measuring on every render.
+	// getBoundingClientRect forces a synchronous layout, and this component
+	// re-renders on every visualViewport scroll event — those fire continuously
+	// while the caret moves.
+	//
+	// A ResizeObserver also removes the need to ENUMERATE what changes the
+	// height. Depending on `headingsOpen` would be depending on a proxy for the
+	// real thing, which is the rendered height — and would silently miss the next
+	// cause (a wrapped row, a late-loading font, a third row).
 	useLayoutEffect(() => {
 		const root = document.documentElement;
-		if (!visible) {
+		const bar = barRef.current;
+		if (!(visible && bar)) {
 			root.style.removeProperty(TOOLBAR_OFFSET_VAR);
 			return;
 		}
-		const height = barRef.current?.getBoundingClientRect().height ?? 0;
-		root.style.setProperty(TOOLBAR_OFFSET_VAR, `${height + inset}px`);
+		const publish = () => {
+			root.style.setProperty(TOOLBAR_OFFSET_VAR, `${bar.getBoundingClientRect().height + inset}px`);
+		};
+		publish();
+		const observer = new ResizeObserver(publish);
+		observer.observe(bar);
 		return () => {
+			observer.disconnect();
 			root.style.removeProperty(TOOLBAR_OFFSET_VAR);
 		};
-	});
+	}, [visible, inset]);
 
 	if (!visible) {
 		return null;
@@ -229,109 +296,19 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 				aria-label="Editor commands"
 				className="flex touch-pan-x items-center gap-2 overflow-x-auto px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>button]:size-11 [&>button]:shrink-0"
 			>
-				{/* History */}
-				<Button variant="ghost" size="icon" aria-label="Undo" onClick={run(undoEdit)}>
-					<Undo2 className="size-6" />
-				</Button>
-				<Button variant="ghost" size="icon" aria-label="Redo" onClick={run(redoEdit)}>
-					<Redo2 className="size-6" />
-				</Button>
-				{/* Inline marks */}
-				<Button
-					variant="ghost"
-					size="icon"
-					aria-label="Bold"
-					onClick={run((v) => toggleWrap(v, "**"))}
-				>
-					<Bold className="size-6" />
-				</Button>
-				<Button
-					variant="ghost"
-					size="icon"
-					aria-label="Italic"
-					onClick={run((v) => toggleWrap(v, "*"))}
-				>
-					<Italic className="size-6" />
-				</Button>
-				<Button
-					variant="ghost"
-					size="icon"
-					aria-label="Strikethrough"
-					onClick={run((v) => toggleWrap(v, "~~"))}
-				>
-					<Strikethrough className="size-6" />
-				</Button>
-				<Button variant="ghost" size="icon" aria-label="Code" onClick={run(toggleCode)}>
-					<Code className="size-6" />
-				</Button>
-				{/* Block structure, then everything that acts on a list item. Indent
-				    and outdent live HERE rather than next to undo: on a phone their
-				    only real use is nesting a list item, so they belong beside the
-				    lists and the checkbox they operate on. */}
-				<Button
-					variant="ghost"
-					size="icon"
-					aria-label="Heading"
-					aria-expanded={headingsOpen}
-					onClick={() => setHeadingsOpen((open) => !open)}
-				>
-					<Heading className="size-6" />
-				</Button>
-				<Button variant="ghost" size="icon" aria-label="Quote" onClick={run(toggleQuote)}>
-					<Quote className="size-6" />
-				</Button>
-				<Button
-					variant="ghost"
-					size="icon"
-					aria-label="Bullet list"
-					onClick={run((v) => toggleList(v, false))}
-				>
-					<List className="size-6" />
-				</Button>
-				<Button
-					variant="ghost"
-					size="icon"
-					aria-label="Numbered list"
-					onClick={run((v) => toggleList(v, true))}
-				>
-					<ListOrdered className="size-6" />
-				</Button>
-				<Button
-					variant="ghost"
-					size="icon"
-					aria-label="Toggle checkbox"
-					onClick={run(toggleCheckbox)}
-				>
-					<SquareCheckBig className="size-6" />
-				</Button>
-				<Button
-					variant="ghost"
-					size="icon"
-					aria-label="Outdent"
-					onClick={run((v) => {
-						indentLess(v);
-					})}
-				>
-					<IndentDecrease className="size-6" />
-				</Button>
-				<Button
-					variant="ghost"
-					size="icon"
-					aria-label="Indent"
-					onClick={run((v) => {
-						indentMore(v);
-					})}
-				>
-					<IndentIncrease className="size-6" />
-				</Button>
-				{/* Insert. Two link buttons on purpose: the wikilink one opens the note
-				    picker, this one is for an external URL you are about to paste. */}
-				<Button variant="ghost" size="icon" aria-label="Wiki link" onClick={run(insertWikiLink)}>
-					<Brackets className="size-6" />
-				</Button>
-				<Button variant="ghost" size="icon" aria-label="Link" onClick={run(insertLink)}>
-					<Link className="size-6" />
-				</Button>
+				{COMMAND_GROUPS.flat().map(({ label, Icon, act }) => (
+					<Button
+						key={label}
+						variant="ghost"
+						size="icon"
+						aria-label={label}
+						// No `act` means the panel button; see COMMAND_GROUPS.
+						aria-expanded={act ? undefined : headingsOpen}
+						onClick={act ? run(act) : () => setHeadingsOpen((open) => !open)}
+					>
+						<Icon className="size-6" />
+					</Button>
+				))}
 			</section>
 		</nav>
 	);
