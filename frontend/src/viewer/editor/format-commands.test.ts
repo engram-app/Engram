@@ -121,6 +121,46 @@ describe("format-commands", () => {
 		});
 	});
 
+	// An insertion sitting exactly on the caret maps the caret BEFORE it by
+	// default, so tapping the list button left the cursor to the left of the
+	// "- " and you had to reach over and move it before typing.
+	describe("caret lands after the inserted marker", () => {
+		test("toggleLinePrefix puts the caret after a bullet on an empty line", () => {
+			mount("", 0, 0);
+			toggleLinePrefix(view, "- ");
+			expect(view.state.doc.toString()).toBe("- ");
+			expect(view.state.selection.main.head).toBe(2);
+		});
+
+		test("toggleLinePrefix keeps the caret in front of existing text, not the marker", () => {
+			mount("item", 0, 0);
+			toggleLinePrefix(view, "- ");
+			expect(view.state.doc.toString()).toBe("- item");
+			expect(view.state.selection.main.head).toBe(2);
+		});
+
+		test("toggleLinePrefix preserves a caret already inside the text", () => {
+			mount("item", 2, 2); // between "it" and "em"
+			toggleLinePrefix(view, "- ");
+			expect(view.state.selection.main.head).toBe(4);
+		});
+
+		test("toggleCheckbox puts the caret after the box, not at the line start", () => {
+			mount("buy milk", 0, 0);
+			toggleCheckbox(view);
+			expect(view.state.doc.toString()).toBe("- [ ] buy milk");
+			expect(view.state.selection.main.head).toBe(6);
+		});
+
+		test("toggleCheckbox keeps the caret next to the same word when checking", () => {
+			// Caret before "milk" in "- [ ] buy milk" → same spot once checked.
+			mount("- [ ] buy milk", 10, 10);
+			toggleCheckbox(view);
+			expect(view.state.doc.toString()).toBe("- [x] buy milk");
+			expect(view.state.selection.main.head).toBe(10);
+		});
+	});
+
 	// Obsidian's "toggle checkbox status": plain text and bare bullets become an
 	// unchecked task, and an existing task flips state rather than being removed.
 	describe("toggleCheckbox", () => {

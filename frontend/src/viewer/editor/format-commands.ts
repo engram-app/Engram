@@ -16,6 +16,20 @@ const TASK = /^(?<marker>[-*+] )\[(?<state>[ xX])\] ?(?<rest>.*)$/u;
 /** A bare list item: `- foo`, with no checkbox yet. */
 const BULLET = /^(?<marker>[-*+] )(?<rest>.*)$/u;
 
+/**
+ * Apply `changes` and map the selection with assoc = 1.
+ *
+ * CodeMirror maps a caret sitting exactly ON an insertion point to BEFORE the
+ * inserted text by default. For a line marker that is always wrong: tapping
+ * the list button on an empty line left the caret to the left of the "- ", so
+ * the next keystroke landed in front of the bullet and you had to move the
+ * cursor by hand before typing. assoc = 1 pushes it to the far side instead.
+ */
+function dispatchKeepingCaretAfterInsert(view: EditorView, changes: ChangeSpec[]): void {
+	const changeSet = view.state.changes(changes);
+	view.dispatch({ changes: changeSet, selection: view.state.selection.map(changeSet, 1) });
+}
+
 /** Tab indents / Shift-Tab dedents the selected lines (Obsidian parity). */
 export const indentKeymap: Extension = keymap.of([indentWithTab]);
 
@@ -115,18 +129,22 @@ export function toggleCheckbox(view: EditorView): void {
 			if (!seen.has(line.number) && line.text.trim() !== "") {
 				seen.add(line.number);
 				const { indent = "", body = "" } = LINE_PARTS.exec(line.text)?.groups ?? {};
+				// Edit only the marker, never the whole line. Rewriting the line
+				// wholesale maps the caret to the line start — tap the button
+				// mid-word and you lose your place.
+				const bodyStart = line.from + indent.length;
 				const task = TASK.exec(body)?.groups;
 				const bullet = BULLET.exec(body)?.groups;
-				let next: string;
 				if (task) {
+					// Flip the single character inside the brackets.
+					const statePos = bodyStart + (task.marker?.length ?? 0) + 1;
 					const checked = task.state?.toLowerCase() === "x";
-					next = `${task.marker}[${checked ? " " : "x"}] ${task.rest}`;
+					changes.push({ from: statePos, to: statePos + 1, insert: checked ? " " : "x" });
 				} else if (bullet) {
-					next = `${bullet.marker}[ ] ${bullet.rest}`;
+					changes.push({ from: bodyStart + (bullet.marker?.length ?? 0), insert: "[ ] " });
 				} else {
-					next = `- [ ] ${body}`;
+					changes.push({ from: bodyStart, insert: "- [ ] " });
 				}
-				changes.push({ from: line.from, to: line.to, insert: `${indent}${next}` });
 			}
 			pos = line.to + 1;
 			if (line.to >= state.doc.length) {
@@ -135,7 +153,7 @@ export function toggleCheckbox(view: EditorView): void {
 		}
 	}
 	if (changes.length > 0) {
-		view.dispatch({ changes });
+		dispatchKeepingCaretAfterInsert(view, changes);
 	}
 	view.focus();
 }
@@ -166,7 +184,7 @@ export function toggleLinePrefix(view: EditorView, prefix: string): void {
 		}
 	}
 	if (changes.length > 0) {
-		view.dispatch({ changes });
+		dispatchKeepingCaretAfterInsert(view, changes);
 	}
 	view.focus();
 }
