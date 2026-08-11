@@ -410,22 +410,20 @@ defmodule Engram.Notes do
 
       result =
         Repo.with_tenant(user.id, fn ->
-          case Repo.one(lookup_query) do
-            nil ->
-              upsert_pathless(
-                client_id,
-                vault,
-                base_attrs,
-                user,
-                sanitized_path,
-                folder,
-                tags,
-                lookup_query
-              )
-
-            existing ->
-              do_update_note(existing, base_attrs, user, sanitized_path, folder, tags, opts)
-          end
+          lookup_and_write(
+            %{
+              query: lookup_query,
+              client_id: client_id,
+              vault: vault,
+              base: base_attrs,
+              user: user,
+              path: sanitized_path,
+              folder: folder,
+              tags: tags,
+              opts: opts
+            },
+            1
+          )
         end)
 
       case result do
@@ -1593,8 +1591,17 @@ defmodule Engram.Notes do
           |> Ecto.Changeset.put_change(:seq, seq)
           |> Ecto.Changeset.put_change(:deleted_at, nil)
 
-        case Repo.update(changeset) do
-          {:ok, updated} ->
+        # Same snapshot fence as do_rewrite_note, for the same reason: this
+        # merges CRDT state from `prior.crdt_state` and then writes both
+        # `content` and `crdt_state`, so a checkpoint committing in the gap
+        # would be rolled back to the pre-checkpoint snapshot with its tail
+        # already pruned. Fixing only do_rewrite_note left the rename and
+        # id-keyed-move path clobbering checkpoints. #1335.
+        #
+        # `put_change(:deleted_at, nil)` means this can also resurrect a
+        # tombstone, so the fence carries the whole pre-image, not just the id.
+        case Repo.update_all(crdt_fence(prior), set: changeset_set(changeset)) do
+          {1, [updated]} ->
             _ =
               if was_tombstoned do
                 :ok = UsageMeters.inc_notes_count(user.id, 1)
@@ -1608,8 +1615,8 @@ defmodule Engram.Notes do
             # vanishes on them until their next pull).
             {:ok, {:moved, prior.content_hash, updated, crdt.merged_text, crdt.content_hash}}
 
-          {:error, changeset} ->
-            {:error, changeset}
+          {0, _} ->
+            :stale_snapshot
         end
       end
     end
@@ -1700,10 +1707,69 @@ defmodule Engram.Notes do
     {:ok, {existing.content_hash, existing, base_attrs.content, existing.content_hash}}
   end
 
-  defp do_rewrite_note(existing, base_attrs, user, sanitized_path, folder, opts),
-    do: do_rewrite_note(existing, base_attrs, user, sanitized_path, folder, opts, 1)
+  # The whole read-then-write, retried ONCE when the write loses its snapshot
+  # fence. #1335.
+  #
+  # The retry re-enters at the LOOKUP, not at `do_rewrite_note`. That matters:
+  # everything between here and the write is a gate that has to be re-evaluated
+  # against whatever is on disk now, not against the row we first read.
+  #
+  #   * the path lookup itself — the row may have been RENAMED in the gap, in
+  #     which case this path no longer names it and re-reading by primary key
+  #     would rewrite the OLD path's hmac/ciphertext and silently undo the
+  #     rename. `note_by_path_query` also filters `deleted_at`, so a note
+  #     deleted in the gap reads as absent instead of being rewritten and
+  #     re-broadcast as an upsert.
+  #   * `do_update_note`'s `base_hash` stale-base gate — the declared base may
+  #     have been fresh against the first read and stale against this one.
+  #   * `idempotent_repush` — the competing write may have made this push a
+  #     provable no-op.
+  #
+  # ONE retry. The interleave is a genuine race, so a second loss means real
+  # contention, and an unbounded loop against a hot note is a livelock.
+  defp lookup_and_write(%{} = w, retries) do
+    result =
+      case Repo.one(w.query) do
+        nil ->
+          upsert_pathless(w.client_id, w.vault, w.base, w.user, w.path, w.folder, w.tags, w.query)
 
-  defp do_rewrite_note(existing, base_attrs, user, sanitized_path, folder, opts, retries) do
+        existing ->
+          # Test-only seam: parks here, between the row read and the write, so a
+          # competing checkpoint can commit in the gap. `nil` in every
+          # environment that does not set it, which is all of them outside
+          # `test/support/checkpoint_interleave.ex`.
+          interleave_hook(:after_note_read)
+          do_update_note(existing, w.base, w.user, w.path, w.folder, w.tags, w.opts)
+      end
+
+    case result do
+      :stale_snapshot when retries > 0 ->
+        lookup_and_write(w, retries - 1)
+
+      :stale_snapshot ->
+        # Out of retries. Re-read so the conflict we hand back describes the row
+        # as it actually is; `nil` means it was deleted, which the delete-wins
+        # contract says must NOT come back as an authoritative "server note".
+        case Repo.one(w.query) do
+          nil -> {:error, :note_deleted}
+          fresh -> {:conflict, fresh}
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp interleave_hook(point) do
+    case Application.get_env(:engram, :checkpoint_interleave_hook) do
+      nil -> :ok
+      fun when is_function(fun, 1) -> _ = fun.(point)
+    end
+
+    :ok
+  end
+
+  defp do_rewrite_note(existing, base_attrs, user, sanitized_path, folder, opts) do
     # db_opts carries `mode: :savepoint` on the batch path so a failed SQL
     # statement here (next_seq!'s UPDATE, or the Repo.update) rolls back to a
     # per-statement savepoint instead of poisoning the shared batch tx into
@@ -1746,89 +1812,58 @@ defmodule Engram.Notes do
 
         changeset =
           existing
-          |> Note.changeset(phase_b)
+          |> Note.changeset(Map.put(phase_b, :version, existing.version + 1))
           |> Ecto.Changeset.put_change(:seq, seq)
-          # #1335. The WHERE was the primary key ALONE — no `@optimistic_lock`,
-          # no version predicate — so this write could land on top of a
-          # checkpoint that committed in the gap after `existing` was read.
-          # `crdt` above was merged from the PRE-checkpoint snapshot, so both
-          # `content` and `crdt_state` would be rolled back to it; the
-          # checkpoint has already pruned its tail rows, so those ops survive
-          # only in the live room's in-memory doc and die with the room.
-          #
-          # `optimistic_lock/2` scopes the fence to THIS changeset rather than
-          # putting `@optimistic_lock` on the schema, which would change every
-          # update path in this module at once. It also supplies the version
-          # bump, so the caller must not set `:version` itself — that would
-          # become the fence value and always miss.
-          |> Ecto.Changeset.optimistic_lock(:version)
 
-        case fenced_update(changeset, db_opts) do
-          # Thread crdt.content_hash (HMAC of projection) alongside merged_text
-          # so callers can include the stored hash in broadcast digests without
-          # re-deriving it.
-          {:ok, updated} ->
+        # #1335. The WHERE was the primary key ALONE, so this write landed on
+        # top of anything that committed after `existing` was read.
+        #
+        # The fence is on `crdt_state_ciphertext`, NOT on `version`. That is the
+        # whole point: `crdt` above was merged against `existing.crdt_state`, so
+        # the snapshot is what this write's correctness depends on — and the
+        # checkpoint branches that cause the loss (compaction, and the
+        # structural/.canvas branch) rewrite `crdt_state` and PRUNE THE TAIL
+        # while deliberately leaving `version` and `seq` untouched, precisely so
+        # legacy /changes pullers see no phantom edit. A version fence is blind
+        # to exactly the writer it needs to catch: replay_tail finds the pruned
+        # rows gone, the merge silently uses the stale snapshot, the version
+        # still matches, and the checkpoint's ops are destroyed.
+        case Repo.update_all(crdt_fence(existing), [set: changeset_set(changeset)], db_opts) do
+          {1, [updated]} ->
+            # Thread crdt.content_hash (HMAC of projection) alongside merged_text
+            # so callers can include the stored hash in broadcast digests without
+            # re-deriving it.
             {:ok, {existing.content_hash, updated, crdt.merged_text, crdt.content_hash}}
 
-          {:error, changeset} ->
-            {:error, changeset}
-
-          :stale ->
-            remerge_after_stale(existing, base_attrs, user, sanitized_path, folder, opts, retries)
+          {0, _} ->
+            :stale_snapshot
         end
       end
     end
   end
 
-  # `Repo.update` RAISES `Ecto.StaleEntryError` when an optimistic-lock filter
-  # matches zero rows — it is not a `{:error, changeset}`. Convert it to a value
-  # so the caller can decide. Nothing is swallowed: the sole caller re-reads and
-  # re-merges, and gives up loudly if that misses too.
+  # The row still carries the snapshot we merged against. `update_all` (not
+  # `Repo.update`) so the predicate is explicit and a miss is a VALUE — mirrors
+  # the #902 fence in `CrdtCheckpoint`. `select: n` returns the written row so
+  # callers still get the struct `Repo.update` used to hand back.
   #
-  # The raise does NOT poison the transaction: the UPDATE itself succeeded (it
-  # matched no rows), so there is no aborted-statement state to recover from,
-  # and the `mode: :savepoint` batch path is unaffected either way.
-  defp fenced_update(changeset, db_opts) do
-    Repo.update(changeset, db_opts)
-  rescue
-    Ecto.StaleEntryError -> :stale
+  # `crdt_state_ciphertext` is nullable and `= NULL` is never true in SQL, so a
+  # never-checkpointed note needs `IS NULL` or its every write would "lose" the
+  # fence forever.
+  defp crdt_fence(%Note{id: id, crdt_state_ciphertext: nil}) do
+    from(n in Note, where: n.id == ^id and is_nil(n.crdt_state_ciphertext), select: n)
   end
 
-  # The row moved under us. Re-read it and run the whole merge again against the
-  # NEW state: `maybe_merge_crdt` is the conflict resolution on this path (see
-  # do_update_note), so re-merging is what preserves BOTH the committed
-  # checkpoint and this writer's edit. Retrying without re-reading would just
-  # miss the fence again.
-  #
-  # One retry, then give up loudly. An unbounded loop against a hot note is a
-  # livelock, and `{:error, :stale_write}` reaching the caller is strictly better
-  # than silently discarding either side.
-  defp remerge_after_stale(existing, base_attrs, user, sanitized_path, folder, opts, retries)
-       when retries > 0 do
-    case Repo.get(Note, existing.id) do
-      # Deleted under us. Same answer as losing the fence: hand the caller a
-      # conflict so it re-reads, rather than resurrecting a tombstoned row.
-      nil ->
-        {:stale_base, existing}
-
-      fresh ->
-        do_rewrite_note(fresh, base_attrs, user, sanitized_path, folder, opts, retries - 1)
-    end
+  defp crdt_fence(%Note{id: id, crdt_state_ciphertext: ct}) do
+    from(n in Note, where: n.id == ^id and n.crdt_state_ciphertext == ^ct, select: n)
   end
 
-  defp remerge_after_stale(existing, _base, _user, _path, _folder, _opts, _retries) do
-    Logger.warning(
-      "note_write_fence_lost_twice",
-      Metadata.with_category(:warning, :sync, note_id: existing.id)
-    )
-
-    # Reuse the EXISTING conflict contract rather than inventing an error shape.
-    # `{:stale_base, row}` is already what this module returns when a writer's
-    # declared base no longer matches the row, and `upsert_note` already maps it
-    # to `{:error, :version_conflict, note}` — which the controller and channel
-    # turn into a 409 the client reconciles. A fresh atom would fall through to
-    # the `{:error, changeset}` clause and reach callers as a non-changeset.
-    {:stale_base, existing}
+  # `update_all` does NOT auto-manage timestamps the way `Repo.update` does, and
+  # `updated_at` is never cast into `changeset.changes`. Set it explicitly,
+  # matching every sibling notes update_all, so the row's recency stays truthful
+  # for everything that orders or filters on it.
+  defp changeset_set(changeset) do
+    changeset.changes |> Map.put(:updated_at, DateTime.utc_now()) |> Map.to_list()
   end
 
   # Posture C CRDT bridge — runs INSIDE the caller's Repo.with_tenant txn.
@@ -3179,18 +3214,15 @@ defmodule Engram.Notes do
       {:error, changeset} ->
         {:error, changeset}
 
-      # The row moved under this entry and the re-merge could not land either.
-      # Previously unreachable from the batch (it passes no base_hash), so this
-      # clause had no reason to exist; the version fence makes it reachable, and
-      # without it the entry would crash the batch's case instead of reporting a
-      # per-entry conflict. #1335.
-      {:stale_base, _existing} ->
-        {:error,
-         %{
-           "code" => "version_conflict",
-           "message" => "This note changed while the batch was being applied.",
-           "detail" => %{}
-         }}
+      # The row moved under this entry and the retry could not land either.
+      # `batch_upsert_results/2` ALREADY has a `{:conflict, existing}` clause
+      # that returns `server_note` — previously unreachable from the batch,
+      # which is the hole this fills. Reporting a generic `:error` instead would
+      # give a draining offline queue no server note to reconcile against, so it
+      # would either drop the entry or retry the same stale content forever.
+      # #1335.
+      {:conflict, _existing} = conflict ->
+        conflict
     end
   end
 

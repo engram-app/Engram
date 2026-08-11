@@ -135,6 +135,19 @@ defmodule EngramWeb.NotesController do
               {:ok, updated} ->
                 json(conn, %{created: false, path: path, note: note_json(updated, user)})
 
+              # 3-tuple — `{:error, changeset}` does not match it. #1335 made
+              # this reachable for callers that declare no base_hash, and append
+              # is one, so without this clause a contended append raises
+              # CaseClauseError and 500s instead of handing back a 409 the
+              # client can reconcile.
+              {:error, :version_conflict, server_note} ->
+                conn
+                |> put_status(409)
+                |> json(%{error: "version_conflict", note: note_json(server_note, user)})
+
+              {:error, :note_deleted} ->
+                conn |> put_status(404) |> json(%{error: "not_found"})
+
               {:error, changeset} ->
                 conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
             end

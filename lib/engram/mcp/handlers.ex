@@ -264,6 +264,10 @@ defmodule Engram.MCP.Handlers do
 
     case Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => now()}) do
       {:ok, _note} -> {:ok, "Note created: #{path}"}
+      # 3-tuple. `{:error, reason}` does not match it, so without this clause a
+      # contended write raises CaseClauseError instead of reporting. #1335 made
+      # it reachable for callers that declare no base_hash, which is all of MCP.
+      {:error, :version_conflict, _note} -> {:ok, "Note changed on the server, retry: #{path}"}
       {:error, _} -> {:ok, "Failed to create note: #{path}"}
     end
   end
@@ -279,6 +283,7 @@ defmodule Engram.MCP.Handlers do
 
     case Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => now()}) do
       {:ok, _note} -> {:ok, "Note saved: #{path}"}
+      {:error, :version_conflict, _note} -> {:ok, "Note changed on the server, retry: #{path}"}
       {:error, _} -> {:ok, "Failed to save note: #{path}"}
     end
   end
