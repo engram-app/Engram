@@ -290,14 +290,28 @@ describe("KeyboardBar", () => {
 			"Bold",
 			"Italic",
 			"Strikethrough",
+			"Code",
 			"Heading",
+			"Quote",
 			"Bullet list",
 			"Numbered list",
 			"Toggle checkbox",
 			"Outdent",
 			"Indent",
 			"Wiki link",
+			"Link",
 		]);
+	});
+
+	it.each([
+		["Code", "`thing`"],
+		["Quote", "> thing"],
+		["Link", "[thing]()"],
+	])("%s acts on the selection", (label, expected) => {
+		mount("thing", 0);
+		view.dispatch({ selection: { anchor: 0, head: 5 } });
+		fireEvent.click(screen.getByRole("button", { name: label }));
+		expect(view.state.doc.toString()).toBe(expected);
 	});
 
 	// The reason the row scrolls at all: full 44px tap targets (WCAG 2.5.5)

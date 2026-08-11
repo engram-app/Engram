@@ -3,11 +3,14 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, test } from "vitest";
 import {
+	insertLink,
 	insertSnippet,
 	setHeading,
 	toggleCheckbox,
+	toggleCode,
 	toggleLinePrefix,
 	toggleList,
+	toggleQuote,
 	toggleWrap,
 } from "./format-commands";
 
@@ -310,6 +313,94 @@ describe("format-commands", () => {
 			mount("#tag", 0, 0);
 			setHeading(view, 1);
 			expect(view.state.doc.toString()).toBe("# #tag");
+		});
+	});
+
+	describe("toggleCode", () => {
+		test("wraps a word in backticks", () => {
+			mount("thing", 0, 5);
+			toggleCode(view);
+			expect(view.state.doc.toString()).toBe("`thing`");
+		});
+
+		// Same trap as bold: a wrap-only command doubles to ``thing`` on tap two.
+		test("unwraps on a second tap", () => {
+			mount("`thing`", 1, 6);
+			toggleCode(view);
+			expect(view.state.doc.toString()).toBe("thing");
+		});
+
+		// Inline backticks cannot span lines in CommonMark -- `a\nb` is literal
+		// text, not code -- so a multi-line selection has to become a fence.
+		test("fences a selection that spans lines", () => {
+			mount("one\ntwo", 0, 7);
+			toggleCode(view);
+			expect(view.state.doc.toString()).toBe("```\none\ntwo\n```");
+		});
+
+		test("leaves the caret inside an empty inline pair", () => {
+			mount("", 0, 0);
+			toggleCode(view);
+			expect(view.state.doc.toString()).toBe("``");
+			expect(view.state.selection.main.head).toBe(1);
+		});
+	});
+
+	describe("toggleQuote", () => {
+		test("quotes the caret line", () => {
+			mount("said", 0, 0);
+			toggleQuote(view);
+			expect(view.state.doc.toString()).toBe("> said");
+		});
+
+		test("quotes every line the selection touches", () => {
+			mount("one\ntwo", 0, 7);
+			toggleQuote(view);
+			expect(view.state.doc.toString()).toBe("> one\n> two");
+		});
+
+		test("unquotes on a second tap", () => {
+			mount("> one\n> two", 0, 11);
+			toggleQuote(view);
+			expect(view.state.doc.toString()).toBe("one\ntwo");
+		});
+
+		test("quotes a mixed selection rather than clearing it", () => {
+			mount("> one\ntwo", 0, 9);
+			toggleQuote(view);
+			expect(view.state.doc.toString()).toBe("> > one\n> two");
+		});
+
+		// `>text` with no space is still a quote to CommonMark, so removing only
+		// `"> "` would leave a stray marker behind.
+		test("removes a spaceless marker too", () => {
+			mount(">one", 0, 0);
+			toggleQuote(view);
+			expect(view.state.doc.toString()).toBe("one");
+		});
+	});
+
+	describe("insertLink", () => {
+		// The URL is the part you cannot guess, so that is where the caret goes.
+		test("wraps the selection and lands the caret in the URL slot", () => {
+			mount("engram", 0, 6);
+			insertLink(view);
+			expect(view.state.doc.toString()).toBe("[engram]()");
+			expect(view.state.selection.main.head).toBe(9);
+		});
+
+		// Nothing selected means there is no link text yet, so start there instead.
+		test("lands the caret in the text slot when nothing is selected", () => {
+			mount("", 0, 0);
+			insertLink(view);
+			expect(view.state.doc.toString()).toBe("[]()");
+			expect(view.state.selection.main.head).toBe(1);
+		});
+
+		test("inserts at the caret without eating the surrounding text", () => {
+			mount("ab", 1, 1);
+			insertLink(view);
+			expect(view.state.doc.toString()).toBe("a[]()b");
 		});
 	});
 

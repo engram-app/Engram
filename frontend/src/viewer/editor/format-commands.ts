@@ -79,13 +79,17 @@ function dispatchKeepingCaretAfterInsert(view: EditorView, changes: ChangeSpec[]
 }
 
 /** Marker -> the syntax node the markdown grammar produces for it. */
-const EMPHASIS_NODES: Record<string, string> = {
+const MARKER_NODES: Record<string, string> = {
 	"*": "Emphasis",
 	_: "Emphasis",
 	"**": "StrongEmphasis",
 	__: "StrongEmphasis",
 	"~~": "Strikethrough",
+	"`": "InlineCode",
 };
+
+/** A blockquote marker, with the space CommonMark treats as optional. */
+const QUOTE = /^(?<marker>[ \t]*> ?)/u;
 
 /**
  * The span of the emphasis of `marker`'s kind enclosing `[from, to)`, or null.
@@ -114,7 +118,7 @@ function enclosingEmphasis(state: EditorState, from: number, to: number, marker:
 	) {
 		return { from: from - len, to: to + len };
 	}
-	const name = EMPHASIS_NODES[marker];
+	const name = MARKER_NODES[marker];
 	if (!name) {
 		return null;
 	}
@@ -284,6 +288,69 @@ export function setHeading(view: EditorView, level: number): void {
 		});
 	}
 	dispatchKeepingCaretAfterInsert(view, changes);
+	view.focus();
+}
+
+/**
+ * Inline `` `code` `` for a selection on one line, a fenced block for one that
+ * spans several.
+ *
+ * The split is not a nicety: inline backticks cannot span lines in CommonMark
+ * (`` `a\nb` `` is literal text, not code), so wrapping a multi-line selection
+ * inline would produce something that does not render as code at all.
+ */
+export function toggleCode(view: EditorView): void {
+	const { from, to } = view.state.selection.main;
+	const selected = view.state.sliceDoc(from, to);
+	if (!selected.includes("\n")) {
+		toggleWrap(view, "`");
+		return;
+	}
+	view.dispatch({
+		changes: { from, to, insert: `\`\`\`\n${selected}\n\`\`\`` },
+		// Select the fenced body so the next keystroke can replace it, and so the
+		// caret is not stranded after the closing fence.
+		selection: EditorSelection.range(from + 4, from + 4 + selected.length),
+	});
+	view.focus();
+}
+
+/** Prefix the selected lines with `> `, or strip the marker when all of them have it. */
+export function toggleQuote(view: EditorView): void {
+	const lines = selectedLines(view.state);
+	// A mixed selection is being quoted, not unquoted — same rule as toggleList.
+	const removing = lines.length > 0 && lines.every((line) => QUOTE.test(line.text));
+	const changes = lines.map((line) => {
+		const marker = QUOTE.exec(line.text)?.groups?.marker ?? "";
+		return removing
+			? { from: line.from, to: line.from + marker.length, insert: "" }
+			: { from: line.from, insert: "> " };
+	});
+	if (changes.length > 0) {
+		dispatchKeepingCaretAfterInsert(view, changes);
+	}
+	view.focus();
+}
+
+/**
+ * `[text](url)` around the selection, caret in whichever slot still needs
+ * filling: the URL when there is link text already, the text when there is not.
+ *
+ * Unlike the wikilink button this does NOT open the note picker — that button
+ * covers linking to notes, and a filtered list of note names is in the way when
+ * what you are about to paste is an external URL.
+ */
+export function insertLink(view: EditorView): void {
+	view.dispatch(
+		view.state.changeByRange((range) => {
+			const text = view.state.sliceDoc(range.from, range.to);
+			const insert = `[${text}]()`;
+			return {
+				changes: { from: range.from, to: range.to, insert },
+				range: EditorSelection.cursor(range.from + (text ? insert.length - 1 : 1)),
+			};
+		}),
+	);
 	view.focus();
 }
 

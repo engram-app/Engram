@@ -4,12 +4,15 @@ import type { EditorView } from "@codemirror/view";
 import {
 	Bold,
 	Brackets,
+	Code,
 	Heading,
 	IndentDecrease,
 	IndentIncrease,
 	Italic,
+	Link,
 	List,
 	ListOrdered,
+	Quote,
 	Redo2,
 	SquareCheckBig,
 	Strikethrough,
@@ -19,7 +22,15 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { yUndoManagerKeymap } from "y-codemirror.next";
 import { Button } from "@/components/ui/button";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { setHeading, toggleCheckbox, toggleList, toggleWrap } from "./format-commands";
+import {
+	insertLink,
+	setHeading,
+	toggleCheckbox,
+	toggleCode,
+	toggleList,
+	toggleQuote,
+	toggleWrap,
+} from "./format-commands";
 import { useEditorFocused } from "./use-editor-focused";
 import { useKeyboardInset, useKeyboardOpen } from "./use-keyboard-inset";
 
@@ -250,6 +261,9 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 				>
 					<Strikethrough className="size-6" />
 				</Button>
+				<Button variant="ghost" size="icon" aria-label="Code" onClick={run(toggleCode)}>
+					<Code className="size-6" />
+				</Button>
 				{/* Block structure, then everything that acts on a list item. Indent
 				    and outdent live HERE rather than next to undo: on a phone their
 				    only real use is nesting a list item, so they belong beside the
@@ -262,6 +276,9 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 					onClick={() => setHeadingsOpen((open) => !open)}
 				>
 					<Heading className="size-6" />
+				</Button>
+				<Button variant="ghost" size="icon" aria-label="Quote" onClick={run(toggleQuote)}>
+					<Quote className="size-6" />
 				</Button>
 				<Button
 					variant="ghost"
@@ -307,9 +324,13 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 				>
 					<IndentIncrease className="size-6" />
 				</Button>
-				{/* Insert */}
+				{/* Insert. Two link buttons on purpose: the wikilink one opens the note
+				    picker, this one is for an external URL you are about to paste. */}
 				<Button variant="ghost" size="icon" aria-label="Wiki link" onClick={run(insertWikiLink)}>
 					<Brackets className="size-6" />
+				</Button>
+				<Button variant="ghost" size="icon" aria-label="Link" onClick={run(insertLink)}>
+					<Link className="size-6" />
 				</Button>
 			</section>
 		</nav>
