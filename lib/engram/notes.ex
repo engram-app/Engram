@@ -1190,6 +1190,13 @@ defmodule Engram.Notes do
 
             {:error, _} = err ->
               err
+
+            # move_note lost its snapshot fence (#1335). These CRDT callers were
+            # written against a two-shape contract, so the bare atom would raise
+            # CaseClauseError. Report it the way every other genesis failure is
+            # reported and let the client re-handshake against fresh state.
+            :stale_snapshot ->
+              {:error, :stale_snapshot}
           end
 
         %Note{} = _occupant ->
@@ -1324,6 +1331,10 @@ defmodule Engram.Notes do
 
         {:error, _} = err ->
           err
+
+        # See genesis_relocate_live: move_note can now lose its snapshot fence.
+        :stale_snapshot ->
+          {:error, :stale_snapshot}
       end
     end
   end
@@ -1600,8 +1611,8 @@ defmodule Engram.Notes do
         #
         # `put_change(:deleted_at, nil)` means this can also resurrect a
         # tombstone, so the fence carries the whole pre-image, not just the id.
-        case Repo.update_all(crdt_fence(prior), set: changeset_set(changeset)) do
-          {1, [updated]} ->
+        case fenced_update(snapshot_fenced(changeset, prior)) do
+          {:ok, updated} ->
             _ =
               if was_tombstoned do
                 :ok = UsageMeters.inc_notes_count(user.id, 1)
@@ -1615,7 +1626,10 @@ defmodule Engram.Notes do
             # vanishes on them until their next pull).
             {:ok, {:moved, prior.content_hash, updated, crdt.merged_text, crdt.content_hash}}
 
-          {0, _} ->
+          {:error, changeset} ->
+            {:error, changeset}
+
+          :stale_snapshot ->
             :stale_snapshot
         end
       end
@@ -1751,8 +1765,26 @@ defmodule Engram.Notes do
         # as it actually is; `nil` means it was deleted, which the delete-wins
         # contract says must NOT come back as an authoritative "server note".
         case Repo.one(w.query) do
-          nil -> {:error, :note_deleted}
-          fresh -> {:conflict, fresh}
+          nil ->
+            {:error, :note_deleted}
+
+          fresh ->
+            # Distinct key. `{:conflict, _}` is also how a concurrent-INSERT
+            # race reports, and upsert_note logs that as
+            # `note_concurrent_insert_race` — a signal operators grep to reason
+            # about duplicate creates. Emitting one more of those for every lost
+            # snapshot fence would inflate that count and leave fence contention
+            # with no signal of its own. #1335.
+            Logger.warning(
+              "note_write_snapshot_fence_lost",
+              Metadata.with_category(:warning, :sync,
+                user_id: w.user.id,
+                note_id: fresh.id,
+                server_version: fresh.version
+              )
+            )
+
+            {:conflict, fresh}
         end
 
       other ->
@@ -1828,42 +1860,70 @@ defmodule Engram.Notes do
         # to exactly the writer it needs to catch: replay_tail finds the pruned
         # rows gone, the merge silently uses the stale snapshot, the version
         # still matches, and the checkpoint's ops are destroyed.
-        case Repo.update_all(crdt_fence(existing), [set: changeset_set(changeset)], db_opts) do
-          {1, [updated]} ->
-            # Thread crdt.content_hash (HMAC of projection) alongside merged_text
-            # so callers can include the stored hash in broadcast digests without
-            # re-deriving it.
+        case fenced_update(snapshot_fenced(changeset, existing), db_opts) do
+          # Thread crdt.content_hash (HMAC of projection) alongside merged_text
+          # so callers can include the stored hash in broadcast digests without
+          # re-deriving it.
+          {:ok, updated} ->
             {:ok, {existing.content_hash, updated, crdt.merged_text, crdt.content_hash}}
 
-          {0, _} ->
+          {:error, changeset} ->
+            {:error, changeset}
+
+          :stale_snapshot ->
             :stale_snapshot
         end
       end
     end
   end
 
-  # The row still carries the snapshot we merged against. `update_all` (not
-  # `Repo.update`) so the predicate is explicit and a miss is a VALUE — mirrors
-  # the #902 fence in `CrdtCheckpoint`. `select: n` returns the written row so
-  # callers still get the struct `Repo.update` used to hand back.
+  # Pin the write to the row pre-image the merge was computed against.
   #
-  # `crdt_state_ciphertext` is nullable and `= NULL` is never true in SQL, so a
-  # never-checkpointed note needs `IS NULL` or its every write would "lose" the
-  # fence forever.
-  defp crdt_fence(%Note{id: id, crdt_state_ciphertext: nil}) do
-    from(n in Note, where: n.id == ^id and is_nil(n.crdt_state_ciphertext), select: n)
+  #
+  # Set as changeset FILTERS rather than switching to `update_all`. Filters keep
+  # `Repo.update`'s changeset validation — otherwise a failed cast is silently
+  # dropped from `changes` and the write reports success — and its
+  # `unique_constraint` mapping, which `do_move_note_inner`'s own comment relies
+  # on to turn a path collision into `{:error, changeset}` rather than a raise
+  # that aborts the tenant transaction. Ecto's Postgres adapter renders a nil
+  # filter as `IS NULL`, so a never-checkpointed note is fenced correctly
+  # instead of never matching.
+  # `seq` is the always-present half. Every committing writer in this module
+  # allocates a fresh one via `Vaults.next_seq!`, and `delete_note` bumps it
+  # too — which is what makes a soft delete racing this write trip the fence
+  # instead of getting the tombstone rewritten and re-broadcast as an upsert.
+  # It is `NOT NULL`, so it can always be filtered on.
+  #
+  # `crdt_state_ciphertext` is the half that catches the checkpoint. Only added
+  # when non-nil: Ecto renders a nil filter as `IS NULL` (correctly) but still
+  # counts it when building the parameter list, so mixing one with a non-nil
+  # filter raises `parameters must be of length N`. A row with no snapshot has
+  # none to lose, and its `seq` still guards it.
+  defp snapshot_fenced(changeset, %Note{crdt_state_ciphertext: nil} = pre) do
+    %{changeset | filters: Map.put(changeset.filters, :seq, pre.seq)}
   end
 
-  defp crdt_fence(%Note{id: id, crdt_state_ciphertext: ct}) do
-    from(n in Note, where: n.id == ^id and n.crdt_state_ciphertext == ^ct, select: n)
+  defp snapshot_fenced(changeset, %Note{} = pre) do
+    %{
+      changeset
+      | filters:
+          Map.merge(changeset.filters, %{
+            seq: pre.seq,
+            crdt_state_ciphertext: pre.crdt_state_ciphertext
+          })
+    }
   end
 
-  # `update_all` does NOT auto-manage timestamps the way `Repo.update` does, and
-  # `updated_at` is never cast into `changeset.changes`. Set it explicitly,
-  # matching every sibling notes update_all, so the row's recency stays truthful
-  # for everything that orders or filters on it.
-  defp changeset_set(changeset) do
-    changeset.changes |> Map.put(:updated_at, DateTime.utc_now()) |> Map.to_list()
+  # `Repo.update` RAISES `Ecto.StaleEntryError` when a filter matches zero rows;
+  # it is not an `{:error, changeset}`. Turn it into a value so the caller can
+  # decide. Nothing is suppressed — every caller either retries against a fresh
+  # read or reports a conflict. The UPDATE itself succeeded (it matched no
+  # rows), so there is no aborted-statement state and the enclosing transaction
+  # stays usable, including on the `mode: :savepoint` batch path.
+  defp fenced_update(changeset, db_opts \\ []) do
+    Repo.update(changeset, db_opts)
+  rescue
+    Ecto.StaleEntryError -> :stale_snapshot
   end
 
   # Posture C CRDT bridge — runs INSIDE the caller's Repo.with_tenant txn.
@@ -3214,15 +3274,19 @@ defmodule Engram.Notes do
       {:error, changeset} ->
         {:error, changeset}
 
-      # The row moved under this entry and the retry could not land either.
-      # `batch_upsert_results/2` ALREADY has a `{:conflict, existing}` clause
-      # that returns `server_note` — previously unreachable from the batch,
-      # which is the hole this fills. Reporting a generic `:error` instead would
-      # give a draining offline queue no server note to reconcile against, so it
-      # would either drop the entry or retry the same stale content forever.
-      # #1335.
-      {:conflict, _existing} = conflict ->
-        conflict
+      # The batch calls do_update_note DIRECTLY — it never enters
+      # lookup_and_write — so the bare `:stale_snapshot` atom surfaces here and
+      # there is no retry above to absorb it. Without this clause the entry
+      # raises CaseClauseError, which process_batch_entry_rescued swallows into
+      # "note_processing_failed": no server_note, no 409, no retry, edit
+      # silently dropped.
+      #
+      # `batch_upsert_results/2` already has a `{:conflict, existing}` clause
+      # that hands back `server_note`, previously unreachable from the batch.
+      # Map onto it so a draining offline queue can reconcile instead of
+      # retrying the same stale content forever. #1335.
+      :stale_snapshot ->
+        {:conflict, existing}
     end
   end
 

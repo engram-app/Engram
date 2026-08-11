@@ -268,6 +268,7 @@ defmodule Engram.MCP.Handlers do
       # contended write raises CaseClauseError instead of reporting. #1335 made
       # it reachable for callers that declare no base_hash, which is all of MCP.
       {:error, :version_conflict, _note} -> {:ok, "Note changed on the server, retry: #{path}"}
+      {:error, :note_deleted} -> {:ok, "Note was deleted: #{path}"}
       {:error, _} -> {:ok, "Failed to create note: #{path}"}
     end
   end
@@ -284,6 +285,7 @@ defmodule Engram.MCP.Handlers do
     case Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => now()}) do
       {:ok, _note} -> {:ok, "Note saved: #{path}"}
       {:error, :version_conflict, _note} -> {:ok, "Note changed on the server, retry: #{path}"}
+      {:error, :note_deleted} -> {:ok, "Note was deleted: #{path}"}
       {:error, _} -> {:ok, "Failed to save note: #{path}"}
     end
   end
@@ -320,6 +322,10 @@ defmodule Engram.MCP.Handlers do
                "mtime" => now()
              }) do
           {:ok, _} -> {:ok, "Note created: #{path}"}
+          # 3-tuple; `{:error, reason}` does not match it. Append-as-create can
+          # lose the insert race, and #1335 widened when that surfaces.
+          {:error, :version_conflict, _} -> {:ok, "Note changed on the server, retry: #{path}"}
+          {:error, :note_deleted} -> {:ok, "Note was deleted: #{path}"}
           {:error, _} -> {:ok, "Failed to create note: #{path}"}
         end
     end
