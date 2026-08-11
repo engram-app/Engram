@@ -9,6 +9,7 @@ import {
 	IndentIncrease,
 	Italic,
 	List,
+	ListOrdered,
 	Redo2,
 	SquareCheckBig,
 	Strikethrough,
@@ -18,7 +19,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { yUndoManagerKeymap } from "y-codemirror.next";
 import { Button } from "@/components/ui/button";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { setHeading, toggleCheckbox, toggleLinePrefix, toggleWrap } from "./format-commands";
+import { setHeading, toggleCheckbox, toggleList, toggleWrap } from "./format-commands";
 import { useEditorFocused } from "./use-editor-focused";
 import { useKeyboardInset, useKeyboardOpen } from "./use-keyboard-inset";
 
@@ -290,9 +291,17 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 					variant="ghost"
 					size="icon"
 					aria-label="Bullet list"
-					onClick={run((v) => toggleLinePrefix(v, "- "))}
+					onClick={run((v) => toggleList(v, false))}
 				>
 					<List className="size-6" />
+				</Button>
+				<Button
+					variant="ghost"
+					size="icon"
+					aria-label="Numbered list"
+					onClick={run((v) => toggleList(v, true))}
+				>
+					<ListOrdered className="size-6" />
 				</Button>
 			</section>
 		</nav>

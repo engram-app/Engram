@@ -340,6 +340,23 @@ describe("KeyboardBar", () => {
 		expect(view.state.doc.toString()).toBe("- thing");
 	});
 
+	it("turns the caret line into a numbered item", () => {
+		mount("thing");
+		fireEvent.click(screen.getByRole("button", { name: "Numbered list" }));
+		expect(view.state.doc.toString()).toBe("1. thing");
+	});
+
+	// The two list buttons have to replace each other's marker, not stack.
+	it("switches between the two list kinds instead of nesting them", () => {
+		mount("thing");
+		fireEvent.click(screen.getByRole("button", { name: "Bullet list" }));
+		fireEvent.click(screen.getByRole("button", { name: "Numbered list" }));
+		expect(view.state.doc.toString()).toBe("1. thing");
+
+		fireEvent.click(screen.getByRole("button", { name: "Bullet list" }));
+		expect(view.state.doc.toString()).toBe("- thing");
+	});
+
 	// getView can return null between a route swap and the next editor mounting,
 	// while focus is still inside the outgoing one.
 	it("does nothing when the view accessor returns null", () => {

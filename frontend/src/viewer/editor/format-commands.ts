@@ -23,6 +23,9 @@ const LINE_PARTS = /^(?<indent>[ \t]*)(?<body>.*)$/u;
 const TASK = /^(?<marker>[-*+] )\[(?<state>[ xX])\] ?(?<rest>.*)$/u;
 /** A bare list item: `- foo`, with no checkbox yet. */
 const BULLET = /^(?<marker>[-*+] )(?<rest>.*)$/u;
+/** The marker of either list kind: `- `, `* `, `+ `, or `12. `. */
+const LIST_MARKER = /^(?<marker>[-*+] |\d+\. )/u;
+const ORDERED_MARKER = /^\d+\. $/u;
 /**
  * An ATX heading marker, matched against a line's body (indent already split
  * off). The trailing ` +` is required by CommonMark and is what keeps `#tag`
@@ -281,6 +284,45 @@ export function setHeading(view: EditorView, level: number): void {
 		});
 	}
 	dispatchKeepingCaretAfterInsert(view, changes);
+	view.focus();
+}
+
+/**
+ * Turn the selected lines into a bullet or numbered list, or back into plain
+ * text when they already are one.
+ *
+ * ONE command for both kinds because they have to compose. Prefixing a numbered
+ * line with `- ` gives `- 1. foo`; each kind has to be able to REPLACE the
+ * other's marker, which a prefix-only command cannot do. Numbering is
+ * sequential rather than a repeated `1. ` — CommonMark renders either the same,
+ * but the source is what you look at in live preview.
+ */
+export function toggleList(view: EditorView, ordered: boolean): void {
+	const lines = selectedLines(view.state);
+	// A blank line ends a list in markdown, so numbering one mid-selection would
+	// split the list AND consume an ordinal. A lone blank line is different: that
+	// is someone starting a list before typing anything.
+	const targets = lines.length === 1 ? lines : lines.filter((line) => line.text.trim() !== "");
+	const items = targets.map((line) => {
+		const { indent = "", body = "" } = LINE_PARTS.exec(line.text)?.groups ?? {};
+		return {
+			at: line.from + indent.length,
+			marker: LIST_MARKER.exec(body)?.groups?.marker ?? "",
+		};
+	});
+	const isKind = (marker: string) =>
+		ordered ? ORDERED_MARKER.test(marker) : BULLET.test(marker) && marker.trimEnd().length === 1;
+	// Only a list that is ALREADY entirely this kind toggles off; a mixed
+	// selection is being converted, not cleared.
+	const removing = items.length > 0 && items.every((item) => isKind(item.marker));
+	const changes = items.map((item, index) => ({
+		from: item.at,
+		to: item.at + item.marker.length,
+		insert: removing ? "" : ordered ? `${index + 1}. ` : "- ",
+	}));
+	if (changes.length > 0) {
+		dispatchKeepingCaretAfterInsert(view, changes);
+	}
 	view.focus();
 }
 

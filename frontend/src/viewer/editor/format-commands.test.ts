@@ -7,6 +7,7 @@ import {
 	setHeading,
 	toggleCheckbox,
 	toggleLinePrefix,
+	toggleList,
 	toggleWrap,
 } from "./format-commands";
 
@@ -309,6 +310,68 @@ describe("format-commands", () => {
 			mount("#tag", 0, 0);
 			setHeading(view, 1);
 			expect(view.state.doc.toString()).toBe("# #tag");
+		});
+	});
+
+	// One command for both list kinds, because they have to compose: prefixing a
+	// numbered line with "- " would produce "- 1. foo", so each has to be able to
+	// REPLACE the other's marker rather than stack on it.
+	describe("toggleList", () => {
+		test("numbers the caret line", () => {
+			mount("thing", 0, 0);
+			toggleList(view, true);
+			expect(view.state.doc.toString()).toBe("1. thing");
+		});
+
+		test("numbers a selection sequentially, not all as 1.", () => {
+			mount("one\ntwo\nthree", 0, 13);
+			toggleList(view, true);
+			expect(view.state.doc.toString()).toBe("1. one\n2. two\n3. three");
+		});
+
+		test("removes the numbers on a second tap", () => {
+			mount("1. one\n2. two", 0, 13);
+			toggleList(view, true);
+			expect(view.state.doc.toString()).toBe("one\ntwo");
+		});
+
+		test("switches a bullet list to a numbered one", () => {
+			mount("- one\n- two", 0, 11);
+			toggleList(view, true);
+			expect(view.state.doc.toString()).toBe("1. one\n2. two");
+		});
+
+		test("switches a numbered list back to bullets", () => {
+			mount("1. one\n2. two", 0, 13);
+			toggleList(view, false);
+			expect(view.state.doc.toString()).toBe("- one\n- two");
+		});
+
+		test("preserves indentation so nesting survives", () => {
+			mount("\t\tnested", 0, 0);
+			toggleList(view, true);
+			expect(view.state.doc.toString()).toBe("\t\t1. nested");
+		});
+
+		test("marks a lone empty line so the next keystroke lands in the item", () => {
+			mount("", 0, 0);
+			toggleList(view, true);
+			expect(view.state.doc.toString()).toBe("1. ");
+			expect(view.state.selection.main.head).toBe(3);
+		});
+
+		// A blank line ends a list in markdown, so numbering one mid-selection
+		// would split the list AND consume an ordinal.
+		test("skips blank lines inside a multi-line selection", () => {
+			mount("one\n\ntwo", 0, 8);
+			toggleList(view, true);
+			expect(view.state.doc.toString()).toBe("1. one\n\n2. two");
+		});
+
+		test("re-numbers only when every selected line is already that kind", () => {
+			mount("1. one\nplain", 0, 12);
+			toggleList(view, true);
+			expect(view.state.doc.toString()).toBe("1. one\n2. plain");
 		});
 	});
 
