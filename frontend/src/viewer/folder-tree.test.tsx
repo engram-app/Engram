@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { FolderTreeProvider } from "../layout/folder-tree-context";
+import { FolderTreeProvider, useFolderTreeState } from "../layout/folder-tree-context";
 import FolderTree from "./folder-tree";
 
 // The HT-driven FolderTree's UX is the COMPOSITION of already-tested
@@ -234,6 +234,69 @@ describe("FolderTree (HT)", () => {
 		mock.rootNotes = [];
 		renderTree();
 		expect(await screen.findByText("No notes yet.")).toBeInTheDocument();
+	});
+
+	// The toolbar's "Collapse all folders" button and the tree are siblings, so
+	// the button reaches the tree through FolderTreeProvider. Expansion state
+	// lives in the headless tree; a context that keeps its OWN open-set is not
+	// wired to anything and the button silently does nothing.
+	describe("collapse all", () => {
+		function CollapseButton() {
+			const { collapseAll } = useFolderTreeState();
+			return (
+				<button type="button" onClick={collapseAll}>
+					collapse
+				</button>
+			);
+		}
+
+		function renderWithToolbar() {
+			const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			qc.setQueryData(["folder-notes-by-id", "", "root"], mock.rootNotes);
+			return render(
+				<QueryClientProvider client={qc}>
+					<MemoryRouter>
+						<FolderTreeProvider>
+							<FolderTree />
+							<CollapseButton />
+						</FolderTreeProvider>
+					</MemoryRouter>
+				</QueryClientProvider>,
+			);
+		}
+
+		it("collapses a folder the user expanded", async () => {
+			renderWithToolbar();
+			fireEvent.click(await screen.findByRole("treeitem", { name: "Projects" }));
+			await waitFor(() => {
+				expect(screen.getByRole("treeitem", { name: "Projects" })).toHaveAttribute(
+					"aria-expanded",
+					"true",
+				);
+			});
+
+			fireEvent.click(screen.getByRole("button", { name: "collapse" }));
+
+			await waitFor(() => {
+				expect(screen.getByRole("treeitem", { name: "Projects" })).toHaveAttribute(
+					"aria-expanded",
+					"false",
+				);
+			});
+		});
+
+		// Collapsing must not take the root down with it: HT renders nothing at
+		// all when the root item is unexpanded, so a bare collapseAll() would
+		// blank the sidebar instead of collapsing it.
+		it("keeps the top-level rows visible", async () => {
+			renderWithToolbar();
+			await screen.findByRole("treeitem", { name: "Projects" });
+			fireEvent.click(screen.getByRole("button", { name: "collapse" }));
+			await waitFor(() => {
+				expect(screen.getByRole("treeitem", { name: "Projects" })).toBeInTheDocument();
+				expect(screen.getByRole("treeitem", { name: "archive" })).toBeInTheDocument();
+			});
+		});
 	});
 
 	// FilesPanel is a flex column: header, tree, FolderActions, VaultSwitcher.

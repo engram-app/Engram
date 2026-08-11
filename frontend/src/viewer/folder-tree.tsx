@@ -78,7 +78,7 @@ export default function FolderTree() {
 		() => synthesizeFolders(folders ?? EMPTY_FOLDERS, attachments),
 		[folders, attachments],
 	);
-	const { sort, pendingFolderRename, requestFolderRename, clearFolderRename } =
+	const { sort, pendingFolderRename, requestFolderRename, clearFolderRename, registerCollapseAll } =
 		useFolderTreeState();
 	const vaultId = useActiveVaultId();
 	const qc = useQueryClient();
@@ -233,6 +233,19 @@ export default function FolderTree() {
 		onRenameCommit,
 		onMove,
 	});
+
+	// The toolbar's collapse button lives in a sibling component, so hand it the
+	// tree's own collapse rather than mirroring expansion state up into context.
+	// Root is re-expanded straight after: HT walks the expanded set to build its
+	// item list, so an unexpanded root renders NOTHING — collapseAll alone would
+	// blank the sidebar rather than collapse it.
+	useEffect(() => {
+		registerCollapseAll(() => {
+			tree.collapseAll();
+			tree.getRootItem().expand();
+		});
+		return () => registerCollapseAll(null);
+	}, [registerCollapseAll, tree]);
 
 	// Register the scroll container with BOTH the virtualizer (scrollRef) and
 	// headless-tree, whose getContainerProps supplies the empty-space drop handler

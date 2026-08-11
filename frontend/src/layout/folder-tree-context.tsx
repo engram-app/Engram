@@ -1,9 +1,22 @@
-import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
+import {
+	createContext,
+	type ReactNode,
+	useCallback,
+	useContext,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 
 interface FolderTreeContextValue {
-	isOpen: (path: string) => boolean;
-	toggle: (path: string) => void;
 	collapseAll: () => void;
+	/**
+	 * The tree registers the real collapse here on mount. Expansion state lives
+	 * in the headless tree, not in this provider — an open-set kept here would
+	 * be read by nobody, which is exactly how the toolbar button ended up
+	 * clearing state that no longer drove the UI.
+	 */
+	registerCollapseAll: (fn: (() => void) | null) => void;
 	sort: SortKey;
 	setSort: (next: SortKey) => void;
 	// Path of a just-created folder that should open in rename mode. Lives here
@@ -25,31 +38,24 @@ export type SortKey =
 	| "modified-asc";
 
 export function FolderTreeProvider({ children }: { children: ReactNode }) {
-	const [openSet, setOpenSet] = useState<Set<string>>(() => new Set());
 	const [sort, setSort] = useState<SortKey>("name-asc");
 	const [pendingFolderRename, setPendingFolderRename] = useState<string | null>(null);
 
-	const isOpen = useCallback((path: string) => openSet.has(path), [openSet]);
-	const toggle = useCallback((path: string) => {
-		setOpenSet((prev) => {
-			const next = new Set(prev);
-			if (next.has(path)) {
-				next.delete(path);
-			} else {
-				next.add(path);
-			}
-			return next;
-		});
+	// A ref, not state: re-rendering every consumer because the tree mounted
+	// would buy nothing, and collapseAll's identity must stay stable so passing
+	// it to the toolbar doesn't churn.
+	const collapseHandlerRef = useRef<(() => void) | null>(null);
+	const registerCollapseAll = useCallback((fn: (() => void) | null) => {
+		collapseHandlerRef.current = fn;
 	}, []);
-	const collapseAll = useCallback(() => setOpenSet(new Set()), []);
+	const collapseAll = useCallback(() => collapseHandlerRef.current?.(), []);
 	const requestFolderRename = useCallback((path: string) => setPendingFolderRename(path), []);
 	const clearFolderRename = useCallback(() => setPendingFolderRename(null), []);
 
 	const value = useMemo(
 		() => ({
-			isOpen,
-			toggle,
 			collapseAll,
+			registerCollapseAll,
 			sort,
 			setSort,
 			pendingFolderRename,
@@ -57,9 +63,8 @@ export function FolderTreeProvider({ children }: { children: ReactNode }) {
 			clearFolderRename,
 		}),
 		[
-			isOpen,
-			toggle,
 			collapseAll,
+			registerCollapseAll,
 			sort,
 			pendingFolderRename,
 			requestFolderRename,
