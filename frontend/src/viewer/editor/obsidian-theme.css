@@ -166,18 +166,26 @@
  * hand-picked grey per block — the failure mode that left bg-surface unset. */
 .cm-tooltip.cm-tooltip-autocomplete {
 	border-color: color-mix(in oklab, var(--foreground) 30%, transparent);
-	border-radius: var(--radius-lg, 0.5rem);
+	/* Square: the package rounds .cm-tooltip to 6px, and a hard corner reads as
+	 * a denser list against the editor than the app's rounded menus do. */
+	border-radius: 0;
 	box-shadow:
 		0 4px 6px -1px rgb(0 0 0 / 0.1),
 		0 2px 4px -2px rgb(0 0 0 / 0.1);
 }
 
-/* Taller menu than CM6's cramped default, Obsidian-ish row rhythm. */
-.cm-tooltip-autocomplete > ul {
-	max-height: 24em;
+/* Taller menu than CM6's cramped default (10em, ~4 rows), Obsidian-ish row
+ * rhythm. ~7.5 rows at the current row height.
+ *
+ * The .cm-editor .cm-tooltip prefix is load-bearing, not decoration. CM6 ships
+ * this cap in a baseTheme as `.ͼ1 .cm-tooltip.cm-tooltip-autocomplete > ul`,
+ * specificity (0,3,1); a bare `.cm-tooltip-autocomplete > ul` is (0,1,1) and
+ * silently loses, which is why the value here sat dead and the menu stayed at
+ * CM's default. Match their specificity and win on source order — StyleModule
+ * inserts at the top of <head> precisely so app CSS can override it. */
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul {
+	max-height: 20em;
 	min-width: 16em;
-	/* Round the inner list with the panel, or its corners square off the shadow. */
-	border-radius: inherit;
 
 	/* shadcn's ScrollBar in CSS form: CodeMirror renders this <ul> itself, so a
 	 * React <ScrollArea> can't wrap it. Values mirror components/ui/scroll-area
@@ -238,12 +246,14 @@
 	opacity: 0.8;
 }
 
-/* Wikilinks are internal navigation — Atomic's external-link ::after icon
-   (the open-in-new-tab affordance on .cm-atomic-link) is noise inside
-   [[...]] and rendered as "[[link]icon]". Scope-kill it via the wiki-link
-   wrapper states; genuine external URLs keep their icon. */
-.cm-atomic-wiki-link-active .cm-atomic-link::after,
-.cm-atomic-wiki-link-hidden-syntax .cm-atomic-link::after {
+/* Atomic's external-link ::after icon (the open-in-new-tab affordance) is
+   suppressed everywhere, not just inside [[...]]. It renders BETWEEN the ] and
+   the ( of a markdown link — "[text]icon(url)" — which reads as a typo in the
+   middle of the syntax you are editing, and the same noise applied to
+   wikilinks. This previously scope-killed only the two wiki-link wrapper
+   states; one unscoped rule covers markdown links, wikilinks, and the
+   table-widget cells that reuse .cm-atomic-link. */
+.cm-atomic-link::after {
 	content: none;
 }
 
