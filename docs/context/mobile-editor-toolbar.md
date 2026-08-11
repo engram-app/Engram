@@ -118,6 +118,32 @@ The nav's `onPointerDown` preventDefault is what keeps a tap from blurring the
 editor; a portalled row escapes it, drops the keyboard, and unmounts the whole
 bar mid-tap.
 
+## Emphasis toggles need the PARSER, not the neighbouring characters
+
+`toggleWrap` unwraps as well as wraps — these are buttons, and a wrap-only
+command turns a second tap of "bold" into `****text****`. Deciding whether the
+selection is *already* emphasised cannot be done by comparing the characters
+on either side, because `*` is a prefix of `**` and string matching is wrong in
+**both** directions:
+
+- It reads `**bold**` as italic, so italicising silently downgrades it to
+  `*bold*` instead of nesting to `***bold***`.
+- A rule patched to avoid that (reject a marker that is part of a longer run)
+  then refuses to un-bold `***text***` back down to `*text*`.
+
+`enclosingEmphasis` walks the Lezer tree for an `Emphasis` / `StrongEmphasis` /
+`Strikethrough` node containing the selection. The grammar already draws the
+distinction; nothing in our code has to.
+
+The one case the parser cannot see is the empty pair that wrapping itself
+produces: `**|**` is not emphasis to CommonMark, which requires content. That
+one is still matched as literal text, or a second tap doubles it to `****|****`.
+
+**Both test harnesses load `markdown({base: markdownLanguage})`.** Without it
+the syntax tree is empty and the emphasis buttons silently only ever wrap —
+which is exactly what `keyboard-bar.test.tsx` caught when the parser landed. A
+bare `EditorView` is not a valid stand-in for this editor.
+
 ## Testing it
 
 happy-dom has no layout engine and no `matchMedia`. The suite stubs
