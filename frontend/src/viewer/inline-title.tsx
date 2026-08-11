@@ -11,7 +11,12 @@ interface Props {
 
 // pb sets the gap down to whatever follows — the properties widget, or the
 // body. Tune here; it is the single knob for all three view modes.
-const FRAME = "px-5 pt-6 pb-4";
+//
+// It is not the WHOLE gap, though: whatever follows adds 20px of its own
+// (`.cm-content`'s top padding in note-editor.tsx, mirrored by the `pt-5` on
+// the reading-mode wrapper), so 20px is the floor and this only sets what sits
+// above it. Total today is 24px.
+const FRAME = "px-5 pt-6 pb-1";
 // One source for the heading's type so the rename box cannot drift out of
 // step with the h1 it stands in for.
 const TITLE_TYPE = "font-semibold text-3xl tracking-tight";
