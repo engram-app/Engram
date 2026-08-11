@@ -35,6 +35,32 @@ document whenever the keyboard was dismissed with the platform's own hide
 button, which does not blur the editor. `KEYBOARD_MIN_PX = 120` keeps a
 collapsing mobile address bar (~60-90px) from reading as a keyboard.
 
+## `touch-action` silently disarms `preventDefault` on pointerdown
+
+The bar keeps the keyboard up by cancelling `pointerdown` on its `nav` — a
+press that reaches the document blurs the editor, the keyboard closes, and the
+bar unmounts mid-tap.
+
+Making the command row horizontally scrollable broke that guard. `touch-action:
+pan-x` is what lets the row pan, and it also makes **pointerdown non-cancelable
+for touch** in Chrome: the browser reserves the right to start a scroll, so
+`preventDefault()` becomes a no-op. Dragging the row blurred the editor and
+closed the keyboard. **Desktop never reproduces this** — mouse `pointerdown` is
+always cancelable — so it only shows up on a real phone.
+
+Two layers, because `preventDefault` still works where it *is* cancelable:
+
+1. `useEditorFocused` treats focus inside `[data-editor-toolbar]` as still being
+   in the editor, so a pan that lands focus on the bar does not unmount it out
+   from under the finger. The keyboard-open gate above is the backstop that
+   stops this tolerance from stranding the bar.
+2. `pointerup` on the `nav` returns focus to the editor. It is still inside the
+   user gesture, which is what allows a programmatic `focus()` to re-open the
+   on-screen keyboard.
+
+The general lesson: any `touch-action` value that permits panning makes the
+pointerdown guard unreliable. Do not add one without a focus-restore path.
+
 ## Other bottom-anchored UI has to be told to move
 
 The setup-checklist FAB is `position: fixed` on the same bottom edge and landed
