@@ -243,6 +243,48 @@ defmodule Engram.Release.PreflightTest do
       assert out =~ "bin/engram eval 'x'"
     end
 
+    test "does not claim irreversibility when the real cause is a fresh install" do
+      out =
+        capture_io(fn ->
+          Preflight.print(%{
+            pending: [
+              %{
+                version: "20260101000000",
+                name: "add_thing",
+                phase: :expand,
+                irreversible: false,
+                lock_risk: :low
+              }
+            ],
+            already_run: 0,
+            rollback_command: nil,
+            warnings: []
+          })
+        end)
+
+      assert out =~ "no migration has been applied yet"
+
+      # Matches the warning sentence, not the bare word — each migration line
+      # legitimately prints "irreversible: false".
+      refute out =~ "marked irreversible",
+             "crying wolf here trains operators to ignore the real irreversibility warning"
+
+      refute out =~ "Take a database backup"
+    end
+
+    test "report/2 flags :no_prior_version when nothing has been applied yet" do
+      dir =
+        tmp_migrations([
+          {"20260101000000_a.exs", "defmodule M do use Ecto.Migration; def change, do: :ok end"}
+        ])
+
+      result = Preflight.report(FakeRepo, migrations_dir: dir, applied_versions: [])
+
+      assert is_nil(result.rollback_command)
+      assert result.already_run == 0
+      refute result.pending == []
+    end
+
     test "warns to take a backup when no rollback command is available" do
       out =
         capture_io(fn ->

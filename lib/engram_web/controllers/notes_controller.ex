@@ -73,6 +73,13 @@ defmodule EngramWeb.NotesController do
           # delete stands; the client converges by dropping its local copy.
           conn |> put_status(409) |> json(%{conflict: true, reason: "recently_deleted"})
 
+        # The note was deleted while this write was losing its snapshot fence
+        # (#1335). Without this clause it falls to the catch-all and answers 500
+        # `internal`, which the plugin treats as transient and re-queues forever
+        # instead of dropping a note that is genuinely gone.
+        {:error, :note_deleted} ->
+          conn |> put_status(404) |> json(%{error: "not_found"})
+
         {:error, reason} ->
           require Logger
 
@@ -135,6 +142,21 @@ defmodule EngramWeb.NotesController do
               {:ok, updated} ->
                 json(conn, %{created: false, path: path, note: note_json(updated, user)})
 
+              # 3-tuple — `{:error, changeset}` does not match it. #1335 made
+              # this reachable for callers that declare no base_hash, and append
+              # is one, so without this clause a contended append raises
+              # CaseClauseError and 500s instead of handing back a 409 the
+              # client can reconcile.
+              # Same body shape upsert/2 returns for this, so the client has one
+              # conflict contract to implement rather than two.
+              {:error, :version_conflict, server_note} ->
+                conn
+                |> put_status(409)
+                |> json(%{conflict: true, server_note: note_json(server_note, user)})
+
+              {:error, :note_deleted} ->
+                conn |> put_status(404) |> json(%{error: "not_found"})
+
               {:error, changeset} ->
                 conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
             end
@@ -180,6 +202,19 @@ defmodule EngramWeb.NotesController do
             # path. Refuse cleanly (409) — never fall through to format_errors/1,
             # which crashes on the :recently_deleted atom (it expects a changeset).
             conn |> put_status(409) |> json(%{conflict: true, reason: "recently_deleted"})
+
+          # Two clients appending to the same missing path: one loses the insert
+          # race and upsert_note answers the 3-TUPLE, which matches neither
+          # clause below. The update branch above already handles this; without
+          # the same clause here the create branch raises CaseClauseError and
+          # 500s. #1335 widened when this is reachable.
+          {:error, :version_conflict, server_note} ->
+            conn
+            |> put_status(409)
+            |> json(%{conflict: true, server_note: note_json(server_note, user)})
+
+          {:error, :note_deleted} ->
+            conn |> put_status(404) |> json(%{error: "not_found"})
 
           {:error, changeset} ->
             conn |> put_status(422) |> json(%{errors: format_errors(changeset)})

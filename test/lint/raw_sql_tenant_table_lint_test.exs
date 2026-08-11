@@ -27,12 +27,13 @@ defmodule Engram.RawSqlTenantTableLintTest do
   # Files allowed to run raw SQL against a tenant table. Each entry needs a
   # comment explaining WHY the cross-tenant raw query is legitimate.
   @allowlist [
-    # Operator-run, intentionally cross-tenant backfill: seeds
-    # onboarding_actions for every legacy user by scanning `FROM vaults`.
-    # Runs as a one-shot release rpc / Mix task, never on a request path.
-    # Lives in its own module (not on the Engram.Onboarding context) precisely
-    # so this file-scoped exemption stays narrow — see the moduledoc.
-    "engram/onboarding/backfill.ex",
+    # (engram/onboarding/backfill.ex was allowlisted here as "intentionally
+    # cross-tenant". That was the bug, not the exception: a cross-tenant raw
+    # SELECT against a FORCE-RLS table reads zero rows on prod. #1349 made it
+    # tenant-scoped, which let it become a structured Ecto insert — so it needs
+    # no exemption at all. If you are about to add an entry justified by
+    # "intentionally cross-tenant", read
+    # docs/context/migrations-force-rls-data-dml.md first.)
     # Vaults.next_seq!/1 — atomic `UPDATE vaults SET change_seq = change_seq + 1
     # ... RETURNING change_seq` for the sync change-log seq allocator. MUST be
     # called inside the caller's existing `Repo.with_tenant/2` transaction (see

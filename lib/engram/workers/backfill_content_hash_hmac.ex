@@ -223,16 +223,30 @@ defmodule Engram.Workers.BackfillContentHashHmac do
       from(a in Attachment, where: a.id == ^att.id)
       |> Repo.update_all(set: [content_hash: new_hash])
     else
+      # Unwrap {:error, reason} before handing it on, matching rehash_note/3.
+      # Passing the whole tuple made `error_kind/1` (which takes elem(0))
+      # collapse EVERY attachment failure to :error — a missing blob and a
+      # decrypt failure were indistinguishable in telemetry and logs, while
+      # the note path reported :not_found vs :decrypt_failed correctly.
       err ->
-        emit_skip_telemetry(:attachment, att, err)
+        reason = unwrap_error(err)
+        emit_skip_telemetry(:attachment, att, reason)
 
         Engram.Logger.DecryptFailure.log(
           "BackfillContentHashHmac: skipping attachment #{att.id}",
-          err,
+          reason,
           attachment_id: att.id
         )
     end
   end
+
+  defp unwrap_error({:error, reason}), do: reason
+  # Envelope.decrypt/4 returns a BARE :error, not a tuple. Without this clause
+  # the one failure mode that matters most — ciphertext that will not decrypt —
+  # still reported error_kind: :error, i.e. the exact collapse this unwrapping
+  # exists to remove.
+  defp unwrap_error(:error), do: :decrypt_failed
+  defp unwrap_error(other), do: other
 
   defp emit_skip_telemetry(scope, row, reason) do
     :telemetry.execute(
