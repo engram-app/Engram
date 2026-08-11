@@ -6,8 +6,14 @@ import { yCollab } from "y-codemirror.next";
 import * as Y from "yjs";
 import { KeyboardBar } from "./keyboard-bar";
 
-const { insetValue } = vi.hoisted(() => ({ insetValue: { current: 300 } }));
-vi.mock("./use-keyboard-inset", () => ({ useKeyboardInset: () => insetValue.current }));
+const { insetValue, keyboardOpen } = vi.hoisted(() => ({
+	insetValue: { current: 300 },
+	keyboardOpen: { current: true },
+}));
+vi.mock("./use-keyboard-inset", () => ({
+	useKeyboardInset: () => insetValue.current,
+	useKeyboardOpen: () => keyboardOpen.current,
+}));
 
 // History lives in Yjs, not CodeMirror, and the failure mode is a DEAD button
 // rather than a crash — so these tests run a real yCollab with a real
@@ -58,6 +64,7 @@ function setViewport(kind: "desktop" | "mobile") {
 beforeEach(() => {
 	setViewport("mobile");
 	insetValue.current = 300;
+	keyboardOpen.current = true;
 });
 
 describe("KeyboardBar", () => {
@@ -77,8 +84,7 @@ describe("KeyboardBar", () => {
 	// resize the LAYOUT viewport for the keyboard (older Chrome, or
 	// interactive-widget=resizes-content) drop window.innerHeight by the same
 	// amount the visual viewport lost, so the inset reads 0 with the keyboard
-	// fully open. Gating visibility on a non-zero inset hid the bar outright on
-	// exactly those browsers; focus is the portable signal.
+	// fully open. Visibility must therefore never be gated on a non-zero inset.
 	it("shows with the keyboard up even when the inset reads 0", () => {
 		insetValue.current = 0;
 		mount("hello");
@@ -86,6 +92,21 @@ describe("KeyboardBar", () => {
 		expect(bar).toBeInTheDocument();
 		// bottom-0 with no lift is already correct there: the viewport shrank.
 		expect(bar.style.transform).toBe("translateY(-0px)");
+	});
+
+	// Focus alone is not enough either: dismissing the keyboard with the
+	// platform's own hide button leaves the editor focused, and the bar was
+	// stranding itself over the document.
+	it("hides once the keyboard is dismissed, even with the editor still focused", () => {
+		keyboardOpen.current = false;
+		mount("hello");
+		expect(screen.queryByRole("toolbar", { name: "Editor actions" })).toBeNull();
+	});
+
+	it("stops reserving bottom space once the keyboard is dismissed", () => {
+		keyboardOpen.current = false;
+		mount("hello");
+		expect(document.documentElement.style.getPropertyValue("--editor-toolbar-offset")).toBe("");
 	});
 
 	it("rides above the keyboard by the measured inset", () => {
@@ -140,6 +161,68 @@ describe("KeyboardBar", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: "Redo" }));
 		expect(view.state.doc.toString()).toBe("- hello");
+	});
+
+	// The setup-checklist FAB is fixed to the same bottom edge and was landing on
+	// top of the toolbar once the keyboard opened. It reads this variable rather
+	// than duplicating the inset measurement, so it clears the taller two-row
+	// layout too. (happy-dom has no layout engine, so the measured height is 0
+	// here and the value is the inset alone.)
+	describe("--editor-toolbar-offset", () => {
+		function offset() {
+			return document.documentElement.style.getPropertyValue("--editor-toolbar-offset");
+		}
+
+		it("publishes the space it occupies while it is up", () => {
+			mount("hello");
+			expect(offset()).toBe("300px");
+		});
+
+		it("clears the offset when the editor loses focus", () => {
+			const { unmount } = mount("hello");
+			unmount();
+			expect(offset()).toBe("");
+		});
+
+		it("publishes nothing on desktop, where the bar never renders", () => {
+			setViewport("desktop");
+			mount("hello");
+			expect(offset()).toBe("");
+		});
+	});
+
+	describe("heading picker", () => {
+		it("keeps the six levels out of the way until asked", () => {
+			mount("title");
+			expect(screen.queryByRole("button", { name: "Heading 1" })).toBeNull();
+		});
+
+		it("slides the six levels up when the heading button is tapped", () => {
+			mount("title");
+			fireEvent.click(screen.getByRole("button", { name: "Heading" }));
+			for (const level of [1, 2, 3, 4, 5, 6]) {
+				expect(screen.getByRole("button", { name: `Heading ${level}` })).toBeInTheDocument();
+			}
+		});
+
+		it("applies the chosen level and closes", () => {
+			mount("title");
+			fireEvent.click(screen.getByRole("button", { name: "Heading" }));
+			fireEvent.click(screen.getByRole("button", { name: "Heading 3" }));
+			expect(view.state.doc.toString()).toBe("### title");
+			expect(screen.queryByRole("button", { name: "Heading 3" })).toBeNull();
+		});
+
+		// The picker rows live INSIDE the toolbar so the nav's pointerdown guard
+		// covers them too — a row that portals out would blur the editor, drop the
+		// keyboard, and unmount the whole bar mid-tap.
+		it("does not let a press on the level row move focus off the editor", () => {
+			mount("title");
+			fireEvent.click(screen.getByRole("button", { name: "Heading" }));
+			const evt = new PointerEvent("pointerdown", { bubbles: true, cancelable: true });
+			fireEvent(screen.getByRole("button", { name: "Heading 2" }), evt);
+			expect(evt.defaultPrevented).toBe(true);
+		});
 	});
 
 	// The whole point of the button is landing INSIDE the brackets: a caret left

@@ -205,7 +205,10 @@ function ChecklistWidget() {
 				type="button"
 				size="icon"
 				aria-label={`Open setup checklist, ${remaining} remaining`}
-				className="fixed right-4 bottom-4 z-40 size-11 rounded-full shadow-xl ring-1 ring-primary/30"
+				// Rides above the editor toolbar when the keyboard is up. The var is
+				// published by KeyboardBar and defaults to 0px, so this is exactly
+				// bottom-4 everywhere else.
+				className="fixed right-4 bottom-[calc(var(--editor-toolbar-offset,0px)+var(--spacing)*4)] z-40 size-11 rounded-full shadow-xl ring-1 ring-primary/30"
 				onClick={() => setCollapsed(false)}
 			>
 				<Waypoints aria-hidden />

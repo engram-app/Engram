@@ -1,7 +1,13 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, test } from "vitest";
-import { insertSnippet, toggleCheckbox, toggleLinePrefix, toggleWrap } from "./format-commands";
+import {
+	insertSnippet,
+	setHeading,
+	toggleCheckbox,
+	toggleLinePrefix,
+	toggleWrap,
+} from "./format-commands";
 
 let view: EditorView;
 afterEach(() => view?.destroy());
@@ -167,6 +173,67 @@ describe("format-commands", () => {
 			toggleCheckbox(view);
 			expect(view.state.doc.toString()).toBe("- [x] buy milk");
 			expect(view.state.selection.main.head).toBe(10);
+		});
+	});
+
+	// The heading picker SETS a level rather than prepending, so tapping H3 on an
+	// H1 line has to replace the marker — toggleLinePrefix would have produced
+	// "### # title", since "# title" does not start with "### ".
+	describe("setHeading", () => {
+		test("turns a plain line into a heading", () => {
+			mount("title", 0, 0);
+			setHeading(view, 1);
+			expect(view.state.doc.toString()).toBe("# title");
+		});
+
+		test("replaces an existing heading marker rather than stacking one", () => {
+			mount("# title", 0, 0);
+			setHeading(view, 3);
+			expect(view.state.doc.toString()).toBe("### title");
+		});
+
+		test("demotes a deeper heading back up", () => {
+			mount("###### deep", 0, 0);
+			setHeading(view, 2);
+			expect(view.state.doc.toString()).toBe("## deep");
+		});
+
+		// No seventh "Normal text" button: tapping the level a line already has is
+		// the way back to plain text, matching the bar's other toggles.
+		test("removes the heading when the line is already at that level", () => {
+			mount("## title", 0, 0);
+			setHeading(view, 2);
+			expect(view.state.doc.toString()).toBe("title");
+		});
+
+		test("applies to every line the selection touches", () => {
+			mount("one\ntwo", 0, 7);
+			setHeading(view, 2);
+			expect(view.state.doc.toString()).toBe("## one\n## two");
+		});
+
+		// Tapping H1 on an empty line then typing is how you start a section, so
+		// unlike toggleCheckbox this does NOT skip blank lines.
+		test("marks an empty line so the next keystroke lands in the heading", () => {
+			mount("", 0, 0);
+			setHeading(view, 1);
+			expect(view.state.doc.toString()).toBe("# ");
+			expect(view.state.selection.main.head).toBe(2);
+		});
+
+		test("keeps the caret next to the same word when changing level", () => {
+			// Caret before "title" in "# title" -> still before it once H3.
+			mount("# title", 2, 2);
+			setHeading(view, 3);
+			expect(view.state.doc.toString()).toBe("### title");
+			expect(view.state.selection.main.head).toBe(4);
+		});
+
+		// `#foo` with no space is not a heading in CommonMark, so it is content.
+		test("does not treat a spaceless hash run as an existing marker", () => {
+			mount("#tag", 0, 0);
+			setHeading(view, 1);
+			expect(view.state.doc.toString()).toBe("# #tag");
 		});
 	});
 

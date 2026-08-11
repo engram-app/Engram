@@ -21,13 +21,48 @@ const DEV_INSET_PX = 300;
  */
 const KEYBOARD_MIN_PX = 120;
 
+function devKeyboardFlag(): boolean {
+	// Dev-only escape hatch so the bar can be driven and screenshotted in a
+	// desktop browser at mobile width. Never reachable in a production build.
+	return import.meta.env.DEV && new URLSearchParams(window.location.search).has("keyboard");
+}
+
+/**
+ * Tallest visual-viewport height seen at the current width.
+ *
+ * The keyboard makes the visual viewport SHORTER under both browser models —
+ * the ones that resize only the visual viewport, and the ones that resize the
+ * layout viewport with it — so a drop from the tallest height seen is the one
+ * signal that means "keyboard is up" everywhere. The inset alone is not: it is
+ * legitimately 0 on the second kind.
+ *
+ * Keyed by width so a rotation starts a fresh baseline instead of comparing
+ * portrait against landscape.
+ */
+let tallest = { width: 0, height: 0 };
+
+function readKeyboardOpen(): boolean {
+	if (typeof window === "undefined") {
+		return false;
+	}
+	if (devKeyboardFlag()) {
+		return true;
+	}
+	const vv = window.visualViewport;
+	if (!vv) {
+		return false;
+	}
+	if (vv.width !== tallest.width || vv.height > tallest.height) {
+		tallest = { width: vv.width, height: vv.height };
+	}
+	return tallest.height - vv.height >= KEYBOARD_MIN_PX;
+}
+
 function readInset(): number {
 	if (typeof window === "undefined") {
 		return 0;
 	}
-	// Dev-only escape hatch so the bar can be driven and screenshotted in a
-	// desktop browser at mobile width. Never reachable in a production build.
-	if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("keyboard")) {
+	if (devKeyboardFlag()) {
 		return DEV_INSET_PX;
 	}
 	const vv = window.visualViewport;
@@ -41,15 +76,16 @@ function readInset(): number {
 	return obscured >= KEYBOARD_MIN_PX ? Math.round(obscured) : 0;
 }
 
-export function useKeyboardInset(): number {
-	const [inset, setInset] = useState(readInset);
+/** Subscribe `read` to the visual viewport's resize/scroll events. */
+function useViewportValue<T>(read: () => T): T {
+	const [value, setValue] = useState(read);
 
 	useEffect(() => {
 		const vv = window.visualViewport;
 		if (!vv) {
 			return;
 		}
-		const update = () => setInset(readInset());
+		const update = () => setValue(read());
 		// resize fires when the keyboard opens/closes; scroll fires when the
 		// visual viewport pans under it, which changes offsetTop and therefore
 		// the inset even though nothing resized.
@@ -59,7 +95,26 @@ export function useKeyboardInset(): number {
 			vv.removeEventListener("resize", update);
 			vv.removeEventListener("scroll", update);
 		};
-	}, []);
+		// `read` is a module-level function, stable across renders.
+	}, [read]);
 
-	return inset;
+	return value;
+}
+
+export function useKeyboardInset(): number {
+	return useViewportValue(readInset);
+}
+
+/**
+ * Whether the on-screen keyboard is up.
+ *
+ * Deliberately NOT `useKeyboardInset() > 0`: on browsers that resize the layout
+ * viewport the inset is 0 with the keyboard fully open, which is why the
+ * toolbar used to gate on focus alone — and that in turn left the bar stranded
+ * over the document whenever the editor kept focus after the keyboard was
+ * dismissed. This compares against the tallest viewport seen instead, which
+ * shrinks under both models.
+ */
+export function useKeyboardOpen(): boolean {
+	return useViewportValue(readKeyboardOpen);
 }

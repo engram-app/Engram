@@ -1,5 +1,11 @@
 import { indentWithTab } from "@codemirror/commands";
-import { type ChangeSpec, EditorSelection, type Extension } from "@codemirror/state";
+import {
+	type ChangeSpec,
+	EditorSelection,
+	type EditorState,
+	type Extension,
+	type Line,
+} from "@codemirror/state";
 import { type EditorView, keymap } from "@codemirror/view";
 
 /** Opens with a line of only `-` or `=` — what CommonMark reads as a setext heading underline. */
@@ -15,6 +21,43 @@ const LINE_PARTS = /^(?<indent>[ \t]*)(?<body>.*)$/u;
 const TASK = /^(?<marker>[-*+] )\[(?<state>[ xX])\] ?(?<rest>.*)$/u;
 /** A bare list item: `- foo`, with no checkbox yet. */
 const BULLET = /^(?<marker>[-*+] )(?<rest>.*)$/u;
+/**
+ * An ATX heading marker, matched against a line's body (indent already split
+ * off). The trailing ` +` is required by CommonMark and is what keeps `#tag`
+ * from reading as an empty h1 — without it, tapping a heading level on a line
+ * starting with a tag would eat the tag's hash.
+ */
+const HEADING = /^(?<hashes>#{1,6}) +/u;
+
+/**
+ * Every line the selection touches, deduped, in document order.
+ *
+ * Mirrors CodeMirror's selectedLineBlocks: a non-empty selection ending exactly
+ * at the start of a line does not select any character of that line. That
+ * boundary rule is easy to get subtly wrong, so the three line commands below
+ * share this one implementation rather than each carrying a copy.
+ */
+function selectedLines(state: EditorState): Line[] {
+	const lines: Line[] = [];
+	const seen = new Set<number>();
+	for (const range of state.selection.ranges) {
+		const endPos =
+			!range.empty && state.doc.lineAt(range.to).from === range.to ? range.to - 1 : range.to;
+		let pos = range.from;
+		while (pos <= endPos) {
+			const line = state.doc.lineAt(pos);
+			if (!seen.has(line.number)) {
+				seen.add(line.number);
+				lines.push(line);
+			}
+			pos = line.to + 1;
+			if (line.to >= state.doc.length) {
+				break;
+			}
+		}
+	}
+	return lines;
+}
 
 /**
  * Apply `changes` and map the selection with assoc = 1.
@@ -115,41 +158,27 @@ export function insertSnippet(
  * and losing the task entirely is not recoverable by tapping again.
  */
 export function toggleCheckbox(view: EditorView): void {
-	const { state } = view;
 	const changes: ChangeSpec[] = [];
-	const seen = new Set<number>();
-	for (const range of state.selection.ranges) {
-		// Same boundary rule as toggleLinePrefix: a selection ending exactly at a
-		// line start does not select any character of that line.
-		const endPos =
-			!range.empty && state.doc.lineAt(range.to).from === range.to ? range.to - 1 : range.to;
-		let pos = range.from;
-		while (pos <= endPos) {
-			const line = state.doc.lineAt(pos);
-			if (!seen.has(line.number) && line.text.trim() !== "") {
-				seen.add(line.number);
-				const { indent = "", body = "" } = LINE_PARTS.exec(line.text)?.groups ?? {};
-				// Edit only the marker, never the whole line. Rewriting the line
-				// wholesale maps the caret to the line start — tap the button
-				// mid-word and you lose your place.
-				const bodyStart = line.from + indent.length;
-				const task = TASK.exec(body)?.groups;
-				const bullet = BULLET.exec(body)?.groups;
-				if (task) {
-					// Flip the single character inside the brackets.
-					const statePos = bodyStart + (task.marker?.length ?? 0) + 1;
-					const checked = task.state?.toLowerCase() === "x";
-					changes.push({ from: statePos, to: statePos + 1, insert: checked ? " " : "x" });
-				} else if (bullet) {
-					changes.push({ from: bodyStart + (bullet.marker?.length ?? 0), insert: "[ ] " });
-				} else {
-					changes.push({ from: bodyStart, insert: "- [ ] " });
-				}
-			}
-			pos = line.to + 1;
-			if (line.to >= state.doc.length) {
-				break;
-			}
+	for (const line of selectedLines(view.state)) {
+		if (line.text.trim() === "") {
+			continue;
+		}
+		const { indent = "", body = "" } = LINE_PARTS.exec(line.text)?.groups ?? {};
+		// Edit only the marker, never the whole line. Rewriting the line
+		// wholesale maps the caret to the line start — tap the button mid-word
+		// and you lose your place.
+		const bodyStart = line.from + indent.length;
+		const task = TASK.exec(body)?.groups;
+		const bullet = BULLET.exec(body)?.groups;
+		if (task) {
+			// Flip the single character inside the brackets.
+			const statePos = bodyStart + (task.marker?.length ?? 0) + 1;
+			const checked = task.state?.toLowerCase() === "x";
+			changes.push({ from: statePos, to: statePos + 1, insert: checked ? " " : "x" });
+		} else if (bullet) {
+			changes.push({ from: bodyStart + (bullet.marker?.length ?? 0), insert: "[ ] " });
+		} else {
+			changes.push({ from: bodyStart, insert: "- [ ] " });
 		}
 	}
 	if (changes.length > 0) {
@@ -158,29 +187,39 @@ export function toggleCheckbox(view: EditorView): void {
 	view.focus();
 }
 
+/**
+ * Set the caret line(s) to heading `level`, Obsidian's heading menu.
+ *
+ * SETS rather than prepends: tapping H3 on an H1 line has to replace the
+ * marker, where toggleLinePrefix would have produced "### # title" (a `# title`
+ * line does not start with `### `). Tapping the level a line already has
+ * removes it, which is the way back to plain text without a seventh button.
+ */
+export function setHeading(view: EditorView, level: number): void {
+	const changes: ChangeSpec[] = [];
+	for (const line of selectedLines(view.state)) {
+		const { indent = "", body = "" } = LINE_PARTS.exec(line.text)?.groups ?? {};
+		const from = line.from + indent.length;
+		const existing = HEADING.exec(body);
+		const hashes = existing?.groups?.hashes ?? "";
+		changes.push({
+			from,
+			// Replace the whole existing marker INCLUDING its trailing spaces, so
+			// re-leveling never leaves a double gap before the text.
+			to: from + (existing?.[0].length ?? 0),
+			insert: hashes.length === level ? "" : `${"#".repeat(level)} `,
+		});
+	}
+	dispatchKeepingCaretAfterInsert(view, changes);
+	view.focus();
+}
+
 /** Prepend `prefix` (e.g. "# ", "> ", "- ") to each line the selection touches. */
 export function toggleLinePrefix(view: EditorView, prefix: string): void {
-	const { state } = view;
 	const changes: ChangeSpec[] = [];
-	const seen = new Set<number>();
-	for (const range of state.selection.ranges) {
-		// Mirror CodeMirror's selectedLineBlocks: a non-empty selection ending exactly
-		// at the start of a line does not select any character of that line.
-		const endPos =
-			!range.empty && state.doc.lineAt(range.to).from === range.to ? range.to - 1 : range.to;
-		let pos = range.from;
-		while (pos <= endPos) {
-			const line = state.doc.lineAt(pos);
-			if (!seen.has(line.number)) {
-				seen.add(line.number);
-				if (!line.text.startsWith(prefix)) {
-					changes.push({ from: line.from, insert: prefix });
-				}
-			}
-			pos = line.to + 1;
-			if (line.to >= state.doc.length) {
-				break;
-			}
+	for (const line of selectedLines(view.state)) {
+		if (!line.text.startsWith(prefix)) {
+			changes.push({ from: line.from, insert: prefix });
 		}
 	}
 	if (changes.length > 0) {
