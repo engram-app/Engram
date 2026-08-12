@@ -377,7 +377,6 @@ class Replica {
 		};
 
 		engine.setCrdtCreate((docId: string, p: string) => channel.crdtCreate(docId, p)); // main.ts:1815
-		engine.setCrdtCreateBatch((creates: unknown) => channel.crdtCreateBatch(creates));
 		engine.setCrdtDelete((docId: string) => channel.crdtDeleteAcked(docId));
 		engine.setCrdtCatchupSince((cursorSeq: number, limit: number) =>
 			channel.crdtCatchupSince(cursorSeq, limit),

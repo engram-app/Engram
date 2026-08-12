@@ -222,6 +222,14 @@ async def swap_to_oauth(cdp, tokens: dict) -> str:
         if (typeof plugin.markSyncGateAccepted === 'function') {{
             await plugin.markSyncGateAccepted();
         }}
+        // saveSettings() above ran with the gate freshly closed (the auth/vault
+        // fingerprint just rotated), which fire-and-forgets
+        // doSyncWithFirstSyncCheck -> a vault-switch SyncPreviewModal nobody
+        // will ever answer. The plugin's syncPreviewGuard then turns every
+        // later open into a silent no-op, cascading "Modal option not found"
+        // into unrelated tests (test_55, docs/context/
+        // e2e-sync-preview-modal-cascade.md). Close it if it already mounted.
+        if (plugin.openPreviewModal) {{ plugin.openPreviewModal.close(); }}
         return 'oauth configured';
     }})()
     """
@@ -282,6 +290,14 @@ async def restore_auth(cdp, original_settings_json: str, verify_timeout: float =
         if (typeof plugin.markSyncGateAccepted === 'function') {{
             await plugin.markSyncGateAccepted();
         }}
+        // saveSettings() above ran with the gate freshly closed (the auth/vault
+        // fingerprint just rotated), which fire-and-forgets
+        // doSyncWithFirstSyncCheck -> a vault-switch SyncPreviewModal nobody
+        // will ever answer. The plugin's syncPreviewGuard then turns every
+        // later open into a silent no-op, cascading "Modal option not found"
+        // into unrelated tests (test_55, docs/context/
+        // e2e-sync-preview-modal-cascade.md). Close it if it already mounted.
+        if (plugin.openPreviewModal) {{ plugin.openPreviewModal.close(); }}
         return 'auth restored';
     }})()
     """
@@ -297,6 +313,16 @@ async def restore_auth(cdp, original_settings_json: str, verify_timeout: float =
     # Fail loudly HERE, at the restore site, instead of 40 tests downstream. The
     # timeout message carries the channel diagnostic (crdtJoinFailedReason etc).
     await cdp.wait_for_stream_connected(timeout=verify_timeout)
+
+    # Second sweep for the stranded vault-switch preview modal (see the
+    # comment in the restore JS above): the void doSyncWithFirstSyncCheck
+    # re-fire opens it on a microtask, so the inline close can lose the race.
+    # By stream-verify time it is settled — close it for real.
+    await cdp.evaluate(
+        f"(() => {{ const p = {_P}; "
+        f"if (p.openPreviewModal) {{ p.openPreviewModal.close(); return 'closed'; }} "
+        f"return 'none'; }})()"
+    )
 
 
 async def wait_for_stream(cdp, timeout: float = 60) -> None:

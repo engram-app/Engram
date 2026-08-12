@@ -531,7 +531,21 @@ class CdpClient:
             if clicked is True:
                 return
             if time.monotonic() >= deadline:
-                raise CdpError(f"Modal option '{label}' not found")
+                # Dump what actually rendered: "option not found" alone can't
+                # distinguish a missing card from a loading view, an empty-plan
+                # view, or plugin #415's one-click screen.
+                state = await self.evaluate(
+                    """
+                    (() => {
+                        const m = document.querySelector('.engram-sync-preview-modal');
+                        if (!m) return '<no .engram-sync-preview-modal in DOM>';
+                        return m.innerText.slice(0, 600);
+                    })()
+                    """
+                )
+                raise CdpError(
+                    f"Modal option '{label}' not found; modal shows: {state!r}"
+                )
             await asyncio.sleep(0.2)
 
     async def click_modal_confirm(self) -> None:
