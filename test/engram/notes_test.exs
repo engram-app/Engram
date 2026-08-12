@@ -952,6 +952,75 @@ defmodule Engram.NotesTest do
   end
 
   # ---------------------------------------------------------------------------
+  # list_types/2
+  # ---------------------------------------------------------------------------
+
+  describe "list_types/2" do
+    test "returns unique OKF types across user's notes", %{user: user, vault: vault} do
+      Notes.upsert_note(user, vault, %{
+        "path" => "A.md",
+        "content" => "---\ntype: playbook\n---",
+        "mtime" => 1_000.0
+      })
+
+      Notes.upsert_note(user, vault, %{
+        "path" => "B.md",
+        "content" => "---\ntype: playbook\n---",
+        "mtime" => 1_000.0
+      })
+
+      Notes.upsert_note(user, vault, %{
+        "path" => "C.md",
+        "content" => "---\ntype: meeting\n---",
+        "mtime" => 1_000.0
+      })
+
+      # No frontmatter at all — must not contribute an entry.
+      Notes.upsert_note(user, vault, %{
+        "path" => "D.md",
+        "content" => "plain body",
+        "mtime" => 1_000.0
+      })
+
+      assert {:ok, ["meeting", "playbook"]} = Notes.list_types(user, vault)
+    end
+
+    test "collapses case variants the way the filter does", %{user: user, vault: vault} do
+      # type_hmac normalises before hashing, so `Playbook` and `playbook` are
+      # ONE filter bucket. Suggestions must not offer them as two choices.
+      Notes.upsert_note(user, vault, %{
+        "path" => "A.md",
+        "content" => "---\ntype: Playbook\n---",
+        "mtime" => 1_000.0
+      })
+
+      Notes.upsert_note(user, vault, %{
+        "path" => "B.md",
+        "content" => "---\ntype: playbook\n---",
+        "mtime" => 1_000.0
+      })
+
+      assert {:ok, ["playbook"]} = Notes.list_types(user, vault)
+    end
+
+    test "excludes types from other users", %{
+      user: user,
+      vault: vault,
+      other_user: other_user,
+      other_vault: other_vault
+    } do
+      Notes.upsert_note(other_user, other_vault, %{
+        "path" => "A.md",
+        "content" => "---\ntype: secret\n---",
+        "mtime" => 1_000.0
+      })
+
+      {:ok, types} = Notes.list_types(user, vault)
+      refute "secret" in types
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # list_folders/2
   # ---------------------------------------------------------------------------
 

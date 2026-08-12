@@ -1,3 +1,5 @@
+import { randomUuid } from "@/lib/random-uuid";
+
 const STORAGE_KEY = "engram.deviceId";
 
 let deviceId: string | null = null;
@@ -29,7 +31,14 @@ export function getDeviceId(): string {
 	if (deviceId) {
 		return deviceId;
 	}
-	deviceId = readStored() ?? crypto.randomUUID();
+	// randomUuid(), not crypto.randomUUID() directly: the latter is
+	// secure-context-only, so it is undefined when the app is served over plain
+	// http from anything but localhost — a phone pointed at the dev server, or a
+	// self-host reached at http://192.168.x.x. This is the first call after
+	// sign-in (it stamps X-Device-Id), so the TypeError surfaced as a permanent
+	// loading screen with no client log, the log shipper needing the device id
+	// too. On HTTPS the helper still returns the same v4 as before.
+	deviceId = readStored() ?? randomUuid();
 	writeStored(deviceId);
 	return deviceId;
 }

@@ -2,12 +2,18 @@
  * (engram-obsidian-sync `src/crdt/uuid7.ts`) so the web mints note_ids the same
  * way the backend/plugin expect.
  *
- * `crypto.randomUUID()` (used elsewhere here for idempotency/placeholder ids)
- * only produces v4 — random, no time ordering. A brand-new note's client-minted
+ * `crypto.randomUUID()` only produces v4 — random, no time ordering. A
+ * brand-new note's client-minted
  * id must be roughly creation-ordered (v7 embeds a 48-bit ms timestamp in the top
  * bits) so ids sort consistently with the backend Postgres uuid ordering; a v4
  * won't do. No `uuid` package is in package.json, so this stays a small
  * self-contained generator instead of a new dependency.
+ *
+ * It is also the app's only id source that works off a secure context —
+ * crypto.getRandomValues below is not gated, whereas crypto.randomUUID is —
+ * which is why `lib/random-uuid` falls back to this. For a plain random id,
+ * call randomUuid() rather than crypto.randomUUID directly; reserve this for
+ * ids that genuinely need to be time-ordered, like note ids.
  *
  * ponytail: "roughly" ordered — same-ms ties fall back to pure randomness (no
  * monotonic counter), fine for a note_id nonce. Swap for a lib if strict per-ms

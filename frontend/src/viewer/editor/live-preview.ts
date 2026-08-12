@@ -26,7 +26,7 @@ import { calloutDecoration } from "./callout-decoration";
 import { calloutMarker } from "./callout-marker";
 import { katexDecoration } from "./katex-decoration";
 import { mermaidDecoration, mermaidKeymap } from "./mermaid-decoration";
-import { wikiCompletionSource } from "./wiki-completion";
+import { mdLinkCompletionSource, wikiCompletionSource } from "./wiki-completion";
 
 /**
  * Token colours that must beat atomicMarkdownSyntax.
@@ -135,7 +135,10 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		// play. defaultKeymap wires Tab/Enter/Escape/arrow-navigation of the
 		// completion popup.
 		autocompletion({
-			override: [wikiCompletionSource(opts.wikiCompletionPaths)],
+			override: [
+				wikiCompletionSource(opts.wikiCompletionPaths),
+				mdLinkCompletionSource(opts.wikiCompletionPaths),
+			],
 			defaultKeymap: true,
 		}),
 	];

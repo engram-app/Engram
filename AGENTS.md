@@ -381,9 +381,11 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Login critical-path optimization (PR #673) — rolldown-vite `manualChunks` gotcha → `docs/context/frontend-login-load-optimization.md`
 - Login boot perf (PR #842) — chunk-size measurement, VLQ-decode under hidden sourcemaps → `docs/context/frontend-login-boot-perf.md`
 - Folder-tree `rebuildTree()` triggers, optimistic move/delete/duplicate → `docs/context/folder-tree-optimistic-rebuild.md`
+- Mobile keyboard toolbar — why it hides on some phones, the decoy Yjs UndoManager, caret-after-insert → `docs/context/mobile-editor-toolbar.md`
 - Frontend/backend deploy-trigger skew (different pipelines) — 2026-06-20 incident + fix → `docs/context/frontend-backend-deploy-skew-cors.md`
 - Writing a CM6 live-preview decoration (lezer reads `[!type]` as a Link; one highlight tag serves many nodes; `syntaxTree` is lazy) → `docs/context/codemirror-live-preview-extensions.md`
 - A route guard or view acts on state that mutations definitely updated (user bounced back to a completed onboarding/wizard step; loop only a full page reload escapes) → `docs/context/bootstrap-seed-cache-dual-authority.md`
+- Adding a shadcn/Base UI component (popup untappable inside a Radix sheet on mobile, field unnamed while the list is open, SPA-wide 504 `Outdated Optimize Dep` after a `bun remove`, `fireEvent.click` won't open a combobox) → `docs/context/shadcn-combobox-adoption.md`
 
 **Issue tracker**
 - An old issue's description contradicts the code, or you are triaging a stale backlog (`Refs #N` drift + the detection recipe) → `docs/context/backlog-refs-drift.md`

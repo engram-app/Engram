@@ -78,7 +78,7 @@ export default function FolderTree() {
 		() => synthesizeFolders(folders ?? EMPTY_FOLDERS, attachments),
 		[folders, attachments],
 	);
-	const { sort, pendingFolderRename, requestFolderRename, clearFolderRename } =
+	const { sort, pendingFolderRename, requestFolderRename, clearFolderRename, registerCollapseAll } =
 		useFolderTreeState();
 	const vaultId = useActiveVaultId();
 	const qc = useQueryClient();
@@ -233,6 +233,19 @@ export default function FolderTree() {
 		onRenameCommit,
 		onMove,
 	});
+
+	// The toolbar's collapse button lives in a sibling component, so hand it the
+	// tree's own collapse rather than mirroring expansion state up into context.
+	// Root is re-expanded straight after: HT walks the expanded set to build its
+	// item list, so an unexpanded root renders NOTHING — collapseAll alone would
+	// blank the sidebar rather than collapse it.
+	useEffect(() => {
+		registerCollapseAll(() => {
+			tree.collapseAll();
+			tree.getRootItem().expand();
+		});
+		return () => registerCollapseAll(null);
+	}, [registerCollapseAll, tree]);
 
 	// Register the scroll container with BOTH the virtualizer (scrollRef) and
 	// headless-tree, whose getContainerProps supplies the empty-space drop handler
@@ -615,16 +628,20 @@ export default function FolderTree() {
 		setDialog({ kind: "none" });
 	}
 
+	// flex-1 on every no-rows branch: FilesPanel is a flex column and only the
+	// tree grows. Without it these shrink to one line and pull FolderActions +
+	// VaultSwitcher up under the header — on an empty vault, and as a jump on
+	// every vault while it loads.
 	if (isLoading) {
 		return (
-			<p data-testid="folder-tree-root" className="px-3 py-2 text-muted-foreground text-xs">
+			<p data-testid="folder-tree-root" className="flex-1 px-3 py-2 text-muted-foreground text-xs">
 				Loading…
 			</p>
 		);
 	}
 	if (isError) {
 		return (
-			<p data-testid="folder-tree-root" className="px-3 py-2 text-destructive text-xs">
+			<p data-testid="folder-tree-root" className="flex-1 px-3 py-2 text-destructive text-xs">
 				Failed to load folders.
 			</p>
 		);
@@ -632,13 +649,13 @@ export default function FolderTree() {
 	// Empty only when there are neither folders nor root-level notes. A vault
 	// with root notes but no folders (e.g. a freshly created "Untitled" at root)
 	// must still render the tree — the loader stitches rootNotes under ROOT.
-	if (!folders || (allFolders.length === 0 && rootNotes.length === 0 && attachments.length === 0)) {
-		return (
-			<p data-testid="folder-tree-root" className="px-3 py-2 text-muted-foreground text-xs">
-				No notes yet.
-			</p>
-		);
-	}
+	//
+	// The empty state renders INSIDE the container rather than replacing it, so
+	// an empty vault keeps the right-click "New note" / "New folder" menu and the
+	// drop-to-root zone. Swapping the container out for bare text is how an empty
+	// vault ended up with no way in but the toolbar button.
+	const isEmpty =
+		!folders || (allFolders.length === 0 && rootNotes.length === 0 && attachments.length === 0);
 
 	return (
 		<>
@@ -667,6 +684,9 @@ export default function FolderTree() {
 				<div
 					style={{ height: virtualizer.getTotalSize(), minHeight: "100%", position: "relative" }}
 				>
+					{isEmpty ? (
+						<p className="px-1 py-0.5 text-muted-foreground text-xs">No notes yet.</p>
+					) : null}
 					{virtualizer.getVirtualItems().map((v) => (
 						<TreeRowVirtualized
 							key={items[v.index]?.getId() ?? v.index}

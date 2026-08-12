@@ -2081,6 +2081,34 @@
         "x-struct": "Elixir.EngramWeb.Schemas.NoteMeta",
         "x-validate": null
       },
+      "TypesResponse": {
+        "properties": {
+          "types": {
+            "items": {
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                }
+              },
+              "type": "object",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "types"
+        ],
+        "title": "TypesResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.TypesResponse",
+        "x-validate": null
+      },
       "Conflict": {
         "properties": {
           "error": {
@@ -3725,6 +3753,30 @@
         "summary": "Permanently purge a vault",
         "tags": [
           "Vaults"
+        ]
+      }
+    },
+    "/api/types": {
+      "get": {
+        "callbacks": {},
+        "description": "Returns the distinct set of Open Knowledge Format `type` values used across all notes in the current vault, normalised (NFKC + lowercase) to match how the search filter buckets them.",
+        "operationId": "types",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TypesResponse"
+                }
+              }
+            },
+            "description": "Types"
+          }
+        },
+        "summary": "List all OKF types in the vault",
+        "tags": [
+          "Types"
         ]
       }
     },

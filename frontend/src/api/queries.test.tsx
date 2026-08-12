@@ -33,6 +33,8 @@ import {
 	useRenameNote,
 	useReverseCancel,
 	useSearch,
+	useTags,
+	useTypes,
 	useUploadAttachment,
 	useVaults,
 } from "./queries";
@@ -2019,6 +2021,65 @@ describe("useSearch", () => {
 			expect(post).toHaveBeenCalledWith(
 				"/search",
 				{ query: "x", limit: 20, type: "Playbook" },
+				{ signal: expect.any(AbortSignal) },
+			),
+		);
+	});
+});
+
+describe("useTags", () => {
+	// TagsController sends `%{tags: [%{name: ...}]}`, but the hook DECLARED
+	// `string[]` — an unchecked assertion, so TypeScript believed it and every
+	// consumer got objects while the types promised strings. Rendering one in an
+	// <option> crashed the whole page with "Objects are not valid as a React
+	// child". The hook's contract stays string[]; it now earns it.
+	it("flattens the {name} rows the API actually sends into plain strings", async () => {
+		get.mockResolvedValue({ tags: [{ name: "project" }, { name: "reading" }] });
+
+		const { result } = renderHook(() => useTags(), { wrapper });
+
+		await waitFor(() => expect(result.current.data).toEqual(["project", "reading"]));
+	});
+
+	// The `enabled: Boolean(vaultId)` guard is not covered here: this file mocks
+	// useActiveVaultId to a constant "42" for every test, so there is no honest
+	// way to observe the disabled state without changing that for all 90 of them.
+});
+
+describe("useTypes", () => {
+	it("flattens the {name} rows the API actually sends into plain strings", async () => {
+		get.mockResolvedValue({ types: [{ name: "meeting" }, { name: "playbook" }] });
+
+		const { result } = renderHook(() => useTypes(), { wrapper });
+
+		await waitFor(() => expect(result.current.data).toEqual(["meeting", "playbook"]));
+	});
+});
+
+describe("useSearch filters for folder and tags", () => {
+	it("posts folder and tags when provided", async () => {
+		post.mockResolvedValue({ results: [] });
+
+		renderHook(() => useSearch("x", { folder: "Archive", tags: ["a", "b"] }), { wrapper });
+
+		await waitFor(() =>
+			expect(post).toHaveBeenCalledWith(
+				"/search",
+				{ query: "x", limit: 20, folder: "Archive", tags: ["a", "b"] },
+				{ signal: expect.any(AbortSignal) },
+			),
+		);
+	});
+
+	it("omits an empty tag list rather than sending []", async () => {
+		post.mockResolvedValue({ results: [] });
+
+		renderHook(() => useSearch("x", { tags: [] }), { wrapper });
+
+		await waitFor(() =>
+			expect(post).toHaveBeenCalledWith(
+				"/search",
+				{ query: "x", limit: 20 },
 				{ signal: expect.any(AbortSignal) },
 			),
 		);

@@ -49,7 +49,11 @@ function DesktopLayout() {
 				<ResizablePanel
 					id="sidebar"
 					defaultSize="240px"
-					minSize="180px"
+					// The FolderActions row is 5 × size-10 icon buttons = 200px of
+					// intrinsic width, and this panel's border-r takes 1px off the
+					// content box. Anything narrower clips the right-hand buttons, so
+					// this floor is measured, not a taste call.
+					minSize="201px"
 					maxSize="480px"
 					className="border-border border-r bg-card"
 				>

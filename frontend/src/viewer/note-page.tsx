@@ -32,6 +32,7 @@ import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";
 import BacklinksPanel from "./backlinks-panel";
 import { useActiveEditor } from "./editor/active-editor-context";
+import { KeyboardBar } from "./editor/keyboard-bar";
 import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
 import { InlineTitle } from "./inline-title";
 import LoadingPane from "./loading-pane";
@@ -615,10 +616,12 @@ export default function NotePage() {
 				<NoteMenu mode={mode} title={name} onPick={handleAction} />
 			</div>
 
-			{/* EditorToolbar is deliberately NOT mounted — see editor/toolbar.tsx.
-			    A desktop-width strip of format buttons earns little next to the
-			    markdown shortcuts, and the case it does earn is mobile, where it
-			    belongs above the keyboard rather than under the header. */}
+			{/* EditorToolbar is still NOT mounted — see editor/toolbar.tsx. The
+			    mobile case that comment anticipated is KeyboardBar below, which
+			    docks above the on-screen keyboard and carries only the commands a
+			    soft keyboard cannot reach. It renders nothing on desktop or while
+			    the keyboard is down. */}
+			{mode !== "reading" && <KeyboardBar getView={() => editorViewRef.current} />}
 
 			<ScrollArea className="min-h-0 flex-1">
 				<div className="w-full pb-5">

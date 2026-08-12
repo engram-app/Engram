@@ -1,3 +1,4 @@
+import type { Vault } from "../api/queries";
 import {
 	Dialog,
 	DialogContent,
@@ -8,7 +9,7 @@ import {
 import { VaultCreateForm } from "../components/vault-create-form";
 
 interface Props {
-	onCreated: (vaultId: string) => void;
+	onCreated: (vault: Vault) => void;
 }
 
 export function CreateFirstVaultModal({ onCreated }: Props) {

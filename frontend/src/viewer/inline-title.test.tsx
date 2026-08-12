@@ -64,6 +64,21 @@ describe("InlineTitle", () => {
 		expect(input.className).not.toMatch(/\btext-sm\b/);
 	});
 
+	// The rename box REPLACES the h1, so any difference in the frame shifts
+	// everything below it the moment you click the title.
+	it("keeps the rename box on the same frame as the heading it replaces", () => {
+		const heading = render(<InlineTitle {...props} />).container.querySelector("h1");
+		const section = render(<InlineTitle {...props} renaming />).container.querySelector("section");
+
+		const frameOf = (el: Element | null) =>
+			(el?.className ?? "")
+				.split(" ")
+				.filter((c) => /^p[xytb]?-/.test(c))
+				.sort();
+		expect(frameOf(section)).toEqual(frameOf(heading));
+		expect(frameOf(heading)).not.toHaveLength(0);
+	});
+
 	it("commits the typed name on Enter", () => {
 		const onCommitRename = vi.fn();
 		render(<InlineTitle {...props} renaming onCommitRename={onCommitRename} />);

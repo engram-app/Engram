@@ -23,6 +23,7 @@ defmodule Engram.Notes do
     Frontmatter,
     Helpers,
     Note,
+    OkfFields,
     PathSanitizer
   }
 
@@ -3754,6 +3755,65 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Returns the unique OKF `type` values across all non-deleted notes for a user.
+
+  Powers the type suggestions in the search filter panel. `type_hmac` is a
+  blind index — it answers "does this note match?" but cannot be enumerated —
+  so the inventory has to come from decrypting `type_ciphertext`, the same
+  round-trip `list_tags/2` makes for tags.
+
+  Values are normalised through `OkfFields.normalize_type/1` before dedup
+  because the HMAC normalises before hashing: `Playbook` and `playbook` are
+  ONE filter bucket, so offering both as separate suggestions would show two
+  choices that return identical results.
+
+  Unlike `list_tags/2`, this does NOT decrypt once per note. `type_hmac` is a
+  deterministic hash of the normalised type, so distinct hmacs are exactly the
+  distinct types — `DISTINCT ON` collapses to one representative row per type
+  in the database (riding the existing `{user_id, vault_id, type_hmac}` index)
+  and only those get decrypted. A 10k-note vault with a dozen types costs a
+  dozen decrypts, not ten thousand. Tags cannot do this: `tags_hmac` is a
+  list, so there is no one-row-per-value to collapse to.
+  """
+  @spec list_types(map(), map()) :: {:ok, [String.t()]}
+  def list_types(user, vault) do
+    case Crypto.dek_filter_key(user) do
+      {:ok, _filter_key} ->
+        {:ok, dek} = Crypto.get_dek(user)
+
+        {:ok, rows} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.all(
+              from(n in scoped_live(user, vault),
+                where: not is_nil(n.type_hmac) and not is_nil(n.type_ciphertext),
+                distinct: [asc: n.type_hmac],
+                select: {n.id, n.dek_version, n.type_ciphertext, n.type_nonce}
+              )
+            )
+          end)
+
+        # Enum.uniq/1 is NOT redundant after the DISTINCT ON. The hmac is keyed
+        # by the user's filter key, so rows written either side of a filter-key
+        # rotation carry different hmacs for the same logical type and survive
+        # the database dedup as separate rows. Normalising and uniq'ing the
+        # plaintext collapses them.
+        types =
+          rows
+          |> Enum.map(fn {id, dv, ct, nonce} ->
+            decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :type, id, dv))
+            |> OkfFields.normalize_type()
+          end)
+          |> Enum.uniq()
+          |> Enum.sort()
+
+        {:ok, types}
+
+      {:error, :no_dek} ->
+        {:ok, []}
+    end
+  end
+
+  @doc """
   Returns unique non-empty folder paths for a user's notes.
   """
   @spec list_folders(map(), map()) :: {:ok, [String.t()]}
@@ -5276,14 +5336,14 @@ defmodule Engram.Notes do
   # OKF v0.1 fields. Sets ALL columns on every write: nil when the key is
   # absent, so removing frontmatter clears previously stored values.
   defp inject_okf_fields(attrs, user, note_id, content) do
-    okf = Engram.Notes.OkfFields.extract(content)
+    okf = OkfFields.extract(content)
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, filter_key} = Crypto.dek_filter_key(user)
 
     type_hmac =
       case okf.type do
         nil -> nil
-        t -> Crypto.hmac_field(filter_key, Engram.Notes.OkfFields.normalize_type(t))
+        t -> Crypto.hmac_field(filter_key, OkfFields.normalize_type(t))
       end
 
     attrs

@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { FolderTreeProvider } from "../layout/folder-tree-context";
+import { FolderTreeProvider, useFolderTreeState } from "../layout/folder-tree-context";
 import FolderTree from "./folder-tree";
 
 // The HT-driven FolderTree's UX is the COMPOSITION of already-tested
@@ -72,6 +72,7 @@ const {
 		folders: [] as unknown[],
 		rootNotes: [] as unknown[],
 		loading: false,
+		error: false,
 		attachments: [] as unknown[],
 		// What useNote hands back for the routed note id. `useNote` keeps the
 		// PREVIOUS note's data while the next one loads, so this can legitimately
@@ -85,9 +86,9 @@ vi.mock("../api/queries", async () => {
 	return {
 		...actual,
 		useFolders: () => ({
-			data: mock.loading ? undefined : mock.folders,
+			data: mock.loading || mock.error ? undefined : mock.folders,
 			isLoading: mock.loading,
-			isError: false,
+			isError: mock.error,
 		}),
 		// `useVaultTree` is deliberately NOT stubbed. It used to be pinned to
 		// `{ data: undefined }`, which meant FolderTree's real call to it was never
@@ -192,6 +193,7 @@ beforeEach(() => {
 	mock.folders = DEFAULT_FOLDERS.map((f) => ({ ...f }));
 	mock.rootNotes = [{ ...DEFAULT_ROOT_NOTE }];
 	mock.loading = false;
+	mock.error = false;
 	mock.attachments = [];
 	mock.activeNote = undefined;
 });
@@ -232,6 +234,95 @@ describe("FolderTree (HT)", () => {
 		mock.rootNotes = [];
 		renderTree();
 		expect(await screen.findByText("No notes yet.")).toBeInTheDocument();
+	});
+
+	// The toolbar's "Collapse all folders" button and the tree are siblings, so
+	// the button reaches the tree through FolderTreeProvider. Expansion state
+	// lives in the headless tree; a context that keeps its OWN open-set is not
+	// wired to anything and the button silently does nothing.
+	describe("collapse all", () => {
+		function CollapseButton() {
+			const { collapseAll } = useFolderTreeState();
+			return (
+				<button type="button" onClick={collapseAll}>
+					collapse
+				</button>
+			);
+		}
+
+		function renderWithToolbar() {
+			const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			qc.setQueryData(["folder-notes-by-id", "", "root"], mock.rootNotes);
+			return render(
+				<QueryClientProvider client={qc}>
+					<MemoryRouter>
+						<FolderTreeProvider>
+							<FolderTree />
+							<CollapseButton />
+						</FolderTreeProvider>
+					</MemoryRouter>
+				</QueryClientProvider>,
+			);
+		}
+
+		it("collapses a folder the user expanded", async () => {
+			renderWithToolbar();
+			fireEvent.click(await screen.findByRole("treeitem", { name: "Projects" }));
+			await waitFor(() => {
+				expect(screen.getByRole("treeitem", { name: "Projects" })).toHaveAttribute(
+					"aria-expanded",
+					"true",
+				);
+			});
+
+			fireEvent.click(screen.getByRole("button", { name: "collapse" }));
+
+			await waitFor(() => {
+				expect(screen.getByRole("treeitem", { name: "Projects" })).toHaveAttribute(
+					"aria-expanded",
+					"false",
+				);
+			});
+		});
+
+		// Collapsing must not take the root down with it: HT renders nothing at
+		// all when the root item is unexpanded, so a bare collapseAll() would
+		// blank the sidebar instead of collapsing it.
+		it("keeps the top-level rows visible", async () => {
+			renderWithToolbar();
+			await screen.findByRole("treeitem", { name: "Projects" });
+			fireEvent.click(screen.getByRole("button", { name: "collapse" }));
+			await waitFor(() => {
+				expect(screen.getByRole("treeitem", { name: "Projects" })).toBeInTheDocument();
+				expect(screen.getByRole("treeitem", { name: "archive" })).toBeInTheDocument();
+			});
+		});
+	});
+
+	// FilesPanel is a flex column: header, tree, FolderActions, VaultSwitcher.
+	// Only the tree grows, so every branch that renders instead of the row list
+	// must still claim the free space — otherwise it shrinks to one line of text
+	// and drags the create buttons + vault switcher up under the header. That is
+	// visible on an empty vault, and as a jump on EVERY vault while it loads.
+	describe("fills the sidebar column so the footer stays pinned", () => {
+		it("while loading", () => {
+			mock.loading = true;
+			renderTree();
+			expect(screen.getByTestId("folder-tree-root").className).toContain("flex-1");
+		});
+
+		it("when the vault is empty", async () => {
+			mock.folders = [];
+			mock.rootNotes = [];
+			renderTree();
+			expect((await screen.findByTestId("folder-tree-root")).className).toContain("flex-1");
+		});
+
+		it("when folders fail to load", async () => {
+			mock.error = true;
+			renderTree();
+			expect((await screen.findByTestId("folder-tree-root")).className).toContain("flex-1");
+		});
 	});
 
 	it("right-click on a folder row opens the ContextMenu", async () => {
@@ -376,6 +467,27 @@ describe("FolderTree (HT)", () => {
 			for (const label of ["Rename", "Move to…", "Delete"]) {
 				expect(screen.queryByRole("menuitem", { name: label })).not.toBeInTheDocument();
 			}
+		});
+
+		// An empty vault is exactly where you most need "New note" — it used to
+		// render as bare text with no container, so right-click did nothing and
+		// the only way in was the toolbar button.
+		it("still offers creation actions when the vault is empty", async () => {
+			mock.folders = [];
+			mock.rootNotes = [];
+			await openRootMenu();
+			expect(screen.getByRole("menuitem", { name: "New note" })).toBeInTheDocument();
+			expect(screen.getByRole("menuitem", { name: "New folder" })).toBeInTheDocument();
+		});
+
+		it("creates a note at the vault root when the vault is empty", async () => {
+			mock.folders = [];
+			mock.rootNotes = [];
+			await openRootMenu();
+			fireEvent.click(screen.getByRole("menuitem", { name: "New note" }));
+			expect(createNoteMutate).toHaveBeenCalledWith(
+				expect.objectContaining({ folder: "", id: expect.any(String) }),
+			);
 		});
 
 		it("creates a note at the vault root", async () => {

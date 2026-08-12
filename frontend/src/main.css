@@ -325,6 +325,18 @@ html {
 	pointer-events: auto;
 }
 
+/* Same failure, different library. Base UI portals the combobox popup to
+   <body>, and it does NOT join Radix's dismissable-layer stack the way a Radix
+   popup would — so inside the mobile drawer (a modal Radix Sheet that sets
+   `body { pointer-events: none }`) every option inherits none. The list opens,
+   you tap an option, the tap hit-tests straight through to whatever sits
+   underneath, and Base UI reads it as an outside press: the list closes and
+   nothing is selected. That made all three search filters unusable by touch,
+   which is the one platform they were rebuilt for. */
+[data-slot="combobox-content"] {
+	pointer-events: auto;
+}
+
 /* Obsidian-flavored callouts (@portaljs/remark-callouts markup).
  *
  * DELIBERATELY UNLAYERED, and for a sharper reason than the code fences.

@@ -10,6 +10,7 @@ import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { collideBump } from "@/lib/collide-bump";
 import { noteName } from "@/lib/note-name";
+import { randomUuid } from "@/lib/random-uuid";
 import { uuid7 } from "../crdt/uuid7";
 import {
 	isSyntheticFolderId,
@@ -221,7 +222,7 @@ interface DuplicateNoteContext {
 }
 
 function idempotencyHeaders(): { headers: Record<string, string> } {
-	return { headers: { "X-Idempotency-Key": crypto.randomUUID() } };
+	return { headers: { "X-Idempotency-Key": randomUuid() } };
 }
 
 interface BatchNotesContext {
@@ -1032,6 +1033,8 @@ export function useCreateFolder() {
 
 export interface SearchFilters {
 	type?: string;
+	folder?: string;
+	tags?: string[];
 	createdAfter?: string;
 	createdBefore?: string;
 	updatedAfter?: string;
@@ -1052,6 +1055,8 @@ export function useSearch(query: string, filters: SearchFilters = {}) {
 					query,
 					limit: 20,
 					...(filters.type ? { type: filters.type } : {}),
+					...(filters.folder ? { folder: filters.folder } : {}),
+					...(filters.tags && filters.tags.length > 0 ? { tags: filters.tags } : {}),
 					...(filters.createdAfter ? { created_after: filters.createdAfter } : {}),
 					...(filters.createdBefore ? { created_before: filters.createdBefore } : {}),
 					...(filters.updatedAfter ? { updated_after: filters.updatedAfter } : {}),
@@ -1069,8 +1074,31 @@ export function useTags() {
 	const vaultId = useActiveVaultId();
 	return useQuery({
 		queryKey: ["tags", vaultId],
-		queryFn: () => api.get<{ tags: string[] }>("/tags"),
-		select: (data) => data.tags,
+		// TagsController sends `[{name}]`, NOT bare strings. This was declared as
+		// `string[]` — an unchecked assertion, so TypeScript believed it and the
+		// first consumer to render a tag got an object. The hook keeps the useful
+		// contract (string[]) and now actually produces it.
+		queryFn: () => api.get<{ tags: Array<{ name: string }> }>("/tags"),
+		select: (data) => data.tags.map((t) => t.name),
+		// Same reasoning as useFolders: with no vault to scope the read to, a deep
+		// link arriving before the bootstrap reconcile would fetch some other
+		// vault's tag inventory.
+		enabled: Boolean(vaultId),
+	});
+}
+
+/**
+ * The OKF `type` values actually present in the vault, for the search filter's
+ * suggestions. Server-normalised (NFKC + lowercase) so the list matches the
+ * filter's own buckets — `Playbook` and `playbook` arrive as one entry.
+ */
+export function useTypes() {
+	const vaultId = useActiveVaultId();
+	return useQuery({
+		queryKey: ["types", vaultId],
+		queryFn: () => api.get<{ types: Array<{ name: string }> }>("/types"),
+		select: (data) => data.types.map((t) => t.name),
+		enabled: Boolean(vaultId),
 	});
 }
 
@@ -1885,7 +1913,7 @@ export function useRenameNote() {
 						next = [
 							...next,
 							{
-								id: `optimistic-${crypto.randomUUID()}`,
+								id: `optimistic-${randomUuid()}`,
 								parent_id: null,
 								name: newFolder,
 								count: 1,
@@ -2243,7 +2271,7 @@ export function useDuplicateNote() {
 			// Placeholder id — the real one arrives with the crdt_create reply.
 			// `optimistic-` prefix avoids collisions with real backend uuids;
 			// onSuccess swaps it for the server-assigned id in the cached list.
-			const placeholderId = `optimistic-${crypto.randomUUID()}`;
+			const placeholderId = `optimistic-${randomUuid()}`;
 			const ctx: DuplicateNoteContext = { placeholderId };
 
 			// Seed metadata from the source row if we have it cached — gives
