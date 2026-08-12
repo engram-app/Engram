@@ -63,6 +63,37 @@ e2e auto-pairs.
   one-click button and asserts the dispatched choice is `smart-merge`.
 - `run.ts`: deleted the `setCrdtCreateBatch` wiring line.
 
+## The REAL strand source: oauth swap/restore (found via the DOM dump)
+
+The test_51 finally-dismiss fix was necessary but test_55 kept failing at the
+same suite position. The new `pick_modal_option` timeout dump showed the stuck
+modal verbatim:
+
+> "You are now pointing at a different cloud vault — This vault is empty on
+> the server. Upload your 16 notes? — Upload everything / Cancel / Change vault"
+
+A vault-switch-context ONE-CLICK screen with a stale plan. Decoded:
+
+- `helpers/oauth.py` `swap_to_oauth`/`restore_auth` rotate the auth/vault
+  fingerprint, which closes the sync gate; the `plugin.saveSettings()` they
+  call then fire-and-forgets `doSyncWithFirstSyncCheck` for the closed gate —
+  **opening a vault-switch SyncPreviewModal nobody answers**. The
+  `markSyncGateAccepted()` that follows re-opens the gate but does NOT close
+  the already-mounted modal.
+- The stranded modal's plan was computed mid-rebind (channel down), so server
+  enumeration read EMPTY → with plugin #415 that renders the one-click upload
+  screen (no option cards). Pre-#415 the same stranded modal happened to
+  contain the five option cards, so `pick_modal_option` clicked the STALE
+  modal and tests passed by accident — #415 exposed the strand, it didn't
+  create it.
+- Local repro gotcha: test_47 is Clerk-gated (`E2E_CLERK_SECRET_KEY`), so a
+  local-auth repro of the CI ordering SKIPS the trigger and test_55 passes —
+  a green local run proved nothing until the DOM dump named the real culprit.
+
+Fix: both oauth helpers now close `plugin.openPreviewModal` right after
+`markSyncGateAccepted()` (inline JS) and `restore_auth` sweeps again after its
+stream verify (the void re-fire can win the inline race).
+
 ## Gotchas for next time
 
 - Writing e2e tests that open the sync-preview modal: ALWAYS
