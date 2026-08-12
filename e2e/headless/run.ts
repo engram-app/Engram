@@ -376,6 +376,9 @@ class Replica {
 			if (!connected) manager.setConnected(false);
 		};
 
+		// Genesis notes ride this per-file loop now. The engine's batch-create
+		// port went away with plugin #413, and the harness mirrors main.ts, so the
+		// setCrdtCreateBatch wiring went with it.
 		engine.setCrdtCreate((docId: string, p: string) => channel.crdtCreate(docId, p)); // main.ts:1815
 		engine.setCrdtDelete((docId: string) => channel.crdtDeleteAcked(docId));
 		engine.setCrdtCatchupSince((cursorSeq: number, limit: number) =>
