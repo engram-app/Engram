@@ -65,6 +65,33 @@ async def _restore_clean(cdp, vault, path: str) -> None:
     await cdp.accept_sync_gate()
 
 
+async def _seed_divergent(cdp, vault, api_sync, local_path: str, remote_path: str) -> None:
+    """Seed BOTH a local-only and a remote-only file (test_55's pattern).
+
+    The option-card tests need the five-option modal, and plugin #415
+    collapses any one-empty-side plan into a one-click screen with no
+    option cards. Populating both sides keeps the full modal rendering
+    on every plugin version.
+    """
+    await cdp.pause_outgoing_sync()
+    write_note(vault, local_path, "# local-only dispatch seed")
+    api_sync.create_note(remote_path, "# remote-only dispatch seed\n")
+    await cdp.reset_sync_gate()
+
+
+async def _restore_divergent(cdp, vault, api_sync, local_path: str, remote_path: str) -> None:
+    """Undo _seed_divergent: delete both seeds, resume push, re-accept."""
+    file_path = vault / local_path
+    if file_path.exists():
+        file_path.unlink()
+    try:
+        api_sync.delete_note(remote_path)
+    except Exception:
+        pass  # idempotent — already gone is fine
+    await cdp.resume_outgoing_sync()
+    await cdp.accept_sync_gate()
+
+
 @pytest.mark.asyncio
 async def test_modal_appears_on_first_sync(vault_a, cdp_a):
     """Reset gate with divergent local state, modal mounts with first-time header."""
@@ -97,7 +124,7 @@ async def test_modal_appears_on_first_sync(vault_a, cdp_a):
 )
 @pytest.mark.asyncio
 async def test_modal_choice_dispatches(
-    vault_a, cdp_a, label, expected_choice, destructive
+    vault_a, cdp_a, api_sync, label, expected_choice, destructive
 ):
     """Each option resolves runSyncFromChoice with the matching choice.
 
@@ -106,7 +133,8 @@ async def test_modal_choice_dispatches(
     dispatch contract is what we're asserting, not the underlying sync.
     """
     path = f"{SEED_DIR}/Dispatch-{expected_choice}.md"
-    await _seed_local_only(cdp_a, vault_a, path, "# Dispatch seed")
+    remote_path = f"{SEED_DIR}/Dispatch-remote-{expected_choice}.md"
+    await _seed_divergent(cdp_a, vault_a, api_sync, path, remote_path)
     await cdp_a.install_choice_spy(swallow=True)
     try:
         await cdp_a.open_sync_preview_modal()
@@ -127,6 +155,70 @@ async def test_modal_choice_dispatches(
         )
     finally:
         await cdp_a.uninstall_choice_spy()
+        # Dismiss any stranded modal FIRST: the plugin's syncPreviewGuard makes
+        # open_sync_preview_modal a silent no-op while a modal lives, so one
+        # stranded modal cascades "option not found" into every later test.
+        await cdp_a.dismiss_modals()
+        await _restore_divergent(cdp_a, vault_a, api_sync, path, remote_path)
+
+
+@pytest.mark.asyncio
+async def test_one_click_upload_screen_dispatches_smart_merge(vault_a, cdp_a):
+    """Plugin #415: an empty-remote first sync renders a one-click upload
+    screen whose single button dispatches smart-merge (never a delete
+    variant). Feature-detected: older plugins — or a worker whose server
+    vault already has notes — render the five-option modal instead; skip
+    there, the dispatch tests above cover that shape.
+    """
+    path = f"{SEED_DIR}/OneClickUpload.md"
+    await _seed_local_only(cdp_a, vault_a, path, "# One-click seed")
+    await cdp_a.install_choice_spy(swallow=True)
+    try:
+        await cdp_a.open_sync_preview_modal()
+        await cdp_a.wait_for_sync_preview_modal()
+
+        # Poll until either screen shape renders (plan computes async).
+        screen = await cdp_a.evaluate(
+            """
+            (async () => {
+                const deadline = Date.now() + 10000;
+                while (Date.now() < deadline) {
+                    const modal = document.querySelector('.engram-sync-preview-modal');
+                    if (modal) {
+                        if (modal.querySelector('.engram-sync-preview-simple-action')) {
+                            return 'simple';
+                        }
+                        if (modal.querySelector('.engram-sync-preview-option-label')) {
+                            return 'options';
+                        }
+                    }
+                    await new Promise(r => setTimeout(r, 200));
+                }
+                return 'none';
+            })()
+            """,
+            await_promise=True,
+        )
+        if screen != "simple":
+            pytest.skip(
+                f"one-click screen not rendered (got {screen!r}) — "
+                "pre-#415 plugin or non-empty server vault"
+            )
+
+        await cdp_a.evaluate(
+            "document.querySelector("
+            "'.engram-sync-preview-modal .engram-sync-preview-simple-action'"
+            ").click()"
+        )
+        await cdp_a.wait_for_modal_closed(timeout=10)
+
+        recorded = await cdp_a.get_last_sync_choice()
+        assert recorded == "smart-merge", (
+            f"One-click upload must dispatch smart-merge, got {recorded!r}"
+        )
+    finally:
+        await cdp_a.uninstall_choice_spy()
+        await cdp_a.dismiss_modals()
         await _restore_clean(cdp_a, vault_a, path)
 
 
