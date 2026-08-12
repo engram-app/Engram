@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.15.1](https://github.com/engram-app/Engram/compare/0.15.0...0.15.1) (2026-08-12)
+
+
+### Bug Fixes
+
+* **backfill:** scope operator discovery reads to each tenant ([#1355](https://github.com/engram-app/Engram/issues/1355)) ([ae6b994](https://github.com/engram-app/Engram/commit/ae6b994218eb6959893b8da51c51b9bb45e0eb48)), closes [#1311](https://github.com/engram-app/Engram/issues/1311) [#1349](https://github.com/engram-app/Engram/issues/1349) [#1350](https://github.com/engram-app/Engram/issues/1350)
+* **ci:** skip the App-token step on Dependabot in the e2e jobs ([#1353](https://github.com/engram-app/Engram/issues/1353)) ([81045f2](https://github.com/engram-app/Engram/commit/81045f2e6c4379bd2c579f6483e549dbf3e91368))
+* **crdt:** fence the checkpoint and rename writers on their row pre-image ([#1360](https://github.com/engram-app/Engram/issues/1360)) ([df03076](https://github.com/engram-app/Engram/commit/df0307692748ab09f41ce27a527d7b1f8c80ed4c))
+* **crdt:** gate checkpoints on DEK rotation and fail loud on an unreadable snapshot ([#1351](https://github.com/engram-app/Engram/issues/1351)) ([7e7331a](https://github.com/engram-app/Engram/commit/7e7331a54d7f23b5c29ec0c8cb353dbb94f2a9a0)), closes [#1341](https://github.com/engram-app/Engram/issues/1341)
+* **crdt:** never half-migrate a legacy row from a checkpoint ([#1340](https://github.com/engram-app/Engram/issues/1340)) ([36f2fc9](https://github.com/engram-app/Engram/commit/36f2fc9a1df09f9a04119d376c4492a7f84fec94))
+* **crdt:** stop repeated marks corrupting open-path timings ([#1338](https://github.com/engram-app/Engram/issues/1338)) ([0f06eff](https://github.com/engram-app/Engram/commit/0f06effe66e097a46f042faaeeeb4bd93d6388a5))
+* **crypto:** keep crdt_state in lockstep with dek_version ([#1342](https://github.com/engram-app/Engram/issues/1342)) ([dbeec78](https://github.com/engram-app/Engram/commit/dbeec786b1d48f5cb73a4a27793f28813c943f0d))
+* **e2e:** drop setCrdtCreateBatch wiring removed by plugin [#413](https://github.com/engram-app/Engram/issues/413) ([#1368](https://github.com/engram-app/Engram/issues/1368)) ([3161459](https://github.com/engram-app/Engram/commit/3161459cdc70d47a6c893c3e4b442dc7c556de0e))
+* **folders:** fail closed when a folder's contents are unreadable ([#1334](https://github.com/engram-app/Engram/issues/1334)) ([b82a920](https://github.com/engram-app/Engram/commit/b82a920b738596b9848d2922967d39e5b8a5a850))
+* **links:** RebindNoteLinks.new_for skips nil basename_hmac instead of crashing ([#1370](https://github.com/engram-app/Engram/issues/1370)) ([c9971fe](https://github.com/engram-app/Engram/commit/c9971fe5bed81d4b40522e885e84bbaffc6e77c8)), closes [#1369](https://github.com/engram-app/Engram/issues/1369)
+* **notes:** fence the note write on the CRDT snapshot it merged against ([#1356](https://github.com/engram-app/Engram/issues/1356)) ([0b44944](https://github.com/engram-app/Engram/commit/0b44944fbcd55374d37a06dbd71b7a71ae9a6d14))
+* **onboarding:** scope request-path tenant reads to their tenant ([#1358](https://github.com/engram-app/Engram/issues/1358)) ([d5ea41d](https://github.com/engram-app/Engram/commit/d5ea41d164de69b5da2ca42c9213f16cae579ab1)), closes [#1354](https://github.com/engram-app/Engram/issues/1354) [#1357](https://github.com/engram-app/Engram/issues/1357)
+* **release:** make documented rpc entrypoints callable ([#1343](https://github.com/engram-app/Engram/issues/1343)) ([c62482d](https://github.com/engram-app/Engram/commit/c62482dcb91e8c595c772ed9111607994d1efccc)), closes [#1311](https://github.com/engram-app/Engram/issues/1311)
+* **vaults:** reject blank client_id at register ([#1332](https://github.com/engram-app/Engram/issues/1332)) ([478040b](https://github.com/engram-app/Engram/commit/478040b5a0808b47fd49b17fef38e29416463dbc))
+
 ## [0.15.0](https://github.com/engram-app/Engram/compare/0.14.0...0.15.0) (2026-08-09)
 
 
