@@ -14,8 +14,11 @@ import {
 import FolderTree from "../viewer/folder-tree";
 import FolderActions from "./folder-actions";
 import { FolderTreeProvider } from "./folder-tree-context";
+import { useRailView } from "./rail-view-context";
 import RightToolPanel from "./right-tool-panel";
 import { RIGHT_TOOLS, useRightTools } from "./right-tools-context";
+import SearchPanel from "./search-panel";
+import SidebarViewToggle from "./sidebar-view-toggle";
 import UserMenu from "./user-menu";
 import VaultSwitcher from "./vault-switcher";
 
@@ -31,6 +34,7 @@ function closeOnLinkClick(close: () => void) {
 
 export default function MobileLayout() {
 	const { resolvedId, setActive, isAvailable } = useRightTools();
+	const { view } = useRailView();
 	const [leftOpen, setLeftOpen] = useState(false);
 	const [rightOpen, setRightOpen] = useState(false);
 	const { pathname } = useLocation();
@@ -71,21 +75,38 @@ export default function MobileLayout() {
 						>
 							<FolderTreeProvider>
 								<section className="flex shrink-0 items-center justify-between border-border border-b px-3 py-2">
-									<SheetTitle className="font-medium text-base">Files</SheetTitle>
-									<SheetDescription className="sr-only">Folder navigation</SheetDescription>
+									<SheetTitle className="font-medium text-base">
+										{view === "search" ? "Search" : "Files"}
+									</SheetTitle>
+									<SheetDescription className="sr-only">
+										{view === "search" ? "Search your notes" : "Folder navigation"}
+									</SheetDescription>
 									<SheetClose asChild>
 										<Button variant="ghost" size="icon-sm" aria-label="Close">
 											<X />
 										</Button>
 									</SheetClose>
 								</section>
-								<ScrollArea
-									className="min-h-0 flex-1"
-									onClick={closeOnLinkClick(() => setLeftOpen(false))}
-								>
-									<FolderTree />
-								</ScrollArea>
-								<FolderActions />
+								{view === "search" ? (
+									// onNavigate rather than the closeOnLinkClick delegation used
+									// for the tree: the handler belongs on the link itself, and
+									// that also covers tapping the result for the note you are
+									// ALREADY on, where the route never changes and the
+									// pathname effect below never fires.
+									<SearchPanel hideHeader onNavigate={() => setLeftOpen(false)} />
+								) : (
+									<>
+										<ScrollArea
+											className="min-h-0 flex-1"
+											onClick={closeOnLinkClick(() => setLeftOpen(false))}
+										>
+											<FolderTree />
+										</ScrollArea>
+										{/* New note / new folder belong to the files view only. */}
+										<FolderActions />
+									</>
+								)}
+								<SidebarViewToggle />
 								<VaultSwitcher />
 							</FolderTreeProvider>
 						</SheetContent>

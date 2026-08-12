@@ -13,7 +13,18 @@ import { pushRecent, readRecent } from "./recent-searches";
 const filterInputClasses =
 	"rounded-md border border-border bg-background px-2 py-1 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
 
-function SearchPanel() {
+/**
+ * `hideHeader` is for the mobile drawer, which supplies its own titled header
+ * and a close button — rendering a second one inside the panel stacked two
+ * headers on top of each other.
+ */
+function SearchPanel({
+	hideHeader = false,
+	onNavigate,
+}: {
+	hideHeader?: boolean;
+	onNavigate?: () => void;
+}) {
 	const { setView } = useRailView();
 	const [input, setInput] = useState("");
 	const [filters, setFilters] = useState<SearchFilters>({});
@@ -46,20 +57,22 @@ function SearchPanel() {
 
 	return (
 		<div className="flex h-full flex-col">
-			<header className="flex shrink-0 items-center justify-between border-border border-b px-3 py-2">
-				<h2 className="font-semibold text-muted-foreground text-xs uppercase tracking-wide">
-					Search
-				</h2>
-				<Button
-					variant="ghost"
-					size="icon-sm"
-					aria-label="Close search"
-					title="Return to files"
-					onClick={close}
-				>
-					<X className="h-4 w-4" />
-				</Button>
-			</header>
+			{hideHeader ? null : (
+				<header className="flex shrink-0 items-center justify-between border-border border-b px-3 py-2">
+					<h2 className="font-semibold text-muted-foreground text-xs uppercase tracking-wide">
+						Search
+					</h2>
+					<Button
+						variant="ghost"
+						size="icon-sm"
+						aria-label="Close search"
+						title="Return to files"
+						onClick={close}
+					>
+						<X className="h-4 w-4" />
+					</Button>
+				</header>
+			)}
 			<div className="border-border border-b p-2">
 				<label className="relative block">
 					<Search className="pointer-events-none absolute top-1/2 left-2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -130,7 +143,7 @@ function SearchPanel() {
 					<ul className="space-y-1 p-2">
 						{results.map((r) => (
 							<li key={r.path}>
-								<ResultRow result={r} />
+								<ResultRow result={r} onNavigate={onNavigate} />
 							</li>
 						))}
 					</ul>
@@ -163,7 +176,7 @@ function RecentList({ recent, onPick }: { recent: string[]; onPick: (q: string) 
 	);
 }
 
-function ResultRow({ result }: { result: SearchResult }) {
+function ResultRow({ result, onNavigate }: { result: SearchResult; onNavigate?: () => void }) {
 	const slug = useActiveVaultSlug();
 	// Orphan hits (no id) are unreachable — render nothing.
 	if (result.id === null) {
@@ -173,6 +186,7 @@ function ResultRow({ result }: { result: SearchResult }) {
 	return (
 		<Link
 			to={href}
+			onClick={onNavigate}
 			className="block rounded-md border border-border bg-card p-2 text-sm hover:border-primary/40 hover:bg-accent"
 		>
 			<p className="font-medium">{noteName(result.path)}</p>
