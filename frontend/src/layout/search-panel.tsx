@@ -341,7 +341,9 @@ function SearchPanel({
 					<div className="mt-2 space-y-3">
 						<div className="space-y-1">
 							<div className="flex items-center gap-1.5">
-								<span className="text-muted-foreground text-xs">Type</span>
+								<label htmlFor={TYPE_FILTER_ID} className="text-muted-foreground text-xs">
+									Type
+								</label>
 								<FieldHelp question="What is type?">
 									We index each note&apos;s <code>type</code> separately, so adding one to your
 									notes can improve your searches. Filter to a type here to look only at notes of
@@ -377,6 +379,10 @@ function SearchPanel({
 							<Combobox items={allTypes ?? []} value={type} onValueChange={(v) => setType(v ?? "")}>
 								<ComboboxInput
 									id={TYPE_FILTER_ID}
+									// Named by BOTH the <label htmlFor> (click-to-focus) and aria-label.
+									// Not redundant: Base UI runs the popup's focus manager in modal
+									// mode, which aria-hides the sibling label while the list is OPEN —
+									// so a label-only name vanishes exactly while you are choosing.
 									aria-label="Type"
 									placeholder="Any type"
 									showClear={Boolean(type)}
@@ -394,7 +400,9 @@ function SearchPanel({
 							</Combobox>
 						</div>
 						<div className="space-y-1">
-							<span className="block text-muted-foreground text-xs">Folder</span>
+							<label htmlFor={FOLDER_FILTER_ID} className="block text-muted-foreground text-xs">
+								Folder
+							</label>
 							<Combobox
 								items={folderNames}
 								value={folder}
@@ -402,6 +410,10 @@ function SearchPanel({
 							>
 								<ComboboxInput
 									id={FOLDER_FILTER_ID}
+									// Named by BOTH the <label htmlFor> (click-to-focus) and aria-label.
+									// Not redundant: Base UI runs the popup's focus manager in modal
+									// mode, which aria-hides the sibling label while the list is OPEN —
+									// so a label-only name vanishes exactly while you are choosing.
 									aria-label="Folder"
 									placeholder="Any folder"
 									showClear={Boolean(folder)}
@@ -419,7 +431,9 @@ function SearchPanel({
 							</Combobox>
 						</div>
 						<div className="space-y-1">
-							<span className="block text-muted-foreground text-xs">Tags</span>
+							<label htmlFor={TAG_FILTER_ID} className="block text-muted-foreground text-xs">
+								Tags
+							</label>
 							{/* The SAME ComboboxInput as Type and Folder, deliberately. shadcn
 							    only documents `multiple` with ComboboxChips, but that container
 							    brings its own chrome — no input-group border, no trigger, a
@@ -435,6 +449,10 @@ function SearchPanel({
 							>
 								<ComboboxInput
 									id={TAG_FILTER_ID}
+									// Named by BOTH the <label htmlFor> (click-to-focus) and aria-label.
+									// Not redundant: Base UI runs the popup's focus manager in modal
+									// mode, which aria-hides the sibling label while the list is OPEN —
+									// so a label-only name vanishes exactly while you are choosing.
 									aria-label="Tags"
 									placeholder="Any tags"
 									showClear={tags.length > 0}

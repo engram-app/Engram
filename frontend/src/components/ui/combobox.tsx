@@ -37,6 +37,10 @@ function ComboboxClear({ className, ...props }: ComboboxPrimitive.Clear.Props) {
 			data-slot="combobox-clear"
 			render={<InputGroupButton variant="ghost" size="icon-xs" />}
 			className={cn(className)}
+			// Upstream's only child is an aria-hidden <svg>, which leaves the button
+			// with no accessible name at all (axe button-name / WCAG 4.1.2). Before
+			// the spread so a caller can still pass something more specific.
+			aria-label="Clear"
 			{...props}
 		>
 			<XIcon className="pointer-events-none" />

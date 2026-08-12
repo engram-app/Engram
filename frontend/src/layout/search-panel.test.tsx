@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router";
@@ -589,6 +590,28 @@ describe("SearchPanel", () => {
 			fireEvent.keyDown(input, { key: "ArrowDown" });
 			fireEvent.change(input, { target: { value: "hello t" } });
 			expect(document.querySelector("[data-active-result='true']")).toBeNull();
+		});
+	});
+
+	// Guards a bug that was invisible on desktop and total on mobile.
+	//
+	// Base UI portals the combobox popup to <body> and does NOT join Radix's
+	// dismissable-layer stack. On mobile this panel lives inside a modal Radix
+	// Sheet, which sets `body { pointer-events: none }`, so every option
+	// inherited none: the list opened, and a tap hit-tested straight through to
+	// whatever was underneath, which Base UI then read as an outside press.
+	// All three filters were unusable by touch.
+	//
+	// Asserted against the stylesheet text rather than behaviour on purpose —
+	// happy-dom has no layout engine and does not cascade `pointer-events`, so
+	// there is no honest way to reproduce the inheritance here. This at least
+	// fails loudly if the rule is deleted.
+	describe("mobile pointer-events fence", () => {
+		it("re-enables hit-testing on the portaled combobox popup", () => {
+			const css = readFileSync("src/main.css", "utf8");
+			const rule = css.match(/\[data-slot="combobox-content"\]\s*\{(?<body>[^}]*)\}/u);
+			expect(rule).not.toBeNull();
+			expect(rule?.groups?.body).toMatch(/pointer-events:\s*auto/u);
 		});
 	});
 });

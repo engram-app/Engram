@@ -3766,6 +3766,14 @@ defmodule Engram.Notes do
   because the HMAC normalises before hashing: `Playbook` and `playbook` are
   ONE filter bucket, so offering both as separate suggestions would show two
   choices that return identical results.
+
+  Unlike `list_tags/2`, this does NOT decrypt once per note. `type_hmac` is a
+  deterministic hash of the normalised type, so distinct hmacs are exactly the
+  distinct types — `DISTINCT ON` collapses to one representative row per type
+  in the database (riding the existing `{user_id, vault_id, type_hmac}` index)
+  and only those get decrypted. A 10k-note vault with a dozen types costs a
+  dozen decrypts, not ten thousand. Tags cannot do this: `tags_hmac` is a
+  list, so there is no one-row-per-value to collapse to.
   """
   @spec list_types(map(), map()) :: {:ok, [String.t()]}
   def list_types(user, vault) do
@@ -3777,12 +3785,18 @@ defmodule Engram.Notes do
           Repo.with_tenant(user.id, fn ->
             Repo.all(
               from(n in scoped_live(user, vault),
-                where: not is_nil(n.type_ciphertext),
+                where: not is_nil(n.type_hmac) and not is_nil(n.type_ciphertext),
+                distinct: [asc: n.type_hmac],
                 select: {n.id, n.dek_version, n.type_ciphertext, n.type_nonce}
               )
             )
           end)
 
+        # Enum.uniq/1 is NOT redundant after the DISTINCT ON. The hmac is keyed
+        # by the user's filter key, so rows written either side of a filter-key
+        # rotation carry different hmacs for the same logical type and survive
+        # the database dedup as separate rows. Normalising and uniq'ing the
+        # plaintext collapses them.
         types =
           rows
           |> Enum.map(fn {id, dv, ct, nonce} ->
