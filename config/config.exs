@@ -89,10 +89,14 @@ config :engram, Oban,
     #
     # They are a FLOOR on the pool, not a fraction of it: 6 reserved
     # connections only leaves usable headroom for REST/search/embed and
-    # ungated room binds while POOL_SIZE stays comfortably above 6. Keep it
-    # there — prod runs 15 (engram-infra main/envs/prod/ecs.tf), and anything
+    # ungated room binds while POOL_SIZE stays comfortably above 6. Anything
     # near 6 starves everything else the moment a reconnect storm claims the
     # checkpoint budget.
+    #
+    # Deliberately does NOT restate prod's POOL_SIZE. That value lives in
+    # engram-infra (main/envs/prod/ecs.tf) and nothing there points back here,
+    # so a copy in this repo would silently go stale — the same cross-file rot
+    # that made the original 10 a leftover rather than a decision.
     crdt_checkpoint: 3,
     default: 1
   ],
