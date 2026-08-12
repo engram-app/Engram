@@ -26,8 +26,18 @@ defmodule Engram.Workers.RebindNoteLinks do
   alias Engram.Repo
   alias Engram.Vaults.Vault
 
-  @doc "Builds a rebind job for the raw `basename_hmac` bytes within `vault_id`."
-  @spec new_for(binary(), binary(), binary()) :: Ecto.Changeset.t()
+  @doc """
+  Builds a rebind job for the raw `basename_hmac` bytes within `vault_id`.
+
+  A `nil` hmac (legacy pre-backfill rows) returns `:skip` — no link edge can
+  reference a basename hmac the row never had, so there is nothing to rebind.
+  `Enqueue.enqueue/3` no-ops on `:skip`, keeping every enqueue site safe
+  without per-caller guards (incident 2026-08-12: `Base.encode64(nil)` here
+  500'd attachment deletes AFTER the soft-delete had committed, #1369).
+  """
+  @spec new_for(binary(), binary(), binary() | nil) :: Ecto.Changeset.t() | :skip
+  def new_for(_user_id, _vault_id, nil), do: :skip
+
   def new_for(user_id, vault_id, basename_hmac) do
     new(%{user_id: user_id, vault_id: vault_id, basename_hmac: Base.encode64(basename_hmac)})
   end

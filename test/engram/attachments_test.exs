@@ -886,4 +886,34 @@ defmodule Engram.AttachmentsTest do
       assert live_paths(user, vault) == []
     end
   end
+
+  describe "delete_attachment on a legacy row (nil basename_hmac)" do
+    # Incident 2026-08-12 (Engram-obsidian#416 / #1369): rows created before
+    # the basename_hmac backfill have NULL basename_hmac; the post-delete
+    # RebindNoteLinks enqueue crashed on Base.encode64(nil) AFTER the
+    # soft-delete + blob delete had committed, so the client saw a 500 for a
+    # delete that had actually succeeded and queued a doomed retry.
+    test "returns :ok instead of crashing after commit", %{user: user, vault: vault} do
+      Mox.stub(Engram.MockStorage, :put, fn _key, _bin, _opts -> :ok end)
+      Mox.stub(Engram.MockStorage, :delete, fn _key -> :ok end)
+
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "legacy/old.png",
+          "content_base64" => Base.encode64("PNGDATA"),
+          "mime_type" => "image/png"
+        })
+
+      # Regress the row to its pre-backfill shape.
+      {:ok, {1, _}} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          import Ecto.Query
+
+          from(a in Engram.Attachments.Attachment, where: is_nil(a.deleted_at))
+          |> Engram.Repo.update_all(set: [basename_hmac: nil])
+        end)
+
+      assert :ok = Attachments.delete_attachment(user, vault, "legacy/old.png")
+    end
+  end
 end
