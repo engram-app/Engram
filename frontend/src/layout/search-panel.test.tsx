@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router";
@@ -593,25 +592,28 @@ describe("SearchPanel", () => {
 		});
 	});
 
-	// Guards a bug that was invisible on desktop and total on mobile.
+	// Guards the coupling behind a bug that was invisible on desktop and total
+	// on mobile.
 	//
 	// Base UI portals the combobox popup to <body> and does NOT join Radix's
 	// dismissable-layer stack. On mobile this panel lives inside a modal Radix
 	// Sheet, which sets `body { pointer-events: none }`, so every option
-	// inherited none: the list opened, and a tap hit-tested straight through to
-	// whatever was underneath, which Base UI then read as an outside press.
-	// All three filters were unusable by touch.
+	// inherited none: the list opened, a tap hit-tested straight through to
+	// whatever was underneath, and Base UI read it as an outside press. All
+	// three filters were unusable by touch.
 	//
-	// Asserted against the stylesheet text rather than behaviour on purpose —
-	// happy-dom has no layout engine and does not cascade `pointer-events`, so
-	// there is no honest way to reproduce the inheritance here. This at least
-	// fails loudly if the rule is deleted.
+	// main.css re-enables hit-testing via `[data-slot="combobox-content"]`.
+	// happy-dom has no layout engine and does not cascade pointer-events, so the
+	// inheritance itself cannot be reproduced here — what IS worth pinning is
+	// the selector's anchor: if the vendored component renames or drops that
+	// data-slot, the fence silently stops matching and mobile breaks again with
+	// no other signal.
 	describe("mobile pointer-events fence", () => {
-		it("re-enables hit-testing on the portaled combobox popup", () => {
-			const css = readFileSync("src/main.css", "utf8");
-			const rule = css.match(/\[data-slot="combobox-content"\]\s*\{(?<body>[^}]*)\}/u);
-			expect(rule).not.toBeNull();
-			expect(rule?.groups?.body).toMatch(/pointer-events:\s*auto/u);
+		it("keeps the data-slot main.css hangs the fence on", () => {
+			renderPanel();
+			fireEvent.click(screen.getByRole("button", { name: /^filters/iu }));
+			openField("Folder");
+			expect(document.querySelector('[data-slot="combobox-content"]')).not.toBeNull();
 		});
 	});
 });
