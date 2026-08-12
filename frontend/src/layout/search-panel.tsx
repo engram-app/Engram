@@ -1,5 +1,5 @@
 import { Search, SlidersHorizontal, X } from "lucide-react";
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -11,6 +11,7 @@ import { useRailView } from "./rail-view-context";
 import { pushRecent, readRecent } from "./recent-searches";
 
 const SEARCH_LIMIT = 20;
+const TYPE_FILTER_ID = "engram-search-type";
 
 type DatePreset = "any" | "7d" | "30d" | "year" | "custom";
 type DateField = "updated" | "created";
@@ -110,6 +111,35 @@ function Highlighted({ text, term }: { text: string; term: string }) {
 					part
 				),
 			)}
+		</>
+	);
+}
+
+/**
+ * A `?` beside a filter label that opens a plain-language note about it.
+ *
+ * A disclosure rather than a tooltip: both explanations matter most on a phone,
+ * where there is no hover and a tooltip is unreachable.
+ */
+function FieldHelp({ question, children }: { question: string; children: ReactNode }) {
+	const [open, setOpen] = useState(false);
+	return (
+		<>
+			<button
+				type="button"
+				aria-label={question}
+				aria-expanded={open}
+				onClick={() => setOpen((v) => !v)}
+				className="inline-flex size-4 items-center justify-center rounded-full border border-border text-[10px] text-muted-foreground leading-none hover:bg-accent hover:text-foreground"
+			>
+				?
+			</button>
+			{open ? (
+				// w-full so it wraps onto its own line inside the caller's flex row.
+				<span className="mt-1 block w-full rounded-md bg-muted/60 p-2 font-normal text-muted-foreground text-xs leading-relaxed">
+					{children}
+				</span>
+			) : null}
 		</>
 	);
 }
@@ -284,22 +314,43 @@ function SearchPanel({
 				</div>
 				{filtersOpen ? (
 					<div className="mt-2 space-y-3">
-						<label className="flex flex-col gap-1 text-muted-foreground text-xs">
-							Type
+						<div className="space-y-1">
+							<div className="flex flex-wrap items-center gap-1.5">
+								<label htmlFor={TYPE_FILTER_ID} className="text-muted-foreground text-xs">
+									Type
+								</label>
+								{/* OUTSIDE the label: a button nested in one joins the field's
+								    accessible name ("Type ?") and swallows clicks meant for it. */}
+								<FieldHelp question="What is type?">
+									A note&apos;s <code>type:</code> field in its YAML frontmatter — the block at the
+									very top of the file between <code>---</code> lines. Notes without one are never
+									matched. Case does not matter, so <code>playbook</code> finds{" "}
+									<code>Playbook</code>.
+								</FieldHelp>
+							</div>
 							<input
+								id={TYPE_FILTER_ID}
 								type="text"
 								placeholder="e.g. Playbook"
 								value={type}
 								onChange={(e) => setType(e.target.value)}
-								className={filterInputClasses}
+								className={`${filterInputClasses} w-full`}
 							/>
-						</label>
+						</div>
 						{/* Real radios, visually hidden and styled through peer-checked.
 						    A single-select chip row IS a radiogroup, and doing it natively
 						    buys arrow-key navigation and the right semantics for nothing —
 						    buttons with aria-pressed would need a roving tabindex to match. */}
 						<fieldset>
-							<legend className="pb-1 text-muted-foreground text-xs">Modified</legend>
+							<legend className="flex flex-wrap items-center gap-1.5 pb-1 text-muted-foreground text-xs">
+								Modified
+								<FieldHelp question="What does modified mean?">
+									The <code>timestamp</code> (or <code>modified</code> / <code>updated</code>) field
+									in a note&apos;s frontmatter — NOT when the file was last saved. A note you edited
+									a minute ago will not match unless that field says so. &ldquo;Created&rdquo; reads{" "}
+									<code>created</code> or <code>date</code> the same way.
+								</FieldHelp>
+							</legend>
 							<div className="flex flex-wrap gap-1">
 								{DATE_PRESETS.map(({ id, label }) => (
 									<label key={id} className="cursor-pointer">

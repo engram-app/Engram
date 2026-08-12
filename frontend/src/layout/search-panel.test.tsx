@@ -140,7 +140,7 @@ describe("SearchPanel", () => {
 	it("typing a type filter re-fires the search with that filter", () => {
 		renderPanel();
 		fireEvent.click(screen.getByRole("button", { name: /^filters/iu }));
-		const typeInput = screen.getByLabelText(/type/iu);
+		const typeInput = screen.getByLabelText(/^type$/iu);
 		fireEvent.change(typeInput, { target: { value: "Playbook" } });
 
 		expect(useSearchSpy).toHaveBeenLastCalledWith("", { type: "Playbook" });
@@ -298,6 +298,48 @@ describe("SearchPanel", () => {
 			fireEvent.click(screen.getByRole("button", { name: /clear filters/iu }));
 			expect(useSearchSpy).toHaveBeenLastCalledWith("", {});
 			expect(screen.getByRole("radio", { name: "Any time" })).toBeChecked();
+		});
+
+		// Both fields read frontmatter, not anything the user can see in the note
+		// body or the file system — which is surprising enough to explain in place.
+		describe("help", () => {
+			it("hides the explanations until asked", () => {
+				renderPanel();
+				openFilters();
+				expect(screen.queryByText(/frontmatter/iu)).toBeNull();
+			});
+
+			it("explains where the type value comes from", () => {
+				renderPanel();
+				openFilters();
+				fireEvent.click(screen.getByRole("button", { name: /what is type/iu }));
+				expect(screen.getByText(/frontmatter/iu)).toBeInTheDocument();
+			});
+
+			it("warns that the date is the frontmatter one, not the file's", () => {
+				renderPanel();
+				openFilters();
+				fireEvent.click(screen.getByRole("button", { name: /what does modified mean/iu }));
+				expect(screen.getByText(/frontmatter/iu)).toBeInTheDocument();
+			});
+
+			it("closes again on a second press", () => {
+				renderPanel();
+				openFilters();
+				const help = screen.getByRole("button", { name: /what is type/iu });
+				fireEvent.click(help);
+				fireEvent.click(help);
+				expect(screen.queryByText(/frontmatter/iu)).toBeNull();
+			});
+
+			it("marks the toggle as expanded so it is not a mystery button", () => {
+				renderPanel();
+				openFilters();
+				const help = screen.getByRole("button", { name: /what is type/iu });
+				expect(help).toHaveAttribute("aria-expanded", "false");
+				fireEvent.click(help);
+				expect(help).toHaveAttribute("aria-expanded", "true");
+			});
 		});
 
 		it("offers nothing to clear when nothing is set", () => {
