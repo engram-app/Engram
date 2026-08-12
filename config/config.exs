@@ -85,10 +85,17 @@ config :engram, Oban,
     # These are ABSOLUTE limits — do NOT scale them with POOL_SIZE. They are
     # the backpressure that bounds a fan-out storm (2026-07-09), and raising
     # them in step with the pool would restore exactly the unbounded
-    # concurrency they exist to prevent. The headroom they leave for
-    # REST/search/embed and ungated room binds widens on its own as the pool
-    # grows; prod derives POOL_SIZE from a connection budget in engram-infra
-    # (main/envs/prod/ecs.tf), so no number here needs to track it.
+    # concurrency they exist to prevent.
+    #
+    # They are a FLOOR on the pool, not a fraction of it. 6 reserved
+    # connections only leaves usable headroom for REST/search/embed and
+    # ungated room binds while POOL_SIZE stays comfortably above 6 — and the
+    # pool does not only grow. Prod derives it from a fixed connection budget
+    # divided across tasks (engram-infra main/envs/prod/ecs.tf), so scaling
+    # OUT shrinks each task's pool. That file carries the matching floor
+    # (`engram_pool_min`) and fails its plan rather than shipping a pool this
+    # path would starve. If you run Engram anywhere else, keep POOL_SIZE
+    # meaningfully above 6 for the same reason.
     crdt_checkpoint: 3,
     default: 1
   ],
