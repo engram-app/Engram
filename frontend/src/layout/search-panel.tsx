@@ -5,13 +5,21 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { noteName } from "@/lib/note-name";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
-import { type SearchFilters, type SearchResult, useSearch } from "../api/queries";
+import {
+	type SearchFilters,
+	type SearchResult,
+	useFolders,
+	useSearch,
+	useTags,
+} from "../api/queries";
 import { useActiveVaultSlug } from "../api/vault-slug";
 import { useRailView } from "./rail-view-context";
 import { pushRecent, readRecent } from "./recent-searches";
 
 const SEARCH_LIMIT = 20;
 const TYPE_FILTER_ID = "engram-search-type";
+const FOLDER_FILTER_ID = "engram-search-folder";
+const TAG_FILTER_ID = "engram-search-tag";
 
 type DatePreset = "any" | "7d" | "30d" | "year" | "custom";
 type DateField = "updated" | "created";
@@ -164,25 +172,35 @@ function SearchPanel({
 	onNavigate?: () => void;
 }) {
 	const { setView } = useRailView();
+	// Folders and tags have an inventory to offer; `type` has none, which is why
+	// that one stays a blind text field.
+	const { data: folders } = useFolders();
+	const { data: allTags } = useTags();
 	const [input, setInput] = useState("");
 	const [type, setType] = useState("");
 	const [preset, setPreset] = useState<DatePreset>("any");
 	const [dateField, setDateField] = useState<DateField>("updated");
 	const [customFrom, setCustomFrom] = useState("");
 	const [customTo, setCustomTo] = useState("");
+	const [folder, setFolder] = useState("");
+	const [tags, setTags] = useState<string[]>([]);
 	const [filtersOpen, setFiltersOpen] = useState(false);
 	// -1 = nothing selected. Enter must do nothing until an arrow key has been
 	// pressed, so that a query typed and submitted does not open a stale row.
 	const [activeIndex, setActiveIndex] = useState(-1);
 	const filters: SearchFilters = {
 		...(type ? { type } : {}),
+		...(folder ? { folder } : {}),
+		...(tags.length > 0 ? { tags } : {}),
 		...dateFilters(preset, dateField, customFrom, customTo),
 	};
 	// Counted as the user sees them — a custom range is ONE filter even though
 	// it becomes two keys in the payload, and "Custom" with no dates yet
 	// constrains nothing so it must not read as on.
 	const dateActive = preset === "custom" ? Boolean(customFrom || customTo) : preset !== "any";
-	const activeCount = (type ? 1 : 0) + (dateActive ? 1 : 0);
+	// However many tags are chosen, it reads as one filter.
+	const activeCount =
+		(type ? 1 : 0) + (dateActive ? 1 : 0) + (folder ? 1 : 0) + (tags.length > 0 ? 1 : 0);
 
 	function clearFilters() {
 		setType("");
@@ -190,6 +208,8 @@ function SearchPanel({
 		setDateField("updated");
 		setCustomFrom("");
 		setCustomTo("");
+		setFolder("");
+		setTags([]);
 	}
 	// True debounce, not useDeferredValue: deferral only delays rendering —
 	// every settled keystroke still became a new query key, i.e. one vector
@@ -336,6 +356,70 @@ function SearchPanel({
 								onChange={(e) => setType(e.target.value)}
 								className={`${filterInputClasses} w-full`}
 							/>
+						</div>
+						<div className="space-y-1">
+							<label htmlFor={FOLDER_FILTER_ID} className="block text-muted-foreground text-xs">
+								Folder
+							</label>
+							<select
+								id={FOLDER_FILTER_ID}
+								value={folder}
+								onChange={(e) => setFolder(e.target.value)}
+								className={`${filterInputClasses} w-full`}
+							>
+								<option value="">Any folder</option>
+								{folders?.map((f) => (
+									<option key={f.id} value={f.name}>
+										{f.name}
+									</option>
+								))}
+							</select>
+						</div>
+						<div className="space-y-1">
+							<label htmlFor={TAG_FILTER_ID} className="block text-muted-foreground text-xs">
+								Add tag
+							</label>
+							{/* A select that EMPTIES itself on pick, so it reads as "add one"
+							    rather than "the tag", and the chips below are the real state.
+							    Beats a combobox: native pickers are better on a phone and
+							    there is no keyboard/aria plumbing to get wrong. */}
+							<select
+								id={TAG_FILTER_ID}
+								value=""
+								onChange={(e) => {
+									const tag = e.target.value;
+									if (tag) {
+										setTags((current) => (current.includes(tag) ? current : [...current, tag]));
+									}
+								}}
+								className={`${filterInputClasses} w-full`}
+							>
+								<option value="">Choose a tag…</option>
+								{allTags
+									?.filter((t) => !tags.includes(t))
+									.map((t) => (
+										<option key={t} value={t}>
+											{t}
+										</option>
+									))}
+							</select>
+							{tags.length > 0 ? (
+								<ul className="flex flex-wrap gap-1 pt-1">
+									{tags.map((t) => (
+										<li key={t}>
+											<button
+												type="button"
+												aria-label={`Remove ${t}`}
+												onClick={() => setTags((current) => current.filter((x) => x !== t))}
+												className="flex items-center gap-1 rounded-full border border-primary/40 bg-primary/15 px-2 py-0.5 text-primary text-xs hover:bg-primary/25"
+											>
+												{t}
+												<X className="size-3" />
+											</button>
+										</li>
+									))}
+								</ul>
+							) : null}
 						</div>
 						{/* Real radios, visually hidden and styled through peer-checked.
 						    A single-select chip row IS a radiogroup, and doing it natively

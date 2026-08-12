@@ -1033,6 +1033,8 @@ export function useCreateFolder() {
 
 export interface SearchFilters {
 	type?: string;
+	folder?: string;
+	tags?: string[];
 	createdAfter?: string;
 	createdBefore?: string;
 	updatedAfter?: string;
@@ -1053,6 +1055,8 @@ export function useSearch(query: string, filters: SearchFilters = {}) {
 					query,
 					limit: 20,
 					...(filters.type ? { type: filters.type } : {}),
+					...(filters.folder ? { folder: filters.folder } : {}),
+					...(filters.tags && filters.tags.length > 0 ? { tags: filters.tags } : {}),
 					...(filters.createdAfter ? { created_after: filters.createdAfter } : {}),
 					...(filters.createdBefore ? { created_before: filters.createdBefore } : {}),
 					...(filters.updatedAfter ? { updated_after: filters.updatedAfter } : {}),

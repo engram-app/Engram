@@ -35,6 +35,9 @@ const useSearchSpy = vi.fn((q: string, _filters?: unknown) => ({
 
 vi.mock("../api/queries", () => ({
 	useSearch: (q: string, filters: unknown) => useSearchSpy(q, filters),
+	// Folder.name is the FULL path, which is why the picker can use it directly.
+	useFolders: () => ({ data: [{ id: "f1", parent_id: null, name: "Archive", count: 2 }] }),
+	useTags: () => ({ data: ["project", "reading"] }),
 }));
 
 // ResultRow reads the active vault slug to build note hrefs. Default to null
@@ -339,6 +342,83 @@ describe("SearchPanel", () => {
 				expect(help).toHaveAttribute("aria-expanded", "false");
 				fireEvent.click(help);
 				expect(help).toHaveAttribute("aria-expanded", "true");
+			});
+		});
+
+		// type is a blind text field because nothing enumerates the types in a
+		// vault; folders and tags DO have an inventory, so they get real pickers.
+		describe("folder and tags", () => {
+			it("offers the vault's folders rather than a text box", () => {
+				renderPanel();
+				openFilters();
+				const folder = screen.getByLabelText(/^folder$/iu) as HTMLSelectElement;
+				expect([...folder.options].map((o) => o.textContent)).toEqual(["Any folder", "Archive"]);
+			});
+
+			it("narrows to the chosen folder", () => {
+				renderPanel();
+				openFilters();
+				fireEvent.change(screen.getByLabelText(/^folder$/iu), { target: { value: "Archive" } });
+				expect(useSearchSpy).toHaveBeenLastCalledWith("", { folder: "Archive" });
+			});
+
+			it("sends no folder for Any folder", () => {
+				renderPanel();
+				openFilters();
+				fireEvent.change(screen.getByLabelText(/^folder$/iu), { target: { value: "Archive" } });
+				fireEvent.change(screen.getByLabelText(/^folder$/iu), { target: { value: "" } });
+				expect(useSearchSpy).toHaveBeenLastCalledWith("", {});
+			});
+
+			it("adds a tag as a removable chip", () => {
+				renderPanel();
+				openFilters();
+				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "project" } });
+				expect(useSearchSpy).toHaveBeenLastCalledWith("", { tags: ["project"] });
+				expect(screen.getByRole("button", { name: /remove project/iu })).toBeInTheDocument();
+			});
+
+			it("accumulates tags instead of replacing them", () => {
+				renderPanel();
+				openFilters();
+				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "project" } });
+				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "reading" } });
+				expect(useSearchSpy).toHaveBeenLastCalledWith("", { tags: ["project", "reading"] });
+			});
+
+			it("drops a tag when its chip is removed", () => {
+				renderPanel();
+				openFilters();
+				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "project" } });
+				fireEvent.click(screen.getByRole("button", { name: /remove project/iu }));
+				expect(useSearchSpy).toHaveBeenLastCalledWith("", {});
+			});
+
+			// Picking the same tag twice would otherwise send it twice.
+			it("does not add the same tag twice", () => {
+				renderPanel();
+				openFilters();
+				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "project" } });
+				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "project" } });
+				expect(useSearchSpy).toHaveBeenLastCalledWith("", { tags: ["project"] });
+			});
+
+			// However many tags are chosen, it is one filter to the user.
+			it("counts all the tags as a single filter", () => {
+				renderPanel();
+				openFilters();
+				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "project" } });
+				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "reading" } });
+				expect(screen.getByRole("button", { name: /^filters/iu })).toHaveTextContent("1");
+			});
+
+			it("clears folder and tags along with the rest", () => {
+				renderPanel();
+				openFilters();
+				fireEvent.change(screen.getByLabelText(/^folder$/iu), { target: { value: "Archive" } });
+				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "project" } });
+				fireEvent.click(screen.getByRole("button", { name: /clear filters/iu }));
+				expect(useSearchSpy).toHaveBeenLastCalledWith("", {});
 			});
 		});
 
