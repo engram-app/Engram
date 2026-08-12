@@ -435,7 +435,8 @@ defmodule Engram.Notes.CrdtCheckpoint do
         # that committed after the snapshot bumped `version`, so the CAS matches
         # zero rows and we ABORT — never overwriting the newer committed content
         # with our stale encoding. `captured_version` nil (e.g. the unbind path)
-        # keeps the prior unfenced behaviour. The field set is derived through
+        # drops THIS layer only — `snapshot_fence/2` below still applies, so
+        # there is no unfenced write path left (#1360). The field set is derived through
         # Note.changeset (identical casting to the previous Repo.update!) and
         # applied via a version-fenced update_all, mirroring the compaction branch.
         captured = Keyword.get(opts, :captured_version)
@@ -527,10 +528,12 @@ defmodule Engram.Notes.CrdtCheckpoint do
   That residual self-heals: deliver_out applies the merged state, which fires
   `update_v1` → a follow-up tick re-checkpoints the merged content.
 
-  Returns nil on read failure, which degrades to an UNfenced write (prior
-  behaviour). This is deliberate: nil is indistinguishable from the unbind
-  path's absent `captured_version` (which must stay unfenced to persist on room
-  exit), and a transient version-read blip is rare + self-heals on the next tick.
+  Returns nil on read failure, which drops the version CAS — but NOT the fence.
+  Since #1360 every checkpoint write path is fenced unconditionally on
+  `snapshot_fence/2` (the row's `seq` + `crdt_state_ciphertext` pre-image), and
+  the version CAS is layered on top of it. Degrading to nil is therefore safe:
+  it is indistinguishable from the unbind path's absent `captured_version`, and
+  a transient version-read blip is rare + self-heals on the next tick.
   """
   @spec current_version(String.t(), String.t()) :: integer() | nil
   def current_version(user_id, note_id) do
