@@ -286,8 +286,11 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     {:ok, _} =
       Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "before APPEND"})
 
-    # Room exits (unbind path: no captured_version). Today this blindly writes
-    # "before EDIT" over "before APPEND" — content AND crdt_state regress.
+    # Room exits (unbind path: no captured_version, so no version CAS). Without
+    # the union this writes "before EDIT" over "before APPEND" — content AND
+    # crdt_state regress. The union, not the fence, is what saves this case:
+    # the REST write committed BEFORE the checkpoint's row read, so the fence
+    # sees a consistent row and correctly lets the write through.
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
 
     {:ok, fresh} = Notes.get_note(user, vault, "p.md")
@@ -880,7 +883,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   # `do_checkpoint/1` reads the doc with `SharedDoc.get_doc/1`, a GenServer.call.
   # A call to a process that terminates mid-call EXITS rather than raising, and
   # `rescue` does not catch exits — so the timer died instead of degrading, even
-  # though its own comment says a read failure should fall through unfenced.
+  # though its own comment says a read failure should degrade, not crash.
   #
   # The race is routine, not exotic: the room stops with a `:tick` already in the
   # timer's mailbox, and the `{:EXIT, room_pid, _}` that stops us cleanly is
