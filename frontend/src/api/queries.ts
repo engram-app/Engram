@@ -1074,8 +1074,16 @@ export function useTags() {
 	const vaultId = useActiveVaultId();
 	return useQuery({
 		queryKey: ["tags", vaultId],
-		queryFn: () => api.get<{ tags: string[] }>("/tags"),
-		select: (data) => data.tags,
+		// TagsController sends `[{name}]`, NOT bare strings. This was declared as
+		// `string[]` — an unchecked assertion, so TypeScript believed it and the
+		// first consumer to render a tag got an object. The hook keeps the useful
+		// contract (string[]) and now actually produces it.
+		queryFn: () => api.get<{ tags: Array<{ name: string }> }>("/tags"),
+		select: (data) => data.tags.map((t) => t.name),
+		// Same reasoning as useFolders: with no vault to scope the read to, a deep
+		// link arriving before the bootstrap reconcile would fetch some other
+		// vault's tag inventory.
+		enabled: Boolean(vaultId),
 	});
 }
 
