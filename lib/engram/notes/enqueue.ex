@@ -24,8 +24,16 @@ defmodule Engram.Notes.Enqueue do
   `{:error, _}`, logs at `:error` with the worker label and emits
   failure telemetry. Always returns the underlying result.
   """
-  @spec enqueue(term(), String.t(), insert_fn()) :: result()
+  @spec enqueue(term(), String.t(), insert_fn()) :: result() | {:ok, :skipped}
   def enqueue(changeset, worker_label, insert_fn \\ &Oban.insert/1)
+
+  # A worker's builder can decline the job (e.g. RebindNoteLinks.new_for/3 on a
+  # nil basename_hmac — nothing to rebind). No-op here so no enqueue site
+  # needs its own guard.
+  def enqueue(:skip, worker_label, _insert_fn) when is_binary(worker_label),
+    do: {:ok, :skipped}
+
+  def enqueue(changeset, worker_label, insert_fn)
       when is_binary(worker_label) and is_function(insert_fn, 1) do
     case insert_fn.(changeset) do
       {:ok, _job} = ok ->
