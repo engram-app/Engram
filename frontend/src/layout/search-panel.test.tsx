@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RailViewProvider, useRailView } from "./rail-view-context";
@@ -38,6 +38,7 @@ vi.mock("../api/queries", () => ({
 	// Folder.name is the FULL path, which is why the picker can use it directly.
 	useFolders: () => ({ data: [{ id: "f1", parent_id: null, name: "Archive", count: 2 }] }),
 	useTags: () => ({ data: ["project", "reading"] }),
+	useTypes: () => ({ data: ["meeting", "playbook"] }),
 }));
 
 // ResultRow reads the active vault slug to build note hrefs. Default to null
@@ -49,6 +50,38 @@ vi.mock("../api/vault-slug", () => ({ useActiveVaultSlug: () => activeSlugMock()
 function PathProbe() {
 	const loc = useLocation();
 	return <span data-testid="path">{loc.pathname}</span>;
+}
+
+/**
+ * Open a filter combobox and pick a value.
+ *
+ * The input IS the trigger here — that is the whole point of the shadcn
+ * Combobox over the popover-plus-separate-field shape this replaced — so
+ * there is no button to click first.
+ */
+function chooseIn(fieldLabel: string, value: string) {
+	const input = openField(fieldLabel);
+	fireEvent.change(input, { target: { value } });
+	const option = screen.getAllByRole("option").find((o) => o.textContent === value);
+	if (!option) {
+		throw new Error(`no option for "${value}" in ${fieldLabel}`);
+	}
+	fireEvent.click(option);
+}
+
+/**
+ * Open a combobox's list and hand back its input.
+ *
+ * pointerDown, NOT click: fireEvent.click dispatches only a click event, while
+ * the combobox opens on pointerdown (so it can track a press-drag-release
+ * selection). A click-only test sees a permanently closed list.
+ */
+function openField(fieldLabel: string): HTMLElement {
+	const input = screen.getByRole("combobox", { name: fieldLabel });
+	fireEvent.pointerDown(input);
+	fireEvent.mouseDown(input);
+	fireEvent.click(input);
+	return input;
 }
 
 function ViewProbe() {
@@ -143,10 +176,9 @@ describe("SearchPanel", () => {
 	it("typing a type filter re-fires the search with that filter", () => {
 		renderPanel();
 		fireEvent.click(screen.getByRole("button", { name: /^filters/iu }));
-		const typeInput = screen.getByLabelText(/^type$/iu);
-		fireEvent.change(typeInput, { target: { value: "Playbook" } });
+		chooseIn("Type", "playbook");
 
-		expect(useSearchSpy).toHaveBeenLastCalledWith("", { type: "Playbook" });
+		expect(useSearchSpy).toHaveBeenLastCalledWith("", { type: "playbook" });
 	});
 
 	// Four identical unlabelled date boxes became one row of relative-time chips,
@@ -265,7 +297,7 @@ describe("SearchPanel", () => {
 		it("counts the type and the date group together", () => {
 			renderPanel();
 			openFilters();
-			fireEvent.change(screen.getByLabelText(/^type$/iu), { target: { value: "Playbook" } });
+			chooseIn("Type", "playbook");
 			fireEvent.click(screen.getByRole("radio", { name: "7 days" }));
 			expect(screen.getByRole("button", { name: /^filters/iu })).toHaveTextContent("2");
 		});
@@ -286,7 +318,7 @@ describe("SearchPanel", () => {
 		it("puts the active count in the label as well as the badge", () => {
 			renderPanel();
 			openFilters();
-			fireEvent.change(screen.getByLabelText(/^type$/iu), { target: { value: "Playbook" } });
+			chooseIn("Type", "playbook");
 			expect(screen.getByRole("button", { name: /^filters/iu })).toHaveAttribute(
 				"aria-label",
 				"Filters, 1 active",
@@ -296,7 +328,7 @@ describe("SearchPanel", () => {
 		it("clears everything at once and re-fires the search", () => {
 			renderPanel();
 			openFilters();
-			fireEvent.change(screen.getByLabelText(/^type$/iu), { target: { value: "Playbook" } });
+			chooseIn("Type", "playbook");
 			fireEvent.click(screen.getByRole("radio", { name: "7 days" }));
 			fireEvent.click(screen.getByRole("button", { name: /clear filters/iu }));
 			expect(useSearchSpy).toHaveBeenLastCalledWith("", {});
@@ -306,74 +338,97 @@ describe("SearchPanel", () => {
 		// Both fields read frontmatter, not anything the user can see in the note
 		// body or the file system — which is surprising enough to explain in place.
 		describe("help", () => {
-			it("hides the explanations until asked", () => {
+			it("hides the explanation until the ? is pressed", () => {
 				renderPanel();
 				openFilters();
-				expect(screen.queryByText(/frontmatter/iu)).toBeNull();
+				expect(screen.queryByText(/index/iu)).toBeNull();
 			});
 
-			it("explains where the type value comes from", () => {
+			// A popover, so the panel does not reflow and shove the fields down
+			// every time someone checks what a filter means.
+			it("opens the type explanation in a popover", async () => {
 				renderPanel();
 				openFilters();
 				fireEvent.click(screen.getByRole("button", { name: /what is type/iu }));
-				expect(screen.getByText(/frontmatter/iu)).toBeInTheDocument();
+				expect(await screen.findByRole("dialog")).toHaveTextContent(/index/iu);
 			});
 
-			it("warns that the date is the frontmatter one, not the file's", () => {
+			it("explains type by what it does for search, not by teaching YAML", async () => {
+				renderPanel();
+				openFilters();
+				fireEvent.click(screen.getByRole("button", { name: /what is type/iu }));
+				const help = await screen.findByRole("dialog");
+				expect(help).toHaveTextContent(/improve/iu);
+				expect(help.textContent).not.toMatch(/yaml/iu);
+			});
+
+			// `type` is the ONE field OKF requires, which is the real reason it is
+			// worth filling in — say so, and link the spec.
+			it("ties type to the Open Knowledge Format and links the spec", async () => {
+				renderPanel();
+				openFilters();
+				fireEvent.click(screen.getByRole("button", { name: /what is type/iu }));
+				const help = await screen.findByRole("dialog");
+				expect(help).toHaveTextContent(/open knowledge format/iu);
+				const link = within(help).getByRole("link");
+				expect(link).toHaveAttribute(
+					"href",
+					"https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf",
+				);
+				// An external tab, and no window.opener handed to it.
+				expect(link).toHaveAttribute("target", "_blank");
+				expect(link.getAttribute("rel")).toMatch(/noreferrer/u);
+			});
+
+			it("explains the date filter the same way", async () => {
 				renderPanel();
 				openFilters();
 				fireEvent.click(screen.getByRole("button", { name: /what does modified mean/iu }));
-				expect(screen.getByText(/frontmatter/iu)).toBeInTheDocument();
-			});
-
-			it("closes again on a second press", () => {
-				renderPanel();
-				openFilters();
-				const help = screen.getByRole("button", { name: /what is type/iu });
-				fireEvent.click(help);
-				fireEvent.click(help);
-				expect(screen.queryByText(/frontmatter/iu)).toBeNull();
-			});
-
-			it("marks the toggle as expanded so it is not a mystery button", () => {
-				renderPanel();
-				openFilters();
-				const help = screen.getByRole("button", { name: /what is type/iu });
-				expect(help).toHaveAttribute("aria-expanded", "false");
-				fireEvent.click(help);
-				expect(help).toHaveAttribute("aria-expanded", "true");
+				expect(await screen.findByRole("dialog")).toBeInTheDocument();
 			});
 		});
 
-		// type is a blind text field because nothing enumerates the types in a
-		// vault; folders and tags DO have an inventory, so they get real pickers.
+		// Typed, not picked: folders and tags are long lists, and a user may be
+		// narrowing to something the cached inventory has not caught up with.
+		// The known values are offered as suggestions rather than as the only
+		// options.
+		// All three filter fields share one combobox: it opens showing everything
+		// the vault already contains and narrows as you type, while still
+		// accepting a value the cached inventory has never seen.
+		// All three fields dropped their free-text "Use …" escape hatch when they
+		// moved to the real Combobox. Not an oversight: every inventory here is
+		// COMPLETE — /folders, /tags and /types each enumerate the whole vault —
+		// so a value absent from the list is a value no note carries, and
+		// filtering on it could only ever return zero results. The empty state
+		// says so instead of pretending the search is worth running.
 		describe("folder and tags", () => {
-			it("offers the vault's folders rather than a text box", () => {
+			it("shows the vault's folders as soon as the field is opened", () => {
 				renderPanel();
 				openFilters();
-				const folder = screen.getByLabelText(/^folder$/iu) as HTMLSelectElement;
-				expect([...folder.options].map((o) => o.textContent)).toEqual(["Any folder", "Archive"]);
+				openField("Folder");
+				expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Archive"]);
+			});
+
+			it("narrows the list as you type", () => {
+				renderPanel();
+				openFilters();
+				const input = openField("Folder");
+				fireEvent.change(input, { target: { value: "zzz" } });
+				expect(screen.queryAllByRole("option")).toEqual([]);
+				expect(screen.getByText("No matching folder")).toBeInTheDocument();
 			});
 
 			it("narrows to the chosen folder", () => {
 				renderPanel();
 				openFilters();
-				fireEvent.change(screen.getByLabelText(/^folder$/iu), { target: { value: "Archive" } });
+				chooseIn("Folder", "Archive");
 				expect(useSearchSpy).toHaveBeenLastCalledWith("", { folder: "Archive" });
 			});
 
-			it("sends no folder for Any folder", () => {
+			it("adds a chosen tag as a removable chip", () => {
 				renderPanel();
 				openFilters();
-				fireEvent.change(screen.getByLabelText(/^folder$/iu), { target: { value: "Archive" } });
-				fireEvent.change(screen.getByLabelText(/^folder$/iu), { target: { value: "" } });
-				expect(useSearchSpy).toHaveBeenLastCalledWith("", {});
-			});
-
-			it("adds a tag as a removable chip", () => {
-				renderPanel();
-				openFilters();
-				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "project" } });
+				chooseIn("Tags", "project");
 				expect(useSearchSpy).toHaveBeenLastCalledWith("", { tags: ["project"] });
 				expect(screen.getByRole("button", { name: /remove project/iu })).toBeInTheDocument();
 			});
@@ -381,42 +436,42 @@ describe("SearchPanel", () => {
 			it("accumulates tags instead of replacing them", () => {
 				renderPanel();
 				openFilters();
-				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "project" } });
-				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "reading" } });
+				chooseIn("Tags", "project");
+				chooseIn("Tags", "reading");
 				expect(useSearchSpy).toHaveBeenLastCalledWith("", { tags: ["project", "reading"] });
+			});
+
+			// Chosen tags STAY in the list, marked selected, so picking one again
+			// turns it off — the chips below the field are not the only way out.
+			it("toggles a chosen tag back off from the list", () => {
+				renderPanel();
+				openFilters();
+				chooseIn("Tags", "project");
+				chooseIn("Tags", "project");
+				expect(useSearchSpy).toHaveBeenLastCalledWith("", {});
 			});
 
 			it("drops a tag when its chip is removed", () => {
 				renderPanel();
 				openFilters();
-				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "project" } });
+				chooseIn("Tags", "project");
 				fireEvent.click(screen.getByRole("button", { name: /remove project/iu }));
 				expect(useSearchSpy).toHaveBeenLastCalledWith("", {});
 			});
 
-			// Picking the same tag twice would otherwise send it twice.
-			it("does not add the same tag twice", () => {
-				renderPanel();
-				openFilters();
-				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "project" } });
-				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "project" } });
-				expect(useSearchSpy).toHaveBeenLastCalledWith("", { tags: ["project"] });
-			});
-
-			// However many tags are chosen, it is one filter to the user.
 			it("counts all the tags as a single filter", () => {
 				renderPanel();
 				openFilters();
-				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "project" } });
-				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "reading" } });
+				chooseIn("Tags", "project");
+				chooseIn("Tags", "reading");
 				expect(screen.getByRole("button", { name: /^filters/iu })).toHaveTextContent("1");
 			});
 
 			it("clears folder and tags along with the rest", () => {
 				renderPanel();
 				openFilters();
-				fireEvent.change(screen.getByLabelText(/^folder$/iu), { target: { value: "Archive" } });
-				fireEvent.change(screen.getByLabelText(/add tag/iu), { target: { value: "project" } });
+				chooseIn("Folder", "Archive");
+				chooseIn("Tags", "project");
 				fireEvent.click(screen.getByRole("button", { name: /clear filters/iu }));
 				expect(useSearchSpy).toHaveBeenLastCalledWith("", {});
 			});

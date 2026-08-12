@@ -1087,6 +1087,21 @@ export function useTags() {
 	});
 }
 
+/**
+ * The OKF `type` values actually present in the vault, for the search filter's
+ * suggestions. Server-normalised (NFKC + lowercase) so the list matches the
+ * filter's own buckets — `Playbook` and `playbook` arrive as one entry.
+ */
+export function useTypes() {
+	const vaultId = useActiveVaultId();
+	return useQuery({
+		queryKey: ["types", vaultId],
+		queryFn: () => api.get<{ types: Array<{ name: string }> }>("/types"),
+		select: (data) => data.types.map((t) => t.name),
+		enabled: Boolean(vaultId),
+	});
+}
+
 export function useMe() {
 	return useQuery({
 		queryKey: ["me"],

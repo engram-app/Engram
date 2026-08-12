@@ -1,7 +1,17 @@
 import { Search, SlidersHorizontal, X } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+	Combobox,
+	ComboboxContent,
+	ComboboxEmpty,
+	ComboboxInput,
+	ComboboxItem,
+	ComboboxList,
+} from "@/components/ui/combobox";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { noteName } from "@/lib/note-name";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
@@ -11,6 +21,7 @@ import {
 	useFolders,
 	useSearch,
 	useTags,
+	useTypes,
 } from "../api/queries";
 import { useActiveVaultSlug } from "../api/vault-slug";
 import { useRailView } from "./rail-view-context";
@@ -126,29 +137,23 @@ function Highlighted({ text, term }: { text: string; term: string }) {
 /**
  * A `?` beside a filter label that opens a plain-language note about it.
  *
- * A disclosure rather than a tooltip: both explanations matter most on a phone,
- * where there is no hover and a tooltip is unreachable.
+ * A POPOVER, not an inline disclosure: expanding in the flow shoved every
+ * field below it down the panel, so checking what a filter meant moved the one
+ * you were about to use.
  */
 function FieldHelp({ question, children }: { question: string; children: ReactNode }) {
-	const [open, setOpen] = useState(false);
 	return (
-		<>
-			<button
-				type="button"
+		<Popover>
+			<PopoverTrigger
 				aria-label={question}
-				aria-expanded={open}
-				onClick={() => setOpen((v) => !v)}
 				className="inline-flex size-4 items-center justify-center rounded-full border border-border text-[10px] text-muted-foreground leading-none hover:bg-accent hover:text-foreground"
 			>
 				?
-			</button>
-			{open ? (
-				// w-full so it wraps onto its own line inside the caller's flex row.
-				<span className="mt-1 block w-full rounded-md bg-muted/60 p-2 font-normal text-muted-foreground text-xs leading-relaxed">
-					{children}
-				</span>
-			) : null}
-		</>
+			</PopoverTrigger>
+			<PopoverContent className="w-64 text-muted-foreground text-xs leading-relaxed">
+				{children}
+			</PopoverContent>
+		</Popover>
 	);
 }
 
@@ -172,10 +177,9 @@ function SearchPanel({
 	onNavigate?: () => void;
 }) {
 	const { setView } = useRailView();
-	// Folders and tags have an inventory to offer; `type` has none, which is why
-	// that one stays a blind text field.
 	const { data: folders } = useFolders();
 	const { data: allTags } = useTags();
+	const { data: allTypes } = useTypes();
 	const [input, setInput] = useState("");
 	const [type, setType] = useState("");
 	const [preset, setPreset] = useState<DatePreset>("any");
@@ -184,6 +188,7 @@ function SearchPanel({
 	const [customTo, setCustomTo] = useState("");
 	const [folder, setFolder] = useState("");
 	const [tags, setTags] = useState<string[]>([]);
+	const folderNames = folders?.map((f) => f.name) ?? [];
 	const [filtersOpen, setFiltersOpen] = useState(false);
 	// -1 = nothing selected. Enter must do nothing until an arrow key has been
 	// pressed, so that a query typed and submitted does not open a stale row.
@@ -335,87 +340,131 @@ function SearchPanel({
 				{filtersOpen ? (
 					<div className="mt-2 space-y-3">
 						<div className="space-y-1">
-							<div className="flex flex-wrap items-center gap-1.5">
-								<label htmlFor={TYPE_FILTER_ID} className="text-muted-foreground text-xs">
-									Type
-								</label>
-								{/* OUTSIDE the label: a button nested in one joins the field's
-								    accessible name ("Type ?") and swallows clicks meant for it. */}
+							<div className="flex items-center gap-1.5">
+								<span className="text-muted-foreground text-xs">Type</span>
 								<FieldHelp question="What is type?">
-									A note&apos;s <code>type:</code> field in its YAML frontmatter — the block at the
-									very top of the file between <code>---</code> lines. Notes without one are never
-									matched. Case does not matter, so <code>playbook</code> finds{" "}
-									<code>Playbook</code>.
+									We index each note&apos;s <code>type</code> separately, so adding one to your
+									notes can improve your searches. Filter to a type here to look only at notes of
+									that kind.
+									<br />
+									<br />
+									It is also the one field required by the{" "}
+									<a
+										href="https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf"
+										target="_blank"
+										rel="noreferrer noopener"
+										className="text-primary underline underline-offset-2"
+									>
+										Open Knowledge Format
+									</a>
+									, the open standard Engram follows — so filling it in keeps your notes portable to
+									anything else that reads OKF.
 								</FieldHelp>
 							</div>
-							<input
-								id={TYPE_FILTER_ID}
-								type="text"
-								placeholder="e.g. Playbook"
-								value={type}
-								onChange={(e) => setType(e.target.value)}
-								className={`${filterInputClasses} w-full`}
-							/>
+							{/* `type` is stored encrypted behind an HMAC blind index, which
+							    answers "does this note match?" but cannot ENUMERATE the
+							    distinct values — so the suggestions come from GET /types,
+							    which decrypts them the way list_tags does for tags.
+
+							    That inventory is COMPLETE, which is why none of these three
+							    fields takes free text: a value not in the list is a value no
+							    note carries, so filtering on it could only return zero.
+
+							    showClear is gated on having a value — passing it
+							    unconditionally renders the X on an empty field (nothing to
+							    clear) and the input group hides the chevron whenever a clear
+							    button exists, so the field stops looking like a picker. */}
+							<Combobox items={allTypes ?? []} value={type} onValueChange={(v) => setType(v ?? "")}>
+								<ComboboxInput
+									id={TYPE_FILTER_ID}
+									aria-label="Type"
+									placeholder="Any type"
+									showClear={Boolean(type)}
+								/>
+								<ComboboxContent>
+									<ComboboxEmpty>No matching type</ComboboxEmpty>
+									<ComboboxList>
+										{(item: string) => (
+											<ComboboxItem key={item} value={item}>
+												{item}
+											</ComboboxItem>
+										)}
+									</ComboboxList>
+								</ComboboxContent>
+							</Combobox>
 						</div>
 						<div className="space-y-1">
-							<label htmlFor={FOLDER_FILTER_ID} className="block text-muted-foreground text-xs">
-								Folder
-							</label>
-							<select
-								id={FOLDER_FILTER_ID}
+							<span className="block text-muted-foreground text-xs">Folder</span>
+							<Combobox
+								items={folderNames}
 								value={folder}
-								onChange={(e) => setFolder(e.target.value)}
-								className={`${filterInputClasses} w-full`}
+								onValueChange={(v) => setFolder(v ?? "")}
 							>
-								<option value="">Any folder</option>
-								{folders?.map((f) => (
-									<option key={f.id} value={f.name}>
-										{f.name}
-									</option>
-								))}
-							</select>
+								<ComboboxInput
+									id={FOLDER_FILTER_ID}
+									aria-label="Folder"
+									placeholder="Any folder"
+									showClear={Boolean(folder)}
+								/>
+								<ComboboxContent>
+									<ComboboxEmpty>No matching folder</ComboboxEmpty>
+									<ComboboxList>
+										{(item: string) => (
+											<ComboboxItem key={item} value={item}>
+												{item}
+											</ComboboxItem>
+										)}
+									</ComboboxList>
+								</ComboboxContent>
+							</Combobox>
 						</div>
 						<div className="space-y-1">
-							<label htmlFor={TAG_FILTER_ID} className="block text-muted-foreground text-xs">
-								Add tag
-							</label>
-							{/* A select that EMPTIES itself on pick, so it reads as "add one"
-							    rather than "the tag", and the chips below are the real state.
-							    Beats a combobox: native pickers are better on a phone and
-							    there is no keyboard/aria plumbing to get wrong. */}
-							<select
-								id={TAG_FILTER_ID}
-								value=""
-								onChange={(e) => {
-									const tag = e.target.value;
-									if (tag) {
-										setTags((current) => (current.includes(tag) ? current : [...current, tag]));
-									}
-								}}
-								className={`${filterInputClasses} w-full`}
+							<span className="block text-muted-foreground text-xs">Tags</span>
+							{/* The SAME ComboboxInput as Type and Folder, deliberately. shadcn
+							    only documents `multiple` with ComboboxChips, but that container
+							    brings its own chrome — no input-group border, no trigger, a
+							    shorter box — so Tags read as a different control sitting under
+							    two matching ones. Keeping the shared input and moving the chosen
+							    tags to chips BELOW the field costs one row and makes all three
+							    fields identical. */}
+							<Combobox
+								items={allTags ?? []}
+								multiple
+								value={tags}
+								onValueChange={(next: string[]) => setTags(next)}
 							>
-								<option value="">Choose a tag…</option>
-								{allTags
-									?.filter((t) => !tags.includes(t))
-									.map((t) => (
-										<option key={t} value={t}>
-											{t}
-										</option>
-									))}
-							</select>
+								<ComboboxInput
+									id={TAG_FILTER_ID}
+									aria-label="Tags"
+									placeholder="Any tags"
+									showClear={tags.length > 0}
+								/>
+								<ComboboxContent>
+									<ComboboxEmpty>No matching tag</ComboboxEmpty>
+									<ComboboxList>
+										{(item: string) => (
+											<ComboboxItem key={item} value={item}>
+												{item}
+											</ComboboxItem>
+										)}
+									</ComboboxList>
+								</ComboboxContent>
+							</Combobox>
 							{tags.length > 0 ? (
 								<ul className="flex flex-wrap gap-1 pt-1">
-									{tags.map((t) => (
-										<li key={t}>
-											<button
-												type="button"
-												aria-label={`Remove ${t}`}
-												onClick={() => setTags((current) => current.filter((x) => x !== t))}
-												className="flex items-center gap-1 rounded-full border border-primary/40 bg-primary/15 px-2 py-0.5 text-primary text-xs hover:bg-primary/25"
-											>
-												{t}
-												<X className="size-3" />
-											</button>
+									{tags.map((tag) => (
+										<li key={tag}>
+											<Badge variant="secondary" className="gap-1 pr-1 font-normal">
+												{tag}
+												<button
+													type="button"
+													aria-label={`Remove ${tag}`}
+													onClick={() => setTags(tags.filter((t) => t !== tag))}
+													className="rounded-sm opacity-60 hover:opacity-100"
+												>
+													<X className="size-3" />
+												</button>
+											</Badge>
 										</li>
 									))}
 								</ul>
@@ -429,10 +478,8 @@ function SearchPanel({
 							<legend className="flex flex-wrap items-center gap-1.5 pb-1 text-muted-foreground text-xs">
 								Modified
 								<FieldHelp question="What does modified mean?">
-									The <code>timestamp</code> (or <code>modified</code> / <code>updated</code>) field
-									in a note&apos;s frontmatter — NOT when the file was last saved. A note you edited
-									a minute ago will not match unless that field says so. &ldquo;Created&rdquo; reads{" "}
-									<code>created</code> or <code>date</code> the same way.
+									The date recorded inside the note itself, not when the file was last saved — so a
+									note you edited a minute ago only matches if its own date says so.
 								</FieldHelp>
 							</legend>
 							<div className="flex flex-wrap gap-1">

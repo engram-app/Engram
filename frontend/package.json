@@ -34,6 +34,7 @@
 	"keywords": [],
 	"dependencies": {
 		"@atomic-editor/editor": "0.6.2",
+		"@base-ui/react": "^1.7.0",
 		"@clerk/react": "^6.12.11",
 		"@clerk/themes": "^2.4.57",
 		"@codemirror/autocomplete": "^6.20.3",

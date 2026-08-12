@@ -34,6 +34,7 @@ import {
 	useReverseCancel,
 	useSearch,
 	useTags,
+	useTypes,
 	useUploadAttachment,
 	useVaults,
 } from "./queries";
@@ -2043,6 +2044,16 @@ describe("useTags", () => {
 	// The `enabled: Boolean(vaultId)` guard is not covered here: this file mocks
 	// useActiveVaultId to a constant "42" for every test, so there is no honest
 	// way to observe the disabled state without changing that for all 90 of them.
+});
+
+describe("useTypes", () => {
+	it("flattens the {name} rows the API actually sends into plain strings", async () => {
+		get.mockResolvedValue({ types: [{ name: "meeting" }, { name: "playbook" }] });
+
+		const { result } = renderHook(() => useTypes(), { wrapper });
+
+		await waitFor(() => expect(result.current.data).toEqual(["meeting", "playbook"]));
+	});
 });
 
 describe("useSearch filters for folder and tags", () => {

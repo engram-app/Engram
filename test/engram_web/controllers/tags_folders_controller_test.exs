@@ -42,6 +42,38 @@ defmodule EngramWeb.TagsFoldersControllerTest do
     end
   end
 
+  describe "GET /types" do
+    test "returns unique OKF types for user", %{conn: conn} do
+      post(conn, "/api/notes", %{
+        path: "A.md",
+        content: "---\ntype: playbook\n---",
+        mtime: 1_000.0
+      })
+
+      post(conn, "/api/notes", %{
+        path: "B.md",
+        content: "---\ntype: Playbook\n---",
+        mtime: 1_000.0
+      })
+
+      post(conn, "/api/notes", %{path: "C.md", content: "---\ntype: meeting\n---", mtime: 1_000.0})
+
+      post(conn, "/api/notes", %{path: "D.md", content: "no frontmatter", mtime: 1_000.0})
+
+      conn = get(conn, "/api/types")
+      assert %{"types" => types} = json_response(conn, 200)
+      assert Enum.map(types, & &1["name"]) == ["meeting", "playbook"]
+    end
+
+    test "returns 401 without auth" do
+      conn =
+        build_conn()
+        |> get("/api/types")
+
+      assert json_response(conn, 401)
+    end
+  end
+
   describe "GET /folders" do
     test "returns unique folders for user", %{conn: conn} do
       post(conn, "/api/notes", %{path: "Folder A/Note.md", content: "x", mtime: 1_000.0})

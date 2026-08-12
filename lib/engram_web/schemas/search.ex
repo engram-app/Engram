@@ -112,3 +112,21 @@ defmodule EngramWeb.Schemas.TagsResponse do
     required: [:tags]
   })
 end
+
+defmodule EngramWeb.Schemas.TypesResponse do
+  @moduledoc false
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "TypesResponse",
+    type: :object,
+    properties: %{
+      types: %Schema{
+        type: :array,
+        items: %Schema{type: :object, properties: %{name: %Schema{type: :string}}}
+      }
+    },
+    required: [:types]
+  })
+end
