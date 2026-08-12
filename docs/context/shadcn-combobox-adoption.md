@@ -80,3 +80,47 @@ For `input-group.tsx` specifically we:
 
 - `frontend-architecture.md` — where the search panel and `components/ui/` live
 - `text-to-control-breaks-locators-and-a11y.md` — the sibling failure mode when text becomes a control
+
+## 6. The popup is untappable inside a Radix dialog/sheet
+
+**Symptom:** on mobile, a filter list opens, you tap an option, the list closes and nothing is
+selected. Desktop is fine. Keyboard selection works.
+
+**Cause:** Base UI portals the popup to `<body>` and does **not** join Radix's
+dismissable-layer stack the way a Radix popup would. A modal Radix Sheet/Dialog sets
+`body { pointer-events: none }` and re-enables `auto` only on its *own* layer element, so the
+portaled popup inherits `none`. The tap hit-tests straight through to whatever sits underneath,
+which Base UI then reads as an outside press.
+
+Measured in a real mobile viewport:
+
+```
+option chain: DIV.combobox-item:none > DIV.combobox-list:none >
+              DIV.combobox-content:none > DIV:none > BODY:none > HTML:auto
+elementFromPoint(centre of the visible option) -> the <label> UNDERNEATH it
+```
+
+**Fix:** re-enable hit-testing on the popup — the same fence `main.css` already applies to
+Paddle's overlay iframe for this exact failure class.
+
+```css
+[data-slot="combobox-content"] { pointer-events: auto; }
+```
+
+Selecting does **not** close the surrounding sheet, so no portal-container plumbing is needed.
+
+**Rule:** any non-Radix portaled popup rendered inside a Radix modal needs this. Check it on a
+mobile viewport, not just desktop — desktop has no modal layer and hides the bug completely.
+
+## 7. The field loses its accessible name while the list is open
+
+`ComboboxPopup` runs `FloatingFocusManager` in **modal** mode whenever the input lives outside
+the popup (`focusManagerModal = !inputInsidePopup || modal`), which `aria-hidden`s the sibling
+`<label htmlFor>`. A field named *only* by that label goes unnamed exactly while the user is
+choosing from it.
+
+Name the input with **both** a `<label htmlFor>` (click-to-focus) and an `aria-label` (survives
+the aria-hiding). Verify in the a11y tree with the list **open**, not closed.
+
+Related: `ComboboxClear`'s only child is an aria-hidden `<svg>`, so it ships with no accessible
+name at all — add one.

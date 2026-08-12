@@ -385,7 +385,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Frontend/backend deploy-trigger skew (different pipelines) — 2026-06-20 incident + fix → `docs/context/frontend-backend-deploy-skew-cors.md`
 - Writing a CM6 live-preview decoration (lezer reads `[!type]` as a Link; one highlight tag serves many nodes; `syntaxTree` is lazy) → `docs/context/codemirror-live-preview-extensions.md`
 - A route guard or view acts on state that mutations definitely updated (user bounced back to a completed onboarding/wizard step; loop only a full page reload escapes) → `docs/context/bootstrap-seed-cache-dual-authority.md`
-- Adding a shadcn/Base UI component (SPA-wide 504 `Outdated Optimize Dep` after a `bun remove`, `fireEvent.click` won't open a combobox, vendored `components/ui/` must pass biome) → `docs/context/shadcn-combobox-adoption.md`
+- Adding a shadcn/Base UI component (popup untappable inside a Radix sheet on mobile, field unnamed while the list is open, SPA-wide 504 `Outdated Optimize Dep` after a `bun remove`, `fireEvent.click` won't open a combobox) → `docs/context/shadcn-combobox-adoption.md`
 
 **Issue tracker**
 - An old issue's description contradicts the code, or you are triaging a stale backlog (`Refs #N` drift + the detection recipe) → `docs/context/backlog-refs-drift.md`
