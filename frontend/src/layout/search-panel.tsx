@@ -12,13 +12,72 @@ import { pushRecent, readRecent } from "./recent-searches";
 
 const SEARCH_LIMIT = 20;
 
-/** The four date filters, so the fields and their labels stay in one place. */
-const DATE_FILTERS: ReadonlyArray<{ key: keyof SearchFilters; label: string }> = [
-	{ key: "createdAfter", label: "Created after" },
-	{ key: "createdBefore", label: "Created before" },
-	{ key: "updatedAfter", label: "Updated after" },
-	{ key: "updatedBefore", label: "Updated before" },
+type DatePreset = "any" | "7d" | "30d" | "year" | "custom";
+type DateField = "updated" | "created";
+
+const DATE_PRESETS: ReadonlyArray<{ id: DatePreset; label: string }> = [
+	{ id: "any", label: "Any time" },
+	{ id: "7d", label: "7 days" },
+	{ id: "30d", label: "30 days" },
+	{ id: "year", label: "This year" },
+	{ id: "custom", label: "Custom…" },
 ];
+
+const DATE_FIELDS: ReadonlyArray<{ id: DateField; label: string }> = [
+	{ id: "updated", label: "Updated" },
+	{ id: "created", label: "Created" },
+];
+
+/**
+ * Midnight UTC `days` ago.
+ *
+ * Quantised to the START OF THE DAY on purpose. An instant-accurate "7 days
+ * ago" would differ by milliseconds on every render, and since the filters end
+ * up in the react-query key, that is a new key — and a new vector search —
+ * every single time the panel renders.
+ */
+function daysAgoUtc(days: number): string {
+	const d = new Date();
+	d.setUTCDate(d.getUTCDate() - days);
+	d.setUTCHours(0, 0, 0, 0);
+	return d.toISOString();
+}
+
+function startOfYearUtc(): string {
+	return new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1)).toISOString();
+}
+
+/** A bare `yyyy-mm-dd` from a date input, as the instant the API expects. */
+function dayStart(value: string): string | undefined {
+	return value ? `${value}T00:00:00Z` : undefined;
+}
+
+/**
+ * Fold the date controls into the flat payload the API takes.
+ *
+ * The UI deliberately does NOT mirror that payload: it used to, and the result
+ * was a cross-product of {created, updated} x {after, before} — four identical
+ * date boxes. One preset row plus an escape hatch covers the same ground.
+ */
+function dateFilters(
+	preset: DatePreset,
+	field: DateField,
+	from: string,
+	to: string,
+): SearchFilters {
+	const bounds =
+		preset === "custom"
+			? { after: dayStart(from), before: dayStart(to) }
+			: preset === "year"
+				? { after: startOfYearUtc() }
+				: preset === "7d" || preset === "30d"
+					? { after: daysAgoUtc(preset === "7d" ? 7 : 30) }
+					: {};
+	return {
+		...(bounds.after ? { [`${field}After`]: bounds.after } : {}),
+		...(bounds.before ? { [`${field}Before`]: bounds.before } : {}),
+	};
+}
 
 /**
  * Split `text` on every case-insensitive occurrence of `term`, keeping the
@@ -55,6 +114,10 @@ function Highlighted({ text, term }: { text: string; term: string }) {
 	);
 }
 
+/** Chip chrome for the visually-hidden radios above. */
+const chipClasses =
+	"inline-block rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors peer-checked:border-primary/40 peer-checked:bg-primary/15 peer-checked:text-primary peer-focus-visible:ring-2 peer-focus-visible:ring-ring hover:bg-accent";
+
 const filterInputClasses =
 	"rounded-md border border-border bg-background px-2 py-1 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
 
@@ -72,12 +135,32 @@ function SearchPanel({
 }) {
 	const { setView } = useRailView();
 	const [input, setInput] = useState("");
-	const [filters, setFilters] = useState<SearchFilters>({});
+	const [type, setType] = useState("");
+	const [preset, setPreset] = useState<DatePreset>("any");
+	const [dateField, setDateField] = useState<DateField>("updated");
+	const [customFrom, setCustomFrom] = useState("");
+	const [customTo, setCustomTo] = useState("");
 	const [filtersOpen, setFiltersOpen] = useState(false);
 	// -1 = nothing selected. Enter must do nothing until an arrow key has been
 	// pressed, so that a query typed and submitted does not open a stale row.
 	const [activeIndex, setActiveIndex] = useState(-1);
-	const activeCount = Object.values(filters).filter(Boolean).length;
+	const filters: SearchFilters = {
+		...(type ? { type } : {}),
+		...dateFilters(preset, dateField, customFrom, customTo),
+	};
+	// Counted as the user sees them — a custom range is ONE filter even though
+	// it becomes two keys in the payload, and "Custom" with no dates yet
+	// constrains nothing so it must not read as on.
+	const dateActive = preset === "custom" ? Boolean(customFrom || customTo) : preset !== "any";
+	const activeCount = (type ? 1 : 0) + (dateActive ? 1 : 0);
+
+	function clearFilters() {
+		setType("");
+		setPreset("any");
+		setDateField("updated");
+		setCustomFrom("");
+		setCustomTo("");
+	}
 	// True debounce, not useDeferredValue: deferral only delays rendering —
 	// every settled keystroke still became a new query key, i.e. one vector
 	// search (Voyage embed + Qdrant) per character typed.
@@ -85,9 +168,6 @@ function SearchPanel({
 	const { data: results, isLoading, error } = useSearch(deferred, filters);
 	const [recent, setRecent] = useState<string[]>(() => readRecent());
 
-	function setDateFilter(key: keyof SearchFilters, rawValue: string) {
-		setFilters((f) => ({ ...f, [key]: rawValue ? `${rawValue}T00:00:00Z` : undefined }));
-	}
 	const inputRef = useRef<HTMLInputElement>(null);
 	const listRef = useRef<HTMLDivElement>(null);
 	const lastRecordedRef = useRef<string>("");
@@ -203,46 +283,94 @@ function SearchPanel({
 					</button>
 				</div>
 				{filtersOpen ? (
-					<fieldset className="mt-2 grid grid-cols-2 gap-2">
-						<legend className="sr-only">Filter search results</legend>
-						<label className="col-span-2 flex flex-col gap-1 text-muted-foreground text-xs">
+					<div className="mt-2 space-y-3">
+						<label className="flex flex-col gap-1 text-muted-foreground text-xs">
 							Type
 							<input
 								type="text"
 								placeholder="e.g. Playbook"
-								value={filters.type ?? ""}
-								onChange={(e) => setFilters((f) => ({ ...f, type: e.target.value || undefined }))}
+								value={type}
+								onChange={(e) => setType(e.target.value)}
 								className={filterInputClasses}
 							/>
 						</label>
-						{DATE_FILTERS.map(({ key, label }) => (
-							<label key={key} className="flex flex-col gap-1 text-muted-foreground text-xs">
-								{label}
-								<input
-									type="date"
-									// CONTROLLED. Uncontrolled, these kept their text after a
-									// reset, so the panel showed a filter it was no longer
-									// applying. The state holds an ISO instant; the input wants
-									// a bare date, hence the slice.
-									value={filters[key]?.slice(0, 10) ?? ""}
-									onChange={(e) => setDateFilter(key, e.target.value)}
-									className={filterInputClasses}
-								/>
-							</label>
-						))}
+						{/* Real radios, visually hidden and styled through peer-checked.
+						    A single-select chip row IS a radiogroup, and doing it natively
+						    buys arrow-key navigation and the right semantics for nothing —
+						    buttons with aria-pressed would need a roving tabindex to match. */}
+						<fieldset>
+							<legend className="pb-1 text-muted-foreground text-xs">Modified</legend>
+							<div className="flex flex-wrap gap-1">
+								{DATE_PRESETS.map(({ id, label }) => (
+									<label key={id} className="cursor-pointer">
+										<input
+											type="radio"
+											name="engram-date-preset"
+											className="peer sr-only"
+											checked={preset === id}
+											onChange={() => setPreset(id)}
+										/>
+										<span className={chipClasses}>{label}</span>
+									</label>
+								))}
+							</div>
+						</fieldset>
+						{preset === "custom" ? (
+							<div className="space-y-2">
+								<fieldset>
+									<legend className="pb-1 text-muted-foreground text-xs">Applies to</legend>
+									<div className="flex gap-1">
+										{DATE_FIELDS.map(({ id, label }) => (
+											<label key={id} className="cursor-pointer">
+												<input
+													type="radio"
+													name="engram-date-field"
+													className="peer sr-only"
+													checked={dateField === id}
+													onChange={() => setDateField(id)}
+												/>
+												<span className={chipClasses}>{label}</span>
+											</label>
+										))}
+									</div>
+								</fieldset>
+								<div className="grid grid-cols-2 gap-2">
+									<label className="flex flex-col gap-1 text-muted-foreground text-xs">
+										From
+										<input
+											type="date"
+											// CONTROLLED. Uncontrolled, these kept their text after a
+											// reset and showed a filter that was no longer applied.
+											value={customFrom}
+											onChange={(e) => setCustomFrom(e.target.value)}
+											className={filterInputClasses}
+										/>
+									</label>
+									<label className="flex flex-col gap-1 text-muted-foreground text-xs">
+										To
+										<input
+											type="date"
+											value={customTo}
+											onChange={(e) => setCustomTo(e.target.value)}
+											className={filterInputClasses}
+										/>
+									</label>
+								</div>
+							</div>
+						) : null}
 						{/* Lives inside the panel now that the trigger is icon-only: the
 						    badge says a filter is on, and this is where you come to change
 						    one anyway. */}
 						{activeCount > 0 ? (
 							<button
 								type="button"
-								onClick={() => setFilters({})}
-								className="col-span-2 justify-self-start rounded-md px-1.5 py-1 text-muted-foreground text-xs hover:bg-accent hover:text-foreground"
+								onClick={clearFilters}
+								className="rounded-md px-1.5 py-1 text-muted-foreground text-xs hover:bg-accent hover:text-foreground"
 							>
 								Clear filters
 							</button>
 						) : null}
-					</fieldset>
+					</div>
 				) : null}
 			</div>
 			<ScrollArea className="flex-1" ref={listRef}>

@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RailViewProvider, useRailView } from "./rail-view-context";
 import SearchPanel from "./search-panel";
 
@@ -70,9 +70,18 @@ function renderPanel() {
 
 describe("SearchPanel", () => {
 	beforeEach(() => {
+		// Presets resolve against the current date, so pin it — but fake ONLY
+		// Date. Faking setTimeout too would freeze the 300ms search debounce and
+		// no query would ever fire.
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(new Date("2026-08-11T13:45:00Z"));
 		window.localStorage.clear();
 		useSearchSpy.mockClear();
 		activeSlugMock.mockReturnValue(null);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
 	});
 
 	it('renders header "Search" and an [x] return-to-files control', () => {
@@ -137,18 +146,8 @@ describe("SearchPanel", () => {
 		expect(useSearchSpy).toHaveBeenLastCalledWith("", { type: "Playbook" });
 	});
 
-	it("picking an updated-after date re-fires the search with an ISO midnight-UTC filter", () => {
-		renderPanel();
-		fireEvent.click(screen.getByRole("button", { name: /^filters/iu }));
-		const updatedAfterInput = screen.getByLabelText(/updated after/iu);
-		fireEvent.change(updatedAfterInput, { target: { value: "2026-01-01" } });
-
-		expect(useSearchSpy).toHaveBeenLastCalledWith("", { updatedAfter: "2026-01-01T00:00:00Z" });
-	});
-
-	// Five inputs — four of them identical unlabelled date boxes — sat permanently
-	// above the results, and there was no way to tell "created after" from
-	// "updated before" or to clear one once set.
+	// Four identical unlabelled date boxes became one row of relative-time chips,
+	// with the exact range kept behind "Custom…" for the rare case that needs it.
 	describe("filters", () => {
 		function openFilters() {
 			fireEvent.click(screen.getByRole("button", { name: /^filters/iu }));
@@ -170,6 +169,117 @@ describe("SearchPanel", () => {
 			expect(trigger).toHaveAttribute("aria-label", "Filters");
 		});
 
+		it("keeps the filter fields out of the way until asked", () => {
+			renderPanel();
+			expect(screen.queryByRole("radio", { name: "7 days" })).toBeNull();
+		});
+
+		it("offers relative-time presets instead of date boxes", () => {
+			renderPanel();
+			openFilters();
+			for (const name of ["Any time", "7 days", "30 days", "This year", "Custom…"]) {
+				expect(screen.getByRole("radio", { name })).toBeInTheDocument();
+			}
+			// The whole point: no date input at all until Custom is chosen.
+			expect(screen.queryByLabelText(/^from$/iu)).toBeNull();
+		});
+
+		it("starts on Any time and sends no date filter", () => {
+			renderPanel();
+			openFilters();
+			expect(screen.getByRole("radio", { name: "Any time" })).toBeChecked();
+			expect(useSearchSpy).toHaveBeenLastCalledWith("", {});
+		});
+
+		it("turns a preset into a midnight-UTC boundary on the updated field", () => {
+			renderPanel();
+			openFilters();
+			fireEvent.click(screen.getByRole("radio", { name: "7 days" }));
+			expect(useSearchSpy).toHaveBeenLastCalledWith("", {
+				updatedAfter: "2026-08-04T00:00:00.000Z",
+			});
+		});
+
+		it("anchors This year to January 1st", () => {
+			renderPanel();
+			openFilters();
+			fireEvent.click(screen.getByRole("radio", { name: "This year" }));
+			expect(useSearchSpy).toHaveBeenLastCalledWith("", {
+				updatedAfter: "2026-01-01T00:00:00.000Z",
+			});
+		});
+
+		it("reveals the exact range only once Custom is picked", () => {
+			renderPanel();
+			openFilters();
+			fireEvent.click(screen.getByRole("radio", { name: "Custom…" }));
+			expect(screen.getByLabelText(/^from$/iu)).toBeInTheDocument();
+			expect(screen.getByLabelText(/^to$/iu)).toBeInTheDocument();
+		});
+
+		it("sends a custom range as after/before", () => {
+			renderPanel();
+			openFilters();
+			fireEvent.click(screen.getByRole("radio", { name: "Custom…" }));
+			fireEvent.change(screen.getByLabelText(/^from$/iu), { target: { value: "2026-01-01" } });
+			fireEvent.change(screen.getByLabelText(/^to$/iu), { target: { value: "2026-02-01" } });
+			expect(useSearchSpy).toHaveBeenLastCalledWith("", {
+				updatedAfter: "2026-01-01T00:00:00Z",
+				updatedBefore: "2026-02-01T00:00:00Z",
+			});
+		});
+
+		// The created/updated choice is the other half of the old cross-product;
+		// it now appears only where it is actually useful.
+		it("switches the range onto the created field", () => {
+			renderPanel();
+			openFilters();
+			fireEvent.click(screen.getByRole("radio", { name: "Custom…" }));
+			fireEvent.change(screen.getByLabelText(/^from$/iu), { target: { value: "2026-01-01" } });
+			fireEvent.click(screen.getByRole("radio", { name: "Created" }));
+			expect(useSearchSpy).toHaveBeenLastCalledWith("", { createdAfter: "2026-01-01T00:00:00Z" });
+		});
+
+		it("drops the custom dates when a preset is picked again", () => {
+			renderPanel();
+			openFilters();
+			fireEvent.click(screen.getByRole("radio", { name: "Custom…" }));
+			fireEvent.change(screen.getByLabelText(/^from$/iu), { target: { value: "2026-01-01" } });
+			fireEvent.click(screen.getByRole("radio", { name: "Any time" }));
+			expect(useSearchSpy).toHaveBeenLastCalledWith("", {});
+		});
+
+		// One user-facing filter, even though it becomes two payload keys.
+		it("counts a custom range as ONE filter, not two", () => {
+			renderPanel();
+			openFilters();
+			fireEvent.click(screen.getByRole("radio", { name: "Custom…" }));
+			fireEvent.change(screen.getByLabelText(/^from$/iu), { target: { value: "2026-01-01" } });
+			fireEvent.change(screen.getByLabelText(/^to$/iu), { target: { value: "2026-02-01" } });
+			expect(screen.getByRole("button", { name: /^filters/iu })).toHaveTextContent("1");
+		});
+
+		it("counts the type and the date group together", () => {
+			renderPanel();
+			openFilters();
+			fireEvent.change(screen.getByLabelText(/^type$/iu), { target: { value: "Playbook" } });
+			fireEvent.click(screen.getByRole("radio", { name: "7 days" }));
+			expect(screen.getByRole("button", { name: /^filters/iu })).toHaveTextContent("2");
+		});
+
+		// Custom with no dates yet constrains nothing, so it must not read as on.
+		it("does not count Custom until a date is actually entered", () => {
+			renderPanel();
+			openFilters();
+			fireEvent.click(screen.getByRole("radio", { name: "Custom…" }));
+			expect(screen.getByRole("button", { name: /^filters/iu })).not.toHaveTextContent(/[0-9]/u);
+		});
+
+		it("shows no count when nothing is filtered", () => {
+			renderPanel();
+			expect(screen.getByRole("button", { name: /^filters/iu })).not.toHaveTextContent(/[0-9]/u);
+		});
+
 		it("puts the active count in the label as well as the badge", () => {
 			renderPanel();
 			openFilters();
@@ -180,81 +290,20 @@ describe("SearchPanel", () => {
 			);
 		});
 
-		it("keeps the filter fields out of the way until asked", () => {
-			renderPanel();
-			expect(screen.queryByLabelText(/created after/iu)).toBeNull();
-		});
-
-		it("reveals the fields when the disclosure is opened", () => {
-			renderPanel();
-			openFilters();
-			for (const name of [
-				/type/iu,
-				/created after/iu,
-				/created before/iu,
-				/updated after/iu,
-				/updated before/iu,
-			]) {
-				expect(screen.getByLabelText(name)).toBeInTheDocument();
-			}
-		});
-
-		// aria-label alone left four visually identical date boxes on screen.
-		it("gives every field a VISIBLE label, not just an accessible one", () => {
-			const { container } = renderPanel();
-			openFilters();
-			const labels = [...container.querySelectorAll("label")]
-				.map((l) => l.textContent?.trim())
-				.filter(Boolean);
-			expect(labels).toEqual(
-				expect.arrayContaining([
-					"Type",
-					"Created after",
-					"Created before",
-					"Updated after",
-					"Updated before",
-				]),
-			);
-		});
-
-		it("counts the active filters on the disclosure, so a collapsed panel is not silently filtered", () => {
-			renderPanel();
-			openFilters();
-			fireEvent.change(screen.getByLabelText(/created after/iu), {
-				target: { value: "2026-01-01" },
-			});
-			fireEvent.change(screen.getByLabelText(/^type$/iu), { target: { value: "Playbook" } });
-			expect(screen.getByRole("button", { name: /^filters/iu })).toHaveTextContent("2");
-		});
-
-		it("shows no count when nothing is filtered", () => {
-			renderPanel();
-			expect(screen.getByRole("button", { name: /^filters/iu })).not.toHaveTextContent(/[0-9]/u);
-		});
-
-		it("clears every filter at once and re-fires the search", () => {
+		it("clears everything at once and re-fires the search", () => {
 			renderPanel();
 			openFilters();
 			fireEvent.change(screen.getByLabelText(/^type$/iu), { target: { value: "Playbook" } });
+			fireEvent.click(screen.getByRole("radio", { name: "7 days" }));
 			fireEvent.click(screen.getByRole("button", { name: /clear filters/iu }));
 			expect(useSearchSpy).toHaveBeenLastCalledWith("", {});
+			expect(screen.getByRole("radio", { name: "Any time" })).toBeChecked();
 		});
 
 		it("offers nothing to clear when nothing is set", () => {
 			renderPanel();
 			openFilters();
 			expect(screen.queryByRole("button", { name: /clear filters/iu })).toBeNull();
-		});
-
-		// Uncontrolled date inputs kept their text after a reset, so the panel
-		// showed a filter that was no longer being applied.
-		it("empties the date fields on clear, not just the query", () => {
-			renderPanel();
-			openFilters();
-			const createdAfter = screen.getByLabelText(/created after/iu) as HTMLInputElement;
-			fireEvent.change(createdAfter, { target: { value: "2026-01-01" } });
-			fireEvent.click(screen.getByRole("button", { name: /clear filters/iu }));
-			expect(createdAfter.value).toBe("");
 		});
 	});
 
