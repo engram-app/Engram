@@ -414,6 +414,120 @@ defmodule Engram.FoldersTest do
                Attachments.list_attachments_strict(user, vault)
     end
 
+    # #1334 closed the create-in-the-gap race by scanning once and deleting by
+    # id from that scan. This is the opposite race it traded for: under READ
+    # COMMITTED each statement takes its own snapshot, so a concurrent same-user
+    # transaction can move a note OUT of the folder after `scan_folders/3`
+    # captured its id and before `delete_scanned/3` applies. The id is still in
+    # the match set, so the note is deleted from a folder the user never asked
+    # to touch.
+    #
+    # Driving scan and delete as separate calls with a move between them is the
+    # race made deterministic — it is the exact interleaving, minus the
+    # scheduling luck needed to hit it with real concurrency.
+    test "a note moved out between scan and delete is NOT deleted", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/b.md", "content" => "y", "mtime" => 1.0})
+
+      {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
+      assert Enum.count(matches, &(&1.kind == "note")) == 2
+
+      # The concurrent transaction commits here.
+      {:ok, _} = Notes.rename_note(user, vault, "Docs/a.md", "Archive/a.md")
+
+      {:ok, %{deleted: _}} = Notes.delete_scanned(user, vault, matches)
+
+      # The moved note lives in a folder that was never targeted.
+      assert {:ok, _} = Notes.get_note(user, vault, "Archive/a.md")
+
+      # ...and the delete still did its job for what genuinely remained.
+      assert {:error, :not_found} = Notes.get_note(user, vault, "Docs/b.md")
+    end
+
+    # The count reaching the user has to come from the write, not the scan.
+    # A concurrent folder RENAME re-keys folder_hmac on every descendant, so
+    # the fence legitimately removes nothing — and reporting the scan's count
+    # would tell the user "3 notes removed" when the answer is zero.
+    test "reports notes actually deleted, not notes scanned", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+
+      {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
+      {:ok, _} = Notes.rename_note(user, vault, "Docs/a.md", "Archive/a.md")
+
+      assert {:ok, %{deleted: 0, notes: 0}} = Notes.delete_scanned(user, vault, matches)
+    end
+
+    # The fence firing is the only in-prod evidence the race is real, and it
+    # leaves a live note under a folder whose markers were just removed.
+    test "logs a warning when the fence skips a row", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+
+      {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
+      {:ok, _} = Notes.rename_note(user, vault, "Docs/a.md", "Archive/a.md")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          {:ok, _} = Notes.delete_scanned(user, vault, matches)
+        end)
+
+      assert log =~ "membership fence skipped rows"
+    end
+
+    # A clean delete must stay quiet — a warning on every folder delete would
+    # train the operator to ignore the one that matters.
+    test "logs nothing when the fence skips nothing", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+
+      {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          {:ok, %{notes: 1}} = Notes.delete_scanned(user, vault, matches)
+        end)
+
+      refute log =~ "membership fence skipped rows"
+    end
+
+    # The fence must re-assert membership, not merely count rows: a same-folder
+    # write between scan and delete changes seq/updated_at but not folder_hmac,
+    # so it must NOT be mistaken for a move and skipped.
+    test "a note edited in place between scan and delete is still deleted", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+
+      {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Docs/a.md",
+          "content" => "edited",
+          "mtime" => 2.0
+        })
+
+      {:ok, %{deleted: _}} = Notes.delete_scanned(user, vault, matches)
+
+      assert {:error, :not_found} = Notes.get_note(user, vault, "Docs/a.md")
+    end
+
     # The first attempt at the fix above applied the fail-closed check to the
     # WHOLE vault before filtering by folder, so one corrupt row anywhere made
     # every folder delete in the vault fail — including recursive. Worse than
