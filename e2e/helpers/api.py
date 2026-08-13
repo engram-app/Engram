@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 import requests
 
-from helpers.latency import DELIVERY_TIMEOUT
+from helpers.latency import DELIVERY_TIMEOUT, SEARCH_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -315,7 +315,7 @@ class ApiClient:
                 "method": "tools/call",
                 "params": {"name": tool_name, "arguments": arguments},
             },
-            timeout=10,
+            timeout=SEARCH_TIMEOUT,
         )
         return resp.json(), resp.status_code
 
@@ -391,7 +391,7 @@ class ApiClient:
         if folder:
             body["folder"] = folder
         resp = self.session.post(
-            f"{self.base_url}/search", json=body, timeout=15
+            f"{self.base_url}/search", json=body, timeout=SEARCH_TIMEOUT
         )
         self._raise_for_status(resp)
         return resp.json().get("results", [])
