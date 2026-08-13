@@ -100,8 +100,7 @@ defmodule EngramWeb.DeviceAuthController do
         # RequestLogger logs it at :info. This is the happy path — the code is
         # alive and the human just has not clicked approve yet — and at a 5s
         # poll over a 300s TTL one successful login would otherwise emit ~60
-        # WARN lines (prod 2026-08-13: ~82% of the warn stream, and a feeder
-        # for the loki-auth-failure-burst alert).
+        # WARN lines (prod 2026-08-13: ~82% of the warn stream).
         conn
         |> assign(:expected_client_status, true)
         |> put_status(400)

@@ -442,9 +442,8 @@ defmodule EngramWeb.RequestLoggerTest do
   # and the human simply has not clicked approve yet. With a 300s code TTL and
   # a 5s advertised poll interval, ONE successful login emits up to 60 request
   # logs. Mapping every 4xx to :warning turned that into ~82% of the prod warn
-  # stream and made a textbook login read as an incident (it also feeds the
-  # loki-auth-failure-burst alert). A log level is the claim "a human should
-  # look at this" — the happy path must not spend it.
+  # stream and made a textbook login read as an incident. A log level is the
+  # claim "a human should look at this" — the happy path must not spend it.
 
   test "a device-flow authorization_pending poll logs at :info, not :warning" do
     conn = %Plug.Conn{
@@ -467,6 +466,84 @@ defmodule EngramWeb.RequestLoggerTest do
     event = find_request_event(events)
     assert event
     assert event.level == :info
+  end
+
+  test "a downgraded response still ships to Loki" do
+    # Quieting the LEVEL must not silently DELETE the record.
+    # Category.loki_ship?(:info, :http) is false, so without an explicit
+    # override the downgrade would drop device-token lines out of Loki
+    # entirely — an operator debugging "linking is stuck" would find nothing,
+    # which is worse than the warn noise this replaces.
+    conn = %Plug.Conn{
+      method: "POST",
+      request_path: "/api/auth/device/token",
+      query_string: "",
+      status: 400,
+      assigns: %{expected_client_status: true},
+      private: %{
+        phoenix_controller: EngramWeb.DeviceAuthController,
+        phoenix_action: :token
+      }
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute([:phoenix, :endpoint, :stop], %{duration: 0}, %{conn: conn})
+      end)
+
+    event = find_request_event(events)
+    assert event
+    assert event.level == :info
+    assert event.meta[:loki_ship] == true
+  end
+
+  test "an ordinary :info request line is NOT force-shipped" do
+    # Boundary: the override rides the marker, not the level. A 2xx :http line
+    # must keep its normal (false) routing or the override becomes a firehose.
+    conn = %Plug.Conn{
+      method: "GET",
+      request_path: "/api/notes",
+      query_string: "",
+      status: 200,
+      assigns: %{},
+      private: %{phoenix_controller: EngramWeb.NotesController, phoenix_action: :index}
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute([:phoenix, :endpoint, :stop], %{duration: 0}, %{conn: conn})
+      end)
+
+    event = find_request_event(events)
+    assert event
+    assert event.meta[:loki_ship] == false
+  end
+
+  test "an over-long user agent is truncated before it reaches the log" do
+    # Unauthenticated trust boundary: the header is attacker-controlled and
+    # RedactFilter neither scrubs nor bounds it, so an unbounded value would
+    # let a caller push ~10KB per request into a hosted aggregator.
+    conn = %Plug.Conn{
+      method: "POST",
+      request_path: "/api/auth/device/token",
+      query_string: "",
+      status: 400,
+      req_headers: [{"user-agent", String.duplicate("A", 5_000)}],
+      assigns: %{expected_client_status: true},
+      private: %{
+        phoenix_controller: EngramWeb.DeviceAuthController,
+        phoenix_action: :token
+      }
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute([:phoenix, :endpoint, :stop], %{duration: 0}, %{conn: conn})
+      end)
+
+    event = find_request_event(events)
+    assert event
+    assert String.length(event.meta[:user_agent]) == 200
   end
 
   test "a 4xx with no expected-status marker still logs at :warning" do
@@ -522,8 +599,15 @@ defmodule EngramWeb.RequestLoggerTest do
     assert event.meta[:user_agent] == "obsidian/1.13.4 engram-vault-sync/1.22.0"
 
     # config/prod.exs states the standing policy that client IPs stay OUT of
-    # Loki. Pinned so a future "just add the IP" cannot land silently.
-    assert event.meta[:client_ip] == nil
+    # Loki. Asserting `meta[:client_ip] == nil` would be a tautology (nothing
+    # sets that key, and a future addition would likely pick another name), so
+    # scan every emitted VALUE for an IP-shaped string instead — that fails
+    # whatever key the address is smuggled in under.
+    ip_like = ~r/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/
+
+    for {k, v} <- event.meta, is_binary(v) do
+      refute v =~ ip_like, "metadata #{inspect(k)} carries an IP-shaped value: #{inspect(v)}"
+    end
   end
 
   test "non-device-auth requests omit the user agent" do

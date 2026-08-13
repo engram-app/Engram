@@ -35,6 +35,18 @@ def start_device_flow(base_url: str, client_id: str) -> dict:
     return data
 
 
+def _is_pending(resp) -> bool:
+    """True when a 4xx body is the device flow's `authorization_pending`.
+
+    RFC 8628 puts the discriminator in the body, not the status line. Anything
+    unparseable is NOT pending — fail loudly rather than poll forever.
+    """
+    try:
+        return resp.json().get("error") == "authorization_pending"
+    except ValueError:
+        return False
+
+
 def exchange_device_code(base_url: str, device_code: str) -> dict | None:
     """Try to exchange a device code for tokens.
 
@@ -44,6 +56,12 @@ def exchange_device_code(base_url: str, device_code: str) -> dict | None:
     Pending is 400 per RFC 8628 §3.5. 428 is the pre-2026-08 status this
     endpoint used; still accepted so the helper works against either side of
     a paired backend/plugin branch rollout.
+
+    The discriminator is the BODY, not the status. `token/2` has no catch-all
+    clause, so a malformed request (missing device_code) raises
+    Phoenix.ActionClauseError and also lands as a 400 — treating bare 400 as
+    "pending" would swallow it and surface 60s later as a misleading timeout
+    instead of failing loudly right here.
     """
     resp = requests.post(
         f"{base_url}/auth/device/token",
@@ -52,7 +70,7 @@ def exchange_device_code(base_url: str, device_code: str) -> dict | None:
     )
     if resp.status_code == 200:
         return resp.json()
-    if resp.status_code in (400, 428):
+    if resp.status_code in (400, 428) and _is_pending(resp):
         return None
     raise RuntimeError(
         f"Device code exchange failed: HTTP {resp.status_code}\n{resp.text[:500]}"

@@ -60,6 +60,14 @@ _PKCE_CHALLENGE = (
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
+def _pending_body(resp) -> bool:
+    """RFC 8628 puts the pending discriminator in the body, not the status."""
+    try:
+        return resp.json().get("error") == "authorization_pending"
+    except ValueError:
+        return False
+
+
 def _ts() -> str:
     """Compact timestamp for unique identifiers."""
     return datetime.now().strftime("%Y%m%d%H%M%S%f")
@@ -493,7 +501,10 @@ def device_token_poll(device_code: str, *, max_attempts: int = 10) -> dict:
             return resp.json()
         # 400 = authorization_pending (RFC 8628 §3.5); 428 is the pre-2026-08
         # status, kept so this works against either side of a paired rollout.
-        if resp.status_code in (400, 428):
+        # Gate on the BODY: `token/2` has no catch-all clause, so a malformed
+        # request 400s too, and treating that as pending would burn all ten
+        # attempts before failing with a misleading timeout.
+        if resp.status_code in (400, 428) and _pending_body(resp):
             time.sleep(0.5)
             continue
         resp.raise_for_status()
