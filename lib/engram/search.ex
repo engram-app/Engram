@@ -320,12 +320,17 @@ defmodule Engram.Search do
         # forever, and in CI the vector leg can vanish suite-wide without a
         # single line in the log. A test asserting semantic behaviour would then
         # pass on the sparse leg and look like proof.
+        # Log the BOUNDED label, not the raw reason: on the {status, body}
+        # branch that body is the decoded provider response — unbounded and
+        # unreviewed — and this line ships to Loki + CloudWatch on every
+        # degraded search. Leaking it would undercut the point of HMAC'ing
+        # folders and tags to keep content out of third-party stores.
         Logger.warning(
           "Search degraded to keyword-only — query embed failed",
           Metadata.with_category(:warning, :search,
             user_id: to_string(user.id),
             reason_label: :embed_failed_degraded_to_keyword,
-            reason: inspect(reason)
+            reason: error_label(reason)
           )
         )
 
@@ -347,9 +352,18 @@ defmodule Engram.Search do
   defp run_legs(_invalid_mode, _user, _query, _search_opts, _profile),
     do: {:error, :invalid_mode}
 
-  # Bounded label for telemetry — the raw reason can carry a response body, and
-  # metric tags must stay low-cardinality (see the Search PromEx contract).
-  defp error_label(%Req.TransportError{reason: r}), do: "transport_#{r}"
+  # Bounded label for telemetry AND for the degradation log — the raw reason can
+  # carry a whole provider response body, and metric tags must stay
+  # low-cardinality (see the Search PromEx contract).
+  #
+  # Transport reasons are NOT always atoms: Mint/Req surface TLS failures as
+  # tuples like `{:tls_alert, {:handshake_failure, ~c"..."}}`, and interpolating
+  # one raises `Protocol.UndefinedError` (no String.Chars for tuples). That would
+  # crash inside the degrade branch and 500 the request — the error handler added
+  # to make degradation observable would be the thing defeating degradation. So
+  # atoms only for the readable label; anything else collapses to a constant.
+  defp error_label(%Req.TransportError{reason: r}) when is_atom(r), do: "transport_#{r}"
+  defp error_label(%Req.TransportError{}), do: "transport_other"
   defp error_label({status, _body}) when is_integer(status), do: "http_#{status}"
   defp error_label(reason) when is_atom(reason), do: to_string(reason)
   defp error_label(_), do: "unknown"

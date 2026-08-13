@@ -360,6 +360,38 @@ defmodule Engram.SearchTest do
       assert {:error, _} = Search.search(user, vault, "iron panel")
     end
 
+    test "hybrid degrades (does not raise) when the transport reason is a TUPLE",
+         %{bypass: bypass, user: user, vault: vault} do
+      # Mint/Req surface TLS failures as tuples, e.g.
+      # {:tls_alert, {:handshake_failure, ~c"..."}}. The degrade branch labels
+      # the reason for telemetry + logging, and interpolating a tuple raises
+      # Protocol.UndefinedError — which would 500 the request from inside the
+      # handler whose whole job is to keep the search alive. Atom reasons never
+      # exercised this.
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ ->
+        {:error, %Req.TransportError{reason: {:tls_alert, {:handshake_failure, ~c"bad"}}}}
+      end)
+
+      # The degrade path falls through to the keyword (sparse) leg.
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => []}}))
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          # Before the fix this raised Protocol.UndefinedError inside the very
+          # branch whose job is to keep the search alive.
+          assert {:ok, []} = Search.search(user, vault, "iron panel", mode: :hybrid)
+        end)
+
+      # …and that it labelled the tuple reason instead of interpolating it.
+      assert log =~ "degraded to keyword-only"
+      assert log =~ "reason=transport_other"
+    end
+
     test "fetches 4x candidates when reranker is configured", %{
       bypass: bypass,
       user: user,

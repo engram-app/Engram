@@ -305,13 +305,20 @@ class ApiClient:
             clone.session.auth = self.session.auth
         return clone
 
-    # Only these MCP tools pay the query-embed cost. Everything else on /mcp
-    # (get_note, write_note, list_folders, …) is a cheap DB/Qdrant round-trip and
-    # belongs on the generic delivery bound instead. Both budgets are 120s today,
-    # so this split changes no timing right now — it exists so the two can move
-    # independently, and so a reader can tell which calls are actually gated on
-    # an embed rather than assuming every MCP call is.
-    _EMBEDDING_MCP_TOOLS = frozenset({"search_notes"})
+    # MCP tools that reach Engram.Search and therefore pay a query embed. This is
+    # NOT just the obvious one — verified against lib/engram/mcp/handlers.ex:
+    #   search_notes    → Search.search (handlers.ex:67/72)
+    #   suggest_folder  → Search.search (handlers.ex:165)
+    #   create_note     → auto_place_folder → Search.search (handlers.ex:252/669),
+    #                     but only when no `suggested_folder` arg is supplied
+    # Everything else (get_note, write_note, list_folders, …) is a cheap
+    # DB/Qdrant round-trip and belongs on the generic delivery bound.
+    #
+    # Both budgets are 120s today, so this split changes no timing right now — it
+    # exists so the two can move independently. Which is exactly why the list has
+    # to be right NOW: the first time the budgets diverge, a missing entry here
+    # becomes a silent wrong timeout with nothing to catch it.
+    _EMBEDDING_MCP_TOOLS = frozenset({"search_notes", "suggest_folder", "create_note"})
 
     def mcp_call(self, tool_name: str, arguments: dict) -> tuple[dict, int]:
         """POST /mcp — JSON-RPC tools/call. Returns (response_json, status)."""

@@ -29,6 +29,7 @@ defmodule Engram.PromEx.Search do
   use PromEx.Plugin
 
   @stop_event [:engram, :search, :request, :stop]
+  @degraded_event [:engram, :search, :degraded]
 
   @impl true
   def event_metrics(opts) do
@@ -64,6 +65,17 @@ defmodule Engram.PromEx.Search do
             buckets: [0, 1, 5, 10, 25, 50]
           ],
           tags: [:status]
+        ),
+        # Search silently fell back to keyword-only because the query embed
+        # failed. This is invisible in the metrics above — a degraded search is
+        # still `status: :ok` with results — so without this counter an operator
+        # whose embedder is slow or down just gets quietly worse search. `reason`
+        # is `Search.error_label/1`, deliberately bounded for cardinality.
+        counter(
+          metric_prefix ++ [:degraded, :total],
+          event_name: @degraded_event,
+          description: "Searches that degraded to a single leg (embed failure).",
+          tags: [:leg, :reason]
         )
       ]
     )

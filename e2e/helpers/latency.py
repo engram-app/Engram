@@ -34,11 +34,24 @@ DELIVERY_TIMEOUT = float(os.environ.get("E2E_DELIVERY_TIMEOUT", "120"))
 # the test it failed (`test_32::test_mcp_search_spans_all_vaults_by_default`)
 # asserts cross-vault labelling, not latency.
 #
-# 120s is deliberately well ABOVE the server's own query-embed ceiling
-# (`Engram.Embedders.Ollama.request_defaults(:query)` → 45s, plus retry backoff
-# and the Qdrant + rerank + decrypt legs after it). The client must not be the
-# first thing to give up: if it were, a server-side degradation or failure would
-# reach us as an ambiguous ReadTimeout instead of the real response the server
-# was about to send. This is a true-breakage bound, NOT a performance budget —
-# real search latency is watched by `engram_prom_ex_search_request_duration_*`.
-SEARCH_TIMEOUT = float(os.environ.get("E2E_SEARCH_TIMEOUT", "120"))
+# The budget has to NEST inside the deadlines that already wrap these calls, or
+# it can never actually fire and the failure surfaces as the wrong diagnosis:
+#
+#   server query-embed ceiling ..... ~52s  (Ollama :query 45s + ~7s Req backoff)
+#   SEARCH_TIMEOUT (this) ..........  60s  ← must exceed the server, but…
+#   caller poll windows ............  90s  (test_77 `_poll_search`, test_67)
+#   pytest-timeout per test ........ 180s  (e2e/pytest.ini)
+#
+# Above the server so the CLIENT is never the first to give up — otherwise a
+# server-side failure reaches us as an ambiguous ReadTimeout instead of the real
+# response the server was about to send. Below the poll windows so a genuinely
+# slow search reports as a slow search, rather than eating a whole 90s poll loop
+# and getting reported as "the repath never landed" (a wrong diagnosis) or being
+# killed by pytest-timeout with a SIGALRM traceback.
+#
+# 120s was the first cut and did not nest: it exceeded every window above it, so
+# it was unreachable in the tests that use it.
+#
+# This is a true-breakage bound, NOT a performance budget — real search latency
+# is watched by `engram_prom_ex_search_request_duration_*`.
+SEARCH_TIMEOUT = float(os.environ.get("E2E_SEARCH_TIMEOUT", "60"))

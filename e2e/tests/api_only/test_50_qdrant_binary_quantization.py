@@ -187,17 +187,11 @@ class TestSearchAPI:
             seeded_note["vault_id"], seeded_note["path_hmac"], note_path, timeout=60
         )
 
-        # Hit the Engram search API (not Qdrant directly)
-        resp = api.session.post(
-            f"{api.base_url}/search",
-            json={"query": "embedding pipeline binary quantization", "limit": 20},
-            timeout=30,
-        )
-        assert resp.status_code == 200, (
-            f"POST /api/search failed: HTTP {resp.status_code} — {resp.text[:300]}"
-        )
-
-        results = resp.json().get("results", [])
+        # Hit the Engram search API (not Qdrant directly). Goes through
+        # ApiClient.search so this shares the ONE search timeout budget
+        # (SEARCH_TIMEOUT) — this path pays a query embed like any other search,
+        # and a hand-rolled session.post opts out of the budget silently.
+        results = api.search("embedding pipeline binary quantization", limit=20)
         # /api/search returns one row per note with `path` carrying the source
         # path (rehydrated from the encrypted notes row — #590 dropped it from
         # the Qdrant payload). The indexing wait above matches by path_hmac.

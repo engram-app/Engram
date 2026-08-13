@@ -49,6 +49,17 @@ defmodule Engram.Embedders.Ollama do
   hang to something an MCP client tolerates, which was the actual goal — the
   point was never "fail fast", it was "do not hang for two minutes".
 
+  **The cost of 45s, stated plainly.** `Qdrant.req_opts(:search)` uses 5s
+  precisely because a brownout that pins each request for minutes holds Bandit
+  processes and cascades into pool pressure, and Voyage's `:query` is 5s for the
+  same reason. 45s accepts that risk on the Ollama path: a self-host Ollama that
+  accepts connections but hangs (e.g. loading a model) will pin one request
+  process per concurrent search for up to ~45s, with no concurrency cap in front
+  of it. That is a deliberate trade — a tight budget here deletes the vector leg
+  under ordinary indexing load (see above), which is worse for a self-host user
+  than transient pressure during an actual brownout. If it ever bites, the fix
+  is a concurrency limit on synchronous embeds, not a shorter timeout.
+
   Divergences from Voyage's `:query` defaults:
 
     * **45s, not 5s.** Voyage's 5s guards a remote brownout, where a slow

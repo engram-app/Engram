@@ -98,10 +98,34 @@ embedding-bearing tools.
 
 > **`ApiClient.search` had ZERO callers.** Every real `/search` in the suite was
 > a hand-rolled `client.session.post(...)` with its own `timeout=30`
-> (`test_67`, `test_77`), which is exactly why the helper's budget could drift
-> unnoticed. Fixing the helper alone would have fixed nothing. Both now route
-> through it, and `e2e/unit/test_search_timeout.py` fails on any new
-> `POST /search` that doesn't.
+> (`test_50`, `test_67`, `test_77`), which is exactly why the helper's budget
+> could drift unnoticed. Fixing the helper alone would have fixed nothing. All
+> three now route through it, and `e2e/unit/test_search_timeout.py` fails on any
+> new `POST /search` that doesn't.
+>
+> **The guard for that was itself broken on the first cut**, and it is worth
+> knowing why: it tested `"/search" in line and ".post(" in line` per line,
+> while every real offender splits the call across lines. It reported green
+> against three live offenders. A guard that cannot fail is worse than no guard
+> — it launders the claim. It now scans file text, and a companion test pins
+> both the single- and multi-line shapes so the matcher itself can't silently
+> stop working.
+
+**Budgets must nest.** The client budget only means something if it can fire
+before the deadlines wrapping it:
+
+| bound | value |
+|---|---|
+| server query-embed ceiling | ~52s (Ollama `:query` 45s + ~7s Req backoff) |
+| `SEARCH_TIMEOUT` | **60s** |
+| caller poll windows (`test_67`, `test_77`) | 90s |
+| pytest-timeout per test (`e2e/pytest.ini`) | 180s |
+
+The first cut used 120s, which exceeded every window above it and so was
+unreachable in the very tests that use it — a slow search would have eaten a
+whole 90s poll loop and been reported as "the repath never landed", or been
+killed by SIGALRM. `test_budget_nests_between_server_ceiling_and_caller_deadlines`
+asserts this ordering.
 
 Two traps this one sets, both worth knowing because the obvious reading is
 wrong in both cases:
