@@ -436,6 +436,120 @@ defmodule EngramWeb.RequestLoggerTest do
     assert event.meta[:reason] == nil
   end
 
+  # --- device-flow polling noise (prod 2026-08-13) ---------------------------
+  #
+  # `authorization_pending` is the device flow's HAPPY path: the code is alive
+  # and the human simply has not clicked approve yet. With a 300s code TTL and
+  # a 5s advertised poll interval, ONE successful login emits up to 60 request
+  # logs. Mapping every 4xx to :warning turned that into ~82% of the prod warn
+  # stream and made a textbook login read as an incident (it also feeds the
+  # loki-auth-failure-burst alert). A log level is the claim "a human should
+  # look at this" — the happy path must not spend it.
+
+  test "a device-flow authorization_pending poll logs at :info, not :warning" do
+    conn = %Plug.Conn{
+      method: "POST",
+      request_path: "/api/auth/device/token",
+      query_string: "",
+      status: 400,
+      assigns: %{expected_client_status: true},
+      private: %{
+        phoenix_controller: EngramWeb.DeviceAuthController,
+        phoenix_action: :token
+      }
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute([:phoenix, :endpoint, :stop], %{duration: 0}, %{conn: conn})
+      end)
+
+    event = find_request_event(events)
+    assert event
+    assert event.level == :info
+  end
+
+  test "a 4xx with no expected-status marker still logs at :warning" do
+    # Boundary: the downgrade is opt-in per response, never blanket-4xx and
+    # never route-shaped — a real client error on the same controller (say a
+    # malformed body) must stay visible.
+    conn = %Plug.Conn{
+      method: "POST",
+      request_path: "/api/auth/device/token",
+      query_string: "",
+      status: 400,
+      assigns: %{},
+      private: %{
+        phoenix_controller: EngramWeb.DeviceAuthController,
+        phoenix_action: :token
+      }
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute([:phoenix, :endpoint, :stop], %{duration: 0}, %{conn: conn})
+      end)
+
+    event = find_request_event(events)
+    assert event
+    assert event.level == :warning
+  end
+
+  test "device-auth requests carry client ip + user agent for attribution" do
+    # /api/auth/device/token is PUBLIC and pre-auth (user_id is null by
+    # design), so without these there is no way to attribute polling to anyone
+    # — neither to answer "who is calling this" nor to see device-code guessing.
+    conn = %Plug.Conn{
+      method: "POST",
+      request_path: "/api/auth/device/token",
+      query_string: "",
+      status: 400,
+      remote_ip: {203, 0, 113, 7},
+      req_headers: [{"user-agent", "obsidian/1.13.4 engram-vault-sync/1.22.0"}],
+      assigns: %{expected_client_status: true},
+      private: %{
+        phoenix_controller: EngramWeb.DeviceAuthController,
+        phoenix_action: :token
+      }
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute([:phoenix, :endpoint, :stop], %{duration: 0}, %{conn: conn})
+      end)
+
+    event = find_request_event(events)
+    assert event
+    assert event.meta[:client_ip] == "203.0.113.7"
+    assert event.meta[:user_agent] == "obsidian/1.13.4 engram-vault-sync/1.22.0"
+  end
+
+  test "non-device-auth requests omit client ip + user agent" do
+    # Scoped on purpose: stamping every request line with an IP + UA is bytes
+    # on every log in the system for a forensic need that is specific to the
+    # unauthenticated device-flow endpoints.
+    conn = %Plug.Conn{
+      method: "GET",
+      request_path: "/api/notes",
+      query_string: "",
+      status: 200,
+      remote_ip: {203, 0, 113, 7},
+      req_headers: [{"user-agent", "obsidian/1.13.4"}],
+      assigns: %{},
+      private: %{phoenix_controller: EngramWeb.NotesController, phoenix_action: :index}
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute([:phoenix, :endpoint, :stop], %{duration: 0}, %{conn: conn})
+      end)
+
+    event = find_request_event(events)
+    assert event
+    assert event.meta[:client_ip] == nil
+    assert event.meta[:user_agent] == nil
+  end
+
   defp find_request_event(events) do
     Enum.find(events, fn e ->
       msg = render_msg(e.msg)

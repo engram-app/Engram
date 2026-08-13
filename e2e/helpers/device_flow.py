@@ -39,7 +39,11 @@ def exchange_device_code(base_url: str, device_code: str) -> dict | None:
     """Try to exchange a device code for tokens.
 
     POST /auth/device/token with device_code.
-    Returns token dict on 200, None on 428 (pending), raises on other errors.
+    Returns token dict on 200, None while pending, raises on other errors.
+
+    Pending is 400 per RFC 8628 §3.5. 428 is the pre-2026-08 status this
+    endpoint used; still accepted so the helper works against either side of
+    a paired backend/plugin branch rollout.
     """
     resp = requests.post(
         f"{base_url}/auth/device/token",
@@ -48,7 +52,7 @@ def exchange_device_code(base_url: str, device_code: str) -> dict | None:
     )
     if resp.status_code == 200:
         return resp.json()
-    if resp.status_code == 428:
+    if resp.status_code in (400, 428):
         return None
     raise RuntimeError(
         f"Device code exchange failed: HTTP {resp.status_code}\n{resp.text[:500]}"

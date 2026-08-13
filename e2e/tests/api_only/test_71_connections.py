@@ -491,7 +491,9 @@ def device_token_poll(device_code: str, *, max_attempts: int = 10) -> dict:
         )
         if resp.status_code == 200:
             return resp.json()
-        if resp.status_code == 428:
+        # 400 = authorization_pending (RFC 8628 §3.5); 428 is the pre-2026-08
+        # status, kept so this works against either side of a paired rollout.
+        if resp.status_code in (400, 428):
             time.sleep(0.5)
             continue
         resp.raise_for_status()

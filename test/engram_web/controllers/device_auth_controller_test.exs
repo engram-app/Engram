@@ -134,7 +134,9 @@ defmodule EngramWeb.DeviceAuthControllerTest do
       {:ok, auth} = DeviceFlow.start_device_flow("client_1")
 
       conn = post(conn, "/api/auth/device/token", %{device_code: auth.device_code})
-      assert %{"error" => "authorization_pending"} = json_response(conn, 428)
+      # RFC 8628 §3.5: authorization_pending is a 400 with the error in the
+      # body. 428 "Precondition Required" was never part of the device flow.
+      assert %{"error" => "authorization_pending"} = json_response(conn, 400)
     end
 
     test "returns tokens for authorized code", %{conn: conn} do

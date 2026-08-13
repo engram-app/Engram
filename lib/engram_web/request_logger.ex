@@ -16,6 +16,8 @@ defmodule EngramWeb.RequestLogger do
   triage; it is not in the redact filter's sensitive-key set.
   """
 
+  alias EngramWeb.RequestMeta
+
   require Logger
 
   @handler_id :engram_request_logger
@@ -73,7 +75,7 @@ defmodule EngramWeb.RequestLogger do
 
   defp emit_request_log(conn, duration) do
     duration_ms = System.convert_time_unit(duration, :native, :millisecond)
-    level = level_for_status(conn.status)
+    level = level_for_conn(conn)
 
     meta =
       [
@@ -86,6 +88,7 @@ defmodule EngramWeb.RequestLogger do
         mtls_clientcert_subject: mtls_clientcert_subject(conn)
       ]
       |> maybe_put_reject_reason(conn)
+      |> maybe_put_client_identity(conn)
 
     Logger.log(
       level,
@@ -117,11 +120,50 @@ defmodule EngramWeb.RequestLogger do
 
   defp suppress_request_log?(_), do: false
 
+  # A controller may mark a 4xx as a NORMAL step in its protocol rather than a
+  # client error. The only current user is the device flow's
+  # `authorization_pending` poll: the code is alive and the human simply has
+  # not approved yet, so at a 5s poll over a 300s TTL one SUCCESSFUL login
+  # emitted ~60 warnings (prod 2026-08-13 — ~82% of the warn stream, and a
+  # feeder for loki-auth-failure-burst). A log level is the claim "a human
+  # should look at this"; spending it on a happy path is how a working system
+  # reads as an incident.
+  #
+  # Opt-in PER RESPONSE, set server-side — never blanket-4xx and never keyed on
+  # route+status, so a genuine client error on the same endpoint (malformed
+  # body, missing param) still surfaces at :warning. 5xx is never downgradable.
+  defp level_for_conn(%Plug.Conn{status: status, assigns: %{expected_client_status: true}})
+       when is_integer(status) and status < 500,
+       do: :info
+
+  defp level_for_conn(%Plug.Conn{status: status}), do: level_for_status(status)
+
   # A 5xx flood must elevate above :info so level-keyed alerting sees it; a 4xx
   # is a client error worth a :warning; everything else stays :info.
   defp level_for_status(status) when status >= 500, do: :error
   defp level_for_status(status) when status >= 400, do: :warning
   defp level_for_status(_), do: :info
+
+  # Client attribution for the device-flow endpoints ONLY. They are public and
+  # pre-auth (`user_id` is null until the code is approved), so without these
+  # a polling client is entirely unattributable — you can neither answer "who
+  # is calling this" nor spot device-code guessing. Scoped rather than global
+  # because an IP + UA on every request line is bytes on every log in the
+  # system for a need specific to these routes.
+  #
+  # IP comes from EngramWeb.RemoteIp, which resolves the Cloudflare-set
+  # CF-Connecting-IP under the AOP trust model and otherwise falls back to the
+  # socket peer. `conn.remote_ip` alone would record the ALB's private address
+  # for every external client (see that module's docs).
+  defp maybe_put_client_identity(meta, %Plug.Conn{private: private} = conn) do
+    if private[:phoenix_controller] == EngramWeb.DeviceAuthController do
+      meta
+      |> Keyword.put(:client_ip, conn |> EngramWeb.RemoteIp.resolve() |> RequestMeta.format_ip())
+      |> Keyword.put(:user_agent, RequestMeta.get_user_agent(conn))
+    else
+      meta
+    end
+  end
 
   defp current_user_id(%Plug.Conn{assigns: %{current_user: %{id: id}}}), do: id
   defp current_user_id(_), do: nil
