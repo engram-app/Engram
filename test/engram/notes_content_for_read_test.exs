@@ -8,8 +8,8 @@ defmodule Engram.NotesContentForReadTest do
   most damaging path of all: the sync change feed, where an empty facade made
   both devices materialize a 0-byte file and push the empty hash back.
 
-  `content_for_read/2` is the seam those paths should route through, so the
-  choice is made once instead of re-litigated per caller.
+  The resolution is shared by the change feed and the manifest so the two agree
+  on what `content_hash` means — the client cross-compares them.
   """
   use Engram.DataCase, async: true
 
@@ -45,51 +45,6 @@ defmodule Engram.NotesContentForReadTest do
       end)
 
     :ok
-  end
-
-  defp reload!(user, note_id) do
-    {:ok, note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note_id) end)
-    {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(note, user)
-    decrypted
-  end
-
-  describe "content_for_read/2 (the per-note seam)" do
-    test "resolves the authority when the note has uncheckpointed ops", ctx do
-      %{user: user, vault: vault} = ctx
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "s1.md", "content" => "REAL BODY"})
-      :ok = blank_facade!(user, note.id)
-      :ok = append_tail!(user, vault, note.id)
-
-      assert {:ok, "REAL BODY"} = Notes.content_for_read(user, reload!(user, note.id))
-    end
-
-    test "serves the facade verbatim when the tail is empty", ctx do
-      %{user: user, vault: vault} = ctx
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "s2.md", "content" => "BODY"})
-
-      # Facade and doc deliberately disagree, with no tail. A checkpointed note
-      # must be served as-is — rebuilding here is what makes the correct call
-      # too expensive to be anyone's default.
-      {:ok, dek} = Crypto.get_dek(user)
-      {ct, n} = Envelope.encrypt("FACADE", dek, Crypto.aad_for_row(:notes, :content, note.id))
-
-      {:ok, _} =
-        Repo.with_tenant(user.id, fn ->
-          Repo.update_all(
-            from(x in Note, where: x.id == ^note.id),
-            set: [content_ciphertext: ct, content_nonce: n]
-          )
-        end)
-
-      assert {:ok, "FACADE"} = Notes.content_for_read(user, reload!(user, note.id))
-    end
-
-    test "a genuinely empty checkpointed note stays on the fast path", ctx do
-      %{user: user, vault: vault} = ctx
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "s3.md", "content" => ""})
-
-      assert {:ok, ""} = Notes.content_for_read(user, reload!(user, note.id))
-    end
   end
 
   # Appends a tail row so the note reads as "has uncheckpointed ops" without
@@ -208,5 +163,89 @@ defmodule Engram.NotesContentForReadTest do
     change = Enum.find(changes, &(&1.path == "h.md"))
 
     assert change.content == "LAST GOOD"
+  end
+
+  # `.canvas` keeps its data in Y.Maps, not the markdown Y.Text, so `project_doc`
+  # returns "" for it. `crdt_checkpoint.ex` refuses to materialize that over the
+  # facade — the only non-Yjs copy of the board — and the read path must refuse
+  # it too.
+  test "a canvas note is never resolved through the markdown projection", ctx do
+    %{user: user, vault: vault} = ctx
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "board.canvas", "content" => ~s({"nodes":[]})})
+
+    :ok = append_tail!(user, vault, note.id)
+
+    {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0)
+    change = Enum.find(changes, &(&1.path == "board.canvas"))
+
+    assert change.content == ~s({"nodes":[]})
+  end
+
+  # `delete_note/4` only sets deleted_at; nothing prunes the tail (the FK cascade
+  # is hard-delete only). Without an explicit exclusion a tombstone stays "stale"
+  # forever — rebuilding a doc on every page that carries it, and shipping a
+  # resurrected body on a `deleted: true` row.
+  test "a tombstone is not resolved and ships no resurrected body", ctx do
+    %{user: user, vault: vault} = ctx
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "gone.md", "content" => "BODY"})
+
+    # Blank the facade FIRST, so a rebuild would visibly resurrect "BODY" from
+    # the snapshot. If the tombstone were resolved, content would come back.
+    :ok = blank_facade!(user, note.id)
+    :ok = append_tail!(user, vault, note.id)
+    :ok = Notes.delete_note(user, vault, "gone.md")
+
+    {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0)
+    change = Enum.find(changes, &(&1.path == "gone.md"))
+
+    assert change.deleted
+    assert change.content == "", "tombstone was resolved: #{inspect(change.content)}"
+    refute Map.has_key?(Notes.resolved_content_hashes(user, vault), note.id)
+  end
+
+  # The read-side mirror of `ensure_projection_safe/2`. Recomputing the hash
+  # removes the one signal (hash/content disagreement) a client could have used
+  # to distrust an empty row, so the backstop has to live here.
+  test "an empty projection over a non-empty facade serves the facade", ctx do
+    %{user: user, vault: vault} = ctx
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "guard.md", "content" => "REAL"})
+
+    # A snapshot that projects "" while the facade still holds the body: the
+    # shape a genesis-empty doc takes if its ops never made it into the state.
+    {:ok, %{state: empty_state}} = Engram.Notes.CrdtBridge.merge_plaintext(nil, "")
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(empty_state, user, note.id)
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note.id),
+          set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+        )
+      end)
+
+    :ok = append_tail!(user, vault, note.id)
+
+    {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0)
+    change = Enum.find(changes, &(&1.path == "guard.md"))
+
+    assert change.content == "REAL"
+  end
+
+  # The manifest and the feed are cross-compared by the client. If the manifest
+  # kept serving the facade hash while the feed served the resolved one, every
+  # actively-edited note would read as diverged and rewind the catch-up cursor.
+  test "the manifest hash agrees with the feed hash for a stale note", ctx do
+    %{user: user, vault: vault} = ctx
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "agree.md", "content" => "AGREE"})
+    :ok = blank_facade!(user, note.id)
+    :ok = append_tail!(user, vault, note.id)
+
+    {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0)
+    feed = Enum.find(changes, &(&1.path == "agree.md"))
+    manifest = Notes.resolved_content_hashes(user, vault)
+
+    assert Map.get(manifest, note.id) == feed.content_hash
   end
 end

@@ -2084,65 +2084,6 @@ defmodule Engram.Notes do
   """
   @spec authoritative_content(map(), Note.t()) :: {:ok, String.t()} | {:error, term()}
   def authoritative_content(user, %Note{} = note) do
-    do_authoritative_content(user, note)
-  end
-
-  @doc """
-  The content a READ PATH should serve: the façade when it is current, the
-  authority when it is not.
-
-  ## Why this exists
-
-  `notes.content` is a façade for a CRDT-managed note — it materializes at
-  checkpoint, so between a doc write and that checkpoint it lags. The correct
-  call is `authoritative_content/2`, but that costs a decrypt plus a Yjs
-  rebuild plus a tail query, so it was never the default and every read path
-  has been left to make the call itself. Three got it wrong —
-  `NotesController.append/2` (#1159), link extraction, and `EmbedNote` (still
-  open) — and #1339 added a fourth on the worst path available: the sync change
-  feed served an empty façade, both devices materialized a 0-byte file, and
-  both pushed back the hash of "". A read bug became permanent data loss.
-
-  One seam makes that a single decision instead of a per-caller judgement call.
-
-  ## The predicate
-
-  The tail IS the staleness marker. `notes.content` materializes at checkpoint
-  and `prune_tail/2` clears the tail in the same breath, so a note with rows in
-  `crdt_update_log` is exactly a note whose façade lags. Cheap (one indexed
-  existence check), and unlike an "is the façade empty" heuristic it both
-  catches a non-empty-but-stale façade AND leaves genuinely-empty notes — which
-  are common in a real vault, and all carry a genesis snapshot — on the fast
-  path.
-
-  Batch callers must NOT loop this: `authoritative_content/2` opens its own
-  `Repo.with_tenant` per call. `list_changes_by_seq/4` resolves the whole page's
-  stale set in one query for that reason.
-
-  ponytail: one existence query per call. When `content` gains a
-  `crdt_head`-style invalidate-on-write flag (BEFORE UPDATE trigger + lazy
-  self-heal), this becomes a column read and the query disappears — callers do
-  not change. See `docs/context/worker-reads-stale-content-facade.md`.
-  """
-  @spec content_for_read(map(), Note.t()) :: {:ok, String.t() | nil} | {:error, term()}
-  def content_for_read(user, %Note{} = note) do
-    if tail_present?(user, note.id) do
-      do_authoritative_content(user, note)
-    else
-      {:ok, note.content}
-    end
-  end
-
-  defp tail_present?(user, note_id) do
-    {:ok, present?} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.exists?(from(l in CrdtUpdateLog, where: l.note_id == ^note_id))
-      end)
-
-    present?
-  end
-
-  defp do_authoritative_content(user, %Note{} = note) do
     case Crypto.decrypt_crdt_state(note, user) do
       {:ok, nil} ->
         {:ok, note.content || ""}
@@ -3748,27 +3689,13 @@ defmodule Engram.Notes do
     # #1339: `notes.content` is a FAÇADE that materializes at checkpoint, so a
     # note with uncheckpointed ops serves a body that lags — and when it lags
     # all the way to "", the client creates a 0-byte file and pushes the empty
-    # hash back. Resolve the authority for exactly those notes, deciding once
-    # per page rather than per caller.
-    stale = stale_facade_ids(user, decrypted, fields)
-
-    content_key =
-      if fields == :all and MapSet.size(stale) > 0 do
-        {:ok, key} = Crypto.dek_content_hash_key(user)
-        key
-      end
+    # hash back. Resolve the authority for exactly those notes, once per page.
+    resolved = resolve_stale_page(user, decrypted, fields)
 
     changes =
       Enum.map(decrypted, fn note ->
-        mode =
-          cond do
-            fields == :meta -> :meta
-            MapSet.member?(stale, note.id) -> {:stale, content_key}
-            true -> {:fresh, nil}
-          end
-
         note
-        |> change_map(feed_content(user, note, mode))
+        |> change_map(feed_pair(note, fields, resolved))
         |> Map.put(:seq, note.seq)
       end)
 
@@ -3781,86 +3708,220 @@ defmodule Engram.Notes do
     {:ok, %{changes: changes, has_more: has_more, next: next}}
   end
 
-  # `fields: :meta` carries `content: nil` by contract and its projection does
-  # not even select `crdt_state_ciphertext`, so it never resolves the authority.
-  defp feed_content(_user, _note, :meta), do: {nil, nil}
+  @doc """
+  `%{note_id => content_hash}` for every note in the vault whose façade lags.
 
-  # Façade is current (no uncheckpointed ops): serve it verbatim. `nil` stays
-  # `nil` rather than being coerced to "" — the plugin reads a row with
-  # `content == "" and content_hash` as PROOF that this hash maps to empty and
-  # caches it as `emptyContentHash` (sync.ts), so manufacturing an "" here would
-  # teach it a hash that means something else.
-  defp feed_content(_user, note, {:fresh, _}), do: {note.content, note.content_hash}
+  The manifest and the change feed are cross-compared by the client
+  (`validateFromManifest` / `healDivergedLiveBoundNotes` stamp `serverHash` from
+  the feed and diff it against the manifest). Since #1339 the feed serves
+  `hmac(resolved body)` for a stale note, so the manifest has to agree or every
+  actively-edited note reads as diverged and rewinds the vault's catch-up
+  cursor on each poll.
 
-  defp feed_content(user, note, {:stale, key}) do
-    case authoritative_content(user, note) do
-      {:ok, text} ->
-        # The hash MUST be recomputed with the text. The plugin treats
-        # content_hash as the identity of content: it stamps `serverHash` from
-        # it and then skips any later row whose hash matches. Shipping a real
-        # body under the façade's stale hash (typically hmac("") pre-checkpoint)
-        # would record `serverHash = hmac("")` for a file holding a body — after
-        # which a genuine emptying of that note arrives as ""/hmac("") and is
-        # silently skipped forever, with every convergence backstop reading
-        # "converged".
-        {text, Crypto.hmac_content_hash(key, text)}
+  Bounded by notes with UNCHECKPOINTED ops, not by vault size: the checkpoint
+  debounce means only actively-edited notes carry a tail, so a quiet vault
+  resolves nothing.
+  """
+  @spec resolved_content_hashes(map(), map()) :: %{optional(String.t()) => String.t()}
+  def resolved_content_hashes(user, vault) do
+    {:ok, rows} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(
+          from(n in scoped_live(user, vault),
+            join: l in CrdtUpdateLog,
+            on: l.note_id == n.id,
+            where: n.kind == "note",
+            distinct: n.id,
+            select: n
+          )
+        )
+      end)
 
-      # Degrade to the façade rather than fail the page. The earlier version
-      # raised here; that was wrong. This feed is keyset-ordered by seq, so one
-      # note with an undecodable crdt_state fails identically on EVERY retry —
-      # it would wedge the whole vault's catch-up permanently and crash
+    case rows do
+      [] ->
+        %{}
+
+      rows ->
+        with {:ok, key} <- Crypto.dek_content_hash_key(user) do
+          by_id = Map.new(decrypt_or_raise!(rows, user), &{&1.id, &1})
+
+          {:ok, resolved} =
+            Repo.with_tenant(user.id, fn ->
+              Enum.reduce(rows, %{}, fn row, acc ->
+                case resolve_one(user, by_id[row.id] || row, row, key) do
+                  {_text, hash} -> Map.put(acc, row.id, hash)
+                  nil -> acc
+                end
+              end)
+            end)
+
+          resolved
+        else
+          _ -> %{}
+        end
+    end
+  end
+
+  # Resolves the authority for every note on this page whose façade lags,
+  # returning %{note_id => {content, content_hash}}. Notes absent from the map
+  # keep their façade values.
+  #
+  # `fields: :meta` never resolves: its projection does not even select
+  # `crdt_state_ciphertext`, and it promises `content: nil` with the row's own
+  # `content_hash`.
+  defp resolve_stale_page(_user, _notes, :meta), do: %{}
+
+  defp resolve_stale_page(user, notes, :all) do
+    # Markdown only. `crdt_checkpoint.ex` refuses this exact projection for
+    # structural docs: a `.canvas` keeps its data in Y.Maps, not the markdown
+    # Y.Text, so `project_doc` returns "" and would replace the façade — the
+    # only non-Yjs copy of the board — with an empty body under a matching hash.
+    candidates = Enum.filter(notes, &(&1.kind == "note" and markdown_path?(&1.path)))
+
+    # Tombstones never prune their tail (`delete_note/4` only sets deleted_at;
+    # the FK cascade is hard-delete only), so without this every catch-up page
+    # carrying that tombstone would rebuild a doc forever — and ship a
+    # resurrected body on a `deleted: true` row.
+    candidates = Enum.reject(candidates, &(not is_nil(&1.deleted_at)))
+
+    case candidates do
+      [] ->
+        %{}
+
+      candidates ->
+        with {:ok, key} <- Crypto.dek_content_hash_key(user) do
+          resolve_stale_candidates(user, candidates, key)
+        else
+          # A DEK failure must not take down the whole page with a MatchError —
+          # that is the failure mode this module argues hardest against. Every
+          # row keeps its façade.
+          {:error, reason} ->
+            Logger.error(
+              "feed: content-hash key unavailable, serving facades",
+              Metadata.with_category(:error, :sync,
+                user_id: user.id,
+                reason_label: inspect(reason)
+              )
+            )
+
+            %{}
+        end
+    end
+  end
+
+  # ONE transaction for the whole page: the staleness read and every rebuild
+  # share a single snapshot, and each note's `crdt_state` is RE-READ here rather
+  # than taken from the page SELECT.
+  #
+  # Both properties are load-bearing. `checkpoint_write` persists the new
+  # snapshot and prunes the tail in one transaction, so with a page-captured
+  # struct a checkpoint committing between the tail read and the rebuild leaves
+  # `replay_tail` with nothing to replay AND a pre-checkpoint snapshot — which
+  # for a genesis note whose body lives entirely in the tail projects "". With
+  # the hash recomputed to match, the client would accept that as authoritative
+  # and write a 0-byte file: #1339 again, through a narrower window. Reading
+  # snapshot and tail together closes it.
+  #
+  # The single transaction also bounds the pool cost. `authoritative_content/2`
+  # opens its own `with_tenant` per call, and a folder rename is exactly the
+  # event that leaves MANY notes stale at once, so per-note resolution would be
+  # hundreds of serial checkouts inside one channel `handle_in` — the shape
+  # behind `docs/context/crdt-sync-pool-exhaustion-loop-2026-07-09.md`.
+  #
+  # ponytail: one query + N in-transaction rebuilds per page. When `content`
+  # gains a `crdt_head`-style invalidate-on-write flag (BEFORE UPDATE trigger +
+  # lazy self-heal), staleness becomes a column read and this collapses. See
+  # `docs/context/worker-reads-stale-content-facade.md`.
+  defp resolve_stale_candidates(user, candidates, key) do
+    by_id = Map.new(candidates, &{&1.id, &1})
+    ids = Map.keys(by_id)
+
+    {:ok, resolved} =
+      Repo.with_tenant(user.id, fn ->
+        stale_ids =
+          Repo.all(
+            from(l in CrdtUpdateLog, where: l.note_id in ^ids, distinct: true, select: l.note_id)
+          )
+
+        fresh_rows =
+          Repo.all(from(n in Note, where: n.id in ^stale_ids, select: {n.id, n}))
+          |> Map.new()
+
+        Enum.reduce(stale_ids, %{}, fn id, acc ->
+          case Map.fetch(fresh_rows, id) do
+            {:ok, row} -> Map.put(acc, id, resolve_one(user, by_id[id], row, key))
+            :error -> acc
+          end
+        end)
+      end)
+
+    resolved |> Enum.reject(&match?({_, nil}, &1)) |> Map.new()
+  end
+
+  # Runs INSIDE the caller's tenant transaction, so it uses the tail-replay
+  # primitive directly rather than `authoritative_content/2` (which would open
+  # its own). Returns nil to mean "keep the façade".
+  defp resolve_one(user, decrypted, row, key) do
+    with {:ok, state} when not is_nil(state) <- Crypto.decrypt_crdt_state(row, user),
+         {:ok, doc} <- CrdtBridge.doc_from_state(state) do
+      _replayed = CrdtPersistence.replay_tail(doc, user, row.id)
+      text = CrdtBridge.project_doc(doc)
+
+      cond do
+        # The read-side mirror of `ensure_projection_safe/2`. The write path
+        # refuses to materialize "" over a façade that holds a body — "pure data
+        # loss" in its own words — and the read path needs the same backstop,
+        # especially since recomputing the hash removes the one signal
+        # (hash/content disagreement) a client could have distrusted.
+        text == "" and (decrypted.content || "") != "" ->
+          Logger.warning(
+            "feed: CRDT projection is empty over a non-empty facade, serving the facade",
+            Metadata.with_category(:warning, :sync, note_id: row.id, user_id: user.id)
+          )
+
+          nil
+
+        true ->
+          {text, Crypto.hmac_content_hash(key, text)}
+      end
+    else
+      # No snapshot: nothing to resolve, the façade IS the authority.
+      {:ok, nil} ->
+        nil
+
+      # Degrade to the façade rather than fail the page. An earlier cut raised
+      # here; that was wrong. The feed is keyset-ordered by seq, so one note
+      # with an undecodable crdt_state fails identically on EVERY retry — it
+      # would wedge the vault's catch-up permanently and crash
       # `crdt_catchup_since` into a rejoin loop. The façade is the last good
-      # checkpoint: stale, but real content the user actually wrote, which is
-      # strictly better than both wedging and serving "". The permanently
+      # checkpoint: stale, but real content the user wrote. The permanently
       # unreadable case has its own quarantine track in #959.
       {:error, reason} ->
         Logger.error(
           "feed: CRDT authority unreadable, serving last checkpoint",
           Metadata.with_category(:error, :sync,
-            note_id: note.id,
+            note_id: row.id,
             user_id: user.id,
             reason_label: inspect(reason)
           )
         )
 
-        {note.content, note.content_hash}
+        nil
     end
   end
 
-  # Which notes on this page have uncheckpointed ops, in ONE query.
-  #
-  # The tail IS the staleness marker: `notes.content` materializes at
-  # checkpoint and `prune_tail/2` clears the tail in the same breath, so a note
-  # with tail rows is exactly a note whose façade lags. That beats the obvious
-  # "façade is empty" heuristic on both correctness and cost — it also catches a
-  # non-empty-but-stale façade, and it does NOT drag every genuinely-empty note
-  # (which has `content: ""` plus a genesis snapshot, and is common in a real
-  # vault) onto the rebuild path on every single page.
-  #
-  # Batched deliberately: `authoritative_content/2` opens its own
-  # `Repo.with_tenant` per call, and a 500-row page resolving one-by-one is 500
-  # serial pool checkouts inside a single channel `handle_in` — the shape that
-  # produced the pool-exhaustion loop in
-  # `docs/context/crdt-sync-pool-exhaustion-loop-2026-07-09.md`.
-  #
-  # ponytail: one indexed query per page. When `content` gains a
-  # `crdt_head`-style invalidate-on-write flag (BEFORE UPDATE trigger + lazy
-  # self-heal), this becomes a column read and the query disappears — callers
-  # do not change. See `docs/context/worker-reads-stale-content-facade.md`.
-  defp stale_facade_ids(_user, _notes, :meta), do: MapSet.new()
+  # `fields: :meta` promises `content: nil` AND the row's `content_hash` — its
+  # projection selects the hash on purpose, and a hash-free feed reads as
+  # "every row diverged" to the client.
+  defp feed_pair(note, :meta, _resolved), do: {nil, note.content_hash}
 
-  defp stale_facade_ids(user, notes, :all) do
-    ids = Enum.map(notes, & &1.id)
-
-    {:ok, rows} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(l in CrdtUpdateLog, where: l.note_id in ^ids, distinct: true, select: l.note_id)
-        )
-      end)
-
-    MapSet.new(rows)
+  defp feed_pair(note, :all, resolved) do
+    Map.get(resolved, note.id) || {note.content, note.content_hash}
   end
+
+  # Same rule `CrdtCheckpoint.markdown?/1` uses: only a `.md` note keeps its
+  # body in the markdown Y.Text that `project_doc/1` reads.
+  defp markdown_path?(path), do: is_binary(path) and String.ends_with?(path, ".md")
 
   defp change_map(note, {content, content_hash}) do
     %{
