@@ -7,6 +7,10 @@ defmodule Engram.Embedders.Ollama do
 
   @behaviour Engram.Embedder
 
+  alias Engram.Logger.Metadata
+
+  require Logger
+
   @default_url "http://localhost:11434"
   @default_model "nomic-embed-text"
 
@@ -27,34 +31,63 @@ defmodule Engram.Embedders.Ollama do
   in-flight index batches. At the `:index` budget a self-hosted search would
   hang for two minutes rather than answer.
 
-  Failing fast is not a lost search: hybrid mode degrades to keyword-only when
-  the embed leg errors (`Engram.Search.run_legs/5`), and hybrid is the default
-  for BOTH real entry points (`Handlers.search_mode/1` and
+  Timing out is not a lost search: hybrid mode degrades to keyword-only when the
+  embed leg errors (`Engram.Search.run_legs/5`), and hybrid is the default for
+  BOTH real entry points (`Handlers.search_mode/1` and
   `SearchController.parse_mode/1` map unknown → `:hybrid`). An explicit
-  `mode: "vector"` caller still gets an error — but a fast error beats a hang
+  `mode: "vector"` caller still gets an error — but a bounded error beats a hang
   there too.
 
-  Two deliberate divergences from Voyage's `:query` defaults:
+  **Why 45s and not something tight.** That degradation is the reason this
+  budget must NOT sit near the measured contention. The first cut of this change
+  used 15s, which is only ~1.9s above the measured 3-batch depth — under the
+  very load this whole change exists to survive, the embed would time out, the
+  vector leg would silently vanish, and a cross-vault search test would pass on
+  the sparse leg while appearing to prove the semantic path. That closes a flake
+  by deleting the thing under test. 45s clears the measured depths with real
+  margin (depth 4 extrapolates to ~17s) while still bounding the user-blocking
+  hang to something an MCP client tolerates, which was the actual goal — the
+  point was never "fail fast", it was "do not hang for two minutes".
 
-    * **15s, not 5s.** Voyage's 5s guards a remote brownout; ours guards local
-      queueing, and 5s would drop to keyword-only almost any time indexing runs.
-      15s clears the measured 3-batch depth while staying well inside any MCP
-      client's patience.
+  Divergences from Voyage's `:query` defaults:
+
+    * **45s, not 5s.** Voyage's 5s guards a remote brownout, where a slow
+      response means trouble. Ours guards local queueing, where a slow response
+      is the normal cost of concurrent indexing and the vector result is still
+      worth waiting for.
     * **Retries kept, not `retry: false`.** Voyage disables them because its
       `:transient` policy also retries timeouts, which would multiply the
-      budget. `retry_fast_transient?/2` already refuses to retry a
-      `receive_timeout`, so retries here stay bounded and cheap — a bounced
-      container shouldn't fail a user's search.
+      budget. `retry_fast_transient?/2` refuses to retry a `receive_timeout`, so
+      the timeout itself cannot compound. A fast 5xx followed by a hang can
+      still cost the budget plus Req's backoff (~1+2+4s), so treat 45s as the
+      dominant term, not a hard ceiling on wall-clock.
 
   Explicit caller opts always win over these defaults (tests pass a
   `plug`/`retry_delay`). Public only so the budgets can be unit-tested without a
   live Ollama — the same reason `retry_fast_transient?/2` is public.
   """
   @spec request_defaults(atom()) :: keyword()
-  def request_defaults(:query),
-    do: [receive_timeout: 15_000, retry: &__MODULE__.retry_fast_transient?/2, max_retries: 3]
+  def request_defaults(:query), do: query_defaults()
 
-  def request_defaults(_purpose),
+  def request_defaults(purpose) when purpose in [nil, :index], do: index_defaults()
+
+  # An unrecognized purpose must NOT silently inherit the 120s indexing budget:
+  # a typo (`purpose: :querry`) would otherwise reinstate the exact two-minute
+  # hang this module exists to prevent, on a user-blocking path. Fall back to
+  # the BOUNDED budget (wrong-but-safe) and say so out loud.
+  def request_defaults(purpose) do
+    Logger.warning(
+      "Ollama embed: unknown purpose #{inspect(purpose)} — using the query budget",
+      Metadata.with_category(:warning, :search, reason_label: :unknown_embed_purpose)
+    )
+
+    query_defaults()
+  end
+
+  defp query_defaults,
+    do: [receive_timeout: 45_000, retry: &__MODULE__.retry_fast_transient?/2, max_retries: 3]
+
+  defp index_defaults,
     do: [receive_timeout: 120_000, retry: &__MODULE__.retry_fast_transient?/2, max_retries: 3]
 
   # Retry only failures that fail FAST. A receive_timeout means Ollama accepted

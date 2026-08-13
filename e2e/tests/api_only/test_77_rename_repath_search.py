@@ -107,15 +107,10 @@ class TestRenameRepathSearch:
         folder: str | None = None,
         limit: int = 10,
     ) -> list[dict]:
-        body: dict = {"query": query, "limit": limit}
-        if folder is not None:
-            body["folder"] = folder
-
-        resp = client.session.post(f"{API_URL}/search", json=body, timeout=30)
-        assert resp.status_code == 200, (
-            f"/api/search failed: {resp.status_code} {resp.text[:300]}"
-        )
-        return resp.json().get("results", [])
+        # Goes through ApiClient.search so this shares the ONE search timeout
+        # budget (SEARCH_TIMEOUT). A hand-rolled session.post here silently opts
+        # out of it and reintroduces the load-sensitive ReadTimeout class.
+        return client.search(query, folder=folder, limit=limit)
 
     def _poll_search(
         self,

@@ -9,10 +9,13 @@ defmodule Engram.Search do
   """
 
   alias Engram.KeywordIndex
+  alias Engram.Logger.Metadata
   alias Engram.Notes.Helpers
   alias Engram.Search.MMR
   alias Engram.Search.SearchProfile
   alias Engram.Vector.Qdrant
+
+  require Logger
 
   defp collection, do: Application.get_env(:engram, :qdrant_collection, "obsidian_notes")
 
@@ -307,9 +310,31 @@ defmodule Engram.Search do
           :no_vault -> Qdrant.search(collection(), vector, search_opts)
         end
 
-      {:error, _reason} = err ->
+      {:error, reason} = err ->
         # Embedding backend down/rate-limited: degrade to keyword-only rather
         # than failing a search the keyword leg could still serve.
+        #
+        # This MUST be loud. Degradation is silent by construction — the caller
+        # gets a normal 200 with plausible results — so without a signal here an
+        # operator whose Ollama is slow or down just gets quietly worse search
+        # forever, and in CI the vector leg can vanish suite-wide without a
+        # single line in the log. A test asserting semantic behaviour would then
+        # pass on the sparse leg and look like proof.
+        Logger.warning(
+          "Search degraded to keyword-only — query embed failed",
+          Metadata.with_category(:warning, :search,
+            user_id: to_string(user.id),
+            reason_label: :embed_failed_degraded_to_keyword,
+            reason: inspect(reason)
+          )
+        )
+
+        :telemetry.execute(
+          [:engram, :search, :degraded],
+          %{count: 1},
+          %{leg: :keyword, reason: error_label(reason)}
+        )
+
         case sparse_query(user, query) do
           {:ok, sparse} -> Qdrant.sparse_search(collection(), sparse, search_opts)
           :no_vault -> err
@@ -321,6 +346,13 @@ defmodule Engram.Search do
   # return an error tuple, not raise FunctionClauseError mid-pipeline.
   defp run_legs(_invalid_mode, _user, _query, _search_opts, _profile),
     do: {:error, :invalid_mode}
+
+  # Bounded label for telemetry — the raw reason can carry a response body, and
+  # metric tags must stay low-cardinality (see the Search PromEx contract).
+  defp error_label(%Req.TransportError{reason: r}), do: "transport_#{r}"
+  defp error_label({status, _body}) when is_integer(status), do: "http_#{status}"
+  defp error_label(reason) when is_atom(reason), do: to_string(reason)
+  defp error_label(_), do: "unknown"
 
   defp sparse_query(user, query) do
     case Engram.Crypto.dek_filter_key(user) do

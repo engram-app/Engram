@@ -52,18 +52,37 @@ defmodule Engram.Embedders.OllamaTest do
   end
 
   describe "request_defaults/1 — query embeds must not inherit the indexing budget" do
-    test "a query embed gets the short synchronous budget" do
-      # A user (or MCP client) is BLOCKED on this call. Ollama serializes, so a
-      # query embed queues behind the embed worker's 128-chunk index batches
-      # (~4.3s per in-flight batch, measured 2026-08-12). Inheriting 120s means
-      # a real MCP client hangs for two minutes instead of answering.
-      assert Ollama.request_defaults(:query)[:receive_timeout] == 15_000
+    test "a query embed gets a bounded — but not tight — synchronous budget" do
+      # A user (or MCP client) is BLOCKED on this call, so it must not inherit
+      # the 120s index budget. But it must ALSO clear the measured contention:
+      # Ollama serializes, so a query embed queues behind the embed worker's
+      # 128-chunk index batches at ~4.3s each (~13.1s at depth 3, measured
+      # 2026-08-12). A budget near that depth would time out under exactly the
+      # load this exists to survive, silently dropping hybrid to keyword-only —
+      # which makes a semantic-search test pass on the sparse leg.
+      assert Ollama.request_defaults(:query)[:receive_timeout] == 45_000
+    end
+
+    test "the query budget clears the measured queueing depth with margin" do
+      measured_depth_3_ms = 13_100
+      assert Ollama.request_defaults(:query)[:receive_timeout] > measured_depth_3_ms * 2
     end
 
     test "an index embed keeps the long Oban budget" do
       # An Oban worker CAN afford to wait out a busy Ollama — nobody is blocked.
       assert Ollama.request_defaults(:index)[:receive_timeout] == 120_000
       assert Ollama.request_defaults(nil)[:receive_timeout] == 120_000
+    end
+
+    test "an UNKNOWN purpose falls back to the bounded budget, not the 120s hang" do
+      # A typo (`purpose: :querry`) must not silently reinstate the two-minute
+      # hang on a user-blocking path. Wrong-but-safe, and loud.
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert Ollama.request_defaults(:querry)[:receive_timeout] == 45_000
+        end)
+
+      assert log =~ "unknown purpose"
     end
 
     test "retries survive on BOTH purposes (unlike Voyage's retry: false)" do

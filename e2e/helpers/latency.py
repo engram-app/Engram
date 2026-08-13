@@ -32,9 +32,13 @@ DELIVERY_TIMEOUT = float(os.environ.get("E2E_DELIVERY_TIMEOUT", "120"))
 #
 # So the old 10s expired on queue depth, not on breakage — load-correlated, and
 # the test it failed (`test_32::test_mcp_search_spans_all_vaults_by_default`)
-# asserts cross-vault labelling, not latency. 120s matches the server's own
-# ceiling for the same work (`Engram.Embedders.Ollama` request_defaults →
-# `receive_timeout: 120_000`), so the client now gives up only when the server
-# would have. This is a true-breakage bound, NOT a performance budget — real
-# search latency is watched by `engram_prom_ex_search_request_duration_*`.
+# asserts cross-vault labelling, not latency.
+#
+# 120s is deliberately well ABOVE the server's own query-embed ceiling
+# (`Engram.Embedders.Ollama.request_defaults(:query)` → 45s, plus retry backoff
+# and the Qdrant + rerank + decrypt legs after it). The client must not be the
+# first thing to give up: if it were, a server-side degradation or failure would
+# reach us as an ambiguous ReadTimeout instead of the real response the server
+# was about to send. This is a true-breakage bound, NOT a performance budget —
+# real search latency is watched by `engram_prom_ex_search_request_duration_*`.
 SEARCH_TIMEOUT = float(os.environ.get("E2E_SEARCH_TIMEOUT", "120"))

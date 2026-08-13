@@ -305,8 +305,17 @@ class ApiClient:
             clone.session.auth = self.session.auth
         return clone
 
+    # Only these MCP tools pay the query-embed cost. Everything else on /mcp
+    # (get_note, write_note, list_folders, …) is a cheap DB/Qdrant round-trip and
+    # belongs on the generic delivery bound instead. Both budgets are 120s today,
+    # so this split changes no timing right now — it exists so the two can move
+    # independently, and so a reader can tell which calls are actually gated on
+    # an embed rather than assuming every MCP call is.
+    _EMBEDDING_MCP_TOOLS = frozenset({"search_notes"})
+
     def mcp_call(self, tool_name: str, arguments: dict) -> tuple[dict, int]:
         """POST /mcp — JSON-RPC tools/call. Returns (response_json, status)."""
+        timeout = SEARCH_TIMEOUT if tool_name in self._EMBEDDING_MCP_TOOLS else DELIVERY_TIMEOUT
         resp = self.session.post(
             f"{self.base_url}/mcp",
             json={
@@ -315,7 +324,7 @@ class ApiClient:
                 "method": "tools/call",
                 "params": {"name": tool_name, "arguments": arguments},
             },
-            timeout=SEARCH_TIMEOUT,
+            timeout=timeout,
         )
         return resp.json(), resp.status_code
 
@@ -385,14 +394,28 @@ class ApiClient:
         self._raise_for_status(resp)
         return resp.json().get("folders", [])
 
-    def search(self, query: str, folder: str | None = None) -> list[dict]:
-        """POST /search. Returns list of result dicts with keys: path, title, folder, snippet, score."""
+    def search(
+        self,
+        query: str,
+        folder: str | None = None,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[dict]:
+        """POST /search. Returns list of result dicts with keys: path, title, folder, snippet, score.
+
+        `tags`/`limit` exist so test-local search helpers don't hand-roll their
+        own `session.post` — every /search call must share ONE timeout budget
+        (see SEARCH_TIMEOUT), and a hand-rolled call site silently opts out of it.
+        `folder=""` is a real filter (the vault root), so test against None.
+        """
         body: dict = {"query": query}
-        if folder:
+        if folder is not None:
             body["folder"] = folder
-        resp = self.session.post(
-            f"{self.base_url}/search", json=body, timeout=SEARCH_TIMEOUT
-        )
+        if tags is not None:
+            body["tags"] = tags
+        if limit is not None:
+            body["limit"] = limit
+        resp = self.session.post(f"{self.base_url}/search", json=body, timeout=SEARCH_TIMEOUT)
         self._raise_for_status(resp)
         return resp.json().get("results", [])
 

@@ -93,7 +93,15 @@ and on unrelated feature branches in the same window, passing on those same
 branches at other times: load-correlated, not branch-correlated.
 
 **Class: load-sensitive client timeout. FIXED** — `SEARCH_TIMEOUT` in
-`e2e/helpers/latency.py`, now used by both `mcp_call` and `search`.
+`e2e/helpers/latency.py`, used by `ApiClient.search` and by `mcp_call` for the
+embedding-bearing tools.
+
+> **`ApiClient.search` had ZERO callers.** Every real `/search` in the suite was
+> a hand-rolled `client.session.post(...)` with its own `timeout=30`
+> (`test_67`, `test_77`), which is exactly why the helper's budget could drift
+> unnoticed. Fixing the helper alone would have fixed nothing. Both now route
+> through it, and `e2e/unit/test_search_timeout.py` fails on any new
+> `POST /search` that doesn't.
 
 Two traps this one sets, both worth knowing because the obvious reading is
 wrong in both cases:
@@ -140,15 +148,29 @@ synchronous search inherited the 120s *indexing* `receive_timeout`, and a real
 MCP client would hang for two minutes rather than degrade.
 
 `Engram.Embedders.Ollama.request_defaults/1` now mirrors Voyage's shape and
-gives `:query` a 15s budget. Two deliberate divergences from Voyage, both
-documented at the function:
+gives `:query` a 45s budget. Divergences from Voyage, documented at the function:
 
-- **15s, not Voyage's 5s.** Voyage's 5s guards a remote brownout; this guards
-  *local queueing*, and 5s would drop to keyword-only almost any time indexing
-  runs. 15s clears the measured 3-batch depth.
-- **Retries kept, not `retry: false`.** Safe only because
-  `retry_fast_transient?/2` already refuses to retry a `receive_timeout`, so
-  retries cannot multiply the budget.
+- **45s, not Voyage's 5s.** Voyage's 5s guards a remote brownout, where slow
+  means trouble. This guards *local queueing*, where slow is the normal cost of
+  concurrent indexing and the vector result is still worth waiting for.
+- **Retries kept, not `retry: false`.** `retry_fast_transient?/2` refuses to
+  retry a `receive_timeout`, so the timeout itself can't compound — though a
+  fast 5xx then a hang still costs the budget plus Req backoff.
+
+> **The trap inside the fix (caught in review, worth keeping).** The first cut
+> used **15s**, only ~1.9s above the measured 3-batch depth. Under exactly the
+> load this change exists to survive, the embed would have timed out, hybrid
+> would have silently dropped to keyword-only, and `test_32` would have gone
+> green on the sparse leg — `"Secret"` is a literal token in both seeded notes —
+> while appearing to prove the cross-vault *vector* path. That closes a flake by
+> deleting the thing under test. When a degradation path exists, a timeout near
+> the measured cost doesn't fix flakiness, it hides it.
+>
+> Because that degradation is now a routine outcome rather than a 120s hang, the
+> keyword fallback in `Search.run_legs/5` was made **loud** — a `Logger.warning`
+> plus an `[:engram, :search, :degraded]` counter. Silent degradation returns a
+> normal 200 with plausible results, so without a signal an operator with a slow
+> Ollama just gets quietly worse search forever.
 
 This degrades rather than fails: hybrid falls back to keyword-only when the
 embed leg errors, and hybrid is the default for both MCP `search_notes` and
