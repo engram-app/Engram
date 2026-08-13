@@ -145,21 +145,26 @@ defmodule EngramWeb.RequestLogger do
   defp level_for_status(_), do: :info
 
   # Client attribution for the device-flow endpoints ONLY. They are public and
-  # pre-auth (`user_id` is null until the code is approved), so without these
-  # a polling client is entirely unattributable — you can neither answer "who
-  # is calling this" nor spot device-code guessing. Scoped rather than global
-  # because an IP + UA on every request line is bytes on every log in the
-  # system for a need specific to these routes.
+  # pre-auth (`user_id` is null until the code is approved), so a polling
+  # client is otherwise entirely unattributable — you cannot tell which client
+  # is calling, and a stuck poller reads identically to a healthy one.
+  # Scoped rather than global because a UA on every request line is bytes on
+  # every log in the system for a need specific to these routes.
   #
-  # IP comes from EngramWeb.RemoteIp, which resolves the Cloudflare-set
-  # CF-Connecting-IP under the AOP trust model and otherwise falls back to the
-  # socket peer. `conn.remote_ip` alone would record the ALB's private address
-  # for every external client (see that module's docs).
+  # NO client IP here, deliberately. `config/prod.exs` states the standing
+  # policy that request headers and client IPs stay OUT of Loki — that is why
+  # prod excludes Sentry.PlugContext's `:__sentry__` blob rather than logging
+  # it. IPs are still recorded where they have a purpose and a lifecycle (ToS
+  # agreements, DCR registrations) as DB columns, not sprayed across every log
+  # line in a hosted, long-retention aggregator. The user agent carries no
+  # credential and is already persisted deliberately elsewhere
+  # (`onboarding/agreement.ex`, `oauth_register_controller`), so it stays.
+  #
+  # If per-source correlation is ever needed here (device-code guessing), the
+  # answer is a keyed digest via Engram.Crypto.HMAC, not the raw address.
   defp maybe_put_client_identity(meta, %Plug.Conn{private: private} = conn) do
     if private[:phoenix_controller] == EngramWeb.DeviceAuthController do
-      meta
-      |> Keyword.put(:client_ip, conn |> EngramWeb.RemoteIp.resolve() |> RequestMeta.format_ip())
-      |> Keyword.put(:user_agent, RequestMeta.get_user_agent(conn))
+      Keyword.put(meta, :user_agent, RequestMeta.get_user_agent(conn))
     else
       meta
     end

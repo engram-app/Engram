@@ -495,10 +495,9 @@ defmodule EngramWeb.RequestLoggerTest do
     assert event.level == :warning
   end
 
-  test "device-auth requests carry client ip + user agent for attribution" do
+  test "device-auth requests carry the user agent for attribution" do
     # /api/auth/device/token is PUBLIC and pre-auth (user_id is null by
-    # design), so without these there is no way to attribute polling to anyone
-    # — neither to answer "who is calling this" nor to see device-code guessing.
+    # design), so without this there is no way to tell which client is polling.
     conn = %Plug.Conn{
       method: "POST",
       request_path: "/api/auth/device/token",
@@ -520,14 +519,17 @@ defmodule EngramWeb.RequestLoggerTest do
 
     event = find_request_event(events)
     assert event
-    assert event.meta[:client_ip] == "203.0.113.7"
     assert event.meta[:user_agent] == "obsidian/1.13.4 engram-vault-sync/1.22.0"
+
+    # config/prod.exs states the standing policy that client IPs stay OUT of
+    # Loki. Pinned so a future "just add the IP" cannot land silently.
+    assert event.meta[:client_ip] == nil
   end
 
-  test "non-device-auth requests omit client ip + user agent" do
-    # Scoped on purpose: stamping every request line with an IP + UA is bytes
-    # on every log in the system for a forensic need that is specific to the
-    # unauthenticated device-flow endpoints.
+  test "non-device-auth requests omit the user agent" do
+    # Scoped on purpose: stamping every request line with a UA is bytes on
+    # every log in the system for a need specific to the unauthenticated
+    # device-flow endpoints.
     conn = %Plug.Conn{
       method: "GET",
       request_path: "/api/notes",
@@ -546,7 +548,6 @@ defmodule EngramWeb.RequestLoggerTest do
 
     event = find_request_event(events)
     assert event
-    assert event.meta[:client_ip] == nil
     assert event.meta[:user_agent] == nil
   end
 

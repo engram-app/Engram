@@ -194,6 +194,7 @@ config :logger, :default_formatter,
     :topic,
     :total_count,
     :trace_id,
+    :user_agent,
     :user_id,
     :vault_id,
     :worker
