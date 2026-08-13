@@ -3742,22 +3742,24 @@ defmodule Engram.Notes do
         %{}
 
       rows ->
-        with {:ok, key} <- Crypto.dek_content_hash_key(user) do
-          by_id = Map.new(decrypt_or_raise!(rows, user), &{&1.id, &1})
+        case Crypto.dek_content_hash_key(user) do
+          {:ok, key} ->
+            by_id = Map.new(decrypt_or_raise!(rows, user), &{&1.id, &1})
 
-          {:ok, resolved} =
-            Repo.with_tenant(user.id, fn ->
-              Enum.reduce(rows, %{}, fn row, acc ->
-                case resolve_one(user, by_id[row.id] || row, row, key) do
-                  {_text, hash} -> Map.put(acc, row.id, hash)
-                  nil -> acc
-                end
+            {:ok, resolved} =
+              Repo.with_tenant(user.id, fn ->
+                Enum.reduce(rows, %{}, fn row, acc ->
+                  case resolve_one(user, by_id[row.id] || row, row, key) do
+                    {_text, hash} -> Map.put(acc, row.id, hash)
+                    nil -> acc
+                  end
+                end)
               end)
-            end)
 
-          resolved
-        else
-          _ -> %{}
+            resolved
+
+          _ ->
+            %{}
         end
     end
   end
@@ -3789,9 +3791,10 @@ defmodule Engram.Notes do
         %{}
 
       candidates ->
-        with {:ok, key} <- Crypto.dek_content_hash_key(user) do
-          resolve_stale_candidates(user, candidates, key)
-        else
+        case Crypto.dek_content_hash_key(user) do
+          {:ok, key} ->
+            resolve_stale_candidates(user, candidates, key)
+
           # A DEK failure must not take down the whole page with a MatchError —
           # that is the failure mode this module argues hardest against. Every
           # row keeps its façade.
@@ -3862,32 +3865,13 @@ defmodule Engram.Notes do
   # primitive directly rather than `authoritative_content/2` (which would open
   # its own). Returns nil to mean "keep the façade".
   defp resolve_one(user, decrypted, row, key) do
-    with {:ok, state} when not is_nil(state) <- Crypto.decrypt_crdt_state(row, user),
-         {:ok, doc} <- CrdtBridge.doc_from_state(state) do
-      _replayed = CrdtPersistence.replay_tail(doc, user, row.id)
-      text = CrdtBridge.project_doc(doc)
-
-      cond do
-        # The read-side mirror of `ensure_projection_safe/2`. The write path
-        # refuses to materialize "" over a façade that holds a body — "pure data
-        # loss" in its own words — and the read path needs the same backstop,
-        # especially since recomputing the hash removes the one signal
-        # (hash/content disagreement) a client could have distrusted.
-        text == "" and (decrypted.content || "") != "" ->
-          Logger.warning(
-            "feed: CRDT projection is empty over a non-empty facade, serving the facade",
-            Metadata.with_category(:warning, :sync, note_id: row.id, user_id: user.id)
-          )
-
-          nil
-
-        true ->
-          {text, Crypto.hmac_content_hash(key, text)}
-      end
-    else
+    case Crypto.decrypt_crdt_state(row, user) do
       # No snapshot: nothing to resolve, the façade IS the authority.
       {:ok, nil} ->
         nil
+
+      {:ok, state} ->
+        project_resolved(user, decrypted, row, key, state)
 
       # Degrade to the façade rather than fail the page. An earlier cut raised
       # here; that was wrong. The feed is keyset-ordered by seq, so one note
@@ -3899,6 +3883,42 @@ defmodule Engram.Notes do
       {:error, reason} ->
         Logger.error(
           "feed: CRDT authority unreadable, serving last checkpoint",
+          Metadata.with_category(:error, :sync,
+            note_id: row.id,
+            user_id: user.id,
+            reason_label: inspect(reason)
+          )
+        )
+
+        nil
+    end
+  end
+
+  defp project_resolved(user, decrypted, row, key, state) do
+    case CrdtBridge.doc_from_state(state) do
+      {:ok, doc} ->
+        _replayed = CrdtPersistence.replay_tail(doc, user, row.id)
+        text = CrdtBridge.project_doc(doc)
+
+        # The read-side mirror of `ensure_projection_safe/2`. The write path
+        # refuses to materialize "" over a façade that holds a body — "pure data
+        # loss" in its own words — and the read path needs the same backstop,
+        # especially since recomputing the hash removes the one signal
+        # (hash/content disagreement) a client could have distrusted.
+        if text == "" and (decrypted.content || "") != "" do
+          Logger.warning(
+            "feed: CRDT projection is empty over a non-empty facade, serving the facade",
+            Metadata.with_category(:warning, :sync, note_id: row.id, user_id: user.id)
+          )
+
+          nil
+        else
+          {text, Crypto.hmac_content_hash(key, text)}
+        end
+
+      {:error, reason} ->
+        Logger.error(
+          "feed: CRDT doc rebuild failed, serving last checkpoint",
           Metadata.with_category(:error, :sync,
             note_id: row.id,
             user_id: user.id,
