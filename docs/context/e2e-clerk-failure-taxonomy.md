@@ -1,6 +1,6 @@
 # Context Doc: e2e-clerk failure taxonomy (it is not one flake)
 
-_Last verified: 2026-08-05_
+_Last verified: 2026-08-12_
 
 ## Status
 Working. Taxonomy produced from 12 nights of ledger data on 2026-08-05.
@@ -32,6 +32,7 @@ red e2e-clerk on your PR is ambient noise.
 | `test_77_bulk_first_sync::test_bulk_first_sync_timing` | **5/7** | Load-sensitive throughput assert |
 | `test_30_sse_catch_up_multi::test_channel_catch_up_multi` | 3/7 | Uninvestigated |
 | `test_49`, `test_37`, `api_only/test_77_rename_repath_search` | 1/7 each | Uninvestigated |
+| `api_only/test_32_vault_api_key_isolation::test_mcp_search_spans_all_vaults_by_default` | (post-window) | **Load-sensitive client timeout — FIXED**, see below |
 
 Two tests account for nearly all of it. Fix those two and the suite's pass
 rate roughly inverts.
@@ -81,6 +82,148 @@ window, so it is not branch-specific.
 **Heuristic that still holds: a whole *category* going red together (all
 attachments, all search) is a dependency or infra regression, not a flake —
 flakes are scattered.** Just don't assume *which*.
+
+### Not in the taxonomy: the search ReadTimeout (client budget, not fan-out)
+
+`api_only/test_32_vault_api_key_isolation::test_mcp_search_spans_all_vaults_by_default`
+fails intermittently with `requests.exceptions.ReadTimeout ... (read timeout=10)`
+on `api.mcp_call("search_notes", {"query": "Secret"})`. It is **not** an
+assertion failure — no correctness claim is ever evaluated. Observed on main
+and on unrelated feature branches in the same window, passing on those same
+branches at other times: load-correlated, not branch-correlated.
+
+**Class: load-sensitive client timeout. FIXED** — `SEARCH_TIMEOUT` in
+`e2e/helpers/latency.py`, used by `ApiClient.search` and by `mcp_call` for the
+embedding-bearing tools.
+
+> **`ApiClient.search` had ZERO callers.** Every real `/search` in the suite was
+> a hand-rolled `client.session.post(...)` with its own `timeout=30`
+> (`test_50`, `test_67`, `test_77`), which is exactly why the helper's budget
+> could drift unnoticed. Fixing the helper alone would have fixed nothing. All
+> three now route through it, and `e2e/unit/test_search_timeout.py` fails on any
+> new `POST /search` that doesn't.
+>
+> **The guard for that was itself broken on the first cut**, and it is worth
+> knowing why: it tested `"/search" in line and ".post(" in line` per line,
+> while every real offender splits the call across lines. It reported green
+> against three live offenders. A guard that cannot fail is worse than no guard
+> — it launders the claim. It now scans file text, and a companion test pins
+> both the single- and multi-line shapes so the matcher itself can't silently
+> stop working.
+
+**Budgets must nest.** The client budget only means something if it can fire
+before the deadlines wrapping it:
+
+| bound | value |
+|---|---|
+| server query-embed ceiling | 45s (Ollama `:query`, **flat** — `retry: false`) |
+| + the rest of the request | ~10s (sparse leg, decrypt, rerank, MMR) |
+| `SEARCH_TIMEOUT` | **60s** |
+| non-search MCP (`MCP_TIMEOUT`) | 30s |
+| caller poll windows (`test_67`, `test_77`) | 90s |
+| pytest-timeout per test (`e2e/pytest.ini`) | 180s |
+
+Three ways this got mis-derived before it was right, all caught in review:
+
+- **120s** exceeded every window *below* it, so it was unreachable in the very
+  tests that use it — a slow search would eat a 90s poll loop and be reported as
+  "the repath never landed", or be killed by SIGALRM.
+- **60s compared against the embed alone.** The request continues past the embed
+  (sparse leg, decrypt, rerank, MMR), so "clears the server ceiling" has to mean
+  the *whole request*, not one leg of it.
+- **The embed ceiling wasn't flat.** `retry_fast_transient?/2` declines to retry
+  a `:timeout` — but retries every *other* transport error, so a late
+  `:econnreset` cost ~4 × 45s ≈ 187s. `:query` now uses `retry: false` (as Voyage
+  always did), which is what makes 45s a real ceiling.
+
+`test_budget_nests_between_server_ceiling_and_caller_deadlines` asserts the whole
+ordering, and reads the 45s **out of `ollama.ex`** rather than hardcoding it — a
+literal would have gone green if the Elixir side later drifted past the client
+budget, which is the same guard-that-cannot-fail trap as the broken matcher
+above. It also asserts `retry: false` is still there, since the arithmetic is
+invalid without it.
+
+Non-search MCP tools get their own 30s bound rather than `DELIVERY_TIMEOUT`:
+that constant is a *polling-loop* budget, and at 120s two wedged calls (test_46
+makes five) blow the 180s pytest-timeout, turning a clean `ReadTimeout` into a
+SIGALRM traceback.
+
+Two traps this one sets, both worth knowing because the obvious reading is
+wrong in both cases:
+
+1. **The "hundreds of Qdrant `points/scroll` calls" right before the timeout
+   are not the fan-out.** They are the harness's own
+   `wait_for_qdrant_indexed`, polling once a second (up to 90s, four calls in
+   that file), logged by urllib3 from the *pytest* process. The cross-vault
+   search issues **zero** scrolls. High scroll volume is a *correlated
+   symptom* of the same load — many polls means the embed worker was backed
+   up — not the cause.
+
+2. **Cross-vault fan-out is not a fan-out.** `#985`'s cross-vault default is
+   one Qdrant query with the `vault_id` filter simply omitted
+   (`Search.do_search/4`), plus one bulk `Vaults.list_for_ids`. There is no
+   per-vault loop and no N+1. Prod bears out the shape:
+   `engram_prom_ex_search_request_duration_milliseconds` gives cross-vault a
+   **303ms** mean vs **194ms** single-vault.
+
+The actual cost is the **one query embed**. CI's embedder is the shared
+FastRaid Ollama (`10.0.20.214:11434`), which serializes requests, so a
+synchronous query embed queues behind the embed worker's 128-chunk index
+batches (`@embed_batch_size`). Measured 2026-08-12 with `mxbai-embed-large`:
+
+| In-flight index batches | Query embed latency |
+|---|---|
+| 0 (idle) | ~0.12s |
+| 1 | ~4.3s |
+| 2 | ~8.4s |
+| 3 | **~13.1s** — exceeds the old 10s |
+
+One 128-chunk batch alone occupies Ollama for ~5.2s. The test's own fixture
+seeds notes immediately before searching, so it partly *creates* the
+contention it then trips over; concurrent e2e jobs supply the rest.
+
+### The self-host gap this uncovered (FIXED in the same PR)
+
+Measuring the above turned up a real product bug next to the harness one.
+`Search.embed_for_search/2` passes `purpose: :query` specifically so "a bulk
+indexing burst can't starve synchronous user search" — but that only routed a
+separate **Voyage** rate-limit bucket. `Engram.Embedders.Ollama` dropped
+`purpose:` on the floor, so **self-host had no equivalent guard**: its
+synchronous search inherited the 120s *indexing* `receive_timeout`, and a real
+MCP client would hang for two minutes rather than degrade.
+
+`Engram.Embedders.Ollama.request_defaults/1` now mirrors Voyage's shape and
+gives `:query` a 45s budget. Divergences from Voyage, documented at the function:
+
+- **45s, not Voyage's 5s.** Voyage's 5s guards a remote brownout, where slow
+  means trouble. This guards *local queueing*, where slow is the normal cost of
+  concurrent indexing and the vector result is still worth waiting for.
+- **Retries kept, not `retry: false`.** `retry_fast_transient?/2` refuses to
+  retry a `receive_timeout`, so the timeout itself can't compound — though a
+  fast 5xx then a hang still costs the budget plus Req backoff.
+
+> **The trap inside the fix (caught in review, worth keeping).** The first cut
+> used **15s**, only ~1.9s above the measured 3-batch depth. Under exactly the
+> load this change exists to survive, the embed would have timed out, hybrid
+> would have silently dropped to keyword-only, and `test_32` would have gone
+> green on the sparse leg — `"Secret"` is a literal token in both seeded notes —
+> while appearing to prove the cross-vault *vector* path. That closes a flake by
+> deleting the thing under test. When a degradation path exists, a timeout near
+> the measured cost doesn't fix flakiness, it hides it.
+>
+> Because that degradation is now a routine outcome rather than a 120s hang, the
+> keyword fallback in `Search.run_legs/5` was made **loud** — a `Logger.warning`
+> plus an `[:engram, :search, :degraded]` counter. Silent degradation returns a
+> normal 200 with plausible results, so without a signal an operator with a slow
+> Ollama just gets quietly worse search forever.
+
+This degrades rather than fails: hybrid falls back to keyword-only when the
+embed leg errors, and hybrid is the default for both MCP `search_notes` and
+`POST /search`.
+
+> **The general trap:** a timeout that is correct for an Oban worker is wrong
+> for a request a user is blocked on. Both embedders now split the budget by
+> `purpose:`; any third embedder must too, or it silently reintroduces this.
 
 ## How to mine the nightly data
 

@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 import requests
 
-from helpers.latency import DELIVERY_TIMEOUT
+from helpers.latency import DELIVERY_TIMEOUT, MCP_TIMEOUT, SEARCH_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -305,8 +305,23 @@ class ApiClient:
             clone.session.auth = self.session.auth
         return clone
 
+    # MCP tools that reach Engram.Search and therefore pay a query embed. This is
+    # NOT just the obvious one — verified against lib/engram/mcp/handlers.ex:
+    #   search_notes    → Search.search (handlers.ex:67/72)
+    #   suggest_folder  → Search.search (handlers.ex:165)
+    #   create_note     → auto_place_folder → Search.search (handlers.ex:252/669),
+    #                     but only when no `suggested_folder` arg is supplied
+    # Everything else (get_note, write_note, list_folders, …) is a cheap
+    # DB/Qdrant round-trip and belongs on the generic delivery bound.
+    #
+    # The two budgets are NOT equal (SEARCH_TIMEOUT 60s vs MCP_TIMEOUT 30s), so a
+    # missing entry here is a real wrong timeout, not a latent one — an embedding
+    # tool left off this list gets half the budget it needs.
+    _EMBEDDING_MCP_TOOLS = frozenset({"search_notes", "suggest_folder", "create_note"})
+
     def mcp_call(self, tool_name: str, arguments: dict) -> tuple[dict, int]:
         """POST /mcp — JSON-RPC tools/call. Returns (response_json, status)."""
+        timeout = SEARCH_TIMEOUT if tool_name in self._EMBEDDING_MCP_TOOLS else MCP_TIMEOUT
         resp = self.session.post(
             f"{self.base_url}/mcp",
             json={
@@ -315,7 +330,7 @@ class ApiClient:
                 "method": "tools/call",
                 "params": {"name": tool_name, "arguments": arguments},
             },
-            timeout=10,
+            timeout=timeout,
         )
         return resp.json(), resp.status_code
 
@@ -385,14 +400,28 @@ class ApiClient:
         self._raise_for_status(resp)
         return resp.json().get("folders", [])
 
-    def search(self, query: str, folder: str | None = None) -> list[dict]:
-        """POST /search. Returns list of result dicts with keys: path, title, folder, snippet, score."""
+    def search(
+        self,
+        query: str,
+        folder: str | None = None,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[dict]:
+        """POST /search. Returns list of result dicts with keys: path, title, folder, snippet, score.
+
+        `tags`/`limit` exist so test-local search helpers don't hand-roll their
+        own `session.post` — every /search call must share ONE timeout budget
+        (see SEARCH_TIMEOUT), and a hand-rolled call site silently opts out of it.
+        `folder=""` is a real filter (the vault root), so test against None.
+        """
         body: dict = {"query": query}
-        if folder:
+        if folder is not None:
             body["folder"] = folder
-        resp = self.session.post(
-            f"{self.base_url}/search", json=body, timeout=15
-        )
+        if tags is not None:
+            body["tags"] = tags
+        if limit is not None:
+            body["limit"] = limit
+        resp = self.session.post(f"{self.base_url}/search", json=body, timeout=SEARCH_TIMEOUT)
         self._raise_for_status(resp)
         return resp.json().get("results", [])
 
