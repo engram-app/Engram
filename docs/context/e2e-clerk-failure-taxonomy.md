@@ -129,16 +129,34 @@ One 128-chunk batch alone occupies Ollama for ~5.2s. The test's own fixture
 seeds notes immediately before searching, so it partly *creates* the
 contention it then trips over; concurrent e2e jobs supply the rest.
 
-> **Open, and deliberately not fixed here:** `Search.embed_for_search/2`
-> passes `purpose: :query` specifically so "a bulk indexing burst can't starve
-> synchronous user search" — but that only routes a separate *Voyage*
-> rate-limit bucket. `Engram.Embedders.Ollama` drops `purpose:` on the floor
-> (it splits only `[:retry, :max_retries, :retry_delay, :receive_timeout,
-> :plug]`), so **self-host has no equivalent guard**, and its synchronous
-> search inherits the 120s indexing `receive_timeout`. A real MCP client would
-> hang for two minutes rather than degrade. Hybrid mode already falls back to
-> keyword-only on embed failure, so a short query-embed timeout would degrade
-> gracefully — that is the shape of the fix if it is taken up.
+### The self-host gap this uncovered (FIXED in the same PR)
+
+Measuring the above turned up a real product bug next to the harness one.
+`Search.embed_for_search/2` passes `purpose: :query` specifically so "a bulk
+indexing burst can't starve synchronous user search" — but that only routed a
+separate **Voyage** rate-limit bucket. `Engram.Embedders.Ollama` dropped
+`purpose:` on the floor, so **self-host had no equivalent guard**: its
+synchronous search inherited the 120s *indexing* `receive_timeout`, and a real
+MCP client would hang for two minutes rather than degrade.
+
+`Engram.Embedders.Ollama.request_defaults/1` now mirrors Voyage's shape and
+gives `:query` a 15s budget. Two deliberate divergences from Voyage, both
+documented at the function:
+
+- **15s, not Voyage's 5s.** Voyage's 5s guards a remote brownout; this guards
+  *local queueing*, and 5s would drop to keyword-only almost any time indexing
+  runs. 15s clears the measured 3-batch depth.
+- **Retries kept, not `retry: false`.** Safe only because
+  `retry_fast_transient?/2` already refuses to retry a `receive_timeout`, so
+  retries cannot multiply the budget.
+
+This degrades rather than fails: hybrid falls back to keyword-only when the
+embed leg errors, and hybrid is the default for both MCP `search_notes` and
+`POST /search`.
+
+> **The general trap:** a timeout that is correct for an Oban worker is wrong
+> for a request a user is blocked on. Both embedders now split the budget by
+> `purpose:`; any third embedder must too, or it silently reintroduces this.
 
 ## How to mine the nightly data
 

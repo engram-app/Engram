@@ -51,6 +51,50 @@ defmodule Engram.Embedders.OllamaTest do
     end
   end
 
+  describe "request_defaults/1 — query embeds must not inherit the indexing budget" do
+    test "a query embed gets the short synchronous budget" do
+      # A user (or MCP client) is BLOCKED on this call. Ollama serializes, so a
+      # query embed queues behind the embed worker's 128-chunk index batches
+      # (~4.3s per in-flight batch, measured 2026-08-12). Inheriting 120s means
+      # a real MCP client hangs for two minutes instead of answering.
+      assert Ollama.request_defaults(:query)[:receive_timeout] == 15_000
+    end
+
+    test "an index embed keeps the long Oban budget" do
+      # An Oban worker CAN afford to wait out a busy Ollama — nobody is blocked.
+      assert Ollama.request_defaults(:index)[:receive_timeout] == 120_000
+      assert Ollama.request_defaults(nil)[:receive_timeout] == 120_000
+    end
+
+    test "retries survive on BOTH purposes (unlike Voyage's retry: false)" do
+      # Safe here only because retry_fast_transient?/2 refuses to retry a
+      # receive_timeout — so retries cannot multiply either budget.
+      for purpose <- [:query, :index] do
+        assert Ollama.request_defaults(purpose)[:max_retries] == 3
+        assert is_function(Ollama.request_defaults(purpose)[:retry], 2)
+      end
+    end
+  end
+
+  describe "embed_texts/2 purpose routing" do
+    test "purpose never reaches Req as an unknown option" do
+      # `purpose:` is our routing hint, not a Req option. If the split ever
+      # stops dropping it, Req raises here rather than embedding.
+      plug = fn conn -> json_resp(conn, 200, %{"embeddings" => [[1.0]]}) end
+      assert {:ok, [[1.0]]} = Ollama.embed_texts(["hi"], purpose: :query, plug: plug)
+      assert {:ok, [[1.0]]} = Ollama.embed_texts(["hi"], purpose: :index, plug: plug)
+    end
+
+    test "an explicit caller receive_timeout still wins over the purpose default" do
+      # Mirrors Voyage: explicit caller opts always win. Asserted through the
+      # real merge in embed_texts/2, not just the defaults table.
+      plug = fn conn -> json_resp(conn, 200, %{"embeddings" => [[1.0]]}) end
+
+      assert {:ok, [[1.0]]} =
+               Ollama.embed_texts(["hi"], purpose: :query, receive_timeout: 42, plug: plug)
+    end
+  end
+
   describe "retry_fast_transient?/2" do
     test "retries fast failures but NOT a receive_timeout (no 120s amplification)" do
       # A hang-to-timeout must not be retried, else max_retries multiplies the
