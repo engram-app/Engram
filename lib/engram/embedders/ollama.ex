@@ -66,12 +66,15 @@ defmodule Engram.Embedders.Ollama do
       response means trouble. Ours guards local queueing, where a slow response
       is the normal cost of concurrent indexing and the vector result is still
       worth waiting for.
-    * **Retries kept, not `retry: false`.** Voyage disables them because its
-      `:transient` policy also retries timeouts, which would multiply the
-      budget. `retry_fast_transient?/2` refuses to retry a `receive_timeout`, so
-      the timeout itself cannot compound. A fast 5xx followed by a hang can
-      still cost the budget plus Req's backoff (~1+2+4s), so treat 45s as the
-      dominant term, not a hard ceiling on wall-clock.
+    * **`retry: false`, same as Voyage** — and NOT the "retries kept" reasoning
+      an earlier cut of this used. That argued `retry_fast_transient?/2` refuses
+      to retry a `receive_timeout` so retries could not compound. True for
+      `:timeout` ONLY: every other transport error (`:closed`, `:econnreset`,
+      `:einval`) returns true, so an Ollama or proxy that accepts a connection
+      then resets it late is retried up to `max_retries` at ~45s a go (≈187s
+      with backoff) — reinstating the very hang this exists to prevent. One
+      attempt keeps the ceiling flat at 45s, which is what the e2e budget nests
+      against.
 
   Explicit caller opts always win over these defaults (tests pass a
   `plug`/`retry_delay`). Public only so the budgets can be unit-tested without a
@@ -95,8 +98,17 @@ defmodule Engram.Embedders.Ollama do
     query_defaults()
   end
 
-  defp query_defaults,
-    do: [receive_timeout: 45_000, retry: &__MODULE__.retry_fast_transient?/2, max_retries: 3]
+  # `retry: false` — matching Voyage's `:query`, and NOT the earlier reasoning
+  # here that retries "stay bounded because retry_fast_transient?/2 refuses to
+  # retry a receive_timeout". That is true for `:timeout` ONLY. Every other
+  # transport error (:closed, :econnreset, :einval) returns true, so an Ollama —
+  # or an LB/proxy in front of it — that accepts a connection and then resets it
+  # late is retried up to max_retries, costing ~4 x 45s + backoff ≈ 187s. That
+  # blows the client budget, the pytest timeout, and reinstates the exact
+  # two-minute user-blocking hang this whole change exists to prevent. One
+  # attempt keeps the server-side query ceiling at a flat 45s, which is what the
+  # e2e budget nests against.
+  defp query_defaults, do: [receive_timeout: 45_000, retry: false]
 
   defp index_defaults,
     do: [receive_timeout: 120_000, retry: &__MODULE__.retry_fast_transient?/2, max_retries: 3]

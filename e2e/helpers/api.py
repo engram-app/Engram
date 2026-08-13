@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 import requests
 
-from helpers.latency import DELIVERY_TIMEOUT, SEARCH_TIMEOUT
+from helpers.latency import DELIVERY_TIMEOUT, MCP_TIMEOUT, SEARCH_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -314,15 +314,14 @@ class ApiClient:
     # Everything else (get_note, write_note, list_folders, …) is a cheap
     # DB/Qdrant round-trip and belongs on the generic delivery bound.
     #
-    # Both budgets are 120s today, so this split changes no timing right now — it
-    # exists so the two can move independently. Which is exactly why the list has
-    # to be right NOW: the first time the budgets diverge, a missing entry here
-    # becomes a silent wrong timeout with nothing to catch it.
+    # The two budgets are NOT equal (SEARCH_TIMEOUT 60s vs MCP_TIMEOUT 30s), so a
+    # missing entry here is a real wrong timeout, not a latent one — an embedding
+    # tool left off this list gets half the budget it needs.
     _EMBEDDING_MCP_TOOLS = frozenset({"search_notes", "suggest_folder", "create_note"})
 
     def mcp_call(self, tool_name: str, arguments: dict) -> tuple[dict, int]:
         """POST /mcp — JSON-RPC tools/call. Returns (response_json, status)."""
-        timeout = SEARCH_TIMEOUT if tool_name in self._EMBEDDING_MCP_TOOLS else DELIVERY_TIMEOUT
+        timeout = SEARCH_TIMEOUT if tool_name in self._EMBEDDING_MCP_TOOLS else MCP_TIMEOUT
         resp = self.session.post(
             f"{self.base_url}/mcp",
             json={

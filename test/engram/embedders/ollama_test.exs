@@ -85,13 +85,25 @@ defmodule Engram.Embedders.OllamaTest do
       assert log =~ "unknown purpose"
     end
 
-    test "retries survive on BOTH purposes (unlike Voyage's retry: false)" do
-      # Safe here only because retry_fast_transient?/2 refuses to retry a
-      # receive_timeout — so retries cannot multiply either budget.
-      for purpose <- [:query, :index] do
-        assert Ollama.request_defaults(purpose)[:max_retries] == 3
-        assert is_function(Ollama.request_defaults(purpose)[:retry], 2)
-      end
+    test "index keeps retries; query does NOT" do
+      # Index: patient retries are right, nobody is blocked on an Oban job.
+      assert Ollama.request_defaults(:index)[:max_retries] == 3
+      assert is_function(Ollama.request_defaults(:index)[:retry], 2)
+
+      # Query: `retry: false`, matching Voyage. retry_fast_transient?/2 only
+      # refuses to retry a :timeout — every OTHER transport error (:closed,
+      # :econnreset) is retried, so a late connection reset would cost
+      # ~4 x 45s + backoff and reinstate the multi-minute user-blocking hang.
+      # The e2e budget nests against a FLAT 45s ceiling; this keeps it flat.
+      assert Ollama.request_defaults(:query)[:retry] == false
+    end
+
+    test "a non-timeout transport error IS retried — which is why query disables retries" do
+      # Pins the premise of the clause above. If this ever returns false, the
+      # "retries would compound" reasoning no longer holds and `retry: false`
+      # on :query can be revisited.
+      assert Ollama.retry_fast_transient?(nil, %Req.TransportError{reason: :closed})
+      refute Ollama.retry_fast_transient?(nil, %Req.TransportError{reason: :timeout})
     end
   end
 

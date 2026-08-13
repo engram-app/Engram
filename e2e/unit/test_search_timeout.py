@@ -102,21 +102,68 @@ def test_budget_default_exceeds_measured_queueing():
     assert _module_default() >= 60
 
 
+# Budget for the rest of a search request after the embed: sparse leg (Qdrant
+# :search 5s), candidate decryption, rerank, MMR. The client must clear the
+# WHOLE request, not just the embed.
+POST_EMBED_ALLOWANCE_S = 10
+
+
+def _ollama_query_ceiling_s() -> float:
+    """Read the server-side :query budget from the Elixir source.
+
+    Deliberately NOT hardcoded. A literal here would keep passing if
+    Ollama.query_defaults/0 were later raised past SEARCH_TIMEOUT — the guard
+    would go green on exactly the regression it exists to catch, which is the
+    same "guard that cannot fail" class this file's docstring calls out.
+    """
+    src = (E2E_DIR.parent / "lib" / "engram" / "embedders" / "ollama.ex").read_text()
+    body = re.search(r"defp query_defaults,?\s*do:\s*\[(.*?)\]", src, re.S).group(1)
+    ms = float(re.search(r"receive_timeout:\s*([\d_]+)", body).group(1).replace("_", ""))
+    # `retry: false` keeps this flat; with retries it would be ~4x + backoff.
+    assert "retry: false" in body, (
+        "Ollama :query re-enabled retries — the ceiling is no longer flat and "
+        "this nesting calculation is invalid (a late reset costs ~4x the budget)"
+    )
+    return ms / 1000
+
+
 def test_budget_nests_between_server_ceiling_and_caller_deadlines():
     """The budget is useless if it can never fire.
 
-    Must exceed the server's own query-embed ceiling (Ollama :query 45s + ~7s
-    Req backoff) so the client is never first to give up, but stay under the
-    90s poll windows in test_67/test_77 and the 180s pytest-timeout — otherwise
-    a slow search is reported as "never landed" or killed by SIGALRM.
+    Must exceed the server's WHOLE-request ceiling so the client is never first
+    to give up, but stay under the 90s poll windows in test_67/test_77 and the
+    180s pytest-timeout — otherwise a slow search is reported as "never landed"
+    or killed by SIGALRM.
     """
     default = _module_default()
-    assert default > 52, f"{default}s is under the server's ~52s query ceiling"
+    server_ceiling = _ollama_query_ceiling_s() + POST_EMBED_ALLOWANCE_S
+    assert default > server_ceiling, (
+        f"{default}s does not clear the server's whole-request ceiling of "
+        f"{server_ceiling}s (embed {_ollama_query_ceiling_s()}s + "
+        f"{POST_EMBED_ALLOWANCE_S}s for the sparse leg, decrypt, rerank, MMR)"
+    )
     assert default < 90, f"{default}s exceeds the 90s caller poll windows"
 
     pytest_ini = (E2E_DIR / "pytest.ini").read_text()
     per_test = float(re.search(r"^timeout\s*=\s*(\d+)", pytest_ini, re.MULTILINE).group(1))
     assert default < per_test, f"{default}s exceeds the pytest-timeout of {per_test}s"
+
+
+def test_non_search_mcp_calls_fit_inside_one_test():
+    """MCP tools that don't embed must not use a polling-loop budget.
+
+    test_46 makes five mcp_calls; at DELIVERY_TIMEOUT (120s) two wedged calls
+    already exceed the pytest-timeout, so the suite dies with SIGALRM instead of
+    a clean ReadTimeout.
+    """
+    from helpers.latency import MCP_TIMEOUT
+
+    pytest_ini = (E2E_DIR / "pytest.ini").read_text()
+    per_test = float(re.search(r"^timeout\s*=\s*(\d+)", pytest_ini, re.MULTILINE).group(1))
+    assert MCP_TIMEOUT * 5 <= per_test, (
+        f"five wedged MCP calls ({MCP_TIMEOUT}s each) exceed the {per_test}s "
+        "pytest-timeout — failures will surface as SIGALRM, not ReadTimeout"
+    )
 
 
 def test_budget_is_env_overridable():

@@ -314,35 +314,45 @@ defmodule Engram.Search do
         # Embedding backend down/rate-limited: degrade to keyword-only rather
         # than failing a search the keyword leg could still serve.
         #
-        # This MUST be loud. Degradation is silent by construction — the caller
-        # gets a normal 200 with plausible results — so without a signal here an
-        # operator whose Ollama is slow or down just gets quietly worse search
-        # forever, and in CI the vector leg can vanish suite-wide without a
-        # single line in the log. A test asserting semantic behaviour would then
-        # pass on the sparse leg and look like proof.
-        # Log the BOUNDED label, not the raw reason: on the {status, body}
-        # branch that body is the decoded provider response — unbounded and
-        # unreviewed — and this line ships to Loki + CloudWatch on every
-        # degraded search. Leaking it would undercut the point of HMAC'ing
-        # folders and tags to keep content out of third-party stores.
-        Logger.warning(
-          "Search degraded to keyword-only — query embed failed",
-          Metadata.with_category(:warning, :search,
-            user_id: to_string(user.id),
-            reason_label: :embed_failed_degraded_to_keyword,
-            reason: error_label(reason)
-          )
-        )
-
-        :telemetry.execute(
-          [:engram, :search, :degraded],
-          %{count: 1},
-          %{leg: :keyword, reason: error_label(reason)}
-        )
-
+        # Emit ONLY on the arm that actually degrades. When sparse_query/2
+        # returns :no_vault the search hard-FAILS — signalling "degraded to
+        # keyword-only" there would conflate real fallbacks with outright
+        # failures in engram_prom_ex_search_degraded_total, and show an operator
+        # a "degraded" line in Loki for a request that returned an error.
         case sparse_query(user, query) do
-          {:ok, sparse} -> Qdrant.sparse_search(collection(), sparse, search_opts)
-          :no_vault -> err
+          {:ok, sparse} ->
+            # This MUST be loud. Degradation is silent by construction — the
+            # caller gets a normal 200 with plausible results — so without a
+            # signal an operator whose Ollama is slow or down just gets quietly
+            # worse search forever, and in CI the vector leg can vanish
+            # suite-wide without a single line in the log. A test asserting
+            # semantic behaviour would then pass on the sparse leg and look like
+            # proof.
+            #
+            # Log the BOUNDED label, not the raw reason: on the {status, body}
+            # branch that body is the decoded provider response — unbounded and
+            # unreviewed — and this ships to Loki + CloudWatch on every degraded
+            # search. Leaking it would undercut the point of HMAC'ing folders and
+            # tags to keep content out of third-party stores.
+            Logger.warning(
+              "Search degraded to keyword-only — query embed failed",
+              Metadata.with_category(:warning, :search,
+                user_id: to_string(user.id),
+                reason_label: :embed_failed_degraded_to_keyword,
+                reason: error_label(reason)
+              )
+            )
+
+            :telemetry.execute(
+              [:engram, :search, :degraded],
+              %{count: 1},
+              %{leg: :keyword, reason: error_label(reason)}
+            )
+
+            Qdrant.sparse_search(collection(), sparse, search_opts)
+
+          :no_vault ->
+            err
         end
     end
   end

@@ -116,16 +116,37 @@ before the deadlines wrapping it:
 
 | bound | value |
 |---|---|
-| server query-embed ceiling | ~52s (Ollama `:query` 45s + ~7s Req backoff) |
+| server query-embed ceiling | 45s (Ollama `:query`, **flat** — `retry: false`) |
+| + the rest of the request | ~10s (sparse leg, decrypt, rerank, MMR) |
 | `SEARCH_TIMEOUT` | **60s** |
+| non-search MCP (`MCP_TIMEOUT`) | 30s |
 | caller poll windows (`test_67`, `test_77`) | 90s |
 | pytest-timeout per test (`e2e/pytest.ini`) | 180s |
 
-The first cut used 120s, which exceeded every window above it and so was
-unreachable in the very tests that use it — a slow search would have eaten a
-whole 90s poll loop and been reported as "the repath never landed", or been
-killed by SIGALRM. `test_budget_nests_between_server_ceiling_and_caller_deadlines`
-asserts this ordering.
+Three ways this got mis-derived before it was right, all caught in review:
+
+- **120s** exceeded every window *below* it, so it was unreachable in the very
+  tests that use it — a slow search would eat a 90s poll loop and be reported as
+  "the repath never landed", or be killed by SIGALRM.
+- **60s compared against the embed alone.** The request continues past the embed
+  (sparse leg, decrypt, rerank, MMR), so "clears the server ceiling" has to mean
+  the *whole request*, not one leg of it.
+- **The embed ceiling wasn't flat.** `retry_fast_transient?/2` declines to retry
+  a `:timeout` — but retries every *other* transport error, so a late
+  `:econnreset` cost ~4 × 45s ≈ 187s. `:query` now uses `retry: false` (as Voyage
+  always did), which is what makes 45s a real ceiling.
+
+`test_budget_nests_between_server_ceiling_and_caller_deadlines` asserts the whole
+ordering, and reads the 45s **out of `ollama.ex`** rather than hardcoding it — a
+literal would have gone green if the Elixir side later drifted past the client
+budget, which is the same guard-that-cannot-fail trap as the broken matcher
+above. It also asserts `retry: false` is still there, since the arithmetic is
+invalid without it.
+
+Non-search MCP tools get their own 30s bound rather than `DELIVERY_TIMEOUT`:
+that constant is a *polling-loop* budget, and at 120s two wedged calls (test_46
+makes five) blow the 180s pytest-timeout, turning a clean `ReadTimeout` into a
+SIGALRM traceback.
 
 Two traps this one sets, both worth knowing because the obvious reading is
 wrong in both cases:
