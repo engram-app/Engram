@@ -1,6 +1,6 @@
 # Context Doc: e2e-clerk failure taxonomy (it is not one flake)
 
-_Last verified: 2026-08-05_
+_Last verified: 2026-08-12_
 
 ## Status
 Working. Taxonomy produced from 12 nights of ledger data on 2026-08-05.
@@ -32,6 +32,7 @@ red e2e-clerk on your PR is ambient noise.
 | `test_77_bulk_first_sync::test_bulk_first_sync_timing` | **5/7** | Load-sensitive throughput assert |
 | `test_30_sse_catch_up_multi::test_channel_catch_up_multi` | 3/7 | Uninvestigated |
 | `test_49`, `test_37`, `api_only/test_77_rename_repath_search` | 1/7 each | Uninvestigated |
+| `api_only/test_32_vault_api_key_isolation::test_mcp_search_spans_all_vaults_by_default` | (post-window) | **Load-sensitive client timeout — FIXED**, see below |
 
 Two tests account for nearly all of it. Fix those two and the suite's pass
 rate roughly inverts.
@@ -81,6 +82,63 @@ window, so it is not branch-specific.
 **Heuristic that still holds: a whole *category* going red together (all
 attachments, all search) is a dependency or infra regression, not a flake —
 flakes are scattered.** Just don't assume *which*.
+
+### Not in the taxonomy: the search ReadTimeout (client budget, not fan-out)
+
+`api_only/test_32_vault_api_key_isolation::test_mcp_search_spans_all_vaults_by_default`
+fails intermittently with `requests.exceptions.ReadTimeout ... (read timeout=10)`
+on `api.mcp_call("search_notes", {"query": "Secret"})`. It is **not** an
+assertion failure — no correctness claim is ever evaluated. Observed on main
+and on unrelated feature branches in the same window, passing on those same
+branches at other times: load-correlated, not branch-correlated.
+
+**Class: load-sensitive client timeout. FIXED** — `SEARCH_TIMEOUT` in
+`e2e/helpers/latency.py`, now used by both `mcp_call` and `search`.
+
+Two traps this one sets, both worth knowing because the obvious reading is
+wrong in both cases:
+
+1. **The "hundreds of Qdrant `points/scroll` calls" right before the timeout
+   are not the fan-out.** They are the harness's own
+   `wait_for_qdrant_indexed`, polling once a second (up to 90s, four calls in
+   that file), logged by urllib3 from the *pytest* process. The cross-vault
+   search issues **zero** scrolls. High scroll volume is a *correlated
+   symptom* of the same load — many polls means the embed worker was backed
+   up — not the cause.
+
+2. **Cross-vault fan-out is not a fan-out.** `#985`'s cross-vault default is
+   one Qdrant query with the `vault_id` filter simply omitted
+   (`Search.do_search/4`), plus one bulk `Vaults.list_for_ids`. There is no
+   per-vault loop and no N+1. Prod bears out the shape:
+   `engram_prom_ex_search_request_duration_milliseconds` gives cross-vault a
+   **303ms** mean vs **194ms** single-vault.
+
+The actual cost is the **one query embed**. CI's embedder is the shared
+FastRaid Ollama (`10.0.20.214:11434`), which serializes requests, so a
+synchronous query embed queues behind the embed worker's 128-chunk index
+batches (`@embed_batch_size`). Measured 2026-08-12 with `mxbai-embed-large`:
+
+| In-flight index batches | Query embed latency |
+|---|---|
+| 0 (idle) | ~0.12s |
+| 1 | ~4.3s |
+| 2 | ~8.4s |
+| 3 | **~13.1s** — exceeds the old 10s |
+
+One 128-chunk batch alone occupies Ollama for ~5.2s. The test's own fixture
+seeds notes immediately before searching, so it partly *creates* the
+contention it then trips over; concurrent e2e jobs supply the rest.
+
+> **Open, and deliberately not fixed here:** `Search.embed_for_search/2`
+> passes `purpose: :query` specifically so "a bulk indexing burst can't starve
+> synchronous user search" — but that only routes a separate *Voyage*
+> rate-limit bucket. `Engram.Embedders.Ollama` drops `purpose:` on the floor
+> (it splits only `[:retry, :max_retries, :retry_delay, :receive_timeout,
+> :plug]`), so **self-host has no equivalent guard**, and its synchronous
+> search inherits the 120s indexing `receive_timeout`. A real MCP client would
+> hang for two minutes rather than degrade. Hybrid mode already falls back to
+> keyword-only on embed failure, so a short query-embed timeout would degrade
+> gracefully — that is the shape of the fix if it is taken up.
 
 ## How to mine the nightly data
 
