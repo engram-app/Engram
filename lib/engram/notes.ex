@@ -4797,24 +4797,53 @@ defmodule Engram.Notes do
       now = DateTime.utc_now()
       ids = Enum.map(matches, & &1.id)
 
-      {real_notes, markers} = Enum.split_with(matches, fn r -> r.kind == "note" end)
+      # Re-assert folder membership at WRITE time, on the pre-image the scan
+      # read. #1334 closed the create-in-the-gap race by deleting by id from a
+      # single scan; that traded it for the opposite one — under READ COMMITTED
+      # a concurrent same-user transaction can move a note OUT of the folder
+      # between `scan_folders/3` and here, and an id-only WHERE still deletes
+      # it. The user loses a note from a folder they never asked to touch.
+      #
+      # Fencing on `folder_hmac` rather than re-deriving the folder keeps this
+      # a pure predicate on the row: a move re-keys folder_hmac (every writer
+      # goes through phase_b_keyword_for/5 or phase_b_path_folder_for/4, both
+      # of which set it), so the moved row no longer matches any hmac the scan
+      # saw. An in-place EDIT does not touch folder_hmac, so it still matches
+      # and is still deleted — the fence must catch moves, not writes. #1346.
+      folder_hmacs =
+        matches |> Enum.map(& &1.folder_hmac) |> Enum.reject(&is_nil/1) |> Enum.uniq()
 
-      Repo.with_tenant(user.id, fn ->
-        seq = Engram.Vaults.next_seq!(vault.id)
+      {:ok, deleted_ids} =
+        Repo.with_tenant(user.id, fn ->
+          seq = Engram.Vaults.next_seq!(vault.id)
 
-        {updated, _} =
-          from(n in Note,
-            where: n.id in ^ids and is_nil(n.deleted_at)
-          )
-          |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
+          # `select:` so the side effects below run on what was ACTUALLY
+          # deleted. Driving them off `matches` was survivable while the WHERE
+          # was id-only (the two sets were identical); with a fence that can
+          # skip rows it is not — the meter would over-decrement, and worse,
+          # the broadcast loop would tell every client to delete a note that
+          # is still live at its new path.
+          {_updated, returned_ids} =
+            from(n in Note,
+              where: n.id in ^ids and n.folder_hmac in ^folder_hmacs and is_nil(n.deleted_at),
+              select: n.id
+            )
+            |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
 
-        # Decrement only real notes — markers don't count against the meter.
-        # `updated` may include both kinds; recompute live-real-note count from
-        # the matched set so the meter delta lines up with notes_count semantics.
-        real_count = length(real_notes)
-        if real_count > 0, do: :ok = UsageMeters.dec_notes_count(user.id, real_count)
-        updated
-      end)
+          deleted = MapSet.new(returned_ids)
+
+          # Decrement only real notes — markers don't count against the meter.
+          real_count =
+            Enum.count(matches, fn r -> r.kind == "note" and MapSet.member?(deleted, r.id) end)
+
+          if real_count > 0, do: :ok = UsageMeters.dec_notes_count(user.id, real_count)
+          deleted
+        end)
+
+      {real_notes, markers} =
+        matches
+        |> Enum.filter(&MapSet.member?(deleted_ids, &1.id))
+        |> Enum.split_with(fn r -> r.kind == "note" end)
 
       # Side effects outside the transaction context, so they never fire if
       # the update_all above rolled back. Qdrant cleanup + broadcasts.
@@ -4844,7 +4873,9 @@ defmodule Engram.Notes do
         :ok = broadcast_change(user.id, vault.id, "delete", marker.folder, nil, [])
       end)
 
-      {:ok, %{deleted: length(matches)}}
+      # The count the caller reports to the user. `length(matches)` was the
+      # scanned set, which is only the deleted set when nothing raced.
+      {:ok, %{deleted: MapSet.size(deleted_ids)}}
     end
   end
 
