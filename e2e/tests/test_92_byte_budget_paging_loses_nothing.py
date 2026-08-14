@@ -13,9 +13,12 @@ delayed. A watermark in `merged_changes_page` clamps that, and a unit test pins
 it — but only a real client walking real pages proves the walk terminates and
 converges.
 
-Staged by shrinking the budget on the running backend so an ordinary test vault
-splits into many pages. Restored in the teardown; the assertion is simply that
-nothing is missing afterwards.
+Crosses the boundary with DATA VOLUME rather than by shrinking the budget on the
+backend. An earlier draft used `backend_rpc` to set `:sync_page_max_bytes` low;
+that is process-global on a shared node, and the suite runs under 2-worker
+xdist, so it would have silently forced a sibling worker's vault to one note per
+page. This version also has the better property of exercising the budget that
+actually ships.
 """
 
 from __future__ import annotations
@@ -24,48 +27,42 @@ import uuid
 
 import pytest
 
-from helpers.backend_rpc import backend_rpc
 from helpers.latency import DELIVERY_TIMEOUT
 from helpers.vault import wait_for_content
 
-NOTE_COUNT = 12
-NOTE_KB = 8
-# Below one note, so every page carries exactly one row and the client has to
-# make NOTE_COUNT round trips. Maximum paging pressure for a small fixture.
-TINY_BUDGET = 2 * 1024
-
-
-def _set_budget(value: str) -> None:
-    backend_rpc(f"Application.put_env(:engram, :sync_page_max_bytes, {value})")
+# Default budget is 4 MB. 9 x 600 KB = ~5.4 MB, so the feed must split at least
+# once. Deliberately modest: the property under test is "a boundary happens and
+# nothing is lost", which two pages prove as well as twenty, and every extra
+# megabyte here is real upload plus an embedding job on a shared CI backend.
+NOTE_COUNT = 9
+NOTE_KB = 600
 
 
 @pytest.mark.asyncio
-async def test_every_note_survives_a_heavily_paged_first_sync(vault_b, cdp_b, api_sync):
+async def test_every_note_survives_a_paged_first_sync(vault_b, cdp_b, api_sync):
     run = uuid.uuid4().hex[:12]
     paths = [f"E2E/Budget-{run}/B{i}.md" for i in range(NOTE_COUNT)]
+    # Encrypted at rest, so the stored ciphertext this is measured against is
+    # incompressible regardless of how repetitive the plaintext looks.
     body = "x" * (NOTE_KB * 1024)
 
     await cdp_b.accept_sync_gate()
     await cdp_b.trigger_full_sync()
 
-    for i, path in enumerate(paths):
-        api_sync.create_note(path, f"budget-marker-{i}\n{body}")
-
-    _set_budget(str(TINY_BUDGET))
     try:
+        for i, path in enumerate(paths):
+            api_sync.create_note(path, f"budget-marker-{i}\n{body}")
+
         await cdp_b.trigger_full_sync()
 
-        # Every note, across every page boundary. A dropped row here is the
-        # merge-watermark failure: the cursor stepped over notes the budget had
-        # held back and they are unreachable from that cursor forever.
+        # Every note, across every page boundary. A missing one here is the
+        # merge-watermark failure: the cursor stepped over notes the budget held
+        # back, and they are unreachable from that cursor forever.
         for i, path in enumerate(paths):
             wait_for_content(
                 vault_b, path, f"budget-marker-{i}", timeout=DELIVERY_TIMEOUT
             )
     finally:
-        # Back to the configured default before anything else runs, or every
-        # later test in the session pays one round trip per note.
-        _set_budget("4 * 1024 * 1024")
         for path in paths:
             try:
                 api_sync.delete_note(path)

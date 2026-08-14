@@ -31,15 +31,35 @@ defmodule Engram.Sync.PageGate do
   use GenServer
   require Logger
 
-  @default_limit 8
+  # Derived from the DB pool, never hardcoded. Every page build checks out a
+  # connection for its read, so N slots is N connections unavailable to
+  # checkpoints, other channels and the seq feed. A flat number also goes stale
+  # silently the moment POOL_SIZE moves (it went 10 -> 15 without this file
+  # knowing), which is exactly the class of bug a derived value cannot have.
+  #
+  # A third, matching the spirit of crdt_channel.batch_concurrency taking a
+  # quarter: enough to overlap real work, not enough to monopolise the pool. A
+  # page is ~250 ms, so even 5 slots clears ~20 vaults/second.
+  @pool_divisor 3
+  @min_limit 2
+
   # Generous: a page is ~250 ms of work, so waiting out a full queue is normally
   # far under this. Hitting it means real saturation, not ordinary contention.
   @default_timeout 15_000
 
+  @doc """
+  Start the gate. `name: nil` starts it unregistered, addressed by pid — which
+  is how tests get an isolated instance without either minting a runtime atom
+  per test or colliding with the app-supervised one.
+  """
   def start_link(opts) do
-    name = Keyword.get(opts, :name, __MODULE__)
     limit = Keyword.get(opts, :limit) || configured_limit()
-    GenServer.start_link(__MODULE__, limit, name: name)
+
+    case Keyword.fetch(opts, :name) do
+      {:ok, nil} -> GenServer.start_link(__MODULE__, limit)
+      {:ok, name} -> GenServer.start_link(__MODULE__, limit, name: name)
+      :error -> GenServer.start_link(__MODULE__, limit, name: __MODULE__)
+    end
   end
 
   @doc """
@@ -70,6 +90,20 @@ defmodule Engram.Sync.PageGate do
     :exit, _ ->
       # Timed out, or the gate is not running (self-host boots without it, and
       # tests may not start it). Either way the work still has to happen.
+      #
+      # WITHDRAW FIRST. A timed-out caller is still sitting in the waiting queue,
+      # and it is still alive — it is a channel process that merely gave up
+      # waiting. Without this, the next free slot gets handed to it, the reply
+      # goes nowhere, and the slot is held until that channel dies. Under exactly
+      # the sustained load this gate exists for, capacity leaks away one slot at
+      # a time and every later page runs ungated while the logs say nothing,
+      # because degrading open is the designed behaviour. Protection that can
+      # vanish without a signal is worse than none.
+      #
+      # Cast, not call: the gate may be down, and a second blocking call on the
+      # failure path is how a timeout becomes a hang.
+      catch_exit_cast(gate, {:cancel, self()})
+
       Logger.warning("sync page gate unavailable or saturated — building page ungated",
         category: :sync
       )
@@ -77,8 +111,26 @@ defmodule Engram.Sync.PageGate do
       :degraded
   end
 
-  defp configured_limit do
-    Application.get_env(:engram, :sync_page_concurrency, @default_limit)
+  defp catch_exit_cast(gate, msg) do
+    GenServer.cast(gate, msg)
+  catch
+    :exit, _ -> :ok
+  end
+
+  @doc """
+  Slots this node allows, derived from the configured Ecto pool unless
+  overridden by `:sync_page_concurrency`. Public so a test can pin the pool
+  coupling — a plausible-looking hardcoded number is what this replaced.
+  """
+  def configured_limit do
+    case Application.get_env(:engram, :sync_page_concurrency) do
+      n when is_integer(n) and n > 0 ->
+        n
+
+      _ ->
+        pool = Keyword.get(Application.get_env(:engram, Engram.Repo, []), :pool_size, 10)
+        max(@min_limit, div(pool, @pool_divisor))
+    end
   end
 
   @impl true
@@ -96,10 +148,24 @@ defmodule Engram.Sync.PageGate do
   @impl true
   def handle_cast({:release, pid}, state), do: {:noreply, state |> drop(pid) |> pump()}
 
+  # A caller that gave up waiting. Must clear BOTH queues: the grant can race
+  # the timeout, so by the time this arrives the waiter may already have been
+  # promoted into `active` and be holding a slot nobody will ever release.
+  @impl true
+  def handle_cast({:cancel, pid}, state) do
+    waiting = :queue.filter(fn {waiter, _tag} -> waiter != pid end, state.waiting)
+    {:noreply, %{state | waiting: waiting} |> drop(pid) |> pump()}
+  end
+
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state),
     do: {:noreply, state |> drop(pid) |> pump()}
 
+  # NOT re-entrant: `active` is keyed by pid, so the same process acquiring
+  # twice would overwrite its own monitor ref (leaking the first) and count as
+  # one slot, over-admitting by one. There is a single call site and it does not
+  # nest; if that ever changes, this needs a per-pid depth count rather than a
+  # bare map.
   defp grant(state, pid) do
     ref = Process.monitor(pid)
     %{state | active: Map.put(state.active, pid, ref)}
