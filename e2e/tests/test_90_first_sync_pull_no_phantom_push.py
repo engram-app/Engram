@@ -56,11 +56,17 @@ async def test_pull_materialises_every_note_and_pushes_none(vault_b, cdp_b, api_
                 vault_b, path, f"pull-marker-{i}", timeout=DELIVERY_TIMEOUT
             )
 
-        assert result.get("pulled", 0) >= NOTE_COUNT, (
-            f"pulled={result.get('pulled')} for {NOTE_COUNT} new server notes — "
-            "the replay is reporting fewer writes than it made"
-        )
-
+        # Deliberately NOT asserting on `pulled`. This device is live-connected,
+        # so `create_note` fans out over the socket and the plugin applies each
+        # row on arrival; by the time the explicit sync runs there is nothing
+        # left to replay and `pulled` is legitimately 0. An earlier cut asserted
+        # `pulled >= NOTE_COUNT` and failed in CI for exactly that reason — it
+        # was pinning WHICH ROUTE delivered, which is not a property of the fix
+        # and is a race between fan-out and the sync call. Materialisation is
+        # already proven above, and the replay route specifically is fenced by
+        # test_89 (gate closed, then opened) where fan-out cannot short-circuit
+        # it.
+        #
         # The fence. A freshly pulled note must never look like a local original.
         assert result.get("pushed", 0) == 0, (
             f"pushed={result.get('pushed')} after a pure pull — notes pulled FROM "
