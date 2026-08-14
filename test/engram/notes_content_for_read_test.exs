@@ -8,8 +8,9 @@ defmodule Engram.NotesContentForReadTest do
   most damaging path of all: the sync change feed, where an empty facade made
   both devices materialize a 0-byte file and push the empty hash back.
 
-  The resolution is shared by the change feed and the manifest so the two agree
-  on what `content_hash` means — the client cross-compares them.
+  Only the BODY is resolved. `content_hash` stays the facade's — it means "hash
+  of the last checkpoint", which is immutable between checkpoints and therefore
+  the same on every endpoint that serves it.
   """
   use Engram.DataCase, async: true
 
@@ -32,6 +33,20 @@ defmodule Engram.NotesContentForReadTest do
   # state a note is in between a CRDT write and its first checkpoint — the
   # #1339 shape — and doing it directly keeps the test independent of room
   # scheduling.
+  # A real, decryptable, valid Yjs update that changes nothing. `replay_tail/3`
+  # counts a row as applied only when it DECRYPTS, and the feed now compares that
+  # count against the tail size — so a junk payload would read as a partial
+  # replay and degrade to the facade.
+  defp noop_update do
+    {:ok, %{state: state}} = Engram.Notes.CrdtBridge.merge_plaintext(nil, "")
+    state
+  end
+
+  defp dek!(user) do
+    {:ok, dek} = Crypto.get_dek(user)
+    dek
+  end
+
   defp blank_facade!(user, note_id) do
     {:ok, dek} = Crypto.get_dek(user)
     {ct, nonce} = Envelope.encrypt("", dek, Crypto.aad_for_row(:notes, :content, note_id))
@@ -55,7 +70,7 @@ defmodule Engram.NotesContentForReadTest do
     {:ok, dek} = Crypto.get_dek(user)
 
     {ct, nonce} =
-      Envelope.encrypt(<<0>>, dek, Crypto.aad_for_row(:crdt_update_log, :update, note_id))
+      Envelope.encrypt(noop_update(), dek, Crypto.aad_for_row(:notes, :crdt_state, note_id))
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
@@ -70,6 +85,50 @@ defmodule Engram.NotesContentForReadTest do
       end)
 
     :ok
+  end
+
+  # THE primary #1339 shape, and the one an earlier cut of this fix missed: a
+  # note that has never been checkpointed has NO snapshot at all
+  # (`genesis_insert_bare` writes content: "", content_hash: nil, no
+  # crdt_state) and its entire body lives in the tail. Bailing on a nil
+  # snapshot serves "" for exactly the notes this exists to fix.
+  test "a never-checkpointed note is rebuilt from the tail alone", ctx do
+    %{user: user, vault: vault} = ctx
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "genesis.md", "content" => "TAIL ONLY"})
+
+    # Move the whole body into the tail and drop the snapshot + facade, which is
+    # the state between a genesis insert and its first checkpoint.
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, state} = Crypto.decrypt_crdt_state(raw, user)
+
+    {ct, nonce} =
+      Envelope.encrypt(state, dek!(user), Crypto.aad_for_row(:notes, :crdt_state, note.id))
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.insert!(%CrdtUpdateLog{
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: nonce,
+          inserted_at: DateTime.utc_now()
+        })
+
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+    :ok = blank_facade!(user, note.id)
+
+    {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0)
+    change = Enum.find(changes, &(&1.path == "genesis.md"))
+
+    assert change.content == "TAIL ONLY"
   end
 
   # The regression this seam exists for. The catch-up feed is what the plugin's
@@ -233,5 +292,75 @@ defmodule Engram.NotesContentForReadTest do
     change = Enum.find(changes, &(&1.path == "guard.md"))
 
     assert change.content == "REAL"
+  end
+
+  # `replay_tail/3` logs-and-SKIPS a tail row it cannot decrypt, so a truncated
+  # projection looks healthy — non-empty, so the empty-projection guard cannot
+  # see it. A transient DEK fault mid-rotation would otherwise ship a body with
+  # the most recent edits missing, and the client would write it to disk.
+  test "a partial tail replay degrades to the facade", ctx do
+    %{user: user, vault: vault} = ctx
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "partial.md", "content" => "INTACT"})
+
+    # One good tail row, one that will not decrypt (wrong AAD) — replay applies
+    # 1 of 2, so the projection is missing ops.
+    :ok = append_tail!(user, vault, note.id)
+
+    {ct, nonce} =
+      Envelope.encrypt(
+        noop_update(),
+        dek!(user),
+        Crypto.aad_for_row(:notes, :content, note.id)
+      )
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.insert!(%CrdtUpdateLog{
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: nonce,
+          inserted_at: DateTime.utc_now()
+        })
+      end)
+
+    {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0)
+    change = Enum.find(changes, &(&1.path == "partial.md"))
+
+    assert change.content == "INTACT"
+  end
+
+  # Resolution runs @resolve_chunk notes per transaction (the 15s Ecto default
+  # would not survive a 500-row page of Yjs rebuilds). A merge bug across the
+  # chunk boundary silently drops notes back to their stale facade, which is the
+  # #1339 loss again — so cross a boundary and assert every note resolved.
+  @tag :slow
+  test "every stale note resolves across a chunk boundary", ctx do
+    %{user: user, vault: vault} = ctx
+    count = 55
+
+    notes =
+      for i <- 1..count do
+        {:ok, note} =
+          Notes.upsert_note(user, vault, %{
+            "path" => "chunk/#{i}.md",
+            "content" => "BODY #{i}"
+          })
+
+        :ok = blank_facade!(user, note.id)
+        :ok = append_tail!(user, vault, note.id)
+        {i, note}
+      end
+
+    {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0, limit: 500)
+    by_path = Map.new(changes, &{&1.path, &1})
+
+    unresolved =
+      for {i, _note} <- notes,
+          Map.get(by_path, "chunk/#{i}.md").content != "BODY #{i}",
+          do: i
+
+    assert unresolved == [], "notes left on the stale facade: #{inspect(unresolved)}"
   end
 end

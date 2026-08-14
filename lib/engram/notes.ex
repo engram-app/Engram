@@ -83,6 +83,16 @@ defmodule Engram.Notes do
   # silently undone by a stale re-push from another device that still holds the
   # note (the cross-device resurrection race). A byte-different note or a
   # tombstone older than the window is allowed through as a genuine re-create.
+  # Notes resolved per transaction on the change feed. `Repo.with_tenant` takes
+  # Ecto's default 15s timeout, and each resolution is a decrypt + Yjs NIF
+  # rebuild + tail query + projection — so an unchunked 500-row page of stale
+  # notes (what a folder rename produces) could exceed it. A timeout there is
+  # not a transient: the feed is keyset-ordered, so every retry hits the same
+  # page and fails identically, which is the permanent catch-up wedge the
+  # degrade-to-façade clauses exist to avoid. Each chunk still reads its
+  # snapshot and tail in ONE transaction, which is where the atomicity lives.
+  @resolve_chunk 50
+
   @delete_tombstone_window_seconds 60
 
   @doc """
@@ -3690,6 +3700,14 @@ defmodule Engram.Notes do
     # note with uncheckpointed ops serves a body that lags — and when it lags
     # all the way to "", the client creates a 0-byte file and pushes the empty
     # hash back. Resolve the authority for exactly those notes, once per page.
+    # Interleave point (tests only; the hook is nil everywhere else). A
+    # checkpoint committing HERE — after the page SELECT, before resolution —
+    # folds the tail into a new snapshot and prunes it. The resolution must
+    # therefore re-read the row rather than trust what the page captured, or it
+    # rebuilds from a pre-checkpoint snapshot with an empty tail and projects
+    # "". See `notes_feed_interleave_test.exs`.
+    interleave_hook(:feed_after_page_read)
+
     resolved = resolve_stale_page(user, decrypted, fields)
 
     changes =
@@ -3709,8 +3727,9 @@ defmodule Engram.Notes do
   end
 
   # Resolves the authority for every note on this page whose façade lags,
-  # returning %{note_id => {content, content_hash}}. Notes absent from the map
-  # keep their façade values.
+  # returning %{note_id => content}. Only the BODY is resolved — `content_hash`
+  # is always the façade's (see `feed_pair/3`). Notes absent from the map keep
+  # their façade content.
   #
   # `fields: :meta` never resolves: its projection does not even select
   # `crdt_state_ciphertext`, and it promises `content: nil` with the row's own
@@ -3722,13 +3741,17 @@ defmodule Engram.Notes do
     # structural docs: a `.canvas` keeps its data in Y.Maps, not the markdown
     # Y.Text, so `project_doc` returns "" and would replace the façade — the
     # only non-Yjs copy of the board — with an empty body under a matching hash.
-    candidates = Enum.filter(notes, &(&1.kind == "note" and markdown_path?(&1.path)))
-
-    # Tombstones never prune their tail (`delete_note/4` only sets deleted_at;
-    # the FK cascade is hard-delete only), so without this every catch-up page
-    # carrying that tombstone would rebuild a doc forever — and ship a
-    # resurrected body on a `deleted: true` row.
-    candidates = Enum.reject(candidates, &(not is_nil(&1.deleted_at)))
+    #
+    # Tombstones are excluded in the same pass: they never prune their tail
+    # (`delete_note/4` only sets deleted_at; the FK cascade is hard-delete
+    # only), so a tombstone would be permanently "stale" — rebuilding a doc on
+    # every page that carries it, and shipping a resurrected body on a
+    # `deleted: true` row.
+    candidates =
+      Enum.filter(
+        notes,
+        &(&1.kind == "note" and markdown_path?(&1.path) and is_nil(&1.deleted_at))
+      )
 
     case candidates do
       [] ->
@@ -3764,41 +3787,92 @@ defmodule Engram.Notes do
   # `docs/context/worker-reads-stale-content-facade.md`.
   defp resolve_stale_candidates(user, candidates) do
     by_id = Map.new(candidates, &{&1.id, &1})
-    ids = Map.keys(by_id)
 
+    by_id
+    |> Map.keys()
+    |> Enum.chunk_every(@resolve_chunk)
+    |> Enum.reduce(%{}, fn chunk, acc -> Map.merge(acc, resolve_chunk(user, by_id, chunk)) end)
+    |> Enum.reject(&match?({_, nil}, &1))
+    |> Map.new()
+  end
+
+  defp resolve_chunk(user, by_id, ids) do
     {:ok, resolved} =
       Repo.with_tenant(user.id, fn ->
-        stale_ids =
-          Repo.all(
-            from(l in CrdtUpdateLog, where: l.note_id in ^ids, distinct: true, select: l.note_id)
+        # `count`, not just the id: `replay_tail/3` logs-and-skips a tail row it
+        # cannot decrypt, so knowing how many rows EXIST is what lets
+        # `project_resolved/5` tell a complete replay from a truncated one.
+        tail_counts =
+          from(l in CrdtUpdateLog,
+            where: l.note_id in ^ids,
+            group_by: l.note_id,
+            select: {l.note_id, count(l.id)}
           )
-
-        fresh_rows =
-          Repo.all(from(n in Note, where: n.id in ^stale_ids, select: {n.id, n}))
+          |> Repo.all()
           |> Map.new()
 
-        Enum.reduce(stale_ids, %{}, fn id, acc ->
-          case Map.fetch(fresh_rows, id) do
-            {:ok, row} -> Map.put(acc, id, resolve_one(user, by_id[id], row))
-            :error -> acc
+        # Re-read the rows that either still have a tail OR were captured with an
+        # empty facade.
+        #
+        # The second group is the one a first cut missed. A checkpoint
+        # committing between the page SELECT and here folds the tail into a new
+        # snapshot, materializes the body back into `notes.content`, and PRUNES
+        # the tail — so the note stops being stale and the resolution skips it,
+        # leaving the page's captured facade in place. For a genesis note that
+        # facade is "", which is #1339 exactly. Re-reading it is what makes the
+        # checkpoint land harmlessly instead of racing us.
+        #
+        # Scoped to empty-facade rows on purpose: a page-captured NON-empty
+        # facade is real content the user wrote, so at worst it is one
+        # checkpoint behind — not worth a second full-row read and content
+        # decrypt for every row on every page.
+        refresh_ids =
+          for n <- ids,
+              Map.has_key?(tail_counts, n) or (by_id[n].content || "") == "",
+              do: n
+
+        fresh_rows =
+          from(n in Note, where: n.id in ^refresh_ids)
+          |> Repo.all()
+
+        fresh_by_id = Map.new(decrypt_or_raise!(fresh_rows, user), &{&1.id, &1})
+        raw_by_id = Map.new(fresh_rows, &{&1.id, &1})
+
+        Enum.reduce(refresh_ids, %{}, fn id, acc ->
+          case {Map.fetch(raw_by_id, id), Map.fetch(fresh_by_id, id)} do
+            {{:ok, row}, {:ok, fresh}} ->
+              Map.put(acc, id, resolve_or_refresh(user, fresh, row, tail_counts[id]))
+
+            _ ->
+              acc
           end
         end)
       end)
 
-    resolved |> Enum.reject(&match?({_, nil}, &1)) |> Map.new()
+    resolved
   end
+
+  # No tail left: the note was checkpointed since the page SELECT, so the
+  # freshly-read facade IS the authority and is what must be served — the page's
+  # copy predates that checkpoint.
+  defp resolve_or_refresh(_user, fresh, _row, nil), do: fresh.content
+
+  defp resolve_or_refresh(user, fresh, row, tail_count),
+    do: resolve_one(user, fresh, row, tail_count)
 
   # Runs INSIDE the caller's tenant transaction, so it uses the tail-replay
   # primitive directly rather than `authoritative_content/2` (which would open
   # its own). Returns nil to mean "keep the façade".
-  defp resolve_one(user, decrypted, row) do
+  defp resolve_one(user, decrypted, row, tail_count) do
     case Crypto.decrypt_crdt_state(row, user) do
-      # No snapshot: nothing to resolve, the façade IS the authority.
-      {:ok, nil} ->
-        nil
-
+      # `state` may be nil — a note that has never been checkpointed holds its
+      # ENTIRE body in the tail (`genesis_insert_bare` writes content: "",
+      # content_hash: nil, no snapshot). That is the primary #1339 shape, so
+      # bailing here would serve "" for exactly the notes this exists to fix.
+      # `doc_from_state(nil)` returns an empty doc and `replay_tail/3` fills it,
+      # which is precisely what `CrdtPersistence.bind/3` does on the write side.
       {:ok, state} ->
-        project_resolved(user, decrypted, row, state)
+        project_resolved(user, decrypted, row, state, tail_count)
 
       # Degrade to the façade rather than fail the page. An earlier cut raised
       # here; that was wrong. The feed is keyset-ordered by seq, so one note
@@ -3821,10 +3895,10 @@ defmodule Engram.Notes do
     end
   end
 
-  defp project_resolved(user, decrypted, row, state) do
+  defp project_resolved(user, decrypted, row, state, tail_count) do
     case CrdtBridge.doc_from_state(state) do
       {:ok, doc} ->
-        _replayed = CrdtPersistence.replay_tail(doc, user, row.id)
+        replayed = CrdtPersistence.replay_tail(doc, user, row.id)
         text = CrdtBridge.project_doc(doc)
 
         # The read-side mirror of `ensure_projection_safe/2`. The write path
@@ -3832,15 +3906,39 @@ defmodule Engram.Notes do
         # loss" in its own words — and the read path needs the same backstop,
         # especially since recomputing the hash removes the one signal
         # (hash/content disagreement) a client could have distrusted.
-        if text == "" and (decrypted.content || "") != "" do
-          Logger.warning(
-            "feed: CRDT projection is empty over a non-empty facade, serving the facade",
-            Metadata.with_category(:warning, :sync, note_id: row.id, user_id: user.id)
-          )
+        cond do
+          # A tail row that would not decrypt was logged and SKIPPED by
+          # replay_tail, so the projection is missing ops — non-empty but
+          # truncated, which the empty-projection guard below cannot see. Every
+          # other failure here degrades to the façade; a partial replay must
+          # too, or a transient DEK fault mid-rotation ships a truncated body
+          # that the client writes to disk.
+          #
+          # `<`, not `!=`: a row appended between the count and the replay makes
+          # `replayed` LARGER, and that is not a loss.
+          length(replayed) < tail_count ->
+            Logger.error(
+              "feed: partial CRDT tail replay, serving last checkpoint",
+              Metadata.with_category(:error, :sync,
+                note_id: row.id,
+                user_id: user.id,
+                replayed: length(replayed),
+                tail_rows: tail_count
+              )
+            )
 
-          nil
-        else
-          text
+            nil
+
+          text == "" and (decrypted.content || "") != "" ->
+            Logger.warning(
+              "feed: CRDT projection is empty over a non-empty facade, serving the facade",
+              Metadata.with_category(:warning, :sync, note_id: row.id, user_id: user.id)
+            )
+
+            nil
+
+          true ->
+            text
         end
 
       {:error, reason} ->
