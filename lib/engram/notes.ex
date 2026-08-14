@@ -78,21 +78,20 @@ defmodule Engram.Notes do
     :parse_reason
   ]
 
+  # Notes resolved per transaction on the change feed. `Repo.with_tenant` takes
+  # Ecto's default 15s timeout, and each resolution is a decrypt + Yjs NIF
+  # rebuild + tail query + projection — so an unchunked 500-row page of stale
+  # notes (what a folder rename produces) could exceed it. A timeout there is
+  # not transient: the feed is keyset-ordered, so every retry hits the same page
+  # and fails identically — the permanent catch-up wedge the degrade clauses
+  # exist to avoid.
+  @resolve_chunk 50
+
   # Delete-wins window: an identical re-push at a path deleted within this many
   # seconds is refused (`:recently_deleted`), so an explicit delete is not
   # silently undone by a stale re-push from another device that still holds the
   # note (the cross-device resurrection race). A byte-different note or a
   # tombstone older than the window is allowed through as a genuine re-create.
-  # Notes resolved per transaction on the change feed. `Repo.with_tenant` takes
-  # Ecto's default 15s timeout, and each resolution is a decrypt + Yjs NIF
-  # rebuild + tail query + projection — so an unchunked 500-row page of stale
-  # notes (what a folder rename produces) could exceed it. A timeout there is
-  # not a transient: the feed is keyset-ordered, so every retry hits the same
-  # page and fails identically, which is the permanent catch-up wedge the
-  # degrade-to-façade clauses exist to avoid. Each chunk still reads its
-  # snapshot and tail in ONE transaction, which is where the atomicity lives.
-  @resolve_chunk 50
-
   @delete_tombstone_window_seconds 60
 
   @doc """
@@ -3727,9 +3726,11 @@ defmodule Engram.Notes do
   end
 
   # Resolves the authority for every note on this page whose façade lags,
-  # returning %{note_id => content}. Only the BODY is resolved — `content_hash`
-  # is always the façade's (see `feed_pair/3`). Notes absent from the map keep
-  # their façade content.
+  # returning %{note_id => {content, content_hash}}. Only the BODY is ever
+  # rebuilt — the hash is always a stored checkpoint hash (see `feed_pair/3`) —
+  # but both come from the SAME freshly-read row, so a checkpoint landing
+  # mid-page cannot pair a new body with an old hash. Notes absent from the map
+  # keep their page values.
   #
   # `fields: :meta` never resolves: its projection does not even select
   # `crdt_state_ciphertext`, and it promises `content: nil` with the row's own
@@ -3822,10 +3823,12 @@ defmodule Engram.Notes do
         # facade is "", which is #1339 exactly. Re-reading it is what makes the
         # checkpoint land harmlessly instead of racing us.
         #
-        # Scoped to empty-facade rows on purpose: a page-captured NON-empty
-        # facade is real content the user wrote, so at worst it is one
-        # checkpoint behind — not worth a second full-row read and content
-        # decrypt for every row on every page.
+        # This does re-read every genuinely-empty .md note on the page, not only
+        # ones that raced a checkpoint — there is no cheaper way to tell those
+        # apart, since "was this checkpointed since the SELECT?" is the question
+        # the re-read answers. The bound is empty-facade notes, not all notes:
+        # a page-captured NON-empty facade is real content at worst one
+        # checkpoint old, so it is left alone.
         refresh_ids =
           for n <- ids,
               Map.has_key?(tail_counts, n) or (by_id[n].content || "") == "",
@@ -3853,9 +3856,11 @@ defmodule Engram.Notes do
   end
 
   # No tail left: the note was checkpointed since the page SELECT, so the
-  # freshly-read facade IS the authority and is what must be served — the page's
-  # copy predates that checkpoint.
-  defp resolve_or_refresh(_user, fresh, _row, nil), do: fresh.content
+  # freshly-read row IS the authority. Content AND hash both come from it — they
+  # are the same checkpoint's values, so the feed still agrees with
+  # `/sync/manifest`, and pairing the fresh body with the PAGE's hash (nil for a
+  # genesis note) would guarantee a serverHash mismatch on the next poll.
+  defp resolve_or_refresh(_user, fresh, _row, nil), do: {fresh.content, fresh.content_hash}
 
   defp resolve_or_refresh(user, fresh, row, tail_count),
     do: resolve_one(user, fresh, row, tail_count)
@@ -3863,6 +3868,15 @@ defmodule Engram.Notes do
   # Runs INSIDE the caller's tenant transaction, so it uses the tail-replay
   # primitive directly rather than `authoritative_content/2` (which would open
   # its own). Returns nil to mean "keep the façade".
+  # Every degrade path lands here. `Repo.with_tenant` is a plain transaction, so
+  # under READ COMMITTED each statement takes its OWN snapshot — the tail count,
+  # the row read and `replay_tail`'s query are NOT atomic with each other. A
+  # checkpoint committing between them makes the replay come up short, and the
+  # honest answer then is the freshly-read row: it is never older than the page's
+  # copy, and for a genesis note the page's copy is "" — the 0-byte loss this PR
+  # exists to close, through a narrower window.
+  defp degrade(fresh), do: {fresh.content, fresh.content_hash}
+
   defp resolve_one(user, decrypted, row, tail_count) do
     case Crypto.decrypt_crdt_state(row, user) do
       # `state` may be nil — a note that has never been checkpointed holds its
@@ -3891,7 +3905,7 @@ defmodule Engram.Notes do
           )
         )
 
-        nil
+        degrade(decrypted)
     end
   end
 
@@ -3909,17 +3923,22 @@ defmodule Engram.Notes do
         cond do
           # A tail row that would not decrypt was logged and SKIPPED by
           # replay_tail, so the projection is missing ops — non-empty but
-          # truncated, which the empty-projection guard below cannot see. Every
-          # other failure here degrades to the façade; a partial replay must
-          # too, or a transient DEK fault mid-rotation ships a truncated body
-          # that the client writes to disk.
+          # truncated, which the empty-projection guard below cannot see. A
+          # transient DEK fault mid-rotation would otherwise ship a body with
+          # the newest edits missing.
           #
           # `<`, not `!=`: a row appended between the count and the replay makes
           # `replayed` LARGER, and that is not a loss.
+          #
+          # `warning`, not `error`: a checkpoint committing between the count and
+          # the replay prunes the tail and lands here legitimately. That is an
+          # ordinary concurrent event, and the freshly-read row it degrades to is
+          # the very content that checkpoint just materialized — paging on it
+          # would be alerting on a non-event.
           length(replayed) < tail_count ->
-            Logger.error(
-              "feed: partial CRDT tail replay, serving last checkpoint",
-              Metadata.with_category(:error, :sync,
+            Logger.warning(
+              "feed: partial CRDT tail replay, serving the freshly-read row",
+              Metadata.with_category(:warning, :sync,
                 note_id: row.id,
                 user_id: user.id,
                 replayed: length(replayed),
@@ -3927,7 +3946,7 @@ defmodule Engram.Notes do
               )
             )
 
-            nil
+            degrade(decrypted)
 
           text == "" and (decrypted.content || "") != "" ->
             Logger.warning(
@@ -3935,10 +3954,14 @@ defmodule Engram.Notes do
               Metadata.with_category(:warning, :sync, note_id: row.id, user_id: user.id)
             )
 
-            nil
+            degrade(decrypted)
 
           true ->
-            text
+            # Body from the doc, hash from the freshly-read row. The hash stays
+            # the checkpoint's — see `feed_pair/3` — and taking it from `fresh`
+            # rather than the page keeps it paired with the same row the body was
+            # rebuilt from.
+            {text, decrypted.content_hash}
         end
 
       {:error, reason} ->
@@ -3951,7 +3974,7 @@ defmodule Engram.Notes do
           )
         )
 
-        nil
+        degrade(decrypted)
     end
   end
 
@@ -3976,7 +3999,7 @@ defmodule Engram.Notes do
   # that checkpoint the feed re-serves the same body under the now-correct hash
   # and the client re-applies idempotently.
   defp feed_pair(note, :all, resolved) do
-    {Map.get(resolved, note.id, note.content), note.content_hash}
+    Map.get(resolved, note.id, {note.content, note.content_hash})
   end
 
   # Same rule `CrdtCheckpoint.markdown?/1` uses: only a `.md` note keeps its
