@@ -161,12 +161,16 @@ defmodule Engram.Folders do
     end
   end
 
-  defp delete_scanned(user, vault, note_rows, att_paths, notes) do
-    with {:ok, %{deleted: _}} <- Notes.delete_scanned(user, vault, note_rows),
+  defp delete_scanned(user, vault, note_rows, att_paths, _scanned_notes) do
+    with {:ok, %{notes: notes}} <- Notes.delete_scanned(user, vault, note_rows),
          {:ok, a} <- Attachments.delete_scanned_paths(user, vault, att_paths) do
-      # Notes.delete_folder's `deleted` includes folder markers; report
-      # the content-note count already computed so the caller sees
-      # notes, not markers.
+      # `notes` comes from what was ACTUALLY deleted, not from the pre-delete
+      # scan. Since #1346 the membership fence can skip a row that moved in the
+      # gap, so the scan count is aspirational — a concurrent folder rename
+      # re-keys every descendant's folder_hmac and the delete legitimately
+      # removes nothing, while the scan still said 3. The attachment leg on the
+      # same tuple has always counted real removals; reporting one true number
+      # beside one hopeful one is worse than either.
       {:ok, %{notes: notes, attachments: a}}
     end
   end
