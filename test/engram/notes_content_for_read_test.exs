@@ -87,23 +87,26 @@ defmodule Engram.NotesContentForReadTest do
     assert change.content == "FEED BODY"
   end
 
-  # The hash is the IDENTITY of the content as far as the plugin is concerned:
-  # it stamps `serverHash` from it, then skips any later row whose hash matches.
-  # Shipping a resolved body under the facade's stale hash would record
-  # `serverHash = hmac("")` for a file holding a body, after which a genuine
-  # emptying of that note arrives as ""/hmac("") and is skipped forever.
-  test "content_hash is recomputed to match the body actually served", ctx do
+  # `content_hash` deliberately stays the FACADE's, even when the body is
+  # resolved. It means "hash of the last checkpoint" — immutable between
+  # checkpoints, so the feed and /sync/manifest serve the same value and
+  # `validateFromManifest` can use equality as a convergence fence.
+  #
+  # Recomputing it to match the resolved body was tried and reverted: that makes
+  # it MUTABLE, so the two endpoints describe different instants of an
+  # actively-edited note and every such note reads as diverged on each poll. No
+  # server-side scheme fixes that — the content changes between the two calls.
+  test "content_hash stays the facade's so the feed and manifest agree", ctx do
     %{user: user, vault: vault} = ctx
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "e.md", "content" => "HASH ME"})
-    :ok = blank_facade!(user, note.id)
+
+    {:ok, before} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
     :ok = append_tail!(user, vault, note.id)
 
     {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0)
     change = Enum.find(changes, &(&1.path == "e.md"))
-    {:ok, key} = Crypto.dek_content_hash_key(user)
 
-    assert change.content == "HASH ME"
-    assert change.content_hash == Crypto.hmac_content_hash(key, "HASH ME")
+    assert change.content_hash == before.content_hash
   end
 
   # A checkpointed note has no tail, so it must NOT pay a Yjs rebuild. This is
@@ -202,7 +205,6 @@ defmodule Engram.NotesContentForReadTest do
 
     assert change.deleted
     assert change.content == "", "tombstone was resolved: #{inspect(change.content)}"
-    refute Map.has_key?(Notes.resolved_content_hashes(user, vault), note.id)
   end
 
   # The read-side mirror of `ensure_projection_safe/2`. Recomputing the hash
@@ -231,21 +233,5 @@ defmodule Engram.NotesContentForReadTest do
     change = Enum.find(changes, &(&1.path == "guard.md"))
 
     assert change.content == "REAL"
-  end
-
-  # The manifest and the feed are cross-compared by the client. If the manifest
-  # kept serving the facade hash while the feed served the resolved one, every
-  # actively-edited note would read as diverged and rewind the catch-up cursor.
-  test "the manifest hash agrees with the feed hash for a stale note", ctx do
-    %{user: user, vault: vault} = ctx
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "agree.md", "content" => "AGREE"})
-    :ok = blank_facade!(user, note.id)
-    :ok = append_tail!(user, vault, note.id)
-
-    {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0)
-    feed = Enum.find(changes, &(&1.path == "agree.md"))
-    manifest = Notes.resolved_content_hashes(user, vault)
-
-    assert Map.get(manifest, note.id) == feed.content_hash
   end
 end

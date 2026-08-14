@@ -3708,62 +3708,6 @@ defmodule Engram.Notes do
     {:ok, %{changes: changes, has_more: has_more, next: next}}
   end
 
-  @doc """
-  `%{note_id => content_hash}` for every note in the vault whose façade lags.
-
-  The manifest and the change feed are cross-compared by the client
-  (`validateFromManifest` / `healDivergedLiveBoundNotes` stamp `serverHash` from
-  the feed and diff it against the manifest). Since #1339 the feed serves
-  `hmac(resolved body)` for a stale note, so the manifest has to agree or every
-  actively-edited note reads as diverged and rewinds the vault's catch-up
-  cursor on each poll.
-
-  Bounded by notes with UNCHECKPOINTED ops, not by vault size: the checkpoint
-  debounce means only actively-edited notes carry a tail, so a quiet vault
-  resolves nothing.
-  """
-  @spec resolved_content_hashes(map(), map()) :: %{optional(String.t()) => String.t()}
-  def resolved_content_hashes(user, vault) do
-    {:ok, rows} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in scoped_live(user, vault),
-            join: l in CrdtUpdateLog,
-            on: l.note_id == n.id,
-            where: n.kind == "note",
-            distinct: n.id,
-            select: n
-          )
-        )
-      end)
-
-    case rows do
-      [] ->
-        %{}
-
-      rows ->
-        case Crypto.dek_content_hash_key(user) do
-          {:ok, key} ->
-            by_id = Map.new(decrypt_or_raise!(rows, user), &{&1.id, &1})
-
-            {:ok, resolved} =
-              Repo.with_tenant(user.id, fn ->
-                Enum.reduce(rows, %{}, fn row, acc ->
-                  case resolve_one(user, by_id[row.id] || row, row, key) do
-                    {_text, hash} -> Map.put(acc, row.id, hash)
-                    nil -> acc
-                  end
-                end)
-              end)
-
-            resolved
-
-          _ ->
-            %{}
-        end
-    end
-  end
-
   # Resolves the authority for every note on this page whose façade lags,
   # returning %{note_id => {content, content_hash}}. Notes absent from the map
   # keep their façade values.
@@ -3791,24 +3735,7 @@ defmodule Engram.Notes do
         %{}
 
       candidates ->
-        case Crypto.dek_content_hash_key(user) do
-          {:ok, key} ->
-            resolve_stale_candidates(user, candidates, key)
-
-          # A DEK failure must not take down the whole page with a MatchError —
-          # that is the failure mode this module argues hardest against. Every
-          # row keeps its façade.
-          {:error, reason} ->
-            Logger.error(
-              "feed: content-hash key unavailable, serving facades",
-              Metadata.with_category(:error, :sync,
-                user_id: user.id,
-                reason_label: inspect(reason)
-              )
-            )
-
-            %{}
-        end
+        resolve_stale_candidates(user, candidates)
     end
   end
 
@@ -3835,7 +3762,7 @@ defmodule Engram.Notes do
   # gains a `crdt_head`-style invalidate-on-write flag (BEFORE UPDATE trigger +
   # lazy self-heal), staleness becomes a column read and this collapses. See
   # `docs/context/worker-reads-stale-content-facade.md`.
-  defp resolve_stale_candidates(user, candidates, key) do
+  defp resolve_stale_candidates(user, candidates) do
     by_id = Map.new(candidates, &{&1.id, &1})
     ids = Map.keys(by_id)
 
@@ -3852,7 +3779,7 @@ defmodule Engram.Notes do
 
         Enum.reduce(stale_ids, %{}, fn id, acc ->
           case Map.fetch(fresh_rows, id) do
-            {:ok, row} -> Map.put(acc, id, resolve_one(user, by_id[id], row, key))
+            {:ok, row} -> Map.put(acc, id, resolve_one(user, by_id[id], row))
             :error -> acc
           end
         end)
@@ -3864,14 +3791,14 @@ defmodule Engram.Notes do
   # Runs INSIDE the caller's tenant transaction, so it uses the tail-replay
   # primitive directly rather than `authoritative_content/2` (which would open
   # its own). Returns nil to mean "keep the façade".
-  defp resolve_one(user, decrypted, row, key) do
+  defp resolve_one(user, decrypted, row) do
     case Crypto.decrypt_crdt_state(row, user) do
       # No snapshot: nothing to resolve, the façade IS the authority.
       {:ok, nil} ->
         nil
 
       {:ok, state} ->
-        project_resolved(user, decrypted, row, key, state)
+        project_resolved(user, decrypted, row, state)
 
       # Degrade to the façade rather than fail the page. An earlier cut raised
       # here; that was wrong. The feed is keyset-ordered by seq, so one note
@@ -3894,7 +3821,7 @@ defmodule Engram.Notes do
     end
   end
 
-  defp project_resolved(user, decrypted, row, key, state) do
+  defp project_resolved(user, decrypted, row, state) do
     case CrdtBridge.doc_from_state(state) do
       {:ok, doc} ->
         _replayed = CrdtPersistence.replay_tail(doc, user, row.id)
@@ -3913,7 +3840,7 @@ defmodule Engram.Notes do
 
           nil
         else
-          {text, Crypto.hmac_content_hash(key, text)}
+          text
         end
 
       {:error, reason} ->
@@ -3935,8 +3862,23 @@ defmodule Engram.Notes do
   # "every row diverged" to the client.
   defp feed_pair(note, :meta, _resolved), do: {nil, note.content_hash}
 
+  # `content_hash` ALWAYS comes from the façade, even when the body is resolved.
+  #
+  # It means "hash of the last checkpoint" — immutable between checkpoints and
+  # therefore identical on every endpoint that serves it, which is why the feed
+  # and `/sync/manifest` agree and why `validateFromManifest` can use equality
+  # as a convergence fence. Recomputing it here to match the resolved body was
+  # tried and reverted: it makes the value MUTABLE, so the feed and the manifest
+  # describe different instants of an actively-edited note and every such note
+  # reads as diverged on each poll. No server-side scheme fixes that — the
+  # content genuinely changes between the two calls.
+  #
+  # The cost is a bounded, self-healing window: until the next checkpoint the
+  # client's `serverHash` describes older bytes than the body it just wrote. At
+  # that checkpoint the feed re-serves the same body under the now-correct hash
+  # and the client re-applies idempotently.
   defp feed_pair(note, :all, resolved) do
-    Map.get(resolved, note.id) || {note.content, note.content_hash}
+    {Map.get(resolved, note.id, note.content), note.content_hash}
   end
 
   # Same rule `CrdtCheckpoint.markdown?/1` uses: only a `.md` note keeps its

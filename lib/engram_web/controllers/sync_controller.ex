@@ -8,7 +8,6 @@ defmodule EngramWeb.SyncController do
   alias Engram.Crypto
   alias Engram.Crypto.PathCrypto
   alias Engram.Logger.Metadata
-  alias Engram.Notes
   alias Engram.Notes.Note
   alias Engram.Repo
   alias EngramWeb.Schemas
@@ -138,29 +137,12 @@ defmodule EngramWeb.SyncController do
     # ~43ms while chunked parallel came out *slower* (result copy-back to the
     # caller's heap rivals the AES-GCM work). Keep these loops sequential;
     # the batch telemetry tells us if a real-world vault disagrees.
-    # #1339: `notes.content_hash` is the hash of the FAÇADE, which lags for a
-    # note with uncheckpointed ops. The change feed now serves the resolved
-    # body's hash for those notes, and the client cross-compares the two
-    # (`validateFromManifest` / `healDivergedLiveBoundNotes` stamp `serverHash`
-    # from the feed, then diff it against this manifest). Disagreeing here would
-    # make every actively-edited note read as diverged and rewind the vault's
-    # catch-up cursor on each poll. Bounded by notes carrying a tail, not by
-    # vault size — the checkpoint debounce keeps a quiet vault at zero.
-    resolved_hashes = Notes.resolved_content_hashes(user, vault)
-
     notes =
       Crypto.measure_decrypt_batch(:manifest_notes, length(note_rows), fn ->
         Enum.map(note_rows, fn {id, dek_version, path_ct, path_nonce, hash, seq, crdt_head} ->
           aad = PathCrypto.aad(:notes, id, dek_version)
           path = PathCrypto.decrypt!(path_ct, path_nonce, dek, aad)
-
-          %{
-            id: id,
-            path: path,
-            content_hash: Map.get(resolved_hashes, id, hash),
-            seq: seq,
-            crdt_head: crdt_head
-          }
+          %{id: id, path: path, content_hash: hash, seq: seq, crdt_head: crdt_head}
         end)
       end)
       |> Enum.sort_by(& &1.path)
