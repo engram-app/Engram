@@ -168,18 +168,18 @@ defmodule Engram.NotesContentForReadTest do
     assert change.content_hash == before.content_hash
   end
 
-  # A checkpointed note has no tail, so it must NOT pay a Yjs rebuild. This is
-  # the guard on the cost claim: genuinely-empty notes are common in a real
-  # vault, and an "is the facade empty" predicate would drag every one of them
-  # onto the slow path on every page.
-  test "a checkpointed note serves the facade verbatim, tail-free", ctx do
+  # A checkpointed note with a NON-empty facade is served verbatim and never
+  # re-read. Note what this does NOT claim: a genuinely-empty checkpointed note
+  # IS re-read and rebuilt, because an empty facade is indistinguishable from
+  # one a checkpoint just moved. That cost is real and bounded to empty notes.
+  test "a checkpointed note with a body is served verbatim", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "f.md", "content" => ""})
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "f.md", "content" => "KEPT"})
 
     {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0)
     change = Enum.find(changes, &(&1.path == "f.md"))
 
-    assert change.content == ""
+    assert change.content == "KEPT"
     refute is_nil(change.content_hash)
   end
 

@@ -3712,7 +3712,13 @@ defmodule Engram.Notes do
     changes =
       Enum.map(decrypted, fn note ->
         # The resolved row replaces the page's copy wholesale, so every field in
-        # the emitted change comes from one coherent DB row.
+        # the emitted change comes from one coherent DB row — EXCEPT `seq`,
+        # which stays the page's below because it is the cursor this page is
+        # keyed on and moving it would break pagination. So a checkpoint landing
+        # mid-page yields post-checkpoint content under a pre-checkpoint seq, and
+        # the plugin fences CRDT rows by seq alone. Self-healing: the
+        # checkpoint's new seq is above this page's max, so the row is
+        # re-delivered on a later page.
         resolved_note = if fields == :all, do: Map.get(resolved, note.id, note), else: note
 
         resolved_note
@@ -3804,7 +3810,7 @@ defmodule Engram.Notes do
   end
 
   defp resolve_chunk(user, by_id, ids) do
-    {:ok, resolved} =
+    {:ok, {fresh_rows, tails}} =
       Repo.with_tenant(user.id, fn ->
         # Fetch the tail ROWS, not a count. Replaying from these buffers is what
         # makes the resolution race-free: `Repo.with_tenant` is a plain
@@ -3845,22 +3851,37 @@ defmodule Engram.Notes do
               Map.has_key?(tails, n) or (by_id[n].content || "") == "",
               do: n
 
-        fresh_rows = Repo.all(from(n in Note, where: n.id in ^refresh_ids))
-        raw_by_id = Map.new(fresh_rows, &{&1.id, &1})
-        fresh_by_id = Map.new(decrypt_or_raise!(fresh_rows, user), &{&1.id, &1})
-
-        Enum.reduce(refresh_ids, %{}, fn id, acc ->
-          case {Map.fetch(raw_by_id, id), Map.fetch(fresh_by_id, id)} do
-            {{:ok, row}, {:ok, fresh}} ->
-              Map.put(acc, id, resolve_one(user, fresh, row, Map.get(tails, id, [])))
-
-            _ ->
-              acc
-          end
-        end)
+        {Repo.all(from(n in Note, where: n.id in ^refresh_ids)), tails}
       end)
 
-    resolved
+    # Rebuild OUTSIDE the transaction. The race only requires that the note rows
+    # and their tail rows be READ together; both are in memory now, and
+    # `doc_from_state` + per-row AES decrypt + `Yex.apply_update` + `project_doc`
+    # are pure NIF/CPU work with no DB access. Doing them inside would hold a
+    # pooled connection across up to @resolve_chunk doc rebuilds on a channel
+    # `handle_in` — with N devices in `crdt_catchup_since` at once, that is the
+    # pool-exhaustion shape in
+    # `docs/context/crdt-sync-pool-exhaustion-loop-2026-07-09.md`.
+    raw_by_id = Map.new(fresh_rows, &{&1.id, &1})
+    fresh_by_id = Map.new(decrypt_or_raise!(fresh_rows, user), &{&1.id, &1})
+
+    Enum.reduce(Map.keys(raw_by_id), %{}, fn id, acc ->
+      case Map.fetch(fresh_by_id, id) do
+        {:ok, fresh} ->
+          # Re-check the tombstone on the FRESH row: a delete committing between
+          # the page SELECT and here would otherwise ship a resurrected body on
+          # a `deleted: true` change, which the page-copy filter above cannot
+          # see.
+          if is_nil(fresh.deleted_at) do
+            Map.put(acc, id, resolve_one(user, fresh, raw_by_id[id], Map.get(tails, id, [])))
+          else
+            acc
+          end
+
+        :error ->
+          acc
+      end
+    end)
   end
 
   # Every path returns a NOTE — the freshly-read one, with `content` replaced by
@@ -3919,7 +3940,7 @@ defmodule Engram.Notes do
           # the tail underneath us.
           length(applied) < length(tail_rows) ->
             Logger.warning(
-              "feed: partial CRDT tail replay, serving last checkpoint",
+              "feed: partial CRDT tail replay",
               Metadata.with_category(:warning, :sync,
                 note_id: row.id,
                 user_id: user.id,
@@ -3928,7 +3949,15 @@ defmodule Engram.Notes do
               )
             )
 
-            fresh
+            # Degrading to the row is only safe when the row HAS a body. A
+            # never-checkpointed note has none — `genesis_insert_bare` leaves
+            # content: "" and the whole body in the tail — so "serve the last
+            # checkpoint" would serve "", and the client's discovery leg writes
+            # that to disk and pushes the empty hash back. That is #1339, reached
+            # through the one undecryptable tail row this branch exists for.
+            # A truncated projection is strictly better: the room heals the
+            # missing ops, and a 0-byte file does not.
+            if (fresh.content || "") == "", do: %{fresh | content: text}, else: fresh
 
           # The read-side mirror of `ensure_projection_safe/2`. The write path
           # refuses to materialize "" over a façade that holds a body — "pure
