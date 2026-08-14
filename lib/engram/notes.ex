@@ -4684,8 +4684,11 @@ defmodule Engram.Notes do
   filters by exact-match-or-prefix on `folder`, then bulk-updates
   `deleted_at` in one `update_all`.
 
-  Returns `{:ok, %{deleted: count}}` where count includes the folder
-  marker (if present) plus every descendant note and sub-marker. A folder
+  Returns `{:ok, %{deleted: count}}` where count is what was ACTUALLY
+  soft-deleted: the folder marker (if present) plus every descendant note and
+  sub-marker that still belonged to the folder at write time. Since #1346 a row
+  that moved between the scan and the write is fenced out, so this can be lower
+  than the scan matched — it is a count of removals, not of candidates. A folder
   that doesn't exist (no marker AND no notes underneath) returns
   `{:ok, %{deleted: 0}}` — same idempotency contract as `rename_folder/4`,
   which returns `{:ok, 0}` for an empty target.
@@ -4709,7 +4712,7 @@ defmodule Engram.Notes do
   (after-commit hooks) is tracked as a follow-up.
   """
   @spec delete_folder(map(), map(), String.t()) ::
-          {:ok, %{deleted: non_neg_integer()}} | {:error, term()}
+          {:ok, %{deleted: non_neg_integer(), notes: non_neg_integer()}} | {:error, term()}
   def delete_folder(user, vault, folder) when is_binary(folder) do
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
       do_delete_folder(user, vault, folder)
@@ -4782,9 +4785,16 @@ defmodule Engram.Notes do
   @doc """
   Soft-deletes rows produced by `scan_folders/3`, with the usual meter
   decrement, Qdrant cleanup enqueue and `note_changed` broadcasts.
+
+  Re-asserts folder membership at write time (#1346), so a row that moved
+  between the scan and here is skipped rather than deleted from a folder the
+  caller never named. `:deleted` counts every row removed (notes + markers),
+  `:notes` only the content notes — both measured from what the write actually
+  touched, which is what the side effects here are driven from.
   """
   # No error branch: every failure inside is a raise, not a tuple.
-  @spec delete_scanned(map(), map(), [map()]) :: {:ok, %{deleted: non_neg_integer()}}
+  @spec delete_scanned(map(), map(), [map()]) ::
+          {:ok, %{deleted: non_neg_integer(), notes: non_neg_integer()}}
   def delete_scanned(user, vault, matches) do
     # `Links.basename_hmac/2` below needs the DEK, and callers reach here with
     # the struct they started with — the same staleness `scan_folders/3`
@@ -4792,29 +4802,46 @@ defmodule Engram.Notes do
     user = Crypto.fresh_user(user)
 
     if matches == [] do
-      {:ok, %{deleted: 0}}
+      {:ok, %{deleted: 0, notes: 0}}
     else
       now = DateTime.utc_now()
-      ids = Enum.map(matches, & &1.id)
 
-      {real_notes, markers} = Enum.split_with(matches, fn r -> r.kind == "note" end)
+      {:ok, deleted_ids} =
+        Repo.with_tenant(user.id, fn ->
+          seq = Engram.Vaults.next_seq!(vault.id)
 
-      Repo.with_tenant(user.id, fn ->
-        seq = Engram.Vaults.next_seq!(vault.id)
+          # Chunked for the reason `@rename_update_chunk` already documents in
+          # this module: each statement binds its rows' ids AND their folder
+          # hmacs, so an unchunked delete of a deep tree walks into Postgres's
+          # 65535-parameter ceiling — and carrying the hmac list moved that wall
+          # closer than the id list alone did. Chunking `matches` rather than
+          # `ids` keeps each statement's hmac list scoped to its own rows.
+          deleted =
+            matches
+            |> Enum.chunk_every(@rename_update_chunk)
+            |> Enum.reduce(MapSet.new(), fn chunk, acc ->
+              {_updated, returned_ids} =
+                chunk
+                |> fenced_delete_query()
+                |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
 
-        {updated, _} =
-          from(n in Note,
-            where: n.id in ^ids and is_nil(n.deleted_at)
-          )
-          |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
+              MapSet.union(acc, MapSet.new(returned_ids))
+            end)
 
-        # Decrement only real notes — markers don't count against the meter.
-        # `updated` may include both kinds; recompute live-real-note count from
-        # the matched set so the meter delta lines up with notes_count semantics.
-        real_count = length(real_notes)
-        if real_count > 0, do: :ok = UsageMeters.dec_notes_count(user.id, real_count)
-        updated
-      end)
+          # Decrement only real notes — markers don't count against the meter.
+          real_count =
+            Enum.count(matches, fn r -> r.kind == "note" and MapSet.member?(deleted, r.id) end)
+
+          if real_count > 0, do: :ok = UsageMeters.dec_notes_count(user.id, real_count)
+          deleted
+        end)
+
+      log_fenced_skips(user, vault, matches, deleted_ids)
+
+      {real_notes, markers} =
+        matches
+        |> Enum.filter(&MapSet.member?(deleted_ids, &1.id))
+        |> Enum.split_with(fn r -> r.kind == "note" end)
 
       # Side effects outside the transaction context, so they never fire if
       # the update_all above rolled back. Qdrant cleanup + broadcasts.
@@ -4844,8 +4871,61 @@ defmodule Engram.Notes do
         :ok = broadcast_change(user.id, vault.id, "delete", marker.folder, nil, [])
       end)
 
-      {:ok, %{deleted: length(matches)}}
+      # The counts the caller reports to the user. `length(matches)` was the
+      # scanned set, which equals the deleted set only when nothing raced.
+      # `:notes` excludes markers so `Folders.delete/4` can report content
+      # notes without recounting a set it no longer owns.
+      {:ok, %{deleted: MapSet.size(deleted_ids), notes: length(real_notes)}}
     end
+  end
+
+  # The fence skipping a row is the ONLY in-prod evidence that the #1346 race
+  # is real, and the row it spares becomes a live note whose ancestor folder
+  # markers were just deleted — an orphan, exactly the shape
+  # `Folders.log_orphaned_attachments/4` refuses to let pass silently.
+  #
+  # Two distinct causes land here and the log does not try to tell them apart,
+  # because the operator response is the same (look at the note, it is intact):
+  #
+  #   1. A move OUT of the tree — the case this fence exists for.
+  #   2. A move deeper INSIDE the tree, into a folder created after the scan.
+  #      The predicate is membership in the hmacs the scan OBSERVED, not "under
+  #      the target prefix" — and it cannot be the latter, because `folder` is
+  #      HMAC'd and SQL cannot prefix-match a keyed hash. So `Docs/a.md` moving
+  #      to `Docs/new-sub/a.md` mid-delete is skipped even though it is still
+  #      inside the tree the user asked to delete. Fail-safe (the note lives)
+  #      and self-healing (a fresh scan sees it), but it is a real skip class.
+  defp log_fenced_skips(user, vault, matches, deleted_ids) do
+    skipped = Enum.reject(matches, &MapSet.member?(deleted_ids, &1.id))
+
+    if skipped != [] do
+      Logger.warning(
+        "folder delete: membership fence skipped rows — they moved between scan and delete",
+        Metadata.with_category(:warning, :sync,
+          user_id: user.id,
+          vault_id: vault.id,
+          scanned: length(matches),
+          deleted: MapSet.size(deleted_ids),
+          skipped: length(skipped)
+        )
+      )
+    end
+
+    :ok
+  end
+
+  # The membership fence itself. `folder_hmac` is NOT NULL for both `kind`s by
+  # check constraint (`notes_kind_shape_check`, validated in the empty-folders
+  # phase-2 migration), so the hmac list can never contain a nil that would
+  # silently drop a row from the match set.
+  defp fenced_delete_query(chunk) do
+    ids = Enum.map(chunk, & &1.id)
+    hmacs = chunk |> Enum.map(& &1.folder_hmac) |> Enum.uniq()
+
+    from(n in Note,
+      where: n.id in ^ids and n.folder_hmac in ^hmacs and is_nil(n.deleted_at),
+      select: n.id
+    )
   end
 
   @doc """
