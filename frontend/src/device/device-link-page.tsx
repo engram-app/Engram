@@ -25,6 +25,16 @@ interface Vault {
 
 type Step = "enter-code" | "pick-vault" | "success" | "error";
 
+// The heading names the step you're on. It used to be a single ternary that
+// only special-cased pick-vault, so the success screen kept announcing "Link
+// Obsidian Vault" for a job that was already done.
+const STEP_TITLES: Record<Step, string> = {
+	"enter-code": "Link Obsidian Vault",
+	"pick-vault": "Choose a vault to sync",
+	success: "Finish in Obsidian",
+	error: "Link Obsidian Vault",
+};
+
 // RFC 8628 verification_uri_complete: the plugin sends the user to
 // /link?code=ENGR-7X4K, so read and normalize the code it already knows.
 // Returns "" when absent, and only returns the dashed 9-char form when the
@@ -265,7 +275,7 @@ function DeviceLinkPage() {
 				)}
 			>
 				<h1 className="font-bold text-2xl text-foreground tracking-tight sm:text-3xl">
-					{step === "pick-vault" ? "Choose a vault to sync" : "Link Obsidian Vault"}
+					{STEP_TITLES[step]}
 				</h1>
 
 				{capCheck.swapCooldownHours !== null && step !== "success" ? (
@@ -422,37 +432,40 @@ function SuccessStep({ linkedVaultId, obsidianVaultName, onForward }: SuccessSte
 
 	return (
 		<div className="flex flex-col gap-4">
-			<div className="flex flex-col gap-1">
-				<h2 className="font-semibold text-foreground text-lg">Vault linked!</h2>
-				<p className="text-foreground text-sm">
-					Now jump back to Obsidian and run your first sync.
-				</p>
-			</div>
-
-			{/* Obsidian registers the `obsidian://` URI scheme, so this is a plain
-			    link — no integration, no detection. Deliberately a button and not
-			    an automatic redirect: browsers suppress protocol launches without
-			    a user gesture, and there is no success callback, so nothing below
-			    may depend on the jump having worked. It also opens Obsidian on
-			    whatever machine the BROWSER is on, which is why it's an offer
-			    sitting next to "Skip ahead" rather than the only way forward. */}
-			{obsidianVaultName ? (
-				<Button asChild className="self-start">
-					<a href={`obsidian://open?vault=${encodeURIComponent(obsidianVaultName)}`}>
-						Open Obsidian
-					</a>
-				</Button>
-			) : null}
+			{/* No second heading here — the panel's h1 already says "Finish in
+			    Obsidian", and "Vault linked!" underneath it was the same news twice. */}
+			<p className="text-foreground text-sm">
+				Your vault is linked. Obsidian is waiting for you to start the first sync.
+			</p>
 
 			<SyncStatusPill message="Waiting for your first sync…" />
 
 			<p className="text-muted-foreground text-sm">
-				Once it lands we'll take you to your vault automatically.
+				We'll open your vault here the moment it lands.
 			</p>
 
-			<Button type="button" variant="ghost" onClick={onForward} className="self-start text-sm">
-				Skip ahead
-			</Button>
+			{/* Actions bottom-right, matching the footer pattern used elsewhere
+			    (e.g. settings/connections-page.tsx). Secondary first, primary last.
+
+			    Obsidian registers the `obsidian://` URI scheme, so the primary is a
+			    plain link — no integration, no detection. Deliberately a button and
+			    not an automatic redirect: browsers suppress protocol launches
+			    without a user gesture, and there is no success callback, so nothing
+			    here may depend on the jump having worked. It also opens Obsidian on
+			    whatever machine the BROWSER is on, which is why the escape hatch
+			    beside it is always present. */}
+			<footer className="flex justify-end gap-2 pt-2">
+				<Button type="button" variant="ghost" onClick={onForward} className="text-sm">
+					Go to my vault without waiting
+				</Button>
+				{obsidianVaultName ? (
+					<Button asChild>
+						<a href={`obsidian://open?vault=${encodeURIComponent(obsidianVaultName)}`}>
+							Open Obsidian
+						</a>
+					</Button>
+				) : null}
+			</footer>
 		</div>
 	);
 }

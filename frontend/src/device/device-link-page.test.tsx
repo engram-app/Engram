@@ -236,7 +236,53 @@ describe("DeviceLinkPage", () => {
 				expect.objectContaining({ user_code: "ENGR-7X4K", vault_id: 7 }),
 			),
 		);
-		expect(await screen.findByText(/vault linked/iu)).toBeInTheDocument();
+		expect(await screen.findByText(/your vault is linked/iu)).toBeInTheDocument();
+	});
+
+	// The heading used to stay "Link Obsidian Vault" on the success step — a
+	// title for a job already finished. It should name the step you're on.
+	it("retitles the page for each step", async () => {
+		get.mockResolvedValue({
+			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
+			user_code_valid: true,
+		});
+		post.mockResolvedValue({ ok: true, vault_id: 7 });
+		renderPage();
+		expect(screen.getByRole("heading", { name: /link obsidian vault/iu })).toBeInTheDocument();
+
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		expect(
+			await screen.findByRole("heading", { name: /choose a vault to sync/iu }),
+		).toBeInTheDocument();
+
+		fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+
+		expect(
+			await screen.findByRole("heading", { name: /finish in obsidian/iu }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("heading", { name: /link obsidian vault/iu }),
+		).not.toBeInTheDocument();
+	});
+
+	it("lets you go to the vault without waiting for the first sync", async () => {
+		get.mockResolvedValue({
+			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
+			user_code_valid: true,
+		});
+		post.mockResolvedValue({ ok: true, vault_id: 7 });
+		renderPage();
+
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+
+		expect(
+			await screen.findByRole("button", { name: /go to my vault without waiting/iu }),
+		).toBeInTheDocument();
 	});
 
 	// Obsidian registers the `obsidian://` URI scheme, so getting the user back
@@ -276,7 +322,7 @@ describe("DeviceLinkPage", () => {
 		fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
 		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
 
-		expect(await screen.findByText(/vault linked/iu)).toBeInTheDocument();
+		expect(await screen.findByText(/your vault is linked/iu)).toBeInTheDocument();
 		expect(screen.queryByRole("link", { name: /open obsidian/iu })).not.toBeInTheDocument();
 	});
 
