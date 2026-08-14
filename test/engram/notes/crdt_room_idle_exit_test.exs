@@ -34,6 +34,22 @@ defmodule Engram.Notes.CrdtRoomIdleExitTest do
 
   @idle_ms 150
 
+  # The re-arm test has two conflicting timing requirements: each gap between
+  # edits must stay RELIABLY under the idle window (or the room really is idle
+  # and the drain correctly fires), while the TOTAL activity period must exceed
+  # it (or a never-re-armed timer would not have fired either, and the test
+  # discriminates nothing).
+  #
+  # The first version used a 2x ratio (75 ms gaps, 150 ms window) and failed
+  # ~70% of the time under CPU contention: a loaded scheduler overshoots the
+  # sleep, the room is genuinely idle past the window, and `idle?/2` fires
+  # exactly as designed. That test was asserting the machine's timeliness, not
+  # the code's behaviour. 6x gap-to-window, with a total that clears the window
+  # three times over.
+  @rearm_idle_ms 1_200
+  @rearm_gap_ms 200
+  @rearm_edits 10
+
   setup do
     # Park the checkpoint debounce far out of reach so the ONLY thing that can
     # materialize content in these tests is the unbind checkpoint on room exit.
@@ -91,15 +107,18 @@ defmodule Engram.Notes.CrdtRoomIdleExitTest do
 
     test "activity re-arms the window so an actively-edited room is never drained", ctx do
       Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(ctx.note.id))
-      room = start_room(ctx, idle_exit_ms: @idle_ms)
+      room = start_room(ctx, idle_exit_ms: @rearm_idle_ms)
       :ok = SharedDoc.observe(room)
 
-      # Keep editing across several idle windows.
-      for n <- 1..5 do
+      # Sustained editing for ~2s against a 1.2s window: a timer armed once at
+      # room start would have fired long before this loop ends.
+      for n <- 1..@rearm_edits do
         edit(room, "typing #{n}")
-        Process.sleep(div(@idle_ms, 2))
+        Process.sleep(@rearm_gap_ms)
       end
 
+      # refute_RECEIVED, not refute_receive: check the mailbox as it stands
+      # rather than waiting further, so the assertion adds no timing surface.
       refute_received {:crdt_room_drain, ^room}
       assert Process.alive?(room)
     end

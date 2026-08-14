@@ -51,15 +51,23 @@ defmodule EngramWeb.CrdtChannelDrainTest do
   # Drive the channel to start + observe the room, and hand back its pid.
   defp open_room(socket, note) do
     client = CrdtBridge.new_doc()
+    push_step1(socket, note, client)
+
+    room = CrdtRegistry.lookup(note.id)
+    assert is_pid(room)
+    {client, room}
+  end
+
+  # A handshake, NOT an edit. Opens the room through ensure_room while changing
+  # no content — which matters for the announce tests: a content-changing
+  # checkpoint fires its own `crdt_doc_ready` (crdt_checkpoint.ex:213), so
+  # re-spinning with an edit makes the two announce sources indistinguishable.
+  defp push_step1(socket, note, client) do
     {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
     {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
 
     push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
     assert_push "crdt_msg", %{"doc_id" => _, "b64" => _}, 3_000
-
-    room = CrdtRegistry.lookup(note.id)
-    assert is_pid(room)
-    {client, room}
   end
 
   # A sync_update frame carrying `content` as the note's full plaintext.
@@ -87,8 +95,11 @@ defmodule EngramWeb.CrdtChannelDrainTest do
       end
     end)
     |> case do
-      :ok -> :ok
-      {:error, last} -> flunk("#{inspect(needle)} never materialized; last content: #{inspect(last)}")
+      :ok ->
+        :ok
+
+      {:error, last} ->
+        flunk("#{inspect(needle)} never materialized; last content: #{inspect(last)}")
     end
   end
 
@@ -98,7 +109,11 @@ defmodule EngramWeb.CrdtChannelDrainTest do
 
     # [edit, drain] — the edit is ahead of the drain in the channel's mailbox,
     # so it must be routed to the still-live room before the room is released.
-    push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => edit_frame(client, "EDIT BEFORE DRAIN")})
+    push(socket, "crdt_msg", %{
+      "doc_id" => note.id,
+      "b64" => edit_frame(client, "EDIT BEFORE DRAIN")
+    })
+
     send(socket.channel_pid, {:crdt_room_drain, room})
 
     assert_content_eventually(user, vault, note.id, "EDIT BEFORE DRAIN")
@@ -112,13 +127,40 @@ defmodule EngramWeb.CrdtChannelDrainTest do
     # [drain, edit] — the drain evicts the cached pid FIRST, so the edit behind
     # it must re-resolve through ensure_room rather than cast at the dead room.
     send(socket.channel_pid, {:crdt_room_drain, room})
-    push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => edit_frame(client, "EDIT AFTER DRAIN")})
+
+    push(socket, "crdt_msg", %{
+      "doc_id" => note.id,
+      "b64" => edit_frame(client, "EDIT AFTER DRAIN")
+    })
 
     assert_content_eventually(user, vault, note.id, "EDIT AFTER DRAIN")
 
     respun = CrdtRegistry.lookup(note.id)
     assert is_pid(respun)
     refute respun == room, "the edit must land on a NEW room, not the drained one"
+  end
+
+  # The whole point of the feature is bounding memory, so "did a room actually
+  # get released" has to be observable in prod, not just in a test.
+  test "a released room emits the telemetry ops needs to see the drain working", ctx do
+    %{socket: socket, note: note} = ctx
+    {_client, room} = open_room(socket, note)
+
+    test_pid = self()
+    handler = "drain-telemetry-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler,
+      [:engram, :crdt, :room_drain],
+      fn _e, measurements, meta, _ -> send(test_pid, {:drain_telemetry, measurements, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    send(socket.channel_pid, {:crdt_room_drain, room})
+
+    assert_receive {:drain_telemetry, %{count: 1}, %{phase: :released}}, 3_000
   end
 
   test "a drain broadcast on the room's topic reaches the channel and releases the room", ctx do
@@ -135,6 +177,206 @@ defmodule EngramWeb.CrdtChannelDrainTest do
 
     # Channel was the only observer, so letting go trips auto_exit.
     assert_receive {:DOWN, ^ref, :process, ^room, :normal}, 5_000
+  end
+
+  # The production shape: two devices on one note share ONE room, so the drain
+  # has to be handled by every observer and the exit must happen exactly once,
+  # on the last release. A drain that assumed a single observer would either
+  # strand the room (nobody else lets go) or exit it under a live observer.
+  test "a drain releases EVERY observer, and the room exits on the last one", ctx do
+    %{socket: socket_a, user: user, vault: vault, note: note} = ctx
+    {_client, room} = open_room(socket_a, note)
+
+    {:ok, _, socket_b} =
+      subscribe_and_join(
+        socket(EngramWeb.UserSocket, "user_#{user.id}_b", %{
+          current_user: user,
+          current_api_key: nil
+        }),
+        EngramWeb.CrdtChannel,
+        "crdt:#{user.id}:#{vault.id}",
+        %{"crdt_proto" => 2}
+      )
+
+    Sandbox.allow(Repo, self(), socket_b.channel_pid)
+    {_client_b, ^room} = open_room(socket_b, note)
+
+    ref = Process.monitor(room)
+
+    Phoenix.PubSub.broadcast(
+      Engram.PubSub,
+      CrdtRegistry.drain_topic(note.id),
+      {:crdt_room_drain, room}
+    )
+
+    assert_receive {:DOWN, ^ref, :process, ^room, :normal}, 5_000
+  end
+
+  # The announce is a DISCOVERY signal and recipients answer it with a
+  # syncStep1. A drain->edit->re-spin discovers nothing (every peer already
+  # heard about this note), so re-announcing would turn every drain cycle into a
+  # handshake fanned out to every other device on the vault — against @hs_limit
+  # here and the plugin's 240/10s crdt_msg budget, with handshake starvation
+  # being the documented trigger for the wrong-mint overwrite class.
+  test "a re-spin after a drain does NOT re-announce crdt_doc_ready", ctx do
+    %{socket: socket, note: note} = ctx
+    {client, room} = open_room(socket, note)
+
+    # The FIRST open announces — pin that, so this test cannot pass by the
+    # announce being broken outright.
+    assert_broadcast "crdt_doc_ready", %{"doc_id" => _}
+
+    send(socket.channel_pid, {:crdt_room_drain, room})
+    push_step1(socket, note, client)
+
+    refute_broadcast "crdt_doc_ready", %{"doc_id" => _}, 300
+  end
+
+  # Suppression is consumed once per drain, not latched: a crash-shaped
+  # eviction still announces, because THAT peer state is genuinely unknown.
+  test "only the drain-induced re-spin is suppressed, not every later open", ctx do
+    %{socket: socket, note: note} = ctx
+    {client, room} = open_room(socket, note)
+    assert_broadcast "crdt_doc_ready", %{"doc_id" => _}
+
+    # Drain -> re-spin is quiet.
+    send(socket.channel_pid, {:crdt_room_drain, room})
+    push_step1(socket, note, client)
+    refute_broadcast "crdt_doc_ready", %{"doc_id" => _}, 300
+
+    # Crash-shaped eviction (no drain recorded) -> announces again.
+    respun = CrdtRegistry.lookup(note.id)
+    send(socket.channel_pid, {:DOWN, make_ref(), :process, respun, :crashed})
+    push_step1(socket, note, client)
+    assert_broadcast "crdt_doc_ready", %{"doc_id" => _}, 3_000
+  end
+
+  # `SharedDoc.unobserve/1` is a GenServer.call with y_ex's 5 s default and no
+  # timeout knob, so a dead or wedged room would exit or stall the channel.
+  # These drive release_room/1 with PLAIN processes that simply do not reply —
+  # no y_ex message shapes encoded here, so the tests keep meaning across a dep
+  # bump. The responsive path is covered end-to-end by the drain tests above.
+  describe "release_room/1" do
+    defp elapsed_ms(fun) do
+      t0 = System.monotonic_time(:millisecond)
+      result = fun.()
+      {result, System.monotonic_time(:millisecond) - t0}
+    end
+
+    test "a room that already exited is a fast no-op, not a channel-killing exit" do
+      dead = spawn(fn -> :ok end)
+      ref = Process.monitor(dead)
+      assert_receive {:DOWN, ^ref, :process, ^dead, _}, 1_000
+
+      {result, ms} = elapsed_ms(fn -> EngramWeb.CrdtChannel.release_room(dead) end)
+
+      assert result == :ok
+      assert ms < 500, "a dead room should short-circuit, took #{ms}ms"
+    end
+
+    test "a wedged room is abandoned at the probe, not held for the 5s call default" do
+      # Assert against a SHORT configured probe rather than racing the 1s
+      # default on a loaded shared runner — the timing headroom is what keeps
+      # this from flaking.
+      # DELETE on restore when the key was previously unset. put_env(…, nil)
+      # would leave the key PRESENT with a nil value, which is not the same as
+      # absent — it poisoned every later test in this file with `timeout: nil`.
+      prev = Application.get_env(:engram, :crdt_room_probe_ms)
+      Application.put_env(:engram, :crdt_room_probe_ms, 100)
+
+      on_exit(fn ->
+        case prev do
+          nil -> Application.delete_env(:engram, :crdt_room_probe_ms)
+          v -> Application.put_env(:engram, :crdt_room_probe_ms, v)
+        end
+      end)
+
+      wedged = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(wedged, :kill) end)
+
+      {result, ms} = elapsed_ms(fn -> EngramWeb.CrdtChannel.release_room(wedged) end)
+
+      assert result == :ok
+      # The point: bounded by the probe, nowhere near y_ex's 5_000ms default.
+      assert ms < 1_000, "a wedged room stalled the channel for #{ms}ms"
+    end
+
+    # Rooms are `:global`-registered, so a channel on this node routinely
+    # observes a room on ANOTHER node. `Process.alive?/1` is local-only and
+    # raises ArgumentError on a remote pid — :error class, which the `catch
+    # :exit` in release_room/1 does NOT contain. Unguarded, every drain of a
+    # remote room crashes the channel, in a cluster that has been live in prod
+    # since 2026-06-23.
+    #
+    # NOTE: `:cluster` is excluded unless CLUSTER_TESTS=1, and nothing in CI
+    # sets it — so this does not currently gate a merge. It is still the only
+    # executable proof of the guard; run it with
+    #   CLUSTER_TESTS=1 mix test test/engram_web/channels/crdt_channel_drain_test.exs
+    @tag :cluster
+    test "a room on ANOTHER node does not crash the channel" do
+      unless Node.alive?() do
+        {:ok, _} = :net_kernel.start([:"drainprimary@127.0.0.1", :longnames])
+        Node.set_cookie(:engram_drain_test)
+      end
+
+      {:ok, peer, _node} =
+        :peer.start(%{
+          name: :crdt_drain_peer,
+          host: ~c"127.0.0.1",
+          longnames: true,
+          connection: :standard_io
+        })
+
+      on_exit(fn -> :peer.stop(peer) end)
+      true = :peer.call(peer, :erlang, :set_cookie, [Node.get_cookie()])
+
+      remote = :peer.call(peer, :erlang, :spawn, [:timer, :sleep, [60_000]])
+      refute node(remote) == node()
+
+      # The bug this pins raises rather than exits, so a bare call is the test.
+      assert EngramWeb.CrdtChannel.release_room(remote) == :ok
+    end
+
+    test "a room that dies mid-call is swallowed rather than exiting the channel" do
+      # Answers the probe, then exits before the unobserve can land.
+      dying =
+        spawn(fn ->
+          receive do
+            {:"$gen_call", from, _} -> GenServer.reply(from, :ok)
+          end
+
+          exit(:normal)
+        end)
+
+      assert EngramWeb.CrdtChannel.release_room(dying) == :ok
+    end
+  end
+
+  # assigns.drained holds a doc_id until its re-spin consumes it — but a note
+  # drained and never re-opened leaves one behind for the life of the socket,
+  # and @default_max_rooms bounds CONCURRENT rooms, not cumulative ones, while
+  # drain-churn is the intended steady state.
+  describe "remember_drained/3" do
+    test "accumulates entries below the cap" do
+      set =
+        Enum.reduce(1..5, MapSet.new(), &EngramWeb.CrdtChannel.remember_drained(&2, "d#{&1}", 10))
+
+      assert MapSet.size(set) == 5
+    end
+
+    # Overflow CLEARS rather than evicting: the degradation is only ever lost
+    # suppression (a re-spin announces, i.e. pre-drain behaviour), never
+    # incorrectness — so it needs no ordering bookkeeping.
+    test "clears at the cap instead of growing without bound" do
+      set =
+        Enum.reduce(
+          1..50,
+          MapSet.new(),
+          &EngramWeb.CrdtChannel.remember_drained(&2, "d#{&1}", 10)
+        )
+
+      assert MapSet.size(set) <= 10
+    end
   end
 
   test "a drain for a room this channel does not hold is ignored", ctx do

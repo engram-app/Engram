@@ -29,6 +29,18 @@ defmodule Engram.Notes.CrdtRegistry do
   def global_name(note_id) when is_binary(note_id), do: {:global, {:crdt_doc, note_id}}
 
   @doc """
+  PubSub topic a room's observers subscribe to, so the room can ask them to LET
+  GO when it has gone idle (#1152).
+
+  PubSub rather than a node-local registry because rooms are `:global`: a room
+  on this node can be observed by channels on any other node. `SharedDoc` also
+  keeps its `observer_process` map private, so a room cannot enumerate its own
+  observers to message them directly.
+  """
+  @spec drain_topic(String.t()) :: String.t()
+  def drain_topic(note_id) when is_binary(note_id), do: "crdt_room_drain:" <> note_id
+
+  @doc """
   Find the live room for `note_id` WITHOUT starting one, returning `nil` when
   no room is running anywhere in the cluster. Used by the deliver-out path,
   which must never spin a room for a note nobody is observing.
