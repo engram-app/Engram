@@ -65,7 +65,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   """
   use GenServer
 
-  alias Engram.Notes.{CrdtCheckpoint, CrdtRegistry}
+  alias Engram.Notes.{CrdtCheckpoint, CrdtRegistry, CrdtRoomLru}
 
   require Logger
 
@@ -157,7 +157,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     # Armed at init, not only on activity: a room that spins for a handshake and
     # is never written to (the common index-room case — connect, sync, go quiet)
     # must still drain.
-    {:ok, arm_idle(state)}
+    {:ok, touch_lru(arm_idle(state))}
   end
 
   @impl true
@@ -170,13 +170,15 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     timer = Process.send_after(self(), :tick, delay)
 
     {:noreply,
-     arm_idle(%{
-       state
-       | first_dirty_at: first_dirty_at,
-         last_activity_at: now,
-         settle_timer: timer,
-         drain_attempts: 0
-     })}
+     touch_lru(
+       arm_idle(%{
+         state
+         | first_dirty_at: first_dirty_at,
+           last_activity_at: now,
+           settle_timer: timer,
+           drain_attempts: 0
+       })
+     )}
   end
 
   # The room has been quiet for `idle_exit_ms`. Ask its observers to let go; the
@@ -241,7 +243,17 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   # for both normal and abnormal room exits without leaving an orphaned timer.
   @impl true
   def handle_info({:EXIT, _room_pid, _reason}, state) do
+    if state.idle_exit_ms, do: CrdtRoomLru.forget(state.note_id)
     {:stop, :normal, state}
+  end
+
+  # Only drain-ENABLED rooms are tracked for eviction, so a note room can never
+  # be evicted and this whole feature stays inert until #1150 opts in.
+  defp touch_lru(%{idle_exit_ms: nil} = state), do: state
+
+  defp touch_lru(state) do
+    CrdtRoomLru.touch(state.note_id, state.room_pid)
+    state
   end
 
   @doc """

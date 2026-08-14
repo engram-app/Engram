@@ -121,6 +121,31 @@ CONCURRENT rooms, not cumulative ones, while drain-churn is the intended steady 
 `remember_drained/3`, which CLEARS on overflow: the only degradation is lost suppression (a re-spin
 announces, i.e. pre-drain behaviour), never incorrectness, so it needs no ordering bookkeeping.
 
+## The LRU backstop
+
+Idle-exit bounds rooms that go **quiet**. It does nothing for a continuously-active room, so a
+pathological mix of busy vaults still pins memory. `Engram.Notes.CrdtRoomLru` is the pressure valve:
+a named public ETS table (`note_id -> {pid, last_activity}`, mirroring `FanoutPacer`) plus a
+periodic sweep that prunes dead entries and then drains down to `max_resident`.
+
+Three properties worth keeping:
+
+- **It drains, it never kills.** Eviction broadcasts on the room's drain topic exactly as the idle
+  timer does. Killing would silently eat the next `sync_update`, which is the whole reason the drain
+  exists.
+- **It deliberately bypasses `idle?/2`.** Evicting rooms that are *not* idle is its entire job —
+  which is precisely why it must go through the safe release path instead of inventing a second one.
+- **Prune before selecting.** A room that exited between sweeps still holds an entry; counting
+  corpses toward residency evicts healthy rooms to free memory nothing is using.
+
+Only drain-ENABLED rooms are tracked (`touch/2` is called from the timer only when `idle_exit_ms`
+is set), so a note room can never be evicted and the feature stays inert until #1150 opts in. Every
+tracked pid is local — a room's timer runs on the room's node — so `Process.alive?/1` is safe here,
+unlike in the channel.
+
+`max_resident` defaults to 64 and wants tuning against real index-doc sizes once #1150 exists;
+#1146's arithmetic says ~128 resident rooms would consume an entire task.
+
 ## Observability
 
 `[:engram, :crdt, :room_drain]`, `%{count: 1}`, `%{phase: :requested | :reasked | :released |
