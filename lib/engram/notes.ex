@@ -3653,6 +3653,7 @@ defmodule Engram.Notes do
 
     fields = Keyword.get(opts, :fields, :all)
     after_id = Keyword.get(opts, :after_id)
+    max_bytes = Keyword.get(opts, :max_bytes) || page_max_bytes()
 
     base =
       from(n in scoped(user, vault),
@@ -3674,13 +3675,32 @@ defmodule Engram.Notes do
         :all -> base
       end
 
-    {:ok, notes} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
+    # Byte budget. `limit` caps ROWS; nothing capped BYTES, and POST /notes
+    # accepts a 10 MB note — so a 500-row page could try to build ~5 GB inside
+    # an 820 MB prod container, OOM the BEAM and take the ECS task down with
+    # every other user on it.
+    #
+    # The probe runs as its own query because the budget has to bound the READ.
+    # Trimming `notes` after Repo.all would already have transferred and (below)
+    # decrypted the rows it was meant to exclude, which is exactly where the
+    # memory goes. The probe selects sizes only — no content, no decrypt — so it
+    # is a few KB regardless of how fat the page would have been.
+    #
+    # :meta carries no content, so it has no byte hazard and skips the probe.
+    {row_limit, budget_more} =
+      case {fields, max_bytes} do
+        {:all, b} when is_integer(b) and b > 0 -> byte_budget_limit(base, user, limit, b)
+        _ -> {limit + 1, false}
+      end
+
+    {:ok, notes} =
+      Repo.with_tenant(user.id, fn -> Repo.all(from(q in query, limit: ^row_limit)) end)
 
     {page, has_more} =
       if length(notes) > limit do
         {Enum.take(notes, limit), true}
       else
-        {notes, false}
+        {notes, budget_more}
       end
 
     changes =
@@ -3695,6 +3715,53 @@ defmodule Engram.Notes do
       end
 
     {:ok, %{changes: changes, has_more: has_more, next: next}}
+  end
+
+  # Default ceiling on the note content one catch-up page may carry. 4 MB keeps
+  # a typical vault a single page (a 316-note real vault measured 1.5 MB) while
+  # holding the worst case to ~4 MB per in-flight page instead of ~5 GB. The
+  # frame is copied about three times on the way out (Elixir term, JSON string,
+  # transport buffer), so the live cost is a small multiple of this, not this.
+  @default_page_max_bytes 4 * 1024 * 1024
+
+  defp page_max_bytes do
+    Application.get_env(:engram, :sync_page_max_bytes, @default_page_max_bytes)
+  end
+
+  # How many of the next rows fit the byte budget, and whether the budget (not
+  # the row limit) is what stopped the page.
+  #
+  # pg_column_size reads the stored size without detoasting the ciphertext, so
+  # the probe stays cheap even when the rows it is measuring are huge. AES output
+  # is incompressible, so for our data it tracks octet_length closely.
+  defp byte_budget_limit(base, user, limit, max_bytes) do
+    {:ok, sizes} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(
+          from(n in base,
+            select: fragment("coalesce(pg_column_size(?), 0)", n.content_ciphertext)
+          )
+        )
+      end)
+
+    fits = count_within_budget(sizes, max_bytes)
+    {min(fits, limit + 1), fits <= limit and length(sizes) > fits}
+  end
+
+  defp count_within_budget(sizes, max_bytes) do
+    sizes
+    |> Enum.reduce_while({0, 0}, fn size, {n, acc} ->
+      cond do
+        # The first row always ships, however far over budget. A page of zero
+        # rows with has_more is a feed that never drains: walkOpLog's
+        # stuck-cursor guard breaks the loop and the note is stranded forever.
+        # One oversized note should sync slowly, not block everything behind it.
+        n == 0 -> {:cont, {1, size}}
+        acc + size > max_bytes -> {:halt, {n, acc}}
+        true -> {:cont, {n + 1, acc + size}}
+      end
+    end)
+    |> elem(0)
   end
 
   defp change_map(note) do

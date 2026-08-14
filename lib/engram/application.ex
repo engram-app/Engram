@@ -41,6 +41,9 @@ defmodule Engram.Application do
         Engram.Onboarding.TermsCache,
         # Subscribe to CacheSync in init → must start after PubSub.
         Engram.Onboarding.GateCache,
+        # Bounds concurrent catch-up page builds. Absent, merged_changes_page
+        # degrades open rather than failing, so ordering here is not critical.
+        Engram.Sync.PageGate,
         # Dedicated LISTEN/NOTIFY connection — OverrideCache LISTENs on it
         # so raw-SQL override writes (trigger → pg_notify) evict caches on
         # every node. Must start before OverrideCache.
