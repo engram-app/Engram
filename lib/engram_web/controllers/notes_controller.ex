@@ -125,7 +125,12 @@ defmodule EngramWeb.NotesController do
     case Notes.get_note(user, vault, path) do
       {:ok, note} ->
         # Append is a read-modify-write, so it must read the AUTHORITY, not the
-        # `notes.content` façade. The façade is materialized from the CRDT doc
+        # `notes.content` façade. It reads the authority UNCONDITIONALLY — do
+        # not "optimise" this with the feed's tail-presence check (#1339): a
+        # read-modify-write derives the new body from this value, so trusting a
+        # façade that is stale for any reason the tail does not witness
+        # truncates the note. The regression tests below construct exactly that
+        # state. The façade is materialized from the CRDT doc
         # at checkpoint, so it lags a doc write; deriving the new full content
         # from a stale (blank) base makes `upsert_note/4`'s merge compute a diff
         # that deletes the body. That is #1159, seen in prod CI as a note

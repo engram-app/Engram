@@ -155,4 +155,34 @@ defmodule Engram.NotesSeqFeedByteBudgetTest do
     refute Enum.any?(page, &(&1.type == :attachment)),
            "an attachment rode past a truncated notes feed and stranded the notes behind it"
   end
+
+  test "the budget survives resolution inflating an empty facade (#1339 shape)", %{
+    user: user,
+    vault: vault
+  } do
+    # The pre-read probe measures the stored facade. Resolution can replace that
+    # with a body rebuilt from the CRDT tail, and for a never-checkpointed note
+    # the facade is "" while the whole body lives in the tail — so the probe
+    # scores the page at ~0 bytes and waves through rows that inflate afterwards.
+    # Whatever the facade said, the page that LEAVES must respect the budget.
+    for i <- 1..5 do
+      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "r#{i}.md", "content" => big(40)})
+    end
+
+    {:ok, %{changes: page, has_more: has_more, next: next}} =
+      Notes.list_changes_by_seq(user, vault, 0, limit: 500, max_bytes: 100 * 1024)
+
+    carried = page |> Enum.map(&byte_size(&1[:content] || "")) |> Enum.sum()
+
+    assert has_more
+    # One oversized note may exceed it alone; several may not.
+    assert length(page) == 1 or carried <= 100 * 1024,
+           "page carried #{carried} bytes over a 100 KB budget"
+
+    # And the cursor must not point past what was actually sent.
+    {next_seq, _} = next
+
+    assert next_seq == List.last(page).seq,
+           "cursor advanced past rows the trim dropped"
+  end
 end
