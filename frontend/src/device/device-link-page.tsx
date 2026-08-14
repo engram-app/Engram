@@ -434,7 +434,10 @@ function SuccessStep({ linkedVaultId, obsidianVaultName, onForward }: SuccessSte
 		<div className="flex flex-col gap-4">
 			{/* No second heading here — the panel's h1 already says "Finish in
 			    Obsidian", and "Vault linked!" underneath it was the same news twice. */}
-			<p className="text-foreground text-sm">
+			{/* text-base, not the text-sm used for hints on the earlier steps: this
+			    is the one instruction on the screen, and at text-sm it read like
+			    fine print the user could skip. */}
+			<p className="text-base text-foreground">
 				Your vault is linked. Obsidian is waiting for you to start the first sync.
 			</p>
 
@@ -456,7 +459,7 @@ function SuccessStep({ linkedVaultId, obsidianVaultName, onForward }: SuccessSte
 			    beside it is always present. */}
 			<footer className="flex justify-end gap-2 pt-2">
 				<Button type="button" variant="ghost" onClick={onForward} className="text-sm">
-					Go to my vault without waiting
+					Continue to web app
 				</Button>
 				{obsidianVaultName ? (
 					<Button asChild>

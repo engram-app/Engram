@@ -267,7 +267,7 @@ describe("DeviceLinkPage", () => {
 		).not.toBeInTheDocument();
 	});
 
-	it("lets you go to the vault without waiting for the first sync", async () => {
+	it("lets you continue to the web app without waiting for the first sync", async () => {
 		get.mockResolvedValue({
 			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
 			user_code_valid: true,
@@ -281,7 +281,7 @@ describe("DeviceLinkPage", () => {
 		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
 
 		expect(
-			await screen.findByRole("button", { name: /go to my vault without waiting/iu }),
+			await screen.findByRole("button", { name: /continue to web app/iu }),
 		).toBeInTheDocument();
 	});
 
