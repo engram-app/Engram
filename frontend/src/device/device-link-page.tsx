@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useAutofocus } from "@/hooks/use-autofocus";
@@ -25,6 +25,23 @@ interface Vault {
 
 type Step = "enter-code" | "pick-vault" | "success" | "error";
 
+// RFC 8628 verification_uri_complete: the plugin sends the user to
+// /link?code=ENGR-7X4K, so read and normalize the code it already knows.
+// Returns "" when absent, and only returns the dashed 9-char form when the
+// query held a full 8-character code — a partial value stays unformatted so
+// the auto-verify below won't fire on it.
+function readCodeFromQuery(): string {
+	if (typeof window === "undefined") {
+		return "";
+	}
+	const raw = new URLSearchParams(window.location.search).get("code") ?? "";
+	const clean = raw
+		.toUpperCase()
+		.replace(/[^A-Z2-9]/gu, "")
+		.slice(0, 8);
+	return clean.length === 8 ? `${clean.slice(0, 4)}-${clean.slice(4)}` : clean;
+}
+
 function DeviceLinkPage() {
 	const { isSignedIn } = useAuthAdapter();
 	const navigate = useNavigate();
@@ -35,19 +52,11 @@ function DeviceLinkPage() {
 	// arrives from the plugin specifically to type into it — land with focus
 	// already there. Keyed on the step so returning to it re-focuses.
 	const codeRef = useAutofocus<HTMLInputElement>(step === "enter-code");
-	// RFC 8628 verification_uri_complete: if the plugin sends the user to
-	// /link?code=ENGR-7X4K, prefill the field instead of forcing a re-type.
-	const [userCode, setUserCode] = useState(() => {
-		if (typeof window === "undefined") {
-			return "";
-		}
-		const raw = new URLSearchParams(window.location.search).get("code") ?? "";
-		const clean = raw
-			.toUpperCase()
-			.replace(/[^A-Z2-9]/gu, "")
-			.slice(0, 8);
-		return clean.length === 8 ? `${clean.slice(0, 4)}-${clean.slice(4)}` : clean;
-	});
+	// Captured once at mount. `userCode` drifts as the user types, but whether
+	// the code ARRIVED from the plugin is fixed — and only that earns an
+	// automatic verify (see the effect below).
+	const [urlCode] = useState(readCodeFromQuery);
+	const [userCode, setUserCode] = useState(urlCode);
 	const [vaults, setVaults] = useState<Vault[]>([]);
 	// `selection` is the radio-row value: 'matched' (create new with the
 	// plugin-suggested name), 'custom' (create new with the input below), or
@@ -75,20 +84,9 @@ function DeviceLinkPage() {
 	const vaultsCap = billing?.caps.vaults ?? null;
 	const atVaultCap = typeof vaultsCap === "number" && vaultsCap > 0 && vaults.length >= vaultsCap;
 
-	if (!isSignedIn) {
-		return (
-			<AuthShell>
-				<AuthPanel className="flex flex-col gap-3">
-					<h1 className={heading}>Link Obsidian Vault</h1>
-					<p className="text-muted-foreground text-sm">
-						Please sign in to link your Obsidian vault.
-					</p>
-				</AuthPanel>
-			</AuthShell>
-		);
-	}
-
-	async function handleVerifyCode() {
+	// useCallback (not a plain function) so the auto-verify effect below can
+	// depend on it without re-firing every render.
+	const handleVerifyCode = useCallback(async () => {
 		const formatted = userCode.toUpperCase().replace(/[^A-Z2-9]/gu, "");
 		if (formatted.length !== 8) {
 			setError("Code must be 8 characters (e.g., ENGR-7X4K)");
@@ -134,6 +132,39 @@ function DeviceLinkPage() {
 		} finally {
 			setLoading(false);
 		}
+	}, [userCode, vaultsCap]);
+
+	// The plugin already knows the code, so a complete link URL means the only
+	// step left is choosing a vault — run the verify for them and land there.
+	//
+	// Deliberately does NOT authorize. Linking stays an explicit Sync click on a
+	// screen that names the vault, which is the consent beat that makes carrying
+	// the code in a URL safe (RFC 8628's device-code phishing concern is about
+	// approving someone ELSE's code, and only a real consent screen defends it).
+	//
+	// Scrubs the code out of the address bar too: it's a single-use credential
+	// and shouldn't sit in history or survive a copy-pasted URL.
+	const autoVerified = useRef(false);
+	useEffect(() => {
+		if (autoVerified.current || !isSignedIn || urlCode.length !== 9) {
+			return;
+		}
+		autoVerified.current = true;
+		window.history.replaceState({}, "", window.location.pathname + window.location.hash);
+		handleVerifyCode();
+	}, [isSignedIn, urlCode, handleVerifyCode]);
+
+	if (!isSignedIn) {
+		return (
+			<AuthShell>
+				<AuthPanel className="flex flex-col gap-3">
+					<h1 className={heading}>Link Obsidian Vault</h1>
+					<p className="text-muted-foreground text-sm">
+						Please sign in to link your Obsidian vault.
+					</p>
+				</AuthPanel>
+			</AuthShell>
+		);
 	}
 
 	const isMatched = selection === "matched";

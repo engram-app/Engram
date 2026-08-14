@@ -92,6 +92,7 @@ function renderPage() {
 
 afterEach(() => {
 	vi.clearAllMocks();
+	window.history.replaceState({}, "", "/link");
 	authState.current = { isSignedIn: true };
 	billingState.current = {
 		caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true },
@@ -112,6 +113,43 @@ describe("DeviceLinkPage", () => {
 	it("focuses the code field on arrival", () => {
 		renderPage();
 		expect(screen.getByPlaceholderText(/XXXX-XXXX/iu)).toHaveFocus();
+	});
+
+	// RFC 8628 verification_uri_complete. The plugin opens /link?code=ENGR-7X4K,
+	// so the user never retypes what their own machine already knows.
+	it("auto-verifies a code supplied in the query string", async () => {
+		window.history.replaceState({}, "", "/link?code=ENGR-7X4K");
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 12 }] });
+		renderPage();
+
+		await waitFor(() => expect(get).toHaveBeenCalledWith("/vaults?user_code=ENGR-7X4K"));
+		expect(await screen.findByRole("radio", { name: /personal/iu })).toBeInTheDocument();
+	});
+
+	// Authorizing is still an explicit act: auto-verify only lists the vaults.
+	// Nothing is linked until the user picks one and clicks Sync.
+	it("does not authorize on its own after auto-verifying", async () => {
+		window.history.replaceState({}, "", "/link?code=ENGR-7X4K");
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 12 }] });
+		renderPage();
+
+		await screen.findByRole("radio", { name: /personal/iu });
+		expect(post).not.toHaveBeenCalled();
+	});
+
+	// A single-use code shouldn't linger in history, bookmarks, or a shared URL.
+	it("scrubs the code out of the URL once it has been read", async () => {
+		window.history.replaceState({}, "", "/link?code=ENGR-7X4K");
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 12 }] });
+		renderPage();
+
+		await waitFor(() => expect(window.location.search).toBe(""));
+		expect(window.location.pathname).toBe("/link");
+	});
+
+	it("does not auto-verify when no code was supplied", () => {
+		renderPage();
+		expect(get).not.toHaveBeenCalled();
 	});
 
 	it("rejects a code that is not 8 characters", () => {
