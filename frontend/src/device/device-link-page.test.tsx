@@ -119,7 +119,7 @@ describe("DeviceLinkPage", () => {
 	// so the user never retypes what their own machine already knows.
 	it("auto-verifies a code supplied in the query string", async () => {
 		window.history.replaceState({}, "", "/link?code=ENGR-7X4K");
-		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 12 }] });
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
 		renderPage();
 
 		await waitFor(() => expect(get).toHaveBeenCalledWith("/vaults?user_code=ENGR-7X4K"));
@@ -130,7 +130,7 @@ describe("DeviceLinkPage", () => {
 	// Nothing is linked until the user picks one and clicks Sync.
 	it("does not authorize on its own after auto-verifying", async () => {
 		window.history.replaceState({}, "", "/link?code=ENGR-7X4K");
-		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 12 }] });
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
 		renderPage();
 
 		await screen.findByRole("radio", { name: /personal/iu });
@@ -140,7 +140,7 @@ describe("DeviceLinkPage", () => {
 	// A single-use code shouldn't linger in history, bookmarks, or a shared URL.
 	it("scrubs the code out of the URL once it has been read", async () => {
 		window.history.replaceState({}, "", "/link?code=ENGR-7X4K");
-		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 12 }] });
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
 		renderPage();
 
 		await waitFor(() => expect(window.location.search).toBe(""));
@@ -158,7 +158,7 @@ describe("DeviceLinkPage", () => {
 	// authorize, three clicks later.
 	it("rejects a typed code the backend reports as invalid", async () => {
 		get.mockResolvedValue({
-			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
+			vaults: [{ id: 7, name: "Personal", note_count: 0 }],
 			user_code_valid: false,
 		});
 		renderPage();
@@ -174,7 +174,7 @@ describe("DeviceLinkPage", () => {
 	it("rejects an invalid code that arrived in the query string", async () => {
 		window.history.replaceState({}, "", "/link?code=ZZZZ-ZZZZ");
 		get.mockResolvedValue({
-			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
+			vaults: [{ id: 7, name: "Personal", note_count: 0 }],
 			user_code_valid: false,
 		});
 		renderPage();
@@ -187,7 +187,7 @@ describe("DeviceLinkPage", () => {
 	// suggested_vault_name: null. That must NOT read as invalid.
 	it("accepts a valid code that has no suggested vault name", async () => {
 		get.mockResolvedValue({
-			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
+			vaults: [{ id: 7, name: "Personal", note_count: 0 }],
 			suggested_vault_name: null,
 			user_code_valid: true,
 		});
@@ -202,7 +202,7 @@ describe("DeviceLinkPage", () => {
 	// Forward compatibility: a frontend deployed ahead of the backend sees no
 	// `user_code_valid` at all. Rejecting on undefined would break every link.
 	it("proceeds when the backend omits user_code_valid entirely", async () => {
-		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 12 }] });
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
 		renderPage();
 
 		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
@@ -220,7 +220,7 @@ describe("DeviceLinkPage", () => {
 	});
 
 	it("verifies a valid code and authorizes the chosen vault", async () => {
-		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 12 }] });
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
 		post.mockResolvedValue({ ok: true, vault_id: 7 });
 		renderPage();
 
@@ -243,7 +243,7 @@ describe("DeviceLinkPage", () => {
 	// title for a job already finished. It should name the step you're on.
 	it("retitles the page for each step", async () => {
 		get.mockResolvedValue({
-			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
+			vaults: [{ id: 7, name: "Personal", note_count: 0 }],
 			user_code_valid: true,
 		});
 		post.mockResolvedValue({ ok: true, vault_id: 7 });
@@ -269,7 +269,7 @@ describe("DeviceLinkPage", () => {
 
 	it("lets you continue to the web app without waiting for the first sync", async () => {
 		get.mockResolvedValue({
-			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
+			vaults: [{ id: 7, name: "Personal", note_count: 0 }],
 			user_code_valid: true,
 		});
 		post.mockResolvedValue({ ok: true, vault_id: 7 });
@@ -285,13 +285,50 @@ describe("DeviceLinkPage", () => {
 		).toBeInTheDocument();
 	});
 
+	// `vault_populated` fires when a vault goes from 0 to 1 notes. Link into a
+	// vault that already has notes and it can never fire — so waiting on it is
+	// waiting on nothing. The picker already knows note_count; use it.
+	it("does not wait for a first sync when the linked vault already has notes", async () => {
+		get.mockResolvedValue({
+			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
+			user_code_valid: true,
+		});
+		post.mockResolvedValue({ ok: true, vault_id: 7 });
+		renderPage();
+
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+
+		await waitFor(() => expect(setActiveVaultId).toHaveBeenCalledWith(7));
+		expect(screen.queryByText(/waiting for your first sync/iu)).not.toBeInTheDocument();
+	});
+
+	// An empty vault genuinely can produce the event, so the wait is real there.
+	it("waits for the first sync when the linked vault is empty", async () => {
+		get.mockResolvedValue({
+			vaults: [{ id: 7, name: "Personal", note_count: 0 }],
+			user_code_valid: true,
+		});
+		post.mockResolvedValue({ ok: true, vault_id: 7 });
+		renderPage();
+
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+
+		expect(await screen.findByText(/waiting for your first sync/iu)).toBeInTheDocument();
+	});
+
 	// Obsidian registers the `obsidian://` URI scheme, so getting the user back
 	// to their editor is a link, not an integration. The vault name is the one
 	// the plugin sent at device-flow start — i.e. the LOCAL Obsidian vault name,
 	// which is exactly what `obsidian://open?vault=` addresses.
 	it("offers a deep link back to Obsidian once the vault is linked", async () => {
 		get.mockResolvedValue({
-			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
+			vaults: [{ id: 7, name: "Personal", note_count: 0 }],
 			suggested_vault_name: "My Local Notes",
 			user_code_valid: true,
 		});
@@ -311,7 +348,7 @@ describe("DeviceLinkPage", () => {
 	// is not a thing. Hide the button rather than render a broken link.
 	it("hides the Obsidian deep link when the plugin sent no vault name", async () => {
 		get.mockResolvedValue({
-			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
+			vaults: [{ id: 7, name: "Personal", note_count: 0 }],
 			user_code_valid: true,
 		});
 		post.mockResolvedValue({ ok: true, vault_id: 7 });
@@ -329,7 +366,7 @@ describe("DeviceLinkPage", () => {
 	it("forwards to the linked vault (sets it active) after authorizing", async () => {
 		get.mockResolvedValue({
 			vaults: [
-				{ id: 7, name: "Personal", note_count: 12 },
+				{ id: 7, name: "Personal", note_count: 0 },
 				{ id: 9, name: "Work", note_count: 3 },
 			],
 		});
@@ -370,7 +407,7 @@ describe("DeviceLinkPage", () => {
 			current_connections: { obsidian: 1, mcp: 0 },
 			device_swap_cooldown_remaining_hours: 17,
 		};
-		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 12 }] });
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
 		renderPage();
 
 		const alert = screen.getByRole("alert");

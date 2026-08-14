@@ -229,8 +229,22 @@ function DeviceLinkPage() {
 				// owes the first sync from inside Obsidian. The success step listens
 				// for the `vault_populated` broadcast and forwards then.
 				setActiveVaultId(vault_id);
-				setLinkedVaultId(vault_id);
 				qc.invalidateQueries({ queryKey: ["vaults"] });
+
+				// `vault_populated` fires on a vault's 0 -> 1 note transition, so a
+				// vault that ALREADY has notes can never emit it. Parking the user on
+				// "waiting for your first sync" there means waiting on an event that
+				// is not coming, until they give up and click through. Only an empty
+				// vault has a first-sync milestone to wait for.
+				const target = createNew
+					? null
+					: vaults.find((v) => String(v.id) === String(selection));
+				if (target && target.note_count > 0) {
+					navigate("/");
+					return;
+				}
+
+				setLinkedVaultId(vault_id);
 				setStep("success");
 			} catch (authErr) {
 				if (swappedFromName) {

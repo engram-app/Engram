@@ -906,6 +906,14 @@ defmodule Engram.Notes do
         # CrdtDeliver call sites in this module.
         {:ok, {:ok, note, :announce}} ->
           :ok = CrdtDeliver.announce_ready(user.id, vault.id, note.path, note.id)
+
+          # The web /link success page waits on this before forwarding the user
+          # to their vault. It used to fire only from the REST upsert/batch
+          # paths — which the Obsidian plugin stopped using when it moved to
+          # CRDT — so an Obsidian first sync, the exact case that page exists
+          # for, never advanced. Same post-commit position as the announce
+          # above; the helper's own 0->1 probe keeps it to the first note.
+          :ok = maybe_broadcast_vault_populated(user, vault)
           {:ok, note}
 
         {:ok, {:ok, note, {:announce_moved, old_path}}} ->

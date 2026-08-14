@@ -24,6 +24,15 @@ defmodule EngramWeb.Endpoint do
     longpoll: false,
     drainer: [batch_size: 1_000, batch_interval: 2_000, shutdown: 25_000]
 
+  # Device flow — no auth by necessity: the plugin has no token until the
+  # flow it is waiting on completes, so it cannot use UserSocket. Join is
+  # gated per-topic on a real, pending device_code. See EngramWeb.DeviceSocket.
+  socket "/socket/device", EngramWeb.DeviceSocket,
+    websocket: [
+      check_origin: {__MODULE__, :check_origin, []}
+    ],
+    longpoll: false
+
   # Origin-allowlist probe — no auth, no channels. Reuses the same
   # check_origin MFA as the main socket so the smoke validates the
   # exact allowlist used by UserSocket. See EngramWeb.OriginProbeSocket

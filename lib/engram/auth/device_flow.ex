@@ -95,6 +95,53 @@ defmodule Engram.Auth.DeviceFlow do
     end
   end
 
+  @doc """
+  True when `device_code` names a real authorization that is still pending
+  and unexpired. Gate for `EngramWeb.DeviceChannel` joins — without it the
+  `device:*` topic space would be an unauthenticated fan-out surface anyone
+  could hold subscriptions against.
+
+  Deliberately NOT a token check: it answers "is this worth waiting on", and
+  the actual credential exchange stays in the single-use REST endpoint.
+  """
+  @spec pending_device_code?(String.t()) :: boolean()
+  def pending_device_code?(device_code) when is_binary(device_code) do
+    now = DateTime.utc_now()
+
+    Repo.exists?(
+      from(da in DeviceAuthorization,
+        where: da.device_code == ^device_code and da.status == "pending" and da.expires_at > ^now
+      ),
+      skip_tenant_check: true
+    )
+  end
+
+  @doc """
+  Tell anyone waiting on `device:{device_code}` that the code was approved,
+  so they can exchange it immediately instead of discovering it on the next
+  poll tick.
+
+  The payload is deliberately empty. A broadcast reaches every subscriber at
+  once while the token exchange is single-use, so shipping credentials here
+  would be weaker than the endpoint it front-runs. See
+  `EngramWeb.DeviceChannel`.
+
+  Always returns `:ok`. This is an optimisation, not a step of the flow — the
+  plugin keeps a slow fallback poll running — so a PubSub failure must not
+  fail the user's authorize call. Logged rather than raised.
+  """
+  @spec notify_authorized(String.t()) :: :ok
+  def notify_authorized(device_code) when is_binary(device_code) do
+    case EngramWeb.Endpoint.broadcast("device:#{device_code}", "authorized", %{}) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("device-flow authorized notify failed", reason: inspect(reason))
+        :ok
+    end
+  end
+
   def authorize_device(user_code, user, vault_id) do
     now = DateTime.utc_now()
 
