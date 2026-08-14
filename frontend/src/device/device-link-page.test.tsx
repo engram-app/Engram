@@ -239,6 +239,47 @@ describe("DeviceLinkPage", () => {
 		expect(await screen.findByText(/vault linked/iu)).toBeInTheDocument();
 	});
 
+	// Obsidian registers the `obsidian://` URI scheme, so getting the user back
+	// to their editor is a link, not an integration. The vault name is the one
+	// the plugin sent at device-flow start — i.e. the LOCAL Obsidian vault name,
+	// which is exactly what `obsidian://open?vault=` addresses.
+	it("offers a deep link back to Obsidian once the vault is linked", async () => {
+		get.mockResolvedValue({
+			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
+			suggested_vault_name: "My Local Notes",
+			user_code_valid: true,
+		});
+		post.mockResolvedValue({ ok: true, vault_id: 7 });
+		renderPage();
+
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+
+		const link = await screen.findByRole("link", { name: /open obsidian/iu });
+		expect(link).toHaveAttribute("href", "obsidian://open?vault=My%20Local%20Notes");
+	});
+
+	// No hint means we cannot address a vault, and `obsidian://open` without one
+	// is not a thing. Hide the button rather than render a broken link.
+	it("hides the Obsidian deep link when the plugin sent no vault name", async () => {
+		get.mockResolvedValue({
+			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
+			user_code_valid: true,
+		});
+		post.mockResolvedValue({ ok: true, vault_id: 7 });
+		renderPage();
+
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+
+		expect(await screen.findByText(/vault linked/iu)).toBeInTheDocument();
+		expect(screen.queryByRole("link", { name: /open obsidian/iu })).not.toBeInTheDocument();
+	});
+
 	it("forwards to the linked vault (sets it active) after authorizing", async () => {
 		get.mockResolvedValue({
 			vaults: [

@@ -378,7 +378,11 @@ function DeviceLinkPage() {
 				)}
 
 				{step === "success" && (
-					<SuccessStep linkedVaultId={linkedVaultId} onForward={() => navigate("/")} />
+					<SuccessStep
+						linkedVaultId={linkedVaultId}
+						obsidianVaultName={suggestedName}
+						onForward={() => navigate("/")}
+					/>
 				)}
 
 				{Boolean(error) && (
@@ -393,10 +397,14 @@ function DeviceLinkPage() {
 
 interface SuccessStepProps {
 	linkedVaultId: string | null;
+	// The LOCAL Obsidian vault name the plugin sent at device-flow start, which
+	// is what `obsidian://open?vault=` addresses — not the server-side vault the
+	// user just picked, whose name may differ. Empty when the plugin sent no hint.
+	obsidianVaultName: string;
 	onForward: () => void;
 }
 
-function SuccessStep({ linkedVaultId, onForward }: SuccessStepProps) {
+function SuccessStep({ linkedVaultId, obsidianVaultName, onForward }: SuccessStepProps) {
 	const { data: me } = useMe();
 	const { vaultPopulated, vaultId } = useVaultReadyEvents({
 		userId: me?.id ?? null,
@@ -420,6 +428,21 @@ function SuccessStep({ linkedVaultId, onForward }: SuccessStepProps) {
 					Now jump back to Obsidian and run your first sync.
 				</p>
 			</div>
+
+			{/* Obsidian registers the `obsidian://` URI scheme, so this is a plain
+			    link — no integration, no detection. Deliberately a button and not
+			    an automatic redirect: browsers suppress protocol launches without
+			    a user gesture, and there is no success callback, so nothing below
+			    may depend on the jump having worked. It also opens Obsidian on
+			    whatever machine the BROWSER is on, which is why it's an offer
+			    sitting next to "Skip ahead" rather than the only way forward. */}
+			{obsidianVaultName ? (
+				<Button asChild className="self-start">
+					<a href={`obsidian://open?vault=${encodeURIComponent(obsidianVaultName)}`}>
+						Open Obsidian
+					</a>
+				</Button>
+			) : null}
 
 			<SyncStatusPill message="Waiting for your first sync…" />
 
