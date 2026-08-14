@@ -75,6 +75,9 @@ function DeviceLinkPage() {
 	const [suggestedName, setSuggestedName] = useState("");
 	const [customName, setCustomName] = useState("");
 	const [linkedVaultId, setLinkedVaultId] = useState<string | null>(null);
+	// Whether the success step has a first-sync milestone to wait for. False when
+	// linking into a vault that already has notes — see handleAuthorize.
+	const [awaitFirstSync, setAwaitFirstSync] = useState(true);
 	const [error, setError] = useState("");
 	const [loading, setLoading] = useState(false);
 	// Device-flow is "I'm moving in" not "I want a 4th tab" — when at cap, we
@@ -232,17 +235,14 @@ function DeviceLinkPage() {
 				qc.invalidateQueries({ queryKey: ["vaults"] });
 
 				// `vault_populated` fires on a vault's 0 -> 1 note transition, so a
-				// vault that ALREADY has notes can never emit it. Parking the user on
-				// "waiting for your first sync" there means waiting on an event that
-				// is not coming, until they give up and click through. Only an empty
-				// vault has a first-sync milestone to wait for.
-				const target = createNew
-					? null
-					: vaults.find((v) => String(v.id) === String(selection));
-				if (target && target.note_count > 0) {
-					navigate("/");
-					return;
-				}
+				// vault that ALREADY has notes can never emit it.
+				//
+				// That kills the WAITING, not the step. The user still has to go back
+				// to Obsidian and finish the sync, so the instructions and the Open
+				// Obsidian button must render either way — skipping straight to the
+				// vault drops the one thing this screen exists to tell them.
+				const target = createNew ? null : vaults.find((v) => String(v.id) === String(selection));
+				setAwaitFirstSync(!target || target.note_count === 0);
 
 				setLinkedVaultId(vault_id);
 				setStep("success");
@@ -405,6 +405,7 @@ function DeviceLinkPage() {
 					<SuccessStep
 						linkedVaultId={linkedVaultId}
 						obsidianVaultName={suggestedName}
+						awaitFirstSync={awaitFirstSync}
 						onForward={() => navigate("/")}
 					/>
 				)}
@@ -425,10 +426,19 @@ interface SuccessStepProps {
 	// is what `obsidian://open?vault=` addresses — not the server-side vault the
 	// user just picked, whose name may differ. Empty when the plugin sent no hint.
 	obsidianVaultName: string;
+	// False when the linked vault already has notes: there is no 0 -> 1
+	// transition left, so there is no `vault_populated` coming and promising an
+	// automatic hand-off would be a lie.
+	awaitFirstSync: boolean;
 	onForward: () => void;
 }
 
-function SuccessStep({ linkedVaultId, obsidianVaultName, onForward }: SuccessStepProps) {
+function SuccessStep({
+	linkedVaultId,
+	obsidianVaultName,
+	awaitFirstSync,
+	onForward,
+}: SuccessStepProps) {
 	const { data: me } = useMe();
 	const { vaultPopulated, vaultId } = useVaultReadyEvents({
 		userId: me?.id ?? null,
@@ -455,11 +465,22 @@ function SuccessStep({ linkedVaultId, obsidianVaultName, onForward }: SuccessSte
 				Your vault is linked. Obsidian is waiting for you to start the first sync.
 			</p>
 
-			<SyncStatusPill message="Waiting for your first sync…" />
-
-			<p className="text-muted-foreground text-sm">
-				We'll open your vault here the moment it lands.
-			</p>
+			{/* Only an empty vault has a 0 -> 1 transition left, so only an empty
+			    vault can produce `vault_populated`. Showing a spinner and promising
+			    an automatic hand-off anywhere else advertises something that is
+			    never going to happen. */}
+			{awaitFirstSync ? (
+				<>
+					<SyncStatusPill message="Waiting for your first sync…" />
+					<p className="text-muted-foreground text-sm">
+						We'll open your vault here the moment it lands.
+					</p>
+				</>
+			) : (
+				<p className="text-muted-foreground text-sm">
+					Your notes will appear here as they sync. You can come back any time.
+				</p>
+			)}
 
 			{/* Actions bottom-right, matching the footer pattern used elsewhere
 			    (e.g. settings/connections-page.tsx). Secondary first, primary last.

@@ -301,8 +301,14 @@ describe("DeviceLinkPage", () => {
 		fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
 		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
 
-		await waitFor(() => expect(setActiveVaultId).toHaveBeenCalledWith(7));
+		// The user still has to go back to Obsidian and finish the sync, so the
+		// step MUST render. What can't happen is the waiting — `vault_populated`
+		// is a 0->1 event and this vault is already past that.
+		expect(
+			await screen.findByRole("heading", { name: /finish in obsidian/iu }),
+		).toBeInTheDocument();
 		expect(screen.queryByText(/waiting for your first sync/iu)).not.toBeInTheDocument();
+		expect(screen.queryByText(/the moment it lands/iu)).not.toBeInTheDocument();
 	});
 
 	// An empty vault genuinely can produce the event, so the wait is real there.
