@@ -123,6 +123,37 @@ defmodule Engram.Notes.CrdtRoomIdleExitTest do
       assert Process.alive?(room)
     end
 
+    # 0 is TRUTHY in Elixir, so it survives the `||` config fallback. Without the
+    # positive-integer guard it would arm at 0 ms and spin the drain broadcast in
+    # a tight loop.
+    test "a zero idle window is treated as disabled, not as drain-immediately", ctx do
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(ctx.note.id))
+      room = start_room(ctx, idle_exit_ms: 0)
+      :ok = SharedDoc.observe(room)
+
+      refute_receive {:crdt_room_drain, ^room}, 300
+      assert Process.alive?(room)
+    end
+
+    test "the first drain is counted so ops can compare asks against releases", ctx do
+      test_pid = self()
+      handler = "req-telemetry-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :crdt, :room_drain],
+        fn _e, m, meta, _ -> send(test_pid, {:drain_telemetry, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      room = start_room(ctx, idle_exit_ms: @idle_ms)
+      :ok = SharedDoc.observe(room)
+
+      assert_receive {:drain_telemetry, %{count: 1}, %{phase: :requested}}, 2_000
+    end
+
     test "a room without idle_exit_ms never drains — note rooms are unchanged", ctx do
       Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(ctx.note.id))
       room = start_room(ctx, [])

@@ -314,27 +314,67 @@ defmodule EngramWeb.CrdtChannelDrainTest do
     #   CLUSTER_TESTS=1 mix test test/engram_web/channels/crdt_channel_drain_test.exs
     @tag :cluster
     test "a room on ANOTHER node does not crash the channel" do
-      unless Node.alive?() do
-        {:ok, _} = :net_kernel.start([:"drainprimary@127.0.0.1", :longnames])
-        Node.set_cookie(:engram_drain_test)
-      end
+      # Engram.ClusterCase owns the net_kernel/cookie/code-path dance (and the
+      # start-not-start_link subtlety around on_exit) — no reason to re-roll it.
+      {_peer, peer_node} = Engram.ClusterCase.start_peer!([], &on_exit/1)
 
-      {:ok, peer, _node} =
-        :peer.start(%{
-          name: :crdt_drain_peer,
-          host: ~c"127.0.0.1",
-          longnames: true,
-          connection: :standard_io
-        })
-
-      on_exit(fn -> :peer.stop(peer) end)
-      true = :peer.call(peer, :erlang, :set_cookie, [Node.get_cookie()])
-
-      remote = :peer.call(peer, :erlang, :spawn, [:timer, :sleep, [60_000]])
+      remote = :erpc.call(peer_node, :erlang, :spawn, [:timer, :sleep, [60_000]])
       refute node(remote) == node()
 
-      # The bug this pins raises rather than exits, so a bare call is the test.
+      # The bug this pins RAISES rather than exits, so a bare call is the test:
+      # an ArgumentError from Process.alive?/1 is :error class and would blow
+      # straight through release_room/1's `catch :exit`.
       assert EngramWeb.CrdtChannel.release_room(remote) == :ok
+    end
+
+    # The `:cluster` test below proves this against a real peer but does NOT run
+    # in CI. This one covers the same guard on a single node by injecting the
+    # "self" node instead of faking a remote pid: with a mismatched node the
+    # check must short-circuit BEFORE Process.alive?/1, which is the local-only
+    # call that raises. Drop the node guard and this flips to true.
+    test "a pid whose node is not ours never reaches the local-only alive? check" do
+      dead = spawn(fn -> :ok end)
+      ref = Process.monitor(dead)
+      assert_receive {:DOWN, ^ref, :process, ^dead, _}, 1_000
+
+      refute EngramWeb.CrdtChannel.locally_dead?(dead, :somewhere@else)
+      assert EngramWeb.CrdtChannel.locally_dead?(dead), "sanity: locally it IS dead"
+    end
+
+    # Locks the `|| @room_probe_ms` reader. A key SET to nil is not the same as
+    # absent, and get_env/3's default would not fire — feeding `timeout: nil` to
+    # GenServer.call/3, which is how one sloppy test restore crashed every later
+    # test in this file.
+    test "a nil-valued probe override still yields a usable timeout" do
+      Application.put_env(:engram, :crdt_room_probe_ms, nil)
+      on_exit(fn -> Application.delete_env(:engram, :crdt_room_probe_ms) end)
+
+      wedged = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(wedged, :kill) end)
+
+      assert EngramWeb.CrdtChannel.release_room(wedged) == :ok
+    end
+
+    test "a skipped release is still counted, so ops can see rooms refusing to go" do
+      dead = spawn(fn -> :ok end)
+      ref = Process.monitor(dead)
+      assert_receive {:DOWN, ^ref, :process, ^dead, _}, 1_000
+
+      test_pid = self()
+      handler = "skip-telemetry-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :crdt, :room_drain],
+        fn _e, m, meta, _ -> send(test_pid, {:drain_telemetry, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      EngramWeb.CrdtChannel.release_room(dead)
+
+      assert_receive {:drain_telemetry, %{count: 1}, %{phase: :skipped}}, 1_000
     end
 
     test "a room that dies mid-call is swallowed rather than exiting the channel" do
@@ -377,6 +417,36 @@ defmodule EngramWeb.CrdtChannelDrainTest do
 
       assert MapSet.size(set) <= 10
     end
+  end
+
+  # Phoenix.PubSub does NOT dedupe: subscribing twice delivers twice. A room
+  # evicted by :DOWN (a crash) is never drained, so without unsubscribing on
+  # that path too its subscription survives and the next start_and_observe_room
+  # stacks a second one.
+  test "a crash-evicted room does not leave its drain subscription behind", ctx do
+    %{socket: socket, note: note} = ctx
+    {client, _room} = open_room(socket, note)
+    topic = CrdtRegistry.drain_topic(note.id)
+
+    # Counting via the Registry backing Phoenix.PubSub is the only way to
+    # observe a duplicate subscription (a doubled delivery is indistinguishable
+    # from a single one here, since the second drain finds an empty room_doc and
+    # no-ops). If PubSub ever stops being Registry-backed this raises rather
+    # than quietly passing, which is the acceptable direction for that coupling.
+    channel_subs = fn ->
+      Engram.PubSub
+      |> Registry.lookup(topic)
+      |> Enum.count(fn {pid, _} -> pid == socket.channel_pid end)
+    end
+
+    assert channel_subs.() == 1
+
+    # Crash-shaped eviction, then re-open: the re-subscribe must not stack.
+    room = CrdtRegistry.lookup(note.id)
+    send(socket.channel_pid, {:DOWN, make_ref(), :process, room, :crashed})
+    push_step1(socket, note, client)
+
+    assert channel_subs.() == 1, "duplicate subscription — every later drain would arrive twice"
   end
 
   test "a drain for a room this channel does not hold is ignored", ctx do

@@ -212,8 +212,22 @@ pids. An unguarded `alive?` here crashed the channel on every drain of a remote 
 It was not caught by the suite because **cluster tests never run**: `CLUSTER_TESTS=1` appears
 nowhere in CI or the Makefile, and only `dek_cache_test.exs` carries `@tag :cluster`. The whole
 cross-node surface — the `:distributed_ets` rate limiter, PubSub cache eviction, and this drain —
-is CI-invisible. Assume any single-node-tested primitive is unproven across nodes until someone
-wires that env var into a job.
+is CI-invisible. Assume any single-node-tested primitive is unproven across nodes.
+
+**Do NOT "fix" this by adding `CLUSTER_TESTS=1` to the existing `unit-tests` job.** Measured
+2026-08-14 on this branch: without it, 4368 tests / 0 failures; with it, 4371 / **1 failure in an
+unrelated test** (`FanoutPacerTest` "two topics drain independently"). `ClusterCase.start_peer!`
+starts a second `Phoenix.PubSub` under the SAME `Engram.PubSub` name on the peer and connects the
+nodes, so the pg group spans both and every later broadcast fans out cross-node — which a 200 ms
+pacing assertion does not survive. Distribution also stays on for the remainder of the run once
+started, so the contamination is not confined to the cluster tests themselves.
+
+The workable shape is a SEPARATE job running `CLUSTER_TESTS=1 mix test --only cluster` in its own
+VM, which cannot contaminate the main suite by construction. Verified green 5/5 in isolation.
+
+Because of that hole, the remote-pid guard is ALSO covered by a single-node test that injects the
+"self" node (`locally_dead?/2`) rather than faking a remote pid — so the guard is gated by the
+default suite even though the `:cluster` test is not.
 
 ## What this does NOT prove
 

@@ -308,7 +308,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   # makes the contract hold for the public function too.
   @spec drain_delay(map()) :: pos_integer()
   def drain_delay(%{idle_exit_ms: ms, drain_attempts: attempts})
-      when is_integer(ms) and is_integer(attempts) do
+      when is_integer(ms) and ms > 0 and is_integer(attempts) do
     ms * min(attempts + 1, @max_drain_backoff)
   end
 

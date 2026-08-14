@@ -956,7 +956,13 @@ defmodule EngramWeb.CrdtChannel do
 
     :ok
   catch
-    :exit, _ -> :ok
+    # The room died between a check and the call. Count it — otherwise this
+    # drain is neither :released nor :skipped, and requests silently exceed
+    # outcomes on the dashboard, which reads exactly like the leak this counter
+    # exists to detect.
+    :exit, _ ->
+      emit_drain(:skipped)
+      :ok
   end
 
   # Paired with the timer's :requested/:reasked counts, this is the signal that
@@ -970,17 +976,26 @@ defmodule EngramWeb.CrdtChannel do
     :ok
   end
 
-  # `Process.alive?/1` is LOCAL-ONLY — it raises ArgumentError on a remote pid,
-  # and an ArgumentError is :error class, so the `catch :exit` above would NOT
-  # contain it. Rooms are `:global`-registered, so a channel on this node
-  # routinely observes a room on another one (clustering live since
-  # 2026-06-23) — an unguarded alive? check would crash the channel on every
-  # drain of a remote room.
-  #
-  # For a remote room we simply skip the fast path: `room_responsive?/1` is a
-  # GenServer.call, which exits catchably against a dead remote pid and is
-  # timeout-bounded either way, so correctness does not depend on this check.
-  defp locally_dead?(room), do: node(room) == node() and not Process.alive?(room)
+  @doc """
+  True only for a pid on THIS node that is already dead.
+
+  `Process.alive?/1` is LOCAL-ONLY: it raises `ArgumentError` on a remote pid,
+  and `ArgumentError` is `:error` class, so `release_room/1`'s `catch :exit`
+  would NOT contain it. Rooms are `:global`-registered, so a channel on this
+  node routinely observes a room on another one (clustering live since
+  2026-06-23) — unguarded, this crashed the channel on every drain of a remote
+  room.
+
+  Remote rooms simply skip the fast path: `room_responsive?/1` is a
+  GenServer.call, which exits catchably against a dead remote pid and is
+  timeout-bounded regardless, so correctness never depended on this check.
+
+  `self_node` is injectable so the remote branch is testable on a single node —
+  the `:cluster`-tagged test that uses a real peer does not run in CI.
+  """
+  @spec locally_dead?(pid(), node()) :: boolean()
+  def locally_dead?(room, self_node \\ node()),
+    do: node(room) == self_node and not Process.alive?(room)
 
   defp room_responsive?(room) do
     SharedDoc.update_doc(room, fn _doc -> :ok end, room_probe_ms())
