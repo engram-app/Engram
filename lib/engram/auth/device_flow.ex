@@ -45,9 +45,20 @@ defmodule Engram.Auth.DeviceFlow do
     |> Repo.insert(skip_tenant_check: true)
   end
 
-  # Read the suggested name a plugin sent at start_device_flow time. Returns
-  # nil if the code is unknown, expired, no longer pending, never carried a
-  # hint, OR has already been viewed by a different authenticated user.
+  # Look up a pending device-link row on behalf of the authenticated user
+  # reading it, and report BOTH whether the code is usable and the suggested
+  # vault name the plugin sent at start_device_flow time.
+  #
+  #   {:ok, name} — real, pending, unexpired, claimable by this user
+  #   {:ok, nil}  — same, but the plugin never sent a vault-name hint
+  #   :error      — unknown, expired, already authorized, or claimed by
+  #                 a different authenticated user
+  #
+  # `{:ok, nil}` and `:error` are DELIBERATELY distinct. This used to return a
+  # bare name, so a valid-but-unnamed code and a bogus code were both `nil`;
+  # /link had no way to tell them apart and waved through any 8-character
+  # typo, deferring the real check to authorize three clicks later. Callers
+  # must not collapse them again.
   #
   # The lookup is bound to the first authenticated user who reads the code
   # — set atomically on the same row in this UPDATE. Without this binding
@@ -56,7 +67,7 @@ defmodule Engram.Auth.DeviceFlow do
   # and read the original user's local Obsidian vault name. The row's main
   # `user_id` is set later, at authorize time, and so is unsuitable as a
   # pre-authorize ownership check.
-  def suggested_vault_name(user_code, user_id) when is_binary(user_id) do
+  def view_pending_code(user_code, user_id) when is_binary(user_id) do
     now = DateTime.utc_now()
 
     query =
@@ -70,16 +81,17 @@ defmodule Engram.Auth.DeviceFlow do
 
     case Repo.update_all(query, [set: [viewer_user_id: user_id]], skip_tenant_check: true) do
       {1, _} ->
-        Repo.one(
-          from(da in DeviceAuthorization,
-            where: da.user_code == ^user_code,
-            select: da.vault_name
-          ),
-          skip_tenant_check: true
-        )
+        {:ok,
+         Repo.one(
+           from(da in DeviceAuthorization,
+             where: da.user_code == ^user_code,
+             select: da.vault_name
+           ),
+           skip_tenant_check: true
+         )}
 
       _ ->
-        nil
+        :error
     end
   end
 

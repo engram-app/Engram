@@ -97,9 +97,23 @@ function DeviceLinkPage() {
 		setError("");
 		try {
 			const formattedCode = `${formatted.slice(0, 4)}-${formatted.slice(4)}`;
-			const data = await api.get<{ vaults: Vault[]; suggested_vault_name?: string | null }>(
-				`/vaults?user_code=${encodeURIComponent(formattedCode)}`,
-			);
+			const data = await api.get<{
+				vaults: Vault[];
+				suggested_vault_name?: string | null;
+				user_code_valid?: boolean;
+			}>(`/vaults?user_code=${encodeURIComponent(formattedCode)}`);
+			// This endpoint answers 200 with the caller's vault list whether or not
+			// the code is real — `user_code_valid` is the only validity signal, and
+			// a null `suggested_vault_name` is NOT one (a valid code from a plugin
+			// that sent no hint has both). Without this check every 8-character
+			// string reached the vault picker and only failed at authorize.
+			//
+			// Compared against `false`, never falsy: a frontend deployed ahead of
+			// the backend sees `undefined` here and must still let the link through.
+			if (data.user_code_valid === false) {
+				setError("This code is invalid or has expired. Please try again from Obsidian.");
+				return;
+			}
 			setUserCode(formattedCode);
 			setVaults(data.vaults ?? []);
 			const suggested = data.suggested_vault_name?.trim() || "";

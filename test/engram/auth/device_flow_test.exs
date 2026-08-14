@@ -39,27 +39,37 @@ defmodule Engram.Auth.DeviceFlowTest do
     end
   end
 
-  describe "suggested_vault_name/2" do
+  describe "view_pending_code/2" do
     test "returns the hint stored at start time for a pending code" do
       reader = insert(:user)
       {:ok, auth} = DeviceFlow.start_device_flow("client_1", "Brainvault")
-      assert DeviceFlow.suggested_vault_name(auth.user_code, reader.id) == "Brainvault"
+      assert DeviceFlow.view_pending_code(auth.user_code, reader.id) == {:ok, "Brainvault"}
     end
 
-    test "returns nil for unknown code" do
+    # The distinction this whole function exists to preserve: a real code that
+    # simply carried no vault-name hint is still a VALID code. Collapsing this
+    # into the same nil as an unknown code is what let /link wave through any
+    # 8-character typo.
+    test "returns {:ok, nil} for a pending code with no hint — valid, just unnamed" do
       reader = insert(:user)
-      assert DeviceFlow.suggested_vault_name("ZZZZ-ZZZZ", reader.id) == nil
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+      assert DeviceFlow.view_pending_code(auth.user_code, reader.id) == {:ok, nil}
     end
 
-    test "returns nil once the code has been authorized (no longer pending)" do
+    test "returns :error for unknown code" do
+      reader = insert(:user)
+      assert DeviceFlow.view_pending_code("ZZZZ-ZZZZ", reader.id) == :error
+    end
+
+    test "returns :error once the code has been authorized (no longer pending)" do
       user = insert(:user)
       vault = insert(:vault, user: user)
       {:ok, auth} = DeviceFlow.start_device_flow("client_1", "Local")
       {:ok, _} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
-      assert DeviceFlow.suggested_vault_name(auth.user_code, user.id) == nil
+      assert DeviceFlow.view_pending_code(auth.user_code, user.id) == :error
     end
 
-    test "returns nil for expired code" do
+    test "returns :error for expired code" do
       reader = insert(:user)
       {:ok, auth} = DeviceFlow.start_device_flow("client_1", "Local")
       past = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
@@ -70,22 +80,22 @@ defmodule Engram.Auth.DeviceFlowTest do
         skip_tenant_check: true
       )
 
-      assert DeviceFlow.suggested_vault_name(auth.user_code, reader.id) == nil
+      assert DeviceFlow.view_pending_code(auth.user_code, reader.id) == :error
     end
 
-    test "the first reader claims the code; subsequent reads by other users return nil" do
+    test "the first reader claims the code; subsequent reads by other users error" do
       first = insert(:user)
       second = insert(:user)
       {:ok, auth} = DeviceFlow.start_device_flow("client_1", "Sensitive Vault")
 
       # First user gets the name and atomically claims the row.
-      assert DeviceFlow.suggested_vault_name(auth.user_code, first.id) == "Sensitive Vault"
+      assert DeviceFlow.view_pending_code(auth.user_code, first.id) == {:ok, "Sensitive Vault"}
 
       # Second user (e.g. someone who shoulder-surfed the code) is blocked.
-      assert DeviceFlow.suggested_vault_name(auth.user_code, second.id) == nil
+      assert DeviceFlow.view_pending_code(auth.user_code, second.id) == :error
 
       # First user can re-read their own claim.
-      assert DeviceFlow.suggested_vault_name(auth.user_code, first.id) == "Sensitive Vault"
+      assert DeviceFlow.view_pending_code(auth.user_code, first.id) == {:ok, "Sensitive Vault"}
     end
   end
 

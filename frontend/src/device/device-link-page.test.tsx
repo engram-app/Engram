@@ -152,6 +152,65 @@ describe("DeviceLinkPage", () => {
 		expect(get).not.toHaveBeenCalled();
 	});
 
+	// The backend answers 200 with the user's vault list regardless of whether
+	// the code is real — `user_code_valid` is the only signal. Before this,
+	// every 8-character string sailed through to the picker and only failed at
+	// authorize, three clicks later.
+	it("rejects a typed code the backend reports as invalid", async () => {
+		get.mockResolvedValue({
+			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
+			user_code_valid: false,
+		});
+		renderPage();
+
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ZZZZZZZZ" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(/invalid or has expired/iu);
+		expect(screen.queryByRole("radio", { name: /personal/iu })).not.toBeInTheDocument();
+		expect(screen.getByPlaceholderText(/XXXX-XXXX/iu)).toBeInTheDocument();
+	});
+
+	it("rejects an invalid code that arrived in the query string", async () => {
+		window.history.replaceState({}, "", "/link?code=ZZZZ-ZZZZ");
+		get.mockResolvedValue({
+			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
+			user_code_valid: false,
+		});
+		renderPage();
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(/invalid or has expired/iu);
+		expect(screen.queryByRole("radio", { name: /personal/iu })).not.toBeInTheDocument();
+	});
+
+	// A valid code whose plugin sent no vault-name hint reports
+	// suggested_vault_name: null. That must NOT read as invalid.
+	it("accepts a valid code that has no suggested vault name", async () => {
+		get.mockResolvedValue({
+			vaults: [{ id: 7, name: "Personal", note_count: 12 }],
+			suggested_vault_name: null,
+			user_code_valid: true,
+		});
+		renderPage();
+
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+
+		expect(await screen.findByRole("radio", { name: /personal/iu })).toBeInTheDocument();
+	});
+
+	// Forward compatibility: a frontend deployed ahead of the backend sees no
+	// `user_code_valid` at all. Rejecting on undefined would break every link.
+	it("proceeds when the backend omits user_code_valid entirely", async () => {
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 12 }] });
+		renderPage();
+
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+
+		expect(await screen.findByRole("radio", { name: /personal/iu })).toBeInTheDocument();
+	});
+
 	it("rejects a code that is not 8 characters", () => {
 		renderPage();
 		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ABC" } });

@@ -56,7 +56,16 @@ defmodule EngramWeb.Schemas.VaultsResponse do
       suggested_vault_name: %Schema{
         type: :string,
         nullable: true,
-        description: "Present only when a `user_code` query param is supplied (device-link flow)."
+        description:
+          "Present only when a `user_code` query param is supplied (device-link flow). " <>
+            "May be null for a perfectly valid code — check `user_code_valid`, not this."
+      },
+      user_code_valid: %Schema{
+        type: :boolean,
+        description:
+          "Present only when a `user_code` query param is supplied. True when the code is " <>
+            "real, still pending, unexpired, and claimable by the calling user. This is the " <>
+            "validity signal; a null `suggested_vault_name` is not."
       }
     },
     required: [:vaults]

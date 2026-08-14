@@ -36,14 +36,14 @@ defmodule EngramWeb.DeviceAuthControllerTest do
         post(conn, "/api/auth/device", %{client_id: "test_client", vault_name: "My Notes"})
 
       resp = json_response(conn, 200)
-      assert DeviceFlow.suggested_vault_name(resp["user_code"], reader.id) == "My Notes"
+      assert DeviceFlow.view_pending_code(resp["user_code"], reader.id) == {:ok, "My Notes"}
     end
 
     test "ignores blank vault_name", %{conn: conn} do
       reader = insert(:user)
       conn = post(conn, "/api/auth/device", %{client_id: "test_client", vault_name: "   "})
       resp = json_response(conn, 200)
-      assert DeviceFlow.suggested_vault_name(resp["user_code"], reader.id) == nil
+      assert DeviceFlow.view_pending_code(resp["user_code"], reader.id) == {:ok, nil}
     end
 
     test "truncates long vault_name to 100 chars", %{conn: conn} do
@@ -51,7 +51,7 @@ defmodule EngramWeb.DeviceAuthControllerTest do
       long = String.duplicate("a", 250)
       conn = post(conn, "/api/auth/device", %{client_id: "test_client", vault_name: long})
       resp = json_response(conn, 200)
-      stored = DeviceFlow.suggested_vault_name(resp["user_code"], reader.id)
+      {:ok, stored} = DeviceFlow.view_pending_code(resp["user_code"], reader.id)
       assert String.length(stored) == 100
     end
   end
