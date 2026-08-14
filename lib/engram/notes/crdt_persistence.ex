@@ -310,6 +310,23 @@ defmodule Engram.Notes.CrdtPersistence do
       |> order_by([l], asc: l.inserted_at)
       |> Repo.all()
 
+    apply_tail_rows(doc, user, note_id, rows)
+  end
+
+  @doc """
+  Applies already-fetched tail rows to `doc`, returning the ids that decrypted.
+
+  Split out of `replay_tail/3` so a BATCH caller can fetch one page's tail in a
+  single query and replay from those buffers. That is not just an N+1 fix: it
+  removes a race. Fetching rows and replaying them in separate statements at
+  READ COMMITTED lets a checkpoint prune the tail in between, so the replay
+  comes up empty against a snapshot that predates the fold. Yjs updates are
+  idempotent and commutative, so replaying a buffer a checkpoint has since
+  folded in is harmless — holding the rows is strictly safer than re-reading
+  them.
+  """
+  @spec apply_tail_rows(Yex.Doc.t(), map(), String.t(), [struct()]) :: [Ecto.UUID.t()]
+  def apply_tail_rows(doc, user, note_id, rows) do
     rows
     |> Enum.reduce([], fn row, applied ->
       shaped = %Note{
