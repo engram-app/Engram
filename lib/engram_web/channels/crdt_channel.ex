@@ -931,6 +931,37 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  # The room has gone idle and is asking its observers to let go (#1152). Evict
+  # the cached pid FIRST, then unobserve — the last unobserve trips the room's
+  # auto_exit, which checkpoints on terminate.
+  #
+  # Evict-before-unobserve is what makes this safe. A `sync_update` frame is a
+  # GenServer.cast (deps/y_ex/lib/server/doc_server_worker.ex:26), so casting at
+  # a dead room returns :ok and silently drops the edit. Because the eviction
+  # happens in this same handle_info, any frame BEHIND this message re-resolves
+  # through ensure_room and lands on a fresh room, and any frame AHEAD of it
+  # already reached the room while it was live. There is no window either way.
+  @impl true
+  def handle_info({:crdt_room_drain, room}, socket) do
+    case Map.get(socket.assigns.room_doc, room) do
+      nil ->
+        # Not ours (a room we already released, or another channel's).
+        {:noreply, socket}
+
+      doc_id ->
+        socket =
+          socket
+          |> assign(:rooms, Map.delete(socket.assigns.rooms, doc_id))
+          |> assign(:room_doc, Map.delete(socket.assigns.room_doc, room))
+          # Remember we let this one go, so the re-spin stays quiet (see the
+          # announce in start_and_observe_room).
+          |> assign(:drained, remember_drained(socket.assigns.drained, doc_id))
+
+        release_room(room)
+        {:noreply, socket}
+    end
+  end
+
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, _reason}, socket) do
     # The index room dying must clear its cache too, or the next frame casts at
