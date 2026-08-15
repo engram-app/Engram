@@ -40,7 +40,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
-  alias Engram.Notes.VaultIndexState
+  alias Engram.Notes.{Enqueue, VaultIndexState}
   alias Engram.Repo
 
   require Logger
@@ -181,6 +181,23 @@ defmodule Engram.Notes.CrdtIndexPersistence do
          {:ok, {ct, nonce}} <- Crypto.encrypt_index_state(encoded, user, vault_id),
          :ok <- upsert(user, vault_id, ct, nonce) do
       emit_checkpoint(:ok)
+
+      # Project the index onto the notes path columns (#1151 step 2) — in a
+      # worker, never here. This runs inside terminate/2 against a shutdown
+      # budget, and a projection pass is N renames, each re-encrypting a path,
+      # rewriting path_hmac, repathing Qdrant points and enqueueing link
+      # rewrites. Doing that in a terminating process during a deploy stampede
+      # loses the checkpoint AND the projection.
+      #
+      # Enqueued only after the snapshot is durably written, so the worker can
+      # never read a snapshot older than the doc that triggered it. Per-vault
+      # `unique` collapses a storm of room exits into one job.
+      _ =
+        Enqueue.enqueue(
+          Engram.Workers.ProjectVaultIndex.new(%{user_id: user_id, vault_id: vault_id}),
+          "project_vault_index"
+        )
+
       :ok
     else
       {:error, reason} ->

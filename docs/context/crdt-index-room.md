@@ -113,11 +113,40 @@ can keep growing one doc. The timer is note-keyed (`note_id` threads through its
 `CrdtRoomLru.touch/3` call), so serving the index room means generalising it — that is the real
 fix, and it is tracked rather than papered over with a flag.
 
+## Projection onto the notes rows (#1151 step 2)
+
+`Engram.Workers.ProjectVaultIndex` walks `filemeta_v0` and corrects the row each entry names.
+This is what keeps REST, search and MCP working against a client-owned index — the server answers
+"what is this note's path" from `notes.path_*`, never from Yjs state, exactly as `CrdtCheckpoint`
+projects note CONTENT for the same reason.
+
+**Additive-corrective, and it never acts on absence.** It walks the ENTRIES and fixes the rows they
+name. It does NOT walk the notes asking whether the index still mentions them. That distinction is
+the entire safety argument for shipping this dormant: no client writes the index yet
+(Engram-obsidian#362), so every vault's index is empty in prod — and a reconcile-by-absence
+implementation would read that as "this vault has no files" and delete the vault. It follows that
+projection can never delete, and never touches a note the index does not mention.
+
+**Through `rename_note/4`, never the columns directly.** That function pre-checks the unique
+`(user, vault, path_hmac)` constraint and answers `{:error, :conflict}` instead of crashing, and it
+carries the Qdrant repath and link-rewrite legs. Writing `path_ciphertext`/`path_nonce`/`path_hmac`
+here would make projection a second path writer against the exactly-one-rewriter invariant, and
+would silently drop both legs.
+
+**A worker, not the checkpoint.** `unbind/3` runs inside `terminate/2` against a shutdown budget; a
+projection pass is N renames, each re-encrypting a path and repathing Qdrant. Doing that in a
+terminating process during a deploy stampede loses the checkpoint AND the projection. The
+checkpoint enqueues after the snapshot is durably written, so the worker can never read a snapshot
+older than the doc that triggered it; per-vault `unique` collapses a storm into one job.
+
+One entry's failure never stops the next — a single collision or stale id would otherwise strand
+every entry behind it. Conflicts and unknown note_ids are logged and skipped: the index and the rows
+disagreeing is not something projection resolves, because the client owns identity.
+
 ## Not in scope here (and why)
 
 | | |
 |---|---|
-| projection to `notes` path columns | #1151 step 2 — goes THROUGH `rename_note`, see below |
 | enabling the idle drain + the wire flag | #1151 step 3 |
 | client adoption, `getManifest` removal | Engram-obsidian#362/#363 (`phase/contract`) |
 | compaction | #1153 — entangled with the #958 checkpoint-union hazard |
