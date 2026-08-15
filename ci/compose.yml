@@ -176,6 +176,17 @@ services:
       # is a REAL finding about the drain, not CI noise — raise it deliberately
       # rather than deleting the line.
       CRDT_IDLE_EXIT_MS: ${CRDT_IDLE_EXIT_MS:-5000}
+      # LRU backstop, also e2e-only. Idle-exit alone never evicts a room that
+      # stays busy, so without these the LRU only ever ran against spawn stubs
+      # in unit tests — it had never touched a real SharedDoc.
+      #
+      # A tiny cap plus a fast sweep is the point: e2e vaults hold few notes, so
+      # a production-shaped cap would never be reached and this would cover
+      # nothing. The sweep interval matters as much as the cap — it defaults to
+      # 30s, and most e2e tests finish inside that, so a low cap alone would arm
+      # the LRU and never fire it.
+      CRDT_MAX_RESIDENT_ROOMS: ${CRDT_MAX_RESIDENT_ROOMS:-3}
+      CRDT_LRU_SWEEP_MS: ${CRDT_LRU_SWEEP_MS:-3000}
       # Free-tier launch test_72_cancel_to_free_overlimit signs a synthetic
       # subscription.canceled webhook with this fixed secret so the e2e
       # exercises the real verify_signature → upsert_from_paddle_event path

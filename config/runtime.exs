@@ -322,6 +322,19 @@ case Engram.RuntimeConfig.ci_gated_int_override(&System.get_env/1, "CRDT_MAX_RES
     :ok
 end
 
+case Engram.RuntimeConfig.ci_gated_int_override(&System.get_env/1, "CRDT_LRU_SWEEP_MS") do
+  {:ok, ms} ->
+    config :engram, Engram.Notes.CrdtRoomLru, sweep_interval_ms: ms
+
+  {:ignored, raw} ->
+    Logger.warning(
+      "CRDT_LRU_SWEEP_MS=#{raw} ignored: drain levers are only honored when CI=true."
+    )
+
+  :none ->
+    :ok
+end
+
 # Clerk auth (only required when AUTH_PROVIDER=clerk)
 # Note: use local variable, not Application.get_env — runtime.exs config
 # is accumulated and not yet applied, so get_env reads stale config.

@@ -50,9 +50,14 @@ defmodule Engram.RuntimeConfig do
   #
   # Nested config keys (module + key) rather than the flat app-env keys the
   # rate-limit overrides use, since both settings live under their module.
+  # NOTE the sweep interval is here for a reason: it defaults to 30s, and most
+  # e2e tests finish well inside that. Setting only `max_resident` would arm the
+  # LRU and never fire it — the suite would look like it covered eviction while
+  # covering nothing.
   @drain_overrides [
     {"CRDT_IDLE_EXIT_MS", {Engram.Notes.CrdtCheckpointTimer, :idle_exit_ms}},
-    {"CRDT_MAX_RESIDENT_ROOMS", {Engram.Notes.CrdtRoomLru, :max_resident}}
+    {"CRDT_MAX_RESIDENT_ROOMS", {Engram.Notes.CrdtRoomLru, :max_resident}},
+    {"CRDT_LRU_SWEEP_MS", {Engram.Notes.CrdtRoomLru, :sweep_interval_ms}}
   ]
 
   @doc """

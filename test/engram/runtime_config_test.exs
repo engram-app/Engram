@@ -26,8 +26,16 @@ defmodule Engram.RuntimeConfigTest do
     test "lists the CRDT room-drain levers with their module + key targets" do
       assert RuntimeConfig.drain_overrides() == [
                {"CRDT_IDLE_EXIT_MS", {Engram.Notes.CrdtCheckpointTimer, :idle_exit_ms}},
-               {"CRDT_MAX_RESIDENT_ROOMS", {Engram.Notes.CrdtRoomLru, :max_resident}}
+               {"CRDT_MAX_RESIDENT_ROOMS", {Engram.Notes.CrdtRoomLru, :max_resident}},
+               {"CRDT_LRU_SWEEP_MS", {Engram.Notes.CrdtRoomLru, :sweep_interval_ms}}
              ]
+    end
+
+    # The sweep interval is not optional trivia: it defaults to 30s and most e2e
+    # tests finish inside that, so capping residency WITHOUT lowering the sweep
+    # arms the LRU and never fires it — coverage that looks real and is not.
+    test "the sweep interval is overridable, not just the cap" do
+      assert {"CRDT_LRU_SWEEP_MS", {Engram.Notes.CrdtRoomLru, :sweep_interval_ms}} in RuntimeConfig.drain_overrides()
     end
 
     # The gate matters more here than for a rate limiter: a stray
