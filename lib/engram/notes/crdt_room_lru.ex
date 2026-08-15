@@ -65,20 +65,45 @@ defmodule Engram.Notes.CrdtRoomLru do
   """
   @spec touch(String.t(), pid(), String.t()) :: :ok
   def touch(note_id, room_pid, vault_id) do
-    :ets.insert(@table, {note_id, room_pid, vault_id, System.monotonic_time(:millisecond)})
-    :ok
+    with_table(fn tid ->
+      :ets.insert(tid, {note_id, room_pid, vault_id, System.monotonic_time(:millisecond)})
+    end)
   end
 
   @doc "Drop a room's entry (its room exited)."
   @spec forget(String.t()) :: :ok
-  def forget(note_id) do
-    :ets.delete(@table, note_id)
-    :ok
+  def forget(note_id), do: with_table(fn tid -> :ets.delete(tid, note_id) end)
+
+  @doc """
+  Rooms tracked on this node, INCLUDING any that exited since the last sweep —
+  `prune_dead/0` only runs on a sweep. Call `sweep/1` first if you need a live
+  count. Returns 0 while the owning process is restarting.
+  """
+  @spec resident_count() :: non_neg_integer()
+  def resident_count do
+    case :ets.whereis(@table) do
+      :undefined -> 0
+      tid -> :ets.info(tid, :size)
+    end
   end
 
-  @doc "Live rooms currently tracked on this node."
-  @spec resident_count() :: non_neg_integer()
-  def resident_count, do: :ets.info(@table, :size)
+  # This module's GenServer owns the table, so between its death and its
+  # restart the table does not exist. A bare :ets call would raise
+  # ArgumentError in the CALLER — and the caller is CrdtCheckpointTimer, which
+  # links itself to its room and is started by a hard match in
+  # CrdtDoc.start_link. The room does not trap exits, so it would die by signal,
+  # skipping terminate/2 and therefore skipping CrdtPersistence.unbind/3's
+  # checkpoint. The LRU is a memory backstop; it must never be able to cost a
+  # room its checkpoint. Degrade instead: a missed touch costs one sweep's worth
+  # of ordering accuracy.
+  defp with_table(fun) do
+    case :ets.whereis(@table) do
+      :undefined -> :ok
+      tid -> _ = fun.(tid)
+    end
+
+    :ok
+  end
 
   @doc """
   Prune dead entries, then drain down to `cap`. Synchronous so tests need not
@@ -181,17 +206,7 @@ defmodule Engram.Notes.CrdtRoomLru do
     for note_id <- note_ids do
       case :ets.lookup(@table, note_id) do
         [{^note_id, pid, vault_id, _last}] ->
-          # Same broadcast the idle timer sends: observers let go, auto_exit
-          # checkpoints. Counted under its own phase so a dashboard can tell
-          # memory-pressure eviction from an ordinary idle drain.
-          _ =
-            Phoenix.PubSub.broadcast(
-              Engram.PubSub,
-              CrdtRegistry.drain_topic(vault_id),
-              {:crdt_room_drain, pid}
-            )
-
-          :telemetry.execute(@drain_event, %{count: 1}, %{phase: :lru_evicted})
+          ask_to_drain(note_id, pid, vault_id)
 
         [] ->
           :ok
@@ -199,6 +214,37 @@ defmodule Engram.Notes.CrdtRoomLru do
     end
 
     :ok
+  end
+
+  # Same broadcast the idle timer sends: observers let go, auto_exit
+  # checkpoints. Counted under its own phase so a dashboard can tell
+  # memory-pressure eviction from an ordinary idle drain.
+  defp ask_to_drain(note_id, pid, vault_id) do
+    case Phoenix.PubSub.broadcast(
+           Engram.PubSub,
+           CrdtRegistry.drain_topic(vault_id),
+           {:crdt_room_drain, pid}
+         ) do
+      :ok ->
+        # Re-stamp as "asked just now". An ask is not an exit: if no observer
+        # acts, the room keeps its old timestamp, stays the oldest entry, and is
+        # re-selected on EVERY later sweep — monopolising the eviction slate
+        # while residency never comes down, and inflating this counter with
+        # repeat asks for one stuck room. Moving it to the back of the queue
+        # gives the other rooms a turn; if the drain does work, the room exits
+        # and `forget/1` removes the entry anyway.
+        _ = :ets.update_element(@table, note_id, {4, System.monotonic_time(:millisecond)})
+        :telemetry.execute(@drain_event, %{count: 1}, %{phase: :lru_evicted})
+
+      {:error, reason} ->
+        # Do NOT count this as an eviction: nothing was asked, so the room is
+        # still resident. Counting it would make the capacity signal read as
+        # "we are shedding load" during precisely the failure where we are not.
+        Logger.warning(
+          "crdt room LRU drain broadcast failed for #{note_id}: #{inspect(reason)}",
+          Engram.Logger.Metadata.with_category(:warning, :sync)
+        )
+    end
   end
 
   defp schedule_sweep, do: Process.send_after(self(), :sweep, sweep_interval_ms())

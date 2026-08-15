@@ -29,7 +29,7 @@ defmodule Engram.Notes.CrdtRoomIdleExitTest do
   use Engram.DataCase, async: false
 
   alias Engram.{Crypto, Notes, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtDoc, CrdtRegistry}
+  alias Engram.Notes.{CrdtBridge, CrdtDoc, CrdtRegistry, CrdtRoomLru}
   alias Yex.Sync.SharedDoc
 
   @idle_ms 150
@@ -198,8 +198,121 @@ defmodule Engram.Notes.CrdtRoomIdleExitTest do
 
       # Re-spin: same note, brand-new room process.
       {:ok, respun} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+      # `auto_exit` is last-OBSERVER-driven, so a room nobody ever observed has
+      # no exit trigger at all — it would outlive the test as an immortal
+      # orphan, checkpointing against a checked-in sandbox connection and
+      # printing an ownership stacktrace into an otherwise clean run.
+      on_exit(fn -> if Process.alive?(respun), do: Process.exit(respun, :kill) end)
+
       assert is_pid(respun)
       refute respun == room
+    end
+  end
+
+  # Only drain-ENABLED rooms are LRU-tracked. CrdtRoomLru's moduledoc stakes the
+  # feature's inertness on exactly that, and nothing asserted it: a mutation
+  # enrolling every note room passed the whole suite. The consequence is not
+  # subtle — the LRU bypasses `idle?/2` on purpose, so once a node holds more
+  # rooms than the cap its sweep starts drain-broadcasting at rooms users are
+  # actively typing in.
+  describe "LRU enrolment" do
+    setup do
+      CrdtRoomLru.reset()
+      on_exit(&CrdtRoomLru.reset/0)
+      :ok
+    end
+
+    test "a room with no idle window is never enrolled", ctx do
+      room = start_room(ctx, [])
+      :ok = SharedDoc.observe(room)
+
+      assert CrdtRoomLru.resident_count() == 0
+    end
+
+    # 0 means disabled to `arm_idle/1`, so it must mean disabled here too. The
+    # guard used to match `nil` only, leaving a zero-window room enrolled and
+    # evictable — half-disabled, in the one direction nothing would notice.
+    test "a zero idle window is not enrolled either", ctx do
+      room = start_room(ctx, idle_exit_ms: 0)
+      :ok = SharedDoc.observe(room)
+
+      assert CrdtRoomLru.resident_count() == 0
+    end
+
+    test "a drain-enabled room IS enrolled, so the guard is not just always-off", ctx do
+      room = start_room(ctx, idle_exit_ms: 60_000)
+      :ok = SharedDoc.observe(room)
+
+      assert CrdtRoomLru.resident_count() == 1
+    end
+  end
+
+  # The backoff arithmetic is covered as a pure function, but nothing proved
+  # `drain_attempts` ever CHANGES: a mutation pinning it at 0 passed the suite.
+  # With it pinned, a wedged observer is broadcast at a fixed rate for the life
+  # of the room — the exact thing the backoff exists to prevent — and `:reasked`
+  # is never emitted at all.
+  describe "re-ask backoff" do
+    setup do
+      test_pid = self()
+      handler = "reask-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :crdt, :room_drain],
+        fn _e, m, meta, _ -> send(test_pid, {:drain_telemetry, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      :ok
+    end
+
+    defp phases_within(ms) do
+      deadline = System.monotonic_time(:millisecond) + ms
+      collect_phases(deadline, [])
+    end
+
+    defp collect_phases(deadline, acc) do
+      remaining = deadline - System.monotonic_time(:millisecond)
+
+      if remaining <= 0 do
+        Enum.reverse(acc)
+      else
+        receive do
+          {:drain_telemetry, _, %{phase: phase}} -> collect_phases(deadline, [phase | acc])
+        after
+          remaining -> Enum.reverse(acc)
+        end
+      end
+    end
+
+    test "a drain nobody answers is asked again, under the re-ask phase", ctx do
+      room = start_room(ctx, idle_exit_ms: @idle_ms)
+      :ok = SharedDoc.observe(room)
+
+      assert_receive {:drain_telemetry, %{count: 1}, %{phase: :requested}}, 2_000
+      assert_receive {:drain_telemetry, %{count: 1}, %{phase: :reasked}}, 2_000
+    end
+
+    # Activity resets the counter, so a room that goes quiet again starts from
+    # the short window instead of keeping its backed-off delay for life. Phases
+    # are COLLECTED rather than matched in order: an unbroken run of `:reasked`
+    # is the failure, and a single `:requested` anywhere after the activity is
+    # the proof, without racing whichever ask was already in flight.
+    test "activity resets the attempt counter", ctx do
+      room = start_room(ctx, idle_exit_ms: @idle_ms)
+      :ok = SharedDoc.observe(room)
+
+      assert_receive {:drain_telemetry, _, %{phase: :requested}}, 2_000
+      assert_receive {:drain_telemetry, _, %{phase: :reasked}}, 2_000
+
+      edit(room, "activity")
+
+      phases = phases_within(1_500)
+
+      assert :requested in phases,
+             "after activity the next ask must be a first ask again, got: #{inspect(phases)}"
     end
   end
 end

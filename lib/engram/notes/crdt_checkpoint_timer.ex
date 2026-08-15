@@ -194,29 +194,34 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     # contradicts the whole point of re-arming, so gate on the real clock.
     state =
       if idle?(state, monotonic_ms()) do
-        case Phoenix.PubSub.broadcast(
-               Engram.PubSub,
-               CrdtRegistry.drain_topic(state.vault_id),
-               {:crdt_room_drain, state.room_pid}
-             ) do
-          :ok ->
-            :ok
+        phase =
+          case Phoenix.PubSub.broadcast(
+                 Engram.PubSub,
+                 CrdtRegistry.drain_topic(state.vault_id),
+                 {:crdt_room_drain, state.room_pid}
+               ) do
+            :ok ->
+              if state.drain_attempts == 0, do: :requested, else: :reasked
 
-          {:error, reason} ->
-            # Transient by nature — the re-arm below asks again, and the attempt
-            # still counts so a persistently broken broadcast backs off rather
-            # than hammering. Logged because a room that can never ask its
-            # observers to let go is exactly the unbounded-residency case the
-            # drain exists to prevent.
-            Logger.warning(
-              "crdt drain broadcast failed: #{inspect(reason)}",
-              Engram.Logger.Metadata.with_category(:warning, :sync, note_id: state.note_id)
-            )
-        end
+            {:error, reason} ->
+              # Transient by nature — the re-arm below asks again, and the
+              # attempt still counts so a persistently broken broadcast backs
+              # off rather than hammering. Logged because a room that can never
+              # ask its observers to let go is exactly the unbounded-residency
+              # case the drain exists to prevent.
+              #
+              # Its OWN phase: nothing was asked, so counting it as :requested
+              # would report an ask that never went out — and `requested` is the
+              # denominator an operator reads this metric through.
+              Logger.warning(
+                "crdt drain broadcast failed: #{inspect(reason)}",
+                Engram.Logger.Metadata.with_category(:warning, :sync, note_id: state.note_id)
+              )
 
-        :telemetry.execute(@drain_event, %{count: 1}, %{
-          phase: if(state.drain_attempts == 0, do: :requested, else: :reasked)
-        })
+              :request_failed
+          end
+
+        :telemetry.execute(@drain_event, %{count: 1}, %{phase: phase})
 
         %{state | drain_attempts: state.drain_attempts + 1}
       else
@@ -247,14 +252,21 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     {:stop, :normal, state}
   end
 
-  # Only drain-ENABLED rooms are tracked for eviction, so a note room can never
-  # be evicted and this whole feature stays inert until #1150 opts in.
-  defp touch_lru(%{idle_exit_ms: nil} = state), do: state
-
-  defp touch_lru(state) do
+  # Only drain-ENABLED rooms are tracked for eviction, so where the drain is off
+  # a room can never be LRU-evicted either — which is prod today (nothing sets
+  # `idle_exit_ms`) but NOT CI/e2e, where `CRDT_IDLE_EXIT_MS` turns the drain on
+  # fleet-wide for every note room.
+  #
+  # The guard must match `arm_idle/1`'s exactly. It used to match only `nil`,
+  # so `idle_exit_ms: 0` — which `arm_idle/1` treats as disabled — enrolled the
+  # room in the LRU and left it evictable: half-disabled, in the one direction
+  # nothing would notice, since eviction bypasses `idle?/2` on purpose.
+  defp touch_lru(%{idle_exit_ms: ms} = state) when is_integer(ms) and ms > 0 do
     CrdtRoomLru.touch(state.note_id, state.room_pid, state.vault_id)
     state
   end
+
+  defp touch_lru(state), do: state
 
   @doc """
   Pure scheduling decision: given the timer `state` and a monotonic `now`,

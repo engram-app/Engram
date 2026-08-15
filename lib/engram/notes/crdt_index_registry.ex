@@ -69,4 +69,26 @@ defmodule Engram.Notes.CrdtIndexRegistry do
       fn room -> SharedDoc.observe(room) end
     )
   end
+
+  @doc """
+  Kill this vault's index room, if one is running (#954: a room must not
+  outlive its vault).
+
+  Mirrors `CrdtRegistry.terminate_room/1`, which walks NOTE ids and so can
+  never reach this room. Brutal kill, and unlike a note room there is nothing
+  to lose by it: the index has no persistence until #1151, so no `unbind`
+  checkpoint would run either way.
+  """
+  @spec terminate_room(String.t()) :: :ok
+  def terminate_room(vault_id) when is_binary(vault_id) do
+    case :global.whereis_name({:crdt_index, vault_id}) do
+      :undefined ->
+        :ok
+
+      pid when is_pid(pid) ->
+        _ = :global.unregister_name({:crdt_index, vault_id})
+        Process.exit(pid, :kill)
+        :ok
+    end
+  end
 end

@@ -1450,6 +1450,12 @@ defmodule Engram.Notes do
       end)
 
     Enum.each(ids, &Engram.Notes.CrdtRegistry.terminate_room/1)
+
+    # The vault's INDEX room (#1150) is keyed by vault, not note, so the loop
+    # above cannot reach it. Same invariant, same reason (#954: a room must not
+    # outlive its vault) — and this one holds nothing durable, so killing it
+    # loses strictly less than killing a note room does.
+    Engram.Notes.CrdtIndexRegistry.terminate_room(vault_id)
     :ok
   rescue
     # Runs in delete_vault's post-commit tap: a raise here would surface as a

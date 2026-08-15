@@ -27,7 +27,7 @@ defmodule EngramWeb.CrdtChannel do
   require Logger
 
   # socket assigns:
-  #   rooms    :: %{doc_id => %{room: pid, note_id: binary}}
+  #   rooms    :: %{doc_id => %{room: pid, note_id: binary, ref: reference}}
   #   room_doc :: %{room_pid => doc_id}  (reverse map for broadcast routing)
 
   # 5 MB decoded-frame ceiling — stops a single client from flooding RDS with
@@ -212,8 +212,8 @@ defmodule EngramWeb.CrdtChannel do
     with :ok <- check_rate(socket, frame_class_b64(b64)),
          {:ok, frame} <- decode_frame(b64),
          :ok <- guard_frame(frame),
-         {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id) do
-      SharedDoc.send_yjs_message(room, frame)
+         {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id),
+         :ok <- relay_frame(room, frame) do
       # ACK the push. Clients attach reply handlers to distinguish delivery
       # from loss; with no ack every successful push "times out" client-side —
       # the web SPA re-handshook every open note every ~3.5s forever
@@ -250,14 +250,74 @@ defmodule EngramWeb.CrdtChannel do
         log_dropped(socket, doc_id, err)
         {:reply, {:error, %{reason: "note_not_found", doc_id: doc_id}}, socket}
 
+      {:error, :room_unavailable} = err ->
+        # The room auto-exited out from under every observe_with_retry attempt.
+        # This used to fall through to the reply-less clause below, on the
+        # reasoning that the sender "has no actionable heal" — defensible when a
+        # room only vanished on a crash. The drain (#1152) makes teardown the
+        # STEADY STATE, so this is now a routine race, and a retry is exactly
+        # the right heal: the next attempt re-resolves through ensure_room and
+        # lands on a fresh room. Reply so the client can take it, instead of
+        # dropping the edit and leaving the push to time out client-side.
+        #
+        # Deliberately NOT fixed by widening observe_with_retry's budget: a room
+        # checkpoints inside terminate/2, so it can hold its :global name for far
+        # longer than the retry sleep, and every extra millisecond spent looping
+        # there blocks EVERY other note on this socket. Bounce it to the client,
+        # which can retry without holding the channel.
+        log_dropped(socket, doc_id, err)
+        {:reply, {:error, %{reason: "room_unavailable", doc_id: doc_id}}, socket}
+
       err ->
         # Surface drops rather than swallowing them silently — a dropped frame
-        # (bad base64, non-UUID doc_id from a stale path-keyed client, or
-        # room_unavailable) means a lost edit. These stay reply-less: a
-        # non-UUID doc_id may be a cleartext path (never echo it back), and
-        # the sender has no actionable heal for the others.
+        # (bad base64, or a non-UUID doc_id from a stale path-keyed client)
+        # means a lost edit. These stay reply-less: a non-UUID doc_id may be a
+        # cleartext path, and echoing it back would leak it.
         log_dropped(socket, doc_id, err)
         {:noreply, socket}
+    end
+  end
+
+  # Per-vault INDEX room frames (#1150). No `doc_id`: the vault is implicit in
+  # the channel topic and there is exactly one index room per connection, so
+  # addressing it by id would be a second way to name the same thing — and a
+  # doc_id-addressable index room would bypass note_in_vault? validation.
+  #
+  # Rides the existing channel — no new transport, per the issue — and is rate
+  # limited EXACTLY like a note frame: `frame_class_b64/1` puts step1 and small
+  # step2 on the handshake lane and everything else, including every
+  # `sync_update`, on the edit lane.
+  #
+  # An earlier comment here claimed index frames ride the handshake bucket
+  # outright, on the reasoning that index sync is once-per-connect. That is true
+  # of the handshake and false of the writes #1151 will add: a rename or create
+  # writes `filemeta_v0`, which is a `sync_update`, which bills the user's edit
+  # budget. Deciding whether that is right belongs to #1151, where those writes
+  # exist and their volume is known — putting ALL index traffic on the handshake
+  # lane just moves the starvation risk onto handshakes, which is the shape
+  # behind the 2026-07-07 cross-file-overwrite incident.
+  @impl true
+  def handle_in("crdt_index_msg", %{"b64" => b64}, socket) do
+    with :ok <- index_enabled(),
+         :ok <- check_rate(socket, frame_class_b64(b64)),
+         {:ok, frame} <- decode_frame(b64),
+         :ok <- guard_frame(frame),
+         {:ok, socket, room} <- ensure_index_room(socket),
+         :ok <- relay_frame(room, frame) do
+      {:reply, {:ok, %{}}, socket}
+    else
+      {:error, :rate_limited} ->
+        {:reply, {:error, %{reason: "rate_limited"}}, socket}
+
+      {:error, :index_disabled} ->
+        {:reply, {:error, %{reason: "index_disabled"}}, socket}
+
+      {:error, reason} ->
+        # The index is not yet load-bearing (nothing reads it back until #1151 /
+        # Engram-obsidian#362), but a silently dropped frame here would become a
+        # drift class the moment it is — so it is logged like any lost edit.
+        log_index_dropped(socket, reason)
+        {:reply, {:error, %{reason: "index_frame_rejected"}}, socket}
     end
   end
 
@@ -268,36 +328,6 @@ defmodule EngramWeb.CrdtChannel do
   # sized for, and NOT the continuous edit stream @msg_limit protects — so
   # sharing that lane is intentional, not accidental reuse. They are still
   # bounded (not exempt): the 2400/10s ceiling applies same as real STEP1s.
-  # Per-vault INDEX room frames (#1150). No `doc_id`: the vault is implicit in
-  # the channel topic and there is exactly one index room per connection, so
-  # addressing it by id would be a second way to name the same thing — and a
-  # doc_id-addressable index room would bypass note_in_vault? validation.
-  #
-  # Rides the existing channel (no new transport, per the issue) and the
-  # HANDSHAKE bucket: index sync is once-per-connect, and billing it to the edit
-  # budget would let it starve a user's real edits (the 2026-07-07
-  # cross-file-overwrite incident shape).
-  @impl true
-  def handle_in("crdt_index_msg", %{"b64" => b64}, socket) do
-    with :ok <- check_rate(socket, frame_class_b64(b64)),
-         {:ok, frame} <- decode_frame(b64),
-         :ok <- guard_frame(frame),
-         {:ok, socket, room} <- ensure_index_room(socket) do
-      SharedDoc.send_yjs_message(room, frame)
-      {:reply, {:ok, %{}}, socket}
-    else
-      {:error, :rate_limited} ->
-        {:reply, {:error, %{reason: "rate_limited"}}, socket}
-
-      {:error, reason} ->
-        # The index is not yet load-bearing (nothing reads it back until #1151 /
-        # Engram-obsidian#362), but a silently dropped frame here would become a
-        # drift class the moment it is — so it is logged like any lost edit.
-        log_dropped(socket, socket.assigns.vault.id, reason)
-        {:reply, {:error, %{reason: "index_frame_rejected"}}, socket}
-    end
-  end
-
   @impl true
   def handle_in("crdt_create", %{"doc_id" => doc_id, "path" => path}, socket) do
     with :ok <- check_rate(socket, :handshake),
@@ -900,16 +930,24 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  # The room has gone idle and is asking its observers to let go (#1152). Evict
-  # the cached pid FIRST, then unobserve — the last unobserve trips the room's
-  # auto_exit, which checkpoints on terminate.
+  # The room has gone idle and is asking its observers to let go (#1152). The
+  # last unobserve trips the room's auto_exit, which checkpoints on terminate.
   #
-  # Evict-before-unobserve is what makes this safe. A `sync_update` frame is a
-  # GenServer.cast (deps/y_ex/lib/server/doc_server_worker.ex:26), so casting at
-  # a dead room returns :ok and silently drops the edit. Because the eviction
-  # happens in this same handle_info, any frame BEHIND this message re-resolves
-  # through ensure_room and lands on a fresh room, and any frame AHEAD of it
-  # already reached the room while it was live. There is no window either way.
+  # What makes this safe is that the release and the eviction happen in the SAME
+  # handle_info. A `sync_update` frame is a GenServer.cast
+  # (deps/y_ex/lib/server/doc_server_worker.ex:26), so casting at a dead room
+  # returns :ok and silently drops the edit — but this callback is atomic with
+  # respect to the channel's mailbox, so no frame can be processed between the
+  # two. A frame BEHIND this message re-resolves through ensure_room onto a
+  # fresh room; one AHEAD of it already reached the room while it was live.
+  # (Their relative order inside this function is therefore free, which is why
+  # the release can now run first and report whether it actually succeeded.)
+  #
+  # ONLY forget the room if it is really gone. A room that failed to release is
+  # still holding this channel in its observer_process map, so auto_exit can
+  # never fire for it; dropping the pid here would also make every backed-off
+  # re-ask a no-op ("not ours"), pinning the room for the life of the socket —
+  # the unbounded residency this whole feature exists to prevent.
   @impl true
   def handle_info({:crdt_room_drain, room}, socket) do
     case Map.get(socket.assigns.room_doc, room) do
@@ -918,16 +956,26 @@ defmodule EngramWeb.CrdtChannel do
         {:noreply, socket}
 
       doc_id ->
-        socket =
-          socket
-          |> assign(:rooms, Map.delete(socket.assigns.rooms, doc_id))
-          |> assign(:room_doc, Map.delete(socket.assigns.room_doc, room))
-          # Remember we let this one go, so the re-spin stays quiet (see the
-          # announce in start_and_observe_room).
-          |> assign(:drained, remember_drained(socket.assigns.drained, doc_id))
+        case release_room(room) do
+          :retry ->
+            {:noreply, socket}
 
-        release_room(room)
-        {:noreply, socket}
+          :gone ->
+            case Map.get(socket.assigns.rooms, doc_id) do
+              %{ref: ref} -> Process.demonitor(ref, [:flush])
+              _ -> :ok
+            end
+
+            socket =
+              socket
+              |> assign(:rooms, Map.delete(socket.assigns.rooms, doc_id))
+              |> assign(:room_doc, Map.delete(socket.assigns.room_doc, room))
+              # Remember we let this one go, so the re-spin stays quiet (see the
+              # announce in start_and_observe_room).
+              |> assign(:drained, remember_drained(socket.assigns.drained, doc_id))
+
+            {:noreply, socket}
+        end
     end
   end
 
@@ -956,7 +1004,13 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   @doc """
-  Let go of `room` in response to a drain (#1152). Always `:ok`.
+  Let go of `room` in response to a drain (#1152).
+
+  Returns `:gone` when the caller may forget the room (released, or already
+  dead), and `:retry` when it must NOT — the room is alive and still counts
+  this channel as an observer, so forgetting it would strand the room with an
+  observer it can never shed. The caller keeps the cached pid and the timer's
+  backed-off re-ask tries again.
 
   `SharedDoc.unobserve/1` is a `GenServer.call` with y_ex's default 5 s timeout
   and no timeout knob, so a room that is dead — or alive but wedged — would
@@ -980,29 +1034,46 @@ defmodule EngramWeb.CrdtChannel do
   Public (`@doc false`-ish) because the dead/wedged paths are unreachable
   through the channel API — same reason `CrdtRegistry.observe_with_retry/3` is.
   """
-  @spec release_room(pid()) :: :ok
+  @spec release_room(pid()) :: :gone | :retry
   def release_room(room) do
     cond do
       locally_dead?(room) ->
-        emit_drain(:skipped)
+        emit_drain(:skipped_dead)
+        :gone
 
       not room_responsive?(room) ->
-        emit_drain(:skipped)
+        # NOT routine, and not the same event as a dead room: this channel is
+        # still in the room's observer_process map, so the room cannot auto_exit
+        # until we succeed on a later re-ask. Loud, because a wedged room is an
+        # incident and the counter alone cannot say how long it stayed wedged.
+        Logger.warning(
+          "crdt room #{inspect(room)} did not answer the drain probe; will re-ask",
+          Engram.Logger.Metadata.with_category(:warning, :sync)
+        )
+
+        emit_drain(:skipped_unresponsive)
+        :retry
 
       true ->
         SharedDoc.unobserve(room)
         emit_drain(:released)
+        :gone
     end
-
-    :ok
   catch
     # The room died between a check and the call. Count it — otherwise this
-    # drain is neither :released nor :skipped, and requests silently exceed
+    # drain is neither released nor skipped, and requests silently exceed
     # outcomes on the dashboard, which reads exactly like the leak this counter
     # exists to detect.
+    #
+    # A `{:timeout, _}` exit is the one case where the room is still ALIVE and
+    # still holding us as an observer, so it must be retried, not forgotten.
+    :exit, {:timeout, _} ->
+      emit_drain(:skipped_unresponsive)
+      :retry
+
     :exit, _ ->
-      emit_drain(:skipped)
-      :ok
+      emit_drain(:skipped_dead)
+      :gone
   end
 
   # Paired with the timer's :requested/:reasked counts, this is the signal that
@@ -1097,6 +1168,49 @@ defmodule EngramWeb.CrdtChannel do
       "crdt_create_batch room enrollment failed: #{inspect(reason)}",
       Metadata.with_category(:warning, :websocket,
         note_id: note_id,
+        user_id: socket.assigns.current_user.id,
+        vault_id: socket.assigns.vault.id
+      )
+    )
+  end
+
+  # The index room accepts arbitrary client writes into a per-vault Y.Map that
+  # has NO persistence (#1151), and therefore no checkpoint timer, no idle drain
+  # and no LRU tracking — its only bound is `auto_exit` when the last socket
+  # closes. Until #1151 gives it a checkpoint, an authenticated client could sit
+  # on a connection growing one doc for the life of its session, against the
+  # same 1 GB task this feature exists to protect.
+  #
+  # No client sends these yet (Engram-obsidian#362/#363), so the wire ships OFF
+  # and the tests turn it on. "Deliberately inert" describes the SERVER; it is
+  # not a property of an endpoint anyone can push to.
+  defp index_enabled do
+    if Application.get_env(:engram, :crdt_index_enabled, false),
+      do: :ok,
+      else: {:error, :index_disabled}
+  end
+
+  # y_ex answers `{:error, :unknown_message}` for a frame its decoder rejects
+  # (deps/y_ex/lib/server/doc_server_worker.ex:30-37). Discarding that and
+  # replying `{:ok, %{}}` anyway tells the client its edit was delivered when
+  # y_ex threw it away — the same silent-drop class as casting into a dead room,
+  # one step further down the pipe. guard_frame/1 does NOT cover this: it checks
+  # state-vector plausibility, not that the frame is a well-formed Yjs message.
+  defp relay_frame(room, frame) do
+    case SharedDoc.send_yjs_message(room, frame) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:rejected_by_ydoc, reason}}
+    end
+  end
+
+  # NOT log_dropped/3: that keys the id as `note_id`, and an index frame has no
+  # note. Handing it the vault id filed a VAULT under `note_id:`, silently
+  # poisoning the one Loki query this metadata exists for — tracing a lost edit
+  # back to its note. The vault is already carried in the attribution.
+  defp log_index_dropped(socket, reason) do
+    Logger.warning(
+      "crdt_channel: dropped crdt_index_msg → #{inspect(reason)}",
+      Metadata.with_category(:warning, :sync,
         user_id: socket.assigns.current_user.id,
         vault_id: socket.assigns.vault.id
       )
@@ -1264,12 +1378,15 @@ defmodule EngramWeb.CrdtChannel do
       # Watch the room: if it dies (crash, node loss), evict it from the cache so
       # the next crdt_msg re-creates it. Without this, send_yjs_message casts to a
       # dead pid return :ok and every subsequent edit is silently dropped.
-      _ref = Process.monitor(room)
-
       # NOTE: no per-room drain subscribe. The connection subscribes ONCE to its
       # vault's drain topic in join/3 — see the comment there for why per-room
       # was self-defeating.
-      entry = %{room: room, note_id: note_id}
+      #
+      # Keep the ref: the drain releases rooms that do NOT die (another observer
+      # still holds it, or this socket re-spins fast enough to cancel auto_exit),
+      # and each such cycle would otherwise leave a monitor behind on both this
+      # channel and the room — unbounded within a long-lived socket.
+      entry = %{room: room, note_id: note_id, ref: Process.monitor(room)}
 
       socket =
         socket
@@ -1300,12 +1417,15 @@ defmodule EngramWeb.CrdtChannel do
       # announces exactly as before, since that peer state is genuinely unknown.
       {announce?, socket} = consume_drained(socket, doc_id)
 
-      if announce? do
+      path =
+        case Notes.get_note_by_id(user, vault, note_id) do
+          {:ok, %{path: p}} when is_binary(p) -> p
+          _ -> nil
+        end
+
+      if announce? or not backstopped?(path) do
         payload =
-          case Notes.get_note_by_id(user, vault, note_id) do
-            {:ok, %{path: path}} when is_binary(path) -> %{"doc_id" => doc_id, "path" => path}
-            _ -> %{"doc_id" => doc_id}
-          end
+          if path, do: %{"doc_id" => doc_id, "path" => path}, else: %{"doc_id" => doc_id}
 
         broadcast_from!(socket, "crdt_doc_ready", payload)
       end
@@ -1313,6 +1433,22 @@ defmodule EngramWeb.CrdtChannel do
       {:ok, socket, entry}
     end
   end
+
+  # Suppressing the re-announce is only safe where SOMETHING ELSE re-signals.
+  # For `.md` that is `CrdtCheckpoint`, which calls `CrdtDeliver.announce_ready/4`
+  # on the next content-changing checkpoint (eager flush, ~250 ms).
+  #
+  # That call is itself path-gated to `.md` (crdt_deliver.ex:134). So for any
+  # other extension — `.canvas` today, which syncs through these same rooms with
+  # no extension gate — the suppressed announce is the ONLY re-attach signal a
+  # detached peer would get. Two devices on a canvas, room drains, both detach:
+  # the one whose user is drawing re-spins the room, and the one who is only
+  # WATCHING is attached to nothing and told nothing. It stays frozen until its
+  # own user happens to draw.
+  #
+  # So suppress exactly what the backstop covers, and no more. If the `.md` gate
+  # in announce_ready/4 ever widens, widen this with it.
+  defp backstopped?(path), do: is_binary(path) and String.ends_with?(path, ".md")
 
   # `{announce?, socket}` — false exactly once per drain, so a LATER drain of the
   # same doc_id is independently suppressed rather than the note going
