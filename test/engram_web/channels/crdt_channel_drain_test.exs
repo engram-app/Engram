@@ -423,7 +423,13 @@ defmodule EngramWeb.CrdtChannelDrainTest do
       # The bug this pins RAISES rather than exits, so a bare call is the test:
       # an ArgumentError from Process.alive?/1 is :error class and would blow
       # straight through release_room/1's `catch :exit`.
-      assert EngramWeb.CrdtChannel.release_room(remote) == :ok
+      #
+      # :retry, because a bare remote sleeper answers nothing: the node check
+      # short-circuits (this is the guard under test), then the probe times out.
+      # It therefore proves "no ArgumentError" and NOT the remote unobserve —
+      # which still ships an anonymous closure to the peer via update_doc/3, and
+      # is the part no single-node suite can speak to.
+      assert EngramWeb.CrdtChannel.release_room(remote) == :retry
     end
 
     # The `:cluster` test below proves this against a real peer but does NOT run
