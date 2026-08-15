@@ -90,7 +90,21 @@ defmodule EngramWeb.DeviceAuthController do
         })
 
       {:error, :authorization_pending} ->
-        conn |> put_status(428) |> json(%{error: "authorization_pending"})
+        # RFC 8628 §3.5: `authorization_pending` is a 400 carrying the error in
+        # the body. The old 428 ("Precondition Required") was never part of the
+        # device flow. Clients keyed on 428 are unaffected in practice: both the
+        # plugin poll loop and the e2e helpers fall through to "keep polling"
+        # on an unrecognised status, and both now accept 400 explicitly.
+        #
+        # :expected_client_status marks this as a NORMAL protocol step so
+        # RequestLogger logs it at :info. This is the happy path — the code is
+        # alive and the human just has not clicked approve yet — and at a 5s
+        # poll over a 300s TTL one successful login would otherwise emit ~60
+        # WARN lines (prod 2026-08-13: ~82% of the warn stream).
+        conn
+        |> assign(:expected_client_status, true)
+        |> put_status(400)
+        |> json(%{error: "authorization_pending"})
 
       {:error, :expired_or_invalid} ->
         conn |> put_status(410) |> json(%{error: "expired_or_invalid"})

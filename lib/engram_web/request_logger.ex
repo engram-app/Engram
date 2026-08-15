@@ -16,6 +16,8 @@ defmodule EngramWeb.RequestLogger do
   triage; it is not in the redact filter's sensitive-key set.
   """
 
+  alias EngramWeb.RequestMeta
+
   require Logger
 
   @handler_id :engram_request_logger
@@ -73,7 +75,7 @@ defmodule EngramWeb.RequestLogger do
 
   defp emit_request_log(conn, duration) do
     duration_ms = System.convert_time_unit(duration, :native, :millisecond)
-    level = level_for_status(conn.status)
+    level = level_for_conn(conn)
 
     meta =
       [
@@ -86,13 +88,30 @@ defmodule EngramWeb.RequestLogger do
         mtls_clientcert_subject: mtls_clientcert_subject(conn)
       ]
       |> maybe_put_reject_reason(conn)
+      |> maybe_put_client_identity(conn)
 
     Logger.log(
       level,
       "#{conn.method} #{conn.status} in #{duration_ms}ms",
-      Engram.Logger.Metadata.with_category(level, :http, meta)
+      level
+      |> Engram.Logger.Metadata.with_category(:http, meta)
+      |> maybe_force_loki_ship(conn)
     )
   end
+
+  # Quieting the LEVEL must not silently DELETE the record.
+  # `Category.loki_ship?(:info, :http)` is false, so a response downgraded to
+  # :info by `expected_client_status` would stop reaching Loki entirely — an
+  # operator debugging "device linking is stuck for user X" would find nothing
+  # at all, which is a worse failure than the warn noise this replaces.
+  # Same per-entry override `Engram.Logs.insert_logs/2` uses for diagnostic
+  # client entries. Volume is not a concern: these lines are a handful per
+  # login, unlike the successful-2xx firehose that keeps :http off the
+  # info-ships list in the first place.
+  defp maybe_force_loki_ship(meta, %Plug.Conn{assigns: %{expected_client_status: true}}),
+    do: Keyword.put(meta, :loki_ship, true)
+
+  defp maybe_force_loki_ship(meta, _conn), do: meta
 
   # A rejecting plug (e.g. VaultPlug) assigns :reject_reason so the reason rides
   # this single request line instead of a second per-request log. Omitted entirely
@@ -117,11 +136,70 @@ defmodule EngramWeb.RequestLogger do
 
   defp suppress_request_log?(_), do: false
 
+  # A controller may mark a 4xx as a NORMAL step in its protocol rather than a
+  # client error. The only current user is the device flow's
+  # `authorization_pending` poll: the code is alive and the human simply has
+  # not approved yet, so at a 5s poll over a 300s TTL one SUCCESSFUL login
+  # emitted ~60 warnings (prod 2026-08-13 — ~82% of the warn stream). A log
+  # level is the claim "a human should look at this"; spending it on a happy
+  # path is how a working system reads as an incident.
+  #
+  # NB: this does NOT feed grafana's loki-auth-failure-burst alert, despite
+  # looking like it should — that rule filters metadata_category="auth" and
+  # these request lines are category :http. The volume argument stands alone.
+  #
+  # Opt-in PER RESPONSE, set server-side — never blanket-4xx and never keyed on
+  # route+status, so a genuine client error on the same endpoint (malformed
+  # body, missing param) still surfaces at :warning. 5xx is never downgradable.
+  defp level_for_conn(%Plug.Conn{status: status, assigns: %{expected_client_status: true}})
+       when is_integer(status) and status < 500,
+       do: :info
+
+  defp level_for_conn(%Plug.Conn{status: status}), do: level_for_status(status)
+
   # A 5xx flood must elevate above :info so level-keyed alerting sees it; a 4xx
   # is a client error worth a :warning; everything else stays :info.
   defp level_for_status(status) when status >= 500, do: :error
   defp level_for_status(status) when status >= 400, do: :warning
   defp level_for_status(_), do: :info
+
+  # Client attribution for the device-flow endpoints ONLY. They are public and
+  # pre-auth (`user_id` is null until the code is approved), so a polling
+  # client is otherwise entirely unattributable — you cannot tell which client
+  # is calling, and a stuck poller reads identically to a healthy one.
+  # Scoped rather than global because a UA on every request line is bytes on
+  # every log in the system for a need specific to these routes.
+  #
+  # NO client IP here, deliberately. `config/prod.exs` states the standing
+  # policy that request headers and client IPs stay OUT of Loki — that is why
+  # prod excludes Sentry.PlugContext's `:__sentry__` blob rather than logging
+  # it. IPs are still recorded where they have a purpose and a lifecycle (ToS
+  # agreements, DCR registrations) as DB columns, not sprayed across every log
+  # line in a hosted, long-retention aggregator. The user agent carries no
+  # credential and is already persisted deliberately elsewhere
+  # (`onboarding/agreement.ex`, `oauth_register_controller`), so it stays.
+  #
+  # If per-source correlation is ever needed here (device-code guessing), the
+  # answer is a keyed digest via Engram.Crypto.HMAC, not the raw address.
+  # TRUNCATED, because this is an unauthenticated trust boundary. The header is
+  # attacker-controlled, RedactFilter neither scrubs nor bounds `:user_agent`,
+  # and prod serializes all metadata — so with Bandit's 10_000-byte header cap
+  # a client hammering /api/auth/device/token could push ~10KB of arbitrary text
+  # per request into a hosted, long-retention aggregator. That is the same
+  # ingest-cost failure mode this PR exists to fix. 200 chars holds every real
+  # UA (the Obsidian one is ~120) and nothing else.
+  @user_agent_log_limit 200
+
+  defp maybe_put_client_identity(meta, %Plug.Conn{private: private} = conn) do
+    if private[:phoenix_controller] == EngramWeb.DeviceAuthController do
+      Keyword.put(meta, :user_agent, truncate_user_agent(RequestMeta.get_user_agent(conn)))
+    else
+      meta
+    end
+  end
+
+  defp truncate_user_agent(nil), do: nil
+  defp truncate_user_agent(ua), do: String.slice(ua, 0, @user_agent_log_limit)
 
   defp current_user_id(%Plug.Conn{assigns: %{current_user: %{id: id}}}), do: id
   defp current_user_id(_), do: nil
