@@ -248,16 +248,34 @@ nowhere in CI or the Makefile, and only `dek_cache_test.exs` carries `@tag :clus
 cross-node surface — the `:distributed_ets` rate limiter, PubSub cache eviction, and this drain —
 is CI-invisible. Assume any single-node-tested primitive is unproven across nodes.
 
-**Do NOT "fix" this by adding `CLUSTER_TESTS=1` to the existing `unit-tests` job.** Measured
-2026-08-14 on this branch: without it, 4368 tests / 0 failures; with it, 4371 / **1 failure in an
-unrelated test** (`FanoutPacerTest` "two topics drain independently"). `ClusterCase.start_peer!`
-starts a second `Phoenix.PubSub` under the SAME `Engram.PubSub` name on the peer and connects the
-nodes, so the pg group spans both and every later broadcast fans out cross-node — which a 200 ms
-pacing assertion does not survive. Distribution also stays on for the remainder of the run once
-started, so the contamination is not confined to the cluster tests themselves.
+**Whether `CLUSTER_TESTS=1` can go on the existing `unit-tests` job is UNRESOLVED — and an earlier
+version of this doc got it wrong.** That version claimed a controlled comparison proved distribution
+contaminates the main suite: without the flag 4368 tests / 0 failures, with it 4371 / 1 failure in
+`FanoutPacerTest`. The mechanism sounded right (`ClusterCase.start_peer!` starts a second
+`Phoenix.PubSub` under the same `Engram.PubSub` name on the peer and connects the nodes, so the pg
+group spans both and a 200 ms pacing assertion would not survive the cross-node fan-out).
 
-The workable shape is a SEPARATE job running `CLUSTER_TESTS=1 mix test --only cluster` in its own
-VM, which cannot contaminate the main suite by construction. Verified green 5/5 in isolation.
+**It was one observation, and `FanoutPacerTest` is load-flaky on its own.** Measured 2026-08-15 on
+plain `main`, no cluster tests anywhere: **4/6 failures under CPU contention**, plus an unrelated
+full-suite failure of the same test. So the single cluster-run failure cannot be attributed to
+distribution — the experiment proves nothing either way.
+
+Lesson worth keeping: a plausible mechanism plus one failing run is not a finding. Establish the
+test's own flake rate FIRST, or the baseline is unknown and any comparison against it is noise.
+
+What IS known: `CLUSTER_TESTS=1 mix test --only cluster` is green 5/5 in isolation, so a separate
+job is a safe shape regardless. Whether the simpler in-job approach works needs re-running on a
+quiet machine (or in CI) with the flake rate characterised first.
+
+## Timing-sensitive tests on this suite (measured 2026-08-15)
+
+Two tests fail under CPU contention independently of any change — budget for this when reading a
+single red run, and characterise the flake rate before attributing a failure to a diff:
+
+| test | shape | observed |
+|---|---|---|
+| `FanoutPacerTest` | 200 ms pacing assertions | 4/6 under load |
+| `Engram.Vector.QdrantHybridTest` | `async: true` + Bypass HTTP + `Req` timeout (one of 47 Bypass tests) | 1 full-suite run, not reproducible in isolation |
 
 Because of that hole, the remote-pid guard is ALSO covered by a single-node test that injects the
 "self" node (`locally_dead?/2`) rather than faking a remote pid — so the guard is gated by the
