@@ -4598,17 +4598,25 @@ jobs:
       # node-compile caches other jobs leave in /tmp and the export ran out of
       # space mid-push: "no space left on device" AFTER 89s of pushing layers,
       # which cancels the whole build. The root filesystem had 35GB free the
-      # entire time. runner.workspace is on that disk, and — being per-runner —
+      # entire time. RUNNER_TEMP is on that disk, and — being per-runner —
       # it also stops two concurrent image builds on one VM from sharing a
       # single fixed cache path.
+      #
+      # runner.temp, not runner.workspace: the latter is undocumented (the
+      # runner context exposes name/os/arch/temp/tool_cache/debug/environment)
+      # and an empty expansion here would silently aim the cache at /buildx-cache.
+      # This job only runs on a main PUSH, so it cannot be proven on the PR —
+      # which is exactly when you take the documented spelling. On these
+      # runners RUNNER_TEMP is <runner>/_work/_temp: per-runner, and on the
+      # ext4 root with 34GB free.
       - name: Restore buildx cache
         if: steps.version.outputs.image_exists != 'true'
         uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
-          path: ${{ runner.workspace }}/buildx-cache
+          path: ${{ runner.temp }}/buildx-cache
           # v2: the cached archive records the absolute path it was saved
-          # from, so the /tmp -> workspace move needs a new key rather than a
-          # restore that half-lands. Costs exactly one cold build.
+          # from, so moving off /tmp needs a new key rather than a restore
+          # that half-lands. Costs exactly one cold build.
           key: buildx-v2-${{ runner.os }}-${{ hashFiles('Dockerfile', 'mix.lock', 'frontend/bun.lock') }}
           restore-keys: |
             buildx-v2-${{ runner.os }}-
@@ -4629,8 +4637,8 @@ jobs:
           provenance: false
           sbom: false
           platforms: linux/amd64
-          cache-from: type=local,src=${{ runner.workspace }}/buildx-cache
-          cache-to: type=local,dest=${{ runner.workspace }}/buildx-cache-new,mode=max
+          cache-from: type=local,src=${{ runner.temp }}/buildx-cache
+          cache-to: type=local,dest=${{ runner.temp }}/buildx-cache-new,mode=max
           tags: ${{ steps.version.outputs.tags }}
           build-args: |
             VITE_SENTRY_DSN=${{ secrets.VITE_SENTRY_DSN }}
@@ -4652,9 +4660,9 @@ jobs:
       - name: Rotate buildx cache
         if: steps.version.outputs.image_exists != 'true' && always()
         run: |
-          if [ -d "${{ runner.workspace }}/buildx-cache-new" ]; then
-            rm -rf "${{ runner.workspace }}/buildx-cache"
-            mv "${{ runner.workspace }}/buildx-cache-new" "${{ runner.workspace }}/buildx-cache"
+          if [ -d "${{ runner.temp }}/buildx-cache-new" ]; then
+            rm -rf "${{ runner.temp }}/buildx-cache"
+            mv "${{ runner.temp }}/buildx-cache-new" "${{ runner.temp }}/buildx-cache"
           fi
 
       # Lift SENTRY_AUTH_TOKEN into a step output so the next two steps
