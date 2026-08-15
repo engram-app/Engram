@@ -86,3 +86,7 @@
 {"date":"2026-08-14","sha":"14c562905ef1cb716e9fd243ee06142aeed18723","workflow_run_id":"31778486968","suite":"e2e-crdt","result":"success","duration_s":241}
 {"date":"2026-08-14","sha":"14c562905ef1cb716e9fd243ee06142aeed18723","workflow_run_id":"31778486968","suite":"e2e-browser","result":"success","duration_s":310}
 {"date":"2026-08-14","sha":"14c562905ef1cb716e9fd243ee06142aeed18723","workflow_run_id":"31778486968","suite":"headless-protocol","result":"success","duration_s":62}
+{"date":"2026-08-15","sha":"171f72c3efcc0c64ce94af99133fa831a7e5dba0","workflow_run_id":"31869040981","suite":"e2e-clerk","result":"success","duration_s":341}
+{"date":"2026-08-15","sha":"171f72c3efcc0c64ce94af99133fa831a7e5dba0","workflow_run_id":"31869040981","suite":"e2e-crdt","result":"success","duration_s":240}
+{"date":"2026-08-15","sha":"171f72c3efcc0c64ce94af99133fa831a7e5dba0","workflow_run_id":"31869040981","suite":"e2e-browser","result":"success","duration_s":260}
+{"date":"2026-08-15","sha":"171f72c3efcc0c64ce94af99133fa831a7e5dba0","workflow_run_id":"31869040981","suite":"headless-protocol","result":"success","duration_s":57}
