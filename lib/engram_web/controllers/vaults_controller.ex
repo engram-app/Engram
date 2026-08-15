@@ -17,8 +17,8 @@ defmodule EngramWeb.VaultsController do
     summary: "List vaults",
     description:
       "Lists the user's active vaults with their note and attachment counts. Pass `deleted=true` " <>
-        "to list soft-deleted vaults instead, or `user_code` to also echo a `suggested_vault_name` " <>
-        "for an in-progress device link.",
+        "to list soft-deleted vaults instead, or `user_code` to also report `user_code_valid` " <>
+        "and a `suggested_vault_name` for an in-progress device link.",
     tags: ["Vaults"],
     parameters: [
       deleted: [
@@ -54,11 +54,18 @@ defmodule EngramWeb.VaultsController do
     payload =
       case Map.get(params, "user_code") do
         code when is_binary(code) and code != "" ->
-          Map.put(
-            payload,
-            :suggested_vault_name,
-            DeviceFlow.suggested_vault_name(code, user.id)
-          )
+          # `user_code_valid` is the ONLY reliable validity signal here — a
+          # real code may legitimately have no `suggested_vault_name`, so a
+          # nil name says nothing about the code. /link rejects on this field.
+          {valid, suggested} =
+            case DeviceFlow.view_pending_code(code, user.id) do
+              {:ok, vault_name} -> {true, vault_name}
+              :error -> {false, nil}
+            end
+
+          payload
+          |> Map.put(:suggested_vault_name, suggested)
+          |> Map.put(:user_code_valid, valid)
 
         _ ->
           payload

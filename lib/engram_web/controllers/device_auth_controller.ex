@@ -68,6 +68,10 @@ defmodule EngramWeb.DeviceAuthController do
   defp do_authorize(conn, user_code, user, vault_id) do
     case DeviceFlow.authorize_device(user_code, user, vault_id) do
       {:ok, auth} ->
+        # Wake the waiting plugin now instead of letting it find out on a poll
+        # tick. This is a notification only — the plugin still exchanges the
+        # code through the single-use REST endpoint. See EngramWeb.DeviceChannel.
+        :ok = DeviceFlow.notify_authorized(auth.device_code)
         json(conn, %{ok: true, vault_id: auth.vault_id})
 
       {:error, :not_found_or_expired} ->

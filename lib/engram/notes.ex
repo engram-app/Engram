@@ -906,6 +906,14 @@ defmodule Engram.Notes do
         # CrdtDeliver call sites in this module.
         {:ok, {:ok, note, :announce}} ->
           :ok = CrdtDeliver.announce_ready(user.id, vault.id, note.path, note.id)
+
+          # The web /link success page waits on this before forwarding the user
+          # to their vault. It used to fire only from the REST upsert/batch
+          # paths — which the Obsidian plugin stopped using when it moved to
+          # CRDT — so an Obsidian first sync, the exact case that page exists
+          # for, never advanced. Same post-commit position as the announce
+          # above; the helper's own 0->1 probe keeps it to the first note.
+          :ok = maybe_broadcast_vault_populated(user, vault)
           {:ok, note}
 
         {:ok, {:ok, note, {:announce_moved, old_path}}} ->
@@ -5684,10 +5692,25 @@ defmodule Engram.Notes do
     # regardless of vault size. Scope stays per-vault (NOT the per-user
     # usage_meters counter — multi-vault users must still get the event
     # for a new vault's first note).
-    {:ok, ids} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(from(n in scoped(user, vault), select: n.id, limit: 2))
-      end)
+    #
+    # Predicates must MATCH `Vaults.do_content_counts/2` (`is_nil(deleted_at)`
+    # and `kind == "note"`), because the page this event unblocks gates on
+    # THAT counter. `scoped/2` alone counts folder markers and tombstones,
+    # which live in this same table — and the plugin's catch-up seeds folder
+    # rows BEFORE the first note, so any vault with one empty folder saw 2
+    # rows here, skipped the broadcast, and left the web page spinning on a
+    # `note_count` of 0 forever. Two "count the notes" predicates that
+    # disagree is the bug; keep them identical.
+    #
+    # `skip_tenant_check:` rather than `Repo.with_tenant/2`: outside a
+    # transaction that helper opens BEGIN + set_config + COMMIT, and this
+    # runs on every genesis insert of a bulk first sync. The query already
+    # filters user_id AND vault_id, so the tenant round-trip buys nothing.
+    ids =
+      Repo.all(
+        from(n in scoped_live(user, vault), where: n.kind == "note", select: n.id, limit: 2),
+        skip_tenant_check: true
+      )
 
     _ =
       if length(ids) == 1 do
