@@ -177,6 +177,9 @@ defmodule Engram.Application do
             :route,
             :status,
             :user_id,
+            # Sync/CRDT errors are vault-scoped; without this a Sentry event for a
+            # failed index checkpoint cannot say WHICH vault lost its snapshot.
+            :vault_id,
             :worker
           ]
         }

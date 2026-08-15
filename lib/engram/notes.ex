@@ -1461,8 +1461,8 @@ defmodule Engram.Notes do
 
     # The vault's INDEX room (#1150) is keyed by vault, not note, so the loop
     # above cannot reach it. Same invariant, same reason (#954: a room must not
-    # outlive its vault) — and this one holds nothing durable, so killing it
-    # loses strictly less than killing a note room does.
+    # outlive its vault). The kill skips its #1151 checkpoint, which is correct
+    # here — the vault is going, and vault_index_states cascades with it.
     Engram.Notes.CrdtIndexRegistry.terminate_room(vault_id)
     :ok
   rescue

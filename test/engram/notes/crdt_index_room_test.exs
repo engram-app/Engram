@@ -160,4 +160,25 @@ defmodule Engram.Notes.CrdtIndexRoomTest do
       assert spec.restart == :temporary
     end
   end
+
+  # A note room gets 15 s because a blown deadline costs it NOTHING — its tail
+  # log replays. This room has no tail log, so a blown deadline loses every
+  # index write since the last exit. It shipped on the OTP default of 5 s: the
+  # risk ordering exactly inverted. One assertion, because the default is
+  # invisible (there is no `shutdown:` key to read).
+  test "the shutdown budget exceeds a note room's, because a blown deadline costs more here" do
+    spec = CrdtIndexDoc.child_spec(vault_id: Ecto.UUID.generate(), user_id: Ecto.UUID.generate())
+
+    note_spec =
+      Engram.Notes.CrdtDoc.child_spec(
+        note_id: Ecto.UUID.generate(),
+        user_id: Ecto.UUID.generate(),
+        vault_id: Ecto.UUID.generate()
+      )
+
+    assert spec.shutdown >= note_spec.shutdown,
+           "the room WITHOUT a tail log must not get less flush time than the one with"
+
+    assert spec.shutdown > 5_000, "the OTP default brutal-kills a ~2 MB encrypt + write"
+  end
 end

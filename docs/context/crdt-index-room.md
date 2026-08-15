@@ -25,20 +25,24 @@ The name `filemeta_v0` matches Relay's (`SyncStore.ts:20`) on purpose: the shape
 their design that removes the drift class, and keeping the name makes the correspondence checkable
 rather than folkloric.
 
-## The trap: #1150 and #1152 combine badly
+## The trap: #1150 and #1152 combined badly (now half-resolved)
 
 Draining a **note** room is lossless *only* because `terminate/2` → `CrdtPersistence.unbind/3`
-checkpoints on the way out. The index room has **no persistence at all** until #1151
-(`CrdtIndexPersistence.bind/3` is a no-op; `bind/3` is the only required callback —
+checkpoints on the way out. At #1150 the index room had **no persistence at all**
+(`CrdtIndexPersistence.bind/3` was a no-op; `bind/3` is the only required callback —
 `deps/y_ex/lib/protocols/shared_doc.ex:350`).
 
-So giving the index room `idle_exit_ms` would exit it and **evaporate the entire index**. The drain
-would be working perfectly — it just has nothing to save here. Nothing in #1152's own suite could
-catch this, because from the drain's side the behaviour is identical.
+So giving the index room `idle_exit_ms` would have exited it and **evaporated the entire index**.
+The drain would be working perfectly — it just had nothing to save here. Nothing in #1152's own
+suite could catch that, because from the drain's side the behaviour is identical.
 
-**The index room therefore runs no `CrdtCheckpointTimer` and sets no `idle_exit_ms`.** Residency is
-bounded the old way (`auto_exit` on last observer), which is adequate precisely because the room
-holds nothing durable. Enabling the drain is a #1151 follow-up, not a #1150 knob.
+**#1151 step 1 fixes the missing half:** `CrdtIndexPersistence` now encrypts the doc into
+`vault_index_states` on `unbind/3` and restores it on `bind/3`. See "Durability" below.
+
+**The index room still runs no `CrdtCheckpointTimer` and sets no `idle_exit_ms`.** Opting in is a
+deliberate, separate step (#1151 step 3) — durability makes the drain *safe*, it does not make it
+*enabled*, and the two must not be conflated. Residency stays bounded the old way (`auto_exit` on
+last observer).
 
 `crdt_index_room_test.exs` pins this by inspecting what the room is **linked to** — a
 `CrdtCheckpointTimer` links itself to its room, so its absence is the real invariant. An earlier
@@ -89,22 +93,32 @@ red if the implementation were wrong?":
 Both mutations were reverted after confirming the red. Treat any test that passes on first write
 with suspicion, and prefer mutating the implementation over re-reading the test.
 
-## The wire ships OFF
+## What bounds the wire (there is no flag)
 
-`crdt_index_msg` is gated on `config :engram, :crdt_index_enabled` (default **false**; `true` in
-`config/test.exs`). "Deliberately inert" describes the SERVER — nothing writes the index and
-nothing reads it back — but it is not a property of an endpoint any authenticated client can push
-to. The index room has no persistence, therefore no checkpoint timer, therefore no idle drain and
-no LRU tracking: its only bound is `auto_exit` when the last socket closes. Until #1151 gives it a
-checkpoint, a client could sit on a connection growing one doc for the life of its session.
+`crdt_index_msg` is open to any authenticated client on the vault's channel. No
+feature flag — a gate that defers a risk is not the same as handling it, and a flag nobody flips
+becomes permanent scaffolding.
 
-Flip it on in the same PR that lands the checkpoint, not before.
+What actually bounds it today:
+
+- **Rate limit** — the same lanes as note frames (`frame_class_b64/1`): step1/small-step2 on the
+  handshake budget, every `sync_update` on the edit budget.
+- **5 MB decoded-frame ceiling** — `guard_frame/1`, shared with the note path.
+- **`auto_exit`** — the room dies when the last socket on the vault disconnects.
+- **Durability** — since #1151 an exiting room checkpoints, so a restart is no longer a wipe.
+
+**The open residency item:** the index room runs no `CrdtCheckpointTimer`, so it gets neither the
+#1152 idle drain nor LRU tracking, and `auto_exit` is session-length. A client that stays connected
+can keep growing one doc. The timer is note-keyed (`note_id` threads through its state and its
+`CrdtRoomLru.touch/3` call), so serving the index room means generalising it — that is the real
+fix, and it is tracked rather than papered over with a flag.
 
 ## Not in scope here (and why)
 
 | | |
 |---|---|
-| checkpoint / projection to `notes` rows | #1151 — also what unblocks the drain |
+| projection to `notes` path columns | #1151 step 2 — goes THROUGH `rename_note`, see below |
+| enabling the idle drain + the wire flag | #1151 step 3 |
 | client adoption, `getManifest` removal | Engram-obsidian#362/#363 (`phase/contract`) |
 | compaction | #1153 — entangled with the #958 checkpoint-union hazard |
 | per-folder sharding | #1154 (p3) |

@@ -12,9 +12,8 @@ defmodule EngramWeb.CrdtChannel do
 
   The same topic also carries the per-vault **index** room (#1150) as
   `crdt_index_msg`. Those frames have NO `doc_id` — the vault is implicit in the
-  topic and there is exactly one index room per connection — and the wire is
-  gated on `:crdt_index_enabled` (off by default) until #1151 gives that room a
-  checkpoint. See `docs/context/crdt-index-room.md`.
+  topic and there is exactly one index room per connection. See
+  `docs/context/crdt-index-room.md`.
   """
 
   use Phoenix.Channel
@@ -304,8 +303,7 @@ defmodule EngramWeb.CrdtChannel do
   # behind the 2026-07-07 cross-file-overwrite incident.
   @impl true
   def handle_in("crdt_index_msg", %{"b64" => b64}, socket) do
-    with :ok <- index_enabled(),
-         :ok <- check_rate(socket, frame_class_b64(b64)),
+    with :ok <- check_rate(socket, frame_class_b64(b64)),
          {:ok, frame} <- decode_frame(b64),
          :ok <- guard_frame(frame),
          {:ok, socket, room} <- ensure_index_room(socket),
@@ -315,13 +313,11 @@ defmodule EngramWeb.CrdtChannel do
       {:error, :rate_limited} ->
         {:reply, {:error, %{reason: "rate_limited"}}, socket}
 
-      {:error, :index_disabled} ->
-        {:reply, {:error, %{reason: "index_disabled"}}, socket}
-
       {:error, reason} ->
-        # The index is not yet load-bearing (nothing reads it back until #1151 /
-        # Engram-obsidian#362), but a silently dropped frame here would become a
-        # drift class the moment it is — so it is logged like any lost edit.
+        # The index is not yet load-bearing — nothing reads it back until the
+        # client adopts it (Engram-obsidian#362/#363) — but a silently dropped
+        # frame here would become a drift class the moment it is, so it is
+        # logged like any lost edit.
         log_index_dropped(socket, reason)
         {:reply, {:error, %{reason: "index_frame_rejected"}}, socket}
     end
@@ -1178,22 +1174,6 @@ defmodule EngramWeb.CrdtChannel do
         vault_id: socket.assigns.vault.id
       )
     )
-  end
-
-  # The index room accepts arbitrary client writes into a per-vault Y.Map that
-  # has NO persistence (#1151), and therefore no checkpoint timer, no idle drain
-  # and no LRU tracking — its only bound is `auto_exit` when the last socket
-  # closes. Until #1151 gives it a checkpoint, an authenticated client could sit
-  # on a connection growing one doc for the life of its session, against the
-  # same 1 GB task this feature exists to protect.
-  #
-  # No client sends these yet (Engram-obsidian#362/#363), so the wire ships OFF
-  # and the tests turn it on. "Deliberately inert" describes the SERVER; it is
-  # not a property of an endpoint anyone can push to.
-  defp index_enabled do
-    if Application.get_env(:engram, :crdt_index_enabled, false),
-      do: :ok,
-      else: {:error, :index_disabled}
   end
 
   # y_ex answers `{:error, :unknown_message}` for a frame its decoder rejects

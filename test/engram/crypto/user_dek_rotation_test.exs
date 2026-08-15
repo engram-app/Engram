@@ -8,10 +8,11 @@ defmodule Engram.Crypto.UserDekRotationTest do
   alias Engram.Attachments
   alias Engram.Crypto
   alias Engram.Crypto.{DekCache, Envelope, UserDekRotation}
-  alias Engram.Notes.CrdtBridge
+  alias Engram.Notes.{CrdtBridge, CrdtIndexDoc, CrdtIndexRegistry, VaultIndexState}
   alias Engram.Repo
   alias Engram.Test.LogCapture
   alias Engram.Vector.Qdrant
+  alias Yex.Sync.SharedDoc
 
   # Module-level Bypass: stubs Qdrant scroll with empty results so all existing
   # tests (which don't seed Qdrant points) pass through the sweep_qdrant phase
@@ -33,6 +34,122 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture(dek_version: 1)
     {:ok, user: user}
+  end
+
+  # A new encrypted table is INVISIBLE to rotation unless it is explicitly swept.
+  # The failure mode is delayed and silent: the row stays wrapped under the old
+  # dek, keeps decrypting for as long as that key is around, and only breaks
+  # once it is retired — long after the rotation reported success.
+  describe "rotate_user/1 — vault index snapshot (#1151)" do
+    setup %{user: user} do
+      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "RotationIndexVault"})
+      %{vault: vault}
+    end
+
+    # The room outlives the rotation, so the snapshot it writes on the way out
+    # must use the NEW dek. Caching the user struct from bind/3 would encrypt
+    # under the old one — and rotation has already swept past this row, so
+    # nothing would ever re-wrap it. Undecryptable the moment the old key goes.
+    test "a room that outlives the rotation checkpoints under the NEW dek", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, room} = CrdtIndexRegistry.ensure_observed(user.id, vault.id)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      :ok =
+        SharedDoc.update_doc(room, fn doc ->
+          doc
+          |> Yex.Doc.get_map(CrdtIndexDoc.map_name())
+          |> Yex.Map.set("After/rotation.md", %{"note_id" => "note-after"})
+        end)
+
+      # Force the cache miss, or this test proves nothing. `Crypto.get_dek/1`
+      # consults DekCache by USER_ID before it ever looks at the struct's
+      # wrapped blob, so a warm cache hands back the new dek even to a stale
+      # user struct — masking the bug entirely. On a miss the stale blob is
+      # unwrapped instead, yielding the OLD dek. Verified by mutation: without
+      # this line, reinstating the cached-user bug still passes.
+      DekCache.invalidate(user.id)
+
+      ref = Process.monitor(room)
+      :ok = SharedDoc.unobserve(room)
+      assert_receive {:DOWN, ^ref, :process, ^room, _}, 5_000
+
+      # Invalidate a SECOND time. An unwrap of the stale blob repopulates
+      # DekCache with the OLD dek, so a verification read that hits that cache
+      # would happily decrypt old-dek ciphertext and report success. Clearing it
+      # forces the read to unwrap the user's CURRENT blob — which is the only
+      # way this assertion is about the rotation rather than about the cache.
+      DekCache.invalidate(user.id)
+
+      rotated_user = Repo.get!(Engram.Accounts.User, user.id)
+
+      {:ok, row} =
+        Repo.with_tenant(user.id, fn -> Repo.get_by(VaultIndexState, vault_id: vault.id) end)
+
+      assert {:ok, snapshot} = Crypto.decrypt_index_state(row, rotated_user)
+
+      doc = Yex.Doc.new()
+      :ok = Yex.apply_update(doc, snapshot)
+
+      entry =
+        doc
+        |> Yex.Doc.get_map(CrdtIndexDoc.map_name())
+        |> Yex.Map.fetch!("After/rotation.md")
+
+      assert entry["note_id"] == "note-after"
+    end
+
+    test "the index snapshot still decrypts after rotation", %{user: user, vault: vault} do
+      {:ok, room} = CrdtIndexRegistry.ensure_observed(user.id, vault.id)
+
+      :ok =
+        SharedDoc.update_doc(room, fn doc ->
+          doc
+          |> Yex.Doc.get_map(CrdtIndexDoc.map_name())
+          |> Yex.Map.set("Rotated/file.md", %{"note_id" => "note-rotated"})
+        end)
+
+      ref = Process.monitor(room)
+      :ok = SharedDoc.unobserve(room)
+      assert_receive {:DOWN, ^ref, :process, ^room, _}, 5_000
+
+      {:ok, before} =
+        Repo.with_tenant(user.id, fn -> Repo.get_by(VaultIndexState, vault_id: vault.id) end)
+
+      assert %VaultIndexState{} = before
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      rotated_user = Repo.get!(Engram.Accounts.User, user.id)
+
+      {:ok, after_row} =
+        Repo.with_tenant(user.id, fn -> Repo.get_by(VaultIndexState, vault_id: vault.id) end)
+
+      # Re-wrapped, not left alone.
+      refute after_row.state_ciphertext == before.state_ciphertext
+      # NOT `== rotated_user.dek_version`: the row already held 2 before the
+      # sweep ran (schema default and the constant unbind used to write), so
+      # that assertion was 2 == 2 and passed with the sweep deleted entirely.
+      # The honest claim is that the sweep STAMPED the new generation.
+      assert after_row.dek_version == before.dek_version + 1
+
+      # And still readable — the point of the sweep, not merely that bytes moved.
+      assert {:ok, snapshot} = Crypto.decrypt_index_state(after_row, rotated_user)
+      assert is_binary(snapshot)
+
+      doc = Yex.Doc.new()
+      :ok = Yex.apply_update(doc, snapshot)
+
+      entry =
+        doc
+        |> Yex.Doc.get_map(CrdtIndexDoc.map_name())
+        |> Yex.Map.fetch!("Rotated/file.md")
+
+      assert entry["note_id"] == "note-rotated"
+    end
   end
 
   describe "rotate_user/1 — socket drain (#1092)" do
