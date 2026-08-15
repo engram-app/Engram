@@ -331,7 +331,7 @@ defmodule Engram.Crypto do
   silently binding an empty doc would look exactly like a fresh vault and let a
   later checkpoint overwrite the real snapshot with nothing.
   """
-  @spec decrypt_index_state(Engram.Notes.VaultIndexState.t() | nil, User.t()) ::
+  @spec decrypt_index_state(Engram.Notes.VaultIndexState.t(), User.t()) ::
           {:ok, binary()} | {:error, term()}
   def decrypt_index_state(%Engram.Notes.VaultIndexState{} = row, %User{} = user) do
     aad = aad_for_row(:vault_index_states, :state, row.vault_id)

@@ -75,9 +75,10 @@ defmodule Engram.Notes.CrdtIndexRegistry do
   outlive its vault).
 
   Mirrors `CrdtRegistry.terminate_room/1`, which walks NOTE ids and so can
-  never reach this room. Brutal kill, and unlike a note room there is nothing
-  to lose by it: the index has no persistence until #1151, so no `unbind`
-  checkpoint would run either way.
+  never reach this room. Brutal kill, so it skips `unbind/3` and the snapshot
+  #1151 would otherwise write — which is fine HERE and only here: the vault is
+  being deleted, and the row goes with it via `on_delete: :delete_all`. Do not
+  reuse this for any other purpose; anywhere else it is silent index loss.
   """
   @spec terminate_room(String.t()) :: :ok
   def terminate_room(vault_id) when is_binary(vault_id) do

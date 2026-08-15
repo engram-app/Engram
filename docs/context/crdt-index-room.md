@@ -93,47 +93,25 @@ red if the implementation were wrong?":
 Both mutations were reverted after confirming the red. Treat any test that passes on first write
 with suspicion, and prefer mutating the implementation over re-reading the test.
 
-## The wire ships OFF
+## What bounds the wire (there is no flag)
 
-`crdt_index_msg` is gated on `config :engram, :crdt_index_enabled` (default **false**; `true` in
-`config/test.exs`). "Deliberately inert" describes the SERVER — nothing writes the index and
-nothing reads it back — but it is not a property of an endpoint any authenticated client can push
-to. The index room has no persistence, therefore no checkpoint timer, therefore no idle drain and
-no LRU tracking: its only bound is `auto_exit` when the last socket closes. Until #1151 gives it a
-checkpoint, a client could sit on a connection growing one doc for the life of its session.
+`crdt_index_msg` is open to any authenticated client on the vault's channel. No
+feature flag — a gate that defers a risk is not the same as handling it, and a flag nobody flips
+becomes permanent scaffolding.
 
-Flip it on in the same PR that lands the checkpoint, not before.
+What actually bounds it today:
 
-## Durability (#1151 step 1)
+- **Rate limit** — the same lanes as note frames (`frame_class_b64/1`): step1/small-step2 on the
+  handshake budget, every `sync_update` on the edit budget.
+- **5 MB decoded-frame ceiling** — `guard_frame/1`, shared with the note path.
+- **`auto_exit`** — the room dies when the last socket on the vault disconnects.
+- **Durability** — since #1151 an exiting room checkpoints, so a restart is no longer a wipe.
 
-One encrypted snapshot per vault in `vault_index_states`, keyed by `vault_id`:
-
-- `bind/3` decrypts and applies it, so a re-spun room comes back with its index.
-- `unbind/3` encodes the whole doc, encrypts it, and upserts the single row.
-- `update_v1/4` is **deliberately absent** — no tail log.
-
-**A separate table, not columns on `vaults`.** #1149 sizes a churned 10k-note index at ~2.0 MB,
-and the vaults row is loaded on essentially every vault-scoped request with no select-exclusion
-pattern anywhere in this codebase. Parking a multi-megabyte column there would ride along on all
-of them; here it is read only when a room binds.
-
-**Snapshot-only is a decision with an expiry date.** Note rooms keep a `crdt_update_log` because
-their hot path is keystrokes and a lost checkpoint interval loses typing. Index writes are
-rename/create/delete, and until Engram-obsidian#363 the `notes` rows remain authoritative for
-paths — so a lost interval leaves the index STALE and rebuildable, never silently wrong. **After
-#363 that stops being true and this needs a tail log.**
-
-**AAD binds to the vault** (`aad_for_row(:vault_index_states, :state, vault_id)`), so a snapshot
-copied onto another vault's row fails to decrypt rather than handing that vault someone else's
-file index. Note this could not reuse `Crypto.decrypt_aad/3`, which binds to `row.id` — this
-table's primary key is `vault_id`.
-
-**A new encrypted table is invisible to DEK rotation unless it is listed there.**
-`UserDekRotation` sweeps an explicit set of tables; an unlisted one keeps its ciphertext wrapped
-under the OLD dek, decrypts fine until that key is retired, and then fails — long after the
-rotation reported success. `sweep_vault_index_states/4` was added in the same PR for that reason,
-with a test that goes red if it is removed. `AadRebind` needs no change: it exists to rebind
-pre-AAD legacy rows, and this table is born AAD-bound.
+**The open residency item:** the index room runs no `CrdtCheckpointTimer`, so it gets neither the
+#1152 idle drain nor LRU tracking, and `auto_exit` is session-length. A client that stays connected
+can keep growing one doc. The timer is note-keyed (`note_id` threads through its state and its
+`CrdtRoomLru.touch/3` call), so serving the index room means generalising it — that is the real
+fix, and it is tracked rather than papered over with a flag.
 
 ## Not in scope here (and why)
 

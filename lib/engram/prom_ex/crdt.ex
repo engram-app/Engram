@@ -27,6 +27,19 @@ defmodule Engram.PromEx.Crdt do
   Metrics:
 
     * `engram_prom_ex_crdt_room_drain_total` — tags `[:phase]`.
+    * `engram_prom_ex_crdt_index_checkpoint_total` — tags `[:phase]`.
+
+  `[:engram, :crdt, :index_checkpoint]` — `%{count: 1}`, `%{phase: atom}`, from
+  `CrdtIndexPersistence.unbind/3`:
+
+    * `:ok` — the vault's index snapshot was written.
+    * `:skipped_rotation` — a DEK rotation was in progress, so the checkpoint was
+      deliberately skipped. Leaves the index stale, which is recoverable;
+      writing under a doomed key would not be.
+    * `:failed` — encode, size-cap, encrypt or DB failure. **There is no retry**:
+      this runs in `terminate/2` on a `:temporary` room. Any sustained rate means
+      vaults are losing index writes permanently, and it is the only signal that
+      says so — the failure is otherwise just an absence of log lines.
 
   ## Reading it
 
@@ -61,6 +74,7 @@ defmodule Engram.PromEx.Crdt do
   use PromEx.Plugin
 
   @drain_event [:engram, :crdt, :room_drain]
+  @checkpoint_event [:engram, :crdt, :index_checkpoint]
 
   @impl true
   def event_metrics(opts) do
@@ -76,6 +90,13 @@ defmodule Engram.PromEx.Crdt do
           description:
             "CRDT idle room-drain events by phase (requested | reasked | request_failed | " <>
               "released | skipped_dead | skipped_unresponsive | lru_evicted).",
+          tags: [:phase]
+        ),
+        counter(
+          metric_prefix ++ [:index_checkpoint, :total],
+          event_name: @checkpoint_event,
+          description:
+            "Per-vault CRDT index checkpoint outcomes by phase (ok | skipped_rotation | failed).",
           tags: [:phase]
         )
       ]

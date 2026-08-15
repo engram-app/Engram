@@ -130,7 +130,11 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       # Re-wrapped, not left alone.
       refute after_row.state_ciphertext == before.state_ciphertext
-      assert after_row.dek_version == rotated_user.dek_version
+      # NOT `== rotated_user.dek_version`: the row already held 2 before the
+      # sweep ran (schema default and the constant unbind used to write), so
+      # that assertion was 2 == 2 and passed with the sweep deleted entirely.
+      # The honest claim is that the sweep STAMPED the new generation.
+      assert after_row.dek_version == before.dek_version + 1
 
       # And still readable — the point of the sweep, not merely that bytes moved.
       assert {:ok, snapshot} = Crypto.decrypt_index_state(after_row, rotated_user)

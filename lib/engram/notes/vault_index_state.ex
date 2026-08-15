@@ -6,8 +6,10 @@ defmodule Engram.Notes.VaultIndexState do
   Snapshot-only: there is no per-update tail log the way `notes.crdt_state` has
   `crdt_update_log`. Index writes are rename/create/delete rather than
   keystrokes, and until Engram-obsidian#363 the `notes` rows stay authoritative
-  for paths — so losing a checkpoint interval leaves the index STALE and
-  rebuildable, never silently wrong. Add a log when that stops being true.
+  for paths — so losing a checkpoint interval leaves the index STALE, never
+  silently wrong. No rebuild path exists in `lib/`; what makes staleness
+  tolerable today is that nothing reads the index. Add a tail log when that
+  stops being true.
 
   Keyed by `vault_id` rather than a surrogate `id`, which is why the AAD is
   built explicitly (`Crypto.encrypt_index_state/3`) instead of going through

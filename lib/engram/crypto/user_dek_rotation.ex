@@ -1028,8 +1028,9 @@ defmodule Engram.Crypto.UserDekRotation do
   # The vault index snapshot (#1151). A NEW encrypted table is invisible to this
   # rotation unless it is listed here — the ciphertext would stay wrapped under
   # the OLD dek, decrypt fine until the old key is retired, and then fail. The
-  # index is rebuildable today (notes rows are still authoritative for paths),
-  # but it will not be after Engram-obsidian#363, so it is swept like any other.
+  # index is not read by anything today (notes rows still hold the authoritative
+  # paths), but that changes at Engram-obsidian#363 — so it is swept like any
+  # other encrypted table rather than treated as a cache.
   #
   # No HMAC and no filter key: the snapshot is one opaque blob with no lookup
   # column, which is why this takes fewer arguments than its siblings.

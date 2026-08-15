@@ -158,21 +158,6 @@ defmodule EngramWeb.CrdtIndexChannelTest do
     end
   end
 
-  # "Deliberately inert" describes the SERVER — nothing writes the index and
-  # nothing reads it back. It is not a property of an endpoint any authenticated
-  # client can push to: the index room has no persistence, no checkpoint timer
-  # and therefore no drain or LRU bound, so its only limit is auto_exit when the
-  # socket closes. Until #1151 the wire ships OFF.
-  test "the wire is closed unless explicitly enabled", ctx do
-    Application.put_env(:engram, :crdt_index_enabled, false)
-    on_exit(fn -> Application.put_env(:engram, :crdt_index_enabled, true) end)
-
-    ref = push(ctx.socket, "crdt_index_msg", %{"b64" => step1_frame(CrdtBridge.new_doc())})
-
-    assert_reply ref, :error, %{reason: "index_disabled"}, 3_000
-    assert CrdtIndexRegistry.lookup(ctx.vault.id) == nil, "a disabled wire must spin no room"
-  end
-
   # A rejected index frame must come back as a reply, not vanish. Nothing reads
   # the index yet, so a silent drop here would be invisible until #1151 turned
   # it into a drift class.
