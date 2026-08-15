@@ -302,6 +302,49 @@ defmodule Engram.Crypto do
   end
 
   @doc """
+  Encrypts a vault's index Yjs state (`filemeta_v0`, #1151) under the user's
+  DEK, AAD-bound to the `vault_index_states` row.
+
+  Separate from `encrypt_crdt_state/3` because the AAD binds to the VAULT, not
+  a note — the index is per-vault and its row is keyed by `vault_id`. Binding
+  it means a snapshot copied onto another vault's row fails to decrypt instead
+  of silently handing that vault someone else's file index.
+  """
+  @spec encrypt_index_state(binary(), User.t(), String.t()) ::
+          {:ok, {binary(), binary()}} | {:error, term()}
+  def encrypt_index_state(state, %User{} = user, vault_id)
+      when is_binary(state) and is_binary(vault_id) do
+    with {:ok, user} <- ensure_user_dek(user),
+         {:ok, dek} <- get_dek(user) do
+      aad = aad_for_row(:vault_index_states, :state, vault_id)
+      {ct, nonce} = Envelope.encrypt(state, dek, aad)
+      {:ok, {ct, nonce}}
+    end
+  end
+
+  @doc """
+  Decrypts a `VaultIndexState` row into the raw Yjs v1 state binary.
+
+  Always AAD-bound: the table was created after the AAD migration, so unlike
+  the note columns there is no legacy `dek_version < 2` empty-AAD case to fall
+  back to. A row that will not decrypt is an error, never an empty index —
+  silently binding an empty doc would look exactly like a fresh vault and let a
+  later checkpoint overwrite the real snapshot with nothing.
+  """
+  @spec decrypt_index_state(Engram.Notes.VaultIndexState.t() | nil, User.t()) ::
+          {:ok, binary()} | {:error, term()}
+  def decrypt_index_state(%Engram.Notes.VaultIndexState{} = row, %User{} = user) do
+    aad = aad_for_row(:vault_index_states, :state, row.vault_id)
+
+    with {:ok, dek} <- get_dek(user) do
+      case Envelope.decrypt(row.state_ciphertext, row.state_nonce, dek, aad) do
+        {:ok, state} -> {:ok, state}
+        :error -> {:error, :decrypt_failed}
+      end
+    end
+  end
+
+  @doc """
   Decrypts a note's `crdt_state_ciphertext` into the raw Yjs v1 state binary.
   Returns `{:ok, nil}` when the column is unpopulated (lazy-seed case).
   Legacy `dek_version < 2` rows decrypt with empty AAD; AAD-bound rows

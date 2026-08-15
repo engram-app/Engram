@@ -25,20 +25,24 @@ The name `filemeta_v0` matches Relay's (`SyncStore.ts:20`) on purpose: the shape
 their design that removes the drift class, and keeping the name makes the correspondence checkable
 rather than folkloric.
 
-## The trap: #1150 and #1152 combine badly
+## The trap: #1150 and #1152 combined badly (now half-resolved)
 
 Draining a **note** room is lossless *only* because `terminate/2` → `CrdtPersistence.unbind/3`
-checkpoints on the way out. The index room has **no persistence at all** until #1151
-(`CrdtIndexPersistence.bind/3` is a no-op; `bind/3` is the only required callback —
+checkpoints on the way out. At #1150 the index room had **no persistence at all**
+(`CrdtIndexPersistence.bind/3` was a no-op; `bind/3` is the only required callback —
 `deps/y_ex/lib/protocols/shared_doc.ex:350`).
 
-So giving the index room `idle_exit_ms` would exit it and **evaporate the entire index**. The drain
-would be working perfectly — it just has nothing to save here. Nothing in #1152's own suite could
-catch this, because from the drain's side the behaviour is identical.
+So giving the index room `idle_exit_ms` would have exited it and **evaporated the entire index**.
+The drain would be working perfectly — it just had nothing to save here. Nothing in #1152's own
+suite could catch that, because from the drain's side the behaviour is identical.
 
-**The index room therefore runs no `CrdtCheckpointTimer` and sets no `idle_exit_ms`.** Residency is
-bounded the old way (`auto_exit` on last observer), which is adequate precisely because the room
-holds nothing durable. Enabling the drain is a #1151 follow-up, not a #1150 knob.
+**#1151 step 1 fixes the missing half:** `CrdtIndexPersistence` now encrypts the doc into
+`vault_index_states` on `unbind/3` and restores it on `bind/3`. See "Durability" below.
+
+**The index room still runs no `CrdtCheckpointTimer` and sets no `idle_exit_ms`.** Opting in is a
+deliberate, separate step (#1151 step 3) — durability makes the drain *safe*, it does not make it
+*enabled*, and the two must not be conflated. Residency stays bounded the old way (`auto_exit` on
+last observer).
 
 `crdt_index_room_test.exs` pins this by inspecting what the room is **linked to** — a
 `CrdtCheckpointTimer` links itself to its room, so its absence is the real invariant. An earlier
@@ -100,11 +104,43 @@ checkpoint, a client could sit on a connection growing one doc for the life of i
 
 Flip it on in the same PR that lands the checkpoint, not before.
 
+## Durability (#1151 step 1)
+
+One encrypted snapshot per vault in `vault_index_states`, keyed by `vault_id`:
+
+- `bind/3` decrypts and applies it, so a re-spun room comes back with its index.
+- `unbind/3` encodes the whole doc, encrypts it, and upserts the single row.
+- `update_v1/4` is **deliberately absent** — no tail log.
+
+**A separate table, not columns on `vaults`.** #1149 sizes a churned 10k-note index at ~2.0 MB,
+and the vaults row is loaded on essentially every vault-scoped request with no select-exclusion
+pattern anywhere in this codebase. Parking a multi-megabyte column there would ride along on all
+of them; here it is read only when a room binds.
+
+**Snapshot-only is a decision with an expiry date.** Note rooms keep a `crdt_update_log` because
+their hot path is keystrokes and a lost checkpoint interval loses typing. Index writes are
+rename/create/delete, and until Engram-obsidian#363 the `notes` rows remain authoritative for
+paths — so a lost interval leaves the index STALE and rebuildable, never silently wrong. **After
+#363 that stops being true and this needs a tail log.**
+
+**AAD binds to the vault** (`aad_for_row(:vault_index_states, :state, vault_id)`), so a snapshot
+copied onto another vault's row fails to decrypt rather than handing that vault someone else's
+file index. Note this could not reuse `Crypto.decrypt_aad/3`, which binds to `row.id` — this
+table's primary key is `vault_id`.
+
+**A new encrypted table is invisible to DEK rotation unless it is listed there.**
+`UserDekRotation` sweeps an explicit set of tables; an unlisted one keeps its ciphertext wrapped
+under the OLD dek, decrypts fine until that key is retired, and then fails — long after the
+rotation reported success. `sweep_vault_index_states/4` was added in the same PR for that reason,
+with a test that goes red if it is removed. `AadRebind` needs no change: it exists to rebind
+pre-AAD legacy rows, and this table is born AAD-bound.
+
 ## Not in scope here (and why)
 
 | | |
 |---|---|
-| checkpoint / projection to `notes` rows | #1151 — also what unblocks the drain |
+| projection to `notes` path columns | #1151 step 2 — goes THROUGH `rename_note`, see below |
+| enabling the idle drain + the wire flag | #1151 step 3 |
 | client adoption, `getManifest` removal | Engram-obsidian#362/#363 (`phase/contract`) |
 | compaction | #1153 — entangled with the #958 checkpoint-union hazard |
 | per-folder sharding | #1154 (p3) |

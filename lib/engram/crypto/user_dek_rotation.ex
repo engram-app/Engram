@@ -186,6 +186,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_notes(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- enqueue_crdt_head_rewarm(user_id),
          :ok <- sweep_vaults(user, old_dek, new_dek, new_filter_key, new_dek_version),
+         :ok <- sweep_vault_index_states(user, old_dek, new_dek, new_dek_version),
          :ok <- sweep_attachments(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
@@ -1024,6 +1025,77 @@ defmodule Engram.Crypto.UserDekRotation do
   # Generic cursor-based sweep loop (notes + vaults)
   # ---------------------------------------------------------------------------
 
+  # The vault index snapshot (#1151). A NEW encrypted table is invisible to this
+  # rotation unless it is listed here — the ciphertext would stay wrapped under
+  # the OLD dek, decrypt fine until the old key is retired, and then fail. The
+  # index is rebuildable today (notes rows are still authoritative for paths),
+  # but it will not be after Engram-obsidian#363, so it is swept like any other.
+  #
+  # No HMAC and no filter key: the snapshot is one opaque blob with no lookup
+  # column, which is why this takes fewer arguments than its siblings.
+  defp sweep_vault_index_states(%User{id: user_id}, old_dek, new_dek, new_dek_version) do
+    sweep_table_loop(
+      user_id,
+      Engram.Notes.VaultIndexState,
+      "00000000-0000-0000-0000-000000000000",
+      fn batch_ids ->
+        Repo.transaction(fn ->
+          rows =
+            from(s in Engram.Notes.VaultIndexState,
+              where: s.vault_id in ^batch_ids,
+              lock: "FOR UPDATE"
+            )
+            |> Repo.all(skip_tenant_check: true)
+
+          Enum.each(rows, &rewrap_index_state(&1, user_id, old_dek, new_dek, new_dek_version))
+        end)
+        |> case do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+      end
+    )
+  end
+
+  defp rewrap_index_state(row, user_id, old_dek, new_dek, new_dek_version) do
+    # AAD binds to the vault and does NOT change across a rotation — only the
+    # key does. Reusing it on both sides is what keeps the row bound to its vault.
+    aad = Crypto.aad_for_row(:vault_index_states, :state, row.vault_id)
+
+    case Envelope.decrypt(row.state_ciphertext, row.state_nonce, old_dek, aad) do
+      {:ok, plaintext} ->
+        {ct, nonce} = Envelope.encrypt(plaintext, new_dek, aad)
+
+        case from(s in Engram.Notes.VaultIndexState, where: s.vault_id == ^row.vault_id)
+             |> Repo.update_all(
+               [set: [state_ciphertext: ct, state_nonce: nonce, dek_version: new_dek_version]],
+               skip_tenant_check: true
+             ) do
+          {1, _} ->
+            :ok
+
+          {0, _} ->
+            Logger.error(
+              "T3.7 sweep_vault_index_states: row vanished during rotation",
+              Metadata.with_category(:error, :crypto,
+                user_id: user_id,
+                table: :vault_index_states,
+                row_id: row.vault_id,
+                phase: :sweep_vault_index_states
+              )
+            )
+
+            raise "T3.7 sweep_vault_index_states: row vanished mid-rotation vault_id=#{row.vault_id}"
+        end
+
+      :error ->
+        # Do NOT skip: a row left under the old dek is a row that stops
+        # decrypting the moment the old key is retired, and it would do so
+        # silently, long after this rotation "succeeded".
+        raise "T3.7 sweep_vault_index_states: decrypt failed vault_id=#{row.vault_id}"
+    end
+  end
+
   defp sweep_table_loop(user_id, schema, last_id, fun) do
     ids = fetch_batch_ids(user_id, schema, last_id)
 
@@ -1047,6 +1119,19 @@ defmodule Engram.Crypto.UserDekRotation do
       order_by: n.id,
       limit: ^@batch_size,
       select: n.id
+    )
+    |> Repo.all(skip_tenant_check: true)
+  end
+
+  # Keyed by vault_id, not id — the generic clause below orders by `r.id`, which
+  # this table does not have.
+  defp fetch_batch_ids(user_id, Engram.Notes.VaultIndexState, last_id) do
+    from(s in Engram.Notes.VaultIndexState,
+      where: s.user_id == ^user_id,
+      where: s.vault_id > ^last_id,
+      order_by: s.vault_id,
+      limit: ^@batch_size,
+      select: s.vault_id
     )
     |> Repo.all(skip_tenant_check: true)
   end
