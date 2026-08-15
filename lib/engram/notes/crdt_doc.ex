@@ -55,7 +55,10 @@ defmodule Engram.Notes.CrdtDoc do
             room_pid: room_pid,
             user_id: user_id,
             vault_id: vault_id,
-            note_id: note_id
+            note_id: note_id,
+            # Opt-in idle drain (#1152). Absent for note rooms — they are bounded
+            # by auto_exit already, since a note is observed only while open.
+            idle_exit_ms: Keyword.get(opts, :idle_exit_ms)
           )
 
         # Store the timer pid in the room's process dictionary so that

@@ -293,6 +293,48 @@ if rate_limit_overrides != [] do
   config :engram, rate_limit_overrides
 end
 
+# CRDT room-drain levers (#1152) — CI/E2E only, same CI=true gate. Written out
+# per-override rather than folded into a loop because each targets a NESTED
+# config key (module + key), not a flat app-env key like the block above.
+case Engram.RuntimeConfig.ci_gated_int_override(&System.get_env/1, "CRDT_IDLE_EXIT_MS") do
+  {:ok, ms} ->
+    config :engram, Engram.Notes.CrdtCheckpointTimer, idle_exit_ms: ms
+
+  {:ignored, raw} ->
+    Logger.warning(
+      "CRDT_IDLE_EXIT_MS=#{raw} ignored: drain levers are only honored when CI=true."
+    )
+
+  :none ->
+    :ok
+end
+
+case Engram.RuntimeConfig.ci_gated_int_override(&System.get_env/1, "CRDT_MAX_RESIDENT_ROOMS") do
+  {:ok, n} ->
+    config :engram, Engram.Notes.CrdtRoomLru, max_resident: n
+
+  {:ignored, raw} ->
+    Logger.warning(
+      "CRDT_MAX_RESIDENT_ROOMS=#{raw} ignored: drain levers are only honored when CI=true."
+    )
+
+  :none ->
+    :ok
+end
+
+case Engram.RuntimeConfig.ci_gated_int_override(&System.get_env/1, "CRDT_LRU_SWEEP_MS") do
+  {:ok, ms} ->
+    config :engram, Engram.Notes.CrdtRoomLru, sweep_interval_ms: ms
+
+  {:ignored, raw} ->
+    Logger.warning(
+      "CRDT_LRU_SWEEP_MS=#{raw} ignored: drain levers are only honored when CI=true."
+    )
+
+  :none ->
+    :ok
+end
+
 # Clerk auth (only required when AUTH_PROVIDER=clerk)
 # Note: use local variable, not Application.get_env — runtime.exs config
 # is accumulated and not yet applied, so get_env reads stale config.

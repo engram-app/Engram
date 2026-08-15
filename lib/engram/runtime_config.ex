@@ -38,6 +38,36 @@ defmodule Engram.RuntimeConfig do
   @spec rate_limit_overrides() :: [{String.t(), atom()}]
   def rate_limit_overrides, do: @rate_limit_overrides
 
+  # CI/E2E-only levers for the CRDT room drain (#1152), under the SAME CI=true
+  # gate as the rate-limit overrides above.
+  #
+  # The drain is OFF in production — no room passes `idle_exit_ms`, so nothing
+  # ever drains. That makes it untestable against a REAL client, and every test
+  # in the suite uses a test process or a channel as the observer. These knobs
+  # let a CI stack turn it on so the e2e suite proves a real Obsidian client
+  # survives rooms being released out from under it mid-session: re-spin, no
+  # lost edits, rename/delete still propagating.
+  #
+  # Nested config keys (module + key) rather than the flat app-env keys the
+  # rate-limit overrides use, since both settings live under their module.
+  # NOTE the sweep interval is here for a reason: it defaults to 30s, and most
+  # e2e tests finish well inside that. Setting only `max_resident` would arm the
+  # LRU and never fire it — the suite would look like it covered eviction while
+  # covering nothing.
+  @drain_overrides [
+    {"CRDT_IDLE_EXIT_MS", {Engram.Notes.CrdtCheckpointTimer, :idle_exit_ms}},
+    {"CRDT_MAX_RESIDENT_ROOMS", {Engram.Notes.CrdtRoomLru, :max_resident}},
+    {"CRDT_LRU_SWEEP_MS", {Engram.Notes.CrdtRoomLru, :sweep_interval_ms}}
+  ]
+
+  @doc """
+  The `{env var, {module, key}}` pairs for the CI-gated CRDT room-drain levers.
+  See the attribute above for why they exist, and `ci_gated_int_override/2` for
+  the gating rule.
+  """
+  @spec drain_overrides() :: [{String.t(), {module(), atom()}}]
+  def drain_overrides, do: @drain_overrides
+
   @doc """
   Decides whether an integer rate-limit override env var should be applied.
 

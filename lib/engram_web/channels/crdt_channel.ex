@@ -45,6 +45,18 @@ defmodule EngramWeb.CrdtChannel do
   @msg_limit 240
   @msg_scale_ms 10_000
 
+  # Liveness-probe timeout before unobserving a drained room (see release_room/1).
+  # Generous enough that a room merely busy in a NIF still answers, short enough
+  # that a genuinely wedged one cannot hold this channel for y_ex's 5 s default.
+  # Overridable (like @default_max_rooms) so the wedged-room test can assert
+  # against a short probe instead of racing a 1 s wall-clock on a loaded runner.
+  @room_probe_ms 1_000
+
+  # Ceiling on the per-socket drained-doc_id set (see remember_drained/3).
+  @max_drained 1_024
+
+  @drain_event [:engram, :crdt, :room_drain]
+
   # Per-socket ceiling on distinct rooms (notes) a single connection may enroll.
   # Each room pins a server Y.Doc + checkpoint timer, so an unbounded client
   # (buggy or hostile) could STEP1 endlessly and exhaust node RAM + the DB pool.
@@ -148,7 +160,26 @@ defmodule EngramWeb.CrdtChannel do
                       )
                     )
 
-                    {:ok, assign(socket, vault: vault, rooms: %{}, room_doc: %{})}
+                    # ONE drain subscription for the whole connection (#1152).
+                    # Per-room would cost a subscription per note the client
+                    # enrolls — 309 bytes each, ~725 KB per socket on a
+                    # 2400-note vault — which is the very memory pressure the
+                    # drain exists to relieve. Nothing extra is needed to route
+                    # it: the drain carries the room pid, and handle_info
+                    # already no-ops on a pid this channel does not hold.
+                    :ok =
+                      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(vault.id))
+
+                    {:ok,
+                     assign(socket,
+                       vault: vault,
+                       rooms: %{},
+                       room_doc: %{},
+                       # doc_ids released by an idle drain (#1152), so the
+                       # re-spin does not re-announce crdt_doc_ready. See
+                       # start_and_observe_room.
+                       drained: MapSet.new()
+                     )}
 
                   _ ->
                     {:error, %{reason: "api_key_vault_forbidden"}}
@@ -832,6 +863,37 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  # The room has gone idle and is asking its observers to let go (#1152). Evict
+  # the cached pid FIRST, then unobserve — the last unobserve trips the room's
+  # auto_exit, which checkpoints on terminate.
+  #
+  # Evict-before-unobserve is what makes this safe. A `sync_update` frame is a
+  # GenServer.cast (deps/y_ex/lib/server/doc_server_worker.ex:26), so casting at
+  # a dead room returns :ok and silently drops the edit. Because the eviction
+  # happens in this same handle_info, any frame BEHIND this message re-resolves
+  # through ensure_room and lands on a fresh room, and any frame AHEAD of it
+  # already reached the room while it was live. There is no window either way.
+  @impl true
+  def handle_info({:crdt_room_drain, room}, socket) do
+    case Map.get(socket.assigns.room_doc, room) do
+      nil ->
+        # Not ours (a room we already released, or another channel's).
+        {:noreply, socket}
+
+      doc_id ->
+        socket =
+          socket
+          |> assign(:rooms, Map.delete(socket.assigns.rooms, doc_id))
+          |> assign(:room_doc, Map.delete(socket.assigns.room_doc, room))
+          # Remember we let this one go, so the re-spin stays quiet (see the
+          # announce in start_and_observe_room).
+          |> assign(:drained, remember_drained(socket.assigns.drained, doc_id))
+
+        release_room(room)
+        {:noreply, socket}
+    end
+  end
+
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, _reason}, socket) do
     case Map.get(socket.assigns.room_doc, pid) do
@@ -847,6 +909,101 @@ defmodule EngramWeb.CrdtChannel do
         {:noreply, socket}
     end
   end
+
+  @doc """
+  Let go of `room` in response to a drain (#1152). Always `:ok`.
+
+  `SharedDoc.unobserve/1` is a `GenServer.call` with y_ex's default 5 s timeout
+  and no timeout knob, so a room that is dead — or alive but wedged — would
+  either EXIT this channel or stall it for 5 s. Three guards, cheapest first:
+
+    1. already dead → nothing to release;
+    2. not answering within `#{@room_probe_ms}` ms → skip. Nothing is lost by
+       skipping: `auto_exit` is driven by the room's own observer bookkeeping,
+       so a room too wedged to answer was never going to exit on this unobserve
+       anyway. The timer's backed-off re-ask picks it up when it recovers;
+    3. otherwise unobserve — a room that answered the probe answers this too.
+
+  The probe is `update_doc/3` with a no-op fun: PUBLIC API that takes a timeout,
+  where `unobserve/1` does not. Reaching for `GenServer.call(room, {:unobserve,
+  self()}, …)` instead would hard-code y_ex's private message shape, which fails
+  silently on a dep bump; this costs one extra round-trip on a path that only
+  runs at idle-drain frequency.
+
+  `catch :exit` still backstops the gap between each check and the call.
+
+  Public (`@doc false`-ish) because the dead/wedged paths are unreachable
+  through the channel API — same reason `CrdtRegistry.observe_with_retry/3` is.
+  """
+  @spec release_room(pid()) :: :ok
+  def release_room(room) do
+    cond do
+      locally_dead?(room) ->
+        emit_drain(:skipped)
+
+      not room_responsive?(room) ->
+        emit_drain(:skipped)
+
+      true ->
+        SharedDoc.unobserve(room)
+        emit_drain(:released)
+    end
+
+    :ok
+  catch
+    # The room died between a check and the call. Count it — otherwise this
+    # drain is neither :released nor :skipped, and requests silently exceed
+    # outcomes on the dashboard, which reads exactly like the leak this counter
+    # exists to detect.
+    :exit, _ ->
+      emit_drain(:skipped)
+      :ok
+  end
+
+  # Paired with the timer's :requested/:reasked counts, this is the signal that
+  # answers "is the drain actually working in prod": requests far exceeding
+  # releases means rooms are being asked to drain and not going away, which is
+  # the unbounded-residency failure the whole feature exists to prevent. Without
+  # it, #1152's "resident room count bounded under a soak" is unverifiable.
+  # Cardinality contract: bounded phase atoms only — NEVER note/vault/user ids.
+  defp emit_drain(phase) do
+    :telemetry.execute(@drain_event, %{count: 1}, %{phase: phase})
+    :ok
+  end
+
+  @doc """
+  True only for a pid on THIS node that is already dead.
+
+  `Process.alive?/1` is LOCAL-ONLY: it raises `ArgumentError` on a remote pid,
+  and `ArgumentError` is `:error` class, so `release_room/1`'s `catch :exit`
+  would NOT contain it. Rooms are `:global`-registered, so a channel on this
+  node routinely observes a room on another one (clustering live since
+  2026-06-23) — unguarded, this crashed the channel on every drain of a remote
+  room.
+
+  Remote rooms simply skip the fast path: `room_responsive?/1` is a
+  GenServer.call, which exits catchably against a dead remote pid and is
+  timeout-bounded regardless, so correctness never depended on this check.
+
+  `self_node` is injectable so the remote branch is testable on a single node —
+  the `:cluster`-tagged test that uses a real peer does not run in CI.
+  """
+  @spec locally_dead?(pid(), node()) :: boolean()
+  def locally_dead?(room, self_node \\ node()),
+    do: node(room) == self_node and not Process.alive?(room)
+
+  defp room_responsive?(room) do
+    SharedDoc.update_doc(room, fn _doc -> :ok end, room_probe_ms())
+    true
+  catch
+    :exit, _ -> false
+  end
+
+  # `|| @room_probe_ms`, NOT `get_env/3` with a default: the three-arg form only
+  # falls back when the key is ABSENT, so any writer that leaves the key set to
+  # nil (e.g. a test restoring a previously-unset override) would feed `nil` to
+  # GenServer.call/3 and crash the channel. Matches effective_msg_limit/0 above.
+  defp room_probe_ms, do: Application.get_env(:engram, :crdt_room_probe_ms) || @room_probe_ms
 
   # A note_id is a non-sensitive UUID and is REQUIRED to diagnose which note
   # lost a dropped edit (redacting it under :path blocked the 2026-07-06
@@ -1047,6 +1204,9 @@ defmodule EngramWeb.CrdtChannel do
       # dead pid return :ok and every subsequent edit is silently dropped.
       _ref = Process.monitor(room)
 
+      # NOTE: no per-room drain subscribe. The connection subscribes ONCE to its
+      # vault's drain topic in join/3 — see the comment there for why per-room
+      # was self-defeating.
       entry = %{room: room, note_id: note_id}
 
       socket =
@@ -1062,16 +1222,64 @@ defmodule EngramWeb.CrdtChannel do
       # empty note live rather than waiting for the pull — matches the
       # CrdtDeliver announce contract; the plugin treats "path" as optional, so
       # a failed lookup just omits it (never crash the room-open).
-      payload =
-        case Notes.get_note_by_id(user, vault, note_id) do
-          {:ok, %{path: path}} when is_binary(path) -> %{"doc_id" => doc_id, "path" => path}
-          _ -> %{"doc_id" => doc_id}
-        end
+      #
+      # SKIPPED when this socket previously released the room to an idle drain
+      # (#1152). The announce is a DISCOVERY signal, and a re-spin discovers
+      # nothing: every peer already learned about this note when it was first
+      # announced. Re-announcing would make every drain->edit cycle fan a
+      # syncStep1 out of every other device on the vault, against budgets that
+      # are already tight (@hs_limit here, the plugin's 240/10s crdt_msg limit
+      # in Engram-obsidian#159) — and handshake starvation is the documented
+      # trigger for the wrong-mint cross-file overwrite class. The drain makes
+      # re-spin routine rather than crash-only, so what used to be rare noise
+      # would become a per-edit storm.
+      #
+      # Scoped to the drain path on purpose: a crash/node-loss re-spin still
+      # announces exactly as before, since that peer state is genuinely unknown.
+      {announce?, socket} = consume_drained(socket, doc_id)
 
-      broadcast_from!(socket, "crdt_doc_ready", payload)
+      if announce? do
+        payload =
+          case Notes.get_note_by_id(user, vault, note_id) do
+            {:ok, %{path: path}} when is_binary(path) -> %{"doc_id" => doc_id, "path" => path}
+            _ -> %{"doc_id" => doc_id}
+          end
+
+        broadcast_from!(socket, "crdt_doc_ready", payload)
+      end
 
       {:ok, socket, entry}
     end
+  end
+
+  # `{announce?, socket}` — false exactly once per drain, so a LATER drain of the
+  # same doc_id is independently suppressed rather than the note going
+  # permanently silent.
+  defp consume_drained(socket, doc_id) do
+    if MapSet.member?(socket.assigns.drained, doc_id) do
+      {false, assign(socket, :drained, MapSet.delete(socket.assigns.drained, doc_id))}
+    else
+      {true, socket}
+    end
+  end
+
+  @doc """
+  Record `doc_id` as drained, bounded at `cap`.
+
+  Entries are consumed by the matching re-spin, but a note that is drained and
+  never re-opened leaves one behind for the life of the socket — and
+  `@default_max_rooms` bounds CONCURRENT rooms, not cumulative ones, while
+  drain-churn is the intended steady state. So the set is capped.
+
+  Overflow CLEARS rather than evicting one entry: it costs no ordering
+  bookkeeping, and the degradation is safe in the only direction that matters —
+  a forgotten doc_id just means its re-spin announces, which is exactly the
+  pre-drain behaviour. Never incorrectness, only lost suppression.
+  """
+  @spec remember_drained(MapSet.t(), String.t(), pos_integer()) :: MapSet.t()
+  def remember_drained(drained, doc_id, cap \\ @max_drained) do
+    drained = MapSet.put(drained, doc_id)
+    if MapSet.size(drained) > cap, do: MapSet.new(), else: drained
   end
 
   # doc_id IS the note_id (client-minted UUIDv7). Validate the note exists in
