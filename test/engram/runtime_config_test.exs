@@ -19,6 +19,36 @@ defmodule Engram.RuntimeConfigTest do
     end
   end
 
+  describe "drain_overrides/0" do
+    # Pins the env var names and the NESTED config targets. These turn the #1152
+    # room drain ON in a CI stack — the only place it ever runs against a real
+    # client — so a typo silently reverts the e2e suite to never exercising it.
+    test "lists the CRDT room-drain levers with their module + key targets" do
+      assert RuntimeConfig.drain_overrides() == [
+               {"CRDT_IDLE_EXIT_MS", {Engram.Notes.CrdtCheckpointTimer, :idle_exit_ms}},
+               {"CRDT_MAX_RESIDENT_ROOMS", {Engram.Notes.CrdtRoomLru, :max_resident}}
+             ]
+    end
+
+    # The gate matters more here than for a rate limiter: a stray
+    # CRDT_IDLE_EXIT_MS reaching production would start draining rooms on a
+    # timer in a deployment that has never exercised that path.
+    for {var, _target} <- RuntimeConfig.drain_overrides() do
+      test "#{var} is ignored outside CI" do
+        assert RuntimeConfig.ci_gated_int_override(
+                 getenv(%{unquote(var) => "5000"}),
+                 unquote(var)
+               ) ==
+                 {:ignored, "5000"}
+      end
+
+      test "#{var} applies when CI=true" do
+        env = getenv(%{unquote(var) => "5000", "CI" => "true"})
+        assert RuntimeConfig.ci_gated_int_override(env, unquote(var)) == {:ok, 5000}
+      end
+    end
+  end
+
   describe "ci_gated_int_override/2" do
     # Run the full gating contract against every override so no limiter can
     # drift onto a different rule.
