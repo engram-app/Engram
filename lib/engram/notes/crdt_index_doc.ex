@@ -4,7 +4,7 @@ defmodule Engram.Notes.CrdtIndexDoc do
   a CRDT instead of a REST projection (engram-app/engram-workspace#167).
 
   Identity today lives in three places that must agree: `NoteIdMap` in the
-  client, the REST manifest, and the seq cursor. `docs/context/relay-pattern-audit.md`
+  client, the REST manifest, and the seq cursor. `relay-pattern-audit.md` (engram-workspace repo)
   traces every drift incident to that split. Relay has no such class because
   identity converges through the SAME channel as content — a `Y.Map` inside a
   synced doc. This room is that map.

@@ -24,9 +24,22 @@ defmodule Engram.Notes.CrdtRoomLru do
 
   ## Only drain-enabled rooms are tracked
 
-  `touch/2` is called from the checkpoint timer ONLY when `idle_exit_ms` is set,
-  so a note room never enters the table and can never be evicted. That keeps the
-  whole feature inert until #1150's index room opts in.
+  `touch/3` is called from the checkpoint timer ONLY when `idle_exit_ms` is a
+  positive integer — the same guard `arm_idle/1` uses, so `0` means disabled to
+  both. Where the drain is off, nothing can be LRU-evicted either.
+
+  That is **prod today**, where nothing sets `idle_exit_ms`. It is NOT CI/e2e:
+  `CRDT_IDLE_EXIT_MS` (`ci/compose.yml`) turns the drain on fleet-wide for every
+  note room, which is deliberate — it makes the whole Obsidian suite exercise
+  this against the real client. And the unblocking event is **#1151, not #1150**:
+  #1150's index room deliberately does not opt in, because it has no persistence
+  to checkpoint on the way out.
+
+  `touch/3` and `forget/1` no-op while the table is missing. The table is owned
+  by this module's GenServer, so a bare `:ets` call would raise in the CALLER —
+  a `CrdtCheckpointTimer` that is linked to a room which does not trap exits.
+  The room would die by signal, skipping `terminate/2` and its unbind
+  checkpoint. A memory backstop must never cost a room its checkpoint.
 
   Every tracked pid is LOCAL: a room's timer is started on the same node as the
   room (`CrdtDoc.start_link`), so `Process.alive?/1` — which raises on remote

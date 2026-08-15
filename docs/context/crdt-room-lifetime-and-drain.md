@@ -1,6 +1,6 @@
 # CRDT room lifetime — why `auto_exit` is not enough, and why an idle room is DRAINED, not stopped
 
-_Last verified: 2026-08-14_
+_Last verified: 2026-08-15_
 
 **TL;DR:** A `SharedDoc` room only exits when its **last observer leaves** (`auto_exit`). That
 bounds a *note* room, which is observed only while the note is open. It does **not** bound a
@@ -12,7 +12,8 @@ The obvious fix — a timer that stops the idle room — **silently loses edits*
 edit is a `GenServer.cast`. So an idle room instead **broadcasts a drain**, its observers let go,
 and the `auto_exit` that already exists does the exiting.
 
-Shipped: PR TBD (`feat/crdt-room-idle-exit`), opt-in via `idle_exit_ms`, default `nil`.
+Shipped: PR #1382 (`feat/crdt-room-idle-exit`), opt-in via `idle_exit_ms`, default `nil`.
+Hardened by the review pass on PR #1383 — see "What the review caught" at the end.
 Refs: engram-app/Engram#1152, #1150, #1149, engram-app/engram-workspace#167.
 
 ---
@@ -52,20 +53,24 @@ no `GenServer.stop`, no fork of `y_ex`.
 ```
 CrdtCheckpointTimer idle (no :activity for idle_exit_ms)
   └─ PubSub.broadcast(CrdtRegistry.drain_topic(vault_id), {:crdt_room_drain, room_pid})
-       └─ each CrdtChannel: evict assigns.rooms/room_doc  →  SharedDoc.unobserve(room)
+       └─ each CrdtChannel: SharedDoc.unobserve(room)  →  evict assigns.rooms/room_doc
             └─ LAST unobserve → auto_exit → terminate/2
                  └─ CrdtPersistence.unbind/3 → checkpoint (CheckpointGate, Oban overflow)
 ```
 
-**Why this closes the race — message ordering, not luck.** The channel evicts its cached pid in
-the *same* `handle_info` that unobserves, so relative to the drain message:
+**Why this closes the race — message ordering, not luck.** The channel releases and evicts inside
+the *same* `handle_info`, which is atomic with respect to its own mailbox, so relative to the drain
+message:
 
 - a frame **ahead** of the drain in the channel's mailbox reached the room while it was still live
 - a frame **behind** it finds no cached pid and re-resolves through `ensure_room` → fresh room
 
-There is no interleaving where a frame casts at a dead pid. The one remaining race — a new
+There is no interleaving where a frame casts at a dead pid. Note the ORDER inside the callback is
+therefore free — nothing else runs between the two — which is what lets the release go first and
+report whether it actually succeeded. (An earlier version evicted first and released blind; see
+"What the review caught".) The one remaining race — a new
 `ensure_started` colliding with the dying room's `:global` deregistration — is pre-existing and
-already handled by `observe_with_retry` (`crdt_registry.ex:119-136`).
+already handled by `observe_with_retry` (`crdt_registry.ex:138-158`).
 
 ## Things that already existed (do not rebuild them)
 
@@ -76,7 +81,10 @@ Roughly half of #1152 turned out to be already-shipped machinery:
   to the `crdt_checkpoint` Oban queue (the 2026-07-09 pool-exhaustion fix).
 - **client re-spin** — `ensure_room` lazily recreates on the next frame. Built for crash/node-loss.
 - **residency enumeration** (for the LRU backstop) — `DynamicSupervisor.which_children(CrdtDocSupervisor)`,
-  already used by `DataCase.stop_crdt_rooms/0`.
+  already used by `DataCase.stop_crdt_rooms/0`. The shipped LRU does NOT use it: eviction needs a
+  `last_activity` per room to order by, which `which_children` cannot supply. It uses its own ETS
+  table instead (below). Do not "simplify" it back onto `which_children` — that silently loses the
+  ordering the whole policy is built on.
 
 ## The announce amplification (the non-obvious one)
 
@@ -84,7 +92,7 @@ Roughly half of #1152 turned out to be already-shipped machinery:
 comment says recipients answer with a syncStep1. That is cheap today because a **re-spin only
 happens on a crash or node loss**. The drain makes re-spin **routine**, so without care every
 drain→edit cycle fans a handshake out of every other device on the vault — against `@hs_limit`
-(`crdt_channel.ex:61`) and the plugin's 240/10s `crdt_msg` budget (Engram-obsidian#159). Handshake
+(`crdt_channel.ex:74`) and the plugin's 240/10s `crdt_msg` budget (Engram-obsidian#159). Handshake
 starvation is the documented trigger for the wrong-mint cross-file overwrite class, so this is not
 merely noisy.
 
@@ -125,7 +133,8 @@ announces, i.e. pre-drain behaviour), never incorrectness, so it needs no orderi
 
 Idle-exit bounds rooms that go **quiet**. It does nothing for a continuously-active room, so a
 pathological mix of busy vaults still pins memory. `Engram.Notes.CrdtRoomLru` is the pressure valve:
-a named public ETS table (`note_id -> {pid, last_activity}`, mirroring `FanoutPacer`) plus a
+a named public ETS table (`{note_id, room_pid, vault_id, last_activity}`, mirroring `FanoutPacer`)
+plus a
 periodic sweep that prunes dead entries and then drains down to `max_resident`.
 
 Three properties worth keeping:
@@ -138,26 +147,48 @@ Three properties worth keeping:
 - **Prune before selecting.** A room that exited between sweeps still holds an entry; counting
   corpses toward residency evicts healthy rooms to free memory nothing is using.
 
-Only drain-ENABLED rooms are tracked (`touch/2` is called from the timer only when `idle_exit_ms`
-is set), so a note room can never be evicted and the feature stays inert until #1150 opts in. Every
-tracked pid is local — a room's timer runs on the room's node — so `Process.alive?/1` is safe here,
-unlike in the channel.
+Only drain-ENABLED rooms are tracked (`touch/3` is called from the timer only when `idle_exit_ms`
+is a positive integer — the same guard `arm_idle/1` uses, so `0` means disabled to both), so where
+the drain is off nothing can be LRU-evicted either. That is **prod today**, where nothing sets
+`idle_exit_ms`. It is NOT CI/e2e: `CRDT_IDLE_EXIT_MS` in `ci/compose.yml` turns the drain on
+fleet-wide for every note room, which is the point — the whole Obsidian suite then exercises it
+against the real client.
+
+Note the unblocking event is **#1151, not #1150**. #1150's index room deliberately does not opt in,
+because it has no persistence yet; see `crdt-index-room.md`.
+
+Every tracked pid is local — a room's timer runs on the room's node — so `Process.alive?/1` is safe
+here, unlike in the channel. `touch/3` and `forget/1` also no-op while the table is missing: the
+table is owned by the LRU GenServer, and a bare `:ets` call would raise in the CALLER, which is a
+checkpoint timer linked to a room that does not trap exits — the room would die by signal and skip
+its unbind checkpoint. A memory backstop must never cost a room its checkpoint.
 
 `max_resident` defaults to 64 and wants tuning against real index-doc sizes once #1150 exists;
 #1146's arithmetic says ~128 resident rooms would consume an entire task.
 
 ## Observability
 
-`[:engram, :crdt, :room_drain]`, `%{count: 1}`, `%{phase: :requested | :reasked | :released |
-:skipped}` → `engram_prom_ex_crdt_room_drain_total` (`Engram.PromEx.Crdt`).
+`[:engram, :crdt, :room_drain]`, `%{count: 1}`, `%{phase: :requested | :reasked |
+:request_failed | :released | :skipped_dead | :skipped_unresponsive | :lru_evicted}` →
+`engram_prom_ex_crdt_room_drain_total` (`Engram.PromEx.Crdt`).
 
-`released` should track `requested`. `requested` climbing while `released` stays flat means rooms
-are being asked to drain and not going away — the unbounded-residency failure the drain exists to
-prevent — and a rising `reasked` localises it to observers that cannot act. This is the only way to
-answer #1152's "resident room count bounded under a soak" in production rather than in a test.
+**Do not alert on `released` vs `requested`.** An earlier version of this doc said `released`
+should track `requested`; it cannot. A request is emitted ONCE PER ROOM (one broadcast), a release
+once per OBSERVING CHANNEL — so a healthy 3-device vault runs at roughly `3x released` per
+`requested`, and the multiplier is unknowable from the metric (`observer_process` is private, which
+is why the drain is a broadcast at all). Worse, a genuine leak can sit at exactly 1:1.
 
-Cardinality contract: the four phase atoms and nothing else. Never note/vault/user ids — a room
-drains repeatedly.
+Alert on the phases that mean one thing each:
+
+- `skipped_unresponsive` — a room that is ALIVE but did not answer the probe, so it still holds an
+  observer it cannot shed. Should be ~zero; any sustained rate is the unbounded-residency failure.
+- `reasked` — same problem, seen from the timer's side.
+- `request_failed` — the broadcast itself errored, so nothing was asked.
+- `lru_evicted` — should be ~zero; sustained means idle-exit alone is not keeping up.
+- `skipped_dead` — routine, rooms die on their own.
+
+Cardinality contract: the phase atoms listed above and nothing else. Never note/vault/user ids — a
+room drains repeatedly.
 
 ## Gotchas
 
@@ -176,7 +207,15 @@ drains repeatedly.
 - **`unobserve` is a `GenServer.call` with no timeout knob.** A room that already exited would
   **exit the channel**; one that is alive but wedged would **stall it for y_ex's 5 s default**.
   `release_room/1` guards cheapest-first: dead → skip; doesn't answer a
-  `update_doc/3` no-op probe within 1 s → skip; else unobserve. `catch :exit` backstops each gap.
+  `update_doc/3` no-op probe within `@room_probe_ms` (1 s, overridable via `:crdt_room_probe_ms`,
+  which the drain tests use) → skip; else unobserve. `catch :exit` backstops each gap.
+
+  **A skip is not a release, and the caller must not treat it as one.** `release_room/1` returns
+  `:gone` (released, or already dead) or `:retry` (alive but wedged). On `:retry` the channel KEEPS
+  its cached pid: it is still in the room's `observer_process` map, so `auto_exit` can never fire
+  until a later re-ask succeeds, and a channel that had forgotten the pid would answer every re-ask
+  with "not ours" — pinning the room for the life of the socket. Evicting unconditionally was the
+  original shape and it turned this feature into the leak it exists to prevent.
 
   Skipping a wedged room loses nothing: `auto_exit` runs off the room's own observer bookkeeping,
   so a room too wedged to answer was never going to exit on that unobserve anyway — the timer's
@@ -196,7 +235,11 @@ drains repeatedly.
   "just in case" stacks duplicates and every later drain arrives twice.
 - **`Phoenix.PubSub.subscribe/2` returns `:ok | {:error, …}`** and dialyzer flags the unmatched
   return. Do not `_ =` it: a failed subscribe means that room can never be drained, i.e. exactly
-  the unbounded-residency failure the drain exists to prevent. Log it.
+  the unbounded-residency failure the drain exists to prevent.
+
+  The channel takes the stricter route and hard-matches `:ok = Phoenix.PubSub.subscribe(…)`, so a
+  failed subscribe raises in `join/3` and the connection fails loudly rather than connecting into a
+  state where its rooms can never drain. Either is defensible; silence is not.
 - **The drain re-arms, with backoff.** An observer that ignores a drain (stale client, wedged
   channel) is asked again rather than pinning the room forever — but each unanswered ask lengthens
   the next (`drain_delay/1`, capped at 8x), so an observer that can *never* act cannot hold a fixed
@@ -281,7 +324,8 @@ single red run, and characterise the flake rate before attributing a failure to 
 | `FanoutPacerTest` | 200 ms pacing assertions | 4/6 under load |
 | `Engram.Vector.QdrantHybridTest` | `async: true` + Bypass HTTP + `Req` timeout (one of 47 Bypass tests) | 1 full-suite run, not reproducible in isolation |
 
-Because of that hole, the remote-pid guard is ALSO covered by a single-node test that injects the
+Returning to the cross-node coverage hole above: because of it, the remote-pid guard is ALSO
+covered by a single-node test that injects the
 "self" node (`locally_dead?/2`) rather than faking a remote pid — so the guard is gated by the
 default suite even though the `:cluster` test is not.
 
@@ -290,5 +334,31 @@ default suite even though the `:cluster` test is not.
 The mechanism is proven (exit with observers attached, checkpoint on exit, correct re-spin under
 both orderings, multi-observer release). The **load model is not**: #1149's 7.91 MB-per-10k-note
 figure belongs to an index doc that does not exist until #1150, so nothing here validates the
-absolute memory bound — only that residency is bounded at all. The resident-room LRU backstop
-(#1152's third bullet) is also still outstanding.
+absolute memory bound — only that residency is bounded at all.
+
+The resident-room LRU backstop (#1152's third bullet) shipped in the same PR — see "The LRU
+backstop" above.
+
+## What the review caught (2026-08-15)
+
+#1382 merged green — full suite, credo, dialyzer, and the whole Obsidian e2e suite with the drain
+and LRU enabled via `ci/compose.yml`. An independent multi-agent review of the merged code then
+found six real defects. Worth recording *why* CI could not have found them:
+
+| defect | why no test could fail |
+|---|---|
+| A skipped release still evicted the cached pid, so the room kept an observer it could never shed and every re-ask no-op'd | The room stays alive and healthy. Nothing is lost, nothing errors — the only symptom is memory that never comes back, over a timescale no test runs for. |
+| `:skipped` conflated "already dead" (routine) with "alive but wedged" (a leak) | A counter that is merely *ambiguous* still increments. You need an operator asking a question the metric cannot answer. |
+| `released` vs `requested` was documented as a 1:1 invariant; it is 1:N over the observer count | Every test has exactly one observer, so 1:N and 1:1 are indistinguishable in the suite by construction. |
+| The re-spin announce was suppressed for `.canvas` too, but its backstop is `.md`-gated | Two *different* files, each correct in isolation. Only reading them together shows the gap. |
+| The LRU counted an ask as an eviction and let one stuck room monopolise every sweep | Needs a room that ignores the drain AND a second sweep. The tests asserted the first sweep's broadcast, which is right up to the point where it isn't. |
+| `touch/3` raised into a linked checkpoint timer if the LRU restarted, killing the room's checkpoint | Requires the LRU GenServer to crash, which nothing makes it do. |
+
+The pattern: **CI proves the mechanism, not the model.** Every one of these is a statement about
+what happens over time, across processes, or between two files — none of which a green suite
+speaks to. The 707 MB per-note-topic defect earlier in this same feature was the same shape, and
+also shipped fully green.
+
+Each fix landed with a regression test that was **mutation-tested**: the fix was reverted and the
+new test confirmed red, then restored. Treat any test in this area that passes on first write with
+suspicion.

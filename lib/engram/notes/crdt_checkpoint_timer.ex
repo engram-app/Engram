@@ -36,7 +36,11 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
 
   ## Idle drain (`idle_exit_ms`, #1152)
 
-  OPT-IN and `nil` by default, so note rooms behave exactly as they always have.
+  OPT-IN and `nil` by default, so note rooms behave exactly as they always have
+  in **prod**. Note the per-room opt is not the only lever: `idle_exit_ms` also
+  falls back to this module's app config, and `CRDT_IDLE_EXIT_MS`
+  (`ci/compose.yml`) sets it fleet-wide in CI/e2e — on purpose, so the Obsidian
+  suite exercises the drain against the real client.
 
   `auto_exit` ends a room when its LAST OBSERVER leaves. That bounds a note
   room, which is observed only while the note is open — but a per-vault index

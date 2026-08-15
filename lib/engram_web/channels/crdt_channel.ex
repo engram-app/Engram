@@ -9,6 +9,12 @@ defmodule EngramWeb.CrdtChannel do
   lazily starts + observes the singleton `CrdtDoc` room per doc, and relays
   y-protocols broadcasts back out as `crdt_msg` events tagged with the
   originating `doc_id`. Auth mirrors SyncChannel.
+
+  The same topic also carries the per-vault **index** room (#1150) as
+  `crdt_index_msg`. Those frames have NO `doc_id` — the vault is implicit in the
+  topic and there is exactly one index room per connection — and the wire is
+  gated on `:crdt_index_enabled` (off by default) until #1151 gives that room a
+  checkpoint. See `docs/context/crdt-index-room.md`.
   """
 
   use Phoenix.Channel

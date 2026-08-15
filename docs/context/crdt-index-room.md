@@ -7,14 +7,16 @@ _Last verified: 2026-08-15_
 `crdt_index_msg`. **Deliberately inert** — nothing writes to it, nothing reads it back, and it must
 **not** opt into the #1152 drain until #1151 gives it a checkpoint.
 
-Shipped: PR TBD (`feat/crdt-index-room`). Refs #1150, #1146, #1152, engram-app/engram-workspace#167.
+Shipped: PR #1383 (`feat/crdt-index-room`). Refs #1150, #1146, #1152,
+engram-app/engram-workspace#167.
 
 ---
 
 ## Why the room exists
 
 Identity today lives in three places that have to agree — `NoteIdMap` in the client, the REST
-manifest, and the seq cursor. `docs/context/relay-pattern-audit.md` traces every drift incident to
+manifest, and the seq cursor. `relay-pattern-audit.md` — in the **engram-workspace** repo, not this one
+(`../engram-workspace/docs/context/relay-pattern-audit.md`) — traces every drift incident to
 that split, and lists the ~18 functions in `plugin/src/sync.ts` that exist only to keep them
 agreeing. Relay has no such class because identity converges through the **same channel as
 content**, as a `Y.Map` inside a synced doc. This room is that map.
@@ -50,9 +52,17 @@ see "Testing notes" below.
   per connection. A doc_id-addressable index room would be a second way to name the same thing —
   and worse, would let a client drive the index through the note path, bypassing `note_in_vault?`.
   Pinned by a test asserting `crdt_msg` with the vault id replies `note_not_found`.
-- **Rate bucket: handshake, not edit.** Index sync is once-per-connect. Billing it to the edit
-  budget would let it starve real edits — the shape behind the 2026-07-07 cross-file-overwrite
-  incident.
+- **Rate bucket: exactly the note path's.** `frame_class_b64/1` lanes by wire prefix, so a step1
+  (and a small step2) rides the handshake lane and everything else — including every `sync_update`
+  — rides the edit lane.
+
+  An earlier version of this doc claimed index frames ride the handshake bucket outright, on the
+  reasoning that index sync is once-per-connect. True of the handshake, false of the writes #1151
+  adds: a rename or create writes `filemeta_v0`, which is a `sync_update`, which bills the user's
+  edit budget. Whether that is right belongs to #1151, where those writes exist and their volume is
+  known — moving ALL index traffic onto the handshake lane only relocates the starvation risk onto
+  handshakes, which is the 2026-07-07 cross-file-overwrite shape. Both lanes are now pinned by
+  tests so the decision is made against measured behaviour rather than a comment.
 - **Relay ordering.** `handle_info({:yjs, frame, room})` checks `index_room` FIRST, so an index
   room can never be mistaken for a note room whose pid was reused.
 - **Monitor + cache eviction.** Same rationale as note rooms: a dead room left in the cache means
@@ -78,6 +88,17 @@ red if the implementation were wrong?":
 
 Both mutations were reverted after confirming the red. Treat any test that passes on first write
 with suspicion, and prefer mutating the implementation over re-reading the test.
+
+## The wire ships OFF
+
+`crdt_index_msg` is gated on `config :engram, :crdt_index_enabled` (default **false**; `true` in
+`config/test.exs`). "Deliberately inert" describes the SERVER — nothing writes the index and
+nothing reads it back — but it is not a property of an endpoint any authenticated client can push
+to. The index room has no persistence, therefore no checkpoint timer, therefore no idle drain and
+no LRU tracking: its only bound is `auto_exit` when the last socket closes. Until #1151 gives it a
+checkpoint, a client could sit on a connection growing one doc for the life of its session.
+
+Flip it on in the same PR that lands the checkpoint, not before.
 
 ## Not in scope here (and why)
 
