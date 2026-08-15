@@ -29,6 +29,7 @@ defmodule Engram.PromEx do
       Engram.PromEx.Crypto,
       Engram.PromEx.Indexing,
       Engram.PromEx.Notes,
+      Engram.PromEx.Crdt,
       Engram.PromEx.Reliability,
       Engram.PromEx.Usage,
       Engram.PromEx.RateLimiter,

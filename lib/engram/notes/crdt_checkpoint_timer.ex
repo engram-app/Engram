@@ -33,16 +33,53 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   stays settle-debounced and ceiling-capped, so there is still exactly ONE
   checkpoint per dirty streak (no per-keystroke churn, no double flush, no
   version/seq thrash). The cheap O(append) `update_v1` hot path is untouched.
+
+  ## Idle drain (`idle_exit_ms`, #1152)
+
+  OPT-IN and `nil` by default, so note rooms behave exactly as they always have.
+
+  `auto_exit` ends a room when its LAST OBSERVER leaves. That bounds a note
+  room, which is observed only while the note is open — but a per-vault index
+  room (#1150) is observed for as long as any client is connected, making its
+  lifetime session-length and its residency a function of concurrent
+  connections rather than mutation rate. #1149 measured 7.91 MB resident per
+  10k-note vault, which misses the target by two orders of magnitude.
+
+  When `idle_exit_ms` is set, a room that has seen no `:activity` for that long
+  broadcasts `{:crdt_room_drain, room_pid}` on `CrdtRegistry.drain_topic/1`.
+  Observers evict their cached pid and unobserve; the last unobserve trips the
+  EXISTING `auto_exit`, whose `terminate/2` runs `CrdtPersistence.unbind/3` and
+  checkpoints.
+
+  It does NOT stop the room itself, and that distinction is the whole design.
+  A client edit is a `sync_update` frame, which y_ex dispatches as a
+  `GenServer.cast` (`deps/y_ex/lib/server/doc_server_worker.ex:26`) — a cast to
+  a dead pid returns `:ok` and drops the edit. Stopping a room out from under an
+  attached observer would therefore turn a timer into silent data loss.
+  Draining makes observers let go FIRST, so a frame either lands on the live
+  room or re-resolves a fresh one, and the exit falls out of machinery that
+  already exists.
+
+  The broadcast re-arms, so an observer that ignores a drain (a stale client, a
+  wedged channel) is asked again rather than pinning the room forever.
   """
   use GenServer
 
-  alias Engram.Notes.CrdtCheckpoint
+  alias Engram.Notes.{CrdtCheckpoint, CrdtRegistry, CrdtRoomLru}
 
   require Logger
 
   @default_settle_ms 5_000
   @default_ceiling_ms 60_000
   @default_eager_ms 250
+
+  # Cap on the idle-drain re-ask multiplier (see drain_delay/1).
+  @max_drain_backoff 8
+
+  # Percent of the drain delay added as random jitter (see jittered_drain_delay/1).
+  @drain_jitter_pct 25
+
+  @drain_event [:engram, :crdt, :room_drain]
 
   # ---------------------------------------------------------------------------
   # Public API
@@ -82,6 +119,8 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     settle_ms = Keyword.get(cfg, :settle_ms, @default_settle_ms)
     ceiling_ms = Keyword.get(cfg, :ceiling_ms, @default_ceiling_ms)
     eager_ms = Keyword.get(cfg, :eager_ms, @default_eager_ms)
+    # Per-room opt wins; config is the fleet-wide fallback. nil = drain disabled.
+    idle_exit_ms = Keyword.get(opts, :idle_exit_ms) || Keyword.get(cfg, :idle_exit_ms)
 
     # Trap exits so we receive {:EXIT, room_pid, reason} as a handle_info
     # message instead of dying silently. This lets us flush or log before
@@ -105,10 +144,20 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
       # eager-eligible. NOT reset on flush, so typing that resumes right after a
       # ceiling/settle flush is correctly seen as still-active (not eager).
       last_activity_at: nil,
-      settle_timer: nil
+      settle_timer: nil,
+      # nil = drain disabled (every note room today).
+      idle_exit_ms: idle_exit_ms,
+      idle_timer: nil,
+      # Consecutive drains broadcast with nobody acting on them. Backs the
+      # re-ask off so an unreachable observer (netsplit, wedged channel) cannot
+      # broadcast at a fixed rate forever. Reset by any activity.
+      drain_attempts: 0
     }
 
-    {:ok, state}
+    # Armed at init, not only on activity: a room that spins for a handshake and
+    # is never written to (the common index-room case — connect, sync, go quiet)
+    # must still drain.
+    {:ok, touch_lru(arm_idle(state))}
   end
 
   @impl true
@@ -121,7 +170,63 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     timer = Process.send_after(self(), :tick, delay)
 
     {:noreply,
-     %{state | first_dirty_at: first_dirty_at, last_activity_at: now, settle_timer: timer}}
+     touch_lru(
+       arm_idle(%{
+         state
+         | first_dirty_at: first_dirty_at,
+           last_activity_at: now,
+           settle_timer: timer,
+           drain_attempts: 0
+       })
+     )}
+  end
+
+  # The room has been quiet for `idle_exit_ms`. Ask its observers to let go; the
+  # last unobserve trips auto_exit, which checkpoints via unbind on terminate.
+  # We deliberately do NOT stop the room here — see the moduledoc.
+  @impl true
+  def handle_info(:idle_drain, state) do
+    # Re-check idleness against OBSERVED activity rather than trusting the timer
+    # bookkeeping. `Process.cancel_timer/1` cannot un-send a message that already
+    # reached the mailbox, so an `:idle_drain` can be queued just before an
+    # `:activity` and still be processed after it — draining a room the user is
+    # actively editing. Lossless (unbind checkpoints) but it churns the room and
+    # contradicts the whole point of re-arming, so gate on the real clock.
+    state =
+      if idle?(state, monotonic_ms()) do
+        case Phoenix.PubSub.broadcast(
+               Engram.PubSub,
+               CrdtRegistry.drain_topic(state.vault_id),
+               {:crdt_room_drain, state.room_pid}
+             ) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            # Transient by nature — the re-arm below asks again, and the attempt
+            # still counts so a persistently broken broadcast backs off rather
+            # than hammering. Logged because a room that can never ask its
+            # observers to let go is exactly the unbounded-residency case the
+            # drain exists to prevent.
+            Logger.warning(
+              "crdt drain broadcast failed: #{inspect(reason)}",
+              Engram.Logger.Metadata.with_category(:warning, :sync, note_id: state.note_id)
+            )
+        end
+
+        :telemetry.execute(@drain_event, %{count: 1}, %{
+          phase: if(state.drain_attempts == 0, do: :requested, else: :reasked)
+        })
+
+        %{state | drain_attempts: state.drain_attempts + 1}
+      else
+        state
+      end
+
+    # Re-arm either way: an observer that ignored the drain gets asked again
+    # instead of pinning the room forever — but at a backed-off interval, so an
+    # unreachable observer cannot hold a fixed broadcast rate indefinitely.
+    {:noreply, arm_idle(%{state | idle_timer: nil})}
   end
 
   @impl true
@@ -138,7 +243,17 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   # for both normal and abnormal room exits without leaving an orphaned timer.
   @impl true
   def handle_info({:EXIT, _room_pid, _reason}, state) do
+    if state.idle_exit_ms, do: CrdtRoomLru.forget(state.note_id)
     {:stop, :normal, state}
+  end
+
+  # Only drain-ENABLED rooms are tracked for eviction, so a note room can never
+  # be evicted and this whole feature stays inert until #1150 opts in.
+  defp touch_lru(%{idle_exit_ms: nil} = state), do: state
+
+  defp touch_lru(state) do
+    CrdtRoomLru.touch(state.note_id, state.room_pid, state.vault_id)
+    state
   end
 
   @doc """
@@ -169,9 +284,83 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     {max(0, delay), first_dirty_at}
   end
 
+  @doc """
+  Whether the room has genuinely been quiet for its full `idle_exit_ms` as of
+  monotonic `now` — the gate on the drain broadcast.
+
+  Checked against OBSERVED activity rather than timer bookkeeping because
+  `Process.cancel_timer/1` cannot un-send a message already in the mailbox: an
+  `:idle_drain` can be queued just before an `:activity` and still be handled
+  after it. Without this gate that races into draining a room the user is
+  actively editing — lossless (unbind checkpoints) but pure churn, and the exact
+  thing re-arming exists to prevent.
+
+  A room that has never seen a write is idle by definition. That is the ordinary
+  index-room shape: spin, handshake, go quiet, never written to.
+  """
+  @spec idle?(map(), integer()) :: boolean()
+  def idle?(%{last_activity_at: nil}, _now), do: true
+
+  def idle?(state, now), do: now - state.last_activity_at >= state.idle_exit_ms
+
+  @doc """
+  How long to wait before the next `:idle_drain`, given how many consecutive
+  drains have already gone unanswered.
+
+  The first ask is at the plain `idle_exit_ms`. Each unanswered one lengthens the
+  next by a further multiple, capped at #{@max_drain_backoff}x, so an observer
+  that can never act (netsplit, wedged channel) degrades to an occasional re-ask
+  rather than broadcasting at a fixed rate for the life of the room. Any
+  `:activity` resets the count, so a room that goes quiet again drains promptly.
+  """
+  # Guarded on integers rather than widening the spec to number(): the result
+  # feeds Process.send_after/3, which REQUIRES a non-negative integer, so a
+  # float idle_exit_ms is a runtime crash rather than a typing inconvenience.
+  # arm_idle/1 already enforces this at the only production call site; the guard
+  # makes the contract hold for the public function too.
+  @spec drain_delay(map()) :: pos_integer()
+  def drain_delay(%{idle_exit_ms: ms, drain_attempts: attempts})
+      when is_integer(ms) and ms > 0 and is_integer(attempts) do
+    ms * min(attempts + 1, @max_drain_backoff)
+  end
+
+  @doc """
+  `drain_delay/1` plus up to #{@drain_jitter_pct}% of random spread.
+
+  Without this, drains synchronize. `auto_exit` fires on user behaviour, so
+  exits spread themselves out naturally — but idle timers are armed when the
+  room STARTS, so every room started in the same burst (a deploy, a reconnect
+  storm) would drain in the same instant and fire a synchronized checkpoint
+  storm. That is the 2026-07-09 pool-exhaustion shape; `CheckpointGate` +
+  the Oban overflow would absorb it, but designing the spike in and leaning on
+  the shock absorber is backwards.
+
+  Jitter is ADDITIVE only. `idle_exit_ms` is a floor — a minimum quiet period
+  before a room may be taken away — and shortening it would drain rooms that
+  have not actually been idle long enough.
+  """
+  @spec jittered_drain_delay(map()) :: pos_integer()
+  def jittered_drain_delay(state) do
+    base = drain_delay(state)
+    base + :rand.uniform(max(div(base * @drain_jitter_pct, 100), 1)) - 1
+  end
+
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------
+
+  # No-op when the drain is disabled (`idle_exit_ms: nil`), which is every note
+  # room. Cancels first so activity genuinely postpones the drain rather than
+  # stacking timers.
+  # Guarded on a POSITIVE integer, so `nil` (every note room), `0`, and any
+  # nonsense value all land on the no-op clause. A zero window would otherwise
+  # re-arm at 0ms and spin the drain broadcast in a tight loop.
+  defp arm_idle(%{idle_exit_ms: ms} = state) when is_integer(ms) and ms > 0 do
+    _ = if state.idle_timer, do: Process.cancel_timer(state.idle_timer)
+    %{state | idle_timer: Process.send_after(self(), :idle_drain, jittered_drain_delay(state))}
+  end
+
+  defp arm_idle(state), do: state
 
   defp do_checkpoint(%{room_pid: room_pid} = state) do
     # Capture the row version BEFORE snapshotting the doc so it never exceeds the

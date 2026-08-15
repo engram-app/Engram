@@ -163,6 +163,30 @@ services:
       # Same CI=true gating (runtime.exs) keeps prod limits un-weakenable.
       CRDT_MSG_RATE_LIMIT_OVERRIDE: "100000"
       CRDT_HS_RATE_LIMIT_OVERRIDE: "100000"
+      # Room drain (#1152) turned ON for e2e only, under the same CI=true gate.
+      # In production NOTHING sets idle_exit_ms, so the drain never fires and is
+      # therefore never exercised against a real client — every unit and channel
+      # test stands a test process in for the plugin. Enabling it here means the
+      # whole Obsidian suite runs with rooms being released out from under the
+      # client mid-session, which is the only way to prove the property the
+      # design rests on: the client re-spins on its next frame and loses nothing.
+      #
+      # 5s is short enough that rooms genuinely drain between test steps and long
+      # enough that it is not pathological. If this destabilises the suite, that
+      # is a REAL finding about the drain, not CI noise — raise it deliberately
+      # rather than deleting the line.
+      CRDT_IDLE_EXIT_MS: ${CRDT_IDLE_EXIT_MS:-5000}
+      # LRU backstop, also e2e-only. Idle-exit alone never evicts a room that
+      # stays busy, so without these the LRU only ever ran against spawn stubs
+      # in unit tests — it had never touched a real SharedDoc.
+      #
+      # A tiny cap plus a fast sweep is the point: e2e vaults hold few notes, so
+      # a production-shaped cap would never be reached and this would cover
+      # nothing. The sweep interval matters as much as the cap — it defaults to
+      # 30s, and most e2e tests finish inside that, so a low cap alone would arm
+      # the LRU and never fire it.
+      CRDT_MAX_RESIDENT_ROOMS: ${CRDT_MAX_RESIDENT_ROOMS:-3}
+      CRDT_LRU_SWEEP_MS: ${CRDT_LRU_SWEEP_MS:-3000}
       # Free-tier launch test_72_cancel_to_free_overlimit signs a synthetic
       # subscription.canceled webhook with this fixed secret so the e2e
       # exercises the real verify_signature → upsert_from_paddle_event path

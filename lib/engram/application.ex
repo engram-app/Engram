@@ -60,6 +60,9 @@ defmodule Engram.Application do
         # Bounds concurrent inline unbind checkpoints (self-healing via monitors);
         # must start before any CRDT room can terminate and call unbind/3.
         Engram.Notes.CheckpointGate,
+        # Owns the resident-room ETS table (#1152). Must start before any CRDT
+        # room, since a drain-enabled room's timer touches it on init.
+        Engram.Notes.CrdtRoomLru,
         Engram.Notes.FanoutPacer,
         # One DynamicSupervisor owns all live CRDT doc rooms. Rooms are
         # cluster-wide singletons via :global; this supervisor is the local
