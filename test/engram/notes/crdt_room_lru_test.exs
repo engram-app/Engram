@@ -133,4 +133,119 @@ defmodule Engram.Notes.CrdtRoomLruTest do
       assert CrdtRoomLru.resident_count() == 1
     end
   end
+
+  describe "eviction accounting" do
+    setup do
+      CrdtRoomLru.reset()
+      on_exit(&CrdtRoomLru.reset/0)
+
+      test_pid = self()
+      handler = "lru-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :crdt, :room_drain],
+        fn _e, m, meta, _ -> send(test_pid, {:drain_telemetry, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      :ok
+    end
+
+    defp live_room do
+      pid = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(pid, :kill) end)
+      pid
+    end
+
+    # `lru_evicted` is the capacity signal an operator reads to decide whether
+    # idle-exit is keeping up. Nothing asserted it was ever emitted.
+    test "an eviction is counted under its own phase" do
+      old = live_room()
+      new = live_room()
+
+      CrdtRoomLru.touch("old-note", old, @vault)
+      Process.sleep(5)
+      CrdtRoomLru.touch("new-note", new, @vault)
+
+      CrdtRoomLru.sweep(1)
+
+      assert_receive {:drain_telemetry, %{count: 1}, %{phase: :lru_evicted}}, 1_000
+    end
+
+    # An ask is not an exit. A room whose observers never act keeps its old
+    # timestamp, so it stays the OLDEST entry and is re-selected on every later
+    # sweep — one stuck room monopolises the eviction slate, residency never
+    # comes down, and the counter inflates with repeat asks for the same room.
+    # Re-stamping on the ask moves it to the back of the queue.
+    test "a room that ignores the drain does not monopolise the eviction slate" do
+      a = live_room()
+      b = live_room()
+      c = live_room()
+
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(@vault))
+
+      CrdtRoomLru.touch("a-note", a, @vault)
+      Process.sleep(5)
+      CrdtRoomLru.touch("b-note", b, @vault)
+      Process.sleep(5)
+      CrdtRoomLru.touch("c-note", c, @vault)
+
+      # Nobody observes these, so the drain changes nothing — the room stays.
+      CrdtRoomLru.sweep(2)
+      assert_receive {:crdt_room_drain, ^a}, 1_000
+
+      CrdtRoomLru.sweep(2)
+      assert_receive {:crdt_room_drain, ^b}, 1_000
+
+      refute_received {:crdt_room_drain, ^a},
+                      "`a` was asked again while `b` had never been asked at all"
+    end
+
+    # sweep/0 and the periodic timer both read max_resident() — every other test
+    # passes the cap explicitly, so the configured reader (and its `|| @default`
+    # nil-safety) never executed.
+    test "sweep/0 falls back to the configured cap" do
+      prev = Application.get_env(:engram, CrdtRoomLru, [])
+      Application.put_env(:engram, CrdtRoomLru, Keyword.put(prev, :max_resident, 1))
+      on_exit(fn -> Application.put_env(:engram, CrdtRoomLru, prev) end)
+
+      old = live_room()
+      new = live_room()
+
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(@vault))
+
+      CrdtRoomLru.touch("old-note", old, @vault)
+      Process.sleep(5)
+      CrdtRoomLru.touch("new-note", new, @vault)
+
+      CrdtRoomLru.sweep()
+
+      assert_receive {:crdt_room_drain, ^old}, 1_000
+    end
+
+    # The table is owned by this module's GenServer. A bare :ets call would
+    # raise in the CALLER — which is a checkpoint timer linked to its room, so
+    # the room would die by signal and skip its unbind checkpoint. A memory
+    # backstop must never be able to cost a room its checkpoint.
+    test "touch/forget degrade quietly while the table is missing" do
+      :ok = GenServer.stop(CrdtRoomLru, :normal)
+
+      assert CrdtRoomLru.touch("orphan", self(), @vault) == :ok
+      assert CrdtRoomLru.forget("orphan") == :ok
+      assert CrdtRoomLru.resident_count() == 0
+
+      # Let the supervisor bring it back before the next test.
+      wait_for_lru()
+    end
+
+    defp wait_for_lru(attempts \\ 100) do
+      cond do
+        attempts == 0 -> flunk("CrdtRoomLru never restarted")
+        is_pid(Process.whereis(CrdtRoomLru)) and :ets.whereis(:crdt_room_lru) != :undefined -> :ok
+        true -> Process.sleep(10) && wait_for_lru(attempts - 1)
+      end
+    end
+  end
 end

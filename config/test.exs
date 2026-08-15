@@ -214,3 +214,8 @@ config :opentelemetry,
   traces_exporter: :none,
   span_processor: :simple,
   sampler: :always_on
+
+# The per-vault CRDT index room (#1150) accepts client writes into a doc with no
+# persistence, no drain and no LRU bound until #1151. Off in prod; the channel
+# tests turn it on to exercise the wire.
+config :engram, :crdt_index_enabled, true

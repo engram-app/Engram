@@ -232,6 +232,31 @@ defmodule EngramWeb.CrdtChannelDrainTest do
     refute_broadcast "crdt_doc_ready", %{"doc_id" => _}, 300
   end
 
+  # The suppression above is only safe because SOMETHING ELSE re-signals: for
+  # `.md`, CrdtCheckpoint calls CrdtDeliver.announce_ready/4 on the next
+  # content-changing checkpoint. That call is path-gated to `.md`
+  # (crdt_deliver.ex:134) — so for a `.canvas`, which syncs through these same
+  # rooms with no extension gate, the suppressed announce is the ONLY re-attach
+  # signal a detached peer would ever get.
+  #
+  # Two devices on a canvas, room drains, both let go: the device whose user is
+  # drawing re-spins the room, and the device that is only WATCHING is attached
+  # to nothing and told nothing. It stays frozen until its own user draws.
+  test "a re-spin after a drain DOES re-announce for a note the checkpoint won't", ctx do
+    %{socket: socket, user: user, vault: vault} = ctx
+
+    {:ok, canvas} =
+      Notes.upsert_note(user, vault, %{"path" => "board.canvas", "content" => "{}"})
+
+    {client, room} = open_room(socket, canvas)
+    assert_broadcast "crdt_doc_ready", %{"doc_id" => _}
+
+    send(socket.channel_pid, {:crdt_room_drain, room})
+    push_step1(socket, canvas, client)
+
+    assert_broadcast "crdt_doc_ready", %{"doc_id" => _}, 3_000
+  end
+
   # Suppression is consumed once per drain, not latched: a crash-shaped
   # eviction still announces, because THAT peer state is genuinely unknown.
   test "only the drain-induced re-spin is suppressed, not every later open", ctx do
@@ -249,6 +274,73 @@ defmodule EngramWeb.CrdtChannelDrainTest do
     send(socket.channel_pid, {:DOWN, make_ref(), :process, respun, :crashed})
     push_step1(socket, note, client)
     assert_broadcast "crdt_doc_ready", %{"doc_id" => _}, 3_000
+  end
+
+  # A room that could not be released is the case the drain must NOT forget.
+  # The channel is still in the room's observer_process map, so auto_exit can
+  # never fire for it; if the channel drops the cached pid anyway, every later
+  # re-ask matches nothing ("not ours") and the room is pinned for the life of
+  # the socket. That is the unbounded residency this whole feature exists to
+  # prevent, and it is invisible: no crash, no log, no failing assertion.
+  #
+  # `:sys.suspend/1` is how a REAL room is made unresponsive without faking
+  # y_ex's message shapes — a suspended GenServer accepts the call and never
+  # answers it, which is exactly a wedged room.
+  describe "a room that refuses to release" do
+    setup do
+      prev = Application.get_env(:engram, :crdt_room_probe_ms)
+      Application.put_env(:engram, :crdt_room_probe_ms, 100)
+
+      on_exit(fn ->
+        case prev do
+          nil -> Application.delete_env(:engram, :crdt_room_probe_ms)
+          v -> Application.put_env(:engram, :crdt_room_probe_ms, v)
+        end
+      end)
+
+      test_pid = self()
+      handler = "drain-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :crdt, :room_drain],
+        fn _e, m, meta, _ -> send(test_pid, {:drain_telemetry, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      :ok
+    end
+
+    test "is kept cached, so the timer's re-ask can actually retry it", ctx do
+      %{socket: socket, note: note} = ctx
+      {_client, room} = open_room(socket, note)
+
+      :sys.suspend(room)
+      on_exit(fn -> if Process.alive?(room), do: :sys.resume(room) end)
+
+      send(socket.channel_pid, {:crdt_room_drain, room})
+      assert_receive {:drain_telemetry, _, %{phase: :skipped_unresponsive}}, 2_000
+
+      # THE assertion: ask again. If the first drain had evicted the pid, this
+      # second one would hit the "not ours" no-op and emit nothing at all.
+      send(socket.channel_pid, {:crdt_room_drain, room})
+      assert_receive {:drain_telemetry, _, %{phase: :skipped_unresponsive}}, 2_000
+    end
+
+    test "is released once it recovers, rather than staying pinned forever", ctx do
+      %{socket: socket, note: note} = ctx
+      {_client, room} = open_room(socket, note)
+
+      :sys.suspend(room)
+      send(socket.channel_pid, {:crdt_room_drain, room})
+      assert_receive {:drain_telemetry, _, %{phase: :skipped_unresponsive}}, 2_000
+
+      :sys.resume(room)
+
+      send(socket.channel_pid, {:crdt_room_drain, room})
+      assert_receive {:drain_telemetry, _, %{phase: :released}}, 2_000
+    end
   end
 
   # `SharedDoc.unobserve/1` is a GenServer.call with y_ex's 5 s default and no
@@ -270,7 +362,9 @@ defmodule EngramWeb.CrdtChannelDrainTest do
 
       {result, ms} = elapsed_ms(fn -> EngramWeb.CrdtChannel.release_room(dead) end)
 
-      assert result == :ok
+      # :gone, not :retry — there is no observer entry left to shed, so the
+      # caller MUST forget this room rather than keep re-asking a corpse.
+      assert result == :gone
       assert ms < 500, "a dead room should short-circuit, took #{ms}ms"
     end
 
@@ -296,7 +390,12 @@ defmodule EngramWeb.CrdtChannelDrainTest do
 
       {result, ms} = elapsed_ms(fn -> EngramWeb.CrdtChannel.release_room(wedged) end)
 
-      assert result == :ok
+      # :retry is the whole point. The room is ALIVE and still holds this
+      # process in its observer_process map, so auto_exit can never fire for it.
+      # A caller that forgot it here would strand the room for the life of the
+      # socket AND make every backed-off re-ask a no-op — the unbounded
+      # residency this feature exists to prevent.
+      assert result == :retry
       # The point: bounded by the probe, nowhere near y_ex's 5_000ms default.
       assert ms < 1_000, "a wedged room stalled the channel for #{ms}ms"
     end
@@ -324,7 +423,13 @@ defmodule EngramWeb.CrdtChannelDrainTest do
       # The bug this pins RAISES rather than exits, so a bare call is the test:
       # an ArgumentError from Process.alive?/1 is :error class and would blow
       # straight through release_room/1's `catch :exit`.
-      assert EngramWeb.CrdtChannel.release_room(remote) == :ok
+      #
+      # :retry, because a bare remote sleeper answers nothing: the node check
+      # short-circuits (this is the guard under test), then the probe times out.
+      # It therefore proves "no ArgumentError" and NOT the remote unobserve —
+      # which still ships an anonymous closure to the peer via update_doc/3, and
+      # is the part no single-node suite can speak to.
+      assert EngramWeb.CrdtChannel.release_room(remote) == :retry
     end
 
     # The `:cluster` test below proves this against a real peer but does NOT run
@@ -346,13 +451,20 @@ defmodule EngramWeb.CrdtChannelDrainTest do
     # GenServer.call/3, which is how one sloppy test restore crashed every later
     # test in this file.
     test "a nil-valued probe override still yields a usable timeout" do
+      prev = Application.get_env(:engram, :crdt_room_probe_ms)
       Application.put_env(:engram, :crdt_room_probe_ms, nil)
-      on_exit(fn -> Application.delete_env(:engram, :crdt_room_probe_ms) end)
+
+      on_exit(fn ->
+        case prev do
+          nil -> Application.delete_env(:engram, :crdt_room_probe_ms)
+          v -> Application.put_env(:engram, :crdt_room_probe_ms, v)
+        end
+      end)
 
       wedged = spawn(fn -> Process.sleep(:infinity) end)
       on_exit(fn -> Process.exit(wedged, :kill) end)
 
-      assert EngramWeb.CrdtChannel.release_room(wedged) == :ok
+      assert EngramWeb.CrdtChannel.release_room(wedged) == :retry
     end
 
     test "a skipped release is still counted, so ops can see rooms refusing to go" do
@@ -374,7 +486,41 @@ defmodule EngramWeb.CrdtChannelDrainTest do
 
       EngramWeb.CrdtChannel.release_room(dead)
 
-      assert_receive {:drain_telemetry, %{count: 1}, %{phase: :skipped}}, 1_000
+      # :skipped_dead, NOT a bare :skipped. A dead room and a wedged one are
+      # different incidents — the first is routine, the second means a room is
+      # pinned. One shared atom made the dashboard unable to tell "drained fine"
+      # from "leaked", which is the failure this counter exists to surface.
+      assert_receive {:drain_telemetry, %{count: 1}, %{phase: :skipped_dead}}, 1_000
+    end
+
+    test "an unresponsive room is counted under its own phase, not as a dead one" do
+      prev = Application.get_env(:engram, :crdt_room_probe_ms)
+      Application.put_env(:engram, :crdt_room_probe_ms, 100)
+
+      on_exit(fn ->
+        case prev do
+          nil -> Application.delete_env(:engram, :crdt_room_probe_ms)
+          v -> Application.put_env(:engram, :crdt_room_probe_ms, v)
+        end
+      end)
+
+      wedged = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(wedged, :kill) end)
+
+      test_pid = self()
+      handler = "wedged-telemetry-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :crdt, :room_drain],
+        fn _e, m, meta, _ -> send(test_pid, {:drain_telemetry, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert EngramWeb.CrdtChannel.release_room(wedged) == :retry
+      assert_receive {:drain_telemetry, %{count: 1}, %{phase: :skipped_unresponsive}}, 1_000
     end
 
     test "a room that dies mid-call is swallowed rather than exiting the channel" do
@@ -388,7 +534,9 @@ defmodule EngramWeb.CrdtChannelDrainTest do
           exit(:normal)
         end)
 
-      assert EngramWeb.CrdtChannel.release_room(dying) == :ok
+      # :gone — a room that died mid-call is gone, so forgetting it is correct.
+      # Contrast the {:timeout, _} exit, which means the room is still alive.
+      assert EngramWeb.CrdtChannel.release_room(dying) == :gone
     end
   end
 

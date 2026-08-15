@@ -62,8 +62,15 @@ defmodule Engram.RuntimeConfig do
 
   @doc """
   The `{env var, {module, key}}` pairs for the CI-gated CRDT room-drain levers.
-  See the attribute above for why they exist, and `ci_gated_int_override/2` for
-  the gating rule.
+
+  `config/runtime.exs` ITERATES this list — it is the single definition of the
+  three levers, not a mirror of them. That matters: an earlier version wrote all
+  three out longhand in `runtime.exs` and never read this list, so the test
+  covering it asserted a constant against itself while a typo in the real
+  env-var string passed clean.
+
+  See the attribute above for why the levers exist, and `ci_gated_int_override/2`
+  for the gating rule.
   """
   @spec drain_overrides() :: [{String.t(), {module(), atom()}}]
   def drain_overrides, do: @drain_overrides
