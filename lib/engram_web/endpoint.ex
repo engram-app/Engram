@@ -29,7 +29,12 @@ defmodule EngramWeb.Endpoint do
   # gated per-topic on a real, pending device_code. See EngramWeb.DeviceSocket.
   socket "/socket/device", EngramWeb.DeviceSocket,
     websocket: [
-      check_origin: {__MODULE__, :check_origin, []}
+      check_origin: {__MODULE__, :check_origin, []},
+      # Phoenix defaults to :infinity. This is the only socket reachable
+      # WITHOUT a token, and the frame is buffered before join/3 ever runs,
+      # so the default would let anyone stream unbounded bytes into memory
+      # pre-auth. Join payloads are `%{}` and nothing is ever sent up.
+      max_frame_size: 64_000
     ],
     longpoll: false
 

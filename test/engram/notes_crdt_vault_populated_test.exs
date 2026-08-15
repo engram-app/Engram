@@ -35,6 +35,36 @@ defmodule Engram.NotesCrdtVaultPopulatedTest do
     assert broadcast_vault_id == vault.id
   end
 
+  # The probe counts NOTES, and folder markers live in the same table. The
+  # plugin's catch-up seeds a folder row for every empty local folder BEFORE
+  # it pushes any note, so this is the ordinary first sync, not a corner: a
+  # bare `scoped/2` probe saw 2 rows, stayed silent, and stranded the web
+  # page on a `note_count` that was still 0.
+  test "a folder marker does not count as a note", %{user: user, vault: vault} do
+    {:ok, _marker} = Notes.create_folder_marker(user, vault, "Empty Folder")
+
+    {:ok, _note} = Notes.genesis_crdt_note(user, vault, Ecto.UUID.generate(), "First Note.md")
+
+    assert_receive %Phoenix.Socket.Broadcast{event: "vault_populated"}
+  end
+
+  # Same class, other predicate: a deleted note is invisible to the counter
+  # the page gates on, so it must be invisible to the probe too.
+  test "a tombstoned note does not count", %{user: user, vault: vault} do
+    {:ok, gone} = Notes.genesis_crdt_note(user, vault, Ecto.UUID.generate(), "Gone.md")
+    assert_receive %Phoenix.Socket.Broadcast{event: "vault_populated"}
+    # Tombstone the row directly: what the probe must ignore is the row STATE,
+    # and going through the delete API would drag its own path-lookup and
+    # tenant plumbing into a test about a WHERE clause.
+    {1, _} =
+      Ecto.Query.from(n in Notes.Note, where: n.id == ^gone.id)
+      |> Engram.Repo.update_all([set: [deleted_at: DateTime.utc_now()]], skip_tenant_check: true)
+
+    {:ok, _note} = Notes.genesis_crdt_note(user, vault, Ecto.UUID.generate(), "Fresh.md")
+
+    assert_receive %Phoenix.Socket.Broadcast{event: "vault_populated"}
+  end
+
   # The listener is one-shot and the event means "this vault stopped being
   # empty", so later creates must stay quiet — otherwise every note in a
   # first sync fans out a redundant broadcast to every connected client.

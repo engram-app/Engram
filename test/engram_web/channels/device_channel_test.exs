@@ -84,9 +84,23 @@ defmodule EngramWeb.DeviceChannelTest do
 
       assert_push("authorized", payload)
       # The plugin reacts by doing exactly ONE token exchange. Credentials must
-      # never ride the channel — see moduledoc.
-      refute Map.has_key?(payload, :access_token)
-      refute Map.has_key?(payload, :refresh_token)
+      # never ride the channel — see moduledoc. Assert the whole payload, not
+      # two key names: the invariant is "carries nothing", and a named-key
+      # check silently passes for any THIRD field someone adds later.
+      assert payload == %{}
+    end
+
+    # Nothing legitimate is ever sent UP this channel, and it is
+    # unauthenticated. Without a fallback clause Phoenix raises
+    # UndefinedFunctionError, and each crash costs a Logger.error + a Sentry
+    # event that any client can trigger on repeat.
+    test "an unexpected inbound event is dropped, not crashed on" do
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+      {:ok, _reply, socket} = subscribe_and_join(socket_conn(), "device:#{auth.device_code}")
+
+      ref = push(socket, "whatever", %{"junk" => true})
+      refute_reply(ref, :error, %{}, 100)
+      assert Process.alive?(socket.channel_pid)
     end
   end
 end

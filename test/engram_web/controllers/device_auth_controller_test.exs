@@ -69,6 +69,23 @@ defmodule EngramWeb.DeviceAuthControllerTest do
       assert %{"ok" => true} = json_response(conn, 200)
     end
 
+    # The plugin's live path hangs off this broadcast. Asserting it HERE and
+    # not just in the channel test is the point: the channel test calls
+    # notify_authorized/1 by hand, so deleting the call from the controller
+    # left the whole suite green while every plugin fell back to the 30s poll.
+    test "notifies the waiting device over its channel", %{authed_conn: conn, user: user} do
+      vault = insert(:vault, user: user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+      EngramWeb.Endpoint.subscribe("device:#{auth.device_code}")
+
+      post(conn, "/api/auth/device/authorize", %{user_code: auth.user_code, vault_id: vault.id})
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "authorized", payload: payload}
+      # The notification carries NOTHING: a broadcast fans out to every
+      # subscriber, while the token exchange is single-use.
+      assert payload == %{}
+    end
+
     test "creates new vault when vault_id is 'new'", %{authed_conn: conn} do
       {:ok, auth} = DeviceFlow.start_device_flow("client_1")
 

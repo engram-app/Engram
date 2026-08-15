@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import DeviceLinkPage from "./device-link-page";
 
@@ -36,6 +36,7 @@ interface FakeBilling {
 	current_connections: { obsidian: number; mcp: number };
 	device_swap_cooldown_remaining_hours: number | null;
 }
+const billingPending = vi.hoisted(() => ({ current: false }));
 const billingState = vi.hoisted(() => ({
 	current: {
 		caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true },
@@ -47,7 +48,10 @@ vi.mock("../api/queries", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../api/queries")>();
 	return {
 		...actual,
-		useBillingStatus: () => ({ data: billingState.current }),
+		useBillingStatus: () => ({
+			data: billingPending.current ? undefined : billingState.current,
+			isPending: billingPending.current,
+		}),
 		useMe: () => ({ data: { id: 1, email: "me@example.com" } }),
 		// The cap panel reads this — keep it deterministic across tests so we
 		// don't trigger real network fetches via the partial-mock pass-through.
@@ -79,19 +83,33 @@ vi.mock("../api/queries", async (importOriginal) => {
 	};
 });
 
-function renderPage() {
-	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	return render(
+// Renders the router's own location so a test can assert what the URL bar
+// would show. The page scrubs through the router, and react-router's location
+// is the only thing that reflects that — `window.location` is decoupled here.
+function LocationProbe() {
+	const { pathname, search } = useLocation();
+	return <span data-testid="location">{`${pathname}${search}`}</span>;
+}
+
+function pageTree(entry: string, qc: QueryClient) {
+	return (
 		<QueryClientProvider client={qc}>
-			<MemoryRouter>
+			<MemoryRouter initialEntries={[entry]}>
 				<DeviceLinkPage />
+				<LocationProbe />
 			</MemoryRouter>
-		</QueryClientProvider>,
+		</QueryClientProvider>
 	);
+}
+
+function renderPage(entry = "/link") {
+	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	return { qc, ...render(pageTree(entry, qc)) };
 }
 
 afterEach(() => {
 	vi.clearAllMocks();
+	billingPending.current = false;
 	window.history.replaceState({}, "", "/link");
 	authState.current = { isSignedIn: true };
 	billingState.current = {
@@ -118,9 +136,8 @@ describe("DeviceLinkPage", () => {
 	// RFC 8628 verification_uri_complete. The plugin opens /link?code=ENGR-7X4K,
 	// so the user never retypes what their own machine already knows.
 	it("auto-verifies a code supplied in the query string", async () => {
-		window.history.replaceState({}, "", "/link?code=ENGR-7X4K");
 		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
-		renderPage();
+		renderPage("/link?code=ENGR-7X4K");
 
 		await waitFor(() => expect(get).toHaveBeenCalledWith("/vaults?user_code=ENGR-7X4K"));
 		expect(await screen.findByRole("radio", { name: /personal/iu })).toBeInTheDocument();
@@ -129,22 +146,80 @@ describe("DeviceLinkPage", () => {
 	// Authorizing is still an explicit act: auto-verify only lists the vaults.
 	// Nothing is linked until the user picks one and clicks Sync.
 	it("does not authorize on its own after auto-verifying", async () => {
-		window.history.replaceState({}, "", "/link?code=ENGR-7X4K");
 		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
-		renderPage();
+		renderPage("/link?code=ENGR-7X4K");
 
 		await screen.findByRole("radio", { name: /personal/iu });
 		expect(post).not.toHaveBeenCalled();
 	});
 
 	// A single-use code shouldn't linger in history, bookmarks, or a shared URL.
+	//
+	// Asserted on the ROUTER's location, which is what the address bar shows on
+	// createBrowserRouter. The old version checked `window.location` under a
+	// MemoryRouter — two decoupled things — so it passed no matter what the
+	// page did, including when the code was still live in `useLocation()` and
+	// being re-emitted into the billing links.
 	it("scrubs the code out of the URL once it has been read", async () => {
-		window.history.replaceState({}, "", "/link?code=ENGR-7X4K");
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
+		renderPage("/link?code=ENGR-7X4K");
+
+		await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/link"));
+		expect(screen.getByTestId("location").textContent).not.toContain("ENGR");
+	});
+
+	// Scrub the credential, not the whole query string: other params on this
+	// URL belong to whoever put them there.
+	it("leaves unrelated query params alone", async () => {
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
+		renderPage("/link?code=ENGR-7X4K&ref=newsletter");
+
+		await waitFor(() => expect(get).toHaveBeenCalled());
+		const url = screen.getByTestId("location").textContent ?? "";
+		expect(url).toContain("ref=newsletter");
+		expect(url).not.toContain("code=");
+	});
+
+	// The default vault selection is cap-aware, and the cap arrives from
+	// /billing/status. Typing a code takes longer than that fetch, so only the
+	// auto path can outrun it — and when it did, an at-cap user was defaulted
+	// onto a create-new row that renders disabled, with Sync still armed for a
+	// guaranteed 402.
+	it("waits for the vault cap before auto-verifying", async () => {
+		billingPending.current = true;
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
+		const { qc, rerender } = renderPage("/link?code=ENGR-7X4K");
+
+		expect(get).not.toHaveBeenCalled();
+
+		// Same mount, cap now known — the verify must resume on its own rather
+		// than needing another visit.
+		billingPending.current = false;
+		rerender(pageTree("/link?code=ENGR-7X4K", qc));
+		await waitFor(() => expect(get).toHaveBeenCalledWith("/vaults?user_code=ENGR-7X4K"));
+	});
+
+	// RFC 8628 §5.4: typing the code IS the anti-phishing beat, and arriving
+	// with ?code= skips it. The suggested vault name comes from an
+	// unauthenticated endpoint, so it is not evidence of who is asking.
+	it("warns about the requesting device only when the code arrived in the URL", async () => {
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
+		renderPage("/link?code=ENGR-7X4K");
+
+		expect(
+			await screen.findByText(/only continue if you started this from obsidian/iu),
+		).toBeInTheDocument();
+	});
+
+	it("does not warn when the user typed the code themselves", async () => {
 		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
 		renderPage();
 
-		await waitFor(() => expect(window.location.search).toBe(""));
-		expect(window.location.pathname).toBe("/link");
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+
+		await screen.findByRole("radio", { name: /personal/iu });
+		expect(screen.queryByText(/only continue if you started this/iu)).not.toBeInTheDocument();
 	});
 
 	it("does not auto-verify when no code was supplied", () => {
@@ -172,12 +247,11 @@ describe("DeviceLinkPage", () => {
 	});
 
 	it("rejects an invalid code that arrived in the query string", async () => {
-		window.history.replaceState({}, "", "/link?code=ZZZZ-ZZZZ");
 		get.mockResolvedValue({
 			vaults: [{ id: 7, name: "Personal", note_count: 0 }],
 			user_code_valid: false,
 		});
-		renderPage();
+		renderPage("/link?code=ZZZZ-ZZZZ");
 
 		expect(await screen.findByRole("alert")).toHaveTextContent(/invalid or has expired/iu);
 		expect(screen.queryByRole("radio", { name: /personal/iu })).not.toBeInTheDocument();

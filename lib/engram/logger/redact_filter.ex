@@ -53,6 +53,10 @@ defmodule Engram.Logger.RedactFilter do
                     # OAuth tokens — never log raw bearer values
                     :access_token,
                     :refresh_token,
+                    # RFC 8628 device flow — `device_code` redeems into both
+                    # tokens above, so it is a bearer credential in its own
+                    # right for its 300s life.
+                    :device_code,
                     :authorization_header,
                     :client_secret,
                     :client_secret_hash

@@ -23,7 +23,7 @@ interface Vault {
 	note_count: number;
 }
 
-type Step = "enter-code" | "pick-vault" | "success" | "error";
+type Step = "enter-code" | "pick-vault" | "success";
 
 // The heading names the step you're on. It used to be a single ternary that
 // only special-cased pick-vault, so the success screen kept announcing "Link
@@ -32,7 +32,6 @@ const STEP_TITLES: Record<Step, string> = {
 	"enter-code": "Link Obsidian Vault",
 	"pick-vault": "Choose a vault to sync",
 	success: "Finish in Obsidian",
-	error: "Link Obsidian Vault",
 };
 
 // RFC 8628 verification_uri_complete: the plugin sends the user to
@@ -40,11 +39,8 @@ const STEP_TITLES: Record<Step, string> = {
 // Returns "" when absent, and only returns the dashed 9-char form when the
 // query held a full 8-character code — a partial value stays unformatted so
 // the auto-verify below won't fire on it.
-function readCodeFromQuery(): string {
-	if (typeof window === "undefined") {
-		return "";
-	}
-	const raw = new URLSearchParams(window.location.search).get("code") ?? "";
+function readCodeFromQuery(search: string): string {
+	const raw = new URLSearchParams(search).get("code") ?? "";
 	const clean = raw
 		.toUpperCase()
 		.replace(/[^A-Z2-9]/gu, "")
@@ -65,7 +61,13 @@ function DeviceLinkPage() {
 	// Captured once at mount. `userCode` drifts as the user types, but whether
 	// the code ARRIVED from the plugin is fixed — and only that earns an
 	// automatic verify (see the effect below).
-	const [urlCode] = useState(readCodeFromQuery);
+	// Read from the ROUTER's location, not window.location: the scrub below
+	// goes through the router, so reading the raw window would leave the two
+	// disagreeing about whether the code is still in the URL.
+	const [urlCode] = useState(() => readCodeFromQuery(location.search));
+	// Did the plugin hand us the code, or did the user type it? Only the first
+	// skips RFC 8628's manual-entry speed bump, so only it needs the caution.
+	const arrivedWithCode = urlCode.length === 9;
 	const [userCode, setUserCode] = useState(urlCode);
 	const [vaults, setVaults] = useState<Vault[]>([]);
 	// `selection` is the radio-row value: 'matched' (create new with the
@@ -93,7 +95,7 @@ function DeviceLinkPage() {
 	// Vault cap awareness for the picker — Free has vaults_cap=1, so once the
 	// user has any vault, the "create new" options would 402 on submit. Disable
 	// them proactively and force a link-into-existing choice.
-	const { data: billing } = useBillingStatus();
+	const { data: billing, isPending: billingPending } = useBillingStatus();
 	const vaultsCap = billing?.caps.vaults ?? null;
 	const atVaultCap = typeof vaultsCap === "number" && vaultsCap > 0 && vaults.length >= vaultsCap;
 
@@ -123,11 +125,14 @@ function DeviceLinkPage() {
 			//
 			// Compared against `false`, never falsy: a frontend deployed ahead of
 			// the backend sees `undefined` here and must still let the link through.
+			// Normalize the field before the validity branch: rejecting the code
+			// used to leave "ZZZZZZZZ" sitting in an input that formats every
+			// other value as "ZZZZ-ZZZZ".
+			setUserCode(formattedCode);
 			if (data.user_code_valid === false) {
 				setError("This code is invalid or has expired. Please try again from Obsidian.");
 				return;
 			}
-			setUserCode(formattedCode);
 			setVaults(data.vaults ?? []);
 			const suggested = data.suggested_vault_name?.trim() || "";
 			setSuggestedName(suggested);
@@ -173,13 +178,32 @@ function DeviceLinkPage() {
 	// and shouldn't sit in history or survive a copy-pasted URL.
 	const autoVerified = useRef(false);
 	useEffect(() => {
-		if (autoVerified.current || !isSignedIn || urlCode.length !== 9) {
+		// Wait for billing: `handleVerifyCode` picks the default selection using
+		// `vaultsCap`, which is null until the query lands. The manual path is
+		// never affected (typing takes longer than the fetch), but the auto path
+		// fires at mount — and with a null cap an at-cap user defaulted to a
+		// create-new row that is then rendered disabled, leaving Sync armed for
+		// a guaranteed 402. `isPending` and not `data === undefined` so a FAILED
+		// billing fetch still lets the link through.
+		if (autoVerified.current || !isSignedIn || urlCode.length !== 9 || billingPending) {
 			return;
 		}
 		autoVerified.current = true;
-		window.history.replaceState({}, "", window.location.pathname + window.location.hash);
+		// Scrub via the ROUTER, not window.history: the app runs on
+		// createBrowserRouter, and a raw replaceState leaves react-router's own
+		// location untouched — so `useLocation().search` kept the code, and the
+		// billing links below (which preserve `search` on purpose) put the
+		// credential straight back into the address bar and into history.
+		// Delete only `code`; a blanket wipe would silently eat a future
+		// redirect or auth-callback param.
+		const scrubbed = new URLSearchParams(location.search);
+		scrubbed.delete("code");
+		navigate(
+			{ pathname: location.pathname, search: scrubbed.toString(), hash: location.hash },
+			{ replace: true },
+		);
 		handleVerifyCode();
-	}, [isSignedIn, urlCode, handleVerifyCode]);
+	}, [isSignedIn, urlCode, handleVerifyCode, billingPending, location, navigate]);
 
 	if (!isSignedIn) {
 		return (
@@ -390,6 +414,18 @@ function DeviceLinkPage() {
 							</p>
 						)}
 
+						{/* The typed-code step IS the phishing defence RFC 8628 §5.4 names,
+						    and arriving with ?code= skips it. `vault_name` is
+						    attacker-supplied (POST /api/auth/device is unauthenticated),
+						    so the name shown above is NOT evidence of who is asking —
+						    say so on the path that lost the speed bump. */}
+						{arrivedWithCode && (
+							<p className="text-muted-foreground text-xs">
+								A device asked to sync with your account. Only continue if you started this from
+								Obsidian &mdash; the vault name above was supplied by that device.
+							</p>
+						)}
+
 						<Button
 							type="button"
 							onClick={handleAuthorize}
@@ -442,7 +478,11 @@ function SuccessStep({
 	const { data: me } = useMe();
 	const { vaultPopulated, vaultId } = useVaultReadyEvents({
 		userId: me?.id ?? null,
-		enabled: true,
+		// A non-empty vault has no 0->1 transition left, so the step below tells
+		// the user there is no automatic hand-off. Opening the socket anyway
+		// would have forwarded them regardless — doing the thing we just said
+		// we wouldn't.
+		enabled: awaitFirstSync,
 	});
 
 	// Auto-forward to the dashboard once the plugin's first sync lands. Match

@@ -28,7 +28,12 @@ defmodule EngramWeb.DeviceChannel do
   that, the topic space would be an unauthenticated, unbounded fan-out
   surface that anyone could hold subscriptions against indefinitely.
   """
-  use EngramWeb, :channel
+  # `log_join: false` is load-bearing, not noise control: Phoenix logs
+  # "JOIN {topic}" at :info, and this topic embeds the device_code — the
+  # bearer credential for the token exchange. RedactFilter only scrubs
+  # metadata, never message bodies, so the default would put a live
+  # 300s credential into Loki on every link. `log_handle_in` likewise.
+  use Phoenix.Channel, log_join: false, log_handle_in: false
 
   alias Engram.Auth.DeviceFlow
 
@@ -43,4 +48,12 @@ defmodule EngramWeb.DeviceChannel do
 
   @impl true
   def join(_topic, _payload, _socket), do: {:error, %{reason: "unknown_topic"}}
+
+  # This channel is push-only — nothing legitimate is ever sent up it. Phoenix
+  # injects no fallback clause, so without this any inbound event raises
+  # UndefinedFunctionError and crashes the channel process, which on an
+  # UNAUTHENTICATED socket hands an attacker a Logger.error + a Sentry event
+  # per frame. Drop them silently instead.
+  @impl true
+  def handle_in(_event, _payload, socket), do: {:noreply, socket}
 end
