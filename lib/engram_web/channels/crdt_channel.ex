@@ -19,6 +19,7 @@ defmodule EngramWeb.CrdtChannel do
   alias Engram.{Notes, Vaults}
   alias Engram.Notes.CrdtBridge
   alias Engram.Notes.CrdtCheckpoint
+  alias Engram.Notes.CrdtIndexRegistry
   alias Engram.Notes.CrdtRegistry
   alias Engram.Notes.CrdtTransport
   alias Yex.Sync.SharedDoc
@@ -267,6 +268,36 @@ defmodule EngramWeb.CrdtChannel do
   # sized for, and NOT the continuous edit stream @msg_limit protects — so
   # sharing that lane is intentional, not accidental reuse. They are still
   # bounded (not exempt): the 2400/10s ceiling applies same as real STEP1s.
+  # Per-vault INDEX room frames (#1150). No `doc_id`: the vault is implicit in
+  # the channel topic and there is exactly one index room per connection, so
+  # addressing it by id would be a second way to name the same thing — and a
+  # doc_id-addressable index room would bypass note_in_vault? validation.
+  #
+  # Rides the existing channel (no new transport, per the issue) and the
+  # HANDSHAKE bucket: index sync is once-per-connect, and billing it to the edit
+  # budget would let it starve a user's real edits (the 2026-07-07
+  # cross-file-overwrite incident shape).
+  @impl true
+  def handle_in("crdt_index_msg", %{"b64" => b64}, socket) do
+    with :ok <- check_rate(socket, frame_class_b64(b64)),
+         {:ok, frame} <- decode_frame(b64),
+         :ok <- guard_frame(frame),
+         {:ok, socket, room} <- ensure_index_room(socket) do
+      SharedDoc.send_yjs_message(room, frame)
+      {:reply, {:ok, %{}}, socket}
+    else
+      {:error, :rate_limited} ->
+        {:reply, {:error, %{reason: "rate_limited"}}, socket}
+
+      {:error, reason} ->
+        # The index is not yet load-bearing (nothing reads it back until #1151 /
+        # Engram-obsidian#362), but a silently dropped frame here would become a
+        # drift class the moment it is — so it is logged like any lost edit.
+        log_dropped(socket, socket.assigns.vault.id, reason)
+        {:reply, {:error, %{reason: "index_frame_rejected"}}, socket}
+    end
+  end
+
   @impl true
   def handle_in("crdt_create", %{"doc_id" => doc_id, "path" => path}, socket) do
     with :ok <- check_rate(socket, :handshake),
@@ -853,12 +884,18 @@ defmodule EngramWeb.CrdtChannel do
 
   @impl true
   def handle_info({:yjs, frame, room}, socket) do
-    case Map.get(socket.assigns.room_doc, room) do
-      nil ->
+    cond do
+      # Index frames come back on their own event (no doc_id) — checked FIRST so
+      # an index room can never be mistaken for a note room whose pid was reused.
+      room == socket.assigns[:index_room] ->
+        push(socket, "crdt_index_msg", %{"b64" => Base.encode64(frame)})
         {:noreply, socket}
 
-      doc_id ->
+      doc_id = Map.get(socket.assigns.room_doc, room) ->
         push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(frame)})
+        {:noreply, socket}
+
+      true ->
         {:noreply, socket}
     end
   end
@@ -896,6 +933,14 @@ defmodule EngramWeb.CrdtChannel do
 
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, _reason}, socket) do
+    # The index room dying must clear its cache too, or the next frame casts at
+    # a dead pid and returns :ok — the same silent-drop class the note-room
+    # monitor exists to prevent.
+    socket =
+      if socket.assigns[:index_room] == pid,
+        do: assign(socket, :index_room, nil),
+        else: socket
+
     case Map.get(socket.assigns.room_doc, pid) do
       nil ->
         {:noreply, socket}
@@ -1190,6 +1235,23 @@ defmodule EngramWeb.CrdtChannel do
         else
           start_and_observe_room(socket, doc_id)
         end
+    end
+  end
+
+  # Lazily start + observe this vault's index room, caching the pid. Mirrors
+  # ensure_room/2 but needs no doc_id resolution: the vault IS the address.
+  defp ensure_index_room(%{assigns: %{index_room: room}} = socket) when is_pid(room) do
+    {:ok, socket, room}
+  end
+
+  defp ensure_index_room(socket) do
+    %{vault: vault, current_user: user} = socket.assigns
+
+    with {:ok, room} <- CrdtIndexRegistry.ensure_observed(user.id, vault.id) do
+      # Same monitor rationale as note rooms: without it, a dead index room stays
+      # cached and every later frame casts into a corpse, returning :ok.
+      _ref = Process.monitor(room)
+      {:ok, assign(socket, :index_room, room), room}
     end
   end
 
