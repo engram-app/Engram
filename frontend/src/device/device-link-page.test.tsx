@@ -21,6 +21,17 @@ vi.mock("../auth/use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ getToken: () => Promise.resolve(null), ...authState.current }),
 }));
 
+// The success step listens for `vault_populated` over a socket. Capture how it
+// is mounted so a test can prove it does NOT open one when there is no 0->1
+// transition left to hear about.
+const vaultReadyArgs = vi.hoisted(() => ({ last: null as any }));
+vi.mock("../onboarding/use-vault-ready-events", () => ({
+	useVaultReadyEvents: (args: any) => {
+		vaultReadyArgs.last = args;
+		return { vaultPopulated: false, vaultId: null };
+	},
+}));
+
 vi.mock("../theme/theme-toggle", () => ({
 	default: () => <button type="button">theme</button>,
 }));
@@ -110,6 +121,7 @@ function renderPage(entry = "/link") {
 afterEach(() => {
 	vi.clearAllMocks();
 	billingPending.current = false;
+	vaultReadyArgs.last = null;
 	window.history.replaceState({}, "", "/link");
 	authState.current = { isSignedIn: true };
 	billingState.current = {
@@ -243,7 +255,9 @@ describe("DeviceLinkPage", () => {
 
 		expect(await screen.findByRole("alert")).toHaveTextContent(/invalid or has expired/iu);
 		expect(screen.queryByRole("radio", { name: /personal/iu })).not.toBeInTheDocument();
-		expect(screen.getByPlaceholderText(/XXXX-XXXX/iu)).toBeInTheDocument();
+		// Formatted, not left as the raw 8 characters the user typed: every other
+		// value in this field renders as XXXX-XXXX.
+		expect(screen.getByPlaceholderText(/XXXX-XXXX/iu)).toHaveValue("ZZZZ-ZZZZ");
 	});
 
 	it("rejects an invalid code that arrived in the query string", async () => {
@@ -460,6 +474,40 @@ describe("DeviceLinkPage", () => {
 		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
 
 		await waitFor(() => expect(setActiveVaultId).toHaveBeenCalledWith(9));
+	});
+
+	// An empty vault has a 0->1 transition left, so the step promises an
+	// automatic hand-off and must be listening for it.
+	it("listens for the first sync when the linked vault is empty", async () => {
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
+		post.mockResolvedValue({ ok: true, vault_id: 7 });
+		renderPage();
+
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+
+		await screen.findByText(/your vault is linked/iu);
+		expect(vaultReadyArgs.last?.enabled).toBe(true);
+	});
+
+	// A vault that already holds notes will never emit `vault_populated`, and
+	// the step says so. Opening the socket anyway meant an unrelated broadcast
+	// could still forward the user — doing the thing we just told them we
+	// would not do.
+	it("does NOT open the socket when the linked vault already has notes", async () => {
+		get.mockResolvedValue({ vaults: [{ id: 9, name: "Work", note_count: 3 }] });
+		post.mockResolvedValue({ ok: true, vault_id: 9 });
+		renderPage();
+
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		fireEvent.click(await screen.findByRole("radio", { name: /work/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+
+		await screen.findByText(/your vault is linked/iu);
+		expect(vaultReadyArgs.last?.enabled).toBe(false);
 	});
 
 	it("shows the heads-up banner (but keeps the code input) when at the Obsidian cap", () => {
