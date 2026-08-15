@@ -51,7 +51,7 @@ no `GenServer.stop`, no fork of `y_ex`.
 
 ```
 CrdtCheckpointTimer idle (no :activity for idle_exit_ms)
-  └─ PubSub.broadcast(CrdtRegistry.drain_topic(note_id), {:crdt_room_drain, room_pid})
+  └─ PubSub.broadcast(CrdtRegistry.drain_topic(vault_id), {:crdt_room_drain, room_pid})
        └─ each CrdtChannel: evict assigns.rooms/room_doc  →  SharedDoc.unobserve(room)
             └─ LAST unobserve → auto_exit → terminate/2
                  └─ CrdtPersistence.unbind/3 → checkpoint (CheckpointGate, Oban overflow)
@@ -187,9 +187,13 @@ drains repeatedly.
   `GenServer.call(room, {:unobserve, self()}, …)`: that hard-codes y_ex's private message shape and
   would fail silently on a dep bump. Test it with plain non-replying processes for the same reason —
   a stub that answers `{:update_doc, …}`/`{:unobserve, …}` would bake those shapes into the suite.
-- **Unsubscribe on the `:DOWN` path too.** `Phoenix.PubSub` does not dedupe subscriptions, so a
-  room that dies by crash (evicted via `:DOWN`, never drained) leaves the subscription behind and
-  the next `start_and_observe_room` stacks a second one — every later drain then arrives twice.
+- **Never unsubscribe on room teardown.** There is exactly ONE subscription per connection, taken
+  at `join/3`, and it covers every room the channel will ever hold. Dropping it when a single room
+  drains or dies (`:DOWN`) would go unnoticed by any test — that channel would simply stop
+  answering drains for the rest of the session, and its rooms would pin memory forever. The
+  per-room subscribe/unsubscribe pair this replaced existed only because the topic used to be
+  per-note; see the memory decision above. `Phoenix.PubSub` also does not dedupe, so re-subscribing
+  "just in case" stacks duplicates and every later drain arrives twice.
 - **`Phoenix.PubSub.subscribe/2` returns `:ok | {:error, …}`** and dialyzer flags the unmatched
   return. Do not `_ =` it: a failed subscribe means that room can never be drained, i.e. exactly
   the unbounded-residency failure the drain exists to prevent. Log it.
