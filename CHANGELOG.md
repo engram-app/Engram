@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.16.0](https://github.com/engram-app/Engram/compare/0.15.1...0.16.0) (2026-08-15)
+
+
+### Features
+
+* **crdt:** bound room lifetime by draining idle rooms, not killing them ([#1382](https://github.com/engram-app/Engram/issues/1382)) ([21f8902](https://github.com/engram-app/Engram/commit/21f89023a116b6428129bf1f174f709d8e1c635a))
+* **crdt:** per-vault index room + channel plumbing (index-crdt 1) ([#1383](https://github.com/engram-app/Engram/issues/1383)) ([171f72c](https://github.com/engram-app/Engram/commit/171f72c3efcc0c64ce94af99133fa831a7e5dba0))
+* **link:** auto-verify a code arriving in the URL ([#1381](https://github.com/engram-app/Engram/issues/1381)) ([6098c85](https://github.com/engram-app/Engram/commit/6098c855435db47693e3362cf8020e47d4564940))
+
+
+### Bug Fixes
+
+* **auth:** quiet the device-flow happy path, attribute its callers ([#1373](https://github.com/engram-app/Engram/issues/1373)) ([14c5629](https://github.com/engram-app/Engram/commit/14c562905ef1cb716e9fd243ee06142aeed18723))
+* **folders:** re-assert folder membership at delete time ([#1374](https://github.com/engram-app/Engram/issues/1374)) ([94a4df1](https://github.com/engram-app/Engram/commit/94a4df1fb7b97d1fbf59e3c4480a615cccd4430a))
+* search ReadTimeout is a client budget, not a slow fan-out ([#1371](https://github.com/engram-app/Engram/issues/1371)) ([8b8ddad](https://github.com/engram-app/Engram/commit/8b8ddadb4c9cbf0f07a2e8590184fd7c86af0099))
+* **sync:** serve the CRDT authority when the content facade lags ([#1375](https://github.com/engram-app/Engram/issues/1375)) ([b2dda6c](https://github.com/engram-app/Engram/commit/b2dda6cf419bc66ba3cda629c1176edf1385f158))
+
 ## [0.15.1](https://github.com/engram-app/Engram/compare/0.15.0...0.15.1) (2026-08-12)
 
 
