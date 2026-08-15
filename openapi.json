@@ -1317,9 +1317,15 @@
       "VaultsResponse": {
         "properties": {
           "suggested_vault_name": {
-            "description": "Present only when a `user_code` query param is supplied (device-link flow).",
+            "description": "Present only when a `user_code` query param is supplied (device-link flow). May be null for a perfectly valid code — check `user_code_valid`, not this.",
             "nullable": true,
             "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "user_code_valid": {
+            "description": "Present only when a `user_code` query param is supplied. True when the code is real, still pending, unexpired, and claimable by the calling user. This is the validity signal; a null `suggested_vault_name` is not.",
+            "type": "boolean",
             "x-struct": null,
             "x-validate": null
           },
@@ -4038,7 +4044,7 @@
     "/api/vaults": {
       "get": {
         "callbacks": {},
-        "description": "Lists the user's active vaults with their note and attachment counts. Pass `deleted=true` to list soft-deleted vaults instead, or `user_code` to also echo a `suggested_vault_name` for an in-progress device link.",
+        "description": "Lists the user's active vaults with their note and attachment counts. Pass `deleted=true` to list soft-deleted vaults instead, or `user_code` to also report `user_code_valid` and a `suggested_vault_name` for an in-progress device link.",
         "operationId": "vaults-index",
         "parameters": [
           {

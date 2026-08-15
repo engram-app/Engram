@@ -41,6 +41,7 @@ defmodule Engram.Logger.RedactFilterTest do
         :code_verifier,
         :access_token,
         :refresh_token,
+        :device_code,
         :authorization_header,
         :client_secret,
         :client_secret_hash

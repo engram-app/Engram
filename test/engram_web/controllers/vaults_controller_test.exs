@@ -66,25 +66,50 @@ defmodule EngramWeb.VaultsControllerTest do
       conn = get(conn, "/api/vaults?user_code=#{auth.user_code}")
       body = json_response(conn, 200)
       assert body["suggested_vault_name"] == "My Obsidian Vault"
+      assert body["user_code_valid"] == true
     end
 
-    test "suggested_vault_name is nil when user_code has no hint stored", %{conn: conn} do
+    # A pending code with no hint is still a code the user can link with, so
+    # it must report valid. /link keys its reject on `user_code_valid`, not on
+    # a missing name — conflating the two is the bug this field exists to stop.
+    test "suggested_vault_name is nil but the code is still valid when no hint was stored",
+         %{conn: conn} do
       {:ok, auth} = DeviceFlow.start_device_flow("client_test")
       conn = get(conn, "/api/vaults?user_code=#{auth.user_code}")
       body = json_response(conn, 200)
       assert Map.has_key?(body, "suggested_vault_name")
       assert body["suggested_vault_name"] == nil
+      assert body["user_code_valid"] == true
     end
 
-    test "omits suggested_vault_name when no user_code passed", %{conn: conn} do
+    test "omits suggested_vault_name and user_code_valid when no user_code passed",
+         %{conn: conn} do
       conn = get(conn, "/api/vaults")
       body = json_response(conn, 200)
       refute Map.has_key?(body, "suggested_vault_name")
+      refute Map.has_key?(body, "user_code_valid")
     end
 
-    test "returns nil suggested_vault_name for unknown user_code", %{conn: conn} do
+    test "reports user_code_valid false for unknown user_code", %{conn: conn} do
       conn = get(conn, "/api/vaults?user_code=ZZZZ-ZZZZ")
       body = json_response(conn, 200)
+      assert body["suggested_vault_name"] == nil
+      assert body["user_code_valid"] == false
+    end
+
+    test "reports user_code_valid false for an expired code", %{conn: conn} do
+      {:ok, auth} = DeviceFlow.start_device_flow("client_test", "Stale Vault")
+      past = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      Engram.Repo.update_all(
+        from(da in Engram.Auth.DeviceAuthorization, where: da.id == ^auth.id),
+        [set: [expires_at: past]],
+        skip_tenant_check: true
+      )
+
+      conn = get(conn, "/api/vaults?user_code=#{auth.user_code}")
+      body = json_response(conn, 200)
+      assert body["user_code_valid"] == false
       assert body["suggested_vault_name"] == nil
     end
 

@@ -36,14 +36,14 @@ defmodule EngramWeb.DeviceAuthControllerTest do
         post(conn, "/api/auth/device", %{client_id: "test_client", vault_name: "My Notes"})
 
       resp = json_response(conn, 200)
-      assert DeviceFlow.suggested_vault_name(resp["user_code"], reader.id) == "My Notes"
+      assert DeviceFlow.view_pending_code(resp["user_code"], reader.id) == {:ok, "My Notes"}
     end
 
     test "ignores blank vault_name", %{conn: conn} do
       reader = insert(:user)
       conn = post(conn, "/api/auth/device", %{client_id: "test_client", vault_name: "   "})
       resp = json_response(conn, 200)
-      assert DeviceFlow.suggested_vault_name(resp["user_code"], reader.id) == nil
+      assert DeviceFlow.view_pending_code(resp["user_code"], reader.id) == {:ok, nil}
     end
 
     test "truncates long vault_name to 100 chars", %{conn: conn} do
@@ -51,7 +51,7 @@ defmodule EngramWeb.DeviceAuthControllerTest do
       long = String.duplicate("a", 250)
       conn = post(conn, "/api/auth/device", %{client_id: "test_client", vault_name: long})
       resp = json_response(conn, 200)
-      stored = DeviceFlow.suggested_vault_name(resp["user_code"], reader.id)
+      {:ok, stored} = DeviceFlow.view_pending_code(resp["user_code"], reader.id)
       assert String.length(stored) == 100
     end
   end
@@ -67,6 +67,23 @@ defmodule EngramWeb.DeviceAuthControllerTest do
         post(conn, "/api/auth/device/authorize", %{user_code: auth.user_code, vault_id: vault.id})
 
       assert %{"ok" => true} = json_response(conn, 200)
+    end
+
+    # The plugin's live path hangs off this broadcast. Asserting it HERE and
+    # not just in the channel test is the point: the channel test calls
+    # notify_authorized/1 by hand, so deleting the call from the controller
+    # left the whole suite green while every plugin fell back to the 30s poll.
+    test "notifies the waiting device over its channel", %{authed_conn: conn, user: user} do
+      vault = insert(:vault, user: user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+      EngramWeb.Endpoint.subscribe("device:#{auth.device_code}")
+
+      post(conn, "/api/auth/device/authorize", %{user_code: auth.user_code, vault_id: vault.id})
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "authorized", payload: payload}
+      # The notification carries NOTHING: a broadcast fans out to every
+      # subscriber, while the token exchange is single-use.
+      assert payload == %{}
     end
 
     test "creates new vault when vault_id is 'new'", %{authed_conn: conn} do
