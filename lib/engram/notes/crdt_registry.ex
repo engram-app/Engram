@@ -29,16 +29,26 @@ defmodule Engram.Notes.CrdtRegistry do
   def global_name(note_id) when is_binary(note_id), do: {:global, {:crdt_doc, note_id}}
 
   @doc """
-  PubSub topic a room's observers subscribe to, so the room can ask them to LET
-  GO when it has gone idle (#1152).
+  PubSub topic a vault's channels subscribe to, so a room can ask its observers
+  to LET GO when it has gone idle (#1152).
 
   PubSub rather than a node-local registry because rooms are `:global`: a room
   on this node can be observed by channels on any other node. `SharedDoc` also
   keeps its `observer_process` map private, so a room cannot enumerate its own
   observers to message them directly.
+
+  Scoped per VAULT, not per note. A per-note topic meant one subscription per
+  room OPEN, and the enroll-everything client opens a room per note — measured
+  at 309 bytes per subscription, that is ~725 KB per socket on a 2400-note vault
+  and ~707 MB per 1000 such clients, against the same 1024 MB task whose memory
+  this feature exists to protect. Self-defeating at the scale #1146 targets.
+
+  Per-vault costs ONE subscription per channel, and needs no extra filtering:
+  the drain carries the room pid, and a channel that does not hold that pid in
+  `room_doc` already no-ops.
   """
   @spec drain_topic(String.t()) :: String.t()
-  def drain_topic(note_id) when is_binary(note_id), do: "crdt_room_drain:" <> note_id
+  def drain_topic(vault_id) when is_binary(vault_id), do: "crdt_room_drain:" <> vault_id
 
   @doc """
   Find the live room for `note_id` WITHOUT starting one, returning `nil` when

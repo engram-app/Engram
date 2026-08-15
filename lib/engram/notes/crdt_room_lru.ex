@@ -63,9 +63,9 @@ defmodule Engram.Notes.CrdtRoomLru do
   checkpoint timer on start and on every write, and cheap by design: a single
   ETS insert on the hot path, no GenServer round-trip.
   """
-  @spec touch(String.t(), pid()) :: :ok
-  def touch(note_id, room_pid) do
-    :ets.insert(@table, {note_id, room_pid, System.monotonic_time(:millisecond)})
+  @spec touch(String.t(), pid(), String.t()) :: :ok
+  def touch(note_id, room_pid, vault_id) do
+    :ets.insert(@table, {note_id, room_pid, vault_id, System.monotonic_time(:millisecond)})
     :ok
   end
 
@@ -94,7 +94,8 @@ defmodule Engram.Notes.CrdtRoomLru do
   Which note_ids to evict: the oldest `length(entries) - cap`, least recently
   active first. Pure, so the policy is testable without rooms or ETS.
   """
-  @spec select_evictions([{String.t(), pid(), integer()}], non_neg_integer()) :: [String.t()]
+  @spec select_evictions([{String.t(), pid(), String.t(), integer()}], non_neg_integer()) ::
+          [String.t()]
   def select_evictions(entries, cap) do
     excess = length(entries) - cap
 
@@ -102,9 +103,9 @@ defmodule Engram.Notes.CrdtRoomLru do
       []
     else
       entries
-      |> Enum.sort_by(fn {_id, _pid, last} -> last end)
+      |> Enum.sort_by(fn {_id, _pid, _vault, last} -> last end)
       |> Enum.take(excess)
-      |> Enum.map(fn {id, _pid, _last} -> id end)
+      |> Enum.map(fn {id, _pid, _vault, _last} -> id end)
     end
   end
 
@@ -157,7 +158,7 @@ defmodule Engram.Notes.CrdtRoomLru do
   defp prune_dead do
     @table
     |> :ets.tab2list()
-    |> Enum.filter(fn {note_id, pid, _last} ->
+    |> Enum.filter(fn {note_id, pid, _vault, _last} ->
       if Process.alive?(pid) do
         true
       else
@@ -179,14 +180,14 @@ defmodule Engram.Notes.CrdtRoomLru do
 
     for note_id <- note_ids do
       case :ets.lookup(@table, note_id) do
-        [{^note_id, pid, _last}] ->
+        [{^note_id, pid, vault_id, _last}] ->
           # Same broadcast the idle timer sends: observers let go, auto_exit
           # checkpoints. Counted under its own phase so a dashboard can tell
           # memory-pressure eviction from an ordinary idle drain.
           _ =
             Phoenix.PubSub.broadcast(
               Engram.PubSub,
-              CrdtRegistry.drain_topic(note_id),
+              CrdtRegistry.drain_topic(vault_id),
               {:crdt_room_drain, pid}
             )
 

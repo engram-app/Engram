@@ -93,7 +93,7 @@ defmodule Engram.Notes.CrdtRoomIdleExitTest do
 
   describe "drain broadcast" do
     test "an idle room asks its observers to let go WITHOUT stopping itself", ctx do
-      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(ctx.note.id))
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(ctx.vault.id))
       room = start_room(ctx, idle_exit_ms: @idle_ms)
       :ok = SharedDoc.observe(room)
 
@@ -106,7 +106,7 @@ defmodule Engram.Notes.CrdtRoomIdleExitTest do
     end
 
     test "activity re-arms the window so an actively-edited room is never drained", ctx do
-      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(ctx.note.id))
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(ctx.vault.id))
       room = start_room(ctx, idle_exit_ms: @rearm_idle_ms)
       :ok = SharedDoc.observe(room)
 
@@ -127,7 +127,7 @@ defmodule Engram.Notes.CrdtRoomIdleExitTest do
     # positive-integer guard it would arm at 0 ms and spin the drain broadcast in
     # a tight loop.
     test "a zero idle window is treated as disabled, not as drain-immediately", ctx do
-      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(ctx.note.id))
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(ctx.vault.id))
       room = start_room(ctx, idle_exit_ms: 0)
       :ok = SharedDoc.observe(room)
 
@@ -155,7 +155,7 @@ defmodule Engram.Notes.CrdtRoomIdleExitTest do
     end
 
     test "a room without idle_exit_ms never drains — note rooms are unchanged", ctx do
-      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(ctx.note.id))
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(ctx.vault.id))
       room = start_room(ctx, [])
       :ok = SharedDoc.observe(room)
 
@@ -167,7 +167,7 @@ defmodule Engram.Notes.CrdtRoomIdleExitTest do
   describe "exit + checkpoint" do
     test "the last unobserve trips auto_exit, and terminate checkpoints the edit", ctx do
       %{user: user, vault: vault, note: note} = ctx
-      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(note.id))
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(vault.id))
       room = start_room(ctx, idle_exit_ms: @idle_ms)
       :ok = SharedDoc.observe(room)
       ref = Process.monitor(room)
@@ -187,7 +187,7 @@ defmodule Engram.Notes.CrdtRoomIdleExitTest do
 
     test "the :global registration is released so the next edit gets a fresh room", ctx do
       %{user: user, vault: vault, note: note} = ctx
-      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(note.id))
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(vault.id))
       room = start_room(ctx, idle_exit_ms: @idle_ms)
       :ok = SharedDoc.observe(room)
       ref = Process.monitor(room)

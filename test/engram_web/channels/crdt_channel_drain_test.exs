@@ -164,14 +164,14 @@ defmodule EngramWeb.CrdtChannelDrainTest do
   end
 
   test "a drain broadcast on the room's topic reaches the channel and releases the room", ctx do
-    %{socket: socket, note: note} = ctx
+    %{socket: socket, vault: vault, note: note} = ctx
     {_client, room} = open_room(socket, note)
     ref = Process.monitor(room)
 
     # The real wiring: the idle timer broadcasts, the channel is subscribed.
     Phoenix.PubSub.broadcast(
       Engram.PubSub,
-      CrdtRegistry.drain_topic(note.id),
+      CrdtRegistry.drain_topic(vault.id),
       {:crdt_room_drain, room}
     )
 
@@ -205,7 +205,7 @@ defmodule EngramWeb.CrdtChannelDrainTest do
 
     Phoenix.PubSub.broadcast(
       Engram.PubSub,
-      CrdtRegistry.drain_topic(note.id),
+      CrdtRegistry.drain_topic(vault.id),
       {:crdt_room_drain, room}
     )
 
@@ -419,34 +419,37 @@ defmodule EngramWeb.CrdtChannelDrainTest do
     end
   end
 
-  # Phoenix.PubSub does NOT dedupe: subscribing twice delivers twice. A room
-  # evicted by :DOWN (a crash) is never drained, so without unsubscribing on
-  # that path too its subscription survives and the next start_and_observe_room
-  # stacks a second one.
-  test "a crash-evicted room does not leave its drain subscription behind", ctx do
-    %{socket: socket, note: note} = ctx
-    {client, _room} = open_room(socket, note)
-    topic = CrdtRegistry.drain_topic(note.id)
+  # The drain subscription is PER CONNECTION, not per room. Per-room cost a
+  # subscription for every note the enroll-everything client opens: measured at
+  # 309 bytes each, ~725 KB per socket on a 2400-note vault and ~707 MB per 1000
+  # such clients — against the same 1024 MB task whose memory this feature
+  # exists to protect. A correctness suite cannot catch that; only counting can.
+  test "opening many rooms adds no drain subscriptions — one per connection", ctx do
+    %{socket: socket, user: user, vault: vault, note: note} = ctx
+    topic = CrdtRegistry.drain_topic(vault.id)
 
-    # Counting via the Registry backing Phoenix.PubSub is the only way to
-    # observe a duplicate subscription (a doubled delivery is indistinguishable
-    # from a single one here, since the second drain finds an empty room_doc and
-    # no-ops). If PubSub ever stops being Registry-backed this raises rather
-    # than quietly passing, which is the acceptable direction for that coupling.
+    # Counting via the Registry backing Phoenix.PubSub. If PubSub ever stops
+    # being Registry-backed this raises rather than quietly passing, which is
+    # the acceptable direction for that coupling.
     channel_subs = fn ->
       Engram.PubSub
       |> Registry.lookup(topic)
       |> Enum.count(fn {pid, _} -> pid == socket.channel_pid end)
     end
 
-    assert channel_subs.() == 1
+    assert channel_subs.() == 1, "the connection subscribes once, at join"
 
-    # Crash-shaped eviction, then re-open: the re-subscribe must not stack.
-    room = CrdtRegistry.lookup(note.id)
-    send(socket.channel_pid, {:DOWN, make_ref(), :process, room, :crashed})
-    push_step1(socket, note, client)
+    {_client, _room} = open_room(socket, note)
 
-    assert channel_subs.() == 1, "duplicate subscription — every later drain would arrive twice"
+    for n <- 1..5 do
+      {:ok, extra} =
+        Notes.upsert_note(user, vault, %{"path" => "n#{n}.md", "content" => "x"})
+
+      push_step1(socket, extra, CrdtBridge.new_doc())
+    end
+
+    assert channel_subs.() == 1,
+           "subscriptions must not scale with rooms opened — that is the memory bug"
   end
 
   test "a drain for a room this channel does not hold is ignored", ctx do

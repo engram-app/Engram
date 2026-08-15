@@ -160,6 +160,16 @@ defmodule EngramWeb.CrdtChannel do
                       )
                     )
 
+                    # ONE drain subscription for the whole connection (#1152).
+                    # Per-room would cost a subscription per note the client
+                    # enrolls — 309 bytes each, ~725 KB per socket on a
+                    # 2400-note vault — which is the very memory pressure the
+                    # drain exists to relieve. Nothing extra is needed to route
+                    # it: the drain carries the room pid, and handle_info
+                    # already no-ops on a pid this channel does not hold.
+                    :ok =
+                      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(vault.id))
+
                     {:ok,
                      assign(socket,
                        vault: vault,
@@ -871,8 +881,6 @@ defmodule EngramWeb.CrdtChannel do
         {:noreply, socket}
 
       doc_id ->
-        entry = Map.get(socket.assigns.rooms, doc_id)
-
         socket =
           socket
           |> assign(:rooms, Map.delete(socket.assigns.rooms, doc_id))
@@ -880,10 +888,6 @@ defmodule EngramWeb.CrdtChannel do
           # Remember we let this one go, so the re-spin stays quiet (see the
           # announce in start_and_observe_room).
           |> assign(:drained, remember_drained(socket.assigns.drained, doc_id))
-
-        if entry do
-          Phoenix.PubSub.unsubscribe(Engram.PubSub, CrdtRegistry.drain_topic(entry.note_id))
-        end
 
         release_room(room)
         {:noreply, socket}
@@ -897,19 +901,10 @@ defmodule EngramWeb.CrdtChannel do
         {:noreply, socket}
 
       doc_id ->
-        entry = Map.get(socket.assigns.rooms, doc_id)
-
         socket =
           socket
           |> assign(:rooms, Map.delete(socket.assigns.rooms, doc_id))
           |> assign(:room_doc, Map.delete(socket.assigns.room_doc, pid))
-
-        # Drop the drain subscription too, or the re-subscribe in the next
-        # start_and_observe_room stacks a SECOND subscription on the same topic
-        # (PubSub does not dedupe) and every later drain arrives twice.
-        if entry do
-          Phoenix.PubSub.unsubscribe(Engram.PubSub, CrdtRegistry.drain_topic(entry.note_id))
-        end
 
         {:noreply, socket}
     end
@@ -1209,25 +1204,9 @@ defmodule EngramWeb.CrdtChannel do
       # dead pid return :ok and every subsequent edit is silently dropped.
       _ref = Process.monitor(room)
 
-      # Subscribe to the room's drain topic so an idle room can ask us to let go
-      # (#1152). PubSub, not a direct message, because rooms are :global — this
-      # room may live on another node, and SharedDoc keeps its observer list
-      # private so it cannot message its observers itself.
-      case Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(note_id)) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          # Sync still works — but this room can now never be drained, so it
-          # sits resident until its observers disconnect. That is the exact
-          # unbounded-residency failure the drain exists to prevent, so it must
-          # not be silent.
-          Logger.warning(
-            "crdt drain subscribe failed: #{inspect(reason)}",
-            Metadata.with_category(:warning, :websocket, note_id: note_id)
-          )
-      end
-
+      # NOTE: no per-room drain subscribe. The connection subscribes ONCE to its
+      # vault's drain topic in join/3 — see the comment there for why per-room
+      # was self-defeating.
       entry = %{room: room, note_id: note_id}
 
       socket =

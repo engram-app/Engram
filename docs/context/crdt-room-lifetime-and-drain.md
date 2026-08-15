@@ -164,6 +164,15 @@ drains repeatedly.
 - **PubSub, not a node-local registry.** Rooms are `:global`, so a room on this node may be
   observed by channels on any other node. `SharedDoc` also keeps `observer_process` private, so a
   room cannot message its own observers directly.
+- **The drain topic is PER VAULT, not per note — this is a memory decision, not a style one.**
+  Per-note meant one subscription per room OPEN, and the enroll-everything client opens a room per
+  note. Measured 2026-08-14: **309 bytes per subscription**, so ~725 KB per socket on a 2400-note
+  vault and **~707 MB per 1000 such clients** — against the same 1024 MB task whose memory this
+  feature exists to protect. Self-defeating at the scale #1146 targets, and invisible to every
+  correctness check: CI was fully green with the per-note version.
+  Per-vault needs no extra routing, because the drain carries the room pid and
+  `handle_info({:crdt_room_drain, room}, …)` already no-ops on a pid the channel does not hold.
+  `crdt_channel_drain_test.exs` pins it by COUNTING subscriptions while opening many rooms.
 - **`unobserve` is a `GenServer.call` with no timeout knob.** A room that already exited would
   **exit the channel**; one that is alive but wedged would **stall it for y_ex's 5 s default**.
   `release_room/1` guards cheapest-first: dead → skip; doesn't answer a

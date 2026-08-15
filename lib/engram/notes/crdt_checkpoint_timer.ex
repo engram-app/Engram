@@ -196,7 +196,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
       if idle?(state, monotonic_ms()) do
         case Phoenix.PubSub.broadcast(
                Engram.PubSub,
-               CrdtRegistry.drain_topic(state.note_id),
+               CrdtRegistry.drain_topic(state.vault_id),
                {:crdt_room_drain, state.room_pid}
              ) do
           :ok ->
@@ -252,7 +252,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   defp touch_lru(%{idle_exit_ms: nil} = state), do: state
 
   defp touch_lru(state) do
-    CrdtRoomLru.touch(state.note_id, state.room_pid)
+    CrdtRoomLru.touch(state.note_id, state.room_pid, state.vault_id)
     state
   end
 

@@ -16,9 +16,11 @@ defmodule Engram.Notes.CrdtRoomLruTest do
 
   alias Engram.Notes.{CrdtRegistry, CrdtRoomLru}
 
+  @vault "vault-1"
+
   describe "select_evictions/2 (pure)" do
-    # Entries are {note_id, pid, last_activity_monotonic}; smaller = older.
-    defp entry(id, age), do: {id, self(), age}
+    # Entries are {note_id, pid, vault_id, last_activity_monotonic}; smaller = older.
+    defp entry(id, age), do: {id, self(), @vault, age}
 
     test "nothing is evicted while resident count is within the cap" do
       entries = [entry("a", 100), entry("b", 200)]
@@ -61,11 +63,11 @@ defmodule Engram.Notes.CrdtRoomLruTest do
       new = spawn(fn -> Process.sleep(:infinity) end)
       on_exit(fn -> Enum.each([old, new], &Process.exit(&1, :kill)) end)
 
-      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic("old-note"))
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(@vault))
 
-      CrdtRoomLru.touch("old-note", old)
+      CrdtRoomLru.touch("old-note", old, @vault)
       Process.sleep(5)
-      CrdtRoomLru.touch("new-note", new)
+      CrdtRoomLru.touch("new-note", new, @vault)
 
       CrdtRoomLru.sweep(1)
 
@@ -78,11 +80,11 @@ defmodule Engram.Notes.CrdtRoomLruTest do
       new = spawn(fn -> Process.sleep(:infinity) end)
       on_exit(fn -> Enum.each([old, new], &Process.exit(&1, :kill)) end)
 
-      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic("new-note"))
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(@vault))
 
-      CrdtRoomLru.touch("old-note", old)
+      CrdtRoomLru.touch("old-note", old, @vault)
       Process.sleep(5)
-      CrdtRoomLru.touch("new-note", new)
+      CrdtRoomLru.touch("new-note", new, @vault)
 
       CrdtRoomLru.sweep(1)
 
@@ -94,14 +96,14 @@ defmodule Engram.Notes.CrdtRoomLruTest do
       b = spawn(fn -> Process.sleep(:infinity) end)
       on_exit(fn -> Enum.each([a, b], &Process.exit(&1, :kill)) end)
 
-      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic("b-note"))
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(@vault))
 
-      CrdtRoomLru.touch("a-note", a)
+      CrdtRoomLru.touch("a-note", a, @vault)
       Process.sleep(5)
-      CrdtRoomLru.touch("b-note", b)
+      CrdtRoomLru.touch("b-note", b, @vault)
       Process.sleep(5)
       # `a` is used again, so `b` becomes the least recently active.
-      CrdtRoomLru.touch("a-note", a)
+      CrdtRoomLru.touch("a-note", a, @vault)
 
       CrdtRoomLru.sweep(1)
 
@@ -116,11 +118,11 @@ defmodule Engram.Notes.CrdtRoomLruTest do
       live = spawn(fn -> Process.sleep(:infinity) end)
       on_exit(fn -> Process.exit(live, :kill) end)
 
-      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic("live-note"))
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(@vault))
 
-      CrdtRoomLru.touch("dead-note", dead)
+      CrdtRoomLru.touch("dead-note", dead, @vault)
       Process.sleep(5)
-      CrdtRoomLru.touch("live-note", live)
+      CrdtRoomLru.touch("live-note", live, @vault)
 
       # Cap of 1 with one DEAD entry: pruning must satisfy the cap on its own,
       # leaving the live room untouched. Counting corpses toward residency
