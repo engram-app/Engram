@@ -76,6 +76,9 @@ jobs:
           # committed frontend/.env.production; only these two are injected.
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY_PROD }}
           VITE_GIT_SHA: ${{ env.SHA }}
+          # Must match deploy-frontend exactly or this "byte-identical" rebuild
+          # would silently produce a bundle with crash reporting switched off.
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |

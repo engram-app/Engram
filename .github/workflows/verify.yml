@@ -5213,6 +5213,14 @@ jobs:
           # by design (ships in the browser), so a variable not a secret.
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY_PROD }}
           VITE_GIT_SHA: ${{ github.sha }}
+          # Sentry. The SaaS bundle reported NOWHERE while the self-host image
+          # shipped this same DSN — exactly backwards from the intent stated in
+          # sentry.ts and the Dockerfile. Disclosed in the privacy policy's
+          # sub-processor table ("Error monitoring and crash reporting | Error
+          # stack traces with PII scrubbing; user ID only"), and the SDK sets no
+          # user at all, so we send strictly less than that. URLs and console /
+          # DOM breadcrumbs are scrubbed in sentry.ts before send.
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
 
       - name: Upload frontend version (nightly, zero-traffic)
         working-directory: frontend
