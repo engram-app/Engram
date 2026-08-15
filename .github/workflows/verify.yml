@@ -4641,7 +4641,20 @@ jobs:
           cache-to: type=local,dest=${{ runner.temp }}/buildx-cache-new,mode=max
           tags: ${{ steps.version.outputs.tags }}
           build-args: |
-            VITE_SENTRY_DSN=${{ secrets.VITE_SENTRY_DSN }}
+            # VITE_SENTRY_DSN is deliberately NOT passed. This image runs
+            # `bun run build:selfhost`, and the bundle it produces is what a
+            # SELF-HOSTER serves. Baking the SaaS DSN in meant every self-hosted
+            # browser reported crashes — with URLs, and therefore note paths — to
+            # our Sentry, from the one deployment whose whole promise is that
+            # data stays on the operator's own infrastructure. Nobody opted in.
+            # The Dockerfile already states this rule for its siblings
+            # ("so self-host bundles don't ship the SaaS-side token"); Sentry was
+            # the exception that slipped.
+            #
+            # Cost: staging-fastraid, which runs this same image, loses browser
+            # crash reporting. Backend Sentry is unaffected. Giving staging its
+            # reporting back means serving the DSN at RUNTIME (so the operator
+            # chooses) rather than baking it at build time.
             VITE_GIT_SHA=${{ github.sha }}
             # Backend counterpart to VITE_GIT_SHA. Baked into the image so
             # /api/health can report what code is actually running: `version`

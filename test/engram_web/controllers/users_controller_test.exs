@@ -70,7 +70,22 @@ defmodule EngramWeb.UsersControllerTest do
       :ok
     end
 
-    test "200 with correct password, hard-deletes the user row", %{user: user} do
+    # The password rides the BODY. In a query string it is written to Phoenix's
+    # and the load balancer's access logs and to the browser's Sentry fetch
+    # breadcrumb — a credential the user typed into a confirm dialog, spread
+    # across three log stores. This test is the contract that keeps the body
+    # path working, so the frontend can never be pushed back to the query.
+    test "200 with correct password in the request BODY, hard-deletes the user row", %{user: user} do
+      conn = auth_conn(user) |> delete("/api/me", %{password: "password123"})
+      assert %{"ok" => true} = json_response(conn, 200)
+
+      refute Engram.Repo.get(Engram.Accounts.User, user.id, skip_tenant_check: true)
+    end
+
+    # Kept working on purpose: an older cached SPA bundle is still out there
+    # sending the query form, and breaking its delete would be worse than the
+    # leak it causes. Remove once the bundle floor has moved.
+    test "200 with correct password in the query string (legacy bundles)", %{user: user} do
       conn = auth_conn(user) |> delete("/api/me?password=password123")
       assert %{"ok" => true} = json_response(conn, 200)
 

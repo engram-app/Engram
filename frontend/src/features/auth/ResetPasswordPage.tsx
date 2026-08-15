@@ -1,5 +1,5 @@
-import { type FormEvent, useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { type FormEvent, useEffect, useState } from "react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { getApiBase, joinApiUrl } from "@/api/base";
 import { Button } from "@/components/ui/button";
 import AuthPanel from "@/layout/auth-panel";
@@ -10,7 +10,28 @@ import { ROUTES } from "@/routes";
 
 export default function ResetPasswordPage() {
 	const [params] = useSearchParams();
-	const token = params.get("token") ?? "";
+	const location = useLocation();
+	const navigate = useNavigate();
+	// Captured once, then scrubbed from the URL. The token IS the credential
+	// that lets the bearer set this account's password, and while it sits in
+	// the address bar it is in browser history, in the Referer of anything the
+	// page loads, and attached to every Sentry event as request.url. Held in
+	// state so the scrub cannot pull it out from under the submit handler.
+	const [token] = useState(() => params.get("token") ?? "");
+
+	useEffect(() => {
+		if (!params.has("token")) {
+			return;
+		}
+		const next = new URLSearchParams(location.search);
+		next.delete("token");
+		// Through the router, not window.history: this app runs on a data
+		// router, which does not observe a raw replaceState.
+		navigate(
+			{ pathname: location.pathname, search: next.toString(), hash: location.hash },
+			{ replace: true },
+		);
+	}, [params, location, navigate]);
 	const [password, setPassword] = useState("");
 	const [confirm, setConfirm] = useState("");
 	const [error, setError] = useState("");

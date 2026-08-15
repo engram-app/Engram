@@ -1,3 +1,4 @@
+import type { Breadcrumb } from "@sentry/react";
 import type { ErrorInfo } from "react";
 
 // Lazy Sentry singleton + crash reporter. Extracted from main.tsx so BOTH the
@@ -17,6 +18,38 @@ import type { ErrorInfo } from "react";
 // an unhandled rejection.
 const sentryDsn = import.meta.env.VITE_SENTRY_DSN;
 
+/** Console and DOM breadcrumbs are dropped outright, and every other kind has
+ *  its URL scrubbed.
+ *
+ *  Console args are arbitrary values a developer passed to console.error —
+ *  attachment paths today, anything tomorrow — and DOM breadcrumbs serialize
+ *  `title`/`alt`/`aria-label` off the clicked element AND five ancestors, which
+ *  in this app carry note paths, filenames and frontmatter values. Neither is
+ *  worth a privacy review on every future edit. */
+function scrubBreadcrumb(crumb: Breadcrumb): Breadcrumb | null {
+	if (crumb.category === "console" || crumb.category?.startsWith("ui.")) {
+		return null;
+	}
+	if (typeof crumb.data?.url === "string") {
+		crumb.data.url = scrubUrl(crumb.data.url);
+	}
+	if (typeof crumb.data?.to === "string") {
+		crumb.data.to = scrubUrl(crumb.data.to);
+	}
+	if (typeof crumb.data?.from === "string") {
+		crumb.data.from = scrubUrl(crumb.data.from);
+	}
+	return crumb;
+}
+
+/** The event itself carries `request.url` via httpContextIntegration. */
+function scrubEvent<T extends { request?: { url?: string } }>(event: T): T {
+	if (event.request?.url) {
+		event.request.url = scrubUrl(event.request.url);
+	}
+	return event;
+}
+
 type SentrySdk = typeof import("@sentry/react");
 
 const earlyErrors: unknown[] = [];
@@ -34,11 +67,18 @@ export const sentryReady: Promise<SentrySdk | null> | null = sentryDsn
 					dsn: sentryDsn,
 					environment: import.meta.env.MODE,
 					release: import.meta.env.VITE_GIT_SHA,
+					// `integrations: []` does NOT disable the defaults — the SDK
+					// MERGES this array with getDefaultIntegrations() and only
+					// `defaultIntegrations: false` opts out. So breadcrumbs and
+					// httpContext were live the whole time, which is what made the
+					// scrubbing below necessary rather than decorative.
 					integrations: [],
 					// sendDefaultPii=false (SDK default) keeps cookies + the
 					// Authorization header out of breadcrumbs even if the SDK's
 					// own scrubbing misses something. Restated for documentation.
 					sendDefaultPii: false,
+					beforeBreadcrumb: scrubBreadcrumb,
+					beforeSend: scrubEvent,
 				});
 				// The SDK's own global handlers are live from here; hand it the
 				// backlog and retire the temporary listeners.
@@ -77,6 +117,32 @@ export const sentryReady: Promise<SentrySdk | null> | null = sentryDsn
  * Sentry.ErrorBoundary makes. Route errors from useRouteError carry no component
  * stack, so they omit it and fall back to captureException.
  */
+/** Replace a URL's path segments and query VALUES with placeholders.
+ *
+ *  Note paths, titles, attachment filenames and single-use credentials all
+ *  travel in URLs here (`/attachments/Medical/labs.pdf`, `?code=`, `?token=`),
+ *  and the SDK attaches `request.url` to every event plus a breadcrumb to every
+ *  fetch. Keeping the shape is enough to debug a route; the contents are the
+ *  user's. Parsed against a dummy base so relative URLs (what fetch breadcrumbs
+ *  actually carry) work; that also means nearly any string resolves and gets
+ *  scrubbed, which is the safe direction. The catch is a last resort: throwing
+ *  inside beforeSend would drop the crash report entirely. */
+export function scrubUrl(url: string): string {
+	let parsed: URL;
+	try {
+		parsed = new URL(url, "http://x.invalid");
+	} catch {
+		return url;
+	}
+	const path = parsed.pathname
+		.split("/")
+		.map((seg) => (seg ? ":seg" : seg))
+		.join("/");
+	const keys = [...parsed.searchParams.keys()];
+	const query = keys.length > 0 ? `?${keys.map((k) => `${k}=:v`).join("&")}` : "";
+	return path + query;
+}
+
 export async function captureError(
 	error: unknown,
 	errorInfo?: ErrorInfo,

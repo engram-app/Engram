@@ -109,3 +109,8 @@ export function createIndexedDbPersister(userId: string, vaultId: string): Persi
 		},
 	};
 }
+
+/** Exported so the sign-out wipe can name it. It sits outside CRDT_IDB_PREFIX
+ *  ("engram-crdt/") by one character, so the prefix sweep never matched it and
+ *  queued ops — which carry note paths — survived sign-out. */
+export const QUEUE_DB_NAME = DB_NAME;
