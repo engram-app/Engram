@@ -2,12 +2,18 @@ import { type FormEvent, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { getApiBase, joinApiUrl } from "@/api/base";
 import { stashCredential, takeCredential } from "@/auth/credential-handoff";
+
 import { Button } from "@/components/ui/button";
 import AuthPanel from "@/layout/auth-panel";
 import AuthShell from "@/layout/auth-shell";
 import { destructiveAlert, fieldInput, heading } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { ROUTES } from "@/routes";
+
+// The path this page mounts on. A handoff is stamped with where it was
+// captured and only handed back on a match, so a reset token stashed here
+// cannot be consumed by /link, and vice versa.
+const RESET_PATH = "/reset-password";
 
 export default function ResetPasswordPage() {
 	const [params] = useSearchParams();
@@ -32,9 +38,9 @@ export default function ResetPasswordPage() {
 		// Put it back: `take` deletes on read, and a user who reloads twice
 		// (mistype, reload, mistype, reload) would otherwise be stranded on the
 		// second one with no way forward but the email.
-		const held = takeCredential("token");
+		const held = takeCredential("token", RESET_PATH);
 		if (held) {
-			stashCredential("token", held);
+			stashCredential("token", held, RESET_PATH);
 		}
 		return held;
 	});
@@ -44,7 +50,7 @@ export default function ResetPasswordPage() {
 			return;
 		}
 		// Stash before scrubbing so a reload can still find it.
-		stashCredential("token", params.get("token") ?? "");
+		stashCredential("token", params.get("token") ?? "", RESET_PATH);
 		const next = new URLSearchParams(location.search);
 		next.delete("token");
 		// Through the router, not window.history: this app runs on a data
@@ -84,7 +90,7 @@ export default function ResetPasswordPage() {
 
 			if (res.ok) {
 				// Spent. Nothing should be able to replay it from this tab.
-				takeCredential("token");
+				takeCredential("token", RESET_PATH);
 				setDone(true);
 			} else {
 				const body = await res.json().catch(() => ({}));

@@ -1,5 +1,39 @@
 import type { Breadcrumb } from "@sentry/react";
 import type { ErrorInfo } from "react";
+import { ROUTES } from "./routes";
+
+/** First path segments that are ours, not the user's.
+ *
+ *  Derived from ROUTES where possible so a new SPA route cannot silently start
+ *  being redacted (and a renamed one cannot silently start leaking). The rest
+ *  are segments with no ROUTES entry: router-literal paths, the API prefixes
+ *  fetch breadcrumbs carry, and Vite's asset dir.
+ *
+ *  Anything NOT here is treated as user data. That is the safe default — the
+ *  cost of a miss is one unhelpful ":seg" in a stack trace, versus a vault
+ *  name shipped to a third party. */
+const KNOWN_FIRST_SEGMENTS = new Set<string>([
+	// flatMap, not map+filter(Boolean): under noUncheckedIndexedAccess the
+	// index is `string | undefined` and filter(Boolean) does not narrow it.
+	...Object.values(ROUTES).flatMap((route) => {
+		const [, segment] = route.split("/");
+		return segment ? [segment] : [];
+	}),
+	// Router literals with no ROUTES constant.
+	"onboard",
+	"settings",
+	"reset-password",
+	"note",
+	"__qc",
+	// Backend prefixes seen in fetch/xhr breadcrumb URLs.
+	"api",
+	"attachments",
+	"socket",
+	"webhooks",
+	".well-known",
+	// Vite build output.
+	"assets",
+]);
 
 // Lazy Sentry singleton + crash reporter. Extracted from main.tsx so BOTH the
 // root boundary (main.tsx, catches bootstrap/app-shell throws above the router)
@@ -101,6 +135,7 @@ export async function captureError(
  *  actually carry) work; that also means nearly any string resolves and gets
  *  scrubbed, which is the safe direction. The catch is a last resort: throwing
  *  inside beforeSend would drop the crash report entirely. */
+
 export function scrubUrl(url: string): string {
 	let parsed: URL;
 	try {
@@ -108,16 +143,30 @@ export function scrubUrl(url: string): string {
 	} catch {
 		return url;
 	}
-	// Keep the HOST and the FIRST path segment; redact the rest.
+	// Keep the HOST and the first path segment ONLY when that segment is a
+	// route we ship; redact everything else.
 	//
 	// Scrubbing everything made the output useless at the moment reporting was
 	// switched on: "/:seg/:seg" cannot tell /api/search from /api/folders, and
-	// dropping the origin hid which service answered. Neither the hostname nor
-	// a first segment like "api" or "attachments" is user data — the note path,
-	// the filename and the credential all live deeper — so keeping them costs
-	// nothing and restores the ability to see which endpoint failed.
+	// dropping the origin hid which service answered.
+	//
+	// But "keep segment 1" is wrong for this router. `/:slug` (router.tsx) is
+	// the VAULT route, and the slug is slugify(vault.name) — a user-typed name.
+	// A vault called "Divorce 2026" put `divorce-2026` into every navigation
+	// breadcrumb and every event's request.url, on the app's most-travelled
+	// route. An allowlist keeps the diagnostic value and closes that.
 	const segments = parsed.pathname.split("/");
-	const path = segments.map((seg, i) => (seg && i > 1 ? ":seg" : seg)).join("/");
+	const path = segments
+		.map((seg, i) => {
+			if (!seg) {
+				return seg;
+			}
+			if (i === 1) {
+				return KNOWN_FIRST_SEGMENTS.has(seg) ? seg : ":seg";
+			}
+			return ":seg";
+		})
+		.join("/");
 	const keys = [...parsed.searchParams.keys()];
 	const query = keys.length > 0 ? `?${keys.map((k) => `${k}=:v`).join("&")}` : "";
 	const host = parsed.hostname === "x.invalid" ? "" : parsed.origin;
@@ -158,9 +207,16 @@ export function scrubEvent<
 	if (event.request?.url) {
 		event.request.url = scrubUrl(event.request.url);
 	}
-	const referer = event.request?.headers?.Referer;
-	if (event.request?.headers && typeof referer === "string") {
-		event.request.headers.Referer = scrubUrl(referer);
+	// Case-insensitive: httpContextIntegration capitalizes it today, but header
+	// names are case-insensitive by spec and an exact-key match is the same
+	// "missed it by one field" mode this function exists to close.
+	const headers = event.request?.headers;
+	if (headers) {
+		for (const key of Object.keys(headers)) {
+			if (key.toLowerCase() === "referer" && typeof headers[key] === "string") {
+				headers[key] = scrubUrl(headers[key]);
+			}
+		}
 	}
 	return event;
 }

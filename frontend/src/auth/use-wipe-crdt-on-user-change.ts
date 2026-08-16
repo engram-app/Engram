@@ -15,11 +15,11 @@ export function useWipeCrdtOnUserChange(userId: string | undefined): void {
 			return;
 		}
 		if (prevRef.current !== undefined) {
-			wipeCrdtIndexedDb().catch((e) => console.warn("CRDT IndexedDB wipe failed", e));
 			// Search terms are the user's words and were surviving sign-out in
 			// localStorage under a key with no owner. Synchronous and cheap, so it
-			// runs first — an interrupted sign-out should not leave them behind.
+			// goes first — an interrupted sign-out should not leave them behind.
 			clearRecent();
+			wipeCrdtIndexedDb().catch((e) => console.warn("CRDT IndexedDB wipe failed", e));
 		}
 		prevRef.current = userId;
 	}, [userId]);

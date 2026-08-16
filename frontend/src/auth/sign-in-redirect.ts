@@ -24,7 +24,7 @@ export function signInRedirectTarget(location: {
 	// destination page can still use it. Done here rather than at the two call
 	// sites because this function is the single seam every sign-in redirect
 	// passes through — a third caller would otherwise silently drop the code.
-	stashCredentialsFrom(location.search);
+	stashCredentialsFrom(location.search, location.pathname);
 
 	const params = new URLSearchParams(location.search);
 	for (const key of CREDENTIAL_PARAMS) {

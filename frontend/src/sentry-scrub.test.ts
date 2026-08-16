@@ -13,6 +13,7 @@
  * shape of a route is enough to debug it; the contents belong to the user.
  */
 import { describe, expect, it } from "vitest";
+import { ROUTES } from "./routes";
 import { scrubBreadcrumb, scrubEvent, scrubUrl, sentryInitOptions } from "./sentry";
 
 describe("scrubUrl", () => {
@@ -47,6 +48,41 @@ describe("scrubUrl", () => {
 
 	it("does not leak a note title from an unresolved wikilink", () => {
 		expect(scrubUrl("/vault-slug/wiki/Divorce%20settlement%20draft")).not.toContain("Divorce");
+	});
+
+	// The bug this allowlist exists for. `/:slug` is the vault route and the
+	// slug is slugify(vault.name), so segment 1 on the app's most-travelled
+	// route IS user data. The wikilink test above passed throughout, because
+	// it only asserted on the note title and never looked at "vault-slug".
+	it("redacts the vault slug, which is a user-typed vault name", () => {
+		expect(scrubUrl("https://app.engram.page/divorce-2026/note-abc")).toBe(
+			"https://app.engram.page/:seg/:seg",
+		);
+		expect(scrubUrl("https://app.engram.page/my-therapy-vault")).toBe(
+			"https://app.engram.page/:seg",
+		);
+	});
+
+	it("still keeps our own first segments, which is the point of keeping any", () => {
+		expect(scrubUrl("/api/search")).toBe("/api/:seg");
+		expect(scrubUrl("/attachments/Medical/labs.pdf")).toBe("/attachments/:seg/:seg");
+		expect(scrubUrl("/onboard/billing")).toBe("/onboard/:seg");
+	});
+
+	// Drift guard. A route renamed in ROUTES without updating the allowlist
+	// would start being redacted (merely unhelpful), but a route REMOVED from
+	// ROUTES while a vault slug of the same name exists is the leak direction.
+	// Either way the two lists must agree, and this fails when they don't.
+	it("keeps every first segment declared in ROUTES", () => {
+		for (const route of Object.values(ROUTES)) {
+			const [, segment] = route.split("/");
+			if (!segment) {
+				continue;
+			}
+			expect(scrubUrl(`https://app.engram.page/${segment}/x`)).toBe(
+				`https://app.engram.page/${segment}/:seg`,
+			);
+		}
 	});
 
 	// A relative URL has to work: fetch breadcrumbs record whatever was passed
@@ -131,6 +167,19 @@ describe("scrubEvent", () => {
 		});
 
 		expect(JSON.stringify(out)).not.toContain("ENGR-7X4K");
+	});
+
+	// Header names are case-insensitive by spec. The scrub used to match the
+	// exact key `Referer`, which works only because httpContextIntegration
+	// happens to capitalize it that way.
+	it("scrubs a lowercased referer header too", () => {
+		const event = {
+			request: {
+				url: "https://app.engram.page/reset-password",
+				headers: { referer: "https://app.engram.page/reset-password?token=secret-tok" },
+			},
+		};
+		expect(scrubEvent(event).request.headers.referer).not.toContain("secret-tok");
 	});
 });
 

@@ -16,6 +16,7 @@ import AuthPanel from "../layout/auth-panel";
 import AuthShell from "../layout/auth-shell";
 import { SyncStatusPill } from "../onboarding/sync-status-pill";
 import { useVaultReadyEvents } from "../onboarding/use-vault-ready-events";
+import { ROUTES } from "../routes";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
 
 interface Vault {
@@ -71,7 +72,8 @@ function DeviceLinkPage() {
 	// signed in on this browser) the handoff IS the code.
 	const [urlCode] = useState(
 		() =>
-			readCodeFromQuery(location.search) || readCodeFromQuery(`?code=${takeCredential("code")}`),
+			readCodeFromQuery(location.search) ||
+			readCodeFromQuery(`?code=${takeCredential("code", ROUTES.DEVICE_LINK)}`),
 	);
 	// Did the plugin hand us the code, or did the user type it? Only the first
 	// skips RFC 8628's manual-entry speed bump, so only it needs the caution.

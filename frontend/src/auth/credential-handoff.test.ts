@@ -21,25 +21,51 @@ beforeEach(() => {
 
 describe("credential handoff", () => {
 	it("round-trips a value", () => {
-		stashCredential("code", "ENGR-7X4K");
-		expect(takeCredential("code")).toBe("ENGR-7X4K");
+		stashCredential("code", "ENGR-7X4K", "/link");
+		expect(takeCredential("code", "/link")).toBe("ENGR-7X4K");
 	});
 
 	// Read-once: a credential must not outlive the flow it belongs to.
 	it("deletes on read", () => {
-		stashCredential("code", "ENGR-7X4K");
-		takeCredential("code");
-		expect(takeCredential("code")).toBe("");
+		stashCredential("code", "ENGR-7X4K", "/link");
+		takeCredential("code", "/link");
+		expect(takeCredential("code", "/link")).toBe("");
 	});
 
 	it("returns empty for something never stashed", () => {
-		expect(takeCredential("token")).toBe("");
+		expect(takeCredential("token", "/reset-password")).toBe("");
+	});
+
+	// The stale-handoff bug. Abandon sign-in from /link?code=A, then reach
+	// /link again later in the same tab from the onboarding wizard's Obsidian
+	// branch — which wants an EMPTY input to type a fresh code into. The old
+	// code was consumed, prefilled, and auto-verified straight into "This code
+	// is invalid or has expired."
+	it("refuses a credential captured on a different path", () => {
+		stashCredential("code", "OLDX-CODE", "/link");
+		expect(takeCredential("code", "/reset-password")).toBe("");
+	});
+
+	// Rejecting still consumes: the page that just refused it is the only
+	// reader, so leaving it would surface it again on the next navigation.
+	it("drops a rejected credential rather than leaving it to resurface", () => {
+		stashCredential("code", "OLDX-CODE", "/link");
+		takeCredential("code", "/reset-password");
+		expect(takeCredential("code", "/link")).toBe("");
+	});
+
+	// A tab left open across a deploy holds a stash written by the old build:
+	// a bare string with no stamp. Unverifiable means dropped — the user
+	// retypes, which is what they did before any of this existed.
+	it("drops an unstamped stash from a previous build", () => {
+		window.sessionStorage.setItem("engram:handoff:code", "ENGR-7X4K");
+		expect(takeCredential("code", "/link")).toBe("");
 	});
 
 	it("picks credentials out of a query string and ignores the rest", () => {
-		stashCredentialsFrom("?code=ENGR-7X4K&ref=newsletter");
-		expect(takeCredential("code")).toBe("ENGR-7X4K");
-		expect(takeCredential("ref")).toBe("");
+		stashCredentialsFrom("?code=ENGR-7X4K&ref=newsletter", "/link");
+		expect(takeCredential("code", "/link")).toBe("ENGR-7X4K");
+		expect(takeCredential("ref", "/link")).toBe("");
 	});
 });
 
@@ -55,7 +81,7 @@ describe("the redirect hands the credential over before stripping it", () => {
 		});
 
 		expect(target).not.toContain("ENGR-7X4K");
-		expect(takeCredential("code")).toBe("ENGR-7X4K");
+		expect(takeCredential("code", "/link")).toBe("ENGR-7X4K");
 	});
 
 	it("does the same for a password-reset token", () => {
@@ -66,12 +92,20 @@ describe("the redirect hands the credential over before stripping it", () => {
 		});
 
 		expect(target).not.toContain("abc123secret");
-		expect(takeCredential("token")).toBe("abc123secret");
+		expect(takeCredential("token", "/reset-password")).toBe("abc123secret");
 	});
 
 	it("stashes nothing when there is no credential", () => {
 		signInRedirectTarget({ pathname: "/note/abc", search: "", hash: "" });
-		expect(takeCredential("code")).toBe("");
-		expect(takeCredential("token")).toBe("");
+		expect(takeCredential("code", "/note/abc")).toBe("");
+		expect(takeCredential("token", "/note/abc")).toBe("");
+	});
+
+	// `code` is a generic param — OAuth callbacks and promo links use it too.
+	// Only the device-link page reads it, so a `code` captured anywhere else
+	// must not reach it.
+	it("does not hand a code captured elsewhere to the device-link page", () => {
+		signInRedirectTarget({ pathname: "/some-vault", search: "?code=PROMO123", hash: "" });
+		expect(takeCredential("code", "/link")).toBe("");
 	});
 });

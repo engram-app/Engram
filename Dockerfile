@@ -32,12 +32,12 @@ FROM oven/bun:1.3 AS frontend
 #       the browser.
 #   VITE_GIT_SHA    — release tag used by Sentry to symbolicate stack
 #       traces against the right source-map upload.
-#   SENTRY_ORG / SENTRY_PROJECT — used by @sentry/vite-plugin to
-#       address the right project when uploading source maps.
+# The image build deliberately does NOT take SENTRY_ORG / SENTRY_PROJECT /
+# SENTRY_AUTH_TOKEN: without an auth token @sentry/vite-plugin is disabled,
+# so this image uploads no source maps and ships none. Source-map upload is
+# the SaaS bundle's job (verify.yml + frontend-promote.yml).
 ARG VITE_SENTRY_DSN
 ARG VITE_GIT_SHA
-ARG SENTRY_ORG
-ARG SENTRY_PROJECT
 # Cloudflare Web Analytics beacon — public per-site identifier.
 # Build-arg so self-host bundles don't ship the SaaS-side token.
 ARG VITE_CF_BEACON_TOKEN
@@ -47,8 +47,6 @@ ARG VITE_POSTHOG_KEY
 ARG VITE_POSTHOG_HOST
 ENV VITE_SENTRY_DSN=${VITE_SENTRY_DSN} \
     VITE_GIT_SHA=${VITE_GIT_SHA} \
-    SENTRY_ORG=${SENTRY_ORG} \
-    SENTRY_PROJECT=${SENTRY_PROJECT} \
     VITE_CF_BEACON_TOKEN=${VITE_CF_BEACON_TOKEN} \
     VITE_POSTHOG_KEY=${VITE_POSTHOG_KEY} \
     VITE_POSTHOG_HOST=${VITE_POSTHOG_HOST}

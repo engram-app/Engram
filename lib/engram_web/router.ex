@@ -89,7 +89,21 @@ defmodule EngramWeb.Router do
 
     plug :put_secure_browser_headers, %{
       "x-content-type-options" => "nosniff",
-      "x-frame-options" => "DENY"
+      "x-frame-options" => "DENY",
+      # Mirrors frontend/public/_headers, which covers ONLY the Cloudflare
+      # bundle. This pipeline serves the self-hosted SPA, and without the
+      # override Phoenix emits its default
+      # `strict-origin-when-cross-origin` — which sends the full path
+      # same-origin, i.e. `/link?code=` and `/reset-password?token=` ride the
+      # Referer of every same-origin subresource, including the lazy route
+      # chunk that loads before the page can scrub the URL.
+      #
+      # Self-host is where this matters MOST: password reset sits behind
+      # RequireLocalAuth, so the token flow only exists on this deployment.
+      #
+      # Only set here. The :api pipelines answer JSON, not documents, and a
+      # referrer policy governs requests a document makes.
+      "referrer-policy" => "origin"
     }
 
     plug :put_csp_header

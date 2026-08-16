@@ -31,4 +31,20 @@ defmodule EngramWeb.CSPPipelineTest do
     assert get_resp_header(conn, "x-frame-options") == ["DENY"]
     assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
   end
+
+  # frontend/public/_headers sets this too, but that file is Cloudflare Pages
+  # metadata — it covers ONLY the uploaded bundle. This pipeline serves the
+  # self-hosted SPA, which is also the ONLY deployment where password reset
+  # exists (RequireLocalAuth), so `/reset-password?token=` riding the Referer
+  # of every same-origin subresource is a self-host-specific leak.
+  #
+  # Asserting the exact value, not just presence: Phoenix's default here is
+  # `strict-origin-when-cross-origin`, which passes a presence check while
+  # sending the full path same-origin — the thing being fixed.
+  test "GET / sets referrer-policy to origin, matching the Cloudflare bundle",
+       %{conn: conn} do
+    conn = get(conn, "/")
+
+    assert get_resp_header(conn, "referrer-policy") == ["origin"]
+  end
 end
