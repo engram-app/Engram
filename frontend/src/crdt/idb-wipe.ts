@@ -1,5 +1,6 @@
 import { forgetCrdtDbs, knownCrdtDbs } from "./idb-registry";
 import { CRDT_IDB_PREFIX } from "./manager";
+import { QUEUE_DB_NAME } from "./op-queue-persist";
 
 const BLOCKED_RETRY_ATTEMPTS = 5;
 const BLOCKED_RETRY_DELAY_MS = 300;
@@ -50,7 +51,13 @@ export async function wipeCrdtIndexedDb(): Promise<void> {
 		return;
 	}
 
-	const names = new Set<string>(knownCrdtDbs());
+	// The durable op-queue is named "engram-crdt-queue", which does NOT start
+	// with "engram-crdt/" — one character outside the prefix, so the sweep below
+	// never saw it. Its entries carry note paths, so it outlived sign-out on a
+	// shared machine. Named explicitly rather than by loosening the prefix,
+	// because a prefix that matches "engram-crdt*" would also match any future
+	// database someone names that way without thinking about wiping.
+	const names = new Set<string>([...knownCrdtDbs(), QUEUE_DB_NAME]);
 
 	if (typeof indexedDB.databases === "function") {
 		const dbs = await indexedDB.databases();

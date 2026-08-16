@@ -304,8 +304,10 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     e ->
       emit_checkpoint(:failed)
 
+      # The index doc holds every path and title in the vault, so this rescue
+      # has more user data in scope than most, not less.
       Logger.error(
-        "crdt index checkpoint raised: #{Exception.message(e)}",
+        "crdt index checkpoint raised: #{Metadata.safe_reason(e)}",
         Metadata.with_category(:error, :sync, user_id: user_id, vault_id: vault_id)
       )
 
@@ -320,7 +322,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
       emit_checkpoint(:failed)
 
       Logger.error(
-        "crdt index checkpoint exited: #{inspect(reason)}",
+        "crdt index checkpoint exited: #{Metadata.safe_exit_reason(reason)}",
         Metadata.with_category(:error, :sync, user_id: user_id, vault_id: vault_id)
       )
 

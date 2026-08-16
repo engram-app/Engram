@@ -165,8 +165,12 @@ defmodule Engram.Notes.Utf8Backfill do
       bump(acc, :fixed)
     else
       other ->
+        # `inspect(other)` here rendered whatever the `with` rejected, and one
+        # of those shapes is `{:error, :version_conflict, %Note{}}` — a struct
+        # whose `:content` field is the note body. One conflicting backfill row
+        # put a user's note into CloudWatch.
         Logger.warning(
-          "utf8_backfill: failed to rewrite note #{decrypted.id}: #{inspect(other)}",
+          "utf8_backfill: failed to rewrite note #{decrypted.id}: #{format_reason(other)}",
           Metadata.with_category(:warning, :data, reason: "rewrite_failed")
         )
 
@@ -175,4 +179,26 @@ defmodule Engram.Notes.Utf8Backfill do
   end
 
   defp bump(acc, key), do: Map.update!(acc, key, &(&1 + 1))
+
+  # The version_conflict tuple hands back the whole `%Note{}`, whose :content
+  # field is the note body. Drop it to the bare label.
+  #
+  # The catch-all renders everything else, and `upsert_note/4` CAN return
+  # `{:error, %Ecto.Changeset{}}` (notes.ex:570, :746, validate_path/1). That
+  # is not a plaintext leak today, but only because of two things this module
+  # does not own: Ecto's Inspect impl prints `data` as `#Engram.Notes.Note<>`
+  # rather than expanding it, and `Note.changeset/2`'s cast list excludes the
+  # virtual :content/:title/:path. Add :content to that cast list and plaintext
+  # comes back through here. The test below is what would catch that.
+  #
+  # (An earlier version of this comment claimed dialyzer had proved changesets
+  # unreachable. It had not — it only rejected a clause ORDER. Wrong, and
+  # recorded here so it is not re-derived.)
+  # Public only so a test can exercise it. Round 5 reverted this function
+  # entirely and the whole "note content cannot reach the backfill's failure
+  # log" block stayed green — every assertion in it measured Ecto's Inspect
+  # impl and the cast list, and nothing called this.
+  @doc false
+  def format_reason({:error, :version_conflict, _note}), do: "version_conflict"
+  def format_reason(other), do: inspect(other)
 end

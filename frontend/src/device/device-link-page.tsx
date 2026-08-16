@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { setActiveVaultId } from "../api/active-vault";
 import { api } from "../api/client";
 import { type Connection, useBillingStatus, useConnections, useMe } from "../api/queries";
+import { takeCredential } from "../auth/credential-handoff";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
 import { connectionId as obsidianConnectionId } from "../billing/existing-connections-panel";
 import { useConnectionCap } from "../billing/use-connection-cap";
@@ -15,6 +16,7 @@ import AuthPanel from "../layout/auth-panel";
 import AuthShell from "../layout/auth-shell";
 import { SyncStatusPill } from "../onboarding/sync-status-pill";
 import { useVaultReadyEvents } from "../onboarding/use-vault-ready-events";
+import { ROUTES } from "../routes";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
 
 interface Vault {
@@ -64,7 +66,15 @@ function DeviceLinkPage() {
 	// Read from the ROUTER's location, not window.location: the scrub below
 	// goes through the router, so reading the raw window would leave the two
 	// disagreeing about whether the code is still in the URL.
-	const [urlCode] = useState(() => readCodeFromQuery(location.search));
+	// URL first, then the sign-in handoff. A signed-out arrival from the plugin
+	// is redirected before this page ever renders, and the redirect strips the
+	// code out of the URL — so for the most common case (first link, never
+	// signed in on this browser) the handoff IS the code.
+	const [urlCode] = useState(
+		() =>
+			readCodeFromQuery(location.search) ||
+			readCodeFromQuery(`?code=${takeCredential("code", ROUTES.DEVICE_LINK)}`),
+	);
 	// Did the plugin hand us the code, or did the user type it? Only the first
 	// skips RFC 8628's manual-entry speed bump, so only it needs the caution.
 	const arrivedWithCode = urlCode.length === 9;

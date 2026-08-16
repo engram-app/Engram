@@ -1,7 +1,9 @@
 import { useEffect, useRef } from "react";
 import { wipeCrdtIndexedDb } from "../crdt/idb-wipe";
+import { clearRecent } from "../layout/recent-searches";
 
-/** Delete all CRDT IndexedDB content when the authenticated user changes
+/** Delete all CRDT IndexedDB content — and the local search history — when the
+ *  authenticated user changes
  *  (switch or logout). Mirrors useClearQueryCacheOnUserChange: skips first
  *  mount, fires on any subsequent identity change. Fire-and-forget — the
  *  channel teardown (useChannel cleanup → stopCrdtSession) closes live DB
@@ -13,6 +15,12 @@ export function useWipeCrdtOnUserChange(userId: string | undefined): void {
 			return;
 		}
 		if (prevRef.current !== undefined) {
+			// Search terms are the user's words and were surviving sign-out in
+			// localStorage under a key with no owner. First and synchronous: the
+			// wipe below is async, so ordering only matters if the wipe throws
+			// SYNCHRONOUSLY, which .catch() would not catch. Cheap insurance on a
+			// sign-out path.
+			clearRecent();
 			wipeCrdtIndexedDb().catch((e) => console.warn("CRDT IndexedDB wipe failed", e));
 		}
 		prevRef.current = userId;

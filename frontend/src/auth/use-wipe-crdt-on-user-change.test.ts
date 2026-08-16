@@ -34,3 +34,33 @@ describe("useWipeCrdtOnUserChange", () => {
 		expect(wipe).not.toHaveBeenCalled();
 	});
 });
+
+describe("search history is cleared with the same edge", () => {
+	// Recent searches are the user's own words ("severance agreement lawyer"),
+	// stored in localStorage under a key with no user in it and no expiry. On a
+	// shared machine the next person to open the search panel read them.
+	it("clears recent searches on sign-out", () => {
+		window.localStorage.setItem("engram:recent-searches", JSON.stringify(["severance lawyer"]));
+
+		const { rerender } = renderHook(
+			({ id }: { id: string | undefined }) => useWipeCrdtOnUserChange(id),
+			{ initialProps: { id: "u1" as string | undefined } },
+		);
+		rerender({ id: undefined });
+
+		expect(window.localStorage.getItem("engram:recent-searches")).toBeNull();
+	});
+
+	// A token refresh does not change the user id, so history must survive it —
+	// clearing on every render would look like the feature was broken.
+	it("keeps them while the same user stays signed in", () => {
+		window.localStorage.setItem("engram:recent-searches", JSON.stringify(["quarterly report"]));
+
+		const { rerender } = renderHook(({ id }) => useWipeCrdtOnUserChange(id), {
+			initialProps: { id: "u1" },
+		});
+		rerender({ id: "u1" });
+
+		expect(window.localStorage.getItem("engram:recent-searches")).toContain("quarterly report");
+	});
+});

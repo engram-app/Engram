@@ -3564,6 +3564,18 @@ defmodule Engram.Notes do
     end
   end
 
+  # A short, non-reversible handle for log lines. Base64 of the path HMAC,
+  # truncated — enough to correlate two lines about the same note, useless for
+  # recovering the path.
+  #
+  # binary_slice, not binary_part: the latter raises below 12 chars. Today the
+  # HMAC is always SHA-256 (44 chars), but this sits INSIDE a rescue whose only
+  # job is isolation, and a log helper must not be the thing that breaks it.
+  defp hmac_ref(%{path_hmac: hmac}) when is_binary(hmac),
+    do: hmac |> Base.encode64() |> binary_slice(0..11)
+
+  defp hmac_ref(_entry), do: "unknown"
+
   defp process_batch_entry(%{result: nil} = entry, existing_by_hmac, user, vault, now, rows) do
     process_batch_entry_rescued(entry, rows, fn ->
       case Map.get(existing_by_hmac, entry.path_hmac) do
@@ -3637,18 +3649,38 @@ defmodule Engram.Notes do
     fun.()
   rescue
     e ->
-      # Path AND exception reason go in the message string, not metadata
-      # alone: neither `:path` nor `:error` is in the Sentry LoggerHandler
-      # metadata allowlist (application.ex), and the console formatter's
-      # allowlist (config.exs) drops them too. Interpolating keeps both
-      # Sentry-visible (on-call sees WHY it raised) AND greppable/testable
-      # in the plain-text console/CI logs. Metadata copies kept for prod's
-      # metadata: :all JSON formatter (Loki structured fields).
+      # The note ID, never the path. This used to interpolate `entry.path`
+      # DELIBERATELY, to route it past the Sentry metadata allowlist so on-call
+      # could see it — which is precisely the thing the allowlist exists to
+      # prevent. RedactFilter and the Sentry scrubber both stop at metadata;
+      # a message body is unfiltered, so that comment was describing a way
+      # around the redaction rather than a reason to bypass it. A path is
+      # folder structure plus a title, and Sentry is a third party.
+      #
+      # `Exception.message/1` is not "our own text": CaseClauseError,
+      # MatchError, KeyError, Protocol.UndefinedError and Jason.EncodeError all
+      # render `inspect(term)` of the offending value, and this rescue wraps
+      # frontmatter parsing, CRDT merge and encryption — every one of which
+      # handles note content. A raise over a note body printed the body:
+      #
+      #   batch entry raised ... (no case clause matching:
+      #     {:parsed, "Dear diary, the biopsy came back positive."})
+      #
+      # Moving it to metadata does NOT fix that. `:error` is not in
+      # RedactFilter's key set, so Loki and CloudWatch get it verbatim. (It is
+      # absent from the Sentry metadata allowlist in application.ex, so Sentry
+      # alone was safe — but "not sent to a third party" is not the bar; the
+      # bar is not logged at all.)
+      #
+      # So the reason is filtered by exception TYPE, in both places. On-call
+      # correlates on the path HMAC: non-reversible, joins to the same row.
+      reason = Metadata.safe_reason(e)
+
       Logger.error(
-        "batch entry raised, degrading note: #{entry.path} (#{Exception.message(e)})",
+        "batch entry raised, degrading note path_hmac=#{hmac_ref(entry)} (#{reason})",
         Metadata.with_category(:error, :sync,
           path: entry.path,
-          error: Exception.message(e)
+          error: reason
         )
       )
 

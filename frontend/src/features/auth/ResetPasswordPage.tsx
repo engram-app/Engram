@@ -1,6 +1,8 @@
-import { type FormEvent, useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { type FormEvent, useEffect, useState } from "react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { getApiBase, joinApiUrl } from "@/api/base";
+import { stashCredential, takeCredential } from "@/auth/credential-handoff";
+
 import { Button } from "@/components/ui/button";
 import AuthPanel from "@/layout/auth-panel";
 import AuthShell from "@/layout/auth-shell";
@@ -8,9 +10,57 @@ import { destructiveAlert, fieldInput, heading } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { ROUTES } from "@/routes";
 
+// The path this page mounts on — the same constant the router mounts it at, so
+// the two cannot drift. A handoff is stamped with where it was captured and
+// only handed back on a match, so a reset token stashed here cannot be consumed
+// by /link, and vice versa.
+const RESET_PATH = ROUTES.RESET_PASSWORD;
+
 export default function ResetPasswordPage() {
 	const [params] = useSearchParams();
-	const token = params.get("token") ?? "";
+	const location = useLocation();
+	const navigate = useNavigate();
+	// Captured once, then scrubbed from the URL. The token IS the credential
+	// that lets the bearer set this account's password, and while it sits in
+	// the address bar it is in browser history, in the Referer of anything the
+	// page loads, and attached to every Sentry event as request.url.
+	//
+	// Falls back to the sessionStorage handoff, which covers two cases: a
+	// signed-out arrival that was redirected through sign-in (the redirect
+	// strips the token), and a RELOAD after the scrub. Scrubbing without the
+	// fallback stranded anyone who hit F5 after a "passwords do not match" —
+	// the token was gone from the URL and from history, and their only way
+	// forward was re-opening the email.
+	const [token] = useState(() => {
+		const fromUrl = params.get("token");
+		if (fromUrl) {
+			return fromUrl;
+		}
+		// Put it back: `take` deletes on read, and a user who reloads twice
+		// (mistype, reload, mistype, reload) would otherwise be stranded on the
+		// second one with no way forward but the email.
+		const held = takeCredential("token", RESET_PATH);
+		if (held) {
+			stashCredential("token", held, RESET_PATH);
+		}
+		return held;
+	});
+
+	useEffect(() => {
+		if (!params.has("token")) {
+			return;
+		}
+		// Stash before scrubbing so a reload can still find it.
+		stashCredential("token", params.get("token") ?? "", RESET_PATH);
+		const next = new URLSearchParams(location.search);
+		next.delete("token");
+		// Through the router, not window.history: this app runs on a data
+		// router, which does not observe a raw replaceState.
+		navigate(
+			{ pathname: location.pathname, search: next.toString(), hash: location.hash },
+			{ replace: true },
+		);
+	}, [params, location, navigate]);
 	const [password, setPassword] = useState("");
 	const [confirm, setConfirm] = useState("");
 	const [error, setError] = useState("");
@@ -40,6 +90,8 @@ export default function ResetPasswordPage() {
 			});
 
 			if (res.ok) {
+				// Spent. Nothing should be able to replay it from this tab.
+				takeCredential("token", RESET_PATH);
 				setDone(true);
 			} else {
 				const body = await res.json().catch(() => ({}));

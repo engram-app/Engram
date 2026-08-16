@@ -144,4 +144,97 @@ defmodule Engram.Notes.Utf8BackfillTest do
     assert result.corrupt == 0
     assert result.fixed == 0
   end
+
+  # ---------------------------------------------------------------------------
+  # Log-leak tripwire for fix_note/3's error branch
+  # ---------------------------------------------------------------------------
+  #
+  # That branch renders whatever the `with` rejected into a Logger message
+  # BODY, which RedactFilter cannot scrub — it gates metadata by key and says so
+  # in its own moduledoc. `format_reason/1` drops the one content-bearing shape
+  # (`{:error, :version_conflict, %Note{}}`) to a bare label and inspects the
+  # rest.
+  #
+  # The rest includes `{:error, %Ecto.Changeset{}}`, which upsert_note/4 really
+  # can return. That is safe ONLY because of two things this module does not
+  # own, so both are pinned here rather than trusted:
+  #
+  #   1. Ecto's Inspect impl prints `data` as `#Engram.Notes.Note<>` instead of
+  #      expanding the struct.
+  #   2. Note.changeset/2's cast list excludes the virtual :content/:title/
+  #      :path, so they never reach `changes`.
+  #
+  # Break either and note plaintext reappears in CloudWatch, Loki and Sentry.
+  # Version conflict is not reachable from the backfill (it never declares a
+  # version), which is why this pins the invariants rather than driving the
+  # branch end to end.
+  describe "note content cannot reach the backfill's failure log" do
+    # The one test that exercises the FIX. Reverting format_reason/1 used to
+    # leave every other test in this block green, because they all measured
+    # Ecto's Inspect impl and the cast list rather than the function that
+    # actually drops the content-bearing shape.
+    test "format_reason/1 drops the %Note{} the version_conflict tuple carries" do
+      secret = "Dear diary, the biopsy came back positive."
+      note = %Note{content: secret, title: "Biopsy results", path: "Medical/biopsy.md"}
+
+      # The struct really does inspect its plaintext, so this measures the
+      # filter rather than an empty base.
+      assert inspect(note) =~ "biopsy"
+
+      assert Utf8Backfill.format_reason({:error, :version_conflict, note}) == "version_conflict"
+    end
+
+    # ...and the catch-all still renders the shapes that are safe and useful.
+    test "format_reason/1 still renders a plain error reason" do
+      assert Utf8Backfill.format_reason({:error, :not_found}) =~ "not_found"
+    end
+
+    test "a changeset built from note attrs carries no plaintext", %{user: user, vault: vault} do
+      secret = "Dear diary, the biopsy came back positive."
+
+      # `data` is a LOADED note, not `%Note{}`. That is the shape the real path
+      # produces — notes.ex:1626 and :1872 both build `prior |> Note.changeset(...)`
+      # — and it is the only shape under which invariant (1) is load-bearing:
+      # with an empty struct as data, no expansion of `data` could reveal the
+      # secret, so an empty base tested nothing about Ecto's Inspect impl.
+      loaded = %Note{content: secret, title: "Biopsy results", path: "Medical/biopsy.md"}
+
+      changeset =
+        Note.changeset(loaded, %{
+          "content" => secret,
+          "title" => "Biopsy results",
+          "path" => "Medical/biopsy.md",
+          "user_id" => user.id,
+          "vault_id" => vault.id
+        })
+
+      # Self-proving: the struct really does hold the secret, so this test is
+      # measuring Ecto's Inspect impl rather than an empty base.
+      assert inspect(loaded) =~ "biopsy"
+
+      rendered = inspect(changeset)
+
+      refute rendered =~ secret
+      refute rendered =~ "Biopsy results"
+      refute rendered =~ "Medical/biopsy.md"
+    end
+
+    test "the changeset cast list never takes the virtual plaintext fields",
+         %{user: user, vault: vault} do
+      changeset =
+        Note.changeset(%Note{}, %{
+          "content" => "secret body",
+          "title" => "secret title",
+          "path" => "secret/path.md",
+          "user_id" => user.id,
+          "vault_id" => vault.id
+        })
+
+      for field <- [:content, :title, :path] do
+        refute Map.has_key?(changeset.changes, field),
+               "#{field} is now cast into the changeset — it will render in any " <>
+                 "log line that inspects an {:error, changeset} from upsert_note"
+      end
+    end
+  end
 end

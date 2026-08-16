@@ -50,7 +50,10 @@ export default function AttachmentPage() {
 					return;
 				}
 				if (!(err instanceof ApiError)) {
-					console.error("attachment load failed", path, err);
+					// Path withheld: an attachment path is folder structure plus a filename
+					// ("Medical/2026-lab-results.pdf"), and console args become Sentry
+					// breadcrumbs as well as sitting in a console the user may screenshot.
+					console.error("attachment load failed", err);
 				}
 				setError(err instanceof ApiError && err.status === 404 ? "missing" : "failed");
 			});

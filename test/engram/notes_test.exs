@@ -132,7 +132,15 @@ defmodule Engram.NotesTest do
     end
 
     test "process_batch_entry_rescued/3 catches a raise and degrades to a per-note error" do
-      entry = %{path: "poison.md", input_path: "poison.md", result: nil}
+      # `path_hmac` mirrors the real batch entry — process_batch_entry/6 reads
+      # it on the line above the rescue. Without it here the log falls back to
+      # "unknown" and this test would pass while proving nothing.
+      entry = %{
+        path: "poison.md",
+        input_path: "poison.md",
+        path_hmac: <<1, 2, 3, 4, 5, 6, 7, 8, 9>>,
+        result: nil
+      }
 
       log =
         capture_log(fn ->
@@ -147,7 +155,107 @@ defmodule Engram.NotesTest do
         end)
 
       assert log =~ "batch entry raised"
-      assert log =~ "poison.md"
+
+      # This assertion used to read `assert log =~ "poison.md"` — it pinned the
+      # leak in place. RedactFilter scrubs metadata, never the message body, so
+      # an interpolated path here reaches CloudWatch and Loki verbatim. On-call
+      # correlates on the HMAC instead: same row, non-reversible.
+      refute log =~ "poison.md"
+
+      assert log =~
+               "path_hmac=" <> String.slice(Base.encode64(<<1, 2, 3, 4, 5, 6, 7, 8, 9>>), 0, 12)
+    end
+
+    # The exception MESSAGE is not our own text. CaseClauseError, MatchError,
+    # Jason.EncodeError and Postgrex.Error all render `inspect(term)` of the
+    # value that blew up, and this rescue wraps frontmatter parsing, CRDT merge
+    # and encryption — all of which hold note content. Interpolating it put a
+    # note body straight into CloudWatch, Loki and Sentry.
+    test "process_batch_entry_rescued/3 keeps note content out of the log body" do
+      entry = %{
+        path: "poison.md",
+        input_path: "poison.md",
+        path_hmac: <<1, 2, 3, 4, 5, 6, 7, 8, 9>>,
+        result: nil
+      }
+
+      secret = "Dear diary, the biopsy came back positive."
+
+      log =
+        capture_log(fn ->
+          assert {_degraded, []} =
+                   Notes.process_batch_entry_rescued(entry, [], fn ->
+                     # Raised directly rather than via a literal `case`: the
+                     # compiler statically proves that clause unreachable and
+                     # warns, which --warnings-as-errors turns into a failure.
+                     # Same struct, same Exception.message/1 rendering.
+                     raise CaseClauseError, term: {:parsed, secret}
+                   end)
+        end)
+
+      assert log =~ "batch entry raised"
+      refute log =~ secret
+      refute log =~ "biopsy"
+      # The class still identifies what went wrong.
+      assert log =~ "CaseClauseError"
+    end
+
+    # `capture_log` renders METADATA as well as the body, which is the point:
+    # moving the exception message out of the body and into `error:` metadata
+    # does not redact it. `:error` is absent from RedactFilter's key set, so
+    # Loki and CloudWatch would print it verbatim. Only the type filter helps.
+    test "process_batch_entry_rescued/3 keeps content out of the metadata too" do
+      entry = %{
+        path: "poison.md",
+        input_path: "poison.md",
+        path_hmac: <<1, 2, 3, 4, 5, 6, 7, 8, 9>>,
+        result: nil
+      }
+
+      secret = "Dear diary, the biopsy came back positive."
+
+      log =
+        capture_log([metadata: :all], fn ->
+          Notes.process_batch_entry_rescued(entry, [], fn ->
+            raise KeyError, key: :missing, term: %{"content" => secret}
+          end)
+        end)
+
+      refute log =~ secret
+      refute log =~ "biopsy"
+      assert log =~ "KeyError"
+    end
+
+    # The counterpart. Postgrex.Error is NOT allowlisted — its message quotes
+    # the offending value, and it also renders the SQL and the Postgres DETAIL
+    # ("Failing row contains (…)"), which is the whole row. It is rendered
+    # structurally instead, from fields that are codes rather than values, so
+    # the SQLSTATE a responder greps for survives without the row.
+    test "process_batch_entry_rescued/3 keeps a database error's codes, not its text" do
+      entry = %{
+        path: "poison.md",
+        input_path: "poison.md",
+        path_hmac: <<1, 2, 3, 4, 5, 6, 7, 8, 9>>,
+        result: nil
+      }
+
+      log =
+        capture_log(fn ->
+          Notes.process_batch_entry_rescued(entry, [], fn ->
+            raise %Postgrex.Error{
+              postgres: %{
+                code: :numeric_value_out_of_range,
+                message: "bigint out of range",
+                severity: "ERROR",
+                pg_code: "22003"
+              }
+            }
+          end)
+        end)
+
+      assert log =~ "22003"
+      assert log =~ "numeric_value_out_of_range"
+      refute log =~ "bigint out of range"
     end
 
     test "process_batch_entry_rescued/3 passes through a non-raising fn untouched" do
@@ -237,7 +345,11 @@ defmodule Engram.NotesTest do
         end)
 
       assert log =~ "batch entry raised"
-      assert log =~ "poison.md"
+
+      # Same flip as the unit test above, but through the real batch path, so
+      # the HMAC is the one production computes rather than a fixture.
+      refute log =~ "poison.md"
+      assert log =~ ~r"path_hmac=[A-Za-z0-9+/]{12}"
     end
   end
 

@@ -29,7 +29,8 @@ export default function AttachmentImg({ path, alt }: { path: string; alt?: strin
 				}
 				// A non-ApiError is a bug (e.g. createObjectURL), not a load failure.
 				if (!(err instanceof ApiError)) {
-					console.error("attachment image load failed", path, err);
+					// See attachment-page: the path is the user's folder structure.
+					console.error("attachment image load failed", err);
 				}
 				setError(err instanceof ApiError && err.status === 404 ? "missing" : "failed");
 			});

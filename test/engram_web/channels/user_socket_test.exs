@@ -36,6 +36,32 @@ defmodule EngramWeb.UserSocketTest do
 
     assert log =~ "ws connect"
     assert log =~ "conn-abc"
+
+    # Phoenix's own "CONNECTED TO ... Parameters:" line renders the connect
+    # params. RedactFilter cannot help here — it scrubs metadata, never the
+    # message body — so the only control is :filter_parameters. This asserts
+    # the credential itself, not the presence of "[FILTERED]", because a
+    # future refactor could drop the line entirely and should still pass.
+    refute log =~ token
+  end
+
+  # Phoenix matches filter_parameters by SUBSTRING on the key, so the entries
+  # are prefixes/fragments, not names. "token" does NOT cover device_code —
+  # which redeems into both an access and a refresh token, and so is a bearer
+  # credential in its own right for its 300s life.
+  test "filters credential-bearing param names, not just exact matches", %{token: token} do
+    log =
+      capture_log(fn ->
+        assert {:ok, _socket} =
+                 connect(UserSocket, %{
+                   "token" => token,
+                   "device_code" => "dev-code-secret",
+                   "code_verifier" => "pkce-secret"
+                 })
+      end)
+
+    refute log =~ "dev-code-secret"
+    refute log =~ "pkce-secret"
   end
 
   test "connect still works with no conn params (backward compatible)", %{token: token} do

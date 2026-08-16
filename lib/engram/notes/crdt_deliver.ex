@@ -251,7 +251,10 @@ defmodule Engram.Notes.CrdtDeliver do
     :exit, reason ->
       Logger.error(
         "crdt deliver room push exited",
-        Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
+        Metadata.with_category(:error, :sync,
+          note_id: note_id,
+          reason: Metadata.safe_exit_reason(reason)
+        )
       )
 
       :ok
@@ -329,18 +332,39 @@ defmodule Engram.Notes.CrdtDeliver do
     end
   rescue
     err ->
-      log_state_load_failure(note_id, Exception.format(:error, err, __STACKTRACE__))
+      # `:reason` is NOT scrubbed by RedactFilter — its own moduledoc calls that
+      # out and tells call sites that might log an error struct there to use a
+      # different key. This loads CRDT state, so the term that blew up can be a
+      # Yjs doc or note content.
+      log_state_load_failure(note_id, Metadata.safe_reason(err))
       {:error, :raised}
   catch
     kind, reason ->
-      log_state_load_failure(note_id, {kind, reason})
+      log_state_load_failure(note_id, "#{kind}: #{Metadata.safe_reason(reason)}")
       {:error, :caught}
   end
 
+  # Two shapes reach here: a pre-filtered binary from the rescue/catch arms,
+  # and a plain `{:error, reason}` / `{:tenant_txn, reason}` from the case above,
+  # where `reason` is a Repo/transaction term. Both are narrowed the same way —
+  # `:reason` is a metadata key RedactFilter documents as deliberately NOT
+  # scrubbed, so nothing downstream will do it for us.
+  defp log_state_load_failure(note_id, reason) when is_binary(reason) do
+    emit_state_load_failure(note_id, reason)
+  end
+
+  defp log_state_load_failure(note_id, {tag, reason}) when is_atom(tag) do
+    emit_state_load_failure(note_id, "#{tag}: #{Metadata.safe_reason(reason)}")
+  end
+
   defp log_state_load_failure(note_id, reason) do
+    emit_state_load_failure(note_id, Metadata.safe_reason(reason))
+  end
+
+  defp emit_state_load_failure(note_id, reason) do
     Logger.error(
       "crdt deliver state load failed — skipping room push (announce still fires)",
-      Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
+      Metadata.with_category(:error, :sync, note_id: note_id, reason: reason)
     )
   end
 

@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { signInRedirectTarget } from "../auth/sign-in-redirect";
 import DeviceLinkPage from "./device-link-page";
 
 const { get, post } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
@@ -120,6 +121,9 @@ function renderPage(entry = "/link") {
 
 afterEach(() => {
 	vi.clearAllMocks();
+	// A handoff is per-tab and survives a render; without this a stash from one
+	// test would be consumed by the next.
+	window.sessionStorage.clear();
 	billingPending.current = false;
 	vaultReadyArgs.last = null;
 	window.history.replaceState({}, "", "/link");
@@ -153,6 +157,35 @@ describe("DeviceLinkPage", () => {
 
 		await waitFor(() => expect(get).toHaveBeenCalledWith("/vaults?user_code=ENGR-7X4K"));
 		expect(await screen.findByRole("radio", { name: /personal/iu })).toBeInTheDocument();
+	});
+
+	// The signed-out arrival — the COMMON case, since the plugin opens
+	// verification_uri_complete for someone who has never signed in on this
+	// browser. Stripping the code out of `return_to` (so it never reaches the
+	// address bar, history, or Clerk) broke exactly this, and every other test
+	// in this file passes the code in the query string, so none of them noticed.
+	it("auto-verifies a code handed over from a sign-in redirect", async () => {
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
+		// What signInRedirectTarget does on the way to Clerk.
+		signInRedirectTarget({ pathname: "/link", search: "?code=ENGR-7X4K", hash: "" });
+
+		renderPage("/link");
+
+		await waitFor(() => expect(get).toHaveBeenCalledWith("/vaults?user_code=ENGR-7X4K"));
+		expect(await screen.findByRole("radio", { name: /personal/iu })).toBeInTheDocument();
+	});
+
+	// The stale-handoff regression. The wizard's Obsidian branch sends the user
+	// to a bare /link expecting an EMPTY field to type a fresh code into. An
+	// abandoned earlier attempt must not be consumed here and auto-verified
+	// into "This code is invalid or has expired."
+	it("ignores a handoff captured somewhere other than /link", async () => {
+		signInRedirectTarget({ pathname: "/some-vault", search: "?code=PROMO123", hash: "" });
+
+		renderPage("/link");
+
+		expect(screen.getByPlaceholderText(/XXXX-XXXX/iu)).toHaveValue("");
+		await waitFor(() => expect(get).not.toHaveBeenCalled());
 	});
 
 	// Authorizing is still an explicit act: auto-verify only lists the vaults.

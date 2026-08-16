@@ -387,7 +387,14 @@ defmodule EngramWeb.CrdtChannelTest do
       # Contained, but never silent — a swallowed pool timeout is how this class
       # of failure stays invisible until e2e goes red.
       assert log =~ "crdt_create_batch entry failed"
-      assert log =~ "connection not available"
+
+      # The CLASS, not the message. This guard wraps prepare_create/2 and
+      # seed_and_checkpoint/5, so note plaintext is in scope, and a
+      # RuntimeError's message is whatever string was raised — `raise "failed
+      # for #{path}"` is one edit away. The `else` arm of this same function was
+      # already narrowed for that reason; the rescue now matches it.
+      assert log =~ "RuntimeError"
+      refute log =~ "connection not available"
     end
 
     test "an exiting entry (dead room / pool timeout) is contained the same way" do

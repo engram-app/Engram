@@ -4641,7 +4641,20 @@ jobs:
           cache-to: type=local,dest=${{ runner.temp }}/buildx-cache-new,mode=max
           tags: ${{ steps.version.outputs.tags }}
           build-args: |
-            VITE_SENTRY_DSN=${{ secrets.VITE_SENTRY_DSN }}
+            # VITE_SENTRY_DSN is deliberately NOT passed. This image runs
+            # `bun run build:selfhost`, and the bundle it produces is what a
+            # SELF-HOSTER serves. Baking the SaaS DSN in meant every self-hosted
+            # browser reported crashes — with URLs, and therefore note paths — to
+            # our Sentry, from the one deployment whose whole promise is that
+            # data stays on the operator's own infrastructure. Nobody opted in.
+            # The Dockerfile already states this rule for its siblings
+            # ("so self-host bundles don't ship the SaaS-side token"); Sentry was
+            # the exception that slipped.
+            #
+            # Cost: staging-fastraid, which runs this same image, loses browser
+            # crash reporting. Backend Sentry is unaffected. Giving staging its
+            # reporting back means serving the DSN at RUNTIME (so the operator
+            # chooses) rather than baking it at build time.
             VITE_GIT_SHA=${{ github.sha }}
             # Backend counterpart to VITE_GIT_SHA. Baked into the image so
             # /api/health can report what code is actually running: `version`
@@ -4649,11 +4662,11 @@ jobs:
             # so it never moves on a non-release deploy. Same full 40-char
             # SHA the frontend and Sentry use, so all three agree.
             RELEASE_SHA=${{ github.sha }}
-            SENTRY_ORG=${{ vars.SENTRY_ORG }}
-            SENTRY_PROJECT=${{ vars.SENTRY_PROJECT_FRONTEND }}
+            # No SENTRY_ORG / SENTRY_PROJECT / sentry_auth_token either: this
+            # bundle no longer carries a DSN, so it emits no events, and
+            # uploading its source maps would spend the token on artifacts
+            # nothing will ever match. Both halves move to the SaaS build.
             HEX_MIRROR=${{ env.HEX_MIRROR }}
-          secrets: |
-            sentry_auth_token=${{ secrets.SENTRY_AUTH_TOKEN }}
 
       # Atomically swap new cache over old. actions/cache@v6 has no built-in
       # rotation; without this step the cache grows unbounded across runs.
@@ -5200,6 +5213,22 @@ jobs:
           # by design (ships in the browser), so a variable not a secret.
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY_PROD }}
           VITE_GIT_SHA: ${{ github.sha }}
+          # Sentry. The SaaS bundle reported NOWHERE while the self-host image
+          # shipped this same DSN — exactly backwards from the intent stated in
+          # sentry.ts and the Dockerfile. Disclosed in the privacy policy's
+          # sub-processor table ("Error monitoring and crash reporting | Error
+          # stack traces with PII scrubbing; user ID only"), and the SDK sets no
+          # user at all, so we send strictly less than that. URLs and console /
+          # DOM breadcrumbs are scrubbed in sentry.ts before send.
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          # Symbolication follows the DSN. vite.config.ts gates the upload on
+          # `disable: !sentryAuthToken` and then deletes every *.map, so a build
+          # with a DSN and no token reports crashes as
+          # `at t (index-9f3a1c.js:1:48392)` — a stack with no frames, for the
+          # release the events are tagged with.
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT_FRONTEND }}
 
       - name: Upload frontend version (nightly, zero-traffic)
         working-directory: frontend

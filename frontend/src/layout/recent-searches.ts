@@ -28,3 +28,21 @@ export function pushRecent(query: string): string[] {
 	window.localStorage.setItem(KEY, JSON.stringify(next));
 	return next;
 }
+
+/** Forget the search history.
+ *
+ *  These are the user's own words — "severance agreement lawyer" — stored under
+ *  a key with no user in it and no expiry. On a shared machine the next person
+ *  to open the search panel reads them. Called on identity change, alongside
+ *  the query-cache clear and the CRDT wipe. */
+export function clearRecent(): void {
+	if (typeof window === "undefined") {
+		return;
+	}
+	try {
+		window.localStorage.removeItem(KEY);
+	} catch {
+		// Storage disabled or full — nothing to clear, and failing the sign-out
+		// path over a cache would be worse.
+	}
+}

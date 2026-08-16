@@ -31,4 +31,33 @@ defmodule EngramWeb.CSPPipelineTest do
     assert get_resp_header(conn, "x-frame-options") == ["DENY"]
     assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
   end
+
+  # frontend/public/_headers sets this too, but that file is Cloudflare Pages
+  # metadata — it covers ONLY the uploaded bundle. This pipeline serves the
+  # self-hosted SPA, which is also the ONLY deployment where password reset
+  # exists (RequireLocalAuth), so `/reset-password?token=` riding the Referer
+  # of every same-origin subresource is a self-host-specific leak.
+  #
+  # Asserting the exact value, not just presence: Phoenix's default here is
+  # `strict-origin-when-cross-origin`, which passes a presence check while
+  # sending the full path same-origin — the thing being fixed.
+  # The :api pipelines carried `x-frame-options: DENY` next to Phoenix's DEFAULT
+  # CSP, whose `frame-ancestors 'self'` supersedes it — so the whole REST
+  # surface advertised DENY and applied 'self'. Same defect as the OAuth
+  # pipeline, found in the same review, fixed in the same pass.
+  test "the api pipeline's CSP agrees with its x-frame-options", %{conn: conn} do
+    conn = get(conn, "/api/health")
+
+    assert get_resp_header(conn, "x-frame-options") == ["DENY"]
+    [csp] = get_resp_header(conn, "content-security-policy")
+    assert csp =~ "frame-ancestors 'none'"
+    refute csp =~ "frame-ancestors 'self'"
+  end
+
+  test "GET / sets referrer-policy to origin, matching the Cloudflare bundle",
+       %{conn: conn} do
+    conn = get(conn, "/")
+
+    assert get_resp_header(conn, "referrer-policy") == ["origin"]
+  end
 end

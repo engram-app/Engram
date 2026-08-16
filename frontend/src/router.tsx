@@ -140,7 +140,7 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 				{ path: ROUTES.SIGN_UP, element: <SignUpPage /> },
 				{ path: ROUTES.WAITLIST, element: <WaitlistPage /> },
 				// Public reset — the one-time token IS the credential.
-				{ path: "/reset-password", element: suspended(<ResetPasswordPage />) },
+				{ path: ROUTES.RESET_PASSWORD, element: suspended(<ResetPasswordPage />) },
 				// Dev-only connector QC gallery — spreads into nothing in production.
 				...(ConnectorQcPage
 					? [{ path: "/__qc/connectors", element: suspended(<ConnectorQcPage />) }]

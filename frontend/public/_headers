@@ -35,6 +35,12 @@
 /*
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
-  Referrer-Policy: strict-origin-when-cross-origin
+  # `origin`, not `strict-origin-when-cross-origin`: the latter sends the FULL
+  # URL on same-origin requests, and credentials arrive here in URLs —
+  # /link?code= and /reset-password?token=. Every same-origin fetch made while
+  # one is still in the address bar (including the lazy route chunk, which
+  # loads BEFORE the page can scrub it) carried it into the edge access log.
+  # `origin` sends the scheme+host and nothing else, everywhere.
+  Referrer-Policy: origin
   Permissions-Policy: geolocation=(), microphone=(), camera=(), payment=(self "https://*.paddle.com")
   Content-Security-Policy-Report-Only: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' https://clerk.engram.page https://*.clerk.accounts.dev https://cdn.paddle.com https://*.paddle.com https://us-assets.i.posthog.com https://static.cloudflareinsights.com https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' https://api.engram.page https://clerk.engram.page https://*.clerk.accounts.dev https://us.i.posthog.com https://us-assets.i.posthog.com https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.paddle.com https://cloudflareinsights.com; frame-src 'self' https://*.paddle.com https://clerk.engram.page https://challenges.cloudflare.com

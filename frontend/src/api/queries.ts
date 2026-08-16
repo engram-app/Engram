@@ -1123,7 +1123,11 @@ export function useUpdateProfile() {
 export function useDeleteSelf() {
 	return useMutation<void, Error, { password: string }>({
 		mutationFn: async ({ password }) => {
-			await api.del<void>(`/me?password=${encodeURIComponent(password)}`);
+			// Body, never the query string: a password in a URL lands in Phoenix's
+			// and the load balancer's access logs, in browser history, and in
+			// Sentry's fetch breadcrumb — none of which the user consented to
+			// when they typed it into a confirm dialog.
+			await api.del<void>("/me", { password });
 		},
 	});
 }

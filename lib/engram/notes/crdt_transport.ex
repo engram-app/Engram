@@ -219,7 +219,10 @@ defmodule Engram.Notes.CrdtTransport do
     :exit, reason ->
       Logger.error(
         "crdt transport room apply exited",
-        Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
+        Metadata.with_category(:error, :sync,
+          note_id: note_id,
+          reason: Metadata.safe_exit_reason(reason)
+        )
       )
 
       {:error, :room_unavailable}

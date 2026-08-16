@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { forgetCrdtDbs, knownCrdtDbs, rememberCrdtDb } from "./idb-registry";
 import { wipeCrdtIndexedDb } from "./idb-wipe";
 import { CRDT_IDB_PREFIX } from "./manager";
+import { QUEUE_DB_NAME } from "./op-queue-persist";
 
 /** Collects deleteDatabase calls; every request succeeds on the first attempt. */
 function stubIndexedDb(opts: { enumerate?: string[] | null }): string[] {
@@ -51,7 +52,11 @@ describe("wipeCrdtIndexedDb", () => {
 			},
 		});
 		await wipeCrdtIndexedDb();
-		expect(deleted).toEqual([`${CRDT_IDB_PREFIX}v1/notes/a.md`, `${CRDT_IDB_PREFIX}v2/notes/b.md`]);
+		// The queue DB is always in the set — it is named, not discovered, because
+		// its name falls outside the prefix this sweep matches.
+		expect(deleted.sort()).toEqual(
+			[`${CRDT_IDB_PREFIX}v1/notes/a.md`, `${CRDT_IDB_PREFIX}v2/notes/b.md`, QUEUE_DB_NAME].sort(),
+		);
 	});
 
 	// #873. This used to assert a NO-OP, which was the bug: on Firefox <126 the
@@ -67,7 +72,7 @@ describe("wipeCrdtIndexedDb", () => {
 		const deleted = stubIndexedDb({ enumerate: null });
 		await wipeCrdtIndexedDb();
 
-		expect(deleted.sort()).toEqual([a, b].sort());
+		expect(deleted.sort()).toEqual([a, b, QUEUE_DB_NAME].sort());
 	});
 
 	// Neither source is complete on its own: enumeration sees docs written by a
@@ -84,7 +89,7 @@ describe("wipeCrdtIndexedDb", () => {
 		const deleted = stubIndexedDb({ enumerate: [onlyEnumerated, both, "clerk-telemetry"] });
 		await wipeCrdtIndexedDb();
 
-		expect(deleted.sort()).toEqual([onlyEnumerated, onlyRemembered, both].sort());
+		expect(deleted.sort()).toEqual([onlyEnumerated, onlyRemembered, both, QUEUE_DB_NAME].sort());
 		// "clerk-telemetry" is same-origin but not ours.
 		expect(deleted).not.toContain("clerk-telemetry");
 		// Exactly once each, despite `both` appearing in two sources.
@@ -145,11 +150,14 @@ describe("wipeCrdtIndexedDb", () => {
 			deleteDatabase: (name: string) => {
 				attempts.push(name);
 				const req: Record<string, unknown> = {};
-				if (attempts.length === 1) {
-					// First call: fire onblocked
+				// Keyed on the NAME, not the call index: the wipe deletes the
+				// op-queue database in the same pass, so "first call" is no longer
+				// this database.
+				const firstTryOfTarget =
+					name === DB_NAME && attempts.filter((n) => n === DB_NAME).length === 1;
+				if (firstTryOfTarget) {
 					queueMicrotask(() => (req.onblocked as () => void)?.());
 				} else {
-					// Second call: succeed
 					queueMicrotask(() => (req.onsuccess as () => void)?.());
 				}
 				return req;
@@ -168,7 +176,32 @@ describe("wipeCrdtIndexedDb", () => {
 
 		await wipePromise;
 
-		expect(attempts).toHaveLength(2);
-		expect(attempts).toEqual([DB_NAME, DB_NAME]);
+		// Twice for the blocked target, once for the queue DB alongside it.
+		expect(attempts.filter((n) => n === DB_NAME)).toEqual([DB_NAME, DB_NAME]);
+		expect(attempts).toContain(QUEUE_DB_NAME);
+	});
+});
+
+describe("the durable op-queue is wiped too", () => {
+	// It is named "engram-crdt-queue" — one character outside the
+	// "engram-crdt/" prefix the enumeration sweep matches on, so it was never
+	// deleted. Its entries carry note paths (create ops store `{ path }`), so
+	// on a shared machine a note path outlived the sign-out meant to clear it.
+	it("deletes the queue database even though it is outside CRDT_IDB_PREFIX", async () => {
+		const deleted = stubIndexedDb({ enumerate: [] });
+
+		await wipeCrdtIndexedDb();
+
+		expect(deleted).toContain(QUEUE_DB_NAME);
+	});
+
+	// Firefox <126 / older Safari: no enumeration, so the name has to come from
+	// somewhere that does not depend on the browser.
+	it("still deletes it when the browser cannot enumerate databases", async () => {
+		const deleted = stubIndexedDb({ enumerate: null });
+
+		await wipeCrdtIndexedDb();
+
+		expect(deleted).toContain(QUEUE_DB_NAME);
 	});
 });
