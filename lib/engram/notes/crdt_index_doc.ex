@@ -55,9 +55,9 @@ defmodule Engram.Notes.CrdtIndexDoc do
   **On by default, and not behind a flag.** Note rooms take the drain as an
   opt-in because `auto_exit` already bounds them; this room does not have that
   luxury, so shipping it off would ship the measured 7.91 MB/vault residency and
-  call it done. `@default_idle_exit_ms` is the value, overridable per room for
-  tests. There is no "drain disabled" mode here to fall back to — the way back
-  is a different number, not a switch.
+  call it done. The interval resolves per-room opt -> `CRDT_IDLE_EXIT_MS` ->
+  `@default_idle_exit_ms`, and never to `nil`. There is no "drain disabled" mode
+  to fall back to — the way back is a different number, not a switch.
   """
 
   alias Engram.Notes.CrdtCheckpointTimer
@@ -132,10 +132,7 @@ defmodule Engram.Notes.CrdtIndexDoc do
           user_id: user_id,
           vault_id: vault_id,
           mode: :index,
-          # Explicit and never nil. The timer treats nil as "drain disabled",
-          # so falling through to its config fallback would have made this
-          # room's residency depend on a note-room knob being set.
-          idle_exit_ms: Keyword.get(opts, :idle_exit_ms, @default_idle_exit_ms)
+          idle_exit_ms: idle_exit_ms(opts)
         )
 
       # Same channel as the note room: update_v1 runs INSIDE this process, so
@@ -147,6 +144,20 @@ defmodule Engram.Notes.CrdtIndexDoc do
 
       result
     end
+  end
+
+  # Per-room opt, then the fleet-wide knob, then the default — and NEVER nil,
+  # which is how the timer spells "drain disabled".
+  #
+  # The middle rung matters: `CRDT_IDLE_EXIT_MS` (`ci/compose.yml`, 5 s) is what
+  # makes the Obsidian e2e suite exercise draining against the real client.
+  # Hard-coding past it would have left the index room's drain untested there —
+  # no e2e run lasts #{@default_idle_exit_ms} ms — which is precisely the
+  # coverage this room needs most, since nothing in prod writes the map yet.
+  defp idle_exit_ms(opts) do
+    Keyword.get(opts, :idle_exit_ms) ||
+      Application.get_env(:engram, CrdtCheckpointTimer, [])[:idle_exit_ms] ||
+      @default_idle_exit_ms
   end
 
   @doc false
