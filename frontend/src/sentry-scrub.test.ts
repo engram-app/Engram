@@ -98,6 +98,22 @@ describe("scrubUrl", () => {
 		}
 	});
 
+	// Fails closed. In a worker or SSR there is no `window`, so origin cannot be
+	// compared — and the safe answer is to treat the URL as ours and apply the
+	// allowlist, not to keep an unrecognised segment.
+	it("redacts an unknown first segment when there is no window to compare", () => {
+		const realWindow = globalThis.window;
+		// biome-ignore lint/performance/noDelete: restoring the global needs a true delete
+		delete (globalThis as { window?: unknown }).window;
+		try {
+			expect(scrubUrl("https://app.engram.page/divorce-2026/x")).toBe(
+				"https://app.engram.page/:seg/:seg",
+			);
+		} finally {
+			(globalThis as { window?: unknown }).window = realWindow;
+		}
+	});
+
 	// A relative URL has to work: fetch breadcrumbs record whatever was passed
 	// to fetch(), which in this app is usually "/api/...".
 	it("handles relative URLs, and keeps them relative", () => {

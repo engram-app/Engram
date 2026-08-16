@@ -166,9 +166,13 @@ export function scrubUrl(url: string): string {
 	//
 	// Relative URLs are the app's own (that is what fetch breadcrumbs carry on
 	// self-host), so they get the allowlist too.
+	// Fails CLOSED. With `window` absent (a worker, SSR, a test that stubs it
+	// away) an unknown origin is treated as ours, so the allowlist applies and
+	// an unrecognised first segment is redacted. The other direction would keep
+	// a vault slug in exactly the context nobody thought to check.
 	const relative = parsed.hostname === "x.invalid";
-	const ownOrigin =
-		relative || (typeof window !== "undefined" && parsed.origin === window.location.origin);
+	const noWindow = typeof window === "undefined";
+	const ownOrigin = relative || noWindow || parsed.origin === window.location.origin;
 	const segments = parsed.pathname.split("/");
 	const path = segments
 		.map((seg, i) => {

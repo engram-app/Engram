@@ -172,14 +172,25 @@ defmodule Engram.Notes.Utf8BackfillTest do
     test "a changeset built from note attrs carries no plaintext", %{user: user, vault: vault} do
       secret = "Dear diary, the biopsy came back positive."
 
+      # `data` is a LOADED note, not `%Note{}`. That is the shape the real path
+      # produces — notes.ex:1626 and :1872 both build `prior |> Note.changeset(...)`
+      # — and it is the only shape under which invariant (1) is load-bearing:
+      # with an empty struct as data, no expansion of `data` could reveal the
+      # secret, so an empty base tested nothing about Ecto's Inspect impl.
+      loaded = %Note{content: secret, title: "Biopsy results", path: "Medical/biopsy.md"}
+
       changeset =
-        Note.changeset(%Note{}, %{
+        Note.changeset(loaded, %{
           "content" => secret,
           "title" => "Biopsy results",
           "path" => "Medical/biopsy.md",
           "user_id" => user.id,
           "vault_id" => vault.id
         })
+
+      # Self-proving: the struct really does hold the secret, so this test is
+      # measuring Ecto's Inspect impl rather than an empty base.
+      assert inspect(loaded) =~ "biopsy"
 
       rendered = inspect(changeset)
 

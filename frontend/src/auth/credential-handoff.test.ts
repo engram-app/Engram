@@ -58,10 +58,13 @@ describe("credential handoff", () => {
 	// `pathname` as written. The stash side reads location.pathname; the page
 	// names its own route. Without normalization those disagree and the code is
 	// dropped silently — and unrecoverably, since a rejected stash is removed.
-	it.each(["/link/", "/Link", "/LINK/"])("matches %s against /link", (arrival) => {
-		stashCredential("code", "ENGR-7X4K", arrival);
-		expect(takeCredential("code", "/link")).toBe("ENGR-7X4K");
-	});
+	it.each(["/link/", "/Link", "/LINK/", "/link//", "/Link///"])(
+		"matches %s against /link",
+		(arrival) => {
+			stashCredential("code", "ENGR-7X4K", arrival);
+			expect(takeCredential("code", "/link")).toBe("ENGR-7X4K");
+		},
+	);
 
 	// Normalizing must not make unrelated paths collide.
 	it("still rejects a genuinely different path", () => {

@@ -68,12 +68,23 @@ defmodule EngramWeb.Router do
     # and render_server_error/2 both send `text/html`), so the OAuth entry
     # point was serving framable, sniffable documents with no headers at all.
     #
-    # Same set as :spa minus CSP, which is built for the SPA's integrations and
-    # would not describe these self-contained error pages.
+    # The CSP is set EXPLICITLY, not left to the default. `put_secure_browser_headers/2`
+    # runs `put_secure_defaults/1` first and merges your map over it, so it
+    # always emits a CSP — Phoenix's default is `frame-ancestors 'self'`, and
+    # per CSP Level 2 §7.4.1 `frame-ancestors` SUPERSEDES `x-frame-options` in
+    # every browser that supports both. Sending DENY next to a default CSP
+    # produces an effective policy of `'self'`: the header says one thing and
+    # the browser does another.
+    #
+    # `default-src 'none'` is exact here rather than merely strict — these
+    # pages are a heading and two paragraphs, with no script, style, image or
+    # fetch of any kind. It also applies to this pipeline's JSON routes, where
+    # a CSP is inert.
     plug :put_secure_browser_headers, %{
       "x-content-type-options" => "nosniff",
       "x-frame-options" => "DENY",
-      "referrer-policy" => "origin"
+      "referrer-policy" => "origin",
+      "content-security-policy" => "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
     }
   end
 

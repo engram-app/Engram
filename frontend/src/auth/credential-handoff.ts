@@ -45,8 +45,14 @@ const PREFIX = "engram:handoff:";
  *  match `/link`, and the code was dropped — silently, and unrecoverably,
  *  since a rejected stash is also removed. */
 function normalizePath(pathname: string): string {
-	const lower = pathname.toLowerCase();
-	return lower.length > 1 && lower.endsWith("/") ? lower.slice(0, -1) : lower;
+	// ALL trailing slashes, not one: `/link//` stripped once is still `/link/`,
+	// which misses `/link` and drops the code silently — the same failure this
+	// function exists to prevent, one slash further out.
+	let path = pathname.toLowerCase();
+	while (path.length > 1 && path.endsWith("/")) {
+		path = path.slice(0, -1);
+	}
+	return path;
 }
 
 /** Query params that are credentials rather than navigation state. */
