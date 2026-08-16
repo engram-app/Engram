@@ -31,23 +31,56 @@ defmodule Engram.Notes.CrdtIndexDoc do
   projection is a no-op — which is a statement about the client we ship, not
   about what the server accepts.
 
-  ## Why there is still no idle drain here
+  ## The idle drain (#1152)
 
-  Note rooms opt into the #1152 drain safely because `terminate/2` runs
-  `CrdtPersistence.unbind/3`, which checkpoints before the room goes away. As of
-  #1151 this room has that too — so the drain is now *safe* here, but it is not
-  *wired*, and those are different things.
+  Draining a room is lossless only if something checkpoints it on the way out.
+  #1151 gave this room that (`CrdtIndexPersistence.unbind/3`), and #1391 gave it
+  a tail log so an ungraceful death is survivable too. Both were prerequisites;
+  neither wired anything up.
 
-  **Still no `idle_exit_ms` and no `CrdtCheckpointTimer`.** The timer is
-  note-keyed: `note_id` threads through its state and its `CrdtRoomLru.touch/3`
-  call, so serving this room means generalising it rather than passing an
-  option. Until then residency here is bounded only by `auto_exit` on the last
-  observer, which is session-length — the open item named in
-  `docs/context/crdt-index-room.md`.
+  It is wired now. `start_link/1` starts a `CrdtCheckpointTimer` in `mode:
+  :index`, which is the timer generalised off `note_id` — it keys on `vault_id`
+  and, crucially, **never checkpoints on a tick**. Only the room's own
+  persistence state knows which tail rows failed to replay, so a checkpoint that
+  did not come from `unbind/3` would prune rows it never folded in. The drain is
+  the mechanism instead: observers let go, `auto_exit` fires on the last one,
+  and `terminate/2` checkpoints with the state that has the answer.
 
+  This matters more here than for a note room. `auto_exit` bounds a note room
+  well, because a note is observed only while it is open. This room is observed
+  for as long as ANY socket on the vault is connected, so without the drain its
+  residency is session-length and tracks concurrent connections rather than
+  mutation rate.
+
+  **On by default, and not behind a flag.** Note rooms take the drain as an
+  opt-in because `auto_exit` already bounds them; this room does not have that
+  luxury, so shipping it off would ship the measured 7.91 MB/vault residency and
+  call it done. `@default_idle_exit_ms` is the value, overridable per room for
+  tests. There is no "drain disabled" mode here to fall back to — the way back
+  is a different number, not a switch.
   """
 
+  alias Engram.Notes.CrdtCheckpointTimer
+
   @map_name "filemeta_v0"
+
+  # The drain is ON for this room, unconditionally — not a flag, not opt-in.
+  #
+  # Unlike a note room, which `auto_exit` bounds well because a note is observed
+  # only while it is open, this room is observed for as long as ANY socket on
+  # the vault is connected. Without a drain its residency is session-length,
+  # which #1149 measured at 7.91 MB per 10k-note vault. Shipping that OFF by
+  # default would mean shipping the measured problem and calling it done.
+  #
+  # Draining is lossless and cheap to undo: `terminate/2` checkpoints, the tail
+  # log covers an ungraceful death, and the next index frame re-spins the room
+  # through `ensure_index_room/1`. The cost of a wrong value is a re-bind
+  # (decrypt + replay), not a lost claim.
+  #
+  # 5 minutes of no index WRITES — renames, creates, deletes. A client that is
+  # merely connected and reading generates no activity here, which is the point:
+  # residency should track mutation, not connection count.
+  @default_idle_exit_ms 300_000
 
   @doc """
   The `Y.Map` name holding `path -> %{note_id, type, hash}`.
@@ -67,17 +100,53 @@ defmodule Engram.Notes.CrdtIndexDoc do
     vault_id = Keyword.fetch!(opts, :vault_id)
     user_id = Keyword.fetch!(opts, :user_id)
 
-    Yex.Sync.SharedDoc.start_link(
-      [
-        doc_name: vault_id,
-        # Must match CrdtBridge.new_doc/0 — UTF-16 offsets are wire-compatible
-        # with Yjs JS clients; the y_ex default (:bytes) is NOT.
-        doc_option: %Yex.Doc.Options{offset_kind: :utf16},
-        persistence: {Engram.Notes.CrdtIndexPersistence, %{user_id: user_id, vault_id: vault_id}},
-        auto_exit: true
-      ],
-      name: Engram.Notes.CrdtIndexRegistry.global_name(vault_id)
-    )
+    result =
+      Yex.Sync.SharedDoc.start_link(
+        [
+          doc_name: vault_id,
+          # Must match CrdtBridge.new_doc/0 — UTF-16 offsets are wire-compatible
+          # with Yjs JS clients; the y_ex default (:bytes) is NOT.
+          doc_option: %Yex.Doc.Options{offset_kind: :utf16},
+          persistence:
+            {Engram.Notes.CrdtIndexPersistence, %{user_id: user_id, vault_id: vault_id}},
+          auto_exit: true
+        ],
+        name: Engram.Notes.CrdtIndexRegistry.global_name(vault_id)
+      )
+
+    with {:ok, room_pid} <- result do
+      # #1152's remaining half. `auto_exit` alone bounds a NOTE room, which is
+      # observed only while the note is open — but this room is observed for as
+      # long as any socket on the vault is connected, so its lifetime is
+      # session-length and its residency tracks concurrent connections rather
+      # than mutation rate.
+      #
+      # `mode: :index` because the timer is otherwise note-keyed and would
+      # checkpoint on every tick. This room must NOT: only its own persistence
+      # state knows which tail rows failed to replay, so the checkpoint has to
+      # come from `unbind/3`. The drain is what gets it there — observers let
+      # go, auto_exit fires, terminate checkpoints.
+      {:ok, timer_pid} =
+        CrdtCheckpointTimer.start_link(
+          room_pid: room_pid,
+          user_id: user_id,
+          vault_id: vault_id,
+          mode: :index,
+          # Explicit and never nil. The timer treats nil as "drain disabled",
+          # so falling through to its config fallback would have made this
+          # room's residency depend on a note-room knob being set.
+          idle_exit_ms: Keyword.get(opts, :idle_exit_ms, @default_idle_exit_ms)
+        )
+
+      # Same channel as the note room: update_v1 runs INSIDE this process, so
+      # it reads the timer pid straight out of the process dictionary rather
+      # than doing a registry lookup on every update.
+      Yex.Sync.SharedDoc.update_doc(room_pid, fn _doc ->
+        Process.put(:crdt_timer_pid, timer_pid)
+      end)
+
+      result
+    end
   end
 
   @doc false

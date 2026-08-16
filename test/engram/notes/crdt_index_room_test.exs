@@ -124,12 +124,17 @@ defmodule Engram.Notes.CrdtIndexRoomTest do
     end
   end
 
-  describe "inertness" do
-    # The index room has NO persistence until #1151, so a drain would exit it
-    # and take the whole index with it. `terminate/2` -> unbind is exactly what
-    # makes draining a NOTE room lossless, and the index room has no such
-    # thing yet. Enabling #1152 here before #1151 lands is silent index loss.
-    test "the room runs NO checkpoint timer, so it cannot drain itself away", ctx do
+  describe "room lifetime" do
+    # INVERTED (#1152). This used to assert `timers == []` — that the room ran
+    # no timer at all — because a drain with no `terminate/2` checkpoint behind
+    # it would have exited the room and taken the whole index with it.
+    #
+    # Both prerequisites have since landed: #1151 gave the room a checkpoint on
+    # unbind, and #1391 gave it a tail log so even an ungraceful death is
+    # survivable. The room now runs a timer, and what has to be pinned is no
+    # longer its absence but its SHAPE — an index-mode timer that never ticks a
+    # checkpoint of its own.
+    test "the room runs an INDEX-mode timer, which never checkpoints on a tick", ctx do
       {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
 
       # Inspect what the room is actually LINKED to, not the opts this test
@@ -149,9 +154,31 @@ defmodule Engram.Notes.CrdtIndexRoomTest do
             )
         end)
 
-      assert timers == [],
-             "the index room must not drain until #1151 gives it a checkpoint — " <>
-               "draining it now would exit the room and take the whole index with it"
+      assert [timer] = timers,
+             "the index room runs no checkpoint timer, so nothing can ever drain it " <>
+               "and its residency stays session-length (#1152)"
+
+      state = :sys.get_state(timer)
+
+      # `:index`, not `:note`. A note-mode timer would tick `CrdtCheckpoint`
+      # against this room — and an index checkpoint that does not come from
+      # `unbind/3` cannot know which tail rows failed to replay, so it would
+      # prune claims it never folded in (#1391).
+      assert state.mode == :index
+      assert state.room_key == ctx.vault.id
+
+      # ON, not opt-in. `nil` is how the timer spells "drain disabled", so a
+      # room that fell through to the note-room config fallback would go back to
+      # session-length residency the moment that knob was unset — the measured
+      # 7.91 MB/vault (#1149), shipped silently.
+      assert is_integer(state.idle_exit_ms) and state.idle_exit_ms > 0,
+             "the index room's drain must not depend on a flag being set"
+
+      # A tick must be inert rather than merely unlikely. Drive one directly:
+      # the note path would crash on a nil note.
+      send(timer, :tick)
+      Process.sleep(50)
+      assert Process.alive?(timer)
     end
 
     test "a crashed room is not resurrected observer-less" do

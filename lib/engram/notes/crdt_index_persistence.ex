@@ -43,28 +43,23 @@ defmodule Engram.Notes.CrdtIndexPersistence do
 
   Note rooms bound their tail three ways — `CrdtCheckpointTimer` debounces a
   flush, `update_v1/4` can checkpoint inline under `CheckpointGate`, and
-  overflow goes to the `crdt_checkpoint` Oban queue. This room has none of them
-  (`CrdtIndexDoc` runs no timer and sets no `idle_exit_ms`), so residency is
-  session-length and the only prune is `unbind/3`.
+  overflow goes to the `crdt_checkpoint` Oban queue. This room has exactly one:
+  `unbind/3`. Nothing folds the tail while the room is alive, deliberately —
+  only the room's persistence state knows which rows failed to replay, so a
+  checkpoint from anywhere else would prune rows it never folded in.
 
-  So the tail grows unbounded for: a room pinned open by a long-lived observer,
-  a crash loop that never reaches `terminate/2`, and every room exit during a
-  DEK rotation (the checkpoint is gated, so it skips the prune too). There is no
-  age sweep, no size cap and no reaper; the `on_delete: :delete_all` FKs only
-  fire when the user or vault is deleted.
+  What bounds it is therefore the room EXITING, and #1152's idle drain is what
+  makes that happen on a timer rather than on the last socket disconnecting
+  (`CrdtIndexDoc` wires it; see there). With the drain off, the tail still grows
+  unbounded for: a room pinned open by a long-lived observer, a crash loop that
+  never reaches `terminate/2`, and every room exit during a DEK rotation (the
+  checkpoint is gated, so it skips the prune too). There is no age sweep, no
+  size cap and no reaper; the `on_delete: :delete_all` FKs only fire when the
+  user or vault is deleted.
 
-  Tolerable today because index writes are rename/create/delete rather than
+  Tolerable because index writes are rename/create/delete rather than
   keystrokes, so the volume is orders of magnitude below a note tail, and
-  because replay is idempotent. It stops being tolerable at the same point
-  everything else here does — generalising `CrdtCheckpointTimer` off `note_id`
-  is #1151 step 3, and that is what bounds this.
-
-  ## This is what unblocks the #1152 drain for the index room
-
-  `CrdtIndexDoc` runs no `CrdtCheckpointTimer` and sets no `idle_exit_ms`,
-  because draining a room is lossless only if something checkpoints it on the
-  way out. That is now this module. Opting the index room in is a follow-up,
-  not an automatic consequence — see `docs/context/crdt-index-room.md`.
+  because replay is idempotent.
   """
   @behaviour Yex.Sync.SharedDoc.PersistenceBehaviour
 
@@ -74,7 +69,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{Enqueue, VaultIndexState, VaultIndexUpdateLog}
+  alias Engram.Notes.{CrdtCheckpointTimer, Enqueue, VaultIndexState, VaultIndexUpdateLog}
   alias Engram.Repo
 
   require Logger
@@ -117,6 +112,18 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   end
 
   defp do_update_v1(state, user_id, vault_id, update) do
+    # Postpone the idle drain (#1152). Signalled for EVERY update, including one
+    # whose tail append fails below: activity is about whether the room is in
+    # use, not whether the write succeeded, and draining a room a client is
+    # actively writing to is the churn the whole re-arm design avoids.
+    #
+    # Runs inside the room process, so the timer pid comes from the process
+    # dictionary — `CrdtIndexDoc.start_link/1` put it there.
+    case Process.get(:crdt_timer_pid) do
+      pid when is_pid(pid) -> CrdtCheckpointTimer.notify_activity(pid)
+      _ -> :ok
+    end
+
     with {:ok, user} <- fetch_user(user_id),
          :ok <- append_tail(user, vault_id, update) do
       state
