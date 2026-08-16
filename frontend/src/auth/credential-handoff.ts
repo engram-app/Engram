@@ -37,6 +37,18 @@
 
 const PREFIX = "engram:handoff:";
 
+/** Paths compare after normalization, because the two sides read it from
+ *  different places: the stash side takes `location.pathname` verbatim, while
+ *  the consuming page names its own route (`ROUTES.DEVICE_LINK`). React-router
+ *  matches `/link/` and `/Link` to `path="/link"` but leaves `pathname` as
+ *  written, so an arrival at `/link/?code=…` stashed under `/link/`, failed to
+ *  match `/link`, and the code was dropped — silently, and unrecoverably,
+ *  since a rejected stash is also removed. */
+function normalizePath(pathname: string): string {
+	const lower = pathname.toLowerCase();
+	return lower.length > 1 && lower.endsWith("/") ? lower.slice(0, -1) : lower;
+}
+
 /** Query params that are credentials rather than navigation state. */
 export const CREDENTIAL_PARAMS = ["code", "token"] as const;
 
@@ -45,7 +57,10 @@ export function stashCredential(name: string, value: string, pathname: string): 
 		return;
 	}
 	try {
-		window.sessionStorage.setItem(PREFIX + name, JSON.stringify({ value, pathname }));
+		window.sessionStorage.setItem(
+			PREFIX + name,
+			JSON.stringify({ value, pathname: normalizePath(pathname) }),
+		);
 	} catch {
 		// Storage disabled or full. The user retypes the code; losing the flow
 		// entirely would be worse than the inconvenience.
@@ -71,7 +86,7 @@ export function takeCredential(name: string, pathname: string): string {
 		// so drop it: the user retypes, which is what they did before any of
 		// this existed.
 		const parsed = JSON.parse(raw) as { value?: string; pathname?: string };
-		return parsed?.pathname === pathname ? (parsed.value ?? "") : "";
+		return parsed?.pathname === normalizePath(pathname) ? (parsed.value ?? "") : "";
 	} catch {
 		return "";
 	}

@@ -20,13 +20,12 @@ describe("scrubUrl", () => {
 	// Host and first segment survive so a breadcrumb can still say WHICH
 	// endpoint failed; everything after is the user's.
 	it("keeps the host and first segment, redacts the rest", () => {
-		expect(scrubUrl("https://app.engram.page/attachments/Medical/labs.pdf")).toBe(
-			"https://app.engram.page/attachments/:seg/:seg",
-		);
+		const app = window.location.origin;
+		expect(scrubUrl(`${app}/attachments/Medical/labs.pdf`)).toBe(`${app}/attachments/:seg/:seg`);
 	});
 
 	it("does not leak a folder or filename", () => {
-		const out = scrubUrl("https://app.engram.page/attachments/Medical/2026-lab-results.pdf");
+		const out = scrubUrl(`${window.location.origin}/attachments/Medical/2026-lab-results.pdf`);
 		expect(out).not.toContain("Medical");
 		expect(out).not.toContain("lab-results");
 	});
@@ -55,15 +54,30 @@ describe("scrubUrl", () => {
 	// route IS user data. The wikilink test above passed throughout, because
 	// it only asserted on the note title and never looked at "vault-slug".
 	it("redacts the vault slug, which is a user-typed vault name", () => {
-		expect(scrubUrl("https://app.engram.page/divorce-2026/note-abc")).toBe(
-			"https://app.engram.page/:seg/:seg",
-		);
-		expect(scrubUrl("https://app.engram.page/my-therapy-vault")).toBe(
-			"https://app.engram.page/:seg",
-		);
+		const app = window.location.origin;
+		expect(scrubUrl(`${app}/divorce-2026/note-abc`)).toBe(`${app}/:seg/:seg`);
+		expect(scrubUrl(`${app}/my-therapy-vault`)).toBe(`${app}/:seg`);
+		// Relative is the same surface — that is what fetch breadcrumbs carry
+		// on self-host.
+		expect(scrubUrl("/divorce-2026/note-abc")).toBe("/:seg/:seg");
 	});
 
-	it("still keeps our own first segments, which is the point of keeping any", () => {
+	// On SaaS the API lives on its own host AND joinApiUrl strips the `/api`
+	// prefix, so these arrive as `/search`, `/folders`, `/notes`. Applying the
+	// route allowlist to them redacted every endpoint name in prod — and SaaS
+	// is the only deployment with a DSN, so that was the only behaviour that
+	// ran. A foreign origin cannot carry a vault slug in segment 1.
+	it("keeps the endpoint name on a foreign origin, and still redacts below it", () => {
+		expect(scrubUrl("https://api.engram.page/search?q=cancer")).toBe(
+			"https://api.engram.page/search?q=:v",
+		);
+		expect(scrubUrl("https://api.engram.page/notes/Medical/labs.md")).toBe(
+			"https://api.engram.page/notes/:seg/:seg",
+		);
+		expect(scrubUrl("https://api.engram.page/folders")).toBe("https://api.engram.page/folders");
+	});
+
+	it("still keeps our own route segments, which is the point of keeping any", () => {
 		expect(scrubUrl("/api/search")).toBe("/api/:seg");
 		expect(scrubUrl("/attachments/Medical/labs.pdf")).toBe("/attachments/:seg/:seg");
 		expect(scrubUrl("/onboard/billing")).toBe("/onboard/:seg");
@@ -74,14 +88,13 @@ describe("scrubUrl", () => {
 	// ROUTES while a vault slug of the same name exists is the leak direction.
 	// Either way the two lists must agree, and this fails when they don't.
 	it("keeps every first segment declared in ROUTES", () => {
+		const app = window.location.origin;
 		for (const route of Object.values(ROUTES)) {
 			const [, segment] = route.split("/");
 			if (!segment) {
 				continue;
 			}
-			expect(scrubUrl(`https://app.engram.page/${segment}/x`)).toBe(
-				`https://app.engram.page/${segment}/:seg`,
-			);
+			expect(scrubUrl(`${app}/${segment}/x`)).toBe(`${app}/${segment}/:seg`);
 		}
 	});
 
@@ -102,7 +115,7 @@ describe("scrubUrl", () => {
 	});
 
 	it("keeps the root path recognisable", () => {
-		expect(scrubUrl("https://app.engram.page/")).toBe("https://app.engram.page/");
+		expect(scrubUrl(`${window.location.origin}/`)).toBe(`${window.location.origin}/`);
 	});
 
 	// The fragment carries heading slugs derived from note body text.

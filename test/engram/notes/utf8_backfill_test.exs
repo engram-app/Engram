@@ -144,4 +144,66 @@ defmodule Engram.Notes.Utf8BackfillTest do
     assert result.corrupt == 0
     assert result.fixed == 0
   end
+
+  # ---------------------------------------------------------------------------
+  # Log-leak tripwire for fix_note/3's error branch
+  # ---------------------------------------------------------------------------
+  #
+  # That branch renders whatever the `with` rejected into a Logger message
+  # BODY, which RedactFilter cannot scrub — it gates metadata by key and says so
+  # in its own moduledoc. `format_reason/1` drops the one content-bearing shape
+  # (`{:error, :version_conflict, %Note{}}`) to a bare label and inspects the
+  # rest.
+  #
+  # The rest includes `{:error, %Ecto.Changeset{}}`, which upsert_note/4 really
+  # can return. That is safe ONLY because of two things this module does not
+  # own, so both are pinned here rather than trusted:
+  #
+  #   1. Ecto's Inspect impl prints `data` as `#Engram.Notes.Note<>` instead of
+  #      expanding the struct.
+  #   2. Note.changeset/2's cast list excludes the virtual :content/:title/
+  #      :path, so they never reach `changes`.
+  #
+  # Break either and note plaintext reappears in CloudWatch, Loki and Sentry.
+  # Version conflict is not reachable from the backfill (it never declares a
+  # version), which is why this pins the invariants rather than driving the
+  # branch end to end.
+  describe "note content cannot reach the backfill's failure log" do
+    test "a changeset built from note attrs carries no plaintext", %{user: user, vault: vault} do
+      secret = "Dear diary, the biopsy came back positive."
+
+      changeset =
+        Note.changeset(%Note{}, %{
+          "content" => secret,
+          "title" => "Biopsy results",
+          "path" => "Medical/biopsy.md",
+          "user_id" => user.id,
+          "vault_id" => vault.id
+        })
+
+      rendered = inspect(changeset)
+
+      refute rendered =~ secret
+      refute rendered =~ "Biopsy results"
+      refute rendered =~ "Medical/biopsy.md"
+    end
+
+    test "the changeset cast list never takes the virtual plaintext fields",
+         %{user: user, vault: vault} do
+      changeset =
+        Note.changeset(%Note{}, %{
+          "content" => "secret body",
+          "title" => "secret title",
+          "path" => "secret/path.md",
+          "user_id" => user.id,
+          "vault_id" => vault.id
+        })
+
+      for field <- [:content, :title, :path] do
+        refute Map.has_key?(changeset.changes, field),
+               "#{field} is now cast into the changeset — it will render in any " <>
+                 "log line that inspects an {:error, changeset} from upsert_note"
+      end
+    end
+  end
 end

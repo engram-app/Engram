@@ -3241,6 +3241,18 @@ defmodule Engram.Notes do
     end
   end
 
+  # A short, non-reversible handle for log lines. Base64 of the path HMAC,
+  # truncated — enough to correlate two lines about the same note, useless for
+  # recovering the path.
+  #
+  # binary_slice, not binary_part: the latter raises below 12 chars. Today the
+  # HMAC is always SHA-256 (44 chars), but this sits INSIDE a rescue whose only
+  # job is isolation, and a log helper must not be the thing that breaks it.
+  defp hmac_ref(%{path_hmac: hmac}) when is_binary(hmac),
+    do: hmac |> Base.encode64() |> binary_slice(0..11)
+
+  defp hmac_ref(_entry), do: "unknown"
+
   defp process_batch_entry(%{result: nil} = entry, existing_by_hmac, user, vault, now, rows) do
     process_batch_entry_rescued(entry, rows, fn ->
       case Map.get(existing_by_hmac, entry.path_hmac) do
@@ -3309,14 +3321,6 @@ defmodule Engram.Notes do
   # pass a fn that runs a real failing Repo query (a plain `raise` will NOT
   # exercise the savepoint, since it never enters 25P02).
   @doc false
-  # A short, non-reversible handle for log lines. Base64 of the path HMAC,
-  # truncated — enough to correlate two lines about the same note, useless for
-  # recovering the path.
-  defp hmac_ref(%{path_hmac: hmac}) when is_binary(hmac),
-    do: hmac |> Base.encode64() |> binary_part(0, 12)
-
-  defp hmac_ref(_entry), do: "unknown"
-
   @spec process_batch_entry_rescued(map(), list(), (-> {map(), list()})) :: {map(), list()}
   def process_batch_entry_rescued(entry, rows, fun) do
     fun.()
@@ -3330,13 +3334,21 @@ defmodule Engram.Notes do
       # around the redaction rather than a reason to bypass it. A path is
       # folder structure plus a title, and Sentry is a third party.
       #
-      # The exception reason still interpolates — that is our own text — and
-      # the path stays in metadata, where prod's JSON formatter puts it into
-      # Loki (ours) and the allowlist keeps it out of Sentry (not ours).
-      # On-call correlates on the path HMAC, which is already how this module
-      # indexes paths: non-reversible, and it joins to the same row.
+      # Only the exception CLASS goes in the body. `Exception.message/1` is not
+      # "our own text": CaseClauseError, MatchError, Protocol.UndefinedError,
+      # Jason.EncodeError and Postgrex.Error all render `inspect(term)` of the
+      # offending value, and this rescue wraps frontmatter parsing, CRDT merge
+      # and encryption — every one of which handles note content. A raise over
+      # a note body printed the body:
+      #
+      #   batch entry raised ... (no case clause matching:
+      #     {:parsed, "Dear diary, the biopsy came back positive."})
+      #
+      # The full message stays in metadata under `error`, where RedactFilter
+      # and the Sentry allowlist can gate it. On-call correlates on the path
+      # HMAC: non-reversible, and it joins to the same row.
       Logger.error(
-        "batch entry raised, degrading note path_hmac=#{hmac_ref(entry)} (#{Exception.message(e)})",
+        "batch entry raised, degrading note path_hmac=#{hmac_ref(entry)} (#{inspect(e.__struct__)})",
         Metadata.with_category(:error, :sync,
           path: entry.path,
           error: Exception.message(e)

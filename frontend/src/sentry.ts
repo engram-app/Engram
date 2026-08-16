@@ -22,15 +22,14 @@ const KNOWN_FIRST_SEGMENTS = new Set<string>([
 	// Router literals with no ROUTES constant.
 	"onboard",
 	"settings",
-	"reset-password",
 	"note",
 	"__qc",
-	// Backend prefixes seen in fetch/xhr breadcrumb URLs.
+	// Backend prefixes the SPA actually fetches same-origin (self-host shape;
+	// on SaaS these live on the API host, which is not our origin and so keeps
+	// its first segment anyway).
 	"api",
 	"attachments",
 	"socket",
-	"webhooks",
-	".well-known",
 	// Vite build output.
 	"assets",
 ]);
@@ -150,11 +149,26 @@ export function scrubUrl(url: string): string {
 	// switched on: "/:seg/:seg" cannot tell /api/search from /api/folders, and
 	// dropping the origin hid which service answered.
 	//
-	// But "keep segment 1" is wrong for this router. `/:slug` (router.tsx) is
+	// But "keep segment 1" is wrong for OUR OWN ORIGIN. `/:slug` (router.tsx) is
 	// the VAULT route, and the slug is slugify(vault.name) — a user-typed name.
 	// A vault called "Divorce 2026" put `divorce-2026` into every navigation
 	// breadcrumb and every event's request.url, on the app's most-travelled
-	// route. An allowlist keeps the diagnostic value and closes that.
+	// route.
+	//
+	// The allowlist only applies there. On any OTHER origin a first segment
+	// cannot be a vault slug: SaaS calls the API on a separate host
+	// (`api.engram.page`), and `joinApiUrl` STRIPS the `/api` prefix when an
+	// apiBase is set (api/base.ts) — so those URLs read `/search`, `/folders`,
+	// `/notes`. Running the route allowlist over them redacted every endpoint
+	// name in prod, which is the exact "cannot tell /api/search from
+	// /api/folders" uselessness this function was written to avoid. And SaaS is
+	// the only deployment with a DSN, so that was the only behaviour that ran.
+	//
+	// Relative URLs are the app's own (that is what fetch breadcrumbs carry on
+	// self-host), so they get the allowlist too.
+	const relative = parsed.hostname === "x.invalid";
+	const ownOrigin =
+		relative || (typeof window !== "undefined" && parsed.origin === window.location.origin);
 	const segments = parsed.pathname.split("/");
 	const path = segments
 		.map((seg, i) => {
@@ -162,7 +176,7 @@ export function scrubUrl(url: string): string {
 				return seg;
 			}
 			if (i === 1) {
-				return KNOWN_FIRST_SEGMENTS.has(seg) ? seg : ":seg";
+				return !ownOrigin || KNOWN_FIRST_SEGMENTS.has(seg) ? seg : ":seg";
 			}
 			return ":seg";
 		})

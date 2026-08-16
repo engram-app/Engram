@@ -54,6 +54,21 @@ describe("credential handoff", () => {
 		expect(takeCredential("code", "/link")).toBe("");
 	});
 
+	// React-router matches `/link/` and `/Link` to `path="/link"` but leaves
+	// `pathname` as written. The stash side reads location.pathname; the page
+	// names its own route. Without normalization those disagree and the code is
+	// dropped silently — and unrecoverably, since a rejected stash is removed.
+	it.each(["/link/", "/Link", "/LINK/"])("matches %s against /link", (arrival) => {
+		stashCredential("code", "ENGR-7X4K", arrival);
+		expect(takeCredential("code", "/link")).toBe("ENGR-7X4K");
+	});
+
+	// Normalizing must not make unrelated paths collide.
+	it("still rejects a genuinely different path", () => {
+		stashCredential("code", "ENGR-7X4K", "/linkedin");
+		expect(takeCredential("code", "/link")).toBe("");
+	});
+
 	// A tab left open across a deploy holds a stash written by the old build:
 	// a bare string with no stamp. Unverifiable means dropped — the user
 	// retypes, which is what they did before any of this existed.

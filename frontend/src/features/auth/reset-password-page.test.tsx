@@ -15,6 +15,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stashCredential } from "@/auth/credential-handoff";
+import { signInRedirectTarget } from "@/auth/sign-in-redirect";
 import ResetPasswordPage from "./ResetPasswordPage";
 
 // AuthShell renders ThemeToggle, which reads a theme context this suite has no
@@ -144,6 +145,20 @@ describe("ResetPasswordPage token handling", () => {
 
 		await waitFor(() => expect(fetchMock).toHaveBeenCalled());
 		expect(sentBody(0).token).toBe("new-tok");
+	});
+
+	// Pins RESET_PATH against the OTHER side of the handoff. Every other test
+	// here stashes and takes through the page, which uses one constant for both
+	// — so they stay green for any value of it, including a wrong one. This one
+	// routes through signInRedirectTarget, which reads the real pathname.
+	it("accepts a token stashed by the sign-in redirect from this path", async () => {
+		signInRedirectTarget({ pathname: "/reset-password", search: "?token=redirect-tok", hash: "" });
+
+		renderPage("/reset-password");
+		await submitPasswords("hunter2hunter2");
+
+		await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+		expect(sentBody(0).token).toBe("redirect-tok");
 	});
 
 	// Handoffs are stamped with the path they were captured on. A device code

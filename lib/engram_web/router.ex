@@ -62,6 +62,19 @@ defmodule EngramWeb.Router do
   pipeline :oauth_api do
     plug :accepts, ["json"]
     plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
+
+    # Not all of this pipeline answers JSON. `GET /oauth/authorize` renders
+    # HTML on the error paths (OAuthAuthorizeController.render_client_error/2
+    # and render_server_error/2 both send `text/html`), so the OAuth entry
+    # point was serving framable, sniffable documents with no headers at all.
+    #
+    # Same set as :spa minus CSP, which is built for the SPA's integrations and
+    # would not describe these self-contained error pages.
+    plug :put_secure_browser_headers, %{
+      "x-content-type-options" => "nosniff",
+      "x-frame-options" => "DENY",
+      "referrer-policy" => "origin"
+    }
   end
 
   # OpenAPI spec serving — PutApiSpec needs its `module:` option, which a

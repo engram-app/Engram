@@ -45,6 +45,25 @@ defmodule EngramWeb.UserSocketTest do
     refute log =~ token
   end
 
+  # Phoenix matches filter_parameters by SUBSTRING on the key, so the entries
+  # are prefixes/fragments, not names. "token" does NOT cover device_code —
+  # which redeems into both an access and a refresh token, and so is a bearer
+  # credential in its own right for its 300s life.
+  test "filters credential-bearing param names, not just exact matches", %{token: token} do
+    log =
+      capture_log(fn ->
+        assert {:ok, _socket} =
+                 connect(UserSocket, %{
+                   "token" => token,
+                   "device_code" => "dev-code-secret",
+                   "code_verifier" => "pkce-secret"
+                 })
+      end)
+
+    refute log =~ "dev-code-secret"
+    refute log =~ "pkce-secret"
+  end
+
   test "connect still works with no conn params (backward compatible)", %{token: token} do
     assert {:ok, socket} = connect(UserSocket, %{"token" => token})
     assert socket.assigns.conn_id == nil

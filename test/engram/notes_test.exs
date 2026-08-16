@@ -166,6 +166,40 @@ defmodule Engram.NotesTest do
                "path_hmac=" <> String.slice(Base.encode64(<<1, 2, 3, 4, 5, 6, 7, 8, 9>>), 0, 12)
     end
 
+    # The exception MESSAGE is not our own text. CaseClauseError, MatchError,
+    # Jason.EncodeError and Postgrex.Error all render `inspect(term)` of the
+    # value that blew up, and this rescue wraps frontmatter parsing, CRDT merge
+    # and encryption — all of which hold note content. Interpolating it put a
+    # note body straight into CloudWatch, Loki and Sentry.
+    test "process_batch_entry_rescued/3 keeps note content out of the log body" do
+      entry = %{
+        path: "poison.md",
+        input_path: "poison.md",
+        path_hmac: <<1, 2, 3, 4, 5, 6, 7, 8, 9>>,
+        result: nil
+      }
+
+      secret = "Dear diary, the biopsy came back positive."
+
+      log =
+        capture_log(fn ->
+          assert {_degraded, []} =
+                   Notes.process_batch_entry_rescued(entry, [], fn ->
+                     # Raised directly rather than via a literal `case`: the
+                     # compiler statically proves that clause unreachable and
+                     # warns, which --warnings-as-errors turns into a failure.
+                     # Same struct, same Exception.message/1 rendering.
+                     raise CaseClauseError, term: {:parsed, secret}
+                   end)
+        end)
+
+      assert log =~ "batch entry raised"
+      refute log =~ secret
+      refute log =~ "biopsy"
+      # The class still identifies what went wrong.
+      assert log =~ "CaseClauseError"
+    end
+
     test "process_batch_entry_rescued/3 passes through a non-raising fn untouched" do
       entry = %{path: "good.md", input_path: "good.md", result: nil}
 

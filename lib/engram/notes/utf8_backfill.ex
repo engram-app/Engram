@@ -180,14 +180,20 @@ defmodule Engram.Notes.Utf8Backfill do
 
   defp bump(acc, key), do: Map.update!(acc, key, &(&1 + 1))
 
-  # Only ONE of the shapes this `with` can reject carries note data: the
-  # version_conflict tuple, which hands back the whole `%Note{}`. Drop it to
-  # the bare label. Everything else is `{:error, atom()}` or the
-  # notes_cap_reached counts tuple — safe to render, and useful to read.
+  # The version_conflict tuple hands back the whole `%Note{}`, whose :content
+  # field is the note body. Drop it to the bare label.
   #
-  # Deliberately two clauses, not five: dialyzer showed the earlier
-  # Ecto.Changeset clauses could never match here, and clauses covering the
-  # whole type would have made a defensive catch-all unreachable.
+  # The catch-all renders everything else, and `upsert_note/4` CAN return
+  # `{:error, %Ecto.Changeset{}}` (notes.ex:570, :746, validate_path/1). That
+  # is not a plaintext leak today, but only because of two things this module
+  # does not own: Ecto's Inspect impl prints `data` as `#Engram.Notes.Note<>`
+  # rather than expanding it, and `Note.changeset/2`'s cast list excludes the
+  # virtual :content/:title/:path. Add :content to that cast list and plaintext
+  # comes back through here. The test below is what would catch that.
+  #
+  # (An earlier version of this comment claimed dialyzer had proved changesets
+  # unreachable. It had not — it only rejected a clause ORDER. Wrong, and
+  # recorded here so it is not re-derived.)
   defp format_reason({:error, :version_conflict, _note}), do: "version_conflict"
   defp format_reason(other), do: inspect(other)
 end

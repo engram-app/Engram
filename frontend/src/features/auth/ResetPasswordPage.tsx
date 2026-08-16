@@ -10,10 +10,11 @@ import { destructiveAlert, fieldInput, heading } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { ROUTES } from "@/routes";
 
-// The path this page mounts on. A handoff is stamped with where it was
-// captured and only handed back on a match, so a reset token stashed here
-// cannot be consumed by /link, and vice versa.
-const RESET_PATH = "/reset-password";
+// The path this page mounts on — the same constant the router mounts it at, so
+// the two cannot drift. A handoff is stamped with where it was captured and
+// only handed back on a match, so a reset token stashed here cannot be consumed
+// by /link, and vice versa.
+const RESET_PATH = ROUTES.RESET_PASSWORD;
 
 export default function ResetPasswordPage() {
 	const [params] = useSearchParams();

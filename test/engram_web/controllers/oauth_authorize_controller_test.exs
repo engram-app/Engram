@@ -113,6 +113,21 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       assert conn.resp_body =~ "invalid_client"
     end
 
+    # This route answers text/html, not JSON, so it needs the browser headers
+    # the :api pipelines legitimately skip. It had NONE — the OAuth entry point
+    # served framable, sniffable, full-Referer documents. `state` is in the
+    # query string of that page, which is why referrer-policy belongs here too.
+    test "the HTML error page carries browser security headers", %{conn: conn} do
+      params = valid_params("00000000-0000-0000-0000-000000000000", "https://x/cb")
+
+      conn = get(conn, "/oauth/authorize", params)
+
+      assert ["text/html" <> _] = get_resp_header(conn, "content-type")
+      assert get_resp_header(conn, "x-frame-options") == ["DENY"]
+      assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+      assert get_resp_header(conn, "referrer-policy") == ["origin"]
+    end
+
     test "returns 400 HTML when redirect_uri does not match registration", %{conn: conn} do
       client = register_client("https://claude.ai/api/mcp/auth_callback")
 
