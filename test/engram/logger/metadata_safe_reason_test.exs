@@ -133,6 +133,83 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
     end
   end
 
+  # A stacktrace is NOT "module/function/arity". BEAM puts the failing call's
+  # actual ARGUMENT LIST in the top frame for FunctionClauseError,
+  # UndefinedFunctionError and any BIF/NIF badarg, and
+  # Exception.format_stacktrace/1 inspects each at :printable_limit (4096) —
+  # so ~4 KB of a note body printed right next to the safe_reason/1 call that
+  # had just suppressed it.
+  describe "format_location/1 renders where, never what" do
+    test "a real FunctionClauseError's arguments do not survive" do
+      # Raised for real so the stacktrace is BEAM's, not a fixture.
+      {:error, stacktrace} =
+        try do
+          String.to_integer(@secret)
+        rescue
+          _ -> {:error, __STACKTRACE__}
+        end
+
+      # The unsafe formatter really does carry it — otherwise this proves nothing.
+      assert Exception.format_stacktrace(stacktrace) =~ "biopsy"
+
+      located = Metadata.format_location(stacktrace)
+      refute located =~ "biopsy"
+      refute located =~ @secret
+      # ...while still saying where. (String.to_integer/1 inlines to the BIF,
+      # so the top frame is :erlang.binary_to_integer/1 — which is the point:
+      # a real BEAM stacktrace, not a fixture.)
+      assert located =~ "binary_to_integer/1"
+    end
+
+    test "handles a malformed or empty stacktrace without raising" do
+      assert Metadata.format_location([]) == ""
+      assert is_binary(Metadata.format_location(:not_a_stacktrace))
+      assert is_binary(Metadata.format_location([:garbage]))
+    end
+  end
+
+  # An exit reason is the other way a stacktrace — and its arguments — reach a
+  # log. A crashed GenServer exits with `{exception, stacktrace}`, and a call
+  # timeout exits with `{:timeout, {GenServer, :call, [pid, request, _]}}` where
+  # `request` on these paths is a Yjs frame or note content.
+  describe "safe_exit_reason/1 keeps the shape, drops the values" do
+    test "an exception+stacktrace exit does not carry the arguments" do
+      {:error, stacktrace} =
+        try do
+          String.to_integer(@secret)
+        rescue
+          _ -> {:error, __STACKTRACE__}
+        end
+
+      reason = {%ArgumentError{message: @secret}, stacktrace}
+
+      # Both halves really would have leaked.
+      assert inspect(reason) =~ "biopsy"
+
+      rendered = Metadata.safe_exit_reason(reason)
+      refute rendered =~ "biopsy"
+      assert rendered =~ "ArgumentError"
+      assert rendered =~ "binary_to_integer/1"
+    end
+
+    test "a GenServer call timeout drops the request payload" do
+      reason = {:timeout, {GenServer, :call, [self(), {:apply, @secret}, 5000]}}
+
+      assert inspect(reason) =~ "biopsy"
+
+      rendered = Metadata.safe_exit_reason(reason)
+      refute rendered =~ "biopsy"
+      assert rendered =~ "GenServer.call/3"
+    end
+
+    test "ordinary exit shapes stay readable" do
+      assert Metadata.safe_exit_reason(:normal) == ":normal"
+      assert Metadata.safe_exit_reason(:noproc) == ":noproc"
+      assert Metadata.safe_exit_reason({:shutdown, @secret}) == ":shutdown"
+      assert is_binary(Metadata.safe_exit_reason("weird"))
+    end
+  end
+
   describe "never raises, whatever it is handed" do
     test "a non-struct does not raise" do
       for value <- [:some_atom, {:error, "boom"}, "raw string", 42, nil, %{a: 1}] do

@@ -101,16 +101,21 @@ defmodule Engram.Notes.CrdtCheckpoint do
     # raise here so unbind/checkpoint always degrades to :ok — the tail-WAL is
     # untouched (nothing pruned), so the flush replays on the next room bind.
     err ->
-      # safe_reason/1 + a bare stacktrace, not Exception.format/3. This path
-      # projects the CRDT doc into notes.content, so note plaintext is in scope,
-      # and CaseClauseError/MatchError/KeyError all render `inspect(term)` into
-      # a message BODY — the one place RedactFilter does not reach. The
-      # stacktrace stays: it is module/function/arity, not values, and it is the
-      # part that says where.
+      # safe_reason/1 + format_location/1. This path projects the CRDT doc into
+      # notes.content, so note plaintext is in scope.
+      #
+      # NOT Exception.format_stacktrace/1. An earlier version of this comment
+      # claimed a stacktrace is "module/function/arity, not values" — it is not.
+      # BEAM puts the failing call's ARGUMENT LIST in the top frame for
+      # FunctionClauseError, UndefinedFunctionError and any BIF/NIF badarg, and
+      # the formatter inspects each at :printable_limit (4096). A
+      # FunctionClauseError in Crypto.hmac_content_hash(key, text) printed ~4 KB
+      # of the note body — right next to the safe_reason/1 call that had just
+      # suppressed it.
       Logger.error(
         "crdt checkpoint raised resolving user note_id=#{note_id} " <>
           "error=#{Metadata.safe_reason(err)} " <>
-          "at=#{Exception.format_stacktrace(__STACKTRACE__)}",
+          "at=#{Metadata.format_location(__STACKTRACE__)}",
         Metadata.with_category(:error, :sync, note_id: note_id)
       )
 
@@ -253,7 +258,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
       Logger.error(
         "crdt checkpoint raised note_id=#{note_id} " <>
           "error=#{Metadata.safe_reason(err)} " <>
-          "at=#{Exception.format_stacktrace(__STACKTRACE__)}",
+          "at=#{Metadata.format_location(__STACKTRACE__)}",
         Metadata.with_category(:error, :sync, note_id: note_id)
       )
 

@@ -544,7 +544,10 @@ defmodule Engram.Links.Rewriter do
     :exit, reason ->
       Logger.error(
         "link rewrite room push exited",
-        Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
+        Metadata.with_category(:error, :sync,
+          note_id: note_id,
+          reason: Metadata.safe_exit_reason(reason)
+        )
       )
 
       {:error, :room_gone}

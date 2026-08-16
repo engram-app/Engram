@@ -91,6 +91,53 @@ defmodule Engram.Logger.Metadata do
   # isolation rescue defeats the isolation.
   def safe_reason(_other), do: "unknown"
 
+  @doc """
+  Where a raise happened, with no argument values.
+
+  `Exception.format_stacktrace/1` is NOT safe to log. BEAM puts the failing
+  call's actual ARGUMENT LIST in the top frame for `FunctionClauseError`,
+  `UndefinedFunctionError` and any BIF/NIF `badarg`, and the formatter inspects
+  each one at `:printable_limit` (4096 bytes) — so a `FunctionClauseError` in
+  `Crypto.hmac_content_hash(key, text)` prints ~4 KB of the note body.
+
+  This renders `Module.function/arity` per frame and nothing else. Locations
+  answer "where"; the values were never the part that helped.
+  """
+  @spec format_location(Exception.stacktrace()) :: String.t()
+  def format_location(stacktrace) when is_list(stacktrace) do
+    stacktrace
+    |> Enum.take(5)
+    |> Enum.map_join(" <- ", fn
+      {mod, fun, arity, _loc} when is_integer(arity) -> "#{inspect(mod)}.#{fun}/#{arity}"
+      {mod, fun, args, _loc} when is_list(args) -> "#{inspect(mod)}.#{fun}/#{length(args)}"
+      _other -> "?"
+    end)
+  end
+
+  def format_location(_other), do: "?"
+
+  @doc """
+  A log-safe rendering of a `catch :exit, reason` value.
+
+  `inspect(reason)` is not safe here for the same reason a raw stacktrace is
+  not: an exit from a crashed GenServer is `{exception, stacktrace}`, and a
+  `GenServer.call` timeout is `{:timeout, {GenServer, :call, [pid, request, _]}}`
+  — where `request` on these paths is a Yjs frame or note content, rendered at
+  `:printable_limit`.
+
+  Keeps the shape and the location, drops every value.
+  """
+  @spec safe_exit_reason(any()) :: String.t()
+  def safe_exit_reason({%{__exception__: true} = e, stacktrace}) when is_list(stacktrace),
+    do: "#{safe_reason(e)} at #{format_location(stacktrace)}"
+
+  def safe_exit_reason({:timeout, {mod, fun, args}}) when is_list(args),
+    do: "timeout in #{inspect(mod)}.#{fun}/#{length(args)}"
+
+  def safe_exit_reason({tag, _payload}) when is_atom(tag), do: inspect(tag)
+  def safe_exit_reason(reason) when is_atom(reason), do: inspect(reason)
+  def safe_exit_reason(_other), do: "unknown"
+
   def with_category(level, category, metadata \\ []) do
     unless Category.valid?(category) do
       raise ArgumentError, "unknown log category: #{inspect(category)}"

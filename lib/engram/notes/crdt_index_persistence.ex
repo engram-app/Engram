@@ -136,7 +136,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
       emit_checkpoint(:failed)
 
       Logger.error(
-        "crdt index checkpoint exited: #{inspect(reason)}",
+        "crdt index checkpoint exited: #{Metadata.safe_exit_reason(reason)}",
         Metadata.with_category(:error, :sync, user_id: user_id, vault_id: vault_id)
       )
 

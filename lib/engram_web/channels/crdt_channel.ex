@@ -872,7 +872,10 @@ defmodule EngramWeb.CrdtChannel do
     :exit, reason ->
       Logger.warning(
         "crdt genesis seed room apply exited",
-        Metadata.with_category(:warning, :sync, note_id: note_id, reason: inspect(reason))
+        Metadata.with_category(:warning, :sync,
+          note_id: note_id,
+          reason: Metadata.safe_exit_reason(reason)
+        )
       )
 
       :error
