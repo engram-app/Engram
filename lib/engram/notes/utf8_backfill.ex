@@ -165,8 +165,12 @@ defmodule Engram.Notes.Utf8Backfill do
       bump(acc, :fixed)
     else
       other ->
+        # `inspect(other)` here rendered whatever the `with` rejected, and one
+        # of those shapes is `{:error, :version_conflict, %Note{}}` — a struct
+        # whose `:content` field is the note body. One conflicting backfill row
+        # put a user's note into CloudWatch.
         Logger.warning(
-          "utf8_backfill: failed to rewrite note #{decrypted.id}: #{inspect(other)}",
+          "utf8_backfill: failed to rewrite note #{decrypted.id}: #{format_reason(other)}",
           Metadata.with_category(:warning, :data, reason: "rewrite_failed")
         )
 
@@ -175,4 +179,15 @@ defmodule Engram.Notes.Utf8Backfill do
   end
 
   defp bump(acc, key), do: Map.update!(acc, key, &(&1 + 1))
+
+  # Only ONE of the shapes this `with` can reject carries note data: the
+  # version_conflict tuple, which hands back the whole `%Note{}`. Drop it to
+  # the bare label. Everything else is `{:error, atom()}` or the
+  # notes_cap_reached counts tuple — safe to render, and useful to read.
+  #
+  # Deliberately two clauses, not five: dialyzer showed the earlier
+  # Ecto.Changeset clauses could never match here, and clauses covering the
+  # whole type would have made a defensive catch-all unreachable.
+  defp format_reason({:error, :version_conflict, _note}), do: "version_conflict"
+  defp format_reason(other), do: inspect(other)
 end

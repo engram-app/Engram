@@ -3309,20 +3309,34 @@ defmodule Engram.Notes do
   # pass a fn that runs a real failing Repo query (a plain `raise` will NOT
   # exercise the savepoint, since it never enters 25P02).
   @doc false
+  # A short, non-reversible handle for log lines. Base64 of the path HMAC,
+  # truncated — enough to correlate two lines about the same note, useless for
+  # recovering the path.
+  defp hmac_ref(%{path_hmac: hmac}) when is_binary(hmac),
+    do: hmac |> Base.encode64() |> binary_part(0, 12)
+
+  defp hmac_ref(_entry), do: "unknown"
+
   @spec process_batch_entry_rescued(map(), list(), (-> {map(), list()})) :: {map(), list()}
   def process_batch_entry_rescued(entry, rows, fun) do
     fun.()
   rescue
     e ->
-      # Path AND exception reason go in the message string, not metadata
-      # alone: neither `:path` nor `:error` is in the Sentry LoggerHandler
-      # metadata allowlist (application.ex), and the console formatter's
-      # allowlist (config.exs) drops them too. Interpolating keeps both
-      # Sentry-visible (on-call sees WHY it raised) AND greppable/testable
-      # in the plain-text console/CI logs. Metadata copies kept for prod's
-      # metadata: :all JSON formatter (Loki structured fields).
+      # The note ID, never the path. This used to interpolate `entry.path`
+      # DELIBERATELY, to route it past the Sentry metadata allowlist so on-call
+      # could see it — which is precisely the thing the allowlist exists to
+      # prevent. RedactFilter and the Sentry scrubber both stop at metadata;
+      # a message body is unfiltered, so that comment was describing a way
+      # around the redaction rather than a reason to bypass it. A path is
+      # folder structure plus a title, and Sentry is a third party.
+      #
+      # The exception reason still interpolates — that is our own text — and
+      # the path stays in metadata, where prod's JSON formatter puts it into
+      # Loki (ours) and the allowlist keeps it out of Sentry (not ours).
+      # On-call correlates on the path HMAC, which is already how this module
+      # indexes paths: non-reversible, and it joins to the same row.
       Logger.error(
-        "batch entry raised, degrading note: #{entry.path} (#{Exception.message(e)})",
+        "batch entry raised, degrading note path_hmac=#{hmac_ref(entry)} (#{Exception.message(e)})",
         Metadata.with_category(:error, :sync,
           path: entry.path,
           error: Exception.message(e)

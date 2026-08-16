@@ -36,6 +36,13 @@ defmodule EngramWeb.UserSocketTest do
 
     assert log =~ "ws connect"
     assert log =~ "conn-abc"
+
+    # Phoenix's own "CONNECTED TO ... Parameters:" line renders the connect
+    # params. RedactFilter cannot help here — it scrubs metadata, never the
+    # message body — so the only control is :filter_parameters. This asserts
+    # the credential itself, not the presence of "[FILTERED]", because a
+    # future refactor could drop the line entirely and should still pass.
+    refute log =~ token
   end
 
   test "connect still works with no conn params (backward compatible)", %{token: token} do

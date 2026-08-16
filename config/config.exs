@@ -203,6 +203,25 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Phoenix logs socket connect params verbatim ("CONNECTED TO ... Parameters:
+# %{...}") at :info, and its default filter is ["password"] only — so the raw
+# WS auth token was printed on every connect, into CloudWatch and Loki.
+#
+# Filtered here rather than with `log: false` on the socket: this is the one
+# place every param-logging path routes through (Plug.Logger, socket connect,
+# any socket added later), so a new socket inherits the filter instead of
+# needing to remember the flag. Matching is substring-on-key, so "token"
+# also covers access_token / refresh_token / device_code-bearing keys.
+config :phoenix, :filter_parameters, [
+  "password",
+  "token",
+  "secret",
+  "code_verifier",
+  "code_challenge",
+  "client_secret",
+  "authorization"
+]
+
 # Key provider defaults (overridden by runtime.exs via env vars)
 config :engram,
   key_provider: Engram.Crypto.KeyProvider.Local,

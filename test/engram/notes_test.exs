@@ -132,7 +132,15 @@ defmodule Engram.NotesTest do
     end
 
     test "process_batch_entry_rescued/3 catches a raise and degrades to a per-note error" do
-      entry = %{path: "poison.md", input_path: "poison.md", result: nil}
+      # `path_hmac` mirrors the real batch entry — process_batch_entry/6 reads
+      # it on the line above the rescue. Without it here the log falls back to
+      # "unknown" and this test would pass while proving nothing.
+      entry = %{
+        path: "poison.md",
+        input_path: "poison.md",
+        path_hmac: <<1, 2, 3, 4, 5, 6, 7, 8, 9>>,
+        result: nil
+      }
 
       log =
         capture_log(fn ->
@@ -147,7 +155,15 @@ defmodule Engram.NotesTest do
         end)
 
       assert log =~ "batch entry raised"
-      assert log =~ "poison.md"
+
+      # This assertion used to read `assert log =~ "poison.md"` — it pinned the
+      # leak in place. RedactFilter scrubs metadata, never the message body, so
+      # an interpolated path here reaches CloudWatch and Loki verbatim. On-call
+      # correlates on the HMAC instead: same row, non-reversible.
+      refute log =~ "poison.md"
+
+      assert log =~
+               "path_hmac=" <> String.slice(Base.encode64(<<1, 2, 3, 4, 5, 6, 7, 8, 9>>), 0, 12)
     end
 
     test "process_batch_entry_rescued/3 passes through a non-raising fn untouched" do
@@ -237,7 +253,11 @@ defmodule Engram.NotesTest do
         end)
 
       assert log =~ "batch entry raised"
-      assert log =~ "poison.md"
+
+      # Same flip as the unit test above, but through the real batch path, so
+      # the HMAC is the one production computes rather than a fixture.
+      refute log =~ "poison.md"
+      assert log =~ ~r"path_hmac=[A-Za-z0-9+/]{12}"
     end
   end
 
