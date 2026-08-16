@@ -49,11 +49,28 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/logs.ex",
     "lib/engram/links/",
     "lib/engram/rerankers/",
-    "lib/engram_web/channels/"
+    "lib/engram_web/channels/",
+    # Added after review: each of these has note content, a path, a title or a
+    # search query in scope, and each was outside the first list purely because
+    # the list was written from the files that session had open. A scope list
+    # assembled from memory covers what you remember, which is not what leaks.
+    "lib/engram/attachments/",
+    "lib/engram/links.ex",
+    "lib/engram/workers/backfill_crdt_state.ex",
+    "lib/engram/workers/checkpoint_note.ex",
+    "lib/engram/workers/project_vault_index.ex",
+    "lib/engram/workers/embed_note.ex",
+    "lib/engram/workers/delete_note_index.ex",
+    "lib/engram/workers/repath_note_index.ex",
+    "lib/engram/workers/reindex_keyword.ex",
+    "lib/engram_web/controllers/search_controller.ex",
+    "lib/engram_web/controllers/notes_controller.ex"
   ]
 
-  # Renders a term rather than a label.
-  @unsafe ~r/Exception\.(message|format|format_stacktrace)\(|\binspect\((reason|err|error|other|term|payload|state)\)/
+  # Renders a term rather than a label. `e` is in the list because `rescue e ->`
+  # is the idiomatic binding and `inspect(e)` was therefore the single most
+  # likely shape to appear next — it was missing from the first version.
+  @unsafe ~r/Exception\.(message|format|format_stacktrace)\(|\binspect\((reason|err|error|e|other|term|payload|state)\)/
 
   @sanctioned ["safe_reason", "safe_exit_reason", "format_location"]
 
@@ -80,22 +97,110 @@ defmodule Engram.Logger.LogCallComplianceTest do
     end)
   end
 
+  # String-aware. A `")"` inside a message literal — `Logger.warning("done :)")`
+  # — decremented the depth and truncated the argument span early, so anything
+  # after it in the call was never inspected. Unterminated or exotic quoting
+  # falls through to "hand back the rest", which errs toward flagging.
   defp balanced_args(source, from) do
     size = byte_size(source)
 
-    Enum.reduce_while(from..(size - 1)//1, {1, from}, fn i, {depth, _} ->
-      case binary_part(source, i, 1) do
-        "(" -> {:cont, {depth + 1, i}}
-        ")" when depth == 1 -> {:halt, {0, i}}
-        ")" -> {:cont, {depth - 1, i}}
-        _ -> {:cont, {depth, i}}
+    Enum.reduce_while(from..(size - 1)//1, {1, from, false}, fn i, {depth, _, in_str} ->
+      char = binary_part(source, i, 1)
+      escaped? = i > 0 and binary_part(source, i - 1, 1) == "\\"
+
+      cond do
+        escaped? -> {:cont, {depth, i, in_str}}
+        char == ~s(") -> {:cont, {depth, i, not in_str}}
+        in_str -> {:cont, {depth, i, in_str}}
+        char == "(" -> {:cont, {depth + 1, i, in_str}}
+        char == ")" and depth == 1 -> {:halt, {0, i, in_str}}
+        char == ")" -> {:cont, {depth - 1, i, in_str}}
+        true -> {:cont, {depth, i, in_str}}
       end
     end)
     |> case do
-      {0, stop} -> binary_part(source, from, stop - from)
-      # Unbalanced: hand back the rest, which errs toward flagging.
-      {_, _} -> binary_part(source, from, size - from)
+      {0, stop, _} -> binary_part(source, from, stop - from)
+      {_, _, _} -> binary_part(source, from, size - from)
     end
+  end
+
+  @doc false
+  # The units a sanctioned call may vouch for: each `\#{...}` interpolation on
+  # its own, plus whatever is left after the interpolations and string literals
+  # are stripped out (the metadata keyword list — `reason: inspect(reason)`
+  # lives there, outside any interpolation).
+  #
+  # Per-UNIT, not per-call. `@sanctioned` used to exempt the entire argument
+  # span if the word appeared anywhere in it, so
+  #
+  #     "note=\#{safe_reason(e)} raw=\#{inspect(reason)}"
+  #
+  # was clean by the guard's own reckoning: one safe interpolation vouched for
+  # its unsafe sibling. Review flagged it; the fix is that a unit can only
+  # vouch for itself.
+  def units(args) do
+    interps = balanced_interpolations(args)
+    [strip_interpolations_and_strings(args) | interps]
+  end
+
+  # `Logger.info("x")` has a zero-length argument span once stripped, and
+  # `0..-1//1` is not empty in Elixir — it iterates once and crashed on
+  # `binary_part("", 0, 1)`.
+  defp balanced_interpolations(text) when byte_size(text) < 2, do: []
+
+  defp balanced_interpolations(text) do
+    size = byte_size(text)
+
+    Enum.reduce(0..max(size - 2, 0)//1, {[], nil, 0}, fn i, {acc, start, depth} ->
+      two = binary_part(text, i, min(2, size - i))
+      char = binary_part(text, i, 1)
+
+      cond do
+        is_nil(start) and two == "\#{" -> {acc, i + 2, 1}
+        is_nil(start) -> {acc, start, depth}
+        char == "{" -> {acc, start, depth + 1}
+        char == "}" and depth == 1 -> {[binary_part(text, start, i - start) | acc], nil, 0}
+        char == "}" -> {acc, start, depth - 1}
+        true -> {acc, start, depth}
+      end
+    end)
+    |> elem(0)
+  end
+
+  defp strip_interpolations_and_strings(text) do
+    text
+    |> String.replace(~r/\#\{(?:[^{}]|\{[^{}]*\})*\}/, " ")
+    |> String.replace(~r/"(?:[^"\\]|\\.)*"/, ~s(""))
+  end
+
+  # Lines to scan for a `reason = <unsafe>` binding, with a continuation folded
+  # onto its opener.
+  #
+  # `mix format` wraps a long binding, and the wrapped form was invisible:
+  #
+  #     reason_str =
+  #       inspect(reason)
+  #
+  # The opener has no `inspect(` on it and the continuation has no `=`, so a
+  # strictly per-line scan matched neither half — and the formatter decides
+  # which bindings get wrapped, so whether this guard saw a site came down to
+  # how long its variable name was.
+  defp binding_lines(source) do
+    source
+    |> String.split("\n")
+    |> Enum.with_index(1)
+    |> Enum.map(fn {text, i} -> {i, text} end)
+    |> then(fn lines ->
+      folded =
+        Enum.zip(lines, Enum.drop(lines, 1) ++ [{0, ""}])
+        |> Enum.map(fn {{i, text}, {_, next}} ->
+          if Regex.match?(~r/=\s*$/, text),
+            do: {i, text <> " " <> String.trim(next)},
+            else: {i, text}
+        end)
+
+      folded
+    end)
   end
 
   test "no log call on a content path renders a raw exception or reason" do
@@ -103,8 +208,20 @@ defmodule Engram.Logger.LogCallComplianceTest do
       Path.wildcard("lib/**/*.ex")
       |> Enum.filter(&in_scope?/1)
 
-    # Vacuity: a guard over zero files proves nothing, and this project has
-    # shipped exactly that.
+    # Vacuity. `length(files) > 20` was too weak to be worth writing: the
+    # directory prefixes alone clear it, so a typo in any single-FILE entry
+    # ("lib/engram/lnks.ex") silently dropped that module from the scan while
+    # the assert stayed comfortably green. Every literal path is now checked to
+    # exist, which is the property actually wanted — the list is a coverage
+    # claim, and a claim naming a file that is not there is a false one.
+    missing = Enum.reject(@content_paths, &(File.exists?(&1) or String.ends_with?(&1, "/")))
+    assert missing == [], "content-module list names files that do not exist: #{inspect(missing)}"
+
+    missing_dirs =
+      Enum.filter(@content_paths, &(String.ends_with?(&1, "/") and not File.dir?(&1)))
+
+    assert missing_dirs == [], "content-module list names missing dirs: #{inspect(missing_dirs)}"
+
     assert length(files) > 20,
            "expected the content-module list to match real files, got #{length(files)}"
 
@@ -112,8 +229,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
       for file <- files,
           source = File.read!(file),
           {line, args} <- log_calls(source),
-          not Enum.any?(@sanctioned, &String.contains?(args, &1)),
-          match = Regex.run(@unsafe, args),
+          unit <- units(args),
+          not Enum.any?(@sanctioned, &String.contains?(unit, &1)),
+          match = Regex.run(@unsafe, unit),
           do: "#{file}:#{line} — #{hd(match)}"
 
     # Indirection through a local defeats the call-site scan:
@@ -123,8 +241,7 @@ defmodule Engram.Logger.LogCallComplianceTest do
     in_bindings =
       for file <- files,
           source = File.read!(file),
-          {line, text} <-
-            Enum.with_index(String.split(source, "\n"), 1) |> Enum.map(fn {l, i} -> {i, l} end),
+          {line, text} <- binding_lines(source),
           not Enum.any?(@sanctioned, &String.contains?(text, &1)),
           not String.starts_with?(String.trim(text), "#"),
           Regex.match?(~r/^\s*\w*(reason|err|error|msg|message)\w*\s*=\s*/, text),

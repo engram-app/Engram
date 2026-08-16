@@ -83,12 +83,22 @@ defmodule Engram.Logger.Metadata do
   # on-call route around a filter instead of trusting it.
   def safe_reason(reason) when is_atom(reason), do: inspect(reason)
 
-  # Storage errors: `{:http_error, 403, "SignatureDoesNotMatch"}`. The status and
-  # the S3 error code are exactly what an operator needs (a misconfigured MinIO
-  # secret is otherwise invisible), and neither can hold user data — an S3 code
-  # is a bare alphabetic identifier, while a storage key is
-  # "user/vault/<path>" and contains separators. Extracted structurally rather
-  # than dropped with the rest of the payload.
+  # Storage errors. The status and the S3 error code are exactly what an
+  # operator needs (a misconfigured MinIO secret is otherwise invisible), and
+  # neither can hold user data — an S3 code is a bare alphabetic identifier,
+  # while a storage key is "user/vault/<path>" and contains separators.
+  #
+  # ExAws hands the third element over in TWO shapes, and the first version of
+  # this clause only handled one of them:
+  #
+  #   4xx  `client_error/2` → the whole response MAP, `%{status_code:, body:, ...}`
+  #   5xx  `Map.get(resp, :body)` → a bare binary
+  #
+  # A 403 SignatureDoesNotMatch — the case named in the original comment as the
+  # motivation — therefore took the map branch and extracted nothing, so the
+  # comment described behaviour the code did not have. Review caught it; both
+  # shapes are handled now and both are covered by tests built from the real
+  # `ExAws.Request` construction rather than a hand-written tuple.
   def safe_reason({:http_error, status, body}) when is_integer(status) do
     ["http_error", to_string(status), storage_code(body)]
     |> Enum.reject(&is_nil/1)
@@ -143,6 +153,12 @@ defmodule Engram.Logger.Metadata do
   # An S3/XML error code, or nil. Accepts ONLY a bare alphabetic identifier, so
   # a message, a URL or a storage key (all of which carry `/`, `.` or spaces)
   # can never qualify.
+  # The 4xx shape: dig the body out and re-enter. Only `:body`, and only when it
+  # is a binary — a response map also carries headers, and a blanket
+  # `inspect(map)` here would reintroduce exactly what this module exists to
+  # prevent.
+  defp storage_code(%{body: body}), do: storage_code(body)
+
   defp storage_code(body) when is_binary(body) do
     candidate =
       case Regex.run(~r|<Code>([A-Za-z]{3,40})</Code>|, body) do

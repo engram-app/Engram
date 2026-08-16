@@ -422,12 +422,27 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     # There is nothing to checkpoint once the room is gone — the doc it held is
     # what we were trying to read — so falling through is the correct outcome,
     # and the EXIT message right behind this tick shuts us down in order.
-    :exit, reason -> log_read_failure(state, {:exit, reason})
+    :exit, reason -> log_exit_failure(state, reason)
   end
 
-  defp log_read_failure(state, reason) do
+  # Two arms, two shapes, two helpers. One helper taking both was a REGRESSION
+  # shipped in this series and caught in review: `rescue` hands over an
+  # exception STRUCT, which `safe_exit_reason/1` has no clause for and renders
+  # `"unknown"`, while the catch arm wrapped its reason in `{:exit, reason}`,
+  # which matches the `{tag, _}` clause and renders the constant `":exit"`.
+  # Both arms logged a fixed string instead of the failure — the exact
+  # diagnostic loss this module's rescue exists to avoid, dressed up as safety.
+  defp log_read_failure(state, err), do: emit_read_failure(state, Metadata.safe_reason(err))
+
+  # Unwrapped: an exit reason from a dead GenServer.call is `{:noproc, {...}}`
+  # or `{:shutdown, ...}`, and `safe_exit_reason/1` pulls the tag off it.
+  # Wrapping it first threw that tag away.
+  defp log_exit_failure(state, reason),
+    do: emit_read_failure(state, Metadata.safe_exit_reason(reason))
+
+  defp emit_read_failure(state, reason) do
     Logger.warning(
-      "crdt checkpoint timer could not fetch doc room_key=#{state.room_key} reason=#{Metadata.safe_exit_reason(reason)}",
+      "crdt checkpoint timer could not fetch doc room_key=#{state.room_key} reason=#{reason}",
       Engram.Logger.Metadata.with_category(:warning, :sync, room_key: state.room_key)
     )
   end

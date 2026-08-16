@@ -243,6 +243,9 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
   # An S3 code is a bare alphabetic identifier; a storage key is
   # "user/vault/<path>". The separator is what makes them separable.
   describe "storage errors keep their code, never their key" do
+    # A bare binary in slot three — the 5xx shape (`Map.get(resp, :body)`).
+    # The 4xx shape is a map and is covered separately below; conflating them
+    # is how the map branch shipped untested.
     test "an S3 error code survives" do
       assert Metadata.safe_reason({:http_error, 403, "SignatureDoesNotMatch"}) ==
                "http_error 403 SignatureDoesNotMatch"
@@ -267,6 +270,63 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
     test "a prose message is not mistaken for a code" do
       assert Metadata.safe_reason({:http_error, 500, "the note Divorce draft failed"}) ==
                "http_error 500"
+    end
+  end
+
+  # The shape ExAws ACTUALLY produces, built by calling ExAws itself.
+  #
+  # The hand-written `{:http_error, 403, "SignatureDoesNotMatch"}` above is a
+  # tuple ExAws never constructs: `ExAws.Request.client_error/2` puts the whole
+  # response MAP in the third slot for 4xx, and only 5xx gets a bare binary.
+  # So the 403 case the implementation comment named as its motivation was
+  # unreachable, and every test covering it was testing a fiction that happened
+  # to agree with the code. Review caught it.
+  #
+  # These call ExAws to build the term, so if a dependency bump changes the
+  # shape, this goes red instead of quietly extracting nothing forever.
+  describe "storage errors — the shapes ExAws really builds" do
+    test "a 4xx carries a response map, and the code is still extracted" do
+      body = "<Error><Code>SignatureDoesNotMatch</Code><Key>u1/v1/Medical/biopsy.md</Key></Error>"
+
+      {:error, reason} =
+        ExAws.Request.client_error(%{status_code: 403, body: body, headers: []}, Jason)
+
+      # The premise: it is a MAP, not the binary the first version assumed.
+      assert {:http_error, 403, %{}} = reason
+
+      rendered = Metadata.safe_reason(reason)
+
+      assert rendered == "http_error 403 SignatureDoesNotMatch"
+      refute rendered =~ "Medical"
+      refute rendered =~ "biopsy"
+    end
+
+    # Headers and anything else on the response map must not ride along — only
+    # `:body` is read, and only when it is a binary.
+    test "nothing but the code escapes the response map" do
+      {:error, reason} =
+        ExAws.Request.client_error(
+          %{
+            status_code: 404,
+            body: "<Error><Code>NoSuchKey</Code></Error>",
+            headers: [{"x-amz-meta-path", "Medical/biopsy.md"}]
+          },
+          Jason
+        )
+
+      rendered = Metadata.safe_reason(reason)
+
+      assert rendered == "http_error 404 NoSuchKey"
+      refute rendered =~ "Medical"
+    end
+
+    # A response map whose body is not a binary must not raise or leak.
+    test "a non-binary body degrades to status only" do
+      assert Metadata.safe_reason({:http_error, 400, %{status_code: 400, body: nil}}) ==
+               "http_error 400"
+
+      assert Metadata.safe_reason({:http_error, 400, %{body: %{secret: @secret}}}) ==
+               "http_error 400"
     end
   end
 

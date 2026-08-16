@@ -257,7 +257,7 @@ defmodule Engram.Workers.BackfillCrdtState do
     else
       err ->
         Logger.warning(
-          "crdt_state backfill skipped note_id=#{note_id} reason=#{inspect(err)}",
+          "crdt_state backfill skipped note_id=#{note_id} reason=#{Metadata.safe_reason(err)}",
           Metadata.with_category(:warning, :sync, note_id: note_id)
         )
 

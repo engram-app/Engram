@@ -186,7 +186,9 @@ defmodule EngramWeb.SearchController do
 
         Logger.error(
           "Search failed",
-          Engram.Logger.Metadata.with_category(:error, :search, reason: inspect(reason))
+          Engram.Logger.Metadata.with_category(:error, :search,
+            reason: Engram.Logger.Metadata.safe_reason(reason)
+          )
         )
 
         conn
