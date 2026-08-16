@@ -2400,6 +2400,26 @@ defmodule Engram.Notes do
         # delete as a relocation leg (id now lives elsewhere) instead of
         # tearing the note's CRDT room down by id before it can materialize.
         decrypted = decrypt_or_raise!(note, user)
+
+        # Dual-write the index (#1146 decision 4). ProjectVaultIndex makes the
+        # index authoritative for paths, so a server-side rename that does not
+        # land here is REVERTED by the next projection run — tombstone at the
+        # new path, Qdrant repath, delete broadcast to every device. This is the
+        # mirror of the exactly-one-rewriter guard: not just "don't write the
+        # path columns directly", but "don't move a note without telling the
+        # index".
+        #
+        # A JOB, not an inline call, and specifically because of this call site:
+        # `batch_move_notes/4` drives rename_note/4 in a loop inside ONE
+        # transaction, and an inline write into a live index room is not
+        # something a rollback can undo. The enqueue joins the transaction and
+        # rolls back with it. See SyncVaultIndex.
+        _ =
+          Enqueue.enqueue(
+            Engram.Workers.SyncVaultIndex.new_for(user.id, vault.id, [note.id]),
+            "sync_vault_index"
+          )
+
         :ok = broadcast_change(user.id, vault.id, "upsert", note.path, decrypted, [])
         :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
         {:ok, decrypted}
@@ -2661,6 +2681,17 @@ defmodule Engram.Notes do
           Enqueue.enqueue(
             delete_note_index_job(note, Links.basename_hmac(user, Links.basename_key(path))),
             "delete_note_index"
+          )
+
+        # Drop the index entry too. Projection never resurrects a deleted note
+        # (get_note_by_id is scoped_live, so the entry just reads as an unknown
+        # note) — but a stale entry then warns and counts as `unresolved` on
+        # every checkpoint forever, which is how a real disagreement gets lost
+        # in noise.
+        _ =
+          Enqueue.enqueue(
+            Engram.Workers.SyncVaultIndex.new_for(user.id, vault.id, [note.id]),
+            "sync_vault_index"
           )
 
         broadcast_change(user.id, vault.id, "delete", path, note.id, opts)
@@ -5010,6 +5041,22 @@ defmodule Engram.Notes do
       # O(content) here; accepted vs the pull-latency correctness bug.
       broadcast_contents =
         fetch_note_contents(user, Enum.map(real_note_updates, fn {n, _, _, _, _} -> n.id end))
+
+      # Dual-write the index for the WHOLE cascade in one call (#1146 decision
+      # 4). A folder rename moves N notes through update_all rather than N
+      # rename_note/4 calls, so it needs its own hook — without it the next
+      # projection run would try to drag every one of them back to its old path.
+      # One job, not N: SyncVaultIndex rewrites the snapshot once for the whole
+      # cascade.
+      _ =
+        Enqueue.enqueue(
+          Engram.Workers.SyncVaultIndex.new_for(
+            user.id,
+            vault.id,
+            Enum.map(real_note_updates, fn {n, _old, _new, _f, _t} -> n.id end)
+          ),
+          "sync_vault_index"
+        )
 
       # Side effects outside the transaction — broadcast + reindex + link
       # rewrite fan-out. T3.2 — hmac-only args, never plaintext.

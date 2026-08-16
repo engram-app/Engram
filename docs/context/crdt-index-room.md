@@ -121,11 +121,34 @@ This is what keeps REST, search and MCP working against a client-owned index —
 projects note CONTENT for the same reason.
 
 **Additive-corrective, and it never acts on absence.** It walks the ENTRIES and fixes the rows they
-name. It does NOT walk the notes asking whether the index still mentions them. That distinction is
-the entire safety argument for shipping this dormant: no client writes the index yet
-(Engram-obsidian#362), so every vault's index is empty in prod — and a reconcile-by-absence
-implementation would read that as "this vault has no files" and delete the vault. It follows that
-projection can never delete, and never touches a note the index does not mention.
+name. It does NOT walk the notes asking whether the index still mentions them — a
+reconcile-by-absence implementation would read an empty index as "this vault has no files" and
+delete the vault. It follows that projection can never delete, and never touches a note the index
+does not mention.
+
+**Do not read that as "dormant".** An earlier draft argued the feature was inert because no client
+writes the index yet. That is a claim about the client we ship, not about what the server accepts:
+`crdt_channel.ex`'s `crdt_index_msg` handler relays any well-formed frame from any authenticated
+socket on the vault, with no write gate. With projection live, a client that writes
+`filemeta_v0["x.md"] = {note_id: …}` moves a real note — tombstone at the old path, Qdrant repath,
+link rewrite, `delete` broadcast to every device. User-scoped, so not a tenancy hole, but it is a
+real capability and it exists now. Inertness is a property of the WORKER (empty in, nothing out),
+not of the system.
+
+**Entries interact, so one pass is not enough.** A CHAIN (A wants the path B is vacating) converges
+only if B is applied first — and that is not a coin flip: Erlang small maps iterate in TERM order,
+so entries are visited sorted by target path, which for a chain is reliably the losing order. Small
+vaults hit it every time. The worker therefore re-runs a pass that made progress AND still has
+conflicts, up to 5 times. A SWAP (A wants B's path, B wants A's) cannot converge at all —
+`rename_note/4` has no temp-path staging — so the loop halts on zero progress and reports it.
+
+**A note claimed by two paths is dropped entirely.** Applying both moves it twice per pass, minting
+two tombstones, two seq bumps, two Qdrant repaths and four broadcasts, on every checkpoint forever.
+Projection cannot pick a winner and must not guess.
+
+**What consistency it actually provides:** eventually consistent with the last PERSISTED snapshot.
+The job can execute after a newer room has bound that snapshot and moved on, applying paths the
+live room already superseded; the next checkpoint's run corrects it.
 
 **Through `rename_note/4`, never the columns directly.** That function pre-checks the unique
 `(user, vault, path_hmac)` constraint and answers `{:error, :conflict}` instead of crashing, and it

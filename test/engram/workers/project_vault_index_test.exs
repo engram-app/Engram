@@ -21,7 +21,9 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
-  alias Engram.{Crypto, Notes, Vaults}
+  import Ecto.Query, only: [from: 2]
+
+  alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Notes.{CrdtIndexDoc, CrdtIndexRegistry}
   alias Engram.Workers.ProjectVaultIndex
   alias Yex.Sync.SharedDoc
@@ -61,6 +63,34 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     :ok = SharedDoc.unobserve(room)
     assert_receive {:DOWN, ^ref, :process, ^room, _}, 5_000
     :ok
+  end
+
+  # update_doc/2 returns :ok and discards the fun's value, so a read has to be
+  # posted back out of the room process.
+  defp read_live(room, path) do
+    test_pid = self()
+
+    :ok =
+      SharedDoc.update_doc(room, fn doc ->
+        result = doc |> Yex.Doc.get_map(CrdtIndexDoc.map_name()) |> Yex.Map.fetch(path)
+        send(test_pid, {:live_read, path, result})
+      end)
+
+    receive do
+      {:live_read, ^path, {:ok, value}} -> value
+      {:live_read, ^path, :error} -> nil
+    after
+      2_000 -> flunk("the live index room never answered a read of #{inspect(path)}")
+    end
+  end
+
+  defp tenant_index_ciphertext(ctx) do
+    {:ok, row} =
+      Repo.with_tenant(ctx.user.id, fn ->
+        Repo.get(Engram.Notes.VaultIndexState, ctx.vault.id)
+      end)
+
+    row && row.state_ciphertext
   end
 
   defp run(ctx) do
@@ -127,6 +157,208 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
 
       assert :ok = run(ctx)
       assert path_of(ctx, n.id) == "untouched.md"
+    end
+  end
+
+  # All three of these were reproduced empirically by an adversarial review
+  # before they were fixed. A chain silently half-applied, a swap churned two
+  # warnings forever, and a duplicated note_id oscillated a note twice per pass
+  # minting tombstones and delete-broadcasts on every checkpoint.
+  # Projection makes the index authoritative for paths. So every path the SERVER
+  # changes must also land in the index, or the next projection run drags the
+  # note back — tombstone at the new path, Qdrant repath, delete broadcast to
+  # every device. These pin the dual-write that closes that (#1146 decision 4).
+  describe "server-side changes are mirrored into the index" do
+    test "a REST rename is NOT reverted by the next projection run", ctx do
+      n = note(ctx, "Old/rest.md")
+      seed_index(ctx, [{"Old/rest.md", n.id}])
+
+      {:ok, _} = Notes.rename_note(ctx.user, ctx.vault, "Old/rest.md", "New/rest.md")
+
+      assert :ok = run(ctx)
+
+      assert path_of(ctx, n.id) == "New/rest.md",
+             "projection dragged a server-side rename back to its old path"
+    end
+
+    # CrdtIndexWriter has TWO paths: write through a live room, or rewrite the
+    # persisted snapshot when there is none. Every other test here stops the
+    # room before renaming, so they all exercise the snapshot path — and the
+    # live-room branch could be deleted entirely with the suite still green.
+    # It is also the branch that runs MOST in prod: a user renaming a note
+    # while connected has a live index room.
+    test "a rename with the index room LIVE is written through the room", ctx do
+      n = note(ctx, "Old/live.md")
+
+      # No on_exit unobserve: the test process IS the observer, so when it exits
+      # the room's :DOWN fires auto_exit on its own. An on_exit callback runs in
+      # a SEPARATE process after that, so it would call unobserve on a room that
+      # has already gone — which exits the caller, the exact hazard
+      # release_room/1 guards against (#1382).
+      {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+
+      :ok =
+        SharedDoc.update_doc(room, fn doc ->
+          doc
+          |> Yex.Doc.get_map(CrdtIndexDoc.map_name())
+          |> Yex.Map.set("Old/live.md", %{"note_id" => n.id})
+        end)
+
+      {:ok, _} = Notes.rename_note(ctx.user, ctx.vault, "Old/live.md", "New/live.md")
+
+      # Read back out of the LIVE room, not the snapshot: that is what proves
+      # the write took the room path rather than silently going to disk.
+      assert read_live(room, "New/live.md")["note_id"] == n.id
+      refute read_live(room, "Old/live.md")
+    end
+
+    # #1341, reintroduced in new code and caught by re-review. The snapshot path
+    # encrypts, and users.encrypted_dek holds the OLD wrapped dek until
+    # final_flip — so a mid-rotation write lands an unreadable blob on a row the
+    # sweep already re-wrapped. Skipping risks a revert; writing loses the index
+    # permanently.
+    test "the snapshot write path is skipped during a DEK rotation", ctx do
+      n = note(ctx, "Old/rot.md")
+      seed_index(ctx, [{"Old/rot.md", n.id}])
+
+      before = tenant_index_ciphertext(ctx)
+
+      {1, _} =
+        Repo.update_all(
+          from(u in Engram.Accounts.User, where: u.id == ^ctx.user.id),
+          set: [dek_rotation_locked_at: DateTime.utc_now()]
+        )
+
+      user = Repo.get!(Engram.Accounts.User, ctx.user.id)
+      {:ok, _} = Notes.rename_note(user, ctx.vault, "Old/rot.md", "New/rot.md")
+
+      assert tenant_index_ciphertext(ctx) == before,
+             "a mid-rotation write-back must not touch the snapshot"
+    end
+
+    test "a folder rename cascade is mirrored for every note it moved", ctx do
+      a = note(ctx, "Src/a.md")
+      b = note(ctx, "Src/b.md")
+
+      seed_index(ctx, [{"Src/a.md", a.id}, {"Src/b.md", b.id}])
+
+      {:ok, _} = Notes.rename_folder(ctx.user, ctx.vault, "Src", "Dst")
+
+      assert :ok = run(ctx)
+
+      assert path_of(ctx, a.id) == "Dst/a.md"
+      assert path_of(ctx, b.id) == "Dst/b.md"
+    end
+
+    # A deleted note leaves its entry behind otherwise. Projection never
+    # resurrects it — get_note_by_id is scoped_live — but the entry then warns
+    # and counts as `unresolved` on every checkpoint forever, which is how a
+    # real disagreement gets lost in noise.
+    test "a deleted note's entry is dropped, so it stops counting as unresolved", ctx do
+      attach_projection_telemetry()
+
+      keep = note(ctx, "Old/keep.md")
+      doomed = note(ctx, "doomed.md")
+
+      seed_index(ctx, [{"doomed.md", doomed.id}, {"New/keep.md", keep.id}])
+
+      :ok = Notes.delete_note(ctx.user, ctx.vault, "doomed.md")
+
+      assert :ok = run(ctx)
+
+      assert_receive {:projection, %{unresolved: 0}, %{phase: :converged}}, 2_000
+      assert path_of(ctx, keep.id) == "New/keep.md"
+    end
+  end
+
+  describe "entries that interact" do
+    defp attach_projection_telemetry do
+      test_pid = self()
+      handler = "proj-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :crdt, :index_projection],
+        fn _e, m, meta, _ -> send(test_pid, {:projection, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+    end
+
+    # a wants b's path; b is vacating it. Entry order is TERM order for small
+    # maps, so "b.md" is visited before "c.md" — reliably the losing order. One
+    # pass leaves `a` stranded; the fixpoint loop is what lands it.
+    test "a chain converges in a single run", ctx do
+      a = note(ctx, "a.md")
+      b = note(ctx, "b.md")
+
+      seed_index(ctx, [{"b.md", a.id}, {"c.md", b.id}])
+
+      assert :ok = run(ctx)
+
+      assert path_of(ctx, a.id) == "b.md", "the chain must not be left half-applied"
+      assert path_of(ctx, b.id) == "c.md"
+    end
+
+    # rename_note/4 has no temp-path staging, so a swap can never converge. The
+    # loop must HALT on it and report, not churn.
+    test "a swap halts and is reported as unresolved rather than churning", ctx do
+      attach_projection_telemetry()
+
+      a = note(ctx, "a.md")
+      b = note(ctx, "b.md")
+
+      seed_index(ctx, [{"b.md", a.id}, {"a.md", b.id}])
+
+      assert :ok = run(ctx)
+
+      assert path_of(ctx, a.id) == "a.md"
+      assert path_of(ctx, b.id) == "b.md"
+
+      assert_receive {:projection, measurements, %{phase: :unresolved}}, 2_000
+      assert measurements.applied == 0, "a swap makes no progress by construction"
+      assert measurements.passes == 1, "zero progress must stop after ONE pass"
+    end
+
+    # Two paths claiming one note cannot both be satisfied. Applying them in
+    # sequence moves the note twice per pass — tombstones, seq bumps, Qdrant
+    # repaths and delete-broadcasts to every device, on every checkpoint.
+    test "a note claimed by two paths is dropped, not oscillated", ctx do
+      n = note(ctx, "orig.md")
+      other = note(ctx, "Old/other.md")
+
+      seed_index(ctx, [{"x.md", n.id}, {"y.md", n.id}, {"New/other.md", other.id}])
+
+      assert :ok = run(ctx)
+
+      assert path_of(ctx, n.id) == "orig.md",
+             "projection cannot pick a winner between two claims, so it moves nothing"
+
+      assert path_of(ctx, other.id) == "New/other.md",
+             "an unambiguous entry alongside them still applies"
+    end
+
+    test "a converged run reports converged", ctx do
+      attach_projection_telemetry()
+
+      n = note(ctx, "Old/fine.md")
+      seed_index(ctx, [{"New/fine.md", n.id}])
+
+      assert :ok = run(ctx)
+
+      assert_receive {:projection, %{applied: 1, unresolved: 0}, %{phase: :converged}}, 2_000
+    end
+
+    # An empty index and "40 entries, all failed" used to be byte-identical to
+    # logs, metrics, Oban and Sentry at once.
+    test "an empty index is distinguishable from a failed one", ctx do
+      attach_projection_telemetry()
+
+      seed_index(ctx, [])
+      assert :ok = run(ctx)
+
+      assert_receive {:projection, %{applied: 0, unresolved: 0}, %{phase: :converged}}, 2_000
     end
   end
 

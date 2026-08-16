@@ -175,31 +175,76 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     :ok
   end
 
-  defp write_snapshot(user, user_id, vault_id, doc) do
+  @doc """
+  Hydrate a `Yex.Doc` from this vault's persisted snapshot.
+
+  Returns an EMPTY doc when there is no snapshot yet — a vault whose index room
+  has never checkpointed is not an error. A snapshot that exists and will not
+  decrypt IS one, and is never silently downgraded to an empty doc: writing that
+  back would replace the real index with nothing.
+
+  Public for `Engram.Workers.SyncVaultIndex`, which mutates the snapshot in place when no room
+  is live. Both go through `persist_doc/3` so there is exactly one writer of the
+  `vault_index_states` row.
+  """
+  @spec load_doc(map(), String.t()) :: {:ok, Yex.Doc.t()} | {:error, term()}
+  def load_doc(user, vault_id) do
+    {:ok, row} = Repo.with_tenant(user.id, fn -> Repo.get(VaultIndexState, vault_id) end)
+    doc = Yex.Doc.new()
+
+    case row do
+      nil ->
+        {:ok, doc}
+
+      row ->
+        with {:ok, snapshot} <- Crypto.decrypt_index_state(row, user) do
+          case Yex.apply_update(doc, snapshot) do
+            :ok -> {:ok, doc}
+            _ -> {:error, :corrupt_snapshot}
+          end
+        end
+    end
+  end
+
+  @doc """
+  Encode, size-check, encrypt and upsert `doc` as this vault's snapshot.
+
+  Does NOT enqueue projection — only a room checkpoint does that. A write-back
+  from `SyncVaultIndex` is recording a path the server just changed, so the
+  index and the rows already agree and a projection pass would find nothing.
+  """
+  @spec persist_doc(map(), String.t(), Yex.Doc.t()) :: :ok | {:error, term()}
+  def persist_doc(user, vault_id, doc) do
     with {:ok, encoded} <- encode_state(doc, vault_id),
          :ok <- check_size(encoded, vault_id),
-         {:ok, {ct, nonce}} <- Crypto.encrypt_index_state(encoded, user, vault_id),
-         :ok <- upsert(user, vault_id, ct, nonce) do
-      emit_checkpoint(:ok)
+         {:ok, {ct, nonce}} <- Crypto.encrypt_index_state(encoded, user, vault_id) do
+      upsert(user, vault_id, ct, nonce)
+    end
+  end
 
-      # Project the index onto the notes path columns (#1151 step 2) — in a
-      # worker, never here. This runs inside terminate/2 against a shutdown
-      # budget, and a projection pass is N renames, each re-encrypting a path,
-      # rewriting path_hmac, repathing Qdrant points and enqueueing link
-      # rewrites. Doing that in a terminating process during a deploy stampede
-      # loses the checkpoint AND the projection.
-      #
-      # Enqueued only after the snapshot is durably written, so the worker can
-      # never read a snapshot older than the doc that triggered it. Per-vault
-      # `unique` collapses a storm of room exits into one job.
-      _ =
-        Enqueue.enqueue(
-          Engram.Workers.ProjectVaultIndex.new(%{user_id: user_id, vault_id: vault_id}),
-          "project_vault_index"
-        )
+  defp write_snapshot(user, user_id, vault_id, doc) do
+    case persist_doc(user, vault_id, doc) do
+      :ok ->
+        emit_checkpoint(:ok)
 
-      :ok
-    else
+        # Project the index onto the notes path columns (#1151 step 2) — in a
+        # worker, never here. This runs inside terminate/2 against a shutdown
+        # budget, and a projection pass is N renames, each re-encrypting a path,
+        # rewriting path_hmac, repathing Qdrant points and enqueueing link
+        # rewrites. Doing that in a terminating process during a deploy stampede
+        # loses the checkpoint AND the projection.
+        #
+        # Enqueued only after the snapshot is durably written, so the worker can
+        # never read a snapshot older than the doc that triggered it. Per-vault
+        # `unique` collapses a storm of room exits into one job.
+        _ =
+          Enqueue.enqueue(
+            Engram.Workers.ProjectVaultIndex.new(%{user_id: user_id, vault_id: vault_id}),
+            "project_vault_index"
+          )
+
+        :ok
+
       {:error, reason} ->
         emit_checkpoint(:failed)
 

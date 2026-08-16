@@ -28,6 +28,18 @@ defmodule Engram.PromEx.Crdt do
 
     * `engram_prom_ex_crdt_room_drain_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_index_checkpoint_total` — tags `[:phase]`.
+    * `engram_prom_ex_crdt_index_projection_total` — tags `[:phase]`.
+    * `engram_prom_ex_crdt_index_projection_unresolved_total` — tags `[:phase]`.
+
+  `[:engram, :crdt, :index_projection]` — one event per projection run
+  (`Engram.Workers.ProjectVaultIndex`), `%{phase: :converged | :unresolved | …}`.
+
+  **`unresolved` is the signal.** A run that applies nothing because the index
+  is empty and a run that fails to apply all forty of its entries are otherwise
+  identical to logs, metrics, Oban and Sentry at the same time. Sustained
+  non-zero means a vault's index and its rows disagree in a way projection
+  cannot fix — a path swap, an entry naming a note that is not there, or one
+  note claimed by two paths.
 
   `[:engram, :crdt, :index_checkpoint]` — `%{count: 1}`, `%{phase: atom}`, from
   `CrdtIndexPersistence.unbind/3`:
@@ -75,6 +87,7 @@ defmodule Engram.PromEx.Crdt do
 
   @drain_event [:engram, :crdt, :room_drain]
   @checkpoint_event [:engram, :crdt, :index_checkpoint]
+  @projection_event [:engram, :crdt, :index_projection]
 
   @impl true
   def event_metrics(opts) do
@@ -97,6 +110,23 @@ defmodule Engram.PromEx.Crdt do
           event_name: @checkpoint_event,
           description:
             "Per-vault CRDT index checkpoint outcomes by phase (ok | skipped_rotation | failed).",
+          tags: [:phase]
+        ),
+        counter(
+          metric_prefix ++ [:index_projection, :total],
+          event_name: @projection_event,
+          description:
+            "Per-vault index projection runs by phase (converged | unresolved | no_snapshot | " <>
+              "decrypt_failed | corrupt_snapshot | snoozed_rotation | user_gone).",
+          tags: [:phase]
+        ),
+        sum(
+          metric_prefix ++ [:index_projection, :unresolved, :total],
+          event_name: @projection_event,
+          measurement: :unresolved,
+          description:
+            "Index entries a projection run could not apply (conflict, unknown note, malformed, " <>
+              "or a note claimed by two paths).",
           tags: [:phase]
         )
       ]

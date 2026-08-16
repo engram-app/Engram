@@ -314,10 +314,12 @@ defmodule EngramWeb.CrdtChannel do
         {:reply, {:error, %{reason: "rate_limited"}}, socket}
 
       {:error, reason} ->
-        # The index is not yet load-bearing — nothing reads it back until the
-        # client adopts it (Engram-obsidian#362/#363) — but a silently dropped
-        # frame here would become a drift class the moment it is, so it is
-        # logged like any lost edit.
+        # The index IS load-bearing as of #1151 step 2: a persisted index entry
+        # is projected onto the notes path columns by
+        # Engram.Workers.ProjectVaultIndex, so a frame accepted here can move a
+        # real note. It relays any well-formed frame from any authenticated
+        # socket on this vault — user-scoped, but not otherwise gated. A dropped
+        # frame is therefore a lost identity write, not a lost hint.
         log_index_dropped(socket, reason)
         {:reply, {:error, %{reason: "index_frame_rejected"}}, socket}
     end
