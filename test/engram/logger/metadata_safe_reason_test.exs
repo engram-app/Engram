@@ -123,6 +123,16 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
   # A rescue always binds a struct, but this is a public helper on a shared
   # logging module and its @spec invites `catch :exit, reason`. Raising from
   # inside an isolation helper defeats the isolation.
+  # A filter that renders everything "unknown" gets routed around. Atoms are the
+  # most common reason shape here and cannot carry note content.
+  describe "atoms survive, because they are the useful case" do
+    test "a bare reason atom renders" do
+      assert Metadata.safe_reason(:not_found) == ":not_found"
+      assert Metadata.safe_reason(:version_conflict) == ":version_conflict"
+      assert Metadata.safe_reason(nil) == "nil"
+    end
+  end
+
   describe "never raises, whatever it is handed" do
     test "a non-struct does not raise" do
       for value <- [:some_atom, {:error, "boom"}, "raw string", 42, nil, %{a: 1}] do

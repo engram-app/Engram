@@ -76,6 +76,13 @@ defmodule Engram.Logger.Metadata do
 
   def safe_reason(%mod{}), do: inspect(mod)
 
+  # Atoms are the single most common reason shape in this codebase
+  # (`:not_found`, `:timeout`, `:version_conflict`) and cannot carry note
+  # content — nothing on these paths interns user text as an atom. Without this
+  # they all collapsed to "unknown", which is the failure mode that makes
+  # on-call route around a filter instead of trusting it.
+  def safe_reason(reason) when is_atom(reason), do: inspect(reason)
+
   # A rescue always binds a struct, but this is called from a shared logging
   # module and its @spec invites `catch :exit, reason`. `hmac_ref/1` in
   # notes.ex got a fallback in the same commit for exactly this reason — "a log

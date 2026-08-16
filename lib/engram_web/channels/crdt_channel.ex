@@ -632,10 +632,23 @@ defmodule EngramWeb.CrdtChannel do
     fun.()
   rescue
     e ->
-      log_entry_failure(entry, Exception.message(e))
+      # safe_reason/1, not Exception.message/1. This guard wraps
+      # prepare_create/2 (whose entry holds the client's `b64` genesis frame)
+      # and seed_and_checkpoint/5 (which materializes that frame into
+      # notes.content), so note plaintext is in scope on both — and
+      # CaseClauseError, MatchError and KeyError all render `inspect(term)`.
+      #
+      # The `else` arm of this same function was already narrowed for exactly
+      # this reason (see the error_kind/1 comment below: "inspecting the
+      # changeset whole dumps its changes ... into Loki. Only metadata keys are
+      # redacted, never the message body"). The rescue never got the same
+      # treatment.
+      log_entry_failure(entry, Metadata.safe_reason(e))
   catch
     :exit, reason ->
-      log_entry_failure(entry, "exited: #{inspect(reason)}")
+      # An exit reason carries the crashed call's arguments, which on this path
+      # are Yjs frames. Kind only.
+      log_entry_failure(entry, "exited: #{Metadata.safe_reason(reason)}")
   end
 
   defp log_entry_failure(entry, reason) do
