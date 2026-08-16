@@ -288,6 +288,17 @@ defmodule EngramWeb.NotesController do
 
       {:error, :not_found} ->
         conn |> put_status(404) |> json(%{error: "not found"})
+
+      # rename_note/5 claims the path in the CRDT authority before moving the
+      # row, so a DEK rotation now refuses the rename outright. Answering 503
+      # rather than letting this fall through to a CaseClauseError: rotations
+      # are transient and operator-initiated, so the honest answer is "try
+      # again", not an exception per rename and a Sentry event per user.
+      {:error, :rotation_in_progress} ->
+        conn
+        |> put_resp_header("retry-after", "30")
+        |> put_status(503)
+        |> json(%{error: "temporarily unavailable, key rotation in progress"})
     end
   end
 

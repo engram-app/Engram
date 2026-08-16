@@ -4,8 +4,16 @@ _Last verified: 2026-08-15_
 
 **TL;DR:** `{:global, {:crdt_index, vault_id}}`, one `Y.Map` named `filemeta_v0`
 (`path -> %{note_id, type, hash}`), riding the existing per-vault `crdt:` channel as
-`crdt_index_msg`. **Deliberately inert** — nothing writes to it, nothing reads it back, and it must
-**not** opt into the #1152 drain until #1151 gives it a checkpoint.
+`crdt_index_msg`. **This map is AUTHORITATIVE for note paths** as of #1151 step 2 —
+`Engram.Notes.Identity` is the only server-side writer, `Engram.Workers.ProjectVaultIndex`
+reads it and derives the `notes.path_*` columns. Durability shipped in #1151 step 1;
+the #1152 drain is still unwired (step 3). See `crdt-identity-authority.md` for the
+decision, and note that projection must NEVER claim (`rename_note/5` takes
+`index: :skip` for it) or it feeds itself.
+
+No CLIENT writes the map yet (Engram-obsidian#362), so in production it is still
+empty and projection is a no-op — a fact about the client we ship, not about what
+the server accepts.
 
 Shipped: PR #1383 (`feat/crdt-index-room`). Refs #1150, #1146, #1152,
 engram-app/engram-workspace#167.

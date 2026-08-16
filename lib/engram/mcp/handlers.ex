@@ -438,8 +438,22 @@ defmodule Engram.MCP.Handlers do
     new_path = args["new_path"] || ""
 
     case Notes.rename_note(user, vault, old_path, new_path) do
-      {:ok, _note} -> {:ok, "Note renamed: #{old_path} -> #{new_path}"}
-      {:error, :not_found} -> {:ok, "Note not found: #{old_path}"}
+      {:ok, _note} ->
+        {:ok, "Note renamed: #{old_path} -> #{new_path}"}
+
+      {:error, :not_found} ->
+        {:ok, "Note not found: #{old_path}"}
+
+      {:error, :conflict} ->
+        {:ok, "Note rename conflict: #{new_path} is already taken"}
+
+      # Same catch-all as rename_folder below, and now load-bearing for a second
+      # reason: rename_note/5 claims the path in the CRDT authority before
+      # moving the row, so it can also surface :rotation_in_progress and
+      # snapshot read/write failures. Without this clause every one of them is a
+      # CaseClauseError → 500.
+      {:error, reason} ->
+        {:ok, "Could not rename note #{old_path} -> #{new_path}: #{inspect(reason)}"}
     end
   end
 

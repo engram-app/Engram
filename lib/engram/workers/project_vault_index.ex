@@ -82,9 +82,11 @@ defmodule Engram.Workers.ProjectVaultIndex do
 
   require Logger
 
-  # Bounds the fixpoint loop. A chain of N renames needs at most N passes, but a
-  # vault needing more than a handful of rounds is disagreeing with its rows in
-  # a way projection will not fix by trying harder — report it instead.
+  # Bounds the fixpoint loop. A chain of N renames needs at most N passes, so a
+  # chain longer than this is left PARTIALLY applied and resumes on the next
+  # checkpoint's run — which is legitimate, and is the same property the
+  # per-vault `unique` window relies on. The cap is here so a swap (which cannot
+  # converge at all) stops churning, not because 6 rounds means failure.
   @max_passes 5
 
   @event [:engram, :crdt, :index_projection]

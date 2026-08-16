@@ -14,18 +14,21 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   `CrdtPersistence` appends every update to `crdt_update_log` because a note
   room's hot path is keystrokes and losing a checkpoint interval means losing
   typing. The index's writes are rename/create/delete — orders of magnitude
-  rarer — and until Engram-obsidian#363 the `notes` rows remain authoritative
-  for paths, so a lost interval leaves the index STALE rather than wrong. An
-  ungraceful room death (SIGKILL, node loss) therefore loses index writes since
-  the last exit.
+  rarer — so this stays snapshot-only. An ungraceful room death (SIGKILL, node
+  loss) loses index writes since the last exit.
 
-  Note what "stale" is doing here: it is safe because nothing READS the index
-  yet, and because the `notes` rows still hold the paths an eventual rebuild
-  would read. There is no rebuild path in `lib/` — do not read "rebuildable" as
-  "a rebuild exists".
+  **The escalation trigger this section used to defer has already fired.** It
+  said "revisit when #363 makes the index authoritative"; the map became
+  authoritative for paths in #1151 step 2, not at #363
+  (`docs/context/crdt-identity-authority.md`). So a lost interval is no longer
+  merely STALE: it drops committed claims, and the rows then converge back to a
+  superseded snapshot on the next projection run.
 
-  Revisit when #363 makes the index authoritative: at that point a lost
-  interval IS data loss and this needs a tail log.
+  What still makes it tolerable is scope, not safety: no CLIENT writes the map
+  yet, so the only claims in flight are the server's own, and each one is
+  followed immediately by the row write it authorises. A tail log is owed before
+  Engram-obsidian#362 lands. There is no rebuild path in `lib/` — do not read
+  "rebuildable" as "a rebuild exists".
 
   ## This is what unblocks the #1152 drain for the index room
 
@@ -183,7 +186,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   decrypt IS one, and is never silently downgraded to an empty doc: writing that
   back would replace the real index with nothing.
 
-  Public for `Engram.Workers.SyncVaultIndex`, which mutates the snapshot in place when no room
+  Public for `Engram.Notes.Identity`, which rewrites the snapshot in place when no room
   is live. Both go through `persist_doc/3` so there is exactly one writer of the
   `vault_index_states` row.
   """
@@ -209,9 +212,12 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   @doc """
   Encode, size-check, encrypt and upsert `doc` as this vault's snapshot.
 
-  Does NOT enqueue projection — only a room checkpoint does that. A write-back
-  from `SyncVaultIndex` is recording a path the server just changed, so the
-  index and the rows already agree and a projection pass would find nothing.
+  Does NOT enqueue projection. A claim from `Engram.Notes.Identity` is followed
+  immediately by the row write in the same call, so the common case needs no
+  pass. Note the ordering: under claim-first the index and the rows explicitly
+  do NOT agree at the moment this returns. A claim whose row write then FAILS is
+  an orphan, and `Engram.Notes` enqueues projection for that case itself rather
+  than leaving it to the next room checkpoint.
   """
   @spec persist_doc(map(), String.t(), Yex.Doc.t()) :: :ok | {:error, term()}
   def persist_doc(user, vault_id, doc) do
@@ -309,7 +315,11 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   #
   # The residual case is a netsplit heal, where `:global`'s conflict resolver
   # kills one registration and that room (trap_exit is set) runs unbind and
-  # clobbers the survivor's row. Accepted for now: nothing writes the index yet.
+  # clobbers the survivor's row. This now costs committed path claims rather
+  # than nothing — `Engram.Notes.Identity` writes the map — so the
+  # merge-on-write fix below is load-bearing rather than optional. Still
+  # accepted for now only because a netsplit heal is rare and projection
+  # re-derives the rows from whichever doc survives.
   # If that changes, the fix is read-then-`Yex.apply_update`-then-encode inside
   # the same transaction — Yjs updates are commutative, so merge-then-write is
   # strictly safer than replace and costs one read on a cold path.

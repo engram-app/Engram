@@ -1755,7 +1755,18 @@ defmodule Engram.NotesTest do
     # change silently masks this — e.g. by catching the Postgrex error
     # and returning {:ok, _} or {:error, :conflict} without a deliberate
     # design — this test fails and forces a re-review of the gap doc.
-    test "nested collision still raises Postgrex.Error (documented gap)",
+    # Was "still raises Postgrex.Error (documented gap)". The gap is CLOSED:
+    # `claim_cascade/4` validates every target against the rows before claiming
+    # the cascade in the authority, so a nested collision is now refused up
+    # front instead of surfacing as a raised unique_violation from
+    # `bulk_rename_update!` mid-transaction.
+    #
+    # That ordering is load-bearing, not cosmetic. The claim commits before the
+    # rows move, so a raise below it would leave the whole cascade claimed at
+    # paths the rows never took — and projection would then apply whichever of
+    # them do not collide: a partial folder rename executing asynchronously
+    # after a 500.
+    test "nested collision is refused before any row moves",
          %{user: user, vault: vault} do
       # src has a nested file
       {:ok, _} =
@@ -1775,9 +1786,10 @@ defmodule Engram.NotesTest do
           "mtime" => 1_000.0
         })
 
-      assert_raise Postgrex.Error, fn ->
-        Notes.rename_folder(user, vault, "src", "dst")
-      end
+      assert {:error, :conflict} = Notes.rename_folder(user, vault, "src", "dst")
+
+      assert {:ok, %{path: "src/sub/x.md"}} = Notes.get_note(user, vault, "src/sub/x.md")
+      assert {:ok, %{path: "dst/sub/x.md"}} = Notes.get_note(user, vault, "dst/sub/x.md")
     end
 
     test "cascades to all children including nested subfolders",

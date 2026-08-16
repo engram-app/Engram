@@ -2333,8 +2333,11 @@ defmodule Engram.Notes do
     now = DateTime.utc_now()
 
     with {:ok, user} <- Crypto.ensure_user_dek(user),
-         :ok <- claim_rename(user, vault, old_path, new_path, opts) do
-      do_rename_note(user, vault, old_path, new_path, new_folder, now)
+         {:ok, claimed?} <- claim_rename(user, vault, old_path, new_path, opts) do
+      case do_rename_note(user, vault, old_path, new_path, new_folder, now) do
+        {:ok, _} = ok -> ok
+        {:error, reason} = err -> report_orphan_claim(user, vault, claimed?, reason, err)
+      end
     end
   end
 
@@ -2347,16 +2350,38 @@ defmodule Engram.Notes do
   # `index: :skip` exists for exactly one caller: ProjectVaultIndex, which is
   # deriving rows FROM the map and would otherwise feed itself. Claiming is the
   # DEFAULT so that a new call site is fail-safe rather than fail-silent.
+  #
+  # Returns `{:ok, claimed?}` so the caller can tell a rename that failed having
+  # committed a claim from one that failed before committing anything.
   defp claim_rename(user, vault, old_path, new_path, opts) do
     if Keyword.get(opts, :index, :claim) == :skip or old_path == new_path do
-      :ok
+      {:ok, false}
     else
-      case note_id_at(user, vault, old_path) do
-        # No note there. do_rename_note reports :not_found for it — claiming a
-        # path for a note that does not exist would put a lie in the authority.
-        nil -> :ok
-        note_id -> Identity.claim(user, vault.id, [{new_path, note_id}])
-      end
+      claim_for_note(user, vault, old_path, new_path)
+    end
+  end
+
+  defp claim_for_note(user, vault, old_path, new_path) do
+    case note_id_at(user, vault, old_path) do
+      # No note there. do_rename_note reports :not_found for it — claiming a
+      # path for a note that does not exist would put a lie in the authority.
+      nil ->
+        {:ok, false}
+
+      note_id ->
+        # THE ROW CHECK IS LOAD-BEARING, not a duplicate of do_rename_note's.
+        # `Identity.claim/3` can only see collisions recorded IN THE MAP, and
+        # until Engram-obsidian#362 no client writes the map — so in production
+        # essentially every collision is invisible to it. Letting the claim
+        # through and discovering the conflict at the row is not "an error
+        # slightly later": the claim is already durable, so the target path
+        # becomes permanently unclaimable by any note, and if the row holding it
+        # is ever deleted, projection performs the rename this call rejected.
+        if path_held_by_other?(user, vault, new_path, note_id) do
+          {:error, :conflict}
+        else
+          with :ok <- Identity.claim(user, vault.id, [{new_path, note_id}]), do: {:ok, true}
+        end
     end
   end
 
@@ -2364,6 +2389,47 @@ defmodule Engram.Notes do
     {:ok, query} = note_by_path_query(user, vault, path)
     {:ok, note} = Repo.with_tenant(user.id, fn -> Repo.one(query) end)
     note && note.id
+  end
+
+  defp path_held_by_other?(user, vault, path, note_id) do
+    case note_id_at(user, vault, path) do
+      nil -> false
+      ^note_id -> false
+      _other -> true
+    end
+  end
+
+  # A claim committed for a rename that then failed. The row check above makes
+  # this rare (a race, or a lost fence in rename_with_retry), but it cannot be
+  # eliminated: a CRDT op cannot join the row transaction, so there is nothing
+  # to roll back with.
+  #
+  # Counted and enqueued rather than hidden. Projection is what converges the
+  # divergence, and NOTHING else would enqueue it — `Identity` deliberately does
+  # not, and a room checkpoint might not happen for hours — so without this the
+  # design's "the row catches up" promise is unimplemented on exactly the path
+  # that breaks it.
+  defp report_orphan_claim(_user, _vault, false, _reason, err), do: err
+
+  defp report_orphan_claim(user, vault, true, reason, err) do
+    :telemetry.execute(
+      [:engram, :crdt, :index_claim],
+      %{count: 1, entries: 1},
+      %{op: :claim, route: :orphan, phase: :orphan_claim}
+    )
+
+    Logger.error(
+      "crdt index claim committed for a rename that failed: #{inspect(reason)}",
+      Metadata.with_category(:error, :sync, user_id: user.id, vault_id: vault.id)
+    )
+
+    _ =
+      Enqueue.enqueue(
+        Engram.Workers.ProjectVaultIndex.new(%{user_id: user.id, vault_id: vault.id}),
+        "project_vault_index"
+      )
+
+    err
   end
 
   defp do_rename_note(user, vault, old_path, new_path, new_folder, now) do
@@ -2431,14 +2497,6 @@ defmodule Engram.Notes do
         # tearing the note's CRDT room down by id before it can materialize.
         decrypted = decrypt_or_raise!(note, user)
 
-        # Dual-write the index (#1146 decision 4). ProjectVaultIndex makes the
-        # index authoritative for paths, so a server-side rename that does not
-        # land here is REVERTED by the next projection run — tombstone at the
-        # new path, Qdrant repath, delete broadcast to every device. This is the
-        # mirror of the exactly-one-rewriter guard: not just "don't write the
-        # path columns directly", but "don't move a note without telling the
-        # index".
-        #
         :ok = broadcast_change(user.id, vault.id, "upsert", note.path, decrypted, [])
         :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
         {:ok, decrypted}
@@ -2829,6 +2887,13 @@ defmodule Engram.Notes do
 
       case result do
         {:ok, %{deleted: deleted, notes: notes}} ->
+          # Release every deleted note's claim, for the same reason delete_note/4
+          # does — and at N scale. A stale entry naming a dead note is not just
+          # `unresolved` noise: Identity.claim/3 refuses that path for every LIVE
+          # note forever, even though the rows are free. Skipping it turns a
+          # 200-note folder delete into 200 permanent path reservations.
+          _ = Identity.release(user, vault.id, Enum.map(notes, & &1.id))
+
           # Post-commit: same per-note delete events clients already handle.
           # Meta rows decrypt cheaply (path envelope only — no content).
           zipped = notes |> Crypto.decrypt_notes_batch(user) |> Enum.zip(notes)
@@ -2941,12 +3006,9 @@ defmodule Engram.Notes do
   # exists purely as a path on its notes. `folder == ""` means the vault root.
   def batch_move_notes(user, vault, ids, {:path, folder})
       when is_list(ids) and is_binary(folder) do
-    Repo.transaction(fn ->
-      case Crypto.ensure_user_dek(user) do
-        {:ok, user} -> reduce_move_notes(user, vault, ids, folder)
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      move_notes_claimed(user, vault, ids, folder)
+    end
   end
 
   def batch_move_notes(user, vault, ids, "root") when is_list(ids) do
@@ -2955,22 +3017,19 @@ defmodule Engram.Notes do
 
   def batch_move_notes(user, vault, ids, target_folder_id)
       when is_list(ids) and is_binary(target_folder_id) do
-    Repo.transaction(fn ->
-      with {:ok, user} <- Crypto.ensure_user_dek(user),
-           {:ok, marker} <- get_folder_marker_by_id(user, vault, target_folder_id),
-           {:ok, dek} <- Crypto.get_dek(user) do
-        target_folder = hydrate_folder_marker(marker, dek).folder
-        reduce_move_notes(user, vault, ids, target_folder)
-      else
-        {:error, :not_found} -> Repo.rollback({:not_found, target_folder_id})
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, marker} <- get_folder_marker_by_id(user, vault, target_folder_id),
+         {:ok, dek} <- Crypto.get_dek(user) do
+      move_notes_claimed(user, vault, ids, hydrate_folder_marker(marker, dek).folder)
+    else
+      {:error, :not_found} -> {:error, {:not_found, target_folder_id}}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   # Shared move loop (runs inside a transaction): move each id into
   # `target_folder` (a path), rolling the whole batch back on the first failure.
-  # move_note_into_folder wraps a path collision as {:error, {:conflict, id}};
+  # validate_move_targets wraps a path collision as {:error, {:conflict, id}};
   # the bare :not_found from the inner get_note_by_id is tagged with its id here.
   # Three phases, and the ORDER is the correctness argument.
   #
@@ -2985,12 +3044,18 @@ defmodule Engram.Notes do
   # So: resolve every id first (nothing committed yet), then claim the whole
   # batch in ONE atomic call, then derive the rows. Every failure mode that can
   # abort the batch is detected before anything is committed.
-  defp reduce_move_notes(user, vault, ids, target_folder) do
+  #
+  # Resolve, validate and claim all run OUTSIDE the row transaction, which is
+  # not a style choice. `Identity` reaches Postgres through `Repo.with_tenant`,
+  # and that JOINS an in-flight transaction — so claiming inside would make the
+  # snapshot write roll back with a failed batch while the live-room write
+  # survived. The same call would have different durability depending on
+  # whether the user happens to have a socket open.
+  defp move_notes_claimed(user, vault, ids, target_folder) do
     with {:ok, moves} <- resolve_moves(user, vault, ids, target_folder),
+         :ok <- validate_move_targets(user, vault, moves),
          :ok <- claim_moves(user, vault, moves) do
-      apply_moves(user, vault, moves)
-    else
-      {:error, reason} -> Repo.rollback(reason)
+      Repo.transaction(fn -> apply_moves(user, vault, moves) end)
     end
   end
 
@@ -3010,6 +3075,48 @@ defmodule Engram.Notes do
   defp move_target(note, ""), do: Path.basename(note.path)
   defp move_target(note, folder), do: Path.join(folder, Path.basename(note.path))
 
+  # Same reason `claim_rename/5` checks the row: `Identity.claim/3` only sees
+  # collisions recorded in the MAP, and until a client populates it the rows are
+  # where collisions actually live. A target held by a note that is NOT itself
+  # moving would otherwise be discovered at the row — after the claim committed,
+  # leaving that path permanently unclaimable.
+  #
+  # Movers are excluded because they are all leaving their current paths in this
+  # same batch; a genuine collision between two movers is caught by
+  # `Identity.claim/3`'s duplicate-target refusal.
+  defp validate_move_targets(user, vault, moves) do
+    movers = MapSet.new(moves, fn {note, _new_path} -> note.id end)
+
+    moves
+    |> Enum.reject(fn {note, new_path} -> note.path == new_path end)
+    |> Enum.find_value(fn {note, new_path} ->
+      mover_id = note.id
+
+      case note_id_at(user, vault, new_path) do
+        nil -> nil
+        ^mover_id -> nil
+        other -> if MapSet.member?(movers, other), do: nil, else: {:error, {:conflict, mover_id}}
+      end
+    end)
+    |> Kernel.||(:ok)
+  end
+
+  # Row validation + claim for a folder cascade. `movers` are the notes this
+  # cascade is itself relocating; a target they currently hold is about to be
+  # vacated, so it is not a collision.
+  defp claim_cascade(user, vault, claims, movers) do
+    collision =
+      Enum.find_value(claims, fn {new_path, note_id} ->
+        case note_id_at(user, vault, new_path) do
+          nil -> nil
+          ^note_id -> nil
+          other -> if MapSet.member?(movers, other), do: nil, else: new_path
+        end
+      end)
+
+    if collision, do: {:error, :conflict}, else: Identity.claim(user, vault.id, claims)
+  end
+
   defp claim_moves(user, vault, moves) do
     claims =
       moves
@@ -3020,10 +3127,12 @@ defmodule Engram.Notes do
   end
 
   # `index: :skip` because claim_moves/3 already committed the whole batch in
-  # the authority. Row-level conflicts remain possible for a collision INSIDE
-  # the batch (two ids targeting one path), which the claim resolves
-  # last-writer-wins rather than refusing — so this keeps the per-id
-  # `{:conflict, id}` contract as the backstop.
+  # the authority.
+  #
+  # A failure here is now genuinely exceptional — resolve, validate and claim
+  # have between them ruled out missing ids, row collisions and intra-batch
+  # duplicates. What remains is a race or a lost fence, and it leaves an orphan
+  # claim that `rename_note/5` counts and enqueues projection for.
   defp apply_moves(user, vault, moves) do
     Enum.reduce_while(moves, %{moved: 0}, fn {note, new_path}, acc ->
       case rename_note(user, vault, note.path, new_path, index: :skip) do
@@ -4772,21 +4881,22 @@ defmodule Engram.Notes do
   # true if any non-deleted row (note or folder marker) lives directly in
   # `folder`. Used as the pre-check for rename_folder/4's conflict gate.
   #
-  # NESTED-COLLISION GAP (intentional, documented):
-  # This check only catches DIRECT-CHILD collisions — rows whose immediate
-  # parent folder hashes to `target_hmac`. It does NOT catch nested
-  # collisions like renaming `src` → `dst` where both `src/sub/x.md` and
-  # `dst/sub/x.md` already exist. Those still surface as a
-  # `Postgrex.Error{unique_violation, "notes_user_vault_path_hmac_v2"}`
-  # from the cascade `update_all` in `do_rename_folder/5`.
+  # Catches DIRECT-CHILD collisions — rows whose immediate parent folder hashes
+  # to `target_hmac` — cheaply, without decrypting.
   #
-  # Why accepted: with opaque HMAC fields we can't do a prefix scan
-  # (`WHERE folder LIKE 'dst/%'` is impossible on ciphertext+HMAC), and a
-  # full decrypt-and-scan would be O(notes) for every rename. Defense in
-  # depth for the nested case is deferred until we either index prefix
-  # hashes or fold the check into the cascade transaction itself. The
-  # common case (renaming onto a populated immediate folder or marker) is
-  # caught here and returns `{:error, :conflict}` cleanly.
+  # It does NOT catch nested collisions (renaming `src` → `dst` where both
+  # `src/sub/x.md` and `dst/sub/x.md` exist), because with opaque HMAC fields a
+  # prefix scan is impossible (`WHERE folder LIKE 'dst/%'` cannot run against
+  # ciphertext) and a full decrypt-and-scan would be O(notes) per rename.
+  #
+  # THAT GAP IS NOW COVERED DOWNSTREAM, not still open: `claim_cascade/4`
+  # resolves each cascade target against the rows before claiming, so a nested
+  # collision returns `{:error, :conflict}` instead of the
+  # `Postgrex.Error{unique_violation}` it used to raise from
+  # `bulk_rename_update!`. That check is O(moved notes) rather than O(vault),
+  # and it had to exist anyway: the claim commits before the rows move, so a
+  # raise below it would leave the cascade claimed at paths the rows never took.
+  # This check stays because it is the cheaper one and it short-circuits first.
   #
   # Optimistic `{:ok, _} = dek_filter_key(user)` match: the only caller
   # (`rename_folder/4`) gates on `Crypto.ensure_user_dek/1` first, so
@@ -4973,7 +5083,18 @@ defmodule Engram.Notes do
       claims =
         Enum.map(real_note_updates, fn {n, _old, new_path, _f, _t} -> {new_path, n.id} end)
 
-      case Identity.claim(user, vault.id, claims) do
+      # Validate against the ROWS before claiming, for the same reason
+      # `claim_rename/5` does: `Identity.claim/3` only sees collisions recorded
+      # in the map, and until a client populates it the rows are where
+      # collisions live. This also closes the NESTED-COLLISION GAP documented at
+      # `folder_target_exists?` — a nested collision surfaces as a raised
+      # Postgrex unique_violation from `bulk_rename_update!` BELOW the claim,
+      # which would leave the whole cascade claimed at paths the rows never
+      # took, and projection would then apply whichever of them do not collide:
+      # a partial folder rename executing asynchronously after a 500.
+      movers = MapSet.new(real_note_updates, fn {n, _o, _np, _f, _t} -> n.id end)
+
+      case claim_cascade(user, vault, claims, movers) do
         {:error, reason} ->
           {:error, reason}
 
@@ -5372,6 +5493,13 @@ defmodule Engram.Notes do
         |> Enum.filter(&MapSet.member?(deleted_ids, &1.id))
         |> Enum.split_with(fn r -> r.kind == "note" end)
 
+      # Release every deleted note's claim, for the same reason delete_note/4
+      # does — and at cascade scale. A stale entry naming a dead note is not
+      # just `unresolved` noise: Identity.claim/3 refuses that path for every
+      # LIVE note forever, even though the rows are free. Markers hold no path
+      # claim, so only real notes are released.
+      _ = Identity.release(user, vault.id, Enum.map(real_notes, & &1.id))
+
       # Side effects outside the transaction context, so they never fire if
       # the update_all above rolled back. Qdrant cleanup + broadcasts.
       # Markers carry no embedding, so they skip the index-cleanup enqueue.
@@ -5655,7 +5783,7 @@ defmodule Engram.Notes do
 
   # Resolve source marker → compute new folder under target → delegate to
   # the gated rename (which cascades through descendants, reusing the shared
-  # batch scan). Mirrors move_note_into_folder/4's contract: returns {:ok, _}
+  # batch scan). Mirrors apply_moves/3's contract: returns {:ok, _}
   # or {:error, atom}.
   defp move_folder_into(user, vault, id, target_folder, dek, rows) do
     case get_folder_marker_by_id(user, vault, id) do

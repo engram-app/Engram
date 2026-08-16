@@ -188,7 +188,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
              "projection dragged a server-side rename back to its old path"
     end
 
-    # CrdtIndexWriter has TWO paths: write through a live room, or rewrite the
+    # Identity has TWO paths: write through a live room, or rewrite the
     # persisted snapshot when there is none. Every other test here stops the
     # room before renaming, so they all exercise the snapshot path — and the
     # live-room branch could be deleted entirely with the suite still green.

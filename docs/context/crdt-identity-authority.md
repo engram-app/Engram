@@ -45,10 +45,26 @@ loser's ROW therefore never moves, never releases the row-level unique
 constraint it holds, and the winner can never derive either. Both notes stuck,
 permanently.
 
-So the map enforces uniqueness instead: **a claim onto a path a different note
-already holds is refused**, and `rename_note/4` keeps returning
-`{:error, :conflict}`. Uniqueness moved from the row to the authority, which is
-the point — the map decides and the column follows.
+So a claim onto a path a different note already holds is refused, and
+`rename_note/5` keeps returning `{:error, :conflict}`.
+
+**But the map cannot enforce uniqueness on its own, and this is the single
+easiest thing to get wrong here.** `Identity.claim/3` only sees collisions
+recorded IN THE MAP, and until Engram-obsidian#362 no client writes it — so in
+production almost every note has no entry and almost every real collision is
+invisible to the claim. Callers therefore validate against the ROWS *before*
+claiming (`claim_rename/5`, `validate_move_targets/3`, `claim_cascade/4`).
+
+Skipping that row check is not "the same error, slightly later". The claim is
+durable: the row write fails, the API reports a conflict, and the target path is
+now permanently unclaimable by any note even though the rows are free — and if
+the row holding it is ever deleted, projection performs the rename the API
+rejected.
+
+A refusal also applies to two entries in ONE claim naming the same path.
+Displacing either way leaves the loser unclaimed, and since projection never
+acts on absence its row never moves, never releases the unique constraint it
+holds, and the winner can never derive either.
 
 What is genuinely given up is narrower than feared:
 
@@ -66,12 +82,21 @@ What is genuinely given up is narrower than feared:
 3. Everything that is not the CRDT — REST, search, MCP — reads the ordinary
    column, exactly as `CrdtCheckpoint` projects note CONTENT for the same reason.
 
-`Engram.Notes.Identity` is the only writer of the map from server code.
-`Engram.Workers.ProjectVaultIndex` is the only writer of the path columns. Each
-has exactly one writer, which is the invariant the old design could not state.
+`Engram.Notes.Identity` is the only writer of the map from server code, and
+projection never writes the path columns DIRECTLY — it goes through
+`rename_note/5`, which is this repo's one path rewriter. (`do_rename_note` and
+the folder cascade write those columns too; the invariant is one rewriter, not
+one caller.)
+
+**Claim outside every transaction.** `Identity` reaches Postgres through
+`Repo.with_tenant/2`, which JOINS an in-flight transaction — so a claim made
+inside one has its snapshot write rolled back with the caller while a live-room
+write survives. Same call, different durability, depending on whether the user
+has a socket open. `batch_move_folders/4` still does this; it logs and counts
+`:in_transaction` until its cascades can be pre-computed.
 
 **Projection must never claim.** It is deriving FROM the map; a claim there is a
-feedback loop. `rename_note/4` takes `index: :skip` for that one caller, and
+feedback loop. `rename_note/5` takes `index: :skip` for that one caller, and
 defaults to claiming so a new call site is fail-safe rather than fail-silent.
 
 ## Removals are id-keyed, never path-keyed
