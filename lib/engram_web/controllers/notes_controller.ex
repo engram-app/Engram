@@ -290,16 +290,33 @@ defmodule EngramWeb.NotesController do
         conn |> put_status(404) |> json(%{error: "not found"})
 
       # rename_note/5 claims the path in the CRDT authority before moving the
-      # row, so a DEK rotation now refuses the rename outright. Answering 503
-      # rather than letting this fall through to a CaseClauseError: rotations
-      # are transient and operator-initiated, so the honest answer is "try
-      # again", not an exception per rename and a Sentry event per user.
-      {:error, :rotation_in_progress} ->
-        conn
-        |> put_resp_header("retry-after", "30")
-        |> put_status(503)
-        |> json(%{error: "temporarily unavailable, key rotation in progress"})
+      # row, which widened this function's error space from 3 shapes to 12.
+      # Everything below was previously a CaseClauseError — and note that
+      # `action_fallback` does NOT catch those: it only intercepts a returned
+      # non-conn value, so an unmatched clause raised, bypassed the fallback,
+      # and produced a 500 plus a Sentry event per request.
+      #
+      # TRANSIENT — the operation is fine, the authority is momentarily
+      # unreachable. These deserve the same "come back" answer as a rotation,
+      # not a permanent-looking 500.
+      {:error, reason} when reason in [:rotation_in_progress, :mailbox_empty] ->
+        retry_later(conn, reason)
+
+      {:error, {:room_exit, _reason}} ->
+        retry_later(conn, :room_exit)
+
+      # INTERNAL — a snapshot that will not decrypt, will not encode, or will
+      # not persist. Genuinely our problem, and not fixed by retrying.
+      {:error, _reason} ->
+        conn |> put_status(500) |> json(%{error: "internal"})
     end
+  end
+
+  defp retry_later(conn, reason) do
+    conn
+    |> put_resp_header("retry-after", "30")
+    |> put_status(503)
+    |> json(%{error: "temporarily unavailable", reason: reason})
   end
 
   operation(:delete,
@@ -558,6 +575,24 @@ defmodule EngramWeb.NotesController do
   # Error tuples ({:not_found, id}/{:conflict, id}/internal) fall through to
   # the action_fallback.
   defp send_move_result(conn, user, vault, ids, result, broadcast_extra) do
+    # Batch moves claim in the CRDT authority before moving rows, so they carry
+    # the same widened error space `rename/2` handles. Without this the SAME
+    # user, mid-rotation, got 503 "try again" from a single rename and 500
+    # "internal" from a batch move of the same notes — because FallbackController
+    # collapses any unrecognised {:error, _} to 500.
+    case result do
+      {:error, reason} when reason in [:rotation_in_progress, :mailbox_empty] ->
+        retry_later(conn, reason)
+
+      {:error, {:room_exit, _}} ->
+        retry_later(conn, :room_exit)
+
+      _ ->
+        do_send_move_result(conn, user, vault, ids, result, broadcast_extra)
+    end
+  end
+
+  defp do_send_move_result(conn, user, vault, ids, result, broadcast_extra) do
     with {:ok, %{moved: n}} <- result do
       body = %{moved: n}
 

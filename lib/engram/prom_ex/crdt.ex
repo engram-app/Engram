@@ -85,6 +85,9 @@ defmodule Engram.PromEx.Crdt do
 
   use PromEx.Plugin
 
+  @claim_event [:engram, :crdt, :index_claim]
+  @recheck_event [:engram, :crdt, :index_recheck]
+  @in_transaction_event [:engram, :crdt, :index_in_transaction]
   @drain_event [:engram, :crdt, :room_drain]
   @checkpoint_event [:engram, :crdt, :index_checkpoint]
   @projection_event [:engram, :crdt, :index_projection]
@@ -111,6 +114,50 @@ defmodule Engram.PromEx.Crdt do
           description:
             "Per-vault CRDT index checkpoint outcomes by phase (ok | skipped_rotation | failed).",
           tags: [:phase]
+        ),
+        # The WRITE side of the authority the projection metrics below read from.
+        # Emitted by `Engram.Notes.Identity` (and by `Engram.Notes` for the
+        # `:orphan` route). Without this the module's own argument — that an
+        # unobserved subsystem is indistinguishable from an idle one — was
+        # unfulfilled: a vault where every rename is refused mid-rotation looked
+        # exactly like a vault nobody renamed.
+        #
+        # Tagged by all three keys on purpose. `phase` alone would merge a room
+        # `:conflict` with a snapshot `:conflict`, losing the only dimension
+        # that tells them apart. 2 ops x 5 routes x 8 phases bounds the series.
+        counter(
+          metric_prefix ++ [:index_claim, :total],
+          event_name: @claim_event,
+          description:
+            "Server-side filemeta_v0 writes by op (claim | release), route " <>
+              "(room | snapshot | orphan) and phase (ok | conflict | rotation | room_exit | " <>
+              "mailbox_empty | load_failed | persist_failed | orphan_claim).",
+          tags: [:op, :route, :phase]
+        ),
+        sum(
+          metric_prefix ++ [:index_claim, :entries, :total],
+          event_name: @claim_event,
+          measurement: :entries,
+          description: "Index entries touched by server-side claims/releases.",
+          tags: [:op, :route, :phase]
+        ),
+        # Deliberately its own series. Folding it into index_claim made one
+        # logical claim register two to four times and report as both :ok and
+        # :conflict simultaneously.
+        counter(
+          metric_prefix ++ [:index_recheck, :total],
+          event_name: @recheck_event,
+          description: "Re-applications through a room that appeared during a snapshot write.",
+          tags: [:op, :phase]
+        ),
+        # A tripwire, not an outcome. Sustained non-zero means a caller is
+        # claiming inside a transaction, where a snapshot write rolls back with
+        # the caller but a live-room write does not.
+        counter(
+          metric_prefix ++ [:index_in_transaction, :total],
+          event_name: @in_transaction_event,
+          description: "filemeta_v0 writes made inside a caller's transaction (should be 0).",
+          tags: [:op]
         ),
         counter(
           metric_prefix ++ [:index_projection, :total],

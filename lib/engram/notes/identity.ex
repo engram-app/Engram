@@ -82,7 +82,6 @@ defmodule Engram.Notes.Identity do
   every rename is refused mid-rotation must not look identical to a vault nobody
   renamed.
   """
-  alias Engram.Accounts.User
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtIndexDoc, CrdtIndexPersistence}
@@ -111,12 +110,12 @@ defmodule Engram.Notes.Identity do
   either way. Remember this only sees the MAP; see "The map cannot enforce
   uniqueness on its own".
   """
-  @spec claim(User.t(), String.t(), [claim()]) :: :ok | {:error, term()}
+  @spec claim(map(), String.t(), [claim()]) :: :ok | {:error, term()}
   def claim(user, vault_id, entries)
 
   def claim(_user, _vault_id, []), do: :ok
 
-  def claim(%User{} = user, vault_id, entries) do
+  def claim(user, vault_id, entries) when is_map(user) do
     apply_targets(user, vault_id, Enum.map(entries, fn {path, id} -> {id, path} end), :claim)
   end
 
@@ -129,12 +128,12 @@ defmodule Engram.Notes.Identity do
   `claim/3` refuses that path for every live note forever, even though the rows
   are free — a deleted file becomes a permanent path reservation.
   """
-  @spec release(User.t(), String.t(), [String.t()]) :: :ok | {:error, term()}
+  @spec release(map(), String.t(), [String.t()]) :: :ok | {:error, term()}
   def release(user, vault_id, note_ids)
 
   def release(_user, _vault_id, []), do: :ok
 
-  def release(%User{} = user, vault_id, note_ids) do
+  def release(user, vault_id, note_ids) when is_map(user) do
     apply_targets(user, vault_id, Enum.map(note_ids, &{&1, :gone}), :release)
   end
 
@@ -145,18 +144,41 @@ defmodule Engram.Notes.Identity do
   # that recursed without bound, at 5s plus a full snapshot decrypt/re-encrypt
   # per lap. Routing is decided once, here.
   defp apply_targets(user, vault_id, targets, op) do
+    # Checked HERE, before routing, not inside the snapshot path. It used to sit
+    # in `do_via_snapshot`, which meant it could never fire for a vault with a
+    # live index room — i.e. never for a connected user. That is exactly
+    # inverted: the gap it exists to expose is "durability differs depending on
+    # whether a socket is open", and the room route is the open-socket half.
+    warn_if_in_transaction(user, vault_id, op)
+
     case :global.whereis_name({:crdt_index, vault_id}) do
       pid when is_pid(pid) ->
         case via_room(pid, targets) do
-          {:error, {:room_exit, reason}} ->
+          {:error, {:room_exit, _}} = err ->
             # The room died or stopped answering. Its checkpoint may or may not
             # have run, so the snapshot is the only place left to write.
             emit(op, :room, :room_exit, targets)
-            log(user, vault_id, op, "index room unavailable: #{inspect(reason)}")
+            log(user, vault_id, op, "index room unavailable: #{sanitize(err)}")
+            via_snapshot(user, vault_id, targets, op)
+
+          # Same treatment, different cause. A remote room whose copy of this
+          # module was compiled from different source cannot invoke the closure
+          # we shipped it — funs travel as {module, md5, index} — which is live
+          # during every rolling deploy. Losing the claim outright over a deploy
+          # window is worse than writing the snapshot.
+          {:error, :mailbox_empty} ->
+            emit(op, :room, :mailbox_empty, targets)
+            log(user, vault_id, op, "room gave no answer; falling back to snapshot")
             via_snapshot(user, vault_id, targets, op)
 
           result ->
             emit(op, :room, phase(result), targets)
+
+            case result do
+              :ok -> :ok
+              other -> log(user, vault_id, op, "room write refused: #{sanitize(other)}")
+            end
+
             result
         end
 
@@ -214,7 +236,7 @@ defmodule Engram.Notes.Identity do
   # permanent unreadability; a future third return from `check_user/1` must
   # break the build here rather than silently open it.
   defp via_snapshot(user, vault_id, targets, op) do
-    case RotationGate.check_user(user) do
+    case rotation_gate(user) do
       :ok ->
         do_via_snapshot(user, vault_id, targets, op)
 
@@ -225,9 +247,17 @@ defmodule Engram.Notes.Identity do
     end
   end
 
-  defp do_via_snapshot(user, vault_id, targets, op) do
-    warn_if_in_transaction(user, vault_id, op)
+  # `RotationGate.check_user/1` only has clauses for `%User{}`, while every
+  # caller's published spec here says `map()`. Anything else FAILS CLOSED rather
+  # than crashing or, worse, proceeding: this gate stands between a write and
+  # permanent unreadability, so "I cannot tell whether a rotation is running"
+  # must mean "do not write".
+  defp rotation_gate(user) when is_struct(user, Engram.Accounts.User),
+    do: RotationGate.check_user(user)
 
+  defp rotation_gate(_other), do: {:error, :rotation_in_progress}
+
+  defp do_via_snapshot(user, vault_id, targets, op) do
     with {:ok, doc} <- CrdtIndexPersistence.load_doc(user, vault_id),
          :ok <- mutate(doc, targets),
          :ok <- CrdtIndexPersistence.persist_doc(user, vault_id, doc) do
@@ -240,22 +270,31 @@ defmodule Engram.Notes.Identity do
 
       {:error, reason} = err ->
         emit(op, :snapshot, snapshot_phase(reason), targets)
-        log(user, vault_id, op, "snapshot write failed: #{inspect(reason)}")
+        log(user, vault_id, op, "snapshot write failed: #{sanitize({:error, reason})}")
         err
     end
   end
 
-  # See "Call it OUTSIDE a transaction". This does not refuse, because refusing
-  # would break the one caller that still does it — `batch_move_folders/4`,
-  # whose all-or-nothing contract means hoisting the claim requires computing
-  # every folder's cascade up front. Until that is done, the asymmetry is at
-  # least visible: inside a transaction the snapshot write rolls back with the
-  # caller while a live-room write would not, so the same call has different
-  # durability depending on whether a socket is open.
+  # See "Call it OUTSIDE a transaction". No caller should trip this any more, so
+  # it is a TRIPWIRE for a future call site rather than a known gap.
+  #
+  # Getting here used to be routine and the comment named only ONE offender.
+  # There were three: `batch_move_folders/4` (which dropped its batch-wide
+  # transaction) plus both folder-DELETE paths, `Engram.Folders.delete/4` and
+  # `batch_delete_folders/3`, whose releases now go through
+  # `Engram.Workers.ReleaseIndexEntries` so they run after the commit instead of
+  # inside it.
+  #
+  # It warns rather than refuses because a write reaching here has already been
+  # validated by its caller; refusing would turn a durability question into a
+  # failed user operation.
   defp warn_if_in_transaction(user, vault_id, op) do
     if Engram.Repo.in_transaction?() do
-      emit(op, :snapshot, :in_transaction, [])
-      log(user, vault_id, op, "claimed inside a transaction — durability is not guaranteed")
+      # A DISTINCT event. Folding this into `index_claim` polluted `count` with
+      # a non-outcome and zeroed `entries`, so the two measurements disagreed by
+      # construction.
+      :telemetry.execute([:engram, :crdt, :index_in_transaction], %{count: 1}, %{op: op})
+      log(user, vault_id, op, "ran inside a transaction — durability is not guaranteed")
     end
 
     :ok
@@ -286,11 +325,20 @@ defmodule Engram.Notes.Identity do
     case :global.whereis_name({:crdt_index, vault_id}) do
       pid when is_pid(pid) ->
         result = via_room(pid, targets)
-        emit(op, :recheck, phase(result), targets)
+
+        # A DISTINCT event, not another `index_claim`. `do_via_snapshot` already
+        # emitted the outcome for this claim; counting again here made a single
+        # logical claim register 2-4 times, and made a `phase` breakdown report
+        # the same claim as both :ok and :conflict.
+        :telemetry.execute(
+          [:engram, :crdt, :index_recheck],
+          %{count: 1},
+          %{op: op, phase: phase(result)}
+        )
 
         case result do
           :ok -> :ok
-          other -> log(user, vault_id, op, "recheck after snapshot write: #{inspect(other)}")
+          other -> log(user, vault_id, op, "recheck after snapshot write: #{sanitize(other)}")
         end
 
         :ok
@@ -399,6 +447,11 @@ defmodule Engram.Notes.Identity do
 
   defp phase(:ok), do: :ok
   defp phase({:error, :conflict}), do: :conflict
+  defp phase({:error, :mailbox_empty}), do: :mailbox_empty
+  defp phase({:error, {:room_exit, _}}), do: :room_exit
+  # Only reached from the snapshot route; the room route's shapes are all
+  # matched above. Labelling a room failure `:persist_failed` sent an operator
+  # hunting a DB or encryption fault on a path that never touched the snapshot.
   defp phase({:error, _}), do: :persist_failed
 
   defp emit(op, route, phase, targets) do
@@ -411,9 +464,24 @@ defmodule Engram.Notes.Identity do
     :ok
   end
 
+  # Reduce a failure to a bounded TAG before it reaches a log message.
+  #
+  # `inspect(exit_reason)` is not safe here. `mutate/2` calls Yex.Map.set/delete
+  # with the plaintext path as an argument, and those are NIF-backed: a :badarg
+  # puts the full argument list in the top stacktrace frame, so inspecting the
+  # exit reason would render the path itself. `RedactFilter` scrubs metadata but
+  # explicitly NOT `event.msg`, so that lands in Loki in cleartext. A Postgrex
+  # error would likewise inspect the encrypted snapshot blob as a bind param.
+  defp sanitize({:error, {:room_exit, {:timeout, _}}}), do: "room_exit:timeout"
+  defp sanitize({:error, {:room_exit, :noproc}}), do: "room_exit:noproc"
+  defp sanitize({:error, {:room_exit, _}}), do: "room_exit:other"
+  defp sanitize({:error, reason}) when is_atom(reason), do: to_string(reason)
+  defp sanitize({:error, {tag, _, _}}) when is_atom(tag), do: to_string(tag)
+  defp sanitize({:error, {tag, _}}) when is_atom(tag), do: to_string(tag)
+  defp sanitize(_), do: "unknown"
+
   # Never the path: `RedactFilter` scrubs metadata but explicitly NOT
-  # `event.msg`, so a plaintext path in the message text would reach Loki. Same
-  # rule as `ProjectVaultIndex`.
+  # `event.msg`. Same rule as `ProjectVaultIndex`.
   defp log(user, vault_id, op, message) do
     Logger.warning(
       "crdt index #{op} #{message}",

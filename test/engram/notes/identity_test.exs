@@ -15,6 +15,7 @@ defmodule Engram.Notes.IdentityTest do
   after the rows had already moved.
   """
   use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query, only: [from: 2]
 
@@ -61,6 +62,29 @@ defmodule Engram.Notes.IdentityTest do
   end
 
   defp entry_for(id), do: %{"note_id" => id}
+
+  # Releases run through Engram.Workers.ReleaseIndexEntries so they commit with
+  # the caller's transaction and run after it — the folder-delete paths wrap
+  # their cascade, and an inline release there either rolls back with a failing
+  # attachment leg or, on the live-room path, does NOT roll back and strands
+  # live notes with no entry. Draining here is what the Oban queue does in prod.
+  defp drain_releases do
+    jobs =
+      Repo.all(
+        from(j in Oban.Job,
+          where: j.worker == "Engram.Workers.ReleaseIndexEntries" and j.state == "available"
+        )
+      )
+
+    assert jobs != [], "no release job was enqueued"
+
+    Enum.each(jobs, fn job ->
+      assert :ok = perform_job(Engram.Workers.ReleaseIndexEntries, job.args)
+    end)
+
+    Repo.delete_all(from(j in Oban.Job, where: j.id in ^Enum.map(jobs, & &1.id)))
+    :ok
+  end
 
   defp index_entries(ctx) do
     {:ok, doc} = CrdtIndexPersistence.load_doc(ctx.user, ctx.vault.id)
@@ -151,6 +175,31 @@ defmodule Engram.Notes.IdentityTest do
       assert entries["Y/dup.md"]["note_id"] == b.id
     end
 
+    # A note ALREADY AT the target path is a no-op: it claims nothing and never
+    # vacates. Counting it as a "mover" made it suppress the collision check for
+    # a different note targeting its path, so that note's claim committed, its
+    # row write hit the incumbent and rolled back, and the path was left
+    # permanently unclaimable — with projection performing the move for real if
+    # the incumbent was ever deleted.
+    test "a no-op mover does not mask a collision for a real mover", ctx do
+      a = note(ctx, "t/n.md")
+      b = note(ctx, "y/n.md")
+      seed_index(ctx, [{"t/n.md", entry_for(a.id)}, {"y/n.md", entry_for(b.id)}])
+
+      assert {:error, {:conflict, _}} =
+               Notes.batch_move_notes(ctx.user, ctx.vault, [a.id, b.id], {:path, "t"})
+
+      assert path_of(ctx, a.id) == "t/n.md"
+      assert path_of(ctx, b.id) == "y/n.md"
+
+      entries = index_entries(ctx)
+
+      assert entries["t/n.md"]["note_id"] == a.id,
+             "the incumbent lost its own claim to a move that was rejected"
+
+      assert entries["y/n.md"]["note_id"] == b.id
+    end
+
     # Re-claiming a path this note already holds must NOT be read as a
     # collision with itself.
     test "re-claiming a path the same note already holds is a no-op", ctx do
@@ -208,6 +257,7 @@ defmodule Engram.Notes.IdentityTest do
       seed_index(ctx, [{"bulk/a.md", entry_for(a.id)}, {"bulk/b.md", entry_for(b.id)}])
 
       {:ok, _} = Notes.batch_delete_notes(ctx.user, ctx.vault, [a.id, b.id])
+      :ok = drain_releases()
 
       assert index_entries(ctx) == %{},
              "deleted notes left path reservations nothing can ever claim"
@@ -220,6 +270,7 @@ defmodule Engram.Notes.IdentityTest do
 
       {:ok, matches} = Notes.scan_folders(ctx.user, ctx.vault, ["Doomed"])
       {:ok, _} = Notes.delete_scanned(ctx.user, ctx.vault, matches)
+      :ok = drain_releases()
 
       assert index_entries(ctx) == %{}
     end
@@ -290,6 +341,27 @@ defmodule Engram.Notes.IdentityTest do
 
       assert path_of(ctx, n.id) == "a.md"
       assert read_live(room, "b.md")["note_id"] == squatter.id
+    end
+
+    # `mutate/2` wraps its writes in `Yex.Doc.transaction(doc, "engram_server", …)`
+    # so a cascade reaches observers as ONE update instead of 2N. That origin is
+    # threaded into SharedDoc's `broadcast_to_users`, which filters observers by
+    # `pid != origin` — a binary never equals a pid, so nobody is filtered out.
+    # Nothing asserted that, and it is the single most load-bearing property of
+    # the change: if server claims stopped reaching devices, the authority would
+    # be silently local-only and every other test here would still pass.
+    test "a server claim is broadcast to observing clients", ctx do
+      n = note(ctx, "old.md")
+
+      # ensure_observed registers THIS process as an observer, so the frame
+      # lands in our mailbox.
+      {:ok, _room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+
+      assert {:ok, _} = Notes.rename_note(ctx.user, ctx.vault, "old.md", "new.md")
+
+      assert_receive {:yjs, _message, _from}, 2_000
+
+      assert path_of(ctx, n.id) == "new.md"
     end
 
     test "a claim through a LIVE room lands in the room", ctx do

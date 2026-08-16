@@ -92,12 +92,39 @@ one caller.)
 `Repo.with_tenant/2`, which JOINS an in-flight transaction — so a claim made
 inside one has its snapshot write rolled back with the caller while a live-room
 write survives. Same call, different durability, depending on whether the user
-has a socket open. `batch_move_folders/4` still does this; it logs and counts
-`:in_transaction` until its cascades can be pre-computed.
+has a socket open.
+
+No caller does this any more. `batch_move_folders/4` was the last, and it
+dropped its batch-wide transaction rather than keep it: that transaction could
+only revert ROWS, never the claims already committed, so it was not providing
+batch atomicity — it was concealing that batch atomicity is impossible once a
+claim is the commit. `Identity` still logs and counts `:in_transaction` as a
+tripwire for future call sites.
 
 **Projection must never claim.** It is deriving FROM the map; a claim there is a
 feedback loop. `rename_note/5` takes `index: :skip` for that one caller, and
 defaults to claiming so a new call site is fail-safe rather than fail-silent.
+
+## Releasing is a job; claiming is not
+
+A CLAIM is the commit, so it happens inline and before the row moves. A RELEASE
+is cleanup after the row is already gone, and it runs through
+`Engram.Workers.ReleaseIndexEntries`.
+
+The difference is transactions. Both folder-delete paths — `Folders.delete/4`
+and `Notes.batch_delete_folders/3` — wrap their cascade, and `Identity` reaches
+Postgres via `Repo.with_tenant/2`, which JOINS an in-flight transaction.
+Releasing inline from inside one breaks both ways: with no live room the
+snapshot write rolls back with the caller, and WITH a live room the in-memory
+write does NOT, so a later failing leg (the attachment leg is the real case)
+brings the notes back with their entries gone — live notes the authority does
+not mention, which projection can never repair because it never acts on absence.
+
+Enqueueing fixes both by construction: the job rolls back with the transaction
+that created it and only runs once the delete has committed. It also replaces a
+discarded return value with a retry, which matters because a release refused
+mid-rotation used to vanish silently and leave one permanent path reservation
+per note.
 
 ## Removals are id-keyed, never path-keyed
 

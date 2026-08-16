@@ -100,6 +100,24 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     row && row.state_ciphertext
   end
 
+  # Releases go through Engram.Workers.ReleaseIndexEntries so they commit with
+  # the caller's transaction and run after it — see that worker's moduledoc.
+  defp drain_releases do
+    jobs =
+      Repo.all(
+        from(j in Oban.Job,
+          where: j.worker == "Engram.Workers.ReleaseIndexEntries" and j.state == "available"
+        )
+      )
+
+    Enum.each(jobs, fn job ->
+      assert :ok = perform_job(Engram.Workers.ReleaseIndexEntries, job.args)
+    end)
+
+    Repo.delete_all(from(j in Oban.Job, where: j.id in ^Enum.map(jobs, & &1.id)))
+    :ok
+  end
+
   defp run(ctx) do
     perform_job(ProjectVaultIndex, %{"user_id" => ctx.user.id, "vault_id" => ctx.vault.id})
   end
@@ -314,6 +332,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       seed_index(ctx, [{"doomed.md", doomed.id}, {"New/keep.md", keep.id}])
 
       :ok = Notes.delete_note(ctx.user, ctx.vault, "doomed.md")
+      :ok = drain_releases()
 
       assert :ok = run(ctx)
 
