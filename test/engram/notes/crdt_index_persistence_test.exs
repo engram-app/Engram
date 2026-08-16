@@ -502,26 +502,23 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
   # The documented lossy case, asserted rather than merely described. If someone
   # later adds a tail log, this test is what tells them the trade-off changed.
   describe "ungraceful death" do
-    test "a killed room loses writes since the last checkpoint", ctx do
-      room = start_index_room(ctx)
-      put_entry(room, "saved.md", "note-saved")
-      stop_room_and_wait(room)
-
-      respun = start_index_room(ctx)
-      put_entry(respun, "unsaved.md", "note-unsaved")
-
-      ref = Process.monitor(respun)
-      Process.exit(respun, :kill)
-      assert_receive {:DOWN, ^ref, :process, ^respun, :killed}, 5_000
-
-      final = start_index_room(ctx)
-
-      assert read_entry(final, "saved.md")["note_id"] == "note-saved",
-             "the last checkpoint must survive"
-
-      refute read_entry(final, "unsaved.md"),
-             "snapshot-only: a SIGKILL loses writes since the last exit (add a tail log to change this)"
-    end
+    # DELETED: "a killed room loses writes since the last checkpoint" (#1391).
+    #
+    # It asserted `refute read_entry(final, "unsaved.md")` — that a SIGKILL
+    # destroys everything since the last checkpoint. That was the correct
+    # contract when the room was snapshot-only, and the tail log inverts it:
+    # "a claim survives a room that dies without checkpointing", above, now
+    # asserts the opposite of it on purpose.
+    #
+    # It was also passing for the wrong reason. `handle_update_v1` is
+    # asynchronous, so the test only stayed green by KILLING the room before
+    # the tail append it was meant to disprove had run — a race it happened to
+    # win. Keeping it would have meant an intermittently red suite asserting
+    # behaviour the design deliberately removed.
+    #
+    # The residual window it half-described is real (a write killed before it
+    # reaches the tail IS lost) and is documented on `await_tail/3`. It is not
+    # re-tested here: pinning it requires winning that same race.
   end
 
   # A deploy terminates rooms via the supervisor, not by dropping observers.

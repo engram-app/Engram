@@ -90,11 +90,15 @@ defmodule Engram.Notes.CrdtIndexDoc do
       # an immortal orphan. Channels re-establish it on demand.
       restart: :temporary,
       # LONGER than a note room's 15 s, not shorter, and the OTP default of
-      # 5_000 is badly wrong here. A note room can afford to be brutal-killed
-      # mid-flush: its encrypted tail-log still holds every update, so the next
-      # bind replays it and only the work is wasted. This room has NO tail log
-      # (see CrdtIndexPersistence) — a blown deadline loses every index write
-      # since the last exit, permanently.
+      # 5_000 is badly wrong here.
+      #
+      # This room now HAS a tail log (#1391), so a blown deadline no longer
+      # loses every index write since the last exit — the next bind replays the
+      # tail, exactly as a note room replays its own. What a blown deadline
+      # still costs is the FOLD: the checkpoint never runs, so nothing is
+      # pruned and the tail keeps growing across restarts. The generous
+      # deadline is now about bounding tail growth and wasted replay work, not
+      # about preventing permanent loss.
       #
       # And the deadline is harder to hit: unbind/3 does a user lookup, a full
       # doc encode, AES-GCM over a blob #1149 sizes at ~2.0 MB for a 10k-note

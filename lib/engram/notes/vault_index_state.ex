@@ -3,13 +3,17 @@ defmodule Engram.Notes.VaultIndexState do
   The encrypted `filemeta_v0` snapshot for one vault's index room (#1151).
 
   One row per vault, upserted when the room exits and read when it binds.
-  Snapshot-only: there is no per-update tail log the way `notes.crdt_state` has
-  `crdt_update_log`. Index writes are rename/create/delete rather than
-  keystrokes, and until Engram-obsidian#363 the `notes` rows stay authoritative
-  for paths — so losing a checkpoint interval leaves the index STALE, never
-  silently wrong. No rebuild path exists in `lib/`; what makes staleness
-  tolerable today is that nothing reads the index. Add a tail log when that
-  stops being true.
+
+  This is the SNAPSHOT half of a two-part record. `vault_index_update_log` is
+  the other: every update is appended there as it happens, and a checkpoint
+  folds the tail into this row and prunes exactly what it folded (#1391). So a
+  bind reads this row and then replays whatever tail survived it.
+
+  The tail exists because the map is authoritative for paths
+  (`docs/context/crdt-identity-authority.md`). Losing a checkpoint interval used
+  to leave the index merely STALE, with the `notes` rows still holding the
+  truth; under map-authority it loses committed path CLAIMS outright, and
+  projection then drags the rows back to the superseded snapshot.
 
   Keyed by `vault_id` rather than a surrogate `id`, which is why the AAD is
   built explicitly (`Crypto.encrypt_index_state/3`) instead of going through

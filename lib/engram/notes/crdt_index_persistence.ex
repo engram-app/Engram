@@ -9,13 +9,14 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     encrypt the whole doc state and upsert the single `vault_index_states` row.
   * `update_v1/4` — the tail append (#1391). See below.
 
-  ## Snapshot-only, and what that costs
+  ## Why a tail log, when the writes are rare
 
   `CrdtPersistence` appends every update to `crdt_update_log` because a note
   room's hot path is keystrokes and losing a checkpoint interval means losing
   typing. The index's writes are rename/create/delete — orders of magnitude
-  rarer — so this stays snapshot-only. An ungraceful room death (SIGKILL, node
-  loss) loses index writes since the last exit.
+  rarer — which is why this room shipped snapshot-only in #1150. Rarity turned
+  out to be the wrong axis: what matters is what a lost write COSTS, not how
+  often one happens.
 
   **That is why `update_v1/4` exists here (#1391).** The snapshot alone was
   written only when a room exited, so anything since the last checkpoint died
