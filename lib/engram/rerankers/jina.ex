@@ -66,7 +66,9 @@ defmodule Engram.Rerankers.Jina do
         "Jina reranker exception, falling back to vector scores",
         Metadata.with_category(:warning, :search,
           exception: inspect(e.__struct__),
-          message: Exception.message(e)
+          # The request body carries the search QUERY and the candidate note
+          # excerpts, so a Jason.EncodeError or Req error here can render them.
+          message: Metadata.safe_reason(e)
         )
       )
 

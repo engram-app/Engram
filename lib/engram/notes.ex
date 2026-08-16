@@ -3334,24 +3334,30 @@ defmodule Engram.Notes do
       # around the redaction rather than a reason to bypass it. A path is
       # folder structure plus a title, and Sentry is a third party.
       #
-      # Only the exception CLASS goes in the body. `Exception.message/1` is not
-      # "our own text": CaseClauseError, MatchError, Protocol.UndefinedError,
-      # Jason.EncodeError and Postgrex.Error all render `inspect(term)` of the
-      # offending value, and this rescue wraps frontmatter parsing, CRDT merge
-      # and encryption — every one of which handles note content. A raise over
-      # a note body printed the body:
+      # `Exception.message/1` is not "our own text": CaseClauseError,
+      # MatchError, KeyError, Protocol.UndefinedError and Jason.EncodeError all
+      # render `inspect(term)` of the offending value, and this rescue wraps
+      # frontmatter parsing, CRDT merge and encryption — every one of which
+      # handles note content. A raise over a note body printed the body:
       #
       #   batch entry raised ... (no case clause matching:
       #     {:parsed, "Dear diary, the biopsy came back positive."})
       #
-      # The full message stays in metadata under `error`, where RedactFilter
-      # and the Sentry allowlist can gate it. On-call correlates on the path
-      # HMAC: non-reversible, and it joins to the same row.
+      # Moving it to metadata does NOT fix that. `:error` is not in
+      # RedactFilter's key set, so Loki and CloudWatch get it verbatim. (It is
+      # absent from the Sentry metadata allowlist in application.ex, so Sentry
+      # alone was safe — but "not sent to a third party" is not the bar; the
+      # bar is not logged at all.)
+      #
+      # So the reason is filtered by exception TYPE, in both places. On-call
+      # correlates on the path HMAC: non-reversible, joins to the same row.
+      reason = Metadata.safe_reason(e)
+
       Logger.error(
-        "batch entry raised, degrading note path_hmac=#{hmac_ref(entry)} (#{inspect(e.__struct__)})",
+        "batch entry raised, degrading note path_hmac=#{hmac_ref(entry)} (#{reason})",
         Metadata.with_category(:error, :sync,
           path: entry.path,
-          error: Exception.message(e)
+          error: reason
         )
       )
 

@@ -200,6 +200,60 @@ defmodule Engram.NotesTest do
       assert log =~ "CaseClauseError"
     end
 
+    # `capture_log` renders METADATA as well as the body, which is the point:
+    # moving the exception message out of the body and into `error:` metadata
+    # does not redact it. `:error` is absent from RedactFilter's key set, so
+    # Loki and CloudWatch would print it verbatim. Only the type filter helps.
+    test "process_batch_entry_rescued/3 keeps content out of the metadata too" do
+      entry = %{
+        path: "poison.md",
+        input_path: "poison.md",
+        path_hmac: <<1, 2, 3, 4, 5, 6, 7, 8, 9>>,
+        result: nil
+      }
+
+      secret = "Dear diary, the biopsy came back positive."
+
+      log =
+        capture_log([metadata: :all], fn ->
+          Notes.process_batch_entry_rescued(entry, [], fn ->
+            raise KeyError, key: :missing, term: %{"content" => secret}
+          end)
+        end)
+
+      refute log =~ secret
+      refute log =~ "biopsy"
+      assert log =~ "KeyError"
+    end
+
+    # The counterpart: a DB error's message is the database's own text, and the
+    # SQLSTATE is the single most useful thing in this line. Allowlisted types
+    # keep their message so the type filter does not cost us the diagnosis.
+    test "process_batch_entry_rescued/3 keeps a database error's message" do
+      entry = %{
+        path: "poison.md",
+        input_path: "poison.md",
+        path_hmac: <<1, 2, 3, 4, 5, 6, 7, 8, 9>>,
+        result: nil
+      }
+
+      log =
+        capture_log(fn ->
+          Notes.process_batch_entry_rescued(entry, [], fn ->
+            raise %Postgrex.Error{
+              postgres: %{
+                code: :numeric_value_out_of_range,
+                message: "bigint out of range",
+                severity: "ERROR",
+                pg_code: "22003"
+              }
+            }
+          end)
+        end)
+
+      assert log =~ "bigint out of range"
+    end
+
     test "process_batch_entry_rescued/3 passes through a non-raising fn untouched" do
       entry = %{path: "good.md", input_path: "good.md", result: nil}
 
