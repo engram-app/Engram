@@ -212,14 +212,21 @@ async def test_deaf_live_bound_note_converges_via_socket_replay(vault_b, cdp_b, 
     # presence asserts pin B's heal to the socket primitive. All are scoped to
     # `post_wedge` so the live-bind step's own pre-wedge open-heal line can't
     # satisfy them.
+    #
+    # Scoped by note_id, NOT by path. The plugin no longer prints vault paths in
+    # client logs — a path names the sensitive fact (`Medical/`, `Divorce 2026/`)
+    # without anyone reading the note, and client logs land in CloudWatch and
+    # Loki outside the per-user encryption boundary. The note_id is an opaque
+    # UUID, so it stays in the line and is the stronger oracle anyway: it is the
+    # identity the CRDT layer actually keys on, and it survives a rename.
     wait_for_client_log(api_sync, "gap-heal fired", timeout=CRDT_TIMEOUT, after=post_wedge)
     wait_for_client_log(
-        api_sync, "socket converge", path_x, timeout=CRDT_TIMEOUT, after=post_wedge
+        api_sync, "socket converge", note_id_x, timeout=CRDT_TIMEOUT, after=post_wedge
     )
     wait_for_client_log(
         api_sync,
         "socket converge: STEP2 committed",
-        path_x,
+        note_id_x,
         timeout=CRDT_TIMEOUT,
         after=post_wedge,
     )
