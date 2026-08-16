@@ -1137,13 +1137,25 @@ defmodule Engram.Crypto.UserDekRotation do
     # old-then-new, like `rewrap_crdt_tail/3`: a rotation RETRIED after a crash
     # meets rows it already re-wrapped, and decrypting under the old key is what
     # discriminates. Raising on those would make a resumed rotation impossible.
+    # log/log_meta/on_both_failed are REQUIRED: try_rewrap's failure branch
+    # fetch!es all three, so omitting them turns an unreadable row into a
+    # KeyError that aborts the rotation after several sweeps have already run
+    # and before final_flip — with no row_failed telemetry and nothing naming
+    # the row. Same shape as rewrap_crdt_tail/3, the note-tail analogue.
     case try_rewrap(row.update_ciphertext, row.update_nonce, old_dek, new_dek, aad, aad,
            table: :vault_index_update_log,
            phase: :sweep_vault_index_update_log,
-           user_id: user_id,
-           row_id: row.id
+           log: "T3.7 sweep_vault_index_update_log: decrypt failed under both old and new DEK",
+           log_meta: [user_id: user_id, row_id: row.id],
+           on_both_failed: {:error, :both_deks_failed}
          ) do
       :already_rotated ->
+        :ok
+
+      # One unreadable tail row must not abort the rotation: try_rewrap has
+      # already logged it and emitted row_failed, and there is nothing safe to
+      # write. Aborting would strand the user mid-rotation permanently.
+      {:error, _reason} ->
         :ok
 
       {:ok, plaintext} ->

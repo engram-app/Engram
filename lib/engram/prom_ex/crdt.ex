@@ -131,8 +131,10 @@ defmodule Engram.PromEx.Crdt do
           event_name: @claim_event,
           description:
             "Server-side filemeta_v0 writes by op (claim | release), route " <>
-              "(room | snapshot | orphan) and phase (ok | conflict | rotation | room_exit | " <>
-              "mailbox_empty | load_failed | persist_failed | orphan_claim).",
+              "(gate | room | snapshot | orphan) and phase (ok | conflict | rotation | " <>
+              "room_exit | mailbox_empty | load_failed | persist_failed | orphan_claim). " <>
+              "route=gate phase=rotation is a write REFUSED before routing because a DEK " <>
+              "rotation is running — the caller got an error and did not commit.",
           tags: [:op, :route, :phase]
         ),
         sum(
@@ -169,7 +171,10 @@ defmodule Engram.PromEx.Crdt do
           event_name: @tail_event,
           description:
             "filemeta_v0 tail-log operations by phase (ok | failed | pruned | " <>
-              "corrupt_row | undecryptable_row).",
+              "corrupt_row | undecryptable_row | skipped_rotation | prune_failed). " <>
+              "A sustained `failed` " <>
+              "OR `skipped_rotation` both mean the same thing — claims are living only in " <>
+              "room memory and die with the process.",
           tags: [:phase]
         ),
         counter(

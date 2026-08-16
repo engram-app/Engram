@@ -13,11 +13,20 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
       write to the map -> room exits -> encrypted snapshot in the DB
         -> new room binds -> the same entries are back
 
-  Snapshot-only by design (no per-update tail log): index writes are
-  rename/create/delete, not keystrokes, and until Engram-obsidian#363 the notes
-  rows remain authoritative for paths — so a lost checkpoint interval leaves the
-  index STALE, never silently wrong. Nothing reads the index yet and no rebuild
-  path exists; "stale is tolerable" is a statement about today.
+  Snapshot-only is no longer enough. #1150's reasoning — that a lost checkpoint
+  interval leaves the index merely STALE because the notes rows stay
+  authoritative — died with the map-authority decision
+  (`docs/context/crdt-identity-authority.md`). The map IS the identity record
+  now, so a claim lost between checkpoints is lost outright, not recoverable
+  from the rows. Hence the tail log: every update is appended durably, and a
+  checkpoint folds the tail into the snapshot and prunes only what it folded.
+
+      write -> tail (durable immediately)
+        -> checkpoint folds + prunes -> snapshot
+        -> new room binds from snapshot + replays whatever tail remains
+
+  The two failure modes that matter are pruning too much (a claim vanishes) and
+  pruning too little (the tail grows forever); both are pinned below.
   """
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
@@ -222,6 +231,99 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
       :ok = stop_room_and_wait(revived2)
     end
 
+    # The test above only pins the UNDER-count direction: it never checkpoints,
+    # so `snapshot_applied` is always false, and it issues no update after a
+    # bind. An implementation that credited too MANY echoes passed it — and an
+    # over-credit is not a cosmetic error, it is a permanent credit that the
+    # next real client claim spends instead of being written.
+    #
+    # yrs fires the update observer from the transaction commit hook only when
+    # the transaction CHANGED the doc, so any apply that changes nothing emits
+    # nothing. Two ordinary situations produce one:
+    #
+    #   1. an empty snapshot — a room that bound and exited without a write
+    #   2. a tail row a roomless write already folded into the snapshot
+    #
+    # Both are exercised below. The shape is the same in each: get the room into
+    # the suspect state, then write ONE claim and demand exactly one tail row.
+    test "a bind over an EMPTY snapshot still appends the next claim", ctx do
+      # A room that binds and exits with no writes checkpoints an empty doc.
+      ctx |> start_index_room() |> stop_room_and_wait()
+
+      {:ok, snapshot_row} =
+        Repo.with_tenant(ctx.user.id, fn ->
+          Repo.get_by(VaultIndexState, vault_id: ctx.vault.id)
+        end)
+
+      assert %VaultIndexState{} = snapshot_row, "expected an empty snapshot to have been written"
+      assert tail_count(ctx.user, ctx.vault.id) == 0
+
+      # Binding applies that empty snapshot: :ok, but no echo.
+      room = start_index_room(ctx)
+      put_entry(room, "after-empty.md", "66666666-6666-4666-8666-666666666666")
+
+      :ok = await_tail(ctx.user, ctx.vault.id, 1)
+
+      assert tail_count(ctx.user, ctx.vault.id) == 1,
+             "the empty snapshot was counted as an echo and swallowed a real claim"
+
+      :ok = stop_room_and_wait(room)
+    end
+
+    test "a bind over a NON-EMPTY snapshot appends the next claim exactly once", ctx do
+      room = start_index_room(ctx)
+      put_entry(room, "snapshotted.md", "77777777-7777-4777-8777-777777777777")
+      :ok = await_tail(ctx.user, ctx.vault.id, 1)
+      # Graceful: folds into the snapshot and prunes the tail to 0.
+      :ok = stop_room_and_wait(room)
+      assert tail_count(ctx.user, ctx.vault.id) == 0
+
+      revived = start_index_room(ctx)
+      put_entry(revived, "next.md", "88888888-8888-4888-8888-888888888888")
+      :ok = await_tail(ctx.user, ctx.vault.id, 1)
+
+      assert tail_count(ctx.user, ctx.vault.id) == 1,
+             "the claim after a bind was swallowed by a mis-credited echo"
+
+      :ok = stop_room_and_wait(revived)
+    end
+
+    # Sequence B's root cause. `Identity`'s roomless path folds the tail into
+    # the snapshot it writes; if it does not also PRUNE, those rows survive and
+    # the next bind replays them as no-ops — each one a mis-credited echo, so N
+    # leftover rows silently eat the next N claims.
+    test "a roomless write prunes the tail rows it folded in", ctx do
+      room = start_index_room(ctx)
+      put_entry(room, "orphaned.md", "99999999-9999-4999-8999-999999999999")
+      :ok = await_tail(ctx.user, ctx.vault.id, 1)
+      # Ungraceful: the row survives with no snapshot behind it.
+      :ok = kill_room_and_wait(room)
+      assert tail_count(ctx.user, ctx.vault.id) == 1
+
+      # No room is live, so this takes Identity's snapshot route.
+      assert :ok =
+               Engram.Notes.Identity.claim(
+                 ctx.user,
+                 ctx.vault.id,
+                 [{"roomless.md", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}]
+               )
+
+      assert tail_count(ctx.user, ctx.vault.id) == 0,
+             "the roomless write folded the tail into its snapshot but left the rows behind"
+
+      # And the folded claim is still there, i.e. it pruned what it folded, not
+      # more than it folded.
+      revived = start_index_room(ctx)
+
+      assert read_entry(revived, "orphaned.md")["note_id"] ==
+               "99999999-9999-4999-8999-999999999999"
+
+      assert read_entry(revived, "roomless.md")["note_id"] ==
+               "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+      :ok = stop_room_and_wait(revived)
+    end
+
     test "a checkpoint prunes the tail it folded in", ctx do
       room = start_index_room(ctx)
       before = tail_count(ctx.user, ctx.vault.id)
@@ -247,13 +349,23 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
       :ok = await_tail(ctx.user, ctx.vault.id, before + 1)
       :ok = kill_room_and_wait(room)
 
-      # Corrupt the ciphertext so replay must skip it. AAD binds to the row id,
-      # so flipping bytes makes decrypt fail exactly as a real transient would.
+      # Corrupt the ciphertext so replay must skip it, by flipping a bit in the
+      # AEAD TAG. Replacing it with a short blob instead would trip
+      # Envelope.decrypt/4's `byte_size - 16 < 0` length short-circuit and never
+      # reach AES-GCM — still an error, but not the one a real transient or a
+      # torn write produces.
+      {:ok, [row]} =
+        Repo.with_tenant(ctx.user.id, fn ->
+          Repo.all(from(l in VaultIndexUpdateLog, where: l.vault_id == ^ctx.vault.id))
+        end)
+
+      <<head::binary-size(byte_size(row.update_ciphertext) - 1), last>> = row.update_ciphertext
+
       {:ok, {1, _}} =
         Repo.with_tenant(ctx.user.id, fn ->
           Repo.update_all(
-            from(l in VaultIndexUpdateLog, where: l.vault_id == ^ctx.vault.id),
-            set: [update_ciphertext: <<0, 1, 2, 3, 4, 5, 6, 7>>]
+            from(l in VaultIndexUpdateLog, where: l.id == ^row.id),
+            set: [update_ciphertext: <<head::binary, Bitwise.bxor(last, 0xFF)>>]
           )
         end)
 

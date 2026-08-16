@@ -220,9 +220,9 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     # #954 error storm.
     user = Accounts.get_user!(user_id)
 
-    {:ok, {snapshot_applied, replay}} =
+    {:ok, {snapshot_echoed?, replay}} =
       Repo.with_tenant(user_id, fn ->
-        applied =
+        echoed? =
           case Repo.get(VaultIndexState, vault_id) do
             nil ->
               # No snapshot yet: a vault whose index room has never checkpointed.
@@ -231,13 +231,12 @@ defmodule Engram.Notes.CrdtIndexPersistence do
 
             %VaultIndexState{} = row ->
               apply_snapshot(row, user, doc, vault_id)
-              true
           end
 
         # AFTER the snapshot, always — including when there is none. A vault
         # that has never checkpointed can still have tail rows, and those are
         # the only record of its claims (#1391).
-        {applied, replay_tail(doc, user, vault_id)}
+        {echoed?, replay_tail(doc, user, vault_id)}
       end)
 
     # y_ex installs the doc update monitor BEFORE bind/3 runs
@@ -249,11 +248,15 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     # of the entire index. On a vault whose room keeps dying — the exact case
     # the tail exists for — that is a spiral, not a leak.
     #
-    # A count is sound rather than a heuristic: those messages are already in
+    # The count is safe to use as a credit because those messages are already in
     # the mailbox when init returns, and a mailbox is FIFO, so they are the next
     # `update_v1/4` calls this process makes. No client update can overtake them
     # because start_link has not returned yet.
-    echoes = if(snapshot_applied, do: 1, else: 0) + length(replay.applied)
+    #
+    # It counts CHANGES, not applies. An apply that changed nothing emits
+    # nothing, so counting it would leave a credit behind that the next real
+    # client claim spends — see `apply_echoing?/2`.
+    echoes = if(snapshot_echoed?, do: 1, else: 0) + replay.echoes
     Process.put(:index_replay_echoes, echoes)
 
     # C2: prune must never delete a row bind could not fold in. A row that fails
@@ -423,6 +426,47 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     end
   end
 
+  @doc """
+  The roomless equivalent of a checkpoint: load, mutate, persist, prune.
+
+  `Identity` takes this path when `:global` finds no room for the vault. It has
+  to honour the SAME fold-and-prune contract `write_snapshot/5` does, because
+  `persist_doc/3` folds the replayed tail into the snapshot it writes. Folding
+  without pruning leaves every one of those rows behind, duplicated inside the
+  snapshot — and the next bind replays them as no-ops, which emit no
+  `{:update_v1, ...}` and so mis-credit the echo suppressor (see
+  `apply_echoing?/2`). One roomless write was enough to start silently dropping
+  the next room session's claims.
+
+  The whole fold runs in ONE transaction, so a mutation that cannot be persisted
+  cannot prune either.
+  """
+  @spec fold_roomless(map(), String.t(), (Yex.Doc.t() -> :ok | {:error, term()})) ::
+          :ok | {:error, term()}
+  def fold_roomless(user, vault_id, mutate) when is_function(mutate, 1) do
+    Repo.with_tenant(user.id, fn ->
+      doc = Yex.Doc.new()
+
+      with :ok <- load_snapshot_into(doc, user, vault_id) do
+        replay = replay_tail(doc, user, vault_id)
+
+        # Read BEFORE the write and prune exactly these, minus whatever replay
+        # could not fold in — identical reasoning to write_snapshot/5.
+        folded_ids = tail_ids(user, vault_id) -- replay.skipped
+
+        with :ok <- mutate.(doc),
+             :ok <- persist_doc(user, vault_id, doc) do
+          prune_tail(user, folded_ids)
+          :ok
+        end
+      end
+    end)
+    |> case do
+      {:ok, result} -> result
+      other -> other
+    end
+  end
+
   defp write_snapshot(user, user_id, vault_id, doc, unfolded_ids) do
     # Read the tail ids BEFORE writing, and prune exactly those afterwards.
     #
@@ -437,7 +481,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     case persist_doc(user, vault_id, doc) do
       :ok ->
         emit_checkpoint(:ok)
-        prune_tail(user, folded_ids)
+        prune_tail_safely(user, vault_id, folded_ids)
 
         # Project the index onto the notes path columns (#1151 step 2) — in a
         # worker, never here. This runs inside terminate/2 against a shutdown
@@ -486,18 +530,6 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     end
   end
 
-  # FAIL LOUD, exactly as CrdtPersistence.bind/3 does for a note's snapshot.
-  #
-  # Binding an empty doc here would be the fail-OPEN choice, and with no tail
-  # log it is strictly worse than it is for notes: the room comes up looking
-  # like a fresh vault, and the very next unbind/3 writes that empty doc back
-  # over a snapshot we merely failed to READ. A transient failure — DEK cache
-  # miss, a read racing a DEK rotation — becomes permanent loss of the whole
-  # index.
-  #
-  # Raising fails the room start instead. The client's frame errors and it
-  # retries; a genuinely corrupt snapshot surfaces as a loud, repeated failure
-  # rather than a vault that silently forgot every path it knew.
   # Replays every tail row for this vault, oldest first, and returns the ids
   # that actually applied. Ordered by (inserted_at, id): two appends can land
   # inside one clock tick, and the checkpoint prunes by EXACT id, so a tie must
@@ -510,18 +542,22 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   # queries a tenant-scoped table.
   @doc false
   @spec replay_tail(Yex.Doc.t(), map(), String.t()) ::
-          %{applied: [Ecto.UUID.t()], skipped: [Ecto.UUID.t()]}
+          %{applied: [Ecto.UUID.t()], skipped: [Ecto.UUID.t()], echoes: non_neg_integer()}
   def replay_tail(doc, user, vault_id) do
     VaultIndexUpdateLog
     |> where([l], l.vault_id == ^vault_id)
     |> order_by([l], asc: l.inserted_at, asc: l.id)
     |> Repo.all()
-    |> Enum.reduce(%{applied: [], skipped: []}, fn row, acc ->
+    |> Enum.reduce(%{applied: [], skipped: [], echoes: 0}, fn row, acc ->
       case Crypto.decrypt_index_update(row, user) do
         {:ok, update} ->
-          case Yex.apply_update(doc, update) do
-            :ok ->
-              %{acc | applied: [row.id | acc.applied]}
+          case apply_echoing?(doc, update) do
+            {:ok, echoed?} ->
+              %{
+                acc
+                | applied: [row.id | acc.applied],
+                  echoes: acc.echoes + if(echoed?, do: 1, else: 0)
+              }
 
             _ ->
               skip_row(acc, row, user, vault_id, :corrupt_row)
@@ -531,7 +567,32 @@ defmodule Engram.Notes.CrdtIndexPersistence do
           skip_row(acc, row, user, vault_id, {:undecryptable_row, reason})
       end
     end)
-    |> then(fn acc -> %{applied: Enum.reverse(acc.applied), skipped: acc.skipped} end)
+    |> then(fn acc -> %{acc | applied: Enum.reverse(acc.applied)} end)
+  end
+
+  # Whether this apply will actually post an `{:update_v1, ...}` back to us.
+  #
+  # yrs fires the update observer from the transaction COMMIT hook, and only
+  # when the transaction changed the doc. `Yex.apply_update/2` answers `:ok`
+  # either way, so counting APPLIES rather than CHANGES over-counts — and every
+  # over-count is a permanent credit in `:index_replay_echoes` that silently
+  # swallows one real client claim. Two ordinary states hit it: an empty
+  # snapshot (a vault whose room bound and exited without a write), and a tail
+  # row a roomless `Identity.via_snapshot` write already folded into the
+  # snapshot.
+  #
+  # The state vector is the CONSERVATIVE signal. It advances iff new items were
+  # integrated, and integrating new items always emits. A delete-only update can
+  # emit without advancing it — that under-counts, which merely re-appends an
+  # idempotent row to the tail. Over-counting loses a claim outright, so the
+  # error is deliberately biased to the harmless direction.
+  defp apply_echoing?(doc, update) do
+    before_sv = Yex.encode_state_vector(doc)
+
+    case Yex.apply_update(doc, update) do
+      :ok -> {:ok, Yex.encode_state_vector(doc) != before_sv}
+      other -> other
+    end
   end
 
   # A skipped row is NOT dropped. It keeps its place in the tail so a later bind
@@ -565,21 +626,71 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   defp prune_tail(_user, []), do: :ok
 
   defp prune_tail(user, ids) do
-    {:ok, {count, _}} =
-      Repo.with_tenant(user.id, fn ->
-        VaultIndexUpdateLog
-        |> where([l], l.id in ^ids)
-        |> Repo.delete_all()
+    # CHUNKED: `l.id in ^ids` binds one parameter per id, and the tail is
+    # unbounded for a room that never checkpoints (see the moduledoc), so a
+    # large enough fold would blow Postgres' parameter ceiling — and take a
+    # checkpoint that had already succeeded down with it.
+    count =
+      ids
+      |> Enum.chunk_every(5_000)
+      |> Enum.reduce(0, fn chunk, acc ->
+        {:ok, {n, _}} =
+          Repo.with_tenant(user.id, fn ->
+            VaultIndexUpdateLog
+            |> where([l], l.id in ^chunk)
+            |> Repo.delete_all()
+          end)
+
+        acc + n
       end)
 
     :telemetry.execute([:engram, :crdt, :index_tail], %{count: count}, %{phase: :pruned})
     :ok
   end
 
+  # The snapshot is ALREADY durable when this runs, so a prune failure is a
+  # tail-hygiene problem, not a checkpoint failure. Letting it propagate made
+  # `unbind/3`'s rescue emit `checkpoint(:failed)` for a checkpoint that had in
+  # fact succeeded, and skipped the ProjectVaultIndex enqueue — so `notes.path_*`
+  # never converged to the snapshot that had just been written.
+  #
+  # Rescuing here is not swallowing a bug: the rows it fails to delete are
+  # replayed as idempotent no-ops on the next bind, and the failure is logged
+  # and counted under its own phase.
+  defp prune_tail_safely(user, vault_id, ids) do
+    prune_tail(user, ids)
+  rescue
+    e ->
+      emit_tail(:prune_failed)
+
+      Logger.error(
+        "crdt index tail prune failed after a durable checkpoint: #{Exception.message(e)}",
+        Metadata.with_category(:error, :sync, user_id: user.id, vault_id: vault_id)
+      )
+
+      :ok
+  end
+
+  # FAIL LOUD, exactly as CrdtPersistence.bind/3 does for a note's snapshot.
+  #
+  # Binding an empty doc here would be the fail-OPEN choice: the room comes up
+  # looking like a fresh vault, and the very next unbind/3 writes that empty doc
+  # back over a snapshot we merely failed to READ. A transient failure — DEK
+  # cache miss, a read racing a DEK rotation — becomes permanent loss of the
+  # whole index. The tail log narrows the blast radius to whatever the last
+  # checkpoint folded in; it does not make fail-open safe.
+  #
+  # Raising fails the room start instead. The client's frame errors and it
+  # retries; a genuinely corrupt snapshot surfaces as a loud, repeated failure
+  # rather than a vault that silently forgot every path it knew.
+  #
+  # Returns whether the apply will echo back through update_v1/4 — see
+  # `apply_echoing?/2`. An EMPTY snapshot applies cleanly and emits nothing.
   defp apply_snapshot(row, user, doc, vault_id) do
     case Crypto.decrypt_index_state(row, user) do
       {:ok, snapshot} when is_binary(snapshot) ->
-        :ok = Yex.apply_update(doc, snapshot)
+        {:ok, echoed?} = apply_echoing?(doc, snapshot)
+        echoed?
 
       {:error, reason} ->
         Logger.error(

@@ -394,6 +394,43 @@ defmodule Engram.Notes.IdentityTest do
       assert path_of(ctx, n.id) == "rot.md"
       assert index_entries(ctx)["rot.md"]["note_id"] == n.id
     end
+
+    # The test above has NO live room, so it only ever exercised the snapshot
+    # route. The room route was deliberately ungated on the reasoning that it
+    # "only mutates memory, and the room's own checkpoint is already gated" —
+    # which the tail log falsified. With a room live, the claim mutated the
+    # doc, `append_tail` skipped on the gate, the gated checkpoint wrote no
+    # snapshot, and the claim died with the process. Silently: the caller got
+    # :ok and committed the rename against a claim that no longer existed.
+    test "a rename during a rotation is refused on the LIVE-ROOM route too", ctx do
+      n = note(ctx, "rot-room.md")
+      seed_index(ctx, [{"rot-room.md", entry_for(n.id)}])
+
+      {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+
+      {1, _} =
+        Repo.update_all(
+          from(u in Engram.Accounts.User, where: u.id == ^ctx.user.id),
+          set: [dek_rotation_locked_at: DateTime.utc_now()]
+        )
+
+      user = Repo.get!(Engram.Accounts.User, ctx.user.id)
+
+      assert {:error, :rotation_in_progress} =
+               Notes.rename_note(user, ctx.vault, "rot-room.md", "moved-room.md")
+
+      assert path_of(ctx, n.id) == "rot-room.md"
+
+      # The live doc must be untouched. Asserting only on the persisted state
+      # would pass even if the room HAD been mutated, because nothing during a
+      # rotation is allowed to write it down — which is the entire failure.
+      assert read_live(room, "rot-room.md")["note_id"] == n.id
+      refute read_live(room, "moved-room.md")
+
+      ref = Process.monitor(room)
+      :ok = SharedDoc.unobserve(room)
+      assert_receive {:DOWN, ^ref, :process, ^room, _}, 5_000
+    end
   end
 
   describe "projection never claims" do
