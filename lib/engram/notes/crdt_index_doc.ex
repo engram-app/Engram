@@ -13,31 +13,74 @@ defmodule Engram.Notes.CrdtIndexDoc do
   One room per vault rather than per note, so this *improves* the `:global`
   registration concern in #896 rather than worsening it.
 
-  ## No client writes it yet
+  ## Who writes it, and who reads it
 
-  The room exists, syncs and can be observed, and since #1151 it PERSISTS — see
-  `CrdtIndexPersistence`. What is still missing is a writer: nothing in `lib/`
-  populates `filemeta_v0`, and nothing reads it back. Projection to the `notes`
-  path columns and client adoption are the remaining work
-  (#1151 step 2, Engram-obsidian#362/#363).
+  This map is AUTHORITATIVE for note paths as of #1151 step 2 — see
+  `docs/context/crdt-identity-authority.md`.
 
-  ## Why there is still no idle drain here
+  * `Engram.Notes.Identity` is the ONLY server-side writer. Every server-side
+    rename, delete, folder rename and batch move claims through it, and the
+    claim is the commit.
+  * `Engram.Workers.ProjectVaultIndex` reads it back and derives the
+    `notes.path_*` columns from it. It must never claim — `rename_note/5` takes
+    `index: :skip` for exactly that caller, because deriving rows FROM the map
+    and then writing to it is a feedback loop.
 
-  Note rooms opt into the #1152 drain safely because `terminate/2` runs
-  `CrdtPersistence.unbind/3`, which checkpoints before the room goes away. As of
-  #1151 this room has that too — so the drain is now *safe* here, but it is not
-  *wired*, and those are different things.
+  No CLIENT writes it yet; that is Engram-obsidian#362, with #363 handing
+  identity over outright. So in production the map is still empty and
+  projection is a no-op — which is a statement about the client we ship, not
+  about what the server accepts.
 
-  **Still no `idle_exit_ms` and no `CrdtCheckpointTimer`.** The timer is
-  note-keyed: `note_id` threads through its state and its `CrdtRoomLru.touch/3`
-  call, so serving this room means generalising it rather than passing an
-  option. Until then residency here is bounded only by `auto_exit` on the last
-  observer, which is session-length — the open item named in
-  `docs/context/crdt-index-room.md`.
+  ## The idle drain (#1152)
 
+  Draining a room is lossless only if something checkpoints it on the way out.
+  #1151 gave this room that (`CrdtIndexPersistence.unbind/3`), and #1391 gave it
+  a tail log so an ungraceful death is survivable too. Both were prerequisites;
+  neither wired anything up.
+
+  It is wired now. `start_link/1` starts a `CrdtCheckpointTimer` in `mode:
+  :index`, which is the timer generalised off `note_id` — it keys on `vault_id`
+  and, crucially, **never checkpoints on a tick**. Only the room's own
+  persistence state knows which tail rows failed to replay, so a checkpoint that
+  did not come from `unbind/3` would prune rows it never folded in. The drain is
+  the mechanism instead: observers let go, `auto_exit` fires on the last one,
+  and `terminate/2` checkpoints with the state that has the answer.
+
+  This matters more here than for a note room. `auto_exit` bounds a note room
+  well, because a note is observed only while it is open. This room is observed
+  for as long as ANY socket on the vault is connected, so without the drain its
+  residency is session-length and tracks concurrent connections rather than
+  mutation rate.
+
+  **On by default, and not behind a flag.** Note rooms take the drain as an
+  opt-in because `auto_exit` already bounds them; this room does not have that
+  luxury, so shipping it off would ship the measured 7.91 MB/vault residency and
+  call it done. The interval resolves per-room opt -> `CRDT_IDLE_EXIT_MS` ->
+  `@default_idle_exit_ms`, and never to `nil`. There is no "drain disabled" mode
+  to fall back to — the way back is a different number, not a switch.
   """
 
+  alias Engram.Notes.CrdtCheckpointTimer
+
   @map_name "filemeta_v0"
+
+  # The drain is ON for this room, unconditionally — not a flag, not opt-in.
+  #
+  # Unlike a note room, which `auto_exit` bounds well because a note is observed
+  # only while it is open, this room is observed for as long as ANY socket on
+  # the vault is connected. Without a drain its residency is session-length,
+  # which #1149 measured at 7.91 MB per 10k-note vault. Shipping that OFF by
+  # default would mean shipping the measured problem and calling it done.
+  #
+  # Draining is lossless and cheap to undo: `terminate/2` checkpoints, the tail
+  # log covers an ungraceful death, and the next index frame re-spins the room
+  # through `ensure_index_room/1`. The cost of a wrong value is a re-bind
+  # (decrypt + replay), not a lost claim.
+  #
+  # 5 minutes of no index WRITES — renames, creates, deletes. A client that is
+  # merely connected and reading generates no activity here, which is the point:
+  # residency should track mutation, not connection count.
+  @default_idle_exit_ms 300_000
 
   @doc """
   The `Y.Map` name holding `path -> %{note_id, type, hash}`.
@@ -57,17 +100,64 @@ defmodule Engram.Notes.CrdtIndexDoc do
     vault_id = Keyword.fetch!(opts, :vault_id)
     user_id = Keyword.fetch!(opts, :user_id)
 
-    Yex.Sync.SharedDoc.start_link(
-      [
-        doc_name: vault_id,
-        # Must match CrdtBridge.new_doc/0 — UTF-16 offsets are wire-compatible
-        # with Yjs JS clients; the y_ex default (:bytes) is NOT.
-        doc_option: %Yex.Doc.Options{offset_kind: :utf16},
-        persistence: {Engram.Notes.CrdtIndexPersistence, %{user_id: user_id, vault_id: vault_id}},
-        auto_exit: true
-      ],
-      name: Engram.Notes.CrdtIndexRegistry.global_name(vault_id)
-    )
+    result =
+      Yex.Sync.SharedDoc.start_link(
+        [
+          doc_name: vault_id,
+          # Must match CrdtBridge.new_doc/0 — UTF-16 offsets are wire-compatible
+          # with Yjs JS clients; the y_ex default (:bytes) is NOT.
+          doc_option: %Yex.Doc.Options{offset_kind: :utf16},
+          persistence:
+            {Engram.Notes.CrdtIndexPersistence, %{user_id: user_id, vault_id: vault_id}},
+          auto_exit: true
+        ],
+        name: Engram.Notes.CrdtIndexRegistry.global_name(vault_id)
+      )
+
+    with {:ok, room_pid} <- result do
+      # #1152's remaining half. `auto_exit` alone bounds a NOTE room, which is
+      # observed only while the note is open — but this room is observed for as
+      # long as any socket on the vault is connected, so its lifetime is
+      # session-length and its residency tracks concurrent connections rather
+      # than mutation rate.
+      #
+      # `mode: :index` because the timer is otherwise note-keyed and would
+      # checkpoint on every tick. This room must NOT: only its own persistence
+      # state knows which tail rows failed to replay, so the checkpoint has to
+      # come from `unbind/3`. The drain is what gets it there — observers let
+      # go, auto_exit fires, terminate checkpoints.
+      {:ok, timer_pid} =
+        CrdtCheckpointTimer.start_link(
+          room_pid: room_pid,
+          user_id: user_id,
+          vault_id: vault_id,
+          mode: :index,
+          idle_exit_ms: idle_exit_ms(opts)
+        )
+
+      # Same channel as the note room: update_v1 runs INSIDE this process, so
+      # it reads the timer pid straight out of the process dictionary rather
+      # than doing a registry lookup on every update.
+      Yex.Sync.SharedDoc.update_doc(room_pid, fn _doc ->
+        Process.put(:crdt_timer_pid, timer_pid)
+      end)
+
+      result
+    end
+  end
+
+  # Per-room opt, then the fleet-wide knob, then the default — and NEVER nil,
+  # which is how the timer spells "drain disabled".
+  #
+  # The middle rung matters: `CRDT_IDLE_EXIT_MS` (`ci/compose.yml`, 5 s) is what
+  # makes the Obsidian e2e suite exercise draining against the real client.
+  # Hard-coding past it would have left the index room's drain untested there —
+  # no e2e run lasts #{@default_idle_exit_ms} ms — which is precisely the
+  # coverage this room needs most, since nothing in prod writes the map yet.
+  defp idle_exit_ms(opts) do
+    Keyword.get(opts, :idle_exit_ms) ||
+      Application.get_env(:engram, CrdtCheckpointTimer, [])[:idle_exit_ms] ||
+      @default_idle_exit_ms
   end
 
   @doc false
@@ -80,11 +170,15 @@ defmodule Engram.Notes.CrdtIndexDoc do
       # an immortal orphan. Channels re-establish it on demand.
       restart: :temporary,
       # LONGER than a note room's 15 s, not shorter, and the OTP default of
-      # 5_000 is badly wrong here. A note room can afford to be brutal-killed
-      # mid-flush: its encrypted tail-log still holds every update, so the next
-      # bind replays it and only the work is wasted. This room has NO tail log
-      # (see CrdtIndexPersistence) — a blown deadline loses every index write
-      # since the last exit, permanently.
+      # 5_000 is badly wrong here.
+      #
+      # This room now HAS a tail log (#1391), so a blown deadline no longer
+      # loses every index write since the last exit — the next bind replays the
+      # tail, exactly as a note room replays its own. What a blown deadline
+      # still costs is the FOLD: the checkpoint never runs, so nothing is
+      # pruned and the tail keeps growing across restarts. The generous
+      # deadline is now about bounding tail growth and wasted replay work, not
+      # about preventing permanent loss.
       #
       # And the deadline is harder to hit: unbind/3 does a user lookup, a full
       # doc encode, AES-GCM over a blob #1149 sizes at ~2.0 MB for a 10k-note

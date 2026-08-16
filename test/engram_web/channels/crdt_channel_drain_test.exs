@@ -179,6 +179,60 @@ defmodule EngramWeb.CrdtChannelDrainTest do
     assert_receive {:DOWN, ^ref, :process, ^room, :normal}, 5_000
   end
 
+  # The per-vault INDEX room is tracked in its own assign (`:index_room`), not
+  # in `room_doc`, which maps note-room pids to doc ids. The drain handler only
+  # consulted `room_doc`, so an index-room drain fell through to its "not ours"
+  # branch and was dropped — silently, and forever: the timer's backed-off
+  # re-ask would keep asking a channel that structurally could not answer, and
+  # residency would stay session-length, which is the whole thing #1152 exists
+  # to bound.
+  test "a drain of the INDEX room releases it instead of being ignored as 'not ours'", ctx do
+    %{socket: socket, user: user, vault: vault} = ctx
+
+    # Open the index room the way a client does — through the channel.
+    push(socket, "crdt_index_msg", %{"b64" => index_claim_frame()})
+    room = await_index_room(vault.id)
+    ref = Process.monitor(room)
+
+    Phoenix.PubSub.broadcast(
+      Engram.PubSub,
+      CrdtRegistry.drain_topic(vault.id),
+      {:crdt_room_drain, room}
+    )
+
+    # The channel is the room's only observer, so letting go trips auto_exit —
+    # whose terminate/2 checkpoints. Nothing else can end this room.
+    assert_receive {:DOWN, ^ref, :process, ^room, _}, 5_000
+
+    # And the channel must forget it, or the next index frame casts at a corpse
+    # and returns :ok.
+    refute :sys.get_state(socket.channel_pid).assigns[:index_room] == room,
+           "the channel kept a released index room cached"
+
+    _ = user
+  end
+
+  defp index_claim_frame do
+    doc = CrdtBridge.new_doc()
+
+    doc
+    |> Yex.Doc.get_map(Engram.Notes.CrdtIndexDoc.map_name())
+    |> Yex.Map.set("drained.md", %{"note_id" => Ecto.UUID.generate()})
+
+    {:ok, update} = Yex.encode_state_as_update(doc)
+    {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_update, update}})
+    Base.encode64(frame)
+  end
+
+  defp await_index_room(vault_id) do
+    Enum.reduce_while(1..100, nil, fn _, _ ->
+      case :global.whereis_name({:crdt_index, vault_id}) do
+        pid when is_pid(pid) -> {:halt, pid}
+        :undefined -> Process.sleep(20) && {:cont, nil}
+      end
+    end) || flunk("the channel never started an index room")
+  end
+
   # The production shape: two devices on one note share ONE room, so the drain
   # has to be handled by every observer and the exit must happen exactly once,
   # on the last release. A drain that assumed a single observer would either

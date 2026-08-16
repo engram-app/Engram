@@ -905,7 +905,8 @@ defmodule Engram.Notes.CrdtCheckpointTest do
       room_pid: dead_room,
       user_id: user.id,
       vault_id: vault.id,
-      note_id: note.id,
+      mode: :note,
+      room_key: note.id,
       first_dirty_at: 123,
       settle_timer: nil
     }

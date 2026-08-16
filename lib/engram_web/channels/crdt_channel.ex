@@ -314,10 +314,12 @@ defmodule EngramWeb.CrdtChannel do
         {:reply, {:error, %{reason: "rate_limited"}}, socket}
 
       {:error, reason} ->
-        # The index is not yet load-bearing — nothing reads it back until the
-        # client adopts it (Engram-obsidian#362/#363) — but a silently dropped
-        # frame here would become a drift class the moment it is, so it is
-        # logged like any lost edit.
+        # The index IS load-bearing as of #1151 step 2: a persisted index entry
+        # is projected onto the notes path columns by
+        # Engram.Workers.ProjectVaultIndex, so a frame accepted here can move a
+        # real note. It relays any well-formed frame from any authenticated
+        # socket on this vault — user-scoped, but not otherwise gated. A dropped
+        # frame is therefore a lost identity write, not a lost hint.
         log_index_dropped(socket, reason)
         {:reply, {:error, %{reason: "index_frame_rejected"}}, socket}
     end
@@ -967,33 +969,25 @@ defmodule EngramWeb.CrdtChannel do
   # re-ask a no-op ("not ours"), pinning the room for the life of the socket —
   # the unbounded residency this whole feature exists to prevent.
   @impl true
+  # The per-vault index room is tracked in its OWN assign, not in room_doc, so
+  # it has to be matched first — exactly like the {:yjs, frame, room} handler
+  # above. Consulting only room_doc sent every index drain to the "not ours"
+  # branch of handle_note_room_drain/2, where it was dropped: the timer's
+  # backed-off re-ask kept asking a channel that structurally could not answer,
+  # and the room stayed resident for the life of the socket (#1152).
   def handle_info({:crdt_room_drain, room}, socket) do
-    case Map.get(socket.assigns.room_doc, room) do
-      nil ->
-        # Not ours (a room we already released, or another channel's).
-        {:noreply, socket}
+    if room == socket.assigns[:index_room] do
+      case release_room(room) do
+        :retry ->
+          {:noreply, socket}
 
-      doc_id ->
-        case release_room(room) do
-          :retry ->
-            {:noreply, socket}
-
-          :gone ->
-            case Map.get(socket.assigns.rooms, doc_id) do
-              %{ref: ref} -> Process.demonitor(ref, [:flush])
-              _ -> :ok
-            end
-
-            socket =
-              socket
-              |> assign(:rooms, Map.delete(socket.assigns.rooms, doc_id))
-              |> assign(:room_doc, Map.delete(socket.assigns.room_doc, room))
-              # Remember we let this one go, so the re-spin stays quiet (see the
-              # announce in start_and_observe_room).
-              |> assign(:drained, remember_drained(socket.assigns.drained, doc_id))
-
-            {:noreply, socket}
-        end
+        :gone ->
+          # Forget it, or the next index frame casts at a corpse and gets :ok
+          # back — the silent-drop class the room monitor exists to prevent.
+          {:noreply, assign(socket, :index_room, nil)}
+      end
+    else
+      handle_note_room_drain(room, socket)
     end
   end
 
@@ -1125,6 +1119,36 @@ defmodule EngramWeb.CrdtChannel do
   @spec locally_dead?(pid(), node()) :: boolean()
   def locally_dead?(room, self_node \\ node()),
     do: node(room) == self_node and not Process.alive?(room)
+
+  defp handle_note_room_drain(room, socket) do
+    case Map.get(socket.assigns.room_doc, room) do
+      nil ->
+        # Not ours (a room we already released, or another channel's).
+        {:noreply, socket}
+
+      doc_id ->
+        case release_room(room) do
+          :retry ->
+            {:noreply, socket}
+
+          :gone ->
+            case Map.get(socket.assigns.rooms, doc_id) do
+              %{ref: ref} -> Process.demonitor(ref, [:flush])
+              _ -> :ok
+            end
+
+            socket =
+              socket
+              |> assign(:rooms, Map.delete(socket.assigns.rooms, doc_id))
+              |> assign(:room_doc, Map.delete(socket.assigns.room_doc, room))
+              # Remember we let this one go, so the re-spin stays quiet (see the
+              # announce in start_and_observe_room).
+              |> assign(:drained, remember_drained(socket.assigns.drained, doc_id))
+
+            {:noreply, socket}
+        end
+    end
+  end
 
   defp room_responsive?(room) do
     SharedDoc.update_doc(room, fn _doc -> :ok end, room_probe_ms())

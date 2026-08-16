@@ -358,6 +358,28 @@ defmodule Engram.NotesBatchTest do
       assert {:ok, %{path: "A/a.md"}} = Notes.get_note(user, vault, "A/a.md")
     end
 
+    # A cycle in a LATER marker must not leave earlier ones moved. This batch
+    # can no longer be wrapped in one transaction — each folder's cascade claims
+    # its paths in the CRDT authority first, and a claim cannot be rolled back,
+    # so a batch-wide transaction would revert rows while the claims stood and
+    # the next projection run would re-apply the moves the API rejected. The
+    # guarantee is preserved instead by pre-flighting every marker.
+    test "a cycle in a later marker moves nothing", %{user: user, vault: vault} do
+      {:ok, target} = Notes.create_folder_marker(user, vault, "Parent")
+      {:ok, m1} = Notes.create_folder_marker(user, vault, "A")
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"})
+
+      # Moving "Parent" into "Parent" is the cycle; it sits AFTER a marker that
+      # would otherwise move successfully.
+      assert {:error, {:cycle, cycle_id}} =
+               Notes.batch_move_folders(user, vault, [m1.id, target.id], target.id)
+
+      assert cycle_id == target.id
+
+      assert {:ok, %{path: "A/a.md"}} = Notes.get_note(user, vault, "A/a.md"),
+             "an earlier folder moved before a later one was rejected"
+    end
+
     test "rolls back when target folder marker is missing", %{user: user, vault: vault} do
       {:ok, m1} = Notes.create_folder_marker(user, vault, "A")
       {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"})

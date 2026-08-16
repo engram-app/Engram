@@ -187,6 +187,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- enqueue_crdt_head_rewarm(user_id),
          :ok <- sweep_vaults(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_vault_index_states(user, old_dek, new_dek, new_dek_version),
+         :ok <- sweep_vault_index_update_log(user, old_dek, new_dek, new_dek_version),
          :ok <- sweep_attachments(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
@@ -1094,6 +1095,97 @@ defmodule Engram.Crypto.UserDekRotation do
         # decrypting the moment the old key is retired, and it would do so
         # silently, long after this rotation "succeeded".
         raise "T3.7 sweep_vault_index_states: decrypt failed vault_id=#{row.vault_id}"
+    end
+  end
+
+  # #1391 — the index TAIL. Rows here are as encrypted as the snapshot and just
+  # as load-bearing: they hold every claim made since the last checkpoint, which
+  # since #1151 step 2 is committed identity that exists nowhere else. Missing
+  # this sweep would leave them under a retiring key, and they would stop
+  # decrypting silently long after the rotation reported success.
+  #
+  # Keyed by the row id (not the vault) because the AAD binds per row.
+  defp sweep_vault_index_update_log(%User{id: user_id}, old_dek, new_dek, new_dek_version) do
+    sweep_table_loop(
+      user_id,
+      Engram.Notes.VaultIndexUpdateLog,
+      "00000000-0000-0000-0000-000000000000",
+      fn batch_ids ->
+        Repo.transaction(fn ->
+          rows =
+            from(l in Engram.Notes.VaultIndexUpdateLog,
+              where: l.id in ^batch_ids,
+              lock: "FOR UPDATE"
+            )
+            |> Repo.all(skip_tenant_check: true)
+
+          Enum.each(rows, &rewrap_index_update(&1, user_id, old_dek, new_dek, new_dek_version))
+        end)
+        |> case do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+      end
+    )
+  end
+
+  defp rewrap_index_update(row, user_id, old_dek, new_dek, new_dek_version) do
+    # AAD binds to the row id and does not change across a rotation, so old and
+    # new AAD are the same value here.
+    aad = Crypto.aad_for_row(:vault_index_update_log, :update, row.id)
+
+    # old-then-new, like `rewrap_crdt_tail/3`: a rotation RETRIED after a crash
+    # meets rows it already re-wrapped, and decrypting under the old key is what
+    # discriminates. Raising on those would make a resumed rotation impossible.
+    # log/log_meta/on_both_failed are REQUIRED: try_rewrap's failure branch
+    # fetch!es all three, so omitting them turns an unreadable row into a
+    # KeyError that aborts the rotation after several sweeps have already run
+    # and before final_flip — with no row_failed telemetry and nothing naming
+    # the row. Same shape as rewrap_crdt_tail/3, the note-tail analogue.
+    case try_rewrap(row.update_ciphertext, row.update_nonce, old_dek, new_dek, aad, aad,
+           table: :vault_index_update_log,
+           phase: :sweep_vault_index_update_log,
+           log: "T3.7 sweep_vault_index_update_log: decrypt failed under both old and new DEK",
+           log_meta: [user_id: user_id, row_id: row.id],
+           on_both_failed: {:error, :both_deks_failed}
+         ) do
+      :already_rotated ->
+        :ok
+
+      # One unreadable tail row must not abort the rotation: try_rewrap has
+      # already logged it and emitted row_failed, and there is nothing safe to
+      # write. Aborting would strand the user mid-rotation permanently.
+      {:error, _reason} ->
+        :ok
+
+      {:ok, plaintext} ->
+        {ct, nonce} = Envelope.encrypt(plaintext, new_dek, aad)
+
+        case from(l in Engram.Notes.VaultIndexUpdateLog, where: l.id == ^row.id)
+             |> Repo.update_all(
+               [set: [update_ciphertext: ct, update_nonce: nonce, dek_version: new_dek_version]],
+               skip_tenant_check: true
+             ) do
+          {1, _} ->
+            :ok
+
+          # NOT an error here, unlike the snapshot sweep. A checkpoint prunes
+          # tail rows by exact id, so a row legitimately disappears mid-rotation
+          # whenever a room happens to exit — and its content is already folded
+          # into the snapshot the previous sweep step re-wrapped.
+          {0, _} ->
+            Logger.info(
+              "T3.7 sweep_vault_index_update_log: row pruned by a checkpoint mid-rotation",
+              Metadata.with_category(:info, :crypto,
+                user_id: user_id,
+                table: :vault_index_update_log,
+                row_id: row.id,
+                phase: :sweep_vault_index_update_log
+              )
+            )
+
+            :ok
+        end
     end
   end
 
