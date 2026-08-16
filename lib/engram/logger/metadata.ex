@@ -83,6 +83,30 @@ defmodule Engram.Logger.Metadata do
   # on-call route around a filter instead of trusting it.
   def safe_reason(reason) when is_atom(reason), do: inspect(reason)
 
+  # Storage errors: `{:http_error, 403, "SignatureDoesNotMatch"}`. The status and
+  # the S3 error code are exactly what an operator needs (a misconfigured MinIO
+  # secret is otherwise invisible), and neither can hold user data — an S3 code
+  # is a bare alphabetic identifier, while a storage key is
+  # "user/vault/<path>" and contains separators. Extracted structurally rather
+  # than dropped with the rest of the payload.
+  def safe_reason({:http_error, status, body}) when is_integer(status) do
+    ["http_error", to_string(status), storage_code(body)]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+  end
+
+  # `{:error, :not_found}` / `{:notes_cap_reached, used, cap}` — the tag names
+  # what went wrong and cannot hold note content. The payload is dropped: it is
+  # where a %Note{}, a changeset or a Yjs frame would ride. Without this every
+  # tuple reason collapsed to "unknown", which is how a filter earns being
+  # routed around.
+  def safe_reason(reason) when is_tuple(reason) and tuple_size(reason) > 0 do
+    case elem(reason, 0) do
+      tag when is_atom(tag) -> inspect(tag)
+      _ -> "unknown"
+    end
+  end
+
   # A rescue always binds a struct, but this is called from a shared logging
   # module and its @spec invites `catch :exit, reason`. `hmac_ref/1` in
   # notes.ex got a fallback in the same commit for exactly this reason — "a log
@@ -115,6 +139,21 @@ defmodule Engram.Logger.Metadata do
   end
 
   def format_location(_other), do: "?"
+
+  # An S3/XML error code, or nil. Accepts ONLY a bare alphabetic identifier, so
+  # a message, a URL or a storage key (all of which carry `/`, `.` or spaces)
+  # can never qualify.
+  defp storage_code(body) when is_binary(body) do
+    candidate =
+      case Regex.run(~r|<Code>([A-Za-z]{3,40})</Code>|, body) do
+        [_, code] -> code
+        _ -> body
+      end
+
+    if Regex.match?(~r/^[A-Za-z]{3,40}$/, candidate), do: candidate
+  end
+
+  defp storage_code(_other), do: nil
 
   @doc """
   A log-safe rendering of a `catch :exit, reason` value.

@@ -135,7 +135,7 @@ defmodule EngramWeb.SyncChannel do
         conn_id: socket.assigns[:conn_id],
         device_id: socket.assigns[:device_id],
         topic: socket.topic,
-        reason: inspect(reason)
+        reason: Metadata.safe_reason(reason)
       )
     )
 

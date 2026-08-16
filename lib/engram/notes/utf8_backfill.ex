@@ -116,7 +116,7 @@ defmodule Engram.Notes.Utf8Backfill do
         # A decrypt failure is a different incident class (key drift/tamper),
         # not UTF-8 corruption — surface it but keep scanning.
         Logger.warning(
-          "utf8_backfill: skipped undecryptable note #{note.id}: #{inspect(reason)}",
+          "utf8_backfill: skipped undecryptable note #{note.id}: #{Metadata.safe_reason(reason)}",
           Metadata.with_category(:warning, :data, reason: "undecryptable_note")
         )
 

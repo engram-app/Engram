@@ -218,6 +218,58 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
     end
   end
 
+  # `{:error, :not_found}` is the most common reason shape in this codebase. The
+  # tag is safe and useful; the payload is where a %Note{} or a Yjs frame rides.
+  describe "tuple reasons keep their tag, drop their payload" do
+    test "the tag renders and the payload does not" do
+      assert Metadata.safe_reason({:error, :not_found}) == ":error"
+      assert Metadata.safe_reason({:notes_cap_reached, 100, 50}) == ":notes_cap_reached"
+
+      note = %Engram.Notes.Note{content: @secret, path: "Medical/biopsy.md"}
+      rendered = Metadata.safe_reason({:error, note})
+
+      assert inspect({:error, note}) =~ "biopsy"
+      refute rendered =~ "biopsy"
+      refute rendered =~ "Medical"
+    end
+
+    test "a tuple with a non-atom tag is not rendered at all" do
+      assert Metadata.safe_reason({@secret, 1}) == "unknown"
+    end
+  end
+
+  # Storage errors are the case where dropping the payload would cost a real
+  # diagnostic: a misconfigured MinIO secret is invisible without the S3 code.
+  # An S3 code is a bare alphabetic identifier; a storage key is
+  # "user/vault/<path>". The separator is what makes them separable.
+  describe "storage errors keep their code, never their key" do
+    test "an S3 error code survives" do
+      assert Metadata.safe_reason({:http_error, 403, "SignatureDoesNotMatch"}) ==
+               "http_error 403 SignatureDoesNotMatch"
+    end
+
+    test "a code buried in an XML body is extracted" do
+      body = "<Error><Code>NoSuchKey</Code><Key>u1/v1/Medical/biopsy.md</Key></Error>"
+      rendered = Metadata.safe_reason({:http_error, 404, body})
+
+      assert rendered == "http_error 404 NoSuchKey"
+      refute rendered =~ "Medical"
+      refute rendered =~ "biopsy"
+    end
+
+    test "a body that is a storage key is not mistaken for a code" do
+      rendered = Metadata.safe_reason({:http_error, 403, "u1/v1/Medical/biopsy.md"})
+
+      assert rendered == "http_error 403"
+      refute rendered =~ "Medical"
+    end
+
+    test "a prose message is not mistaken for a code" do
+      assert Metadata.safe_reason({:http_error, 500, "the note Divorce draft failed"}) ==
+               "http_error 500"
+    end
+  end
+
   describe "never raises, whatever it is handed" do
     test "a non-struct does not raise" do
       for value <- [:some_atom, {:error, "boom"}, "raw string", 42, nil, %{a: 1}] do

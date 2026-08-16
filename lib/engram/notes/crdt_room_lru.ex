@@ -58,6 +58,7 @@ defmodule Engram.Notes.CrdtRoomLru do
   """
   use GenServer
 
+  alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtRegistry
 
   require Logger
@@ -254,7 +255,7 @@ defmodule Engram.Notes.CrdtRoomLru do
         # still resident. Counting it would make the capacity signal read as
         # "we are shedding load" during precisely the failure where we are not.
         Logger.warning(
-          "crdt room LRU drain broadcast failed for #{note_id}: #{inspect(reason)}",
+          "crdt room LRU drain broadcast failed for #{note_id}: #{Metadata.safe_reason(reason)}",
           Engram.Logger.Metadata.with_category(:warning, :sync)
         )
     end

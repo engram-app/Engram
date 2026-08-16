@@ -69,6 +69,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   """
   use GenServer
 
+  alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtCheckpoint, CrdtRegistry, CrdtRoomLru}
 
   require Logger
@@ -226,7 +227,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
               # would report an ask that never went out — and `requested` is the
               # denominator an operator reads this metric through.
               Logger.warning(
-                "crdt drain broadcast failed: #{inspect(reason)}",
+                "crdt drain broadcast failed: #{Metadata.safe_reason(reason)}",
                 Engram.Logger.Metadata.with_category(:warning, :sync, room_key: state.room_key)
               )
 
@@ -426,7 +427,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
 
   defp log_read_failure(state, reason) do
     Logger.warning(
-      "crdt checkpoint timer could not fetch doc room_key=#{state.room_key} reason=#{inspect(reason)}",
+      "crdt checkpoint timer could not fetch doc room_key=#{state.room_key} reason=#{Metadata.safe_exit_reason(reason)}",
       Engram.Logger.Metadata.with_category(:warning, :sync, room_key: state.room_key)
     )
   end

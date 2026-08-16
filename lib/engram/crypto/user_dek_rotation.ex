@@ -98,7 +98,7 @@ defmodule Engram.Crypto.UserDekRotation do
               new_dek_version: new_dek_version,
               kind: :error,
               exception_struct: e.__struct__,
-              message: Exception.message(e)
+              message: Metadata.safe_reason(e)
             )
           )
 
@@ -113,7 +113,7 @@ defmodule Engram.Crypto.UserDekRotation do
               user_id: user_id,
               new_dek_version: new_dek_version,
               kind: kind,
-              reason: inspect(reason)
+              reason: Metadata.safe_exit_reason(reason)
             )
           )
 
@@ -161,7 +161,7 @@ defmodule Engram.Crypto.UserDekRotation do
         Metadata.with_category(:error, :crypto,
           user_id: user_id,
           phase: :post_rotation_repairs,
-          message: Exception.message(e)
+          message: Metadata.safe_reason(e)
         )
       )
 
@@ -574,7 +574,7 @@ defmodule Engram.Crypto.UserDekRotation do
               table: :attachments,
               row_id: att_id,
               storage_key: attachment.storage_key,
-              reason_label: inspect(reason)
+              reason_label: Metadata.safe_reason(reason)
             )
           )
 
@@ -891,7 +891,7 @@ defmodule Engram.Crypto.UserDekRotation do
             user_id: user_id,
             phase: :sweep_qdrant,
             status: :scroll_failed,
-            reason_label: inspect(reason)
+            reason_label: Metadata.safe_reason(reason)
           )
         )
 
@@ -941,7 +941,7 @@ defmodule Engram.Crypto.UserDekRotation do
                   qdrant_id: qdrant_id,
                   phase: :sweep_qdrant,
                   status: :set_payload_failed,
-                  reason_label: inspect(reason)
+                  reason_label: Metadata.safe_reason(reason)
                 )
               )
 

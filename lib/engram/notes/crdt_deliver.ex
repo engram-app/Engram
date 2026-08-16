@@ -220,7 +220,10 @@ defmodule Engram.Notes.CrdtDeliver do
   defp quarantine_room(_room, note_id, reason) do
     Logger.error(
       "crdt deliver quarantined stale room — killed for rebind from row",
-      Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
+      Metadata.with_category(:error, :sync,
+        note_id: note_id,
+        reason: Metadata.safe_reason(reason)
+      )
     )
 
     # terminate_room unregisters the INNER :global term before the kill —
@@ -273,7 +276,10 @@ defmodule Engram.Notes.CrdtDeliver do
         # announce → re-pull lands on a FRESH room hydrated from the row.
         Logger.error(
           "crdt deliver apply_update failed — skipping push",
-          Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
+          Metadata.with_category(:error, :sync,
+            note_id: note_id,
+            reason: Metadata.safe_reason(reason)
+          )
         )
 
         :apply_failed

@@ -1271,7 +1271,7 @@ defmodule Engram.Notes do
             user_id: user.id,
             vault_id: vault.id,
             note_id: note_id,
-            reason: inspect(reason)
+            reason: Metadata.safe_reason(reason)
           )
         )
 
@@ -1478,7 +1478,7 @@ defmodule Engram.Notes do
         Metadata.with_category(:warning, :sync,
           user_id: user_id,
           vault_id: vault_id,
-          error: Exception.message(e)
+          error: Metadata.safe_reason(e)
         )
       )
 
@@ -2463,7 +2463,7 @@ defmodule Engram.Notes do
     )
 
     Logger.error(
-      "crdt index claim committed for an operation that failed: #{inspect(reason)}",
+      "crdt index claim committed for an operation that failed: #{Metadata.safe_reason(reason)}",
       Metadata.with_category(:error, :sync, user_id: user.id, vault_id: vault.id)
     )
 
@@ -2986,7 +2986,7 @@ defmodule Engram.Notes do
                   user_id: user.id,
                   vault_id: vault.id,
                   note_id: raw.id,
-                  reason: inspect(reason)
+                  reason: Metadata.safe_reason(reason)
                 )
               )
           end)
@@ -4375,7 +4375,7 @@ defmodule Engram.Notes do
           Metadata.with_category(:error, :sync,
             note_id: row.id,
             user_id: user.id,
-            reason_label: inspect(reason)
+            reason_label: Metadata.safe_reason(reason)
           )
         )
 
@@ -4441,7 +4441,7 @@ defmodule Engram.Notes do
           Metadata.with_category(:error, :sync,
             note_id: row.id,
             user_id: user.id,
-            reason_label: inspect(reason)
+            reason_label: Metadata.safe_reason(reason)
           )
         )
 

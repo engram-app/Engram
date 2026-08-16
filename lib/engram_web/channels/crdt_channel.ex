@@ -925,7 +925,7 @@ defmodule EngramWeb.CrdtChannel do
         conn_id: socket.assigns[:conn_id],
         device_id: socket.assigns[:device_id],
         topic: socket.topic,
-        reason: inspect(reason)
+        reason: Metadata.safe_reason(reason)
       )
     )
 
@@ -1207,7 +1207,7 @@ defmodule EngramWeb.CrdtChannel do
       end
 
     Logger.warning(
-      "crdt_create_batch room enrollment failed: #{inspect(reason)}",
+      "crdt_create_batch room enrollment failed: #{Metadata.safe_reason(reason)}",
       Metadata.with_category(:warning, :websocket,
         note_id: note_id,
         user_id: socket.assigns.current_user.id,
@@ -1235,7 +1235,7 @@ defmodule EngramWeb.CrdtChannel do
   # back to its note. The vault is already carried in the attribution.
   defp log_index_dropped(socket, reason) do
     Logger.warning(
-      "crdt_channel: dropped crdt_index_msg → #{inspect(reason)}",
+      "crdt_channel: dropped crdt_index_msg → #{Metadata.safe_reason(reason)}",
       Metadata.with_category(:warning, :sync,
         user_id: socket.assigns.current_user.id,
         vault_id: socket.assigns.vault.id
@@ -1258,7 +1258,7 @@ defmodule EngramWeb.CrdtChannel do
     ]
 
     Logger.warning(
-      "crdt_channel: dropped crdt_msg → #{inspect(reason)}",
+      "crdt_channel: dropped crdt_msg → #{Metadata.safe_reason(reason)}",
       Metadata.with_category(:warning, :sync, attribution ++ id_meta)
     )
   end
