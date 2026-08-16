@@ -13,11 +13,20 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
       write to the map -> room exits -> encrypted snapshot in the DB
         -> new room binds -> the same entries are back
 
-  Snapshot-only by design (no per-update tail log): index writes are
-  rename/create/delete, not keystrokes, and until Engram-obsidian#363 the notes
-  rows remain authoritative for paths — so a lost checkpoint interval leaves the
-  index STALE, never silently wrong. Nothing reads the index yet and no rebuild
-  path exists; "stale is tolerable" is a statement about today.
+  Snapshot-only is no longer enough. #1150's reasoning — that a lost checkpoint
+  interval leaves the index merely STALE because the notes rows stay
+  authoritative — died with the map-authority decision
+  (`docs/context/crdt-identity-authority.md`). The map IS the identity record
+  now, so a claim lost between checkpoints is lost outright, not recoverable
+  from the rows. Hence the tail log: every update is appended durably, and a
+  checkpoint folds the tail into the snapshot and prunes only what it folded.
+
+      write -> tail (durable immediately)
+        -> checkpoint folds + prunes -> snapshot
+        -> new room binds from snapshot + replays whatever tail remains
+
+  The two failure modes that matter are pruning too much (a claim vanishes) and
+  pruning too little (the tail grows forever); both are pinned below.
   """
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
@@ -25,7 +34,7 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
   import Ecto.Query, only: [from: 2]
 
   alias Engram.{Crypto, Repo, Vaults}
-  alias Engram.Notes.{CrdtIndexDoc, CrdtIndexRegistry, VaultIndexState}
+  alias Engram.Notes.{CrdtIndexDoc, CrdtIndexRegistry, VaultIndexState, VaultIndexUpdateLog}
   alias Yex.Sync.SharedDoc
 
   setup do
@@ -89,6 +98,284 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
     :ok = SharedDoc.unobserve(room)
     assert_receive {:DOWN, ^ref, :process, ^room, _}, 5_000
     :ok
+  end
+
+  # Wait until `n` tail rows are durable for this vault.
+  #
+  # `SharedDoc.update_doc/2` returns once the mutation has been applied to the
+  # doc, but the resulting update is delivered to the room as a MESSAGE and
+  # persisted in `handle_update_v1`. So there is a real window in which the doc
+  # has changed and nothing is on disk yet, and killing inside it loses the
+  # update no matter what the tail log does. That is inherent — note rooms have
+  # the same property — so the tests synchronise on durability rather than
+  # pretending the write is atomic with the mutation.
+  defp tail_count(user, vault_id) do
+    {:ok, count} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.aggregate(from(l in VaultIndexUpdateLog, where: l.vault_id == ^vault_id), :count)
+      end)
+
+    count
+  end
+
+  defp await_tail(user, vault_id, n) do
+    Enum.reduce_while(1..100, :timeout, fn _, _ ->
+      count = tail_count(user, vault_id)
+
+      if count >= n do
+        {:halt, :ok}
+      else
+        Process.sleep(20)
+        {:cont, :timeout}
+      end
+    end)
+    |> case do
+      :ok -> :ok
+      :timeout -> flunk("tail never reached #{n} row(s) for vault #{vault_id}")
+    end
+  end
+
+  # Kill the room outright: no terminate/2, so no unbind/3 and no checkpoint.
+  # This is a deploy replacing an ECS task, a node loss, or an OOM kill.
+  defp kill_room_and_wait(room) do
+    ref = Process.monitor(room)
+    Process.exit(room, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^room, :killed}, 5_000
+    :ok
+  end
+
+  describe "durability across an UNGRACEFUL death" do
+    # #1391. Snapshot-only was a sound trade while the `notes` rows were
+    # authoritative for paths: losing a checkpoint interval left the index
+    # STALE, and the rows still held the truth.
+    #
+    # #1151 step 2 changed the premise. The map is now authoritative and
+    # `ProjectVaultIndex` derives the path columns FROM it, so an interval lost
+    # to a SIGKILL drops committed path claims — and the rows then converge
+    # BACK to the superseded snapshot on the next projection run. There is no
+    # rebuild path in `lib/`.
+    test "a claim survives a room that dies without checkpointing", ctx do
+      room = start_index_room(ctx)
+      before = tail_count(ctx.user, ctx.vault.id)
+      put_entry(room, "survives.md", "11111111-1111-4111-8111-111111111111")
+      :ok = await_tail(ctx.user, ctx.vault.id, before + 1)
+
+      :ok = kill_room_and_wait(room)
+
+      revived = start_index_room(ctx)
+
+      assert read_entry(revived, "survives.md")["note_id"] ==
+               "11111111-1111-4111-8111-111111111111",
+             "a committed claim was lost because the room died before checkpointing"
+
+      # Stop it before the test ends. unbind/3 now WRITES (checkpoint + tail
+      # prune), so a room still alive at teardown runs those against a sandbox
+      # connection whose owner has gone.
+      :ok = stop_room_and_wait(revived)
+    end
+
+    # The tail must carry updates made AFTER the last checkpoint, not replace
+    # what the checkpoint already folded in.
+    test "a checkpointed entry and a post-checkpoint entry both survive", ctx do
+      room = start_index_room(ctx)
+      put_entry(room, "folded.md", "22222222-2222-4222-8222-222222222222")
+      :ok = stop_room_and_wait(room)
+
+      room2 = start_index_room(ctx)
+      # Baseline AFTER the checkpoint above, because that checkpoint prunes the
+      # tail it folded in. Awaiting an absolute count of 1 raced the prune: it
+      # could observe the row the checkpoint was still deleting, return early,
+      # and kill the room before "tailed.md" was ever appended.
+      before = tail_count(ctx.user, ctx.vault.id)
+      put_entry(room2, "tailed.md", "33333333-3333-4333-8333-333333333333")
+      :ok = await_tail(ctx.user, ctx.vault.id, before + 1)
+      :ok = kill_room_and_wait(room2)
+
+      revived = start_index_room(ctx)
+
+      assert read_entry(revived, "folded.md")["note_id"] ==
+               "22222222-2222-4222-8222-222222222222"
+
+      assert read_entry(revived, "tailed.md")["note_id"] ==
+               "33333333-3333-4333-8333-333333333333"
+
+      :ok = stop_room_and_wait(revived)
+    end
+  end
+
+  describe "the tail prune contract" do
+    # y_ex installs the doc update monitor BEFORE bind/3 runs, so every
+    # apply_update inside bind echoes back through update_v1/4. Unsuppressed,
+    # binding re-appends the snapshot AND the whole tail it just read: n rows
+    # become 2n+1 every restart, each cycle also writing a row the size of the
+    # entire index. On a vault whose room keeps dying — the exact case the tail
+    # exists for — that is a spiral.
+    test "binding does not append the snapshot or the tail back onto the tail", ctx do
+      room = start_index_room(ctx)
+      before = tail_count(ctx.user, ctx.vault.id)
+      put_entry(room, "one.md", "44444444-4444-4444-8444-444444444444")
+      :ok = await_tail(ctx.user, ctx.vault.id, before + 1)
+      :ok = kill_room_and_wait(room)
+
+      after_first = tail_count(ctx.user, ctx.vault.id)
+
+      # Bind twice more. Each bind replays the tail and, if the echo is not
+      # suppressed, re-appends everything it replayed.
+      revived = start_index_room(ctx)
+      :ok = kill_room_and_wait(revived)
+      revived2 = start_index_room(ctx)
+
+      assert tail_count(ctx.user, ctx.vault.id) == after_first,
+             "bind re-appended its own replay to the tail"
+
+      :ok = stop_room_and_wait(revived2)
+    end
+
+    # The test above only pins the UNDER-count direction: it never checkpoints,
+    # so `snapshot_applied` is always false, and it issues no update after a
+    # bind. An implementation that credited too MANY echoes passed it — and an
+    # over-credit is not a cosmetic error, it is a permanent credit that the
+    # next real client claim spends instead of being written.
+    #
+    # yrs fires the update observer from the transaction commit hook only when
+    # the transaction CHANGED the doc, so any apply that changes nothing emits
+    # nothing. Two ordinary situations produce one:
+    #
+    #   1. an empty snapshot — a room that bound and exited without a write
+    #   2. a tail row a roomless write already folded into the snapshot
+    #
+    # Both are exercised below. The shape is the same in each: get the room into
+    # the suspect state, then write ONE claim and demand exactly one tail row.
+    test "a bind over an EMPTY snapshot still appends the next claim", ctx do
+      # A room that binds and exits with no writes checkpoints an empty doc.
+      ctx |> start_index_room() |> stop_room_and_wait()
+
+      {:ok, snapshot_row} =
+        Repo.with_tenant(ctx.user.id, fn ->
+          Repo.get_by(VaultIndexState, vault_id: ctx.vault.id)
+        end)
+
+      assert %VaultIndexState{} = snapshot_row, "expected an empty snapshot to have been written"
+      assert tail_count(ctx.user, ctx.vault.id) == 0
+
+      # Binding applies that empty snapshot: :ok, but no echo.
+      room = start_index_room(ctx)
+      put_entry(room, "after-empty.md", "66666666-6666-4666-8666-666666666666")
+
+      :ok = await_tail(ctx.user, ctx.vault.id, 1)
+
+      assert tail_count(ctx.user, ctx.vault.id) == 1,
+             "the empty snapshot was counted as an echo and swallowed a real claim"
+
+      :ok = stop_room_and_wait(room)
+    end
+
+    test "a bind over a NON-EMPTY snapshot appends the next claim exactly once", ctx do
+      room = start_index_room(ctx)
+      put_entry(room, "snapshotted.md", "77777777-7777-4777-8777-777777777777")
+      :ok = await_tail(ctx.user, ctx.vault.id, 1)
+      # Graceful: folds into the snapshot and prunes the tail to 0.
+      :ok = stop_room_and_wait(room)
+      assert tail_count(ctx.user, ctx.vault.id) == 0
+
+      revived = start_index_room(ctx)
+      put_entry(revived, "next.md", "88888888-8888-4888-8888-888888888888")
+      :ok = await_tail(ctx.user, ctx.vault.id, 1)
+
+      assert tail_count(ctx.user, ctx.vault.id) == 1,
+             "the claim after a bind was swallowed by a mis-credited echo"
+
+      :ok = stop_room_and_wait(revived)
+    end
+
+    # Sequence B's root cause. `Identity`'s roomless path folds the tail into
+    # the snapshot it writes; if it does not also PRUNE, those rows survive and
+    # the next bind replays them as no-ops — each one a mis-credited echo, so N
+    # leftover rows silently eat the next N claims.
+    test "a roomless write prunes the tail rows it folded in", ctx do
+      room = start_index_room(ctx)
+      put_entry(room, "orphaned.md", "99999999-9999-4999-8999-999999999999")
+      :ok = await_tail(ctx.user, ctx.vault.id, 1)
+      # Ungraceful: the row survives with no snapshot behind it.
+      :ok = kill_room_and_wait(room)
+      assert tail_count(ctx.user, ctx.vault.id) == 1
+
+      # No room is live, so this takes Identity's snapshot route.
+      assert :ok =
+               Engram.Notes.Identity.claim(
+                 ctx.user,
+                 ctx.vault.id,
+                 [{"roomless.md", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}]
+               )
+
+      assert tail_count(ctx.user, ctx.vault.id) == 0,
+             "the roomless write folded the tail into its snapshot but left the rows behind"
+
+      # And the folded claim is still there, i.e. it pruned what it folded, not
+      # more than it folded.
+      revived = start_index_room(ctx)
+
+      assert read_entry(revived, "orphaned.md")["note_id"] ==
+               "99999999-9999-4999-8999-999999999999"
+
+      assert read_entry(revived, "roomless.md")["note_id"] ==
+               "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+      :ok = stop_room_and_wait(revived)
+    end
+
+    test "a checkpoint prunes the tail it folded in", ctx do
+      room = start_index_room(ctx)
+      before = tail_count(ctx.user, ctx.vault.id)
+      put_entry(room, "folded.md", "55555555-5555-4555-8555-555555555555")
+      :ok = await_tail(ctx.user, ctx.vault.id, before + 1)
+
+      # Graceful exit -> unbind -> checkpoint -> prune.
+      :ok = stop_room_and_wait(room)
+
+      assert tail_count(ctx.user, ctx.vault.id) == 0,
+             "a checkpoint left behind rows it had already folded into the snapshot"
+    end
+
+    # THE regression for the prune contract. `replay_tail` skips a row it cannot
+    # decrypt so a later successful replay can still recover the claim — but the
+    # prune used to re-query EVERY row for the vault and delete it anyway. One
+    # transient decrypt failure then destroyed the claim permanently, in the
+    # code whose entire purpose is preventing that.
+    test "a row that could not be replayed is NOT pruned by the checkpoint", ctx do
+      room = start_index_room(ctx)
+      before = tail_count(ctx.user, ctx.vault.id)
+      put_entry(room, "fragile.md", "66666666-6666-4666-8666-666666666666")
+      :ok = await_tail(ctx.user, ctx.vault.id, before + 1)
+      :ok = kill_room_and_wait(room)
+
+      # Corrupt the ciphertext so replay must skip it, by flipping a bit in the
+      # AEAD TAG. Replacing it with a short blob instead would trip
+      # Envelope.decrypt/4's `byte_size - 16 < 0` length short-circuit and never
+      # reach AES-GCM — still an error, but not the one a real transient or a
+      # torn write produces.
+      {:ok, [row]} =
+        Repo.with_tenant(ctx.user.id, fn ->
+          Repo.all(from(l in VaultIndexUpdateLog, where: l.vault_id == ^ctx.vault.id))
+        end)
+
+      <<head::binary-size(byte_size(row.update_ciphertext) - 1), last>> = row.update_ciphertext
+
+      {:ok, {1, _}} =
+        Repo.with_tenant(ctx.user.id, fn ->
+          Repo.update_all(
+            from(l in VaultIndexUpdateLog, where: l.id == ^row.id),
+            set: [update_ciphertext: <<head::binary, Bitwise.bxor(last, 0xFF)>>]
+          )
+        end)
+
+      # Bind (skips the row), then check point on the way out.
+      revived = start_index_room(ctx)
+      :ok = stop_room_and_wait(revived)
+
+      assert tail_count(ctx.user, ctx.vault.id) == 1,
+             "the checkpoint deleted a row it never folded in — that claim is now unrecoverable"
+    end
   end
 
   describe "snapshot round trip" do
@@ -215,26 +502,23 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
   # The documented lossy case, asserted rather than merely described. If someone
   # later adds a tail log, this test is what tells them the trade-off changed.
   describe "ungraceful death" do
-    test "a killed room loses writes since the last checkpoint", ctx do
-      room = start_index_room(ctx)
-      put_entry(room, "saved.md", "note-saved")
-      stop_room_and_wait(room)
-
-      respun = start_index_room(ctx)
-      put_entry(respun, "unsaved.md", "note-unsaved")
-
-      ref = Process.monitor(respun)
-      Process.exit(respun, :kill)
-      assert_receive {:DOWN, ^ref, :process, ^respun, :killed}, 5_000
-
-      final = start_index_room(ctx)
-
-      assert read_entry(final, "saved.md")["note_id"] == "note-saved",
-             "the last checkpoint must survive"
-
-      refute read_entry(final, "unsaved.md"),
-             "snapshot-only: a SIGKILL loses writes since the last exit (add a tail log to change this)"
-    end
+    # DELETED: "a killed room loses writes since the last checkpoint" (#1391).
+    #
+    # It asserted `refute read_entry(final, "unsaved.md")` — that a SIGKILL
+    # destroys everything since the last checkpoint. That was the correct
+    # contract when the room was snapshot-only, and the tail log inverts it:
+    # "a claim survives a room that dies without checkpointing", above, now
+    # asserts the opposite of it on purpose.
+    #
+    # It was also passing for the wrong reason. `handle_update_v1` is
+    # asynchronous, so the test only stayed green by KILLING the room before
+    # the tail append it was meant to disprove had run — a race it happened to
+    # win. Keeping it would have meant an intermittently red suite asserting
+    # behaviour the design deliberately removed.
+    #
+    # The residual window it half-described is real (a write killed before it
+    # reaches the tail IS lost) and is documented on `await_tail/3`. It is not
+    # re-tested here: pinning it requires winning that same race.
   end
 
   # A deploy terminates rooms via the supervisor, not by dropping observers.

@@ -345,6 +345,41 @@ defmodule Engram.Crypto do
   end
 
   @doc """
+  Encrypts one `filemeta_v0` update for the index tail log (#1391).
+
+  AAD binds to the LOG ROW's id, not the vault, because each row is an
+  independent append that is later pruned by exact id — binding to the vault
+  would make every row of a vault interchangeable under AAD.
+  """
+  @spec encrypt_index_update(binary(), User.t(), String.t()) ::
+          {:ok, {binary(), binary()}} | {:error, term()}
+  def encrypt_index_update(update, %User{} = user, row_id)
+      when is_binary(update) and is_binary(row_id) do
+    with {:ok, user} <- ensure_user_dek(user),
+         {:ok, dek} <- get_dek(user) do
+      aad = aad_for_row(:vault_index_update_log, :update, row_id)
+      {ct, nonce} = Envelope.encrypt(update, dek, aad)
+      {:ok, {ct, nonce}}
+    end
+  end
+
+  @doc """
+  Decrypts one index tail row into the raw Yjs v1 update binary.
+  """
+  @spec decrypt_index_update(Engram.Notes.VaultIndexUpdateLog.t(), User.t()) ::
+          {:ok, binary()} | {:error, term()}
+  def decrypt_index_update(%Engram.Notes.VaultIndexUpdateLog{} = row, %User{} = user) do
+    aad = aad_for_row(:vault_index_update_log, :update, row.id)
+
+    with {:ok, dek} <- get_dek(user) do
+      case Envelope.decrypt(row.update_ciphertext, row.update_nonce, dek, aad) do
+        {:ok, update} -> {:ok, update}
+        :error -> {:error, :decrypt_failed}
+      end
+    end
+  end
+
+  @doc """
   Decrypts a note's `crdt_state_ciphertext` into the raw Yjs v1 state binary.
   Returns `{:ok, nil}` when the column is unpopulated (lazy-seed case).
   Legacy `dek_version < 2` rows decrypt with empty AAD; AAD-bound rows

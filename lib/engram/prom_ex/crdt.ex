@@ -88,6 +88,7 @@ defmodule Engram.PromEx.Crdt do
   @claim_event [:engram, :crdt, :index_claim]
   @recheck_event [:engram, :crdt, :index_recheck]
   @in_transaction_event [:engram, :crdt, :index_in_transaction]
+  @tail_event [:engram, :crdt, :index_tail]
   @drain_event [:engram, :crdt, :room_drain]
   @checkpoint_event [:engram, :crdt, :index_checkpoint]
   @projection_event [:engram, :crdt, :index_projection]
@@ -130,8 +131,10 @@ defmodule Engram.PromEx.Crdt do
           event_name: @claim_event,
           description:
             "Server-side filemeta_v0 writes by op (claim | release), route " <>
-              "(room | snapshot | orphan) and phase (ok | conflict | rotation | room_exit | " <>
-              "mailbox_empty | load_failed | persist_failed | orphan_claim).",
+              "(gate | room | snapshot | orphan) and phase (ok | conflict | rotation | " <>
+              "room_exit | mailbox_empty | load_failed | persist_failed | orphan_claim). " <>
+              "route=gate phase=rotation is a write REFUSED before routing because a DEK " <>
+              "rotation is running — the caller got an error and did not commit.",
           tags: [:op, :route, :phase]
         ),
         sum(
@@ -158,6 +161,21 @@ defmodule Engram.PromEx.Crdt do
           event_name: @in_transaction_event,
           description: "filemeta_v0 writes made inside a caller's transaction (should be 0).",
           tags: [:op]
+        ),
+        # #1391 — the index tail. `ok` should track index writes closely; a
+        # sustained `failed` means claims are living only in room memory, which
+        # is exactly the state the tail exists to prevent and is otherwise
+        # invisible until a room dies and the claims are simply gone.
+        counter(
+          metric_prefix ++ [:index_tail, :total],
+          event_name: @tail_event,
+          description:
+            "filemeta_v0 tail-log operations by phase (ok | failed | pruned | " <>
+              "corrupt_row | undecryptable_row | skipped_rotation | prune_failed). " <>
+              "A sustained `failed` " <>
+              "OR `skipped_rotation` both mean the same thing — claims are living only in " <>
+              "room memory and die with the process.",
+          tags: [:phase]
         ),
         counter(
           metric_prefix ++ [:index_projection, :total],

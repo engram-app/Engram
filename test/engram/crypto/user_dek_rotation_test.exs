@@ -8,7 +8,15 @@ defmodule Engram.Crypto.UserDekRotationTest do
   alias Engram.Attachments
   alias Engram.Crypto
   alias Engram.Crypto.{DekCache, Envelope, UserDekRotation}
-  alias Engram.Notes.{CrdtBridge, CrdtIndexDoc, CrdtIndexRegistry, VaultIndexState}
+
+  alias Engram.Notes.{
+    CrdtBridge,
+    CrdtIndexDoc,
+    CrdtIndexRegistry,
+    VaultIndexState,
+    VaultIndexUpdateLog
+  }
+
   alias Engram.Repo
   alias Engram.Test.LogCapture
   alias Engram.Vector.Qdrant
@@ -150,6 +158,124 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       assert entry["note_id"] == "note-rotated"
     end
+
+    # The snapshot sweep above is only half the story. A claim is durable the
+    # moment it hits the TAIL, long before any checkpoint folds it into a
+    # snapshot — so a rotation that sweeps `vault_index_states` but not
+    # `vault_index_update_log` leaves every uncheckpointed claim wrapped under
+    # the retired dek. That failure is silent and delayed in exactly the way the
+    # comment at the top of this block warns about: the rows keep decrypting
+    # until the old key goes away, and only then does a rebind come up missing
+    # claims that the rotation reported as successfully migrated.
+    test "the index tail rewraps too, so uncheckpointed claims survive", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, room} = CrdtIndexRegistry.ensure_observed(user.id, vault.id)
+
+      :ok =
+        SharedDoc.update_doc(room, fn doc ->
+          doc
+          |> Yex.Doc.get_map(CrdtIndexDoc.map_name())
+          |> Yex.Map.set("Tail/rotated.md", %{"note_id" => "note-tail-rotated"})
+        end)
+
+      # `handle_update_v1` is asynchronous, so the write has to be observed as
+      # DURABLE before rotating — otherwise the sweep can legitimately run
+      # before the row exists and the test proves nothing.
+      before = await_index_tail(user, vault.id, 1)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      after_rows = index_tail_rows(user, vault.id)
+      assert length(after_rows) == 1
+      [after_row] = after_rows
+      [before_row] = before
+
+      refute after_row.update_ciphertext == before_row.update_ciphertext,
+             "the tail row was left wrapped under the retired dek"
+
+      assert after_row.dek_version == before_row.dek_version + 1
+
+      # Kill rather than unobserve: a graceful exit would checkpoint and prune,
+      # so the rebind below would read the snapshot and never touch the tail —
+      # which is precisely the path under test.
+      ref = Process.monitor(room)
+      Process.exit(room, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^room, _}, 5_000
+
+      {:ok, respun} = CrdtIndexRegistry.ensure_observed(user.id, vault.id)
+      test_pid = self()
+
+      :ok =
+        SharedDoc.update_doc(respun, fn doc ->
+          send(
+            test_pid,
+            {:entry,
+             doc |> Yex.Doc.get_map(CrdtIndexDoc.map_name()) |> Yex.Map.fetch("Tail/rotated.md")}
+          )
+        end)
+
+      assert_receive {:entry, {:ok, %{"note_id" => "note-tail-rotated"}}}, 5_000
+    end
+
+    # A tail row that decrypts under NEITHER key has to be survivable. It is a
+    # lost claim, but aborting the sweep strands the user mid-rotation — several
+    # tables re-wrapped, `final_flip` never reached — and the rotation cannot be
+    # retried into a good state.
+    #
+    # This also pins the opts contract: `try_rewrap`'s failure branch `fetch!`es
+    # :log, :log_meta and :on_both_failed, so a call site that omits them turns
+    # this row into a KeyError instead of a logged, counted skip.
+    test "an unreadable index tail row does not abort the rotation", %{user: user, vault: vault} do
+      {:ok, room} = CrdtIndexRegistry.ensure_observed(user.id, vault.id)
+
+      :ok =
+        SharedDoc.update_doc(room, fn doc ->
+          doc
+          |> Yex.Doc.get_map(CrdtIndexDoc.map_name())
+          |> Yex.Map.set("Corrupt/row.md", %{"note_id" => "note-corrupt"})
+        end)
+
+      [row] = await_index_tail(user, vault.id, 1)
+
+      # Flip a bit in the AEAD TAG rather than truncating: Envelope.decrypt/4
+      # short-circuits on `byte_size - 16 < 0` before AES-GCM ever runs, so a
+      # short blob would never exercise the tag check a real corruption trips.
+      <<head::binary-size(byte_size(row.update_ciphertext) - 1), last>> = row.update_ciphertext
+      corrupted = <<head::binary, Bitwise.bxor(last, 0xFF)>>
+
+      {:ok, {1, _}} =
+        Repo.with_tenant(user.id, fn ->
+          from(l in VaultIndexUpdateLog, where: l.id == ^row.id)
+          |> Repo.update_all(set: [update_ciphertext: corrupted])
+        end)
+
+      assert :ok = UserDekRotation.rotate_user(user.id),
+             "one unreadable tail row aborted the whole rotation"
+    end
+  end
+
+  defp index_tail_rows(user, vault_id) do
+    {:ok, rows} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(from(l in VaultIndexUpdateLog, where: l.vault_id == ^vault_id, order_by: l.id))
+      end)
+
+    rows
+  end
+
+  defp await_index_tail(user, vault_id, n) do
+    Enum.reduce_while(1..200, nil, fn _, _ ->
+      case index_tail_rows(user, vault_id) do
+        rows when length(rows) >= n ->
+          {:halt, rows}
+
+        _ ->
+          Process.sleep(10)
+          {:cont, nil}
+      end
+    end) || flunk("the index write never reached the tail log")
   end
 
   describe "rotate_user/1 — socket drain (#1092)" do

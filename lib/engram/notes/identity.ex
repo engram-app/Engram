@@ -151,6 +151,30 @@ defmodule Engram.Notes.Identity do
     # whether a socket is open", and the room route is the open-socket half.
     warn_if_in_transaction(user, vault_id, op)
 
+    # Gated BEFORE routing, so both routes fail closed. This used to sit only on
+    # the snapshot route, on the reasoning that "the room path needs no gate —
+    # it only mutates memory, and the room's own checkpoint is already gated."
+    # The tail log killed that: a room write now has to become durable through
+    # `append_tail`, which is gated, and the checkpoint that was supposed to
+    # rescue the in-memory claim afterwards is gated too and runs only at
+    # process death. So the ungated room route returned :ok, wrote no tail row,
+    # wrote no snapshot, and lost the claim outright when the room drained —
+    # while the caller had already committed the notes row against it.
+    #
+    # Refusing is the documented contract: "a rename during a DEK rotation fails
+    # rather than half-applying."
+    case rotation_gate(user) do
+      :ok ->
+        route_targets(user, vault_id, targets, op)
+
+      {:error, :rotation_in_progress} = err ->
+        emit(op, :gate, :rotation, targets)
+        log(user, vault_id, op, "refused — dek rotation in progress")
+        err
+    end
+  end
+
+  defp route_targets(user, vault_id, targets, op) do
     case :global.whereis_name({:crdt_index, vault_id}) do
       pid when is_pid(pid) ->
         case via_room(pid, targets) do
@@ -229,8 +253,12 @@ defmodule Engram.Notes.Identity do
   #
   # Because the claim is the commit, this cannot be skipped-and-continued the
   # way a derived side effect could: half-applying a rename is worse than
-  # refusing it. The room path needs no gate — it only mutates memory, and the
-  # room's own checkpoint is already gated.
+  # refusing it.
+  #
+  # `apply_targets/4` now gates BOTH routes before it picks one, so this is a
+  # second line rather than the only one. It is kept because `via_snapshot` is
+  # also the fallback target of a room that died mid-write, and a rotation can
+  # begin in that window.
   #
   # Matching `:ok` EXPLICITLY, not `_`. This gate stands between a write and
   # permanent unreadability; a future third return from `check_user/1` must
@@ -258,12 +286,13 @@ defmodule Engram.Notes.Identity do
   defp rotation_gate(_other), do: {:error, :rotation_in_progress}
 
   defp do_via_snapshot(user, vault_id, targets, op) do
-    with {:ok, doc} <- CrdtIndexPersistence.load_doc(user, vault_id),
-         :ok <- mutate(doc, targets),
-         :ok <- CrdtIndexPersistence.persist_doc(user, vault_id, doc) do
-      emit(op, :snapshot, :ok, targets)
-      recheck_room(user, vault_id, targets, op)
-    else
+    # fold_roomless owns the load -> mutate -> persist -> PRUNE contract. Doing
+    # the first three by hand here is what left folded tail rows behind.
+    case CrdtIndexPersistence.fold_roomless(user, vault_id, &mutate(&1, targets)) do
+      :ok ->
+        emit(op, :snapshot, :ok, targets)
+        recheck_room(user, vault_id, targets, op)
+
       {:error, :conflict} = err ->
         emit(op, :snapshot, :conflict, targets)
         err

@@ -126,6 +126,23 @@ discarded return value with a retry, which matters because a release refused
 mid-rotation used to vanish silently and leave one permanent path reservation
 per note.
 
+## The tail log is what makes a claim durable
+
+`vault_index_states` holds a snapshot written when a room EXITS. On its own that
+meant every claim made since the last checkpoint lived only in room memory, so a
+SIGKILL, a node loss or an ECS task replacement dropped committed identity — and
+projection then converged the rows back to the superseded snapshot.
+
+`vault_index_update_log` (#1391) closes it: every update is appended, replayed on
+`bind/3` after the snapshot, and pruned by EXACT id when a checkpoint folds it
+in. Never by a timestamp range — an update appended between the encode and the
+delete is not in the snapshot, and a range prune would drop exactly the claim the
+tail exists to protect.
+
+Durability is reached when the ROOM processes its own update message, not when
+`update_doc/2` returns; `handle_update_v1` is asynchronous. A kill inside that
+window still loses the update, as it does for note rooms.
+
 ## Removals are id-keyed, never path-keyed
 
 Removing an entry by deleting whatever sits at a path clobbers the entry of
@@ -139,5 +156,22 @@ Writing the snapshot encrypts, and `users.encrypted_dek` holds the OLD wrapped
 dek until `final_flip` — so a write landing mid-rotation is unreadable once the
 old key retires (#1341). Under map-authority the claim IS the commit, so it
 cannot be "best effort": a rename during a DEK rotation fails loudly rather than
-half-completing. The live-room path needs no gate; it only mutates memory, and
-the room's own checkpoint is already gated.
+half-completing.
+
+**Both routes are gated, before routing.** An earlier version gated only the
+snapshot route, reasoning that "the live-room path needs no gate; it only
+mutates memory, and the room's own checkpoint is already gated." The tail log
+(#1391) falsified that. A room write becomes durable through `append_tail`,
+which is gated; the checkpoint that was supposed to write the in-memory claim
+"afterwards" is gated too and runs only at process death. So the ungated room
+route returned `:ok`, wrote nothing anywhere, and lost the claim when the room
+drained — with the caller's rename already committed against it. `RotationGate`
+is therefore checked in `Identity.apply_targets/4` before it picks a route
+(`route=gate phase=rotation` on `index_claim`).
+
+One residual, deliberately not closed: a client writing `filemeta_v0` directly
+over the channel bypasses `Identity` entirely, so its update reaches
+`update_v1/4` and is dropped by `append_tail`'s gate (`phase=skipped_rotation`).
+`SessionInvalidator.disconnect_user/1` drains sockets at the top of a rotation,
+which narrows the window rather than eliminating it. It has no production
+exposure until Engram-obsidian#362 makes a client write the map.

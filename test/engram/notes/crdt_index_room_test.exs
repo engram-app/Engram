@@ -161,10 +161,12 @@ defmodule Engram.Notes.CrdtIndexRoomTest do
     end
   end
 
-  # A note room gets 15 s because a blown deadline costs it NOTHING — its tail
-  # log replays. This room has no tail log, so a blown deadline loses every
-  # index write since the last exit. It shipped on the OTP default of 5 s: the
-  # risk ordering exactly inverted. One assertion, because the default is
+  # Both rooms now have a tail log (#1391), so a blown deadline no longer loses
+  # writes on either — it costs the FOLD. The checkpoint never runs, nothing is
+  # pruned, and the tail grows across restarts. This room still gets the longer
+  # budget because its flush is a single ~2 MB encode + encrypt for the whole
+  # vault, against a note's one document. It shipped on the OTP default of 5 s,
+  # which brutal-kills that flush. One assertion, because the default is
   # invisible (there is no `shutdown:` key to read).
   test "the shutdown budget exceeds a note room's, because a blown deadline costs more here" do
     spec = CrdtIndexDoc.child_spec(vault_id: Ecto.UUID.generate(), user_id: Ecto.UUID.generate())
@@ -177,7 +179,7 @@ defmodule Engram.Notes.CrdtIndexRoomTest do
       )
 
     assert spec.shutdown >= note_spec.shutdown,
-           "the room WITHOUT a tail log must not get less flush time than the one with"
+           "the room with the whole-vault flush must not get less time than a single note's"
 
     assert spec.shutdown > 5_000, "the OTP default brutal-kills a ~2 MB encrypt + write"
   end
