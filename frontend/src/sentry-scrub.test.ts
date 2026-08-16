@@ -13,13 +13,21 @@
  * shape of a route is enough to debug it; the contents belong to the user.
  */
 import { describe, expect, it } from "vitest";
-import { scrubUrl } from "./sentry";
+import { scrubBreadcrumb, scrubEvent, scrubUrl, sentryInitOptions } from "./sentry";
 
 describe("scrubUrl", () => {
-	it("replaces path segments, keeping the shape", () => {
+	// Host and first segment survive so a breadcrumb can still say WHICH
+	// endpoint failed; everything after is the user's.
+	it("keeps the host and first segment, redacts the rest", () => {
 		expect(scrubUrl("https://app.engram.page/attachments/Medical/labs.pdf")).toBe(
-			"/:seg/:seg/:seg",
+			"https://app.engram.page/attachments/:seg/:seg",
 		);
+	});
+
+	it("does not leak a folder or filename", () => {
+		const out = scrubUrl("https://app.engram.page/attachments/Medical/2026-lab-results.pdf");
+		expect(out).not.toContain("Medical");
+		expect(out).not.toContain("lab-results");
 	});
 
 	it("keeps query KEYS but never values", () => {
@@ -43,8 +51,8 @@ describe("scrubUrl", () => {
 
 	// A relative URL has to work: fetch breadcrumbs record whatever was passed
 	// to fetch(), which in this app is usually "/api/...".
-	it("handles relative URLs", () => {
-		expect(scrubUrl("/api/notes/Personal/Secret.md")).toBe("/:seg/:seg/:seg/:seg");
+	it("handles relative URLs, and keeps them relative", () => {
+		expect(scrubUrl("/api/notes/Personal/Secret.md")).toBe("/api/:seg/:seg/:seg");
 	});
 
 	// Parsed against a base, so nearly any string resolves to a path and gets
@@ -58,6 +66,81 @@ describe("scrubUrl", () => {
 	});
 
 	it("keeps the root path recognisable", () => {
-		expect(scrubUrl("https://app.engram.page/")).toBe("/");
+		expect(scrubUrl("https://app.engram.page/")).toBe("https://app.engram.page/");
+	});
+
+	// The fragment carries heading slugs derived from note body text.
+	it("drops the fragment entirely", () => {
+		expect(scrubUrl("/vault/notes#Divorce-settlement-heading")).not.toContain("Divorce");
+	});
+});
+
+describe("scrubBreadcrumb", () => {
+	// Console args are whatever a developer passed — an attachment path today,
+	// anything tomorrow. Not worth a privacy review on every future edit.
+	it("drops console breadcrumbs entirely", () => {
+		expect(scrubBreadcrumb({ category: "console", message: "attachment load failed" })).toBeNull();
+	});
+
+	// The DOM serializer reads title/alt/aria-label off the clicked element AND
+	// five ancestors. In this app those carry note paths, filenames and
+	// frontmatter values.
+	it.each(["ui.click", "ui.input"])("drops %s breadcrumbs", (category) => {
+		expect(scrubBreadcrumb({ category })).toBeNull();
+	});
+
+	it("keeps fetch breadcrumbs but scrubs the url", () => {
+		const crumb = scrubBreadcrumb({
+			category: "fetch",
+			data: { url: "https://app.engram.page/api/attachments/Medical/labs.pdf", status_code: 500 },
+		});
+
+		expect(crumb).not.toBeNull();
+		expect(crumb?.data?.url).not.toContain("Medical");
+		// The endpoint is still identifiable — over-scrubbing to "/:seg/:seg"
+		// made breadcrumbs useless at the moment reporting was switched on.
+		expect(crumb?.data?.url).toContain("/api/");
+		expect(crumb?.data?.status_code).toBe(500);
+	});
+
+	it("scrubs navigation from/to", () => {
+		const crumb = scrubBreadcrumb({
+			category: "navigation",
+			data: { from: "/link?code=ENGR-7X4K", to: "/vault/Personal/Secret.md" },
+		});
+
+		expect(crumb?.data?.from).not.toContain("ENGR-7X4K");
+		expect(crumb?.data?.to).not.toContain("Secret");
+	});
+});
+
+describe("scrubEvent", () => {
+	it("scrubs request.url", () => {
+		const out = scrubEvent({ request: { url: "/reset-password?token=abc123secret" } });
+		expect(JSON.stringify(out)).not.toContain("abc123secret");
+	});
+
+	// httpContextIntegration attaches headers too, and Referer is the full URL
+	// of the page while the credential is still in the address bar.
+	it("scrubs the Referer header, not just the url", () => {
+		const out = scrubEvent({
+			request: {
+				url: "/api/notes",
+				headers: { Referer: "https://app.engram.page/link?code=ENGR-7X4K" },
+			},
+		});
+
+		expect(JSON.stringify(out)).not.toContain("ENGR-7X4K");
+	});
+});
+
+describe("the scrubbers are actually wired into Sentry.init", () => {
+	// Without this, deleting the two hook lines from the options left every
+	// other test in this file green while everything shipped unscrubbed.
+	it("passes beforeBreadcrumb and beforeSend", () => {
+		const opts = sentryInitOptions("https://key@example.ingest.sentry.io/1");
+		expect(opts.beforeBreadcrumb).toBe(scrubBreadcrumb);
+		expect(opts.beforeSend).toBe(scrubEvent);
+		expect(opts.sendDefaultPii).toBe(false);
 	});
 });

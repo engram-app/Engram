@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { getApiBase, joinApiUrl } from "@/api/base";
+import { stashCredential, takeCredential } from "@/auth/credential-handoff";
 import { Button } from "@/components/ui/button";
 import AuthPanel from "@/layout/auth-panel";
 import AuthShell from "@/layout/auth-shell";
@@ -15,14 +16,35 @@ export default function ResetPasswordPage() {
 	// Captured once, then scrubbed from the URL. The token IS the credential
 	// that lets the bearer set this account's password, and while it sits in
 	// the address bar it is in browser history, in the Referer of anything the
-	// page loads, and attached to every Sentry event as request.url. Held in
-	// state so the scrub cannot pull it out from under the submit handler.
-	const [token] = useState(() => params.get("token") ?? "");
+	// page loads, and attached to every Sentry event as request.url.
+	//
+	// Falls back to the sessionStorage handoff, which covers two cases: a
+	// signed-out arrival that was redirected through sign-in (the redirect
+	// strips the token), and a RELOAD after the scrub. Scrubbing without the
+	// fallback stranded anyone who hit F5 after a "passwords do not match" —
+	// the token was gone from the URL and from history, and their only way
+	// forward was re-opening the email.
+	const [token] = useState(() => {
+		const fromUrl = params.get("token");
+		if (fromUrl) {
+			return fromUrl;
+		}
+		// Put it back: `take` deletes on read, and a user who reloads twice
+		// (mistype, reload, mistype, reload) would otherwise be stranded on the
+		// second one with no way forward but the email.
+		const held = takeCredential("token");
+		if (held) {
+			stashCredential("token", held);
+		}
+		return held;
+	});
 
 	useEffect(() => {
 		if (!params.has("token")) {
 			return;
 		}
+		// Stash before scrubbing so a reload can still find it.
+		stashCredential("token", params.get("token") ?? "");
 		const next = new URLSearchParams(location.search);
 		next.delete("token");
 		// Through the router, not window.history: this app runs on a data
@@ -61,6 +83,8 @@ export default function ResetPasswordPage() {
 			});
 
 			if (res.ok) {
+				// Spent. Nothing should be able to replay it from this tab.
+				takeCredential("token");
 				setDone(true);
 			} else {
 				const body = await res.json().catch(() => ({}));
