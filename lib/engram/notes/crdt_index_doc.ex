@@ -13,13 +13,23 @@ defmodule Engram.Notes.CrdtIndexDoc do
   One room per vault rather than per note, so this *improves* the `:global`
   registration concern in #896 rather than worsening it.
 
-  ## No client writes it yet
+  ## Who writes it, and who reads it
 
-  The room exists, syncs and can be observed, and since #1151 it PERSISTS — see
-  `CrdtIndexPersistence`. What is still missing is a writer: nothing in `lib/`
-  populates `filemeta_v0`, and nothing reads it back. Projection to the `notes`
-  path columns and client adoption are the remaining work
-  (#1151 step 2, Engram-obsidian#362/#363).
+  This map is AUTHORITATIVE for note paths as of #1151 step 2 — see
+  `docs/context/crdt-identity-authority.md`.
+
+  * `Engram.Notes.Identity` is the ONLY server-side writer. Every server-side
+    rename, delete, folder rename and batch move claims through it, and the
+    claim is the commit.
+  * `Engram.Workers.ProjectVaultIndex` reads it back and derives the
+    `notes.path_*` columns from it. It must never claim — `rename_note/5` takes
+    `index: :skip` for exactly that caller, because deriving rows FROM the map
+    and then writing to it is a feedback loop.
+
+  No CLIENT writes it yet; that is Engram-obsidian#362, with #363 handing
+  identity over outright. So in production the map is still empty and
+  projection is a no-op — which is a statement about the client we ship, not
+  about what the server accepts.
 
   ## Why there is still no idle drain here
 

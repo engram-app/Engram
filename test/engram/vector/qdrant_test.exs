@@ -534,12 +534,20 @@ defmodule Engram.Vector.QdrantTest do
     end
 
     test "is a public function with arity 0" do
+      # ensure_loaded? first: function_exported?/3 answers false for a module
+      # that simply has not been LOADED yet, which under CI's test ordering is
+      # a coin flip rather than a statement about the module.
+      assert Code.ensure_loaded?(Engram.Vector.Qdrant)
       assert function_exported?(Engram.Vector.Qdrant, :collection_name, 0)
     end
   end
 
   describe "scroll/2" do
     test "is a public function with arity 2" do
+      # See collection_name/0 above — without ensure_loaded? this asserts on
+      # module load order, and it went red in CI while the scroll/2 HTTP test
+      # directly below it passed.
+      assert Code.ensure_loaded?(Engram.Vector.Qdrant)
       assert function_exported?(Engram.Vector.Qdrant, :scroll, 2)
     end
 

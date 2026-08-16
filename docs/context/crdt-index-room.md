@@ -4,8 +4,16 @@ _Last verified: 2026-08-15_
 
 **TL;DR:** `{:global, {:crdt_index, vault_id}}`, one `Y.Map` named `filemeta_v0`
 (`path -> %{note_id, type, hash}`), riding the existing per-vault `crdt:` channel as
-`crdt_index_msg`. **Deliberately inert** — nothing writes to it, nothing reads it back, and it must
-**not** opt into the #1152 drain until #1151 gives it a checkpoint.
+`crdt_index_msg`. **This map is AUTHORITATIVE for note paths** as of #1151 step 2 —
+`Engram.Notes.Identity` is the only server-side writer, `Engram.Workers.ProjectVaultIndex`
+reads it and derives the `notes.path_*` columns. Durability shipped in #1151 step 1;
+the #1152 drain is still unwired (step 3). See `crdt-identity-authority.md` for the
+decision, and note that projection must NEVER claim (`rename_note/5` takes
+`index: :skip` for it) or it feeds itself.
+
+No CLIENT writes the map yet (Engram-obsidian#362), so in production it is still
+empty and projection is a no-op — a fact about the client we ship, not about what
+the server accepts.
 
 Shipped: PR #1383 (`feat/crdt-index-room`). Refs #1150, #1146, #1152,
 engram-app/engram-workspace#167.
@@ -113,11 +121,63 @@ can keep growing one doc. The timer is note-keyed (`note_id` threads through its
 `CrdtRoomLru.touch/3` call), so serving the index room means generalising it — that is the real
 fix, and it is tracked rather than papered over with a flag.
 
+## Projection onto the notes rows (#1151 step 2)
+
+`Engram.Workers.ProjectVaultIndex` walks `filemeta_v0` and corrects the row each entry names.
+This is what keeps REST, search and MCP working against a client-owned index — the server answers
+"what is this note's path" from `notes.path_*`, never from Yjs state, exactly as `CrdtCheckpoint`
+projects note CONTENT for the same reason.
+
+**Additive-corrective, and it never acts on absence.** It walks the ENTRIES and fixes the rows they
+name. It does NOT walk the notes asking whether the index still mentions them — a
+reconcile-by-absence implementation would read an empty index as "this vault has no files" and
+delete the vault. It follows that projection can never delete, and never touches a note the index
+does not mention.
+
+**Do not read that as "dormant".** An earlier draft argued the feature was inert because no client
+writes the index yet. That is a claim about the client we ship, not about what the server accepts:
+`crdt_channel.ex`'s `crdt_index_msg` handler relays any well-formed frame from any authenticated
+socket on the vault, with no write gate. With projection live, a client that writes
+`filemeta_v0["x.md"] = {note_id: …}` moves a real note — tombstone at the old path, Qdrant repath,
+link rewrite, `delete` broadcast to every device. User-scoped, so not a tenancy hole, but it is a
+real capability and it exists now. Inertness is a property of the WORKER (empty in, nothing out),
+not of the system.
+
+**Entries interact, so one pass is not enough.** A CHAIN (A wants the path B is vacating) converges
+only if B is applied first — and that is not a coin flip: Erlang small maps iterate in TERM order,
+so entries are visited sorted by target path, which for a chain is reliably the losing order. Small
+vaults hit it every time. The worker therefore re-runs a pass that made progress AND still has
+conflicts, up to 5 times. A SWAP (A wants B's path, B wants A's) cannot converge at all —
+`rename_note/4` has no temp-path staging — so the loop halts on zero progress and reports it.
+
+**A note claimed by two paths is dropped entirely.** Applying both moves it twice per pass, minting
+two tombstones, two seq bumps, two Qdrant repaths and four broadcasts, on every checkpoint forever.
+Projection cannot pick a winner and must not guess.
+
+**What consistency it actually provides:** eventually consistent with the last PERSISTED snapshot.
+The job can execute after a newer room has bound that snapshot and moved on, applying paths the
+live room already superseded; the next checkpoint's run corrects it.
+
+**Through `rename_note/4`, never the columns directly.** That function pre-checks the unique
+`(user, vault, path_hmac)` constraint and answers `{:error, :conflict}` instead of crashing, and it
+carries the Qdrant repath and link-rewrite legs. Writing `path_ciphertext`/`path_nonce`/`path_hmac`
+here would make projection a second path writer against the exactly-one-rewriter invariant, and
+would silently drop both legs.
+
+**A worker, not the checkpoint.** `unbind/3` runs inside `terminate/2` against a shutdown budget; a
+projection pass is N renames, each re-encrypting a path and repathing Qdrant. Doing that in a
+terminating process during a deploy stampede loses the checkpoint AND the projection. The
+checkpoint enqueues after the snapshot is durably written, so the worker can never read a snapshot
+older than the doc that triggered it; per-vault `unique` collapses a storm into one job.
+
+One entry's failure never stops the next — a single collision or stale id would otherwise strand
+every entry behind it. Conflicts and unknown note_ids are logged and skipped: the index and the rows
+disagreeing is not something projection resolves, because the client owns identity.
+
 ## Not in scope here (and why)
 
 | | |
 |---|---|
-| projection to `notes` path columns | #1151 step 2 — goes THROUGH `rename_note`, see below |
 | enabling the idle drain + the wire flag | #1151 step 3 |
 | client adoption, `getManifest` removal | Engram-obsidian#362/#363 (`phase/contract`) |
 | compaction | #1153 — entangled with the #958 checkpoint-union hazard |

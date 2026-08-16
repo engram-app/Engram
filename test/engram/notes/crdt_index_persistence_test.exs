@@ -20,6 +20,7 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
   path exists; "stale is tolerable" is a statement about today.
   """
   use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query, only: [from: 2]
 
@@ -312,6 +313,37 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
       stop_room_and_wait(room)
 
       assert_receive {:ckpt, %{count: 1}, %{phase: :ok}}, 2_000
+    end
+  end
+
+  # Projection is what makes the index usable by REST/search/MCP. Wiring it to
+  # the checkpoint is the only thing that ever triggers it, so the wiring needs
+  # its own assertion — the projection worker's own tests all invoke it directly.
+  describe "projection handoff" do
+    test "a successful checkpoint enqueues the projection for this vault", ctx do
+      room = start_index_room(ctx)
+      put_entry(room, "handoff.md", "note-handoff")
+      stop_room_and_wait(room)
+
+      assert_enqueued(
+        worker: Engram.Workers.ProjectVaultIndex,
+        args: %{user_id: ctx.user.id, vault_id: ctx.vault.id}
+      )
+    end
+
+    test "a skipped checkpoint enqueues nothing", ctx do
+      room = start_index_room(ctx)
+      put_entry(room, "skipped.md", "note-skipped")
+
+      {1, _} =
+        Repo.update_all(
+          from(u in Engram.Accounts.User, where: u.id == ^ctx.user.id),
+          set: [dek_rotation_locked_at: DateTime.utc_now()]
+        )
+
+      stop_room_and_wait(room)
+
+      refute_enqueued(worker: Engram.Workers.ProjectVaultIndex)
     end
   end
 
