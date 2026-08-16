@@ -6,7 +6,7 @@ _Last verified: 2026-08-15_
 (`path -> %{note_id, type, hash}`), riding the existing per-vault `crdt:` channel as
 `crdt_index_msg`. **This map is AUTHORITATIVE for note paths** as of #1151 step 2 —
 `Engram.Notes.Identity` is the only server-side writer, `Engram.Workers.ProjectVaultIndex`
-reads it and derives the `notes.path_*` columns. Durability shipped in #1151 step 1;
+reads it and derives the `notes.path_*` columns. Durability shipped in #1151 step 1, with a per-update tail log in #1391;
 the #1152 drain is still unwired (step 3). See `crdt-identity-authority.md` for the
 decision, and note that projection must NEVER claim (`rename_note/5` takes
 `index: :skip` for it) or it feeds itself.

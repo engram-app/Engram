@@ -126,6 +126,23 @@ discarded return value with a retry, which matters because a release refused
 mid-rotation used to vanish silently and leave one permanent path reservation
 per note.
 
+## The tail log is what makes a claim durable
+
+`vault_index_states` holds a snapshot written when a room EXITS. On its own that
+meant every claim made since the last checkpoint lived only in room memory, so a
+SIGKILL, a node loss or an ECS task replacement dropped committed identity — and
+projection then converged the rows back to the superseded snapshot.
+
+`vault_index_update_log` (#1391) closes it: every update is appended, replayed on
+`bind/3` after the snapshot, and pruned by EXACT id when a checkpoint folds it
+in. Never by a timestamp range — an update appended between the encode and the
+delete is not in the snapshot, and a range prune would drop exactly the claim the
+tail exists to protect.
+
+Durability is reached when the ROOM processes its own update message, not when
+`update_doc/2` returns; `handle_update_v1` is asynchronous. A kill inside that
+window still loses the update, as it does for note rooms.
+
 ## Removals are id-keyed, never path-keyed
 
 Removing an entry by deleting whatever sits at a path clobbers the entry of
