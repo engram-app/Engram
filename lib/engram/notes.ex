@@ -19,11 +19,11 @@ defmodule Engram.Notes do
     CrdtBridge,
     CrdtDeliver,
     CrdtPersistence,
-    Identity,
     CrdtUpdateLog,
     Enqueue,
     Frontmatter,
     Helpers,
+    Identity,
     Note,
     OkfFields,
     PathSanitizer
@@ -2972,19 +2972,66 @@ defmodule Engram.Notes do
   # `target_folder` (a path), rolling the whole batch back on the first failure.
   # move_note_into_folder wraps a path collision as {:error, {:conflict, id}};
   # the bare :not_found from the inner get_note_by_id is tagged with its id here.
+  # Three phases, and the ORDER is the correctness argument.
+  #
+  # The map is the authority for paths and a claim is the commit
+  # (docs/context/crdt-identity-authority.md), but a CRDT op cannot join a
+  # Postgres transaction — so a claim CANNOT be rolled back. The old shape
+  # claimed inside the per-id loop, which meant a batch failing on id 7 had
+  # already committed 1-6 in the authority: the rows rolled back, and the next
+  # projection run moved them anyway. The API reported a failed batch that then
+  # happened regardless.
+  #
+  # So: resolve every id first (nothing committed yet), then claim the whole
+  # batch in ONE atomic call, then derive the rows. Every failure mode that can
+  # abort the batch is detected before anything is committed.
   defp reduce_move_notes(user, vault, ids, target_folder) do
-    ids
-    |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
-      case move_note_into_folder(user, vault, id, target_folder) do
-        {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
-        {:error, {kind, id_err}} -> {:halt, {:rollback, {kind, id_err}}}
-        {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
+    with {:ok, moves} <- resolve_moves(user, vault, ids, target_folder),
+         :ok <- claim_moves(user, vault, moves) do
+      apply_moves(user, vault, moves)
+    else
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp resolve_moves(user, vault, ids, target_folder) do
+    Enum.reduce_while(ids, {:ok, []}, fn id, {:ok, acc} ->
+      case fetch_note_by_id(user, vault, id, :meta) do
+        {:ok, note} -> {:cont, {:ok, [{note, move_target(note, target_folder)} | acc]}}
+        {:error, :not_found} -> {:halt, {:error, {:not_found, id}}}
       end
     end)
     |> case do
-      {:rollback, reason} -> Repo.rollback(reason)
-      acc -> acc
+      {:ok, moves} -> {:ok, Enum.reverse(moves)}
+      err -> err
     end
+  end
+
+  defp move_target(note, ""), do: Path.basename(note.path)
+  defp move_target(note, folder), do: Path.join(folder, Path.basename(note.path))
+
+  defp claim_moves(user, vault, moves) do
+    claims =
+      moves
+      |> Enum.reject(fn {note, new_path} -> note.path == new_path end)
+      |> Enum.map(fn {note, new_path} -> {new_path, note.id} end)
+
+    Identity.claim(user, vault.id, claims)
+  end
+
+  # `index: :skip` because claim_moves/3 already committed the whole batch in
+  # the authority. Row-level conflicts remain possible for a collision INSIDE
+  # the batch (two ids targeting one path), which the claim resolves
+  # last-writer-wins rather than refusing — so this keeps the per-id
+  # `{:conflict, id}` contract as the backstop.
+  defp apply_moves(user, vault, moves) do
+    Enum.reduce_while(moves, %{moved: 0}, fn {note, new_path}, acc ->
+      case rename_note(user, vault, note.path, new_path, index: :skip) do
+        {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
+        {:error, :conflict} -> {:halt, Repo.rollback({:conflict, note.id})}
+        {:error, reason} -> {:halt, Repo.rollback(reason)}
+      end
+    end)
   end
 
   # ---------------------------------------------------------------------------
@@ -3666,29 +3713,6 @@ defmodule Engram.Notes do
   # string, sanitizes the new path, and pre-checks the unique
   # (user, vault, path_hmac) constraint, surfacing {:error, :conflict}
   # instead of crashing on a Postgrex unique_violation.
-  defp move_note_into_folder(user, vault, id, target_folder) do
-    # Meta fetch (#863): only note.path is needed to build the destination —
-    # the previous get_note_by_id decrypted the full content per id, and
-    # rename_note's inner path decrypts the row AGAIN for the re-encrypt.
-    case fetch_note_by_id(user, vault, id, :meta) do
-      {:ok, note} ->
-        new_path =
-          case target_folder do
-            "" -> Path.basename(note.path)
-            folder -> Path.join(folder, Path.basename(note.path))
-          end
-
-        case rename_note(user, vault, note.path, new_path) do
-          {:ok, updated} -> {:ok, updated}
-          {:error, :conflict} -> {:error, {:conflict, id}}
-          {:error, reason} -> {:error, reason}
-        end
-
-      {:error, :not_found} ->
-        {:error, {:not_found, id}}
-    end
-  end
-
   @changes_page_max_limit 500
 
   @doc """
@@ -4936,246 +4960,251 @@ defmodule Engram.Notes do
       real_note_updates =
         Enum.reject(updates, fn {note, _, _, _, _} -> note.kind == "folder" end)
 
-      # One seq for the whole folder-rename op — shared across every touched
-      # row (renamed updates + old-path tombstones). The cascade row-updates
-      # AND the tombstone insert commit in a SINGLE transaction so a
-      # cursor-based pull (`WHERE seq > cursor`) can never observe the renamed
-      # rows at seq S, advance past S, and then miss the tombstones (also S,
-      # excluded by `seq > cursor`) → lost delete / resurrection (#614).
-      # seq is allocated inside the txn that holds the vault row lock; the
-      # tombstone rows are built from in-memory data (no re-query of committed
-      # state) so they fold cleanly into the same transaction.
-      {:ok, _seq} =
-        Repo.with_tenant(user.id, fn ->
-          seq = Engram.Vaults.next_seq!(vault.id)
-
-          # Batched write side: the old shape issued one update_all PER NOTE
-          # (each row carries its own re-encrypted envelopes, so a plain
-          # update_all can't express it). Partition rows by the column set
-          # each class updates and apply each class as chunked
-          # `UPDATE ... FROM (VALUES ...)` statements — column sets are
-          # IDENTICAL to the old per-note set lists:
-          #   markers → folder envelope only;
-          #   AAD-bound v2 notes (#863) → path + folder envelopes only
-          #     (content/tags AADs key on note_id and the basename can't
-          #     change, so re-encrypting content was pure TOAST/WAL churn);
-          #   legacy v1 rows → full rebind (the rename is their upgrade to
-          #     AAD-bound encryption, dek_version stamped to 2).
-          grouped =
-            updates
-            |> Enum.map(fn {note, _old_path, new_path, new_note_folder, new_title} ->
-              case note.kind do
-                "folder" ->
-                  {ct, nonce, hmac} =
-                    folder_only_aad_bound(user, note.id, new_note_folder, note.dek_version)
-
-                  {:marker,
-                   {note.id, [folder_ciphertext: ct, folder_nonce: nonce, folder_hmac: hmac]}}
-
-                _ ->
-                  if note.dek_version == Crypto.row_version_aad_bound() do
-                    {:v2,
-                     {note.id, phase_b_path_folder_for(user, note.id, new_path, new_note_folder)}}
-                  else
-                    {:v1,
-                     {note.id,
-                      full_aad_bound_kw(
-                        user,
-                        note.id,
-                        Map.get(content_by_id, note.id, ""),
-                        new_title,
-                        new_path,
-                        new_note_folder,
-                        note.tags || []
-                      )}}
-                  end
-              end
-            end)
-            |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-
-          # One shared `now` for every row this cascade writes — renamed rows
-          # AND tombstones. The seq feed orders by (seq, id), so same-stamp
-          # runs are harmless. `seq` stays IDENTICAL for every row — the #614
-          # one-op-one-seq contract that keeps a cursor pull from splitting
-          # the renamed rows from their tombstones.
-          marker_rows = stamp_rename_rows(grouped[:marker] || [], now)
-          v2_rows = stamp_rename_rows(grouped[:v2] || [], now)
-          v1_rows = stamp_rename_rows(grouped[:v1] || [], now)
-
-          bulk_rename_update!(marker_rows, @marker_rename_cols, seq)
-          bulk_rename_update!(v2_rows, @v2_rename_cols, seq)
-          bulk_rename_update!(v1_rows, @v1_rename_cols, seq)
-
-          # Insert soft-deleted tombstones for old paths so the seq feed
-          # (list_changes_by_seq — no deleted_at filter) carries delete
-          # signals. Without these, catch-up clients retain stale files at
-          # old paths after a folder rename. Tombstones
-          # are full-row inserts so each must carry the encrypted
-          # path/folder/tags fields too. Marker rows have no path to
-          # tombstone — skip them. Built in-memory from `real_note_updates`,
-          # stamped with the same `seq` and `now` as the renamed rows.
-          tombstones =
-            Enum.map(real_note_updates, fn {_note, old_path, _new_path, _new_folder, _title} ->
-              # T3.6 — pre-allocate the tombstone id so the AAD bind string can
-              # be constructed before insert. Tombstones are full-row inserts
-              # written with empty content/title/tags but the row-id-bound AAD
-              # still applies — keeps tombstones decryptable and indistinguishable
-              # from any other AAD-bound row at read time.
-              tomb_id = mint_id()
-              old_path_folder = Helpers.extract_folder(old_path)
-
-              full_kw =
-                full_aad_bound_kw(user, tomb_id, "", "", old_path, old_path_folder, [])
-
-              base = %{
-                id: tomb_id,
-                content_hash: "",
-                mtime: mtime_float,
-                user_id: user.id,
-                vault_id: vault.id,
-                created_at: now,
-                updated_at: now,
-                deleted_at: now,
-                seq: seq
-              }
-
-              Map.merge(base, Map.new(full_kw))
-            end)
-
-          # Bind the insert_all return; it's no longer the block's tail
-          # expression (the block returns `seq`), so discard explicitly to
-          # satisfy Dialyzer's unmatched_return.
-          _ = Repo.insert_all(Note, tombstones, on_conflict: :nothing)
-
-          seq
-        end)
-
-      # Content for the upsert broadcast (e2e test_34 "received=yes
-      # materialized=no"): the cascade scans meta columns only (#863), so the
-      # `note` struct carries content: nil. Broadcasting that omits the inline
-      # body, forcing receivers to wait ~30-60s for a pull to materialize the
-      # renamed path. Decrypt each renamed note's body once here so the upsert
-      # ships it inline, exactly like do_rename_note. Content is unchanged by a
-      # rename, so the stored content_hash stays consistent with this body.
-      # ponytail: decrypts every renamed note — a very large folder rename pays
-      # O(content) here; accepted vs the pull-latency correctness bug.
-      broadcast_contents =
-        fetch_note_contents(user, Enum.map(real_note_updates, fn {n, _, _, _, _} -> n.id end))
-
-      # Claim every new path for the WHOLE cascade in one call. A folder rename
-      # moves N notes through update_all rather than N rename_note/4 calls, so
-      # it needs its own hook — without it the next projection run drags every
-      # one of them back to its old path. One claim, not N: a single snapshot
-      # rewrite for the cascade, atomic in the authority the way it already is
-      # in Postgres.
+      # Claim every new path for the WHOLE cascade BEFORE any row moves — the
+      # map is the authority and this claim is the commit
+      # (docs/context/crdt-identity-authority.md). Claiming after the rows move
+      # is the dual-write this design replaced: a refused claim would leave the
+      # rows already moved, and projection would revert every one of them.
       #
-      # INVERSION OWED: every other call site claims BEFORE the row moves,
-      # because the claim is the commit (docs/context/crdt-identity-authority.md).
-      # This one still claims after, which leaves the dual-write failure mode on
-      # this path alone: if the claim is refused, the rows have already moved and
-      # projection reverts them. Correct placement is immediately before the
-      # `Repo.with_tenant` below, which needs ~250 lines of this function
-      # re-indented under a `case` — a mechanical change, but not one to make
-      # blind. Tracked as the last step of #1151.
-      _ =
-        Identity.claim(
-          user,
-          vault.id,
-          Enum.map(real_note_updates, fn {n, _old, new_path, _f, _t} -> {new_path, n.id} end)
-        )
+      # ONE claim, not N. A folder rename moves N notes through update_all
+      # rather than N rename_note/4 calls, so it needs its own hook — and doing
+      # it in a single call makes the cascade atomic in the authority the way it
+      # already is in Postgres, at the cost of one snapshot rewrite instead of N.
+      claims =
+        Enum.map(real_note_updates, fn {n, _old, new_path, _f, _t} -> {new_path, n.id} end)
 
-      # Side effects outside the transaction — broadcast + reindex + link
-      # rewrite fan-out. T3.2 — hmac-only args, never plaintext.
-      # Marker rows have no path / no embedding / no basename, skip everything.
-      Enum.each(real_note_updates, fn {note, old_note_path, new_path, new_note_folder, _title} ->
-        old_path_hmac = old_path_hmac_b64!(user, old_note_path)
+      case Identity.claim(user, vault.id, claims) do
+        {:error, reason} ->
+          {:error, reason}
 
-        _ =
-          Enqueue.enqueue(
-            Engram.Workers.RepathNoteIndex.new_debounced(note.id,
-              old_path_hmac: old_path_hmac
-            ),
-            "repath_note_index"
-          )
+        :ok ->
+          # One seq for the whole folder-rename op — shared across every touched
+          # row (renamed updates + old-path tombstones). The cascade row-updates
+          # AND the tombstone insert commit in a SINGLE transaction so a
+          # cursor-based pull (`WHERE seq > cursor`) can never observe the renamed
+          # rows at seq S, advance past S, and then miss the tombstones (also S,
+          # excluded by `seq > cursor`) → lost delete / resurrection (#614).
+          # seq is allocated inside the txn that holds the vault row lock; the
+          # tombstone rows are built from in-memory data (no re-query of committed
+          # state) so they fold cleanly into the same transaction.
+          {:ok, _seq} =
+            Repo.with_tenant(user.id, fn ->
+              seq = Engram.Vaults.next_seq!(vault.id)
 
-        # #648/#1231 Phase 3 — a folder rename is N note renames (basename
-        # unchanged), so each moved note reuses the Phase 1 rewrite job
-        # verbatim: qualified [[old-folder/…]] occurrences get the new
-        # prefix; bare [[basename]] occurrences plan no edit (idempotence
-        # guard in Rewriter.plan_edits/5). Old-path recovery = the tombstone
-        # this very cascade inserted in the same transaction — no ciphertext
-        # args. Origin safety is by construction: the plugin never calls the
-        # folder-rename REST surface (it renames per-file over CRDT, which
-        # Phase 2 gates), so every caller here is web/MCP and must rewrite.
-        # Gated on a real move: the idempotent same-folder branch of
-        # rename_folder_gated reaches this loop with old == new.
-        _ =
-          if old_note_path != new_path do
-            Enqueue.enqueue(
-              RewriteNoteLinks.new_for(
+              # Batched write side: the old shape issued one update_all PER NOTE
+              # (each row carries its own re-encrypted envelopes, so a plain
+              # update_all can't express it). Partition rows by the column set
+              # each class updates and apply each class as chunked
+              # `UPDATE ... FROM (VALUES ...)` statements — column sets are
+              # IDENTICAL to the old per-note set lists:
+              #   markers → folder envelope only;
+              #   AAD-bound v2 notes (#863) → path + folder envelopes only
+              #     (content/tags AADs key on note_id and the basename can't
+              #     change, so re-encrypting content was pure TOAST/WAL churn);
+              #   legacy v1 rows → full rebind (the rename is their upgrade to
+              #     AAD-bound encryption, dek_version stamped to 2).
+              grouped = group_rename_updates(user, updates, content_by_id)
+
+              # One shared `now` for every row this cascade writes — renamed rows
+              # AND tombstones. The seq feed orders by (seq, id), so same-stamp
+              # runs are harmless. `seq` stays IDENTICAL for every row — the #614
+              # one-op-one-seq contract that keeps a cursor pull from splitting
+              # the renamed rows from their tombstones.
+              marker_rows = stamp_rename_rows(grouped[:marker] || [], now)
+              v2_rows = stamp_rename_rows(grouped[:v2] || [], now)
+              v1_rows = stamp_rename_rows(grouped[:v1] || [], now)
+
+              bulk_rename_update!(marker_rows, @marker_rename_cols, seq)
+              bulk_rename_update!(v2_rows, @v2_rename_cols, seq)
+              bulk_rename_update!(v1_rows, @v1_rename_cols, seq)
+
+              # Insert soft-deleted tombstones for old paths so the seq feed
+              # (list_changes_by_seq — no deleted_at filter) carries delete
+              # signals. Without these, catch-up clients retain stale files at
+              # old paths after a folder rename. Tombstones
+              # are full-row inserts so each must carry the encrypted
+              # path/folder/tags fields too. Marker rows have no path to
+              # tombstone — skip them. Built in-memory from `real_note_updates`,
+              # stamped with the same `seq` and `now` as the renamed rows.
+              tombstones =
+                Enum.map(real_note_updates, fn {_note, old_path, _new_path, _new_folder, _title} ->
+                  # T3.6 — pre-allocate the tombstone id so the AAD bind string can
+                  # be constructed before insert. Tombstones are full-row inserts
+                  # written with empty content/title/tags but the row-id-bound AAD
+                  # still applies — keeps tombstones decryptable and indistinguishable
+                  # from any other AAD-bound row at read time.
+                  tomb_id = mint_id()
+                  old_path_folder = Helpers.extract_folder(old_path)
+
+                  full_kw =
+                    full_aad_bound_kw(user, tomb_id, "", "", old_path, old_path_folder, [])
+
+                  base = %{
+                    id: tomb_id,
+                    content_hash: "",
+                    mtime: mtime_float,
+                    user_id: user.id,
+                    vault_id: vault.id,
+                    created_at: now,
+                    updated_at: now,
+                    deleted_at: now,
+                    seq: seq
+                  }
+
+                  Map.merge(base, Map.new(full_kw))
+                end)
+
+              # Bind the insert_all return; it's no longer the block's tail
+              # expression (the block returns `seq`), so discard explicitly to
+              # satisfy Dialyzer's unmatched_return.
+              _ = Repo.insert_all(Note, tombstones, on_conflict: :nothing)
+
+              seq
+            end)
+
+          # Content for the upsert broadcast (e2e test_34 "received=yes
+          # materialized=no"): the cascade scans meta columns only (#863), so the
+          # `note` struct carries content: nil. Broadcasting that omits the inline
+          # body, forcing receivers to wait ~30-60s for a pull to materialize the
+          # renamed path. Decrypt each renamed note's body once here so the upsert
+          # ships it inline, exactly like do_rename_note. Content is unchanged by a
+          # rename, so the stored content_hash stays consistent with this body.
+          # ponytail: decrypts every renamed note — a very large folder rename pays
+          # O(content) here; accepted vs the pull-latency correctness bug.
+          broadcast_contents =
+            fetch_note_contents(user, Enum.map(real_note_updates, fn {n, _, _, _, _} -> n.id end))
+
+          # Side effects outside the transaction — broadcast + reindex + link
+          # rewrite fan-out. T3.2 — hmac-only args, never plaintext.
+          # Marker rows have no path / no embedding / no basename, skip everything.
+          Enum.each(real_note_updates, fn {note, old_note_path, new_path, new_note_folder, _title} ->
+            old_path_hmac = old_path_hmac_b64!(user, old_note_path)
+
+            _ =
+              Enqueue.enqueue(
+                Engram.Workers.RepathNoteIndex.new_debounced(note.id,
+                  old_path_hmac: old_path_hmac
+                ),
+                "repath_note_index"
+              )
+
+            # #648/#1231 Phase 3 — a folder rename is N note renames (basename
+            # unchanged), so each moved note reuses the Phase 1 rewrite job
+            # verbatim: qualified [[old-folder/…]] occurrences get the new
+            # prefix; bare [[basename]] occurrences plan no edit (idempotence
+            # guard in Rewriter.plan_edits/5). Old-path recovery = the tombstone
+            # this very cascade inserted in the same transaction — no ciphertext
+            # args. Origin safety is by construction: the plugin never calls the
+            # folder-rename REST surface (it renames per-file over CRDT, which
+            # Phase 2 gates), so every caller here is web/MCP and must rewrite.
+            # Gated on a real move: the idempotent same-folder branch of
+            # rename_folder_gated reaches this loop with old == new.
+            _ =
+              if old_note_path != new_path do
+                Enqueue.enqueue(
+                  RewriteNoteLinks.new_for(
+                    user.id,
+                    vault.id,
+                    :note,
+                    note.id,
+                    old_path_hmac,
+                    Base.encode64(Links.basename_hmac(user, Links.basename_key(old_note_path)))
+                  ),
+                  "rewrite_note_links"
+                )
+              end
+
+            # #976: carry the moved note's id on the old-path delete leg. The note
+            # still exists (same id, new path, upsert leg below), so receivers can
+            # correlate the delete+upsert pair by id instead of resolving by path
+            # mid-relocation — the ambiguity window the resurrection bug lived in.
+            #
+            # Emit the new-path upsert BEFORE the old-path delete: the receiver
+            # must relocate the note's id to the new path first, so the delete
+            # reads as a relocation leg (id now lives elsewhere) instead of
+            # tearing the note's CRDT room down by id before the new path can
+            # materialize from it (e2e test_34 "received=yes materialized=no").
+            #
+            # Root cause of a dropped CRDT rebind on cross-tab folder rename: the
+            # 4-arity clause below carries no `id`, so a client's id-keyed
+            # `useNote(id)` cache never invalidates and its editor stays bound to
+            # the pre-rename CRDT doc path. Pass the note (id included) through
+            # the 6-arity clause instead, same as single-note rename does.
+            :ok =
+              broadcast_change(
                 user.id,
                 vault.id,
-                :note,
-                note.id,
-                old_path_hmac,
-                Base.encode64(Links.basename_hmac(user, Links.basename_key(old_note_path)))
-              ),
-              "rewrite_note_links"
-            )
-          end
+                "upsert",
+                new_path,
+                %{
+                  note
+                  | path: new_path,
+                    folder: new_note_folder,
+                    content: Map.get(broadcast_contents, note.id)
+                },
+                []
+              )
 
-        # #976: carry the moved note's id on the old-path delete leg. The note
-        # still exists (same id, new path, upsert leg below), so receivers can
-        # correlate the delete+upsert pair by id instead of resolving by path
-        # mid-relocation — the ambiguity window the resurrection bug lived in.
-        #
-        # Emit the new-path upsert BEFORE the old-path delete: the receiver
-        # must relocate the note's id to the new path first, so the delete
-        # reads as a relocation leg (id now lives elsewhere) instead of
-        # tearing the note's CRDT room down by id before the new path can
-        # materialize from it (e2e test_34 "received=yes materialized=no").
-        #
-        # Root cause of a dropped CRDT rebind on cross-tab folder rename: the
-        # 4-arity clause below carries no `id`, so a client's id-keyed
-        # `useNote(id)` cache never invalidates and its editor stays bound to
-        # the pre-rename CRDT doc path. Pass the note (id included) through
-        # the 6-arity clause instead, same as single-note rename does.
-        :ok =
-          broadcast_change(
-            user.id,
-            vault.id,
-            "upsert",
-            new_path,
-            %{
-              note
-              | path: new_path,
-                folder: new_note_folder,
-                content: Map.get(broadcast_contents, note.id)
-            },
-            []
-          )
+            :ok = broadcast_change(user.id, vault.id, "delete", old_note_path, note.id, [])
+          end)
 
-        :ok = broadcast_change(user.id, vault.id, "delete", old_note_path, note.id, [])
-      end)
+          # #1231 — bulk rebind fan-out: ONE RebindNoteLinks per DISTINCT moved
+          # basename (old and new basename keys are equal on a folder move, so
+          # this is do_rename_note_inner's dedup-when-equal rule at folder
+          # scale). Closes what the text rewrite can't: bare-link winners whose
+          # shortest-path tiebreak flipped with the move, and pre-typed danglers
+          # waiting on the NEW qualified path.
+          real_note_updates
+          |> Enum.filter(fn {_n, old_p, new_p, _f, _t} -> old_p != new_p end)
+          |> Enum.map(fn {_n, old_p, _np, _f, _t} ->
+            Links.basename_hmac(user, Links.basename_key(old_p))
+          end)
+          |> Enum.uniq()
+          |> Enum.each(fn hmac ->
+            _ =
+              Enqueue.enqueue(
+                RebindNoteLinks.new_for(user.id, vault.id, hmac),
+                "rebind_note_links"
+              )
+          end)
 
-      # #1231 — bulk rebind fan-out: ONE RebindNoteLinks per DISTINCT moved
-      # basename (old and new basename keys are equal on a folder move, so
-      # this is do_rename_note_inner's dedup-when-equal rule at folder
-      # scale). Closes what the text rewrite can't: bare-link winners whose
-      # shortest-path tiebreak flipped with the move, and pre-typed danglers
-      # waiting on the NEW qualified path.
-      real_note_updates
-      |> Enum.filter(fn {_n, old_p, new_p, _f, _t} -> old_p != new_p end)
-      |> Enum.map(fn {_n, old_p, _np, _f, _t} ->
-        Links.basename_hmac(user, Links.basename_key(old_p))
-      end)
-      |> Enum.uniq()
-      |> Enum.each(fn hmac ->
-        _ = Enqueue.enqueue(RebindNoteLinks.new_for(user.id, vault.id, hmac), "rebind_note_links")
-      end)
-
-      {:ok, length(notes)}
+          {:ok, length(notes)}
+      end
     end
+  end
+
+  # Extracted from `do_rename_folder/6` so the claim above it can guard the row
+  # writes without pushing this past the nesting limit. Pure: partitions the
+  # cascade's rows by which column set each class rewrites.
+  defp group_rename_updates(user, updates, content_by_id) do
+    updates
+    |> Enum.map(fn {note, _old_path, new_path, new_note_folder, new_title} ->
+      case note.kind do
+        "folder" ->
+          {ct, nonce, hmac} =
+            folder_only_aad_bound(user, note.id, new_note_folder, note.dek_version)
+
+          {:marker, {note.id, [folder_ciphertext: ct, folder_nonce: nonce, folder_hmac: hmac]}}
+
+        _ ->
+          if note.dek_version == Crypto.row_version_aad_bound() do
+            {:v2, {note.id, phase_b_path_folder_for(user, note.id, new_path, new_note_folder)}}
+          else
+            {:v1,
+             {note.id,
+              full_aad_bound_kw(
+                user,
+                note.id,
+                Map.get(content_by_id, note.id, ""),
+                new_title,
+                new_path,
+                new_note_folder,
+                note.tags || []
+              )}}
+          end
+      end
+    end)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
   end
 
   @doc """

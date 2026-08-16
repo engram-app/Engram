@@ -84,6 +84,13 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     end
   end
 
+  # The PERSISTED entries, which is what a claim has to land in when no room is
+  # live — reading the live room instead would not prove the snapshot was written.
+  defp index_entries(ctx) do
+    {:ok, doc} = Engram.Notes.CrdtIndexPersistence.load_doc(ctx.user, ctx.vault.id)
+    doc |> Yex.Doc.get_map(CrdtIndexDoc.map_name()) |> Yex.Map.to_map()
+  end
+
   defp tenant_index_ciphertext(ctx) do
     {:ok, row} =
       Repo.with_tenant(ctx.user.id, fn ->
@@ -242,6 +249,42 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
 
       assert path_of(ctx, n.id) == "Old/rot.md",
              "the row must not move when its claim was refused"
+    end
+
+    # The cascade used to claim AFTER its rows moved, which is the dual-write
+    # ordering this design replaced. A refused claim then left N rows already
+    # moved and projection reverted every one of them.
+    test "a folder rename whose claim is refused moves no rows", ctx do
+      a = note(ctx, "Src/a.md")
+      squatter = note(ctx, "elsewhere.md")
+
+      # The authority says Dst/a.md belongs to another note, while no ROW holds
+      # it — so only the claim can catch this. A row-level check cannot.
+      seed_index(ctx, [{"Src/a.md", a.id}, {"Dst/a.md", squatter.id}])
+
+      assert {:error, :conflict} = Notes.rename_folder(ctx.user, ctx.vault, "Src", "Dst")
+
+      assert path_of(ctx, a.id) == "Src/a.md",
+             "the cascade moved rows even though its claim was refused"
+    end
+
+    # The batch used to claim per id INSIDE the loop, so a batch failing on a
+    # later id had already committed the earlier ones in the authority: the rows
+    # rolled back and the next projection run moved them anyway. The API
+    # reported a failed batch that then happened regardless.
+    test "a batch move that fails claims nothing", ctx do
+      a = note(ctx, "a.md")
+      seed_index(ctx, [{"a.md", a.id}])
+
+      missing = Ecto.UUID.generate()
+
+      assert {:error, {:not_found, ^missing}} =
+               Notes.batch_move_notes(ctx.user, ctx.vault, [a.id, missing], {:path, "Dst"})
+
+      assert path_of(ctx, a.id) == "a.md"
+
+      refute Map.has_key?(index_entries(ctx), "Dst/a.md"),
+             "a rolled-back batch left a claim behind, which projection would then apply"
     end
 
     test "a folder rename cascade is mirrored for every note it moved", ctx do
