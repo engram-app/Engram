@@ -212,12 +212,15 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       refute read_live(room, "Old/live.md")
     end
 
-    # #1341, reintroduced in new code and caught by re-review. The snapshot path
-    # encrypts, and users.encrypted_dek holds the OLD wrapped dek until
-    # final_flip — so a mid-rotation write lands an unreadable blob on a row the
-    # sweep already re-wrapped. Skipping risks a revert; writing loses the index
-    # permanently.
-    test "the snapshot write path is skipped during a DEK rotation", ctx do
+    # #1341. The snapshot path encrypts, and users.encrypted_dek holds the OLD
+    # wrapped dek until final_flip — so a mid-rotation write lands a blob no
+    # surviving key can read, on a row the sweep already re-wrapped.
+    #
+    # Under map-authority the claim IS the commit, so this cannot be
+    # skipped-and-continued the way a derived side effect could: the rename
+    # fails outright. Half-applying it — row moved, authority not updated — is
+    # precisely the state projection would then REVERT.
+    test "a rename during a DEK rotation fails instead of half-applying", ctx do
       n = note(ctx, "Old/rot.md")
       seed_index(ctx, [{"Old/rot.md", n.id}])
 
@@ -230,10 +233,15 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
         )
 
       user = Repo.get!(Engram.Accounts.User, ctx.user.id)
-      {:ok, _} = Notes.rename_note(user, ctx.vault, "Old/rot.md", "New/rot.md")
+
+      assert {:error, :rotation_in_progress} =
+               Notes.rename_note(user, ctx.vault, "Old/rot.md", "New/rot.md")
 
       assert tenant_index_ciphertext(ctx) == before,
-             "a mid-rotation write-back must not touch the snapshot"
+             "a refused claim must not touch the snapshot"
+
+      assert path_of(ctx, n.id) == "Old/rot.md",
+             "the row must not move when its claim was refused"
     end
 
     test "a folder rename cascade is mirrored for every note it moved", ctx do

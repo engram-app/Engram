@@ -19,6 +19,7 @@ defmodule Engram.Notes do
     CrdtBridge,
     CrdtDeliver,
     CrdtPersistence,
+    Identity,
     CrdtUpdateLog,
     Enqueue,
     Frontmatter,
@@ -2324,16 +2325,45 @@ defmodule Engram.Notes do
   Renames a note to a new path. Sanitizes the new path, updates folder and title.
   Returns {:ok, updated_note} or {:error, :not_found}.
   """
-  @spec rename_note(map(), map(), String.t(), String.t()) ::
-          {:ok, Note.t()} | {:error, :not_found | :conflict}
-  def rename_note(user, vault, old_path, new_path) do
+  @spec rename_note(map(), map(), String.t(), String.t(), keyword()) ::
+          {:ok, Note.t()} | {:error, :not_found | :conflict | term()}
+  def rename_note(user, vault, old_path, new_path, opts \\ []) do
     new_path = PathSanitizer.sanitize(new_path)
     new_folder = Helpers.extract_folder(new_path)
     now = DateTime.utc_now()
 
-    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         :ok <- claim_rename(user, vault, old_path, new_path, opts) do
       do_rename_note(user, vault, old_path, new_path, new_folder, now)
     end
+  end
+
+  # The `filemeta_v0` map owns which note is at which path, and the path columns
+  # are DERIVED from it (docs/context/crdt-identity-authority.md). So a rename
+  # claims the path first — that is the commit — and the row follows. Claiming
+  # after the row moves is the dual-write this design replaced, whose failure
+  # mode is projection silently REVERTING a completed rename.
+  #
+  # `index: :skip` exists for exactly one caller: ProjectVaultIndex, which is
+  # deriving rows FROM the map and would otherwise feed itself. Claiming is the
+  # DEFAULT so that a new call site is fail-safe rather than fail-silent.
+  defp claim_rename(user, vault, old_path, new_path, opts) do
+    if Keyword.get(opts, :index, :claim) == :skip or old_path == new_path do
+      :ok
+    else
+      case note_id_at(user, vault, old_path) do
+        # No note there. do_rename_note reports :not_found for it — claiming a
+        # path for a note that does not exist would put a lie in the authority.
+        nil -> :ok
+        note_id -> Identity.claim(user, vault.id, [{new_path, note_id}])
+      end
+    end
+  end
+
+  defp note_id_at(user, vault, path) do
+    {:ok, query} = note_by_path_query(user, vault, path)
+    {:ok, note} = Repo.with_tenant(user.id, fn -> Repo.one(query) end)
+    note && note.id
   end
 
   defp do_rename_note(user, vault, old_path, new_path, new_folder, now) do
@@ -2409,17 +2439,6 @@ defmodule Engram.Notes do
         # path columns directly", but "don't move a note without telling the
         # index".
         #
-        # A JOB, not an inline call, and specifically because of this call site:
-        # `batch_move_notes/4` drives rename_note/4 in a loop inside ONE
-        # transaction, and an inline write into a live index room is not
-        # something a rollback can undo. The enqueue joins the transaction and
-        # rolls back with it. See SyncVaultIndex.
-        _ =
-          Enqueue.enqueue(
-            Engram.Workers.SyncVaultIndex.new_for(user.id, vault.id, [note.id]),
-            "sync_vault_index"
-          )
-
         :ok = broadcast_change(user.id, vault.id, "upsert", note.path, decrypted, [])
         :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
         {:ok, decrypted}
@@ -2683,16 +2702,17 @@ defmodule Engram.Notes do
             "delete_note_index"
           )
 
-        # Drop the index entry too. Projection never resurrects a deleted note
-        # (get_note_by_id is scoped_live, so the entry just reads as an unknown
-        # note) — but a stale entry then warns and counts as `unresolved` on
-        # every checkpoint forever, which is how a real disagreement gets lost
-        # in noise.
-        _ =
-          Enqueue.enqueue(
-            Engram.Workers.SyncVaultIndex.new_for(user.id, vault.id, [note.id]),
-            "sync_vault_index"
-          )
+        # Release the note's claim on its path. Projection never resurrects a
+        # deleted note (get_note_by_id is scoped_live, so the entry reads as an
+        # unknown note) — but a stale entry then warns and counts as
+        # `unresolved` on every checkpoint forever, which is how a real
+        # disagreement gets lost in noise.
+        #
+        # After the row is gone, not before: releasing is not a commit the way
+        # claiming is. A release that fails leaves a stale entry, which is
+        # noise; a release that lands while the delete then fails would strand a
+        # live note with no path in the authority.
+        _ = Identity.release(user, vault.id, [note.id])
 
         broadcast_change(user.id, vault.id, "delete", path, note.id, opts)
       end
@@ -5042,20 +5062,26 @@ defmodule Engram.Notes do
       broadcast_contents =
         fetch_note_contents(user, Enum.map(real_note_updates, fn {n, _, _, _, _} -> n.id end))
 
-      # Dual-write the index for the WHOLE cascade in one call (#1146 decision
-      # 4). A folder rename moves N notes through update_all rather than N
-      # rename_note/4 calls, so it needs its own hook — without it the next
-      # projection run would try to drag every one of them back to its old path.
-      # One job, not N: SyncVaultIndex rewrites the snapshot once for the whole
-      # cascade.
+      # Claim every new path for the WHOLE cascade in one call. A folder rename
+      # moves N notes through update_all rather than N rename_note/4 calls, so
+      # it needs its own hook — without it the next projection run drags every
+      # one of them back to its old path. One claim, not N: a single snapshot
+      # rewrite for the cascade, atomic in the authority the way it already is
+      # in Postgres.
+      #
+      # INVERSION OWED: every other call site claims BEFORE the row moves,
+      # because the claim is the commit (docs/context/crdt-identity-authority.md).
+      # This one still claims after, which leaves the dual-write failure mode on
+      # this path alone: if the claim is refused, the rows have already moved and
+      # projection reverts them. Correct placement is immediately before the
+      # `Repo.with_tenant` below, which needs ~250 lines of this function
+      # re-indented under a `case` — a mechanical change, but not one to make
+      # blind. Tracked as the last step of #1151.
       _ =
-        Enqueue.enqueue(
-          Engram.Workers.SyncVaultIndex.new_for(
-            user.id,
-            vault.id,
-            Enum.map(real_note_updates, fn {n, _old, _new, _f, _t} -> n.id end)
-          ),
-          "sync_vault_index"
+        Identity.claim(
+          user,
+          vault.id,
+          Enum.map(real_note_updates, fn {n, _old, new_path, _f, _t} -> {new_path, n.id} end)
         )
 
       # Side effects outside the transaction — broadcast + reindex + link

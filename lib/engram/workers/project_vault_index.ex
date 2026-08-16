@@ -304,7 +304,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
   end
 
   defp rename(user, vault, note, path, vault_id) do
-    case Notes.rename_note(user, vault, note.path, path) do
+    case Notes.rename_note(user, vault, note.path, path, index: :skip) do
       {:ok, _note} ->
         :applied
 
