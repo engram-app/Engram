@@ -226,10 +226,12 @@ defmodule Engram.NotesTest do
       assert log =~ "KeyError"
     end
 
-    # The counterpart: a DB error's message is the database's own text, and the
-    # SQLSTATE is the single most useful thing in this line. Allowlisted types
-    # keep their message so the type filter does not cost us the diagnosis.
-    test "process_batch_entry_rescued/3 keeps a database error's message" do
+    # The counterpart. Postgrex.Error is NOT allowlisted — its message quotes
+    # the offending value, and it also renders the SQL and the Postgres DETAIL
+    # ("Failing row contains (…)"), which is the whole row. It is rendered
+    # structurally instead, from fields that are codes rather than values, so
+    # the SQLSTATE a responder greps for survives without the row.
+    test "process_batch_entry_rescued/3 keeps a database error's codes, not its text" do
       entry = %{
         path: "poison.md",
         input_path: "poison.md",
@@ -251,7 +253,9 @@ defmodule Engram.NotesTest do
           end)
         end)
 
-      assert log =~ "bigint out of range"
+      assert log =~ "22003"
+      assert log =~ "numeric_value_out_of_range"
+      refute log =~ "bigint out of range"
     end
 
     test "process_batch_entry_rescued/3 passes through a non-raising fn untouched" do

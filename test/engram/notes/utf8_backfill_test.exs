@@ -169,6 +169,26 @@ defmodule Engram.Notes.Utf8BackfillTest do
   # version), which is why this pins the invariants rather than driving the
   # branch end to end.
   describe "note content cannot reach the backfill's failure log" do
+    # The one test that exercises the FIX. Reverting format_reason/1 used to
+    # leave every other test in this block green, because they all measured
+    # Ecto's Inspect impl and the cast list rather than the function that
+    # actually drops the content-bearing shape.
+    test "format_reason/1 drops the %Note{} the version_conflict tuple carries" do
+      secret = "Dear diary, the biopsy came back positive."
+      note = %Note{content: secret, title: "Biopsy results", path: "Medical/biopsy.md"}
+
+      # The struct really does inspect its plaintext, so this measures the
+      # filter rather than an empty base.
+      assert inspect(note) =~ "biopsy"
+
+      assert Utf8Backfill.format_reason({:error, :version_conflict, note}) == "version_conflict"
+    end
+
+    # ...and the catch-all still renders the shapes that are safe and useful.
+    test "format_reason/1 still renders a plain error reason" do
+      assert Utf8Backfill.format_reason({:error, :not_found}) =~ "not_found"
+    end
+
     test "a changeset built from note attrs carries no plaintext", %{user: user, vault: vault} do
       secret = "Dear diary, the biopsy came back positive."
 

@@ -194,6 +194,11 @@ defmodule Engram.Notes.Utf8Backfill do
   # (An earlier version of this comment claimed dialyzer had proved changesets
   # unreachable. It had not — it only rejected a clause ORDER. Wrong, and
   # recorded here so it is not re-derived.)
-  defp format_reason({:error, :version_conflict, _note}), do: "version_conflict"
-  defp format_reason(other), do: inspect(other)
+  # Public only so a test can exercise it. Round 5 reverted this function
+  # entirely and the whole "note content cannot reach the backfill's failure
+  # log" block stayed green — every assertion in it measured Ecto's Inspect
+  # impl and the cast list, and nothing called this.
+  @doc false
+  def format_reason({:error, :version_conflict, _note}), do: "version_conflict"
+  def format_reason(other), do: inspect(other)
 end

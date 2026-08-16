@@ -6,7 +6,14 @@ defmodule EngramWeb.Router do
 
     plug :put_secure_browser_headers, %{
       "x-content-type-options" => "nosniff",
-      "x-frame-options" => "DENY"
+      "x-frame-options" => "DENY",
+      # Phoenix's put_secure_defaults/1 always emits a CSP, and its default is
+      # `frame-ancestors 'self'` — which per CSP Level 2 section 7.4.1
+      # SUPERSEDES the x-frame-options DENY set right above it. Left implicit,
+      # this pipeline claimed DENY and got 'self'. These routes answer JSON, so
+      # nothing here is framable anyway; the point is that the header and the
+      # effective policy now agree.
+      "content-security-policy" => "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
     }
   end
 
@@ -19,7 +26,14 @@ defmodule EngramWeb.Router do
   pipeline :api_any_accept do
     plug :put_secure_browser_headers, %{
       "x-content-type-options" => "nosniff",
-      "x-frame-options" => "DENY"
+      "x-frame-options" => "DENY",
+      # Phoenix's put_secure_defaults/1 always emits a CSP, and its default is
+      # `frame-ancestors 'self'` — which per CSP Level 2 section 7.4.1
+      # SUPERSEDES the x-frame-options DENY set right above it. Left implicit,
+      # this pipeline claimed DENY and got 'self'. These routes answer JSON, so
+      # nothing here is framable anyway; the point is that the header and the
+      # effective policy now agree.
+      "content-security-policy" => "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
     }
   end
 
