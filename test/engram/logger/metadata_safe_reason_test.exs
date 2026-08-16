@@ -17,6 +17,14 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
 
   @secret "Dear diary, the biopsy came back positive."
 
+  # `String.to_integer(@secret)` on a literal makes the compiler prove the call
+  # fails and emit "the call to binary_to_integer/1 will fail with a 'badarg'
+  # exception" — which --warnings-as-errors turns into a CI failure. It compiled
+  # clean locally only because _build was warm and these files were already
+  # built; CI compiles fresh. Routing through Enum.random/1 hides the value's
+  # type from the compiler while returning exactly it.
+  defp opaque_secret, do: Enum.random([@secret])
+
   # Every one of these renders inspect(term) in its message/1, and every one is
   # reachable from a rescue that has note content in scope.
   describe "exceptions that inspect a term contribute their class only" do
@@ -144,7 +152,7 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
       # Raised for real so the stacktrace is BEAM's, not a fixture.
       {:error, stacktrace} =
         try do
-          String.to_integer(@secret)
+          String.to_integer(opaque_secret())
         rescue
           _ -> {:error, __STACKTRACE__}
         end
@@ -176,7 +184,7 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
     test "an exception+stacktrace exit does not carry the arguments" do
       {:error, stacktrace} =
         try do
-          String.to_integer(@secret)
+          String.to_integer(opaque_secret())
         rescue
           _ -> {:error, __STACKTRACE__}
         end
