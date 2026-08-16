@@ -9,7 +9,7 @@ defmodule Engram.Notes.CrdtCheckpointTimerTest do
   """
   use ExUnit.Case, async: true
 
-  alias Engram.Notes.CrdtCheckpointTimer
+  alias Engram.Notes.{CrdtCheckpointTimer, CrdtRegistry}
 
   # Eager < settle so the eager path is observable; ceiling well above both.
   @cfg %{settle_ms: 1_000, ceiling_ms: 5_000, eager_ms: 100}
@@ -19,6 +19,62 @@ defmodule Engram.Notes.CrdtCheckpointTimerTest do
       Map.merge(@cfg, %{last_activity_at: nil, first_dirty_at: nil}),
       Map.new(overrides)
     )
+  end
+
+  # #1152's remaining half. The timer was note-keyed — `note_id` was a
+  # `Keyword.fetch!` and threaded through the LRU call and every log line — so
+  # the per-vault index room could not use it at all, and stayed bounded only by
+  # `auto_exit` on the last observer, i.e. session-length.
+  #
+  # These are behavioural rather than pure: what matters is that a timer with no
+  # note at all still arms, still drains, and does NOT try to checkpoint a note.
+  describe "index mode — a vault-keyed room (#1152)" do
+    setup do
+      # A stand-in for the room. The timer links to it, so it must outlive the
+      # timer rather than being a bare self().
+      room = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(room, :kill) end)
+      %{room: room, vault_id: Ecto.UUID.generate(), user_id: Ecto.UUID.generate()}
+    end
+
+    test "an index-mode timer drains its room without a note_id", ctx do
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(ctx.vault_id))
+
+      {:ok, _timer} =
+        CrdtCheckpointTimer.start_link(
+          room_pid: ctx.room,
+          user_id: ctx.user_id,
+          vault_id: ctx.vault_id,
+          mode: :index,
+          idle_exit_ms: 50
+        )
+
+      assert_receive {:crdt_room_drain, room}, 2_000
+      assert room == ctx.room
+    end
+
+    # The index checkpoint has to run from `unbind/3`, not from a tick. Only the
+    # room's own persistence state knows which tail rows failed to replay, and
+    # pruning without that list destroys exactly the claims the tail exists to
+    # protect. So the drain is the mechanism here: observers let go, auto_exit
+    # fires, terminate checkpoints with the right state.
+    test "an index-mode tick does not attempt a note checkpoint", ctx do
+      {:ok, timer} =
+        CrdtCheckpointTimer.start_link(
+          room_pid: ctx.room,
+          user_id: ctx.user_id,
+          vault_id: ctx.vault_id,
+          mode: :index,
+          idle_exit_ms: 60_000
+        )
+
+      # A note-mode tick would call CrdtCheckpoint against a nil note_id and
+      # crash. Drive one directly rather than waiting for the scheduler.
+      send(timer, :tick)
+      Process.sleep(100)
+
+      assert Process.alive?(timer), "the index timer died trying to checkpoint a note"
+    end
   end
 
   describe "compute_delay/2 — eager first flush" do

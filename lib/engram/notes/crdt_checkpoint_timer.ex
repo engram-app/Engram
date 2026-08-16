@@ -117,7 +117,12 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     room_pid = Keyword.fetch!(opts, :room_pid)
     user_id = Keyword.fetch!(opts, :user_id)
     vault_id = Keyword.fetch!(opts, :vault_id)
-    note_id = Keyword.fetch!(opts, :note_id)
+
+    # `:note` (default) keys off note_id and checkpoints on every tick.
+    # `:index` keys off vault_id and NEVER ticks a checkpoint — see
+    # `do_checkpoint/1`. Defaulting keeps every existing note call site literal.
+    mode = Keyword.get(opts, :mode, :note)
+    room_key = if mode == :index, do: vault_id, else: Keyword.fetch!(opts, :note_id)
 
     cfg = Application.get_env(:engram, __MODULE__, [])
     settle_ms = Keyword.get(cfg, :settle_ms, @default_settle_ms)
@@ -136,7 +141,8 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
       room_pid: room_pid,
       user_id: user_id,
       vault_id: vault_id,
-      note_id: note_id,
+      mode: mode,
+      room_key: room_key,
       settle_ms: settle_ms,
       ceiling_ms: ceiling_ms,
       eager_ms: eager_ms,
@@ -169,9 +175,11 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     now = monotonic_ms()
     {delay, first_dirty_at} = compute_delay(state, now)
 
-    # Cancel any existing settle timer and re-arm it.
+    # Cancel any existing settle timer and re-arm it. Not armed at all in
+    # :index mode — `do_checkpoint/1` is a no-op there, so a settle tick would
+    # be a timer scheduled to do nothing.
     _ = if state.settle_timer, do: Process.cancel_timer(state.settle_timer)
-    timer = Process.send_after(self(), :tick, delay)
+    timer = if state.mode == :index, do: nil, else: Process.send_after(self(), :tick, delay)
 
     {:noreply,
      touch_lru(
@@ -219,7 +227,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
               # denominator an operator reads this metric through.
               Logger.warning(
                 "crdt drain broadcast failed: #{inspect(reason)}",
-                Engram.Logger.Metadata.with_category(:warning, :sync, note_id: state.note_id)
+                Engram.Logger.Metadata.with_category(:warning, :sync, room_key: state.room_key)
               )
 
               :request_failed
@@ -252,7 +260,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   # for both normal and abnormal room exits without leaving an orphaned timer.
   @impl true
   def handle_info({:EXIT, _room_pid, _reason}, state) do
-    if state.idle_exit_ms, do: CrdtRoomLru.forget(state.note_id)
+    if state.idle_exit_ms, do: CrdtRoomLru.forget(state.room_key)
     {:stop, :normal, state}
   end
 
@@ -266,7 +274,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   # room in the LRU and left it evictable: half-disabled, in the one direction
   # nothing would notice, since eviction bypasses `idle?/2` on purpose.
   defp touch_lru(%{idle_exit_ms: ms} = state) when is_integer(ms) and ms > 0 do
-    CrdtRoomLru.touch(state.note_id, state.room_pid, state.vault_id)
+    CrdtRoomLru.touch(state.room_key, state.room_pid, state.vault_id)
     state
   end
 
@@ -378,6 +386,14 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
 
   defp arm_idle(state), do: state
 
+  # An index room's checkpoint MUST come from `CrdtIndexPersistence.unbind/3`,
+  # never from a tick here. Only the room's own persistence state knows which
+  # tail rows failed to replay (`:unfolded_ids`), and a checkpoint that prunes
+  # without that list deletes exactly the claims the tail log exists to protect
+  # (#1391). So the drain is the whole mechanism for this room: observers let
+  # go, `auto_exit` fires, and `terminate/2` checkpoints with the right state.
+  defp do_checkpoint(%{mode: :index}), do: :ok
+
   defp do_checkpoint(%{room_pid: room_pid} = state) do
     # Capture the row version BEFORE snapshotting the doc so it never exceeds the
     # version the snapshot reflects (#902 fence). A REST/MCP write committing
@@ -387,10 +403,10 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     # nil on read failure is NOT an unfenced write (it was, before #1360). The
     # version CAS is layered ON TOP of `snapshot_fence/2`, which applies to every
     # checkpoint write path unconditionally. nil just drops the extra layer.
-    captured_version = CrdtCheckpoint.current_version(state.user_id, state.note_id)
+    captured_version = CrdtCheckpoint.current_version(state.user_id, state.room_key)
     doc = Yex.Sync.SharedDoc.get_doc(room_pid)
 
-    CrdtCheckpoint.checkpoint(state.user_id, state.vault_id, state.note_id, doc,
+    CrdtCheckpoint.checkpoint(state.user_id, state.vault_id, state.room_key, doc,
       captured_version: captured_version
     )
   rescue
@@ -410,8 +426,8 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
 
   defp log_read_failure(state, reason) do
     Logger.warning(
-      "crdt checkpoint timer could not fetch doc note_id=#{state.note_id} reason=#{inspect(reason)}",
-      Engram.Logger.Metadata.with_category(:warning, :sync, note_id: state.note_id)
+      "crdt checkpoint timer could not fetch doc room_key=#{state.room_key} reason=#{inspect(reason)}",
+      Engram.Logger.Metadata.with_category(:warning, :sync, room_key: state.room_key)
     )
   end
 
