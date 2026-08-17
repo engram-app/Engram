@@ -213,36 +213,23 @@ async def test_deaf_live_bound_note_converges_via_socket_replay(vault_b, cdp_b, 
     # `post_wedge` so the live-bind step's own pre-wedge open-heal line can't
     # satisfy them.
     #
-    # Scoped by note_id OR path, for one release only.
+    # Scoped by note_id, not by path.
     #
-    # The plugin stopped printing vault paths in client logs: a path names the
+    # The plugin does not print vault paths in client logs: a path names the
     # sensitive fact (`Medical/`, `Divorce 2026/`) without anyone reading the
     # note, and client logs land in CloudWatch and Loki outside the per-user
-    # encryption boundary. The replacement scope is note_id — opaque, and the
-    # identity the CRDT layer actually keys on, so it also survives a rename.
-    #
-    # Both are accepted because the two repos cannot land together: this PR's
-    # e2e runs against plugin `main` (still path), while the paired plugin PR's
-    # e2e runs against backend `main` (this file). Asserting on note_id alone
-    # deadlocks the pair; asserting on path alone reverts the privacy fix.
-    #
-    # CONTRACT once Engram-obsidian#436 is merged: drop `any_of` and pass
-    # `note_id_x` as a plain needle. Verified green as a pair by dispatching
-    # verify.yml with `-f plugin_branch=fix/no-paths-in-logs`.
+    # encryption boundary. note_id is opaque, and it is the identity the CRDT
+    # layer actually keys on — so unlike a path it also survives a rename.
     wait_for_client_log(api_sync, "gap-heal fired", timeout=CRDT_TIMEOUT, after=post_wedge)
     wait_for_client_log(
-        api_sync,
-        "socket converge",
-        timeout=CRDT_TIMEOUT,
-        after=post_wedge,
-        any_of=(note_id_x, path_x),
+        api_sync, "socket converge", note_id_x, timeout=CRDT_TIMEOUT, after=post_wedge
     )
     wait_for_client_log(
         api_sync,
         "socket converge: STEP2 committed",
+        note_id_x,
         timeout=CRDT_TIMEOUT,
         after=post_wedge,
-        any_of=(note_id_x, path_x),
     )
     logs = api_sync.get_logs(limit=1000).get("logs", [])
     rest_lines = [
