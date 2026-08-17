@@ -176,6 +176,41 @@ describe("useEngramTree", () => {
 		await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
 	});
 
+	// A background write (e.g. a device_type sync touch) can bump `updated_at`
+	// without bumping `version`. The "Modified" sort reads `updated_at`
+	// (loader.ts sortNotes), so the fingerprint has to catch a timestamp-only
+	// change too, or the visible sort order goes stale after a no-op-looking
+	// refetch.
+	it("rebuilds when only updated_at changes (sort order can depend on it)", async () => {
+		const qc = new QueryClient();
+		const { result } = renderHook(() => useEngramTree({ ...baseDeps, qc }));
+		const spy = vi.spyOn(result.current.tree, "rebuildTree");
+
+		const note: NoteSummary = {
+			id: "n1",
+			path: "Projects/n1.md",
+			title: "n1",
+			folder: "Projects",
+			tags: [],
+			version: 1,
+			mtime: "",
+			created_at: "",
+			updated_at: "2026-08-17T00:00:00Z",
+		};
+		act(() => {
+			qc.setQueryData(["folder-notes-by-id", "v", "1"], [note]);
+		});
+		await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+
+		act(() => {
+			qc.setQueryData(
+				["folder-notes-by-id", "v", "1"],
+				[{ ...note, updated_at: "2026-08-17T00:05:00Z" }],
+			);
+		});
+		await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+	});
+
 	it('rebuilds the tree when the root note list (by-id "root") changes', async () => {
 		const qc = new QueryClient();
 		const { result } = renderHook(() => useEngramTree({ ...baseDeps, qc }));

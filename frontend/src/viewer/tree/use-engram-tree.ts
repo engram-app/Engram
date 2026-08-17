@@ -13,7 +13,12 @@ import { useTree } from "@headless-tree/react";
 import type { QueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef } from "react";
-import { type AttachmentSummary, type Folder, type NoteSummary, ROOT_FOLDER_ID } from "../../api/queries";
+import {
+	type AttachmentSummary,
+	type Folder,
+	type NoteSummary,
+	ROOT_FOLDER_ID,
+} from "../../api/queries";
 import { resolveDropMove } from "./drop-redirect";
 import { buildLoader, type LoaderItem, type SortKey } from "./loader";
 import { TREE_SLOT_HEIGHT } from "./row-metrics";
@@ -72,8 +77,14 @@ function noteListFingerprint(data: unknown): string {
 	if (!Array.isArray(data)) {
 		return "";
 	}
+	// id/version/path covers identity + content + rename; updated_at/created_at
+	// are ALSO load-bearing even though they never gate identity — sortNotes
+	// (loader.ts) orders "Modified"/"Created" views by them, and a fingerprint
+	// blind to a timestamp-only change (e.g. a background write that bumps
+	// updated_at without bumping version) would skip the rebuild and leave that
+	// sort order stale.
 	return (data as NoteSummary[])
-		.map((n) => `${n.id}:${n.version}:${n.path}`)
+		.map((n) => `${n.id}:${n.version}:${n.path}:${n.updated_at}:${n.created_at}`)
 		.sort()
 		.join("|");
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ApiError, api } from "../api/client";
+import { ApiError, api, isNotFound } from "../api/client";
 
 // 'missing' only for a real 404; a transient 5xx/network failure must NOT claim
 // the file is missing (the file exists, storage is just unreachable).
@@ -32,7 +32,7 @@ export default function AttachmentImg({ path, alt }: { path: string; alt?: strin
 					// See attachment-page: the path is the user's folder structure.
 					console.error("attachment image load failed", err);
 				}
-				setError(err instanceof ApiError && err.status === 404 ? "missing" : "failed");
+				setError(isNotFound(err) ? "missing" : "failed");
 			});
 		return () => {
 			cancelled = true;
