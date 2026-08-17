@@ -255,9 +255,21 @@ def wait_for_binary_delivery(
 
 
 def wait_for_client_log(
-    api_sync, *needles: str, timeout: float, after: str | None = None
+    api_sync,
+    *needles: str,
+    timeout: float,
+    after: str | None = None,
+    any_of: tuple[str, ...] = (),
 ) -> None:
     """Poll client logs until one line contains ALL ``needles``.
+
+    ``any_of``, when given, additionally requires AT LEAST ONE of its members
+    on the same line. It exists for backend/plugin migrations where the two
+    repos cannot land in one commit: a backend PR's e2e runs against plugin
+    ``main`` while the plugin PR's e2e runs against backend ``main``, so during
+    a log-format change neither side can assert on the new format alone
+    without deadlocking the other. Assert on both, merge, then contract to the
+    new one. Do NOT reach for it to paper over an oracle that is merely flaky.
 
     Shared by CRDT mechanism-oracle tests (previously duplicated as a local
     ``_wait_for_log``/``_wait_for_heal_log`` in each test file). Logs
@@ -275,7 +287,16 @@ def wait_for_client_log(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         logs = api_sync.get_logs(since=after or "", limit=1000).get("logs", [])
-        if any(all(n in log.get("message", "") for n in needles) for log in logs):
+        for log in logs:
+            message = log.get("message", "")
+            if not all(n in message for n in needles):
+                continue
+            if any_of and not any(n in message for n in any_of):
+                continue
             return
         time.sleep(1)
-    raise TimeoutError(f"no client log containing {needles!r} within {timeout}s")
+    raise TimeoutError(
+        f"no client log containing {needles!r}"
+        + (f" and one of {any_of!r}" if any_of else "")
+        + f" within {timeout}s"
+    )
