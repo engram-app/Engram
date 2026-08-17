@@ -80,6 +80,13 @@ defmodule Engram.Logger.RedactFilter do
   `:logger` primary filter callback.
 
   Returns the event with sensitive metadata values replaced by `[REDACTED]`.
+
+  TOP-LEVEL keys only, and ATOM keys only. `%{req: %URI{path: "/Medical/x.md"}}`
+  and `%{"path" => "/Medical/x.md"}` both pass through untouched. Redacting
+  nested values wholesale would destroy legitimate metadata (`counts: %{...}`),
+  so the boundary is stated rather than widened: call sites must put a sensitive
+  value under a sensitive key at the top level, which is what
+  `Metadata.with_category/3` does.
   Never returns `:stop` or `:ignore` — this filter never drops events.
   """
   def filter(event, _opts) do
@@ -172,7 +179,12 @@ defmodule Engram.Logger.RedactFilter do
   # under-redacting costs a vault path. `mfa`, level and the surrounding words
   # all survive.
   @byte_render ~r{<<[0-9, ]+>>}
-  @separators ["/", "%2F", "%2f"]
+  # Backslash and double-encoded forms included: the comment used to claim "any
+  # separator, encoded or not" while covering only three of them. RFC 3986 also
+  # permits a relative-path `Location` with NO separator at all — a bare
+  # `biopsy.md` still passes, and `:filename` is in @sensitive_keys, so that
+  # remains a known gap rather than a covered one.
+  @separators ["/", "\\", "%2F", "%2f", "%5C", "%5c", "%25"]
 
   defp redact_dependency_message(%{meta: %{mfa: {mod, _, _}}, msg: {:string, msg}} = event)
        when mod in @url_logging_modules and not is_atom(msg) do
@@ -232,11 +244,54 @@ defmodule Engram.Logger.RedactFilter do
   # downstream rather than removing it: `Logger.Formatter` does `Access.get/3`
   # over the metadata, and a struct implements neither Access nor Enumerable —
   # so the formatter raised instead of the filter, which is no better.
+  # OTP puts these on every event itself; the formatter and handlers require
+  # them. Replacing metadata wholesale removed the filter for a different reason
+  # than the crash it was fixing — `Logger.Formatter` needs `:time`.
+  @otp_meta_keys [
+    :pid,
+    :gl,
+    :time,
+    :mfa,
+    :file,
+    :line,
+    :domain,
+    :report_cb,
+    :crash_reason,
+    :initial_call,
+    :registered_name,
+    :ansi_color
+  ]
+
+  # A struct as metadata: keep the class and OTP's own keys, redact every field.
+  #
+  # Key-based redaction cannot work here — `%RuntimeError{message: ...}` has no
+  # key in @sensitive_keys, and that `message` is routinely note content or a
+  # path. Worse, deleting `__struct__` (which the previous version did, to stop
+  # the formatter crashing) turned a term the JSON encoder REFUSED into a clean
+  # encodable map, so this made the exception case strictly worse than before.
+  #
+  # The class name is the diagnostic an operator actually needs — `%KeyError{}`
+  # vs `%Jason.EncodeError{}` — and it cannot carry user data.
+  defp redact(%{__struct__: mod} = meta) do
+    # NOT piped: `:maps.map/2` is (fun, map). Piping the map in gives :badarg —
+    # made that mistake twice in this file, and both times the catch arm below
+    # swallowed it silently and blanked every event. That is the standing cost
+    # of a broad catch, and the reason the tests around it assert POSITIVE
+    # values rather than only absence.
+    redacted =
+      :maps.map(
+        fn k, v -> if k in @otp_meta_keys, do: v, else: @redacted end,
+        Map.delete(meta, :__struct__)
+      )
+
+    Map.put(redacted, :meta_struct, inspect(mod))
+  end
+
   defp redact(meta) do
     # `:maps.map/2` is (fun, map) — NOT pipeable with the map first.
     :maps.map(
       fn k, v -> if MapSet.member?(@sensitive_keys, k), do: @redacted, else: v end,
-      Map.delete(meta, :__struct__)
+      meta
     )
   end
 end

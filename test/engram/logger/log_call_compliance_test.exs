@@ -336,6 +336,15 @@ defmodule Engram.Logger.LogCallComplianceTest do
   def keyword_follows?(graphemes, from) do
     graphemes
     |> Enum.drop(from)
+    # Leading whitespace does not count against the window. `strip_comments/1`
+    # removes comment TEXT but leaves the newline and each line's indentation,
+    # so a two-line comment block at this repo's 10-space log indent puts 33
+    # whitespace characters before the key — past a 40-char window once the key
+    # name is included. Measured gaps of 33, 45 and 91 at `jina.ex:65`,
+    # `rewrite_note_links.ex:337` and `attachments_controller.ex:342`; the
+    # comment claiming "the widest real gap is 25" was measuring the wrong
+    # thing.
+    |> Enum.drop_while(&(&1 in [" ", "\t", "\n", "\r"]))
     |> Enum.take(40)
     |> Enum.join()
     |> then(&Regex.match?(~r/^\s*[a-z_][a-zA-Z0-9_]*:/, &1))
@@ -508,6 +517,27 @@ defmodule Engram.Logger.LogCallComplianceTest do
 
       assert Enum.any?(units, &(&1 =~ "inspect(reason)" and not (&1 =~ "safe_reason("))),
              "comment merged the keys back into one unit: #{inspect(units)}"
+    end
+
+    # A TWO-LINE comment block at this repo's real 10-space log indent.
+    #
+    # `strip_comments/1` removes the comment text but leaves the newline and
+    # each line's indentation, so this puts 33 whitespace characters between
+    # the comma and the key — past a 40-char window once the key name is
+    # counted. The single-short-comment case below was calibrated under the
+    # real threshold and so could not tell a 40-char window from a 400-char
+    # one; three live sites were mis-split while it stayed green.
+    test "a multi-line comment block at real indentation still splits" do
+      args =
+        "\"msg\", Metadata.with_category(:error, :sync, a: inspect(reason)," <>
+          "\n          # first line of explanation" <>
+          "\n          # second line of explanation" <>
+          "\n          message: safe_reason(x))"
+
+      units = units(args)
+
+      assert Enum.any?(units, &(&1 =~ "inspect(reason)" and not (&1 =~ "safe_reason("))),
+             "a real-width comment block merged the keys: #{inspect(units)}"
     end
 
     # Pins `keyword_follows?/2` itself: a comma NOT followed by a key must not

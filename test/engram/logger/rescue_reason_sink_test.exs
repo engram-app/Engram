@@ -259,19 +259,47 @@ defmodule Engram.Logger.RescueReasonSinkTest do
 
     # Struct metadata must be REDACTED, not merely survived. The first fix
     # guarded with `not is_struct(meta)`, which passed it through in clear.
-    test "struct metadata is redacted, not waved through" do
+    # POSITIVE assertions, deliberately.
+    #
+    # The previous version was all `refute`, and the catch arm sets
+    # `meta: %{}` — so "redacted correctly" and "wiped by the fail-closed net"
+    # were indistinguishable to it. Reverting `redact/1` to the raising version
+    # left the ENTIRE 4589-test suite green: the net that makes the bug
+    # survivable is the same net that made it untestable.
+    test "an exception struct keeps its class and loses every field" do
+      secret = "Dear diary, the biopsy came back positive"
+
+      out =
+        RedactFilter.filter(
+          %{level: :warning, msg: {:string, "m"}, meta: %RuntimeError{message: secret}},
+          []
+        )
+
+      # The leak this closes: deleting `__struct__` turned a term the JSON
+      # encoder REFUSED into a clean encodable map carrying `message`.
+      refute inspect(out.meta) =~ "biopsy"
+      # Positive: CLASSIFIED and field-redacted, not blanked by the catch arm.
+      assert out.meta.meta_struct == "RuntimeError"
+      assert out.meta.message == "[REDACTED]"
+      assert out.msg == {:string, "m"}
+    end
+
+    test "a plain map keeps its non-sensitive keys" do
       out =
         RedactFilter.filter(
           %{
             level: :warning,
             msg: {:string, "m"},
-            meta: %URI{path: "/Medical/biopsy.md", query: "cancer prognosis"}
+            meta: %{path: "/Medical/biopsy.md", vault_id: "v-1", note_id: "n-1"}
           },
           []
         )
 
-      refute inspect(out.meta) =~ "Medical"
-      refute inspect(out.meta) =~ "cancer"
+      assert out.meta.path == "[REDACTED]"
+      # The half that distinguishes real redaction from the catch arm wiping
+      # metadata wholesale.
+      assert out.meta.vault_id == "v-1"
+      assert out.meta.note_id == "n-1"
     end
 
     # `rescue` covers only the :error class; OTP removes a THROWING filter
@@ -287,8 +315,13 @@ defmodule Engram.Logger.RescueReasonSinkTest do
 
       assert installed?()
 
-      ev = %{level: :error, msg: {:string, "m"}, meta: %{path: "Medical/x.md"}}
-      assert RedactFilter.filter(ev, []).meta.path == "[REDACTED]"
+      ev = %{level: :error, msg: {:string, "m"}, meta: %{path: "Medical/x.md", vault_id: "v-1"}}
+      out = RedactFilter.filter(ev, [])
+
+      assert out.meta.path == "[REDACTED]"
+      # Positive half: proves redaction still RUNS, rather than the catch arm
+      # having quietly taken over for every event from here on.
+      assert out.meta.vault_id == "v-1"
     end
   end
 
