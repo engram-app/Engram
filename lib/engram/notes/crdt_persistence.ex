@@ -85,7 +85,7 @@ defmodule Engram.Notes.CrdtPersistence do
                   "crdt bind refused: crdt_state decrypt failed for note #{note_id}",
                   Metadata.with_category(:error, :sync,
                     note_id: note_id,
-                    reason: inspect(reason)
+                    reason: Metadata.safe_reason(reason)
                   )
                 )
 
@@ -232,7 +232,7 @@ defmodule Engram.Notes.CrdtPersistence do
 
       {:error, reason} ->
         Logger.error(
-          "crdt_update_log encrypt failed note_id=#{note_id} reason=#{inspect(reason)}",
+          "crdt_update_log encrypt failed note_id=#{note_id} reason=#{Metadata.safe_reason(reason)}",
           Metadata.with_category(:error, :sync, note_id: note_id)
         )
     end
@@ -343,8 +343,11 @@ defmodule Engram.Notes.CrdtPersistence do
 
         {:error, reason} ->
           Logger.warning(
-            "crdt replay_tail decrypt failed note_id=#{note_id} reason=#{inspect(reason)}",
-            Metadata.with_category(:warning, :sync, note_id: note_id, reason: inspect(reason))
+            "crdt replay_tail decrypt failed note_id=#{note_id} reason=#{Metadata.safe_reason(reason)}",
+            Metadata.with_category(:warning, :sync,
+              note_id: note_id,
+              reason: Metadata.safe_reason(reason)
+            )
           )
 
           applied

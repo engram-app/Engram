@@ -203,7 +203,7 @@ defmodule Engram.Logs do
       rescue
         e ->
           Logger.warning(
-            "client log re-emit failed: #{Exception.message(e)}",
+            "client log re-emit failed: #{Metadata.safe_reason(e)}",
             Engram.Logger.Metadata.with_category(:warning, :client, [])
           )
       end

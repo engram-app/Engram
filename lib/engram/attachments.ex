@@ -281,7 +281,12 @@ defmodule Engram.Attachments do
 
           {:error, reason} ->
             require Logger
-            reason_str = inspect(reason)
+            # safe_reason/1, not inspect/1. `storage_key` above is redacted by key, but
+            # this value is not — `:reason` is absent from RedactFilter's set, and it
+            # goes into the message BODY as well, which nothing filters. For legacy
+            # rows `key` is Storage.key/3 = "user/vault/<cleartext path>", so an
+            # ExAws error that echoes the key would print the path.
+            reason_str = Metadata.safe_reason(reason)
 
             Logger.error(
               "attachment storage GET failed: #{reason_str}",
@@ -364,7 +369,7 @@ defmodule Engram.Attachments do
 
               Logger.warning(
                 "delete_attachment: tenant lookup failed",
-                Metadata.with_category(:warning, :sync, reason: inspect(reason))
+                Metadata.with_category(:warning, :sync, reason: Metadata.safe_reason(reason))
               )
 
               {false, nil}
@@ -430,7 +435,7 @@ defmodule Engram.Attachments do
           "Failed to delete blob (row already soft-deleted)",
           Metadata.with_category(:warning, :sync,
             storage_key: storage_key,
-            reason: inspect(reason)
+            reason: Metadata.safe_reason(reason)
           )
         )
 
@@ -1002,7 +1007,7 @@ defmodule Engram.Attachments do
           "Failed to batch-delete blobs (rows already soft-deleted)",
           Metadata.with_category(:warning, :sync,
             key_count: length(storage_keys),
-            reason: inspect(reason)
+            reason: Metadata.safe_reason(reason)
           )
         )
 
@@ -1308,7 +1313,12 @@ defmodule Engram.Attachments do
 
       {:error, reason} ->
         require Logger
-        reason_str = inspect(reason)
+        # safe_reason/1, not inspect/1. `storage_key` above is redacted by key, but
+        # this value is not — `:reason` is absent from RedactFilter's set, and it
+        # goes into the message BODY as well, which nothing filters. For legacy
+        # rows `key` is Storage.key/3 = "user/vault/<cleartext path>", so an
+        # ExAws error that echoes the key would print the path.
+        reason_str = Metadata.safe_reason(reason)
 
         # Reason is inlined into the message (not only metadata) so it's visible
         # in dev too — config/dev.exs strips Logger metadata from the formatter.
@@ -1390,7 +1400,7 @@ defmodule Engram.Attachments do
             "Skipping undecryptable attachment",
             Metadata.with_category(:error, :sync,
               attachment_id: att.id,
-              reason: inspect(reason)
+              reason: Metadata.safe_reason(reason)
             )
           )
 

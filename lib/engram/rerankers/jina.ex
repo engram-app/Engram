@@ -55,7 +55,7 @@ defmodule Engram.Rerankers.Jina do
       {:error, reason} ->
         Logger.warning(
           "Jina reranker failed, falling back to vector scores",
-          Metadata.with_category(:warning, :search, reason: inspect(reason))
+          Metadata.with_category(:warning, :search, reason: Metadata.safe_reason(reason))
         )
 
         None.rerank(query, candidates, top_n)

@@ -132,7 +132,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
         emit_tail(:failed)
 
         Logger.error(
-          "crdt index tail append failed: #{inspect(reason)}",
+          "crdt index tail append failed: #{Metadata.safe_reason(reason)}",
           Metadata.with_category(:error, :sync, user_id: user_id, vault_id: vault_id)
         )
 
@@ -517,7 +517,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
         # Loud: this is the write that makes the index durable at all, and the
         # room is on its way out — there is no later attempt.
         Logger.error(
-          "crdt index checkpoint failed: #{inspect(reason)}",
+          "crdt index checkpoint failed: #{Metadata.safe_reason(reason)}",
           Metadata.with_category(:error, :sync, user_id: user_id, vault_id: vault_id)
         )
 
@@ -614,7 +614,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     emit_tail(phase)
 
     Logger.warning(
-      "crdt index tail row skipped on replay: #{inspect(reason)}",
+      "crdt index tail row skipped on replay: #{Metadata.safe_reason(reason)}",
       Metadata.with_category(:warning, :sync, user_id: user.id, vault_id: vault_id)
     )
 
@@ -674,7 +674,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
       emit_tail(:prune_failed)
 
       Logger.error(
-        "crdt index tail prune failed after a durable checkpoint: #{Exception.message(e)}",
+        "crdt index tail prune failed after a durable checkpoint: #{Metadata.safe_reason(e)}",
         Metadata.with_category(:error, :sync, user_id: user.id, vault_id: vault_id)
       )
 
@@ -704,7 +704,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
 
       {:error, reason} ->
         Logger.error(
-          "crdt index bind could not decrypt the snapshot: #{inspect(reason)}",
+          "crdt index bind could not decrypt the snapshot: #{Metadata.safe_reason(reason)}",
           Metadata.with_category(:error, :sync, vault_id: vault_id)
         )
 

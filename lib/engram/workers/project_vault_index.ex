@@ -141,7 +141,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
       # those as permanent and discarded a vault's projection over a blip.
       {:error, reason} ->
         Logger.error(
-          "vault index projection failed to load, will retry: #{inspect(reason)}",
+          "vault index projection failed to load, will retry: #{Metadata.safe_reason(reason)}",
           Metadata.with_category(:error, :sync, user_id: user.id, vault_id: vault_id)
         )
 
@@ -316,7 +316,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
         # :not_found means the row moved between the id lookup and this call
         # (TOCTOU); the next run sees the new state.
         Logger.warning(
-          "vault index projection could not move a note: #{inspect(reason)}",
+          "vault index projection could not move a note: #{Metadata.safe_reason(reason)}",
           Metadata.with_category(:warning, :sync,
             user_id: user.id,
             vault_id: vault_id,

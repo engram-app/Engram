@@ -117,10 +117,10 @@ defmodule Engram.Workers.CheckpointNote do
                   # row keeps every byte it had. #1341.
                   {:error, reason} ->
                     Logger.warning(
-                      "crdt checkpoint skipped — unreadable snapshot note_id=#{note_id} reason=#{inspect(reason)}",
+                      "crdt checkpoint skipped — unreadable snapshot note_id=#{note_id} reason=#{Metadata.safe_reason(reason)}",
                       Metadata.with_category(:warning, :sync,
                         note_id: note_id,
-                        reason: inspect(reason)
+                        reason: Metadata.safe_reason(reason)
                       )
                     )
 

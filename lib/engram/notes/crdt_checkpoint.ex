@@ -230,7 +230,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
           {:skip, reason} ->
             Logger.warning(
-              "crdt checkpoint skipped — #{inspect(reason)} note_id=#{note_id}",
+              "crdt checkpoint skipped — #{Metadata.safe_reason(reason)} note_id=#{note_id}",
               Metadata.with_category(:warning, :sync, note_id: note_id)
             )
 
@@ -238,7 +238,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
           {:abort, err} ->
             Logger.error(
-              "crdt checkpoint aborted note_id=#{note_id} reason=#{inspect(err)}",
+              "crdt checkpoint aborted note_id=#{note_id} reason=#{Metadata.safe_reason(err)}",
               Metadata.with_category(:error, :sync, note_id: note_id)
             )
 
@@ -247,7 +247,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
       err ->
         Logger.error(
-          "crdt checkpoint failed note_id=#{note_id} reason=#{inspect(err)}",
+          "crdt checkpoint failed note_id=#{note_id} reason=#{Metadata.safe_reason(err)}",
           Metadata.with_category(:error, :sync, note_id: note_id)
         )
 
