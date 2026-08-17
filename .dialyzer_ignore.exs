@@ -7,8 +7,8 @@
   # caller-side `binary()` parameter type fail to match.
   # NOTE: dialyxir 1.4.x line-matches the `@spec` line, not `@doc`. Keep these
   # in sync if you re-order or add lines above the AAD helpers.
-  {"lib/engram/crypto.ex", :contract_supertype, 85},
-  {"lib/engram/crypto.ex", :contract_supertype, 94},
+  {"lib/engram/crypto.ex", :contract_supertype, 86},
+  {"lib/engram/crypto.ex", :contract_supertype, 95},
 
   # `identify_from_blob/1` is intentionally specced as `term()` because callers
   # pass values straight from DB columns (which may be nil) or from arbitrary

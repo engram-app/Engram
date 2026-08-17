@@ -64,7 +64,20 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/workers/repath_note_index.ex",
     "lib/engram/workers/reindex_keyword.ex",
     "lib/engram_web/controllers/search_controller.ex",
-    "lib/engram_web/controllers/notes_controller.ex"
+    "lib/engram_web/controllers/notes_controller.ex",
+    # Second widening, from a deliberate audit of the 311 files the list did
+    # NOT cover rather than from the files a session happened to have open.
+    # `storage/s3.ex` is the one that proved the point: `storage_key:` is in
+    # RedactFilter's key set and came out `[REDACTED]`, while the SAME vault
+    # path rode through unredacted inside `reason:` in the same call. A
+    # key-based redactor cannot catch a value travelling under another name.
+    "lib/engram/storage/",
+    "lib/engram/indexing.ex",
+    "lib/engram/crypto.ex",
+    "lib/engram_web/controllers/attachments_controller.ex",
+    "lib/engram/backfill/",
+    "lib/engram/mcp/",
+    "lib/engram/vaults.ex"
   ]
 
   # Renders a term rather than a label. `e` is in the list because `rescue e ->`
@@ -79,6 +92,13 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # Every `Logger.<level>(...)` call in a file, AND every call to a local log
   # helper, with arguments and line.
   #
+  # `:telemetry.execute/3` is in the list because its third argument is
+  # METADATA that reaches PromEx and Sentry handlers — it is a sink, even though
+  # nothing about the call says "log". `indexing.ex` was putting
+  # `reason: inspect(reason)` into an `encrypt_failed` event and the
+  # Logger-only scan walked straight past it; verified by reverting that line
+  # and watching this test stay green.
+  #
   # The helper half is not optional. `crdt_deliver.ex` reads
   # `log_state_load_failure(note_id, Exception.message(err))` — the unsafe
   # rendering happens at the CALL SITE and the `Logger.` call is one function
@@ -86,7 +106,7 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # reverting that exact line and watching this test stay green.
   defp log_calls(source) do
     Regex.scan(
-      ~r/(?:Logger\.(?:error|warning|warn|info|debug)|log_[a-z_]+|emit_[a-z_]*(?:failure|error))\(/,
+      ~r/(?:Logger\.(?:error|warning|warn|info|debug)|log_[a-z_]+|emit_[a-z_]*(?:failure|error)|:telemetry\.execute)\(/,
       source,
       return: :index
     )

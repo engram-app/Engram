@@ -343,8 +343,11 @@ defmodule EngramWeb.AttachmentsController do
           "Failed to list attachments",
           Engram.Logger.Metadata.with_category(:error, :sync,
             vault_id: vault.id,
-            # noqa: T3.0.6 — Logger metadata only; bounded ExAws error term
-            reason: inspect(reason)
+            # The ExAws 4xx term is the whole response MAP, body included —
+            # the storage key (a vault path) rides in it. The old `noqa` here
+            # called it "bounded", which was true of its size and irrelevant to
+            # its contents.
+            reason: Engram.Logger.Metadata.safe_reason(reason)
           )
         )
 

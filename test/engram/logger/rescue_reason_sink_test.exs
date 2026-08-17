@@ -64,4 +64,46 @@ defmodule Engram.Logger.RescueReasonSinkTest do
     assert line =~ "biopsy",
            "RedactFilter now scrubs :error — safe_reason/1 may be redundant, re-check it"
   end
+
+  # The storage key IS a vault path — `user/vault/Medical/biopsy.md`. It is in
+  # RedactFilter's `@sensitive_keys`, so `storage_key:` metadata comes out
+  # `[REDACTED]`. But the SAME key rides inside the ExAws error term, and
+  # `:reason` is not a sensitive key — so the control was defeated by the value
+  # simply travelling under a different name in the same log call.
+  #
+  # This is what a key-based redactor cannot do on its own, and why the reason
+  # has to be rendered rather than trusted.
+  test "a storage key redacted by name does not leak inside :reason" do
+    key = "u1/v1/Medical/biopsy.md"
+
+    # The shape ExAws hands back for a 4xx: the whole response map.
+    {:error, reason} =
+      ExAws.Request.client_error(
+        %{
+          status_code: 404,
+          body: "<Error><Code>NoSuchKey</Code><Key>#{key}</Key></Error>",
+          headers: []
+        },
+        Jason
+      )
+
+    # The premise: rendering it raw discloses the path the sibling key hides.
+    assert inspect(reason) =~ "Medical"
+
+    meta =
+      Metadata.with_category(:error, :sync,
+        storage_key: key,
+        reason: Metadata.safe_reason(reason)
+      )
+      |> Map.new()
+
+    line = prod_line(meta, "S3.exists? failed")
+    encoded = Jason.encode!(line)
+
+    assert encoded =~ "[REDACTED]", "storage_key should still be redacted by name"
+    refute encoded =~ "Medical"
+    refute encoded =~ "biopsy"
+    # The diagnostic survives: an operator still learns WHICH S3 error it was.
+    assert encoded =~ "NoSuchKey"
+  end
 end
