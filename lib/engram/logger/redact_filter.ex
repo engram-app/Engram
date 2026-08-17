@@ -59,7 +59,13 @@ defmodule Engram.Logger.RedactFilter do
                     :device_code,
                     :authorization_header,
                     :client_secret,
-                    :client_secret_hash
+                    :client_secret_hash,
+                    # Only reachable with a NON-atom value: a real struct is
+                    # handled by `redact/1`'s first clause, which keeps the class
+                    # as `meta_struct`. Anything else carrying this key is a term
+                    # of unknown shape, and letting it through would just move
+                    # the leak the `is_atom/1` guard was added to close.
+                    :__struct__
                   ])
 
   # NOTE: `:reason` is NOT in the sensitive set — many call sites use it
@@ -301,7 +307,15 @@ defmodule Engram.Logger.RedactFilter do
   #
   # The class name is the diagnostic an operator actually needs — `%KeyError{}`
   # vs `%Jason.EncodeError{}` — and it cannot carry user data.
-  defp redact(%{__struct__: mod} = meta) do
+  #
+  # `is_atom(mod)`: a real struct's `__struct__` is always a module, but this
+  # head matches any map carrying that KEY, and `inspect/1` on the value was
+  # unbounded. `%{__struct__: %{note: "<body>"}}` rendered the whole term into
+  # `meta_struct` — a redactor emitting a term rather than a label, which is the
+  # exact defect this PR's call-site guard exists to catch. A non-atom falls
+  # through to the plain clause below, where `__struct__` is not a sanctioned
+  # key and so is redacted like any other unknown value.
+  defp redact(%{__struct__: mod} = meta) when is_atom(mod) do
     # NOT piped: `:maps.map/2` is (fun, map). Piping the map in gives :badarg —
     # made that mistake twice in this file, and both times the catch arm below
     # swallowed it silently and blanked every event. That is the standing cost

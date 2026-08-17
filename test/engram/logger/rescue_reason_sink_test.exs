@@ -293,6 +293,28 @@ defmodule Engram.Logger.RescueReasonSinkTest do
       assert out.meta.gl == self()
     end
 
+    # `meta_struct` was `inspect(mod)` with no guard and no bound, and this head
+    # matches any map carrying the KEY — not only a real struct. So a non-atom
+    # value was rendered into the log verbatim: a redactor emitting a term
+    # rather than a label, which is the defect the call-site guard in
+    # log_call_compliance_test.exs exists to catch.
+    test "a non-atom __struct__ is redacted, not inspected into the line" do
+      out =
+        RedactFilter.filter(
+          %{
+            level: :error,
+            msg: {:string, "m"},
+            meta: %{__struct__: %{note: "Dear diary, the biopsy came back positive"}, time: 1}
+          },
+          []
+        )
+
+      refute inspect(out.meta) =~ "biopsy"
+      assert out.meta.__struct__ == "[REDACTED]"
+      # Not the struct path: there is no class to report, so no label is minted.
+      refute Map.has_key?(out.meta, :meta_struct)
+    end
+
     # Struct metadata must be REDACTED, not merely survived. The first fix
     # guarded with `not is_struct(meta)`, which passed it through in clear.
     # POSITIVE assertions, deliberately.
