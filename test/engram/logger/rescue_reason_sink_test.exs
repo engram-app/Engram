@@ -257,6 +257,42 @@ defmodule Engram.Logger.RescueReasonSinkTest do
       assert installed?(), "the primary filter was removed — all redaction is now off"
     end
 
+    # `@otp_meta_keys` is load-bearing and was shipping unpinned: deleting the
+    # whole list left the suite green.
+    #
+    # OTP merges its own keys INTO struct-shaped metadata, so a struct event
+    # arrives carrying `:pid`, `:time` and `:gl` alongside the struct's fields.
+    # The formatter requires them — replacing metadata wholesale removed the
+    # filter for a different reason than the crash it was fixing.
+    #
+    # Reachability note: `Logger.error("m", %URI{})` raises at the CALL SITE
+    # (the macro cannot take a struct), so only the raw `:logger.log/3` OTP API
+    # reaches the struct clause at all.
+    test "OTP's own metadata keys survive struct redaction" do
+      out =
+        RedactFilter.filter(
+          %{
+            level: :error,
+            msg: {:string, "m"},
+            meta:
+              Map.merge(
+                %{pid: self(), time: 123, gl: self()},
+                Map.from_struct(%URI{path: "/Medical/x.md"})
+              )
+              |> Map.put(:__struct__, URI)
+          },
+          []
+        )
+
+      # The struct's own fields are redacted...
+      assert out.meta.path == "[REDACTED]"
+      assert out.meta.meta_struct == "URI"
+      # ...and OTP's are not, or the formatter breaks downstream.
+      assert out.meta.time == 123
+      assert out.meta.pid == self()
+      assert out.meta.gl == self()
+    end
+
     # Struct metadata must be REDACTED, not merely survived. The first fix
     # guarded with `not is_struct(meta)`, which passed it through in clear.
     # POSITIVE assertions, deliberately.
@@ -331,7 +367,13 @@ defmodule Engram.Logger.RescueReasonSinkTest do
     for {name, raw} <- [
           {"a relative path with no leading slash", "Medical/biopsy.md"},
           {"a percent-encoded key", "bucket%2FMedical%2Fbiopsy.md"},
-          {"a bare bucket/key", "bucket/Medical.md"}
+          {"a bare bucket/key", "bucket/Medical.md"},
+          # Added in response to review, and shipped with nothing holding them:
+          # reverting @separators to its original three entries left the suite
+          # green.
+          {"a backslash-separated path", "Medical\\biopsy.md"},
+          {"a percent-encoded backslash", "Medical%5Cbiopsy.md"},
+          {"a double-encoded separator", "Medical%252Fbiopsy.md"}
         ] do
       test "#{name} is redacted" do
         raw = unquote(raw)
