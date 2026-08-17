@@ -77,11 +77,21 @@ ones — they pass trivially before the fix (nothing claimed at all) and only ea
 their keep afterwards. Both are mutation-proven: dropping the occupied-target
 guard, or claiming for creates, each turns exactly one red.
 
-## Still open
+## The sibling legs, audited — both already correct
 
-`crdt_delete` and `crdt_create_batch` were not audited. `crdt_delete` plausibly
-owes an `Identity.release` for the same reason — a tombstoned note whose entry
-survives keeps a path reserved that nothing can reuse.
+Worth writing down so nobody re-derives it. The obvious next suspicion is that
+`crdt_delete` owes an `Identity.release` for the same reason a rename owes a
+claim (a tombstoned note whose entry survives keeps a path reserved that nothing
+can reuse). It does not:
+
+- **`crdt_delete`** → `Notes.delete_note_by_id/4`, which is a thin wrapper that
+  resolves the id and delegates to `delete_note/4` — the same function the REST
+  path uses, and it already enqueues `Engram.Workers.ReleaseIndexEntries`.
+- **`crdt_create_batch`** → `prepare_create/4` → the same `genesis_crdt_note/5`,
+  so it inherits the claim above with no separate change.
+
+The relocate leg was the only gap, because it is the only one that reached the
+row through a path the REST equivalent does not share.
 
 ## Related
 - `crdt-identity-authority.md` — why the map is the authority
