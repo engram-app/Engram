@@ -140,6 +140,42 @@ describe("useEngramTree", () => {
 		await waitFor(() => expect(spy).toHaveBeenCalled());
 	});
 
+	it("does not rebuild again when a by-id list refetches to the SAME notes", async () => {
+		const qc = new QueryClient();
+		const { result } = renderHook(() => useEngramTree({ ...baseDeps, qc }));
+		const spy = vi.spyOn(result.current.tree, "rebuildTree");
+
+		const note: NoteSummary = {
+			id: "n1",
+			path: "Projects/n1.md",
+			title: "n1",
+			folder: "Projects",
+			tags: [],
+			version: 1,
+			mtime: "",
+			created_at: "",
+			updated_at: "",
+		};
+		act(() => {
+			qc.setQueryData(["folder-notes-by-id", "v", "1"], [note]);
+		});
+		await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+
+		// A reconnect-driven backfill refetch that lands the identical list (the
+		// common no-op case) must not redraw the tree a second time.
+		act(() => {
+			qc.setQueryData(["folder-notes-by-id", "v", "1"], [{ ...note }]);
+		});
+		await new Promise((r) => setTimeout(r, 0));
+		expect(spy).toHaveBeenCalledTimes(1);
+
+		// A genuine change (version bump) still rebuilds.
+		act(() => {
+			qc.setQueryData(["folder-notes-by-id", "v", "1"], [{ ...note, version: 2 }]);
+		});
+		await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+	});
+
 	it('rebuilds the tree when the root note list (by-id "root") changes', async () => {
 		const qc = new QueryClient();
 		const { result } = renderHook(() => useEngramTree({ ...baseDeps, qc }));

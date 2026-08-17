@@ -13,7 +13,7 @@ import { useTree } from "@headless-tree/react";
 import type { QueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef } from "react";
-import { type AttachmentSummary, type Folder, ROOT_FOLDER_ID } from "../../api/queries";
+import { type AttachmentSummary, type Folder, type NoteSummary, ROOT_FOLDER_ID } from "../../api/queries";
 import { resolveDropMove } from "./drop-redirect";
 import { buildLoader, type LoaderItem, type SortKey } from "./loader";
 import { TREE_SLOT_HEIGHT } from "./row-metrics";
@@ -59,6 +59,23 @@ function attachmentsFingerprint(attachments?: AttachmentSummary[]): string {
 		}
 	}
 	return `${attachments.length}:${max}`;
+}
+
+// Cheap content fingerprint for a `folder-notes-by-id` list. A reconnect-driven
+// refetch (backfillStructural) hits EVERY loaded folder, whether or not
+// anything actually changed, and each one is a fresh array from a fresh
+// fetch — a reference check alone can't tell a no-op refetch from a real
+// change. Comparing this fingerprint against the last-seen one (below) lets a
+// no-op refetch skip the rebuild instead of redrawing the whole tree for
+// nothing.
+function noteListFingerprint(data: unknown): string {
+	if (!Array.isArray(data)) {
+		return "";
+	}
+	return (data as NoteSummary[])
+		.map((n) => `${n.id}:${n.version}:${n.path}`)
+		.sort()
+		.join("|");
 }
 
 type TreeLoader = ReturnType<typeof buildLoader>;
@@ -247,6 +264,9 @@ export function useEngramTree(deps: Deps) {
 				treeRef.current?.rebuildTree();
 			});
 		};
+		// Per-folder last-seen fingerprint, scoped to this effect so it resets
+		// cleanly on a vault switch instead of comparing across vaults.
+		const lastFingerprint = new Map<string, string>();
 		const unsubscribe = cache.subscribe((event) => {
 			const key = event.query.queryKey;
 			if (!Array.isArray(key) || key[0] !== "folder-notes-by-id" || key[1] !== deps.vaultId) {
@@ -257,6 +277,14 @@ export function useEngramTree(deps: Deps) {
 			if (event.type === "added" || event.type === "removed") {
 				schedule();
 			} else if (event.type === "updated" && event.action.type === "success") {
+				const keyStr = key.join(":");
+				const fingerprint = noteListFingerprint(event.query.state.data);
+				if (lastFingerprint.get(keyStr) === fingerprint) {
+					// A backfill/reconnect refetch that landed the SAME notes — the
+					// common case on a socket hiccup. Nothing to redraw.
+					return;
+				}
+				lastFingerprint.set(keyStr, fingerprint);
 				schedule();
 			}
 		});
