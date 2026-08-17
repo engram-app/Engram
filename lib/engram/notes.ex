@@ -841,10 +841,15 @@ defmodule Engram.Notes do
 
     with {:ok, canonical_id} <- Ecto.UUID.cast(id),
          {:ok, user} <- Crypto.ensure_user_dek(user),
-         {:ok, path} <- validate_path(path) do
-      sanitized_path = PathSanitizer.sanitize(path)
-      folder = Helpers.extract_folder(sanitized_path)
-
+         {:ok, path} <- validate_path(path),
+         sanitized_path = PathSanitizer.sanitize(path),
+         folder = Helpers.extract_folder(sanitized_path),
+         # BEFORE the row transaction, because a claim IS the commit and the row
+         # follows — see `claim_rename/5`. Claiming after the row moves is the
+         # dual-write whose failure mode is projection silently reverting a
+         # completed rename, which is exactly what this leg used to do.
+         {:ok, claimed?} <-
+           claim_crdt_relocate(user, vault, canonical_id, sanitized_path, opts) do
       # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
       # Unwrap once so the public contract matches the @spec above.
       case Repo.with_tenant(user.id, fn ->
@@ -944,16 +949,104 @@ defmodule Engram.Notes do
           {:adopted, note}
 
         {:ok, inner} ->
-          inner
+          report_genesis_orphan(inner, user, vault, claimed?)
 
         {:error, _} = err ->
-          err
+          report_genesis_orphan(err, user, vault, claimed?)
       end
     else
       :error -> {:error, :invalid_id}
       {:error, _} = err -> err
     end
   end
+
+  # The web app renames and moves EVERY note through `crdt_create`: `queries.ts`
+  # `useRenameNote` calls `crdtCreateNote(id, new_path)` under the comment
+  # "Replaces POST /notes/rename", and a folder drag-move sends one per id at its
+  # new path. So the relocate leg IS a rename and has to claim like one, or the
+  # entry keeps naming the old path and `ProjectVaultIndex` — which walks the
+  # entries and corrects the row each one names — drags the rename back.
+  #
+  # Runs OUTSIDE the row transaction, like `rename_note`: `Identity` warns that a
+  # claim inside one has no durability guarantee, because the tail-log append
+  # rolls back with the transaction while the caller treats the claim as
+  # committed.
+  #
+  # Deliberately NARROWER than the genesis path it guards — only a live id moving
+  # to a free path claims. A claim cannot be rolled back, so claiming for an
+  # operation that then does not happen makes the path permanently unclaimable,
+  # which is worse than the stale entry this fixes:
+  #
+  #   * a first-time create claims nothing. Projection never acts on absence, so
+  #     an unclaimed new note is benign — while `classify_by_id` answering
+  #     `:taken` re-mints a FRESH id, and a claim under the client's id would
+  #     name a row that never exists.
+  #   * an OCCUPIED target is `:id_conflict` below, and claiming for a relocate
+  #     that is about to be refused is the same permanent-unclaimability bug.
+  defp claim_crdt_relocate(user, vault, canonical_id, sanitized_path, opts) do
+    if Keyword.get(opts, :index, :claim) == :skip do
+      {:ok, false}
+    else
+      case Repo.with_tenant(user.id, fn -> classify_by_id(vault, canonical_id) end) do
+        {:ok, {:live, live}} -> claim_if_relocating(user, vault, live, sanitized_path)
+        _ -> {:ok, false}
+      end
+    end
+  end
+
+  defp claim_if_relocating(user, vault, live, sanitized_path) do
+    case same_path?(live, user, sanitized_path) do
+      # Already there: idempotent replay, nothing moves, nothing to claim.
+      {:ok, true} -> {:ok, false}
+      {:ok, false} -> claim_free_target(user, vault, live.id, sanitized_path)
+      {:error, _} = err -> err
+    end
+  end
+
+  # The same row check `decide_claim/5` makes, load-bearing for the same reason:
+  # `Identity.claim/3` sees only collisions recorded IN THE MAP, and in a vault
+  # whose notes predate any client writing it, essentially every collision is
+  # invisible there. A target held by a ROW with no entry would sail through and
+  # strand a durable claim on a path the relocate is about to refuse.
+  defp claim_free_target(user, vault, note_id, new_path) do
+    case note_ids_at(user, vault, [new_path]) do
+      {:error, reason} ->
+        {:error, reason}
+
+      held ->
+        case Map.get(held, new_path) do
+          nil -> claim_one(user, vault, new_path, note_id)
+          ^note_id -> claim_one(user, vault, new_path, note_id)
+          # Occupied by someone else. `genesis_relocate_live` rejects this as
+          # `:id_conflict`; claiming first would outlive the rejection.
+          _other -> {:ok, false}
+        end
+    end
+  end
+
+  # A claim is durable and cannot join the row transaction, so a relocate that
+  # claimed and then failed leaves the authority naming a path the row never
+  # reached. Rare (the row check above closes all but a genuine race), but not
+  # eliminable — so it is counted the way `rename_note` counts it rather than
+  # silently dropped.
+  # Calls `orphan_claim/4` directly rather than reusing `report_orphan_claim/5`.
+  # That helper returns whatever `err` it was handed, so feeding it this path's
+  # `{:error, :id_conflict, note}` widened its inferred return type to include a
+  # 3-tuple — and `rename_note/5`, which shares it, then had a spec dialyzer
+  # called incomplete for a shape it cannot actually return. Widening that spec
+  # to silence the warning would have documented a return value that does not
+  # exist, so the narrow helper stays narrow.
+  defp report_genesis_orphan({:error, reason, _note} = err, user, vault, true) do
+    _ = orphan_claim(user, vault, 1, reason)
+    err
+  end
+
+  defp report_genesis_orphan({:error, reason} = err, user, vault, true) do
+    _ = orphan_claim(user, vault, 1, reason)
+    err
+  end
+
+  defp report_genesis_orphan(result, _user, _vault, _claimed?), do: result
 
   # :none-branch of genesis_crdt_note/4: no row by client id, so route by PATH.
   # note_by_path_query is computed HERE (its only consumer), not at the top of
