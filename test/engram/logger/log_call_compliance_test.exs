@@ -100,9 +100,32 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # Renders a term rather than a label. `e` is in the list because `rescue e ->`
   # is the idiomatic binding and `inspect(e)` was therefore the single most
   # likely shape to appear next — it was missing from the first version.
-  @unsafe ~r/Exception\.(message|format|format_stacktrace)\(|\binspect\((reason|err|error|e|other|term|payload|state|unexpected|result|resp|res)\)/
+  @carriers "reason|err|error|e|other|term|payload|state|unexpected|result|resp|res|changeset|att|note|content"
 
-  @sanctioned ["safe_reason", "safe_exit_reason", "format_location"]
+  # Anchored on `inspect(` REACHING a carrier, not on `inspect(carrier)` exactly.
+  # Review's table of misses was all near-hits on the old shape:
+  #
+  #   inspect(%{outer: %{reason: reason}})   nested in a map
+  #   inspect(reason, limit: 50)             a second argument
+  #   reason |> inspect()                    piped
+  #   inspect reason                         no parens
+  #
+  # Each renders the term just as completely as `inspect(reason)`. `\b` around
+  # each carrier keeps `error_kind` and `note_id` from matching, since `_` is a
+  # word character.
+  @unsafe ~r/Exception\.(message|format|format_stacktrace)\(|\binspect\([^)]{0,120}\b(#{@carriers})\b|\b(#{@carriers})\b\s*\|>\s*inspect\b|\binspect\s+(#{@carriers})\b/
+
+  # `error_kind/1` (Engram.Telemetry) is a label renderer exactly like
+  # `safe_reason/1`: every clause returns an atom or a module — the term itself
+  # when it is already an atom, the tuple TAG, the exception struct name, or
+  # `:other`. `inspect/1` around it therefore renders a label, not the payload.
+  # `prepare_error_kind/1` in crdt_channel delegates straight to it.
+  @sanctioned [
+    "safe_reason",
+    "safe_exit_reason",
+    "format_location",
+    "error_kind"
+  ]
 
   defp in_scope?(path), do: Enum.any?(@content_paths, &String.starts_with?(path, &1))
 
@@ -176,27 +199,76 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # its unsafe sibling. Review flagged it; the fix is that a unit can only
   # vouch for itself.
   def units(args) do
-    interps = balanced_interpolations(args)
-    [strip_interpolations_and_strings(args) | interps]
+    balanced_interpolations(args) ++ metadata_units(args)
   end
 
-  # Every `\#{...}` body in a template.
+  # The non-interpolated leftover, split per `key: value`.
   #
-  # The hand-rolled scanner this replaces ALWAYS RETURNED `[]`. It set depth to
-  # 1 on the `#`, then the very next byte — the `{` of the interpolation itself
-  # — bumped it to 2, so the `depth == 1` push arm could never fire. Since
-  # `strip_interpolations_and_strings/1` then DELETES those spans, the guard was
-  # blind to everything rendered inside a message body: the exact half
-  # `RedactFilter` cannot cover, across 30 live call sites. Caught by reverting
-  # crypto.ex's message-body conversion and watching the suite stay green.
+  # It used to be handed back as ONE string, so one `safe_reason` anywhere in a
+  # keyword list exempted every other key in it — verbatim the sibling-vouching
+  # defect the per-unit split was introduced to fix, just moved. Worse, this
+  # series ENLARGED it: every site converted here now contains the sanctioned
+  # literal, which permanently exempted its whole metadata list. Review measured
+  # 52 of 292 in-scope calls self-exempt, a number that grew because of the fix.
   #
-  # One level of nesting, matching what the strip regex below already handles.
-  # A guard that is regularly WRONG about which spans exist is worse than one
-  # with a stated depth limit.
+  # Split on top-level commas only — a nested `inspect(%{a: 1, b: 2})` or a call
+  # with several arguments must not be torn into fragments that match nothing.
+  defp metadata_units(args) do
+    args
+    |> strip_interpolations_and_strings()
+    |> split_top_level_commas()
+  end
+
+  defp split_top_level_commas(text) do
+    text
+    |> String.graphemes()
+    |> Enum.reduce({[], [], 0}, fn ch, {done, cur, depth} ->
+      cond do
+        ch in ["(", "{", "["] -> {done, [ch | cur], depth + 1}
+        ch in [")", "}", "]"] -> {done, [ch | cur], depth - 1}
+        ch == "," and depth <= 0 -> {[Enum.reverse(cur) |> Enum.join() | done], [], depth}
+        true -> {done, [ch | cur], depth}
+      end
+    end)
+    |> then(fn {done, cur, _} -> [Enum.reverse(cur) |> Enum.join() | done] end)
+  end
+
+  # Every `#{...}` body in a template, at arbitrary nesting depth.
+  #
+  # This is the hand-rolled scanner restored with TWO fixes, having twice been
+  # wrong here:
+  #
+  #   * it seeded depth to 1 on the `#`, then the loop re-read the `{` of `#{`
+  #     and made it 2 — so the `depth == 1` push arm could never fire and this
+  #     returned [] for everything. The guard was blind to every message body.
+  #   * the range stopped at `size - 2`, so the final byte was never visited and
+  #     a template ENDING in `}` — which is most of them — was missed even after
+  #     the seed was fixed.
+  #
+  # The regex that briefly replaced it was worse: `(?:[^{}]|\{[^{}]*\})*` caps
+  # out at one level of nesting, and on two levels the span was not merely
+  # unparsed but ERASED — `strip_interpolations_and_strings/1` failed to strip
+  # it and its string-literal rule then swallowed the text, so it landed in no
+  # unit at all. A counter has no depth limit.
+  defp balanced_interpolations(text) when byte_size(text) < 2, do: []
+
   defp balanced_interpolations(text) do
-    ~r/\#\{((?:[^{}]|\{[^{}]*\})*)\}/
-    |> Regex.scan(text)
-    |> Enum.map(&Enum.at(&1, 1))
+    size = byte_size(text)
+
+    Enum.reduce(0..(size - 1)//1, {[], nil, 0}, fn i, {acc, start, depth} ->
+      two = if i + 2 <= size, do: binary_part(text, i, 2), else: ""
+      char = binary_part(text, i, 1)
+
+      cond do
+        is_nil(start) and two == "\#{" -> {acc, i + 2, 0}
+        is_nil(start) -> {acc, start, depth}
+        char == "{" -> {acc, start, depth + 1}
+        char == "}" and depth == 1 -> {[binary_part(text, start, i - start) | acc], nil, 0}
+        char == "}" -> {acc, start, depth - 1}
+        true -> {acc, start, depth}
+      end
+    end)
+    |> elem(0)
   end
 
   defp strip_interpolations_and_strings(text) do
@@ -276,7 +348,10 @@ defmodule Engram.Logger.LogCallComplianceTest do
           {line, text} <- binding_lines(source),
           not Enum.any?(@sanctioned, &String.contains?(text, &1)),
           not String.starts_with?(String.trim(text), "#"),
-          Regex.match?(~r/^\s*\w*(reason|err|error|msg|message)\w*\s*=\s*/, text),
+          # Any identifier, not just one whose NAME says "reason". `detail =
+          # inspect(reason)` a few lines above a Logger call is the same
+          # indirection and was invisible.
+          Regex.match?(~r/^\s*[a-z_][a-zA-Z0-9_]*\s*=\s*/, text),
           match = Regex.run(@unsafe, text),
           do: "#{file}:#{line} — #{hd(match)} bound to a local"
 

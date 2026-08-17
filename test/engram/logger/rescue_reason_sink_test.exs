@@ -137,6 +137,39 @@ defmodule Engram.Logger.RescueReasonSinkTest do
     assert out =~ "ATTEMPT: 3"
   end
 
+  # Req follows an S3 region redirect BEFORE ExAws sees a status, and hands the
+  # message over as an IOLIST. The previous `when is_binary(msg)` guard made
+  # that a silent skip — the filter simply did not run.
+  test "a Req redirect iolist is scrubbed" do
+    url = "https://bucket.s3.us-west-2.amazonaws.com/u1/v1/Medical/biopsy.md"
+
+    event = %{
+      level: :debug,
+      msg: {:string, ["redirecting to ", url]},
+      meta: %{mfa: {Req.Steps, :redirect, 1}}
+    }
+
+    {:string, out} = RedactFilter.filter(event, []).msg
+
+    refute out =~ "Medical"
+    assert out =~ "redirecting to"
+  end
+
+  # A non-UTF-8 key renders as `<<104, 116, ...>>`, which contains SPACES — so
+  # a `\S+` match stopped at the first one and left the bytes in the line. The
+  # decimals are trivially reversible.
+  test "a byte-rendered key does not survive" do
+    msg =
+      "ExAws: HTTP ERROR: :timeout for URL: " <>
+        inspect(<<104, 116, 116, 112, 58, 47, 47, 120, 47, 255, 46, 109, 100>>) <> " ATTEMPT: 3"
+
+    event = %{level: :warning, msg: {:string, msg}, meta: %{mfa: {ExAws.Request, :r, 7}}}
+    {:string, out} = RedactFilter.filter(event, []).msg
+
+    refute out =~ "109, 100"
+    assert out =~ "ATTEMPT: 3"
+  end
+
   # Our own log lines must not be touched by that rule.
   test "a non-ExAws message with the same words is left alone" do
     msg = "sync failed for URL: internal"

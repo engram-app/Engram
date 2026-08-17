@@ -302,7 +302,7 @@ defmodule Engram.Attachments do
             # safe_reason/1, not inspect/1. `storage_key` above is redacted by key, but
             # this value is not — `:reason` is absent from RedactFilter's set, and it
             # goes into the message BODY as well, which nothing filters. For legacy
-            # rows `key` may be a legacy path-derived value, so an
+            # `key` comes from the storage_key column, so an
             # ExAws error that echoes the key would print the path.
             reason_str = Metadata.safe_reason(reason)
 
@@ -1333,7 +1333,7 @@ defmodule Engram.Attachments do
         # safe_reason/1, not inspect/1. `storage_key` above is redacted by key, but
         # this value is not — `:reason` is absent from RedactFilter's set, and it
         # goes into the message BODY as well, which nothing filters. For legacy
-        # rows `key` may be a legacy path-derived value, so an
+        # `key` comes from the storage_key column, so an
         # ExAws error that echoes the key would print the path.
         reason_str = Metadata.safe_reason(reason)
 

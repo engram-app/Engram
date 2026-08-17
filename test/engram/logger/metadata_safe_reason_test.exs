@@ -221,7 +221,7 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
   # `{:error, :not_found}` is the most common reason shape in this codebase. The
   # tag is safe and useful; the payload is where a %Note{} or a Yjs frame rides.
   describe "tuple reasons keep their tag, drop their payload" do
-    test "the tag renders and the payload does not" do
+    test "the tag renders; a payload that could carry data does not" do
       # Was `":error"`. An all-atom payload is now kept — see the clause above:
       # an atom cannot carry user data, and collapsing `{:error, :not_found}` to
       # a bare ":error" threw away the only useful half. The assertion moved

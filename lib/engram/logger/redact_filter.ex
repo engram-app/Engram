@@ -88,28 +88,38 @@ defmodule Engram.Logger.RedactFilter do
 
   def filter(event, _opts), do: event
 
-  # ExAws logs the object URL itself, and no call-site control can reach it:
+  # Dependencies log URLs that contain the storage key, and no call-site control
+  # in this codebase can reach them. This filter is the only layer between them
+  # and Loki.
   #
-  #     Logger.warning("ExAws: HTTP ERROR: \#{inspect(reason)} for URL: " <>
-  #                    "\#{inspect(safe_url)} ATTEMPT: \#{attempt}")
+  #   ExAws.Request  "ExAws: HTTP ERROR: ... for URL: ..."   (transport errors)
+  #   Req.Steps      ["redirecting to ", location]            (S3 region redirect)
   #
-  # `ExAws.Request.Url.sanitize/2` only URI-ENCODES the path, so the storage key
-  # — `u1/v1/Medical/biopsy.md`, a vault path — survives verbatim. Prod runs at
-  # `:info`, so this shipped on every transport error: exactly the MinIO and
-  # Tigris flakes this system actually has.
+  # Req is the one that bites first: it follows a redirect before ExAws ever
+  # sees a status, and its message is an IOLIST, not a binary.
+  @url_logging_modules [ExAws.Request, Req.Steps]
+
+  # Any scheme-bearing URL, not just the one after `for URL:`. Three shapes
+  # defeated the narrower version:
   #
-  # It is a dependency's MESSAGE BODY, so neither the key-based redaction above
-  # nor the source guard over our own call sites can see it. This filter is the
-  # only layer that sits between it and Loki.
-  #
-  # The URL is replaced rather than the event dropped: the reason and the
-  # attempt number are the diagnostic, and losing "S3 timed out on attempt 3"
-  # to hide a path we can already identify by other means is a bad trade.
-  defp redact_dependency_message(
-         %{meta: %{mfa: {ExAws.Request, _, _}}, msg: {:string, msg}} = event
-       )
-       when is_binary(msg) do
-    %{event | msg: {:string, String.replace(msg, ~r/for URL: \S+/, "for URL: #{@redacted}")}}
+  #   * `Req.Steps` uses different wording entirely
+  #   * ExAws's `debug_requests` line says `Request URL:` (and also carries the
+  #     SigV4 Authorization header and the body) — one config flag away
+  #   * a non-UTF-8 key renders as `<<104, 116, ...>>`, which CONTAINS SPACES,
+  #     so a `\S+` match stopped early and left the bytes behind. `/x.md` was
+  #     recoverable from the decimals.
+  @url_pattern ~r{\S*://\S+|<<[0-9, ]+>>}
+
+  defp redact_dependency_message(%{meta: %{mfa: {mod, _, _}}, msg: {:string, msg}} = event)
+       when mod in @url_logging_modules do
+    # chardata, not a binary: `when is_binary(msg)` was a SILENT SKIP, and an
+    # iolist is exactly what Req hands over.
+    scrubbed =
+      msg
+      |> IO.chardata_to_string()
+      |> String.replace(@url_pattern, @redacted)
+
+    %{event | msg: {:string, scrubbed}}
   end
 
   defp redact_dependency_message(event), do: event
