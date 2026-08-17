@@ -361,4 +361,63 @@ defmodule Engram.Logger.RescueReasonSinkTest do
 
     assert System.monotonic_time(:millisecond) - started < 500
   end
+
+  # The other axis: many small tokens that DO carry separators, so the walk is
+  # actually entered. The first version of this test used separator-free
+  # tokens, which the whole-string pre-check short-circuits — it never reached
+  # the code it claimed to measure and merely duplicated the test below.
+  # Sized just under @max_scrub_bytes so the cap does not short-circuit it
+  # either.
+  test "a separator-dense message under the cap cannot block the caller" do
+    msg = String.duplicate("a/b ", 8_000)
+    event = %{level: :warning, msg: {:string, msg}, meta: %{mfa: {ExAws.Request, :r, 7}}}
+
+    started = System.monotonic_time(:millisecond)
+    RedactFilter.filter(event, [])
+
+    assert System.monotonic_time(:millisecond) - started < 500
+  end
+
+  # Whitespace other than a space must survive: one `/` must not collapse a
+  # whole tab- or newline-delimited line.
+  test "tab and newline separated fields are scrubbed individually" do
+    event = %{
+      level: :warning,
+      msg: {:string, "tab\tMedical/biopsy.md\tkept"},
+      meta: %{mfa: {ExAws.Request, :r, 7}}
+    }
+
+    {:string, out} = RedactFilter.filter(event, []).msg
+
+    refute out =~ "Medical"
+    assert out =~ "tab"
+    assert out =~ "kept"
+  end
+
+  # Pins the whole-string pre-check. Without it every token is walked even when
+  # there is no separator anywhere — the overwhelmingly common case for a
+  # dependency log line.
+  test "a large separator-free message skips the token walk entirely" do
+    msg = String.duplicate("ab ", 400_000)
+    event = %{level: :warning, msg: {:string, msg}, meta: %{mfa: {ExAws.Request, :r, 7}}}
+
+    started = System.monotonic_time(:millisecond)
+    assert %{msg: {:string, ^msg}} = RedactFilter.filter(event, [])
+
+    assert System.monotonic_time(:millisecond) - started < 200
+  end
+
+  # Pins the size cap: past it, fail closed rather than spend unbounded time in
+  # a caller's process. Only two dependency modules reach this rule.
+  test "a pathological separator-bearing message is capped, not walked" do
+    msg = String.duplicate("a/b ", 20_000)
+    assert byte_size(msg) > 32_768
+    event = %{level: :warning, msg: {:string, msg}, meta: %{mfa: {ExAws.Request, :r, 7}}}
+
+    started = System.monotonic_time(:millisecond)
+    {:string, out} = RedactFilter.filter(event, []).msg
+
+    assert out == "[REDACTED]"
+    assert System.monotonic_time(:millisecond) - started < 200
+  end
 end

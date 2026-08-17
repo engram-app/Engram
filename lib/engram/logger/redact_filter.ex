@@ -179,6 +179,7 @@ defmodule Engram.Logger.RedactFilter do
   # under-redacting costs a vault path. `mfa`, level and the surrounding words
   # all survive.
   @byte_render ~r{<<[0-9, ]+>>}
+  @max_scrub_bytes 32_768
   # Backslash and double-encoded forms included: the comment used to claim "any
   # separator, encoded or not" while covering only three of them. RFC 3986 also
   # permits a relative-path `Location` with NO separator at all — a bare
@@ -211,7 +212,7 @@ defmodule Engram.Logger.RedactFilter do
     msg
     |> IO.chardata_to_string()
     |> String.replace(@byte_render, @redacted)
-    |> then(&Regex.replace(~r/\S+/, &1, fn token -> redact_token(token) end))
+    |> scrub_tokens()
   catch
     _, _ -> @redacted
   end
@@ -223,6 +224,34 @@ defmodule Engram.Logger.RedactFilter do
   # Measured 53 ms at 1 KB, 7.1 s at 16 KB, 282 s at 100 KB — and a primary
   # filter runs in the CALLING process, so that is the caller blocked, not a
   # background cost. Same output on every case, 100 KB in under a millisecond.
+  # Cost is per TOKEN, and token count is unbounded — the first perf test only
+  # covered one giant token, which is the shape the OLD quadratic regex choked
+  # on. Measured at 100_000 tokens: `Regex.replace` with a callback 486 ms,
+  # split/map/join 196 ms, and a whole-string pre-check 0 ms when there is no
+  # separator to find. All three are linear; the constants are what matter,
+  # because this runs in the CALLING process.
+  defp scrub_tokens(text) do
+    cond do
+      not String.contains?(text, @separators) ->
+        # The common case: nothing to scrub, so do not walk the tokens at all.
+        text
+
+      byte_size(text) > @max_scrub_bytes ->
+        # Fail closed rather than spend unbounded time in a caller's process on
+        # a pathological line. Only the two dependency modules reach here, and a
+        # 32 KB log line carrying paths is not a diagnostic worth preserving.
+        @redacted
+
+      true ->
+        # `~r/\S+/`, not `String.split(" ")`. Splitting on a literal space drops
+        # tab and newline as delimiters, so one `/` anywhere collapsed a whole
+        # tab-separated dependency line to `[REDACTED]` and took its
+        # diagnostics with it. The callback form is slower per token, but
+        # `@max_scrub_bytes` above already bounds how many tokens can reach it.
+        Regex.replace(~r/\S+/, text, &redact_token/1)
+    end
+  end
+
   defp redact_token(token) do
     if String.contains?(token, @separators), do: @redacted, else: token
   end
