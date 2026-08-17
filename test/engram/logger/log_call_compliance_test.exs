@@ -103,9 +103,15 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # `(?![.\\w])` after each carrier, applied where these are interpolated below.
   # A carrier FOLLOWED BY A FIELD ACCESS is a scalar, not the term:
   # `inspect(note.id)`, `inspect(att.id)`, `inspect(e.__struct__)`,
-  # `inspect(changeset.valid?)`, `inspect(byte_size(content))`. Without it the
-  # per-key split turns `rerankers/jina.ex:65` red for a line that is correct,
-  # which is how a guard earns being switched off.
+  # `inspect(changeset.valid?)`. Without it the per-key split turns
+  # `rerankers/jina.ex:65` red for a line that is correct, which is how a guard
+  # earns being switched off.
+  #
+  # It does NOT exclude a carrier wrapped in a CALL — `inspect(byte_size(content))`
+  # and `inspect(length(result))` are safe and would flag, because `)` is neither
+  # `.` nor a word character. None occur in scope today; if one appears the
+  # answer is to name the wrapper in @sanctioned, not to widen this. An earlier
+  # version of this comment claimed that shape was handled.
   @carriers "reason|err|error|e|other|term|payload|state|unexpected|result|resp|res|changeset|att|note|content"
 
   # Anchored on `inspect(` REACHING a carrier, not on `inspect(carrier)` exactly.
@@ -126,6 +132,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # when it is already an atom, the tuple TAG, the exception struct name, or
   # `:other`. `inspect/1` around it therefore renders a label, not the payload.
   # `prepare_error_kind/1` in crdt_channel delegates straight to it.
+  @doc false
+  def unsafe_pattern, do: @unsafe
+
   @sanctioned [
     "safe_reason",
     "safe_exit_reason",
@@ -150,10 +159,20 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # same, and so would an impostor `error_kind_of/1` returning the raw term.
   def sanctioned?(unit) do
     unit
-    |> String.split("\n")
-    |> Enum.reject(&String.starts_with?(String.trim(&1), "#"))
-    |> Enum.join("\n")
+    |> strip_comments_and_strings()
     |> then(&Regex.match?(~r/\b(#{Enum.join(@sanctioned, "|")})\(/, &1))
+  end
+
+  # Comments and string literals never vouch.
+  #
+  # Line-based rejection only caught a comment on its OWN line, so
+  # `reason: inspect(reason) # prefer safe_reason(e)` was exempt — and a string
+  # literal mentioning the name did the same. Strip from `#` to end-of-line
+  # wherever it appears.
+  defp strip_comments_and_strings(text) do
+    text
+    |> String.replace(~r/"(?:[^"\\]|\\.)*"/, ~s(""))
+    |> String.replace(~r/#(?!\{)[^\n]*/, "")
   end
 
   # Every `Logger.<level>(...)` call in a file, AND every call to a local log
@@ -282,11 +301,24 @@ defmodule Engram.Logger.LogCallComplianceTest do
     |> then(fn {done, cur, _} -> [cur |> Enum.reverse() |> Enum.join() | done] end)
   end
 
+  # Does a `key:` follow this comma, once any comment lines between them are
+  # skipped?
+  #
+  # Without the comment skip, a `# explanation` line between two metadata keys
+  # stopped the split and merged them back into one unit — so a sanctioned key
+  # vouched for its unsafe sibling again, the round-5 defect one comment deeper.
+  # It is the house style here: measured 5 in-scope calls self-exempt for
+  # exactly this reason, including `rerankers/jina.ex:65`, whose own comment
+  # says the request body carries the search QUERY.
+  #
+  # The window is 400 rather than 40 because a skipped comment consumes it. The
+  # widest real comma→key gap in scope is 25, so this is slack, not tuning.
   def keyword_follows?(graphemes, from) do
     graphemes
     |> Enum.drop(from)
-    |> Enum.take(40)
+    |> Enum.take(400)
     |> Enum.join()
+    |> String.replace(~r/^(\s*#[^\n]*\n)+/, "")
     |> then(&Regex.match?(~r/^\s*[a-z_][a-zA-Z0-9_]*:/, &1))
   end
 
@@ -404,6 +436,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
           source = File.read!(file),
           {line, text} <- binding_lines(source),
           not sanctioned?(text),
+          # Strip before matching too: `detail = inspect(reason) <> "safe_reason(e)"`
+          # was clean because the STRING mentioned it.
+          text = strip_comments_and_strings(text),
           not String.starts_with?(String.trim(text), "#"),
           # Any identifier, not just one whose NAME says "reason". `detail =
           # inspect(reason)` a few lines above a Logger call is the same
@@ -446,7 +481,28 @@ defmodule Engram.Logger.LogCallComplianceTest do
              "the unsafe key must be its own unit, got: #{inspect(units)}"
     end
 
-    # Splitting on depth alone would tear this into fragments matching nothing.
+    # A COMMENT between two keys stopped the split and merged them back, so the
+    # sanctioned key vouched for its sibling again. This is the house style —
+    # 5 in-scope calls were self-exempt for exactly this reason.
+    test "a comment line between keys does not merge them" do
+      args =
+        ~s|"msg", Metadata.with_category(:error, :sync, a: inspect(reason),\n  # why we do this\n  b: safe_reason(x))|
+
+      units = units(args)
+
+      assert Enum.any?(units, &(&1 =~ "inspect(reason)" and not (&1 =~ "safe_reason("))),
+             "comment merged the keys back into one unit: #{inspect(units)}"
+    end
+
+    # Pins `keyword_follows?/2` itself: a comma NOT followed by a key must not
+    # split. Previously nothing exercised this — replacing the function with
+    # `true` left the suite green.
+    test "a comma inside an argument list is not a key boundary" do
+      refute keyword_follows?(String.graphemes("inspect(a, b)"), 10)
+      assert keyword_follows?(String.graphemes(", note_id: x"), 1)
+      assert keyword_follows?(String.graphemes(",\n  # a comment\n  note_id: x"), 1)
+    end
+
     test "a comma inside a nested map does not split" do
       units = units(~s|"msg", m: inspect(%{a: 1, b: 2})|)
 
@@ -459,6 +515,12 @@ defmodule Engram.Logger.LogCallComplianceTest do
       assert "inspect(%{k: %{j: %{n: 1}}})" in units(~s|"a=\#{inspect(%{k: %{j: %{n: 1}}})}"|)
     end
 
+    # Pins the scanner's range. It ran to `size - 2` and so never visited the
+    # final byte, missing every template ENDING in `}` — which is most of them.
+    test "an interpolation at the very end of a template is found" do
+      assert balanced_interpolations(~s|a=\#{x}|) == ["x"]
+    end
+
     test "adjacent interpolations are separate units" do
       units = units(~s|"\#{a} and \#{b}"|)
 
@@ -467,11 +529,31 @@ defmodule Engram.Logger.LogCallComplianceTest do
     end
   end
 
+  # Pins `(?![.\w])`. Without it a field access on a carrier is flagged, and
+  # `rerankers/jina.ex:65` — correct code — goes red. That is the "flags safe
+  # code, gets switched off" failure.
+  describe "@unsafe carrier boundary" do
+    test "a field access on a carrier is not a leak" do
+      for safe <- ["inspect(note.id)", "inspect(e.__struct__)", "inspect(att.id)"] do
+        refute Regex.match?(unsafe_pattern(), safe), "false positive on #{safe}"
+      end
+    end
+
+    test "the bare carrier still is" do
+      for leak <- ["inspect(reason)", "inspect(e)", "reason |> inspect()", "inspect reason"] do
+        assert Regex.match?(unsafe_pattern(), leak), "missed #{leak}"
+      end
+    end
+  end
+
   describe "sanctioned?/1" do
-    test "vouches only for a CALL, never a key name or a comment" do
+    test "vouches only for a CALL, never a key name, comment or string" do
       refute sanctioned?("error_kind: inspect(reason)")
-      refute sanctioned?("# use safe_reason here\n raw: inspect(reason)")
       refute sanctioned?("error_kind_of(reason)")
+      # Comment stripping: these DO contain `safe_reason(`, so they pin it.
+      refute sanctioned?("# use safe_reason(e) here\n raw: inspect(reason)")
+      refute sanctioned?(~s|raw: inspect(reason) # prefer safe_reason(e)|)
+      refute sanctioned?(~s|raw: inspect(reason) <> "see safe_reason(e)"|)
 
       assert sanctioned?("reason: Metadata.safe_reason(reason)")
       assert sanctioned?("inspect(Engram.Telemetry.error_kind(reason))")

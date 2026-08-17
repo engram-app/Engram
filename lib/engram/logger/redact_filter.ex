@@ -82,11 +82,34 @@ defmodule Engram.Logger.RedactFilter do
   Returns the event with sensitive metadata values replaced by `[REDACTED]`.
   Never returns `:stop` or `:ignore` — this filter never drops events.
   """
-  def filter(%{meta: meta} = event, _opts) when is_map(meta) do
+  def filter(event, _opts) do
+    do_filter(event)
+  catch
+    # A PRIMARY filter that raises — or throws, or exits — is DELETED by OTP,
+    # node-wide, for the life of the VM. That would disable this entire scrub
+    # (content, title, path, tokens), so the wrapper belongs around everything,
+    # not around the one helper that happened to be under review.
+    #
+    # `redact/1` was the live route: `is_map/1` is true for a STRUCT, and
+    # `Map.new(meta, ...)` raises `Protocol.UndefinedError` for any struct
+    # without an `Enumerable` impl. `:logger.log(:warning, "x", %URI{})` removed
+    # the filter and every subsequent path, token and note body went out in
+    # clear. `%MapSet{}` does implement Enumerable, which is why a casual probe
+    # misses it.
+    #
+    # `catch _, _` rather than `rescue`: Elixir's `rescue` only covers the
+    # :error class, and OTP removes a throwing filter exactly like a raising
+    # one.
+    _, _ -> %{event | meta: %{}, msg: {:string, @redacted}}
+  end
+
+  # Structs are excluded explicitly as well as caught, so the ordinary path
+  # stays exact rather than relying on the net above.
+  defp do_filter(%{meta: meta} = event) when is_map(meta) and not is_struct(meta) do
     %{event | meta: redact(meta)} |> redact_dependency_message()
   end
 
-  def filter(event, _opts), do: event
+  defp do_filter(event), do: event
 
   # Dependencies log URLs that contain the storage key, and no call-site control
   # in this codebase can reach them. This filter is the only layer between them
@@ -120,7 +143,19 @@ defmodule Engram.Logger.RedactFilter do
   # `/bucket/u1/v1/Medical/biopsy.md`, with no scheme, and a scheme-anchored
   # pattern left it untouched. ExAws runs on Req here (config/config.exs →
   # Engram.Aws.ReqClient), so that shape is live for S3 and MinIO.
-  @url_pattern ~r{\S*://\S+|/\S*/\S+|<<[0-9, ]+>>}
+  # ANY token carrying a path separator, encoded or not, plus byte renderings.
+  #
+  # Enumerating shapes lost every time. A scheme anchor missed the relative
+  # `Location`; adding `/\S*/\S+` still missed `Medical/biopsy.md` (no leading
+  # slash), `bucket%2FMedical%2Fbiopsy.md` (percent-encoded) and `bucket/key`.
+  # RFC 7231 §7.1.2 permits a relative-path reference just as much as the
+  # absolute-path one, and Req logs the raw header either way.
+  #
+  # Only `@url_logging_modules` reaches this — two dependency log lines — so
+  # over-redacting a slash-bearing token there costs almost nothing, while
+  # under-redacting costs a vault path. `mfa`, level and the surrounding words
+  # all survive.
+  @url_pattern ~r{\S*(?:/|%2F|%2f)\S*|<<[0-9, ]+>>}
 
   defp redact_dependency_message(%{meta: %{mfa: {mod, _, _}}, msg: {:string, msg}} = event)
        when mod in @url_logging_modules and not is_atom(msg) do
@@ -146,8 +181,8 @@ defmodule Engram.Logger.RedactFilter do
     msg
     |> IO.chardata_to_string()
     |> String.replace(@url_pattern, @redacted)
-  rescue
-    _ -> @redacted
+  catch
+    _, _ -> @redacted
   end
 
   defp redact(meta) do
