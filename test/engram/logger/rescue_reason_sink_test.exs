@@ -221,4 +221,111 @@ defmodule Engram.Logger.RescueReasonSinkTest do
 
     assert RedactFilter.filter(event, []).msg == {:string, msg}
   end
+
+  # THE filter must survive, and must keep redacting.
+  #
+  # Everything else in this file tests `filter/2` by calling it directly, which
+  # cannot observe the failure that matters: OTP DELETES a primary filter that
+  # raises, throws or exits — node-wide, for the life of the VM — and every
+  # later path, token and note body then ships in clear. Six review rounds ran
+  # with that route unpinned, and reverting the fix left the suite green.
+  #
+  # These install the real filter and drive the real `:logger` API.
+  describe "the primary filter survives everything :logger can hand it" do
+    setup do
+      :logger.add_primary_filter(:engram_redact_test, {&RedactFilter.filter/2, []})
+      on_exit(fn -> :logger.remove_primary_filter(:engram_redact_test) end)
+      :ok
+    end
+
+    defp installed?, do: :engram_redact_test in Keyword.keys(:logger.get_primary_config().filters)
+
+    test "a struct metadata does not remove the filter" do
+      assert installed?()
+
+      # `is_map/1` is true for a struct, and `Map.new/2` raises
+      # Protocol.UndefinedError on one with no Enumerable impl. %MapSet{} HAS
+      # one, which is why a casual probe misses this.
+      for meta <- [%URI{}, %RuntimeError{message: "x"}] do
+        try do
+          :logger.log(:warning, "probe", meta)
+        catch
+          _, _ -> :ok
+        end
+      end
+
+      assert installed?(), "the primary filter was removed — all redaction is now off"
+    end
+
+    # Struct metadata must be REDACTED, not merely survived. The first fix
+    # guarded with `not is_struct(meta)`, which passed it through in clear.
+    test "struct metadata is redacted, not waved through" do
+      out =
+        RedactFilter.filter(
+          %{
+            level: :warning,
+            msg: {:string, "m"},
+            meta: %URI{path: "/Medical/biopsy.md", query: "cancer prognosis"}
+          },
+          []
+        )
+
+      refute inspect(out.meta) =~ "Medical"
+      refute inspect(out.meta) =~ "cancer"
+    end
+
+    # `rescue` covers only the :error class; OTP removes a THROWING filter
+    # exactly like a raising one.
+    test "every exit class leaves the filter installed and redacting" do
+      for meta <- [%URI{}, :not_a_map, %{msg_only: 1}] do
+        try do
+          :logger.log(:error, "probe", meta)
+        catch
+          _, _ -> :ok
+        end
+      end
+
+      assert installed?()
+
+      ev = %{level: :error, msg: {:string, "m"}, meta: %{path: "Medical/x.md"}}
+      assert RedactFilter.filter(ev, []).meta.path == "[REDACTED]"
+    end
+  end
+
+  # The shapes the widening was made for. Each was leaking under the previous
+  # pattern, and none of them was covered — all three reverts stayed green.
+  describe "separator-bearing tokens in dependency lines" do
+    for {name, raw} <- [
+          {"a relative path with no leading slash", "Medical/biopsy.md"},
+          {"a percent-encoded key", "bucket%2FMedical%2Fbiopsy.md"},
+          {"a bare bucket/key", "bucket/Medical.md"}
+        ] do
+      test "#{name} is redacted" do
+        raw = unquote(raw)
+
+        event = %{
+          level: :debug,
+          msg: {:string, ["redirecting to ", raw]},
+          meta: %{mfa: {Req.Steps, :r, 1}}
+        }
+
+        {:string, out} = RedactFilter.filter(event, []).msg
+
+        refute out =~ "Medical", "leaked: #{out}"
+        assert out =~ "redirecting to"
+      end
+    end
+  end
+
+  # I1: the previous pattern was quadratic and ran in the CALLING process —
+  # 7.1 s at 16 KB, 282 s at 100 KB.
+  test "a large separator-free message cannot block the caller" do
+    msg = String.duplicate("a", 100_000)
+    event = %{level: :warning, msg: {:string, msg}, meta: %{mfa: {ExAws.Request, :r, 7}}}
+
+    started = System.monotonic_time(:millisecond)
+    RedactFilter.filter(event, [])
+
+    assert System.monotonic_time(:millisecond) - started < 500
+  end
 end

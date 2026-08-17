@@ -100,12 +100,28 @@ defmodule Engram.Logger.RedactFilter do
     # `catch _, _` rather than `rescue`: Elixir's `rescue` only covers the
     # :error class, and OTP removes a throwing filter exactly like a raising
     # one.
-    _, _ -> %{event | meta: %{}, msg: {:string, @redacted}}
+    #
+    # NOT PINNED, deliberately stated: with `redact/1` no longer able to raise,
+    # no reachable input throws or exits here, so no test distinguishes `catch`
+    # from `rescue`. It stays because the cost is one word and the failure it
+    # guards against is node-wide and permanent — but a mutation swapping it
+    # will not go red, and nobody should read the suite as saying otherwise.
+    _, _ ->
+      # M2: emit a signal. Without it a genuine redaction bug degrades every
+      # line node-wide to [REDACTED] forever with nothing to notice it by.
+      # Telemetry rather than Logger — logging from inside a log filter
+      # re-enters this code path.
+      :telemetry.execute([:engram, :logger, :redact_filter, :failed], %{count: 1}, %{})
+
+      # M1: built rather than updated. `%{event | ...}` requires the keys to
+      # exist, so an event without :msg would raise INSIDE the net and get the
+      # filter deleted — precisely the outcome this exists to prevent.
+      event
+      |> Map.put(:meta, %{})
+      |> Map.put(:msg, {:string, @redacted})
   end
 
-  # Structs are excluded explicitly as well as caught, so the ordinary path
-  # stays exact rather than relying on the net above.
-  defp do_filter(%{meta: meta} = event) when is_map(meta) and not is_struct(meta) do
+  defp do_filter(%{meta: meta} = event) when is_map(meta) do
     %{event | meta: redact(meta)} |> redact_dependency_message()
   end
 
@@ -155,7 +171,8 @@ defmodule Engram.Logger.RedactFilter do
   # over-redacting a slash-bearing token there costs almost nothing, while
   # under-redacting costs a vault path. `mfa`, level and the surrounding words
   # all survive.
-  @url_pattern ~r{\S*(?:/|%2F|%2f)\S*|<<[0-9, ]+>>}
+  @byte_render ~r{<<[0-9, ]+>>}
+  @separators ["/", "%2F", "%2f"]
 
   defp redact_dependency_message(%{meta: %{mfa: {mod, _, _}}, msg: {:string, msg}} = event)
        when mod in @url_logging_modules and not is_atom(msg) do
@@ -166,7 +183,8 @@ defmodule Engram.Logger.RedactFilter do
 
   defp redact_dependency_message(event), do: event
 
-  # FAIL CLOSED, and never raise.
+  # FAIL CLOSED. Belt and braces: `filter/2` also catches, so this is the
+  # inner of two nets rather than the only one.
   #
   # This runs as a PRIMARY `:logger` filter, and OTP deletes a filter that
   # raises — node-wide, permanently, for the life of the VM. So one malformed
@@ -180,14 +198,45 @@ defmodule Engram.Logger.RedactFilter do
   defp scrub_message(msg) do
     msg
     |> IO.chardata_to_string()
-    |> String.replace(@url_pattern, @redacted)
+    |> String.replace(@byte_render, @redacted)
+    |> then(&Regex.replace(~r/\S+/, &1, fn token -> redact_token(token) end))
   catch
     _, _ -> @redacted
   end
 
+  # Per TOKEN, by substring test — linear.
+  #
+  # The regex it replaces was `\S*(?:/|%2F|%2f)\S*`, whose two greedy `\S*`
+  # halves backtrack for the separator: quadratic on a token that has none.
+  # Measured 53 ms at 1 KB, 7.1 s at 16 KB, 282 s at 100 KB — and a primary
+  # filter runs in the CALLING process, so that is the caller blocked, not a
+  # background cost. Same output on every case, 100 KB in under a millisecond.
+  defp redact_token(token) do
+    if String.contains?(token, @separators), do: @redacted, else: token
+  end
+
+  # `:maps.map/2`, not `Map.new/2`.
+  #
+  # `Map.new/2` enumerates, and `is_map/1` is true for a STRUCT — so any struct
+  # without an `Enumerable` impl raised `Protocol.UndefinedError` here and OTP
+  # deleted this primary filter node-wide, taking all redaction with it. The
+  # first fix guarded with `not is_struct(meta)`, which was FAIL-OPEN: struct
+  # metadata then reached the handler unredacted, `%URI{path:
+  # "/Medical/biopsy.md", query: "cancer prognosis"}` included.
+  #
+  # `:maps.map/2` works on any map including structs, so there is nothing to
+  # guard against and struct metadata is redacted like everything else.
+  #
+  # `__struct__` is dropped first so the result is a PLAIN map. `:logger`
+  # metadata is specified as one, and leaving it a struct moves the crash
+  # downstream rather than removing it: `Logger.Formatter` does `Access.get/3`
+  # over the metadata, and a struct implements neither Access nor Enumerable —
+  # so the formatter raised instead of the filter, which is no better.
   defp redact(meta) do
-    Map.new(meta, fn {k, v} ->
-      if MapSet.member?(@sensitive_keys, k), do: {k, @redacted}, else: {k, v}
-    end)
+    # `:maps.map/2` is (fun, map) — NOT pipeable with the map first.
+    :maps.map(
+      fn k, v -> if MapSet.member?(@sensitive_keys, k), do: @redacted, else: v end,
+      Map.delete(meta, :__struct__)
+    )
   end
 end

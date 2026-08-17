@@ -38,7 +38,7 @@ defmodule Engram.Logger.LogCallComplianceTest do
 
   # Modules where note content, a path, a title or a search query is in scope.
   # Deliberately NOT all of lib/: the same shape in `accounts/lifecycle.ex` or
-  # `workers/export_expiry_sweep.ex` cannot reach note data, and a guard that
+  # `billing/` cannot reach note data, and a guard that
   # flags 84 sites to protect 40 gets switched off. Widen this list rather than
   # adding exceptions to it.
   @content_paths [
@@ -172,8 +172,11 @@ defmodule Engram.Logger.LogCallComplianceTest do
   defp strip_comments_and_strings(text) do
     text
     |> String.replace(~r/"(?:[^"\\]|\\.)*"/, ~s(""))
-    |> String.replace(~r/#(?!\{)[^\n]*/, "")
+    |> strip_comments()
   end
+
+  # `#` to end of line, except `#{` which opens an interpolation.
+  defp strip_comments(text), do: String.replace(text, ~r/#(?!\{)[^\n]*/, "")
 
   # Every `Logger.<level>(...)` call in a file, AND every call to a local log
   # helper, with arguments and line.
@@ -245,7 +248,26 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # its unsafe sibling. Review flagged it; the fix is that a unit can only
   # vouch for itself.
   def units(args) do
-    balanced_interpolations(args) ++ metadata_units(args)
+    # Comments are stripped ONCE, here, over the whole span.
+    #
+    # Doing it inside `keyword_follows?/2` needed a lookahead window, and a
+    # comment run LONGER than that window left the window ending mid-comment:
+    # no `key:` matched, no split, and the keys merged back into one unit —
+    # sibling-vouching again, one comment deeper. This repo writes 400-800 char
+    # comment blocks inside log calls (`attachments_controller.ex:342`,
+    # `crdt_channel.ex:144`), so no window was ever going to be big enough.
+    #
+    # It also fixes the mirror-image failure: prose in a comment could TRIGGER
+    # the `@unsafe` match while never being able to silence it, so
+    # `# do NOT switch this to inspect(reason)` turned the guard red on correct
+    # code. The two were masking each other; stripping once cures both.
+    #
+    # COMMENTS only — stripping string literals here would blank the very
+    # interpolations `balanced_interpolations/1` exists to find. Strings are
+    # stripped further down, in `metadata_units/1`, where that is correct.
+    stripped = strip_comments(args)
+
+    balanced_interpolations(stripped) ++ metadata_units(stripped)
   end
 
   # The non-interpolated leftover, split per `key: value`.
@@ -301,24 +323,21 @@ defmodule Engram.Logger.LogCallComplianceTest do
     |> then(fn {done, cur, _} -> [cur |> Enum.reverse() |> Enum.join() | done] end)
   end
 
-  # Does a `key:` follow this comma, once any comment lines between them are
-  # skipped?
+  # Does a `key:` follow this comma? Comments are already gone by here (see
+  # `units/1`), so a small fixed window suffices — the widest real comma-to-key
+  # gap in scope is 25.
   #
-  # Without the comment skip, a `# explanation` line between two metadata keys
-  # stopped the split and merged them back into one unit — so a sanctioned key
-  # vouched for its unsafe sibling again, the round-5 defect one comment deeper.
-  # It is the house style here: measured 5 in-scope calls self-exempt for
-  # exactly this reason, including `rerankers/jina.ex:65`, whose own comment
-  # says the request body carries the search QUERY.
-  #
-  # The window is 400 rather than 40 because a skipped comment consumes it. The
-  # widest real comma→key gap in scope is 25, so this is slack, not tuning.
+  # The previous version skipped comment lines inside a 400-grapheme window,
+  # and a comment run LONGER than the window left it ending mid-comment: no
+  # `key:` matched, no split, and the keys merged back into one unit. This repo
+  # writes 400-800 char comment blocks inside log calls, so that window was
+  # never going to be big enough. Stripping once in `units/1` removes the
+  # problem instead of sizing around it.
   def keyword_follows?(graphemes, from) do
     graphemes
     |> Enum.drop(from)
-    |> Enum.take(400)
+    |> Enum.take(40)
     |> Enum.join()
-    |> String.replace(~r/^(\s*#[^\n]*\n)+/, "")
     |> then(&Regex.match?(~r/^\s*[a-z_][a-zA-Z0-9_]*:/, &1))
   end
 
@@ -436,9 +455,6 @@ defmodule Engram.Logger.LogCallComplianceTest do
           source = File.read!(file),
           {line, text} <- binding_lines(source),
           not sanctioned?(text),
-          # Strip before matching too: `detail = inspect(reason) <> "safe_reason(e)"`
-          # was clean because the STRING mentioned it.
-          text = strip_comments_and_strings(text),
           not String.starts_with?(String.trim(text), "#"),
           # Any identifier, not just one whose NAME says "reason". `detail =
           # inspect(reason)` a few lines above a Logger call is the same
@@ -500,7 +516,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
     test "a comma inside an argument list is not a key boundary" do
       refute keyword_follows?(String.graphemes("inspect(a, b)"), 10)
       assert keyword_follows?(String.graphemes(", note_id: x"), 1)
-      assert keyword_follows?(String.graphemes(",\n  # a comment\n  note_id: x"), 1)
+      # NOT a comment case: comments are gone before this is called (units/1),
+      # so this function deliberately does not know about them.
+      refute keyword_follows?(String.graphemes(", inspect(x)"), 1)
     end
 
     test "a comma inside a nested map does not split" do
