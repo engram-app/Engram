@@ -100,6 +100,12 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # Renders a term rather than a label. `e` is in the list because `rescue e ->`
   # is the idiomatic binding and `inspect(e)` was therefore the single most
   # likely shape to appear next — it was missing from the first version.
+  # `(?![.\\w])` after each carrier, applied where these are interpolated below.
+  # A carrier FOLLOWED BY A FIELD ACCESS is a scalar, not the term:
+  # `inspect(note.id)`, `inspect(att.id)`, `inspect(e.__struct__)`,
+  # `inspect(changeset.valid?)`, `inspect(byte_size(content))`. Without it the
+  # per-key split turns `rerankers/jina.ex:65` red for a line that is correct,
+  # which is how a guard earns being switched off.
   @carriers "reason|err|error|e|other|term|payload|state|unexpected|result|resp|res|changeset|att|note|content"
 
   # Anchored on `inspect(` REACHING a carrier, not on `inspect(carrier)` exactly.
@@ -113,7 +119,7 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # Each renders the term just as completely as `inspect(reason)`. `\b` around
   # each carrier keeps `error_kind` and `note_id` from matching, since `_` is a
   # word character.
-  @unsafe ~r/Exception\.(message|format|format_stacktrace)\(|\binspect\([^)]{0,120}\b(#{@carriers})\b|\b(#{@carriers})\b\s*\|>\s*inspect\b|\binspect\s+(#{@carriers})\b/
+  @unsafe ~r/Exception\.(message|format|format_stacktrace)\(|\binspect\([^)]{0,120}\b(#{@carriers})\b(?![.\w])|\b(#{@carriers})\b(?![.\w])\s*\|>\s*inspect\b|\binspect\s+(#{@carriers})\b(?![.\w])/
 
   # `error_kind/1` (Engram.Telemetry) is a label renderer exactly like
   # `safe_reason/1`: every clause returns an atom or a module — the term itself
@@ -124,10 +130,31 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "safe_reason",
     "safe_exit_reason",
     "format_location",
-    "error_kind"
+    "error_kind",
+    # Delegates straight to error_kind/1 (crdt_channel.ex:1196). Listed
+    # explicitly because sanctioned names now have to match as CALLS with a
+    # word boundary — which is the point: it stops an impostor
+    # `error_kind_of/1` vouching by substring, but it also stops a legitimate
+    # wrapper doing so, so real wrappers get named here.
+    "prepare_error_kind"
   ]
 
   defp in_scope?(path), do: Enum.any?(@content_paths, &String.starts_with?(path, &1))
+
+  # A sanctioned name only vouches when it is CALLED, and comments never vouch.
+  #
+  # `String.contains?` over the raw unit meant `error_kind: inspect(reason)`
+  # was clean because the KEY NAME matched — and `error_kind:` is an
+  # established metadata key here, so that is a realistic mistake, not a
+  # contrived one. A comment mentioning `safe_reason` above the line did the
+  # same, and so would an impostor `error_kind_of/1` returning the raw term.
+  def sanctioned?(unit) do
+    unit
+    |> String.split("\n")
+    |> Enum.reject(&String.starts_with?(String.trim(&1), "#"))
+    |> Enum.join("\n")
+    |> then(&Regex.match?(~r/\b(#{Enum.join(@sanctioned, "|")})\(/, &1))
+  end
 
   # Every `Logger.<level>(...)` call in a file, AND every call to a local log
   # helper, with arguments and line.
@@ -213,24 +240,54 @@ defmodule Engram.Logger.LogCallComplianceTest do
   #
   # Split on top-level commas only — a nested `inspect(%{a: 1, b: 2})` or a call
   # with several arguments must not be torn into fragments that match nothing.
-  defp metadata_units(args) do
+  def metadata_units(args) do
     args
     |> strip_interpolations_and_strings()
     |> split_top_level_commas()
   end
 
-  defp split_top_level_commas(text) do
-    text
-    |> String.graphemes()
-    |> Enum.reduce({[], [], 0}, fn ch, {done, cur, depth} ->
+  # Split a keyword list into one unit per `key: value`.
+  #
+  # The previous version split on commas at bracket depth 0 — and essentially
+  # every in-scope call writes its metadata as
+  # `Metadata.with_category(:error, :sync, k1: v1, k2: v2)`, where those commas
+  # sit at depth 1. So it split nothing that exists and the keyword list stayed
+  # one unit, leaving one sanctioned key vouching for all its siblings: the
+  # same defect as the round before, moved one paren deeper. It moved the
+  # measured count from 52 self-exempt calls to 50.
+  #
+  # Depth <= 1 AND the next token must look like `key:`. Both halves matter:
+  # depth alone would tear `inspect(%{a: 1, b: 2})` into fragments that match
+  # nothing, and the `key:` lookahead alone would split argument lists.
+  def split_top_level_commas(text) do
+    graphemes = String.graphemes(text)
+
+    graphemes
+    |> Enum.with_index()
+    |> Enum.reduce({[], [], 0}, fn {ch, i}, {done, cur, depth} ->
       cond do
-        ch in ["(", "{", "["] -> {done, [ch | cur], depth + 1}
-        ch in [")", "}", "]"] -> {done, [ch | cur], depth - 1}
-        ch == "," and depth <= 0 -> {[Enum.reverse(cur) |> Enum.join() | done], [], depth}
-        true -> {done, [ch | cur], depth}
+        ch in ["(", "{", "["] ->
+          {done, [ch | cur], depth + 1}
+
+        ch in [")", "}", "]"] ->
+          {done, [ch | cur], depth - 1}
+
+        ch == "," and depth <= 1 and keyword_follows?(graphemes, i + 1) ->
+          {[cur |> Enum.reverse() |> Enum.join() | done], [], depth}
+
+        true ->
+          {done, [ch | cur], depth}
       end
     end)
-    |> then(fn {done, cur, _} -> [Enum.reverse(cur) |> Enum.join() | done] end)
+    |> then(fn {done, cur, _} -> [cur |> Enum.reverse() |> Enum.join() | done] end)
+  end
+
+  def keyword_follows?(graphemes, from) do
+    graphemes
+    |> Enum.drop(from)
+    |> Enum.take(40)
+    |> Enum.join()
+    |> then(&Regex.match?(~r/^\s*[a-z_][a-zA-Z0-9_]*:/, &1))
   end
 
   # Every `#{...}` body in a template, at arbitrary nesting depth.
@@ -250,9 +307,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # unparsed but ERASED — `strip_interpolations_and_strings/1` failed to strip
   # it and its string-literal rule then swallowed the text, so it landed in no
   # unit at all. A counter has no depth limit.
-  defp balanced_interpolations(text) when byte_size(text) < 2, do: []
+  def balanced_interpolations(text) when byte_size(text) < 2, do: []
 
-  defp balanced_interpolations(text) do
+  def balanced_interpolations(text) do
     size = byte_size(text)
 
     Enum.reduce(0..(size - 1)//1, {[], nil, 0}, fn i, {acc, start, depth} ->
@@ -334,7 +391,7 @@ defmodule Engram.Logger.LogCallComplianceTest do
           source = File.read!(file),
           {line, args} <- log_calls(source),
           unit <- units(args),
-          not Enum.any?(@sanctioned, &String.contains?(unit, &1)),
+          not sanctioned?(unit),
           match = Regex.run(@unsafe, unit),
           do: "#{file}:#{line} — #{hd(match)}"
 
@@ -346,7 +403,7 @@ defmodule Engram.Logger.LogCallComplianceTest do
       for file <- files,
           source = File.read!(file),
           {line, text} <- binding_lines(source),
-          not Enum.any?(@sanctioned, &String.contains?(text, &1)),
+          not sanctioned?(text),
           not String.starts_with?(String.trim(text), "#"),
           # Any identifier, not just one whose NAME says "reason". `detail =
           # inspect(reason)` a few lines above a Logger call is the same
@@ -366,5 +423,58 @@ defmodule Engram.Logger.LogCallComplianceTest do
 
            #{Enum.join(findings, "\n")}
            """
+  end
+
+  # The helpers, tested directly.
+  #
+  # Every previous version of this guard was broken in a way the LIVE scan could
+  # not reveal: a scanner that always returned [], a splitter that split nothing
+  # the codebase writes. Both passed because the tree happened to be clean, and
+  # both were only caught by review. Replacing `split_top_level_commas/1` with
+  # `List.wrap/1` — its pre-fix behaviour — left the whole suite green.
+  #
+  # These pin the mechanism instead of the tree, so the next regression fails
+  # here rather than waiting for a leak to walk past.
+  describe "units/1 mechanics" do
+    test "a with_category keyword list splits per key" do
+      args =
+        ~s|"msg", Metadata.with_category(:error, :sync, a: inspect(reason), b: safe_reason(x))|
+
+      units = units(args)
+
+      assert Enum.any?(units, &(&1 =~ "inspect(reason)" and not (&1 =~ "safe_reason"))),
+             "the unsafe key must be its own unit, got: #{inspect(units)}"
+    end
+
+    # Splitting on depth alone would tear this into fragments matching nothing.
+    test "a comma inside a nested map does not split" do
+      units = units(~s|"msg", m: inspect(%{a: 1, b: 2})|)
+
+      assert Enum.any?(units, &(&1 =~ "%{a: 1, b: 2}")),
+             "nested map was torn apart: #{inspect(units)}"
+    end
+
+    test "interpolations are returned whole, at any nesting depth" do
+      assert "inspect(reason)" in units(~s|"a=\#{inspect(reason)}"|)
+      assert "inspect(%{k: %{j: %{n: 1}}})" in units(~s|"a=\#{inspect(%{k: %{j: %{n: 1}}})}"|)
+    end
+
+    test "adjacent interpolations are separate units" do
+      units = units(~s|"\#{a} and \#{b}"|)
+
+      assert "a" in units
+      assert "b" in units
+    end
+  end
+
+  describe "sanctioned?/1" do
+    test "vouches only for a CALL, never a key name or a comment" do
+      refute sanctioned?("error_kind: inspect(reason)")
+      refute sanctioned?("# use safe_reason here\n raw: inspect(reason)")
+      refute sanctioned?("error_kind_of(reason)")
+
+      assert sanctioned?("reason: Metadata.safe_reason(reason)")
+      assert sanctioned?("inspect(Engram.Telemetry.error_kind(reason))")
+    end
   end
 end

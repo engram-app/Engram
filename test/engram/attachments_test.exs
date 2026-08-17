@@ -607,9 +607,14 @@ defmodule Engram.AttachmentsTest do
         end)
 
       assert log =~ "no storage_key"
-      # The whole point: the path must not appear anywhere in the fallout.
-      refute log =~ "Medical"
-      refute log =~ "biopsy"
+
+      # NOT `refute log =~ "Medical"` — that passed under the old code too, so
+      # it proved nothing. The old leak went into the S3 URL, which this test
+      # never renders. What actually distinguishes the fix is that NO storage
+      # read is attempted at all: the deleted fallback would have rebuilt a key
+      # from the path and fetched it.
+      refute log =~ "Attachment blob missing",
+             "a key was reconstructed and fetched — the fallback is back"
     end
   end
 

@@ -170,6 +170,50 @@ defmodule Engram.Logger.RescueReasonSinkTest do
     assert out =~ "ATTEMPT: 3"
   end
 
+  # RFC 7231 §7.1.2 permits a RELATIVE Location, and Req logs the raw header
+  # before `URI.merge` — so the very shape this filter was added for arrives
+  # with no scheme, and a scheme-anchored pattern left it untouched.
+  test "a relative Location redirect is scrubbed" do
+    event = %{
+      level: :debug,
+      msg: {:string, ["redirecting to ", "/bucket/u1/v1/Medical/biopsy.md"]},
+      meta: %{mfa: {Req.Steps, :redirect, 1}}
+    }
+
+    {:string, out} = RedactFilter.filter(event, []).msg
+
+    refute out =~ "Medical"
+    assert out =~ "redirecting to"
+  end
+
+  # THE most important test in this file.
+  #
+  # This is a PRIMARY `:logger` filter, and OTP deletes a filter that raises —
+  # node-wide, permanently. So one malformed event would disable the entire
+  # @sensitive_keys scrub (content, title, path, tokens) for the life of the
+  # VM. `IO.chardata_to_string/1` raises on an atom in chardata, which
+  # `Logger.warning(:atom)` produces legally.
+  test "a message the filter cannot render does not raise, and fails closed" do
+    for msg <- [
+          ["redirecting to ", :some_atom],
+          [<<0xFF>>, "bad utf8"],
+          [1_114_112]
+        ] do
+      event = %{level: :warning, msg: {:string, msg}, meta: %{mfa: {Req.Steps, :r, 1}}}
+
+      assert %{msg: {:string, out}} = RedactFilter.filter(event, [])
+      assert out == "[REDACTED]", "unrenderable message must fail closed, got #{inspect(out)}"
+    end
+  end
+
+  # `msg: {:string, :atom}` does not match the scrub head at all — it must fall
+  # through the catch-all rather than raise a FunctionClauseError.
+  test "an atom message falls through untouched" do
+    event = %{level: :warning, msg: {:string, :shutdown}, meta: %{mfa: {Req.Steps, :r, 1}}}
+
+    assert RedactFilter.filter(event, []).msg == {:string, :shutdown}
+  end
+
   # Our own log lines must not be touched by that rule.
   test "a non-ExAws message with the same words is left alone" do
     msg = "sync failed for URL: internal"
