@@ -77,13 +77,30 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram_web/controllers/attachments_controller.ex",
     "lib/engram/backfill/",
     "lib/engram/mcp/",
-    "lib/engram/vaults.ex"
+    "lib/engram/vaults.ex",
+    # Third widening. Review checked the previous one and found `workers/` held
+    # the very defect this change is named after — `storage_key:` redacted by
+    # name while the same vault path rode inside `reason:` — in
+    # `cleanup_vault.ex`. The rest are clean today and are netted so they stay
+    # that way; `folders.ex` is the constraint's own `Medical/` example and was
+    # somehow still not listed after two passes.
+    "lib/engram/workers/",
+    "lib/engram/folders.ex",
+    "lib/engram/search.ex",
+    "lib/engram/search/",
+    "lib/engram/sync.ex",
+    "lib/engram/storage.ex",
+    "lib/engram/vaults/",
+    "lib/engram/vector/",
+    "lib/engram/keyword_index.ex",
+    "lib/engram/embedder.ex",
+    "lib/engram/embedders/"
   ]
 
   # Renders a term rather than a label. `e` is in the list because `rescue e ->`
   # is the idiomatic binding and `inspect(e)` was therefore the single most
   # likely shape to appear next — it was missing from the first version.
-  @unsafe ~r/Exception\.(message|format|format_stacktrace)\(|\binspect\((reason|err|error|e|other|term|payload|state)\)/
+  @unsafe ~r/Exception\.(message|format|format_stacktrace)\(|\binspect\((reason|err|error|e|other|term|payload|state|unexpected|result|resp|res)\)/
 
   @sanctioned ["safe_reason", "safe_exit_reason", "format_location"]
 
@@ -163,28 +180,23 @@ defmodule Engram.Logger.LogCallComplianceTest do
     [strip_interpolations_and_strings(args) | interps]
   end
 
-  # `Logger.info("x")` has a zero-length argument span once stripped, and
-  # `0..-1//1` is not empty in Elixir — it iterates once and crashed on
-  # `binary_part("", 0, 1)`.
-  defp balanced_interpolations(text) when byte_size(text) < 2, do: []
-
+  # Every `\#{...}` body in a template.
+  #
+  # The hand-rolled scanner this replaces ALWAYS RETURNED `[]`. It set depth to
+  # 1 on the `#`, then the very next byte — the `{` of the interpolation itself
+  # — bumped it to 2, so the `depth == 1` push arm could never fire. Since
+  # `strip_interpolations_and_strings/1` then DELETES those spans, the guard was
+  # blind to everything rendered inside a message body: the exact half
+  # `RedactFilter` cannot cover, across 30 live call sites. Caught by reverting
+  # crypto.ex's message-body conversion and watching the suite stay green.
+  #
+  # One level of nesting, matching what the strip regex below already handles.
+  # A guard that is regularly WRONG about which spans exist is worse than one
+  # with a stated depth limit.
   defp balanced_interpolations(text) do
-    size = byte_size(text)
-
-    Enum.reduce(0..max(size - 2, 0)//1, {[], nil, 0}, fn i, {acc, start, depth} ->
-      two = binary_part(text, i, min(2, size - i))
-      char = binary_part(text, i, 1)
-
-      cond do
-        is_nil(start) and two == "\#{" -> {acc, i + 2, 1}
-        is_nil(start) -> {acc, start, depth}
-        char == "{" -> {acc, start, depth + 1}
-        char == "}" and depth == 1 -> {[binary_part(text, start, i - start) | acc], nil, 0}
-        char == "}" -> {acc, start, depth - 1}
-        true -> {acc, start, depth}
-      end
-    end)
-    |> elem(0)
+    ~r/\#\{((?:[^{}]|\{[^{}]*\})*)\}/
+    |> Regex.scan(text)
+    |> Enum.map(&Enum.at(&1, 1))
   end
 
   defp strip_interpolations_and_strings(text) do

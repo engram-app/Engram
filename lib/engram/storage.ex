@@ -88,12 +88,6 @@ defmodule Engram.Storage do
   @doc "Returns the configured storage adapter module."
   def adapter, do: Application.get_env(:engram, :storage, __MODULE__.S3)
 
-  @doc "Build a storage key from user_id, vault_id, and attachment path."
-  def key(user_id, vault_id, path)
-      when is_binary(user_id) and is_binary(vault_id) and is_binary(path) and path != "" do
-    "#{user_id}/#{vault_id}/#{path}"
-  end
-
   @doc """
   Build a storage key from the immutable attachment row UUID. Decoupled from
   the mutable vault path so move/rename never relocates the blob and a new

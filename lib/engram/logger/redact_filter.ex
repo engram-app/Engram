@@ -83,10 +83,36 @@ defmodule Engram.Logger.RedactFilter do
   Never returns `:stop` or `:ignore` — this filter never drops events.
   """
   def filter(%{meta: meta} = event, _opts) when is_map(meta) do
-    %{event | meta: redact(meta)}
+    %{event | meta: redact(meta)} |> redact_dependency_message()
   end
 
   def filter(event, _opts), do: event
+
+  # ExAws logs the object URL itself, and no call-site control can reach it:
+  #
+  #     Logger.warning("ExAws: HTTP ERROR: \#{inspect(reason)} for URL: " <>
+  #                    "\#{inspect(safe_url)} ATTEMPT: \#{attempt}")
+  #
+  # `ExAws.Request.Url.sanitize/2` only URI-ENCODES the path, so the storage key
+  # — `u1/v1/Medical/biopsy.md`, a vault path — survives verbatim. Prod runs at
+  # `:info`, so this shipped on every transport error: exactly the MinIO and
+  # Tigris flakes this system actually has.
+  #
+  # It is a dependency's MESSAGE BODY, so neither the key-based redaction above
+  # nor the source guard over our own call sites can see it. This filter is the
+  # only layer that sits between it and Loki.
+  #
+  # The URL is replaced rather than the event dropped: the reason and the
+  # attempt number are the diagnostic, and losing "S3 timed out on attempt 3"
+  # to hide a path we can already identify by other means is a bad trade.
+  defp redact_dependency_message(
+         %{meta: %{mfa: {ExAws.Request, _, _}}, msg: {:string, msg}} = event
+       )
+       when is_binary(msg) do
+    %{event | msg: {:string, String.replace(msg, ~r/for URL: \S+/, "for URL: #{@redacted}")}}
+  end
+
+  defp redact_dependency_message(event), do: event
 
   defp redact(meta) do
     Map.new(meta, fn {k, v} ->

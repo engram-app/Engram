@@ -257,9 +257,27 @@ defmodule Engram.Attachments do
       {:ok, nil} ->
         {:ok, nil}
 
+      # A row with no storage_key is a broken row, not a legacy shape to be
+      # recovered. This used to fall back to `Storage.key/3`, which rebuilt
+      # "user/vault/<cleartext path>" at READ time — so a path ended up in the
+      # S3 URL, and from there in ExAws's own log line, S3 access logs and
+      # bucket listings, none of which any call-site control can reach. Blobs
+      # are keyed by the immutable attachment UUID (`Storage.object_key/3`);
+      # nothing reconstructs a key from a path any more, and the builder that
+      # could is deleted.
+      {:ok, %Attachment{storage_key: nil} = att} ->
+        require Logger
+
+        Logger.error(
+          "Attachment row has no storage_key",
+          Metadata.with_category(:error, :sync, attachment_id: att.id)
+        )
+
+        {:error, {:storage, :blob_missing}}
+
       {:ok, %Attachment{} = att} ->
         {:ok, att} = Crypto.maybe_decrypt_attachment_fields(att, user)
-        key = att.storage_key || Storage.key(user.id, vault.id, path)
+        key = att.storage_key
 
         case Storage.adapter().get(key) do
           {:ok, ciphertext} ->
@@ -284,7 +302,7 @@ defmodule Engram.Attachments do
             # safe_reason/1, not inspect/1. `storage_key` above is redacted by key, but
             # this value is not — `:reason` is absent from RedactFilter's set, and it
             # goes into the message BODY as well, which nothing filters. For legacy
-            # rows `key` is Storage.key/3 = "user/vault/<cleartext path>", so an
+            # rows `key` may be a legacy path-derived value, so an
             # ExAws error that echoes the key would print the path.
             reason_str = Metadata.safe_reason(reason)
 
@@ -1273,7 +1291,6 @@ defmodule Engram.Attachments do
          explicit_mime
        ) do
     mime = explicit_mime || MimeWhitelist.detect_mime(path)
-    # was: key = Storage.key(user.id, vault.id, path)
     key = Storage.object_key(user.id, vault.id, att_id)
 
     with {:ok, dek} <- Crypto.get_dek(user),
@@ -1316,7 +1333,7 @@ defmodule Engram.Attachments do
         # safe_reason/1, not inspect/1. `storage_key` above is redacted by key, but
         # this value is not — `:reason` is absent from RedactFilter's set, and it
         # goes into the message BODY as well, which nothing filters. For legacy
-        # rows `key` is Storage.key/3 = "user/vault/<cleartext path>", so an
+        # rows `key` may be a legacy path-derived value, so an
         # ExAws error that echoes the key would print the path.
         reason_str = Metadata.safe_reason(reason)
 

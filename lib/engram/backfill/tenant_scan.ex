@@ -71,10 +71,10 @@ defmodule Engram.Backfill.TenantScan do
         {:error, _} = err ->
           Logger.error(
             "tenant scan aborted at user #{user_id} after #{done}/#{length(ids)} users " <>
-              "(work already committed is NOT rolled back; re-running is safe): #{inspect(err)}"
+              "(work already committed is NOT rolled back; re-running is safe): #{Engram.Logger.Metadata.safe_reason(err)}"
           )
 
-          raise "tenant scan failed for #{user_id}: #{inspect(err)}"
+          raise "tenant scan failed for #{user_id}: #{Engram.Logger.Metadata.safe_reason(err)}"
       end
     end)
     |> elem(0)

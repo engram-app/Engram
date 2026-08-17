@@ -222,7 +222,13 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
   # tag is safe and useful; the payload is where a %Note{} or a Yjs frame rides.
   describe "tuple reasons keep their tag, drop their payload" do
     test "the tag renders and the payload does not" do
-      assert Metadata.safe_reason({:error, :not_found}) == ":error"
+      # Was `":error"`. An all-atom payload is now kept — see the clause above:
+      # an atom cannot carry user data, and collapsing `{:error, :not_found}` to
+      # a bare ":error" threw away the only useful half. The assertion moved
+      # because the behaviour deliberately improved, not to make a failure go
+      # away; the payload-dropping property it was written to protect is
+      # asserted three lines down and unchanged.
+      assert Metadata.safe_reason({:error, :not_found}) == ":error :not_found"
       assert Metadata.safe_reason({:notes_cap_reached, 100, 50}) == ":notes_cap_reached"
 
       note = %Engram.Notes.Note{content: @secret, path: "Medical/biopsy.md"}
@@ -231,6 +237,24 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
       assert inspect({:error, note}) =~ "biopsy"
       refute rendered =~ "biopsy"
       refute rendered =~ "Medical"
+    end
+
+    # Both elements atoms — neither can carry user data, and collapsing it to
+    # ":error" told an operator nothing, which is how a filter earns being
+    # routed around instead of used.
+    test "an all-atom tuple keeps its payload" do
+      assert Metadata.safe_reason({:error, :aad_mismatch}) == ":error :aad_mismatch"
+      assert Metadata.safe_reason({:error, :no_dek}) == ":error :no_dek"
+    end
+
+    # ...but only when the payload really is an atom. A %Note{} payload must
+    # still be dropped.
+    test "an atom tag with a struct payload still drops the payload" do
+      note = %Engram.Notes.Note{content: @secret, path: "Medical/biopsy.md"}
+      rendered = Metadata.safe_reason({:error, note})
+
+      assert rendered == ":error"
+      refute rendered =~ "biopsy"
     end
 
     test "a tuple with a non-atom tag is not rendered at all" do

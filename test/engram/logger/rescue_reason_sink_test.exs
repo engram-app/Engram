@@ -106,4 +106,42 @@ defmodule Engram.Logger.RescueReasonSinkTest do
     # The diagnostic survives: an operator still learns WHICH S3 error it was.
     assert encoded =~ "NoSuchKey"
   end
+
+  # ExAws logs the object URL itself, from inside the dependency. No call-site
+  # control reaches it: `ExAws.Request.Url.sanitize/2` only URI-encodes the
+  # path, so the storage key survives, and prod runs at `:info` so it shipped on
+  # every transport error. The message BODY is also the half RedactFilter's
+  # key-based pass explicitly does not touch — this is the one seam that can.
+  test "the ExAws URL log cannot carry a vault path to the sink" do
+    url = "https://bucket.s3.example.com/u1/v1/Medical/biopsy.md"
+
+    msg =
+      "ExAws: HTTP ERROR: #{inspect(:timeout)} for URL: #{inspect(url)} ATTEMPT: 3"
+
+    # The premise: unfiltered, this is a vault path in a prod log line.
+    assert msg =~ "Medical"
+
+    event = %{
+      level: :warning,
+      msg: {:string, msg},
+      meta: %{mfa: {ExAws.Request, :request_and_retry, 7}}
+    }
+
+    filtered = RedactFilter.filter(event, [])
+    {:string, out} = filtered.msg
+
+    refute out =~ "Medical"
+    refute out =~ "biopsy"
+    # The diagnostic survives — which error, and which attempt.
+    assert out =~ "timeout"
+    assert out =~ "ATTEMPT: 3"
+  end
+
+  # Our own log lines must not be touched by that rule.
+  test "a non-ExAws message with the same words is left alone" do
+    msg = "sync failed for URL: internal"
+    event = %{level: :warning, msg: {:string, msg}, meta: %{}}
+
+    assert RedactFilter.filter(event, []).msg == {:string, msg}
+  end
 end

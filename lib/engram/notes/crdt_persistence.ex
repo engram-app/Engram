@@ -354,7 +354,7 @@ defmodule Engram.Notes.CrdtPersistence do
 
         unexpected ->
           Logger.warning(
-            "crdt replay_tail unexpected decrypt result note_id=#{note_id} result=#{inspect(unexpected)}",
+            "crdt replay_tail unexpected decrypt result note_id=#{note_id} result=#{Metadata.safe_reason(unexpected)}",
             Metadata.with_category(:warning, :sync,
               note_id: note_id,
               reason: "unexpected_shape"

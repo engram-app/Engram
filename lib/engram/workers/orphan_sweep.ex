@@ -89,7 +89,10 @@ defmodule Engram.Workers.OrphanSweep do
             other ->
               Logger.error(
                 "orphan_sweep Qdrant delete failed",
-                Metadata.with_category(:error, :oban, user_id: user_id, reason: inspect(other))
+                Metadata.with_category(:error, :oban,
+                  user_id: user_id,
+                  reason: Metadata.safe_reason(other)
+                )
               )
 
               acc
@@ -99,7 +102,7 @@ defmodule Engram.Workers.OrphanSweep do
       {:error, reason} ->
         Logger.error(
           "orphan_sweep Qdrant discovery failed",
-          Metadata.with_category(:error, :oban, reason: inspect(reason))
+          Metadata.with_category(:error, :oban, reason: Metadata.safe_reason(reason))
         )
 
         0
@@ -155,7 +158,10 @@ defmodule Engram.Workers.OrphanSweep do
             other ->
               Logger.error(
                 "orphan_sweep S3 delete failed",
-                Metadata.with_category(:error, :oban, user_id: user_id, reason: inspect(other))
+                Metadata.with_category(:error, :oban,
+                  user_id: user_id,
+                  reason: Metadata.safe_reason(other)
+                )
               )
 
               acc
@@ -165,7 +171,7 @@ defmodule Engram.Workers.OrphanSweep do
       {:error, reason} ->
         Logger.error(
           "orphan_sweep S3 discovery failed",
-          Metadata.with_category(:error, :oban, reason: inspect(reason))
+          Metadata.with_category(:error, :oban, reason: Metadata.safe_reason(reason))
         )
 
         0
