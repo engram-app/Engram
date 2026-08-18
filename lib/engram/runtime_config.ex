@@ -41,12 +41,13 @@ defmodule Engram.RuntimeConfig do
   # CI/E2E-only levers for the CRDT room drain (#1152), under the SAME CI=true
   # gate as the rate-limit overrides above.
   #
-  # The drain is OFF in production — no room passes `idle_exit_ms`, so nothing
-  # ever drains. That makes it untestable against a REAL client, and every test
-  # in the suite uses a test process or a channel as the observer. These knobs
-  # let a CI stack turn it on so the e2e suite proves a real Obsidian client
+  # The drain is ON everywhere by default (`CrdtCheckpointTimer`), so these are
+  # NOT how production gets a value — they are CI-gated and a task definition
+  # setting them is a silent no-op. They exist so a CI stack can shorten the
+  # window to something a test can observe, proving a real Obsidian client
   # survives rooms being released out from under it mid-session: re-spin, no
-  # lost edits, rename/delete still propagating.
+  # lost edits, rename/delete still propagating. Every unit and channel test
+  # otherwise stands a test process in for the plugin.
   #
   # Nested config keys (module + key) rather than the flat app-env keys the
   # rate-limit overrides use, since both settings live under their module.

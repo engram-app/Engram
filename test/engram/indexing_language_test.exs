@@ -100,6 +100,64 @@ defmodule Engram.IndexingLanguageTest do
     assert note_language == LangDetect.detect(@mixed_content)
   end
 
+  # `Markdown.parse/2` strips frontmatter before chunking and re-appends the raw
+  # block as a synthetic chunk at the END. Detecting over `note.content` would
+  # therefore sample the property block, not the prose — and since the language
+  # is now resolved once for the whole note, one bad sample mis-stems EVERY
+  # chunk rather than just the frontmatter one.
+  @frontmatter_content """
+  ---
+  aliases: [Zusammenfassung, Uebersicht, Inhaltsverzeichnis, Dokumentation]
+  tags: [projekt/dokumentation, status/entwurf, bereich/technik, jahr/2026]
+  verwandte: [Einleitung, Schlussfolgerung, Anhang, Literaturverzeichnis]
+  beschreibung: Eine sehr lange deutsche Beschreibung als Eigenschaftsblock
+  ---
+
+  # Introduction
+
+  The quick brown fox jumps over the lazy dog while the sun rises slowly over
+  the quiet English countryside on this particular morning, and the whole of
+  this note is written in plain English prose from beginning to end.
+  """
+
+  test "language comes from the body, not the frontmatter block", %{
+    bypass: bypass,
+    user: user,
+    vault: vault
+  } do
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{
+        "path" => "frontmatter.md",
+        "content" => @frontmatter_content,
+        "mtime" => 2_000.0
+      })
+
+    {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
+
+    Engram.MockEmbedder
+    |> expect(:embed_texts, fn texts ->
+      {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+    end)
+
+    Bypass.expect(bypass, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result": true}))
+    end)
+
+    {:ok, _prepared} = Indexing.prepare_index(note, vault)
+
+    assert [language] = Enum.uniq(drain_languages())
+
+    # Guard the fixture: the German property block must actually be big enough to
+    # dominate a raw-content sample, or this proves nothing.
+    assert LangDetect.detect(@frontmatter_content) != :en,
+           "fixture too weak — raw content already detects :en, so the bug wouldn't show"
+
+    assert language == :en,
+           "language was taken from the frontmatter block instead of the body"
+  end
+
   defp drain_languages(acc \\ []) do
     receive do
       {:encode_document_language, language} -> drain_languages([language | acc])
