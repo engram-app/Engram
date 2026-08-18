@@ -273,13 +273,24 @@ defmodule Engram.Indexing do
   defp build_prepared(note, user, vault, chunks, vectors, filter_key, avgdl, link_rows) do
     now = DateTime.utc_now(:second)
 
+    # Language is a property of the NOTE, not of each chunk. Detecting per chunk
+    # meant one full Lingua detector build per chunk (the NIF rebuilds the
+    # detector on every call — deps/lingua/native/lingua_nif/src/lib.rs), i.e.
+    # 8-38x the work for a normal note, and it was the single largest on-CPU
+    # frame in prod during a bulk vault upload.
+    #
+    # Detecting once over the note body is also *more* accurate: lingua is far
+    # more confident on a paragraph than on a one-line heading chunk. The
+    # tradeoff is a mixed-language note now picks a single stemmer, which is
+    # what the @floor confidence gate + raw-token fallback already assume.
+    language = detect_language(note.content || "")
+
     prepared =
       Enum.zip(chunks, vectors)
       |> Enum.reduce_while({:ok, []}, fn {chunk, vector}, {:ok, acc} ->
         point_id = Ecto.UUID.generate()
 
         doc_len = chunk.text |> Tokenizer.tokens(nil) |> length()
-        language = detect_language(chunk.text)
 
         sparse =
           KeywordIndex.module().encode_document(chunk.text, filter_key, doc_len, avgdl, language)
