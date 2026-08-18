@@ -417,6 +417,47 @@ Two traps worth carrying elsewhere:
   refuses to arm any PR carrying a `0.X → 0.Y` transition (engram-infra#909).
   engram has 13 deps on `~> 0.x`.
 
+## test_66: a lying assertion message (observed once, 2026-08-18)
+
+`test_66_remote_logging_toggle::test_disable_stops_flush` failed on
+`e2e-clerk` with:
+
+```
+AssertionError: No pre-disable log entries reached the server within 5 s
+after push_file_now + flush_remote_logs. This means rlog().info(...) calls
+inside pushFile() either didn't fire (engine code change) or the
+visibilitychange flush handler isn't POSTing to /logs.
+assert []
+```
+
+**Do not follow that message into `remote-log.ts`.** It names two causes and
+the observed failure was neither. `test_16_remote_logging_pipeline` exercises
+the same pipeline and passed in the same run, at 31% while test_66 failed at
+84%, so the pipeline was working the whole time.
+
+Non-deterministic: the identical job passed on rerun with no code change.
+
+### Why it is easy to misattribute to your own diff
+
+It surfaced on a PR that ADDED e2e tests, which makes "my new tests polluted
+a shared resource" the obvious story, and there is even a real mechanism to
+support it: `list_logs(query=)` filters Python-side AFTER the backend caps at
+`limit`, under one shared session user with logging seeded on suite-wide, so
+a log-noisy test upstream genuinely can push a marker out of the window
+(#1419).
+
+That story was wrong, and one cheap fact killed it: **execution order**. The
+new tests ran at 98-100%, test_66 failed at 84%. They ran after it.
+
+Check the order before building a theory:
+
+```bash
+gh run view <run-id> --log | grep -oE "\[gw[0-9]\] \[ *[0-9]+%\] (PASSED|FAILED) tests/[^ ]*"
+```
+
+Adding tests does perturb xdist distribution, so a new test file can change
+test_66's neighbours and timing without being at fault for its content.
+
 ## What is still open
 
 - `test_34` — **FIXED** (Engram-obsidian#394), verified green in the
