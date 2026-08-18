@@ -482,10 +482,21 @@ defmodule EngramWeb.AttachmentsController do
   # markup or XSLT) are NOT — they force-download. Everything not on this list
   # downloads by default.
   defp inline_safe?(nil), do: false
-  defp inline_safe?("image/svg+xml"), do: false
 
   defp inline_safe?(mime) when is_binary(mime) do
-    String.starts_with?(mime, "image/") or mime == "application/pdf" or mime == "text/plain"
+    # Normalize BEFORE matching. `mime_type` is stored verbatim from the
+    # uploader (see create/2), so the bare `"image/svg+xml"` clause this used
+    # to match on was trivially sidestepped: `image/svg+xml; charset=utf-8`
+    # and `image/svg+xml ` both missed the exclusion and fell into the
+    # `starts_with?("image/")` allowlist, i.e. an SVG (a script-executing
+    # document format) served `inline`. Strip parameters and case so the
+    # exclusion below is decided by the media type alone.
+    case mime |> String.split(";", parts: 2) |> hd() |> String.trim() |> String.downcase() do
+      "image/svg+xml" -> false
+      "application/pdf" -> true
+      "text/plain" -> true
+      type -> String.starts_with?(type, "image/")
+    end
   end
 
   defp serialize_metadata(att) do

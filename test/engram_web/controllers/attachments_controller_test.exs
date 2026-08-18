@@ -504,6 +504,40 @@ defmodule EngramWeb.AttachmentsControllerTest do
              ]
     end
 
+    test "forces download for svg carrying a charset parameter", %{conn: conn} do
+      # `mime_type` is stored verbatim from the uploader, so the SVG exclusion
+      # must not be an exact-string match: `image/svg+xml; charset=utf-8` and
+      # `image/svg+xml ` used to miss it and fall through to the
+      # `starts_with?("image/")` allowlist, serving a script-executing document
+      # `inline`. Not exploitable on its own (the :api pipeline sets
+      # `default-src 'none'` and the route is Bearer-only, so there is no
+      # drive-by), but it is the defense-in-depth layer, so it must hold.
+      for {path, mime} <- [
+            {"param.svg", "image/svg+xml; charset=utf-8"},
+            {"trail.svg", "image/svg+xml "},
+            {"upper.svg", "IMAGE/SVG+XML"}
+          ] do
+        _ =
+          conn
+          |> post("/api/attachments", %{
+            path: path,
+            content_base64: Base.encode64("<svg/>"),
+            mime_type: mime,
+            mtime: 1.0
+          })
+          |> json_response(200)
+
+        resp = get(conn, "/api/attachments/#{path}?raw=1")
+
+        assert resp.status == 200
+
+        assert get_resp_header(resp, "content-disposition") == [
+                 ~s(attachment; filename="#{path}")
+               ],
+               "#{inspect(mime)} was served inline"
+      end
+    end
+
     test "forces download for text/* markup types (allowlist, not just svg/html)", %{conn: conn} do
       # text/xml is admitted by the MIME whitelist's `text/` prefix and can run
       # script via XSLT — it must NOT render inline.

@@ -71,9 +71,25 @@ stored-XSS vector:
    `content-security-policy: default-src 'none'`.
 3. Bearer auth means there is no drive-by navigation to the URL.
 
-> **Hardening note, the one that matters.** The safety of the entire attachment
-> serving path rests on `inline_safe?/1` staying an **allowlist**. Flip it to a
-> denylist, or add a broad prefix to it, and stored HTML becomes servable inline.
+> **Hardening note, corrected.** An earlier draft of this doc said the safety of
+> the attachment path "rests on `inline_safe?/1` staying an allowlist". That was
+> wrong on both halves, and review caught it.
+>
+> It does not rest on `inline_safe?/1`. The two load-bearing guards are the
+> `:api` pipeline's `content-security-policy: default-src 'none'` (router.ex),
+> which means a rendered SVG or HTML document executes nothing, and
+> `EngramWeb.Plugs.Auth` matching `Bearer` on the `authorization` header ONLY,
+> with no cookie or query-param fallback, so a victim who follows a link just
+> gets a 401. Those are what to protect. `inline_safe?/1` is defense in depth.
+>
+> And it was not a clean allowlist: it carried an exact-string `"image/svg+xml"`
+> exclusion, while `mime_type` is stored verbatim from the uploader. So
+> `image/svg+xml; charset=utf-8` and `image/svg+xml ` both missed the exclusion
+> and fell through to `starts_with?("image/")`, i.e. served `inline`. Fixed in
+> the same PR by normalizing (strip parameters, trim, downcase) before matching,
+> with a regression test covering the parameterized, trailing-space, and
+> uppercase forms. Not exploitable on its own thanks to the two guards above,
+> which is why it is recorded here rather than as an incident.
 
 The OAuth sites interpolate only hardcoded error-code literals and are HTML-escaped
 anyway. `spa_controller` injects zero request data.
@@ -134,8 +150,37 @@ mix sobelow --exit low --skip
 An `ignore:` list of check names in `.sobelow-conf` was considered and rejected:
 it permanently blinds whole **categories**. Ignoring `Misc.BinToTerm` means a
 future genuinely-unsafe `binary_to_term` never fires. The fingerprint approach
-keeps every category live and preserves the strictness Phase 6 was after; only
-these 21 exact sites are muted.
+keeps every category live; only these 21 exact sites are muted.
+
+### What a fingerprint does NOT protect (know this before trusting it)
+
+`Sobelow.Finding.fingerprint/1` is `:erlang.phash2` of
+`[check_type, vuln_source, filename, line]`, where `vuln_source` is the AST of
+**the flagged call itself**. It does not cover the surrounding function, and it
+does not cover where the data came from.
+
+This matters because most of the 21 are justified by **provenance**, not by the
+call. Review demonstrated the gap concretely: at `notes.ex:4597` the
+authenticated decrypt feeding the skipped `binary_to_term` was replaced with a
+plain `Base.decode64!`, deleting the entire "bytes just passed AES-GCM auth"
+argument, and `mix sobelow --exit low --skip` stayed **silent at exit 0**.
+
+So the gate defends **locations**, not **invariants**:
+
+| Change | Resurfaces? |
+|---|---|
+| Same check at a new file or line | yes |
+| The flagged call itself edited (`[:safe]` dropped) | yes |
+| File renamed, or lines inserted above | yes (fails closed, but noisy) |
+| **The data reaching the call made untrusted** | **no** |
+
+The invariants each skip depends on are written down in the triage table above.
+Keeping them true is a code-review responsibility, not something CI checks.
+
+Corollary: the remedy for line-shift churn, `mix sobelow --mark-skip-all`,
+regenerates the file **wholesale**. That is exactly the moment a genuinely new
+finding can get pinned under cover of a large churn diff. Re-triage the diff,
+do not just re-run and commit.
 
 ### Verification recipe (re-run this whenever sobelow config or version changes)
 
@@ -154,15 +199,32 @@ rm lib/engram/zz_sobelow_canary.ex
 Verified 2026-08-18: exits **1** and names the new file. If it exits 0, sobelow is
 not scanning and every green sobelow check on this repo is meaningless.
 
+This canary proves **new-location** detection only. It does not prove the skips
+are still justified, because the fingerprint cannot see provenance (see above).
+Read it as "the scanner is alive", not "the suppressions are still safe".
+
 ## Operational gotchas
 
-- **`.sobelow-skips` must be registered in two fingerprint inputs**, or a stale
-  green can be replayed over a changed skip list:
+- **`.sobelow-skips` must be registered in THREE places**, or a stale green can
+  be replayed over a changed skip list:
+  - `lint-config` in `ci/fingerprint/groups.sh` — **this is the one that
+    actually gates the lint job.** `verify.yml` computes `skip-lint` from
+    `job_groups lint` here, not from `BACKEND_HASH`.
   - `BACKEND_HASH` inputs in `.github/workflows/verify.yml` (~line 333)
   - `ELIXIR_AFFECTING_REGEX` in `.githooks/pre-push` (~line 125)
 
-  Both were updated. See `docs/context/ci-fingerprint-markers.md` for why an
-  unregistered input is a correctness bug, not a cache miss.
+  Also add a row to the `PAIRS` table in `ci/fingerprint/test/groups_test.sh`,
+  or the static assertion passes vacuously and cannot catch the omission.
+
+  The first draft of this PR registered only the last two and asserted in a CI
+  comment that a skips-only edit "cannot replay a stale pass". It could: a PR
+  touching only `.sobelow-skips` produced an identical `job_hash lint`, hit the
+  existing `ci-lint:<hash>` marker, and skipped the lint job entirely, so the
+  required check went green **without running sobelow against the new
+  suppression list**. Review caught it; verified fixed by confirming a
+  skips-only commit now changes `job_hash lint`. See
+  `docs/context/ci-fingerprint-markers.md` for why an unregistered input is a
+  correctness bug, not a cache miss.
 
 - **CI and the pre-push hook invoke sobelow separately** (the `Sobelow` step in
   `verify.yml`, and Stage B in `.githooks/pre-push`) and must carry identical

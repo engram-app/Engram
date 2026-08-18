@@ -113,7 +113,7 @@ Phase 6 (this PR) is a thin closeout because Phases 4 + 5 already exceeded the p
 mix format --check-formatted          # exit 0
 mix compile --warnings-as-errors      # exit 0
 mix credo --strict                    # exit 0, 0 findings
-mix sobelow --exit low                # exit 0, 0 findings (no --skip)
+mix sobelow --exit low --skip         # exit 0 (see sobelow-silent-no-op doc)
 mix dialyzer                          # exit 0, 0 effective findings (4 ignored)
 mix test                              # 1046+ pass, 0 fail
 ```
@@ -127,7 +127,7 @@ cd backend
 mix format --check-formatted          # exit-status only
 mix compile --warnings-as-errors --force
 mix credo --strict --mute-exit-status # full report
-mix sobelow --exit low                # full report (no --skip — annotations surface)
+mix sobelow --exit low                # full report, INCLUDING accepted findings
 mix dialyzer                          # full report (PLT must be built first via mix dialyzer --plt)
 ```
 
