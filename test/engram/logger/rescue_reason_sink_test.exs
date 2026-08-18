@@ -64,4 +64,405 @@ defmodule Engram.Logger.RescueReasonSinkTest do
     assert line =~ "biopsy",
            "RedactFilter now scrubs :error — safe_reason/1 may be redundant, re-check it"
   end
+
+  # The storage key IS a vault path — `user/vault/Medical/biopsy.md`. It is in
+  # RedactFilter's `@sensitive_keys`, so `storage_key:` metadata comes out
+  # `[REDACTED]`. But the SAME key rides inside the ExAws error term, and
+  # `:reason` is not a sensitive key — so the control was defeated by the value
+  # simply travelling under a different name in the same log call.
+  #
+  # This is what a key-based redactor cannot do on its own, and why the reason
+  # has to be rendered rather than trusted.
+  test "a storage key redacted by name does not leak inside :reason" do
+    key = "u1/v1/Medical/biopsy.md"
+
+    # The shape ExAws hands back for a 4xx: the whole response map.
+    {:error, reason} =
+      ExAws.Request.client_error(
+        %{
+          status_code: 404,
+          body: "<Error><Code>NoSuchKey</Code><Key>#{key}</Key></Error>",
+          headers: []
+        },
+        Jason
+      )
+
+    # The premise: rendering it raw discloses the path the sibling key hides.
+    assert inspect(reason) =~ "Medical"
+
+    meta =
+      Metadata.with_category(:error, :sync,
+        storage_key: key,
+        reason: Metadata.safe_reason(reason)
+      )
+      |> Map.new()
+
+    line = prod_line(meta, "S3.exists? failed")
+    encoded = Jason.encode!(line)
+
+    assert encoded =~ "[REDACTED]", "storage_key should still be redacted by name"
+    refute encoded =~ "Medical"
+    refute encoded =~ "biopsy"
+    # The diagnostic survives: an operator still learns WHICH S3 error it was.
+    assert encoded =~ "NoSuchKey"
+  end
+
+  # Everything these two dependencies log is DROPPED, so the invariant under
+  # test is no longer "the path was removed from the message" but "none of the
+  # message survives at all".
+  #
+  # A TABLE rather than a test each, because the point is that the shape stops
+  # mattering. Every entry below defeated at least one of the four scrub rules
+  # that shipped before this one — and the last two were found by review AFTER
+  # a rule was written specifically to be shape-proof.
+  @dependency_shapes [
+    {"an absolute URL",
+     {:string,
+      "ExAws: HTTP ERROR: :timeout for URL: \"https://b/u1/v1/Medical/biopsy.md\" ATTEMPT: 3"},
+     {ExAws.Request, :request_and_retry, 7}},
+
+    # Req hands its message over as an IOLIST. A `when is_binary(msg)` guard
+    # once made this a silent skip — the filter simply did not run.
+    {"a Req redirect iolist", {:string, ["redirecting to ", "https://b/u1/v1/Medical/biopsy.md"]},
+     {Req.Steps, :redirect, 1}},
+
+    # RFC 7231 §7.1.2 permits a RELATIVE Location, and Req logs the raw header
+    # before `URI.merge`. A scheme-anchored pattern left this untouched.
+    {"a relative Location with no scheme",
+     {:string, ["redirecting to ", "/bucket/u1/v1/Medical/biopsy.md"]},
+     {Req.Steps, :redirect, 1}},
+
+    # Beat the per-token rule: `\S+` stopped at the space inside the rendering.
+    {"a byte-rendered non-UTF-8 key",
+     {:string, "for URL: " <> inspect(<<104, 116, 116, 112, 58, 47, 47, 255, 46, 109, 100>>)},
+     {ExAws.Request, :r, 7}},
+
+    # Beat it HARDER: `inspect/1` truncates at 100 bytes, so the byte-render
+    # regex no longer matched at all and the decimals shipped whole — a full
+    # path, one `String.to_integer` away.
+    {"a byte rendering past inspect's 100-byte truncation",
+     {:string,
+      "for URL: " <>
+        inspect(:binary.copy(<<0xFF>>, 1) <> String.duplicate("Medical/biopsy.md", 8))},
+     {ExAws.Request, :r, 7}},
+
+    # Beat the per-element rule: element two holds no separator, so it passed,
+    # and the join produced a string with no separator left to catch.
+    {"a path split across iodata elements",
+     {:string, ["redirecting to ", "Medical/", "biopsy.md"]}, {Req.Steps, :redirect, 1}},
+
+    # Beat PREFIX-truncation, the rule written to be shape-proof: a space in the
+    # first folder name and the folder ships in clear. `Divorce 2026` and
+    # `Medical Records` disclose the sensitive fact on their own.
+    {"a folder name containing a space",
+     {:string, ["redirecting to ", "Medical Records/2026/biopsy.md"]}, {Req.Steps, :redirect, 1}},
+
+    # Beat every separator-based rule at once: there is no separator to find.
+    # This was a documented, pinned GAP until the message stopped being read.
+    {"a separator-free filename", {:string, ["redirecting to ", "Divorce settlement notes.md"]},
+     {Req.Steps, :redirect, 1}},
+    {"percent-encoded separators",
+     {:string, "for URL: \"b%2Fu1%2FMedical%2F2026 biopsy results.md\""}, {ExAws.Request, :r, 7}},
+
+    # `msg: {:string, :atom}` used to fall through the scrub head untouched.
+    {"an atom message", {:string, :shutdown}, {Req.Steps, :r, 1}},
+
+    # Erlang-style shapes never matched `{:string, chardata}` at all, so they
+    # skipped the scrub entirely. Nothing reads the message now, so they cannot.
+    {"an Erlang format/args message", {~c"redirecting to ~ts", ["Medical/biopsy.md"]},
+     {Req.Steps, :r, 1}},
+    {"a report message", %{url: "https://b/u1/v1/Medical/biopsy.md"}, {Req.Steps, :r, 1}},
+
+    # Unrenderable chardata. This must not RAISE above all else: OTP deletes a
+    # primary filter that raises, node-wide, killing every other scrub with it.
+    {"an atom inside chardata", {:string, ["redirecting to ", :some_atom]}, {Req.Steps, :r, 1}},
+    {"invalid UTF-8", {:string, [<<0xFF>>, "bad utf8"]}, {Req.Steps, :r, 1}},
+    {"an out-of-range codepoint", {:string, [1_114_112]}, {Req.Steps, :r, 1}}
+  ]
+
+  for {name, msg, mfa} <- @dependency_shapes do
+    test "#{name} does not survive a dependency log line" do
+      event = %{
+        level: :warning,
+        msg: unquote(Macro.escape(msg)),
+        meta: %{mfa: unquote(Macro.escape(mfa))}
+      }
+
+      assert %{msg: {:string, out}} = RedactFilter.filter(event, [])
+      assert out == "[REDACTED]", "dependency message must not survive, got: #{inspect(out)}"
+    end
+  end
+
+  # The other half. Dropping the message is only acceptable because what an
+  # operator actually needs is in the METADATA, which is ours — so this pins
+  # that the drop does not take the metadata with it. Without this, replacing
+  # the whole event with `[REDACTED]` would pass every assertion above.
+  test "dropping the message keeps the metadata that makes it diagnosable" do
+    event = %{
+      level: :warning,
+      msg: {:string, ["redirecting to ", "https://b/u1/v1/Medical/biopsy.md"]},
+      meta: %{mfa: {Req.Steps, :redirect, 1}, request_id: "req-123"}
+    }
+
+    assert %{msg: {:string, "[REDACTED]"}, meta: meta, level: :warning} =
+             RedactFilter.filter(event, [])
+
+    # WHICH dependency, WHICH function, and our own correlation id.
+    assert meta.mfa == {Req.Steps, :redirect, 1}
+    assert meta.request_id == "req-123"
+  end
+
+  # Our own log lines must not be touched by that rule. The drop is scoped to
+  # two modules; everything else keeps its message verbatim.
+  test "a non-ExAws message with the same words is left alone" do
+    msg = "sync failed for URL: internal"
+    event = %{level: :warning, msg: {:string, msg}, meta: %{}}
+
+    assert RedactFilter.filter(event, []).msg == {:string, msg}
+  end
+
+  test "a module that merely resembles a listed one is left alone" do
+    msg = "GET https://b/u1/v1/Medical/biopsy.md"
+
+    for mfa <- [{ExAws.S3, :put_object, 3}, {Req.Request, :run, 1}, {Engram.Sync, :push, 2}] do
+      event = %{level: :warning, msg: {:string, msg}, meta: %{mfa: mfa}}
+      assert RedactFilter.filter(event, []).msg == {:string, msg}
+    end
+  end
+
+  # THE filter must survive, and must keep redacting.
+  #
+  # Everything else in this file tests `filter/2` by calling it directly, which
+  # cannot observe the failure that matters: OTP DELETES a primary filter that
+  # raises, throws or exits — node-wide, for the life of the VM — and every
+  # later path, token and note body then ships in clear. Six review rounds ran
+  # with that route unpinned, and reverting the fix left the suite green.
+  #
+  # These install the real filter and drive the real `:logger` API.
+  describe "the primary filter survives everything :logger can hand it" do
+    setup do
+      :logger.add_primary_filter(:engram_redact_test, {&RedactFilter.filter/2, []})
+      on_exit(fn -> :logger.remove_primary_filter(:engram_redact_test) end)
+      :ok
+    end
+
+    defp installed?, do: :engram_redact_test in Keyword.keys(:logger.get_primary_config().filters)
+
+    test "a struct metadata does not remove the filter" do
+      assert installed?()
+
+      # `is_map/1` is true for a struct, and `Map.new/2` raises
+      # Protocol.UndefinedError on one with no Enumerable impl. %MapSet{} HAS
+      # one, which is why a casual probe misses this.
+      for meta <- [%URI{}, %RuntimeError{message: "x"}] do
+        try do
+          :logger.log(:warning, "probe", meta)
+        catch
+          _, _ -> :ok
+        end
+      end
+
+      assert installed?(), "the primary filter was removed — all redaction is now off"
+    end
+
+    # `@otp_meta_keys` is load-bearing and was shipping unpinned: deleting the
+    # whole list left the suite green.
+    #
+    # OTP merges its own keys INTO struct-shaped metadata, so a struct event
+    # arrives carrying `:pid`, `:time` and `:gl` alongside the struct's fields.
+    # The formatter requires them — replacing metadata wholesale removed the
+    # filter for a different reason than the crash it was fixing.
+    #
+    # Reachability note: `Logger.error("m", %URI{})` raises at the CALL SITE
+    # (the macro cannot take a struct), so only the raw `:logger.log/3` OTP API
+    # reaches the struct clause at all.
+    test "OTP's own metadata keys survive struct redaction" do
+      out =
+        RedactFilter.filter(
+          %{
+            level: :error,
+            msg: {:string, "m"},
+            meta:
+              Map.merge(
+                %{pid: self(), time: 123, gl: self()},
+                Map.from_struct(%URI{path: "/Medical/x.md"})
+              )
+              |> Map.put(:__struct__, URI)
+          },
+          []
+        )
+
+      # The struct's own fields are redacted...
+      assert out.meta.path == "[REDACTED]"
+      assert out.meta.meta_struct == "URI"
+      # ...and OTP's are not, or the formatter breaks downstream.
+      assert out.meta.time == 123
+      assert out.meta.pid == self()
+      assert out.meta.gl == self()
+    end
+
+    # `meta_struct` was `inspect(mod)` with no guard and no bound, and this head
+    # matches any map carrying the KEY — not only a real struct. So a non-atom
+    # value was rendered into the log verbatim: a redactor emitting a term
+    # rather than a label, which is the defect the call-site guard in
+    # log_call_compliance_test.exs exists to catch.
+    test "a non-atom __struct__ is redacted, not inspected into the line" do
+      out =
+        RedactFilter.filter(
+          %{
+            level: :error,
+            msg: {:string, "m"},
+            meta: %{__struct__: %{note: "Dear diary, the biopsy came back positive"}, time: 1}
+          },
+          []
+        )
+
+      refute inspect(out.meta) =~ "biopsy"
+      assert out.meta.__struct__ == "[REDACTED]"
+      # Not the struct path: there is no class to report, so no label is minted.
+      refute Map.has_key?(out.meta, :meta_struct)
+    end
+
+    # Struct metadata must be REDACTED, not merely survived. The first fix
+    # guarded with `not is_struct(meta)`, which passed it through in clear.
+    # POSITIVE assertions, deliberately.
+    #
+    # The previous version was all `refute`, and the catch arm sets
+    # `meta: %{}` — so "redacted correctly" and "wiped by the fail-closed net"
+    # were indistinguishable to it. Reverting `redact/1` to the raising version
+    # left the ENTIRE 4589-test suite green: the net that makes the bug
+    # survivable is the same net that made it untestable.
+    test "an exception struct keeps its class and loses every field" do
+      secret = "Dear diary, the biopsy came back positive"
+
+      out =
+        RedactFilter.filter(
+          %{level: :warning, msg: {:string, "m"}, meta: %RuntimeError{message: secret}},
+          []
+        )
+
+      # The leak this closes: deleting `__struct__` turned a term the JSON
+      # encoder REFUSED into a clean encodable map carrying `message`.
+      refute inspect(out.meta) =~ "biopsy"
+      # Positive: CLASSIFIED and field-redacted, not blanked by the catch arm.
+      assert out.meta.meta_struct == "RuntimeError"
+      assert out.meta.message == "[REDACTED]"
+      assert out.msg == {:string, "m"}
+    end
+
+    test "a plain map keeps its non-sensitive keys" do
+      out =
+        RedactFilter.filter(
+          %{
+            level: :warning,
+            msg: {:string, "m"},
+            meta: %{path: "/Medical/biopsy.md", vault_id: "v-1", note_id: "n-1"}
+          },
+          []
+        )
+
+      assert out.meta.path == "[REDACTED]"
+      # The half that distinguishes real redaction from the catch arm wiping
+      # metadata wholesale.
+      assert out.meta.vault_id == "v-1"
+      assert out.meta.note_id == "n-1"
+    end
+
+    # `rescue` covers only the :error class; OTP removes a THROWING filter
+    # exactly like a raising one.
+    test "every exit class leaves the filter installed and redacting" do
+      for meta <- [%URI{}, :not_a_map, %{msg_only: 1}] do
+        try do
+          :logger.log(:error, "probe", meta)
+        catch
+          _, _ -> :ok
+        end
+      end
+
+      assert installed?()
+
+      ev = %{level: :error, msg: {:string, "m"}, meta: %{path: "Medical/x.md", vault_id: "v-1"}}
+      out = RedactFilter.filter(ev, [])
+
+      assert out.meta.path == "[REDACTED]"
+      # Positive half: proves redaction still RUNS, rather than the catch arm
+      # having quietly taken over for every event from here on.
+      assert out.meta.vault_id == "v-1"
+    end
+  end
+
+  # The shapes the widening was made for. Each was leaking under the previous
+  # pattern, and none of them was covered — all three reverts stayed green.
+
+  # I1: the previous pattern was quadratic and ran in the CALLING process —
+  # 7.1 s at 16 KB, 282 s at 100 KB.
+  test "a large separator-free message cannot block the caller" do
+    msg = String.duplicate("a", 100_000)
+    event = %{level: :warning, msg: {:string, msg}, meta: %{mfa: {ExAws.Request, :r, 7}}}
+
+    started = System.monotonic_time(:millisecond)
+    RedactFilter.filter(event, [])
+
+    assert System.monotonic_time(:millisecond) - started < 500
+  end
+
+  # The other axis: many small tokens that DO carry separators, so the walk is
+  # actually entered. The first version of this test used separator-free
+  # tokens, which the whole-string pre-check short-circuits — it never reached
+  # the code it claimed to measure and merely duplicated the test below.
+  # Sized just under @max_scrub_bytes so the cap does not short-circuit it
+  # either.
+  test "a separator-dense message under the cap cannot block the caller" do
+    msg = String.duplicate("a/b ", 8_000)
+    event = %{level: :warning, msg: {:string, msg}, meta: %{mfa: {ExAws.Request, :r, 7}}}
+
+    started = System.monotonic_time(:millisecond)
+    RedactFilter.filter(event, [])
+
+    assert System.monotonic_time(:millisecond) - started < 500
+  end
+
+  # Pins the size cap: past it, fail closed rather than spend unbounded time in
+  # a caller's process. Only two dependency modules reach this rule.
+  test "a pathological separator-bearing message is capped, not walked" do
+    msg = String.duplicate("a/b ", 20_000)
+    assert byte_size(msg) > 32_768
+    event = %{level: :warning, msg: {:string, msg}, meta: %{mfa: {ExAws.Request, :r, 7}}}
+
+    started = System.monotonic_time(:millisecond)
+    {:string, out} = RedactFilter.filter(event, []).msg
+
+    assert out == "[REDACTED]"
+    assert System.monotonic_time(:millisecond) - started < 200
+  end
+
+  # The limits the moduledoc names, asserted as CURRENT BEHAVIOUR.
+  #
+  # These are gaps, not features. They are pinned so that closing one is a
+  # deliberate act with a red test attached, and so nobody reads the moduledoc's
+  # honesty as hedging — every leak in this series survived behind a comment
+  # claiming more coverage than the code had.
+  describe "known gaps (pinned so a change is noticed)" do
+    test "nested metadata is NOT redacted" do
+      out =
+        RedactFilter.filter(
+          %{level: :warning, msg: {:string, "m"}, meta: %{req: %{path: "/Medical/biopsy.md"}}},
+          []
+        )
+
+      assert out.meta.req.path == "/Medical/biopsy.md",
+             "nesting is now redacted — good, update the moduledoc and delete this"
+    end
+
+    test "non-atom metadata keys are NOT redacted" do
+      out =
+        RedactFilter.filter(
+          %{level: :warning, msg: {:string, "m"}, meta: %{"path" => "/Medical/biopsy.md"}},
+          []
+        )
+
+      assert out.meta["path"] == "/Medical/biopsy.md",
+             "string keys are now redacted — good, update the moduledoc and delete this"
+    end
+  end
 end

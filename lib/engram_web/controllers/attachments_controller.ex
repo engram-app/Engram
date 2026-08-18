@@ -343,8 +343,13 @@ defmodule EngramWeb.AttachmentsController do
           "Failed to list attachments",
           Engram.Logger.Metadata.with_category(:error, :sync,
             vault_id: vault.id,
-            # noqa: T3.0.6 — Logger metadata only; bounded ExAws error term
-            reason: inspect(reason)
+            # Defensive: this branch is not currently reachable — the listing
+            # is DB-only and `Repo.all` raises rather than returning `{:error,
+            # _}`. Rendered as a label anyway so it cannot become a leak if a
+            # storage call is ever added here. The `noqa` this replaced claimed
+            # a "bounded ExAws error term"; there is no ExAws call on this path
+            # at all, so the note was wrong in both directions.
+            reason: Engram.Logger.Metadata.safe_reason(reason)
           )
         )
 

@@ -259,7 +259,7 @@ defmodule Engram.Fixtures do
     {:ok, content_key} = Engram.Crypto.dek_content_hash_key(user)
 
     att_id = Ecto.UUID.generate()
-    storage_key = Engram.Storage.key(user.id, vault.id, path)
+    storage_key = Engram.Storage.object_key(user.id, vault.id, att_id)
 
     # DB-enforced NOT NULL on seq (NULL rows vanish from the sync feed).
     {:ok, seq} = Repo.with_tenant(user.id, fn -> Engram.Vaults.next_seq!(vault.id) end)

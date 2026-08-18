@@ -338,7 +338,7 @@ defmodule Engram.Indexing do
                 user_id: note.user_id,
                 vault_id: note.vault_id,
                 note_id: note.id,
-                reason: inspect(reason)
+                reason: Engram.Logger.Metadata.safe_reason(reason)
               }
             )
 

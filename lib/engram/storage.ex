@@ -88,17 +88,21 @@ defmodule Engram.Storage do
   @doc "Returns the configured storage adapter module."
   def adapter, do: Application.get_env(:engram, :storage, __MODULE__.S3)
 
-  @doc "Build a storage key from user_id, vault_id, and attachment path."
-  def key(user_id, vault_id, path)
-      when is_binary(user_id) and is_binary(vault_id) and is_binary(path) and path != "" do
-    "#{user_id}/#{vault_id}/#{path}"
-  end
-
   @doc """
   Build a storage key from the immutable attachment row UUID. Decoupled from
   the mutable vault path so move/rename never relocates the blob and a new
-  upload to a vacated path computes a fresh key (no clobber). New uploads use
-  this; legacy rows keep their path-derived `storage_key` column value.
+  upload to a vacated path computes a fresh key (no clobber).
+
+  This is the ONLY key builder. `key/3`, which produced
+  `"user/vault/<cleartext path>"`, is deleted — a storage key ends up in the S3
+  URL and therefore in S3 access logs, CDN logs and bucket listings, none of
+  which any control in this codebase can reach, so the path must not be in the
+  key at all.
+
+  Prod was counted on 2026-08-17 before that deletion shipped: 129 attachments
+  across 6 tenants, ALL UUID-keyed, zero path-derived and zero NULL. So there
+  is no legacy population to migrate; the previous note here, that "legacy rows
+  keep their path-derived `storage_key`", described rows that do not exist.
   """
   def object_key(user_id, vault_id, att_id)
       when is_binary(user_id) and is_binary(vault_id) and is_binary(att_id) and att_id != "" do
