@@ -78,6 +78,12 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   @default_ceiling_ms 60_000
   @default_eager_ms 250
 
+  # No activity for this long and the room asks its observers to let go, after
+  # which the existing auto_exit stops it. 5 min is deliberately conservative:
+  # the cost of draining a room someone still wants is one re-handshake on their
+  # next keystroke. See the resolution in init/1 for why this defaults ON.
+  @default_idle_exit_ms 300_000
+
   # Cap on the idle-drain re-ask multiplier (see drain_delay/1).
   @max_drain_backoff 8
 
@@ -129,8 +135,25 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     settle_ms = Keyword.get(cfg, :settle_ms, @default_settle_ms)
     ceiling_ms = Keyword.get(cfg, :ceiling_ms, @default_ceiling_ms)
     eager_ms = Keyword.get(cfg, :eager_ms, @default_eager_ms)
-    # Per-room opt wins; config is the fleet-wide fallback. nil = drain disabled.
-    idle_exit_ms = Keyword.get(opts, :idle_exit_ms) || Keyword.get(cfg, :idle_exit_ms)
+    # Per-room opt wins, then fleet config, then the built-in default. Set either
+    # to 0 to disable the drain for a room.
+    #
+    # This defaults ON. It used to default to nil (disabled), which meant the
+    # drain shipped in #1382 was armed only where something set it — CI — and a
+    # room in prod lived until its last observer left. On 2026-08-18 a 1.7k-file
+    # vault upload left ~2000 rooms resident on 0.5-vCPU tasks (process count
+    # 757 -> 2744, process memory 41 MB -> 324 MB against an 820 MB limit) with
+    # `crdt_room_drain_total` at 0/0 for the entire window.
+    #
+    # Defaulting off is the wrong shape for a residency bound: every environment
+    # that forgets to set it is unbounded, and the one that most needs the bound
+    # (a real fleet under real load) is the least likely to have it. Rooms are
+    # ephemeral by design — a drained room checkpoints to Postgres and is
+    # re-created on the next frame — so the cost of a drain that wasn't needed is
+    # one re-handshake, not lost data.
+    idle_exit_ms =
+      Keyword.get(opts, :idle_exit_ms) ||
+        Keyword.get(cfg, :idle_exit_ms, @default_idle_exit_ms)
 
     # Trap exits so we receive {:EXIT, room_pid, reason} as a handle_info
     # message instead of dying silently. This lets us flush or log before

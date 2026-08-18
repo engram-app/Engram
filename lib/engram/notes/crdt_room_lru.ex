@@ -64,7 +64,11 @@ defmodule Engram.Notes.CrdtRoomLru do
   require Logger
 
   @table :crdt_room_lru
-  @default_max_resident 64
+  # Ceiling on resident rooms per node, enforced regardless of idleness so a bulk
+  # upload cannot outrun the idle timer. Sized against the 2026-08-18 measurement
+  # of ~162 KB per room: 256 rooms ≈ 41 MB, which fits a 0.5-vCPU / 1 GB task
+  # alongside everything else. Raise it with the task size, not ahead of it.
+  @default_max_resident 256
   @default_sweep_interval_ms 30_000
   @drain_event [:engram, :crdt, :room_drain]
 

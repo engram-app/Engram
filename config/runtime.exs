@@ -293,6 +293,13 @@ if rate_limit_overrides != [] do
   config :engram, rate_limit_overrides
 end
 
+# NOTE: the drain's fleet-wide defaults are NOT set here. They are module
+# defaults (`CrdtCheckpointTimer.@default_idle_exit_ms`,
+# `CrdtRoomLru.@default_max_resident`) so every environment is bounded without
+# having to remember to configure it. Setting CRDT_IDLE_EXIT_MS in an ECS task
+# definition would NOT work: ci_gated_int_override/2 below ignores it unless
+# CI=true, and only logs a warning.
+#
 # CRDT room-drain levers (#1152) — CI/E2E only, same CI=true gate. Each targets
 # a NESTED config key (module + key) rather than the flat app-env keys above, so
 # the pairs live in RuntimeConfig and DRIVE this loop. Writing them out longhand
