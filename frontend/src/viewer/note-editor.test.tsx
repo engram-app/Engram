@@ -32,6 +32,33 @@ describe("buildEditorState", () => {
 		expect(state.doc.toString()).toBe("# Seeded heading\n\nbody text");
 	});
 
+	// CodeMirror's content DOM defaults to spellcheck="false" (it's built for
+	// code). This is a prose/markdown editor, so the browser's native
+	// squiggly-underline spellcheck has to be switched back on, or misspelled
+	// words never get flagged.
+	it("enables the browser's native spellcheck on the content DOM", () => {
+		const doc = new Y.Doc();
+		const ytext = doc.getText("content");
+		const awareness = new Awareness(doc);
+
+		const view = new EditorView({
+			state: buildEditorState(
+				ytext,
+				awareness,
+				false,
+				"rendered",
+				resolveWikiLink,
+				openWikiLink,
+				wikiCompletionPaths,
+			),
+		});
+		try {
+			expect(view.contentDOM.getAttribute("spellcheck")).toBe("true");
+		} finally {
+			view.destroy();
+		}
+	});
+
 	it("produces an empty document when the Y.Text is empty", () => {
 		const doc = new Y.Doc();
 		const ytext = doc.getText("content");

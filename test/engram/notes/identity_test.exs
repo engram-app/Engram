@@ -468,4 +468,73 @@ defmodule Engram.Notes.IdentityTest do
              "projection wrote to the authority it derives from — that is a feedback loop"
     end
   end
+
+  describe "the crdt_create relocate leg claims, like every other rename" do
+    # The web app renames and moves EVERY note through `crdt_create`:
+    # `queries.ts` `useRenameNote` calls `crdtCreateNote(id, new_path)` under
+    # the comment "Replaces POST /notes/rename", and a folder drag-move sends
+    # one `crdt_create` per id at its new path. That leg relocated the ROW and
+    # claimed nothing, which is precisely the dual-write `claim_rename/5`
+    # exists to prevent — its own comment says claiming after the row moves has
+    # "the failure mode of projection silently REVERTING a completed rename".
+    #
+    # Latent until a client writes the map. `Engram-obsidian#362` is that
+    # client, so these pin the leg before it ships.
+    test "relocating a CLAIMED note moves the claim to the new path", ctx do
+      a = note(ctx, "a.md")
+      seed_index(ctx, [{"a.md", entry_for(a.id)}])
+
+      assert {:ok, moved} = Notes.genesis_crdt_note(ctx.user, ctx.vault, a.id, "b.md")
+      assert moved.path == "b.md", "the row did not relocate — this test proves nothing"
+
+      entries = index_entries(ctx)
+      note_id = a.id
+
+      assert %{"note_id" => ^note_id} = entries["b.md"],
+             "the row moved to b.md but the authority never followed — ProjectVaultIndex " <>
+               "walks the entries and corrects the row each one names, so the next " <>
+               "checkpoint drags this rename back to a.md"
+
+      refute Map.has_key?(entries, "a.md"),
+             "the old claim survived, so one note is named at two paths — the fixpoint " <>
+               "ProjectVaultIndex cannot converge"
+    end
+
+    # The guard that keeps the fix from being worse than the bug. A claim is
+    # durable and cannot be rolled back, so claiming a path the relocate then
+    # REFUSES makes that path permanently unclaimable — every later claim on it
+    # is refused even though the rows are free.
+    test "a relocate onto an OCCUPIED path leaves no claim behind", ctx do
+      a = note(ctx, "a.md")
+      b = note(ctx, "b.md")
+      seed_index(ctx, [{"a.md", entry_for(a.id)}, {"b.md", entry_for(b.id)}])
+
+      assert {:error, :id_conflict, _} =
+               Notes.genesis_crdt_note(ctx.user, ctx.vault, a.id, "b.md")
+
+      entries = index_entries(ctx)
+      a_id = a.id
+      b_id = b.id
+
+      assert %{"note_id" => ^b_id} = entries["b.md"],
+             "a rejected relocate stole the occupant's claim"
+
+      assert %{"note_id" => ^a_id} = entries["a.md"],
+             "a rejected relocate dropped the mover's own claim"
+    end
+
+    # A plain create is NOT a relocate. Claiming here would be wrong in the one
+    # case that matters: `classify_by_id` answering `:taken` makes genesis
+    # re-mint a FRESH id, so a claim naming the id the client sent would name a
+    # row that never exists — an orphan claim on a path nothing can ever hold.
+    test "a first-time create does not claim under the client's id", ctx do
+      fresh = Ecto.UUID.generate()
+
+      assert {:ok, _} = Notes.genesis_crdt_note(ctx.user, ctx.vault, fresh, "new.md")
+
+      refute Map.has_key?(index_entries(ctx), "new.md"),
+             "genesis claimed for a create; projection never acts on absence, so an " <>
+               "unclaimed new note is benign and claiming here only adds orphan risk"
+    end
+  end
 end

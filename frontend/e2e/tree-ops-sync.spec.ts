@@ -207,17 +207,19 @@ test.describe("web tree ops sync (web to web)", () => {
 		//      invalidated, only a defunct path-keyed one. Fixed by threading
 		//      the note id through to the broadcast for every "the note is
 		//      really gone" call site.
-		// With both fixed, useNote(id) refetches by id in both tabs, the
-		// backend 404s ("not found"), and NotePage's `error` branch renders
-		// "Failed to load note: not found" in place of the editor. The
-		// route/URL is left untouched (no redirect). That is the graceful
-		// state this test locks in: no dead editor showing stale content, no
-		// crash, no infinite spinner, just an explicit not-found message.
-		await expect(pageA).toHaveURL(noteUrlRe(doomedId));
-		await expect(pageA.getByText(/Failed to load note/u)).toBeVisible({ timeout: 10_000 });
+		// With both fixed, useNote(id) refetches by id in both tabs and the
+		// backend 404s ("not found"). Superseded: NotePage used to render
+		// "Failed to load note: not found" in place of the editor and leave the
+		// URL on the dead note; it now redirects to the bare vault instead (a
+		// deleted note is not a failure to explain, just gone) — see
+		// note-page.tsx's `noteGone` handling. Either way, no dead editor
+		// showing stale content, no crash, no infinite spinner, no stranded
+		// dead-note URL.
+		await expect(pageA).not.toHaveURL(noteUrlRe(doomedId), { timeout: 10_000 });
+		await expect(row(pageA, "survivor")).toBeVisible({ timeout: 10_000 });
 
-		await expect(pageB).toHaveURL(noteUrlRe(doomedId));
-		await expect(pageB.getByText(/Failed to load note/u)).toBeVisible({ timeout: 10_000 });
+		await expect(pageB).not.toHaveURL(noteUrlRe(doomedId), { timeout: 10_000 });
+		await expect(row(pageB, "survivor")).toBeVisible({ timeout: 10_000 });
 
 		// No crash in either tab: the CRDT doc teardown (closeDoc fires from the
 		// effect cleanup once `note` flips to the error state and its derived

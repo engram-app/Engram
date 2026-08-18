@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, api, LimitExceededError, setUpgradeHandler } from "./client";
+import { ApiError, api, isNotFound, LimitExceededError, setUpgradeHandler } from "./client";
+
+describe("isNotFound", () => {
+	it("is true only for a 404 ApiError", () => {
+		expect(isNotFound(new ApiError(404, "not found"))).toBe(true);
+		expect(isNotFound(new ApiError(500, "server error"))).toBe(false);
+		expect(isNotFound(new Error("network down"))).toBe(false);
+		expect(isNotFound(null)).toBe(false);
+	});
+});
 
 describe("api client 402 handling", () => {
 	beforeEach(() => {

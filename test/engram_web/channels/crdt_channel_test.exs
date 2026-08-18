@@ -995,7 +995,21 @@ defmodule EngramWeb.CrdtChannelTest do
              "Expected note_id #{inspect(doc_id)} to be visible in the log, got: #{inspect(log)}"
 
       # ...but only via metadata, never interpolated into the message body.
-      [_meta_and_level, msg] = String.split(log, "[warning]", parts: 2)
+      #
+      # Isolate THIS warning's line first. `capture_log` is global, so under a
+      # loaded suite the capture also holds unrelated concurrent output — the
+      # Prometheus aggregator's "Dropping aggregation for bad tag value"
+      # warnings arrive in bursts. Splitting the whole capture on the FIRST
+      # `[warning]` then landed on one of those, leaving this test's own line —
+      # metadata `note_id=...` included — inside `msg`, and the refute below
+      # failed on metadata it was never meant to read. Same shared-capture
+      # class as #1359.
+      msg =
+        log
+        |> String.split("\n")
+        |> Enum.find(&String.contains?(&1, "dropped crdt_msg"))
+        |> String.split("[warning]", parts: 2)
+        |> List.last()
 
       refute String.contains?(msg, doc_id),
              "note_id must live in metadata, not the message body: #{inspect(msg)}"
