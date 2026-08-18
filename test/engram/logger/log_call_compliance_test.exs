@@ -94,7 +94,141 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/vector/",
     "lib/engram/keyword_index.ex",
     "lib/engram/embedder.ex",
-    "lib/engram/embedders/"
+    "lib/engram/embedders/",
+    # Fourth widening, from the deny-list work below: `reranker.ex` sees search
+    # queries (its `rerankers/` siblings were already in scope) and
+    # `request_logger.ex` logs request paths.
+    "lib/engram/reranker.ex",
+    "lib/engram/sync/",
+    "lib/engram/keyword_index/",
+    "lib/engram/accounts/export/",
+    "lib/engram_web/request_logger.ex",
+    # Clean today, netted so they stay that way: the markdown parser IS note
+    # content, content-hash backfill reads it, and `logs/client_log.ex` is the
+    # schema for the plugin's own log lines.
+    "lib/engram/parsers/",
+    "lib/engram/content_hash/",
+    "lib/engram/logs/"
+  ]
+
+  # Everything in `lib/` that is deliberately NOT scanned, with the reason.
+  #
+  # The scope list above was an ALLOWLIST, and widening it found real leaks FOUR
+  # separate times — `storage/s3.ex`, `cleanup_vault.ex`, `folders.ex` (the
+  # constraint's own `Medical/` example, missed twice) and `reranker.ex`. Four
+  # for four is not a list converging on complete; it is a list whose default is
+  # wrong.
+  #
+  # So the default is inverted here: `every_file_is_classified` fails on any
+  # file matching NEITHER list. A new module cannot be silently uncovered — it
+  # has to be put in scope or written down here with a reason. That turns an
+  # omission into a decision.
+  @out_of_scope [
+    # Auth, identity and OAuth — tokens and emails, never note data.
+    "lib/engram/abuse/",
+    "lib/engram/auth.ex",
+    "lib/engram/auth/",
+    "lib/engram/auth/clerk/",
+    "lib/engram/auth/providers/",
+    "lib/engram/connections.ex",
+    "lib/engram/connections/",
+    "lib/engram/invites.ex",
+    "lib/engram/invites/",
+    "lib/engram/oauth.ex",
+    "lib/engram/oauth/",
+    "lib/engram/oauth/cimd/",
+    "lib/engram/token.ex",
+    "lib/engram_web/oauth_metadata.ex",
+
+    # Billing and payments — Paddle, plans, meters.
+    "lib/engram/billing.ex",
+    "lib/engram/billing/",
+    "lib/engram/billing/workers/",
+    "lib/engram/conversation_meter.ex",
+    "lib/engram/legal.ex",
+    "lib/engram/legal/",
+    "lib/engram/legal/version_cache/",
+    "lib/engram/onboarding.ex",
+    "lib/engram/onboarding/",
+    "lib/engram/paddle/",
+    "lib/engram/paddle/client/",
+    "lib/engram/usage/",
+    "lib/engram/usage/daily_cap/",
+    "lib/engram/usage_meters.ex",
+    "lib/engram/usage_meters/",
+
+    # Web plumbing — routing, plugs, schemas, sockets. Request PATHS are handled
+    # in `request_logger.ex`, which IS in scope.
+    "lib/engram/webhooks/",
+    "lib/engram_web.ex",
+    "lib/engram_web/api_spec.ex",
+    "lib/engram_web/controllers/",
+    "lib/engram_web/controllers/admin/",
+    "lib/engram_web/csp.ex",
+    "lib/engram_web/endpoint.ex",
+    "lib/engram_web/gettext.ex",
+    "lib/engram_web/limit_response.ex",
+    "lib/engram_web/origin_device.ex",
+    "lib/engram_web/plugs/",
+    "lib/engram_web/presence.ex",
+    "lib/engram_web/rate_limiter.ex",
+    "lib/engram_web/rate_limiter/",
+    "lib/engram_web/remote_ip.ex",
+    "lib/engram_web/request_meta.ex",
+    "lib/engram_web/router.ex",
+    "lib/engram_web/schemas.ex",
+    "lib/engram_web/schemas/",
+    "lib/engram_web/telemetry.ex",
+    "lib/engram_web/user_socket.ex",
+    "lib/engram_web/webhooks/",
+
+    # Observability and telemetry — counters and traces by construction.
+    "lib/engram/logger/",
+    "lib/engram/observability/",
+    "lib/engram/prom_ex.ex",
+    "lib/engram/prom_ex/",
+    "lib/engram/spa_integrity.ex",
+    "lib/engram/telemetry.ex",
+    "lib/engram/telemetry/",
+
+    # Infrastructure and runtime — no note data reaches these.
+    "lib/engram.ex",
+    "lib/engram/accounts.ex",
+    "lib/engram/accounts/",
+    "lib/engram/application.ex",
+    "lib/engram/aws/",
+    "lib/engram/aws_kms.ex",
+    "lib/engram/aws_kms/",
+    "lib/engram/cache/",
+    "lib/engram/cluster/",
+    "lib/engram/drainer.ex",
+    "lib/engram/email/",
+    "lib/engram/http/",
+    "lib/engram/idempotency.ex",
+    "lib/engram/idempotency/",
+    "lib/engram/instance.ex",
+    "lib/engram/instance/",
+    "lib/engram/mailer.ex",
+    "lib/engram/oban_facade.ex",
+    "lib/engram/release.ex",
+    "lib/engram/release/",
+    "lib/engram/repo.ex",
+    "lib/engram/runtime_config.ex",
+    "lib/engram/schema.ex",
+    "lib/engram/secrets.ex",
+    "lib/engram/service_config.ex",
+    "lib/engram/tenant_error.ex",
+
+    # Mix tasks — operator tooling, run by hand.
+    "lib/mix/tasks/",
+
+    # Redaction implementations. In scope would be circular — these ARE the
+    # controls, and `sentry/scrubber.ex` has its own test asserting note data
+    # never reaches Sentry.
+    "lib/engram/sentry/",
+
+    # Host/URL configuration — public hostnames, no note data.
+    "lib/engram/host_origins.ex"
   ]
 
   # Renders a term rather than a label. `e` is in the list because `rescue e ->`
@@ -424,6 +558,39 @@ defmodule Engram.Logger.LogCallComplianceTest do
     end)
   end
 
+  # The inversion. Without this the scope list is a wish; with it, a new module
+  # is a build failure until someone classifies it.
+  test "every file in lib/ is classified as in-scope or explicitly excluded" do
+    unclassified =
+      Path.wildcard("lib/**/*.ex")
+      |> Enum.reject(fn f ->
+        Enum.any?(@content_paths, &String.starts_with?(f, &1)) or
+          Enum.any?(@out_of_scope, &String.starts_with?(f, &1))
+      end)
+
+    assert unclassified == [],
+           """
+           These files are in neither list. Decide which:
+
+           * it can reach note content, a path, a title or a search query
+             -> add it to @content_paths, and fix whatever the scan then finds
+           * it cannot -> add it to @out_of_scope with the reason
+
+           Do not add it to @out_of_scope to make this pass. The allowlist that
+           preceded this test hid real leaks in four separate modules.
+
+           #{Enum.join(unclassified, "\n")}
+           """
+  end
+
+  # A stale entry is a coverage claim about a file that no longer exists.
+  test "no classification entry is stale" do
+    for entry <- @content_paths ++ @out_of_scope do
+      exists? = if String.ends_with?(entry, "/"), do: File.dir?(entry), else: File.exists?(entry)
+      assert exists?, "classification names a path that does not exist: #{entry}"
+    end
+  end
+
   test "no log call on a content path renders a raw exception or reason" do
     files =
       Path.wildcard("lib/**/*.ex")
@@ -605,6 +772,47 @@ defmodule Engram.Logger.LogCallComplianceTest do
 
       assert sanctioned?("reason: Metadata.safe_reason(reason)")
       assert sanctioned?("inspect(Engram.Telemetry.error_kind(reason))")
+    end
+  end
+
+  # What this guard does NOT catch, as executable record.
+  #
+  # Review produced these across eight rounds. Left in a transcript they are
+  # folklore; here they are checked, so if one starts being caught the test
+  # goes red and someone deletes a line instead of wondering. Equally, nobody
+  # can claim coverage this guard does not have — which is how every leak in
+  # this series survived.
+  #
+  # None occurs in `lib/` today; that was swept per-shape.
+  describe "documented blind spots" do
+    test "to_string/1 renders a term and is not matched" do
+      refute Regex.match?(unsafe_pattern(), "to_string(reason)"),
+             "to_string is now caught — delete this test and say so in the moduledoc"
+    end
+
+    # `log_calls/1` anchors on `Logger.*`, `log_*` and `emit_*(failure|error)`.
+    # A helper named anything else hides its argument one call away.
+    test "a helper outside the naming convention is not scanned" do
+      calls = log_calls(~s|def f(r), do: report_problem("x", inspect(r))|)
+
+      assert calls == [], "helper naming is now scanned — widen the doc, not just the regex"
+    end
+
+    # `balanced_args/2` is string-aware for `"` only.
+    test "a ~s sigil truncates the argument span" do
+      args = balanced_args(~s|Logger.error(~s(a)b), inspect(reason))|, 13)
+
+      refute args =~ "inspect(reason)",
+             "sigils are now handled — this blind spot is closed"
+    end
+
+    # Both scans are per-file. A value assembled in another module, or a
+    # binding more than one hop from the log call, is invisible.
+    test "cross-module indirection is out of reach by construction" do
+      # Recorded rather than asserted: there is no regex that closes this.
+      # `Metadata.safe_reason/1` at the call site is the control; this guard is
+      # the net under it.
+      assert true
     end
   end
 end

@@ -218,25 +218,45 @@ defmodule Engram.Logger.RedactFilter do
     msg
     |> IO.chardata_to_string()
     |> String.replace(@byte_render, @redacted)
-    |> scrub_tokens()
+    |> truncate_at_separator()
   catch
     _, _ -> @redacted
   end
 
-  # Per TOKEN, by substring test — linear.
+  # PREFIX ONLY: keep the prose up to the first token holding a separator, and
+  # drop the rest of the line.
   #
-  # The regex it replaces was `\S*(?:/|%2F|%2f)\S*`, whose two greedy `\S*`
-  # halves backtrack for the separator: quadratic on a token that has none.
-  # Measured 53 ms at 1 KB, 7.1 s at 16 KB, 282 s at 100 KB — and a primary
-  # filter runs in the CALLING process, so that is the caller blocked, not a
-  # background cost. Same output on every case, 100 KB in under a millisecond.
-  # Cost is per TOKEN, and token count is unbounded — the first perf test only
-  # covered one giant token, which is the shape the OLD quadratic regex choked
-  # on. Measured at 100_000 tokens: `Regex.replace` with a callback 486 ms,
-  # split/map/join 196 ms, and a whole-string pre-check 0 ms when there is no
-  # separator to find. All three are linear; the constants are what matter,
-  # because this runs in the CALLING process.
-  defp scrub_tokens(text) do
+  # Three earlier boundaries all failed, each in a way its own tests missed:
+  #
+  #   * Per TOKEN (`\S+`). Whitespace is the wrong boundary, because a vault
+  #     path contains spaces constantly. `"…/Medical/2026 biopsy results.md"`
+  #     redacted only the token holding the `/` and shipped `biopsy` and
+  #     `results.md` in clear.
+  #   * Per ELEMENT of the iolist. Better only when the whole path sits in one
+  #     element. `["Medical/", "biopsy.md"]` redacted element one, passed
+  #     element two, and joined them into `[REDACTED]biopsy.md` — which holds
+  #     no separator, so the token pass then skipped it entirely. That case was
+  #     CLEAN under the token rule; the element rule REGRESSED it.
+  #   * Per QUOTED SPAN. Matched `[\/\\]` while `@separators` also lists the
+  #     percent-encoded forms, so the two disagreed and the encoded shape fell
+  #     through.
+  #
+  # Every one of those tried to find where the path ENDS. Nothing in a log line
+  # marks that, so each was a guess, and each guess had a shape it did not
+  # cover. This rule does not guess: past the first separator, everything goes.
+  # It cannot be defeated by a space, an element boundary, a quote or an
+  # encoding, because it never has to decide where the path stops.
+  #
+  # The cost is real and worth naming: `ExAws` puts `ATTEMPT: 3` AFTER the URL,
+  # so the retry count is lost. Our own storage logging carries `storage_code`
+  # through `safe_reason/1`, so the dependency line is supplementary — and this
+  # is the trade the requirement makes. "No way to log note content" outranks a
+  # retry counter in a third-party line.
+  #
+  # Flattening happens FIRST, so a path split across elements and an improper
+  # list (`["a " | "b"]` — legal iodata, which `Enum.map_join/2` rejects) are
+  # both non-issues rather than cases to enumerate.
+  defp truncate_at_separator(text) do
     cond do
       not String.contains?(text, @separators) ->
         # The common case: nothing to scrub, so do not walk the tokens at all.
@@ -249,17 +269,17 @@ defmodule Engram.Logger.RedactFilter do
         @redacted
 
       true ->
-        # `~r/\S+/`, not `String.split(" ")`. Splitting on a literal space drops
-        # tab and newline as delimiters, so one `/` anywhere collapsed a whole
-        # tab-separated dependency line to `[REDACTED]` and took its
-        # diagnostics with it. The callback form is slower per token, but
-        # `@max_scrub_bytes` above already bounds how many tokens can reach it.
-        Regex.replace(~r/\S+/, text, &redact_token/1)
-    end
-  end
+        # `~r/\s+/` with `include_captures`, not `String.split(" ")`: splitting
+        # on a literal space drops tab and newline as delimiters, and the
+        # captures keep the original spacing of the prefix that survives.
+        kept =
+          text
+          |> String.split(~r/\s+/, include_captures: true)
+          |> Enum.take_while(&(not String.contains?(&1, @separators)))
+          |> Enum.join()
 
-  defp redact_token(token) do
-    if String.contains?(token, @separators), do: @redacted, else: token
+        kept <> @redacted
+    end
   end
 
   # `:maps.map/2`, not `Map.new/2`.

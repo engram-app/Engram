@@ -132,9 +132,15 @@ defmodule Engram.Logger.RescueReasonSinkTest do
 
     refute out =~ "Medical"
     refute out =~ "biopsy"
-    # The diagnostic survives — which error, and which attempt.
+
+    # What survives is the PREFIX: an operator still learns this was an ExAws
+    # timeout. `ATTEMPT: 3` does not survive, because ExAws puts it AFTER the
+    # URL and nothing in the line marks where the path ends — see
+    # `truncate_at_separator/1`. Pinned as an equality so the trade is visible
+    # here rather than implied: if a future change claims to keep the tail, this
+    # test says exactly what it would be keeping it past.
+    assert out == "ExAws: HTTP ERROR: :timeout for URL: [REDACTED]"
     assert out =~ "timeout"
-    assert out =~ "ATTEMPT: 3"
   end
 
   # Req follows an S3 region redirect BEFORE ExAws sees a status, and hands the
@@ -442,9 +448,16 @@ defmodule Engram.Logger.RescueReasonSinkTest do
     assert System.monotonic_time(:millisecond) - started < 500
   end
 
-  # Whitespace other than a space must survive: one `/` must not collapse a
-  # whole tab- or newline-delimited line.
-  test "tab and newline separated fields are scrubbed individually" do
+  # Tab and newline are delimiters, not ordinary characters.
+  #
+  # If they were not, the whole line would be ONE token, the prefix would be
+  # empty, and the result would be a bare `[REDACTED]` — so the surviving `tab`
+  # is what proves the split. The trailing `kept` does NOT survive, and that is
+  # the deliberate trade in `truncate_at_separator/1`: nothing marks where a
+  # path ends, so everything past the first separator goes. An earlier version
+  # kept it by scrubbing per token, and shipped `biopsy` and `results.md` in
+  # clear for any path containing a space.
+  test "tab is a delimiter, so the prefix survives and the tail does not" do
     event = %{
       level: :warning,
       msg: {:string, "tab\tMedical/biopsy.md\tkept"},
@@ -453,9 +466,9 @@ defmodule Engram.Logger.RescueReasonSinkTest do
 
     {:string, out} = RedactFilter.filter(event, []).msg
 
+    assert out == "tab\t[REDACTED]"
     refute out =~ "Medical"
-    assert out =~ "tab"
-    assert out =~ "kept"
+    refute out =~ "kept"
   end
 
   # Pins the whole-string pre-check. Without it every token is walked even when
@@ -483,5 +496,50 @@ defmodule Engram.Logger.RescueReasonSinkTest do
 
     assert out == "[REDACTED]"
     assert System.monotonic_time(:millisecond) - started < 200
+  end
+
+  # The limits the moduledoc names, asserted as CURRENT BEHAVIOUR.
+  #
+  # These are gaps, not features. They are pinned so that closing one is a
+  # deliberate act with a red test attached, and so nobody reads the moduledoc's
+  # honesty as hedging — every leak in this series survived behind a comment
+  # claiming more coverage than the code had.
+  describe "known gaps (pinned so a change is noticed)" do
+    test "nested metadata is NOT redacted" do
+      out =
+        RedactFilter.filter(
+          %{level: :warning, msg: {:string, "m"}, meta: %{req: %{path: "/Medical/biopsy.md"}}},
+          []
+        )
+
+      assert out.meta.req.path == "/Medical/biopsy.md",
+             "nesting is now redacted — good, update the moduledoc and delete this"
+    end
+
+    test "non-atom metadata keys are NOT redacted" do
+      out =
+        RedactFilter.filter(
+          %{level: :warning, msg: {:string, "m"}, meta: %{"path" => "/Medical/biopsy.md"}},
+          []
+        )
+
+      assert out.meta["path"] == "/Medical/biopsy.md",
+             "string keys are now redacted — good, update the moduledoc and delete this"
+    end
+
+    # A dependency line with a separator-free filename. `:filename` is itself a
+    # sensitive key, so this is a real gap in the message scrub.
+    test "a separator-free filename in a dependency line is NOT scrubbed" do
+      event = %{
+        level: :debug,
+        msg: {:string, ["redirecting to ", "biopsy.md"]},
+        meta: %{mfa: {Req.Steps, :r, 1}}
+      }
+
+      {:string, out} = RedactFilter.filter(event, []).msg
+
+      assert out =~ "biopsy.md",
+             "separator-free tokens are now scrubbed — update the moduledoc and delete this"
+    end
   end
 end
