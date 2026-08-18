@@ -102,6 +102,13 @@ export class ApiError extends Error {
 	}
 }
 
+/** The resource is gone (deleted, or never existed) rather than some other
+ *  failure (network, auth, server error) — the distinction every "show a
+ *  missing-state fallback" call site needs. */
+export function isNotFound(err: unknown): boolean {
+	return err instanceof ApiError && err.status === 404;
+}
+
 export class LimitExceededError extends Error {
 	readonly name = "LimitExceededError";
 	constructor(

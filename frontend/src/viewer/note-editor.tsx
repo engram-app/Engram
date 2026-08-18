@@ -114,6 +114,11 @@ export function buildEditorState(
 		doc: ytext.toString(),
 		extensions: [
 			...(onFrontmatterShortcut ? [frontmatterShortcut(onFrontmatterShortcut)] : []),
+			// CodeMirror's content DOM sets spellcheck="false" by default (it's
+			// built for code, not prose). This is a markdown/prose editor, so
+			// override it back on — the browser's native spellcheck is the only
+			// squiggly-underline signal this editor gets, there's no in-app one.
+			EditorView.contentAttributes.of({ spellcheck: "true" }),
 			drawSelection(),
 			EditorView.lineWrapping,
 			Prec.highest(keymap.of(yUndoManagerKeymap)),

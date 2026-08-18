@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
+import { ApiError } from "../api/client";
 import { readRows } from "../crdt/frontmatter-doc";
 import { RightToolsProvider } from "../layout/right-tools-context";
 import { ActiveEditorProvider, useActiveEditor } from "./editor/active-editor-context";
@@ -174,6 +175,46 @@ describe("NotePage (CRDT)", () => {
 		renderPage();
 		await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-1"));
 		expect(enroll).toHaveBeenCalledWith("note-1");
+	});
+
+	// The routed note 404s — deleted from another device/tab, or by this one's
+	// own delete racing the route. Must bounce to the vault root instead of the
+	// red-text dead end this page used to show.
+	describe("routed note 404s", () => {
+		it("redirects to the vault root instead of showing an error screen", async () => {
+			useNoteMock.mockReturnValue({
+				data: undefined,
+				isLoading: false,
+				error: new ApiError(404, "not found"),
+			});
+			renderPage();
+			await waitFor(() =>
+				expect(navigateMock).toHaveBeenCalledWith("/my-vault", { replace: true }),
+			);
+			expect(screen.queryByText(/Failed to load note/)).not.toBeInTheDocument();
+		});
+
+		it("redirects to / when there is no vault slug", async () => {
+			paramsMock.slug = undefined;
+			useNoteMock.mockReturnValue({
+				data: undefined,
+				isLoading: false,
+				error: new ApiError(404, "not found"),
+			});
+			renderPage();
+			await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/", { replace: true }));
+		});
+
+		it("still shows the error screen for a non-404 failure", async () => {
+			useNoteMock.mockReturnValue({
+				data: undefined,
+				isLoading: false,
+				error: new ApiError(500, "server exploded"),
+			});
+			renderPage();
+			await screen.findByText(/Failed to load note: server exploded/);
+			expect(navigateMock).not.toHaveBeenCalled();
+		});
 	});
 
 	// Switching notes does NOT remount NotePage (React Router reuses the route

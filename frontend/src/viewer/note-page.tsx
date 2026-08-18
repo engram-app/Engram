@@ -7,6 +7,7 @@ import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { isNotFound } from "../api/client";
 import type { Note } from "../api/queries";
 import {
 	useBatchMoveNotes,
@@ -30,6 +31,7 @@ import {
 import { useRightTools } from "../layout/right-tools-context";
 import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";
+import { rlog } from "../observability/remote-log";
 import BacklinksPanel from "./backlinks-panel";
 import { useActiveEditor } from "./editor/active-editor-context";
 import { KeyboardBar } from "./editor/keyboard-bar";
@@ -408,13 +410,32 @@ export default function NotePage() {
 		return () => setEditor(null);
 	}, [editorMounted, setEditor]);
 
+	// The routed note is gone — deleted from another device, or by this one's
+	// own delete action racing the route. A 404 here means there is no note to
+	// show, not a failure to explain, so bounce to the bare vault instead of
+	// stranding the user on a red-text dead end. Logged (not silent): a 404 can
+	// also mean a real backend bug (bad auth/vault scoping), and that must stay
+	// diagnosable even though the redirect makes it invisible in the UI.
+	const noteGone = isNotFound(error);
+	useEffect(() => {
+		if (!noteGone || validId === null) {
+			return;
+		}
+		rlog().warn("note", `note ${validId} 404'd while routed — redirecting to vault root`);
+		navigate(slug ? `/${slug}` : "/", { replace: true });
+	}, [noteGone, validId, navigate, slug]);
+
 	if (validId === null) {
 		return <p className="p-6 text-destructive">Invalid note id.</p>;
 	}
+	if (noteGone) {
+		// Redirecting (see the effect above) — nothing to show for the one tick
+		// it takes.
+		return null;
+	}
 	if (error) {
-		// The ROUTED note failed — never paper over that with the held pair. The
-		// note may have just been deleted out from under this route (see
-		// useDeleteNote's invalidateQueries comment).
+		// The ROUTED note failed for a reason other than "it's gone" — never
+		// paper over that with the held pair.
 		return <p className="p-6 text-destructive">Failed to load note: {error.message}</p>;
 	}
 	if (!shown) {

@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useParams } from "react-router";
-import { ApiError, api } from "../api/client";
+import { ApiError, api, isNotFound } from "../api/client";
 import { useAttachments } from "../api/queries";
 import LoadingPane from "./loading-pane";
 import PreviewColumn from "./preview-column";
@@ -55,7 +55,7 @@ export default function AttachmentPage() {
 					// breadcrumbs as well as sitting in a console the user may screenshot.
 					console.error("attachment load failed", err);
 				}
-				setError(err instanceof ApiError && err.status === 404 ? "missing" : "failed");
+				setError(isNotFound(err) ? "missing" : "failed");
 			});
 		return () => {
 			cancelled = true;
