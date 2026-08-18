@@ -74,25 +74,6 @@ defmodule EngramWeb.Endpoint do
   # including 404/410 rejections from HostRewrite — for log correlation.
   plug Plug.RequestId
 
-  # Recover the ORIGINAL request scheme from the edge.
-  #
-  # TLS terminates at the edge in both deployment shapes (ALB in SaaS prod,
-  # the operator's reverse proxy in self-host) and the app only ever listens
-  # plaintext behind it — see the note in runtime.exs. Without this, every
-  # proxied request presents `conn.scheme == :http` even though the user
-  # reached us over HTTPS, and any code branching on it silently takes the
-  # cleartext path. That is not hypothetical: it shipped the 30-day
-  # `refresh_token` cookie WITHOUT the `Secure` flag on every proxied
-  # deployment (LocalAuthController), so a downgrade could replay it over
-  # cleartext. Fixed here, at the one place every caller routes through,
-  # rather than at that one call site.
-  #
-  # Trusting the header is safe in this position: the ALB and the self-host
-  # reverse proxy both overwrite `x-forwarded-proto` on ingress, so a client
-  # cannot forge it. If the app were ever exposed directly, a spoofed value
-  # can only mark cookies MORE restrictive (Secure on a plaintext origin,
-  # which the browser then withholds) — it cannot downgrade one.
-  plug Plug.RewriteOn, [:x_forwarded_proto]
   # Drain hygiene: during graceful shutdown every response tells the client to
   # drop the keep-alive connection (see EngramWeb.Plugs.DrainConnClose).
   plug EngramWeb.Plugs.DrainConnClose

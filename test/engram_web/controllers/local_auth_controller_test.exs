@@ -9,6 +9,34 @@ defmodule EngramWeb.LocalAuthControllerTest do
     :ok
   end
 
+  # Swap the endpoint's canonical URL for the duration of `fun`. The refresh
+  # cookie's `secure` flag is derived from it, so this is the real lever a
+  # deployment pulls (PHX_HOST / PHX_SCHEME in runtime.exs).
+  #
+  # `Endpoint.url/0` is served from a persistent_term warmed off the endpoint's
+  # ETS config, NOT from Application env, so `put_env` alone is invisible to
+  # it. `config_change/2` is the supported path: it updates the ETS table and
+  # re-warms. Restored on the way out so a failure cannot leak a bogus URL into
+  # later tests (this file is already `async: false`).
+  defp with_endpoint_url(url, fun) do
+    %{scheme: scheme, host: host, port: port} = URI.parse(url)
+    prev = Application.get_env(:engram, EngramWeb.Endpoint)
+    next = Keyword.put(prev, :url, host: host, port: port, scheme: scheme)
+
+    apply_url = fn cfg ->
+      Application.put_env(:engram, EngramWeb.Endpoint, cfg)
+      EngramWeb.Endpoint.config_change([{EngramWeb.Endpoint, cfg}], [])
+    end
+
+    apply_url.(next)
+
+    try do
+      fun.()
+    after
+      apply_url.(prev)
+    end
+  end
+
   describe "POST /api/auth/register" do
     test "creates user and returns access token + refresh cookie", %{conn: conn} do
       conn =
@@ -24,33 +52,64 @@ defmodule EngramWeb.LocalAuthControllerTest do
       assert cookie.same_site == "Lax"
     end
 
-    test "refresh cookie is Secure when the edge terminated TLS", %{conn: conn} do
-      # Both deployment shapes put a TLS-terminating proxy in front of the app
-      # (ALB in SaaS, the operator's reverse proxy in self-host) and the app
-      # only ever listens plaintext behind it — see the note in runtime.exs.
-      # So `conn.scheme` is `:http` on a request that reached the user over
-      # HTTPS, and the ONLY signal that it was HTTPS is x-forwarded-proto.
-      # Without the endpoint rewriting the scheme from that header, this
-      # 30-day refresh token ships with no Secure flag on every proxied
-      # deployment, i.e. a downgrade attack can replay it over cleartext.
-      conn =
-        conn
-        |> put_req_header("x-forwarded-proto", "https")
-        |> post("/api/auth/register", %{email: "tls@test.com", password: "StrongPass123!"})
+    test "refresh cookie is Secure when the canonical URL is https", %{conn: conn} do
+      # The app never sees TLS: it listens plaintext behind an edge, so
+      # `conn.scheme` is :http even for a user who arrived over HTTPS. Deriving
+      # the flag from the conn shipped this 30-day token with no `Secure`
+      # attribute, letting a downgrade replay it over cleartext.
+      #
+      # Note this asserts on the URL config, NOT on `x-forwarded-proto`. A
+      # header-derived fix passes a test like this while silently failing on
+      # the header shapes real proxy chains emit (uppercase `HTTPS`, or the
+      # appended `https,http` a CDN in front of nginx produces) — `RewriteOn`
+      # matches the literal lowercase "https" only and otherwise falls through
+      # to a bare conn with no log and no error.
+      with_endpoint_url("https://engram.example", fn ->
+        conn =
+          post(conn, "/api/auth/register", %{email: "tls@test.com", password: "StrongPass123!"})
 
-      assert json_response(conn, 201)
-      assert conn.resp_cookies["refresh_token"].secure == true
+        assert json_response(conn, 201)
+        assert conn.resp_cookies["refresh_token"].secure == true
+      end)
     end
 
-    test "refresh cookie is not Secure on a genuinely plaintext request", %{conn: conn} do
-      # Guards the other direction: a real cleartext request (no proxy header)
-      # must NOT get a Secure cookie, or local http dev logins silently break —
-      # the browser would refuse to send the cookie back.
-      conn =
-        post(conn, "/api/auth/register", %{email: "plain@test.com", password: "StrongPass123!"})
+    test "refresh cookie is not Secure when the canonical URL is http", %{conn: conn} do
+      # The other direction: a genuinely plaintext deployment must NOT get a
+      # Secure cookie, or local http logins break silently (the browser simply
+      # withholds the cookie on the next request).
+      with_endpoint_url("http://localhost:4000", fn ->
+        conn =
+          post(conn, "/api/auth/register", %{email: "plain@test.com", password: "StrongPass123!"})
 
-      assert json_response(conn, 201)
-      refute conn.resp_cookies["refresh_token"].secure
+        assert json_response(conn, 201)
+        refute conn.resp_cookies["refresh_token"].secure
+      end)
+    end
+
+    test "login and refresh rotation set Secure too, not just register", %{conn: conn} do
+      # All three sites share `refresh_cookie_opts/0`, but only `register` was
+      # covered before. The rotation cookie is the longest-lived credential in
+      # the flow, so it is the one that most needs pinning.
+      with_endpoint_url("https://engram.example", fn ->
+        post(conn, "/api/auth/register", %{email: "all@test.com", password: "StrongPass123!"})
+
+        login =
+          post(build_conn(), "/api/auth/login", %{
+            email: "all@test.com",
+            password: "StrongPass123!"
+          })
+
+        assert json_response(login, 200)
+        assert login.resp_cookies["refresh_token"].secure == true
+
+        rotated =
+          build_conn()
+          |> put_req_cookie("refresh_token", login.resp_cookies["refresh_token"].value)
+          |> post("/api/auth/refresh")
+
+        assert json_response(rotated, 200)
+        assert rotated.resp_cookies["refresh_token"].secure == true
+      end)
     end
 
     test "first user is admin, second is member", %{conn: conn} do

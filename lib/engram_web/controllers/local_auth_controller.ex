@@ -13,8 +13,28 @@ defmodule EngramWeb.LocalAuthController do
     max_age: 30 * 24 * 3600
   ]
 
-  defp refresh_cookie_opts(conn) do
-    secure = conn.scheme == :https
+  # Canonical URL, never the connection. `conn.scheme` is :http on every
+  # deployment that terminates TLS at an edge (ALB in saas, the operator's
+  # reverse proxy in self-host, and self-host is the ONLY shape that reaches
+  # this controller — see RequireLocalAuth on the router), so deriving the
+  # flag from the conn shipped this 30-day refresh token with no `Secure`
+  # attribute and let a downgrade replay it over cleartext.
+  #
+  # Deliberately NOT `Plug.RewriteOn`/`x-forwarded-proto`: that trusts a
+  # client-settable header, and it silently no-ops on the header shapes real
+  # proxy chains emit. `Plug.RewriteOn` matches the literal lowercase "https"
+  # only, so an uppercase `HTTPS` or the appended `https,http` a CDN in front
+  # of nginx produces both fall through to a bare `conn` with no log and no
+  # error, i.e. the bug comes back invisibly.
+  #
+  # Same source `Endpoint.url()` already backs for the device-flow
+  # verification URL, account emails, and the admin reset link. Its ceiling is
+  # that an operator who leaves PHX_HOST/PHX_SCHEME unset gets the
+  # `http://localhost` default and no Secure flag, but that is the existing
+  # single point of truth for every link this app emits, not a new failure
+  # mode. See `.env.example` for the operator-facing guidance.
+  defp refresh_cookie_opts do
+    secure = URI.parse(EngramWeb.Endpoint.url()).scheme == "https"
     Keyword.put(@refresh_cookie_base, :secure, secure)
   end
 
@@ -29,7 +49,7 @@ defmodule EngramWeb.LocalAuthController do
                  {:ok, access_token} <- Local.issue_access_token(ext_id, user_email),
                  {:ok, raw_refresh, _record} <- Accounts.create_refresh_token(user) do
               conn
-              |> put_resp_cookie("refresh_token", raw_refresh, refresh_cookie_opts(conn))
+              |> put_resp_cookie("refresh_token", raw_refresh, refresh_cookie_opts())
               |> put_status(:created)
               |> json(%{access_token: access_token, user: %{email: user.email, role: user.role}})
             else
@@ -97,7 +117,7 @@ defmodule EngramWeb.LocalAuthController do
              {:ok, access_token} <- Local.issue_access_token(ext_id, user_email),
              {:ok, raw_refresh, _record} <- Accounts.create_refresh_token(user) do
           conn
-          |> put_resp_cookie("refresh_token", raw_refresh, refresh_cookie_opts(conn))
+          |> put_resp_cookie("refresh_token", raw_refresh, refresh_cookie_opts())
           |> json(%{access_token: access_token, user: %{email: user.email, role: user.role}})
         else
           {:error, _} ->
@@ -128,7 +148,7 @@ defmodule EngramWeb.LocalAuthController do
             case Local.issue_access_token(user.external_id, user.email) do
               {:ok, access_token} ->
                 conn
-                |> put_resp_cookie("refresh_token", new_raw_token, refresh_cookie_opts(conn))
+                |> put_resp_cookie("refresh_token", new_raw_token, refresh_cookie_opts())
                 |> json(%{access_token: access_token})
 
               {:error, _} ->
