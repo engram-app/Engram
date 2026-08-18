@@ -151,136 +151,55 @@ defmodule Engram.Logger.RedactFilter do
   # sees a status, and its message is an IOLIST, not a binary.
   @url_logging_modules [ExAws.Request, Req.Steps]
 
-  # Any scheme-bearing URL, not just the one after `for URL:`. Three shapes
-  # defeated the narrower version:
+  # The message from these two modules is DROPPED, not scrubbed.
   #
-  #   * `Req.Steps` uses different wording entirely
-  #   * ExAws's `debug_requests` line (`request.ex:33`) additionally logs
-  #     `HEADERS:` and `BODY:` — for a PutObject that is the attachment bytes
-  #     and a live SigV4 signature. This scrubs the URL in it and NOT those,
-  #     so `debug_requests` must stay off in any environment with real data.
-  #     Stated rather than implied: the previous comment named that line as if
-  #     it were covered.
-  #   * a non-UTF-8 key renders as `<<104, 116, ...>>`, which CONTAINS SPACES,
-  #     so a `\S+` match stopped early and left the bytes behind. `/x.md` was
-  #     recoverable from the decimals.
-  # A scheme-bearing URL, a path-shaped run, or a byte rendering.
+  # Four scrub rules have now shipped for this seam and every one of them
+  # leaked. Per-token lost the suffix of a path containing a space. Per-element
+  # lost the tail of a path split across elements, and REGRESSED a case the
+  # token rule had clean. Per-quoted-span disagreed with the separator list on
+  # the percent-encoded forms. Prefix-truncation — the last one — kept the text
+  # BEFORE the first token holding a separator, which leaks the folder name
+  # itself the moment it contains a space:
   #
-  # The path alternative is not optional: RFC 7231 §7.1.2 permits a RELATIVE
-  # `Location`, and `Req.Steps.build_redirect_request/3` logs the raw header
-  # BEFORE `URI.merge` — so the very line this module was added for arrives as
-  # `/bucket/u1/v1/Medical/biopsy.md`, with no scheme, and a scheme-anchored
-  # pattern left it untouched. ExAws runs on Req here (config/config.exs →
-  # Engram.Aws.ReqClient), so that shape is live for S3 and MinIO.
-  # ANY token carrying a path separator, encoded or not, plus byte renderings.
+  #     ["redirecting to ", "Medical Records/2026/biopsy.md"]
+  #       -> "redirecting to Medical [REDACTED]"
   #
-  # Enumerating shapes lost every time. A scheme anchor missed the relative
-  # `Location`; adding `/\S*/\S+` still missed `Medical/biopsy.md` (no leading
-  # slash), `bucket%2FMedical%2Fbiopsy.md` (percent-encoded) and `bucket/key`.
-  # RFC 7231 §7.1.2 permits a relative-path reference just as much as the
-  # absolute-path one, and Req logs the raw header either way.
+  # A folder named `Medical Records` or `Divorce 2026` discloses the sensitive
+  # fact on its own. That one is not a near-miss, it is the whole harm.
   #
-  # Only `@url_logging_modules` reaches this — two dependency log lines — so
-  # over-redacting a slash-bearing token there costs almost nothing, while
-  # under-redacting costs a vault path. `mfa`, level and the surrounding words
-  # all survive.
-  @byte_render ~r{<<[0-9, ]+>>}
-  @max_scrub_bytes 32_768
-  # Backslash and double-encoded forms included: the comment used to claim "any
-  # separator, encoded or not" while covering only three of them. RFC 3986 also
-  # permits a relative-path `Location` with NO separator at all — a bare
-  # `biopsy.md` still passes, and `:filename` is in @sensitive_keys, so that
-  # remains a known gap rather than a covered one.
-  @separators ["/", "\\", "%2F", "%2f", "%5C", "%5c", "%25"]
-
-  defp redact_dependency_message(%{meta: %{mfa: {mod, _, _}}, msg: {:string, msg}} = event)
-       when mod in @url_logging_modules and not is_atom(msg) do
-    # chardata, not a binary: `when is_binary(msg)` was a SILENT SKIP, and an
-    # iolist is exactly what Req hands over.
-    %{event | msg: {:string, scrub_message(msg)}}
+  # The pattern, once four data points make it visible: every rule tried to keep
+  # SOME of a string we do not author, and each needed a boundary — where the
+  # path starts, where it ends — that nothing in the text actually marks. There
+  # is always another shape, and it is by definition the one nobody thought of.
+  # Two more leaked past prefix-truncation without needing a new rule at all: a
+  # filename with no separator (`biopsy.md`), and `inspect/1` truncating a
+  # non-UTF-8 key at 100 bytes so the byte-render regex no longer matched and
+  # the path shipped as recoverable decimals.
+  #
+  # So: keep nothing. We cannot prove any part of a third party's message is
+  # safe, and the requirement is absolute. This cannot be defeated by a space, a
+  # quote, an encoding, an element boundary, a truncation or a shape nobody has
+  # seen, because it does not read the message.
+  #
+  # WHAT SURVIVES, and why this is not a real diagnostic loss: `meta` is ours
+  # and is untouched here — `mfa` names the module and function, and the level
+  # is intact. The error KIND is not lost either, because our own call sites log
+  # it safely: `storage/s3.ex` records `reason: safe_reason(reason)`, which
+  # renders `http_error 403 AccessDenied`. The dependency line was always
+  # supplementary to that. What actually goes is `ATTEMPT: 3` and the ExAws
+  # `debug_requests` dump — and that dump carried a live SigV4 signature and
+  # attachment bytes, so losing it is a second win rather than a cost.
+  #
+  # No message shape is read, so nothing here can raise. That also closes a gap
+  # the previous version had: it matched only `{:string, chardata}`, so an
+  # Erlang-style `{format, args}` or `{:report, _}` from one of these modules
+  # skipped the scrub entirely. Every shape is now covered.
+  defp redact_dependency_message(%{meta: %{mfa: {mod, _, _}}} = event)
+       when mod in @url_logging_modules do
+    %{event | msg: {:string, @redacted}}
   end
 
   defp redact_dependency_message(event), do: event
-
-  # FAIL CLOSED. Belt and braces: `filter/2` also catches, so this is the
-  # inner of two nets rather than the only one.
-  #
-  # This runs as a PRIMARY `:logger` filter, and OTP deletes a filter that
-  # raises — node-wide, permanently, for the life of the VM. So one malformed
-  # event would take out the entire `@sensitive_keys` scrub (content, title,
-  # path, tokens), not just this rule. `IO.chardata_to_string/1` raises on an
-  # atom in chardata, which `Logger.warning(:atom)` produces legally, and the
-  # `msg: {:string, :atom}` shape does not even match the head above.
-  #
-  # An unrenderable message is replaced wholesale rather than passed through:
-  # if we cannot read it we cannot prove it holds no path.
-  defp scrub_message(msg) do
-    msg
-    |> IO.chardata_to_string()
-    |> String.replace(@byte_render, @redacted)
-    |> truncate_at_separator()
-  catch
-    _, _ -> @redacted
-  end
-
-  # PREFIX ONLY: keep the prose up to the first token holding a separator, and
-  # drop the rest of the line.
-  #
-  # Three earlier boundaries all failed, each in a way its own tests missed:
-  #
-  #   * Per TOKEN (`\S+`). Whitespace is the wrong boundary, because a vault
-  #     path contains spaces constantly. `"…/Medical/2026 biopsy results.md"`
-  #     redacted only the token holding the `/` and shipped `biopsy` and
-  #     `results.md` in clear.
-  #   * Per ELEMENT of the iolist. Better only when the whole path sits in one
-  #     element. `["Medical/", "biopsy.md"]` redacted element one, passed
-  #     element two, and joined them into `[REDACTED]biopsy.md` — which holds
-  #     no separator, so the token pass then skipped it entirely. That case was
-  #     CLEAN under the token rule; the element rule REGRESSED it.
-  #   * Per QUOTED SPAN. Matched `[\/\\]` while `@separators` also lists the
-  #     percent-encoded forms, so the two disagreed and the encoded shape fell
-  #     through.
-  #
-  # Every one of those tried to find where the path ENDS. Nothing in a log line
-  # marks that, so each was a guess, and each guess had a shape it did not
-  # cover. This rule does not guess: past the first separator, everything goes.
-  # It cannot be defeated by a space, an element boundary, a quote or an
-  # encoding, because it never has to decide where the path stops.
-  #
-  # The cost is real and worth naming: `ExAws` puts `ATTEMPT: 3` AFTER the URL,
-  # so the retry count is lost. Our own storage logging carries `storage_code`
-  # through `safe_reason/1`, so the dependency line is supplementary — and this
-  # is the trade the requirement makes. "No way to log note content" outranks a
-  # retry counter in a third-party line.
-  #
-  # Flattening happens FIRST, so a path split across elements and an improper
-  # list (`["a " | "b"]` — legal iodata, which `Enum.map_join/2` rejects) are
-  # both non-issues rather than cases to enumerate.
-  defp truncate_at_separator(text) do
-    cond do
-      not String.contains?(text, @separators) ->
-        # The common case: nothing to scrub, so do not walk the tokens at all.
-        text
-
-      byte_size(text) > @max_scrub_bytes ->
-        # Fail closed rather than spend unbounded time in a caller's process on
-        # a pathological line. Only the two dependency modules reach here, and a
-        # 32 KB log line carrying paths is not a diagnostic worth preserving.
-        @redacted
-
-      true ->
-        # `~r/\s+/` with `include_captures`, not `String.split(" ")`: splitting
-        # on a literal space drops tab and newline as delimiters, and the
-        # captures keep the original spacing of the prefix that survives.
-        kept =
-          text
-          |> String.split(~r/\s+/, include_captures: true)
-          |> Enum.take_while(&(not String.contains?(&1, @separators)))
-          |> Enum.join()
-
-        kept <> @redacted
-    end
-  end
 
   # `:maps.map/2`, not `Map.new/2`.
   #

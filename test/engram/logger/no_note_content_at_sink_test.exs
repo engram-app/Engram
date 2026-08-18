@@ -77,7 +77,7 @@ defmodule Engram.Logger.NoNoteContentAtSinkTest do
   # `catch` arm in `RedactFilter` does on a malformed event, and what one real
   # defect in this workstream did for a whole class of input. Every caller
   # names something that must SURVIVE.
-  defp assert_clean(lines, anchor) do
+  defp assert_clean(lines, anchor, count) do
     emitted = lines.()
 
     for marker <- @markers, line <- emitted do
@@ -99,9 +99,15 @@ defmodule Engram.Logger.NoNoteContentAtSinkTest do
     # destroy output.
     assert emitted != [], "no log lines were captured — the failure did not fire"
 
-    assert Enum.any?(emitted, &(&1 =~ anchor)),
+    # COUNT, not `any?`. With `any?`, a test emitting three lines was satisfied
+    # by one of them surviving — review proved it: blanking exactly one of the
+    # three lines in the split-elements test left the suite GREEN. The count is
+    # how many log calls the test makes, so losing any one of them is red.
+    actual = Enum.count(emitted, &(&1 =~ anchor))
+
+    assert actual == count,
            """
-           Nothing survived redaction.
+           Expected #{count} line(s) to survive redaction, got #{actual}.
 
              expected to survive: #{inspect(anchor)}
              lines: #{inspect(emitted)}
@@ -128,7 +134,7 @@ defmodule Engram.Logger.NoNoteContentAtSinkTest do
       assert {:error, {:storage, :blob_missing}} =
                Attachments.get_attachment(user, vault, "Medical/biopsy scan.png")
 
-      assert_clean(lines, "blob missing")
+      assert_clean(lines, "blob missing", 1)
     end
 
     test "a row with no storage_key", %{lines: lines} do
@@ -152,7 +158,7 @@ defmodule Engram.Logger.NoNoteContentAtSinkTest do
       assert {:error, {:storage, :blob_missing}} =
                Attachments.get_attachment(user, vault, "Medical/biopsy scan.png")
 
-      assert_clean(lines, "no storage_key")
+      assert_clean(lines, "no storage_key", 1)
     end
   end
 
@@ -173,7 +179,7 @@ defmodule Engram.Logger.NoNoteContentAtSinkTest do
         )
       end
 
-      assert_clean(lines, "operation failed")
+      assert_clean(lines, "operation failed", 3)
     end
 
     test "an ExAws error whose body echoes the storage key", %{lines: lines} do
@@ -199,7 +205,7 @@ defmodule Engram.Logger.NoNoteContentAtSinkTest do
         )
       )
 
-      assert_clean(lines, "storage failed")
+      assert_clean(lines, "storage failed", 1)
     end
 
     test "a struct handed over as metadata", %{lines: lines} do
@@ -208,7 +214,7 @@ defmodule Engram.Logger.NoNoteContentAtSinkTest do
       :logger.log(:error, "probe", %RuntimeError{message: @secret})
       :logger.log(:error, "probe", %URI{path: "/#{@path}", query: "biopsy prognosis"})
 
-      assert_clean(lines, "probe")
+      assert_clean(lines, "probe", 2)
     end
   end
 
@@ -226,7 +232,7 @@ defmodule Engram.Logger.NoNoteContentAtSinkTest do
         %{mfa: {ExAws.Request, :request_and_retry, 7}}
       )
 
-      assert_clean(lines, "ExAws: HTTP ERROR")
+      assert_clean(lines, "Req.Steps.redirect", 1)
     end
 
     # A path SPLIT ACROSS ELEMENTS. Every one of these was proven leaking by
@@ -242,12 +248,16 @@ defmodule Engram.Logger.NoNoteContentAtSinkTest do
       for parts <- [
             ["redirecting to ", "Medical/", "biopsy.md"],
             ["redirecting to ", "Medical/2026 ", "biopsy results.md"],
-            ["redirecting to https://b/u1/v1/Medical/2026 ", "biopsy results.md"]
+            ["redirecting to https://b/u1/v1/Medical/2026 ", "biopsy results.md"],
+            # A SPACE in the first folder name. Prefix-truncation kept everything
+            # before the first separator-bearing token and shipped `Medical` in
+            # clear — the folder name IS the disclosure.
+            ["redirecting to ", "Medical Records/2026/biopsy.md"]
           ] do
         :logger.log(:warning, parts, %{mfa: {Req.Steps, :redirect, 1}})
       end
 
-      assert_clean(lines, "redirecting to")
+      assert_clean(lines, "Req.Steps.redirect", 4)
     end
 
     # An IMPROPER list is legal iodata and `IO.chardata_to_string/1` accepts it.
@@ -260,7 +270,7 @@ defmodule Engram.Logger.NoNoteContentAtSinkTest do
         mfa: {ExAws.Request, :retry, 1}
       })
 
-      assert_clean(lines, "ExAws: retry")
+      assert_clean(lines, "ExAws.Request.retry", 1)
     end
 
     # `@separators` lists the percent-encoded forms; a rule that enumerated only
@@ -277,7 +287,7 @@ defmodule Engram.Logger.NoNoteContentAtSinkTest do
         })
       end
 
-      assert_clean(lines, "ExAws: HTTP ERROR")
+      assert_clean(lines, "ExAws.Request.request_and_retry", 2)
     end
   end
 end

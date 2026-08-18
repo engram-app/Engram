@@ -107,125 +107,127 @@ defmodule Engram.Logger.RescueReasonSinkTest do
     assert encoded =~ "NoSuchKey"
   end
 
-  # ExAws logs the object URL itself, from inside the dependency. No call-site
-  # control reaches it: `ExAws.Request.Url.sanitize/2` only URI-encodes the
-  # path, so the storage key survives, and prod runs at `:info` so it shipped on
-  # every transport error. The message BODY is also the half RedactFilter's
-  # key-based pass explicitly does not touch — this is the one seam that can.
-  test "the ExAws URL log cannot carry a vault path to the sink" do
-    url = "https://bucket.s3.example.com/u1/v1/Medical/biopsy.md"
-
-    msg =
-      "ExAws: HTTP ERROR: #{inspect(:timeout)} for URL: #{inspect(url)} ATTEMPT: 3"
-
-    # The premise: unfiltered, this is a vault path in a prod log line.
-    assert msg =~ "Medical"
-
-    event = %{
-      level: :warning,
-      msg: {:string, msg},
-      meta: %{mfa: {ExAws.Request, :request_and_retry, 7}}
-    }
-
-    filtered = RedactFilter.filter(event, [])
-    {:string, out} = filtered.msg
-
-    refute out =~ "Medical"
-    refute out =~ "biopsy"
-
-    # What survives is the PREFIX: an operator still learns this was an ExAws
-    # timeout. `ATTEMPT: 3` does not survive, because ExAws puts it AFTER the
-    # URL and nothing in the line marks where the path ends — see
-    # `truncate_at_separator/1`. Pinned as an equality so the trade is visible
-    # here rather than implied: if a future change claims to keep the tail, this
-    # test says exactly what it would be keeping it past.
-    assert out == "ExAws: HTTP ERROR: :timeout for URL: [REDACTED]"
-    assert out =~ "timeout"
-  end
-
-  # Req follows an S3 region redirect BEFORE ExAws sees a status, and hands the
-  # message over as an IOLIST. The previous `when is_binary(msg)` guard made
-  # that a silent skip — the filter simply did not run.
-  test "a Req redirect iolist is scrubbed" do
-    url = "https://bucket.s3.us-west-2.amazonaws.com/u1/v1/Medical/biopsy.md"
-
-    event = %{
-      level: :debug,
-      msg: {:string, ["redirecting to ", url]},
-      meta: %{mfa: {Req.Steps, :redirect, 1}}
-    }
-
-    {:string, out} = RedactFilter.filter(event, []).msg
-
-    refute out =~ "Medical"
-    assert out =~ "redirecting to"
-  end
-
-  # A non-UTF-8 key renders as `<<104, 116, ...>>`, which contains SPACES — so
-  # a `\S+` match stopped at the first one and left the bytes in the line. The
-  # decimals are trivially reversible.
-  test "a byte-rendered key does not survive" do
-    msg =
-      "ExAws: HTTP ERROR: :timeout for URL: " <>
-        inspect(<<104, 116, 116, 112, 58, 47, 47, 120, 47, 255, 46, 109, 100>>) <> " ATTEMPT: 3"
-
-    event = %{level: :warning, msg: {:string, msg}, meta: %{mfa: {ExAws.Request, :r, 7}}}
-    {:string, out} = RedactFilter.filter(event, []).msg
-
-    refute out =~ "109, 100"
-    assert out =~ "ATTEMPT: 3"
-  end
-
-  # RFC 7231 §7.1.2 permits a RELATIVE Location, and Req logs the raw header
-  # before `URI.merge` — so the very shape this filter was added for arrives
-  # with no scheme, and a scheme-anchored pattern left it untouched.
-  test "a relative Location redirect is scrubbed" do
-    event = %{
-      level: :debug,
-      msg: {:string, ["redirecting to ", "/bucket/u1/v1/Medical/biopsy.md"]},
-      meta: %{mfa: {Req.Steps, :redirect, 1}}
-    }
-
-    {:string, out} = RedactFilter.filter(event, []).msg
-
-    refute out =~ "Medical"
-    assert out =~ "redirecting to"
-  end
-
-  # THE most important test in this file.
+  # Everything these two dependencies log is DROPPED, so the invariant under
+  # test is no longer "the path was removed from the message" but "none of the
+  # message survives at all".
   #
-  # This is a PRIMARY `:logger` filter, and OTP deletes a filter that raises —
-  # node-wide, permanently. So one malformed event would disable the entire
-  # @sensitive_keys scrub (content, title, path, tokens) for the life of the
-  # VM. `IO.chardata_to_string/1` raises on an atom in chardata, which
-  # `Logger.warning(:atom)` produces legally.
-  test "a message the filter cannot render does not raise, and fails closed" do
-    for msg <- [
-          ["redirecting to ", :some_atom],
-          [<<0xFF>>, "bad utf8"],
-          [1_114_112]
-        ] do
-      event = %{level: :warning, msg: {:string, msg}, meta: %{mfa: {Req.Steps, :r, 1}}}
+  # A TABLE rather than a test each, because the point is that the shape stops
+  # mattering. Every entry below defeated at least one of the four scrub rules
+  # that shipped before this one — and the last two were found by review AFTER
+  # a rule was written specifically to be shape-proof.
+  @dependency_shapes [
+    {"an absolute URL",
+     {:string,
+      "ExAws: HTTP ERROR: :timeout for URL: \"https://b/u1/v1/Medical/biopsy.md\" ATTEMPT: 3"},
+     {ExAws.Request, :request_and_retry, 7}},
+
+    # Req hands its message over as an IOLIST. A `when is_binary(msg)` guard
+    # once made this a silent skip — the filter simply did not run.
+    {"a Req redirect iolist", {:string, ["redirecting to ", "https://b/u1/v1/Medical/biopsy.md"]},
+     {Req.Steps, :redirect, 1}},
+
+    # RFC 7231 §7.1.2 permits a RELATIVE Location, and Req logs the raw header
+    # before `URI.merge`. A scheme-anchored pattern left this untouched.
+    {"a relative Location with no scheme",
+     {:string, ["redirecting to ", "/bucket/u1/v1/Medical/biopsy.md"]},
+     {Req.Steps, :redirect, 1}},
+
+    # Beat the per-token rule: `\S+` stopped at the space inside the rendering.
+    {"a byte-rendered non-UTF-8 key",
+     {:string, "for URL: " <> inspect(<<104, 116, 116, 112, 58, 47, 47, 255, 46, 109, 100>>)},
+     {ExAws.Request, :r, 7}},
+
+    # Beat it HARDER: `inspect/1` truncates at 100 bytes, so the byte-render
+    # regex no longer matched at all and the decimals shipped whole — a full
+    # path, one `String.to_integer` away.
+    {"a byte rendering past inspect's 100-byte truncation",
+     {:string,
+      "for URL: " <>
+        inspect(:binary.copy(<<0xFF>>, 1) <> String.duplicate("Medical/biopsy.md", 8))},
+     {ExAws.Request, :r, 7}},
+
+    # Beat the per-element rule: element two holds no separator, so it passed,
+    # and the join produced a string with no separator left to catch.
+    {"a path split across iodata elements",
+     {:string, ["redirecting to ", "Medical/", "biopsy.md"]}, {Req.Steps, :redirect, 1}},
+
+    # Beat PREFIX-truncation, the rule written to be shape-proof: a space in the
+    # first folder name and the folder ships in clear. `Divorce 2026` and
+    # `Medical Records` disclose the sensitive fact on their own.
+    {"a folder name containing a space",
+     {:string, ["redirecting to ", "Medical Records/2026/biopsy.md"]}, {Req.Steps, :redirect, 1}},
+
+    # Beat every separator-based rule at once: there is no separator to find.
+    # This was a documented, pinned GAP until the message stopped being read.
+    {"a separator-free filename", {:string, ["redirecting to ", "Divorce settlement notes.md"]},
+     {Req.Steps, :redirect, 1}},
+    {"percent-encoded separators",
+     {:string, "for URL: \"b%2Fu1%2FMedical%2F2026 biopsy results.md\""}, {ExAws.Request, :r, 7}},
+
+    # `msg: {:string, :atom}` used to fall through the scrub head untouched.
+    {"an atom message", {:string, :shutdown}, {Req.Steps, :r, 1}},
+
+    # Erlang-style shapes never matched `{:string, chardata}` at all, so they
+    # skipped the scrub entirely. Nothing reads the message now, so they cannot.
+    {"an Erlang format/args message", {~c"redirecting to ~ts", ["Medical/biopsy.md"]},
+     {Req.Steps, :r, 1}},
+    {"a report message", %{url: "https://b/u1/v1/Medical/biopsy.md"}, {Req.Steps, :r, 1}},
+
+    # Unrenderable chardata. This must not RAISE above all else: OTP deletes a
+    # primary filter that raises, node-wide, killing every other scrub with it.
+    {"an atom inside chardata", {:string, ["redirecting to ", :some_atom]}, {Req.Steps, :r, 1}},
+    {"invalid UTF-8", {:string, [<<0xFF>>, "bad utf8"]}, {Req.Steps, :r, 1}},
+    {"an out-of-range codepoint", {:string, [1_114_112]}, {Req.Steps, :r, 1}}
+  ]
+
+  for {name, msg, mfa} <- @dependency_shapes do
+    test "#{name} does not survive a dependency log line" do
+      event = %{
+        level: :warning,
+        msg: unquote(Macro.escape(msg)),
+        meta: %{mfa: unquote(Macro.escape(mfa))}
+      }
 
       assert %{msg: {:string, out}} = RedactFilter.filter(event, [])
-      assert out == "[REDACTED]", "unrenderable message must fail closed, got #{inspect(out)}"
+      assert out == "[REDACTED]", "dependency message must not survive, got: #{inspect(out)}"
     end
   end
 
-  # `msg: {:string, :atom}` does not match the scrub head at all — it must fall
-  # through the catch-all rather than raise a FunctionClauseError.
-  test "an atom message falls through untouched" do
-    event = %{level: :warning, msg: {:string, :shutdown}, meta: %{mfa: {Req.Steps, :r, 1}}}
+  # The other half. Dropping the message is only acceptable because what an
+  # operator actually needs is in the METADATA, which is ours — so this pins
+  # that the drop does not take the metadata with it. Without this, replacing
+  # the whole event with `[REDACTED]` would pass every assertion above.
+  test "dropping the message keeps the metadata that makes it diagnosable" do
+    event = %{
+      level: :warning,
+      msg: {:string, ["redirecting to ", "https://b/u1/v1/Medical/biopsy.md"]},
+      meta: %{mfa: {Req.Steps, :redirect, 1}, request_id: "req-123"}
+    }
 
-    assert RedactFilter.filter(event, []).msg == {:string, :shutdown}
+    assert %{msg: {:string, "[REDACTED]"}, meta: meta, level: :warning} =
+             RedactFilter.filter(event, [])
+
+    # WHICH dependency, WHICH function, and our own correlation id.
+    assert meta.mfa == {Req.Steps, :redirect, 1}
+    assert meta.request_id == "req-123"
   end
 
-  # Our own log lines must not be touched by that rule.
+  # Our own log lines must not be touched by that rule. The drop is scoped to
+  # two modules; everything else keeps its message verbatim.
   test "a non-ExAws message with the same words is left alone" do
     msg = "sync failed for URL: internal"
     event = %{level: :warning, msg: {:string, msg}, meta: %{}}
 
     assert RedactFilter.filter(event, []).msg == {:string, msg}
+  end
+
+  test "a module that merely resembles a listed one is left alone" do
+    msg = "GET https://b/u1/v1/Medical/biopsy.md"
+
+    for mfa <- [{ExAws.S3, :put_object, 3}, {Req.Request, :run, 1}, {Engram.Sync, :push, 2}] do
+      event = %{level: :warning, msg: {:string, msg}, meta: %{mfa: mfa}}
+      assert RedactFilter.filter(event, []).msg == {:string, msg}
+    end
   end
 
   # THE filter must survive, and must keep redacting.
@@ -391,34 +393,6 @@ defmodule Engram.Logger.RescueReasonSinkTest do
 
   # The shapes the widening was made for. Each was leaking under the previous
   # pattern, and none of them was covered — all three reverts stayed green.
-  describe "separator-bearing tokens in dependency lines" do
-    for {name, raw} <- [
-          {"a relative path with no leading slash", "Medical/biopsy.md"},
-          {"a percent-encoded key", "bucket%2FMedical%2Fbiopsy.md"},
-          {"a bare bucket/key", "bucket/Medical.md"},
-          # Added in response to review, and shipped with nothing holding them:
-          # reverting @separators to its original three entries left the suite
-          # green.
-          {"a backslash-separated path", "Medical\\biopsy.md"},
-          {"a percent-encoded backslash", "Medical%5Cbiopsy.md"},
-          {"a double-encoded separator", "Medical%252Fbiopsy.md"}
-        ] do
-      test "#{name} is redacted" do
-        raw = unquote(raw)
-
-        event = %{
-          level: :debug,
-          msg: {:string, ["redirecting to ", raw]},
-          meta: %{mfa: {Req.Steps, :r, 1}}
-        }
-
-        {:string, out} = RedactFilter.filter(event, []).msg
-
-        refute out =~ "Medical", "leaked: #{out}"
-        assert out =~ "redirecting to"
-      end
-    end
-  end
 
   # I1: the previous pattern was quadratic and ran in the CALLING process —
   # 7.1 s at 16 KB, 282 s at 100 KB.
@@ -446,42 +420,6 @@ defmodule Engram.Logger.RescueReasonSinkTest do
     RedactFilter.filter(event, [])
 
     assert System.monotonic_time(:millisecond) - started < 500
-  end
-
-  # Tab and newline are delimiters, not ordinary characters.
-  #
-  # If they were not, the whole line would be ONE token, the prefix would be
-  # empty, and the result would be a bare `[REDACTED]` — so the surviving `tab`
-  # is what proves the split. The trailing `kept` does NOT survive, and that is
-  # the deliberate trade in `truncate_at_separator/1`: nothing marks where a
-  # path ends, so everything past the first separator goes. An earlier version
-  # kept it by scrubbing per token, and shipped `biopsy` and `results.md` in
-  # clear for any path containing a space.
-  test "tab is a delimiter, so the prefix survives and the tail does not" do
-    event = %{
-      level: :warning,
-      msg: {:string, "tab\tMedical/biopsy.md\tkept"},
-      meta: %{mfa: {ExAws.Request, :r, 7}}
-    }
-
-    {:string, out} = RedactFilter.filter(event, []).msg
-
-    assert out == "tab\t[REDACTED]"
-    refute out =~ "Medical"
-    refute out =~ "kept"
-  end
-
-  # Pins the whole-string pre-check. Without it every token is walked even when
-  # there is no separator anywhere — the overwhelmingly common case for a
-  # dependency log line.
-  test "a large separator-free message skips the token walk entirely" do
-    msg = String.duplicate("ab ", 400_000)
-    event = %{level: :warning, msg: {:string, msg}, meta: %{mfa: {ExAws.Request, :r, 7}}}
-
-    started = System.monotonic_time(:millisecond)
-    assert %{msg: {:string, ^msg}} = RedactFilter.filter(event, [])
-
-    assert System.monotonic_time(:millisecond) - started < 200
   end
 
   # Pins the size cap: past it, fail closed rather than spend unbounded time in
@@ -525,21 +463,6 @@ defmodule Engram.Logger.RescueReasonSinkTest do
 
       assert out.meta["path"] == "/Medical/biopsy.md",
              "string keys are now redacted — good, update the moduledoc and delete this"
-    end
-
-    # A dependency line with a separator-free filename. `:filename` is itself a
-    # sensitive key, so this is a real gap in the message scrub.
-    test "a separator-free filename in a dependency line is NOT scrubbed" do
-      event = %{
-        level: :debug,
-        msg: {:string, ["redirecting to ", "biopsy.md"]},
-        meta: %{mfa: {Req.Steps, :r, 1}}
-      }
-
-      {:string, out} = RedactFilter.filter(event, []).msg
-
-      assert out =~ "biopsy.md",
-             "separator-free tokens are now scrubbed — update the moduledoc and delete this"
     end
   end
 end
