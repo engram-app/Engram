@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.17.0](https://github.com/engram-app/Engram/compare/0.16.0...0.17.0) (2026-08-18)
+
+
+### Features
+
+* **crdt:** add a tail log for the vault index room ([#1392](https://github.com/engram-app/Engram/issues/1392)) ([d9dae45](https://github.com/engram-app/Engram/commit/d9dae455dbe72c159ff7b1166e655a3abe4867ba))
+* **crdt:** drain the per-vault index room on idle (closes [#1152](https://github.com/engram-app/Engram/issues/1152)) ([#1394](https://github.com/engram-app/Engram/issues/1394)) ([7422cbb](https://github.com/engram-app/Engram/commit/7422cbbdc554226b97164b887443ea97280f5a4a))
+* **crdt:** make the filemeta_v0 map authoritative for note paths (index-crdt 2, step 2) ([#1388](https://github.com/engram-app/Engram/issues/1388)) ([d92b44e](https://github.com/engram-app/Engram/commit/d92b44e1d85b901a4451f31ba1257fa63303b0de))
+* **crdt:** persist the per-vault index snapshot (index-crdt 2, step 1) ([#1387](https://github.com/engram-app/Engram/issues/1387)) ([bc7f34c](https://github.com/engram-app/Engram/commit/bc7f34c2d5d6dd578968e02126e34a6cc90ce7e4))
+
+
+### Bug Fixes
+
+* **ci:** build the image cache on disk, not in a 4GB tmpfs ([#1385](https://github.com/engram-app/Engram/issues/1385)) ([9244d19](https://github.com/engram-app/Engram/commit/9244d19da105bd73c39fbc5ee3dd11fd963ad8dd))
+* **crdt:** crdt_create is the web app's rename, so it must claim (+ the e2e that proves the client half) ([#1399](https://github.com/engram-app/Engram/issues/1399)) ([e8f0bad](https://github.com/engram-app/Engram/commit/e8f0badaa44b9c4eee3f9e3f6f0f270885b9f571))
+* **privacy:** audit the safe_reason scope, close 6 leaks it never covered ([#1398](https://github.com/engram-app/Engram/issues/1398)) ([eb2d6a2](https://github.com/engram-app/Engram/commit/eb2d6a245e543903a0b100295cc194d7156f7dc9))
+* **privacy:** filter exception reasons across content-handling modules ([#1396](https://github.com/engram-app/Engram/issues/1396)) ([58f3203](https://github.com/engram-app/Engram/commit/58f32033a617e6fb7c7816aef1bc21d07a9c1d5a))
+* **web:** stop deleted-note red screen and file-tree reconnect flash ([#1404](https://github.com/engram-app/Engram/issues/1404)) ([d267f4e](https://github.com/engram-app/Engram/commit/d267f4e6379c5da2007b68072c01d204686e387f))
+
 ## [0.16.0](https://github.com/engram-app/Engram/compare/0.15.1...0.16.0) (2026-08-15)
 
 
