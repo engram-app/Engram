@@ -24,6 +24,35 @@ defmodule EngramWeb.LocalAuthControllerTest do
       assert cookie.same_site == "Lax"
     end
 
+    test "refresh cookie is Secure when the edge terminated TLS", %{conn: conn} do
+      # Both deployment shapes put a TLS-terminating proxy in front of the app
+      # (ALB in SaaS, the operator's reverse proxy in self-host) and the app
+      # only ever listens plaintext behind it — see the note in runtime.exs.
+      # So `conn.scheme` is `:http` on a request that reached the user over
+      # HTTPS, and the ONLY signal that it was HTTPS is x-forwarded-proto.
+      # Without the endpoint rewriting the scheme from that header, this
+      # 30-day refresh token ships with no Secure flag on every proxied
+      # deployment, i.e. a downgrade attack can replay it over cleartext.
+      conn =
+        conn
+        |> put_req_header("x-forwarded-proto", "https")
+        |> post("/api/auth/register", %{email: "tls@test.com", password: "StrongPass123!"})
+
+      assert json_response(conn, 201)
+      assert conn.resp_cookies["refresh_token"].secure == true
+    end
+
+    test "refresh cookie is not Secure on a genuinely plaintext request", %{conn: conn} do
+      # Guards the other direction: a real cleartext request (no proxy header)
+      # must NOT get a Secure cookie, or local http dev logins silently break —
+      # the browser would refuse to send the cookie back.
+      conn =
+        post(conn, "/api/auth/register", %{email: "plain@test.com", password: "StrongPass123!"})
+
+      assert json_response(conn, 201)
+      refute conn.resp_cookies["refresh_token"].secure
+    end
+
     test "first user is admin, second is member", %{conn: conn} do
       post(conn, "/api/auth/register", %{email: "first@test.com", password: "StrongPass123!"})
       # Default mode is invite_only; open up so the second signup isn't gated.
