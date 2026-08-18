@@ -222,11 +222,16 @@ defmodule Engram.Notes.CrdtRoomIdleExitTest do
       :ok
     end
 
-    test "a room with no idle window is never enrolled", ctx do
+    # The drain now defaults ON (CrdtCheckpointTimer.@default_idle_exit_ms), so a
+    # room started with no explicit window inherits it and IS enrolled. This
+    # previously asserted the opposite, back when the default was nil — which was
+    # the bug: prod ran unbounded because nothing set the value. Disabling is now
+    # something you opt into, and the two tests below cover that direction.
+    test "a room with no explicit idle window inherits the default and is enrolled", ctx do
       room = start_room(ctx, [])
       :ok = SharedDoc.observe(room)
 
-      assert CrdtRoomLru.resident_count() == 0
+      assert CrdtRoomLru.resident_count() == 1
     end
 
     # 0 means disabled to `arm_idle/1`, so it must mean disabled here too. The
