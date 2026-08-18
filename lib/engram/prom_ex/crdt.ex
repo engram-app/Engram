@@ -91,6 +91,7 @@ defmodule Engram.PromEx.Crdt do
   @tail_event [:engram, :crdt, :index_tail]
   @drain_event [:engram, :crdt, :room_drain]
   @checkpoint_event [:engram, :crdt, :index_checkpoint]
+  @abort_event [:engram, :crdt, :checkpoint_abort]
   @projection_event [:engram, :crdt, :index_projection]
 
   @impl true
@@ -114,6 +115,35 @@ defmodule Engram.PromEx.Crdt do
           event_name: @checkpoint_event,
           description:
             "Per-vault CRDT index checkpoint outcomes by phase (ok | skipped_rotation | failed).",
+          tags: [:phase]
+        ),
+        # #959. A note whose stored crdt_state cannot be decrypted aborts its
+        # checkpoint forever: content freezes at the last good checkpoint while
+        # every tick appends another tail row. `unreadable_state` sustained
+        # non-zero is the signal; `quarantine` means the tail already crossed the
+        # depth threshold and the note needs an operator, not another tick.
+        #
+        # Tagged by phase ONLY — deliberately no note_id. The whole point is a
+        # per-note condition, but a note_id label is unbounded cardinality
+        # (2026-07-02 audit); the note_id lives on the log line, which is where
+        # you go once this counter tells you to look.
+        counter(
+          metric_prefix ++ [:checkpoint_abort, :total],
+          event_name: @abort_event,
+          description:
+            "CRDT checkpoint aborts by phase (unreadable_state | quarantine | other). " <>
+              "Sustained unreadable_state means a note is frozen and its tail log is growing.",
+          tags: [:phase]
+        ),
+        # The unbounded thing itself. A counter says aborts are happening; this
+        # says how far the log has run, which is what decides urgency.
+        last_value(
+          metric_prefix ++ [:checkpoint_abort, :tail_depth],
+          event_name: @abort_event,
+          measurement: :tail_depth,
+          description:
+            "Unfolded crdt_update_log rows for the note that just aborted. Grows without " <>
+              "bound while the abort persists; a successful checkpoint prunes it.",
           tags: [:phase]
         ),
         # The WRITE side of the authority the projection metrics below read from.
