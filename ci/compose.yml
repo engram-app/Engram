@@ -164,12 +164,13 @@ services:
       CRDT_MSG_RATE_LIMIT_OVERRIDE: "100000"
       CRDT_HS_RATE_LIMIT_OVERRIDE: "100000"
       # Room drain (#1152) turned ON for e2e only, under the same CI=true gate.
-      # In production NOTHING sets idle_exit_ms, so the drain never fires and is
-      # therefore never exercised against a real client — every unit and channel
-      # test stands a test process in for the plugin. Enabling it here means the
-      # whole Obsidian suite runs with rooms being released out from under the
-      # client mid-session, which is the only way to prove the property the
-      # design rests on: the client re-spins on its next frame and loses nothing.
+      # Production drains on a 5 min window, which no e2e run would ever reach —
+      # so without shortening it here the drain is never exercised against a real
+      # client, and every unit and channel test stands a test process in for the
+      # plugin. These values make the whole Obsidian suite run with rooms being
+      # released out from under the client mid-session, which is the only way to
+      # prove the property the design rests on: the client re-spins on its next
+      # frame and loses nothing.
       #
       # 5s is short enough that rooms genuinely drain between test steps and long
       # enough that it is not pathological. If this destabilises the suite, that

@@ -28,12 +28,16 @@ defmodule Engram.Notes.CrdtRoomLru do
   positive integer — the same guard `arm_idle/1` uses, so `0` means disabled to
   both. Where the drain is off, nothing can be LRU-evicted either.
 
-  That is **prod today**, where nothing sets `idle_exit_ms`. It is NOT CI/e2e:
-  `CRDT_IDLE_EXIT_MS` (`ci/compose.yml`) turns the drain on fleet-wide for every
-  note room, which is deliberate — it makes the whole Obsidian suite exercise
-  this against the real client. And the unblocking event is **#1151, not #1150**:
-  #1150's index room deliberately does not opt in, because it has no persistence
-  to checkpoint on the way out.
+  That is now the explicit opt-out case only: the drain defaults ON
+  (`CrdtCheckpointTimer.@default_idle_exit_ms`), so in prod every note room is
+  enrolled and this table is live. It previously read "prod today, where nothing
+  sets idle_exit_ms" — that was the bug, not the design. CI/e2e additionally
+  overrides the window via `CRDT_IDLE_EXIT_MS` (`ci/compose.yml`) so the Obsidian
+  suite exercises this against the real client at an observable timescale.
+
+  And the unblocking event is **#1151, not #1150**: #1150's index room resolves
+  its own `idle_exit_ms` before reaching the timer, so it is unaffected by this
+  module's default either way.
 
   `touch/3` and `forget/1` no-op while the table is missing. The table is owned
   by this module's GenServer, so a bare `:ets` call would raise in the CALLER —
@@ -49,7 +53,7 @@ defmodule Engram.Notes.CrdtRoomLru do
   ## Config
 
       config :engram, Engram.Notes.CrdtRoomLru,
-        max_resident: 64,
+        max_resident: 64,  # the default; see @default_max_resident
         sweep_interval_ms: 30_000
 
   `max_resident` wants tuning against real index-doc sizes once #1150 exists —
@@ -64,8 +68,38 @@ defmodule Engram.Notes.CrdtRoomLru do
   require Logger
 
   @table :crdt_room_lru
+  # Ceiling on resident rooms per node, enforced regardless of idleness so a bulk
+  # upload cannot outrun the idle timer.
+  #
+  # Do NOT raise this on note-room arithmetic alone. A 2026-08-18 measurement put
+  # note rooms at ~162 KB, which makes 256 look like a comfortable ~41 MB — but
+  # this table is COUNT-based and also tracks index rooms, which the moduledoc
+  # measures at ~7.91 MB per 10k-note vault, roughly 50x a note room. A node
+  # holding mostly index rooms would sit well under a count-based cap while
+  # blowing the memory budget the cap exists to defend, so the binding constraint
+  # is #1146's ~128-rooms-consumes-a-task figure, not the note-room average.
   @default_max_resident 64
   @default_sweep_interval_ms 30_000
+
+  # Most rooms a single sweep may evict.
+  #
+  # An eviction sends one `{:crdt_room_drain, pid}` to the owning channel, and a
+  # channel handles them SERIALLY out of its mailbox — each costing a
+  # `room_responsive?` probe bounded at `crdt_channel.@room_probe_ms` (1s) plus
+  # an unobserve. Unpaced, a node far over cap hands one socket a queue of
+  # drains: instant when rooms are healthy, but minutes of head-of-line blocking
+  # exactly when they are not (a starved pool — see #1411), which stalls the
+  # client's own frames behind it.
+  #
+  # Unlike the idle path this has no jitter, so the burst lands all at once.
+  # Capping the batch bounds the worst case to `cap x probe` per sweep and lets a
+  # backlog drain down over successive sweeps instead.
+  #
+  # Consequence to know: while a bulk upload creates rooms faster than this
+  # reclaims them, residency exceeds `max_resident` between sweeps. That is the
+  # accepted trade — a lagging bound beats a wedged socket — and it stops
+  # mattering once a bulk upload no longer creates a room per note (#1409).
+  @max_evictions_per_sweep 16
   @drain_event [:engram, :crdt, :room_drain]
 
   # Client -------------------------------------------------------------------
@@ -143,7 +177,7 @@ defmodule Engram.Notes.CrdtRoomLru do
     else
       entries
       |> Enum.sort_by(fn {_id, _pid, _vault, last} -> last end)
-      |> Enum.take(excess)
+      |> Enum.take(min(excess, @max_evictions_per_sweep))
       |> Enum.map(fn {id, _pid, _vault, _last} -> id end)
     end
   end
@@ -212,8 +246,13 @@ defmodule Engram.Notes.CrdtRoomLru do
   defp evict(note_ids, cap, resident) do
     # Never silent: an LRU eviction means the idle drain alone was not keeping
     # up, which is a capacity signal and not routine.
+    # `backlog` is what this sweep is deliberately NOT evicting because of
+    # @max_evictions_per_sweep. Logged explicitly so a paced sweep can never read
+    # as "residency is under control" when it is only catching up.
+    backlog = max(resident - cap - length(note_ids), 0)
+
     Logger.warning(
-      "crdt room LRU evicting #{length(note_ids)} room(s) — resident=#{resident} cap=#{cap}",
+      "crdt room LRU evicting #{length(note_ids)} room(s) — resident=#{resident} cap=#{cap} backlog=#{backlog}",
       Engram.Logger.Metadata.with_category(:warning, :sync)
     )
 

@@ -73,7 +73,7 @@ defmodule Engram.IndexingKeywordTest do
     assert hd(prepared.chunk_rows).token_count == expected_raw
   end
 
-  test "per-chunk detection: German note indexed with German stems (not English stems)", %{
+  test "per-note detection: German note indexed with German stems (not English stems)", %{
     bypass: bypass,
     user: user,
     vault: vault

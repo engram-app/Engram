@@ -80,11 +80,33 @@ defmodule Engram.Application do
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
         maybe_seed_legal()
+        maybe_warm_lang_models()
         {:ok, pid}
 
       other ->
         other
     end
+  end
+
+  # Pull the Lingua n-gram models into the NIF's process-global cache at boot.
+  # They are loaded lazily on first detection and then shared by every caller on
+  # the node, so without this the first note indexed after a deploy pays a ~55 MB
+  # load on a DirtyCpu scheduler while a user waits on their sync.
+  #
+  # Runs async and unlinked on purpose: the load depends on nothing in the
+  # supervision tree, and doing it inline would hold start/2 — and therefore the
+  # Endpoint and the ECS health check — behind pure CPU work. LangDetect.classify/1
+  # rescues internally, so a failure degrades to raw-token indexing, never a
+  # crashed boot.
+  defp maybe_warm_lang_models do
+    # The spawned pid is deliberately dropped: nothing waits on the warmup and
+    # nothing supervises it (see above), so there is no handle worth keeping.
+    _ =
+      if Application.get_env(:engram, :warm_lang_models, true) do
+        {:ok, _pid} = Task.start(&Engram.KeywordIndex.LangDetect.warmup/0)
+      end
+
+    :ok
   end
 
   # Seed + verify terms_versions from the vendored manifest, then warm the
