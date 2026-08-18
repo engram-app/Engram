@@ -573,6 +573,49 @@ defmodule Engram.AttachmentsTest do
 
       assert log =~ "Attachment blob missing"
     end
+
+    # The read path used to be `att.storage_key || Storage.key(user, vault, path)`,
+    # so a NULL storage_key silently REBUILT "user/vault/<cleartext path>" and
+    # put a vault path in the S3 URL — and from there in S3 access logs, CDN
+    # logs and ExAws's own line, none of which any control here can reach.
+    #
+    # `Storage.key/3` is deleted, so a NULL is now what it actually is: a broken
+    # row. Prod was counted before this shipped — 129 attachments, all
+    # UUID-keyed, ZERO NULL — so no live row takes this path today. It is
+    # asserted anyway because the failure mode it replaces was silent.
+    test "a NULL storage_key fails loudly instead of rebuilding a path key" do
+      user = insert(:user) |> Engram.Repo.reload!()
+      vault = insert(:vault, user: user)
+      path = "Medical/biopsy.png"
+
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => path,
+          "content_base64" => Base.encode64("x"),
+          "mtime" => 0.0
+        })
+
+      Engram.Repo.with_tenant(user.id, fn ->
+        from(a in Attachment, where: a.id == ^att.id)
+        |> Engram.Repo.update_all(set: [storage_key: nil])
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:storage, :blob_missing}} =
+                   Attachments.get_attachment(user, vault, path)
+        end)
+
+      assert log =~ "no storage_key"
+
+      # NOT `refute log =~ "Medical"` — that passed under the old code too, so
+      # it proved nothing. The old leak went into the S3 URL, which this test
+      # never renders. What actually distinguishes the fix is that NO storage
+      # read is attempted at all: the deleted fallback would have rebuilt a key
+      # from the path and fetched it.
+      refute log =~ "Attachment blob missing",
+             "a key was reconstructed and fetched — the fallback is back"
+    end
   end
 
   describe "uuid-keyed storage (Task 2)" do

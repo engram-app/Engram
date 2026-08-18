@@ -7,6 +7,7 @@ defmodule Engram.Vaults do
   import Ecto.Query
 
   alias Engram.Billing
+  alias Engram.Logger.Metadata
   alias Engram.Repo
   alias Engram.Vaults.Vault
 
@@ -565,7 +566,7 @@ defmodule Engram.Vaults do
 
               Logger.info(
                 "vault deleted",
-                Engram.Logger.Metadata.with_category(:info, :lifecycle,
+                Metadata.with_category(:info, :lifecycle,
                   user_id: deleted.user_id,
                   vault_id: deleted.id
                 )
@@ -883,10 +884,10 @@ defmodule Engram.Vaults do
 
         Logger.error(
           "vault decrypt_failed",
-          Engram.Logger.Metadata.with_category(:error, :crypto,
+          Metadata.with_category(:error, :crypto,
             user_id: user.id,
             vault_id: vault.id,
-            reason: inspect(reason)
+            reason: Metadata.safe_reason(reason)
           )
         )
 

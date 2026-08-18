@@ -110,6 +110,14 @@ defmodule Engram.Logger.Metadata do
   # where a %Note{}, a changeset or a Yjs frame would ride. Without this every
   # tuple reason collapsed to "unknown", which is how a filter earns being
   # routed around.
+  # `{:error, :aad_mismatch}` and friends: BOTH elements are atoms, so neither
+  # can hold user data and dropping the payload costs the entire signal. The
+  # general tuple clause below renders this ":error", which tells an operator
+  # nothing at all — the failure mode that gets a filter routed around rather
+  # than fixed.
+  def safe_reason({tag, payload}) when is_atom(tag) and is_atom(payload),
+    do: "#{inspect(tag)} #{inspect(payload)}"
+
   def safe_reason(reason) when is_tuple(reason) and tuple_size(reason) > 0 do
     case elem(reason, 0) do
       tag when is_atom(tag) -> inspect(tag)

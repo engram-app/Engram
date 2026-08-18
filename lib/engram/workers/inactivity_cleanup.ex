@@ -207,7 +207,7 @@ defmodule Engram.Workers.InactivityCleanup do
           Metadata.with_category(:error, :oban,
             user_id: user.id,
             reason_label: :inactivity_120d,
-            reason: inspect(other)
+            reason: Metadata.safe_reason(other)
           )
         )
     end

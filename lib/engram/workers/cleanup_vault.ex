@@ -201,7 +201,10 @@ defmodule Engram.Workers.CleanupVault do
       {:error, reason} ->
         Logger.warning(
           "CleanupVault: Qdrant delete failed",
-          Metadata.with_category(:warning, :oban, vault_id: vault.id, reason: inspect(reason))
+          Metadata.with_category(:warning, :oban,
+            vault_id: vault.id,
+            reason: Metadata.safe_reason(reason)
+          )
         )
     end
   rescue
@@ -210,7 +213,7 @@ defmodule Engram.Workers.CleanupVault do
         "CleanupVault: Qdrant delete raised",
         Metadata.with_category(:warning, :oban,
           vault_id: vault.id,
-          reason: Exception.message(e)
+          reason: Metadata.safe_reason(e)
         )
       )
   end
@@ -227,14 +230,17 @@ defmodule Engram.Workers.CleanupVault do
       {:error, reason} ->
         Logger.warning(
           "CleanupVault: storage delete failed",
-          Metadata.with_category(:warning, :oban, storage_key: key, reason: inspect(reason))
+          Metadata.with_category(:warning, :oban,
+            storage_key: key,
+            reason: Metadata.safe_reason(reason)
+          )
         )
     end
   rescue
     e ->
       Logger.warning(
         "CleanupVault: storage delete raised",
-        Metadata.with_category(:warning, :oban, storage_key: key, reason: Exception.message(e))
+        Metadata.with_category(:warning, :oban, storage_key: key, reason: Metadata.safe_reason(e))
       )
   end
 end

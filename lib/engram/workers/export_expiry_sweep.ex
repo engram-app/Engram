@@ -52,7 +52,7 @@ defmodule Engram.Workers.ExportExpirySweep do
             "export_expiry_sweep: sweep raised, continuing with remaining exports",
             Metadata.with_category(:error, :data,
               user_id: export.user_id,
-              reason: inspect(error)
+              reason: Metadata.safe_reason(error)
             )
           )
       end
@@ -81,7 +81,7 @@ defmodule Engram.Workers.ExportExpirySweep do
         "export_expiry_sweep: blob delete failed, key retained for next run",
         Metadata.with_category(:warning, :data,
           user_id: export.user_id,
-          reason: inspect(reason),
+          reason: Metadata.safe_reason(reason),
           key_present: is_binary(entry["key"])
         )
       )

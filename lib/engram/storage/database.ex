@@ -92,7 +92,7 @@ defmodule Engram.Storage.Database do
         "Database.exists? failed",
         Engram.Logger.Metadata.with_category(:error, :sync,
           storage_key: key,
-          reason: inspect(e)
+          reason: Engram.Logger.Metadata.safe_reason(e)
         )
       )
 

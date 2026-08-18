@@ -5,6 +5,8 @@ defmodule Engram.Storage.S3 do
 
   @behaviour Engram.Storage
 
+  alias Engram.Logger.Metadata
+
   defp bucket, do: Application.fetch_env!(:engram, :storage_bucket)
 
   @impl true
@@ -67,7 +69,7 @@ defmodule Engram.Storage.S3 do
 
             Logger.error(
               "S3.delete_many partial failure",
-              Engram.Logger.Metadata.with_category(:error, :sync,
+              Metadata.with_category(:error, :sync,
                 key_count: length(keys),
                 error_count: error_count
               )
@@ -204,9 +206,9 @@ defmodule Engram.Storage.S3 do
 
         Logger.error(
           "S3.exists? failed",
-          Engram.Logger.Metadata.with_category(:error, :sync,
+          Metadata.with_category(:error, :sync,
             storage_key: key,
-            reason: inspect(reason)
+            reason: Metadata.safe_reason(reason)
           )
         )
 
