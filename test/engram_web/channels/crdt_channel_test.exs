@@ -226,9 +226,25 @@ defmodule EngramWeb.CrdtChannelTest do
       roomed_id = Ecto.UUID.generate()
       ref2 = push(socket, "crdt_create", %{"doc_id" => roomed_id, "path" => "Notes/roomed.md"})
       assert_reply ref2, :ok, %{doc_id: ^roomed_id}
-      push(socket, "crdt_msg", %{"doc_id" => roomed_id, "b64" => frame})
+      ref3 = push(socket, "crdt_msg", %{"doc_id" => roomed_id, "b64" => frame})
+      # Await the ack (routed-to-room, per handle_in("crdt_msg", ...)) instead
+      # of a bare push, so the room has actually started + observed the frame
+      # before the poll below begins — otherwise room startup/:global
+      # registration eats into the SAME window as the checkpoint-timer wait.
+      assert_reply ref3, :ok, %{}
 
-      assert_note_content_eventually(user, vault, roomed_id, "# Title\n\nshared body")
+      # This leg converges on the room's checkpoint TIMER (~250ms), not on the
+      # write itself — unlike the detached leg, which is synchronous. Give it a
+      # deadline generous relative to that timer; this is a convergence
+      # deadline, not a correctness bound (the assertion below is unchanged).
+      assert_note_content_eventually(
+        user,
+        vault,
+        roomed_id,
+        "# Title\n\nshared body",
+        System.monotonic_time(:millisecond) + 2_000
+      )
+
       assert_note_content_eventually(user, vault, detached_id, "# Title\n\nshared body")
 
       assert {:ok, detached} = Notes.get_note_by_id(user, vault, detached_id)
@@ -254,6 +270,52 @@ defmodule EngramWeb.CrdtChannelTest do
 
       assert_reply ref, :ok, %{doc_id: ^id, seeded: false}
       assert Notes.note_in_vault?(user, vault, id)
+    end
+
+    test "a row holding a DIFFERENT body than the frame declines and leaves the row untouched",
+         %{socket: socket, user: user, vault: vault, note: note} do
+      # `note` (from setup) is live at "p.md" with content "base". A same-path
+      # crdt_create is the idempotent-retry leg (reaches {:ok, note}, not
+      # {:adopted, _}), so this exercises seed_empty_row/6's THIRD clause: the
+      # row content ("base") and the frame's projection disagree — a
+      # concurrent write landed between genesis and here — so it must decline
+      # rather than merge two lineages itself.
+      id = note.id
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "p.md",
+          "b64" => frame_for_content("a different body")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false}
+      assert {:ok, unchanged} = Notes.get_note_by_id(user, vault, id)
+      assert unchanged.content == "base"
+    end
+
+    test "an empty frame on an already-empty row reports seeded: true with no write", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # A fresh genesis row starts with content: "" (genesis_insert_bare). A
+      # frame that projects "" therefore matches seed_empty_row/6's FIRST
+      # clause (expected, expected pattern-equality) before ever reaching the
+      # second ("" row) clause — the idempotent short-circuit, not a real
+      # write.
+      id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/empty.md",
+          "b64" => frame_for_content("")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true}
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == ""
     end
   end
 
@@ -1596,13 +1658,18 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   # Poll get_note_by_id until the row's decrypted content matches (or flunk).
-  defp assert_note_content_eventually(user, vault, note_id, content) do
-    wait_until(fn ->
-      case Notes.get_note_by_id(user, vault, note_id) do
-        {:ok, note} -> note.content == content
-        _ -> false
-      end
-    end)
+  # `deadline` (absolute monotonic ms, as `wait_until/2` takes) defaults to
+  # `wait_until/2`'s own 500ms when omitted.
+  defp assert_note_content_eventually(user, vault, note_id, content, deadline \\ nil) do
+    wait_until(
+      fn ->
+        case Notes.get_note_by_id(user, vault, note_id) do
+          {:ok, note} -> note.content == content
+          _ -> false
+        end
+      end,
+      deadline
+    )
   end
 
   defp wait_until(condition, deadline \\ nil) do

@@ -847,6 +847,23 @@ defmodule EngramWeb.CrdtChannel do
          # snoozes on this exact condition (checkpoint_note.ex:50); a channel
          # cannot snooze, so we decline and let the client's crdt_msg path — which
          # goes THROUGH the room — do it.
+         #
+         # TOCTOU (reviewed, OPEN): a room can `ensure_started` right after this
+         # `lookup` returns nil but before `checkpoint/5` below commits. If it
+         # does, it loads the row's PRE-write (still-empty) state into its live
+         # doc — our write hasn't landed yet — so the room has no way to know
+         # about it. `checkpoint/5`'s `captured_version:` CAS does NOT close this:
+         # the CAS only rejects our write if `notes.version` already advanced,
+         # and a room merely starting (or loading an empty doc) never bumps
+         # `version` — only a COMMITTED checkpoint does. So our write still lands.
+         # If that room's doc is then independently seeded (e.g. the client also
+         # sends the same frame over crdt_msg, or starts typing) before its own
+         # checkpoint fires, `union_with_row_state/3` folds our persisted lineage
+         # with the room's causally-unrelated one — same #846 mechanism, doubled
+         # body. No lock invented here; narrow window, self-heals on nothing, so
+         # flagged for the room's owner to decide whether to close it (e.g. by
+         # having room startup adopt/replace an in-flight detached-seed lineage
+         # instead of independently re-seeding an apparently-empty doc).
          nil <- CrdtRegistry.lookup(note_id),
          {:ok, doc} <- apply_detached(update),
          expected = CrdtBridge.text_of(doc),
@@ -866,6 +883,16 @@ defmodule EngramWeb.CrdtChannel do
   # doubles. `crdt_create` is idempotent and clients do retry it, so the detached
   # path needs the same guard — taken against the row, which is the durable
   # equivalent of the room's in-memory doc.
+  #
+  # Clause ORDER is load-bearing, not interchangeable: the first clause's
+  # `expected, expected` pattern-match-equality only fires when the row
+  # content is EXACTLY the frame's projection, and must be checked before the
+  # `""` clause below — an empty frame (`expected == ""`) landing on an
+  # already-empty row must report the idempotent `true` of clause 1, not fall
+  # through to clause 2 and pay for a real (no-op) checkpoint write. Clause 2
+  # ("") must in turn precede the catch-all: it is the ONLY row state clause 3's
+  # "declined" `false` may not return for, since an empty row is exactly what a
+  # genesis seed is for.
   #
   # Already exactly this body: an idempotent retry with nothing to write. Report
   # true — the client's file IS synced, which is what `seeded` means.
@@ -887,8 +914,11 @@ defmodule EngramWeb.CrdtChannel do
   # and let the client's crdt_msg seed go through one.
   defp seed_empty_row(_user, _vault, _note_id, _doc, _expected, _row_content), do: false
 
-  # A crafted update can abort inside the y_ex NIF. Contain it: a bad frame costs
-  # this note its seed (the client re-sends over crdt_msg), never the channel.
+  # A crafted update can abort inside the y_ex NIF — either by raising (caught
+  # below) or, per its room-path twin `seed_genesis_if_empty/3`, by exiting the
+  # calling process (caught here too, same discipline). Contain it: a bad frame
+  # costs this note its seed (the client re-sends over crdt_msg), never the
+  # channel.
   defp apply_detached(update) do
     doc = CrdtBridge.new_doc()
 
@@ -901,6 +931,17 @@ defmodule EngramWeb.CrdtChannel do
       Logger.warning(
         "crdt genesis detached seed apply failed",
         Metadata.with_category(:warning, :sync, error_kind: Engram.Telemetry.error_kind(e))
+      )
+
+      :error
+  catch
+    :exit, reason ->
+      # Never log the raw exit reason: a NIF abort can carry the offending Yjs
+      # frame bytes in its payload. safe_exit_reason/1 is the same bounded
+      # projection seed_genesis_if_empty/3 uses for this exact failure class.
+      Logger.warning(
+        "crdt genesis detached seed apply exited",
+        Metadata.with_category(:warning, :sync, reason: Metadata.safe_exit_reason(reason))
       )
 
       :error
