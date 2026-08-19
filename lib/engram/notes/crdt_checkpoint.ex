@@ -123,30 +123,36 @@ defmodule Engram.Notes.CrdtCheckpoint do
   end
 
   defp do_checkpoint(user, user_id, vault_id, note_id, doc, opts) do
-    # Determine the prune boundary. `:prune_ids` (detached callers) is the exact
-    # set of folded rows — safest. Otherwise fall back to the `inserted_at`
-    # watermark path for live-room callers whose doc reflects the whole tail.
+    # Determine the prune boundary. `:prune_ids` is the exact set of rows this
+    # caller FOLDED into `doc`, and it is the only boundary that is safe on its
+    # own terms: a row nobody folded is never in the set, so it survives.
+    #
+    # Omitting it used to fall back to capturing an `inserted_at` watermark and
+    # pruning everything at or below it. That deletes rows regardless of whether
+    # the snapshotted doc contains them, which is safe ONLY while the caller is
+    # the sole tail writer — a property of who else may append, not of the
+    # checkpoint. #1391 established the same rule for the index room ("a
+    # checkpoint that prunes without that list deletes exactly the claims the
+    # tail log exists to protect"), and #1146 spec 0a showed the note-room path
+    # has the identical hole the moment a second writer exists.
+    #
+    # So the DEFAULT is now: prune nothing. Keeping rows is always recoverable
+    # (they replay on next bind, and apply_update is idempotent); deleting an
+    # unfolded row is not. A caller that wants compaction must say what it
+    # folded. `CrdtCheckpointTimer.do_checkpoint/1` folds the tail explicitly
+    # and passes the ids.
+    #
+    # `:watermark` remains as an EXPLICIT opt-in and carries the sole-writer
+    # assumption with it. Prefer `:prune_ids`; see the follow-up to retire this.
     prune =
       case Keyword.fetch(opts, :prune_ids) do
         {:ok, ids} when is_list(ids) ->
           {:ids, ids}
 
         :error ->
-          # Capture the prune watermark BEFORE reading/encoding the doc. Any tail
-          # row inserted while we encode is NOT necessarily in the snapshot, so it
-          # must survive the prune (it replays on next bind — apply_update is
-          # idempotent).
           case Keyword.fetch(opts, :watermark) do
-            {:ok, wm} ->
-              {:watermark, wm}
-
-            :error ->
-              # A capture failure degrades to nil: prune becomes a no-op, which is
-              # the safe direction (rows are kept and replayed on next bind).
-              case Repo.with_tenant(user_id, fn -> tail_watermark(note_id) end) do
-                {:ok, wm} -> {:watermark, wm}
-                _ -> {:watermark, nil}
-              end
+            {:ok, wm} -> {:watermark, wm}
+            :error -> {:ids, []}
           end
       end
 

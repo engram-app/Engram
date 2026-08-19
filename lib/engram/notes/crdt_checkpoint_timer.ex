@@ -82,8 +82,9 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   """
   use GenServer
 
+  alias Engram.Accounts
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtCheckpoint, CrdtRegistry, CrdtRoomLru}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, CrdtRegistry, CrdtRoomLru}
 
   require Logger
 
@@ -444,8 +445,34 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     captured_version = CrdtCheckpoint.current_version(state.user_id, state.room_key)
     doc = Yex.Sync.SharedDoc.get_doc(room_pid)
 
-    CrdtCheckpoint.checkpoint(state.user_id, state.vault_id, state.room_key, doc,
-      captured_version: captured_version
+    # Prune EXACTLY what this snapshot folded (#1146 spec 0a).
+    #
+    # Passing no `:prune_ids` takes the WATERMARK branch, which deletes every
+    # tail row at or below the watermark whether or not the snapshotted doc
+    # folded it. That is safe only while the room is the SOLE tail writer, so
+    # its doc provably reflects every row that exists — a property of who may
+    # append, not of the checkpoint. A row appended by anyone else after the
+    # room bound is in no snapshot and would be deleted unfolded: gone from the
+    # tail AND absent from crdt_state.
+    #
+    # This is the rule #1391 already established for the index room ("a
+    # checkpoint that prunes without that list deletes exactly the claims the
+    # tail log exists to protect"), which sidesteps it by never checkpointing
+    # from a tick. A note room ticks, so it has to fold instead.
+    #
+    # Fold the durable tail into a transient doc seeded from the room's ENCODED
+    # STATE, never from its projected text: a doc rebuilt from text is a
+    # different Yjs lineage and unions into a duplicated body. The room's own
+    # doc is a NIF resource owned by the room process, so it is never mutated
+    # from here.
+    user = Accounts.get_user!(state.user_id)
+    {:ok, encoded} = Yex.encode_state_as_update(doc)
+    {:ok, folded} = CrdtBridge.doc_from_state(encoded)
+    prune_ids = CrdtPersistence.replay_tail(folded, user, state.room_key)
+
+    CrdtCheckpoint.checkpoint(state.user_id, state.vault_id, state.room_key, folded,
+      captured_version: captured_version,
+      prune_ids: prune_ids
     )
   rescue
     err -> log_read_failure(state, err)
