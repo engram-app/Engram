@@ -1217,6 +1217,56 @@ class CdpClient:
         # unconditionally is safe and makes the drain deterministic.
         await self.evaluate(f"{ENGINE_PATH}.flushQueue()", await_promise=True)
 
+    async def get_crdt_queue_size(self) -> int:
+        """Read the CRDT outbound op-queue depth (`CrdtOpQueue`).
+
+        NOT `get_queue_size()`. That one reads `syncEngine.queue`, the REST
+        offline queue, which the CRDT path does not use. The two are separate
+        mechanisms and simulate_offline()/restore_online() only drive the REST
+        one (they stub api.* methods; CRDT traffic is on the WebSocket).
+
+        `crdtOpQueue` is TypeScript-`private`, which is erased at runtime, so
+        it is reachable here without a plugin-side test seam.
+        """
+        # `size()`, with parens. `OfflineQueue.size` is a property but
+        # `CrdtOpQueue.size` is a method, and reading it without calling
+        # yields a function, which this coerces to -1 rather than a depth.
+        result = await self.evaluate(f"{PLUGIN_PATH}.crdtOpQueue?.size() ?? -1")
+        return result if isinstance(result, int) else -1
+
+    async def get_crdt_queue_ops(self) -> list:
+        """Flat snapshot of pending CRDT ops: `[{kind, docId, path}, ...]`.
+
+        `path` is included deliberately. Without it no assertion can pin an op
+        to the note that produced it, which forces tests into weak shapes like
+        "at least 2 distinct docIds" — satisfied by one leftover op from an
+        earlier test plus one of the two the test just made, while the other was
+        silently dropped. e2e paths are synthetic `E2E/...` fixtures, and other
+        helpers here already take a note path, so there is nothing to protect.
+        """
+        js = (
+            f"({PLUGIN_PATH}.crdtOpQueue?.all() ?? [])"
+            ".map(o => ({kind: o.kind, docId: o.docId, path: o.payload?.path ?? null}))"
+        )
+        result = await self.evaluate(js)
+        return result if isinstance(result, list) else []
+
+    async def wait_for_crdt_queue_drain(self, timeout: float = 30, poll: float = 0.5) -> None:
+        """Poll until the CRDT op queue is empty.
+
+        Generous default: the queue retries on a 5s tick with exponential
+        backoff, so a drain can legitimately wait one tick past reconnect.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if await self.get_crdt_queue_size() == 0:
+                return
+            await asyncio.sleep(poll)
+        raise TimeoutError(
+            f"CRDT op queue not drained after {timeout}s, "
+            f"size={await self.get_crdt_queue_size()}"
+        )
+
     async def get_queue_size(self) -> int:
         """Read the offline queue size."""
         result = await self.evaluate(f"{ENGINE_PATH}.queue.size")
