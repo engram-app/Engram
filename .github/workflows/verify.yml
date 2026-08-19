@@ -330,7 +330,7 @@ jobs:
               lib priv config test frontend \
               Dockerfile entrypoint.sh .dockerignore \
               mix.lock \
-              .formatter.exs .credo.exs .dialyzer_ignore.exs .sobelow-conf \
+              .formatter.exs .credo.exs .dialyzer_ignore.exs .sobelow-conf .sobelow-skips \
               ci/compose.yml ci/compose.local.yml ci/compose.database.yml \
               .github/workflows/verify.yml
             echo "mix.exs-no-version:$MIX_EXS_NO_VERSION"
@@ -2626,7 +2626,8 @@ jobs:
     # was historically NOT trusted (it once let credo/sobelow regressions merge):
     # a ci-lint marker means lint passed in full for this exact
     # elixir-src+test+lint-config content (incl. .credo.exs/.sobelow-conf/
-    # .formatter.exs/.dialyzer_ignore.exs — a loosened rule busts the hash).
+    # .sobelow-skips/.formatter.exs/.dialyzer_ignore.exs — a loosened rule, or
+    # a newly accepted sobelow finding, busts the hash).
     # Skipping replays that pass on identical content, on main as much as on a
     # PR. CAVEAT: mix_audit is time-dependent (same mix.lock, new CVE ⇒ new
     # verdict), which no content hash can model — the 06:00 nightly is a
@@ -2693,7 +2694,22 @@ jobs:
       # Phase 5: credo → fatal.
       # Phase 6: sobelow drops `--skip` (any `#sobelow_skip` annotation in the
       #         tree now surfaces as a finding); sobelow threshold already at
-      #         strictest (low). Dialyzer flags already exceed plan target
+      #         strictest (low).
+      #         SUPERSEDED 2026-08-18: `--skip` is back, because Phase 6 was
+      #         never actually enforcing anything. sobelow 0.14.1 did not scan
+      #         this project at all — it printed its category guide and exited
+      #         0, so the gate was green on a scan that never happened (one of
+      #         several silent-pass bugs 0.15.0 fixes). Bumping to 0.15.0 turned
+      #         the scan on for the first time and surfaced 21 findings, all
+      #         triaged as false positives. They are pinned by fingerprint in
+      #         `.sobelow-skips` rather than suppressed by check name, so the
+      #         strictness Phase 6 wanted is preserved for LOCATIONS: an
+      #         already-accepted check firing somewhere new still fails. See
+      #         the Sobelow step below for what a fingerprint does NOT cover.
+      #         `.sobelow-skips` is in the `lint-config` group in
+      #         ci/fingerprint/groups.sh (the list that actually gates this
+      #         job), so a skips-only change cannot replay a stale pass.
+      #         Dialyzer flags already exceed plan target
       #         (Phase 4 added :missing_return + :extra_return on top of
       #         :unmatched_returns, :error_handling, :underspecs). Credo
       #         already strict (config + CLI). Deferred: Readability.Specs
@@ -2720,7 +2736,27 @@ jobs:
         run: mix engram.lint.no_client_only_rate_limits
 
       - name: Sobelow
-        run: mix sobelow --exit low
+        # `--skip` honours `.sobelow-skips`, which pins accepted findings by
+        # fingerprint rather than by check name, so an already-accepted check
+        # firing at a NEW location still fails the build.
+        #
+        # Know the ceiling, it is narrower than "pinned by fingerprint" sounds.
+        # The fingerprint is `phash2` of {check, the flagged call's AST, file,
+        # line} — the CALL only. It does not cover the data reaching that call.
+        # Concretely: the `binary_to_term` skips are justified by the bytes
+        # having just passed AES-GCM auth, and replacing that decrypt with a
+        # plain `Base.decode64!` does NOT resurface the finding. What does
+        # resurface it: changing the call itself, moving it, renaming the file,
+        # or adding one anywhere new. So this gate defends locations, not
+        # invariants. The invariants are recorded in
+        # docs/context/sobelow-silent-no-op-and-fingerprint-skips.md and are a
+        # code-review responsibility.
+        #
+        # Note `--skip` also re-enables in-source `# sobelow_skip` /
+        # `@sobelow_skip` annotations, which DO suppress by check name and are
+        # not recorded in `.sobelow-skips`. The tree has none today; adding one
+        # should be treated as a suppression, not a comment.
+        run: mix sobelow --exit low --skip
 
       - name: Hex CVE audit (mix_audit)
         # Backstops gaps in GitHub's Advisory DB coverage of Hex.

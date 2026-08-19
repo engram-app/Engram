@@ -94,8 +94,13 @@ defmodule EngramWeb.AttachmentsController do
 
   defp text_mime?(nil), do: false
 
+  # Same normalizer as the upload gate and `inline_safe?/1`. This was the third
+  # MIME decision site and it was missed when the other two were unified, which
+  # left the exact bug that unification existed to remove: a Free-tier user
+  # uploading `" text/plain"` got 402 `attachment_must_be_text` while
+  # `MimeWhitelist.check/2` considered the same string text.
   defp text_mime?(mime) when is_binary(mime),
-    do: String.starts_with?(String.downcase(mime), "text/")
+    do: String.starts_with?(Engram.Storage.MimeWhitelist.normalize(mime), "text/")
 
   defp do_upload(conn, user, vault, params) do
     case Attachments.upsert_attachment(user, vault, params) do
@@ -482,10 +487,25 @@ defmodule EngramWeb.AttachmentsController do
   # markup or XSLT) are NOT — they force-download. Everything not on this list
   # downloads by default.
   defp inline_safe?(nil), do: false
-  defp inline_safe?("image/svg+xml"), do: false
 
   defp inline_safe?(mime) when is_binary(mime) do
-    String.starts_with?(mime, "image/") or mime == "application/pdf" or mime == "text/plain"
+    # Normalize BEFORE matching. `mime_type` is stored verbatim from the
+    # uploader (see create/2), so the bare `"image/svg+xml"` clause this used
+    # to match on was trivially sidestepped: `image/svg+xml; charset=utf-8`
+    # and `image/svg+xml ` both missed the exclusion and fell into the
+    # `starts_with?("image/")` allowlist, i.e. an SVG (a script-executing
+    # document format) served `inline`.
+    #
+    # Shared with `MimeWhitelist.check/2` on purpose: the upload gate and this
+    # serve gate must agree on what a value MEANS, or the same media type gets
+    # opposite answers depending on whitespace. Normalizing here only, as an
+    # earlier version of this fix did, was how that split appeared.
+    case Engram.Storage.MimeWhitelist.normalize(mime) do
+      "image/svg+xml" -> false
+      "application/pdf" -> true
+      "text/plain" -> true
+      type -> String.starts_with?(type, "image/")
+    end
   end
 
   defp serialize_metadata(att) do

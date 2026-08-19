@@ -1,6 +1,13 @@
 [
   verbose: false,
   private: false,
+  # Deliberately false while CI and .githooks/pre-push both pass `--skip`.
+  # CLI beats config (Sobelow merges conf then opts), so the gate still skips.
+  # Setting it true here would make a bare `mix sobelow` match CI, but it would
+  # also make the accepted findings UNREACHABLE: there is no `--no-skip`, so
+  # dropping the flag would no longer show them. Keeping it false preserves
+  # `mix sobelow --exit low` as the way to audit what is currently pinned.
+  # See docs/context/sobelow-silent-no-op-and-fingerprint-skips.md.
   skip: false,
   router: "lib/engram_web/router.ex",
   exit: "low",
