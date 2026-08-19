@@ -17,6 +17,32 @@ defmodule EngramWeb.WellKnownController do
 
   alias EngramWeb.OAuthMetadata
 
+  # Edge-cacheable. Both documents are pure functions of (dialed host, deploy):
+  # every value is either a compile-time literal or derived from
+  # `OAuthMetadata.base_url/1`, which resolves from the Host header against the
+  # `:cors_origin` allowlist. No user, no token, no request body. Verified by
+  # diffing two live responses byte-for-byte.
+  #
+  # Without this every MCP client connect (Claude, Cursor, ChatGPT probe these
+  # on EVERY connect, before auth) crossed Cloudflare -> ALB -> Fargate to
+  # render a constant. Phoenix's default `max-age=0, private, must-revalidate`
+  # made that non-negotiable: `private` forbids a shared cache from storing it
+  # at all, so the edge reported `cf-cache-status: DYNAMIC` and passed through.
+  #
+  # The headers themselves are set by the `:public_cacheable` pipeline in the
+  # router, shared with `/api/openapi`, NOT here. They belong together because
+  # caching these safely requires a second, non-obvious header change (pinning
+  # `access-control-allow-origin` to a constant, since the CORS plug otherwise
+  # echoes the request Origin into a shared cache entry) — see the long comment
+  # on `public_cacheable_headers/2`. Splitting them across two files is how one
+  # of the pair gets changed alone.
+  #
+  # Correctness note that constrains BOTH: the body VARIES BY HOST.
+  # Cloudflare's cache key includes the hostname, so `mcp.` and `app.` get
+  # separate entries and cannot be crossed. Do not "optimise" this into a
+  # host-independent constant, and do not add a Cache Rule that normalises the
+  # host out of the cache key.
+
   # RFC 9728 `resource_documentation` — where a developer is sent to learn how
   # to use this resource. Optional in the spec, which is exactly why a link that
   # does not resolve is worse than no link: a client following it lands nowhere.
