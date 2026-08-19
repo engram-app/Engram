@@ -70,10 +70,39 @@ defmodule Engram.Storage.MimeWhitelist do
 
   defp bypass?, do: Application.get_env(:engram, :attachment_mime_bypass, false) == true
 
+  @doc """
+  Canonical form of a `mime_type` value, for DECISIONS only.
+
+  Strips any parameters (`; charset=utf-8`), trims surrounding whitespace and
+  downcases, so `"Image/SVG+XML; charset=utf-8 "` and `"image/svg+xml"` are the
+  same media type to every check.
+
+  Callers must NOT store or serve this: the parameters are meaningful in a
+  response `Content-Type` (dropping `charset` from a `text/*` response changes
+  how a browser decodes it). Attachments keep the uploader's exact string and
+  normalize only when deciding allow/deny and inline/download.
+
+  Exists because those two decisions used to normalize differently. This
+  module downcased only; `AttachmentsController.inline_safe?/1` also stripped
+  parameters. The observable split was that `" image/svg+xml"` was rejected at
+  upload while `"image/svg+xml "` was accepted and stored — same media type,
+  opposite outcomes, and nothing kept the two in sync.
+  """
+  @spec normalize(String.t() | nil) :: String.t() | nil
+  def normalize(nil), do: nil
+
+  def normalize(mime) when is_binary(mime) do
+    mime
+    |> String.split(";", parts: 2)
+    |> hd()
+    |> String.trim()
+    |> String.downcase()
+  end
+
   defp mime_allowed?(nil), do: false
 
   defp mime_allowed?(mime) when is_binary(mime) do
-    mime = String.downcase(mime)
+    mime = normalize(mime)
 
     Enum.any?(@mime_prefixes, &String.starts_with?(mime, &1)) or
       MapSet.member?(@mime_explicit, mime) or

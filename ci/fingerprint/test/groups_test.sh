@@ -43,7 +43,7 @@ unit-tests test Run-Elixir-unit-tests
 lint .credo.exs Credo-strict
 lint .dialyzer_ignore.exs Dialyzer
 lint .sobelow-conf Sobelow
-lint .sobelow-skips Sobelow-accepted-findings
+lint .sobelow-skips Sobelow
 lint mix.lock Hex-CVE-audit-mix_audit
 e2e-browser frontend browser-e2e-serves-the-SPA
 storage-database Dockerfile boots-the-release-image

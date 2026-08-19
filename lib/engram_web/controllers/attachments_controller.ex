@@ -489,9 +489,13 @@ defmodule EngramWeb.AttachmentsController do
     # to match on was trivially sidestepped: `image/svg+xml; charset=utf-8`
     # and `image/svg+xml ` both missed the exclusion and fell into the
     # `starts_with?("image/")` allowlist, i.e. an SVG (a script-executing
-    # document format) served `inline`. Strip parameters and case so the
-    # exclusion below is decided by the media type alone.
-    case mime |> String.split(";", parts: 2) |> hd() |> String.trim() |> String.downcase() do
+    # document format) served `inline`.
+    #
+    # Shared with `MimeWhitelist.check/2` on purpose: the upload gate and this
+    # serve gate must agree on what a value MEANS, or the same media type gets
+    # opposite answers depending on whitespace. Normalizing here only, as an
+    # earlier version of this fix did, was how that split appeared.
+    case Engram.Storage.MimeWhitelist.normalize(mime) do
       "image/svg+xml" -> false
       "application/pdf" -> true
       "text/plain" -> true

@@ -25,7 +25,9 @@ _Captured 2026-05-09 on `chore/quality-tooling-foundation` (PR #TBD). Each subse
 
 ## Sobelow
 
-`mix sobelow --exit low --skip` → exit 0. No XSS, SQL-injection, path-traversal, RCE, command-injection, DoS, or known-vuln-dep findings at the strictest threshold. Already gateable; Phase 3 promotes.
+`mix sobelow --exit low --skip` → exit 0 at the strictest threshold. Already gateable; Phase 3 promotes.
+
+> **Corrected 2026-08-18.** This line used to read "No XSS, SQL-injection, path-traversal, RCE, command-injection, DoS, or known-vuln-dep findings". That was never measured: sobelow 0.14.1 printed its category guide and exited 0 without scanning this project at all, so the baseline recorded the absence of a scan, not the absence of findings. 0.15.0 scans and reports **21**, all triaged as false positives and pinned by fingerprint in `.sobelow-skips`. Exit 0 above now means "no UNACCEPTED findings". See `sobelow-silent-no-op-and-fingerprint-skips.md`.
 
 ## Dialyzer
 
@@ -127,7 +129,7 @@ cd backend
 mix format --check-formatted          # exit-status only
 mix compile --warnings-as-errors --force
 mix credo --strict --mute-exit-status # full report
-mix sobelow --exit low                # full report, INCLUDING accepted findings
+mix sobelow --exit low --skip         # full report (drop --skip to also list accepted findings; exits 1)
 mix dialyzer                          # full report (PLT must be built first via mix dialyzer --plt)
 ```
 
