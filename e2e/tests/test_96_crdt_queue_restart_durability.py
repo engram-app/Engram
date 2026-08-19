@@ -1,22 +1,28 @@
-"""Test 96: the CRDT op queue is persisted before a hard kill and reloaded after.
+"""Test 96: the CRDT op queue is persisted to disk, so a hard kill cannot lose it.
 
-The `#1315` restart-durability box, and the part the unit suite structurally
-cannot reach: it can prove `persistable()`/`load()` round-trip a list, but not
-that a real Obsidian process wrote that list to `data.json` before being
-SIGKILLed, nor that boot picked it back up.
+The `#1315` durability box. An op enqueued while the socket is down lives only
+in `CrdtOpQueue` until it flushes; if it never reaches `data.json`, a crash
+loses a path->id claim with no error anywhere. The unit suite can prove
+`persistable()`/`load()` round-trip a list, but not that the real plugin writes
+that list to disk.
 
-An op enqueued while the socket is down lives only in this queue. If the write
-to `data.json` does not happen, or the load does not, the claim is gone with no
-error anywhere.
+Scope, deliberately narrowed after two CI failures. This test used to stop the
+client and restart it. Two problems with that:
 
-Scope, stated honestly: the load-bearing assertion is the on-disk one, read with
-the process dead. The post-restart convergence check below is deliberately NOT
-claimed as proof the QUEUE delivered it — vault B still has the file on disk, so
-a plain boot re-push would also satisfy it. Isolating those two needs a way to
-suppress the boot push, which does not exist today; the on-disk assertion plus
-the reload observation is what this test can honestly prove.
+* It bought nothing. Vault B still has the file on disk, so a plain boot re-push
+  satisfies "the note reached the server" just as well as a queue replay would.
+  Isolating those needs a way to suppress the boot push, which does not exist.
+  The on-disk assertion was always the load-bearing one.
+* It cost a lot. `stop()` is `pkill -9` plus an `rmtree` of the config dir, and
+  the restart respawns Xvfb and Obsidian. `obsidian_b` is SESSION-scoped and
+  test_82 already restarts it, so this added a SECOND full restart cycle to one
+  session. Both CI failures landed in test_82's restart afterwards: once
+  `Xvfb failed to start (rc=-9)`, once `CDP not available after 60s`. Classic
+  resource pressure, and this test was the new contributor.
 
-Uses instance B and `async_start(restart=True)`, following test_82.
+So it now proves persistence and stops there, with the process left running.
+The reload half stays open on #1315 and wants harness support to be worth
+having.
 """
 
 import asyncio
@@ -27,27 +33,23 @@ from helpers.vault import write_note
 
 
 @pytest.mark.asyncio
-async def test_crdt_queue_survives_client_restart(obsidian_b, cdp_b, api_sync):
-    """Queue an op offline, hard-kill the client, and the op is on disk and reloaded."""
+async def test_crdt_queue_is_persisted_to_disk(obsidian_b, cdp_b, api_sync):
+    """An op queued while offline is written to data.json, where a crash cannot lose it."""
     path = "E2E/CrdtQueueRestart96.md"
 
     write_note(obsidian_b.vault_path, "E2E/CrdtQueueRestart96base.md", "# base")
     api_sync.wait_for_note("E2E/CrdtQueueRestart96base.md")
 
-    stopped = False
     await cdp_b.disconnect_stream()
 
-    # Everything from here to the restart runs under try/finally. `obsidian_b`
-    # is SESSION-scoped: an assertion failing in between would otherwise leave B
-    # socket-dead, or (past stop()) fully torn down with its config_dir removed,
-    # for every later test in the run. Those tests would then fail with unrelated
-    # CDP connection errors and bury the real failure.
+    # `obsidian_b` is SESSION-scoped: an assertion failing while its socket is
+    # down would leave every later test talking to a dead channel.
     try:
         assert not await cdp_b.check_stream_connected(), (
             "disconnect_stream() must actually drop the channel"
         )
 
-        write_note(obsidian_b.vault_path, path, "# Restart 96\nqueued before the kill")
+        write_note(obsidian_b.vault_path, path, "# Restart 96\nqueued while offline")
 
         deadline = asyncio.get_event_loop().time() + 20
         queued_ids: set = set()
@@ -60,43 +62,22 @@ async def test_crdt_queue_survives_client_restart(obsidian_b, cdp_b, api_sync):
             await asyncio.sleep(0.5)
         assert queued_ids, f"precondition: the offline write must be held, queue={ops}"
 
-        # Drive the plugin's OWN savePluginData rather than sleeping past the
-        # debounce. stop() is a SIGKILL, so a fixed sleep racing a loaded CI box
-        # would surface as a confusing "not persisted" assertion instead of a
-        # timeout.
+        # Drive the plugin's OWN savePluginData. Persist is debounced, so without
+        # this the read below races the write and fails for the wrong reason.
         await cdp_b.persist_plugin_data()
 
-        obsidian_b.stop()
-        stopped = True
-
-        # The durability proof, read off disk with the process dead. Pinned to
-        # THIS test's op: asserting the key is merely non-empty would pass on any
-        # leftover entry and prove nothing about the write just made.
+        # The durability proof: the op is on disk, pinned to THIS test's op.
+        # Asserting the key is merely non-empty would pass on any leftover entry.
         data = obsidian_b.read_data_json()
         persisted = data.get("crdtOpQueue") or []
         persisted_ids = {op.get("docId") for op in persisted}
         assert queued_ids & persisted_ids, (
-            f"the op held in memory ({queued_ids}) must be on disk before the kill; "
+            f"the op held in memory ({queued_ids}) must be on disk; "
             f"data.json had {persisted_ids} (keys={list(data)})"
         )
     finally:
-        if stopped:
-            await obsidian_b.async_start(restart=True)
-            # Hand B back in the state the rest of the SESSION expects, not just
-            # "running". A restarted instance comes up with its stream not yet
-            # re-established and its remote logging not re-seeded, and the
-            # delivery oracle reads B's CLIENT LOGS — so the next test that waits
-            # on a B-side delivery fails with `received=no materialized=yes`:
-            # the file lands, but the evidence never ships. Verified: test_09
-            # passes alone and fails immediately after this test without these
-            # two lines.
-            await cdp_b.enable_remote_logging()
-            await cdp_b.wait_for_stream_connected()
-        else:
-            await cdp_b.reconnect_stream()
+        await cdp_b.reconnect_stream()
 
-    # Reloaded and converged. The drain has no "was ever non-empty" guard on
-    # purpose: the queue may legitimately have flushed before the first poll, and
-    # the reload itself is already evidenced by the on-disk assertion above.
-    await cdp_b.wait_for_crdt_queue_drain(timeout=60)
+    # And it still converges once the socket returns.
+    await cdp_b.wait_for_crdt_queue_drain(timeout=45)
     api_sync.wait_for_note(path, timeout=30)
