@@ -127,6 +127,12 @@ defmodule EngramWeb.CrdtChannelTest do
       ref2 = push(socket, "crdt_catchup_since", %{})
       assert_reply ref2, :ok, %{changes: _}
     end
+
+    test "reply carries seeded: false when no b64 is sent", %{socket: socket} do
+      id = Ecto.UUID.generate()
+      ref = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/noseed.md"})
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false}
+    end
   end
 
   describe "crdt_delete" do

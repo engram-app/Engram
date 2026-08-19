@@ -344,14 +344,19 @@ defmodule EngramWeb.CrdtChannel do
              origin: socket.assigns[:client_type]
            ) do
         {:ok, note} ->
-          {:reply, {:ok, %{doc_id: note.id}}, socket}
+          {:reply, {:ok, %{doc_id: note.id, seeded: false}}, socket}
 
         {:adopted, note} ->
           # Unchanged behaviour for the single create: the client's crdtCreate
           # promise resolves to the authoritative id and pushFile's ADOPT then
           # transfers the local body onto that lineage. Only the BATCH leg has to
           # distinguish this from a create (it reports frame-applied, not id).
-          {:reply, {:ok, %{doc_id: note.id}}, socket}
+          #
+          # seeded is ALWAYS false here even when the client sent a b64: adopting
+          # means the path is owned by a different live note, and applying our
+          # frame to it would overwrite that note's body. The ADOPT path transfers
+          # the body deliberately; this must not shortcut it.
+          {:reply, {:ok, %{doc_id: note.id, seeded: false}}, socket}
 
         {:error, :id_conflict, note} ->
           {:reply, {:error, %{reason: "id_conflict", doc_id: note.id}}, socket}
