@@ -417,6 +417,68 @@ Two traps worth carrying elsewhere:
   refuses to arm any PR carrying a `0.X → 0.Y` transition (engram-infra#909).
   engram has 13 deps on `~> 0.x`.
 
+## test_66: a lying assertion message (2 hits in 3 runs, 2026-08-18)
+
+`test_66_remote_logging_toggle::test_disable_stops_flush` failed on
+`e2e-clerk` with:
+
+```
+AssertionError: No pre-disable log entries reached the server within 5 s
+after push_file_now + flush_remote_logs. This means rlog().info(...) calls
+inside pushFile() either didn't fire (engine code change) or the
+visibilitychange flush handler isn't POSTing to /logs.
+assert []
+```
+
+**Do not follow that message into `remote-log.ts`.** It names two causes and
+the observed failure was neither. `test_16_remote_logging_pipeline` exercises
+the same pipeline and passed in the same run, at 31% while test_66 failed at
+84%, so the pipeline was working the whole time.
+
+Non-deterministic: the identical job passed on rerun with no code change.
+
+**Two hits within ~45 minutes, on unrelated PRs in different repos**, identical
+`assert []`:
+
+| Run | PR | What it changes |
+|---|---|---|
+| 32197136622 | Engram #1418 | adds three e2e test files |
+| 32199914733 | Engram-obsidian #449 | one guard clause in `sync.ts` |
+
+Neither can touch remote logging. #449 only alters a branch gated on
+`content === "" && content_hash`, and test_66 pushes real content. So a hit on
+YOUR PR is not evidence your PR did anything.
+
+Leading hypothesis, unproven and tracked in #1421: `flush_remote_logs`
+(`cdp.py`) waits a **fixed 600 ms** for the POST, and its own docstring says
+"bump it on slow CI shapes" — a fixed sleep standing in for a round-trip that
+varies with load. Both hits landed while several PRs ran concurrently on the
+shared pool. The competing hypothesis is that the flush is fine and
+`push_file_now` sometimes emits no rlog lines at all, in which case the buffer
+is legitimately empty. Checking whether ANY /logs rows exist for the session
+user at failure time separates the two.
+
+### Why it is easy to misattribute to your own diff
+
+It surfaced on a PR that ADDED e2e tests, which makes "my new tests polluted
+a shared resource" the obvious story, and there is even a real mechanism to
+support it: `list_logs(query=)` filters Python-side AFTER the backend caps at
+`limit`, under one shared session user with logging seeded on suite-wide, so
+a log-noisy test upstream genuinely can push a marker out of the window
+(#1419).
+
+That story was wrong, and one cheap fact killed it: **execution order**. The
+new tests ran at 98-100%, test_66 failed at 84%. They ran after it.
+
+Check the order before building a theory:
+
+```bash
+gh run view <run-id> --log | grep -oE "\[gw[0-9]\] \[ *[0-9]+%\] (PASSED|FAILED) tests/[^ ]*"
+```
+
+Adding tests does perturb xdist distribution, so a new test file can change
+test_66's neighbours and timing without being at fault for its content.
+
 ## What is still open
 
 - `test_34` — **FIXED** (Engram-obsidian#394), verified green in the

@@ -5,7 +5,7 @@ defmodule EngramWeb.CrdtChannelTest do
   import ExUnit.CaptureLog
 
   alias Ecto.Adapters.SQL.Sandbox
-  alias Engram.{Attachments, Crypto, Fixtures, Notes, Vaults}
+  alias Engram.{Attachments, CheckpointInterleave, Crypto, Fixtures, Notes, Vaults}
   alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog}
   alias Engram.Repo
   alias Yex.Sync.SharedDoc
@@ -126,6 +126,562 @@ defmodule EngramWeb.CrdtChannelTest do
 
       ref2 = push(socket, "crdt_catchup_since", %{})
       assert_reply ref2, :ok, %{changes: _}
+    end
+
+    test "reply carries seeded: false when no b64 is sent", %{socket: socket} do
+      id = Ecto.UUID.generate()
+      ref = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/noseed.md"})
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false}
+    end
+  end
+
+  describe "crdt_create with b64 (detached genesis seed)" do
+    test "persists the body and creates NO room", %{socket: socket, user: user, vault: vault} do
+      id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/seeded.md",
+          "b64" => frame_for_content("hello from genesis")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true}
+      assert_note_content_eventually(user, vault, id, "hello from genesis")
+
+      # The whole point: no SharedDoc actor was started for this note.
+      assert CrdtRegistry.lookup(id) == nil
+    end
+
+    test "fans the genesis body out to the vault's other devices", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # #1409, found by the first paired e2e run. `note_yjs_update` is emitted
+      # from CrdtPersistence.update_v1/4, which runs INSIDE the room GenServer.
+      # A detached seed opens no room, so without an explicit fan-out a second
+      # device only ever heard `crdt_doc_ready` — which says the note exists but
+      # carries no content — and materialized the file at 0 bytes
+      # (e2e-crdt test_no_conflict_modal_on_divergence; headless-protocol
+      # "live A->B fan-out" saw the empty-string hash e3b0c44298fc).
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/fanned.md",
+          "b64" => frame_for_content("# Fanned\n\ngenesis body")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true}
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "note_yjs_update",
+                       payload: %{"note_id" => ^id, "b64" => b64}
+                     },
+                     2_000
+
+      # FULL state, not a delta: a device that has never seen this note must
+      # converge from an empty doc.
+      {:ok, doc} = CrdtBridge.doc_from_state(Base.decode64!(b64))
+      assert CrdtBridge.text_of(doc) == "# Fanned\n\ngenesis body"
+
+      # Still no room — the fan-out must not resurrect the thing this whole
+      # change removes.
+      assert CrdtRegistry.lookup(id) == nil
+    end
+
+    test "an ack-loss retry with a FRESH clientID still takes the room-free fast path", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # #1409. The realistic retry: the create's ack was lost, so the client
+      # rebuilds the genesis frame from scratch — a NEW Yjs clientID projecting
+      # the SAME text. The existing "seeding the same note twice" test replays
+      # the IDENTICAL frame, so it never exercises this.
+      #
+      # This is the case the tail/snapshot fold made subtle. `fold_row_and_tail/4`
+      # applies the STORED snapshot (clientID A) into a doc holding the retry
+      # frame (clientID B), and two independent inserts of the same text are
+      # concurrent under YATA, so the UNION projects the body twice. Comparing
+      # that union against the row would decline the retry (`seeded: false`),
+      # sending the client to its crdt_msg fallback — which is safe but costs a
+      # room, the exact thing this change exists to avoid.
+      #
+      # So the "already synced?" question is asked against the frame's OWN
+      # projection, before the fold — what the client HAS — while the union is
+      # only ever what a real write COMMITS. Both values, two jobs.
+      id = Ecto.UUID.generate()
+      payload = %{"doc_id" => id, "path" => "Notes/ackloss.md"}
+
+      ref1 = push(socket, "crdt_create", Map.put(payload, "b64", frame_for_content("once")))
+      assert_reply ref1, :ok, %{doc_id: ^id, seeded: true}
+      assert_note_content_eventually(user, vault, id, "once")
+
+      # A SEPARATE frame_for_content/1 call — CrdtBridge.new_doc/0 mints a fresh
+      # clientID, which is what makes this different from the retry test above.
+      ref2 = push(socket, "crdt_create", Map.put(payload, "b64", frame_for_content("once")))
+      assert_reply ref2, :ok, %{doc_id: ^id, seeded: true}
+
+      # Not doubled, and still no room: the retry cost nothing.
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == "once"
+      assert CrdtRegistry.lookup(id) == nil
+    end
+
+    test "folds a tail row written in the seed window instead of stranding it", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # #1409 H2, data loss. In the seed window device B can open the note,
+      # have bind/3 hydrate the still-bare row into an EMPTY doc, type, and land
+      # a tail row — while notes.content is STILL "" because the room's
+      # checkpoint is debounced by seconds. A seed that reads "" and writes only
+      # the genesis lineage strands that edit: it bumps seq (so an offline
+      # device pages our content and advances past it) and then
+      # evict_racing_room/1 kills the room whose debounced checkpoint was the
+      # only thing that would ever have materialized it.
+      id = Ecto.UUID.generate()
+      ref1 = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/tail.md"})
+      assert_reply ref1, :ok, %{doc_id: ^id}
+
+      insert_tail_row(user, vault, id, "TAILEDIT")
+      assert tail_count(user) == 1
+
+      ref2 =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/tail.md",
+          "b64" => frame_for_content("GENESIS")
+        })
+
+      assert_reply ref2, :ok, %{doc_id: ^id, seeded: true}
+
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content =~ "TAILEDIT", "the tail edit was destroyed by the seed"
+      assert note.content =~ "GENESIS"
+
+      # Folded means pruned: prune_ids carried exactly that row, so the log is
+      # empty rather than holding an edit already in the snapshot.
+      assert tail_count(user) == 0
+    end
+
+    test "emits no room_start telemetry — the whole point, measured by allocation", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # #1409. Residency after the fact cannot prove this: rooms idle-drain, so
+      # a room-per-note regression can allocate and release entirely between two
+      # samples. `[:engram, :crdt, :room_start]` counts ALLOCATION, which is the
+      # claim. Guarded here so the e2e gate that reads the same event is not the
+      # only thing standing behind it.
+      test_pid = self()
+      handler = "room-start-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :crdt, :room_start],
+        fn _e, m, _meta, _ -> send(test_pid, {:room_start, m}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      for n <- 1..3 do
+        id = Ecto.UUID.generate()
+
+        ref =
+          push(socket, "crdt_create", %{
+            "doc_id" => id,
+            "path" => "Notes/alloc#{n}.md",
+            "b64" => frame_for_content("body #{n}")
+          })
+
+        assert_reply ref, :ok, %{doc_id: ^id, seeded: true}
+        assert_note_content_eventually(user, vault, id, "body #{n}")
+      end
+
+      refute_receive {:room_start, _}, 100
+
+      # Sanity that the probe is wired: a real room start DOES fire it, so the
+      # refute above is an observation, not a broken handler.
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/probe.md", "content" => "x"})
+
+      {:ok, _room} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+      assert_receive {:room_start, %{count: 1}}, 2_000
+    end
+
+    test "a non-markdown genesis frame is never seeded", %{socket: socket, vault: _vault} do
+      # #1409 M3. CRDT projects to notes.content for markdown only —
+      # checkpoint/5 routes a .canvas doc to do_structural_checkpoint, which
+      # never touches content. Its frame therefore projects "" against a fresh
+      # (also "") row, hits the idempotent clause, and would report seeded: true
+      # having written nothing, so the client stamps its body as synced and
+      # stops. Unreachable today only because the plugin gates .md client-side.
+      id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/board.canvas",
+          "b64" => frame_for_content("")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false}
+    end
+
+    test "a declined seed does NOT fan out", %{socket: socket, user: user, vault: vault} do
+      # The fan-out rides the write path only. A create whose row already holds
+      # a DIFFERENT body writes nothing, so broadcasting would push state no
+      # writer here produced.
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/taken.md", "content" => "base"})
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => note.id,
+          "path" => "Notes/taken.md",
+          "b64" => frame_for_content("something else")
+        })
+
+      assert_reply ref, :ok, %{doc_id: _, seeded: false}
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200
+    end
+
+    test "seeding the same note twice does not double the body", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # #846: a client retry re-sends the create. The create-time checkpoint
+      # flattens the doc to a fresh server lineage, so a naive re-apply APPENDS
+      # rather than merging as a no-op and the body doubles.
+      id = Ecto.UUID.generate()
+      frame = frame_for_content("once")
+      payload = %{"doc_id" => id, "path" => "Notes/retry.md", "b64" => frame}
+
+      ref1 = push(socket, "crdt_create", payload)
+      assert_reply ref1, :ok, %{seeded: true}
+      assert_note_content_eventually(user, vault, id, "once")
+
+      ref2 = push(socket, "crdt_create", payload)
+      assert_reply ref2, :ok, %{doc_id: ^id}
+
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == "once"
+    end
+
+    test "a live room for the note skips the detached seed", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # Two writers, one document. A detached write would be invisible to the
+      # room, which later checkpoints its own in-memory doc over it.
+      #
+      # The realistic shape: the create is retried (it is idempotent) after the
+      # user opened the note in an editor, so a room now exists for it.
+      id = Ecto.UUID.generate()
+      ref1 = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/live.md"})
+      assert_reply ref1, :ok, %{doc_id: ^id}
+
+      {:ok, _room} = CrdtRegistry.ensure_started(user.id, vault.id, id)
+      on_exit(fn -> CrdtRegistry.terminate_room(id) end)
+
+      ref2 =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/live.md",
+          "b64" => frame_for_content("body")
+        })
+
+      assert_reply ref2, :ok, %{doc_id: ^id, seeded: false}
+    end
+
+    test "a detached seed materializes the same content as the same frame through a room", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # The equivalence this design rests on: "detached" must be a deployment
+      # detail, not a second semantics. Same frame, two routes, one result.
+      frame = frame_for_content("# Title\n\nshared body")
+
+      detached_id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => detached_id,
+          "path" => "Notes/detached.md",
+          "b64" => frame
+        })
+
+      assert_reply ref, :ok, %{seeded: true}
+
+      roomed_id = Ecto.UUID.generate()
+      ref2 = push(socket, "crdt_create", %{"doc_id" => roomed_id, "path" => "Notes/roomed.md"})
+      assert_reply ref2, :ok, %{doc_id: ^roomed_id}
+      ref3 = push(socket, "crdt_msg", %{"doc_id" => roomed_id, "b64" => frame})
+      # Await the ack (routed-to-room, per handle_in("crdt_msg", ...)) instead
+      # of a bare push, so the room has actually started + observed the frame
+      # before the poll below begins — otherwise room startup/:global
+      # registration eats into the SAME window as the checkpoint-timer wait.
+      assert_reply ref3, :ok, %{}
+
+      # This leg converges on the room's checkpoint TIMER (~250ms), not on the
+      # write itself — unlike the detached leg, which is synchronous. Give it a
+      # deadline generous relative to that timer; this is a convergence
+      # deadline, not a correctness bound (the assertion below is unchanged).
+      assert_note_content_eventually(
+        user,
+        vault,
+        roomed_id,
+        "# Title\n\nshared body",
+        System.monotonic_time(:millisecond) + 2_000
+      )
+
+      assert_note_content_eventually(user, vault, detached_id, "# Title\n\nshared body")
+
+      assert {:ok, detached} = Notes.get_note_by_id(user, vault, detached_id)
+      assert {:ok, roomed} = Notes.get_note_by_id(user, vault, roomed_id)
+      assert detached.content == roomed.content
+    end
+
+    test "a malformed b64 creates the row and reports seeded: false", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # The row must still exist: identity and content are separate concerns, and
+      # the client's fallback is a crdt_msg seed against that row.
+      id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/bad.md",
+          "b64" => "!!!not base64!!!"
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false}
+      assert Notes.note_in_vault?(user, vault, id)
+    end
+
+    test "a row holding a DIFFERENT body than the frame declines and leaves the row untouched",
+         %{socket: socket, user: user, vault: vault, note: note} do
+      # `note` (from setup) is live at "p.md" with content "base". A same-path
+      # crdt_create is the idempotent-retry leg (reaches {:ok, note}, not
+      # {:adopted, _}), so this exercises seed_against/6's THIRD clause: the
+      # row content ("base") and the frame's projection disagree — a
+      # concurrent write landed between genesis and here — so it must decline
+      # rather than merge two lineages itself.
+      id = note.id
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "p.md",
+          "b64" => frame_for_content("a different body")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false}
+      assert {:ok, unchanged} = Notes.get_note_by_id(user, vault, id)
+      assert unchanged.content == "base"
+    end
+
+    test "an empty frame on an already-empty row reports seeded: true with no write", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # A fresh genesis row starts with content: "" (genesis_insert_bare). A
+      # frame that projects "" therefore matches seed_against/6's FIRST
+      # clause (expected, expected pattern-equality) before ever reaching the
+      # second ("" row) clause — the idempotent short-circuit, not a real
+      # write.
+      id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/empty.md",
+          "b64" => frame_for_content("")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true}
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == ""
+    end
+
+    test "a room that registers in the write window is evicted after the seed commits",
+         %{socket: socket, user: user, vault: vault} do
+      # #1409. `maybe_seed_detached/4`'s CrdtRegistry.lookup at the top is only
+      # a cheap fast path — a room can register (and CrdtPersistence.bind/3
+      # hydrate from the still-empty row) between that check and the write in
+      # `seed_detached/5`, leaving that room divergent from the row. Round 3
+      # fenced this with an advisory lock on both sides; that stalled every
+      # room start on the node (bind/3 runs inline in the single
+      # DynamicSupervisor process), so the seed now cleans up after itself
+      # instead: commit, then terminate the racer so it re-binds against the
+      # committed row.
+      #
+      # This drives exactly that window: park the create right before the write
+      # transaction, register a room in the gap, then let it continue.
+      #
+      # What this test proves: the post-commit re-check finds the racing room,
+      # terminates it, and the body still lands durably (`seeded: true`).
+      # What it does NOT prove: any cross-connection ordering. Under this
+      # file's SHARED sandbox connection (`async: false`) the channel and the
+      # room's bind/3 are the SAME Postgres session, so there is no real
+      # concurrency between the two DB legs here — only the registry
+      # interleaving is genuine (CrdtRegistry is a `:global` process registry,
+      # not transaction-gated).
+      id = Ecto.UUID.generate()
+
+      on_exit(CheckpointInterleave.arm(:genesis_seed_before_write))
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/race.md",
+          "b64" => frame_for_content("body")
+        })
+
+      parked = CheckpointInterleave.await_parked(:genesis_seed_before_write, socket.channel_pid)
+
+      {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, id)
+      on_exit(fn -> CrdtRegistry.terminate_room(id) end)
+      room_ref = Process.monitor(room)
+
+      CheckpointInterleave.release(:genesis_seed_before_write, parked)
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true}
+      assert_note_content_eventually(user, vault, id, "body")
+
+      # The stale room is gone, so the client's next crdt_msg starts a fresh
+      # one that binds against the row we just committed.
+      assert_receive {:DOWN, ^room_ref, :process, ^room, _}, 2_000
+      assert CrdtRegistry.lookup(id) == nil
+    end
+
+    test "a seed that writes nothing leaves a racing room alone", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # The eviction is scoped to the clause that actually writes (#1409). An
+      # idempotent retry against a row that ALREADY holds the frame's body wrote
+      # nothing, so no room can have gone stale behind it — killing one would
+      # drop a live editing session for free.
+      id = Ecto.UUID.generate()
+      payload = %{"doc_id" => id, "path" => "Notes/noop.md", "b64" => frame_for_content("body")}
+
+      ref1 = push(socket, "crdt_create", payload)
+      assert_reply ref1, :ok, %{seeded: true}
+      assert_note_content_eventually(user, vault, id, "body")
+
+      on_exit(CheckpointInterleave.arm(:genesis_seed_before_write))
+      ref2 = push(socket, "crdt_create", payload)
+
+      parked = CheckpointInterleave.await_parked(:genesis_seed_before_write, socket.channel_pid)
+
+      {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, id)
+      on_exit(fn -> CrdtRegistry.terminate_room(id) end)
+
+      CheckpointInterleave.release(:genesis_seed_before_write, parked)
+
+      assert_reply ref2, :ok, %{doc_id: ^id, seeded: true}
+      assert CrdtRegistry.lookup(id) == room
+    end
+
+    test "a DEK rotation in progress reports seeded: false and leaves the row empty", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # CrdtCheckpoint.checkpoint/5 returns :ok when it SKIPS for rotation
+      # (#1341). Building the reply from that :ok would tell the plugin the file
+      # is synced while nothing was written — and a fresh import has no later
+      # bind to replay from, so the note would just be empty forever.
+      id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        user
+        |> Ecto.Changeset.change(dek_rotation_locked_at: DateTime.utc_now())
+        |> Repo.update()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/rotating.md",
+          "b64" => frame_for_content("must not be reported as synced")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false}
+
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == ""
+    end
+
+    test "a new room started after eviction re-binds against the seeded row (STEP2 carries the body)",
+         %{socket: socket, user: user, vault: vault} do
+      # The eviction test above ("a room that registers in the write window is
+      # evicted after the seed commits") proves the racing room dies. It does
+      # NOT prove the entire point of killing it: that the REPLACEMENT room a
+      # client's next STEP1 opens actually re-binds against the row the seed
+      # just committed, rather than an empty one. Close that gap by driving a
+      # real client through crdt_msg after the eviction, same as the
+      # `describe "crdt_msg"` STEP1/STEP2 idiom elsewhere in this file.
+      #
+      # Reuses the exact race setup from the eviction test: park the seed right
+      # before its write via the same CheckpointInterleave seam, register a
+      # room in the gap, then release.
+      id = Ecto.UUID.generate()
+
+      on_exit(CheckpointInterleave.arm(:genesis_seed_before_write))
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/race-rebind.md",
+          "b64" => frame_for_content("seeded body")
+        })
+
+      parked = CheckpointInterleave.await_parked(:genesis_seed_before_write, socket.channel_pid)
+
+      {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, id)
+      on_exit(fn -> CrdtRegistry.terminate_room(id) end)
+      room_ref = Process.monitor(room)
+
+      CheckpointInterleave.release(:genesis_seed_before_write, parked)
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true}
+      assert_note_content_eventually(user, vault, id, "seeded body")
+
+      # The racer is confirmed dead before we drive the replacement — otherwise
+      # a STEP1 below could route through the still-alive racer instead of
+      # exercising the fresh bind this test is actually about.
+      assert_receive {:DOWN, ^room_ref, :process, ^room, _}, 2_000
+      assert CrdtRegistry.lookup(id) == nil
+
+      client = CrdtBridge.new_doc()
+      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+      {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+      push(socket, "crdt_msg", %{"doc_id" => id, "b64" => Base.encode64(frame)})
+
+      assert_push "crdt_msg", %{"doc_id" => ^id, "b64" => b64}, 3000
+      {:ok, {:sync, {:sync_step2, update}}} = Yex.Sync.message_decode(Base.decode64!(b64))
+      :ok = Yex.apply_update(client, update)
+      assert CrdtBridge.text_of(client) == "seeded body"
     end
   end
 
@@ -1382,6 +1938,110 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   # ---------------------------------------------------------------------------
+  # crdt_create rate lane — genesis size gate (#1409)
+  #
+  # Mirrors "a LARGE STEP2 pays the edit budget" above, for crdt_create's own
+  # b64: small (or absent) rides :handshake, a genesis frame over
+  # @hs_genesis_max_b64 pays the :edit budget instead — same override=2 setup
+  # so the edit lane's ceiling is cheap to exhaust in a test.
+  # ---------------------------------------------------------------------------
+
+  describe "crdt_create rate lane (genesis size gate)" do
+    setup do
+      Application.put_env(:engram, :crdt_msg_rate_limit_override, 2)
+      # Also bound the HANDSHAKE lane to 2 (#1409). Without this, "a small (or
+      # absent) genesis body stays on the handshake lane" below would pass
+      # vacuously even if the size gate were deleted entirely: with
+      # genesis_create_class/1 hardcoded to :handshake, the two "oversized"
+      # pushes would land on the (otherwise near-unbounded) handshake lane
+      # too and never exhaust anything, so the small-body probe would succeed
+      # either way. Bounding both lanes to the same size means a classifier
+      # that misroutes the oversized pushes onto :handshake instead of :edit
+      # spends the SAME budget the small body then needs, so the probe can
+      # actually go the other way and prove the routing is real.
+      Application.put_env(:engram, :crdt_hs_rate_limit_override, 2)
+      EngramWeb.RateLimiter.reset_buckets!()
+
+      on_exit(fn ->
+        Application.delete_env(:engram, :crdt_msg_rate_limit_override)
+        Application.delete_env(:engram, :crdt_hs_rate_limit_override)
+        EngramWeb.RateLimiter.reset_buckets!()
+      end)
+    end
+
+    test "a small (or absent) genesis body stays on the handshake lane", %{socket: socket} do
+      # Exhaust the EDIT lane (override = 2) FIRST, with oversized creates —
+      # which DO count against it (see the next test), and must NOT count
+      # against the (also override = 2) handshake lane. A small-body create
+      # afterwards succeeding is then real evidence it rides a separate,
+      # still-full lane: if genesis_create_class/1 were hardcoded to
+      # :handshake, these two "oversized" pushes would instead spend the
+      # handshake budget themselves, and the small-body probe below would be
+      # denied (see the sabotage proof in the #1409 report).
+      oversized_b64 = Base.encode64(:binary.copy(<<0>>, 25_000))
+
+      push(socket, "crdt_create", %{
+        "doc_id" => Ecto.UUID.generate(),
+        "path" => "Notes/o1.md",
+        "b64" => oversized_b64
+      })
+
+      push(socket, "crdt_create", %{
+        "doc_id" => Ecto.UUID.generate(),
+        "path" => "Notes/o2.md",
+        "b64" => oversized_b64
+      })
+
+      # The edit lane is now spent, and the handshake lane hasn't been
+      # touched. A THIRD create, this time with a small b64 genesis seed,
+      # must still succeed — proving small-body creates ride the separate,
+      # still-full handshake lane rather than the exhausted edit lane.
+      id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/n3.md",
+          "b64" => frame_for_content("small body")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true}, 3000
+    end
+
+    test "a genesis body over the size gate pays the edit budget", %{socket: socket} do
+      # Same shape as "a LARGE STEP2 pays the edit budget": not a valid Yjs
+      # frame, just oversized. genesis_create_class/1 classifies on byte_size
+      # alone, before any decode is attempted, so this is enough to exercise
+      # the rate lane without needing a well-formed frame.
+      oversized_b64 = Base.encode64(:binary.copy(<<0>>, 25_000))
+      assert byte_size(oversized_b64) > 32_768
+
+      push(socket, "crdt_create", %{
+        "doc_id" => Ecto.UUID.generate(),
+        "path" => "Notes/o1.md",
+        "b64" => oversized_b64
+      })
+
+      push(socket, "crdt_create", %{
+        "doc_id" => Ecto.UUID.generate(),
+        "path" => "Notes/o2.md",
+        "b64" => oversized_b64
+      })
+
+      # The edit budget (2) is now spent — a third oversized create is denied,
+      # same as a third large STEP2 crdt_msg would be.
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => Ecto.UUID.generate(),
+          "path" => "Notes/o3.md",
+          "b64" => oversized_b64
+        })
+
+      assert_reply ref, :error, %{reason: "rate_limited"}, 3000
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # crdt_doc_ready — device-B discovery announce
   # ---------------------------------------------------------------------------
   #
@@ -1456,6 +2116,31 @@ defmodule EngramWeb.CrdtChannelTest do
     n
   end
 
+  # Append a durable tail-log row for `note_id` carrying `text` on its own Yjs
+  # lineage — what `CrdtPersistence.update_v1/4` writes for one client delta,
+  # without needing a live room to produce it.
+  defp insert_tail_row(user, vault, note_id, text) do
+    doc = CrdtBridge.new_doc()
+    :ok = CrdtBridge.ingest_plaintext(doc, text)
+    {:ok, update} = Yex.encode_state_as_update(doc)
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(update, user, note_id)
+
+    {:ok, row} =
+      Repo.with_tenant(user.id, fn ->
+        %CrdtUpdateLog{}
+        |> CrdtUpdateLog.changeset(%{
+          note_id: note_id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: nonce
+        })
+        |> Repo.insert!()
+      end)
+
+    row
+  end
+
   # A base64 Yjs update that, applied to a fresh empty doc, ingests `content`
   # as full note plaintext — i.e. the frame a client sends as the initial
   # crdt_create_batch payload for a brand-new note.
@@ -1468,28 +2153,40 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   # Poll get_note_by_id until the row's decrypted content matches (or flunk).
-  defp assert_note_content_eventually(user, vault, note_id, content) do
-    wait_until(fn ->
-      case Notes.get_note_by_id(user, vault, note_id) do
-        {:ok, note} -> note.content == content
-        _ -> false
-      end
-    end)
+  # `deadline` (absolute monotonic ms, as `wait_until/2` takes) defaults to
+  # `wait_until/2`'s own 500ms when omitted.
+  defp assert_note_content_eventually(user, vault, note_id, content, deadline \\ nil) do
+    wait_until(
+      fn ->
+        case Notes.get_note_by_id(user, vault, note_id) do
+          {:ok, note} -> note.content == content
+          _ -> false
+        end
+      end,
+      deadline
+    )
   end
 
   defp wait_until(condition, deadline \\ nil) do
-    deadline = deadline || System.monotonic_time(:millisecond) + 500
+    now = System.monotonic_time(:millisecond)
+    deadline = deadline || now + 500
+    do_wait_until(condition, deadline, deadline - now)
+  end
 
+  # `budget_ms` is captured once, in wait_until/2, from the deadline actually
+  # in effect (default 500ms or a caller-supplied one) — so the flunk message
+  # below reports what this call was really given, not a hardcoded default.
+  defp do_wait_until(condition, deadline, budget_ms) do
     if condition.() do
       :ok
     else
       now = System.monotonic_time(:millisecond)
 
       if now >= deadline do
-        flunk("wait_until: condition never became true within 500ms")
+        flunk("wait_until: condition never became true within #{budget_ms}ms")
       else
         Process.sleep(10)
-        wait_until(condition, deadline)
+        do_wait_until(condition, deadline, budget_ms)
       end
     end
   end
