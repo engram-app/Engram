@@ -379,7 +379,15 @@ class Replica {
 		// Genesis notes ride this per-file loop now. The engine's batch-create
 		// port went away with plugin #413, and the harness mirrors main.ts, so the
 		// setCrdtCreateBatch wiring went with it.
-		engine.setCrdtCreate((docId: string, p: string) => channel.crdtCreate(docId, p)); // main.ts:1815
+		//
+		// `b64` MUST be forwarded (#1409). It carries the note's genesis body so the
+		// server can persist it with a detached doc instead of opening a SharedDoc
+		// room per file. Dropping it here still passes — the server treats a missing
+		// body as `seeded: false` and the client falls back to the `crdt_msg` seed —
+		// so the suite would go green while exercising NONE of the new path.
+		engine.setCrdtCreate((docId: string, p: string, b64?: string) =>
+			channel.crdtCreate(docId, p, b64),
+		); // main.ts:1815
 		engine.setCrdtDelete((docId: string) => channel.crdtDeleteAcked(docId));
 		engine.setCrdtCatchupSince((cursorSeq: number, limit: number) =>
 			channel.crdtCatchupSince(cursorSeq, limit),

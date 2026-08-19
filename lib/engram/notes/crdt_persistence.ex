@@ -50,6 +50,14 @@ defmodule Engram.Notes.CrdtPersistence do
 
     _ =
       Repo.with_tenant(user_id, fn ->
+        # NO lock here, deliberately (#1409). bind/3 runs INLINE inside the one
+        # DynamicSupervisor process per node (start_child is a synchronous call
+        # whose handle_call runs the child's init), so anything that blocks here
+        # stalls EVERY other room start on this node. A detached genesis seed
+        # racing this read is instead resolved by the seed itself: it commits,
+        # then terminates whatever room appeared in its window
+        # (`EngramWeb.CrdtChannel.evict_racing_room/1`), so the replacement room
+        # binds against the committed row.
         case Repo.get(Note, note_id) do
           %Note{} = note ->
             # Hydrate the snapshot when present. Absent one, the doc stays
