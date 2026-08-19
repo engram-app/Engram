@@ -33,6 +33,38 @@
   Cache-Control: no-cache
 
 /*
+  # Warm the two cross-origin connections the app cannot start without, in
+  # parallel with downloading the bundle instead of serially after it.
+  #
+  # Measured on prod before adding this: ~95ms of DNS + TCP + TLS to each of
+  # these before byte one (~1s on a cold path). The browser cannot begin that
+  # handshake until it discovers it needs the origin, and both discoveries are
+  # LATE: `clerk-auth-provider` is a lazy `import()`, so the Clerk origin is
+  # unknown until the main bundle has downloaded AND parsed, and api.engram.page
+  # is not dialed until the first query fires. A `Link: rel=preconnect` response
+  # header starts both while the bundle is still in flight, so by the time the
+  # code asks, the pipe is warm.
+  #
+  # `crossorigin` is REQUIRED, not decorative. Without it the browser opens an
+  # unauthenticated connection; the script fetch and the credentialed API/WS
+  # calls both need an authenticated one, so it would open a SECOND connection
+  # and the hint would buy nothing while costing a socket. Silent, and it looks
+  # correct in devtools.
+  #
+  # This file is saas-only by construction (Phoenix does not read it, per the
+  # header comment above), which is the reason this lives here rather than as a
+  # <link> in index.html: index.html is shared with the self-host build, and a
+  # self-hoster who deliberately runs no Clerk should not be made to open a
+  # connection to Clerk on every page load.
+  #
+  # On `/*` rather than just `/` and `/index.html` on purpose: a deep link
+  # (`/notes/<id>`, the shared-link case) is matched by request path, so it
+  # would miss a `/`-scoped rule, and that is exactly the cold-connection case
+  # where the win is largest. The cost of it also landing on `/assets/*` is nil:
+  # browsers only act on Link hints for the main document, and HTTP/2 HPACK
+  # indexes the repeated identical header down to a couple of bytes.
+  Link: <https://clerk.engram.page>; rel=preconnect; crossorigin
+  Link: <https://api.engram.page>; rel=preconnect; crossorigin
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   # `origin`, not `strict-origin-when-cross-origin`: the latter sends the FULL

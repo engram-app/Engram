@@ -106,6 +106,28 @@ defmodule EngramWeb.Router do
   # bare `pipe_through` can't supply, so it lives in its own pipeline.
   pipeline :openapi do
     plug OpenApiSpex.Plug.PutApiSpec, module: EngramWeb.ApiSpec
+    plug :cache_public_deploy_static
+  end
+
+  # `/api/openapi` is ~72 KB of JSON that `OpenApiSpex.Plug.RenderSpec`
+  # re-renders on EVERY request, and it changes only when a deploy changes the
+  # spec. It was going out as `max-age=0, private, must-revalidate` (Phoenix's
+  # default), so the edge reported `cf-cache-status: DYNAMIC` and every docs
+  # page load, API explorer and codegen run crossed Cloudflare -> ALB ->
+  # Fargate to rebuild a constant.
+  #
+  # Safe for the CI drift gate: that gate generates the spec locally with
+  # `mix openapi.spec.json` and diffs it against the committed `openapi.json`
+  # (verify.yml). It never fetches this endpoint, so a cached copy cannot make
+  # it pass on stale content.
+  #
+  # Same 5 minute TTL as the OAuth discovery documents, deliberately. This
+  # payload is far bigger so a longer TTL is tempting, but it buys little: a
+  # docs reader fetches it once per page and 5 minutes already covers a
+  # browsing session, while a short window keeps a bad deploy from being
+  # pinned at the edge.
+  defp cache_public_deploy_static(conn, _opts) do
+    Plug.Conn.put_resp_header(conn, "cache-control", "public, max-age=300")
   end
 
   # SPA shell pipeline — HTML responses with strict browser-security headers.
