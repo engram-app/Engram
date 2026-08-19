@@ -29,27 +29,19 @@ defmodule EngramWeb.WellKnownController do
   # made that non-negotiable: `private` forbids a shared cache from storing it
   # at all, so the edge reported `cf-cache-status: DYNAMIC` and passed through.
   #
-  # Correctness note: the body VARIES BY HOST. Cloudflare's cache key includes
-  # the hostname, so `mcp.` and `app.` get separate entries and cannot be
-  # crossed. Do not "optimise" this into a host-independent constant.
+  # The headers themselves are set by the `:public_cacheable` pipeline in the
+  # router, shared with `/api/openapi`, NOT here. They belong together because
+  # caching these safely requires a second, non-obvious header change (pinning
+  # `access-control-allow-origin` to a constant, since the CORS plug otherwise
+  # echoes the request Origin into a shared cache entry) — see the long comment
+  # on `public_cacheable_headers/2`. Splitting them across two files is how one
+  # of the pair gets changed alone.
   #
-  # TTL is deliberately short. These documents carry `authorization_endpoint`
-  # and `registration_endpoint`; a client that caches a stale endpoint after we
-  # move one fails auth in a way that looks like a client bug. Five minutes
-  # removes essentially all of the repeat-connect cost (a client reconnecting
-  # within a session is already a hit) while bounding staleness to something a
-  # deploy can outrun. A day would buy almost nothing more and take real risk.
-  #
-  # NOTE: this header alone is not sufficient at the edge. Cloudflare's default
-  # Cache Level only treats known static extensions as eligible, so an
-  # extensionless JSON path stays DYNAMIC no matter what we send. The paired
-  # Cache Rule lives in engram-infra (`main/cloudflare/cache.tf`). If you see
-  # DYNAMIC here after deploying, that rule is missing, not this header.
-  @discovery_cache_control "public, max-age=300"
-
-  defp cacheable(conn) do
-    Plug.Conn.put_resp_header(conn, "cache-control", @discovery_cache_control)
-  end
+  # Correctness note that constrains BOTH: the body VARIES BY HOST.
+  # Cloudflare's cache key includes the hostname, so `mcp.` and `app.` get
+  # separate entries and cannot be crossed. Do not "optimise" this into a
+  # host-independent constant, and do not add a Cache Rule that normalises the
+  # host out of the cache key.
 
   # RFC 9728 `resource_documentation` — where a developer is sent to learn how
   # to use this resource. Optional in the spec, which is exactly why a link that
@@ -72,7 +64,7 @@ defmodule EngramWeb.WellKnownController do
   def protected_resource(conn, _params) do
     base = OAuthMetadata.base_url(conn)
 
-    json(cacheable(conn), %{
+    json(conn, %{
       # The advertised `resource` must be the URL at which THIS host actually
       # serves MCP — RFC 9728 lets us advertise only one, and strict clients
       # bind the token audience to it (and self-check it == the dialed URL).
@@ -103,7 +95,7 @@ defmodule EngramWeb.WellKnownController do
     base = OAuthMetadata.base_url(conn)
 
     json(
-      cacheable(conn),
+      conn,
       %{
         issuer: base,
         authorization_endpoint: base <> "/oauth/authorize",

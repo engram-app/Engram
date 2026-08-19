@@ -106,7 +106,14 @@ defmodule EngramWeb.Router do
   # bare `pipe_through` can't supply, so it lives in its own pipeline.
   pipeline :openapi do
     plug OpenApiSpex.Plug.PutApiSpec, module: EngramWeb.ApiSpec
-    plug :cache_public_deploy_static
+  end
+
+  # Applied to the handful of PUBLIC, UNAUTHENTICATED documents that are pure
+  # functions of (dialed host, deploy) and are cached at the Cloudflare edge:
+  # the OAuth discovery documents and the OpenAPI spec. One pipeline for all of
+  # them so the cache header and the CORS correction below cannot drift apart.
+  pipeline :public_cacheable do
+    plug :public_cacheable_headers
   end
 
   # `/api/openapi` is ~72 KB of JSON that `OpenApiSpex.Plug.RenderSpec`
@@ -126,8 +133,46 @@ defmodule EngramWeb.Router do
   # docs reader fetches it once per page and 5 minutes already covers a
   # browsing session, while a short window keeps a bad deploy from being
   # pinned at the edge.
-  defp cache_public_deploy_static(conn, _opts) do
-    Plug.Conn.put_resp_header(conn, "cache-control", "public, max-age=300")
+  #
+  # The `access-control-allow-origin` override is a CORRECTNESS REQUIREMENT of
+  # caching these at all, not a loosening. `EngramWeb.Plugs.CORS` runs in the
+  # endpoint (before this router) and ECHOES the request Origin whenever it is
+  # in the `:cors_origin` allowlist — verified against prod: sending
+  # `Origin: https://mcp.engram.page` returns that same value, while an
+  # unlisted origin gets the canonical `https://app.engram.page`. So the
+  # response VARIES BY REQUEST while its body does not.
+  #
+  # A shared cache storing one such response replays that origin to everyone:
+  # whichever client fills the cache decides who else can read it for the next
+  # 300s, and a browser on `app.engram.page` gets a document stamped
+  # `access-control-allow-origin: https://mcp.engram.page` and is CORS-blocked.
+  #
+  # `Vary: Origin` does NOT fix this. Cloudflare honours `Vary` only for
+  # `Accept-Encoding` on standard caching; any other `Vary` value is ignored,
+  # so the entry would still be shared across origins.
+  #
+  # `*` is the correct answer rather than a concession: these documents are
+  # unauthenticated public metadata (RFC 8414 / RFC 9728 both expect them to be
+  # openly fetchable), carry no user data and no secrets, and are already
+  # readable by anyone without an Origin at all. Nothing here is credentialed,
+  # and `*` is incompatible with credentialed CORS by construction, so this
+  # cannot widen access to anything that needs a token.
+  #
+  # Consequence to know: `x-request-id` is cached along with the body, so a hit
+  # replays the request id of whichever request filled the cache. Use `cf-ray`
+  # to correlate these specific endpoints; the id is still accurate on a MISS.
+  #
+  # This header alone is NOT sufficient at the edge. Cloudflare's default Cache
+  # Level only treats known static file extensions as eligible, so these
+  # extensionless JSON paths stay `cf-cache-status: DYNAMIC` no matter what we
+  # send here. The paired Cache Rule lives in engram-infra
+  # (`main/cloudflare/cache.tf`) and is host-scoped to api/mcp, because the same
+  # paths return the SPA shell on app/staging. If you see DYNAMIC after
+  # deploying, that rule is missing or its host list is wrong — not this header.
+  defp public_cacheable_headers(conn, _opts) do
+    conn
+    |> Plug.Conn.put_resp_header("cache-control", "public, max-age=300")
+    |> Plug.Conn.put_resp_header("access-control-allow-origin", "*")
   end
 
   # SPA shell pipeline — HTML responses with strict browser-security headers.
@@ -194,7 +239,7 @@ defmodule EngramWeb.Router do
   # MCP clients (Claude Connectors, Cursor, ChatGPT custom GPTs, etc.)
   # probe these to learn how to negotiate auth against /api/mcp.
   scope "/.well-known", EngramWeb do
-    pipe_through :api
+    pipe_through [:api, :public_cacheable]
 
     get "/oauth-protected-resource", WellKnownController, :protected_resource
     get "/oauth-authorization-server", WellKnownController, :authorization_server
@@ -244,7 +289,7 @@ defmodule EngramWeb.Router do
   # No EngramWeb alias on this scope: RenderSpec is an open_api_spex plug,
   # not an Engram controller.
   scope "/api" do
-    pipe_through [:api, :openapi]
+    pipe_through [:api, :openapi, :public_cacheable]
     get "/openapi", OpenApiSpex.Plug.RenderSpec, []
   end
 

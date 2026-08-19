@@ -19,12 +19,8 @@ defmodule EngramWeb.OpenApiEndpointTest do
     assert ["public, max-age=300"] = get_resp_header(conn, "cache-control")
   end
 
-  test "health checks are NOT cached", %{conn: conn} do
-    # Guards the blast radius of the `:openapi` pipeline plug and of any future
-    # broad cache rule. A cached health check reports healthy from the edge
-    # while the app is down, which is worse than having no health check.
-    conn = get(conn, "/api/health")
-
-    refute get_resp_header(conn, "cache-control") == ["public, max-age=300"]
-  end
+  # Health-check cacheability and the CORS pinning both live in
+  # EngramWeb.PublicCacheableHeadersTest, which asserts the PROPERTY ("nothing
+  # public") rather than one exact string, and needs async: false to configure
+  # a prod-shaped :cors_origin allowlist.
 end
