@@ -33,10 +33,18 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     {:ok, {ct1, n1}} = Crypto.encrypt_crdt_state("fake_update_1", user, note.id)
     {:ok, {ct2, n2}} = Crypto.encrypt_crdt_state("fake_update_2", user, note.id)
 
+    # Capture the ids: a checkpoint prunes exactly the rows the caller declares
+    # it FOLDED (#1146 spec 0a). These payloads are synthetic and no doc folds
+    # them, so passing them explicitly is what makes this a compaction test
+    # rather than a re-assertion of the watermark bug — that branch deleted
+    # unfolded rows, which is the defect 0a removed.
+    tail_id_1 = Ecto.UUID.generate()
+    tail_id_2 = Ecto.UUID.generate()
+
     Repo.with_tenant(user.id, fn ->
       Repo.insert_all(CrdtUpdateLog, [
         %{
-          id: Ecto.UUID.generate(),
+          id: tail_id_1,
           note_id: note.id,
           user_id: user.id,
           vault_id: vault.id,
@@ -45,7 +53,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
           inserted_at: DateTime.utc_now()
         },
         %{
-          id: Ecto.UUID.generate(),
+          id: tail_id_2,
           note_id: note.id,
           user_id: user.id,
           vault_id: vault.id,
@@ -65,7 +73,11 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert tail_count_before == 2
 
     seq0 = Vaults.current_seq(user.id, vault.id)
-    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    :ok =
+      CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc,
+        prune_ids: [tail_id_1, tail_id_2]
+      )
 
     # get_note resolves by path_hmac — ONLY succeeds if the checkpoint
     # preserved the path/folder HMACs, which requires virtual path/folder
@@ -380,13 +392,16 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     :ok =
       CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before FENCED")
 
-    # Seed a tail row to prove the success path still prunes.
+    # Seed a tail row to prove the success path still prunes. Its id is declared
+    # to the checkpoint below: a checkpoint prunes exactly what the caller says
+    # it FOLDED (#1146 spec 0a), so compaction has to be asked for by id.
     {:ok, {ct, n}} = Crypto.encrypt_crdt_state("fake_update", user, note.id)
+    tail_id = Ecto.UUID.generate()
 
     Repo.with_tenant(user.id, fn ->
       Repo.insert_all(CrdtUpdateLog, [
         %{
-          id: Ecto.UUID.generate(),
+          id: tail_id,
           note_id: note.id,
           user_id: user.id,
           vault_id: vault.id,
@@ -399,7 +414,8 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
     :ok =
       CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc,
-        captured_version: captured_version
+        captured_version: captured_version,
+        prune_ids: [tail_id]
       )
 
     # Version matched → the CAS wrote (did not spuriously abort on equal versions).
