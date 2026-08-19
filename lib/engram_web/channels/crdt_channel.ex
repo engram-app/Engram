@@ -122,6 +122,21 @@ defmodule EngramWeb.CrdtChannel do
 
     user_id_str = to_string(user.id)
 
+    # The onboarding gate is enforced here, not by a router pipeline:
+    # `RequireOnboarding` is a Plug and Plugs never run on a socket. This is
+    # the live sync write path, so an account that skipped ToS / plan
+    # selection reached a full read-write vault through it while every REST
+    # route correctly 403'd. Same verdict function as the plug.
+    case Engram.Onboarding.gate(user) do
+      :ok ->
+        join_rotation_checked(ids, user, user_id_str, socket)
+
+      {:error, missing, next_step} ->
+        {:error, %{reason: "onboarding_required", missing: missing, next_step: next_step}}
+    end
+  end
+
+  defp join_rotation_checked(ids, user, user_id_str, socket) do
     # T3.7 (#1092): the crdt: channel is the live write path — refuse to open it
     # while a DEK rotation holds the user's lock. check/1 re-reads the row so a
     # reconnect mid-rotation is caught even if the socket's user struct predates

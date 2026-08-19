@@ -14,6 +14,7 @@ defmodule Engram.Onboarding do
   alias Engram.Legal.VersionCache
   alias Engram.Onboarding.Action
   alias Engram.Onboarding.Agreement
+  alias Engram.Onboarding.GateCache
   alias Engram.Onboarding.TermsCache
   alias Engram.Repo
   alias Engram.Vaults
@@ -197,6 +198,66 @@ defmodule Engram.Onboarding do
       next_step: next,
       steps: steps
     }
+  end
+
+  @doc """
+  Authoritative runtime-traffic gate: may `user` reach vault data paths?
+
+  Returns `:ok`, or `{:error, missing, next_step}` where `missing` is the
+  sorted list of unmet requirements (`"terms"`, `"subscription"`, `"profile"`,
+  `"vault"`).
+
+  Both enforcement points route through here — `EngramWeb.Plugs.RequireOnboarding`
+  (HTTP) and the `sync:` / `crdt:` channel joins (WebSocket). Sync lives on
+  Phoenix Channels and a Plug never runs on a socket, so this rule cannot live
+  in the router pipeline alone: it did, and an account that skipped ToS and
+  plan selection synced a whole vault over the socket while every REST route
+  correctly 403'd it.
+
+  PASS verdicts are cached per node (`Engram.Onboarding.GateCache`); failing
+  users always take the authoritative slow path.
+  """
+  @spec gate(Engram.Accounts.User.t()) :: :ok | {:error, [String.t()], atom()}
+  def gate(%{id: user_id} = user) do
+    if GateCache.passed?(user_id), do: :ok, else: derive_gate(user, status(user))
+  end
+
+  defp derive_gate(user, %{next_step: :done}) do
+    :ok = GateCache.mark_passed(user.id)
+    :ok
+  end
+
+  defp derive_gate(user, status) do
+    %{
+      terms_ok: terms_ok,
+      subscription_ok: sub_ok,
+      profile_complete: profile_ok,
+      next_step: next_step
+    } = status
+
+    has_vault = Map.get(status, :has_vault, true)
+    profile = Map.get(status, :profile) || %{}
+    # uses_obsidian users bypass the vault gate (the plugin creates the vault).
+    vault_required = profile_ok and Map.get(profile, "uses_obsidian") != true
+
+    missing =
+      []
+      |> then(&if terms_ok, do: &1, else: ["terms" | &1])
+      |> then(&if sub_ok, do: &1, else: ["subscription" | &1])
+      |> then(&if profile_ok, do: &1, else: ["profile" | &1])
+      |> then(&if not vault_required or has_vault, do: &1, else: ["vault" | &1])
+      |> Enum.sort()
+
+    if missing == [] do
+      # All enforced gates pass even though wizard navigation isn't `:done`
+      # yet (e.g. obsidian user mid-flow whose plugin is about to first-sync).
+      # Runtime traffic permission and wizard state are intentionally
+      # decoupled — see `next_step/5`.
+      :ok = GateCache.mark_passed(user.id)
+      :ok
+    else
+      {:error, missing, next_step}
+    end
   end
 
   # Enumerates the full step chain so the frontend can render "Step X of N"

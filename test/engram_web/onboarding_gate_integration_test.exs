@@ -2,6 +2,7 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
   use EngramWeb.ConnCase, async: false
 
   alias Engram.Accounts
+  alias Engram.Auth.DeviceFlow
   alias Engram.Legal.VersionCache
   alias Engram.LegalFixtures
 
@@ -99,6 +100,47 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
     body = %{path: "Test/note.md", content: "# Hi", mtime: 1_700_000_000.0}
     resp = post(conn, "/api/notes", body)
     assert resp.status in [200, 201]
+  end
+
+  # The device-link flow lives on the user-scoped pipeline (it must stay
+  # reachable so the wizard can create a first vault), so it does NOT inherit
+  # RequireOnboarding from the vault pipeline — it declares the plug itself.
+  # Without this the plugin links happily and only discovers the problem as a
+  # silent channel-join refusal.
+  test "POST /api/auth/device/authorize is gated", %{conn: conn, user: user} do
+    vault = insert(:vault, user: user)
+    {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+
+    resp =
+      post(conn, "/api/auth/device/authorize", %{
+        user_code: auth.user_code,
+        vault_id: vault.id
+      })
+
+    assert json_response(resp, 403)["error"] == "onboarding_required"
+
+    assert {:error, :authorization_pending} =
+             DeviceFlow.exchange_device_code(auth.device_code)
+  end
+
+  test "POST /api/auth/device/authorize succeeds once onboarding completes", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, _} = Engram.Onboarding.accept_terms(user, "2026-05-15", %{})
+    {:ok, _} = Engram.Onboarding.accept_free_tier(user)
+    {:ok, _} = Engram.Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+
+    vault = insert(:vault, user: user)
+    {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+
+    resp =
+      post(conn, "/api/auth/device/authorize", %{
+        user_code: auth.user_code,
+        vault_id: vault.id
+      })
+
+    assert json_response(resp, 200)["ok"] == true
   end
 
   test "suspended user gets 402 from RequireActiveSubscription on vault routes",

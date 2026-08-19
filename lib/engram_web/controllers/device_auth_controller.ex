@@ -4,6 +4,14 @@ defmodule EngramWeb.DeviceAuthController do
   alias Engram.Auth.DeviceFlow
   alias Engram.Vaults
 
+  # Fail the link at the moment the user clicks "connect", not later with a
+  # silent socket refusal. This route sits on the user-scoped pipeline (it must
+  # stay reachable for vault creation), so it does not inherit
+  # `RequireOnboarding` from the vault-scoped pipeline — declare it here. The
+  # socket-side gate in `SyncChannel`/`CrdtChannel` is the authority; this is
+  # the readable error.
+  plug EngramWeb.Plugs.RequireOnboarding when action in [:authorize]
+
   # Gate new plugin connections at the per-tier obsidian cap. Only on
   # :authorize — start/token/refresh do not mint new connection families.
   plug EngramWeb.Plugs.EnforceDeviceCap when action in [:authorize]

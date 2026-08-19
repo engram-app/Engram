@@ -7,6 +7,12 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
   Self-host (billing off): profile + vault. SaaS: agreement + billing +
   profile + vault.
 
+  This is the HTTP half of the gate only. The verdict itself lives in
+  `Engram.Onboarding.gate/1` because the WebSocket sync path (`sync:` /
+  `crdt:` channel joins) must enforce the same rule and a Plug never runs
+  on a socket. Adding a route to the vault pipeline gets you this plug;
+  adding a *channel* does not — call `Onboarding.gate/1` from its `join/3`.
+
   Must run after `EngramWeb.Plugs.Auth` (needs `conn.assigns.current_user`)
   and after `EngramWeb.Plugs.RotationLockCheck`. May run before or after
   `VaultPlug`; in this codebase it runs immediately before VaultPlug so
@@ -14,7 +20,6 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
   """
 
   alias Engram.Onboarding
-  alias Engram.Onboarding.GateCache
   alias EngramWeb.Plugs.Halt
 
   def init(opts), do: opts
@@ -25,60 +30,17 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
         Halt.json(conn, 401, %{error: "authentication_required"})
 
       user ->
-        # Deriving status costs ~3 DB round-trips (profile re-read +
-        # has_vault? in its own RLS transaction) on EVERY vault-scoped
-        # request. The verdict is cached on pass; failing users always
-        # take the authoritative slow path. Eviction contract lives in
-        # the GateCache moduledoc.
-        if GateCache.passed?(user.id) do
-          conn
-        else
-          gate(conn, Onboarding.status(user), user)
+        case Onboarding.gate(user) do
+          :ok ->
+            conn
+
+          {:error, missing, next_step} ->
+            Halt.json(conn, 403, %{
+              error: "onboarding_required",
+              missing: missing,
+              next_step: next_step
+            })
         end
-    end
-  end
-
-  defp gate(conn, %{next_step: :done}, user) do
-    :ok = GateCache.mark_passed(user.id)
-    conn
-  end
-
-  defp gate(
-         conn,
-         %{
-           terms_ok: terms_ok,
-           subscription_ok: sub_ok,
-           profile_complete: profile_ok,
-           next_step: next_step
-         } = status,
-         user
-       ) do
-    has_vault = Map.get(status, :has_vault, true)
-    # uses_obsidian users bypass the vault gate (plugin creates vault later).
-    profile = Map.get(status, :profile, %{})
-    vault_required = profile_ok and Map.get(profile || %{}, "uses_obsidian") != true
-
-    missing =
-      []
-      |> then(&if terms_ok, do: &1, else: ["terms" | &1])
-      |> then(&if sub_ok, do: &1, else: ["subscription" | &1])
-      |> then(&if profile_ok, do: &1, else: ["profile" | &1])
-      |> then(&if not vault_required or has_vault, do: &1, else: ["vault" | &1])
-      |> Enum.sort()
-
-    if missing == [] do
-      # All enforced gates pass even though wizard navigation isn't `:done`
-      # yet (e.g. obsidian user mid-flow whose plugin is about to first-sync).
-      # Runtime traffic permission and wizard state are intentionally
-      # decoupled — see `Engram.Onboarding.next_step/5`.
-      :ok = GateCache.mark_passed(user.id)
-      conn
-    else
-      Halt.json(conn, 403, %{
-        error: "onboarding_required",
-        missing: missing,
-        next_step: next_step
-      })
     end
   end
 end
