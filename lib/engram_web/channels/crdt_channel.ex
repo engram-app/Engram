@@ -21,7 +21,7 @@ defmodule EngramWeb.CrdtChannel do
   alias Engram.Crypto.HMAC
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
-  alias Engram.{Notes, Vaults}
+  alias Engram.{Notes, Repo, Vaults}
   alias Engram.Notes.CrdtBridge
   alias Engram.Notes.CrdtCheckpoint
   alias Engram.Notes.CrdtIndexRegistry
@@ -325,16 +325,19 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  # These four frames carry no b64 payload, so frame_class_b64 doesn't apply —
-  # they ride the :handshake lane (see check_rate/2 below). All four are
-  # connect/catchup-time operations (one create/delete per note mutation, one
-  # catchup call per note during enrollment), the exact shape @hs_limit was
-  # sized for, and NOT the continuous edit stream @msg_limit protects — so
-  # sharing that lane is intentional, not accidental reuse. They are still
-  # bounded (not exempt): the 2400/10s ceiling applies same as real STEP1s.
+  # `crdt_delete`/`crdt_catchup_since` (below) carry no b64 payload, so
+  # frame_class_b64 doesn't apply to them — they ride the :handshake lane
+  # unconditionally (see check_rate/2). `crdt_create` is different since
+  # #1409: it MAY carry a genesis-seed `b64`, sized-gated by
+  # `genesis_create_class/1` exactly like frame_class_b64/1 gates a large
+  # STEP2 — small (or absent) rides :handshake, oversized pays :edit. All are
+  # still bounded either way (not exempt): the 2400/10s ceiling applies same
+  # as real STEP1s.
   @impl true
   def handle_in("crdt_create", %{"doc_id" => doc_id, "path" => path} = payload, socket) do
-    with :ok <- check_rate(socket, :handshake),
+    b64 = Map.get(payload, "b64")
+
+    with :ok <- check_rate(socket, genesis_create_class(b64)),
          {:ok, note_id} <- cast_doc_id(doc_id),
          :ok <- validate_create_path(path) do
       user = socket.assigns.current_user
@@ -344,7 +347,7 @@ defmodule EngramWeb.CrdtChannel do
              origin: socket.assigns[:client_type]
            ) do
         {:ok, note} ->
-          seeded = maybe_seed_detached(user, vault, note.id, Map.get(payload, "b64"))
+          seeded = maybe_seed_detached(user, vault, note.id, b64)
           {:reply, {:ok, %{doc_id: note.id, seeded: seeded}}, socket}
 
         {:adopted, note} ->
@@ -848,22 +851,15 @@ defmodule EngramWeb.CrdtChannel do
          # cannot snooze, so we decline and let the client's crdt_msg path — which
          # goes THROUGH the room — do it.
          #
-         # TOCTOU (reviewed, OPEN): a room can `ensure_started` right after this
-         # `lookup` returns nil but before `checkpoint/5` below commits. If it
-         # does, it loads the row's PRE-write (still-empty) state into its live
-         # doc — our write hasn't landed yet — so the room has no way to know
-         # about it. `checkpoint/5`'s `captured_version:` CAS does NOT close this:
-         # the CAS only rejects our write if `notes.version` already advanced,
-         # and a room merely starting (or loading an empty doc) never bumps
-         # `version` — only a COMMITTED checkpoint does. So our write still lands.
-         # If that room's doc is then independently seeded (e.g. the client also
-         # sends the same frame over crdt_msg, or starts typing) before its own
-         # checkpoint fires, `union_with_row_state/3` folds our persisted lineage
-         # with the room's causally-unrelated one — same #846 mechanism, doubled
-         # body. No lock invented here; narrow window, self-heals on nothing, so
-         # flagged for the room's owner to decide whether to close it (e.g. by
-         # having room startup adopt/replace an in-flight detached-seed lineage
-         # instead of independently re-seeding an apparently-empty doc).
+         # This check is a CHEAP, NON-authoritative fast path only — it just
+         # avoids the decode/apply/row-read below when a room OBVIOUSLY already
+         # exists. A room can `ensure_started` (and `CrdtPersistence.bind/3` can
+         # hydrate) right after this `lookup` returns nil but before our write
+         # commits. `checkpoint/5`'s `captured_version:` CAS does NOT close that
+         # window on its own — a room merely starting never bumps `notes.version`,
+         # only a COMMITTED checkpoint does. The AUTHORITATIVE guard is the
+         # transaction-scoped advisory lock + re-check in `seed_empty_row/6`'s
+         # `""` clause below, paired with the SAME lock in `bind/3` (#1409).
          nil <- CrdtRegistry.lookup(note_id),
          {:ok, doc} <- apply_detached(update),
          expected = CrdtBridge.text_of(doc),
@@ -899,20 +895,84 @@ defmodule EngramWeb.CrdtChannel do
   defp seed_empty_row(_user, _vault, _note_id, _doc, expected, expected), do: true
 
   defp seed_empty_row(user, vault, note_id, doc, expected, "") do
-    captured_version = CrdtCheckpoint.current_version(user.id, note_id)
+    # Test-only seam (#1409 TOCTOU close): fires just before the locked
+    # re-check below, so a test can register a room in exactly the window
+    # this lock exists to close. Reuses CheckpointInterleave's
+    # `:checkpoint_interleave_hook` env key / park-release protocol
+    # (test/support/checkpoint_interleave.ex) — same convention as
+    # CrdtCheckpoint.interleave_hook/1 and Notes.interleave_hook/1. `nil` in
+    # every environment that doesn't arm it.
+    interleave_hook(:genesis_seed_before_lock)
 
-    _ =
-      CrdtCheckpoint.checkpoint(user.id, vault.id, note_id, doc,
-        captured_version: captured_version
+    {:ok, result} =
+      Repo.with_tenant(user.id, fn ->
+        # #1409 TOCTOU close. The caller's `CrdtRegistry.lookup` at the top of
+        # maybe_seed_detached/4 is only a cheap fast path — a room can
+        # register AND `CrdtPersistence.bind/3` can hydrate its doc from the
+        # row between that check and here. This transaction-scoped advisory
+        # lock, keyed on `note_id`, is ALSO taken by bind/3 before it reads
+        # `crdt_state` (same `hashtextextended` idiom as
+        # `Links.lock_source_note!/1` — the identical key on both sides is
+        # load-bearing; changing one without the other silently stops them
+        # serializing). Whichever of us wins the lock establishes a real
+        # happens-before order instead of two racing reads/writes:
+        #   - bind wins: it hydrates (possibly empty), releases the lock, and
+        #     the re-check below now sees the registered room and DECLINES —
+        #     the seed falls to the client's crdt_msg fallback, which routes
+        #     through that real room and applies safely there.
+        #   - we win: our commit (which releases the lock) happens before
+        #     bind can read, so bind hydrates our just-written content.
+        _ = Repo.query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [note_id])
+
+        case CrdtRegistry.lookup(note_id) do
+          nil ->
+            captured_version = CrdtCheckpoint.current_version(user.id, note_id)
+
+            _ =
+              CrdtCheckpoint.checkpoint(user.id, vault.id, note_id, doc,
+                captured_version: captured_version
+              )
+
+            seed_landed?(user, vault, note_id, expected)
+
+          _pid ->
+            false
+        end
+      end)
+
+    result
+  rescue
+    e ->
+      # A raised lock/query (connection loss, etc.) must cost this note its
+      # seed, never the channel — same discipline as apply_detached/1.
+      # `CrdtCheckpoint.checkpoint/5` itself still never raises; the new
+      # surface here is the advisory-lock query.
+      Logger.warning(
+        "crdt genesis detached seed lock/write failed",
+        Metadata.with_category(:warning, :sync, error_kind: Engram.Telemetry.error_kind(e))
       )
 
-    seed_landed?(user, vault, note_id, expected)
+      false
   end
 
   # The row already carries a DIFFERENT body — a concurrent write landed between
   # genesis and here. Merging two lineages is exactly what a room is for; decline
   # and let the client's crdt_msg seed go through one.
   defp seed_empty_row(_user, _vault, _note_id, _doc, _expected, _row_content), do: false
+
+  # Same convention as CrdtCheckpoint.interleave_hook/1 and
+  # Notes.interleave_hook/1 (SAME `:checkpoint_interleave_hook` app env key —
+  # each module dispatches only the points it defines; a point it doesn't
+  # recognize falls through to `_other -> :ok`, so arming one module's point
+  # never fires another's). `nil` in every environment that doesn't arm it.
+  defp interleave_hook(point) do
+    case Application.get_env(:engram, :checkpoint_interleave_hook) do
+      nil -> :ok
+      fun when is_function(fun, 1) -> _ = fun.(point)
+    end
+
+    :ok
+  end
 
   # A crafted update can abort inside the y_ex NIF — either by raising (caught
   # below) or, per its room-path twin `seed_genesis_if_empty/3`, by exiting the
@@ -1477,6 +1537,28 @@ defmodule EngramWeb.CrdtChannel do
   # Shorter than 4 b64 chars cannot carry a valid handshake prefix; the edit
   # lane is the conservative default.
   defp frame_class_b64(_), do: :edit
+
+  # `crdt_create`'s own version of the frame_class_b64/1 size gate (#1409).
+  # A genesis seed is NOT a cheap echo like a small STEP2: it does a full
+  # decode, a NIF apply, an encrypt, AND a row write (`maybe_seed_detached/4`)
+  # — strictly more expensive per frame than the handshake lane's other
+  # occupants. 32 KB of base64 is ~24 KB of note text (base64 expands ~4/3),
+  # which covers the overwhelming majority of real markdown notes, so a real
+  # vault import still rides the handshake lane at its intended 2400/10s
+  # shape. An oversized note still syncs — `maybe_seed_detached/4` doesn't
+  # change — it just pays the edit budget like any other state-bearing frame.
+  @hs_genesis_max_b64 32_768
+
+  defp genesis_create_class(nil), do: :handshake
+
+  defp genesis_create_class(b64) when is_binary(b64) and byte_size(b64) <= @hs_genesis_max_b64,
+    do: :handshake
+
+  # Non-binary (malformed client payload) and oversized both pay the edit
+  # budget — `maybe_seed_detached/4` independently rejects a non-binary b64,
+  # so this is only about which rate lane an ill-formed payload bills, never
+  # about accepting it.
+  defp genesis_create_class(_b64), do: :edit
 
   defp check_rate(socket, class) do
     {key_prefix, limit} =

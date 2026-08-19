@@ -5,7 +5,7 @@ defmodule EngramWeb.CrdtChannelTest do
   import ExUnit.CaptureLog
 
   alias Ecto.Adapters.SQL.Sandbox
-  alias Engram.{Attachments, Crypto, Fixtures, Notes, Vaults}
+  alias Engram.{Attachments, CheckpointInterleave, Crypto, Fixtures, Notes, Vaults}
   alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog}
   alias Engram.Repo
   alias Yex.Sync.SharedDoc
@@ -314,6 +314,39 @@ defmodule EngramWeb.CrdtChannelTest do
         })
 
       assert_reply ref, :ok, %{doc_id: ^id, seeded: true}
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == ""
+    end
+
+    test "a room that registers in the TOCTOU window declines the seed instead of losing the race",
+         %{socket: socket, user: user, vault: vault} do
+      # #1409. `maybe_seed_detached/4`'s CrdtRegistry.lookup at the top is only
+      # a cheap fast path — a room can register (and CrdtPersistence.bind/3
+      # hydrate) between that check and the locked write in
+      # seed_empty_row/6's `""` clause. This drives exactly that: park the
+      # create right before the lock, register a room in the gap, then let it
+      # continue. The AUTHORITATIVE re-check under the lock must see the room
+      # and decline — proving the advisory lock + re-check (not just the
+      # early, racy check) is what makes this safe.
+      id = Ecto.UUID.generate()
+
+      on_exit(CheckpointInterleave.arm(:genesis_seed_before_lock))
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/race.md",
+          "b64" => frame_for_content("body")
+        })
+
+      parked = CheckpointInterleave.await_parked(:genesis_seed_before_lock, socket.channel_pid)
+
+      {:ok, _room} = CrdtRegistry.ensure_started(user.id, vault.id, id)
+      on_exit(fn -> CrdtRegistry.terminate_room(id) end)
+
+      CheckpointInterleave.release(:genesis_seed_before_lock, parked)
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false}
       assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
       assert note.content == ""
     end
@@ -1568,6 +1601,93 @@ defmodule EngramWeb.CrdtChannelTest do
       victim_absent = Ecto.UUID.generate()
       ref_victim = push(socket, "crdt_msg", %{"doc_id" => victim_absent, "b64" => tiny_b64})
       assert_reply ref_victim, :error, %{reason: "note_not_found"}, 3000
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # crdt_create rate lane — genesis size gate (#1409)
+  #
+  # Mirrors "a LARGE STEP2 pays the edit budget" above, for crdt_create's own
+  # b64: small (or absent) rides :handshake, a genesis frame over
+  # @hs_genesis_max_b64 pays the :edit budget instead — same override=2 setup
+  # so the edit lane's ceiling is cheap to exhaust in a test.
+  # ---------------------------------------------------------------------------
+
+  describe "crdt_create rate lane (genesis size gate)" do
+    setup do
+      Application.put_env(:engram, :crdt_msg_rate_limit_override, 2)
+      EngramWeb.RateLimiter.reset_buckets!()
+
+      on_exit(fn ->
+        Application.delete_env(:engram, :crdt_msg_rate_limit_override)
+        EngramWeb.RateLimiter.reset_buckets!()
+      end)
+    end
+
+    test "a small (or absent) genesis body stays on the handshake lane", %{socket: socket} do
+      # Exhaust the EDIT lane (override = 2) FIRST, with oversized creates —
+      # which DO count against it (see the next test). A small-body create
+      # afterwards succeeding is then real evidence it rides a separate lane,
+      # not a vacuous pass from never having spent the edit budget at all.
+      oversized_b64 = Base.encode64(:binary.copy(<<0>>, 25_000))
+
+      push(socket, "crdt_create", %{
+        "doc_id" => Ecto.UUID.generate(),
+        "path" => "Notes/o1.md",
+        "b64" => oversized_b64
+      })
+
+      push(socket, "crdt_create", %{
+        "doc_id" => Ecto.UUID.generate(),
+        "path" => "Notes/o2.md",
+        "b64" => oversized_b64
+      })
+
+      # The edit lane is now spent. A THIRD create, this time with a small b64
+      # genesis seed, must still succeed — proving small-body creates ride the
+      # separate (larger) handshake lane rather than the exhausted edit lane.
+      id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/n3.md",
+          "b64" => frame_for_content("small body")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true}, 3000
+    end
+
+    test "a genesis body over the size gate pays the edit budget", %{socket: socket} do
+      # Same shape as "a LARGE STEP2 pays the edit budget": not a valid Yjs
+      # frame, just oversized. genesis_create_class/1 classifies on byte_size
+      # alone, before any decode is attempted, so this is enough to exercise
+      # the rate lane without needing a well-formed frame.
+      oversized_b64 = Base.encode64(:binary.copy(<<0>>, 25_000))
+      assert byte_size(oversized_b64) > 32_768
+
+      push(socket, "crdt_create", %{
+        "doc_id" => Ecto.UUID.generate(),
+        "path" => "Notes/o1.md",
+        "b64" => oversized_b64
+      })
+
+      push(socket, "crdt_create", %{
+        "doc_id" => Ecto.UUID.generate(),
+        "path" => "Notes/o2.md",
+        "b64" => oversized_b64
+      })
+
+      # The edit budget (2) is now spent — a third oversized create is denied,
+      # same as a third large STEP2 crdt_msg would be.
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => Ecto.UUID.generate(),
+          "path" => "Notes/o3.md",
+          "b64" => oversized_b64
+        })
+
+      assert_reply ref, :error, %{reason: "rate_limited"}, 3000
     end
   end
 

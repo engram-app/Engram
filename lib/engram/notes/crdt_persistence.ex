@@ -50,6 +50,19 @@ defmodule Engram.Notes.CrdtPersistence do
 
     _ =
       Repo.with_tenant(user_id, fn ->
+        # #1409 TOCTOU close: serializes this hydration read against a
+        # concurrent detached genesis seed
+        # (`EngramWeb.CrdtChannel.seed_empty_row/6`) for the SAME note.
+        # Without this, bind can read `crdt_state` BEFORE that seed's
+        # checkpoint commits, load an empty doc, and never learn about the
+        # write that lands moments later — this room then silently diverges
+        # from the row (worst case: a later edit through this room unions two
+        # independent lineages and doubles the body, same #846 mechanism).
+        # SAME `hashtextextended(note_id, 0)` key as the seed's lock (also
+        # matches `Links.lock_source_note!/1`'s idiom) — changing one side
+        # without the other silently stops them serializing.
+        _ = Repo.query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [note_id])
+
         case Repo.get(Note, note_id) do
           %Note{} = note ->
             # Hydrate the snapshot when present. Absent one, the doc stays
