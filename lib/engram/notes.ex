@@ -818,9 +818,13 @@ defmodule Engram.Notes do
 
   @doc """
   Create/resurrect/adopt a BARE note row for a client-minted id over CRDT
-  (crdt_create). Content is owned by the CRDT room and arrives via crdt_msg —
-  this never merges empty content against an existing row and never content-
-  broadcasts. See docs spec 2026-07-15-crdt-create-genesis-bare-row-design.
+  (crdt_create). This function never writes content: it never merges empty
+  content against an existing row and never content-broadcasts.
+
+  Content is applied SEPARATELY by the caller, either as a detached genesis seed
+  when `crdt_create` carried a `b64` frame (#1409, the import path — no room), or
+  as a later `crdt_msg` through the note's live room (the editor path). See docs
+  spec 2026-07-15-crdt-create-genesis-bare-row-design.
   """
   @spec genesis_crdt_note(map(), map(), String.t(), String.t(), keyword()) ::
           {:ok, Note.t()}
