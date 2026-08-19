@@ -352,8 +352,8 @@ defmodule EngramWeb.CrdtChannel do
           # transfers the local body onto that lineage. Only the BATCH leg has to
           # distinguish this from a create (it reports frame-applied, not id).
           #
-          # seeded is ALWAYS false here even when the client sent a b64: adopting
-          # means the path is owned by a different live note, and applying our
+          # #1409: seeded is ALWAYS false here even when the client sent a b64:
+          # adopting means the path is owned by a different live note, and applying our
           # frame to it would overwrite that note's body. The ADOPT path transfers
           # the body deliberately; this must not shortcut it.
           {:reply, {:ok, %{doc_id: note.id, seeded: false}}, socket}
