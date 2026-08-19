@@ -50,18 +50,14 @@ defmodule Engram.Notes.CrdtPersistence do
 
     _ =
       Repo.with_tenant(user_id, fn ->
-        # #1409 TOCTOU close: serializes this hydration read against a
-        # concurrent detached genesis seed
-        # (`EngramWeb.CrdtChannel.seed_locked/5`) for the SAME note. Without
-        # this, bind can read `crdt_state` BEFORE that seed's checkpoint
-        # commits, load an empty doc, and never learn about the write that
-        # lands moments later — this room then silently diverges from the row
-        # (worst case: a later edit through this room unions two independent
-        # lineages and doubles the body, same #846 mechanism).
-        # `Repo.advisory_lock!/1` is the ONE place the lock key is computed —
-        # both sides call it, so there is no separate formula here to drift.
-        Repo.advisory_lock!(note_id)
-
+        # NO lock here, deliberately (#1409). bind/3 runs INLINE inside the one
+        # DynamicSupervisor process per node (start_child is a synchronous call
+        # whose handle_call runs the child's init), so anything that blocks here
+        # stalls EVERY other room start on this node. A detached genesis seed
+        # racing this read is instead resolved by the seed itself: it commits,
+        # then terminates whatever room appeared in its window
+        # (`EngramWeb.CrdtChannel.evict_racing_room/1`), so the replacement room
+        # binds against the committed row.
         case Repo.get(Note, note_id) do
           %Note{} = note ->
             # Hydrate the snapshot when present. Absent one, the doc stays

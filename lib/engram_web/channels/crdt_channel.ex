@@ -857,11 +857,11 @@ defmodule EngramWeb.CrdtChannel do
          # hydrate) right after this `lookup` returns nil but before our write
          # commits. `checkpoint/5`'s `captured_version:` CAS does NOT close that
          # window on its own — a room merely starting never bumps `notes.version`,
-         # only a COMMITTED checkpoint does. The AUTHORITATIVE guard is
-         # `seed_locked/5` below (#1409).
+         # only a COMMITTED checkpoint does. That window is closed AFTER the
+         # write instead, by `evict_racing_room/1` below (#1409).
          nil <- CrdtRegistry.lookup(note_id),
          {:ok, doc} <- apply_detached(update) do
-      seed_locked(user, vault, note_id, doc, CrdtBridge.text_of(doc))
+      seed_detached(user, vault, note_id, doc, CrdtBridge.text_of(doc))
     else
       _ -> false
     end
@@ -869,75 +869,100 @@ defmodule EngramWeb.CrdtChannel do
 
   defp maybe_seed_detached(_user, _vault, _note_id, _b64), do: false
 
-  # Test-only seam (#1409 TOCTOU close): fires just before the locked
-  # re-check below, so a test can register a room in exactly the window this
-  # lock exists to close. Reuses CheckpointInterleave's
+  # Test-only seam (#1409): fires just before the write transaction below, so a
+  # test can register a room in exactly the window `evict_racing_room/1` exists
+  # to clean up after. Reuses CheckpointInterleave's
   # `:checkpoint_interleave_hook` env key / park-release protocol
   # (test/support/checkpoint_interleave.ex) — same convention as
   # CrdtCheckpoint.interleave_hook/1 and Notes.interleave_hook/1. `nil` in
   # every environment that doesn't arm it.
   #
-  # The lock + BOTH re-checks below (registry AND row content) must run in
-  # ONE locked critical section, so this is a separate function from
-  # maybe_seed_detached/4 rather than another `with` step there: the row
-  # content that picks seed_against/6's clause has to be read fresh, INSIDE
-  # the lock — reading it earlier (as an outer `with` step, the original
-  # round-2 shape) leaves the exact same class of gap open one level up: a
-  # REST/MCP write landing between that read and the lock would still route
-  # to the empty-row clause and double the body via union_with_row_state.
-  defp seed_locked(user, vault, note_id, doc, expected) do
-    interleave_hook(:genesis_seed_before_lock)
+  # The row content that picks seed_against/6's clause is read INSIDE the same
+  # transaction as the write, as late as possible — hence a separate function
+  # from maybe_seed_detached/4 rather than another `with` step there. Reading it
+  # earlier (the original round-2 shape) leaves a gap one level up: a REST/MCP
+  # write landing between that read and the write would still route to the
+  # empty-row clause and double the body via union_with_row_state (#846).
+  defp seed_detached(user, vault, note_id, doc, expected) do
+    interleave_hook(:genesis_seed_before_write)
 
-    {:ok, result} =
+    # NOTE (acknowledged, not fixed): this `with_tenant` makes `checkpoint/5`'s
+    # OWN inner `with_tenant` call re-entrant (same tenant, already in a
+    # transaction — see Repo.with_tenant/2's doc), so `checkpoint/5`'s Oban
+    # enqueues (EmbedNote, ExtractNoteLinks) and its `CrdtDeliver.announce_ready`
+    # broadcast fire BEFORE this transaction commits, not after. Self-healing for
+    # CRDT clients (they converge on the next catch-up regardless); a plain REST
+    # reader could in principle observe a sub-ms window where the job/broadcast
+    # fired but the row isn't visible yet.
+    {:ok, {seeded, wrote?}} =
       Repo.with_tenant(user.id, fn ->
-        # #1409 TOCTOU close. `Repo.advisory_lock!/1` is the ONE place the
-        # lock key is computed — `bind/3` calls the SAME function, so there is
-        # no separate formula on either side to drift out of sync. Whichever
-        # of us wins the lock establishes a real happens-before order instead
-        # of two racing reads/writes:
-        #   - bind wins: it hydrates (possibly empty), releases the lock, and
-        #     the registry re-check below now sees the registered room and
-        #     DECLINES — the seed falls to the client's crdt_msg fallback,
-        #     which routes through that real room and applies safely there.
-        #   - we win: our commit (which releases the lock) happens before
-        #     bind can read, so bind hydrates our just-written content.
-        #
-        # NOTE (acknowledged, not fixed): this `with_tenant` makes
-        # `checkpoint/5`'s OWN inner `with_tenant` call re-entrant (same
-        # tenant, already in a transaction — see Repo.with_tenant/2's
-        # doc), so `checkpoint/5`'s Oban enqueues (EmbedNote,
-        # ExtractNoteLinks) and its `CrdtDeliver.announce_ready` broadcast
-        # now fire BEFORE this transaction commits, not after. Self-healing
-        # for CRDT clients (they converge on the next catch-up regardless);
-        # a plain REST reader could in principle observe a sub-ms window
-        # where the job/broadcast fired but the row isn't visible yet.
-        Repo.advisory_lock!(note_id)
-
-        case CrdtRegistry.lookup(note_id) do
-          nil ->
-            case Notes.get_note_by_id(user, vault, note_id) do
-              {:ok, note} -> seed_against(user, vault, note_id, doc, expected, note.content)
-              _ -> false
-            end
-
-          _pid ->
-            false
+        case Notes.get_note_by_id(user, vault, note_id) do
+          {:ok, note} -> seed_against(user, vault, note_id, doc, expected, note.content)
+          _ -> {false, false}
         end
       end)
 
-    result
+    # Only a real write can have left a racing room stale. The other two
+    # seed_against/6 clauses wrote nothing, so any room that exists is still
+    # consistent with the row and killing it would drop a live client's session
+    # for free.
+    if wrote?, do: evict_racing_room(note_id)
+
+    seeded
   rescue
     e ->
-      # A raised lock/query (connection loss, etc.) must cost this note its
-      # seed, never the channel — same discipline as apply_detached/1.
-      # `CrdtCheckpoint.checkpoint/5` itself still never raises; the new
-      # surface here is the advisory-lock query.
+      # A raised query (connection loss, etc.) must cost this note its seed,
+      # never the channel — same discipline as apply_detached/1.
+      # `CrdtCheckpoint.checkpoint/5` itself still never raises.
       Logger.warning(
-        "crdt genesis detached seed lock/write failed",
+        "crdt genesis detached seed write failed",
         Metadata.with_category(:warning, :sync, error_kind: Engram.Telemetry.error_kind(e))
       )
 
       false
+  end
+
+  # Post-commit cleanup of the create-race (#1409). The early `lookup` in
+  # maybe_seed_detached/4 is a fast path, not a fence: a room can register — and
+  # `CrdtPersistence.bind/3` hydrate from the still-empty row — between it and
+  # our commit, leaving that room silently divergent from the row.
+  #
+  # Round 3 closed this with a `pg_advisory_xact_lock` both sides took. It
+  # worked and it was too expensive: the seed held it for a measured 7.5-101ms,
+  # and `bind/3` runs INLINE in the ONE DynamicSupervisor process per node
+  # (start_child is a synchronous call whose handle_call runs the child's init),
+  # so every seed stalled every OTHER room start on the node, each waiter
+  # pinning a pooled connection. That is the pool-exhaustion shape this whole
+  # change exists to prevent.
+  #
+  # So: write first, then evict the racer. A room that appeared inside that
+  # window is milliseconds old, bound to a note that did not exist moments ago,
+  # and holds an empty doc. Terminating it loses nothing and costs one
+  # re-handshake, which this protocol already treats as routine — see the
+  # `room_unavailable` reply arm in handle_in("crdt_msg", ...), which exists
+  # precisely so clients retry into a fresh room. That fresh room's bind/3 reads
+  # our committed row.
+  #
+  # Safe even if that room ALREADY took a client edit: terminate_room/1
+  # unregisters the :global name and then brutal-:kills, deliberately skipping
+  # terminate/2 -> unbind -> checkpoint, so no second lineage is ever unioned
+  # with ours (#846). The edit itself is durable in the tail-log (update_v1
+  # appends per delta) and our checkpoint prunes NOTHING (`prune_ids: []`), so it
+  # replays onto our state on the next bind. Idempotent on an already-dead pid,
+  # so racing the room's own idle-exit drain is a no-op, not a raise.
+  defp evict_racing_room(note_id) do
+    case CrdtRegistry.lookup(note_id) do
+      nil ->
+        :ok
+
+      _pid ->
+        Logger.info(
+          "crdt genesis seed evicting room that raced the detached write",
+          Metadata.with_category(:info, :sync, doc_id: note_id)
+        )
+
+        CrdtRegistry.terminate_room(note_id)
+    end
   end
 
   # #846, the detached twin of seed_genesis_if_empty/3. The room path guards its
@@ -947,10 +972,15 @@ defmodule EngramWeb.CrdtChannel do
   # doubles. `crdt_create` is idempotent and clients do retry it, so the detached
   # path needs the same guard — taken against the row, which is the durable
   # equivalent of the room's in-memory doc. `row_content` (the 6th arg) is read
-  # by seed_locked/5 INSIDE the advisory-lock section, never before it — a value
-  # read earlier could be stale by the time this dispatches (a REST/MCP write
-  # landing in that gap would otherwise still route to the `""` clause and
-  # double the body via `union_with_row_state`, the #1409 review round-3 fix).
+  # by seed_detached/5 inside the SAME transaction as the write and as late as
+  # possible, never before it — a value read earlier could be stale by the time
+  # this dispatches (a REST/MCP write landing in that gap would otherwise still
+  # route to the `""` clause and double the body via `union_with_row_state`, the
+  # #1409 review round-3 fix).
+  #
+  # Returns `{seeded?, wrote?}`. `wrote?` is what tells seed_detached/5 whether
+  # a racing room can have gone stale and needs evicting — only the middle
+  # clause writes.
   #
   # Clause ORDER is load-bearing, not interchangeable: the first clause's
   # `expected, expected` pattern-match-equality only fires when the row
@@ -964,23 +994,30 @@ defmodule EngramWeb.CrdtChannel do
   #
   # Already exactly this body: an idempotent retry with nothing to write. Report
   # true — the client's file IS synced, which is what `seeded` means.
-  defp seed_against(_user, _vault, _note_id, _doc, expected, expected), do: true
+  defp seed_against(_user, _vault, _note_id, _doc, expected, expected), do: {true, false}
 
   defp seed_against(user, vault, note_id, doc, expected, "") do
     captured_version = CrdtCheckpoint.current_version(user.id, note_id)
 
     _ =
       CrdtCheckpoint.checkpoint(user.id, vault.id, note_id, doc,
-        captured_version: captured_version
+        captured_version: captured_version,
+        # We are a DETACHED caller, like CheckpointNote.finalize/1: `doc` was
+        # built from the client's frame, not from replay_tail, so it folded ZERO
+        # tail rows and must prune zero. Omitting this takes checkpoint/5's
+        # LIVE-ROOM watermark fallback, which deletes every tail row up to now —
+        # including an edit taken by a room that registered in our write window,
+        # which our snapshot does not contain. #1409.
+        prune_ids: []
       )
 
-    seed_landed?(user, vault, note_id, expected)
+    {seed_landed?(user, vault, note_id, expected), true}
   end
 
   # The row already carries a DIFFERENT body — a concurrent write landed between
   # genesis and here. Merging two lineages is exactly what a room is for; decline
   # and let the client's crdt_msg seed go through one.
-  defp seed_against(_user, _vault, _note_id, _doc, _expected, _row_content), do: false
+  defp seed_against(_user, _vault, _note_id, _doc, _expected, _row_content), do: {false, false}
 
   # Same convention as CrdtCheckpoint.interleave_hook/1 and
   # Notes.interleave_hook/1 (SAME `:checkpoint_interleave_hook` app env key —

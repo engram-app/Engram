@@ -318,28 +318,32 @@ defmodule EngramWeb.CrdtChannelTest do
       assert note.content == ""
     end
 
-    test "a room that registers in the TOCTOU window declines the seed instead of losing the race",
+    test "a room that registers in the write window is evicted after the seed commits",
          %{socket: socket, user: user, vault: vault} do
       # #1409. `maybe_seed_detached/4`'s CrdtRegistry.lookup at the top is only
       # a cheap fast path — a room can register (and CrdtPersistence.bind/3
-      # hydrate) between that check and the locked write in `seed_locked/5`.
-      # This drives exactly that: park the create right before the lock,
-      # register a room in the gap, then let it continue. The AUTHORITATIVE
-      # re-check under the lock must see the room and decline — proving the
-      # early, racy check alone is not what makes this safe.
+      # hydrate from the still-empty row) between that check and the write in
+      # `seed_detached/5`, leaving that room divergent from the row. Round 3
+      # fenced this with an advisory lock on both sides; that stalled every
+      # room start on the node (bind/3 runs inline in the single
+      # DynamicSupervisor process), so the seed now cleans up after itself
+      # instead: commit, then terminate the racer so it re-binds against the
+      # committed row.
       #
-      # What this test does NOT prove: the advisory lock's blocking property
-      # itself. Under this file's SHARED sandbox connection (`async: false`),
-      # this test's channel process and the room's bind/3 are the SAME
-      # Postgres session, so `pg_advisory_xact_lock` is re-entrant to itself
-      # and never actually blocks either side. This test only exercises the
-      # re-check that runs once the (here, no-op) lock "acquisition" returns —
-      # a genuine two-connection block/serialize test would need
-      # `CheckpointInterleave.checkout_real!/0`'s real-connection machinery,
-      # which this test deliberately does not use (see the round-2 report).
+      # This drives exactly that window: park the create right before the write
+      # transaction, register a room in the gap, then let it continue.
+      #
+      # What this test proves: the post-commit re-check finds the racing room,
+      # terminates it, and the body still lands durably (`seeded: true`).
+      # What it does NOT prove: any cross-connection ordering. Under this
+      # file's SHARED sandbox connection (`async: false`) the channel and the
+      # room's bind/3 are the SAME Postgres session, so there is no real
+      # concurrency between the two DB legs here — only the registry
+      # interleaving is genuine (CrdtRegistry is a `:global` process registry,
+      # not transaction-gated).
       id = Ecto.UUID.generate()
 
-      on_exit(CheckpointInterleave.arm(:genesis_seed_before_lock))
+      on_exit(CheckpointInterleave.arm(:genesis_seed_before_write))
 
       ref =
         push(socket, "crdt_create", %{
@@ -348,16 +352,51 @@ defmodule EngramWeb.CrdtChannelTest do
           "b64" => frame_for_content("body")
         })
 
-      parked = CheckpointInterleave.await_parked(:genesis_seed_before_lock, socket.channel_pid)
+      parked = CheckpointInterleave.await_parked(:genesis_seed_before_write, socket.channel_pid)
 
-      {:ok, _room} = CrdtRegistry.ensure_started(user.id, vault.id, id)
+      {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, id)
+      on_exit(fn -> CrdtRegistry.terminate_room(id) end)
+      room_ref = Process.monitor(room)
+
+      CheckpointInterleave.release(:genesis_seed_before_write, parked)
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true}
+      assert_note_content_eventually(user, vault, id, "body")
+
+      # The stale room is gone, so the client's next crdt_msg starts a fresh
+      # one that binds against the row we just committed.
+      assert_receive {:DOWN, ^room_ref, :process, ^room, _}, 2_000
+      assert CrdtRegistry.lookup(id) == nil
+    end
+
+    test "a seed that writes nothing leaves a racing room alone", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # The eviction is scoped to the clause that actually writes (#1409). An
+      # idempotent retry against a row that ALREADY holds the frame's body wrote
+      # nothing, so no room can have gone stale behind it — killing one would
+      # drop a live editing session for free.
+      id = Ecto.UUID.generate()
+      payload = %{"doc_id" => id, "path" => "Notes/noop.md", "b64" => frame_for_content("body")}
+
+      ref1 = push(socket, "crdt_create", payload)
+      assert_reply ref1, :ok, %{seeded: true}
+      assert_note_content_eventually(user, vault, id, "body")
+
+      on_exit(CheckpointInterleave.arm(:genesis_seed_before_write))
+      ref2 = push(socket, "crdt_create", payload)
+
+      parked = CheckpointInterleave.await_parked(:genesis_seed_before_write, socket.channel_pid)
+
+      {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, id)
       on_exit(fn -> CrdtRegistry.terminate_room(id) end)
 
-      CheckpointInterleave.release(:genesis_seed_before_lock, parked)
+      CheckpointInterleave.release(:genesis_seed_before_write, parked)
 
-      assert_reply ref, :ok, %{doc_id: ^id, seeded: false}
-      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
-      assert note.content == ""
+      assert_reply ref2, :ok, %{doc_id: ^id, seeded: true}
+      assert CrdtRegistry.lookup(id) == room
     end
   end
 
