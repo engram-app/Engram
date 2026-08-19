@@ -231,6 +231,54 @@ defmodule EngramWeb.CrdtChannelTest do
       assert tail_count(user) == 0
     end
 
+    test "emits no room_start telemetry — the whole point, measured by allocation", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # #1409. Residency after the fact cannot prove this: rooms idle-drain, so
+      # a room-per-note regression can allocate and release entirely between two
+      # samples. `[:engram, :crdt, :room_start]` counts ALLOCATION, which is the
+      # claim. Guarded here so the e2e gate that reads the same event is not the
+      # only thing standing behind it.
+      test_pid = self()
+      handler = "room-start-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :crdt, :room_start],
+        fn _e, m, _meta, _ -> send(test_pid, {:room_start, m}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      for n <- 1..3 do
+        id = Ecto.UUID.generate()
+
+        ref =
+          push(socket, "crdt_create", %{
+            "doc_id" => id,
+            "path" => "Notes/alloc#{n}.md",
+            "b64" => frame_for_content("body #{n}")
+          })
+
+        assert_reply ref, :ok, %{doc_id: ^id, seeded: true}
+        assert_note_content_eventually(user, vault, id, "body #{n}")
+      end
+
+      refute_receive {:room_start, _}, 100
+
+      # Sanity that the probe is wired: a real room start DOES fire it, so the
+      # refute above is an observation, not a broken handler.
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/probe.md", "content" => "x"})
+
+      {:ok, _room} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+      assert_receive {:room_start, %{count: 1}}, 2_000
+    end
+
     test "a non-markdown genesis frame is never seeded", %{socket: socket, vault: _vault} do
       # #1409 M3. CRDT projects to notes.content for markdown only —
       # checkpoint/5 routes a .canvas doc to do_structural_checkpoint, which

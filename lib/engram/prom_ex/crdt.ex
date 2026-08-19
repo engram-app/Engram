@@ -4,6 +4,13 @@ defmodule Engram.PromEx.Crdt do
 
   Subscribes to:
 
+    * `[:engram, :crdt, :room_start]` — `%{count: 1}`, no metadata. One event
+      per room process actually created (`Engram.Notes.CrdtDoc.start_link/1`),
+      so a lookup that resolves to an existing room does not count. The ARRIVAL
+      counterpart to `room_drain` below; without it, room allocation over a
+      bulk import was unobservable and only instantaneous residency could be
+      sampled (#1409).
+
     * `[:engram, :crdt, :room_drain]` — `%{count: 1}`, metadata `%{phase: atom}`:
 
       * `:requested` — an idle room asked its observers to let go (first ask).
@@ -26,6 +33,7 @@ defmodule Engram.PromEx.Crdt do
 
   Metrics:
 
+    * `engram_prom_ex_crdt_room_start_total` — untagged.
     * `engram_prom_ex_crdt_room_drain_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_index_checkpoint_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_index_projection_total` — tags `[:phase]`.
@@ -90,6 +98,7 @@ defmodule Engram.PromEx.Crdt do
   @in_transaction_event [:engram, :crdt, :index_in_transaction]
   @tail_event [:engram, :crdt, :index_tail]
   @drain_event [:engram, :crdt, :room_drain]
+  @start_event [:engram, :crdt, :room_start]
   @checkpoint_event [:engram, :crdt, :index_checkpoint]
   @projection_event [:engram, :crdt, :index_projection]
 
@@ -101,6 +110,16 @@ defmodule Engram.PromEx.Crdt do
     Event.build(
       :engram_crdt_event_metrics,
       [
+        # Rooms ARRIVING, paired with room_drain below (rooms leaving). Rate of
+        # this over a bulk import is the direct measure of the detached genesis
+        # seed's headline claim: creating notes must not allocate a room each.
+        # Untagged — a room start has no phase, and the alternative (tag by
+        # vault or note) is unbounded cardinality.
+        counter(
+          metric_prefix ++ [:room_start, :total],
+          event_name: @start_event,
+          description: "CRDT note rooms started (process actually created)."
+        ),
         counter(
           metric_prefix ++ [:room_drain, :total],
           event_name: @drain_event,

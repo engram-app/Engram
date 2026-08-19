@@ -1010,13 +1010,37 @@ defmodule EngramWeb.CrdtChannel do
   #
   # Empty on the happy path (a genesis note has no tail), so this costs one
   # indexed, usually-zero-row query.
+  #
+  # ORDER IS LOAD-BEARING: stored snapshot FIRST, then the tail — the order
+  # `rebuild_detached/3` and `bind/3` both use. A tail delta's causal parents can
+  # live in `crdt_state`, and yrs BUFFERS a delta whose parents are missing: it
+  # would be excluded from `encode_state_as_update` yet STILL land in
+  # `prune_ids`, because `apply_tail_rows/4` records the row id on decrypt
+  # success and discards the apply result (crdt_persistence.ex:349-350). Folded,
+  # pruned, never applied — the #285 prune-set failure reached from a new caller.
+  #
+  # Do NOT weaken this to "clause 2 needs content == "", and a bare genesis row
+  # has no crdt_state". That precondition does not hold: a note EMPTIED through
+  # CRDT has `content == ""` AND a full deletion lineage in `crdt_state`, and
+  # `crdt_create` is idempotent, so a retry carrying a body frame lands here on
+  # exactly such a row.
+  #
+  # An UNREADABLE snapshot declines the whole seed rather than folding tail-only
+  # (same call as `bind/3`'s fail-loud and `rebuild_detached/3`'s `:unreadable`
+  # skip): unreadable is not absent, and replaying deltas onto a base-less doc
+  # yields a fragment we would then materialize over the body and prune the tail
+  # that proved it wrong. #1341.
   defp fold_row_and_tail(user, vault, note_id, doc) do
     {:ok, result} =
       Repo.with_tenant(user.id, fn ->
-        case Notes.get_note_by_id(user, vault, note_id) do
+        with {:ok, note} <- Notes.get_note_by_id(user, vault, note_id),
+             {:ok, snapshot} <- Engram.Crypto.decrypt_crdt_state(note, user) do
+          if is_binary(snapshot), do: :ok = Yex.apply_update(doc, snapshot)
+
           # replay_tail/3 must run inside this with_tenant — it queries
           # CrdtUpdateLog, which is RLS-scoped.
-          {:ok, note} -> {:ok, note.content, CrdtPersistence.replay_tail(doc, user, note_id)}
+          {:ok, note.content, CrdtPersistence.replay_tail(doc, user, note_id)}
+        else
           _ -> :error
         end
       end)
@@ -1048,10 +1072,20 @@ defmodule EngramWeb.CrdtChannel do
   # Safe even if that room ALREADY took a client edit: terminate_room/1
   # unregisters the :global name and then brutal-:kills, deliberately skipping
   # terminate/2 -> unbind -> checkpoint, so no second lineage is ever unioned
-  # with ours (#846). The edit itself is durable in the tail-log (update_v1
-  # appends per delta) and our checkpoint prunes NOTHING (`prune_ids: []`), so it
-  # replays onto our state on the next bind. Idempotent on an already-dead pid,
-  # so racing the room's own idle-exit drain is a no-op, not a raise.
+  # with ours (#846). No edit is lost either, and the reason is the PRUNE SET —
+  # read this before changing it, because this branch has already gotten the
+  # prune set wrong once. Every tail row is in exactly one of two states when we
+  # kill the room:
+  #
+  #   * folded by `fold_row_and_tail/4` — it is IN the snapshot we just
+  #     committed, and it is in `prune_ids`, so pruning it destroys nothing;
+  #   * appended AFTER our fold — it is NOT in `prune_ids`, so `checkpoint/5`
+  #     leaves it in the log and the next bind replays it onto our state.
+  #
+  # An exact-id prune is what makes that dichotomy total: checkpoint/5's
+  # alternative watermark path would delete rows in the second class too (#285).
+  # Idempotent on an already-dead pid, so racing the room's own idle-exit drain
+  # is a no-op, not a raise.
   defp evict_racing_room(note_id) do
     case CrdtRegistry.lookup(note_id) do
       nil ->
