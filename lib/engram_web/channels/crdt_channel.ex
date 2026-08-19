@@ -1222,11 +1222,40 @@ defmodule EngramWeb.CrdtChannel do
   # y_ex threw it away — the same silent-drop class as casting into a dead room,
   # one step further down the pipe. guard_frame/1 does NOT cover this: it checks
   # state-vector plausibility, not that the frame is a well-formed Yjs message.
-  defp relay_frame(room, frame) do
+  @doc false
+  # Public for the same reason as release_room/3 below: the dead-room path is
+  # a RACE and cannot be driven deterministically through push/3 — the existing
+  # channel-level room-death test has to sleep past this exact window.
+  #
+  # y_ex dispatches a sync frame as a `GenServer.call`
+  # (deps/y_ex/lib/server/doc_server_worker.ex:16-31), which EXITS the caller
+  # when the room is gone. Uncaught, that exit kills the CHANNEL — and with it
+  # every note syncing over that socket, not just this frame.
+  #
+  # Rooms are `:global` singletons, so the room is routinely on ANOTHER node.
+  # When that node drains, the monitor `:DOWN` that evicts our cached pid
+  # arrives over distribution while the client keeps sending. Observed in prod
+  # 2026-08-18: a full-vault download to mobile died mid-transfer because its
+  # channel called into a room on a task that had just been replaced.
+  #
+  # `:room_unavailable` is deliberately the EXISTING reason, not a new one: it
+  # already routes to a reply that tells the client to retry, and that clause
+  # already reasons that the drain makes teardown the steady state and a retry
+  # re-resolves through ensure_room onto a fresh room. This is the same event
+  # arriving one step later, so it deserves the same heal rather than a second
+  # vocabulary for it.
+  #
+  # No explicit eviction here: the room is monitored, and a monitor fires on
+  # node loss too (`:noconnection`), so the cached pid is gone well before the
+  # client's retry completes a round trip.
+  @spec relay_frame(pid(), binary()) :: :ok | {:error, term()}
+  def relay_frame(room, frame) do
     case SharedDoc.send_yjs_message(room, frame) do
       :ok -> :ok
       {:error, reason} -> {:error, {:rejected_by_ydoc, reason}}
     end
+  catch
+    :exit, _ -> {:error, :room_unavailable}
   end
 
   # NOT log_dropped/3: that keys the id as `note_id`, and an index frame has no
