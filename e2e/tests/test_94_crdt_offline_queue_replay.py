@@ -47,16 +47,24 @@ async def test_crdt_offline_queue_replays_on_reconnect(vault_a, cdp_a, api_sync)
 
         # Enqueue is a REACTION to the vault event, so poll rather than
         # snapshotting a point in time (the #635 lesson from the old test_24).
+        #
+        # Matched by PATH, not by counting distinct docIds. Instance A is
+        # session-scoped, so a leftover pending op from an earlier test plus ONE
+        # of these two would satisfy a `>= 2` count while the other was silently
+        # dropped — the exact failure this test exists to catch.
         deadline = asyncio.get_event_loop().time() + 20
-        ops = []
+        ours: set = set()
+        ops: list = []
         while asyncio.get_event_loop().time() < deadline:
             ops = await cdp_a.get_crdt_queue_ops()
-            if len({o["docId"] for o in ops}) >= 2:
+            ours = {o["path"] for o in ops if o.get("path") in (path1, path2)}
+            if ours == {path1, path2}:
                 break
             await asyncio.sleep(0.5)
 
-        assert len({o["docId"] for o in ops}) >= 2, (
-            f"expected both offline creates held in the CRDT queue, got {ops}"
+        assert ours == {path1, path2}, (
+            f"both offline creates must be held in the CRDT queue; "
+            f"held for this test={sorted(ours)}, full queue={ops}"
         )
     finally:
         # MUST restore even if an assertion fails, or every later test in the

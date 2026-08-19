@@ -1235,15 +1235,19 @@ class CdpClient:
         return result if isinstance(result, int) else -1
 
     async def get_crdt_queue_ops(self) -> list:
-        """Flat snapshot of pending CRDT ops: `[{kind, docId}, ...]`.
+        """Flat snapshot of pending CRDT ops: `[{kind, docId, path}, ...]`.
 
-        Only the two fields the tests assert on. The payload can carry a note
-        path, and this is logged, so it stays out.
+        `path` is included deliberately. Without it no assertion can pin an op
+        to the note that produced it, which forces tests into weak shapes like
+        "at least 2 distinct docIds" — satisfied by one leftover op from an
+        earlier test plus one of the two the test just made, while the other was
+        silently dropped. e2e paths are synthetic `E2E/...` fixtures, and other
+        helpers here already take a note path, so there is nothing to protect.
         """
         js = (
             f"({PLUGIN_PATH}.crdtOpQueue?.all() ?? [])"
-            ".map(o => ({{kind: o.kind, docId: o.docId}}))"
-        ).replace("{{", "{").replace("}}", "}")
+            ".map(o => ({kind: o.kind, docId: o.docId, path: o.payload?.path ?? null}))"
+        )
         result = await self.evaluate(js)
         return result if isinstance(result, list) else []
 
