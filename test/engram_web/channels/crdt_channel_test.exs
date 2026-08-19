@@ -276,7 +276,7 @@ defmodule EngramWeb.CrdtChannelTest do
          %{socket: socket, user: user, vault: vault, note: note} do
       # `note` (from setup) is live at "p.md" with content "base". A same-path
       # crdt_create is the idempotent-retry leg (reaches {:ok, note}, not
-      # {:adopted, _}), so this exercises seed_empty_row/6's THIRD clause: the
+      # {:adopted, _}), so this exercises seed_against/6's THIRD clause: the
       # row content ("base") and the frame's projection disagree — a
       # concurrent write landed between genesis and here — so it must decline
       # rather than merge two lineages itself.
@@ -300,7 +300,7 @@ defmodule EngramWeb.CrdtChannelTest do
       vault: vault
     } do
       # A fresh genesis row starts with content: "" (genesis_insert_bare). A
-      # frame that projects "" therefore matches seed_empty_row/6's FIRST
+      # frame that projects "" therefore matches seed_against/6's FIRST
       # clause (expected, expected pattern-equality) before ever reaching the
       # second ("" row) clause — the idempotent short-circuit, not a real
       # write.
@@ -1745,19 +1745,35 @@ defmodule EngramWeb.CrdtChannelTest do
   describe "crdt_create rate lane (genesis size gate)" do
     setup do
       Application.put_env(:engram, :crdt_msg_rate_limit_override, 2)
+      # Also bound the HANDSHAKE lane to 2 (#1409). Without this, "a small (or
+      # absent) genesis body stays on the handshake lane" below would pass
+      # vacuously even if the size gate were deleted entirely: with
+      # genesis_create_class/1 hardcoded to :handshake, the two "oversized"
+      # pushes would land on the (otherwise near-unbounded) handshake lane
+      # too and never exhaust anything, so the small-body probe would succeed
+      # either way. Bounding both lanes to the same size means a classifier
+      # that misroutes the oversized pushes onto :handshake instead of :edit
+      # spends the SAME budget the small body then needs, so the probe can
+      # actually go the other way and prove the routing is real.
+      Application.put_env(:engram, :crdt_hs_rate_limit_override, 2)
       EngramWeb.RateLimiter.reset_buckets!()
 
       on_exit(fn ->
         Application.delete_env(:engram, :crdt_msg_rate_limit_override)
+        Application.delete_env(:engram, :crdt_hs_rate_limit_override)
         EngramWeb.RateLimiter.reset_buckets!()
       end)
     end
 
     test "a small (or absent) genesis body stays on the handshake lane", %{socket: socket} do
       # Exhaust the EDIT lane (override = 2) FIRST, with oversized creates —
-      # which DO count against it (see the next test). A small-body create
-      # afterwards succeeding is then real evidence it rides a separate lane,
-      # not a vacuous pass from never having spent the edit budget at all.
+      # which DO count against it (see the next test), and must NOT count
+      # against the (also override = 2) handshake lane. A small-body create
+      # afterwards succeeding is then real evidence it rides a separate,
+      # still-full lane: if genesis_create_class/1 were hardcoded to
+      # :handshake, these two "oversized" pushes would instead spend the
+      # handshake budget themselves, and the small-body probe below would be
+      # denied (see the sabotage proof in the #1409 report).
       oversized_b64 = Base.encode64(:binary.copy(<<0>>, 25_000))
 
       push(socket, "crdt_create", %{
@@ -1772,9 +1788,10 @@ defmodule EngramWeb.CrdtChannelTest do
         "b64" => oversized_b64
       })
 
-      # The edit lane is now spent. A THIRD create, this time with a small b64
-      # genesis seed, must still succeed — proving small-body creates ride the
-      # separate (larger) handshake lane rather than the exhausted edit lane.
+      # The edit lane is now spent, and the handshake lane hasn't been
+      # touched. A THIRD create, this time with a small b64 genesis seed,
+      # must still succeed — proving small-body creates ride the separate,
+      # still-full handshake lane rather than the exhausted edit lane.
       id = Ecto.UUID.generate()
 
       ref =
@@ -1922,18 +1939,25 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   defp wait_until(condition, deadline \\ nil) do
-    deadline = deadline || System.monotonic_time(:millisecond) + 500
+    now = System.monotonic_time(:millisecond)
+    deadline = deadline || now + 500
+    do_wait_until(condition, deadline, deadline - now)
+  end
 
+  # `budget_ms` is captured once, in wait_until/2, from the deadline actually
+  # in effect (default 500ms or a caller-supplied one) — so the flunk message
+  # below reports what this call was really given, not a hardcoded default.
+  defp do_wait_until(condition, deadline, budget_ms) do
     if condition.() do
       :ok
     else
       now = System.monotonic_time(:millisecond)
 
       if now >= deadline do
-        flunk("wait_until: condition never became true within 500ms")
+        flunk("wait_until: condition never became true within #{budget_ms}ms")
       else
         Process.sleep(10)
-        wait_until(condition, deadline)
+        do_wait_until(condition, deadline, budget_ms)
       end
     end
   end

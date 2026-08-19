@@ -902,10 +902,15 @@ defmodule EngramWeb.CrdtChannel do
         end
       end)
 
-    # Only a real write can have left a racing room stale. The other two
-    # seed_against/6 clauses wrote nothing, so any room that exists is still
-    # consistent with the row and killing it would drop a live client's session
-    # for free.
+    # `wrote?` means "we took the write path" (seed_against/6's clause 2),
+    # not "a write definitely landed" — checkpoint/5 can still no-op inside
+    # that clause (a rotation skip, {:skip, :no_crdt_state}, {:abort, _}).
+    # Evicting on the write path anyway is deliberate: the alternative is
+    # leaving a room that raced the write silently stale, which is the more
+    # harmful direction. Worst case here is an innocent live room getting
+    # evicted and re-binding, costing a re-handshake the client already
+    # handles (#1409). The other two seed_against/6 clauses never take the
+    # write path, so a room racing THEM is left alone.
     if wrote?, do: evict_racing_room(note_id)
 
     seeded
