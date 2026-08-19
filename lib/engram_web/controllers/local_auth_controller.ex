@@ -43,31 +43,37 @@ defmodule EngramWeb.LocalAuthController do
   #      host's scheme. Handled by the host check below rather than ignored:
   #      the alternative (trusting the canonical scheme for every host) breaks
   #      login outright on the plaintext one.
-  defp refresh_cookie_opts(conn) do
-    %URI{scheme: scheme, host: canonical_host} = URI.parse(EngramWeb.Endpoint.url())
+  defp refresh_cookie_opts(_conn) do
+    %URI{scheme: scheme} = URI.parse(EngramWeb.Endpoint.url())
 
-    # BOTH conditions, and the host half is not redundant.
+    # Canonical scheme ONLY. Deliberately not also comparing `conn.host`.
     #
-    # `PHX_HOST` is documented as comma-separated with the FIRST entry
-    # canonical (`.env.example` gives `engram.example.com,10.0.20.5:4000` as an
-    # example), and `HostOrigins.parse/1` admits http AND https for EVERY entry.
-    # So a self-host box is routinely reachable on a TLS public name and a
-    # plaintext LAN address at the same time, and only the canonical one is
-    # described by `Endpoint.url()`.
+    # An earlier version required `conn.host == canonical_host` as well, to
+    # protect the documented mixed deployment: `PHX_HOST` is comma-separated
+    # with the FIRST entry canonical (`.env.example` ships
+    # `engram.example.com,10.0.20.5:4000`), and `HostOrigins.parse/1` admits
+    # http AND https for EVERY entry, so a self-host box is routinely reachable
+    # on a TLS public name and a plaintext LAN address at once. Requiring the
+    # host match kept the LAN user working.
     #
-    # Deriving `secure` from the canonical scheme alone therefore marks the
-    # cookie Secure for the LAN user too. Their login looks fine (201 + a valid
-    # access token), the browser silently discards a Secure cookie sent over
-    # cleartext, and `/api/auth/refresh` 401s forever once that token expires.
-    # Comparing the dialed host keeps the flag tied to the connection it was
-    # actually derived for.
+    # It also silently dropped `Secure` on any OTHER TLS hostname. A self-hoster
+    # serving two HTTPS names got a 30-day refresh token with no `Secure` flag
+    # on the second, and `SameSite=Lax` does not cover that: Lax still sends the
+    # cookie on top-level navigations, so forcing the victim to
+    # `http://second-host/api/auth/refresh` puts it on the wire in cleartext.
     #
-    # Safe against a forged Host: a browser sets Host from the URL the user
-    # navigated to, so an attacker cannot choose the victim's value. And the
-    # only reachable mistake is the SAFE direction — an unexpected host yields
-    # `secure: false`, which is exactly the pre-existing behaviour, never a
-    # downgrade of a cookie that would otherwise be protected.
-    secure = scheme == "https" and conn.host == canonical_host
+    # Chosen trade-off: protect the credential, accept the break. If a
+    # deployment is canonically HTTPS, every refresh cookie it issues is marked
+    # Secure regardless of which host was dialed.
+    #
+    # CONSEQUENCE, so nobody debugs this twice: on a mixed deployment the
+    # plaintext alias no longer works for login persistence. The browser accepts
+    # the 201 and the access token, then silently discards the Secure cookie,
+    # and `/api/auth/refresh` 401s once the access token expires — perhaps an
+    # hour later, far from the cause. That is intended. The fix for an operator
+    # is to serve the alias over TLS too (or drop it from PHX_HOST), NOT to
+    # reintroduce the host comparison.
+    secure = scheme == "https"
 
     Keyword.put(@refresh_cookie_base, :secure, secure)
   end

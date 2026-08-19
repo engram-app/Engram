@@ -87,26 +87,34 @@ defmodule EngramWeb.LocalAuthControllerTest do
       end)
     end
 
-    test "no Secure flag when the request arrives on a NON-canonical host", %{conn: conn} do
-      # Regression guard. PHX_HOST is comma-separated with the first entry
-      # canonical (`.env.example` ships `engram.example.com,10.0.20.5:4000` as
-      # the example), and HostOrigins admits http AND https for every entry, so
-      # a self-host box is routinely reachable on a TLS public name AND a
-      # plaintext LAN address at once.
+    test "Secure is set on a NON-canonical host too", %{conn: conn} do
+      # Pins the deliberate trade-off, because the obvious "fix" is to make this
+      # test's assertion the opposite.
       #
-      # Deriving `secure` from the canonical scheme alone marked the cookie
-      # Secure for the LAN user too. Login still returned 201 with a valid
-      # access token, so it looked fine, but the browser silently dropped a
-      # Secure cookie sent over cleartext and /api/auth/refresh 401'd forever
-      # once that token expired. Worse than the bug this fix exists for,
-      # because it is a hard break rather than a weakened flag.
+      # PHX_HOST is comma-separated with the first entry canonical
+      # (`.env.example` ships `engram.example.com,10.0.20.5:4000`), and
+      # HostOrigins admits http AND https for every entry, so a self-host box is
+      # routinely reachable on several names at once. An earlier version keyed
+      # `secure` off `conn.host == canonical_host` so the plaintext LAN alias
+      # kept working — and thereby dropped Secure on any OTHER TLS hostname,
+      # handing out a 30-day refresh token in the clear on a host that was
+      # perfectly capable of protecting it. SameSite=Lax does not cover that:
+      # Lax still rides top-level navigations, so a forced navigation to
+      # http://other-host/api/auth/refresh leaks it to the wire.
+      #
+      # The credential wins. A canonically-HTTPS deployment marks every refresh
+      # cookie Secure, whatever host was dialed. The accepted cost is that a
+      # plaintext alias can no longer persist a login: the browser takes the 201
+      # and the access token, silently discards the Secure cookie, and
+      # /api/auth/refresh 401s once the access token expires. Operators fix that
+      # by serving the alias over TLS, not by reintroducing the host check.
       with_endpoint_url("https://engram.example", fn ->
         conn =
           %{conn | host: "10.0.20.5"}
           |> post("/api/auth/register", %{email: "lan@test.com", password: "StrongPass123!"})
 
         assert json_response(conn, 201)
-        refute conn.resp_cookies["refresh_token"].secure
+        assert conn.resp_cookies["refresh_token"].secure == true
       end)
     end
 
