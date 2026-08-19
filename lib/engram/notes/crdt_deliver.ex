@@ -89,8 +89,12 @@ defmodule Engram.Notes.CrdtDeliver do
   # the plugin now leaves idle notes room-free under the fan-out model).
   #
   # Broadcasts the FULL committed state (not a delta) so a device that has never
-  # seen the note converges from an empty doc; the client skips it while the note
-  # is live-bound (its own room owns it). Emitted AFTER the `note_changed` upsert
+  # seen the note converges from an empty doc. It is delivered to EVERY device on
+  # the vault topic, live-bound ones included — `applyPushedNoteUpdate` applies
+  # while live-bound too (#256/#224), it does not skip. That is safe rather than
+  # merely tolerable: the bytes are the note's own committed lineage, so a
+  # device that already holds them re-applies a Yjs no-op. Emitted AFTER the
+  # `note_changed` upsert
   # broadcast, on the SAME `sync:` topic (ordered delivery), so the client has
   # already mapped + confirmed the note_id before these bytes arrive. Best-effort
   # and post-commit like the rest of deliver-out: a state-less (legacy/lazy) row
@@ -102,9 +106,9 @@ defmodule Engram.Notes.CrdtDeliver do
   # GenServer — never fires for it. That is the same first-delivery gap this
   # function already covers for REST/MCP writes, so it reuses this rather than
   # growing a second emitter. No origin filtering here or there: the `sync:`
-  # topic is per-vault, the originating device suppresses client-side (applies
-  # with REMOTE_ORIGIN, and skips entirely while the note is live-bound), and a
-  # Yjs re-apply of its own state is a no-op.
+  # topic is per-vault, so the originating device receives its own bytes back
+  # and suppresses client-side by applying with REMOTE_ORIGIN (no re-broadcast)
+  # — and a Yjs re-apply of state it already holds is a no-op.
   @doc """
   Broadcast `note_id`'s committed Yjs state on the vault's `sync:` topic so
   devices with no open room for it converge room-free. Paced by `FanoutPacer`.

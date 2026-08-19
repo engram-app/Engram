@@ -193,6 +193,63 @@ defmodule EngramWeb.CrdtChannelTest do
       assert CrdtRegistry.lookup(id) == nil
     end
 
+    test "folds a tail row written in the seed window instead of stranding it", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # #1409 H2, data loss. In the seed window device B can open the note,
+      # have bind/3 hydrate the still-bare row into an EMPTY doc, type, and land
+      # a tail row — while notes.content is STILL "" because the room's
+      # checkpoint is debounced by seconds. A seed that reads "" and writes only
+      # the genesis lineage strands that edit: it bumps seq (so an offline
+      # device pages our content and advances past it) and then
+      # evict_racing_room/1 kills the room whose debounced checkpoint was the
+      # only thing that would ever have materialized it.
+      id = Ecto.UUID.generate()
+      ref1 = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/tail.md"})
+      assert_reply ref1, :ok, %{doc_id: ^id}
+
+      insert_tail_row(user, vault, id, "TAILEDIT")
+      assert tail_count(user) == 1
+
+      ref2 =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/tail.md",
+          "b64" => frame_for_content("GENESIS")
+        })
+
+      assert_reply ref2, :ok, %{doc_id: ^id, seeded: true}
+
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content =~ "TAILEDIT", "the tail edit was destroyed by the seed"
+      assert note.content =~ "GENESIS"
+
+      # Folded means pruned: prune_ids carried exactly that row, so the log is
+      # empty rather than holding an edit already in the snapshot.
+      assert tail_count(user) == 0
+    end
+
+    test "a non-markdown genesis frame is never seeded", %{socket: socket, vault: _vault} do
+      # #1409 M3. CRDT projects to notes.content for markdown only —
+      # checkpoint/5 routes a .canvas doc to do_structural_checkpoint, which
+      # never touches content. Its frame therefore projects "" against a fresh
+      # (also "") row, hits the idempotent clause, and would report seeded: true
+      # having written nothing, so the client stamps its body as synced and
+      # stops. Unreachable today only because the plugin gates .md client-side.
+      id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/board.canvas",
+          "b64" => frame_for_content("")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false}
+    end
+
     test "a declined seed does NOT fan out", %{socket: socket, user: user, vault: vault} do
       # The fan-out rides the write path only. A create whose row already holds
       # a DIFFERENT body writes nothing, so broadcasting would push state no
@@ -1970,6 +2027,31 @@ defmodule EngramWeb.CrdtChannelTest do
       end)
 
     n
+  end
+
+  # Append a durable tail-log row for `note_id` carrying `text` on its own Yjs
+  # lineage — what `CrdtPersistence.update_v1/4` writes for one client delta,
+  # without needing a live room to produce it.
+  defp insert_tail_row(user, vault, note_id, text) do
+    doc = CrdtBridge.new_doc()
+    :ok = CrdtBridge.ingest_plaintext(doc, text)
+    {:ok, update} = Yex.encode_state_as_update(doc)
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(update, user, note_id)
+
+    {:ok, row} =
+      Repo.with_tenant(user.id, fn ->
+        %CrdtUpdateLog{}
+        |> CrdtUpdateLog.changeset(%{
+          note_id: note_id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: nonce
+        })
+        |> Repo.insert!()
+      end)
+
+    row
   end
 
   # A base64 Yjs update that, applied to a fresh empty doc, ingests `content`

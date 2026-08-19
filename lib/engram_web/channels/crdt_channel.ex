@@ -26,6 +26,7 @@ defmodule EngramWeb.CrdtChannel do
   alias Engram.Notes.CrdtCheckpoint
   alias Engram.Notes.CrdtDeliver
   alias Engram.Notes.CrdtIndexRegistry
+  alias Engram.Notes.CrdtPersistence
   alias Engram.Notes.CrdtRegistry
   alias Engram.Notes.CrdtTransport
   alias Yex.Sync.SharedDoc
@@ -348,7 +349,7 @@ defmodule EngramWeb.CrdtChannel do
              origin: socket.assigns[:client_type]
            ) do
         {:ok, note} ->
-          seeded = maybe_seed_detached(user, vault, note.id, b64)
+          seeded = maybe_seed_detached(user, vault, note, b64)
           {:reply, {:ok, %{doc_id: note.id, seeded: seeded}}, socket}
 
         {:adopted, note} ->
@@ -840,11 +841,21 @@ defmodule EngramWeb.CrdtChannel do
   # makes the plugin stamp its local body as the synced baseline and stop, so a
   # skipped checkpoint would silently lose the file with no later bind to replay
   # from. Every `false` path falls back to the client's existing crdt_msg seed.
-  defp maybe_seed_detached(_user, _vault, _note_id, nil), do: false
+  defp maybe_seed_detached(_user, _vault, _note, nil), do: false
 
-  defp maybe_seed_detached(user, vault, note_id, b64) when is_binary(b64) do
+  defp maybe_seed_detached(user, vault, %{id: note_id} = note, b64) when is_binary(b64) do
     with {:ok, frame} <- decode_frame(b64),
          :ok <- guard_frame(frame),
+         # CRDT projects to `notes.content` for MARKDOWN only — `checkpoint/5`
+         # routes a non-`.md` doc to `do_structural_checkpoint`, which never
+         # touches content. A `.canvas` genesis frame therefore projects
+         # `text_of/1 == ""` against a fresh (also `""`) row, hits
+         # seed_against/6's idempotent clause, and reports `seeded: true`
+         # having written nothing — the client then stamps its body as synced
+         # and stops. Unreachable today only because the plugin gates `.md`
+         # client-side; the server's contract must not depend on that (#1409).
+         # Same `.md` test CrdtDeliver and CrdtCheckpoint already use.
+         true <- markdown_path?(note.path),
          {:ok, {:sync, {:sync_update, update}}} <- Yex.Sync.message_decode(frame),
          # Two writers, one document: a room holds the doc in memory and would
          # later checkpoint over anything written behind its back. CheckpointNote
@@ -862,13 +873,15 @@ defmodule EngramWeb.CrdtChannel do
          # write instead, by `evict_racing_room/1` below (#1409).
          nil <- CrdtRegistry.lookup(note_id),
          {:ok, doc} <- apply_detached(update) do
-      seed_detached(user, vault, note_id, doc, CrdtBridge.text_of(doc))
+      seed_detached(user, vault, note_id, doc)
     else
       _ -> false
     end
   end
 
-  defp maybe_seed_detached(_user, _vault, _note_id, _b64), do: false
+  defp maybe_seed_detached(_user, _vault, _note, _b64), do: false
+
+  defp markdown_path?(path), do: is_binary(path) and String.ends_with?(path, ".md")
 
   # Test-only seam (#1409): fires just before the write transaction below, so a
   # test can register a room in exactly the window `evict_racing_room/1` exists
@@ -878,44 +891,72 @@ defmodule EngramWeb.CrdtChannel do
   # CrdtCheckpoint.interleave_hook/1 and Notes.interleave_hook/1. `nil` in
   # every environment that doesn't arm it.
   #
-  # The row content that picks seed_against/6's clause is read INSIDE the same
-  # transaction as the write, as late as possible — hence a separate function
-  # from maybe_seed_detached/4 rather than another `with` step there. Reading it
-  # earlier (the original round-2 shape) leaves a gap one level up: a REST/MCP
-  # write landing between that read and the write would still route to the
-  # empty-row clause and double the body via union_with_row_state (#846).
-  defp seed_detached(user, vault, note_id, doc, expected) do
+  # SHORT transaction, then the write OUTSIDE it (#1409 H3). The earlier shape
+  # wrapped `checkpoint/5` in this function's own `Repo.with_tenant`, which made
+  # checkpoint's inner one re-entrant: ONE pooled connection was then held across
+  # two decrypting reads, a version read, a row read, an AES encrypt of the full
+  # state, an `update_all` and two Oban inserts — the measured 7.5-101ms, per
+  # note, on the channel process. At import scale that is the 2026-07-09
+  # pool-exhaustion shape this whole change cites as its motivation.
+  #
+  # `Workers.CheckpointNote` already solved this exact problem the same way:
+  # `rebuild_detached/3` reads the row + folds the tail in ONE short tenant
+  # transaction and returns a token; `finalize/1` then calls `checkpoint/5`,
+  # which opens its OWN transaction. Two short holds instead of one long one, and
+  # checkpoint's post-commit work (the EmbedNote/ExtractNoteLinks enqueues and
+  # `CrdtDeliver.announce_ready`, which sit AFTER its `with_tenant` block) goes
+  # back to being genuinely post-commit instead of firing inside our outer txn.
+  #
+  # Splitting the row read out of the write's transaction costs no safety: at
+  # READ COMMITTED a concurrent commit is visible to the NEXT statement even
+  # inside one transaction, so the enclosing txn never fenced the clause
+  # selector. `checkpoint_write/6` is what actually fences — unconditionally on
+  # `snapshot_fence/2` (the row's `seq` + `crdt_state_nonce` pre-image, #1360)
+  # and, layered on top, the `captured_version` CAS (#902). A REST/MCP write
+  # landing in the gap fails one of those, the write aborts, `seed_landed?/4`
+  # reports false, and the client falls back to its crdt_msg seed.
+  #
+  # The interleave hook fires before the fold so a test can register a room in
+  # the window `evict_racing_room/1` cleans up after. Reuses
+  # CheckpointInterleave's `:checkpoint_interleave_hook` env key / park-release
+  # protocol — same convention as CrdtCheckpoint.interleave_hook/1 and
+  # Notes.interleave_hook/1. `nil` in every environment that doesn't arm it.
+  defp seed_detached(user, vault, note_id, doc) do
     interleave_hook(:genesis_seed_before_write)
 
-    # NOTE (acknowledged, not fixed): this `with_tenant` makes `checkpoint/5`'s
-    # OWN inner `with_tenant` call re-entrant (same tenant, already in a
-    # transaction — see Repo.with_tenant/2's doc), so `checkpoint/5`'s Oban
-    # enqueues (EmbedNote, ExtractNoteLinks) and its `CrdtDeliver.announce_ready`
-    # broadcast fire BEFORE this transaction commits, not after. Self-healing for
-    # CRDT clients (they converge on the next catch-up regardless); a plain REST
-    # reader could in principle observe a sub-ms window where the job/broadcast
-    # fired but the row isn't visible yet.
-    {:ok, {seeded, wrote?}} =
-      Repo.with_tenant(user.id, fn ->
-        case Notes.get_note_by_id(user, vault, note_id) do
-          {:ok, note} -> seed_against(user, vault, note_id, doc, expected, note.content)
-          _ -> {false, false}
-        end
-      end)
+    {seeded, wrote?} =
+      case fold_row_and_tail(user, vault, note_id, doc) do
+        {:ok, row_content, prune_ids} ->
+          # `expected` is read AFTER the fold, not before: with tail rows folded
+          # in, the doc projects genesis + those edits, and that union is what
+          # the checkpoint writes and what `seed_landed?/4` must compare against.
+          seed_against(
+            user,
+            vault,
+            note_id,
+            doc,
+            CrdtBridge.text_of(doc),
+            row_content,
+            prune_ids
+          )
 
-    # `wrote?` means "we took the write path" (seed_against/6's clause 2),
-    # not "a write definitely landed" — checkpoint/5 can still no-op inside
-    # that clause (a rotation skip, {:skip, :no_crdt_state}, {:abort, _}).
-    # Evicting on the write path anyway is deliberate: the alternative is
-    # leaving a room that raced the write silently stale, which is the more
-    # harmful direction. Worst case here is an innocent live room getting
-    # evicted and re-binding, costing a re-handshake the client already
-    # handles (#1409). The other two seed_against/6 clauses never take the
-    # write path, so a room racing THEM is left alone.
-    if wrote? do
-      # Evict BEFORE the fan-out: a client still live-bound to that room skips
-      # pushed state (its own room owns the note), so the broadcast below only
-      # reaches it once the stale room is gone.
+        :error ->
+          {false, false}
+      end
+
+    # A CONFIRMED write, not merely an attempted one (#1409 M2). `wrote?` alone
+    # is "we took the write clause" — `checkpoint/5` can still silently no-op
+    # inside it (a DEK rotation skip, `{:skip, :no_crdt_state}`,
+    # `{:skip, :stale_snapshot}`, `{:abort, _}`), and evicting on the attempt
+    # kills a room that is still perfectly consistent with the row. That is not
+    # free: `handle_info({:DOWN, ...})` only clears server-side assigns, so no
+    # frame reaches the socket and an open-but-idle editor stays bound to a dead
+    # room until its next outbound message. `seeded` alone is not the gate
+    # either — it is `true` for the idempotent no-write clause, whose racing room
+    # is equally innocent. Both together mean "we changed the row", which is
+    # exactly when a racing room can be stale and the fan-out has something true
+    # to say.
+    if wrote? and seeded do
       evict_racing_room(note_id)
 
       # The other half of removing the room (#1409, found by the first paired
@@ -946,6 +987,41 @@ defmodule EngramWeb.CrdtChannel do
       )
 
       false
+  end
+
+  # ONE short tenant transaction: read the clause selector and fold the durable
+  # tail-log into `doc`. Returns `{:ok, row_content, prune_ids}`, where
+  # `prune_ids` is the EXACT set of tail rows folded — `checkpoint/5` then prunes
+  # only those. Verbatim `CheckpointNote.rebuild_detached/3`'s recipe, for
+  # verbatim the same reason.
+  #
+  # Folding the tail is not optional (#1409 H2, data loss). In the seed window a
+  # device can open the note, have `bind/3` hydrate the still-bare row into an
+  # EMPTY doc, type, and land a tail row via `update_v1/4` — while
+  # `notes.content` is STILL `""`, because the room's checkpoint is debounced by
+  # seconds. Without this fold our txn sees `""`, takes the write clause, and
+  # `union_with_row_state/3` folds the row's (absent) snapshot with the genesis
+  # doc ALONE. We would then write content + a fresh `seq` and
+  # `evict_racing_room/1` would brutal-kill the room whose debounced checkpoint
+  # was the only thing that would ever have materialized that edit. Nothing
+  # downstream recovers it: `fanout_idle/3` reads `crdt_state_ciphertext` only,
+  # and `crdt_catchup_since` ships `notes.content`, so an offline device pages
+  # our seq, writes our content, advances its cursor, and the edit is gone.
+  #
+  # Empty on the happy path (a genesis note has no tail), so this costs one
+  # indexed, usually-zero-row query.
+  defp fold_row_and_tail(user, vault, note_id, doc) do
+    {:ok, result} =
+      Repo.with_tenant(user.id, fn ->
+        case Notes.get_note_by_id(user, vault, note_id) do
+          # replay_tail/3 must run inside this with_tenant — it queries
+          # CrdtUpdateLog, which is RLS-scoped.
+          {:ok, note} -> {:ok, note.content, CrdtPersistence.replay_tail(doc, user, note_id)}
+          _ -> :error
+        end
+      end)
+
+    result
   end
 
   # Post-commit cleanup of the create-race (#1409). The early `lookup` in
@@ -997,16 +1073,16 @@ defmodule EngramWeb.CrdtChannel do
   # lineage afterwards no longer merges as a no-op, Yjs APPENDS it, and the body
   # doubles. `crdt_create` is idempotent and clients do retry it, so the detached
   # path needs the same guard — taken against the row, which is the durable
-  # equivalent of the room's in-memory doc. `row_content` (the 6th arg) is read
-  # by seed_detached/5 inside the SAME transaction as the write and as late as
-  # possible, never before it — a value read earlier could be stale by the time
-  # this dispatches (a REST/MCP write landing in that gap would otherwise still
-  # route to the `""` clause and double the body via `union_with_row_state`, the
-  # #1409 review round-3 fix).
+  # equivalent of the room's in-memory doc. `row_content` and `prune_ids` both
+  # come from `fold_row_and_tail/4`, read as late as possible: a value read
+  # earlier could be stale by the time this dispatches. The write itself is
+  # fenced independently (`snapshot_fence/2` always, `captured_version` CAS on
+  # top), so a REST/MCP write landing in the remaining gap aborts our write
+  # rather than doubling the body via `union_with_row_state` (#846).
   #
-  # Returns `{seeded?, wrote?}`. `wrote?` is what tells seed_detached/5 whether
-  # a racing room can have gone stale and needs evicting — only the middle
-  # clause writes.
+  # Returns `{seeded?, wrote?}`. `seeded?` is the honest read-back the reply
+  # carries; `wrote?` says only that the write CLAUSE ran. seed_detached/5 needs
+  # both to tell a confirmed row change from a no-op — see its eviction gate.
   #
   # Clause ORDER is load-bearing, not interchangeable: the first clause's
   # `expected, expected` pattern-match-equality only fires when the row
@@ -1020,21 +1096,22 @@ defmodule EngramWeb.CrdtChannel do
   #
   # Already exactly this body: an idempotent retry with nothing to write. Report
   # true — the client's file IS synced, which is what `seeded` means.
-  defp seed_against(_user, _vault, _note_id, _doc, expected, expected), do: {true, false}
+  defp seed_against(_user, _vault, _note_id, _doc, expected, expected, _prune_ids),
+    do: {true, false}
 
-  defp seed_against(user, vault, note_id, doc, expected, "") do
+  defp seed_against(user, vault, note_id, doc, expected, "", prune_ids) do
     captured_version = CrdtCheckpoint.current_version(user.id, note_id)
 
     _ =
       CrdtCheckpoint.checkpoint(user.id, vault.id, note_id, doc,
         captured_version: captured_version,
-        # We are a DETACHED caller, like CheckpointNote.finalize/1: `doc` was
-        # built from the client's frame, not from replay_tail, so it folded ZERO
-        # tail rows and must prune zero. Omitting this takes checkpoint/5's
-        # LIVE-ROOM watermark fallback, which deletes every tail row up to now —
-        # including an edit taken by a room that registered in our write window,
-        # which our snapshot does not contain. #1409.
-        prune_ids: []
+        # We are a DETACHED caller, exactly like CheckpointNote.finalize/1:
+        # prune EXACTLY the tail rows `fold_row_and_tail/4` folded into `doc`,
+        # never a range. Omitting this takes checkpoint/5's LIVE-ROOM watermark
+        # fallback, which deletes every tail row up to now — including one a
+        # room appended after our fold, which our snapshot does not contain
+        # (#285's exact failure mode, reached from a new caller). #1409.
+        prune_ids: prune_ids
       )
 
     {seed_landed?(user, vault, note_id, expected), true}
@@ -1043,7 +1120,8 @@ defmodule EngramWeb.CrdtChannel do
   # The row already carries a DIFFERENT body — a concurrent write landed between
   # genesis and here. Merging two lineages is exactly what a room is for; decline
   # and let the client's crdt_msg seed go through one.
-  defp seed_against(_user, _vault, _note_id, _doc, _expected, _row_content), do: {false, false}
+  defp seed_against(_user, _vault, _note_id, _doc, _expected, _row_content, _prune_ids),
+    do: {false, false}
 
   # Same convention as CrdtCheckpoint.interleave_hook/1 and
   # Notes.interleave_hook/1 (SAME `:checkpoint_interleave_hook` app env key —
