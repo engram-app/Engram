@@ -417,7 +417,7 @@ Two traps worth carrying elsewhere:
   refuses to arm any PR carrying a `0.X → 0.Y` transition (engram-infra#909).
   engram has 13 deps on `~> 0.x`.
 
-## test_66: a lying assertion message (observed once, 2026-08-18)
+## test_66: a lying assertion message (2 hits in 3 runs, 2026-08-18)
 
 `test_66_remote_logging_toggle::test_disable_stops_flush` failed on
 `e2e-clerk` with:
@@ -436,6 +436,27 @@ the same pipeline and passed in the same run, at 31% while test_66 failed at
 84%, so the pipeline was working the whole time.
 
 Non-deterministic: the identical job passed on rerun with no code change.
+
+**Two hits within ~45 minutes, on unrelated PRs in different repos**, identical
+`assert []`:
+
+| Run | PR | What it changes |
+|---|---|---|
+| 32197136622 | Engram #1418 | adds three e2e test files |
+| 32199914733 | Engram-obsidian #449 | one guard clause in `sync.ts` |
+
+Neither can touch remote logging. #449 only alters a branch gated on
+`content === "" && content_hash`, and test_66 pushes real content. So a hit on
+YOUR PR is not evidence your PR did anything.
+
+Leading hypothesis, unproven and tracked in #1421: `flush_remote_logs`
+(`cdp.py`) waits a **fixed 600 ms** for the POST, and its own docstring says
+"bump it on slow CI shapes" — a fixed sleep standing in for a round-trip that
+varies with load. Both hits landed while several PRs ran concurrently on the
+shared pool. The competing hypothesis is that the flush is fine and
+`push_file_now` sometimes emits no rlog lines at all, in which case the buffer
+is legitimately empty. Checking whether ANY /logs rows exist for the session
+user at failure time separates the two.
 
 ### Why it is easy to misattribute to your own diff
 
