@@ -398,6 +398,87 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_reply ref2, :ok, %{doc_id: ^id, seeded: true}
       assert CrdtRegistry.lookup(id) == room
     end
+
+    test "a DEK rotation in progress reports seeded: false and leaves the row empty", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # CrdtCheckpoint.checkpoint/5 returns :ok when it SKIPS for rotation
+      # (#1341). Building the reply from that :ok would tell the plugin the file
+      # is synced while nothing was written — and a fresh import has no later
+      # bind to replay from, so the note would just be empty forever.
+      id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        user
+        |> Ecto.Changeset.change(dek_rotation_locked_at: DateTime.utc_now())
+        |> Repo.update()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/rotating.md",
+          "b64" => frame_for_content("must not be reported as synced")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false}
+
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == ""
+    end
+
+    test "a new room started after eviction re-binds against the seeded row (STEP2 carries the body)",
+         %{socket: socket, user: user, vault: vault} do
+      # The eviction test above ("a room that registers in the write window is
+      # evicted after the seed commits") proves the racing room dies. It does
+      # NOT prove the entire point of killing it: that the REPLACEMENT room a
+      # client's next STEP1 opens actually re-binds against the row the seed
+      # just committed, rather than an empty one. Close that gap by driving a
+      # real client through crdt_msg after the eviction, same as the
+      # `describe "crdt_msg"` STEP1/STEP2 idiom elsewhere in this file.
+      #
+      # Reuses the exact race setup from the eviction test: park the seed right
+      # before its write via the same CheckpointInterleave seam, register a
+      # room in the gap, then release.
+      id = Ecto.UUID.generate()
+
+      on_exit(CheckpointInterleave.arm(:genesis_seed_before_write))
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/race-rebind.md",
+          "b64" => frame_for_content("seeded body")
+        })
+
+      parked = CheckpointInterleave.await_parked(:genesis_seed_before_write, socket.channel_pid)
+
+      {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, id)
+      on_exit(fn -> CrdtRegistry.terminate_room(id) end)
+      room_ref = Process.monitor(room)
+
+      CheckpointInterleave.release(:genesis_seed_before_write, parked)
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true}
+      assert_note_content_eventually(user, vault, id, "seeded body")
+
+      # The racer is confirmed dead before we drive the replacement — otherwise
+      # a STEP1 below could route through the still-alive racer instead of
+      # exercising the fresh bind this test is actually about.
+      assert_receive {:DOWN, ^room_ref, :process, ^room, _}, 2_000
+      assert CrdtRegistry.lookup(id) == nil
+
+      client = CrdtBridge.new_doc()
+      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+      {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+      push(socket, "crdt_msg", %{"doc_id" => id, "b64" => Base.encode64(frame)})
+
+      assert_push "crdt_msg", %{"doc_id" => ^id, "b64" => b64}, 3000
+      {:ok, {:sync, {:sync_step2, update}}} = Yex.Sync.message_decode(Base.decode64!(b64))
+      :ok = Yex.apply_update(client, update)
+      assert CrdtBridge.text_of(client) == "seeded body"
+    end
   end
 
   describe "crdt_delete" do
