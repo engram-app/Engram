@@ -333,7 +333,7 @@ defmodule EngramWeb.CrdtChannel do
   # sharing that lane is intentional, not accidental reuse. They are still
   # bounded (not exempt): the 2400/10s ceiling applies same as real STEP1s.
   @impl true
-  def handle_in("crdt_create", %{"doc_id" => doc_id, "path" => path}, socket) do
+  def handle_in("crdt_create", %{"doc_id" => doc_id, "path" => path} = payload, socket) do
     with :ok <- check_rate(socket, :handshake),
          {:ok, note_id} <- cast_doc_id(doc_id),
          :ok <- validate_create_path(path) do
@@ -344,7 +344,8 @@ defmodule EngramWeb.CrdtChannel do
              origin: socket.assigns[:client_type]
            ) do
         {:ok, note} ->
-          {:reply, {:ok, %{doc_id: note.id, seeded: false}}, socket}
+          seeded = maybe_seed_detached(user, vault, note.id, Map.get(payload, "b64"))
+          {:reply, {:ok, %{doc_id: note.id, seeded: seeded}}, socket}
 
         {:adopted, note} ->
           # Unchanged behaviour for the single create: the client's crdtCreate
@@ -818,6 +819,104 @@ defmodule EngramWeb.CrdtChannel do
     end
 
     :ok
+  end
+
+  # Genesis-time content seed WITHOUT a room (#1409). A brand-new note has no
+  # collaborators — no awareness peers, no fan-out subscribers, nobody to
+  # serialize against — so paying for a SharedDoc actor (plus its :global name,
+  # checkpoint timer, observer monitor and LRU slot) to perform what is really an
+  # insert is what made a 1,700-file import allocate ~2,000 processes and 324 MB.
+  # A throwaway Yex.Doc runs the SAME apply-and-checkpoint code the room's
+  # persistence layer runs, then goes out of scope.
+  #
+  # Returns whether the body is DURABLY READABLE afterwards, not whether we tried.
+  # `CrdtCheckpoint.checkpoint/5` deliberately never raises and returns `:ok` even
+  # when it skips (DEK rotation in progress, deleted user — see #1341), which is
+  # correct for its room-terminate caller and actively wrong here: a `true` reply
+  # makes the plugin stamp its local body as the synced baseline and stop, so a
+  # skipped checkpoint would silently lose the file with no later bind to replay
+  # from. Every `false` path falls back to the client's existing crdt_msg seed.
+  defp maybe_seed_detached(_user, _vault, _note_id, nil), do: false
+
+  defp maybe_seed_detached(user, vault, note_id, b64) when is_binary(b64) do
+    with {:ok, frame} <- decode_frame(b64),
+         :ok <- guard_frame(frame),
+         {:ok, {:sync, {:sync_update, update}}} <- Yex.Sync.message_decode(frame),
+         # Two writers, one document: a room holds the doc in memory and would
+         # later checkpoint over anything written behind its back. CheckpointNote
+         # snoozes on this exact condition (checkpoint_note.ex:50); a channel
+         # cannot snooze, so we decline and let the client's crdt_msg path — which
+         # goes THROUGH the room — do it.
+         nil <- CrdtRegistry.lookup(note_id),
+         {:ok, doc} <- apply_detached(update),
+         expected = CrdtBridge.text_of(doc),
+         {:ok, note} <- Notes.get_note_by_id(user, vault, note_id) do
+      seed_empty_row(user, vault, note_id, doc, expected, note.content)
+    else
+      _ -> false
+    end
+  end
+
+  defp maybe_seed_detached(_user, _vault, _note_id, _b64), do: false
+
+  # #846, the detached twin of seed_genesis_if_empty/3. The room path guards its
+  # apply on the doc still being empty because the create-time checkpoint
+  # FLATTENS the doc to a fresh server lineage: re-applying the client's original
+  # lineage afterwards no longer merges as a no-op, Yjs APPENDS it, and the body
+  # doubles. `crdt_create` is idempotent and clients do retry it, so the detached
+  # path needs the same guard — taken against the row, which is the durable
+  # equivalent of the room's in-memory doc.
+  #
+  # Already exactly this body: an idempotent retry with nothing to write. Report
+  # true — the client's file IS synced, which is what `seeded` means.
+  defp seed_empty_row(_user, _vault, _note_id, _doc, expected, expected), do: true
+
+  defp seed_empty_row(user, vault, note_id, doc, expected, "") do
+    captured_version = CrdtCheckpoint.current_version(user.id, note_id)
+
+    _ =
+      CrdtCheckpoint.checkpoint(user.id, vault.id, note_id, doc,
+        captured_version: captured_version
+      )
+
+    seed_landed?(user, vault, note_id, expected)
+  end
+
+  # The row already carries a DIFFERENT body — a concurrent write landed between
+  # genesis and here. Merging two lineages is exactly what a room is for; decline
+  # and let the client's crdt_msg seed go through one.
+  defp seed_empty_row(_user, _vault, _note_id, _doc, _expected, _row_content), do: false
+
+  # A crafted update can abort inside the y_ex NIF. Contain it: a bad frame costs
+  # this note its seed (the client re-sends over crdt_msg), never the channel.
+  defp apply_detached(update) do
+    doc = CrdtBridge.new_doc()
+
+    case Yex.apply_update(doc, update) do
+      :ok -> {:ok, doc}
+      _ -> :error
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "crdt genesis detached seed apply failed",
+        Metadata.with_category(:warning, :sync, error_kind: Engram.Telemetry.error_kind(e))
+      )
+
+      :error
+  end
+
+  # Read-back, not a rotation pre-check: `checkpoint/5` can skip for reasons
+  # beyond rotation and reports none of them, so the only honest signal is
+  # whether the row now projects the body we applied. One indexed primary-key
+  # read is noise next to the SharedDoc process this replaces. A re-seed of an
+  # already-correct row returns true (idempotent), which is what the #846 retry
+  # case needs.
+  defp seed_landed?(user, vault, note_id, expected) do
+    case Notes.get_note_by_id(user, vault, note_id) do
+      {:ok, %{content: ^expected}} -> true
+      _ -> false
+    end
   end
 
   # Apply the client's genesis frame to the room's doc ONLY if the doc is still

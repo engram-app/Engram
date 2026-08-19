@@ -135,6 +135,128 @@ defmodule EngramWeb.CrdtChannelTest do
     end
   end
 
+  describe "crdt_create with b64 (detached genesis seed)" do
+    test "persists the body and creates NO room", %{socket: socket, user: user, vault: vault} do
+      id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/seeded.md",
+          "b64" => frame_for_content("hello from genesis")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true}
+      assert_note_content_eventually(user, vault, id, "hello from genesis")
+
+      # The whole point: no SharedDoc actor was started for this note.
+      assert CrdtRegistry.lookup(id) == nil
+    end
+
+    test "seeding the same note twice does not double the body", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # #846: a client retry re-sends the create. The create-time checkpoint
+      # flattens the doc to a fresh server lineage, so a naive re-apply APPENDS
+      # rather than merging as a no-op and the body doubles.
+      id = Ecto.UUID.generate()
+      frame = frame_for_content("once")
+      payload = %{"doc_id" => id, "path" => "Notes/retry.md", "b64" => frame}
+
+      ref1 = push(socket, "crdt_create", payload)
+      assert_reply ref1, :ok, %{seeded: true}
+      assert_note_content_eventually(user, vault, id, "once")
+
+      ref2 = push(socket, "crdt_create", payload)
+      assert_reply ref2, :ok, %{doc_id: ^id}
+
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == "once"
+    end
+
+    test "a live room for the note skips the detached seed", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # Two writers, one document. A detached write would be invisible to the
+      # room, which later checkpoints its own in-memory doc over it.
+      #
+      # The realistic shape: the create is retried (it is idempotent) after the
+      # user opened the note in an editor, so a room now exists for it.
+      id = Ecto.UUID.generate()
+      ref1 = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/live.md"})
+      assert_reply ref1, :ok, %{doc_id: ^id}
+
+      {:ok, _room} = CrdtRegistry.ensure_started(user.id, vault.id, id)
+      on_exit(fn -> CrdtRegistry.terminate_room(id) end)
+
+      ref2 =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/live.md",
+          "b64" => frame_for_content("body")
+        })
+
+      assert_reply ref2, :ok, %{doc_id: ^id, seeded: false}
+    end
+
+    test "a detached seed materializes the same content as the same frame through a room", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # The equivalence this design rests on: "detached" must be a deployment
+      # detail, not a second semantics. Same frame, two routes, one result.
+      frame = frame_for_content("# Title\n\nshared body")
+
+      detached_id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => detached_id,
+          "path" => "Notes/detached.md",
+          "b64" => frame
+        })
+
+      assert_reply ref, :ok, %{seeded: true}
+
+      roomed_id = Ecto.UUID.generate()
+      ref2 = push(socket, "crdt_create", %{"doc_id" => roomed_id, "path" => "Notes/roomed.md"})
+      assert_reply ref2, :ok, %{doc_id: ^roomed_id}
+      push(socket, "crdt_msg", %{"doc_id" => roomed_id, "b64" => frame})
+
+      assert_note_content_eventually(user, vault, roomed_id, "# Title\n\nshared body")
+      assert_note_content_eventually(user, vault, detached_id, "# Title\n\nshared body")
+
+      assert {:ok, detached} = Notes.get_note_by_id(user, vault, detached_id)
+      assert {:ok, roomed} = Notes.get_note_by_id(user, vault, roomed_id)
+      assert detached.content == roomed.content
+    end
+
+    test "a malformed b64 creates the row and reports seeded: false", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # The row must still exist: identity and content are separate concerns, and
+      # the client's fallback is a crdt_msg seed against that row.
+      id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/bad.md",
+          "b64" => "!!!not base64!!!"
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false}
+      assert Notes.note_in_vault?(user, vault, id)
+    end
+  end
+
   describe "crdt_delete" do
     test "soft-deletes a note by id and is idempotent", %{
       socket: socket,
