@@ -33,6 +33,60 @@
   Cache-Control: no-cache
 
 /*
+  # Warm the two cross-origin connections the app cannot start without, in
+  # parallel with downloading the bundle instead of serially after it.
+  #
+  # Measured on prod before adding this: ~95ms of DNS + TCP + TLS to each of
+  # these before byte one (~1s on a cold path). The browser cannot begin that
+  # handshake until it discovers it needs the origin, and both discoveries are
+  # LATE: `clerk-auth-provider` is a lazy `import()`, so the Clerk origin is
+  # unknown until the main bundle has downloaded AND parsed, and api.engram.page
+  # is not dialed until the first query fires. A `Link: rel=preconnect` response
+  # header starts both while the bundle is still in flight, so by the time the
+  # code asks, the pipe is warm.
+  #
+  # `crossorigin` is REQUIRED, not decorative, and the reason is NOT "these are
+  # credentialed" — they are not. A preconnect opens a connection into a
+  # specific pool, and a hint that names the wrong pool is silently wasted: the
+  # real request opens a SECOND connection while the hinted one idles. So the
+  # flag has to match what each origin's real fetch actually does. Verified,
+  # rather than assumed, for both:
+  #
+  #   * Clerk — `@clerk/shared`'s loader sets `crossOrigin: "anonymous"` on the
+  #     script tag it injects (loadClerkJsScript.mjs). Bare `crossorigin` IS
+  #     anonymous, so this matches.
+  #   * api.engram.page — saas auth is a Clerk JWT in an `Authorization`
+  #     header, never a cookie, so these are plain (non-credentialed) CORS
+  #     requests, which also use the anonymous pool.
+  #
+  # The one place credentials DO ride cross-origin is `local-auth-provider.tsx`
+  # (`credentials: "include"` on the refresh call) — that is the SELF-HOST local
+  # auth path, where `VITE_API_BASE` is empty and the call is same-origin, and
+  # self-host never serves this file anyway. If saas ever moves to a cookie on
+  # api.engram.page, this becomes `crossorigin="use-credentials"` or the hint
+  # goes back to buying nothing.
+  #
+  # This file is saas-only by construction (Phoenix does not read it, per the
+  # header comment above), which is the reason this lives here rather than as a
+  # <link> in index.html: index.html is shared with the self-host build, and a
+  # self-hoster who deliberately runs no Clerk should not be made to open a
+  # connection to Clerk on every page load.
+  #
+  # On `/*` rather than just `/` and `/index.html` on purpose: a deep link
+  # (`/notes/<id>`, the shared-link case) is matched by request path and would
+  # miss a `/`-scoped rule. The cost of it also landing on `/assets/*` is nil:
+  # browsers only act on Link hints for the main document, and HTTP/2 HPACK
+  # indexes the repeated identical header down to a couple of bytes.
+  #
+  # Calibration on the deep-link case, because it is easy to overclaim: the
+  # header always works as an ordinary response header, so the preconnect does
+  # start as soon as the browser parses the response. What a NOVEL deep link
+  # does not get is the `103 Early Hints` acceleration on top — Cloudflare
+  # replays hints it has already observed FOR THAT URL, so the first visitor to
+  # `/notes/<uuid>` primes it and later ones benefit. The win here is real but
+  # smaller than on `/`, which is warm essentially always.
+  Link: <https://clerk.engram.page>; rel=preconnect; crossorigin
+  Link: <https://api.engram.page>; rel=preconnect; crossorigin
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   # `origin`, not `strict-origin-when-cross-origin`: the latter sends the FULL

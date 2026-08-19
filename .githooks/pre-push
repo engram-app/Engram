@@ -122,7 +122,7 @@ FAILED=0
 # strips the version line before hashing). If mix.exs is the ONLY affecting
 # file AND the diff touches only the version line, drop it from the trigger
 # set so doc-only PRs (which still need a version bump) hit the fast path.
-ELIXIR_AFFECTING_REGEX='\.(ex|exs)$|^mix\.lock$|^\.credo\.exs$|^\.sobelow-conf$'
+ELIXIR_AFFECTING_REGEX='\.(ex|exs)$|^mix\.lock$|^\.credo\.exs$|^\.sobelow-conf$|^\.sobelow-skips$'
 CHANGED_AFFECTING="$(git diff --name-only origin/main...HEAD 2>/dev/null | grep -E "$ELIXIR_AFFECTING_REGEX" || true)"
 
 # Strip mix.exs from the trigger set if the only changed lines are the version line.
@@ -165,7 +165,10 @@ fi
 
 echo "▸ Stage B (parallel): credo, sobelow..."
 run_bg credo   mix credo --strict
-run_bg sobelow mix sobelow --exit low
+# `--skip` must match CI's Sobelow step (.github/workflows/verify.yml).
+# It honours `.sobelow-skips`, which pins accepted findings by fingerprint,
+# so a NEW finding still fails here exactly as it does in CI.
+run_bg sobelow mix sobelow --exit low --skip
 wait
 report "credo"   credo   || FAILED=1
 report "sobelow" sobelow || FAILED=1

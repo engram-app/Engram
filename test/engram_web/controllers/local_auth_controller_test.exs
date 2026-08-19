@@ -9,6 +9,34 @@ defmodule EngramWeb.LocalAuthControllerTest do
     :ok
   end
 
+  # Swap the endpoint's canonical URL for the duration of `fun`. The refresh
+  # cookie's `secure` flag is derived from it, so this is the real lever a
+  # deployment pulls (PHX_HOST / PHX_SCHEME in runtime.exs).
+  #
+  # `Endpoint.url/0` is served from a persistent_term warmed off the endpoint's
+  # ETS config, NOT from Application env, so `put_env` alone is invisible to
+  # it. `config_change/2` is the supported path: it updates the ETS table and
+  # re-warms. Restored on the way out so a failure cannot leak a bogus URL into
+  # later tests (this file is already `async: false`).
+  defp with_endpoint_url(url, fun) do
+    %{scheme: scheme, host: host, port: port} = URI.parse(url)
+    prev = Application.get_env(:engram, EngramWeb.Endpoint)
+    next = Keyword.put(prev, :url, host: host, port: port, scheme: scheme)
+
+    apply_url = fn cfg ->
+      Application.put_env(:engram, EngramWeb.Endpoint, cfg)
+      EngramWeb.Endpoint.config_change([{EngramWeb.Endpoint, cfg}], [])
+    end
+
+    apply_url.(next)
+
+    try do
+      fun.()
+    after
+      apply_url.(prev)
+    end
+  end
+
   describe "POST /api/auth/register" do
     test "creates user and returns access token + refresh cookie", %{conn: conn} do
       conn =
@@ -22,6 +50,105 @@ defmodule EngramWeb.LocalAuthControllerTest do
       assert cookie
       assert cookie.http_only == true
       assert cookie.same_site == "Lax"
+    end
+
+    test "refresh cookie is Secure when the canonical URL is https", %{conn: conn} do
+      # The app never sees TLS: it listens plaintext behind an edge, so
+      # `conn.scheme` is :http even for a user who arrived over HTTPS. Deriving
+      # the flag from the conn shipped this 30-day token with no `Secure`
+      # attribute, letting a downgrade replay it over cleartext.
+      #
+      # Note this asserts on the URL config, NOT on `x-forwarded-proto`. A
+      # header-derived fix passes a test like this while silently failing on
+      # the header shapes real proxy chains emit (uppercase `HTTPS`, or the
+      # appended `https,http` a CDN in front of nginx produces) — `RewriteOn`
+      # matches the literal lowercase "https" only and otherwise falls through
+      # to a bare conn with no log and no error.
+      with_endpoint_url("https://engram.example", fn ->
+        conn =
+          %{conn | host: "engram.example"}
+          |> post("/api/auth/register", %{email: "tls@test.com", password: "StrongPass123!"})
+
+        assert json_response(conn, 201)
+        assert conn.resp_cookies["refresh_token"].secure == true
+      end)
+    end
+
+    test "refresh cookie is not Secure when the canonical URL is http", %{conn: conn} do
+      # The other direction: a genuinely plaintext deployment must NOT get a
+      # Secure cookie, or local http logins break silently (the browser simply
+      # withholds the cookie on the next request).
+      with_endpoint_url("http://localhost:4000", fn ->
+        conn =
+          post(conn, "/api/auth/register", %{email: "plain@test.com", password: "StrongPass123!"})
+
+        assert json_response(conn, 201)
+        refute conn.resp_cookies["refresh_token"].secure
+      end)
+    end
+
+    test "Secure is set on a NON-canonical host too", %{conn: conn} do
+      # Pins the deliberate trade-off, because the obvious "fix" is to make this
+      # test's assertion the opposite.
+      #
+      # PHX_HOST is comma-separated with the first entry canonical
+      # (`.env.example` ships `engram.example.com,10.0.20.5:4000`), and
+      # HostOrigins admits http AND https for every entry, so a self-host box is
+      # routinely reachable on several names at once. An earlier version keyed
+      # `secure` off `conn.host == canonical_host` so the plaintext LAN alias
+      # kept working — and thereby dropped Secure on any OTHER TLS hostname,
+      # handing out a 30-day refresh token in the clear on a host that was
+      # perfectly capable of protecting it. SameSite=Lax does not cover that:
+      # Lax still rides top-level navigations, so a forced navigation to
+      # http://other-host/api/auth/refresh leaks it to the wire.
+      #
+      # The credential wins. A canonically-HTTPS deployment marks every refresh
+      # cookie Secure, whatever host was dialed. The accepted cost is that a
+      # plaintext alias can no longer persist a login: the browser takes the 201
+      # and the access token, silently discards the Secure cookie, and
+      # /api/auth/refresh 401s once the access token expires. Operators fix that
+      # by serving the alias over TLS, not by reintroducing the host check.
+      with_endpoint_url("https://engram.example", fn ->
+        conn =
+          %{conn | host: "10.0.20.5"}
+          |> post("/api/auth/register", %{email: "lan@test.com", password: "StrongPass123!"})
+
+        assert json_response(conn, 201)
+        assert conn.resp_cookies["refresh_token"].secure == true
+      end)
+    end
+
+    test "login and refresh rotation set Secure too, not just register", %{conn: conn} do
+      # All three sites share `refresh_cookie_opts/1`, but only `register` was
+      # covered before. The rotation cookie is the longest-lived credential in
+      # the flow, so it is the one that most needs pinning.
+      #
+      # Each conn dials the canonical host explicitly: `build_conn/0` defaults
+      # to `www.example.com`, which is (correctly) a non-canonical host and
+      # would yield `secure: false` for reasons unrelated to what this test is
+      # about.
+      with_endpoint_url("https://engram.example", fn ->
+        %{conn | host: "engram.example"}
+        |> post("/api/auth/register", %{email: "all@test.com", password: "StrongPass123!"})
+
+        login =
+          %{build_conn() | host: "engram.example"}
+          |> post("/api/auth/login", %{
+            email: "all@test.com",
+            password: "StrongPass123!"
+          })
+
+        assert json_response(login, 200)
+        assert login.resp_cookies["refresh_token"].secure == true
+
+        rotated =
+          %{build_conn() | host: "engram.example"}
+          |> put_req_cookie("refresh_token", login.resp_cookies["refresh_token"].value)
+          |> post("/api/auth/refresh")
+
+        assert json_response(rotated, 200)
+        assert rotated.resp_cookies["refresh_token"].secure == true
+      end)
     end
 
     test "first user is admin, second is member", %{conn: conn} do

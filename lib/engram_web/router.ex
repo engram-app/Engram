@@ -108,6 +108,51 @@ defmodule EngramWeb.Router do
     plug OpenApiSpex.Plug.PutApiSpec, module: EngramWeb.ApiSpec
   end
 
+  # Applied to the handful of PUBLIC, UNAUTHENTICATED documents that are pure
+  # functions of (dialed host, deploy) and are cached at the Cloudflare edge:
+  # the OAuth discovery documents and the OpenAPI spec. One pipeline for all of
+  # them so the cache header and the CORS correction below cannot drift apart.
+  pipeline :public_cacheable do
+    plug :public_cacheable_headers
+  end
+
+  # `/api/openapi` is ~72 KB of JSON that `OpenApiSpex.Plug.RenderSpec`
+  # re-renders on EVERY request, and it changes only when a deploy changes the
+  # spec. It was going out as `max-age=0, private, must-revalidate` (Phoenix's
+  # default), so the edge reported `cf-cache-status: DYNAMIC` and every docs
+  # page load, API explorer and codegen run crossed Cloudflare -> ALB ->
+  # Fargate to rebuild a constant.
+  #
+  # Safe for the CI drift gate: that gate generates the spec locally with
+  # `mix openapi.spec.json` and diffs it against the committed `openapi.json`
+  # (verify.yml). It never fetches this endpoint, so a cached copy cannot make
+  # it pass on stale content.
+  #
+  # Same 5 minute TTL as the OAuth discovery documents, deliberately. This
+  # payload is far bigger so a longer TTL is tempting, but it buys little: a
+  # docs reader fetches it once per page and 5 minutes already covers a
+  # browsing session, while a short window keeps a bad deploy from being
+  # pinned at the edge.
+  #
+  # The OTHER header these paths need — a constant
+  # `access-control-allow-origin` — is NOT set here. It lives in
+  # `EngramWeb.Plugs.CORS`, keyed on PATH, because that is the predicate the
+  # edge uses. A router pipeline only runs for a matched ROUTE, so pinning it
+  # here left a request under `/.well-known/oauth-` that matches no route
+  # getting an echoed Origin on a response the edge already considered
+  # cacheable. See the comment on `@cacheable_prefixes` there.
+  #
+  # This header alone is NOT sufficient at the edge. Cloudflare's default Cache
+  # Level only treats known static file extensions as eligible, so these
+  # extensionless JSON paths stay `cf-cache-status: DYNAMIC` no matter what we
+  # send here. The paired Cache Rule lives in engram-infra
+  # (`main/cloudflare/cache.tf`) and is host-scoped to api/mcp, because the same
+  # paths return the SPA shell on app/staging. If you see DYNAMIC after
+  # deploying, that rule is missing or its host list is wrong — not this header.
+  defp public_cacheable_headers(conn, _opts) do
+    Plug.Conn.put_resp_header(conn, "cache-control", "public, max-age=300")
+  end
+
   # SPA shell pipeline — HTML responses with strict browser-security headers.
   # x-frame-options=DENY is critical for /oauth/consent: without it the consent
   # UI could be iframed by an attacker site and the approval click hijacked.
@@ -172,7 +217,7 @@ defmodule EngramWeb.Router do
   # MCP clients (Claude Connectors, Cursor, ChatGPT custom GPTs, etc.)
   # probe these to learn how to negotiate auth against /api/mcp.
   scope "/.well-known", EngramWeb do
-    pipe_through :api
+    pipe_through [:api, :public_cacheable]
 
     get "/oauth-protected-resource", WellKnownController, :protected_resource
     get "/oauth-authorization-server", WellKnownController, :authorization_server
@@ -222,7 +267,7 @@ defmodule EngramWeb.Router do
   # No EngramWeb alias on this scope: RenderSpec is an open_api_spex plug,
   # not an Engram controller.
   scope "/api" do
-    pipe_through [:api, :openapi]
+    pipe_through [:api, :openapi, :public_cacheable]
     get "/openapi", OpenApiSpex.Plug.RenderSpec, []
   end
 

@@ -140,7 +140,7 @@ See `docs/context/testing-strategy.md` for the full testing strategy and
 - One concern per PR. Split refactors out from feature changes.
 - All four lint checks pass locally: `mix format --check-formatted`,
   `mix compile --warnings-as-errors`, `mix credo --strict`,
-  `mix sobelow --exit low`. Dialyzer runs in CI.
+  `mix sobelow --exit low --skip`. Dialyzer runs in CI.
 - Tests added for new behavior. See `docs/context/testing-strategy.md`.
 - Commit messages follow Conventional Commits (`feat:`, `fix:`, `chore:`, ...).
 - `mix.exs` `version:` bumped if the change is user-visible (pre-push hook

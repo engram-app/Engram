@@ -24,7 +24,7 @@ group_paths() {
     # Both were in BACKEND_HASH; dropping them lets a stack/release-env change skip.
     docker-image) echo "Dockerfile entrypoint.sh .dockerignore rel ci/compose.yml ci/compose.local.yml ci/compose.database.yml" ;;
     # .dialyzer_ignore.exs gates the lint job's dialyzer step (a fatal check).
-    lint-config) echo ".credo.exs .sobelow-conf .formatter.exs .dialyzer_ignore.exs" ;;
+    lint-config) echo ".credo.exs .sobelow-conf .sobelow-skips .formatter.exs .dialyzer_ignore.exs" ;;
     # The CI logic itself: a change to the workflow or the fingerprint scripts
     # must bust EVERY job's hash (mirrors BACKEND_HASH including verify.yml), so
     # a CI-config change is never skipped by a stale per-job marker.
