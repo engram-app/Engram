@@ -13,7 +13,7 @@ Working — `low_accuracy_mode: true` set in `lib/engram/keyword_index/lang_dete
 - It is a **single shared load per BEAM node** — NOT per detection call, per Elixir process, or per note. (Proof: under 8-concurrent load the footprint grew to a ceiling and then stayed flat across further rounds; per-instance would have multiplied it.) Each node in a cluster loads its own copy.
 - Footprint by mode, for `builder_option: :all_languages_with_latin_script`:
   - **full accuracy (default):** uni/bi/tri/quad/five-gram models → **~945 MB** resident.
-  - **`low_accuracy_mode: true`:** **trigram-only** → **~135 MB** resident (~7× smaller). Plateaus; does not grow with more text.
+  - **`low_accuracy_mode: true`:** **trigram-only** → **~55 MB** resident. Plateaus; does not grow with more text. (Re-measured 2026-08-18 by sampling RSS around the first `Lingua.detect/2`: +55 MB on call 1, flat across 400 more. The earlier ~135 MB figure was not reproducible.)
 - The memory is **off-heap** — invisible to `:erlang.memory` / PromEx BEAM metrics. Only container RSS / `smaps` `Anonymous` / ECS `MemoryUtilized` see it.
 
 ## Why it mattered (incident #891/#892)
@@ -22,7 +22,7 @@ On the 1024 MB Fargate task (512 CPU / 1024 MB, 3 containers, no per-container l
 ## The dial
 `lib/engram/keyword_index/lang_detect.ex`, in the `Lingua.detect/2` call:
 ```elixir
-low_accuracy_mode: true,   # trigram-only ~135 MB; false = full ~945 MB/node
+low_accuracy_mode: true,   # trigram-only ~55 MB; false = full ~945 MB/node
 ```
 Trade memory back for accuracy by flipping to `false` — but budget ~945 MB resident NIF memory **per node** and raise the ECS task memory accordingly. For our use (coarse language ID to pick a stemmer, gated at `@floor 0.40` confidence with a raw-index fallback), low accuracy is sufficient.
 

@@ -32,7 +32,7 @@ defmodule Engram.ObanQueueConfigTest do
   # Tripwire against unbounded embed concurrency. The 2026-07-03 OOM crash-loop
   # was NOT caused by embed concurrency itself — it was the Lingua language
   # detector loading ~945 MB of full-accuracy models off-heap during indexing
-  # (fixed via `low_accuracy_mode: true`; see LangDetect +
+  # (fixed via `low_accuracy_mode: true`, re-measured at ~55 MB; see LangDetect +
   # docs/context/lingua-language-detection-memory.md). With that bounded, embed: 5
   # is safe (peak ≈ 560 MB under the 1024 MB task). This ceiling just stops the
   # value being cranked into a new memory problem without a fresh measurement.

@@ -36,11 +36,24 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
 
   ## Idle drain (`idle_exit_ms`, #1152)
 
-  OPT-IN and `nil` by default, so note rooms behave exactly as they always have
-  in **prod**. Note the per-room opt is not the only lever: `idle_exit_ms` also
-  falls back to this module's app config, and `CRDT_IDLE_EXIT_MS`
-  (`ci/compose.yml`) sets it fleet-wide in CI/e2e — on purpose, so the Obsidian
-  suite exercises the drain against the real client.
+  ON by default (`@default_idle_exit_ms`), for every note room, in every
+  environment. Resolution is: per-room opt, then this module's app config, then
+  that default. Pass `0` (or configure `nil`) to disable it for a room.
+
+  It used to be opt-in and `nil` by default, which meant the drain armed only
+  where something set it — CI — and prod ran with no room bound at all. On
+  2026-08-18 that let a 1.7k-file vault upload leave ~2000 rooms resident
+  (process count 757 -> 2744, process memory 41 MB -> 324 MB against an 820 MB
+  container limit) with `crdt_room_drain_total` at 0/0 the whole window. A
+  residency bound that defaults off is unbound in exactly the fleets that need
+  it most. `CrdtIndexDoc` already reached this conclusion independently — see its
+  "never to `nil`. There is no 'drain disabled' mode".
+
+  `CRDT_IDLE_EXIT_MS` (`ci/compose.yml`) still overrides it fleet-wide in
+  CI/e2e — on purpose, so the Obsidian suite exercises the drain against the real
+  client at a timescale a test can observe. Note that env var is CI-gated
+  (`RuntimeConfig.ci_gated_int_override/2`) and is therefore NOT how production
+  gets a value; setting it in a task definition is a silent no-op.
 
   `auto_exit` ends a room when its LAST OBSERVER leaves. That bounds a note
   room, which is observed only while the note is open — but a per-vault index
@@ -77,6 +90,12 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   @default_settle_ms 5_000
   @default_ceiling_ms 60_000
   @default_eager_ms 250
+
+  # No activity for this long and the room asks its observers to let go, after
+  # which the existing auto_exit stops it. 5 min is deliberately conservative:
+  # the cost of draining a room someone still wants is one re-handshake on their
+  # next keystroke. See the resolution in init/1 for why this defaults ON.
+  @default_idle_exit_ms 300_000
 
   # Cap on the idle-drain re-ask multiplier (see drain_delay/1).
   @max_drain_backoff 8
@@ -129,8 +148,25 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     settle_ms = Keyword.get(cfg, :settle_ms, @default_settle_ms)
     ceiling_ms = Keyword.get(cfg, :ceiling_ms, @default_ceiling_ms)
     eager_ms = Keyword.get(cfg, :eager_ms, @default_eager_ms)
-    # Per-room opt wins; config is the fleet-wide fallback. nil = drain disabled.
-    idle_exit_ms = Keyword.get(opts, :idle_exit_ms) || Keyword.get(cfg, :idle_exit_ms)
+    # Per-room opt wins, then fleet config, then the built-in default. Set either
+    # to 0 to disable the drain for a room.
+    #
+    # This defaults ON. It used to default to nil (disabled), which meant the
+    # drain shipped in #1382 was armed only where something set it — CI — and a
+    # room in prod lived until its last observer left. On 2026-08-18 a 1.7k-file
+    # vault upload left ~2000 rooms resident on 0.5-vCPU tasks (process count
+    # 757 -> 2744, process memory 41 MB -> 324 MB against an 820 MB limit) with
+    # `crdt_room_drain_total` at 0/0 for the entire window.
+    #
+    # Defaulting off is the wrong shape for a residency bound: every environment
+    # that forgets to set it is unbounded, and the one that most needs the bound
+    # (a real fleet under real load) is the least likely to have it. Rooms are
+    # ephemeral by design — a drained room checkpoints to Postgres and is
+    # re-created on the next frame — so the cost of a drain that wasn't needed is
+    # one re-handshake, not lost data.
+    idle_exit_ms =
+      Keyword.get(opts, :idle_exit_ms) ||
+        Keyword.get(cfg, :idle_exit_ms, @default_idle_exit_ms)
 
     # Trap exits so we receive {:EXIT, room_pid, reason} as a handle_info
     # message instead of dying silently. This lets us flush or log before
@@ -156,7 +192,8 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
       # ceiling/settle flush is correctly seen as still-active (not eager).
       last_activity_at: nil,
       settle_timer: nil,
-      # nil = drain disabled (every note room today).
+      # nil/0 = drain disabled. Rare: this defaults ON, so it means an
+      # explicit opt-out rather than the old fleet-wide default.
       idle_exit_ms: idle_exit_ms,
       idle_timer: nil,
       # Consecutive drains broadcast with nobody acting on them. Backs the
@@ -265,10 +302,10 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     {:stop, :normal, state}
   end
 
-  # Only drain-ENABLED rooms are tracked for eviction, so where the drain is off
-  # a room can never be LRU-evicted either — which is prod today (nothing sets
-  # `idle_exit_ms`) but NOT CI/e2e, where `CRDT_IDLE_EXIT_MS` turns the drain on
-  # fleet-wide for every note room.
+  # Only drain-ENABLED rooms are tracked for eviction, so a room with the drain
+  # explicitly off can never be LRU-evicted either. Since the drain now defaults
+  # ON, that is the opt-out case — it is NOT prod, where every note room is
+  # enrolled. CI/e2e additionally overrides the window via `CRDT_IDLE_EXIT_MS`.
   #
   # The guard must match `arm_idle/1`'s exactly. It used to match only `nil`,
   # so `idle_exit_ms: 0` — which `arm_idle/1` treats as disabled — enrolled the

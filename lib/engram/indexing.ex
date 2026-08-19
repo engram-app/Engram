@@ -273,13 +273,43 @@ defmodule Engram.Indexing do
   defp build_prepared(note, user, vault, chunks, vectors, filter_key, avgdl, link_rows) do
     now = DateTime.utc_now(:second)
 
+    # Language is a property of the NOTE, not of each chunk. Detecting per chunk
+    # meant one full Lingua detector build per chunk (the NIF rebuilds the
+    # detector on every call — deps/lingua/native/lingua_nif/src/lib.rs), i.e.
+    # 8-38x the work for a normal note, and it was the single largest on-CPU
+    # frame in prod during a bulk vault upload.
+    #
+    # Detecting once over the note body is also *more* accurate: lingua is far
+    # more confident on a paragraph than on a one-line heading chunk. The
+    # tradeoff is a mixed-language note now picks a single stemmer, which is
+    # what the @floor confidence gate + raw-token fallback already assume.
+    # Sample the CHUNKS, not `note.content`. `Markdown.parse/2` strips
+    # frontmatter before chunking and re-appends the raw block as a synthetic
+    # chunk at the END, so raw content can lead with a property block big enough
+    # to fill detect/1's whole sample — and the language would then be decided by
+    # YAML keys, for every chunk at once. Leading chunks are body prose.
+    #
+    # Bounded to a few chunks so a large note doesn't build a large throwaway
+    # binary just to have detect/1 slice the front off it.
+    # Reject by heading_path rather than trusting position: the frontmatter chunk
+    # is appended last today, but a short note can have so few body chunks that a
+    # positional take swallows it anyway (a one-section note has exactly two).
+    # A note that is ONLY frontmatter then yields no sample and falls back to raw
+    # token indexing, which is the right answer — YAML keys should not pick a
+    # stemmer for prose that doesn't exist.
+    language =
+      chunks
+      |> Enum.reject(&(&1.heading_path == "frontmatter"))
+      |> Enum.take(3)
+      |> Enum.map_join("\n\n", & &1.text)
+      |> detect_language()
+
     prepared =
       Enum.zip(chunks, vectors)
       |> Enum.reduce_while({:ok, []}, fn {chunk, vector}, {:ok, acc} ->
         point_id = Ecto.UUID.generate()
 
         doc_len = chunk.text |> Tokenizer.tokens(nil) |> length()
-        language = detect_language(chunk.text)
 
         sparse =
           KeywordIndex.module().encode_document(chunk.text, filter_key, doc_len, avgdl, language)
