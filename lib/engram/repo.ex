@@ -25,6 +25,27 @@ defmodule Engram.Repo do
   def tenant_tables, do: @tenant_tables
 
   @doc """
+  Take a transaction-scoped Postgres advisory lock keyed on a string id (a
+  note/attachment/source-note UUID, etc). Released automatically at
+  commit/rollback — the caller must already be inside a transaction (e.g.
+  `with_tenant/2`) or the lock releases the instant this call returns.
+
+  `hashtextextended(id, 0)` maps the string to the bigint advisory-lock
+  keyspace. This is the ONE place that formula lives — every call site that
+  needs two writers to serialize on the SAME logical id (e.g.
+  `EngramWeb.CrdtChannel`'s genesis seed and `CrdtPersistence.bind/3`, #1409)
+  must call this, not reimplement the query, because the correctness of
+  those pairs rests entirely on both sides hashing to an IDENTICAL key.
+  Collisions across UNRELATED ids are tolerable (an unrelated write waits, a
+  latency cost, not a correctness issue).
+  """
+  @spec advisory_lock!(String.t()) :: :ok
+  def advisory_lock!(id) when is_binary(id) do
+    _ = query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [id])
+    :ok
+  end
+
+  @doc """
   Executes `fun` inside a transaction with RLS tenant context set.
 
   Sets both the process-dict guard (for prepare_query) and the

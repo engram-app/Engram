@@ -322,12 +322,21 @@ defmodule EngramWeb.CrdtChannelTest do
          %{socket: socket, user: user, vault: vault} do
       # #1409. `maybe_seed_detached/4`'s CrdtRegistry.lookup at the top is only
       # a cheap fast path — a room can register (and CrdtPersistence.bind/3
-      # hydrate) between that check and the locked write in
-      # seed_empty_row/6's `""` clause. This drives exactly that: park the
-      # create right before the lock, register a room in the gap, then let it
-      # continue. The AUTHORITATIVE re-check under the lock must see the room
-      # and decline — proving the advisory lock + re-check (not just the
-      # early, racy check) is what makes this safe.
+      # hydrate) between that check and the locked write in `seed_locked/5`.
+      # This drives exactly that: park the create right before the lock,
+      # register a room in the gap, then let it continue. The AUTHORITATIVE
+      # re-check under the lock must see the room and decline — proving the
+      # early, racy check alone is not what makes this safe.
+      #
+      # What this test does NOT prove: the advisory lock's blocking property
+      # itself. Under this file's SHARED sandbox connection (`async: false`),
+      # this test's channel process and the room's bind/3 are the SAME
+      # Postgres session, so `pg_advisory_xact_lock` is re-entrant to itself
+      # and never actually blocks either side. This test only exercises the
+      # re-check that runs once the (here, no-op) lock "acquisition" returns —
+      # a genuine two-connection block/serialize test would need
+      # `CheckpointInterleave.checkout_real!/0`'s real-connection machinery,
+      # which this test deliberately does not use (see the round-2 report).
       id = Ecto.UUID.generate()
 
       on_exit(CheckpointInterleave.arm(:genesis_seed_before_lock))
