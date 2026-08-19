@@ -255,16 +255,12 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
             :ok
 
-          # Both shapes: `union_with_row_state` returns `{:error, {:row_state_unreadable,
-          # _}}` and `do_markdown_checkpoint`'s `with` else-clause wraps whatever it
-          # got in `{:abort, _}`, so the tag arrives nested. Matching only the bare
-          # tuple silently fell through to the generic branch — which is exactly the
-          # indistinguishability this change exists to remove.
-          {:abort, {:error, {:row_state_unreadable, _}}} = abort ->
-            report_unreadable_state(user_id, note_id, elem(abort, 1))
-            :ok
-
-          {:abort, {:row_state_unreadable, _} = err} ->
+          # The tag arrives NESTED, and only nested. `union_with_row_state`
+          # returns `{:error, {:row_state_unreadable, _}}`, and both callers'
+          # `with` else-clauses wrap whatever they got in `{:abort, _}`. Matching
+          # the bare tuple instead silently fell through to the generic branch,
+          # which is exactly the indistinguishability this removes.
+          {:abort, {:error, {:row_state_unreadable, _}} = err} ->
             report_unreadable_state(user_id, note_id, err)
             :ok
 
@@ -619,39 +615,69 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # already happened, so a failure to count must not turn a logged abort into a
   # raised one — nil simply means "depth unknown" and the line still goes out.
   defp report_unreadable_state(user_id, note_id, err) do
-    depth =
-      case Repo.with_tenant(user_id, fn -> tail_depth(note_id) end) do
-        {:ok, n} when is_integer(n) -> n
-        _ -> nil
-      end
-
+    depth = safe_tail_depth(user_id, note_id)
     quarantined = is_integer(depth) and depth >= @quarantine_tail_depth
 
-    :telemetry.execute(
-      @abort_event,
-      %{count: 1, tail_depth: depth || 0},
-      %{phase: if(quarantined, do: :quarantine, else: :unreadable_state)}
-    )
-
-    key =
-      if quarantined,
-        do: "crdt_checkpoint_quarantine",
-        else: "crdt_checkpoint_state_unreadable"
+    # ADDITIVE, never a replacement. Escalation used to swap the phase and the
+    # log key, which meant the one alert this change exists to enable ("any
+    # unreadable_state in the last 15m") RESOLVED the moment a note got bad
+    # enough to cross the threshold, while it was still frozen and still
+    # growing. The worst notes went quiet. `:unreadable_state` is therefore
+    # emitted for every abort, and `quarantined` is a dimension on it.
+    :telemetry.execute(@abort_event, %{count: 1}, %{
+      phase: :unreadable_state,
+      quarantined: to_string(quarantined)
+    })
 
     Logger.error(
-      "#{key} note_id=#{note_id} tail_depth=#{depth || "unknown"} " <>
-        "threshold=#{@quarantine_tail_depth} reason=#{Metadata.safe_reason(err)}",
+      "crdt_checkpoint_state_unreadable note_id=#{note_id} " <>
+        "tail_depth=#{depth || "unknown"} threshold=#{@quarantine_tail_depth} " <>
+        "quarantined=#{quarantined} reason=#{Metadata.safe_reason(err)}",
       Metadata.with_category(:error, :sync, note_id: note_id)
     )
+
+    # A SECOND line rather than a different one, for the same reason: a Loki
+    # alert on the key above must not stop matching once this one starts.
+    if quarantined do
+      Logger.error(
+        "crdt_checkpoint_quarantine note_id=#{note_id} tail_depth=#{depth} " <>
+          "threshold=#{@quarantine_tail_depth} — needs an operator, not another tick",
+        Metadata.with_category(:error, :sync, note_id: note_id)
+      )
+    end
   end
 
-  # Row count of the note's unfolded tail. Unbounded growth here IS the #959
-  # failure, so it is the metric worth carrying.
-  @doc false
-  def tail_depth(note_id) do
+  # Depth is DIAGNOSTICS for an abort that already happened, so it must not be
+  # able to escalate that abort into a raise. `Repo.with_tenant/2` RAISES on
+  # DBConnection errors rather than returning them, and pool starvation is
+  # exactly when mass aborts happen — without the rescue the distinct log key
+  # and the telemetry event were both lost into the generic `raised` path,
+  # precisely when the signal matters most. nil means "unknown", never zero.
+  defp safe_tail_depth(user_id, note_id) do
+    case Repo.with_tenant(user_id, fn -> tail_depth(note_id) end) do
+      {:ok, n} when is_integer(n) -> n
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  # Rows in the note's unfolded tail, CAPPED at the threshold.
+  #
+  # The uncapped count was a full scan of the very table whose unbounded growth
+  # is the failure being measured, re-run every debounce tick, forever, per
+  # broken note: the diagnostic scaled with the pathology. The value is only
+  # ever compared against `@quarantine_tail_depth`, so counting past it buys
+  # nothing. `:count` (count(*)) rather than `:count, :id` keeps it on the
+  # (note_id, inserted_at) index instead of forcing heap fetches for a column
+  # that index does not cover.
+  defp tail_depth(note_id) do
     CrdtUpdateLog
     |> where([l], l.note_id == ^note_id)
-    |> Repo.aggregate(:count, :id)
+    |> select([l], 1)
+    |> limit(^(@quarantine_tail_depth + 1))
+    |> Repo.all()
+    |> length()
   end
 
   defp interleave_hook(point) do

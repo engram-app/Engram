@@ -119,32 +119,30 @@ defmodule Engram.PromEx.Crdt do
         ),
         # #959. A note whose stored crdt_state cannot be decrypted aborts its
         # checkpoint forever: content freezes at the last good checkpoint while
-        # every tick appends another tail row. `unreadable_state` sustained
-        # non-zero is the signal; `quarantine` means the tail already crossed the
-        # depth threshold and the note needs an operator, not another tick.
+        # every tick appends another tail row.
         #
-        # Tagged by phase ONLY — deliberately no note_id. The whole point is a
-        # per-note condition, but a note_id label is unbounded cardinality
-        # (2026-07-02 audit); the note_id lives on the log line, which is where
-        # you go once this counter tells you to look.
+        # `quarantined` is a DIMENSION, not a separate phase. Escalation must not
+        # move an abort off `phase="unreadable_state"`, or an alert written
+        # against that phase resolves the moment a note gets bad enough to cross
+        # the threshold — silence on the worst notes. Alert on the phase; use the
+        # dimension to sort by urgency.
+        #
+        # No note_id label. This is a per-note condition, but note_id is
+        # unbounded cardinality (2026-07-02 audit). The counter tells you to
+        # look; the log line carries the note_id and the tail depth.
+        #
+        # No depth gauge, deliberately. Tagged by phase it would flap between
+        # notes every tick, and the depth read is capped at the threshold, so it
+        # could never show the unbounded growth such a gauge would imply. Depth
+        # belongs on the log line, where it is per-note by construction.
         counter(
           metric_prefix ++ [:checkpoint_abort, :total],
           event_name: @abort_event,
           description:
-            "CRDT checkpoint aborts by phase (unreadable_state | quarantine | other). " <>
-              "Sustained unreadable_state means a note is frozen and its tail log is growing.",
-          tags: [:phase]
-        ),
-        # The unbounded thing itself. A counter says aborts are happening; this
-        # says how far the log has run, which is what decides urgency.
-        last_value(
-          metric_prefix ++ [:checkpoint_abort, :tail_depth],
-          event_name: @abort_event,
-          measurement: :tail_depth,
-          description:
-            "Unfolded crdt_update_log rows for the note that just aborted. Grows without " <>
-              "bound while the abort persists; a successful checkpoint prunes it.",
-          tags: [:phase]
+            "CRDT checkpoint aborts on unreadable stored state, by quarantine status. " <>
+              "Sustained non-zero means a note is frozen and its tail log is growing; " <>
+              "quarantined=true means it has crossed the depth threshold.",
+          tags: [:phase, :quarantined]
         ),
         # The WRITE side of the authority the projection metrics below read from.
         # Emitted by `Engram.Notes.Identity` (and by `Engram.Notes` for the

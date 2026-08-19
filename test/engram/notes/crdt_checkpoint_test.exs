@@ -402,7 +402,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
         :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
       end)
 
-    assert_received {:abort_event, %{tail_depth: 2}, %{phase: :unreadable_state}}
+    assert_received {:abort_event, %{count: 1}, %{phase: :unreadable_state, quarantined: "false"}}
 
     # Its OWN key. The generic "crdt checkpoint aborted" line cannot be alerted
     # on: it also fires for transient causes that self-heal on the next tick.
@@ -438,8 +438,14 @@ defmodule Engram.Notes.CrdtCheckpointTest do
         :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
       end)
 
-    assert_received {:abort_event, %{tail_depth: 500}, %{phase: :quarantine}}
+    # ADDITIVE. The phase must NOT flip to something else at the threshold: an
+    # alert written against `phase="unreadable_state"` would then resolve exactly
+    # when the note is at its worst, still frozen and still growing. Escalation
+    # is a dimension on the same series, and a SECOND log line beside the first,
+    # never a replacement for either.
+    assert_received {:abort_event, %{count: 1}, %{phase: :unreadable_state, quarantined: "true"}}
     assert log =~ "crdt_checkpoint_quarantine"
+    assert log =~ "crdt_checkpoint_state_unreadable"
 
     # Escalating must not start writing. The whole reason this aborts is that we
     # cannot prove a write is a superset of the durable truth, and crossing a
