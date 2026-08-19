@@ -52,10 +52,23 @@ defmodule Engram.Observability.Pyroscope do
 
   ## What's profiled
 
-  * Wall-clock CPU (`process_info(:current_stacktrace)` returns the
-    process's instantaneous frame whether it's running on a scheduler
-    or parked in a receive — Pyroscope's flame graphs treat them
-    uniformly).
+  * **On-CPU time only.** A pass samples a process's `:current_stacktrace`
+    solely when its `:status` says it is using or contending for a scheduler
+    (`@on_cpu_statuses`). Processes parked in a `receive` are skipped.
+
+    This filter is load-bearing, not a refinement. `:current_stacktrace`
+    answers just as readily for a process blocked in `receive`, so sampling
+    unconditionally produces a census of *where processes are parked* — which,
+    on a normal node, is overwhelmingly `:gen_server.loop/7` and
+    `:prim_inet.accept0/3`. A 2026-08-18 investigation into a prod CPU
+    saturation pulled a flame graph that was 74% `:gen_server.loop/7` and
+    found nothing, because the real consumer was a few hundred samples deep
+    under idle noise. Only frames a parked process cannot be in — a pure-CPU
+    NIF, a tight `Enum.reduce` — survived, and only by luck.
+
+    The cost of the filter is a thinner profile: on an idle node most passes
+    now record nothing at all, which is the correct answer. A sparse honest
+    profile is worth more than a dense misleading one.
 
   Off-CPU and memory profiles are deferred (not landed in v1). They
   need different sampling strategies (`erlang:process_info(:memory)`
@@ -120,6 +133,20 @@ defmodule Engram.Observability.Pyroscope do
 
   # Profile types we ship in v1 (CPU only). Off-CPU + memory deferred.
   @profile_kind "cpu"
+
+  # Process states that mean "this stack is consuming or contending for a
+  # scheduler". Everything else (`:waiting`, `:suspended`, `:exiting`) is a
+  # process at rest, and counting it turns a CPU profile into a census of idle
+  # receive loops — see the moduledoc.
+  #
+  #   :running            — on a scheduler right now
+  #   :garbage_collecting — on a scheduler, doing GC; real CPU, and attributing
+  #                         it to the stack that allocated is the useful reading
+  #   :runnable           — ready but waiting for a free scheduler. Not strictly
+  #                         on-CPU, but it is precisely the demand that saturates
+  #                         a node, and dropping it would blind the profile to
+  #                         the queued work during the exact incident it's for.
+  @on_cpu_statuses [:running, :garbage_collecting, :runnable]
 
   defstruct [
     :url,
@@ -303,8 +330,9 @@ defmodule Engram.Observability.Pyroscope do
       if pid == self_pid do
         {acc, n + 1}
       else
-        case Process.info(pid, :current_stacktrace) do
-          {:current_stacktrace, [_ | _] = stack} ->
+        case Process.info(pid, [:status, :current_stacktrace]) do
+          [{:status, status}, {:current_stacktrace, [_ | _] = stack}]
+          when status in @on_cpu_statuses ->
             key = collapse(stack)
             {Map.update(acc, key, 1, &(&1 + 1)), n + 1}
 
@@ -371,9 +399,11 @@ defmodule Engram.Observability.Pyroscope do
   end
 
   defp do_push(_state, counters, _passes, _from, _until) when map_size(counters) == 0 do
-    # Empty window — nothing to push. Happens during startup before
-    # the first sample fires, or if every Process.list/0 frame was
-    # filtered (unlikely outside tests).
+    # Empty window — nothing to push. Happens during startup before the first
+    # sample fires, and routinely on an idle node: since take_sample/1 only
+    # records processes on (or contending for) a scheduler, a window in which
+    # nothing ran yields no samples. A gap in the flame graph is then the
+    # truthful answer ("no CPU was used"), not a dropped push.
     :ok
   end
 

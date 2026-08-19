@@ -13,8 +13,68 @@ defmodule EngramWeb.LocalAuthController do
     max_age: 30 * 24 * 3600
   ]
 
-  defp refresh_cookie_opts(conn) do
-    secure = conn.scheme == :https
+  # Canonical URL, never the connection. `conn.scheme` is :http on every
+  # deployment that terminates TLS at an edge (ALB in saas, the operator's
+  # reverse proxy in self-host, and self-host is the ONLY shape that reaches
+  # this controller — see RequireLocalAuth on the router), so deriving the
+  # flag from the conn shipped this 30-day refresh token with no `Secure`
+  # attribute and let a downgrade replay it over cleartext.
+  #
+  # Deliberately NOT `Plug.RewriteOn`/`x-forwarded-proto`: that trusts a
+  # client-settable header, and it silently no-ops on the header shapes real
+  # proxy chains emit. `Plug.RewriteOn` matches the literal lowercase "https"
+  # only, so an uppercase `HTTPS` or the appended `https,http` a CDN in front
+  # of nginx produces both fall through to a bare `conn` with no log and no
+  # error, i.e. the bug comes back invisibly.
+  #
+  # Same source `Endpoint.url()` already backs for the device-flow
+  # verification URL, account emails, and the admin reset link.
+  #
+  # Ceiling, stated in full because an earlier revision of this comment listed
+  # only the first case and the second one is a functional break, not a missed
+  # hardening:
+  #
+  #   1. PHX_HOST/PHX_SCHEME unset -> the `http://localhost` default -> no
+  #      Secure flag. Same single point of truth every link this app emits
+  #      already depends on, so not a new failure mode. `Engram.Application`
+  #      warns about this at boot.
+  #   2. Multi-host (`PHX_HOST=a,b`) where the request arrives on a
+  #      NON-canonical host -> no Secure flag, because we cannot know that
+  #      host's scheme. Handled by the host check below rather than ignored:
+  #      the alternative (trusting the canonical scheme for every host) breaks
+  #      login outright on the plaintext one.
+  defp refresh_cookie_opts(_conn) do
+    %URI{scheme: scheme} = URI.parse(EngramWeb.Endpoint.url())
+
+    # Canonical scheme ONLY. Deliberately not also comparing `conn.host`.
+    #
+    # An earlier version required `conn.host == canonical_host` as well, to
+    # protect the documented mixed deployment: `PHX_HOST` is comma-separated
+    # with the FIRST entry canonical (`.env.example` ships
+    # `engram.example.com,10.0.20.5:4000`), and `HostOrigins.parse/1` admits
+    # http AND https for EVERY entry, so a self-host box is routinely reachable
+    # on a TLS public name and a plaintext LAN address at once. Requiring the
+    # host match kept the LAN user working.
+    #
+    # It also silently dropped `Secure` on any OTHER TLS hostname. A self-hoster
+    # serving two HTTPS names got a 30-day refresh token with no `Secure` flag
+    # on the second, and `SameSite=Lax` does not cover that: Lax still sends the
+    # cookie on top-level navigations, so forcing the victim to
+    # `http://second-host/api/auth/refresh` puts it on the wire in cleartext.
+    #
+    # Chosen trade-off: protect the credential, accept the break. If a
+    # deployment is canonically HTTPS, every refresh cookie it issues is marked
+    # Secure regardless of which host was dialed.
+    #
+    # CONSEQUENCE, so nobody debugs this twice: on a mixed deployment the
+    # plaintext alias no longer works for login persistence. The browser accepts
+    # the 201 and the access token, then silently discards the Secure cookie,
+    # and `/api/auth/refresh` 401s once the access token expires — perhaps an
+    # hour later, far from the cause. That is intended. The fix for an operator
+    # is to serve the alias over TLS too (or drop it from PHX_HOST), NOT to
+    # reintroduce the host comparison.
+    secure = scheme == "https"
+
     Keyword.put(@refresh_cookie_base, :secure, secure)
   end
 

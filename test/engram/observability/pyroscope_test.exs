@@ -1,3 +1,22 @@
+defmodule Engram.Observability.SamplerFixtures do
+  @moduledoc """
+  Two processes with known, greppable frames and opposite scheduler states, so
+  the `take_sample/1` status filter can be asserted deterministically instead of
+  depending on whatever else the VM happens to be doing.
+  """
+
+  # Tail-recursive hot loop: reliably :running or :runnable.
+  def spin, do: spin()
+
+  # Blocked in a receive: reliably :waiting. Note :current_stacktrace still
+  # answers for this process — being sampleable is exactly the trap.
+  def park do
+    receive do
+      :stop -> :ok
+    end
+  end
+end
+
 defmodule Engram.Observability.PyroscopeTest do
   @moduledoc """
   Function-of-env contract for the Pyroscope sampler:
@@ -20,6 +39,7 @@ defmodule Engram.Observability.PyroscopeTest do
   use ExUnit.Case, async: false
 
   alias Engram.Observability.Pyroscope
+  alias Engram.Observability.SamplerFixtures, as: Fixtures
 
   setup do
     prior = Application.get_env(:engram, :pyroscope)
@@ -100,11 +120,25 @@ defmodule Engram.Observability.PyroscopeTest do
   end
 
   describe "take_sample/1" do
+    # A sample only records processes that are on (or contending for) a
+    # scheduler, so a test that wants a non-empty keyset has to guarantee one is
+    # running rather than hope the VM is busy. `spin/0` supplies that; `park/0`
+    # supplies the opposite case.
+    setup do
+      spinner = spawn(Fixtures, :spin, [])
+      parked = spawn(Fixtures, :park, [])
+      # Let the scheduler actually pick the spinner up before sampling.
+      Process.sleep(20)
+
+      on_exit(fn ->
+        Process.exit(spinner, :kill)
+        Process.exit(parked, :kill)
+      end)
+
+      %{spinner: spinner, parked: parked}
+    end
+
     test "increments the count for each collapsed stack seen this tick" do
-      # The real Process.list/0 sweep is hard to make deterministic in
-      # a unit test (any GenServer in the VM contributes a frame), so
-      # we just assert the invariant: counter values are non-negative
-      # integers and the keyset is non-empty when other processes exist.
       {counters, process_count} = Pyroscope.take_sample(%{})
       assert is_map(counters)
       assert map_size(counters) > 0
@@ -121,6 +155,27 @@ defmodule Engram.Observability.PyroscopeTest do
       # any existing counter — it's monotonic until the next push.
       {counters2, _} = Pyroscope.take_sample(counters)
       assert map_size(counters2) >= map_size(counters)
+    end
+
+    test "samples a process that is burning a scheduler" do
+      {counters, _} = Pyroscope.take_sample(%{})
+
+      assert Enum.any?(counters, fn {stack, _} ->
+               String.contains?(stack, "SamplerFixtures.spin")
+             end),
+             "a spinning process must appear in a CPU profile"
+    end
+
+    test "does NOT sample a process parked in a receive" do
+      # The whole point of the :status filter. `park/0` is blocked in a receive,
+      # so :current_stacktrace answers happily — an unfiltered walk would count
+      # it, and idle receive loops would then dominate the flame graph.
+      {counters, _} = Pyroscope.take_sample(%{})
+
+      refute Enum.any?(counters, fn {stack, _} ->
+               String.contains?(stack, "SamplerFixtures.park")
+             end),
+             "a process parked in a receive is not on CPU and must not be sampled"
     end
 
     test "skips the calling process so the sampler can't dominate its own flame" do
@@ -204,6 +259,12 @@ defmodule Engram.Observability.PyroscopeTest do
         send(parent, {:pyroscope_push, conn.query_string, conn.req_headers, body})
         Plug.Conn.resp(conn, 200, "")
       end)
+
+      # A window with nothing on CPU produces no samples and therefore no push
+      # (see do_push/5's empty-counters clause), so the test has to supply the
+      # load it wants reported rather than rely on ambient VM activity.
+      spinner = spawn(Fixtures, :spin, [])
+      on_exit(fn -> Process.exit(spinner, :kill) end)
 
       {:ok, pid} = Pyroscope.start_link([])
       on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid, :normal, 1_000) end)

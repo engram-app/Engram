@@ -29,6 +29,17 @@ defmodule EngramWeb.WellKnownControllerTest do
       assert ["application/json" <> _] = get_resp_header(conn, "content-type")
     end
 
+    test "is edge-cacheable, and not marked private", %{conn: conn} do
+      conn = get(conn, "/.well-known/oauth-protected-resource")
+
+      # `private` is the specific thing that must not come back: it forbids a
+      # SHARED cache (Cloudflare) from storing the response at all, which is
+      # what pinned every MCP client connect to a Fargate round trip. Phoenix's
+      # default is `max-age=0, private, must-revalidate`, so a future change
+      # that drops the explicit header regresses silently and invisibly.
+      assert ["public, max-age=300"] = get_resp_header(conn, "cache-control")
+    end
+
     # `resource_documentation` is where a developer is sent to learn how to use
     # this resource, so a link that does not resolve is worse than the field
     # being absent — RFC 9728 makes it optional precisely so you can omit it.
@@ -81,6 +92,14 @@ defmodule EngramWeb.WellKnownControllerTest do
   end
 
   describe "GET /.well-known/oauth-authorization-server" do
+    test "is edge-cacheable, and not marked private", %{conn: conn} do
+      # Same contract as the protected-resource document above. Both are probed
+      # by every MCP client on every connect, so both must stay shared-cacheable.
+      conn = get(conn, "/.well-known/oauth-authorization-server")
+
+      assert ["public, max-age=300"] = get_resp_header(conn, "cache-control")
+    end
+
     test "returns RFC 8414 server metadata with required fields", %{conn: conn} do
       conn = get(conn, "/.well-known/oauth-authorization-server")
       body = json_response(conn, 200)

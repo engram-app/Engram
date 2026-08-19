@@ -123,18 +123,7 @@ defmodule Engram.Links do
     :ok
   end
 
-  # Transaction-scoped advisory lock keyed on the source note id. Released
-  # automatically at commit/rollback; hashtextextended maps the UUID string
-  # to the bigint advisory-lock keyspace.
-  defp lock_source_note!(source_note_id) do
-    %{rows: [[_]]} =
-      Repo.query!(
-        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-        [to_string(source_note_id)]
-      )
-
-    :ok
-  end
+  defp lock_source_note!(source_note_id), do: Repo.advisory_lock!(to_string(source_note_id))
 
   defp put_optional_envelope(row, field, nil, _dek, _id) do
     {ct_key, nonce_key} = envelope_keys(field)

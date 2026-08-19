@@ -22,6 +22,14 @@ defmodule Engram.Notes.CrdtDoc do
 
   alias Engram.Notes.CrdtCheckpointTimer
 
+  # Room ALLOCATION, the counterpart to `[:engram, :crdt, :room_drain]`. Until
+  # #1409 this subsystem counted rooms leaving but never rooms arriving, so
+  # "how many rooms did that import allocate" — the question the detached
+  # genesis seed exists to change the answer to — was unanswerable. Residency is
+  # not a substitute: it is instantaneous, and with an idle drain a burst of
+  # rooms can come and go entirely between two samples.
+  @start_event [:engram, :crdt, :room_start]
+
   @doc """
   Start a room for `note_id` and its companion checkpoint timer. Opts must
   carry `:user_id` and `:vault_id` (threaded to the persistence module and
@@ -48,6 +56,12 @@ defmodule Engram.Notes.CrdtDoc do
            name: name
          ) do
       {:ok, room_pid} = result ->
+        # Emitted here, not in CrdtRegistry.ensure_started/3: this is the only
+        # place a room process is actually created, so `already_started` races
+        # and cluster-wide lookups that resolve to an existing room correctly do
+        # NOT count as allocations.
+        :telemetry.execute(@start_event, %{count: 1}, %{})
+
         # Start the debounced checkpoint timer linked to this room. The timer
         # exits when the room exits (Process.link inside CrdtCheckpointTimer.init).
         {:ok, timer_pid} =
