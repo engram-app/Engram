@@ -66,7 +66,8 @@ defmodule EngramWeb.LocalAuthControllerTest do
       # to a bare conn with no log and no error.
       with_endpoint_url("https://engram.example", fn ->
         conn =
-          post(conn, "/api/auth/register", %{email: "tls@test.com", password: "StrongPass123!"})
+          %{conn | host: "engram.example"}
+          |> post("/api/auth/register", %{email: "tls@test.com", password: "StrongPass123!"})
 
         assert json_response(conn, 201)
         assert conn.resp_cookies["refresh_token"].secure == true
@@ -86,15 +87,45 @@ defmodule EngramWeb.LocalAuthControllerTest do
       end)
     end
 
+    test "no Secure flag when the request arrives on a NON-canonical host", %{conn: conn} do
+      # Regression guard. PHX_HOST is comma-separated with the first entry
+      # canonical (`.env.example` ships `engram.example.com,10.0.20.5:4000` as
+      # the example), and HostOrigins admits http AND https for every entry, so
+      # a self-host box is routinely reachable on a TLS public name AND a
+      # plaintext LAN address at once.
+      #
+      # Deriving `secure` from the canonical scheme alone marked the cookie
+      # Secure for the LAN user too. Login still returned 201 with a valid
+      # access token, so it looked fine, but the browser silently dropped a
+      # Secure cookie sent over cleartext and /api/auth/refresh 401'd forever
+      # once that token expired. Worse than the bug this fix exists for,
+      # because it is a hard break rather than a weakened flag.
+      with_endpoint_url("https://engram.example", fn ->
+        conn =
+          %{conn | host: "10.0.20.5"}
+          |> post("/api/auth/register", %{email: "lan@test.com", password: "StrongPass123!"})
+
+        assert json_response(conn, 201)
+        refute conn.resp_cookies["refresh_token"].secure
+      end)
+    end
+
     test "login and refresh rotation set Secure too, not just register", %{conn: conn} do
-      # All three sites share `refresh_cookie_opts/0`, but only `register` was
+      # All three sites share `refresh_cookie_opts/1`, but only `register` was
       # covered before. The rotation cookie is the longest-lived credential in
       # the flow, so it is the one that most needs pinning.
+      #
+      # Each conn dials the canonical host explicitly: `build_conn/0` defaults
+      # to `www.example.com`, which is (correctly) a non-canonical host and
+      # would yield `secure: false` for reasons unrelated to what this test is
+      # about.
       with_endpoint_url("https://engram.example", fn ->
-        post(conn, "/api/auth/register", %{email: "all@test.com", password: "StrongPass123!"})
+        %{conn | host: "engram.example"}
+        |> post("/api/auth/register", %{email: "all@test.com", password: "StrongPass123!"})
 
         login =
-          post(build_conn(), "/api/auth/login", %{
+          %{build_conn() | host: "engram.example"}
+          |> post("/api/auth/login", %{
             email: "all@test.com",
             password: "StrongPass123!"
           })
@@ -103,7 +134,7 @@ defmodule EngramWeb.LocalAuthControllerTest do
         assert login.resp_cookies["refresh_token"].secure == true
 
         rotated =
-          build_conn()
+          %{build_conn() | host: "engram.example"}
           |> put_req_cookie("refresh_token", login.resp_cookies["refresh_token"].value)
           |> post("/api/auth/refresh")
 

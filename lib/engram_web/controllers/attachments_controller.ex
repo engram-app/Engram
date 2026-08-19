@@ -94,8 +94,13 @@ defmodule EngramWeb.AttachmentsController do
 
   defp text_mime?(nil), do: false
 
+  # Same normalizer as the upload gate and `inline_safe?/1`. This was the third
+  # MIME decision site and it was missed when the other two were unified, which
+  # left the exact bug that unification existed to remove: a Free-tier user
+  # uploading `" text/plain"` got 402 `attachment_must_be_text` while
+  # `MimeWhitelist.check/2` considered the same string text.
   defp text_mime?(mime) when is_binary(mime),
-    do: String.starts_with?(String.downcase(mime), "text/")
+    do: String.starts_with?(Engram.Storage.MimeWhitelist.normalize(mime), "text/")
 
   defp do_upload(conn, user, vault, params) do
     case Attachments.upsert_attachment(user, vault, params) do

@@ -28,13 +28,47 @@ defmodule EngramWeb.LocalAuthController do
   # error, i.e. the bug comes back invisibly.
   #
   # Same source `Endpoint.url()` already backs for the device-flow
-  # verification URL, account emails, and the admin reset link. Its ceiling is
-  # that an operator who leaves PHX_HOST/PHX_SCHEME unset gets the
-  # `http://localhost` default and no Secure flag, but that is the existing
-  # single point of truth for every link this app emits, not a new failure
-  # mode. See `.env.example` for the operator-facing guidance.
-  defp refresh_cookie_opts do
-    secure = URI.parse(EngramWeb.Endpoint.url()).scheme == "https"
+  # verification URL, account emails, and the admin reset link.
+  #
+  # Ceiling, stated in full because an earlier revision of this comment listed
+  # only the first case and the second one is a functional break, not a missed
+  # hardening:
+  #
+  #   1. PHX_HOST/PHX_SCHEME unset -> the `http://localhost` default -> no
+  #      Secure flag. Same single point of truth every link this app emits
+  #      already depends on, so not a new failure mode. `Engram.Application`
+  #      warns about this at boot.
+  #   2. Multi-host (`PHX_HOST=a,b`) where the request arrives on a
+  #      NON-canonical host -> no Secure flag, because we cannot know that
+  #      host's scheme. Handled by the host check below rather than ignored:
+  #      the alternative (trusting the canonical scheme for every host) breaks
+  #      login outright on the plaintext one.
+  defp refresh_cookie_opts(conn) do
+    %URI{scheme: scheme, host: canonical_host} = URI.parse(EngramWeb.Endpoint.url())
+
+    # BOTH conditions, and the host half is not redundant.
+    #
+    # `PHX_HOST` is documented as comma-separated with the FIRST entry
+    # canonical (`.env.example` gives `engram.example.com,10.0.20.5:4000` as an
+    # example), and `HostOrigins.parse/1` admits http AND https for EVERY entry.
+    # So a self-host box is routinely reachable on a TLS public name and a
+    # plaintext LAN address at the same time, and only the canonical one is
+    # described by `Endpoint.url()`.
+    #
+    # Deriving `secure` from the canonical scheme alone therefore marks the
+    # cookie Secure for the LAN user too. Their login looks fine (201 + a valid
+    # access token), the browser silently discards a Secure cookie sent over
+    # cleartext, and `/api/auth/refresh` 401s forever once that token expires.
+    # Comparing the dialed host keeps the flag tied to the connection it was
+    # actually derived for.
+    #
+    # Safe against a forged Host: a browser sets Host from the URL the user
+    # navigated to, so an attacker cannot choose the victim's value. And the
+    # only reachable mistake is the SAFE direction — an unexpected host yields
+    # `secure: false`, which is exactly the pre-existing behaviour, never a
+    # downgrade of a cookie that would otherwise be protected.
+    secure = scheme == "https" and conn.host == canonical_host
+
     Keyword.put(@refresh_cookie_base, :secure, secure)
   end
 
@@ -49,7 +83,7 @@ defmodule EngramWeb.LocalAuthController do
                  {:ok, access_token} <- Local.issue_access_token(ext_id, user_email),
                  {:ok, raw_refresh, _record} <- Accounts.create_refresh_token(user) do
               conn
-              |> put_resp_cookie("refresh_token", raw_refresh, refresh_cookie_opts())
+              |> put_resp_cookie("refresh_token", raw_refresh, refresh_cookie_opts(conn))
               |> put_status(:created)
               |> json(%{access_token: access_token, user: %{email: user.email, role: user.role}})
             else
@@ -117,7 +151,7 @@ defmodule EngramWeb.LocalAuthController do
              {:ok, access_token} <- Local.issue_access_token(ext_id, user_email),
              {:ok, raw_refresh, _record} <- Accounts.create_refresh_token(user) do
           conn
-          |> put_resp_cookie("refresh_token", raw_refresh, refresh_cookie_opts())
+          |> put_resp_cookie("refresh_token", raw_refresh, refresh_cookie_opts(conn))
           |> json(%{access_token: access_token, user: %{email: user.email, role: user.role}})
         else
           {:error, _} ->
@@ -148,7 +182,7 @@ defmodule EngramWeb.LocalAuthController do
             case Local.issue_access_token(user.external_id, user.email) do
               {:ok, access_token} ->
                 conn
-                |> put_resp_cookie("refresh_token", new_raw_token, refresh_cookie_opts())
+                |> put_resp_cookie("refresh_token", new_raw_token, refresh_cookie_opts(conn))
                 |> json(%{access_token: access_token})
 
               {:error, _} ->

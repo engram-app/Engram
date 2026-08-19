@@ -538,7 +538,7 @@ defmodule EngramWeb.AttachmentsControllerTest do
       end
     end
 
-    test "a charset parameter does not change the inline decision for text/plain", %{conn: conn} do
+    test "charset parameter renders text/plain inline (behaviour change)", %{conn: conn} do
       # The other direction of the normalization, pinned because it is a real
       # behaviour CHANGE, not just a hole being closed: browsers commonly send
       # `text/plain; charset=utf-8`, which previously missed the bare

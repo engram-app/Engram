@@ -73,7 +73,6 @@ defmodule EngramWeb.Endpoint do
   # RequestId runs FIRST so request_id is attached to every response —
   # including 404/410 rejections from HostRewrite — for log correlation.
   plug Plug.RequestId
-
   # Drain hygiene: during graceful shutdown every response tells the client to
   # drop the keep-alive connection (see EngramWeb.Plugs.DrainConnClose).
   plug EngramWeb.Plugs.DrainConnClose

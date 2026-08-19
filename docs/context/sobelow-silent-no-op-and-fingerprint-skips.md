@@ -44,7 +44,7 @@ few genuinely load-bearing invariants are written down.
 
 ### `Misc.BinToTerm` x4
 
-`crypto.ex:580`, `crypto/user_dek_rotation.ex:1411`, `notes.ex:4597`, `notes.ex:4932`.
+`crypto.ex:581`, `crypto/user_dek_rotation.ex:1411`, `notes.ex:4597`, `notes.ex:4932`.
 
 All already pass `[:safe]`, and all only ever decode bytes that just passed
 AES-GCM authentication under a per-user DEK with row-bound AAD (the
@@ -52,12 +52,17 @@ AES-GCM authentication under a per-user DEK with row-bound AAD (the
 attacker-substituted byte string fails the GCM tag check and returns `:error`
 before `binary_to_term` is ever reached.
 
-The adjacent `crypto/aad_rebind.ex:220` shares the same pattern and was not
-flagged, which is itself a reminder that the check's coverage is uneven.
+These four are the **only** `binary_to_term` call sites in the tree
+(`grep -rn "binary_to_term" lib/`), and all four are pinned. An earlier draft of
+this section claimed `crypto/aad_rebind.ex:220` was an unflagged fifth site and
+cited it as evidence the check's coverage is uneven. That file contains no
+`binary_to_term` at all; the claim was fabricated and is retracted here rather
+than quietly deleted, because this doc is the designated record of the
+invariants each skip rests on, and a made-up site in it is worse than no note.
 
 ### `XSS.ContentType` + `XSS.SendResp` x5
 
-`attachments` controller (401, 403), `oauth_authorize_controller` (119, 139),
+`attachments` controller (411, 413), `oauth_authorize_controller` (119, 139),
 `spa_controller` (7).
 
 Attachment MIME is user-settable, and `MimeWhitelist` allows the whole `text/`
@@ -104,7 +109,7 @@ discards params entirely.
 
 ### `SQL.Query` x2
 
-`attachments.ex:970`, `notes.ex:6582`.
+`attachments.ex:988`, `notes.ex:6582`.
 
 Interpolation builds query **shape** only: `$N` placeholder tuples from
 `Enum.with_index`, column names from the compile-time module attributes
@@ -134,7 +139,7 @@ low-flags anything else.
 ### `Config.HTTPS` x1
 
 `config/prod.exs`. TLS terminates at the edge by design (ALB in SaaS, operator
-reverse proxy in self-host), documented at `prod.exs:3` and `runtime.exs:746`.
+reverse proxy in self-host), documented at `prod.exs:3` and `runtime.exs:753`.
 Sobelow reads only `prod.exs` and cannot see `runtime.exs`.
 
 ## The resolution, and why fingerprints and not an ignore list
@@ -177,10 +182,21 @@ So the gate defends **locations**, not **invariants**:
 The invariants each skip depends on are written down in the triage table above.
 Keeping them true is a code-review responsibility, not something CI checks.
 
-Corollary: the remedy for line-shift churn, `mix sobelow --mark-skip-all`,
-regenerates the file **wholesale**. That is exactly the moment a genuinely new
-finding can get pinned under cover of a large churn diff. Re-triage the diff,
-do not just re-run and commit.
+Corollary: the remedy for line-shift churn is `mix sobelow --mark-skip-all`,
+and it **APPENDS — it does not replace.** Re-running it after a refactor leaves
+every superseded fingerprint in place: this PR moved two findings by five lines
+and the file went 21 -> 23 entries, still carrying the dead `:406` / `:408`
+pins. Dead pins match nothing, so nothing fails; the file just silently becomes
+a graveyard where you can no longer tell which suppressions are live. Always:
+
+```bash
+rm .sobelow-skips && mix sobelow --mark-skip-all
+```
+
+Then diff the result and re-triage. Regenerating is also exactly the moment a
+genuinely new finding can get pinned under cover of a large churn diff, so read
+the diff — do not just re-run and commit. Sanity check: the entry COUNT should
+only change if a finding was genuinely added or removed.
 
 ### Verification recipe (re-run this whenever sobelow config or version changes)
 
@@ -235,9 +251,12 @@ Read it as "the scanner is alive", not "the suppressions are still safe".
   earlier assumption that CI must pass `--config` for an ignore list to be honoured
   was tested and is **false**. No `--config` flag is needed.
 
-- **Line shifts invalidate fingerprints.** When a flagged file moves lines,
-  regenerate with `mix sobelow --mark-skip-all` and re-triage anything new that
-  appears in the diff. Do not hand-edit `.sobelow-skips`.
+- **Line shifts invalidate fingerprints**, and the gate is what tells you: an
+  unrelated edit above a flagged line fails the build with the finding
+  re-reported at its new line. That is correct, fail-closed behaviour, not a
+  false alarm. Regenerate with `rm .sobelow-skips && mix sobelow --mark-skip-all`
+  (the `rm` is required — see above), then re-triage the diff. Do not hand-edit
+  `.sobelow-skips`.
 
 ## Related
 

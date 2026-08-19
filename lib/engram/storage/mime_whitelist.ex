@@ -102,16 +102,28 @@ defmodule Engram.Storage.MimeWhitelist do
   defp mime_allowed?(nil), do: false
 
   defp mime_allowed?(mime) when is_binary(mime) do
-    mime = normalize(mime)
+    # Reject header-illegal bytes BEFORE normalizing. `String.trim/1` strips
+    # `\n` and `\r`, so normalizing first would let `"application/pdf\n"` pass
+    # the gate; the value is then stored VERBATIM (parameters are meaningful in
+    # a response Content-Type, so we deliberately do not store the normalized
+    # form), and `put_resp_content_type/2` raises on it at serve time —
+    # `GET /api/attachments/<path>?raw=1` would 500 forever on that row rather
+    # than 415 at upload. Plug's own check is
+    # `Plug.Conn.validate_header_key_value!`; this mirrors its byte set.
+    if String.contains?(mime, ["\n", "\r", "\0"]) do
+      false
+    else
+      mime = normalize(mime)
 
-    Enum.any?(@mime_prefixes, &String.starts_with?(mime, &1)) or
-      MapSet.member?(@mime_explicit, mime) or
-      MapSet.member?(extra_allowlist(), mime)
+      Enum.any?(@mime_prefixes, &String.starts_with?(mime, &1)) or
+        MapSet.member?(@mime_explicit, mime) or
+        MapSet.member?(extra_allowlist(), mime)
+    end
   end
 
   defp extra_allowlist do
     case Application.get_env(:engram, :attachment_mime_allowlist_extra) do
-      list when is_list(list) -> MapSet.new(Enum.map(list, &String.downcase/1))
+      list when is_list(list) -> MapSet.new(Enum.map(list, &normalize/1))
       _ -> MapSet.new()
     end
   end

@@ -177,13 +177,18 @@ defmodule Engram.Application do
   # Only fires where the cookie actually exists (local credentials, i.e.
   # self-host) and only in a release build, so dev and test stay quiet.
   defp warn_if_refresh_cookie_insecure do
-    scheme =
-      :engram
-      |> Application.get_env(EngramWeb.Endpoint, [])
-      |> Keyword.get(:url, [])
-      |> Keyword.get(:scheme, "http")
+    url = :engram |> Application.get_env(EngramWeb.Endpoint, []) |> Keyword.get(:url, [])
+    scheme = Keyword.get(url, :scheme, "http")
 
-    if @release_build? and Engram.Auth.supports_credentials?() and scheme != "https" do
+    # Evaluated BEFORE the guard, not inside it: `@release_build?` is a
+    # compile-time `false` in dev/test, so anything to the right of it in the
+    # `and` chain is dead code there and dialyzer fails the build with
+    # `loopback?/1 will never be called`. Hoisting the call keeps it reachable
+    # in every MIX_ENV. It is one keyword lookup at boot, once.
+    on_loopback? = loopback?(Keyword.get(url, :host, "localhost"))
+
+    if @release_build? and Engram.Auth.supports_credentials?() and scheme != "https" and
+         not on_loopback? do
       Logger.warning("""
       refresh_token cookie will be issued WITHOUT the Secure attribute.
 
@@ -200,6 +205,21 @@ defmodule Engram.Application do
       """)
     end
   end
+
+  # A loopback canonical host is the documented `.env.example` quickstart
+  # (`PHX_HOST=localhost`), and the cookie cannot cross a network to be
+  # downgraded there. Warning on it would train operators to ignore the
+  # warning in exactly the deployments where it IS real.
+  # Deliberately NOT including 0.0.0.0: it is a bind address, not a reachable
+  # canonical host, and treating it as loopback would silence the warning on a
+  # misconfiguration rather than surface it.
+  defp loopback?(host) when is_binary(host) do
+    host = host |> String.trim() |> String.downcase() |> String.trim("[") |> String.trim("]")
+
+    host in ["localhost", "::1"] or String.starts_with?(host, "127.")
+  end
+
+  defp loopback?(_), do: false
 
   defp install_log_redaction_filter do
     # Idempotent: removing a missing filter is a no-op error we ignore so
