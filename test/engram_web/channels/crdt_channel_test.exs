@@ -153,6 +153,66 @@ defmodule EngramWeb.CrdtChannelTest do
       assert CrdtRegistry.lookup(id) == nil
     end
 
+    test "fans the genesis body out to the vault's other devices", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # #1409, found by the first paired e2e run. `note_yjs_update` is emitted
+      # from CrdtPersistence.update_v1/4, which runs INSIDE the room GenServer.
+      # A detached seed opens no room, so without an explicit fan-out a second
+      # device only ever heard `crdt_doc_ready` — which says the note exists but
+      # carries no content — and materialized the file at 0 bytes
+      # (e2e-crdt test_no_conflict_modal_on_divergence; headless-protocol
+      # "live A->B fan-out" saw the empty-string hash e3b0c44298fc).
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/fanned.md",
+          "b64" => frame_for_content("# Fanned\n\ngenesis body")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true}
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "note_yjs_update",
+                       payload: %{"note_id" => ^id, "b64" => b64}
+                     },
+                     2_000
+
+      # FULL state, not a delta: a device that has never seen this note must
+      # converge from an empty doc.
+      {:ok, doc} = CrdtBridge.doc_from_state(Base.decode64!(b64))
+      assert CrdtBridge.text_of(doc) == "# Fanned\n\ngenesis body"
+
+      # Still no room — the fan-out must not resurrect the thing this whole
+      # change removes.
+      assert CrdtRegistry.lookup(id) == nil
+    end
+
+    test "a declined seed does NOT fan out", %{socket: socket, user: user, vault: vault} do
+      # The fan-out rides the write path only. A create whose row already holds
+      # a DIFFERENT body writes nothing, so broadcasting would push state no
+      # writer here produced.
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/taken.md", "content" => "base"})
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => note.id,
+          "path" => "Notes/taken.md",
+          "b64" => frame_for_content("something else")
+        })
+
+      assert_reply ref, :ok, %{doc_id: _, seeded: false}
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200
+    end
+
     test "seeding the same note twice does not double the body", %{
       socket: socket,
       user: user,

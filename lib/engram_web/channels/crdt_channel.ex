@@ -24,6 +24,7 @@ defmodule EngramWeb.CrdtChannel do
   alias Engram.{Notes, Repo, Vaults}
   alias Engram.Notes.CrdtBridge
   alias Engram.Notes.CrdtCheckpoint
+  alias Engram.Notes.CrdtDeliver
   alias Engram.Notes.CrdtIndexRegistry
   alias Engram.Notes.CrdtRegistry
   alias Engram.Notes.CrdtTransport
@@ -911,7 +912,27 @@ defmodule EngramWeb.CrdtChannel do
     # evicted and re-binding, costing a re-handshake the client already
     # handles (#1409). The other two seed_against/6 clauses never take the
     # write path, so a room racing THEM is left alone.
-    if wrote?, do: evict_racing_room(note_id)
+    if wrote? do
+      # Evict BEFORE the fan-out: a client still live-bound to that room skips
+      # pushed state (its own room owns the note), so the broadcast below only
+      # reaches it once the stale room is gone.
+      evict_racing_room(note_id)
+
+      # The other half of removing the room (#1409, found by the first paired
+      # e2e run: device B created the file at 0 bytes and never filled it).
+      # `note_yjs_update` — the per-vault live fan-out that makes a SECOND
+      # device materialize the body — is emitted from
+      # `CrdtPersistence.update_v1/4`, which runs INSIDE the room GenServer. No
+      # room means it never fired, and `announce_ready` (from checkpoint/5)
+      # says a note EXISTS but carries no content. That is exactly the
+      # first-delivery gap `CrdtDeliver.fanout_idle/3` already closes for
+      # REST/MCP writes, so reuse it rather than grow a second emitter: same
+      # full-state payload, same topic, and the same `FanoutPacer` pacing, so a
+      # 1,700-note import enqueues COLD and drains at a bounded rate instead of
+      # emitting 1,700 unpaced broadcasts. Best-effort and post-commit — it
+      # skips silently if the row carries no state (the checkpoint no-op'd).
+      CrdtDeliver.fanout_idle(user.id, vault.id, note_id)
+    end
 
     seeded
   rescue

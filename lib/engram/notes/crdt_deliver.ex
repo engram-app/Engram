@@ -95,7 +95,23 @@ defmodule Engram.Notes.CrdtDeliver do
   # already mapped + confirmed the note_id before these bytes arrive. Best-effort
   # and post-commit like the rest of deliver-out: a state-less (legacy/lazy) row
   # or a load failure simply skips — the announce still fires for enrolled clients.
-  defp fanout_idle(user_id, vault_id, note_id) do
+  #
+  # PUBLIC for one more caller (#1409): the detached genesis seed in
+  # `EngramWeb.CrdtChannel` writes a note's body WITHOUT opening a room, so the
+  # room's `CrdtPersistence.update_v1/4` fan-out — which runs inside the room
+  # GenServer — never fires for it. That is the same first-delivery gap this
+  # function already covers for REST/MCP writes, so it reuses this rather than
+  # growing a second emitter. No origin filtering here or there: the `sync:`
+  # topic is per-vault, the originating device suppresses client-side (applies
+  # with REMOTE_ORIGIN, and skips entirely while the note is live-bound), and a
+  # Yjs re-apply of its own state is a no-op.
+  @doc """
+  Broadcast `note_id`'s committed Yjs state on the vault's `sync:` topic so
+  devices with no open room for it converge room-free. Paced by `FanoutPacer`.
+  Best-effort: a state-less row or a load failure skips silently. Returns `:ok`.
+  """
+  @spec fanout_idle(String.t(), String.t(), String.t()) :: :ok
+  def fanout_idle(user_id, vault_id, note_id) do
     _ =
       with {:ok, state, seq} when is_binary(state) <- load_merged_state(user_id, note_id) do
         head =
