@@ -7,10 +7,16 @@ defmodule Engram.Application do
 
   require Logger
 
+  # Compile-time, because `Mix` is not available at runtime in a release. Used
+  # to keep boot-time operator warnings out of dev and test, where a plaintext
+  # canonical URL is normal and correct.
+  @release_build? Mix.env() == :prod
+
   @impl true
   def start(_type, _args) do
     Engram.Crypto.Config.validate!()
     verify_spa_integrity!()
+    warn_if_refresh_cookie_insecure()
     install_log_redaction_filter()
     # Sentry logger handler must attach AFTER the redaction filter so
     # error logs sent to Sentry have already had secrets scrubbed by
@@ -150,6 +156,70 @@ defmodule Engram.Application do
       Engram.SpaIntegrity.verify!()
     end
   end
+
+  # `LocalAuthController` derives the refresh cookie's `Secure` attribute from
+  # the canonical URL, which is the only operator-declared statement of how
+  # users actually reach this deployment (`conn.scheme` is always `:http`
+  # behind a TLS-terminating edge, which is what shipped the cookie without
+  # `Secure` in the first place).
+  #
+  # The gap that leaves: `config/runtime.exs` wraps the whole `url:` block in
+  # `if phx_hosts do`, so an operator who never sets `PHX_HOST` falls back to
+  # the `config/config.exs` default of `http://localhost` and gets
+  # `secure: false` — even if they are, in fact, behind Caddy or nginx doing
+  # TLS. That is a supported shape, so this cannot fail closed without breaking
+  # genuine plaintext LAN deployments. It CAN refuse to be silent about it.
+  #
+  # Read from application env rather than `EngramWeb.Endpoint.url/0`: the
+  # endpoint is started further down in `children` and its persistent_term is
+  # not warmed yet at this point in boot.
+  #
+  # Only fires where the cookie actually exists (local credentials, i.e.
+  # self-host) and only in a release build, so dev and test stay quiet.
+  defp warn_if_refresh_cookie_insecure do
+    url = :engram |> Application.get_env(EngramWeb.Endpoint, []) |> Keyword.get(:url, [])
+    scheme = Keyword.get(url, :scheme, "http")
+
+    # Evaluated BEFORE the guard, not inside it: `@release_build?` is a
+    # compile-time `false` in dev/test, so anything to the right of it in the
+    # `and` chain is dead code there and dialyzer fails the build with
+    # `loopback?/1 will never be called`. Hoisting the call keeps it reachable
+    # in every MIX_ENV. It is one keyword lookup at boot, once.
+    on_loopback? = loopback?(Keyword.get(url, :host, "localhost"))
+
+    if @release_build? and Engram.Auth.supports_credentials?() and scheme != "https" and
+         not on_loopback? do
+      Logger.warning("""
+      refresh_token cookie will be issued WITHOUT the Secure attribute.
+
+      The canonical URL is #{scheme}://…, so Engram assumes it is reached over
+      plaintext. If that is right (a LAN box with no TLS), nothing is wrong.
+
+      If you are actually behind a TLS reverse proxy, this is a real exposure:
+      a 30-day refresh token that a downgrade can replay over cleartext. The
+      app cannot detect this on its own, because TLS terminates at your proxy
+      and every request arrives here as plain HTTP.
+
+      Fix: set PHX_HOST (and PHX_SCHEME=https if you do not want the prod
+      default). See .env.example.
+      """)
+    end
+  end
+
+  # A loopback canonical host is the documented `.env.example` quickstart
+  # (`PHX_HOST=localhost`), and the cookie cannot cross a network to be
+  # downgraded there. Warning on it would train operators to ignore the
+  # warning in exactly the deployments where it IS real.
+  # Deliberately NOT including 0.0.0.0: it is a bind address, not a reachable
+  # canonical host, and treating it as loopback would silence the warning on a
+  # misconfiguration rather than surface it.
+  defp loopback?(host) when is_binary(host) do
+    host = host |> String.trim() |> String.downcase() |> String.trim("[") |> String.trim("]")
+
+    host in ["localhost", "::1"] or String.starts_with?(host, "127.")
+  end
+
+  defp loopback?(_), do: false
 
   defp install_log_redaction_filter do
     # Idempotent: removing a missing filter is a no-op error we ignore so

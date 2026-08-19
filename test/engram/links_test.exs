@@ -206,8 +206,19 @@ defmodule Engram.LinksTest do
              "replace_links must call lock_source_note!(source_note_id) to serialize " <>
                "concurrent writers (Task 2)"
 
-      assert src =~ ~r/pg_advisory_xact_lock/,
-             "lock_source_note! must issue pg_advisory_xact_lock (Task 2)"
+      # #1409 review round 3: the raw `pg_advisory_xact_lock` SQL moved out of
+      # this file into the shared `Repo.advisory_lock!/1` (so this call site
+      # and CrdtChannel/CrdtPersistence's #1409 lock can never key-drift
+      # against each other). `lock_source_note!/1` now just delegates —
+      # assert THAT delegation, plus that the shared helper itself still
+      # issues the real SQL (in repo.ex, not mocked away).
+      assert src =~ ~r/Repo\.advisory_lock!\(/,
+             "lock_source_note! must delegate to Repo.advisory_lock!/1 (Task 2 / #1409)"
+
+      repo_src = File.read!("lib/engram/repo.ex")
+
+      assert repo_src =~ ~r/pg_advisory_xact_lock/,
+             "Repo.advisory_lock!/1 must issue pg_advisory_xact_lock (Task 2 / #1409)"
 
       assert src =~ ~r/Repo\.transaction/,
              "replace_links must wrap delete+insert in a transaction so the advisory " <>

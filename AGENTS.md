@@ -105,7 +105,7 @@ See `docs/context/testing-strategy.md` for full strategy, tooling, and CI pipeli
 
 ## Quality Tooling
 
-All quality lints are fatal in CI: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix credo --strict`, `mix sobelow --exit low`, `mix dialyzer`. Configs at `.credo.exs`, `.sobelow-conf`, `.dialyzer_ignore.exs`. Historical phase 1-6 ratchet record + threshold rationale at `docs/context/quality-tooling-baseline.md`.
+All quality lints are fatal in CI: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix credo --strict`, `mix sobelow --exit low --skip`, `mix dialyzer`. Configs at `.credo.exs`, `.sobelow-conf`, `.sobelow-skips`, `.dialyzer_ignore.exs`. Historical phase 1-6 ratchet record + threshold rationale at `docs/context/quality-tooling-baseline.md`.
 
 Deferred ratchets (future): `Readability.Specs` (forces `@spec` on every public function — ~225 outstanding) and `Design.DuplicatedCode` (13 outstanding).
 
@@ -115,7 +115,7 @@ Deferred ratchets (future): `Readability.Specs` (forces `@spec` on every public 
 mix format --check-formatted              # fast, gates immediately
 mix compile --warnings-as-errors --force  # fast
 mix credo --strict --mute-exit-status     # ~3s, strict mode (default in this repo)
-mix sobelow --exit low                    # ~5s (no --skip → annotations surface)
+mix sobelow --exit low --skip             # ~5s (--skip honours .sobelow-skips; MUST match CI)
 mix dialyzer                              # slow first run (~5-10 min PLT build)
 ```
 
