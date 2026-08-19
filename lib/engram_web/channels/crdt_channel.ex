@@ -924,12 +924,35 @@ defmodule EngramWeb.CrdtChannel do
   defp seed_detached(user, vault, note_id, doc) do
     interleave_hook(:genesis_seed_before_write)
 
+    # The frame's OWN projection — what the CLIENT holds — captured before the
+    # fold mutates `doc`. Distinct from the union below, and the distinction is
+    # load-bearing (#1409).
+    genesis_text = CrdtBridge.text_of(doc)
+
     {seeded, wrote?} =
       case fold_row_and_tail(user, vault, note_id, doc) do
+        # Already exactly this body: an idempotent retry with nothing to write.
+        # Report true — the client's file IS synced, which is what `seeded`
+        # means — and take no room.
+        #
+        # Asked against `genesis_text`, NOT the post-fold union, and that is the
+        # whole point. The realistic retry (a lost ack) rebuilds the frame with a
+        # FRESH Yjs clientID, so folding the stored snapshot in yields two
+        # concurrent inserts of the same text: under YATA the union projects the
+        # body TWICE. Comparing the union here would decline every such retry
+        # (`seeded: false`) and push the client onto its crdt_msg fallback, which
+        # is safe but spends a room per retry — precisely what this change exists
+        # to stop, in precisely the bulk-import conditions where acks get lost.
+        #
+        # The union is not the right question for "is the client synced": it is
+        # what a WRITE would commit, and it is used for exactly that below.
+        {:ok, ^genesis_text, _prune_ids} ->
+          {true, false}
+
         {:ok, row_content, prune_ids} ->
-          # `expected` is read AFTER the fold, not before: with tail rows folded
-          # in, the doc projects genesis + those edits, and that union is what
-          # the checkpoint writes and what `seed_landed?/4` must compare against.
+          # The union is read AFTER the fold: with the stored snapshot and any
+          # tail rows folded in, THIS is what `checkpoint/5` commits and what
+          # `seed_landed?/4` must compare the row against.
           seed_against(
             user,
             vault,
@@ -1115,25 +1138,20 @@ defmodule EngramWeb.CrdtChannel do
   # rather than doubling the body via `union_with_row_state` (#846).
   #
   # Returns `{seeded?, wrote?}`. `seeded?` is the honest read-back the reply
-  # carries; `wrote?` says only that the write CLAUSE ran. seed_detached/5 needs
+  # carries; `wrote?` says only that the write CLAUSE ran. seed_detached/4 needs
   # both to tell a confirmed row change from a no-op — see its eviction gate.
   #
-  # Clause ORDER is load-bearing, not interchangeable: the first clause's
-  # `expected, expected` pattern-match-equality only fires when the row
-  # content is EXACTLY the frame's projection, and must be checked before the
-  # `""` clause below — an empty frame (`expected == ""`) landing on an
-  # already-empty row must report the idempotent `true` of clause 1, not fall
-  # through to clause 2 and pay for a real (no-op) checkpoint write. Clause 2
-  # ("") must in turn precede the catch-all: it is the ONLY row state clause 3's
-  # "declined" `false` may not return for, since an empty row is exactly what a
-  # genesis seed is for.
+  # The "row already holds exactly this body" case does NOT live here: it is
+  # answered against the frame's own pre-fold projection by seed_detached/4,
+  # which is the only place `genesis_text` is meaningful. Both clauses below
+  # therefore take `union_text` — the post-fold projection — and use it only as
+  # the value a write is checked against, never as an identity test.
   #
-  # Already exactly this body: an idempotent retry with nothing to write. Report
-  # true — the client's file IS synced, which is what `seeded` means.
-  defp seed_against(_user, _vault, _note_id, _doc, expected, expected, _prune_ids),
-    do: {true, false}
-
-  defp seed_against(user, vault, note_id, doc, expected, "", prune_ids) do
+  # Clause ORDER is still load-bearing: the `""` clause must precede the
+  # catch-all, because an empty row is the ONE row state the catch-all's
+  # "declined" `false` may not be returned for — it is exactly what a genesis
+  # seed is for.
+  defp seed_against(user, vault, note_id, doc, union_text, "", prune_ids) do
     captured_version = CrdtCheckpoint.current_version(user.id, note_id)
 
     _ =
@@ -1148,13 +1166,13 @@ defmodule EngramWeb.CrdtChannel do
         prune_ids: prune_ids
       )
 
-    {seed_landed?(user, vault, note_id, expected), true}
+    {seed_landed?(user, vault, note_id, union_text), true}
   end
 
   # The row already carries a DIFFERENT body — a concurrent write landed between
   # genesis and here. Merging two lineages is exactly what a room is for; decline
   # and let the client's crdt_msg seed go through one.
-  defp seed_against(_user, _vault, _note_id, _doc, _expected, _row_content, _prune_ids),
+  defp seed_against(_user, _vault, _note_id, _doc, _union_text, _row_content, _prune_ids),
     do: {false, false}
 
   # Same convention as CrdtCheckpoint.interleave_hook/1 and

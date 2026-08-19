@@ -193,6 +193,45 @@ defmodule EngramWeb.CrdtChannelTest do
       assert CrdtRegistry.lookup(id) == nil
     end
 
+    test "an ack-loss retry with a FRESH clientID still takes the room-free fast path", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # #1409. The realistic retry: the create's ack was lost, so the client
+      # rebuilds the genesis frame from scratch — a NEW Yjs clientID projecting
+      # the SAME text. The existing "seeding the same note twice" test replays
+      # the IDENTICAL frame, so it never exercises this.
+      #
+      # This is the case the tail/snapshot fold made subtle. `fold_row_and_tail/4`
+      # applies the STORED snapshot (clientID A) into a doc holding the retry
+      # frame (clientID B), and two independent inserts of the same text are
+      # concurrent under YATA, so the UNION projects the body twice. Comparing
+      # that union against the row would decline the retry (`seeded: false`),
+      # sending the client to its crdt_msg fallback — which is safe but costs a
+      # room, the exact thing this change exists to avoid.
+      #
+      # So the "already synced?" question is asked against the frame's OWN
+      # projection, before the fold — what the client HAS — while the union is
+      # only ever what a real write COMMITS. Both values, two jobs.
+      id = Ecto.UUID.generate()
+      payload = %{"doc_id" => id, "path" => "Notes/ackloss.md"}
+
+      ref1 = push(socket, "crdt_create", Map.put(payload, "b64", frame_for_content("once")))
+      assert_reply ref1, :ok, %{doc_id: ^id, seeded: true}
+      assert_note_content_eventually(user, vault, id, "once")
+
+      # A SEPARATE frame_for_content/1 call — CrdtBridge.new_doc/0 mints a fresh
+      # clientID, which is what makes this different from the retry test above.
+      ref2 = push(socket, "crdt_create", Map.put(payload, "b64", frame_for_content("once")))
+      assert_reply ref2, :ok, %{doc_id: ^id, seeded: true}
+
+      # Not doubled, and still no room: the retry cost nothing.
+      assert {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == "once"
+      assert CrdtRegistry.lookup(id) == nil
+    end
+
     test "folds a tail row written in the seed window instead of stranding it", %{
       socket: socket,
       user: user,
