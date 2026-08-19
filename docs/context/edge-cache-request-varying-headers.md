@@ -37,11 +37,27 @@ five minutes — the worst possible bug report.
 the entry stays shared. This is the trap: `Vary` is the textbook answer, it
 looks like it works, and at our edge it does nothing.
 
-The fix is to make the header **constant** on exactly the routes that are
-cached. `EngramWeb.Router`'s `:public_cacheable` pipeline pins
-`access-control-allow-origin: *` alongside the `Cache-Control`, and both live
-in one pipeline specifically so a third cached endpoint cannot pick up half
-the pair.
+The fix is to make the header **constant**, and to key that on **path, not
+route**. `EngramWeb.Plugs.CORS` returns `*` for `@cacheable_prefixes` /
+`@cacheable_exact`, which mirror the Cache Rule; the router's
+`:public_cacheable` pipeline only sets `Cache-Control`.
+
+Pinning it per-route (the first attempt) leaves a reachable gap, because the
+edge matches by prefix and a router pipeline only runs for a matched route.
+Verified against prod:
+
+```
+GET /.well-known/oauth-bogus-does-not-exist
+  -> 404
+  -> access-control-allow-origin: https://mcp.engram.page   # echoed
+  -> cf-cache-status: BYPASS                                # the rule DID match
+```
+
+`BYPASS` is the tell: the edge considered the path cacheable and declined only
+because Phoenix's 404 happens to send `private`. That is incidental protection.
+Give any fallback a `public` cache-control later and the poisoning returns
+through a path nobody thinks of as an endpoint. Matching the app's predicate to
+the edge's removes the gap instead of depending on a 404's headers.
 
 `*` is safe **here** and is not a general licence: these are unauthenticated
 RFC 8414 / RFC 9728 discovery documents and the OpenAPI spec, all fetchable by
@@ -95,6 +111,15 @@ Do not copy the `*` onto a route that answers differently per user.
 - **Ordering between the two repos is safe either way.** If the infra rule
   lands first, the app is still sending Phoenix's default `private`, and
   `respect_origin` declines to cache. No window of wrongness.
+- **A cookie's `Secure` flag is decided by the CANONICAL scheme, not the dialed
+  host.** `refresh_cookie_opts/1` in `local_auth_controller.ex` sets `secure`
+  from `Endpoint.url()` alone. Keying it off `conn.host == canonical_host`
+  looks more precise and is worse: it silently drops `Secure` on any *other*
+  TLS hostname in a multi-host `PHX_HOST`, and `SameSite=Lax` does not cover
+  that gap because Lax still rides top-level navigations. The accepted cost is
+  that a plaintext alias can no longer persist a login — the browser takes the
+  201, discards the Secure cookie, and `/api/auth/refresh` 401s an hour later.
+  Serve the alias over TLS; do not reintroduce the host comparison.
 - **`x-request-id` is cached with the body**, so a hit replays the request id
   of whichever request filled the cache. Use `cf-ray` to correlate these
   endpoints; the id is still accurate on a MISS.

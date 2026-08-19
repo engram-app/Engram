@@ -73,6 +73,32 @@ defmodule EngramWeb.PublicCacheableHeadersTest do
     end
   end
 
+  describe "paths the edge may cache but no route serves" do
+    test "a 404 under the cached prefix still gets a constant origin", %{conn: conn} do
+      # The gap this closes. The Cloudflare rule matches by PATH PREFIX
+      # (/.well-known/oauth-), the router pins headers per matched ROUTE, and
+      # the difference between those two is reachable. Verified against prod
+      # before the fix: GET /.well-known/oauth-bogus-does-not-exist returned
+      # `access-control-allow-origin: https://mcp.engram.page` (echoed) with
+      # `cf-cache-status: BYPASS` — BYPASS meaning the cache rule DID match and
+      # the edge declined only because Phoenix's 404 happens to send `private`.
+      #
+      # That is incidental protection. Give a fallback a `public` cache-control
+      # someday and the poisoning is back, via a path nobody thinks of as an
+      # endpoint. Pinning in the CORS plug by path removes the gap instead of
+      # relying on the 404's headers.
+      resp =
+        conn
+        |> put_req_header("origin", @allowlisted)
+        |> get("/.well-known/oauth-bogus-does-not-exist")
+
+      assert resp.status == 404
+
+      assert get_resp_header(resp, "access-control-allow-origin") == ["*"],
+             "an unrouted path under the cached prefix echoed the request Origin"
+    end
+  end
+
   describe "everything else" do
     test "still echoes an allowlisted Origin", %{conn: conn} do
       # The override must be scoped to the cached documents. If it leaked into

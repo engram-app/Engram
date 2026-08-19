@@ -1,5 +1,5 @@
-Config.CSP: Missing Content-Security-Policy,lib/engram_web/router.ex:195,7241304
-Config.CSRFRoute: CSRF via Action Reuse,lib/engram_web/router.ex:608,612C31C
+Config.CSP: Missing Content-Security-Policy,lib/engram_web/router.ex:173,43202C
+Config.CSRFRoute: CSRF via Action Reuse,lib/engram_web/router.ex:586,342E9AB
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:9,68D560D
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:30,6F8AC00
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:45,6EA19F5
