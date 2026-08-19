@@ -193,6 +193,24 @@ def _make_clerk_user(clerk_client) -> tuple[str, str, str]:
         f"User DB provisioning failed: {resp.status_code} {resp.text}"
     )
 
+    # Complete the FTUX questionnaire, mirroring helpers/clerk_auth.py and
+    # helpers/oauth.py. Provisioning the DB row is not the same as onboarding:
+    # `POST /api/auth/device/authorize` is gated on the same verdict the
+    # sync channels use (`Engram.Onboarding.gate/1`), so a user who never
+    # answered `tools` gets 403 onboarding_required missing=["profile"].
+    # A real user answers this on the `tools` step, which precedes the vault
+    # step where they link the plugin — so onboarding here is what makes the
+    # fixture resemble a real account, not a workaround.
+    prof = requests.patch(
+        f"{API_URL}/onboarding/profile",
+        json={"uses_obsidian": True, "tools": ["claude"]},
+        headers={"Authorization": f"Bearer {initial_jwt}"},
+        timeout=10,
+    )
+    assert prof.status_code in (200, 201), (
+        f"Onboarding profile PATCH failed: {prof.status_code} {prof.text}"
+    )
+
     jwt_token = clerk_client.create_session_token(clerk_user_id)
     return clerk_user_id, jwt_token, email
 
