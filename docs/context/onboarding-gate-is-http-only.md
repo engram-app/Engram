@@ -23,7 +23,7 @@ normal state rather than a blocked one).
 (`router.ex:55`). It correctly 403'd `/api/notes`, `/api/search`, `/api/folders`.
 But a Plug takes a `conn` and **never runs on a socket** — and sync had moved to
 Phoenix Channels. The live path checked token validity (`user_socket.ex`
-`connect/3`), `crdt_proto` version, `RotationGate.check/1` (DEK rotation lock),
+`connect/3`), `crdt_proto` version, the DEK rotation lock,
 topic ownership, and `Vaults.check_api_key_access/2`. What it did **not** check
 was entitlement: nothing asked about ToS, plan, or wizard completion.
 
@@ -50,15 +50,19 @@ The vault scope pipes `:authed_api` (`router.ex:49-60`), which runs **eleven**
 plugs — not three. Do not trust a summary that says otherwise; that
 miscount is what let the gaps below go unnoticed.
 
-| `:authed_api` plug | HTTP | Socket |
-|---|---|---|
-| `AccountDeleted` | 410 `account_deleted` (`deleted_at` only) | ✅ #1429 |
-| `RequireOnboarding` | 403 `onboarding_required` | ✅ #1426 |
-| `RequireActiveSubscription` | 402 `account_suspended` | ✅ #1429 |
-| `BumpActivity` | stamps `last_active_at` | ✅ #1429 (see below — load-bearing) |
-| `RotationLockCheck` | 423 | ✅ #1434 — in `ChannelGate`, both channels |
-| `RequireApiWriteEnabled` | 402 | ✅ #1433 — write frames only |
-| `RequireApiRpsBudget` | 429 | ✅ #1433 — refuses the JOIN when the key's tier has `api_rps_cap: 0` |
+Listed in **pipeline execution order** (`router.ex:49-60`) — `ChannelGate`'s
+`with` chain follows this order deliberately, so a reader deriving one from
+the other must not be handed a re-sorted table:
+
+| # | `:authed_api` plug | HTTP | Socket |
+|---|---|---|---|
+| 1 | 2 | 3 | `AccountDeleted` | 410 `account_deleted` (`deleted_at` only) | ✅ #1429 |
+| 4 | 5 | `RotationLockCheck` | 503 `rotation_in_progress` | ✅ #1434 |
+| 6 | `RequireOnboarding` | 403 `onboarding_required` | ✅ #1426 |
+| 7 | `RequireActiveSubscription` | 402 `account_suspended` | ✅ #1429 |
+| 8 | `BumpActivity` | stamps `last_active_at` | ✅ #1429 (load-bearing, see below) |
+| 9 | `RequireApiRpsBudget` | 429 | ✅ #1433 — refuses the JOIN at `cap: 0` |
+| 10 | 11 | `RequireApiWriteEnabled` | 402 | ✅ #1433 — write frames only |
 | `EnforceSearchCap` | 402 | ❌ (no channel equivalent) |
 | `PreAuthRateLimit` | 429 | ❌ — **there is no join rate limiter at all** |
 | `DeviceFingerprint` | — | ❌ |
@@ -115,9 +119,14 @@ plumbing. #1429 closed the other two.
   `missing: ["terms"]` from a `VersionCache` leak. See Gotchas.
 
 ## Ordering (do not "tidy" this)
-In `CrdtChannel`: `crdt_proto` → `RotationGate.check/1` → **topic ownership
-match** → `ChannelGate.check/1` → vault resolve. In `SyncChannel`: topic
-ownership match → `ChannelGate.check/1` → vault resolve.
+In `CrdtChannel`: `crdt_proto` → **topic ownership match** →
+`ChannelGate.check/2` → vault resolve. In `SyncChannel`: topic ownership
+match → `ChannelGate.check/2` → vault resolve.
+
+Rotation used to sit ahead of the ownership match in `CrdtChannel`; #1434
+moved it inside `ChannelGate` so `SyncChannel` gets it too. Behaviour change
+worth knowing: a user mid-rotation joining a topic they do NOT own now gets
+`unauthorized` rather than `rotation_in_progress`.
 
 The gate goes last because:
 - the ownership match is free, and the verdict costs ~4 DB round-trips

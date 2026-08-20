@@ -157,7 +157,7 @@ defmodule EngramWeb.OnboardingGateChannelTest do
     end
 
     # T3.7: a user mid-DEK-rotation must hear rotation_in_progress. Gating
-    # ahead of RotationGate.check/1 would have swallowed it.
+    # ahead of the rotation check (now in ChannelGate) would have swallowed it.
     test "rotation_in_progress outranks onboarding_required", %{user: user, vault: vault} do
       {:ok, _} =
         user

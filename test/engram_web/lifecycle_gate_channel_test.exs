@@ -303,9 +303,10 @@ defmodule EngramWeb.LifecycleGateChannelTest do
   # able to write through the socket instead. Reads stay open: the plug
   # exempts GET, and existing tests assert Free API keys can join and read.
   describe "API-key entitlements (#1433)" do
-    setup %{user: user} do
+    setup %{user: user, vault: vault} do
       {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "entitlement-gate")
-      {:ok, api_key: api_key}
+      {:ok, note} = Engram.Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "hi"})
+      {:ok, api_key: api_key, note: note}
     end
 
     # Free's `api_rps_cap` is 0 and `RequireApiRpsBudget` has no GET
@@ -346,7 +347,6 @@ defmodule EngramWeb.LifecycleGateChannelTest do
     } do
       # rps only — `api_write_enabled` stays at the Free default (false).
       grant_api_read!(user)
-      Engram.Billing.OverrideCache.clear_local()
 
       assert {:ok, _, joined} =
                subscribe_and_join(
@@ -360,6 +360,37 @@ defmodule EngramWeb.LifecycleGateChannelTest do
 
       ref = push(joined, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "n.md"})
       assert_reply ref, :error, %{reason: "api_write_not_available"}
+    end
+
+    # `crdt_msg` is not "the write frame" — it carries the Yjs sync handshake
+    # too. SyncStep1 (`<<0, 0, _>>`) is a pure state-vector REQUEST: it is how
+    # a client asks for doc state. Blocking it means a read-entitled key joins
+    # successfully and then receives nothing, forever — no room is ever
+    # observed, so fan-out never fires either. The plug this mirrors opens
+    # with `when m in ["GET", "HEAD"], do: conn` under "Reads are never
+    # gated"; this is that clause.
+    test "a write-blocked PAT can still send SyncStep1 and read", %{
+      user: user,
+      vault: vault,
+      api_key: api_key,
+      note: note
+    } do
+      grant_api_read!(user)
+
+      {:ok, _, joined} =
+        subscribe_and_join(
+          user_socket(user, api_key),
+          EngramWeb.CrdtChannel,
+          "crdt:#{user.id}:#{vault.id}",
+          %{"crdt_proto" => 2}
+        )
+
+      Sandbox.allow(Repo, self(), joined.channel_pid)
+
+      # SyncStep1 for an empty local state = read the whole doc.
+      step1 = Base.encode64(<<0, 0, 1, 0>>)
+      ref = push(joined, "crdt_msg", %{"doc_id" => note.id, "b64" => step1})
+      assert_reply ref, :ok, %{}
     end
 
     test "a JWT socket writes normally", %{user: user, vault: vault} do
@@ -377,7 +408,6 @@ defmodule EngramWeb.LifecycleGateChannelTest do
       api_key: api_key
     } do
       grant_api_write!(user)
-      Engram.Billing.OverrideCache.clear_local()
 
       assert {:ok, _, joined} =
                subscribe_and_join(

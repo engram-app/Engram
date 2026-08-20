@@ -9,13 +9,13 @@ defmodule EngramWeb.ChannelGate do
   ## What is mirrored, and what is NOT
 
   The vault scope pipes `:authed_api` (`router.ex:49-60`), which runs
-  **eleven** plugs. This module mirrors three of them:
+  **eleven** plugs, in this order. This module mirrors six of them:
 
     * `AccountDeleted`            → 410 `account_deleted` (`deleted_at` only) ✅
     * `RequireOnboarding`         → 403 `onboarding_required` ✅ (#1426)
     * `RequireActiveSubscription` → 402 `account_suspended` ✅ (#1429)
 
-    * `RotationLockCheck`         → 423 `rotation_in_progress` ✅ (#1434)
+    * `RotationLockCheck`         → 503 `rotation_in_progress` ✅ (#1434)
     * `RequireApiRpsBudget`       → `api_access_not_available` at join for a
       key whose tier has `api_rps_cap: 0` ✅ (#1433)
     * `RequireApiWriteEnabled`    → WRITE frames only ✅ (#1433), see
@@ -91,9 +91,12 @@ defmodule EngramWeb.ChannelGate do
   `:ok`, or `{:error, payload}` where `payload` is the map to return straight
   from `join/3` (always carries a `:reason`).
   """
+  # `api_key` is MANDATORY, deliberately. It defaulted to nil, which made the
+  # ungated arity the convenient one: `check(user)` compiled, passed dialyzer
+  # and looked complete while silently skipping both Pricing v2 §G gates —
+  # the identical fail-open shape this module exists to prevent one layer up.
+  # Pass `socket.assigns[:current_api_key]`; nil is the JWT case.
   @spec check(Engram.Accounts.User.t(), term()) :: :ok | {:error, map()}
-  def check(user, api_key \\ nil)
-
   def check(%Engram.Accounts.User{id: user_id}, api_key) do
     # One read, shared by both checks — `gate/2` is told not to re-read.
     #
@@ -117,12 +120,21 @@ defmodule EngramWeb.ChannelGate do
         with :ok <- deleted(fresh),
              :ok <- rotation(fresh),
              :ok <- onboarding(fresh),
-             :ok <- suspended(fresh),
-             :ok <- api_access(fresh, api_key) do
-          # Liveness, mirroring `EngramWeb.Plugs.BumpActivity` — see the
-          # `## Activity` note above. Only on a PASS: a refused client
-          # retrying forever must not keep its own account looking alive.
+             :ok <- suspended(fresh) do
+          # Liveness stamp sits HERE, between the account gates and the API
+          # gates, because that is where `BumpActivity` sits on HTTP
+          # (router.ex:57, ahead of `RequireApiRpsBudget` at :58). A Pro user
+          # with a PAT integration who downgrades to Free is stamped on every
+          # REST call before being refused; stamping after `api_access/2`
+          # would leave the socket silent and let `InactivityCleanup` sweep an
+          # account generating daily traffic on both transports.
+          #
+          # It therefore fires when the ACCOUNT passes, not when the join
+          # ultimately succeeds — a join later refused for `vault_not_found`
+          # still stamps, exactly as an HTTP request to a missing vault does
+          # (BumpActivity runs before VaultPlug).
           stamp_activity(user_id)
+          api_access(fresh, api_key)
         end
     end
   end
@@ -145,12 +157,17 @@ defmodule EngramWeb.ChannelGate do
   end
 
   # Each of these matches STRICTLY on the field it gates rather than falling
-  # through a `_user` catch-all. A catch-all is fail-OPEN keyed on field
-  # presence: rename the column, narrow the read to a projection, or change
-  # the type away from `:utc_datetime_usec`, and the guard stops matching
-  # while every account silently passes — no compile error, no test failure.
-  # Same argument `Onboarding.derive_gate/3` makes about its destructuring.
-  # A missing field should crash, not pass.
+  # through a `_user` catch-all, so a renamed or retyped column CRASHES here
+  # instead of silently passing every account. Same argument
+  # `Onboarding.derive_gate/3` makes about its destructuring.
+  #
+  # This does NOT protect against a narrowed read. Ecto materialises
+  # unselected columns as nil, so a `select:`-projected `get_user/1` yields
+  # `%User{deleted_at: nil, suspended_at: nil}` and both clauses match
+  # cleanly — every suspended and soft-deleted account would pass, with no
+  # crash and no test failure. `check/2` must keep loading the FULL row; if
+  # the join cost ever motivates a narrower query, gate on a column list, not
+  # on these clauses.
   defp deleted(%{deleted_at: %DateTime{}}), do: {:error, %{reason: "account_deleted"}}
   defp deleted(%{deleted_at: nil}), do: :ok
 
@@ -166,11 +183,17 @@ defmodule EngramWeb.ChannelGate do
   assigns so the per-frame check is a pattern match, not a query — an
   entitlement change takes effect on the next join, same as `plan_state`.
   """
-  @spec api_write_blocked?(Engram.Accounts.User.t(), term()) :: boolean()
-  def api_write_blocked?(_user, nil), do: false
+  @spec api_write_blocked?(Ecto.UUID.t(), term()) :: boolean()
+  def api_write_blocked?(_user_id, nil), do: false
 
-  def api_write_blocked?(user, _api_key) do
-    Billing.check_feature(user, :api_write_enabled) != :ok
+  def api_write_blocked?(user_id, _api_key) do
+    # Takes an ID, not a struct, so a caller cannot accidentally hand it the
+    # socket's connect-time `current_user`. `Billing.check_feature/2` reads
+    # `plan_id` straight off whatever struct it is given.
+    case Accounts.get_user(user_id) do
+      nil -> true
+      user -> Billing.check_feature(user, :api_write_enabled) != :ok
+    end
   end
 
   # Best-effort, and deliberately so. This is a DB WRITE on a path that was
@@ -190,11 +213,31 @@ defmodule EngramWeb.ChannelGate do
     UsageMeters.touch_active(user_id)
   rescue
     e ->
+      # `:lifecycle`, not `:database` — `Engram.Logger.Category` has no
+      # `:database`, and `with_category/3` RAISES on an unknown atom, so the
+      # rescue handler itself blew up and killed the join it exists to save.
+      # `:reason` (not `:error`) because only allowlisted metadata keys are
+      # emitted, and `safe_reason/1` because `Exception.message/1` on a
+      # `%Postgrex.Error{}` can carry a row value into the log.
       Logger.error(
         "activity stamp failed",
-        Metadata.with_category(:error, :database,
+        Metadata.with_category(:error, :lifecycle,
           user_id: HMAC.hash_user_id(to_string(user_id)),
-          error: Exception.message(e)
+          reason: Metadata.safe_reason(e)
+        )
+      )
+
+      :ok
+  catch
+    # `rescue` does not catch exits, and a DBConnection checkout timeout exits
+    # rather than raising — the single most likely failure here.
+    kind, reason ->
+      Logger.error(
+        "activity stamp exited",
+        Metadata.with_category(:error, :lifecycle,
+          user_id: HMAC.hash_user_id(to_string(user_id)),
+          reason_label: to_string(kind),
+          reason: inspect(reason)
         )
       )
 
