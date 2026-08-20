@@ -233,7 +233,7 @@ defmodule Engram.Onboarding do
       # for the life of the connection. `accept_free_tier/1` is a bare
       # `Repo.update` with no socket disconnect, so nothing else would clear it.
       # `fresh: true` means the caller already re-read this row this join
-      # (see `EngramWeb.ChannelGate.check/1`) — don't pay for it twice.
+      # (see `EngramWeb.ChannelGate.check/2`) — don't pay for it twice.
       user =
         if Keyword.get(opts, :fresh, false),
           do: user,

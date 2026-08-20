@@ -38,7 +38,6 @@ defmodule EngramWeb.ConnCase do
   end
 
   defdelegate grant_api_write!(user), to: Engram.ApiEntitlementHelpers
-  defdelegate grant_api_read!(user), to: Engram.ApiEntitlementHelpers
 
   @doc """
   Test `setup` callback that builds an API-key-authenticated connection:

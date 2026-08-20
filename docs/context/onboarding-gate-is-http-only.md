@@ -42,7 +42,7 @@ Two layers:
 - **`Engram.Onboarding.gate/2`** — the onboarding verdict itself. `:ok` or
   `{:error, missing, next_step}`, with `GateCache` pass-caching.
   `EngramWeb.Plugs.RequireOnboarding` is a thin 403-shaping wrapper over it.
-- **`EngramWeb.ChannelGate.check/1`** — the socket-side equivalent of the whole
+- **`EngramWeb.ChannelGate.check/2`** — the socket-side equivalent of the whole
   vault-scoped pipeline. Composes lifecycle + onboarding and returns the map to
   reply straight from `join/3`. `SyncChannel` and `CrdtChannel` both call it.
 
@@ -88,7 +88,7 @@ touches REST" into a permanently locked-out account in daily active use.
 Port the enforcement half and the liveness half together, always.
 
 **Adding a route to the vault pipeline gets you the plugs. Adding a _channel_
-gets you nothing — call `ChannelGate.check/1` from its `join/3`. And adding a
+gets you nothing — call `ChannelGate.check/2` from its `join/3`. And adding a
 plug to the pipeline does NOT add it to sockets: decide explicitly and put it
 in `ChannelGate`.**
 
@@ -127,11 +127,13 @@ The gate goes last because:
   `crdt:<other-user>:<uuid>` probe must not buy that;
 - the plugin's identity self-heal keys on `reason === "unauthorized"`
   specifically (`channel.ts`, e2e test_84) — replacing that reason wedges it;
-- (retired) rotation used to be checked ahead of the match, so a mid-rotation
-  user on a foreign topic heard `rotation_in_progress`; #1434 moved rotation
-  into `ChannelGate`, so that case now correctly reports `unauthorized`.
+- a user mid-DEK-rotation on their OWN topic must still hear
+  `rotation_in_progress` — `check/2` runs `rotation/1` before `onboarding/1`
+  for exactly this, and there is a test on it. Only the FOREIGN-topic case
+  changed: #1434 moved rotation behind the ownership match, so a mid-rotation
+  user probing someone else's topic now correctly gets `unauthorized`.
 
-There are mutation-checked tests for the two live rules in
+There are mutation-checked tests for all three in
 `onboarding_gate_channel_test.exs` ("gate ordering").
 
 ## Gotchas
@@ -169,7 +171,7 @@ There are mutation-checked tests for the two live rules in
   is a client convention, not an enforced one — and this topic is reachable
   pre-onboarding by design.
 - **Lifecycle is never cached and never read off the socket struct.**
-  `ChannelGate.check/1` re-reads the row on every join. An admin suspension has
+  `ChannelGate.check/2` re-reads the row on every join. An admin suspension has
   to bite on the *next* join: `SessionInvalidator` kills the live socket, but
   the JWT stays valid and the client reconnects within seconds. `GateCache`
   holds PASS verdicts for 60s, so routing the lifecycle check through it would

@@ -26,16 +26,6 @@ defmodule Engram.ApiEntitlementHelpers do
     user
   end
 
-  @doc """
-  Grants read-level API access only (`api_rps_cap`), leaving
-  `api_write_enabled` at the tier default. Use when the test needs an API key
-  to CONNECT but is asserting that writes are refused.
-  """
-  def grant_api_read!(%Engram.Accounts.User{} = user) do
-    upsert_override!(user, "api_rps_cap", 1_000)
-    user
-  end
-
   # Writes the row, then evicts `Engram.Billing.OverrideCache` for this user.
   #
   # The eviction is NOT optional. That cache is node-global ETS with a 60s TTL

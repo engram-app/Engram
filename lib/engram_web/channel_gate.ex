@@ -30,19 +30,33 @@ defmodule EngramWeb.ChannelGate do
       a substitute: it uses fixed compile-time budgets per device and never
       reads the plan, so Starter (10 req/s) and Pro (30 req/s) are metered
       identically and both far above their REST entitlement. #1433.
-    * `RequireApiWriteEnabled`. Attempted and REVERTED: no tier has
-      `api_rps_cap > 0` with `api_write_enabled: false` (Free 0/false,
-      Starter 10/true, Pro 30/true), so it guards only an admin-override
-      state — while screening `crdt_msg` by payload broke reads twice.
+    * `RequireApiWriteEnabled`. Attempted and REVERTED — **this is a real,
+      currently-open entitlement gap, not a no-op**. An earlier version of
+      this note claimed "no tier has `api_rps_cap > 0` with
+      `api_write_enabled: false`". That is wrong: `Billing.do_effective_limit/2`
+      resolves EACH KEY independently (override → env → plan → tier default),
+      so a single `user_limit_overrides` row raising a Free user's
+      `api_rps_cap` leaves `api_write_enabled` at false. That user is refused
+      every non-GET REST route and, after the revert, writes freely over
+      `crdt_create` / `crdt_delete` / `sync_update`. The mechanism is
+      first-class (dedicated table, pg NOTIFY trigger, OverrideCache, expiry
+      sweeper), so treat it as reachable in prod.
+
+      It was reverted because screening `crdt_msg` by payload broke reads
+      twice.
       SyncStep1 is a read, but the server answers it with its own SyncStep1
       whose protocol-mandated reply is a SyncStep2, so "block SyncStep2"
       breaks the handshake. Entitlement decided on a wire byte also sits
       ahead of `ensure_room/3`, i.e. ahead of real side effects. If this is
       ever wanted, gate it where the write happens, not on the frame. #1433.
-    * `EnforceSearchCap`, `DeviceFingerprint`, `PreAuthRateLimit` — no channel
-      equivalent. `PreAuthRateLimit` notably means there is **no join rate
-      limiter** at all, which is why `check/2` sits behind the free topic
+    * `PreAuthRateLimit` (plug 1) — no equivalent, so there is **no join rate
+      limiter at all**, which is why `check/2` sits behind the free topic
       ownership match.
+    * `DeviceFingerprint` (4) — no equivalent.
+    * `EnforceSearchCap` (10) — no equivalent; there is no channel search.
+
+  (`Auth` (2) is not mirrored HERE because `UserSocket.connect/3` already is
+  it — that is the eleventh plug, and the one an 11-vs-10 count trips over.)
 
   `RequireActiveSubscription` collapses into the suspended check — since
   2026-06-07 it passes every tier (Free counts as active) and only rejects
@@ -108,7 +122,7 @@ defmodule EngramWeb.ChannelGate do
   """
   # `api_key` is MANDATORY, deliberately. It defaulted to nil, which made the
   # ungated arity the convenient one: `check(user)` compiled, passed dialyzer
-  # and looked complete while silently skipping both Pricing v2 §G gates —
+  # and looked complete while silently skipping the Pricing v2 §G join gate —
   # the identical fail-open shape this module exists to prevent one layer up.
   # Pass `socket.assigns[:current_api_key]`; nil is the JWT case.
   @spec check(Engram.Accounts.User.t(), term()) :: :ok | {:error, map()}
