@@ -240,14 +240,35 @@ defmodule EngramWeb.LifecycleGateChannelTest do
       assert %DateTime{} = UsageMeters.last_active_at(user.id)
     end
 
-    # A refused join is not activity — a suspended or un-onboarded client
+    # An ACCOUNT-refused join is not activity: a suspended or deleted client
     # retrying forever must not keep its own account looking alive.
-    test "a REFUSED join does not stamp", %{user: user, vault: vault} do
+    test "an account-gate refusal does not stamp", %{user: user, vault: vault} do
       ActivityCache.clear_local()
       user = mark!(user, :suspended_at)
 
       assert {:error, %{reason: "account_suspended"}} = join_crdt(user, vault)
       assert is_nil(UsageMeters.last_active_at(user.id))
+    end
+
+    # An ENTITLEMENT refusal is the opposite, and deliberately so: the account
+    # is healthy, only its API plan is not. HTTP stamps here too — BumpActivity
+    # is router.ex:57, RequireApiRpsBudget is :58 — so a Pro user with a PAT
+    # integration who downgrades to Free stays visibly alive on both
+    # transports. Stamping after the entitlement gate instead would let
+    # InactivityCleanup soft-delete an account generating daily traffic.
+    test "an ENTITLEMENT refusal still stamps", %{user: user, vault: vault} do
+      ActivityCache.clear_local()
+      {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "no-entitlement")
+
+      assert {:error, %{reason: "api_access_not_available"}} =
+               subscribe_and_join(
+                 user_socket(user, api_key),
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+
+      assert %DateTime{} = UsageMeters.last_active_at(user.id)
     end
   end
 
