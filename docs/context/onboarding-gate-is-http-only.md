@@ -56,9 +56,9 @@ miscount is what let the gaps below go unnoticed.
 | `RequireOnboarding` | 403 `onboarding_required` | ✅ #1426 |
 | `RequireActiveSubscription` | 402 `account_suspended` | ✅ #1429 |
 | `BumpActivity` | stamps `last_active_at` | ✅ #1429 (see below — load-bearing) |
-| `RotationLockCheck` | 423 | ⚠️ `crdt:` only, `sync:` has none → #1434 |
-| `RequireApiWriteEnabled` | 402 | ❌ → #1433 |
-| `RequireApiRpsBudget` | 429 | ❌ → #1433 |
+| `RotationLockCheck` | 423 | ✅ #1434 — in `ChannelGate`, both channels |
+| `RequireApiWriteEnabled` | 402 | ✅ #1433 — write frames only |
+| `RequireApiRpsBudget` | 429 | ✅ #1433 — refuses the JOIN when the key's tier has `api_rps_cap: 0` |
 | `EnforceSearchCap` | 402 | ❌ (no channel equivalent) |
 | `PreAuthRateLimit` | 429 | ❌ — **there is no join rate limiter at all** |
 | `DeviceFingerprint` | — | ❌ |
@@ -69,6 +69,19 @@ miscount is what let the gaps below go unnoticed.
 `AccountLifecycle` is a *different, richer* plug on the user-scoped and
 onboarding pipelines — **not** on `:authed_api`. Getting those two confused is
 how you conclude `RequireActiveSubscription` is redundant and drop it.
+
+**API-key sockets are gated; JWT sockets are not.** Pricing v2 §G is a
+paid-API entitlement, and the exemption keys on `current_api_key` being
+**non-nil**, not on the assign existing — `UserSocket.accept/4` ALWAYS sets
+that key (nil for JWT), so porting the plugs' `not is_map_key/2` guard
+literally gates every web and plugin user on the platform. Device-flow and
+Clerk tokens resolve with a nil key and are unaffected.
+
+Consequence for tests: any test that mints an API key to exercise something
+*else* (vault restriction, join tracing, channel logging) must first call
+`grant_api_write!/1` or `grant_api_read!/1` from
+`Engram.ApiEntitlementHelpers`, or it fails on entitlement before reaching
+what it is actually testing.
 
 **`BumpActivity` is not bookkeeping.** It is the only writer of
 `usage_meters.last_active_at`, and `Workers.InactivityCleanup` soft-deletes

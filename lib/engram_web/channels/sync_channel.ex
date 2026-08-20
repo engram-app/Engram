@@ -50,7 +50,7 @@ defmodule EngramWeb.SyncChannel do
   # match, which is free — the gate costs DB round-trips and there is no join
   # rate limiter, so a `sync:<other-user>:<uuid>` probe must not pay for it.
   defp gate_and_join(vault_id_str, params, socket, user) do
-    case ChannelGate.check(user) do
+    case ChannelGate.check(user, socket.assigns[:current_api_key]) do
       :ok -> resolve_vault_and_join(vault_id_str, params, socket, user)
       {:error, payload} -> {:error, payload}
     end

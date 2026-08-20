@@ -16,6 +16,8 @@ defmodule EngramWeb.ChannelGate do
     * `RequireActiveSubscription` → 402 `account_suspended` ✅ (#1429)
 
     * `RotationLockCheck`         → 423 `rotation_in_progress` ✅ (#1434)
+    * `RequireApiRpsBudget`       → `api_access_not_available` at join for a
+      key whose tier has `api_rps_cap: 0` ✅ (#1433)
     * `RequireApiWriteEnabled`    → WRITE frames only ✅ (#1433), see
       `api_write_blocked?/2` and `CrdtChannel`'s `@write_events` clause
 
@@ -23,13 +25,6 @@ defmodule EngramWeb.ChannelGate do
 
   **NOT mirrored — sockets are more permissive than HTTP here:**
 
-    * `RequireApiRpsBudget` — Free's `api_rps_cap` is 0 and that plug has no
-      GET exemption, so a Free PAT cannot make a single REST call, yet it can
-      still open a socket and READ the whole vault. Gating the join on it was
-      tried and reverted: `sync_channel_test.exs` and the tracing tests
-      actively assert Free API keys CAN join, so that is a contract change,
-      not a bug fix — it needs a product decision, not a security patch.
-      Writes are blocked regardless (above). Tracked in #1433.
     * `EnforceSearchCap`, `DeviceFingerprint`, `PreAuthRateLimit` — no channel
       equivalent; `PreAuthRateLimit` notably means there is **no join rate
       limiter** at all.
@@ -92,8 +87,10 @@ defmodule EngramWeb.ChannelGate do
   `:ok`, or `{:error, payload}` where `payload` is the map to return straight
   from `join/3` (always carries a `:reason`).
   """
-  @spec check(Engram.Accounts.User.t()) :: :ok | {:error, map()}
-  def check(%Engram.Accounts.User{id: user_id}) do
+  @spec check(Engram.Accounts.User.t(), term()) :: :ok | {:error, map()}
+  def check(user, api_key \\ nil)
+
+  def check(%Engram.Accounts.User{id: user_id}, api_key) do
     # One read, shared by both checks — `gate/2` is told not to re-read.
     #
     # No `|| socket_user` fallback: `Accounts.Lifecycle.hard_delete/2` removes
@@ -116,7 +113,8 @@ defmodule EngramWeb.ChannelGate do
         with :ok <- deleted(fresh),
              :ok <- rotation(fresh),
              :ok <- onboarding(fresh),
-             :ok <- suspended(fresh) do
+             :ok <- suspended(fresh),
+             :ok <- api_access(fresh, api_key) do
           # Liveness, mirroring `EngramWeb.Plugs.BumpActivity` — see the
           # `## Activity` note above. Only on a PASS: a refused client
           # retrying forever must not keep its own account looking alive.
@@ -169,6 +167,28 @@ defmodule EngramWeb.ChannelGate do
 
   def api_write_blocked?(user, _api_key) do
     Billing.check_feature(user, :api_write_enabled) != :ok
+  end
+
+  # Pricing v2 §G, mirroring `RequireApiRpsBudget` (#1433). That plug has no
+  # GET exemption, so for an API-key caller it gates EVERY request — and
+  # Free's `api_rps_cap` default is 0. A Free key therefore cannot make a
+  # single REST call, and must not be able to open a sync socket and read the
+  # whole vault instead.
+  #
+  # The exemption keys on the key being non-nil, NOT on the assign existing.
+  # The plug uses `not is_map_key(assigns, :current_api_key)`, but
+  # `UserSocket.accept/4` ALWAYS sets that key (nil for JWT) — porting the
+  # guard literally would gate every web and plugin user on the platform.
+  #
+  # Positive caps are metered per-frame by `CrdtChannel.check_rate/2`; this is
+  # the "may you use the API at all" half.
+  defp api_access(_user, nil), do: :ok
+
+  defp api_access(user, _api_key) do
+    case Billing.effective_limit(user, :api_rps_cap) do
+      0 -> {:error, %{reason: "api_access_not_available", upgrade_url: "/#settings/billing"}}
+      _ -> :ok
+    end
   end
 
   # `check_user/1`, not `check/1` — the row is already loaded, so this costs

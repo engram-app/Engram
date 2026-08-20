@@ -302,17 +302,52 @@ defmodule EngramWeb.LifecycleGateChannelTest do
   # an API-key caller is 402'd on every non-GET REST route — and must not be
   # able to write through the socket instead. Reads stay open: the plug
   # exempts GET, and existing tests assert Free API keys can join and read.
-  describe "API-key write entitlement (#1433)" do
+  describe "API-key entitlements (#1433)" do
     setup %{user: user} do
-      {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "write-gate")
+      {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "entitlement-gate")
       {:ok, api_key: api_key}
     end
 
-    test "a Free PAT can join and read but cannot write", %{
+    # Free's `api_rps_cap` is 0 and `RequireApiRpsBudget` has no GET
+    # exemption, so a Free key cannot make a single REST call. It must not be
+    # able to open a socket and read the whole vault instead.
+    test "a Free PAT cannot join at all", %{user: user, vault: vault, api_key: api_key} do
+      assert {:error, %{reason: "api_access_not_available"}} =
+               subscribe_and_join(
+                 user_socket(user, api_key),
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+    end
+
+    test "a Free PAT cannot join sync: either", %{user: user, vault: vault, api_key: api_key} do
+      assert {:error, %{reason: "api_access_not_available"}} =
+               subscribe_and_join(
+                 user_socket(user, api_key),
+                 EngramWeb.SyncChannel,
+                 "sync:#{user.id}:#{vault.id}"
+               )
+    end
+
+    # The exemption must key on the api_key being non-nil, NOT on the assign
+    # existing: `UserSocket.accept/4` ALWAYS sets :current_api_key (nil for
+    # JWT), so a literal port of the plug's `not is_map_key/2` guard would
+    # gate every web and plugin user on the platform.
+    test "the SAME user on a JWT socket is unaffected", %{user: user, vault: vault} do
+      assert {:ok, _, joined} = join_crdt(user, vault)
+      Sandbox.allow(Repo, self(), joined.channel_pid)
+    end
+
+    test "a read-entitled PAT can join but still cannot write", %{
       user: user,
       vault: vault,
       api_key: api_key
     } do
+      # rps only — `api_write_enabled` stays at the Free default (false).
+      grant_api_read!(user)
+      Engram.Billing.OverrideCache.clear_local()
+
       assert {:ok, _, joined} =
                subscribe_and_join(
                  user_socket(user, api_key),
@@ -327,7 +362,7 @@ defmodule EngramWeb.LifecycleGateChannelTest do
       assert_reply ref, :error, %{reason: "api_write_not_available"}
     end
 
-    test "the SAME user on a JWT socket writes normally", %{user: user, vault: vault} do
+    test "a JWT socket writes normally", %{user: user, vault: vault} do
       assert {:ok, _, joined} = join_crdt(user, vault)
       Sandbox.allow(Repo, self(), joined.channel_pid)
 
@@ -341,7 +376,7 @@ defmodule EngramWeb.LifecycleGateChannelTest do
       vault: vault,
       api_key: api_key
     } do
-      insert(:user_limit_override, user: user, key: "api_write_enabled", value: %{"v" => true})
+      grant_api_write!(user)
       Engram.Billing.OverrideCache.clear_local()
 
       assert {:ok, _, joined} =

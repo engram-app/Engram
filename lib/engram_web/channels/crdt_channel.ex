@@ -142,7 +142,7 @@ defmodule EngramWeb.CrdtChannel do
   defp join_vault("crdt:" <> ids, user, user_id_str, socket) do
     case String.split(ids, ":") do
       [^user_id_str, _vid] ->
-        case ChannelGate.check(user) do
+        case ChannelGate.check(user, socket.assigns[:current_api_key]) do
           :ok -> join_gated_vault("crdt:" <> ids, user, user_id_str, socket)
           {:error, payload} -> {:error, payload}
         end

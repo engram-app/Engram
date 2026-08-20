@@ -37,21 +37,8 @@ defmodule EngramWeb.ConnCase do
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
 
-  @doc """
-  Grants the user paid-tier API access via `user_limit_overrides` rows:
-  `api_write_enabled=true` and a generous `api_rps_cap=1000`. Use in
-  setup blocks for tests that exercise API-key write paths — pricing v2
-  §G gates non-GET requests on the write flag AND every API-key request
-  on the RPS cap when authed via API key, so any test minting a key for
-  controller use must represent a paid user.
-
-  Returns `user` unchanged for pipe-friendliness.
-  """
-  def grant_api_write!(%Engram.Accounts.User{} = user) do
-    upsert_override!(user, "api_write_enabled", true)
-    upsert_override!(user, "api_rps_cap", 1_000)
-    user
-  end
+  defdelegate grant_api_write!(user), to: Engram.ApiEntitlementHelpers
+  defdelegate grant_api_read!(user), to: Engram.ApiEntitlementHelpers
 
   @doc """
   Test `setup` callback that builds an API-key-authenticated connection:
@@ -94,17 +81,4 @@ defmodule EngramWeb.ConnCase do
 
   # Idempotent insert — the helper may be called multiple times against the
   # same user when a test exercises more than one `create_api_key` flow.
-  defp upsert_override!(user, key, value) do
-    case Engram.Repo.get_by(Engram.Billing.UserLimitOverride, user_id: user.id, key: key) do
-      nil ->
-        Engram.Factory.insert(:user_limit_override,
-          user: user,
-          key: key,
-          value: %{"v" => value}
-        )
-
-      _existing ->
-        :noop
-    end
-  end
 end
