@@ -42,6 +42,11 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # flags 84 sites to protect 40 gets switched off. Widen this list rather than
   # adding exceptions to it.
   @content_paths [
+    # Logs exception and EXIT reasons from the liveness stamp. A Postgrex
+    # error renders "Failing row contains (...)", so this file can absolutely
+    # reach a row value — it was out-of-scope on the claim that it "never"
+    # can, which its own safe_reason/safe_exit_reason calls disprove.
+    "lib/engram_web/channel_gate.ex",
     "lib/engram/notes.ex",
     "lib/engram/notes/",
     "lib/engram/attachments.ex",

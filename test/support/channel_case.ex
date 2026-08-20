@@ -9,6 +9,7 @@ defmodule EngramWeb.ChannelCase do
   using do
     quote do
       import Phoenix.ChannelTest
+      import Engram.ApiEntitlementHelpers
       import Engram.Factory
 
       @endpoint EngramWeb.Endpoint

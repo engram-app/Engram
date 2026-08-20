@@ -20,6 +20,7 @@ defmodule EngramWeb.SyncChannelTracingTest do
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     vault = insert(:vault, user: user, is_default: true)
+    grant_api_write!(user)
     {:ok, token, _} = Engram.Accounts.create_api_key(user, "tracing-test")
     topic = "sync:#{user.id}:#{vault.id}"
     %{user: user, vault: vault, token: token, topic: topic}

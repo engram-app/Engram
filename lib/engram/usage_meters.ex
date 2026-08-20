@@ -10,7 +10,9 @@ defmodule Engram.UsageMeters do
   """
 
   import Ecto.Query
+
   alias Engram.Repo
+  alias Engram.UsageMeters.ActivityCache
 
   defmodule Meter do
     use Ecto.Schema
@@ -187,8 +189,53 @@ defmodule Engram.UsageMeters do
   end
 
   @doc """
+  Debounced liveness stamp: writes `last_active_at` only when the stored value
+  is stale by more than the `ActivityCache` debounce window, so a busy client
+  does not hammer the meter row. A warm cache inside the window touches no DB
+  at all.
+
+  This is what tells `Engram.Workers.InactivityCleanup` who is actually using
+  Engram — the sweep soft-deletes Free accounts whose `last_active_at` has
+  aged past the window. It must therefore be called from EVERY transport a
+  user can be "active" on, not just HTTP: `EngramWeb.Plugs.BumpActivity` for
+  requests, `EngramWeb.ChannelGate` for `sync:`/`crdt:` joins. A plugin user
+  who syncs daily over WebSocket and never touches REST would otherwise age
+  into the sweep while in constant active use.
+  """
+  @spec touch_active(Ecto.UUID.t()) :: :ok
+  def touch_active(user_id) when is_binary(user_id) do
+    case ActivityCache.get(user_id) do
+      {:ok, ts} ->
+        if stale?(ts), do: do_touch(user_id), else: :ok
+
+      :miss ->
+        last = last_active_at(user_id)
+
+        if stale?(last) do
+          do_touch(user_id)
+        else
+          ActivityCache.put(user_id, last)
+          :ok
+        end
+    end
+  end
+
+  defp do_touch(user_id) do
+    now = DateTime.utc_now()
+    :ok = bump_last_active(user_id)
+    ActivityCache.put(user_id, now)
+    :ok
+  end
+
+  defp stale?(nil), do: true
+
+  defp stale?(%DateTime{} = ts) do
+    DateTime.diff(DateTime.utc_now(), ts, :second) > ActivityCache.debounce_seconds()
+  end
+
+  @doc """
   Stamps `last_active_at = now()` for the user. Lazy-inits the row.
-  Called from the auth pipeline plug (debounced to once per hour).
+  Undebounced — callers go through `touch_active/1`, which owns the debounce.
   """
   @spec bump_last_active(Ecto.UUID.t()) :: :ok
   def bump_last_active(user_id) when is_binary(user_id) do

@@ -19,7 +19,6 @@ defmodule EngramWeb.CrdtChannel do
   use Phoenix.Channel
 
   alias Engram.Crypto.HMAC
-  alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
   alias Engram.{Notes, Repo, Vaults}
   alias Engram.Notes.CrdtBridge
@@ -29,6 +28,7 @@ defmodule EngramWeb.CrdtChannel do
   alias Engram.Notes.CrdtPersistence
   alias Engram.Notes.CrdtRegistry
   alias Engram.Notes.CrdtTransport
+  alias EngramWeb.ChannelGate
   alias Yex.Sync.SharedDoc
 
   require Logger
@@ -117,49 +117,34 @@ defmodule EngramWeb.CrdtChannel do
   defp client_type(%{"client_type" => t}) when is_binary(t) and byte_size(t) <= 32, do: t
   defp client_type(_params), do: nil
 
+  # T3.7 (#1092): the crdt: channel is the live write path and must not open
+  # while a DEK rotation holds the user's lock. That check now lives in
+  # `EngramWeb.ChannelGate` (#1434) so `sync:` gets it too — it used to be
+  # open-coded here, and `SyncChannel` had none. In-flight sockets are drained
+  # separately (UserDekRotation).
   defp join_authenticated("crdt:" <> ids, socket) do
     user = socket.assigns.current_user
 
-    user_id_str = to_string(user.id)
-
-    join_rotation_checked(ids, user, user_id_str, socket)
+    join_vault("crdt:" <> ids, user, to_string(user.id), socket)
   end
 
-  defp join_rotation_checked(ids, user, user_id_str, socket) do
-    # T3.7 (#1092): the crdt: channel is the live write path — refuse to open it
-    # while a DEK rotation holds the user's lock. check/1 re-reads the row so a
-    # reconnect mid-rotation is caught even if the socket's user struct predates
-    # the lock. In-flight sockets are drained separately (UserDekRotation).
-    case RotationGate.check(user.id) do
-      {:error, :rotation_in_progress} -> {:error, %{reason: "rotation_in_progress"}}
-      # :ok, or {:error, :user_not_found} — let the vault-auth path decide
-      # (a missing user falls through to "unauthorized", not a rotation reason).
-      _ -> join_vault("crdt:" <> ids, user, user_id_str, socket)
-    end
-  end
-
-  # Enforced here, not by a router pipeline: `RequireOnboarding` is a Plug and
-  # Plugs never run on a socket, and this is the live sync write path — an
-  # account that skipped ToS / plan selection reached a full read-write vault
-  # through it while every REST route correctly 403'd. Same verdict function
-  # as the plug (`Engram.Onboarding.gate/1`).
+  # Plugs never run on a socket, so every vault-pipeline access gate is
+  # re-expressed in `EngramWeb.ChannelGate` and applied here. Read that
+  # moduledoc before adding a plug to the vault pipeline.
   #
-  # Deliberately positioned AFTER the topic ownership match and after
-  # `RotationGate.check/1`: the match is free, so a `crdt:<other-user>:<uuid>`
-  # probe must not buy ~4 DB round-trips (there is no join rate limiter), and
-  # a user mid-DEK-rotation must still get `rotation_in_progress` rather than
-  # this. The plugin's identity self-heal also keys on `unauthorized`
-  # specifically (channel.ts, e2e test_84) — gating ahead of the match would
-  # have replaced that reason and wedged the heal.
+  # Deliberately positioned AFTER the topic ownership match: the match is
+  # free, so a `crdt:<other-user>:<uuid>`
+  # probe must not buy the gate's DB round-trips (there is no join rate
+  # limiter), and a user mid-DEK-rotation must still get `rotation_in_progress`
+  # rather than this. The plugin's identity self-heal also keys on
+  # `unauthorized` specifically (channel.ts, e2e test_84) — gating ahead of the
+  # match would have replaced that reason and wedged the heal.
   defp join_vault("crdt:" <> ids, user, user_id_str, socket) do
     case String.split(ids, ":") do
       [^user_id_str, _vid] ->
-        case Engram.Onboarding.gate(user) do
-          :ok ->
-            join_gated_vault("crdt:" <> ids, user, user_id_str, socket)
-
-          {:error, missing, next_step} ->
-            {:error, %{reason: "onboarding_required", missing: missing, next_step: next_step}}
+        case ChannelGate.check(user, socket.assigns[:current_api_key]) do
+          :ok -> join_gated_vault("crdt:" <> ids, user, user_id_str, socket)
+          {:error, payload} -> {:error, payload}
         end
 
       _ ->
