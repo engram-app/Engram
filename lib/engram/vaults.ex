@@ -30,66 +30,6 @@ defmodule Engram.Vaults do
   @spec deleted(Ecto.Queryable.t()) :: Ecto.Query.t()
   def deleted(query), do: from(v in query, where: not is_nil(v.deleted_at))
 
-  # ── Create ─────────────────────────────────────────────────────────────────
-
-  @doc """
-  Creates a new vault for a user.
-
-  - Enforces billing limit (max_vaults).
-  - First vault is automatically set as default.
-  - Generates a unique slug from the name.
-
-  Returns {:ok, vault} or {:error, {:vault_limit_reached, limit, current}}
-  or {:error, changeset}.
-  """
-  def create_vault(user, attrs) do
-    # Ensure user has a DEK before Phase B injection
-    with {:ok, user} <- Engram.Crypto.ensure_user_dek(user) do
-      Repo.with_tenant(user.id, fn ->
-        current_count = count_vaults(user.id)
-
-        case Billing.check_limit(user, :vaults_cap, current_count) do
-          {:error, :limit_reached} ->
-            # Free-tier launch §4.5 — carry the resolved limit + current
-            # count back to the controller so the 402 body can populate
-            # them. The resolver call here is the same one check_limit
-            # already made internally; a second call is cheaper than
-            # threading the value out of check_limit (no hot path).
-            limit = Billing.effective_limit(user, :vaults_cap)
-            {:error, {:vault_limit_reached, limit, current_count}}
-
-          :ok ->
-            is_default = current_count == 0
-            name = attrs[:name] || attrs["name"] || ""
-            slug = unique_slug(user.id, slugify(name))
-            vault_id = Ecto.UUID.generate()
-
-            vault_attrs =
-              attrs
-              |> atomize_keys()
-              |> inject_name_phase_b(user, vault_id)
-              |> Map.merge(%{slug: slug, user_id: user.id, is_default: is_default})
-
-            %Vault{id: vault_id}
-            |> Vault.changeset(vault_attrs)
-            |> Repo.insert()
-            |> case do
-              {:ok, v} ->
-                emit_vault_count(user.id, :created)
-                _ = Engram.Onboarding.record_action(user.id, :first_vault_created)
-                decrypted = decrypt_vault_if_needed(v, user)
-                broadcast_vault_created(user.id, decrypted)
-                {:ok, decrypted}
-
-              other ->
-                other
-            end
-        end
-      end)
-      |> unwrap_transaction()
-    end
-  end
-
   # FTUX vault page subscribes to user channel and waits for this event so
   # it can auto-transition to the dashboard once a vault appears (e.g. the
   # Obsidian plugin creates one via its OAuth flow). Fire-and-forget; if
@@ -170,22 +110,37 @@ defmodule Engram.Vaults do
     seq
   end
 
-  # ── Register (idempotent) ───────────────────────────────────────────────────
+  # ── Create (single path) ────────────────────────────────────────────────────
 
   @doc """
-  Registers a vault by client_id. Idempotent: returns the existing vault if
-  a non-deleted vault with this client_id already exists for the user.
+  Creates a vault, keyed by `client_id`. **This is the only way a vault is
+  created** — every caller (HTTP, device link, tests) comes through here, so
+  the billing check, slug allocation, default-vault rule, encryption
+  injection, telemetry, onboarding action and `vault_created` broadcast can
+  only be applied one way.
+
+  Idempotent: returns the existing vault if a non-deleted vault with this
+  `client_id` already exists for the user. That is the whole point of the
+  key — a caller that retries after a timeout resolves to the vault its first
+  attempt may already have created, instead of minting a second one.
+
+  `extra_attrs` carries optional columns (e.g. `:description`); `:name`,
+  `:client_id`, `:slug`, `:user_id` and `:is_default` are computed here and
+  cannot be overridden.
 
   Returns:
     {:ok, vault, :created}   — new vault was inserted
     {:ok, vault, :existing}  — matched an existing vault
     {:error, :invalid_client_id}  — client_id is not a non-blank string
     {:error, {:vault_limit_reached, limit, current}}
+    {:error, changeset}
   """
-  def register_vault(_user, _name, client_id) when not is_binary(client_id),
+  def register_vault(user, name, client_id, extra_attrs \\ %{})
+
+  def register_vault(_user, _name, client_id, _extra_attrs) when not is_binary(client_id),
     do: {:error, :invalid_client_id}
 
-  def register_vault(user, name, client_id) do
+  def register_vault(user, name, client_id, extra_attrs) do
     # A blank client_id cannot serve as this function's idempotency key, and
     # fails in the worst direction: `Vault.changeset/2` casts `:client_id`, so
     # Ecto's default `:empty_values` drops "" and the row stores NULL — which
@@ -196,57 +151,65 @@ defmodule Engram.Vaults do
     if String.trim(client_id) == "" do
       {:error, :invalid_client_id}
     else
-      do_register_vault(user, name, client_id)
+      do_register_vault(user, name, client_id, atomize_keys(extra_attrs))
     end
   end
 
-  defp do_register_vault(user, name, client_id) do
+  defp do_register_vault(user, name, client_id, extra_attrs) do
     # Ensure user has a DEK before Phase B injection
     with {:ok, user} <- Engram.Crypto.ensure_user_dek(user) do
-      result =
-        Repo.with_tenant(user.id, fn ->
-          existing = find_by_client_id(user.id, client_id)
+      Repo.with_tenant(user.id, fn ->
+        case find_by_client_id(user.id, client_id) do
+          %Vault{} = vault ->
+            {:ok, decrypt_vault_if_needed(vault, user), :existing}
 
-          case existing do
-            %Vault{} = vault ->
-              {:ok, decrypt_vault_if_needed(vault, user), :existing}
+          nil ->
+            insert_vault(user, name, client_id, extra_attrs)
+        end
+      end)
+      |> unwrap_register_transaction()
+    end
+  end
 
-            nil ->
-              current_count = count_vaults(user.id)
+  # Runs inside the caller's `Repo.with_tenant/2` transaction.
+  defp insert_vault(user, name, client_id, extra_attrs) do
+    current_count = count_vaults(user.id)
 
-              case Billing.check_limit(user, :vaults_cap, current_count) do
-                {:error, :limit_reached} ->
-                  limit = Billing.effective_limit(user, :vaults_cap)
-                  {:error, {:vault_limit_reached, limit, current_count}}
+    case Billing.check_limit(user, :vaults_cap, current_count) do
+      {:error, :limit_reached} ->
+        # Free-tier launch §4.5 — carry the resolved limit + current count back
+        # to the controller so the 402 body can populate them. The resolver
+        # call here is the same one check_limit already made internally; a
+        # second call is cheaper than threading the value out of check_limit
+        # (no hot path).
+        limit = Billing.effective_limit(user, :vaults_cap)
+        {:error, {:vault_limit_reached, limit, current_count}}
 
-                :ok ->
-                  is_default = current_count == 0
-                  slug = unique_slug(user.id, slugify(name))
-                  vault_id = Ecto.UUID.generate()
+      :ok ->
+        vault_id = Ecto.UUID.generate()
 
-                  attrs = %{
-                    name: name,
-                    client_id: client_id,
-                    slug: slug,
-                    user_id: user.id,
-                    is_default: is_default
-                  }
+        attrs =
+          extra_attrs
+          |> Map.merge(%{
+            name: name,
+            client_id: client_id,
+            slug: unique_slug(user.id, slugify(name)),
+            user_id: user.id,
+            is_default: current_count == 0
+          })
+          |> inject_name_phase_b(user, vault_id)
 
-                  attrs = inject_name_phase_b(attrs, user, vault_id)
+        case Repo.insert(Vault.changeset(%Vault{id: vault_id}, attrs)) do
+          {:ok, vault} ->
+            emit_vault_count(user.id, :created)
+            _ = Engram.Onboarding.record_action(user.id, :first_vault_created)
+            decrypted = decrypt_vault_if_needed(vault, user)
+            broadcast_vault_created(user.id, decrypted)
+            {:ok, decrypted, :created}
 
-                  case Repo.insert(Vault.changeset(%Vault{id: vault_id}, attrs)) do
-                    {:ok, vault} ->
-                      emit_vault_count(user.id, :created)
-                      {:ok, decrypt_vault_if_needed(vault, user), :created}
-
-                    {:error, cs} ->
-                      {:error, cs}
-                  end
-              end
-          end
-        end)
-
-      unwrap_register_transaction(result)
+          {:error, cs} ->
+            {:error, cs}
+        end
     end
   end
 

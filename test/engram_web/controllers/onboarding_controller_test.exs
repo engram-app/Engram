@@ -311,7 +311,7 @@ defmodule EngramWeb.OnboardingControllerTest do
   describe "GET /api/onboarding/status payload extensions" do
     test "includes actions list and vault_count", %{conn: conn, user: user} do
       :ok = Engram.Onboarding.record_action(user.id, :first_vault_created)
-      {:ok, _vault} = Engram.Vaults.create_vault(user, %{name: "Demo"})
+      {:ok, _vault, _} = Engram.Vaults.register_vault(user, "Demo", Ecto.UUID.generate())
 
       resp = conn |> get("/api/onboarding/status") |> json_response(200)
 

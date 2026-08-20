@@ -1671,11 +1671,18 @@ export function useUpdateVault() {
 export function useCreateVault() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (attrs: { name: string; description?: string }) =>
-			api.post<{ vault: Vault }>("/vaults", attrs),
+		// POST /vaults/register is the only create endpoint, and it is
+		// idempotent by client_id: a retry after a timeout or a double submit
+		// resolves to the vault the first attempt already created instead of
+		// minting a second one. Callers must therefore hold `client_id` STABLE
+		// across retries of one user intent — mint it when the form mounts, not
+		// per submit, or the idempotency is a no-op. Responds with the vault
+		// flat (plus `status`), not wrapped in `{ vault }`.
+		mutationFn: (attrs: { name: string; client_id: string }) =>
+			api.post<Vault>("/vaults/register", attrs),
 		onSuccess: () => {
 			qc.invalidateQueries({ queryKey: ["vaults"] });
-			// Backend records `first_vault_created` in Vaults.create_vault/2;
+			// Backend records `first_vault_created` in Vaults.register_vault/4;
 			// refresh /status so the onboarding checklist ticks immediately.
 			qc.invalidateQueries({ queryKey: ["onboarding", "status"] });
 		},

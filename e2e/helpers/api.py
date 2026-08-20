@@ -272,15 +272,8 @@ class ApiClient:
         self._log_error_response(resp)
         return resp.json() if resp.status_code in (200, 201) else {}, resp.status_code
 
-    def create_vault(self, name: str) -> tuple[dict, int]:
-        """POST /vaults. Returns (response_json, status_code)."""
-        resp = self.session.post(
-            f"{self.base_url}/vaults",
-            json={"name": name},
-            timeout=10,
-        )
-        self._log_error_response(resp)
-        return resp.json() if resp.status_code in (200, 201) else {}, resp.status_code
+    # `create_vault` (POST /vaults) is gone — it made a new vault per call, so a
+    # retry produced a duplicate. Use `register_vault` with a stable client_id.
 
     def get_vault(self, vault_id: str) -> tuple[dict | None, int]:
         """GET /vaults/:id. Returns (vault_dict or None, status_code)."""

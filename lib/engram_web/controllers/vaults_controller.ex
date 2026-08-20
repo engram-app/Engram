@@ -86,47 +86,11 @@ defmodule EngramWeb.VaultsController do
     %{vaults: Enum.map(vaults, &vault_json(&1, Map.get(counts, &1.id, @zero_counts)))}
   end
 
-  # ── create ─────────────────────────────────────────────────────────────────
-
-  operation(:create,
-    operation_id: "vaults-create",
-    summary: "Create a vault",
-    description:
-      "Creates a new vault for the user and returns it with zeroed content counts. Returns 402 " <>
-        "when the plan's vault cap is reached and 422 on validation errors.",
-    tags: ["Vaults"],
-    request_body:
-      {"Vault attributes", "application/json", Schemas.CreateVaultRequest, required: true},
-    responses: [
-      created: {"Created", "application/json", Schemas.VaultResponse},
-      payment_required: {"Vault cap reached", "application/json", Schemas.LimitError},
-      unprocessable_entity: {"Validation error", "application/json", Schemas.Error}
-    ]
-  )
-
-  def create(conn, params) do
-    user = conn.assigns.current_user
-
-    case Vaults.create_vault(user, params) do
-      {:ok, vault} ->
-        conn
-        |> put_status(201)
-        |> json(%{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
-
-      {:error, {:vault_limit_reached, limit, current}} ->
-        # Free-tier launch §4.5 — standardized 402 shape via LimitResponse.
-        EngramWeb.LimitResponse.halt(
-          conn,
-          "vaults_cap_exceeded",
-          :vaults_cap,
-          limit,
-          current
-        )
-
-      {:error, %Ecto.Changeset{}} = error ->
-        error
-    end
-  end
+  # `POST /vaults` used to live here. It created a vault per call with no
+  # idempotency key, so a client that retried a slow or failed request got a
+  # SECOND vault — which is how one Obsidian first-sync produced two vaults and
+  # orphaned 292 uploads into the abandoned one. `POST /vaults/register` (the
+  # `:register` action below) is now the only create endpoint.
 
   # ── show ───────────────────────────────────────────────────────────────────
 

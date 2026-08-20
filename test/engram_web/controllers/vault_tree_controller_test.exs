@@ -162,7 +162,7 @@ defmodule EngramWeb.VaultTreeControllerTest do
       # VaultTreeController.render_tree/5 actually does something.
       post(conn, "/api/notes", %{path: "InDefaultVault.md", content: "# d", mtime: 1_000.0})
 
-      {:ok, other_vault} = Engram.Vaults.create_vault(user, %{name: "Other"})
+      {:ok, other_vault, _} = Engram.Vaults.register_vault(user, "Other", Ecto.UUID.generate())
 
       other_vault_conn = put_req_header(conn, "x-vault-id", to_string(other_vault.id))
 

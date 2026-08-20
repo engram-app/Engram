@@ -14,7 +14,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Test"})
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
     EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
     %{user: user, vault: vault}
   end

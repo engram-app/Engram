@@ -30,7 +30,7 @@ defmodule EngramWeb.VaultsControllerTest do
     end
 
     test "lists user's vaults", %{conn: conn, user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "My Vault"})
+      {:ok, vault, _} = Vaults.register_vault(user, "My Vault", Ecto.UUID.generate())
       conn = get(conn, "/api/vaults")
       body = json_response(conn, 200)
       ids = Enum.map(body["vaults"], & &1["id"])
@@ -40,8 +40,11 @@ defmodule EngramWeb.VaultsControllerTest do
     test "does not include vaults of other users", %{conn: conn, user: user} do
       other_user = insert(:user)
       insert(:user_limit_override, user: other_user, key: "vaults_cap", value: %{"v" => 5})
-      {:ok, other_vault} = Vaults.create_vault(other_user, %{name: "Other Vault"})
-      {:ok, _my_vault} = Vaults.create_vault(user, %{name: "My Vault"})
+
+      {:ok, other_vault, _} =
+        Vaults.register_vault(other_user, "Other Vault", Ecto.UUID.generate())
+
+      {:ok, _my_vault, _} = Vaults.register_vault(user, "My Vault", Ecto.UUID.generate())
 
       conn = get(conn, "/api/vaults")
       body = json_response(conn, 200)
@@ -154,56 +157,14 @@ defmodule EngramWeb.VaultsControllerTest do
     end
   end
 
-  describe "POST /api/vaults" do
-    test "creates a vault and returns 201", %{conn: conn} do
-      conn = post(conn, "/api/vaults", %{name: "Work Notes"})
-      body = json_response(conn, 201)
-      assert body["vault"]["name"] == "Work Notes"
-      assert is_binary(body["vault"]["id"])
-      assert is_binary(body["vault"]["slug"])
-    end
-
-    test "returns 402 when vault limit reached", %{conn: conn, user: user} do
-      # Override to limit of 1
-      Engram.Repo.delete_all(
-        from o in Engram.Billing.UserLimitOverride, where: o.user_id == ^user.id
-      )
-
-      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 1})
-      # Re-grant API access after wiping all overrides above.
-      grant_api_write!(user)
-
-      {:ok, _} = Vaults.create_vault(user, %{name: "First"})
-
-      conn = post(conn, "/api/vaults", %{name: "Second"})
-      body = json_response(conn, 402)
-      assert body["error"] == "limit_exceeded"
-      assert body["reason"] == "vaults_cap_exceeded"
-      assert body["limit_key"] == "vaults_cap"
-      assert body["limit"] == 1
-      assert body["current"] == 1
-    end
-
-    test "returns 422 with missing name", %{conn: conn} do
-      conn = post(conn, "/api/vaults", %{})
-
-      assert json_response(conn, 422) == %{
-               "errors" => %{"name" => ["can't be blank"]}
-             }
-    end
-
-    test "returns 422 with blank name", %{conn: conn} do
-      conn = post(conn, "/api/vaults", %{name: "  "})
-
-      assert json_response(conn, 422) == %{
-               "errors" => %{"name" => ["can't be blank"]}
-             }
-    end
-  end
+  # `POST /api/vaults` is gone — it created a vault per call with no
+  # idempotency key. Its coverage (201, 402, 422 blank name) now lives in the
+  # `POST /api/vaults/register` describe below, which additionally covers the
+  # duplicate-client_id 200 that made the old endpoint redundant.
 
   describe "GET /api/vaults/:id" do
     test "returns vault by id", %{conn: conn, user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Fetched"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Fetched", Ecto.UUID.generate())
       conn = get(conn, "/api/vaults/#{vault.id}")
       body = json_response(conn, 200)
       assert body["vault"]["id"] == vault.id
@@ -218,7 +179,7 @@ defmodule EngramWeb.VaultsControllerTest do
     test "returns 404 for another user's vault", %{conn: conn} do
       other_user = insert(:user)
       insert(:user_limit_override, user: other_user, key: "vaults_cap", value: %{"v" => 5})
-      {:ok, other_vault} = Vaults.create_vault(other_user, %{name: "Other"})
+      {:ok, other_vault, _} = Vaults.register_vault(other_user, "Other", Ecto.UUID.generate())
 
       conn = get(conn, "/api/vaults/#{other_vault.id}")
       assert json_response(conn, 404)
@@ -227,7 +188,7 @@ defmodule EngramWeb.VaultsControllerTest do
 
   describe "PATCH /api/vaults/:id" do
     test "updates vault name", %{conn: conn, user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Old Name"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Old Name", Ecto.UUID.generate())
       conn = patch(conn, "/api/vaults/#{vault.id}", %{name: "New Name"})
       body = json_response(conn, 200)
       assert body["vault"]["name"] == "New Name"
@@ -239,7 +200,7 @@ defmodule EngramWeb.VaultsControllerTest do
     end
 
     test "returns 422 with changeset errors for an invalid is_default", %{conn: conn, user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Valid"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Valid", Ecto.UUID.generate())
       conn = patch(conn, "/api/vaults/#{vault.id}", %{is_default: "banana"})
       assert %{"errors" => %{"is_default" => [_ | _]}} = json_response(conn, 422)
     end
@@ -247,7 +208,7 @@ defmodule EngramWeb.VaultsControllerTest do
 
   describe "DELETE /api/vaults/:id" do
     test "soft-deletes vault and returns 200", %{conn: conn, user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "To Delete"})
+      {:ok, vault, _} = Vaults.register_vault(user, "To Delete", Ecto.UUID.generate())
       conn = delete(conn, "/api/vaults/#{vault.id}")
       body = json_response(conn, 200)
       assert body["deleted"] == true
@@ -265,7 +226,7 @@ defmodule EngramWeb.VaultsControllerTest do
 
   describe "GET /api/vaults?deleted=true" do
     test "lists soft-deleted vaults with a purge_at and content counts", %{conn: conn, user: user} do
-      {:ok, v} = Vaults.create_vault(user, %{name: "Trashed"})
+      {:ok, v, _} = Vaults.register_vault(user, "Trashed", Ecto.UUID.generate())
       insert(:note, user: user, vault: v)
       insert(:attachment, user: user, vault: v)
       {:ok, _} = Vaults.delete_vault(user, v.id)
@@ -280,7 +241,7 @@ defmodule EngramWeb.VaultsControllerTest do
     end
 
     test "active listing excludes deleted vaults", %{conn: conn, user: user} do
-      {:ok, v} = Vaults.create_vault(user, %{name: "Trashed"})
+      {:ok, v, _} = Vaults.register_vault(user, "Trashed", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(user, v.id)
 
       body = conn |> get("/api/vaults") |> json_response(200)
@@ -290,7 +251,7 @@ defmodule EngramWeb.VaultsControllerTest do
 
   describe "POST /api/vaults/:id/restore" do
     test "restores a deleted vault", %{conn: conn, user: user} do
-      {:ok, v} = Vaults.create_vault(user, %{name: "Back"})
+      {:ok, v, _} = Vaults.register_vault(user, "Back", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(user, v.id)
 
       body = conn |> post("/api/vaults/#{v.id}/restore") |> json_response(200)
@@ -304,9 +265,9 @@ defmodule EngramWeb.VaultsControllerTest do
       grant_api_write!(other)
       oconn = build_conn() |> put_req_header("authorization", "Bearer #{raw_key}")
 
-      {:ok, first} = Vaults.create_vault(other, %{name: "First"})
+      {:ok, first, _} = Vaults.register_vault(other, "First", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(other, first.id)
-      {:ok, _} = Vaults.create_vault(other, %{name: "Replacement"})
+      {:ok, _, _} = Vaults.register_vault(other, "Replacement", Ecto.UUID.generate())
 
       body = oconn |> post("/api/vaults/#{first.id}/restore") |> json_response(402)
       assert body["error"] == "limit_exceeded"
@@ -317,14 +278,14 @@ defmodule EngramWeb.VaultsControllerTest do
     end
 
     test "returns 404 for an active vault", %{conn: conn, user: user} do
-      {:ok, v} = Vaults.create_vault(user, %{name: "Active"})
+      {:ok, v, _} = Vaults.register_vault(user, "Active", Ecto.UUID.generate())
       conn |> post("/api/vaults/#{v.id}/restore") |> json_response(404)
     end
   end
 
   describe "POST /api/vaults/:id/purge" do
     test "purges a deleted vault", %{conn: conn, user: user} do
-      {:ok, v} = Vaults.create_vault(user, %{name: "Doomed"})
+      {:ok, v, _} = Vaults.register_vault(user, "Doomed", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(user, v.id)
 
       body = conn |> post("/api/vaults/#{v.id}/purge") |> json_response(200)
@@ -333,7 +294,7 @@ defmodule EngramWeb.VaultsControllerTest do
     end
 
     test "returns 404 for an active vault", %{conn: conn, user: user} do
-      {:ok, v} = Vaults.create_vault(user, %{name: "Active"})
+      {:ok, v, _} = Vaults.register_vault(user, "Active", Ecto.UUID.generate())
       conn |> post("/api/vaults/#{v.id}/purge") |> json_response(404)
     end
   end
@@ -372,7 +333,7 @@ defmodule EngramWeb.VaultsControllerTest do
       # Re-grant API access after wiping all overrides above.
       grant_api_write!(user)
 
-      {:ok, _} = Vaults.create_vault(user, %{name: "First"})
+      {:ok, _, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
 
       conn = post(conn, "/api/vaults/register", %{name: "New", client_id: "xyz"})
       body = json_response(conn, 402)
@@ -415,7 +376,7 @@ defmodule EngramWeb.VaultsControllerTest do
 
       {:ok, raw_key, _} = Engram.Accounts.create_api_key(user, "ft-test-key")
       grant_api_write!(user)
-      {:ok, _first} = Vaults.create_vault(user, %{name: "First"})
+      {:ok, _first, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
 
       authed =
         build_conn()
@@ -425,7 +386,7 @@ defmodule EngramWeb.VaultsControllerTest do
     end
 
     test "returns standardized 402 shape", %{conn: conn} do
-      conn = post(conn, ~p"/api/vaults", %{name: "Second"})
+      conn = post(conn, ~p"/api/vaults/register", %{name: "Second", client_id: "ft-second"})
       body = json_response(conn, 402)
       assert body["error"] == "limit_exceeded"
       assert body["reason"] == "vaults_cap_exceeded"

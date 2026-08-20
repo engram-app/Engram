@@ -10,7 +10,9 @@ defmodule Engram.SearchIntegrationTest do
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
-    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "SearchIntegration"})
+
+    {:ok, vault, _} =
+      Engram.Vaults.register_vault(user, "SearchIntegration", Ecto.UUID.generate())
 
     # Use a test-isolated Qdrant collection so we can drop it after.
     col = "engram_test_#{System.unique_integer([:positive])}"

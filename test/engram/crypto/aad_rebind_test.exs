@@ -20,7 +20,7 @@ defmodule Engram.Crypto.AadRebindTest do
       # Use the real Vaults context so the vault is born AAD-bound (dek_version=2).
       # The rebind would otherwise pick it up and fail on the random-bytes
       # ciphertext the test factory writes.
-      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Rebind Vault"})
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Rebind Vault", Ecto.UUID.generate())
       {:ok, dek} = Crypto.get_dek(user)
 
       # Hand-build a legacy note: every ciphertext column written with
@@ -139,7 +139,8 @@ defmodule Engram.Crypto.AadRebindTest do
       # from "1000 users had nothing to do." Fix: track whether the wrap was
       # changed AND whether any rows were rewritten. If neither, return
       # :skipped so re-runs are honest.
-      {:ok, _vault} = Engram.Vaults.create_vault(user, %{name: "Idempotence Vault"})
+      {:ok, _vault, _} =
+        Engram.Vaults.register_vault(user, "Idempotence Vault", Ecto.UUID.generate())
 
       # First run: DEK wrap upgrades v1→v2 + Idempotence Vault was just
       # created (post-T3.6 already at v2 if factories track it; the rewrap
@@ -167,7 +168,8 @@ defmodule Engram.Crypto.AadRebindTest do
       # Use the real Vaults context so the vault is born AAD-bound; we want
       # to isolate this test to the attachment rebind signal, not vault
       # legacy decrypt.
-      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Attachment Vault"})
+      {:ok, vault, _} =
+        Engram.Vaults.register_vault(user, "Attachment Vault", Ecto.UUID.generate())
 
       _att1 = insert(:attachment, user: user, vault: vault, dek_version: legacy_version)
       _att2 = insert(:attachment, user: user, vault: vault, dek_version: legacy_version)

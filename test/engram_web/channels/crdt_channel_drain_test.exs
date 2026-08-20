@@ -32,7 +32,7 @@ defmodule EngramWeb.CrdtChannelDrainTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
-    {:ok, vault} = Vaults.create_vault(user, %{name: "CrdtChannelDrainTest"})
+    {:ok, vault, _} = Vaults.register_vault(user, "CrdtChannelDrainTest", Ecto.UUID.generate())
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "base"})
 
     {:ok, _, socket} =

@@ -13,7 +13,7 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
-    {:ok, vault} = Vaults.create_vault(user, %{name: "BackfillCrdtStateTest"})
+    {:ok, vault, _} = Vaults.register_vault(user, "BackfillCrdtStateTest", Ecto.UUID.generate())
     %{user: user, vault: vault}
   end
 

@@ -26,6 +26,10 @@ export function VaultCreateForm({
 }: Props) {
 	const create = useCreateVault();
 	const [name, setName] = useState("");
+	// Stable across retries of ONE create intent so a double submit or a retry
+	// after a timeout resolves to the same vault instead of making a second.
+	// Re-minted on success, since the next create is a new intent.
+	const [clientId, setClientId] = useState(() => crypto.randomUUID());
 	const nameRef = useAutofocus<HTMLInputElement>(autoFocus);
 
 	function submit(e: React.FormEvent) {
@@ -35,12 +39,13 @@ export function VaultCreateForm({
 			return;
 		}
 		create.mutate(
-			{ name: next },
+			{ name: next, client_id: clientId },
 			{
-				onSuccess: (res) => {
+				onSuccess: (vault) => {
 					toast.success("Vault created");
 					setName("");
-					onCreated?.(res.vault);
+					setClientId(crypto.randomUUID());
+					onCreated?.(vault);
 				},
 				onError: (err) => {
 					// 402 cap errors are already surfaced by UpgradeDialogProvider via

@@ -10,7 +10,7 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "BackfillTest"})
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "BackfillTest", Ecto.UUID.generate())
     %{user: user, vault: vault}
   end
 
@@ -119,7 +119,9 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
       other = insert(:user)
       insert(:user_limit_override, user: other, key: "vaults_cap", value: %{"v" => -1})
       {:ok, other} = Engram.Crypto.ensure_user_dek(other)
-      {:ok, other_vault} = Engram.Vaults.create_vault(other, %{name: "OtherVault"})
+
+      {:ok, other_vault, _} =
+        Engram.Vaults.register_vault(other, "OtherVault", Ecto.UUID.generate())
 
       {:ok, _} =
         Notes.upsert_note(other, other_vault, %{path: "B/y.md", content: "# Y", mtime: 1.0})

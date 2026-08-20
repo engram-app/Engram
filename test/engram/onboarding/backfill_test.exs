@@ -12,7 +12,7 @@ defmodule Engram.Onboarding.BackfillTest do
   test "records first_vault_created for every user holding a vault, and no one else" do
     user_with = insert_user()
     user_without = insert_user()
-    {:ok, _} = Vaults.create_vault(user_with, %{name: "Main"})
+    {:ok, _, _} = Vaults.register_vault(user_with, "Main", Ecto.UUID.generate())
 
     # Clear the row the T5 hook creates so this exercises pure backfill.
     # Cross-tenant test cleanup — onboarding_actions is a tenant table (#788).
@@ -26,7 +26,7 @@ defmodule Engram.Onboarding.BackfillTest do
 
   test "is idempotent — a second run inserts nothing" do
     user = insert_user()
-    {:ok, _} = Vaults.create_vault(user, %{name: "Main"})
+    {:ok, _, _} = Vaults.register_vault(user, "Main", Ecto.UUID.generate())
     Repo.delete_all(Action, skip_tenant_check: true)
 
     assert Backfill.first_vault_created() == 1

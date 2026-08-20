@@ -36,7 +36,7 @@ defmodule Engram.Workers.ReindexKeywordTest do
     insert(:user_limit_override, user: build(:user), key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
-    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Test"})
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
 
     note = insert(:note, user: user, vault: vault)
     {:ok, marker} = Engram.Notes.create_folder_marker(user, vault, "Docs")

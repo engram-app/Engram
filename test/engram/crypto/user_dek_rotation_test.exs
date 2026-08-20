@@ -50,7 +50,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
   # once it is retired — long after the rotation reported success.
   describe "rotate_user/1 — vault index snapshot (#1151)" do
     setup %{user: user} do
-      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "RotationIndexVault"})
+      {:ok, vault, _} =
+        Engram.Vaults.register_vault(user, "RotationIndexVault", Ecto.UUID.generate())
+
       %{vault: vault}
     end
 
@@ -990,9 +992,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
   describe "rotate_user/1 — production-path bug regression" do
     setup %{user: user} do
-      # Grant unlimited vaults so create_vault doesn't hit the billing limit.
+      # Grant unlimited vaults so register_vault doesn't hit the billing limit.
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
-      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "ProdVault"})
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "ProdVault", Ecto.UUID.generate())
       {:ok, user: user, vault: vault}
     end
 

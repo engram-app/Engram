@@ -8,9 +8,9 @@ defmodule EngramWeb.McpControllerTest do
   setup %{conn: conn} do
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-    # Use the public create_vault path so name_ciphertext is real and
+    # Use the public register_vault path so name_ciphertext is real and
     # decrypts back to "Test Vault" — not random factory bytes.
-    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Test Vault"})
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test Vault", Ecto.UUID.generate())
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     grant_api_write!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
@@ -205,14 +205,14 @@ defmodule EngramWeb.McpControllerTest do
   describe "MCP multi-vault selection (#985)" do
     # Self-contained fresh user (not the single-vault main-setup user, whose
     # vaults_cap is already resolved at 1). Override is inserted BEFORE any
-    # create_vault so the cap resolves at 10 from the first call.
+    # register_vault so the cap resolves at 10 from the first call.
     setup do
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
-      {:ok, default} = Engram.Vaults.create_vault(user, %{name: "Personal"})
-      {:ok, vault_b} = Engram.Vaults.create_vault(user, %{name: "Health"})
+      {:ok, default, _} = Engram.Vaults.register_vault(user, "Personal", Ecto.UUID.generate())
+      {:ok, vault_b, _} = Engram.Vaults.register_vault(user, "Health", Ecto.UUID.generate())
       {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "multi-key")
       grant_api_write!(user)
 
@@ -715,7 +715,7 @@ defmodule EngramWeb.McpControllerTest do
 
       # Override limit so user can have 2 vaults
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
-      {:ok, vault_b} = Engram.Vaults.create_vault(user, %{name: "Vault B"})
+      {:ok, vault_b, _} = Engram.Vaults.register_vault(user, "Vault B", Ecto.UUID.generate())
 
       {:ok, api_key, api_key_record} = Engram.Accounts.create_api_key(user, "restricted-key")
       grant_api_write!(user)
@@ -809,9 +809,9 @@ defmodule EngramWeb.McpControllerTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
-      {:ok, va} = Engram.Vaults.create_vault(user, %{name: "A"})
-      {:ok, vb} = Engram.Vaults.create_vault(user, %{name: "B"})
-      {:ok, _vc} = Engram.Vaults.create_vault(user, %{name: "C"})
+      {:ok, va, _} = Engram.Vaults.register_vault(user, "A", Ecto.UUID.generate())
+      {:ok, vb, _} = Engram.Vaults.register_vault(user, "B", Ecto.UUID.generate())
+      {:ok, _vc, _} = Engram.Vaults.register_vault(user, "C", Ecto.UUID.generate())
 
       {:ok, api_key, key_rec} = Engram.Accounts.create_api_key(user, "subset-key")
       grant_api_write!(user)
@@ -850,7 +850,7 @@ defmodule EngramWeb.McpControllerTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
       vault_a = insert(:vault, user: user, is_default: true, name: "A")
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
-      {:ok, vault_b} = Engram.Vaults.create_vault(user, %{name: "B"})
+      {:ok, vault_b, _} = Engram.Vaults.register_vault(user, "B", Ecto.UUID.generate())
       {:ok, api_key, key_rec} = Engram.Accounts.create_api_key(user, "b-only")
       grant_api_write!(user)
 

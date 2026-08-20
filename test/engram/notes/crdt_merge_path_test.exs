@@ -10,7 +10,7 @@ defmodule Engram.Notes.CrdtMergePathTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
-    {:ok, vault} = Vaults.create_vault(user, %{name: "CrdtMerge"})
+    {:ok, vault, _} = Vaults.register_vault(user, "CrdtMerge", Ecto.UUID.generate())
     %{user: user, vault: vault}
   end
 
@@ -391,7 +391,7 @@ defmodule Engram.Notes.CrdtMergePathTest do
   # green without ever exercising it.
   test "a tail row stamped with another vault is not folded into this vault's doc", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, other_vault} = Vaults.create_vault(user, %{name: "OtherVault"})
+    {:ok, other_vault, _} = Vaults.register_vault(user, "OtherVault", Ecto.UUID.generate())
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "scoped.md", "content" => "MINE"})
 
     {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state("foreign_update", user, note.id)
