@@ -41,7 +41,7 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
     user = insert(:user, id: user_id, email: email)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
-    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "CpInterleave"})
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "CpInterleave", Ecto.UUID.generate())
 
     %{user: user, vault: vault}
   end

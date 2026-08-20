@@ -1,15 +1,15 @@
 Config.CSP: Missing Content-Security-Policy,lib/engram_web/router.ex:173,43202C
-Config.CSRFRoute: CSRF via Action Reuse,lib/engram_web/router.ex:586,342E9AB
+Config.CSRFRoute: CSRF via Action Reuse,lib/engram_web/router.ex:585,41B0634
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:9,68D560D
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:30,6F8AC00
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:45,6EA19F5
 Config.HTTPS: HTTPS Not Enabled,config/prod.exs:0,2B5C077
 Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/crypto.ex:581,7EA51D6
 Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/crypto/user_dek_rotation.ex:1411,772DFE4
-Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:4601,31D59FA
-Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:4936,2D16AAE
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:4629,5923205
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:4964,3F6BB54
 SQL.Query: SQL injection,lib/engram/attachments.ex:988,22EF6CC
-SQL.Query: SQL injection,lib/engram/notes.ex:6586,4104576
+SQL.Query: SQL injection,lib/engram/notes.ex:6614,29558DC
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/legal/seeder.ex:84,12C6307
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/release/preflight.ex:114,30D4B80
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram_web/controllers/spa_controller.ex:58,5A4EB4C

@@ -1080,7 +1080,7 @@ defmodule EngramWeb.CrdtChannel do
 
           # replay_tail/3 must run inside this with_tenant — it queries
           # CrdtUpdateLog, which is RLS-scoped.
-          {:ok, note.content, CrdtPersistence.replay_tail(doc, user, note_id)}
+          {:ok, note.content, CrdtPersistence.replay_tail(doc, user, note_id, vault.id)}
         else
           _ -> :error
         end

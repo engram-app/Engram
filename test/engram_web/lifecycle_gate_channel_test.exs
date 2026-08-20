@@ -48,7 +48,7 @@ defmodule EngramWeb.LifecycleGateChannelTest do
 
     user = insert_user(onboarding_profile: %{})
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
-    {:ok, vault} = Vaults.create_vault(user, %{name: "Lifecycle"})
+    {:ok, vault, _} = Vaults.register_vault(user, "Lifecycle", Ecto.UUID.generate())
 
     # Fully onboarded on purpose: these tests must fail for LIFECYCLE reasons,
     # not because the onboarding gate happened to catch them first.

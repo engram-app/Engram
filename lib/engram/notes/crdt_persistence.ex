@@ -16,6 +16,22 @@ defmodule Engram.Notes.CrdtPersistence do
   """
   @behaviour Yex.Sync.SharedDoc.PersistenceBehaviour
 
+  # INVARIANT (load-bearing since tail reads became vault-scoped): the vault_id
+  # threaded through this module's state MUST equal the vault_id on the note's
+  # own row.
+  #
+  # `update_v1/4` stamps every tail row with the state's vault_id, and every
+  # read filters on it, so the two are self-consistent. The risk is a room
+  # started under the WRONG vault: before scoping, reads were vault-agnostic and
+  # such a mismatch was harmless; now it silently truncates the note's history
+  # to whatever that room wrote.
+  #
+  # Nothing enforces this at runtime — the room's vault comes from
+  # `CrdtRegistry.ensure_started/4`, which the channel calls with the socket's
+  # vault after `resolve_note_id/3` has already proven the note belongs to it.
+  # `tail_rows/2` logs when a note has rows that are ALL foreign, which is the
+  # observable symptom if that ever stops holding.
+
   import Ecto.Query
   alias Engram.{Accounts, Crypto, Repo}
   alias Engram.Logger.Metadata
@@ -37,7 +53,7 @@ defmodule Engram.Notes.CrdtPersistence do
   # and cache it in the state so the per-update hot path does NOT do an
   # `Accounts.get_user!` DB round-trip on every keystroke.
   @impl true
-  def bind(%{user_id: user_id, note_id: note_id} = state, _doc_name, doc) do
+  def bind(%{user_id: user_id, vault_id: vault_id, note_id: note_id} = state, _doc_name, doc) do
     # bind/3 runs INSIDE the room (SharedDoc.init). Trapping exits here makes
     # gen_server intercept the supervisor's :shutdown on deploys and run
     # terminate/2 → unbind → full checkpoint, instead of dying unflushed.
@@ -100,7 +116,7 @@ defmodule Engram.Notes.CrdtPersistence do
                 raise "CrdtPersistence.bind/3: crdt_state decrypt failed for note #{note_id} (#{inspect(reason)}) — refusing to bind an empty doc over existing state"
             end
 
-            _applied = replay_tail(doc, user, note_id)
+            _applied = replay_tail(doc, user, note_id, vault_id)
 
             # NOTE: the server no longer seeds the doc from `notes.content`
             # here. That seed made the SERVER a third writer of note content,
@@ -310,15 +326,57 @@ defmodule Engram.Notes.CrdtPersistence do
   # Must be called inside the caller's `Repo.with_tenant` transaction — it
   # queries `CrdtUpdateLog` which is tenant-scoped by RLS.
   @doc false
-  @spec replay_tail(Yex.Doc.t(), map(), String.t()) :: [Ecto.UUID.t()]
-  def replay_tail(doc, user, note_id) do
+  @spec replay_tail(Yex.Doc.t(), map(), String.t(), String.t()) :: [Ecto.UUID.t()]
+  def replay_tail(doc, user, note_id, vault_id) do
+    apply_tail_rows(doc, user, note_id, tail_rows(note_id, vault_id))
+  end
+
+  @doc """
+  A note's tail rows, oldest first. The caller supplies the tenant (this issues
+  a bare `Repo.all`, like the rest of this module's reads).
+
+  Split out so a caller can find out whether there is anything to fold BEFORE
+  paying to materialize a doc to fold it into. Most notes in a bulk import have
+  an empty tail, and for those the fold is pure overhead.
+  """
+  @spec tail_rows(String.t(), String.t()) :: [struct()]
+  def tail_rows(note_id, vault_id) do
     rows =
       CrdtUpdateLog
-      |> where([l], l.note_id == ^note_id)
+      |> where([l], l.note_id == ^note_id and l.vault_id == ^vault_id)
       |> order_by([l], asc: l.inserted_at)
       |> Repo.all()
 
-    apply_tail_rows(doc, user, note_id, rows)
+    warn_on_foreign_vault_rows(note_id, vault_id, length(rows))
+    rows
+  end
+
+  # Vault-scoping made a corrupt state SILENT. Before it, a row stamped with the
+  # wrong vault was folded (wrong content, but visible) and pruned by the
+  # watermark. Now it is invisible to BOTH the fold and the prune: it can never
+  # be read and can never be deleted, so it accumulates forever with no symptom.
+  # That is better for correctness and worse for diagnosis, which is only an
+  # acceptable trade if the state is detectable — hence this.
+  #
+  # Costs one COUNT against the (note_id, inserted_at) index, and only when the
+  # scoped read came back EMPTY, i.e. the case where an invisible row would
+  # otherwise be indistinguishable from "no tail at all". A note with rows is
+  # already proving the filter matches.
+  defp warn_on_foreign_vault_rows(_note_id, _vault_id, n) when n > 0, do: :ok
+
+  defp warn_on_foreign_vault_rows(note_id, vault_id, 0) do
+    case Repo.aggregate(where(CrdtUpdateLog, [l], l.note_id == ^note_id), :count) do
+      0 ->
+        :ok
+
+      hidden ->
+        Logger.warning(
+          "crdt tail rows exist for this note but ALL belong to another vault — " <>
+            "they can neither be folded nor pruned (#1318 corruption shape): " <>
+            "note_id=#{note_id} vault_id=#{vault_id} hidden_rows=#{hidden}",
+          Metadata.with_category(:warning, :sync, note_id: note_id)
+        )
+    end
   end
 
   @doc """

@@ -95,14 +95,14 @@ defmodule Engram.Workers.CheckpointNote do
                 case Crypto.decrypt_crdt_state(note, user) do
                   {:ok, snapshot} when is_binary(snapshot) ->
                     :ok = Yex.apply_update(doc, snapshot)
-                    applied_ids = CrdtPersistence.replay_tail(doc, user, note_id)
+                    applied_ids = CrdtPersistence.replay_tail(doc, user, note_id, vault_id)
                     {true, applied_ids}
 
                   # No snapshot at all — legitimate for a note that has never
                   # been checkpointed. bind/3 documents the same case: the tail
                   # IS the doc's whole history, so replaying it is complete.
                   {:ok, nil} ->
-                    applied_ids = CrdtPersistence.replay_tail(doc, user, note_id)
+                    applied_ids = CrdtPersistence.replay_tail(doc, user, note_id, vault_id)
                     {applied_ids != [], applied_ids}
 
                   # A snapshot that will not decrypt is NOT the same as no

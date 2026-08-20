@@ -202,11 +202,11 @@ def test_cancel_pro_to_free_over_limit():
     _set_notes_count(user_id, SEED_NOTES_COUNT)
 
     # Create a vault so vault-scoped endpoints don't 404.
-    vault_resp, vault_status = api.create_vault(f"cancel-vault-{_ts()}")
+    vault_resp, vault_status = api.register_vault(f"cancel-vault-{_ts()}", f"cancel-client-{_ts()}")
     assert vault_status in (200, 201), (
         f"vault create should succeed for Pro user; got {vault_status}: {vault_resp}"
     )
-    vault_id = (vault_resp.get("vault") or {}).get("id")
+    vault_id = vault_resp.get("id")
     assert vault_id, f"vault response missing id: {vault_resp}"
     api_v = api.with_vault(vault_id)
 

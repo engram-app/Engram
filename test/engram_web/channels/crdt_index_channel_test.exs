@@ -25,7 +25,7 @@ defmodule EngramWeb.CrdtIndexChannelTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
-    {:ok, vault} = Vaults.create_vault(user, %{name: "IndexChannelTest"})
+    {:ok, vault, _} = Vaults.register_vault(user, "IndexChannelTest", Ecto.UUID.generate())
 
     {:ok, _, socket} =
       subscribe_and_join(

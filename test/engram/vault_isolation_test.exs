@@ -14,8 +14,8 @@ defmodule Engram.VaultIsolationTest do
     # Phase B reads derive a filter key from the user's DEK — provision upfront.
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
-    {:ok, vault_a} = Vaults.create_vault(user, %{name: "Personal"})
-    {:ok, vault_b} = Vaults.create_vault(user, %{name: "Work"})
+    {:ok, vault_a, _} = Vaults.register_vault(user, "Personal", Ecto.UUID.generate())
+    {:ok, vault_b, _} = Vaults.register_vault(user, "Work", Ecto.UUID.generate())
 
     %{user: user, vault_a: vault_a, vault_b: vault_b}
   end

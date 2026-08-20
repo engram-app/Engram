@@ -25,7 +25,7 @@ defmodule Engram.NotesContentForReadTest do
   setup do
     user = insert(:user)
     {:ok, user} = Crypto.ensure_user_dek(user)
-    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "ContentForRead"})
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "ContentForRead", Ecto.UUID.generate())
     %{user: user, vault: vault}
   end
 

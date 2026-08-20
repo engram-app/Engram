@@ -376,10 +376,10 @@ defmodule Engram.ConnectionsTest do
 
     test "vault_name resolves to the decrypted vault name" do
       user = insert_user()
-      # create_vault drives the real encryption pipeline so list_vaults/1 can
+      # register_vault drives the real encryption pipeline so list_vaults/1 can
       # decrypt the name back. The factory-built :vault has random ciphertext
       # which would decrypt to nil, that's the "vault gone" path tested below.
-      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Personal"})
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Personal", Ecto.UUID.generate())
       client = insert(:oauth_client, kind: "mcp")
 
       insert(:oauth_refresh_token,

@@ -40,7 +40,7 @@ defmodule Engram.Workers.CleanupVaultTest do
 
     test "enqueue/2 is called when delete_vault soft-deletes" do
       user = insert(:user)
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Temp Vault"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Temp Vault", Ecto.UUID.generate())
 
       assert {:ok, _deleted} = Vaults.delete_vault(user, vault.id)
 
@@ -302,13 +302,13 @@ defmodule Engram.Workers.CleanupVaultTest do
     end
 
     test "skips when the vault was restored (deleted_at nil)", %{user: user} do
-      {:ok, v} = Vaults.create_vault(user, %{name: "V"})
+      {:ok, v, _} = Vaults.register_vault(user, "V", Ecto.UUID.generate())
       assert :ok = CleanupVault.perform_cleanup(v.id, user.id)
       assert Repo.get(Vault, v.id, skip_tenant_check: true)
     end
 
     test "snoozes when deleted_at is younger than 30 days", %{user: user} do
-      {:ok, v} = Vaults.create_vault(user, %{name: "V"})
+      {:ok, v, _} = Vaults.register_vault(user, "V", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(user, v.id)
       backdate_deleted_at(v.id, 5)
 
@@ -319,7 +319,7 @@ defmodule Engram.Workers.CleanupVaultTest do
 
     test "purges when deleted_at is older than 30 days", %{bypass: bypass, user: user} do
       stub_qdrant_ack(bypass)
-      {:ok, v} = Vaults.create_vault(user, %{name: "V"})
+      {:ok, v, _} = Vaults.register_vault(user, "V", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(user, v.id)
       backdate_deleted_at(v.id, 31)
 
@@ -329,7 +329,7 @@ defmodule Engram.Workers.CleanupVaultTest do
 
     test "force purges immediately regardless of age", %{bypass: bypass, user: user} do
       stub_qdrant_ack(bypass)
-      {:ok, v} = Vaults.create_vault(user, %{name: "V"})
+      {:ok, v, _} = Vaults.register_vault(user, "V", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(user, v.id)
       # freshly deleted (age ~0) but force=true
 

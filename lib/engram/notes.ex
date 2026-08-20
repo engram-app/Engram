@@ -699,7 +699,8 @@ defmodule Engram.Notes do
          lookup_query,
          remint? \\ true
        ) do
-    with {:ok, crdt} <- maybe_merge_crdt(nil, base_attrs.content, user, note_id),
+    with {:ok, crdt} <-
+           maybe_merge_crdt(nil, base_attrs.content, user, note_id, base_attrs.vault_id),
          merged_attrs = %{
            base_attrs
            | content: crdt.merged_text,
@@ -1692,7 +1693,8 @@ defmodule Engram.Notes do
   defp move_note(prior, base_attrs, user, sanitized_path, folder) do
     was_tombstoned = not is_nil(prior.deleted_at)
 
-    with {:ok, crdt} <- maybe_merge_crdt(prior, base_attrs.content, user, prior.id) do
+    with {:ok, crdt} <-
+           maybe_merge_crdt(prior, base_attrs.content, user, prior.id, prior.vault_id) do
       merged_title = Helpers.extract_title(crdt.merged_text, sanitized_path)
 
       merged_attrs = %{
@@ -1938,7 +1940,8 @@ defmodule Engram.Notes do
         mode -> [mode: mode]
       end
 
-    with {:ok, crdt} <- maybe_merge_crdt(existing, base_attrs.content, user, existing.id) do
+    with {:ok, crdt} <-
+           maybe_merge_crdt(existing, base_attrs.content, user, existing.id, existing.vault_id) do
       merged_title = Helpers.extract_title(crdt.merged_text, sanitized_path)
 
       merged_attrs = %{
@@ -2065,7 +2068,7 @@ defmodule Engram.Notes do
   #
   # Returns the merged text so callers compute content_hash + tags from the
   # MERGED result — the public-API contract is "server merges, never clobbers."
-  defp maybe_merge_crdt(existing, incoming_content, user, note_id) do
+  defp maybe_merge_crdt(existing, incoming_content, user, note_id, vault_id) do
     prior_state =
       case existing do
         %Note{} = note ->
@@ -2108,7 +2111,7 @@ defmodule Engram.Notes do
           # any checkpoint). Replay the tail, then two-way-diff the incoming
           # text against the tail-inclusive doc to avoid full-body duplication.
           with {:ok, doc} <- CrdtBridge.doc_from_state(nil) do
-            _count = CrdtPersistence.replay_tail(doc, user, note_id)
+            _count = CrdtPersistence.replay_tail(doc, user, note_id, vault_id)
             CrdtBridge.merge_plaintext_into_doc(doc, incoming_content)
           end
 
@@ -2123,7 +2126,7 @@ defmodule Engram.Notes do
               # empty-projecting ancestor takes the same tail-inclusive
               # two-way path as a nil snapshot (reusing the hydrated doc keeps
               # the empty snapshot's lineage continuity).
-              _count = CrdtPersistence.replay_tail(snapshot_doc, user, note_id)
+              _count = CrdtPersistence.replay_tail(snapshot_doc, user, note_id, vault_id)
               CrdtBridge.merge_plaintext_into_doc(snapshot_doc, incoming_content)
             else
               # Two independent docs from the same snapshot:
@@ -2136,7 +2139,7 @@ defmodule Engram.Notes do
               with {:ok, tail_doc} <- CrdtBridge.doc_from_state(prior_state) do
                 # Fold in updates logged since the last checkpoint. Runs inside
                 # the caller's with_tenant txn — no nested tenant context needed.
-                _count = CrdtPersistence.replay_tail(tail_doc, user, note_id)
+                _count = CrdtPersistence.replay_tail(tail_doc, user, note_id, vault_id)
 
                 CrdtBridge.merge_plaintext_relative_to_snapshot(
                   snapshot_doc,
@@ -2216,7 +2219,7 @@ defmodule Engram.Notes do
           # reach this from a controller rather than from inside upsert_note's
           # transaction, so establish the tenant here.
           Repo.with_tenant(user.id, fn ->
-            _replayed = CrdtPersistence.replay_tail(doc, user, note.id)
+            _replayed = CrdtPersistence.replay_tail(doc, user, note.id, note.vault_id)
           end)
 
           {:ok, CrdtBridge.project_doc(doc)}
@@ -4379,11 +4382,36 @@ defmodule Engram.Notes do
         # checkpoint has since folded in is harmless. Holding them is strictly
         # safer than re-reading them, and it collapses one query per note into
         # one per chunk.
+        # Vault-scoped like every other tail read (the DEK-rotation rewrap is the
+        # one documented exemption). `ids` is a chunk of this user's notes and
+        # can span vaults, so the filter is the chunk's OWN vault set rather
+        # than a single id — note_id alone would fold a foreign vault's updates
+        # into this note's doc if an id ever appeared in two vaults (#1318).
+        chunk_vault_ids =
+          ids
+          |> Enum.map(&Map.get(by_id, &1))
+          |> Enum.reject(&is_nil/1)
+          |> Enum.map(& &1.vault_id)
+          |> Enum.uniq()
+
+        # Vault-filter ONLY when the candidates actually carried a vault_id.
+        # `candidates` can be a partial select, in which case chunk_vault_ids is
+        # empty and `l.vault_id in []` matches nothing — silently dropping every
+        # tail row and, with it, the room's unfolded ops (caught by #847's
+        # stale-fence test). Falling back to the unscoped read is exactly the
+        # prior behaviour, never worse.
+        tail_query =
+          if chunk_vault_ids == [] do
+            from(l in CrdtUpdateLog, where: l.note_id in ^ids, order_by: [asc: l.inserted_at])
+          else
+            from(l in CrdtUpdateLog,
+              where: l.note_id in ^ids and l.vault_id in ^chunk_vault_ids,
+              order_by: [asc: l.inserted_at]
+            )
+          end
+
         tails =
-          from(l in CrdtUpdateLog,
-            where: l.note_id in ^ids,
-            order_by: [asc: l.inserted_at]
-          )
+          tail_query
           |> Repo.all()
           |> Enum.group_by(& &1.note_id)
 

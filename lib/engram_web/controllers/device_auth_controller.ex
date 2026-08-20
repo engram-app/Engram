@@ -49,8 +49,11 @@ defmodule EngramWeb.DeviceAuthController do
   def authorize(conn, %{"user_code" => user_code, "vault_id" => "new", "vault_name" => vault_name}) do
     user = conn.assigns.current_user
 
-    case Vaults.create_vault(user, %{name: vault_name}) do
-      {:ok, vault} ->
+    # `user_code` identifies THIS link attempt, so it doubles as the
+    # idempotency key for the vault it creates: a double-tapped Authorize
+    # resolves to the vault the first tap made instead of minting a second.
+    case Vaults.register_vault(user, vault_name, "device-link:" <> user_code) do
+      {:ok, vault, _status} ->
         do_authorize(conn, user_code, user, vault.id)
 
       {:error, {:vault_limit_reached, limit, current}} ->

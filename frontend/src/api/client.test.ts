@@ -58,7 +58,7 @@ describe("api client 402 handling", () => {
 			),
 		);
 
-		await expect(api.post("/vaults", {})).rejects.toBeInstanceOf(LimitExceededError);
+		await expect(api.post("/vaults/register", {})).rejects.toBeInstanceOf(LimitExceededError);
 	});
 
 	it("LimitExceededError carries null fields when body is empty", async () => {

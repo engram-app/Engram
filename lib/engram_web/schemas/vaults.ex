@@ -72,28 +72,6 @@ defmodule EngramWeb.Schemas.VaultsResponse do
   })
 end
 
-defmodule EngramWeb.Schemas.CreateVaultRequest do
-  @moduledoc false
-  alias OpenApiSpex.Schema
-  require OpenApiSpex
-
-  OpenApiSpex.schema(%{
-    title: "CreateVaultRequest",
-    type: :object,
-    properties: %{
-      name: %Schema{type: :string},
-      description: %Schema{type: :string, nullable: true},
-      is_default: %Schema{type: :boolean}
-    },
-    required: [:name],
-    example: %{
-      "name" => "Research",
-      "description" => "Papers and reading notes.",
-      "is_default" => false
-    }
-  })
-end
-
 defmodule EngramWeb.Schemas.UpdateVaultRequest do
   @moduledoc "Partial update — only supplied fields change."
   alias OpenApiSpex.Schema

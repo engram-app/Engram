@@ -13,8 +13,8 @@ import pytest
 @pytest.fixture(scope="session", autouse=True)
 def ensure_vaults(api_sync, api_iso):
     """Create default vaults so vault-scoped endpoints don't 404."""
-    api_sync.create_vault("e2e-api-only")
-    api_iso.create_vault("e2e-api-only-iso")
+    api_sync.register_vault("e2e-api-only", "e2e-api-only-client")
+    api_iso.register_vault("e2e-api-only-iso", "e2e-api-only-iso-client")
 
 
 @pytest.fixture(scope="session", autouse=True)

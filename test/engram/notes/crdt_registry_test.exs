@@ -9,7 +9,7 @@ defmodule Engram.Notes.CrdtRegistryTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-    {:ok, vault} = Vaults.create_vault(user, %{name: "CrdtRegistryTest"})
+    {:ok, vault, _} = Vaults.register_vault(user, "CrdtRegistryTest", Ecto.UUID.generate())
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "base"})
     %{user: user, vault: vault, note: note}
   end

@@ -75,7 +75,7 @@ defmodule Engram.Onboarding.GateCacheTest do
 
     test "delete_vault evicts the user's verdict" do
       user = insert(:user)
-      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "V"})
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "V", Ecto.UUID.generate())
       :ok = GateCache.mark_passed(user.id)
 
       {:ok, _} = Engram.Vaults.delete_vault(user, vault.id)

@@ -651,7 +651,7 @@ defmodule Engram.OnboardingTest do
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "active")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
-      {:ok, _} = Engram.Vaults.create_vault(user, %{name: "My Vault"})
+      {:ok, _, _} = Engram.Vaults.register_vault(user, "My Vault", Ecto.UUID.generate())
 
       assert %{has_vault: true, next_step: :done} = Onboarding.status(user)
     end

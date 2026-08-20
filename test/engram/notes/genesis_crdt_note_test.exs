@@ -6,7 +6,7 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
-    {:ok, vault} = Vaults.create_vault(user, %{name: "GenesisTest"})
+    {:ok, vault, _} = Vaults.register_vault(user, "GenesisTest", Ecto.UUID.generate())
     %{user: user, vault: vault}
   end
 
@@ -237,7 +237,7 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
   end
 
   test "an id owned by ANOTHER vault is re-minted, not dropped", %{user: user, vault: vault} do
-    {:ok, other} = Vaults.create_vault(user, %{name: "GenesisTestB"})
+    {:ok, other, _} = Vaults.register_vault(user, "GenesisTestB", Ecto.UUID.generate())
 
     {:ok, in_a} =
       Notes.upsert_note(user, vault, %{"path" => "Notes/copied.md", "content" => "vault A"})
@@ -265,7 +265,7 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     # no-op on the PK -- and, with it, a crdt merge, an encrypt, and a vault seq
     # consumed by a row that never lands. remint_own_id still backstops the REST
     # leg; this pins that the socket leg no longer needs it.
-    {:ok, other} = Vaults.create_vault(user, %{name: "GenesisSeqB"})
+    {:ok, other, _} = Vaults.register_vault(user, "GenesisSeqB", Ecto.UUID.generate())
     {:ok, foreign} = Notes.upsert_note(user, other, %{"path" => "Notes/f.md", "content" => "x"})
 
     {:ok, base} = Notes.upsert_note(user, vault, %{"path" => "Notes/base.md", "content" => "b"})

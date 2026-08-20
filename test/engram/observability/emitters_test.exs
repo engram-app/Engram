@@ -68,7 +68,7 @@ defmodule Engram.Observability.EmittersTest do
   describe "note_created" do
     test "fires on new note insert with vault_id property", %{bypass: bypass} do
       user = user_with_clerk_id()
-      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Test"})
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
       expect_capture(bypass)
 
       assert {:ok, _note} =
@@ -87,7 +87,7 @@ defmodule Engram.Observability.EmittersTest do
     test "does NOT fire on an update to an existing note (idempotent re-push)",
          %{bypass: bypass} do
       user = user_with_clerk_id()
-      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Test"})
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
 
       # First insert — burn the single Bypass expectation so a second emit
       # would fail the test (Bypass.expect_once raises on extra calls).
@@ -122,7 +122,7 @@ defmodule Engram.Observability.EmittersTest do
     test "fires after Qdrant returns with result_count + latency_ms",
          %{bypass: bypass} do
       user = user_with_clerk_id()
-      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Test"})
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
 
       # Re-route Qdrant to the same Bypass under a distinct path so we can
       # serve the search response inline.
@@ -162,7 +162,7 @@ defmodule Engram.Observability.EmittersTest do
   describe "vault_opened" do
     test "fires on GET /vaults/:id success", %{conn: conn, bypass: bypass} do
       user = user_with_clerk_id()
-      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Test"})
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
       expect_capture(bypass)
 
       conn = conn |> authenticate(user) |> get("/api/vaults/#{vault.id}")

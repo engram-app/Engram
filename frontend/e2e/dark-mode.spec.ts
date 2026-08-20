@@ -24,10 +24,10 @@ async function registerUser(baseURL: string, email: string) {
 	if (!prof.ok) {
 		throw new Error(`onboarding PATCH failed: ${prof.status} ${await prof.text()}`);
 	}
-	const vault = await fetch(`${baseURL}/api/vaults`, {
+	const vault = await fetch(`${baseURL}/api/vaults/register`, {
 		method: "POST",
 		headers: auth,
-		body: JSON.stringify({ name: "E2E Vault" }),
+		body: JSON.stringify({ name: "E2E Vault", client_id: crypto.randomUUID() }),
 	});
 	if (!vault.ok) {
 		throw new Error(`vault POST failed: ${vault.status} ${await vault.text()}`);

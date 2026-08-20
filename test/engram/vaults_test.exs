@@ -17,32 +17,36 @@ defmodule Engram.VaultsTest do
   # only path to a vault name now, exercised throughout the rest of the suite.
 
   # ---------------------------------------------------------------------------
-  # create_vault/2
+  # register_vault/4
   # ---------------------------------------------------------------------------
 
-  describe "create_vault/2" do
+  describe "register_vault/4" do
     test "creates a vault with generated slug", %{user: user} do
-      assert {:ok, vault} = Vaults.create_vault(user, %{name: "My Notes"})
+      assert {:ok, vault, _} = Vaults.register_vault(user, "My Notes", Ecto.UUID.generate())
       assert vault.name == "My Notes"
       assert vault.slug == "my-notes"
       assert vault.user_id == user.id
     end
 
     test "first vault is set as default", %{user: user} do
-      assert {:ok, vault} = Vaults.create_vault(user, %{name: "First"})
+      assert {:ok, vault, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
       assert vault.is_default == true
     end
 
     test "ignores unknown string keys instead of crashing", %{user: user} do
-      # Controller feeds raw params straight in; an attacker-supplied key that
-      # is not an existing atom must not raise (String.to_existing_atom).
-      attrs = %{"name" => "Notes", "__definitely_not_a_field__" => "x"}
-      assert {:ok, vault} = Vaults.create_vault(user, attrs)
+      # `extra_attrs` may carry raw params; an attacker-supplied key that is
+      # not an existing atom must not raise (String.to_existing_atom).
+      extra = %{"description" => "Notes", "__definitely_not_a_field__" => "x"}
+
+      assert {:ok, vault, _} =
+               Vaults.register_vault(user, "Notes", Ecto.UUID.generate(), extra)
+
       assert vault.name == "Notes"
+      assert vault.description == "Notes"
     end
 
     test "second vault is not default", %{user: user} do
-      {:ok, _} = Vaults.create_vault(user, %{name: "First"})
+      {:ok, _, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
 
       # Give the second user unlimited vaults via user_overrides or just test default (1) blocks
       # Override the limit so we can insert a second vault. The first create
@@ -51,55 +55,55 @@ defmodule Engram.VaultsTest do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
       :ok = OverrideCache.evict(user.id)
 
-      assert {:ok, vault2} = Vaults.create_vault(user, %{name: "Second"})
+      assert {:ok, vault2, _} = Vaults.register_vault(user, "Second", Ecto.UUID.generate())
       assert vault2.is_default == false
     end
 
     test "enforces default billing limit of 1", %{user: user} do
-      {:ok, _} = Vaults.create_vault(user, %{name: "First"})
+      {:ok, _, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
 
       assert {:error, {:vault_limit_reached, 1, 1}} =
-               Vaults.create_vault(user, %{name: "Second"})
+               Vaults.register_vault(user, "Second", Ecto.UUID.generate())
     end
 
     test "unlimited override (-1) allows any number of vaults", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
 
-      {:ok, _} = Vaults.create_vault(user, %{name: "First"})
-      {:ok, _} = Vaults.create_vault(user, %{name: "Second"})
-      {:ok, _} = Vaults.create_vault(user, %{name: "Third"})
+      {:ok, _, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
+      {:ok, _, _} = Vaults.register_vault(user, "Second", Ecto.UUID.generate())
+      {:ok, _, _} = Vaults.register_vault(user, "Third", Ecto.UUID.generate())
     end
 
     test "specific override enforces that exact limit", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 2})
 
-      {:ok, _} = Vaults.create_vault(user, %{name: "First"})
-      {:ok, _} = Vaults.create_vault(user, %{name: "Second"})
+      {:ok, _, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
+      {:ok, _, _} = Vaults.register_vault(user, "Second", Ecto.UUID.generate())
 
       assert {:error, {:vault_limit_reached, 2, 2}} =
-               Vaults.create_vault(user, %{name: "Third"})
+               Vaults.register_vault(user, "Third", Ecto.UUID.generate())
     end
 
     test "override upgrade: blocked by default, then lifted", %{user: user} do
-      {:ok, _} = Vaults.create_vault(user, %{name: "First"})
+      {:ok, _, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
 
       assert {:error, {:vault_limit_reached, 1, 1}} =
-               Vaults.create_vault(user, %{name: "Second"})
+               Vaults.register_vault(user, "Second", Ecto.UUID.generate())
 
       # Lift the limit via per-user override. Earlier creates cached the
       # override MISS — evict so the grant is visible immediately.
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
       :ok = OverrideCache.evict(user.id)
 
-      {:ok, _} = Vaults.create_vault(user, %{name: "Second"})
-      {:ok, _} = Vaults.create_vault(user, %{name: "Third"})
+      {:ok, _, _} = Vaults.register_vault(user, "Second", Ecto.UUID.generate())
+      {:ok, _, _} = Vaults.register_vault(user, "Third", Ecto.UUID.generate())
     end
 
     test "deduplicates slug collision with numeric suffix", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
-      {:ok, v1} = Vaults.create_vault(user, %{name: "Notes"})
-      {:ok, v2} = Vaults.create_vault(user, %{name: "Notes"})
+      {:ok, v1, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+      {:ok, v2, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
 
       assert v1.slug == "notes"
       assert v2.slug == "notes-2"
@@ -108,9 +112,9 @@ defmodule Engram.VaultsTest do
     test "slug with triple collision gets -3 suffix", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
-      {:ok, _} = Vaults.create_vault(user, %{name: "Notes"})
-      {:ok, _} = Vaults.create_vault(user, %{name: "Notes"})
-      {:ok, v3} = Vaults.create_vault(user, %{name: "Notes"})
+      {:ok, _, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+      {:ok, _, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+      {:ok, v3, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
 
       assert v3.slug == "notes-3"
     end
@@ -123,49 +127,66 @@ defmodule Engram.VaultsTest do
       # rejection here would be a dead end: "Settings" always slugifies to
       # "settings" and the user has no field to fix. Route reserved words
       # through the same dedup path as a taken slug.
-      assert {:ok, vault} = Vaults.create_vault(user, %{name: "Settings"})
+      assert {:ok, vault, _} = Vaults.register_vault(user, "Settings", Ecto.UUID.generate())
       assert vault.slug == "settings-2"
     end
 
     test "slug strips special characters", %{user: user} do
-      assert {:ok, vault} = Vaults.create_vault(user, %{name: "My Vault!"})
+      assert {:ok, vault, _} = Vaults.register_vault(user, "My Vault!", Ecto.UUID.generate())
       assert vault.slug == "my-vault"
     end
 
     test "empty slug falls back to 'vault'", %{user: user} do
-      assert {:ok, vault} = Vaults.create_vault(user, %{name: "!!!"})
+      assert {:ok, vault, _} = Vaults.register_vault(user, "!!!", Ecto.UUID.generate())
       assert vault.slug == "vault"
     end
 
-    test "description and client_id are optional", %{user: user} do
-      assert {:ok, vault} =
-               Vaults.create_vault(user, %{
-                 name: "Work",
-                 description: "Work notes",
-                 client_id: "client-abc"
-               })
+    test "description rides along in extra_attrs", %{user: user} do
+      assert {:ok, vault, _} =
+               Vaults.register_vault(user, "Work", "client-abc", %{description: "Work notes"})
 
       assert vault.description == "Work notes"
       assert vault.client_id == "client-abc"
+    end
+
+    test "extra_attrs cannot override the computed columns", %{user: user} do
+      # name/client_id/slug/user_id/is_default are derived, not caller input —
+      # a caller that smuggles them through extra_attrs must not win.
+      other = insert(:user)
+
+      assert {:ok, vault, _} =
+               Vaults.register_vault(user, "Real", "cid-real", %{
+                 name: "Spoofed",
+                 client_id: "cid-spoofed",
+                 slug: "spoofed",
+                 user_id: other.id,
+                 is_default: false
+               })
+
+      assert vault.name == "Real"
+      assert vault.client_id == "cid-real"
+      assert vault.slug == "real"
+      assert vault.user_id == user.id
+      assert vault.is_default == true
     end
 
     test "requires a name", %{user: user} do
       # Phase B.3: name is virtual — a missing name means the encrypted trio
       # never gets injected, and the changeset surfaces that on the public
       # `name` field (never the internal ciphertext/nonce/hmac column names).
-      assert {:error, changeset} = Vaults.create_vault(user, %{})
+      assert {:error, changeset} = Vaults.register_vault(user, "", Ecto.UUID.generate())
       errors = errors_on(changeset)
       assert errors[:name] == ["can't be blank"]
       refute Map.has_key?(errors, :name_ciphertext)
     end
 
     test "rejects a blank name", %{user: user} do
-      assert {:error, changeset} = Vaults.create_vault(user, %{name: "   "})
+      assert {:error, changeset} = Vaults.register_vault(user, "   ", Ecto.UUID.generate())
       assert errors_on(changeset)[:name] == ["can't be blank"]
     end
 
     test "update_vault rejects a blank name without touching the slug", %{user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Keep Me"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Keep Me", Ecto.UUID.generate())
 
       assert {:error, changeset} = Vaults.update_vault(user, vault.id, %{name: ""})
       assert errors_on(changeset)[:name] == ["can't be blank"]
@@ -183,8 +204,8 @@ defmodule Engram.VaultsTest do
   describe "content_counts_for/2 and content_counts/2" do
     setup %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
-      {:ok, a} = Vaults.create_vault(user, %{name: "Alpha"})
-      {:ok, b} = Vaults.create_vault(user, %{name: "Beta"})
+      {:ok, a, _} = Vaults.register_vault(user, "Alpha", Ecto.UUID.generate())
+      {:ok, b, _} = Vaults.register_vault(user, "Beta", Ecto.UUID.generate())
       %{a: a, b: b}
     end
 
@@ -310,8 +331,8 @@ defmodule Engram.VaultsTest do
     test "returns all non-deleted vaults for user", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
-      {:ok, v1} = Vaults.create_vault(user, %{name: "A"})
-      {:ok, v2} = Vaults.create_vault(user, %{name: "B"})
+      {:ok, v1, _} = Vaults.register_vault(user, "A", Ecto.UUID.generate())
+      {:ok, v2, _} = Vaults.register_vault(user, "B", Ecto.UUID.generate())
 
       vaults = Vaults.list_vaults(user)
       ids = Enum.map(vaults, & &1.id)
@@ -322,8 +343,8 @@ defmodule Engram.VaultsTest do
     test "excludes soft-deleted vaults", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
-      {:ok, v1} = Vaults.create_vault(user, %{name: "Keep"})
-      {:ok, v2} = Vaults.create_vault(user, %{name: "Delete"})
+      {:ok, v1, _} = Vaults.register_vault(user, "Keep", Ecto.UUID.generate())
+      {:ok, v2, _} = Vaults.register_vault(user, "Delete", Ecto.UUID.generate())
       Vaults.delete_vault(user, v2.id)
 
       vaults = Vaults.list_vaults(user)
@@ -333,8 +354,8 @@ defmodule Engram.VaultsTest do
     end
 
     test "does not return other user's vaults", %{user: user, other_user: other_user} do
-      {:ok, my_vault} = Vaults.create_vault(user, %{name: "Mine"})
-      {:ok, their_vault} = Vaults.create_vault(other_user, %{name: "Theirs"})
+      {:ok, my_vault, _} = Vaults.register_vault(user, "Mine", Ecto.UUID.generate())
+      {:ok, their_vault, _} = Vaults.register_vault(other_user, "Theirs", Ecto.UUID.generate())
 
       my_list = Vaults.list_vaults(user)
       their_list = Vaults.list_vaults(other_user)
@@ -348,12 +369,12 @@ defmodule Engram.VaultsTest do
     test "returns vaults ordered by inserted_at ascending", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
-      {:ok, v1} = Vaults.create_vault(user, %{name: "Alpha"})
+      {:ok, v1, _} = Vaults.register_vault(user, "Alpha", Ecto.UUID.generate())
       # 1.1s gap ensures distinct second-precision `created_at` timestamps so the
       # secondary `v.id` ordering doesn't race with UUIDv7 sub-millisecond
       # tiebreaker randomness.
       Process.sleep(1100)
-      {:ok, v2} = Vaults.create_vault(user, %{name: "Beta"})
+      {:ok, v2, _} = Vaults.register_vault(user, "Beta", Ecto.UUID.generate())
 
       [first, second | _] = Vaults.list_vaults(user)
       assert first.id == v1.id
@@ -368,8 +389,8 @@ defmodule Engram.VaultsTest do
     end
 
     test "returns only soft-deleted vaults, newest-deleted first", %{user: user} do
-      {:ok, keep} = Vaults.create_vault(user, %{name: "Keep"})
-      {:ok, gone} = Vaults.create_vault(user, %{name: "Gone"})
+      {:ok, keep, _} = Vaults.register_vault(user, "Keep", Ecto.UUID.generate())
+      {:ok, gone, _} = Vaults.register_vault(user, "Gone", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(user, gone.id)
 
       deleted = Vaults.list_deleted_vaults(user)
@@ -381,8 +402,8 @@ defmodule Engram.VaultsTest do
 
     test "excludes other users' deleted vaults", %{user: user, other_user: other} do
       insert(:user_limit_override, user: other, key: "vaults_cap", value: %{"v" => 10})
-      {:ok, mine} = Vaults.create_vault(user, %{name: "Mine"})
-      {:ok, theirs} = Vaults.create_vault(other, %{name: "Theirs"})
+      {:ok, mine, _} = Vaults.register_vault(user, "Mine", Ecto.UUID.generate())
+      {:ok, theirs, _} = Vaults.register_vault(other, "Theirs", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(user, mine.id)
       {:ok, _} = Vaults.delete_vault(other, theirs.id)
 
@@ -393,7 +414,7 @@ defmodule Engram.VaultsTest do
   describe "restore_vault/2" do
     test "clears deleted_at and returns the vault", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
-      {:ok, v} = Vaults.create_vault(user, %{name: "Temp"})
+      {:ok, v, _} = Vaults.register_vault(user, "Temp", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(user, v.id)
 
       assert {:ok, restored} = Vaults.restore_vault(user, v.id)
@@ -405,9 +426,9 @@ defmodule Engram.VaultsTest do
 
     test "blocks restore when it would exceed the vault cap", %{user: user} do
       # Cap of 1: create one, delete it, create a replacement, then try to restore.
-      {:ok, first} = Vaults.create_vault(user, %{name: "First"})
+      {:ok, first, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(user, first.id)
-      {:ok, _replacement} = Vaults.create_vault(user, %{name: "Replacement"})
+      {:ok, _replacement, _} = Vaults.register_vault(user, "Replacement", Ecto.UUID.generate())
 
       assert {:error, {:limit_reached, 1, 1}} = Vaults.restore_vault(user, first.id)
       # Blocked restore leaves the vault soft-deleted: it stays in the trash
@@ -418,13 +439,13 @@ defmodule Engram.VaultsTest do
 
     test "returns :not_found for an active vault", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
-      {:ok, v} = Vaults.create_vault(user, %{name: "Active"})
+      {:ok, v, _} = Vaults.register_vault(user, "Active", Ecto.UUID.generate())
       assert {:error, :not_found} = Vaults.restore_vault(user, v.id)
     end
 
     test "returns :not_found for another user's deleted vault", %{user: user, other_user: other} do
       insert(:user_limit_override, user: other, key: "vaults_cap", value: %{"v" => 10})
-      {:ok, v} = Vaults.create_vault(other, %{name: "Theirs"})
+      {:ok, v, _} = Vaults.register_vault(other, "Theirs", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(other, v.id)
       assert {:error, :not_found} = Vaults.restore_vault(user, v.id)
     end
@@ -439,7 +460,7 @@ defmodule Engram.VaultsTest do
   describe "purge_vault/2" do
     test "enqueues an immediate force cleanup for a soft-deleted vault", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
-      {:ok, v} = Vaults.create_vault(user, %{name: "Doomed"})
+      {:ok, v, _} = Vaults.register_vault(user, "Doomed", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(user, v.id)
 
       assert {:ok, vault} = Vaults.purge_vault(user, v.id)
@@ -453,7 +474,7 @@ defmodule Engram.VaultsTest do
 
     test "returns :not_found for an active vault", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
-      {:ok, v} = Vaults.create_vault(user, %{name: "Active"})
+      {:ok, v, _} = Vaults.register_vault(user, "Active", Ecto.UUID.generate())
       assert {:error, :not_found} = Vaults.purge_vault(user, v.id)
       refute_enqueued(worker: Engram.Workers.CleanupVault)
     end
@@ -465,7 +486,7 @@ defmodule Engram.VaultsTest do
 
   describe "get_vault/2" do
     test "returns {:ok, vault} for owned vault", %{user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Mine"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Mine", Ecto.UUID.generate())
       assert {:ok, found} = Vaults.get_vault(user, vault.id)
       assert found.id == vault.id
     end
@@ -484,14 +505,14 @@ defmodule Engram.VaultsTest do
       user: user,
       other_user: other_user
     } do
-      {:ok, their_vault} = Vaults.create_vault(other_user, %{name: "Theirs"})
+      {:ok, their_vault, _} = Vaults.register_vault(other_user, "Theirs", Ecto.UUID.generate())
       assert {:error, :not_found} = Vaults.get_vault(user, their_vault.id)
     end
 
     test "returns {:error, :not_found} for soft-deleted vault", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Gone"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Gone", Ecto.UUID.generate())
       Vaults.delete_vault(user, vault.id)
       assert {:error, :not_found} = Vaults.get_vault(user, vault.id)
     end
@@ -503,7 +524,7 @@ defmodule Engram.VaultsTest do
 
   describe "get_default_vault/1" do
     test "returns the default vault", %{user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Default"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Default", Ecto.UUID.generate())
       assert {:ok, found} = Vaults.get_default_vault(user)
       assert found.id == vault.id
     end
@@ -519,7 +540,7 @@ defmodule Engram.VaultsTest do
 
   describe "update_vault/3" do
     test "updates name and description", %{user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Old Name"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Old Name", Ecto.UUID.generate())
 
       assert {:ok, updated} =
                Vaults.update_vault(user, vault.id, %{name: "New Name", description: "Desc"})
@@ -529,7 +550,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "regenerates slug when name changes", %{user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Original"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Original", Ecto.UUID.generate())
       assert vault.slug == "original"
 
       assert {:ok, updated} = Vaults.update_vault(user, vault.id, %{name: "Renamed Vault"})
@@ -539,7 +560,7 @@ defmodule Engram.VaultsTest do
     test "renaming into a reserved word gets a numeric suffix instead of being rejected", %{
       user: user
     } do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Original"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Original", Ecto.UUID.generate())
 
       assert {:ok, updated} = Vaults.update_vault(user, vault.id, %{name: "Search"})
       assert updated.slug == "search-2"
@@ -548,8 +569,8 @@ defmodule Engram.VaultsTest do
     test "setting is_default clears other defaults", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
-      {:ok, v1} = Vaults.create_vault(user, %{name: "First"})
-      {:ok, v2} = Vaults.create_vault(user, %{name: "Second"})
+      {:ok, v1, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
+      {:ok, v2, _} = Vaults.register_vault(user, "Second", Ecto.UUID.generate())
       assert v1.is_default == true
       assert v2.is_default == false
 
@@ -579,7 +600,7 @@ defmodule Engram.VaultsTest do
       Process.flag(:trap_exit, true)
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Rooms"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Rooms", Ecto.UUID.generate())
 
       {:ok, note} =
         Engram.Notes.upsert_note(user, vault, %{
@@ -615,7 +636,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "soft-deletes vault by setting deleted_at", %{user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Temp"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Temp", Ecto.UUID.generate())
       assert {:ok, deleted} = Vaults.delete_vault(user, vault.id)
       assert deleted.deleted_at != nil
       assert deleted.is_default == false
@@ -624,8 +645,8 @@ defmodule Engram.VaultsTest do
     test "promotes next vault to default when default is deleted", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
-      {:ok, v1} = Vaults.create_vault(user, %{name: "First"})
-      {:ok, v2} = Vaults.create_vault(user, %{name: "Second"})
+      {:ok, v1, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
+      {:ok, v2, _} = Vaults.register_vault(user, "Second", Ecto.UUID.generate())
       assert v1.is_default == true
 
       Vaults.delete_vault(user, v1.id)
@@ -642,8 +663,8 @@ defmodule Engram.VaultsTest do
     test "does not promote when non-default vault is deleted", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
-      {:ok, v1} = Vaults.create_vault(user, %{name: "First"})
-      {:ok, v2} = Vaults.create_vault(user, %{name: "Second"})
+      {:ok, v1, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
+      {:ok, v2, _} = Vaults.register_vault(user, "Second", Ecto.UUID.generate())
 
       Vaults.delete_vault(user, v2.id)
 
@@ -657,7 +678,7 @@ defmodule Engram.VaultsTest do
 
     test "delete_vault enqueues the deletion-notice email", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
-      {:ok, v} = Vaults.create_vault(user, %{name: "Bye"})
+      {:ok, v, _} = Vaults.register_vault(user, "Bye", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(user, v.id)
 
       assert_enqueued(
@@ -668,8 +689,8 @@ defmodule Engram.VaultsTest do
 
     test "revokes vault-scoped OAuth and device tokens on soft-delete", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
-      {:ok, gone} = Vaults.create_vault(user, %{name: "Gone"})
-      {:ok, kept} = Vaults.create_vault(user, %{name: "Kept"})
+      {:ok, gone, _} = Vaults.register_vault(user, "Gone", Ecto.UUID.generate())
+      {:ok, kept, _} = Vaults.register_vault(user, "Kept", Ecto.UUID.generate())
       client = insert(:oauth_client, kind: "mcp")
 
       # Connections on the doomed vault…
@@ -710,19 +731,19 @@ defmodule Engram.VaultsTest do
 
   describe "check_api_key_access/2" do
     test "nil api_key (JWT auth) always returns :ok", %{user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "V"})
+      {:ok, vault, _} = Vaults.register_vault(user, "V", Ecto.UUID.generate())
       assert :ok = Vaults.check_api_key_access(nil, vault)
     end
 
     test "unrestricted key (no api_key_vaults rows) returns :ok", %{user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "V"})
+      {:ok, vault, _} = Vaults.register_vault(user, "V", Ecto.UUID.generate())
       {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "unrestricted")
 
       assert :ok = Vaults.check_api_key_access(api_key, vault)
     end
 
     test "restricted key with matching vault returns :ok", %{user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "V"})
+      {:ok, vault, _} = Vaults.register_vault(user, "V", Ecto.UUID.generate())
       {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "restricted")
 
       Engram.Repo.insert_all("api_key_vaults", [
@@ -736,8 +757,8 @@ defmodule Engram.VaultsTest do
       user: user,
       other_user: other_user
     } do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "V"})
-      {:ok, other_vault} = Vaults.create_vault(other_user, %{name: "Other"})
+      {:ok, vault, _} = Vaults.register_vault(user, "V", Ecto.UUID.generate())
+      {:ok, other_vault, _} = Vaults.register_vault(other_user, "Other", Ecto.UUID.generate())
       {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "restricted")
 
       # Restrict to other vault only
@@ -818,8 +839,8 @@ defmodule Engram.VaultsTest do
       %{user: user}
     end
 
-    test "create_vault populates name_hmac/ciphertext/nonce", %{user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "client-acme"})
+    test "register_vault populates name_hmac/ciphertext/nonce", %{user: user} do
+      {:ok, vault, _} = Vaults.register_vault(user, "client-acme", Ecto.UUID.generate())
 
       {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
       expected_hmac = Engram.Crypto.hmac_field(filter_key, "client-acme")
@@ -831,7 +852,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "update_vault re-encrypts name on change", %{user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "old-name"})
+      {:ok, vault, _} = Vaults.register_vault(user, "old-name", Ecto.UUID.generate())
       {:ok, updated} = Vaults.update_vault(user, vault.id, %{name: "new-name"})
 
       {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
@@ -861,8 +882,8 @@ defmodule Engram.VaultsTest do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
       same_time = DateTime.utc_now(:second)
 
-      {:ok, v1} = Vaults.create_vault(user, %{name: "vault-order-a"})
-      {:ok, v2} = Vaults.create_vault(user, %{name: "vault-order-b"})
+      {:ok, v1, _} = Vaults.register_vault(user, "vault-order-a", Ecto.UUID.generate())
+      {:ok, v2, _} = Vaults.register_vault(user, "vault-order-b", Ecto.UUID.generate())
 
       # Force both vaults to the same created_at timestamp via Repo.update_all
       Engram.Repo.update_all(
@@ -882,9 +903,9 @@ defmodule Engram.VaultsTest do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
       same_time = DateTime.utc_now(:second)
 
-      {:ok, v1} = Vaults.create_vault(user, %{name: "alpha"})
-      {:ok, v2} = Vaults.create_vault(user, %{name: "beta"})
-      {:ok, v3} = Vaults.create_vault(user, %{name: "gamma"})
+      {:ok, v1, _} = Vaults.register_vault(user, "alpha", Ecto.UUID.generate())
+      {:ok, v2, _} = Vaults.register_vault(user, "beta", Ecto.UUID.generate())
+      {:ok, v3, _} = Vaults.register_vault(user, "gamma", Ecto.UUID.generate())
 
       Engram.Repo.update_all(
         Ecto.Query.from(v in Engram.Vaults.Vault,
@@ -917,14 +938,14 @@ defmodule Engram.VaultsTest do
     # routes to self(); concurrent async tests firing :vault_count also land
     # in this test's mailbox. Pin user_id in every pattern so we only match
     # our own user's events.
-    test "emits :vault_count on create_vault success", %{user: user} do
+    test "emits :vault_count on vault creation", %{user: user} do
       user_id = user.id
-      assert {:ok, _} = Vaults.create_vault(user, %{name: "V1"})
+      assert {:ok, _, _} = Vaults.register_vault(user, "V1", Ecto.UUID.generate())
 
       assert_received {[:engram, :abuse, :vault_count], _ref, %{count: 1},
                        %{user_id: ^user_id, op: :created}}
 
-      assert {:ok, _} = Vaults.create_vault(user, %{name: "V2"})
+      assert {:ok, _, _} = Vaults.register_vault(user, "V2", Ecto.UUID.generate())
 
       assert_received {[:engram, :abuse, :vault_count], _, %{count: 2},
                        %{user_id: ^user_id, op: :created}}
@@ -932,7 +953,7 @@ defmodule Engram.VaultsTest do
 
     test "emits :vault_count on delete_vault success", %{user: user} do
       user_id = user.id
-      {:ok, v} = Vaults.create_vault(user, %{name: "V1"})
+      {:ok, v, _} = Vaults.register_vault(user, "V1", Ecto.UUID.generate())
       drain_vault_count_messages()
 
       assert {:ok, _} = Vaults.delete_vault(user, v.id)
@@ -958,22 +979,22 @@ defmodule Engram.VaultsTest do
     end
   end
 
-  describe "create_vault/2 onboarding hook" do
+  describe "register_vault/4 onboarding hook" do
     test "records first_vault_created on first vault" do
       user = insert(:user)
       assert [] = Engram.Onboarding.list_actions(user.id)
 
-      {:ok, _v} = Engram.Vaults.create_vault(user, %{name: "Main"})
+      {:ok, _v, _} = Engram.Vaults.register_vault(user, "Main", Ecto.UUID.generate())
       assert ["first_vault_created"] = Engram.Onboarding.list_actions(user.id)
     end
 
     test "second vault does not double-record" do
       user = insert(:user)
-      {:ok, _} = Engram.Vaults.create_vault(user, %{name: "Main"})
+      {:ok, _, _} = Engram.Vaults.register_vault(user, "Main", Ecto.UUID.generate())
       # First create cached the override MISS — evict so the grant lands.
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
       :ok = OverrideCache.evict(user.id)
-      {:ok, _} = Engram.Vaults.create_vault(user, %{name: "Second"})
+      {:ok, _, _} = Engram.Vaults.register_vault(user, "Second", Ecto.UUID.generate())
 
       assert ["first_vault_created"] = Engram.Onboarding.list_actions(user.id)
     end

@@ -116,13 +116,12 @@ describe("VaultSwitcher", () => {
 		fireEvent.submit(input.closest("form")!);
 
 		expect(createMutate).toHaveBeenCalledWith(
-			{ name: "Archive" },
+			{ name: "Archive", client_id: expect.any(String) },
 			expect.objectContaining({ onSuccess: expect.any(Function) }),
 		);
-		// Land in the vault that was just created, by slug.
-		createMutate.mock.calls[0]![1].onSuccess({
-			vault: { id: "id-c", slug: "archive", name: "Archive" },
-		});
+		// Land in the vault that was just created, by slug. /vaults/register
+		// answers with the vault flat, NOT wrapped in { vault }.
+		createMutate.mock.calls[0]![1].onSuccess({ id: "id-c", slug: "archive", name: "Archive" });
 		expect(navigate).toHaveBeenCalledWith("/archive");
 	});
 });

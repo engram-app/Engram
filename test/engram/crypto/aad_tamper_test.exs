@@ -16,7 +16,7 @@ defmodule Engram.Crypto.AadTamperTest do
     DekCache.invalidate_all()
     user = insert(:user)
     {:ok, user} = Crypto.ensure_user_dek(user)
-    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Tamper Vault"})
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "Tamper Vault", Ecto.UUID.generate())
     {:ok, user: user, vault: vault}
   end
 
@@ -58,7 +58,7 @@ defmodule Engram.Crypto.AadTamperTest do
        %{user: user_a, vault: vault_a} do
     user_b = insert(:user)
     {:ok, user_b} = Crypto.ensure_user_dek(user_b)
-    {:ok, vault_b} = Engram.Vaults.create_vault(user_b, %{name: "B Vault"})
+    {:ok, vault_b, _} = Engram.Vaults.register_vault(user_b, "B Vault", Ecto.UUID.generate())
 
     {:ok, note_a} = Notes.upsert_note(user_a, vault_a, %{path: "a.md", content: "user-a-secret"})
     {:ok, note_b} = Notes.upsert_note(user_b, vault_b, %{path: "b.md", content: "user-b-secret"})

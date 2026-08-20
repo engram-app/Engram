@@ -10,7 +10,7 @@ Covers the happy path a Free user walks from "just signed up" to
      (Phase 2 endpoint, gates RequireOnboarding's :subscription_ok lane
      when SaaS billing_enabled is true). Asserted both first-call (200
      with next_step shape) and idempotent second-call.
-  3. POST /api/vaults — create the user's first (and only, on Free) vault.
+  3. POST /api/vaults/register — create the user's first (and only, on Free) vault.
   4. POST /api/notes — create hello.md under that vault.
   5. GET /api/sync/manifest — verify the note appears in the manifest, and
      that the retired GET /api/notes/changes feed answers 410 Gone.
@@ -109,12 +109,12 @@ def test_free_signup_to_first_note():
     )
 
     # ── 3. Create first vault ────────────────────────────────────────────
-    vault_resp, vault_status = api.create_vault(f"hello-vault-{_ts()}")
+    vault_resp, vault_status = api.register_vault(f"hello-vault-{_ts()}", f"hello-client-{_ts()}")
     assert vault_status in (200, 201), (
-        f"POST /api/vaults should succeed for Free user with 0 vaults; "
+        f"POST /api/vaults/register should succeed for Free user with 0 vaults; "
         f"got {vault_status}: {vault_resp}"
     )
-    vault_id = (vault_resp.get("vault") or {}).get("id")
+    vault_id = vault_resp.get("id")
     assert vault_id, f"vault response missing id: {vault_resp}"
 
     api_v = api.with_vault(vault_id)

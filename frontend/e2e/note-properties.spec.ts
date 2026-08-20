@@ -56,16 +56,16 @@ interface Vault {
 }
 
 async function createVault(baseURL: string, token: string, name: string): Promise<Vault> {
-	const res = await fetch(`${baseURL}/api/vaults`, {
+	const res = await fetch(`${baseURL}/api/vaults/register`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-		body: JSON.stringify({ name }),
+		body: JSON.stringify({ name, client_id: crypto.randomUUID() }),
 	});
 	if (!res.ok) {
 		throw new Error(`vault create failed: ${res.status} ${await res.text()}`);
 	}
-	const { vault } = (await res.json()) as { vault: Vault };
-	return vault;
+	// /vaults/register answers with the vault flat, not wrapped in { vault }.
+	return (await res.json()) as Vault;
 }
 
 async function upsertNote(

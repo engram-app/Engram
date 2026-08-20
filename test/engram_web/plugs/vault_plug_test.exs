@@ -9,11 +9,11 @@ defmodule EngramWeb.Plugs.VaultPlugTest do
     user = insert(:user)
     other_user = insert(:user)
 
-    {:ok, vault} =
-      Vaults.create_vault(user, %{name: "My Vault", client_id: "client-abc"})
+    {:ok, vault, _} =
+      Vaults.register_vault(user, "My Vault", "client-abc")
 
-    {:ok, other_vault} =
-      Vaults.create_vault(other_user, %{name: "Other Vault", client_id: "client-xyz"})
+    {:ok, other_vault, _} =
+      Vaults.register_vault(other_user, "Other Vault", "client-xyz")
 
     %{user: user, other_user: other_user, vault: vault, other_vault: other_vault}
   end

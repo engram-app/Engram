@@ -31,7 +31,7 @@ defmodule Engram.Backfill.TenantScanTest do
     user = insert(:user)
     {:ok, user} = Crypto.ensure_user_dek(user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
-    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "TenantScan"})
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "TenantScan", Ecto.UUID.generate())
 
     %{user: user, vault: vault}
   end

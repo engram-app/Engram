@@ -12,7 +12,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
-    {:ok, vault} = Vaults.create_vault(user, %{name: "CrdtCheckpointTest"})
+    {:ok, vault, _} = Vaults.register_vault(user, "CrdtCheckpointTest", Ecto.UUID.generate())
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "before"})
     %{user: user, vault: vault, note: note}
   end
@@ -720,7 +720,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     # Simulate the race: watermark is captured (pre-encode), THEN a new update
     # row lands (concurrent update_v1 during encode), THEN checkpoint completes.
     {:ok, watermark} =
-      Repo.with_tenant(user.id, fn -> CrdtCheckpoint.tail_watermark(note.id) end)
+      Repo.with_tenant(user.id, fn -> CrdtCheckpoint.tail_watermark(note.id, note.vault_id) end)
 
     {:ok, {ct, n}} = Crypto.encrypt_crdt_state("late_update", user, note.id)
 

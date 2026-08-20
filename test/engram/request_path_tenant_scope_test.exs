@@ -32,7 +32,7 @@ defmodule Engram.RequestPathTenantScopeTest do
     user = insert(:user)
     {:ok, user} = Crypto.ensure_user_dek(user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
-    {:ok, vault} = Vaults.create_vault(user, %{name: "RequestScope"})
+    {:ok, vault, _} = Vaults.register_vault(user, "RequestScope", Ecto.UUID.generate())
 
     %{user: user, vault: vault}
   end

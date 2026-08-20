@@ -26,7 +26,7 @@ defmodule Engram.Workers.VaultDeletedEmailTest do
   end
 
   test "perform sends the notice for a soft-deleted vault", %{user: user} do
-    {:ok, v} = Vaults.create_vault(user, %{name: "Gone"})
+    {:ok, v, _} = Vaults.register_vault(user, "Gone", Ecto.UUID.generate())
     {:ok, _} = Vaults.delete_vault(user, v.id)
 
     expect(Engram.Email.ProviderMock, :send, 1, fn to, subject, _html, _opts ->
@@ -40,7 +40,7 @@ defmodule Engram.Workers.VaultDeletedEmailTest do
   end
 
   test "perform is a no-op when the vault was restored before send", %{user: user} do
-    {:ok, v} = Vaults.create_vault(user, %{name: "Restored"})
+    {:ok, v, _} = Vaults.register_vault(user, "Restored", Ecto.UUID.generate())
     {:ok, _} = Vaults.delete_vault(user, v.id)
 
     # Restore the vault (clear deleted_at) before the job runs.
@@ -63,7 +63,7 @@ defmodule Engram.Workers.VaultDeletedEmailTest do
 
   test "manage_url keeps the query ahead of the fragment so location.search can parse it",
        %{user: user} do
-    {:ok, v} = Vaults.create_vault(user, %{name: "Gone"})
+    {:ok, v, _} = Vaults.register_vault(user, "Gone", Ecto.UUID.generate())
     {:ok, _} = Vaults.delete_vault(user, v.id)
 
     expect(Engram.Email.ProviderMock, :send, 1, fn _to, _subject, html, _opts ->
