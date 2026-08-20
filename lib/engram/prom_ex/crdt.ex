@@ -114,12 +114,19 @@ defmodule Engram.PromEx.Crdt do
         # Rooms ARRIVING, paired with room_drain below (rooms leaving). Rate of
         # this over a bulk import is the direct measure of the detached genesis
         # seed's headline claim: creating notes must not allocate a room each.
-        # Untagged — a room start has no phase, and the alternative (tag by
-        # vault or note) is unbounded cardinality.
+        # Tagged by the call path that allocated it, NOT by vault or note (which
+        # would be unbounded cardinality). `source` is a small closed set of
+        # atoms fixed in code.
+        #
+        # Count alone says how many rooms an import allocated; it cannot say
+        # WHY. The 2026-08-19 staging import measured 406 rooms for 1,516 notes
+        # and the remaining 27% could not be attributed to a path, which is the
+        # question the routing rework has to answer.
         counter(
           metric_prefix ++ [:room_start, :total],
           event_name: @start_event,
-          description: "CRDT note rooms started (process actually created)."
+          description: "CRDT note rooms started (process actually created), by call path.",
+          tags: [:source]
         ),
         counter(
           metric_prefix ++ [:room_drain, :total],

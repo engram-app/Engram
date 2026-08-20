@@ -120,6 +120,58 @@ defmodule Engram.Notes.CrdtDocTest do
     assert fresh.content == "before AND TICKED"
   end
 
+  # The tag is the whole point of the metric: `count` says how many rooms an
+  # import allocated, `source` says which path allocated them. Asserted here
+  # because a telemetry tag that is never read in a test is indistinguishable
+  # from one that is never emitted.
+  test "room_start carries the source that allocated the room", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    ref = make_ref()
+    test_pid = self()
+
+    :telemetry.attach(
+      "room-start-source-#{inspect(ref)}",
+      [:engram, :crdt, :room_start],
+      fn _event, measurements, metadata, _cfg ->
+        send(test_pid, {ref, measurements, metadata})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach("room-start-source-#{inspect(ref)}") end)
+
+    {:ok, _room} =
+      CrdtRegistry.ensure_started(user.id, vault.id, note.id, :handshake)
+
+    assert_receive {^ref, %{count: 1}, %{source: :handshake}}, 2_000
+  end
+
+  # A room that already exists is resolved, not allocated, so it must not emit
+  # at all — otherwise the counter measures lookups and the headline "rooms per
+  # import" number is inflated by every subsequent frame.
+  test "resolving an existing room emits no room_start", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, _room} = CrdtRegistry.ensure_started(user.id, vault.id, note.id, :handshake)
+
+    ref = make_ref()
+    test_pid = self()
+
+    :telemetry.attach(
+      "room-start-dup-#{inspect(ref)}",
+      [:engram, :crdt, :room_start],
+      fn _event, _m, meta, _cfg -> send(test_pid, {ref, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach("room-start-dup-#{inspect(ref)}") end)
+
+    {:ok, _same} = CrdtRegistry.ensure_started(user.id, vault.id, note.id, :edit)
+
+    refute_receive {^ref, _}, 300
+  end
+
   defp eventually(fun, attempts \\ 100) do
     Enum.reduce_while(1..attempts, false, fn _, _ ->
       if fun.() do
