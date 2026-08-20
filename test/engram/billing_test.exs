@@ -9,6 +9,7 @@ defmodule Engram.BillingTest do
   import Mox
 
   alias Engram.Billing
+  alias Engram.Billing.LimitKeys
   alias Engram.Billing.Subscription
   alias Engram.Repo
 
@@ -154,6 +155,7 @@ defmodule Engram.BillingTest do
       user = build(:user, free_tier_accepted_at: nil)
       state = Billing.plan_state(user)
       assert state.tier == :free
+      assert state.attachments_all_types == false
       assert state.attachments_text_only == true
       assert is_integer(state.max_file_bytes)
       assert is_integer(state.attachment_bytes_cap) or is_nil(state.attachment_bytes_cap)
@@ -163,7 +165,169 @@ defmodule Engram.BillingTest do
       user = build(:user) |> with_subscription(tier: "pro", status: "active")
       state = Billing.plan_state(user)
       assert state.tier == :pro
+      assert state.attachments_all_types == true
       assert state.attachments_text_only == false
+    end
+
+    test "the legacy field is always the exact inverse of the new one" do
+      # EXPAND step: both fields ship until the released plugin reads the new
+      # one. They are derived from a single call, so a future edit cannot let
+      # them drift into disagreeing about the same user.
+      for user <- [
+            build(:user, free_tier_accepted_at: nil),
+            build(:user) |> with_subscription(tier: "starter", status: "active"),
+            build(:user) |> with_subscription(tier: "pro", status: "active")
+          ] do
+        state = Billing.plan_state(user)
+        assert state.attachments_text_only == not state.attachments_all_types
+      end
+    end
+  end
+
+  describe "inactivity_warnings_exempt?/1" do
+    test "self-host is exempt: no free-tier dunning on your own server" do
+      prev = Application.get_env(:engram, :limits_enforced, true)
+      Application.put_env(:engram, :limits_enforced, false)
+      on_exit(fn -> Application.put_env(:engram, :limits_enforced, prev) end)
+
+      assert Billing.inactivity_warnings_exempt?(build(:user, free_tier_accepted_at: nil))
+    end
+
+    test "Free is not exempt, paid tiers are" do
+      refute Billing.inactivity_warnings_exempt?(build(:user, free_tier_accepted_at: nil))
+
+      assert Billing.inactivity_warnings_exempt?(
+               build(:user)
+               |> with_subscription(tier: "pro", status: "active")
+             )
+    end
+
+    test "an unreadable override leaves the user ALONE (opposite fail direction)" do
+      # Deliberately not fail-closed. Refusing this grant means mailing someone
+      # about inactivity and starting the deletion clock, so an unreadable value
+      # must not trigger it. Contrast attachments_all_types?/1, where refusing
+      # only costs an upload.
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      insert(:user_limit_override,
+        user: user,
+        key: "inactivity_warnings_exempt",
+        value: %{"v" => "nonsense"},
+        reason: "malformed on purpose",
+        set_by: "test"
+      )
+
+      assert Billing.inactivity_warnings_exempt?(user)
+    end
+  end
+
+  describe "the helper and the capabilities map cannot drift" do
+    # `capabilities/1` does NOT call attachments_all_types?/1 — it resolves
+    # every key generically through normalize_capability/2. That is the split
+    # that produced the original bug (plan_state said allowed, capabilities
+    # said restricted, and the plugin believed capabilities). Nothing in the
+    # types binds the two paths, so this test does.
+    for {tier, opts} <- [
+          free: [free_tier_accepted_at: nil],
+          starter: [subscription: {"starter", "active"}],
+          pro: [subscription: {"pro", "active"}]
+        ] do
+      test "#{tier}: capabilities agrees with the helper" do
+        user =
+          case unquote(opts)[:subscription] do
+            nil -> insert(:user, free_tier_accepted_at: nil)
+            {t, s} -> insert(:user) |> with_subscription(tier: t, status: s)
+          end
+
+        assert Billing.capabilities(user).limits["attachments_all_types"] ==
+                 Billing.attachments_all_types?(user)
+      end
+    end
+
+    test "and they still agree with enforcement off" do
+      prev = Application.get_env(:engram, :limits_enforced, true)
+      Application.put_env(:engram, :limits_enforced, false)
+      on_exit(fn -> Application.put_env(:engram, :limits_enforced, prev) end)
+
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      assert Billing.capabilities(user).limits["attachments_all_types"] ==
+               Billing.attachments_all_types?(user)
+
+      assert Billing.attachments_all_types?(user)
+    end
+  end
+
+  describe "attachments_all_types?/1 fails closed" do
+    test "a malformed override does not grant the paid surface" do
+      # Overrides are operator-written JSON. A string "false" instead of the
+      # boolean must not read as "not false, therefore granted" — that is the
+      # fail-open shape, and the `== true` code this replaced refused it.
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      insert(:user_limit_override,
+        user: user,
+        key: "attachments_all_types",
+        value: %{"v" => "false"},
+        reason: "malformed on purpose",
+        set_by: "test"
+      )
+
+      refute Billing.attachments_all_types?(user)
+    end
+
+    test "an explicit true override grants" do
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      insert(:user_limit_override,
+        user: user,
+        key: "attachments_all_types",
+        value: %{"v" => true},
+        reason: "grant",
+        set_by: "test"
+      )
+
+      assert Billing.attachments_all_types?(user)
+    end
+  end
+
+  describe "self-host (enforcement off) grants every capability" do
+    setup do
+      prev = Application.get_env(:engram, :limits_enforced, true)
+      Application.put_env(:engram, :limits_enforced, false)
+      on_exit(fn -> Application.put_env(:engram, :limits_enforced, prev) end)
+      :ok
+    end
+
+    test "attachments_all_types? is true even for an otherwise-Free user" do
+      # The regression. `attachments_text_only` was restriction-shaped, and
+      # `normalize_capability(:boolean, :unlimited)` returns `true` for every
+      # boolean — so turning enforcement OFF turned the restriction ON, and
+      # self-hosters silently lost every image and PDF while their own server
+      # would have accepted them.
+      user = build(:user, free_tier_accepted_at: nil)
+      assert Billing.attachments_all_types?(user)
+    end
+
+    test "plan_state and capabilities agree — they used to disagree" do
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      state = Billing.plan_state(user)
+      caps = Billing.capabilities(user)
+
+      assert state.attachments_all_types == true
+      assert caps.limits["attachments_all_types"] == true
+      assert state.attachments_text_only == false
+    end
+
+    test "no boolean capability resolves to a restriction" do
+      user = insert(:user, free_tier_accepted_at: nil)
+      caps = Billing.capabilities(user)
+
+      for key <- LimitKeys.all(), LimitKeys.type(key) == :boolean do
+        assert caps.limits[Atom.to_string(key)] == true,
+               "#{key} is not granted with enforcement off"
+      end
     end
   end
 

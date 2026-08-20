@@ -20,13 +20,20 @@ defmodule Engram.Billing.LimitKeys do
       defaults: %{free: 1_073_741_824, starter: 3_221_225_472, pro: 16_106_127_360}
     },
     attachments_enabled: %{type: :boolean, defaults: %{free: true, starter: true, pro: true}},
-    # Free is restricted to text/* uploads only; Starter+ get the full
-    # MimeWhitelist surface (images, audio, video, PDFs, office docs).
-    # `true` means "Free-style restriction is ON" so the gate matches
-    # the pattern of every other paid-feature boolean.
-    attachments_text_only: %{
+    # Starter+ get the full MimeWhitelist surface (images, audio, video, PDFs,
+    # office docs); Free is text/* only.
+    #
+    # POLARITY IS LOAD-BEARING. This replaces `attachments_text_only`, whose
+    # `true` meant "restriction ON" — the only inverted boolean in this catalog.
+    # `normalize_capability/2` maps `:unlimited` (enforcement off) to `true` for
+    # every boolean, which is correct ONLY for grant-shaped flags. Under the old
+    # inverted key that rule read as "restriction ON", so turning enforcement
+    # OFF silently turned the restriction ON and every self-hoster lost images
+    # and PDFs. Keep every boolean here grant-shaped (`true` == the user gets
+    # the thing) and that whole failure class cannot come back.
+    attachments_all_types: %{
       type: :boolean,
-      defaults: %{free: true, starter: false, pro: false}
+      defaults: %{free: false, starter: true, pro: true}
     },
     max_file_bytes: %{
       type: :integer,
@@ -59,9 +66,14 @@ defmodule Engram.Billing.LimitKeys do
     # cap exists for spam defense, not to throttle the user in the app.
     external_ai_searches_per_day: %{type: :integer, defaults: %{free: 15, starter: nil, pro: nil}},
     inapp_searches_per_day: %{type: :integer, defaults: %{free: 60, starter: nil, pro: nil}},
-    inactivity_warn_60_days: %{
+    # Grant-shaped, like every other boolean here: `true` == this user is
+    # EXEMPT from the free-tier inactivity dunning. Was `inactivity_warn_60_days`
+    # (free: true), which is the same inverted shape that broke attachments —
+    # enforcement off resolved to `:unlimited` -> `true` -> "warn them", so
+    # self-hosters got free-tier inactivity warnings on their own hardware.
+    inactivity_warnings_exempt: %{
       type: :boolean,
-      defaults: %{free: true, starter: false, pro: false}
+      defaults: %{free: false, starter: true, pro: true}
     },
     inactivity_delete_days: %{type: :integer, defaults: %{free: 90, starter: nil, pro: nil}},
     # Legacy keys preserved for back-compat with existing call sites

@@ -213,9 +213,10 @@ defmodule Engram.Workers.InactivityCleanup do
     end
   end
 
-  defp warn_enabled?(user) do
-    Billing.effective_limit(user, :inactivity_warn_60_days) == true
-  end
+  # Routes through the single source of truth rather than re-deriving it. The
+  # key is grant-shaped (`true` == exempt), so enforcement-off (`:unlimited`)
+  # means exempt and a self-hosted instance never sends free-tier dunning.
+  defp warn_enabled?(user), do: not Billing.inactivity_warnings_exempt?(user)
 
   defp delete_after_days(user) do
     Billing.effective_limit(user, :inactivity_delete_days)
