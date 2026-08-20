@@ -369,6 +369,8 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Attachment MIME/extension whitelist abuse defense (Pricing v2 §H) → `docs/context/attachment-mime-whitelist.md`
 
 **Auth, OAuth & MCP**
+- Gating a Phoenix **channel** on onboarding/billing, or a paywalled account is syncing anyway (`RequireOnboarding` is a Plug and never runs on a socket; `user:` must stay UNGATED) → `docs/context/onboarding-gate-is-http-only.md`
+- A test asserting paywall/tier/onboarding behavior passes but shouldn't (`config/runtime.exs` clobbers `billing_enabled` to false for the whole suite) → `docs/context/onboarding-gate-is-http-only.md`
 - OAuth 2.1 + DCR on `/api/mcp` — wire flow, endpoints, token model, scopes → `docs/context/mcp-oauth.md`
 - MCP vault selection design — stateless `set_vault`, fate of the default vault → `docs/context/mcp-vault-selection.md`
 - Refresh-token rotation — leeway/overlap window, token-family reuse detection → `docs/context/refresh-token-reuse-detection.md`
