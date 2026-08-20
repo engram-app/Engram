@@ -162,6 +162,10 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/webhooks/",
     "lib/engram_web.ex",
     "lib/engram_web/api_spec.ex",
+    # Socket-side equivalent of `plugs/` below: account lifecycle, onboarding
+    # and API entitlement verdicts. Sees user ids and plan limits, never note
+    # content, paths, titles or queries.
+    "lib/engram_web/channel_gate.ex",
     "lib/engram_web/controllers/",
     "lib/engram_web/controllers/admin/",
     "lib/engram_web/csp.ex",
