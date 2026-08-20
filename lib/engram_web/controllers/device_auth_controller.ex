@@ -4,6 +4,21 @@ defmodule EngramWeb.DeviceAuthController do
   alias Engram.Auth.DeviceFlow
   alias Engram.Vaults
 
+  # Fail the link at the moment the user clicks "connect", not later with a
+  # silent socket refusal. This route sits on the user-scoped pipeline (it must
+  # stay reachable for vault creation), so it does not inherit
+  # `RequireOnboarding` from the vault-scoped pipeline — declare it here. The
+  # socket-side gate in `SyncChannel`/`CrdtChannel` is the authority; this is
+  # the readable error.
+  # `skip_vault: true`: this endpoint CREATES the first vault (`vault_id: "new"`),
+  # so gating it on "you already have one" makes it permanently unreachable for
+  # the exact user who needs it. `Vaults.delete_vault/2` evicts the gate cache
+  # on last-vault deletion precisely because zero-vault users are a real state.
+  # Every other requirement (terms, subscription, profile) still applies, and
+  # the sync channels enforce the vault rule too — nothing reaches data through
+  # this relaxation.
+  plug EngramWeb.Plugs.RequireOnboarding, [skip_vault: true] when action in [:authorize]
+
   # Gate new plugin connections at the per-tier obsidian cap. Only on
   # :authorize — start/token/refresh do not mint new connection families.
   plug EngramWeb.Plugs.EnforceDeviceCap when action in [:authorize]
