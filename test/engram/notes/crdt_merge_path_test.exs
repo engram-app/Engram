@@ -4,7 +4,7 @@ defmodule Engram.Notes.CrdtMergePathTest do
   use Engram.DataCase, async: false
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, CrdtUpdateLog, Note}
 
   setup do
     user = insert(:user)
@@ -376,5 +376,51 @@ defmodule Engram.Notes.CrdtMergePathTest do
            row(s) remain, so the " EXTRA" update exists nowhere: the next bind
            replays an empty tail over a snapshot that never saw it. Unrecoverable.
            """
+  end
+
+  # The whole point of vault-scoping the tail reads (#1318). `notes.id` is a
+  # primary key, so the same note_id cannot appear twice in `notes` — but
+  # `crdt_update_log` rows carry their own id and a note_id COLUMN, so rows for
+  # one note_id can be stamped with different vault_ids. That is the state
+  # #1318 produced (do_bare_insert wrote global, read vault-scoped), and an
+  # unscoped read folds the foreign vault's updates straight into this vault's
+  # document.
+  #
+  # Written because the scoping change was otherwise UNTESTED against its own
+  # purpose: no fixture produces this state naturally, so the whole suite stayed
+  # green without ever exercising it.
+  test "a tail row stamped with another vault is not folded into this vault's doc", ctx do
+    %{user: user, vault: vault} = ctx
+    {:ok, other_vault} = Vaults.create_vault(user, %{name: "OtherVault"})
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "scoped.md", "content" => "MINE"})
+
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state("foreign_update", user, note.id)
+    foreign_id = Ecto.UUID.generate()
+
+    Repo.with_tenant(user.id, fn ->
+      Repo.insert_all(CrdtUpdateLog, [
+        %{
+          id: foreign_id,
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: other_vault.id,
+          update_ciphertext: ct,
+          update_nonce: nonce,
+          inserted_at: DateTime.utc_now()
+        }
+      ])
+    end)
+
+    {:ok, mine} =
+      Repo.with_tenant(user.id, fn -> CrdtPersistence.tail_rows(note.id, vault.id) end)
+
+    {:ok, theirs} =
+      Repo.with_tenant(user.id, fn -> CrdtPersistence.tail_rows(note.id, other_vault.id) end)
+
+    refute Enum.any?(mine, &(&1.id == foreign_id)),
+           "a tail row belonging to another vault was returned for this vault's fold"
+
+    assert Enum.any?(theirs, &(&1.id == foreign_id)),
+           "the row vanished entirely — the filter is excluding its OWN vault too"
   end
 end

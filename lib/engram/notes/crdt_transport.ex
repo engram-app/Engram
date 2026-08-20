@@ -319,7 +319,11 @@ defmodule Engram.Notes.CrdtTransport do
       {:ok, note} ->
         {:ok, snapshot} = Crypto.decrypt_crdt_state(note, user)
         {:ok, doc} = CrdtBridge.doc_from_state(snapshot)
-        Repo.with_tenant(user.id, fn -> CrdtPersistence.replay_tail(doc, user, note_id) end)
+
+        Repo.with_tenant(user.id, fn ->
+          CrdtPersistence.replay_tail(doc, user, note_id, vault.id)
+        end)
+
         {:ok, doc}
 
       {:error, :not_found} ->

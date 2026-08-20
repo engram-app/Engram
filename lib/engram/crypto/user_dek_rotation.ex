@@ -1466,6 +1466,11 @@ defmodule Engram.Crypto.UserDekRotation do
   # 50k-note vault — every one of them inside the window where the RotationLock
   # is rejecting the user's writes. Covered by the existing
   # [:note_id, :inserted_at] index.
+  # DELIBERATELY NOT vault-scoped, unlike every other CrdtUpdateLog read. A DEK
+  # is per-USER, so a rotation must rewrap every row that user owns across all
+  # their vaults; filtering by vault here would silently leave rows encrypted
+  # under the retired key. The `skip_tenant_check: true` below says the same
+  # thing. This is the one legitimate exemption from the vault-scoping rule.
   defp rewrap_crdt_tail(batch_ids, old_dek, new_dek) do
     from(l in CrdtUpdateLog, where: l.note_id in ^batch_ids, lock: "FOR UPDATE")
     |> Repo.all(skip_tenant_check: true)
