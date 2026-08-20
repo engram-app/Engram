@@ -482,35 +482,25 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
         :ok
 
       user ->
-        {:ok, encoded} = Yex.encode_state_as_update(doc)
-        {:ok, folded} = CrdtBridge.doc_from_state(encoded)
+        # Find out whether there IS a tail before paying to materialize a doc to
+        # fold it into. In a bulk import almost every note has an EMPTY tail
+        # (staging 2026-08-20: 24 rows across 1,516 notes), and the encode +
+        # rebuild below is a full doc round-trip per room per tick. Doing it
+        # unconditionally put that cost in exactly the window where hundreds of
+        # rooms are live.
+        case fetch_tail_rows(state) do
+          [] ->
+            # Nothing folded, so nothing may be pruned. Checkpoint the room's
+            # own doc directly: the pre-fold path, minus the watermark prune
+            # that 0a removed.
+            CrdtCheckpoint.checkpoint(state.user_id, state.vault_id, state.room_key, doc,
+              captured_version: captured_version,
+              prune_ids: []
+            )
 
-        # `replay_tail/3` issues a BARE `Repo.all` — it sets no tenant of its
-        # own. Every other caller supplies one (`bind/3`,
-        # `CheckpointNote.rebuild_detached/3`, `CrdtChannel.fold_row_and_tail/4`
-        # all run it under `with_tenant`). Without one, RLS returns no rows,
-        # `prune_ids` comes back empty, and compaction silently stops — the
-        # tail grows forever and nothing reports it.
-        # Degrade, never abort. `with_tenant/2` does not always return
-        # `{:ok, _}` — `CrdtCheckpoint` has carried a catch-all arm for its own
-        # call since the watermark days. A hard match here would raise into the
-        # rescue below and skip the checkpoint ENTIRELY, so a transient tenant
-        # failure would also stop `notes.content` materializing. That is the one
-        # thing this timer exists to do promptly (see "Eager first flush").
-        # Folding nothing costs a delayed compaction; not checkpointing costs
-        # every non-CRDT reader a stale note.
-        prune_ids =
-          case Repo.with_tenant(state.user_id, fn ->
-                 CrdtPersistence.replay_tail(folded, user, state.room_key)
-               end) do
-            {:ok, ids} when is_list(ids) -> ids
-            _ -> []
-          end
-
-        CrdtCheckpoint.checkpoint(state.user_id, state.vault_id, state.room_key, folded,
-          captured_version: captured_version,
-          prune_ids: prune_ids
-        )
+          rows ->
+            fold_and_checkpoint(state, doc, user, rows, captured_version)
+        end
     end
   rescue
     err -> log_read_failure(state, err)
@@ -525,6 +515,54 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     # what we were trying to read — so falling through is the correct outcome,
     # and the EXIT message right behind this tick shuts us down in order.
     :exit, reason -> log_exit_failure(state, reason)
+  end
+
+  # Materialize the union of the room's doc and its durable tail, then prune
+  # exactly the rows folded. Only reached when the tail is non-empty.
+  defp fold_and_checkpoint(state, doc, user, rows, captured_version) do
+    {:ok, encoded} = Yex.encode_state_as_update(doc)
+    {:ok, folded} = CrdtBridge.doc_from_state(encoded)
+
+    # `replay_tail/3` issues a BARE `Repo.all` — it sets no tenant of its
+    # own. Every other caller supplies one (`bind/3`,
+    # `CheckpointNote.rebuild_detached/3`, `CrdtChannel.fold_row_and_tail/4`
+    # all run it under `with_tenant`). Without one, RLS returns no rows,
+    # `prune_ids` comes back empty, and compaction silently stops — the
+    # tail grows forever and nothing reports it.
+    # Degrade, never abort. `with_tenant/2` does not always return
+    # `{:ok, _}` — `CrdtCheckpoint` has carried a catch-all arm for its own
+    # call since the watermark days. A hard match here would raise into the
+    # rescue below and skip the checkpoint ENTIRELY, so a transient tenant
+    # failure would also stop `notes.content` materializing. That is the one
+    # thing this timer exists to do promptly (see "Eager first flush").
+    # Folding nothing costs a delayed compaction; not checkpointing costs
+    # every non-CRDT reader a stale note.
+    prune_ids = CrdtPersistence.apply_tail_rows(folded, user, state.room_key, rows)
+
+    CrdtCheckpoint.checkpoint(state.user_id, state.vault_id, state.room_key, folded,
+      captured_version: captured_version,
+      prune_ids: prune_ids
+    )
+  end
+
+  # Degrade, never abort. `with_tenant/2` does not always return `{:ok, _}` —
+  # `CrdtCheckpoint` has carried a catch-all arm for its own call since the
+  # watermark days. Raising here would skip the checkpoint ENTIRELY, so a
+  # transient tenant failure would also stop `notes.content` materializing,
+  # which is the one thing this timer exists to do promptly ("Eager first
+  # flush"). An empty list costs a delayed compaction; no checkpoint costs every
+  # non-CRDT reader a stale note.
+  #
+  # `tail_rows/1` issues a BARE `Repo.all` and sets no tenant of its own, like
+  # the rest of that module's reads — without one, RLS returns nothing and
+  # compaction silently stops.
+  defp fetch_tail_rows(state) do
+    case Repo.with_tenant(state.user_id, fn ->
+           CrdtPersistence.tail_rows(state.room_key)
+         end) do
+      {:ok, rows} when is_list(rows) -> rows
+      _ -> []
+    end
   end
 
   # Two arms, two shapes, two helpers. One helper taking both was a REGRESSION

@@ -312,13 +312,23 @@ defmodule Engram.Notes.CrdtPersistence do
   @doc false
   @spec replay_tail(Yex.Doc.t(), map(), String.t()) :: [Ecto.UUID.t()]
   def replay_tail(doc, user, note_id) do
-    rows =
-      CrdtUpdateLog
-      |> where([l], l.note_id == ^note_id)
-      |> order_by([l], asc: l.inserted_at)
-      |> Repo.all()
+    apply_tail_rows(doc, user, note_id, tail_rows(note_id))
+  end
 
-    apply_tail_rows(doc, user, note_id, rows)
+  @doc """
+  A note's tail rows, oldest first. The caller supplies the tenant (this issues
+  a bare `Repo.all`, like the rest of this module's reads).
+
+  Split out so a caller can find out whether there is anything to fold BEFORE
+  paying to materialize a doc to fold it into. Most notes in a bulk import have
+  an empty tail, and for those the fold is pure overhead.
+  """
+  @spec tail_rows(String.t()) :: [struct()]
+  def tail_rows(note_id) do
+    CrdtUpdateLog
+    |> where([l], l.note_id == ^note_id)
+    |> order_by([l], asc: l.inserted_at)
+    |> Repo.all()
   end
 
   @doc """
