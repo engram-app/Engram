@@ -101,6 +101,43 @@ curl -X POST http://localhost:4000/api/notes \
 | Unit | `mix test` | Pure logic, RLS isolation, auth, HTTP contract (ConnCase) |
 | E2E | `python3 -m pytest e2e/tests/ -v` | Real Obsidian sync cycles against Docker stack |
 
+### Do NOT run the full suite locally
+
+The full `mix test` is **~9 min** and cannot be sped up by your machine: **217 of
+441 test files are `async: false`**, so a measured run is
+`Finished in 526.0s (57.4s async, 468.6s sync)` — ~89% strictly sequential on one
+core. Running it blocks the edit loop while CI would run it in parallel, on the
+faster runner, for free. Four full local runs in one session (2026-08-18) cost
+~36 min and caught nothing CI would not have.
+
+**Run locally before committing/pushing:**
+
+```bash
+mix format && mix credo --strict          # ~25s
+mix dialyzer                              # ~30-35s with a warm PLT — do NOT skip
+mix test <files-you-changed> test/lint/ --warnings-as-errors
+```
+
+- `test/lint/` is mandatory even on a targeted run — those are full-suite-only
+  meta-tests (e.g. `notes_scope_lint_test.exs`) a targeted run otherwise skips.
+- `--warnings-as-errors` because CI applies it to *test* code and the pre-push
+  hook does not. Without it CI aborts **after a fully green run** with
+  `Test suite aborted after successful execution due to warnings`, which reads
+  like an infra failure rather than a code problem. Caveat: the flag only fails
+  on warnings emitted while *compiling the files that run recompiled*, so with a
+  warm `_build` an unchanged file emits nothing and the gate silently passes —
+  introduce a warning, run once (red), re-run without editing, green. CI builds
+  cold and catches it anyway. To actually reproduce CI, force the compile:
+  `mix compile --force --warnings-as-errors`.
+- Never run `mix dialyzer` and `mix test` concurrently — parallel dialyzer
+  saturates the box, drops postgres connections, and fabricates failures
+  scattered across unrelated modules. The tell is scatter; re-run alone.
+- Never pipe a gate command through `tail` — `mix test | tail -25` returns
+  *tail's* exit code (a fake 0) and truncates the failure block. Redirect to a
+  file instead.
+
+CI is the gate for the full suite and e2e. **Never merge on red** is unchanged.
+
 See `docs/context/testing-strategy.md` for full strategy, tooling, and CI pipeline.
 
 ## Quality Tooling
@@ -116,7 +153,7 @@ mix format --check-formatted              # fast, gates immediately
 mix compile --warnings-as-errors --force  # fast
 mix credo --strict --mute-exit-status     # ~3s, strict mode (default in this repo)
 mix sobelow --exit low --skip             # ~5s (--skip honours .sobelow-skips; MUST match CI)
-mix dialyzer                              # slow first run (~5-10 min PLT build)
+mix dialyzer                              # ~32s warm; ~8 min the FIRST time in a new worktree (PLT re-key)
 ```
 
 **Pre-push hook** (`.githooks/pre-push`, activated via `git config core.hooksPath .githooks`): runs all four informationally in Phase 1. Promoted to fatal phase by phase. Bypass with `git push --no-verify` for WIP / emergency. Dialyzer skipped from pre-push (too slow); CI handles it.
