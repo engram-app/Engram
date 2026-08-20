@@ -184,6 +184,39 @@ defmodule Engram.BillingTest do
     end
   end
 
+  describe "attachments_all_types?/1 fails closed" do
+    test "a malformed override does not grant the paid surface" do
+      # Overrides are operator-written JSON. A string "false" instead of the
+      # boolean must not read as "not false, therefore granted" — that is the
+      # fail-open shape, and the `== true` code this replaced refused it.
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      insert(:user_limit_override,
+        user: user,
+        key: "attachments_all_types",
+        value: %{"v" => "false"},
+        reason: "malformed on purpose",
+        set_by: "test"
+      )
+
+      refute Billing.attachments_all_types?(user)
+    end
+
+    test "an explicit true override grants" do
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      insert(:user_limit_override,
+        user: user,
+        key: "attachments_all_types",
+        value: %{"v" => true},
+        reason: "grant",
+        set_by: "test"
+      )
+
+      assert Billing.attachments_all_types?(user)
+    end
+  end
+
   describe "self-host (enforcement off) grants every capability" do
     setup do
       prev = Application.get_env(:engram, :limits_enforced, true)

@@ -121,7 +121,16 @@ defmodule Engram.Billing do
   """
   @spec attachments_all_types?(Engram.Accounts.User.t()) :: boolean()
   def attachments_all_types?(%Engram.Accounts.User{} = user) do
-    effective_limit(user, :attachments_all_types) != false
+    # Mirrors `normalize_capability(:boolean, _)`: only `:unlimited` and a real
+    # `true` grant. Anything else fails CLOSED. `!= false` would have been
+    # fail-open — a hand-written override row holding the string "false"
+    # instead of the boolean would then hand a Free user the paid attachment
+    # surface, which the `== true` code this replaced correctly refused.
+    case effective_limit(user, :attachments_all_types) do
+      :unlimited -> true
+      true -> true
+      _ -> false
+    end
   end
 
   @doc """
