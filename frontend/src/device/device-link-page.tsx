@@ -123,6 +123,12 @@ function DeviceLinkPage() {
 		const formatted = userCode.toUpperCase().replace(/[^A-Z2-9]/gu, "");
 		if (formatted.length !== 8) {
 			setError("Code must be 8 characters (e.g., ENGR-7X4K)");
+			// Unreachable from "verifying" today (readCodeFromQuery only seeds a
+			// 9-char code, and the form can't be typed into behind the spinner),
+			// but every exit from this function has to restore a step the user
+			// can act on. Two of three doing it is how the third becomes a
+			// spinner with an error banner and no form under it.
+			setStep("enter-code");
 			return;
 		}
 
