@@ -1,11 +1,18 @@
-"""Test 77: 1k-note bulk first sync lands via crdt_create_batch in bounded time.
+"""Test 77: a 1k-note bulk first sync lands in bounded time, and does not
+allocate a CRDT room per note.
 
-CRDT single-push-path migration: pushGenesisBatch sends notes through the
-WS `crdt_create_batch` op in chunks, not POST /notes/batch (removed) — a
-1,000-note first sync is a handful of socket round-trips instead of 1,000.
-The duration bound is deliberately generous for CI noise but far below
-what the per-note path costs (1,000 paced requests), so a silent fallback
-to per-note pushes fails this test.
+Push path: `pushPartitioned` -> `pushFile` -> socket-native `crdt_create`,
+one bounded per-file work unit each (the `crdt_create_batch` RPC this test
+was originally written against was retired in the Relay-pattern rewrite, in
+favour of per-file failure isolation). The duration bound is deliberately
+generous for CI noise but far below what a REST per-note fallback costs
+(1,000 paced requests), so a silent regression to that path fails here.
+
+The room-allocation bound is the #1409 acceptance criterion. A room is a
+live-collaboration actor; an import has no collaborators, so genesis content
+is seeded detached (#1424) and rooms should be allocated only for notes
+actually open in an editor. Importing a 1,700-file vault once allocated
+~1,700 rooms and took prod's BEAM from 757 to 2,744 processes (2026-08-18).
 """
 
 import shutil
@@ -13,10 +20,23 @@ import time
 
 import pytest
 
+from helpers.room_probe import arm_room_starts, read_room_starts
 from helpers.vault import write_note
 
 NOTE_COUNT = 1000
 PUSH_TIME_BOUND_S = 120
+
+# Rooms this sync may allocate. The criterion is O(open editors), not O(N) —
+# the bound is a small constant on purpose, so a per-note regression fails by
+# two orders of magnitude rather than by a tuning argument. Raising this is
+# only correct alongside a reason a first sync needs more live actors.
+#
+# MEASURED 0 locally on 0.18.0 (2026-08-20, 1,000 notes): with the genesis body
+# riding `crdt_create` (#1424 + plugin #452) the import never sends a `crdt_msg`,
+# and `crdt_msg` is what calls `ensure_room`. The headroom above 0 covers a note
+# open in the editor during the run and any seed that falls back to the
+# `crdt_msg` path (`seeded: false`, e.g. an ADOPT) — both allocate legitimately.
+ROOM_ALLOC_BOUND = 8
 
 SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
@@ -63,6 +83,12 @@ async def _cleanup_bulk_residue(vault_a, cdp_a, api_sync) -> None:
 @pytest.mark.asyncio
 async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
     try:
+        # Arm BEFORE the gate work: the counter is cumulative per node and the
+        # measured window is a delta, so arming early only widens what is
+        # attributed to this test — it can never under-count the sync.
+        arm_room_starts()
+        rooms_before = read_room_starts()
+
         # Close the sync gate FIRST: every raw write below fires the vault
         # watcher, and an open gate turns that into 1,000 debounced single-note
         # auto-pushes — a request storm that exhausts the rate budget and
@@ -129,6 +155,18 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
             f"bulk first sync converged only {bulk_count}/{NOTE_COUNT} notes in "
             f"{elapsed:.1f}s (bound {PUSH_TIME_BOUND_S}s) — did the plugin fall "
             "back to per-note pushes or stall?"
+        )
+
+        # Read AFTER convergence: a room allocated by the tail of the sync must
+        # be counted, and the drain means residency would already have shed it.
+        rooms = read_room_starts() - rooms_before
+        print(f"\ntest_77 rooms allocated for {NOTE_COUNT} notes: {rooms}")
+        assert rooms.total <= ROOM_ALLOC_BOUND, (
+            f"bulk first sync of {NOTE_COUNT} notes allocated {rooms} — expected "
+            f"<= {ROOM_ALLOC_BOUND} (#1409: rooms are for notes open in an editor, "
+            "not for imported files). The per-source split names the path that "
+            "regressed; `unknown` means an allocation site shipped without a "
+            "source tag."
         )
     finally:
         await _cleanup_bulk_residue(vault_a, cdp_a, api_sync)
