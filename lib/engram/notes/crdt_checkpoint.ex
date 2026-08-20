@@ -221,7 +221,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
                 if markdown?(note.path) do
                   do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user)
                 else
-                  do_structural_checkpoint(note, note_id, live_state, prune, user)
+                  do_structural_checkpoint(note, vault_id, note_id, live_state, prune, user)
                 end
             end
           end)
@@ -370,15 +370,15 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # ponytail: no structural flatten yet. A canvas that crosses the client-id
   # ceiling keeps its full state vector; add a structural (nodes/edges-preserving)
   # flatten in Phase 2 if a real board ever hits it.
-  defp do_structural_checkpoint(note, note_id, live_state, prune, user) do
+  defp do_structural_checkpoint(note, vault_id, note_id, live_state, prune, user) do
     if legacy_row?(note) do
       {:skip, :legacy_row_needs_rebind}
     else
-      do_structural_checkpoint_bound(note, note_id, live_state, prune, user)
+      do_structural_checkpoint_bound(note, vault_id, note_id, live_state, prune, user)
     end
   end
 
-  defp do_structural_checkpoint_bound(note, note_id, live_state, prune, user) do
+  defp do_structural_checkpoint_bound(note, vault_id, note_id, live_state, prune, user) do
     with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
          {:ok, raw_state} <- encode(union_doc),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(raw_state, user, note_id) do
@@ -390,7 +390,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
              ]
            ) do
         {1, _} ->
-          prune_tail(note_id, prune)
+          prune_tail(note_id, vault_id, prune)
           {note.content_hash, note.content_hash, note.path}
 
         {0, _} ->
@@ -453,7 +453,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
                ]
              ) do
           {1, _} ->
-            prune_tail(note_id, prune)
+            prune_tail(note_id, vault_id, prune)
             {prev, content_hash, note.path}
 
           {0, _} ->
@@ -521,7 +521,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
         case Repo.update_all(fenced_query, set: set) do
           {1, _} ->
-            prune_tail(note_id, prune)
+            prune_tail(note_id, vault_id, prune)
             {prev, content_hash, note.path}
 
           {0, _} ->
@@ -605,9 +605,9 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # Called at the START of the checkpoint so the watermark marks the exact
   # boundary the snapshot covers.
   @doc false
-  def tail_watermark(note_id) do
+  def tail_watermark(note_id, vault_id) do
     CrdtUpdateLog
-    |> where([l], l.note_id == ^note_id)
+    |> where([l], l.note_id == ^note_id and l.vault_id == ^vault_id)
     |> select([l], max(l.inserted_at))
     |> Repo.one()
   end
@@ -776,19 +776,22 @@ defmodule Engram.Notes.CrdtCheckpoint do
   #
   # Runs inside the same `Repo.with_tenant` transaction as the notes UPDATE for
   # atomicity.
-  defp prune_tail(_note_id, {:ids, []}), do: :ok
+  defp prune_tail(_note_id, _vault_id, {:ids, []}), do: :ok
 
-  defp prune_tail(note_id, {:ids, ids}) do
+  defp prune_tail(note_id, vault_id, {:ids, ids}) do
     CrdtUpdateLog
-    |> where([l], l.note_id == ^note_id and l.id in ^ids)
+    |> where([l], l.note_id == ^note_id and l.vault_id == ^vault_id and l.id in ^ids)
     |> Repo.delete_all()
   end
 
-  defp prune_tail(_note_id, {:watermark, nil}), do: :ok
+  defp prune_tail(_note_id, _vault_id, {:watermark, nil}), do: :ok
 
-  defp prune_tail(note_id, {:watermark, watermark}) do
+  defp prune_tail(note_id, vault_id, {:watermark, watermark}) do
     CrdtUpdateLog
-    |> where([l], l.note_id == ^note_id and l.inserted_at <= ^watermark)
+    |> where(
+      [l],
+      l.note_id == ^note_id and l.vault_id == ^vault_id and l.inserted_at <= ^watermark
+    )
     |> Repo.delete_all()
   end
 end
