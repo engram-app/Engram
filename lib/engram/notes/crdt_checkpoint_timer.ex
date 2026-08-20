@@ -491,10 +491,21 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
         # all run it under `with_tenant`). Without one, RLS returns no rows,
         # `prune_ids` comes back empty, and compaction silently stops — the
         # tail grows forever and nothing reports it.
-        {:ok, prune_ids} =
-          Repo.with_tenant(state.user_id, fn ->
-            CrdtPersistence.replay_tail(folded, user, state.room_key)
-          end)
+        # Degrade, never abort. `with_tenant/2` does not always return
+        # `{:ok, _}` — `CrdtCheckpoint` has carried a catch-all arm for its own
+        # call since the watermark days. A hard match here would raise into the
+        # rescue below and skip the checkpoint ENTIRELY, so a transient tenant
+        # failure would also stop `notes.content` materializing. That is the one
+        # thing this timer exists to do promptly (see "Eager first flush").
+        # Folding nothing costs a delayed compaction; not checkpointing costs
+        # every non-CRDT reader a stale note.
+        prune_ids =
+          case Repo.with_tenant(state.user_id, fn ->
+                 CrdtPersistence.replay_tail(folded, user, state.room_key)
+               end) do
+            {:ok, ids} when is_list(ids) -> ids
+            _ -> []
+          end
 
         CrdtCheckpoint.checkpoint(state.user_id, state.vault_id, state.room_key, folded,
           captured_version: captured_version,
