@@ -26,6 +26,25 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
   require Logger
 
+  # #959. A checkpoint that cannot READ the row's stored state aborts rather
+  # than overwrite state it cannot prove it contains. That is correct, and for a
+  # transient cause (KMS blip, pool starvation) it self-heals on the next tick.
+  #
+  # For a PERMANENT cause — a lost DEK version, a botched AAD rebind — it never
+  # heals: every debounce tick appends a tail row via `update_v1` and aborts, so
+  # `crdt_update_log` grows without bound while `notes.content` is frozen at the
+  # last good checkpoint and embeddings never refresh. Nothing distinguished
+  # that from the transient case but a repeating error line.
+  #
+  # The tail depth IS the distinguisher, and it needs no new state to track: it
+  # only grows while the abort persists, and a successful checkpoint prunes it.
+  # Past the threshold the note is quarantined-in-place — still aborting, but now
+  # loudly and on its own greppable key, so ops can find it before the log does
+  # real damage. Deliberately not auto-repaired: every repair overwrites state we
+  # just admitted we cannot read.
+  @abort_event [:engram, :crdt, :checkpoint_abort]
+  @quarantine_tail_depth 500
+
   @doc """
   Checkpoint the live doc into the `notes` row. Encrypts the full Yjs v1
   state, prunes the tail-log, and — when the projected text actually changed —
@@ -236,7 +255,18 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
             :ok
 
+          # The tag arrives NESTED, and only nested. `union_with_row_state`
+          # returns `{:error, {:row_state_unreadable, _}}`, and both callers'
+          # `with` else-clauses wrap whatever they got in `{:abort, _}`. Matching
+          # the bare tuple instead silently fell through to the generic branch,
+          # which is exactly the indistinguishability this removes.
+          {:abort, {:error, {:row_state_unreadable, _}} = err} ->
+            report_unreadable_state(user_id, note_id, err)
+            :ok
+
           {:abort, err} ->
+            :telemetry.execute(@abort_event, %{count: 1}, %{phase: :other})
+
             Logger.error(
               "crdt checkpoint aborted note_id=#{note_id} reason=#{Metadata.safe_reason(err)}",
               Metadata.with_category(:error, :sync, note_id: note_id)
@@ -574,6 +604,80 @@ defmodule Engram.Notes.CrdtCheckpoint do
     |> where([l], l.note_id == ^note_id)
     |> select([l], max(l.inserted_at))
     |> Repo.one()
+  end
+
+  # Unreadable stored state (#959). Distinct from the generic abort on BOTH
+  # channels: its own greppable log key, and its own telemetry phase, so a
+  # permanently frozen note is separable from a transient decrypt blip without
+  # reading stack traces.
+  #
+  # The depth read is best-effort. It is diagnostics for an abort that has
+  # already happened, so a failure to count must not turn a logged abort into a
+  # raised one — nil simply means "depth unknown" and the line still goes out.
+  defp report_unreadable_state(user_id, note_id, err) do
+    depth = safe_tail_depth(user_id, note_id)
+    quarantined = is_integer(depth) and depth >= @quarantine_tail_depth
+
+    # ADDITIVE, never a replacement. Escalation used to swap the phase and the
+    # log key, which meant the one alert this change exists to enable ("any
+    # unreadable_state in the last 15m") RESOLVED the moment a note got bad
+    # enough to cross the threshold, while it was still frozen and still
+    # growing. The worst notes went quiet. `:unreadable_state` is therefore
+    # emitted for every abort, and `quarantined` is a dimension on it.
+    :telemetry.execute(@abort_event, %{count: 1}, %{
+      phase: :unreadable_state,
+      quarantined: to_string(quarantined)
+    })
+
+    Logger.error(
+      "crdt_checkpoint_state_unreadable note_id=#{note_id} " <>
+        "tail_depth=#{depth || "unknown"} threshold=#{@quarantine_tail_depth} " <>
+        "quarantined=#{quarantined} reason=#{Metadata.safe_reason(err)}",
+      Metadata.with_category(:error, :sync, note_id: note_id)
+    )
+
+    # A SECOND line rather than a different one, for the same reason: a Loki
+    # alert on the key above must not stop matching once this one starts.
+    if quarantined do
+      Logger.error(
+        "crdt_checkpoint_quarantine note_id=#{note_id} tail_depth=#{depth} " <>
+          "threshold=#{@quarantine_tail_depth} — needs an operator, not another tick",
+        Metadata.with_category(:error, :sync, note_id: note_id)
+      )
+    end
+  end
+
+  # Depth is DIAGNOSTICS for an abort that already happened, so it must not be
+  # able to escalate that abort into a raise. `Repo.with_tenant/2` RAISES on
+  # DBConnection errors rather than returning them, and pool starvation is
+  # exactly when mass aborts happen — without the rescue the distinct log key
+  # and the telemetry event were both lost into the generic `raised` path,
+  # precisely when the signal matters most. nil means "unknown", never zero.
+  defp safe_tail_depth(user_id, note_id) do
+    case Repo.with_tenant(user_id, fn -> tail_depth(note_id) end) do
+      {:ok, n} when is_integer(n) -> n
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  # Rows in the note's unfolded tail, CAPPED at the threshold.
+  #
+  # The uncapped count was a full scan of the very table whose unbounded growth
+  # is the failure being measured, re-run every debounce tick, forever, per
+  # broken note: the diagnostic scaled with the pathology. The value is only
+  # ever compared against `@quarantine_tail_depth`, so counting past it buys
+  # nothing. `:count` (count(*)) rather than `:count, :id` keeps it on the
+  # (note_id, inserted_at) index instead of forcing heap fetches for a column
+  # that index does not cover.
+  defp tail_depth(note_id) do
+    CrdtUpdateLog
+    |> where([l], l.note_id == ^note_id)
+    |> select([l], 1)
+    |> limit(^(@quarantine_tail_depth + 1))
+    |> Repo.all()
+    |> length()
   end
 
   defp interleave_hook(point) do

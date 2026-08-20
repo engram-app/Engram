@@ -339,6 +339,122 @@ defmodule Engram.Notes.CrdtCheckpointTest do
            "checkpoint replaced a stored state it could not read"
   end
 
+  # ── #959: a PERMANENTLY unreadable stored state is separable from a blip ──
+
+  # Helper: make the row's stored state undecryptable and hand back a divergent
+  # live doc, i.e. the exact state the abort path is written for.
+  defp wedge_unreadable_state(user, note) do
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before EDIT")
+
+    Repo.with_tenant(user.id, fn ->
+      Repo.update_all(from(n in Note, where: n.id == ^note.id),
+        set: [crdt_state_ciphertext: <<0, 1, 2, 3>>, crdt_state_nonce: <<0::96>>]
+      )
+    end)
+
+    doc
+  end
+
+  defp attach_abort_probe do
+    parent = self()
+    handler = "abort-probe-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:engram, :crdt, :checkpoint_abort],
+        fn _e, measurements, meta, _ -> send(parent, {:abort_event, measurements, meta}) end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  test "an unreadable stored state reports :unreadable_state with the tail depth", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+    attach_abort_probe()
+    doc = wedge_unreadable_state(user, note)
+
+    # Two unfolded tail rows: the depth the abort reports must be the real count,
+    # since that number is what tells an operator how far the leak has run.
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state("tail", user, note.id)
+
+    rows =
+      for _ <- 1..2 do
+        %{
+          id: Ecto.UUID.generate(),
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: nonce,
+          inserted_at: DateTime.utc_now()
+        }
+      end
+
+    Repo.with_tenant(user.id, fn -> Repo.insert_all(CrdtUpdateLog, rows) end)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+      end)
+
+    assert_received {:abort_event, %{count: 1}, %{phase: :unreadable_state, quarantined: "false"}}
+
+    # Its OWN key. The generic "crdt checkpoint aborted" line cannot be alerted
+    # on: it also fires for transient causes that self-heal on the next tick.
+    assert log =~ "crdt_checkpoint_state_unreadable"
+    assert log =~ "tail_depth=2"
+    refute log =~ "crdt_checkpoint_quarantine"
+  end
+
+  test "past the depth threshold the abort escalates to :quarantine", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+    attach_abort_probe()
+    doc = wedge_unreadable_state(user, note)
+
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state("tail", user, note.id)
+
+    rows =
+      for _ <- 1..500 do
+        %{
+          id: Ecto.UUID.generate(),
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: nonce,
+          inserted_at: DateTime.utc_now()
+        }
+      end
+
+    Repo.with_tenant(user.id, fn -> Repo.insert_all(CrdtUpdateLog, rows) end)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+      end)
+
+    # ADDITIVE. The phase must NOT flip to something else at the threshold: an
+    # alert written against `phase="unreadable_state"` would then resolve exactly
+    # when the note is at its worst, still frozen and still growing. Escalation
+    # is a dimension on the same series, and a SECOND log line beside the first,
+    # never a replacement for either.
+    assert_received {:abort_event, %{count: 1}, %{phase: :unreadable_state, quarantined: "true"}}
+    assert log =~ "crdt_checkpoint_quarantine"
+    assert log =~ "crdt_checkpoint_state_unreadable"
+
+    # Escalating must not start writing. The whole reason this aborts is that we
+    # cannot prove a write is a superset of the durable truth, and crossing a
+    # depth threshold does not change that.
+    {:ok, after_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    assert after_note.crdt_state_ciphertext == <<0, 1, 2, 3>>
+    assert after_note.version == note.version
+  end
+
   # ── /changes feed integrity: checkpoint must advance updated_at ────────────
 
   test "checkpoint advances updated_at so the /changes timestamp feed sees the edit", ctx do
