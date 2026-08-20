@@ -130,6 +130,26 @@ defmodule EngramWeb.LifecycleGateChannelTest do
     end
   end
 
+  # The `user:` carve-out is SUSPENSION-specific: it mirrors AccountLifecycle
+  # allowlisting `/api/billing/*` so a suspended user can pay their way out.
+  # Deletion has no such exemption — the deleted clause runs ahead of the
+  # allowlist and HTTP is terminal, "410 on every endpoint, no exemptions".
+  describe "user: channel vs deletion (#1435)" do
+    test "a deleted account cannot join user:", %{user: user} do
+      _deleted = mark!(user, :deleted_at)
+
+      assert {:error, %{reason: "account_deleted"}} =
+               subscribe_and_join(user_socket(user), EngramWeb.UserChannel, "user:#{user.id}")
+    end
+
+    test "an un-onboarded account CAN still join user: — the wizard needs it", %{vault: _v} do
+      fresh = insert_user(onboarding_profile: %{})
+
+      assert {:ok, _, _} =
+               subscribe_and_join(user_socket(fresh), EngramWeb.UserChannel, "user:#{fresh.id}")
+    end
+  end
+
   describe "soft-deleted accounts" do
     test "crdt: join is refused", %{user: user, vault: vault} do
       # `user` stays the PRE-deletion struct on purpose — see the suspension
@@ -228,6 +248,115 @@ defmodule EngramWeb.LifecycleGateChannelTest do
 
       assert {:error, %{reason: "account_suspended"}} = join_crdt(user, vault)
       assert is_nil(UsageMeters.last_active_at(user.id))
+    end
+  end
+
+  # `RotationLockCheck` runs on :authed_api and its moduledoc is explicit that
+  # "Read AND write paths block" — rotated rows reference a dek_version whose
+  # master mapping has not flipped yet, so any decrypt with the old DEK fails
+  # until the rotation completes. CrdtChannel open-coded a check; SyncChannel
+  # had none, so a mid-rotation user was blocked on every HTTP route and on
+  # `crdt:` but received Presence + note_changed on `sync:` for the whole
+  # rotation window. (#1434)
+  describe "DEK rotation (#1434)" do
+    setup %{user: user} do
+      {:ok, _} =
+        user
+        |> Ecto.Changeset.change(dek_rotation_locked_at: DateTime.utc_now())
+        |> Repo.update()
+
+      :ok
+    end
+
+    test "sync: join is refused mid-rotation", %{user: user, vault: vault} do
+      assert {:error, %{reason: "rotation_in_progress"}} =
+               subscribe_and_join(
+                 user_socket(user),
+                 EngramWeb.SyncChannel,
+                 "sync:#{user.id}:#{vault.id}"
+               )
+    end
+
+    test "crdt: still reports rotation_in_progress, not a lifecycle reason", %{
+      user: user,
+      vault: vault
+    } do
+      assert {:error, %{reason: "rotation_in_progress"}} = join_crdt(user, vault)
+    end
+
+    # Rotation must outrank lifecycle: it is transient and self-clears, and
+    # the client backs off on it. Reporting account_suspended for a suspended
+    # user mid-rotation would be correct too, but the ordering has to be
+    # DECIDED rather than incidental — HTTP runs AccountDeleted (52) before
+    # RotationLockCheck (54), so deleted wins there and must here.
+    test "a DELETED account mid-rotation still reports account_deleted", %{
+      user: user,
+      vault: vault
+    } do
+      _deleted = mark!(user, :deleted_at)
+      assert {:error, %{reason: "account_deleted"}} = join_crdt(user, vault)
+    end
+  end
+
+  # Pricing v2 §G write half (#1433). Free's `api_write_enabled` is false, so
+  # an API-key caller is 402'd on every non-GET REST route — and must not be
+  # able to write through the socket instead. Reads stay open: the plug
+  # exempts GET, and existing tests assert Free API keys can join and read.
+  describe "API-key write entitlement (#1433)" do
+    setup %{user: user} do
+      {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "write-gate")
+      {:ok, api_key: api_key}
+    end
+
+    test "a Free PAT can join and read but cannot write", %{
+      user: user,
+      vault: vault,
+      api_key: api_key
+    } do
+      assert {:ok, _, joined} =
+               subscribe_and_join(
+                 user_socket(user, api_key),
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+
+      Sandbox.allow(Repo, self(), joined.channel_pid)
+
+      ref = push(joined, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "n.md"})
+      assert_reply ref, :error, %{reason: "api_write_not_available"}
+    end
+
+    test "the SAME user on a JWT socket writes normally", %{user: user, vault: vault} do
+      assert {:ok, _, joined} = join_crdt(user, vault)
+      Sandbox.allow(Repo, self(), joined.channel_pid)
+
+      id = Ecto.UUID.generate()
+      ref = push(joined, "crdt_create", %{"doc_id" => id, "path" => "n.md"})
+      assert_reply ref, :ok, %{doc_id: ^id}
+    end
+
+    test "a PAT with api_write_enabled granted can write", %{
+      user: user,
+      vault: vault,
+      api_key: api_key
+    } do
+      insert(:user_limit_override, user: user, key: "api_write_enabled", value: %{"v" => true})
+      Engram.Billing.OverrideCache.clear_local()
+
+      assert {:ok, _, joined} =
+               subscribe_and_join(
+                 user_socket(user, api_key),
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+
+      Sandbox.allow(Repo, self(), joined.channel_pid)
+
+      id = Ecto.UUID.generate()
+      ref = push(joined, "crdt_create", %{"doc_id" => id, "path" => "n2.md"})
+      assert_reply ref, :ok, %{doc_id: ^id}
     end
   end
 

@@ -19,7 +19,6 @@ defmodule EngramWeb.CrdtChannel do
   use Phoenix.Channel
 
   alias Engram.Crypto.HMAC
-  alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
   alias Engram.{Notes, Repo, Vaults}
   alias Engram.Notes.CrdtBridge
@@ -118,26 +117,15 @@ defmodule EngramWeb.CrdtChannel do
   defp client_type(%{"client_type" => t}) when is_binary(t) and byte_size(t) <= 32, do: t
   defp client_type(_params), do: nil
 
+  # T3.7 (#1092): the crdt: channel is the live write path and must not open
+  # while a DEK rotation holds the user's lock. That check now lives in
+  # `EngramWeb.ChannelGate` (#1434) so `sync:` gets it too — it used to be
+  # open-coded here, and `SyncChannel` had none. In-flight sockets are drained
+  # separately (UserDekRotation).
   defp join_authenticated("crdt:" <> ids, socket) do
     user = socket.assigns.current_user
 
-    user_id_str = to_string(user.id)
-
-    join_rotation_checked(ids, user, user_id_str, socket)
-  end
-
-  defp join_rotation_checked(ids, user, user_id_str, socket) do
-    # T3.7 (#1092): the crdt: channel is the live write path — refuse to open it
-    # while a DEK rotation holds the user's lock. check/1 re-reads the row so a
-    # reconnect mid-rotation is caught even if the socket's user struct predates
-    # the lock. In-flight sockets are drained separately (UserDekRotation).
-    case RotationGate.check(user.id) do
-      {:error, :rotation_in_progress} -> {:error, %{reason: "rotation_in_progress"}}
-      # :ok, or {:error, :user_not_found} — let the downstream path decide.
-      # A missing user now reaches `ChannelGate.check/1`, which refuses with
-      # "account_deleted" (it used to fall through to "unauthorized").
-      _ -> join_vault("crdt:" <> ids, user, user_id_str, socket)
-    end
+    join_vault("crdt:" <> ids, user, to_string(user.id), socket)
   end
 
   # Plugs never run on a socket, so every vault-pipeline access gate is
@@ -213,6 +201,14 @@ defmodule EngramWeb.CrdtChannel do
                        vault: vault,
                        rooms: %{},
                        room_doc: %{},
+                       # Pricing v2 §G write gate (#1433). Resolved once here
+                       # so the per-frame check below is a pattern match, not
+                       # a query. JWT sockets are always false.
+                       api_write_blocked:
+                         ChannelGate.api_write_blocked?(
+                           user,
+                           socket.assigns[:current_api_key]
+                         ),
                        # doc_ids released by an idle drain (#1152), so the
                        # re-spin does not re-announce crdt_doc_ready. See
                        # start_and_observe_room.
@@ -237,6 +233,21 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   @impl true
+  # Pricing v2 §G, mirroring `EngramWeb.Plugs.RequireApiWriteEnabled` (#1433):
+  # an API-key caller whose tier lacks `api_write_enabled` is 402'd on every
+  # non-GET REST route, and must not be able to write through the socket
+  # instead. Reads (`crdt_catchup_since`, inbound fan-out) are deliberately
+  # NOT listed — the plug exempts GET, and a key that may read over REST may
+  # read here. Placed ahead of the write handlers and matched on an assign
+  # resolved at join, so the common path pays nothing.
+  @write_events ~w(crdt_msg crdt_index_msg crdt_create crdt_create_batch crdt_delete)
+
+  def handle_in(event, _payload, %{assigns: %{api_write_blocked: true}} = socket)
+      when event in @write_events do
+    {:reply, {:error, %{reason: "api_write_not_available", upgrade_url: "/#settings/billing"}},
+     socket}
+  end
+
   def handle_in("crdt_msg", %{"doc_id" => doc_id, "b64" => b64}, socket) do
     # Classify (O(1), first 4 b64 chars) BEFORE the rate check so sync
     # handshakes ride their own, larger bucket than edit frames: connect-time

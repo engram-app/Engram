@@ -15,19 +15,21 @@ defmodule EngramWeb.ChannelGate do
     * `RequireOnboarding`         → 403 `onboarding_required` ✅ (#1426)
     * `RequireActiveSubscription` → 402 `account_suspended` ✅ (#1429)
 
-  plus `BumpActivity`'s liveness stamp (see `## Activity`), and `CrdtChannel`
-  separately open-codes `RotationGate.check/1`.
+    * `RotationLockCheck`         → 423 `rotation_in_progress` ✅ (#1434)
+    * `RequireApiWriteEnabled`    → WRITE frames only ✅ (#1433), see
+      `api_write_blocked?/2` and `CrdtChannel`'s `@write_events` clause
+
+  plus `BumpActivity`'s liveness stamp (see `## Activity`).
 
   **NOT mirrored — sockets are more permissive than HTTP here:**
 
-    * `RequireApiWriteEnabled` / `RequireApiRpsBudget` — a Free-tier PAT is
-      402'd and 429'd on `POST /api/notes` but writes freely over `crdt_msg`.
-      Tracked in #1433. Port trap: both exempt via
-      `not is_map_key(assigns, :current_api_key)`, and `UserSocket.accept/4`
-      ALWAYS sets that key (nil for JWT), so a literal port gates every JWT
-      socket.
-    * `RotationLockCheck` — `CrdtChannel` has an equivalent, `SyncChannel` has
-      none. Tracked in #1434.
+    * `RequireApiRpsBudget` — Free's `api_rps_cap` is 0 and that plug has no
+      GET exemption, so a Free PAT cannot make a single REST call, yet it can
+      still open a socket and READ the whole vault. Gating the join on it was
+      tried and reverted: `sync_channel_test.exs` and the tracing tests
+      actively assert Free API keys CAN join, so that is a contract change,
+      not a bug fix — it needs a product decision, not a security patch.
+      Writes are blocked regardless (above). Tracked in #1433.
     * `EnforceSearchCap`, `DeviceFingerprint`, `PreAuthRateLimit` — no channel
       equivalent; `PreAuthRateLimit` notably means there is **no join rate
       limiter** at all.
@@ -81,6 +83,8 @@ defmodule EngramWeb.ChannelGate do
   """
 
   alias Engram.Accounts
+  alias Engram.Billing
+  alias Engram.Crypto.RotationGate
   alias Engram.Onboarding
   alias Engram.UsageMeters
 
@@ -103,8 +107,16 @@ defmodule EngramWeb.ChannelGate do
         {:error, %{reason: "account_deleted"}}
 
       fresh ->
-        with :ok <- lifecycle(fresh),
-             :ok <- onboarding(fresh) do
+        # Precedence mirrors `:authed_api` exactly (router.ex:52-56):
+        # AccountDeleted -> RotationLockCheck -> RequireOnboarding ->
+        # RequireActiveSubscription. Suspension therefore comes AFTER
+        # onboarding, so an account suspended mid-signup reports the same
+        # reason on both transports. Rotation reuses the row already loaded
+        # here via `check_user/1`, so it costs no extra query.
+        with :ok <- deleted(fresh),
+             :ok <- rotation(fresh),
+             :ok <- onboarding(fresh),
+             :ok <- suspended(fresh) do
           # Liveness, mirroring `EngramWeb.Plugs.BumpActivity` — see the
           # `## Activity` note above. Only on a PASS: a refused client
           # retrying forever must not keep its own account looking alive.
@@ -113,19 +125,61 @@ defmodule EngramWeb.ChannelGate do
     end
   end
 
-  # Deleted takes precedence over suspended, mirroring
-  # `EngramWeb.Plugs.AccountLifecycle`.
-  defp lifecycle(%{deleted_at: %DateTime{}}), do: {:error, %{reason: "account_deleted"}}
-  defp lifecycle(%{suspended_at: %DateTime{}}), do: {:error, %{reason: "account_suspended"}}
+  @doc """
+  Deletion-only check, for `user:`.
 
-  # Strictly `nil, nil` rather than a `_user` catch-all. A catch-all is
-  # fail-OPEN keyed on field presence: rename either column, narrow the read
-  # to a projection, or change the type away from `:utc_datetime_usec`, and
-  # both guard clauses above stop matching while every account silently
-  # passes the lifecycle gate — no compile error, no test failure. This is
-  # the same argument `Onboarding.derive_gate/3` makes about its own
-  # destructuring. A missing field should crash, not pass.
-  defp lifecycle(%{deleted_at: nil, suspended_at: nil}), do: :ok
+  `user:` is exempt from suspension and onboarding on purpose (see the
+  moduledoc) but NOT from deletion: `AccountDeleted`'s clause runs ahead of
+  the suspension allowlist and HTTP is terminal for a deleted account —
+  "410 Gone on every endpoint, no exemptions". A purged row counts as deleted.
+  """
+  @spec check_not_deleted(Engram.Accounts.User.t()) :: :ok | {:error, map()}
+  def check_not_deleted(%Engram.Accounts.User{id: user_id}) do
+    case Accounts.get_user(user_id) do
+      nil -> {:error, %{reason: "account_deleted"}}
+      %{deleted_at: %DateTime{}} -> {:error, %{reason: "account_deleted"}}
+      %{deleted_at: nil} -> :ok
+    end
+  end
+
+  # Each of these matches STRICTLY on the field it gates rather than falling
+  # through a `_user` catch-all. A catch-all is fail-OPEN keyed on field
+  # presence: rename the column, narrow the read to a projection, or change
+  # the type away from `:utc_datetime_usec`, and the guard stops matching
+  # while every account silently passes — no compile error, no test failure.
+  # Same argument `Onboarding.derive_gate/3` makes about its destructuring.
+  # A missing field should crash, not pass.
+  defp deleted(%{deleted_at: %DateTime{}}), do: {:error, %{reason: "account_deleted"}}
+  defp deleted(%{deleted_at: nil}), do: :ok
+
+  defp suspended(%{suspended_at: %DateTime{}}), do: {:error, %{reason: "account_suspended"}}
+  defp suspended(%{suspended_at: nil}), do: :ok
+
+  @doc """
+  Pricing v2 §G write half, mirroring `EngramWeb.Plugs.RequireApiWriteEnabled`
+  (#1433). True when this socket's caller may not issue write frames.
+
+  JWT callers are exempt (the web UI hides write affordances for tiers that
+  lack the feature), matching the plug. Evaluated once at join and stashed in
+  assigns so the per-frame check is a pattern match, not a query — an
+  entitlement change takes effect on the next join, same as `plan_state`.
+  """
+  @spec api_write_blocked?(Engram.Accounts.User.t(), term()) :: boolean()
+  def api_write_blocked?(_user, nil), do: false
+
+  def api_write_blocked?(user, _api_key) do
+    Billing.check_feature(user, :api_write_enabled) != :ok
+  end
+
+  # `check_user/1`, not `check/1` — the row is already loaded, so this costs
+  # no query. `CrdtChannel` used to open-code `RotationGate.check/1`, which
+  # re-read the same row; `SyncChannel` had no check at all (#1434).
+  defp rotation(user) do
+    case RotationGate.check_user(user) do
+      :ok -> :ok
+      {:error, :rotation_in_progress} -> {:error, %{reason: "rotation_in_progress"}}
+    end
+  end
 
   defp onboarding(user) do
     case Onboarding.gate(user, fresh: true) do
