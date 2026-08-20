@@ -1,8 +1,14 @@
 # CRDT lineage doubling — why the same edit must be encoded exactly once
 
-_Last verified: 2026-07-02_
+_Last verified: 2026-08-18_
 
-**Status:** root-caused + fixed 2026-07-02 (PR #846, deliver-out state-apply commit).
+**Status:** two distinct mechanisms share this symptom.
+1. **Dual-encoder** (the original) — root-caused + fixed 2026-07-02 (PR #846,
+   deliver-out state-apply commit). Everything below through "Debugging recipe"
+   describes this one.
+2. **Flatten boundary** (#958) — OPEN as of 2026-08-18, reproduced. See
+   "Second mechanism" at the end. Do not read the "fixed" above as covering it.
+
 **Symptom class:** stored/live note content duplicates or char-interleaves under
 rapid REST writes with a live room: `"Iteration 6"` + `"Iteration 7"` →
 `"Iteration 67"`, `"Version 22"`, `"Version 233"`, full-body duplication.
@@ -82,3 +88,74 @@ Caveat for local unit repro: the shared local test DB may carry migrations from
 other branches (`mix ecto.reset` under MIX_ENV=test before trusting a big local
 failure count), and `Repo.with_tenant` wraps returns in `{:ok, _}` (see
 `with-tenant-return-wrapping.md`).
+
+## Second mechanism: the flatten boundary (#958, OPEN)
+
+_Added 2026-08-18._
+
+Same symptom, different cause, and the #846 fix does not touch it. Reproduced
+against `main` on 2026-08-18:
+
+```
+[1] after normal checkpoint:        "ALPHA"
+[2] row flattened to fresh lineage; live doc still on old lineage
+[3] after post-flatten checkpoint:  "ALPHA BETAALPHA"   <- expected "ALPHA BETA"
+```
+
+`maybe_flatten` (`crdt_checkpoint.ex`) is a RESET, not a merge: it replaces the
+doc with a fresh single-client one. The call site persists only the flattened
+`state` and **discards `_flat_doc`**, so the row moves to a new lineage while the
+live room keeps running the old one. The next `union_with_row_state` folds two
+disjoint lineages, and every old-lineage struct integrates as new content.
+
+This does not violate the one-encoder invariant above. It violates the *other*
+assumption the union rests on, stated in `do_checkpoint`'s own comment: "the
+stored state is the same lineage deliver_out pushes, so the fold is idempotent."
+After a flatten, it is not.
+
+### Why there is no cheap fix (checked, 2026-08-18)
+
+Do not re-derive these. Both obvious directions have holes:
+
+**"Only flatten where it is safe."** There is no such site.
+
+| Caller | Hole |
+|---|---|
+| `crdt_checkpoint_timer.ex` | live room keeps editing the old lineage |
+| `crdt_persistence.ex` (unbind) | watermark prune lets tail rows written *during* the encode survive and replay onto the new lineage at next bind |
+| `workers/checkpoint_note.ex` | overflow path from unbind; a room may have re-bound before the job runs |
+| `crdt_channel.ex` (genesis) | already known to double, see below |
+
+Plus a rebind race with no guard: a client binding a new room mid-unbind loads
+the PRE-flatten state, then the unbind commits the flattened one. `snapshot_fence/2`
+does not catch it, because a bind is not a write.
+
+**"Detect disjoint lineage (client-id sets) and skip the union."** Cheap to
+detect, but it **false-positives on genesis**: `crdt_channel.ex` states the
+create-time checkpoint flattens to a fresh server lineage while the client frame
+keeps its own, so a healthy new note legitimately presents disjoint lineages. A
+blanket skip-or-abort would freeze them. That path is currently handled by
+*avoidance* (do not re-checkpoint a `:skipped` create), not at the seam.
+
+Skipping the union is also not free when detection is right: Phase 0 exists
+because a room that missed a `deliver_out` is BEHIND committed writes, and
+skipping there re-opens the 2026-07-07 data-loss class (MCP appends erased).
+
+### Recommended direction
+
+Record the lineage reset instead of inferring it. A lineage epoch on the row,
+bumped on every flatten, lets the union distinguish "the live doc predates this
+row's lineage" from "the live doc is merely behind" — the distinction every
+proposed fix silently needs and none can currently make. Genesis then declares
+its own reset rather than being special-cased at the call site.
+
+Schema + protocol change, so it wants a design pass, and it should land before
+#1151 mirrors this seam for the index room.
+
+### Reproducing it
+
+Do not commit the repro (it asserts buggy behaviour). Shape: checkpoint a doc
+normally, then `CrdtBridge.flatten` the row state and write it back directly
+(mirroring what `maybe_flatten` + `checkpoint_write` persist), then edit the
+ORIGINAL doc and checkpoint again. The flatten ceilings (500KB AND 1000
+client-ids) are not needed to demonstrate the mechanism.
