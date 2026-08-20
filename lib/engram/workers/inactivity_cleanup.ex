@@ -213,8 +213,11 @@ defmodule Engram.Workers.InactivityCleanup do
     end
   end
 
+  # Inverted deliberately: the catalog key is grant-shaped (`true` == exempt),
+  # so enforcement-off (`:unlimited`) means exempt and a self-hosted instance
+  # never sends free-tier inactivity dunning.
   defp warn_enabled?(user) do
-    Billing.effective_limit(user, :inactivity_warn_60_days) == true
+    Billing.effective_limit(user, :inactivity_warnings_exempt) == false
   end
 
   defp delete_after_days(user) do

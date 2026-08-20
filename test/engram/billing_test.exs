@@ -9,6 +9,7 @@ defmodule Engram.BillingTest do
   import Mox
 
   alias Engram.Billing
+  alias Engram.Billing.LimitKeys
   alias Engram.Billing.Subscription
   alias Engram.Repo
 
@@ -154,6 +155,7 @@ defmodule Engram.BillingTest do
       user = build(:user, free_tier_accepted_at: nil)
       state = Billing.plan_state(user)
       assert state.tier == :free
+      assert state.attachments_all_types == false
       assert state.attachments_text_only == true
       assert is_integer(state.max_file_bytes)
       assert is_integer(state.attachment_bytes_cap) or is_nil(state.attachment_bytes_cap)
@@ -163,7 +165,62 @@ defmodule Engram.BillingTest do
       user = build(:user) |> with_subscription(tier: "pro", status: "active")
       state = Billing.plan_state(user)
       assert state.tier == :pro
+      assert state.attachments_all_types == true
       assert state.attachments_text_only == false
+    end
+
+    test "the legacy field is always the exact inverse of the new one" do
+      # EXPAND step: both fields ship until the released plugin reads the new
+      # one. They are derived from a single call, so a future edit cannot let
+      # them drift into disagreeing about the same user.
+      for user <- [
+            build(:user, free_tier_accepted_at: nil),
+            build(:user) |> with_subscription(tier: "starter", status: "active"),
+            build(:user) |> with_subscription(tier: "pro", status: "active")
+          ] do
+        state = Billing.plan_state(user)
+        assert state.attachments_text_only == not state.attachments_all_types
+      end
+    end
+  end
+
+  describe "self-host (enforcement off) grants every capability" do
+    setup do
+      prev = Application.get_env(:engram, :limits_enforced, true)
+      Application.put_env(:engram, :limits_enforced, false)
+      on_exit(fn -> Application.put_env(:engram, :limits_enforced, prev) end)
+      :ok
+    end
+
+    test "attachments_all_types? is true even for an otherwise-Free user" do
+      # The regression. `attachments_text_only` was restriction-shaped, and
+      # `normalize_capability(:boolean, :unlimited)` returns `true` for every
+      # boolean — so turning enforcement OFF turned the restriction ON, and
+      # self-hosters silently lost every image and PDF while their own server
+      # would have accepted them.
+      user = build(:user, free_tier_accepted_at: nil)
+      assert Billing.attachments_all_types?(user)
+    end
+
+    test "plan_state and capabilities agree — they used to disagree" do
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      state = Billing.plan_state(user)
+      caps = Billing.capabilities(user)
+
+      assert state.attachments_all_types == true
+      assert caps.limits["attachments_all_types"] == true
+      assert state.attachments_text_only == false
+    end
+
+    test "no boolean capability resolves to a restriction" do
+      user = insert(:user, free_tier_accepted_at: nil)
+      caps = Billing.capabilities(user)
+
+      for key <- LimitKeys.all(), LimitKeys.type(key) == :boolean do
+        assert caps.limits[Atom.to_string(key)] == true,
+               "#{key} is not granted with enforcement off"
+      end
     end
   end
 
