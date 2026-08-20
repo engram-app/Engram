@@ -20,7 +20,7 @@ defmodule EngramWeb.CrdtChannelTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
-    {:ok, vault} = Vaults.create_vault(user, %{name: "CrdtChannelTest"})
+    {:ok, vault, _} = Vaults.register_vault(user, "CrdtChannelTest", Ecto.UUID.generate())
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "base"})
     other_user = insert(:user)
     {:ok, other_user} = Crypto.ensure_user_dek(other_user)
@@ -1047,7 +1047,8 @@ defmodule EngramWeb.CrdtChannelTest do
       # id, so every re-minted entry fell into the create_failed arm, its content
       # frame was dropped, and the row committed EMPTY. Asserting the content (not
       # just the status) is what makes this a real regression test.
-      {:ok, other_vault} = Vaults.create_vault(user, %{name: "CrdtChannelTestB"})
+      {:ok, other_vault, _} =
+        Vaults.register_vault(user, "CrdtChannelTestB", Ecto.UUID.generate())
 
       {:ok, foreign} =
         Notes.upsert_note(user, other_vault, %{"path" => "Copied.md", "content" => "vault B body"})
@@ -1289,7 +1290,10 @@ defmodule EngramWeb.CrdtChannelTest do
 
     test "rejects join for vault belonging to another user", %{user: user, other_user: other_user} do
       insert(:user_limit_override, user: other_user, key: "vaults_cap", value: %{"v" => -1})
-      {:ok, other_vault} = Vaults.create_vault(other_user, %{name: "OtherVault"})
+
+      {:ok, other_vault, _} =
+        Vaults.register_vault(other_user, "OtherVault", Ecto.UUID.generate())
+
       socket = user_socket(user)
 
       assert {:error, %{reason: "vault_not_found"}} =
@@ -1897,7 +1901,7 @@ defmodule EngramWeb.CrdtChannelTest do
       # Attacker (other_user) forges device_id to the VICTIM's user id, trying to
       # land in the victim's rate bucket, and hammers from their OWN vault.
       insert(:user_limit_override, user: other_user, key: "vaults_cap", value: %{"v" => -1})
-      {:ok, atk_vault} = Vaults.create_vault(other_user, %{name: "AtkVault"})
+      {:ok, atk_vault, _} = Vaults.register_vault(other_user, "AtkVault", Ecto.UUID.generate())
 
       {:ok, _, atk_sock} =
         user_socket(other_user)

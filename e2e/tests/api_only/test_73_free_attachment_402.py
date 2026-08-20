@@ -93,11 +93,11 @@ def test_free_attachment_blocked_note_passes():
     )
 
     # Create the user's one Free-tier vault.
-    vault_resp, vault_status = api.create_vault(f"att-vault-{_ts()}")
+    vault_resp, vault_status = api.register_vault(f"att-vault-{_ts()}", f"att-client-{_ts()}")
     assert vault_status in (200, 201), (
         f"vault create should succeed; got {vault_status}: {vault_resp}"
     )
-    vault_id = (vault_resp.get("vault") or {}).get("id")
+    vault_id = vault_resp.get("id")
     assert vault_id, f"vault response missing id: {vault_resp}"
     api_v = api.with_vault(vault_id)
 

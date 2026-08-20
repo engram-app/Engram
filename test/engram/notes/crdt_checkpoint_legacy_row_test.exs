@@ -31,7 +31,7 @@ defmodule Engram.Notes.CrdtCheckpointLegacyRowTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
-    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "LegacyRow"})
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "LegacyRow", Ecto.UUID.generate())
     %{user: user, vault: vault}
   end
 

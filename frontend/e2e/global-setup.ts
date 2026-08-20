@@ -62,10 +62,10 @@ async function preCompleteOnboarding(userId: string, secretKey: string): Promise
 	// dashboard, breaking sign-out / theme / mobile / note tests. The FTUX
 	// modal-specific tests use idempotent "skip if absent" checks, so seeding
 	// here doesn't regress that coverage.
-	const vaultResp = await fetch(`${CLERK_API_BASE}/vaults`, {
+	const vaultResp = await fetch(`${CLERK_API_BASE}/vaults/register`, {
 		method: "POST",
 		headers: { Authorization: `Bearer ${jwt}`, "Content-Type": "application/json" },
-		body: JSON.stringify({ name: "E2E Default Vault" }),
+		body: JSON.stringify({ name: "E2E Default Vault", client_id: crypto.randomUUID() }),
 	});
 	if (!vaultResp.ok) {
 		throw new Error(`Vault POST failed: ${vaultResp.status} ${await vaultResp.text()}`);

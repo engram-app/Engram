@@ -41,7 +41,7 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
-    {:ok, vault} = Vaults.create_vault(user, %{name: "IndexPersistenceTest"})
+    {:ok, vault, _} = Vaults.register_vault(user, "IndexPersistenceTest", Ecto.UUID.generate())
 
     %{user: user, vault: vault}
   end
@@ -633,7 +633,7 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
 
   describe "isolation and binding" do
     test "one vault's index never bleeds into another's", ctx do
-      {:ok, other} = Vaults.create_vault(ctx.user, %{name: "OtherVault"})
+      {:ok, other, _} = Vaults.register_vault(ctx.user, "OtherVault", Ecto.UUID.generate())
 
       room = start_index_room(ctx)
       put_entry(room, "mine.md", "note-mine")
@@ -661,7 +661,7 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
     # it lives in, so a blob moved between vaults fails to decrypt rather than
     # silently handing one vault another's index.
     test "a snapshot moved to another vault's row will not decrypt", ctx do
-      {:ok, other} = Vaults.create_vault(ctx.user, %{name: "AadVault"})
+      {:ok, other, _} = Vaults.register_vault(ctx.user, "AadVault", Ecto.UUID.generate())
 
       room = start_index_room(ctx)
       put_entry(room, "bound.md", "note-bound")

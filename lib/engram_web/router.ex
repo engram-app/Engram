@@ -358,7 +358,6 @@ defmodule EngramWeb.Router do
     # Vault management (user-level, not vault-scoped)
     get "/vaults", VaultsController, :index
     post "/vaults/register", VaultsController, :register
-    post "/vaults", VaultsController, :create
     get "/vaults/:id", VaultsController, :show
     patch "/vaults/:id", VaultsController, :update
     delete "/vaults/:id", VaultsController, :delete

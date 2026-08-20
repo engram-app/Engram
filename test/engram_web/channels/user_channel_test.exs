@@ -52,21 +52,21 @@ defmodule EngramWeb.UserChannelTest do
 
   describe "vault_created broadcast" do
     test "subscriber receives vault_created when their vault is created", %{user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Demo"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Demo", Ecto.UUID.generate())
 
       assert_broadcast "vault_created", %{vault_id: vault_id}
       assert vault_id == vault.id
     end
 
     test "subscriber does NOT receive vault_created for another user", %{other_user: other_user} do
-      {:ok, _} = Vaults.create_vault(other_user, %{name: "Other"})
+      {:ok, _, _} = Vaults.register_vault(other_user, "Other", Ecto.UUID.generate())
       refute_broadcast "vault_created", %{}, 200
     end
   end
 
   describe "vault_populated broadcast" do
     test "fires when first note is upserted into an empty vault", %{user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Notes"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
 
       {:ok, _note} =
         Notes.upsert_note(user, vault, %{
@@ -80,7 +80,7 @@ defmodule EngramWeb.UserChannelTest do
     end
 
     test "does NOT fire on the second note in the same vault", %{user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Notes"})
+      {:ok, vault, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
 
       {:ok, _} =
         Notes.upsert_note(user, vault, %{
@@ -110,7 +110,7 @@ defmodule EngramWeb.UserChannelTest do
       # Free tier caps vaults at 1 — lift it so this user can hold two.
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
 
-      {:ok, vault_a} = Vaults.create_vault(user, %{name: "A"})
+      {:ok, vault_a, _} = Vaults.register_vault(user, "A", Ecto.UUID.generate())
 
       {:ok, _} =
         Notes.upsert_note(user, vault_a, %{
@@ -121,7 +121,7 @@ defmodule EngramWeb.UserChannelTest do
 
       assert_broadcast "vault_populated", %{}
 
-      {:ok, vault_b} = Vaults.create_vault(user, %{name: "B"})
+      {:ok, vault_b, _} = Vaults.register_vault(user, "B", Ecto.UUID.generate())
 
       {:ok, _} =
         Notes.upsert_note(user, vault_b, %{

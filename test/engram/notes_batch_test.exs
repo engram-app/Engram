@@ -13,8 +13,8 @@ defmodule Engram.NotesBatchTest do
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     {:ok, other_user} = Engram.Crypto.ensure_user_dek(other_user)
 
-    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Test"})
-    {:ok, other_vault} = Engram.Vaults.create_vault(other_user, %{name: "Test"})
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
+    {:ok, other_vault, _} = Engram.Vaults.register_vault(other_user, "Test", Ecto.UUID.generate())
 
     %{user: user, other_user: other_user, vault: vault, other_vault: other_vault}
   end
@@ -535,7 +535,7 @@ defmodule Engram.NotesBatchSetBasedTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Test"})
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
     %{user: user, vault: vault}
   end
 

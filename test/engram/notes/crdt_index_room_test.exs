@@ -30,8 +30,8 @@ defmodule Engram.Notes.CrdtIndexRoomTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
-    {:ok, vault} = Vaults.create_vault(user, %{name: "IndexRoomTest"})
-    {:ok, other} = Vaults.create_vault(user, %{name: "IndexRoomTestOther"})
+    {:ok, vault, _} = Vaults.register_vault(user, "IndexRoomTest", Ecto.UUID.generate())
+    {:ok, other, _} = Vaults.register_vault(user, "IndexRoomTestOther", Ecto.UUID.generate())
 
     %{user: user, vault: vault, other_vault: other}
   end

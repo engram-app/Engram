@@ -33,7 +33,7 @@ defmodule Engram.Notes.CrdtE2ETest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
-    {:ok, vault} = Vaults.create_vault(user, %{name: "CrdtE2E"})
+    {:ok, vault, _} = Vaults.register_vault(user, "CrdtE2E", Ecto.UUID.generate())
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "e2e.md", "content" => "base"})
     doc_id = note.id
     topic = "crdt:#{user.id}:#{vault.id}"

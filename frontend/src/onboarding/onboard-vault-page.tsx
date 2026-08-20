@@ -46,6 +46,10 @@ function VaultStep({
 	const [source, setSource] = useState<Source>(
 		profileSaved ? (savedUsesObsidian ? "obsidian" : "fresh") : null,
 	);
+	// Idempotency key for this user's FIRST vault, stable for the lifetime of
+	// the step. Without it a retry after a slow or failed create leaves the
+	// user with two vaults and their content split across them.
+	const [vaultClientId] = useState(() => crypto.randomUUID());
 	// Track whether we've eager-committed `uses_obsidian: true` so the plugin's
 	// first sync isn't blocked by RequireOnboarding. The gate skips the vault
 	// check when uses_obsidian is true — without this, /api/notes 403s mid-sync
@@ -83,7 +87,10 @@ function VaultStep({
 	async function commitFresh(name: string) {
 		await setProfile.mutateAsync({ uses_obsidian: false });
 		const trimmed = name.trim() || "My Vault";
-		const { vault } = await createVault.mutateAsync({ name: trimmed });
+		const vault = await createVault.mutateAsync({
+			name: trimmed,
+			client_id: vaultClientId,
+		});
 		setActiveVaultId(vault.id);
 		try {
 			await updateNote.mutateAsync({

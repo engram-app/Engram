@@ -10,7 +10,7 @@ defmodule Engram.Notes.CrdtTransportTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "TransportTest"})
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "TransportTest", Ecto.UUID.generate())
     %{user: user, vault: vault}
   end
 

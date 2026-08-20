@@ -9,7 +9,7 @@ defmodule Engram.NotesTest do
     user = insert(:user)
     other_user = insert(:user)
 
-    # Allow unlimited vaults so create_vault doesn't hit the billing limit
+    # Allow unlimited vaults so register_vault doesn't hit the billing limit
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     insert(:user_limit_override, user: other_user, key: "vaults_cap", value: %{"v" => -1})
 
@@ -18,8 +18,8 @@ defmodule Engram.NotesTest do
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     {:ok, other_user} = Engram.Crypto.ensure_user_dek(other_user)
 
-    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Test"})
-    {:ok, other_vault} = Engram.Vaults.create_vault(other_user, %{name: "Test"})
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
+    {:ok, other_vault, _} = Engram.Vaults.register_vault(other_user, "Test", Ecto.UUID.generate())
 
     %{user: user, other_user: other_user, vault: vault, other_vault: other_vault}
   end

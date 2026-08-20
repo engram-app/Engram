@@ -135,7 +135,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
     insert(:subscription, user: user, status: "active")
     {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
-    {:ok, _} = Engram.Vaults.create_vault(user, %{name: "My Vault"})
+    {:ok, _, _} = Engram.Vaults.register_vault(user, "My Vault", Ecto.UUID.generate())
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     refute conn.halted
   end
@@ -189,7 +189,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "active")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
-      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "My Vault"})
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "My Vault", Ecto.UUID.generate())
       {user, vault}
     end
 

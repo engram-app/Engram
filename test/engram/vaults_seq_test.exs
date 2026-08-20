@@ -7,7 +7,7 @@ defmodule Engram.VaultsSeqTest do
     user = insert_user()
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-    {:ok, vault} = Vaults.create_vault(user, %{name: "Test"})
+    {:ok, vault, _} = Vaults.register_vault(user, "Test", Ecto.UUID.generate())
     %{user: user, vault: vault}
   end
 
@@ -26,7 +26,7 @@ defmodule Engram.VaultsSeqTest do
   end
 
   test "next_seq! is isolated per vault", %{user: user, vault: vault_a} do
-    {:ok, vault_b} = Vaults.create_vault(user, %{name: "B"})
+    {:ok, vault_b, _} = Vaults.register_vault(user, "B", Ecto.UUID.generate())
     {:ok, a1} = Repo.with_tenant(user.id, fn -> Vaults.next_seq!(vault_a.id) end)
     {:ok, b1} = Repo.with_tenant(user.id, fn -> Vaults.next_seq!(vault_b.id) end)
     {:ok, a2} = Repo.with_tenant(user.id, fn -> Vaults.next_seq!(vault_a.id) end)

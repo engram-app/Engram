@@ -12,7 +12,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
-    {:ok, vault} = Vaults.create_vault(user, %{name: "CrdtCheckpointTest"})
+    {:ok, vault, _} = Vaults.register_vault(user, "CrdtCheckpointTest", Ecto.UUID.generate())
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "before"})
     %{user: user, vault: vault, note: note}
   end

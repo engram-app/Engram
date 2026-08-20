@@ -44,7 +44,7 @@ defmodule EngramWeb.OnboardingGateChannelTest do
     # opt-out of its "already onboarded" default.
     user = insert_user(onboarding_profile: %{})
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
-    {:ok, vault} = Vaults.create_vault(user, %{name: "Ungated"})
+    {:ok, vault, _} = Vaults.register_vault(user, "Ungated", Ecto.UUID.generate())
 
     {:ok, user: user, vault: vault, socket: user_socket(user)}
   end

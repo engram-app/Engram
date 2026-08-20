@@ -531,19 +531,20 @@ def device_token_poll(device_code: str, *, max_attempts: int = 10) -> dict:
 
 
 def create_vault(jwt_token: str, name: str) -> int:
-    """POST /api/vaults — create a vault. Returns vault_id (int).
+    """POST /api/vaults/register: create a vault. Returns vault_id.
 
-    The controller wraps the row under a "vault" key — see
-    EngramWeb.VaultsController.create/2 returning %{vault: vault_json(...)}.
+    The only create endpoint, idempotent by client_id, and it responds with
+    the vault flat (no "vault" wrapper). The name is already unique per call
+    here, so it doubles as the idempotency key.
     """
     resp = requests.post(
-        f"{API_URL}/vaults",
-        json={"name": name},
+        f"{API_URL}/vaults/register",
+        json={"name": name, "client_id": name},
         headers={"Authorization": f"Bearer {jwt_token}"},
         timeout=10,
     )
     resp.raise_for_status()
-    return resp.json()["vault"]["id"]
+    return resp.json()["id"]
 
 
 def revoke_device(jwt_token: str, family_id: str) -> int:
