@@ -134,6 +134,25 @@ defmodule Engram.Billing do
   end
 
   @doc """
+  Whether this user is exempt from the free-tier inactivity dunning.
+
+  The single answer, same as `attachments_all_types?/1` — but the fail
+  direction is deliberately the OPPOSITE, and that is a decision, not an
+  oversight. Failing "closed" on a grant normally means refusing it, which for
+  attachments means refusing an upload: harmless. Refusing THIS grant means
+  mailing the user about inactivity and starting the deletion clock. On a value
+  we cannot read, the safe answer is to leave them alone, so anything that is
+  not an explicit `false` counts as exempt.
+
+  `:unlimited` (enforcement off, i.e. self-host) is exempt: a self-hosted
+  instance must never send free-tier dunning about its operator's own data.
+  """
+  @spec inactivity_warnings_exempt?(Engram.Accounts.User.t()) :: boolean()
+  def inactivity_warnings_exempt?(%Engram.Accounts.User{} = user) do
+    effective_limit(user, :inactivity_warnings_exempt) != false
+  end
+
+  @doc """
   Returns :ok if current_count is below the limit, or the limit is -1 (unlimited).
   Returns {:error, :limit_reached} when at or over the limit.
   """

@@ -184,6 +184,80 @@ defmodule Engram.BillingTest do
     end
   end
 
+  describe "inactivity_warnings_exempt?/1" do
+    test "self-host is exempt: no free-tier dunning on your own server" do
+      prev = Application.get_env(:engram, :limits_enforced, true)
+      Application.put_env(:engram, :limits_enforced, false)
+      on_exit(fn -> Application.put_env(:engram, :limits_enforced, prev) end)
+
+      assert Billing.inactivity_warnings_exempt?(build(:user, free_tier_accepted_at: nil))
+    end
+
+    test "Free is not exempt, paid tiers are" do
+      refute Billing.inactivity_warnings_exempt?(build(:user, free_tier_accepted_at: nil))
+
+      assert Billing.inactivity_warnings_exempt?(
+               build(:user)
+               |> with_subscription(tier: "pro", status: "active")
+             )
+    end
+
+    test "an unreadable override leaves the user ALONE (opposite fail direction)" do
+      # Deliberately not fail-closed. Refusing this grant means mailing someone
+      # about inactivity and starting the deletion clock, so an unreadable value
+      # must not trigger it. Contrast attachments_all_types?/1, where refusing
+      # only costs an upload.
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      insert(:user_limit_override,
+        user: user,
+        key: "inactivity_warnings_exempt",
+        value: %{"v" => "nonsense"},
+        reason: "malformed on purpose",
+        set_by: "test"
+      )
+
+      assert Billing.inactivity_warnings_exempt?(user)
+    end
+  end
+
+  describe "the helper and the capabilities map cannot drift" do
+    # `capabilities/1` does NOT call attachments_all_types?/1 — it resolves
+    # every key generically through normalize_capability/2. That is the split
+    # that produced the original bug (plan_state said allowed, capabilities
+    # said restricted, and the plugin believed capabilities). Nothing in the
+    # types binds the two paths, so this test does.
+    for {tier, opts} <- [
+          free: [free_tier_accepted_at: nil],
+          starter: [subscription: {"starter", "active"}],
+          pro: [subscription: {"pro", "active"}]
+        ] do
+      test "#{tier}: capabilities agrees with the helper" do
+        user =
+          case unquote(opts)[:subscription] do
+            nil -> insert(:user, free_tier_accepted_at: nil)
+            {t, s} -> insert(:user) |> with_subscription(tier: t, status: s)
+          end
+
+        assert Billing.capabilities(user).limits["attachments_all_types"] ==
+                 Billing.attachments_all_types?(user)
+      end
+    end
+
+    test "and they still agree with enforcement off" do
+      prev = Application.get_env(:engram, :limits_enforced, true)
+      Application.put_env(:engram, :limits_enforced, false)
+      on_exit(fn -> Application.put_env(:engram, :limits_enforced, prev) end)
+
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      assert Billing.capabilities(user).limits["attachments_all_types"] ==
+               Billing.attachments_all_types?(user)
+
+      assert Billing.attachments_all_types?(user)
+    end
+  end
+
   describe "attachments_all_types?/1 fails closed" do
     test "a malformed override does not grant the paid surface" do
       # Overrides are operator-written JSON. A string "false" instead of the
