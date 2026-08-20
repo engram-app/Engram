@@ -13,6 +13,10 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
   on a socket. Adding a route to the vault pipeline gets you this plug;
   adding a *channel* does not — call `Onboarding.gate/1` from its `join/3`.
 
+  Accepts the same options as `Engram.Onboarding.gate/2` — notably
+  `skip_vault: true`, for routes whose own job is creating the first vault
+  (see `EngramWeb.DeviceAuthController`).
+
   Must run after `EngramWeb.Plugs.Auth` (needs `conn.assigns.current_user`)
   and after `EngramWeb.Plugs.RotationLockCheck`. May run before or after
   `VaultPlug`; in this codebase it runs immediately before VaultPlug so
@@ -24,13 +28,13 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
 
   def init(opts), do: opts
 
-  def call(conn, _opts) do
+  def call(conn, opts) do
     case conn.assigns[:current_user] do
       nil ->
         Halt.json(conn, 401, %{error: "authentication_required"})
 
       user ->
-        case Onboarding.gate(user) do
+        case Onboarding.gate(user, opts) do
           :ok ->
             conn
 

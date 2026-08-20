@@ -10,10 +10,12 @@ defmodule EngramWeb.OnboardingGateChannelTest do
   """
   use EngramWeb.ChannelCase, async: false
 
+  alias Ecto.Adapters.SQL.Sandbox
   alias Engram.Legal.VersionCache
   alias Engram.LegalFixtures
   alias Engram.Onboarding
   alias Engram.Onboarding.GateCache
+  alias Engram.Repo
   alias Engram.Vaults
 
   setup do
@@ -84,7 +86,28 @@ defmodule EngramWeb.OnboardingGateChannelTest do
                  %{"crdt_proto" => 2}
                )
 
-      Ecto.Adapters.SQL.Sandbox.allow(Engram.Repo, self(), joined.channel_pid)
+      Sandbox.allow(Repo, self(), joined.channel_pid)
+    end
+
+    # Counterpart to the positive self-host test below, mirroring
+    # `require_onboarding_test.exs`. Without this, short-circuiting `gate/1`
+    # to `:ok` whenever `billing_enabled` is false passes the entire suite:
+    # the positive test satisfies every precondition for a pass, so it stays
+    # green even if the gate is deleted from both channels outright.
+    test "self-host still gates on profile — billing off is not auth off", %{
+      user: user,
+      vault: vault
+    } do
+      Application.put_env(:engram, :billing_enabled, false)
+      GateCache.evict_all()
+
+      assert {:error, %{reason: "onboarding_required", missing: ["profile"]}} =
+               subscribe_and_join(
+                 user_socket(user),
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
     end
 
     test "self-host (billing disabled) is unaffected", %{user: user, vault: vault} do
@@ -101,7 +124,87 @@ defmodule EngramWeb.OnboardingGateChannelTest do
                  %{"crdt_proto" => 2}
                )
 
-      Ecto.Adapters.SQL.Sandbox.allow(Engram.Repo, self(), joined.channel_pid)
+      Sandbox.allow(Repo, self(), joined.channel_pid)
+    end
+  end
+
+  describe "gate ordering (the checks it must not displace)" do
+    # A `crdt:<other-user>:<uuid>` probe costs zero DB work. Deriving the
+    # onboarding verdict costs ~4 round-trips including an RLS transaction,
+    # and there is no join rate limiter — so the free ownership match has to
+    # come first. The plugin's identity self-heal also keys on this exact
+    # reason (channel.ts, e2e test_84); replacing it wedges the heal.
+    test "a foreign topic still returns unauthorized, not onboarding_required", %{
+      socket: socket,
+      vault: vault
+    } do
+      other = insert_user(onboarding_profile: %{})
+
+      assert {:error, %{reason: "unauthorized"}} =
+               subscribe_and_join(
+                 socket,
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{other.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+    end
+
+    test "sync: foreign topic likewise", %{socket: socket, vault: vault} do
+      other = insert_user(onboarding_profile: %{})
+
+      assert {:error, %{reason: "unauthorized"}} =
+               subscribe_and_join(socket, EngramWeb.SyncChannel, "sync:#{other.id}:#{vault.id}")
+    end
+
+    # T3.7: a user mid-DEK-rotation must hear rotation_in_progress. Gating
+    # ahead of RotationGate.check/1 would have swallowed it.
+    test "rotation_in_progress outranks onboarding_required", %{user: user, vault: vault} do
+      {:ok, _} =
+        user
+        |> Ecto.Changeset.change(dek_rotation_locked_at: DateTime.utc_now())
+        |> Repo.update()
+
+      assert {:error, %{reason: "rotation_in_progress"}} =
+               subscribe_and_join(
+                 user_socket(user),
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+    end
+  end
+
+  describe "socket-frozen user struct" do
+    # `UserSocket` assigns current_user ONCE at connect/3. A Free user who
+    # finishes onboarding mid-session (accept_free_tier is a bare Repo.update
+    # with no socket disconnect) must not be judged on the stale struct — it
+    # would lock them out for the life of the connection, and Free is the
+    # default cohort. Note the socket is built BEFORE onboarding completes.
+    test "completing onboarding on an already-open socket takes effect", %{
+      user: user,
+      vault: vault,
+      socket: socket
+    } do
+      assert {:error, %{reason: "onboarding_required"}} =
+               subscribe_and_join(
+                 socket,
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+
+      _ = complete_onboarding!(user)
+
+      # Same stale socket, no reconnect.
+      assert {:ok, _, joined} =
+               subscribe_and_join(
+                 socket,
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+
+      Sandbox.allow(Repo, self(), joined.channel_pid)
     end
   end
 
@@ -132,6 +235,26 @@ defmodule EngramWeb.OnboardingGateChannelTest do
     } do
       assert {:ok, %{plan: %{tier: :free}}, _} =
                subscribe_and_join(socket, EngramWeb.UserChannel, "user:#{user.id}")
+    end
+
+    # Leaving `user:` open is deliberate, so it has to survive being talked to.
+    # Phoenix dispatches inbound events unconditionally
+    # (`Phoenix.Channel.Server.handle_info/2` -> `socket.channel.handle_in/3`),
+    # so a channel with no `handle_in/3` clause raises UndefinedFunctionError
+    # and the process dies. Server-push-only is a client convention, not an
+    # enforced one — and this topic is reachable by accounts that have accepted
+    # nothing and paid nothing.
+    test "an unsolicited client push does not kill the channel", %{
+      socket: socket,
+      user: user
+    } do
+      {:ok, _, joined} = subscribe_and_join(socket, EngramWeb.UserChannel, "user:#{user.id}")
+      ref = Process.monitor(joined.channel_pid)
+
+      push(joined, "definitely_not_a_real_event", %{"x" => 1})
+
+      refute_receive {:DOWN, ^ref, :process, _, _}, 300
+      assert Process.alive?(joined.channel_pid)
     end
   end
 end

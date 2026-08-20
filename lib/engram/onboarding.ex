@@ -10,6 +10,7 @@ defmodule Engram.Onboarding do
   step (questionnaire + first vault) gates in every mode.
   """
 
+  alias Engram.Accounts
   alias Engram.Legal
   alias Engram.Legal.VersionCache
   alias Engram.Onboarding.Action
@@ -217,26 +218,46 @@ defmodule Engram.Onboarding do
   PASS verdicts are cached per node (`Engram.Onboarding.GateCache`); failing
   users always take the authoritative slow path.
   """
-  @spec gate(Engram.Accounts.User.t()) :: :ok | {:error, [String.t()], atom()}
-  def gate(%{id: user_id} = user) do
-    if GateCache.passed?(user_id), do: :ok, else: derive_gate(user, status(user))
+  @spec gate(Engram.Accounts.User.t(), keyword()) :: :ok | {:error, [String.t()], atom()}
+  def gate(%{id: user_id} = user, opts \\ []) do
+    if GateCache.passed?(user_id) do
+      :ok
+    else
+      # Re-read the row. `status/1` derives `subscription_ok` partly from
+      # `user.free_tier_accepted_at` on the STRUCT, while every other input
+      # (terms, profile, vault, subscription row) is queried fresh. That was
+      # harmless when the only caller was a Plug — `Plugs.Auth` reloads the
+      # user per request. `UserSocket` assigns `current_user` ONCE at
+      # `connect/3`, so a Free user who clicks "Continue with Free" mid-session
+      # would re-derive from a stale struct on every rejoin and stay locked out
+      # for the life of the connection. `accept_free_tier/1` is a bare
+      # `Repo.update` with no socket disconnect, so nothing else would clear it.
+      user = Accounts.get_user(user_id) || user
+      derive_gate(user, status(user), opts)
+    end
   end
 
-  defp derive_gate(user, %{next_step: :done}) do
+  defp derive_gate(user, %{next_step: :done}, _opts) do
     :ok = GateCache.mark_passed(user.id)
     :ok
   end
 
-  defp derive_gate(user, status) do
+  defp derive_gate(user, status, opts) do
+    # Every key is destructured, none defaulted. `has_vault` and `profile` used
+    # to come from `Map.get/3` with fail-OPEN defaults three lines under four
+    # strictly-matched siblings: dropping `:next_step` from `status/1` would
+    # raise, while dropping `:has_vault` would silently pass the vault rule for
+    # every user on both transports, with no compile error and no test failure.
     %{
       terms_ok: terms_ok,
       subscription_ok: sub_ok,
       profile_complete: profile_ok,
+      has_vault: has_vault,
+      profile: profile,
       next_step: next_step
     } = status
 
-    has_vault = Map.get(status, :has_vault, true)
-    profile = Map.get(status, :profile) || %{}
+    profile = profile || %{}
     # uses_obsidian users bypass the vault gate (the plugin creates the vault).
     vault_required = profile_ok and Map.get(profile, "uses_obsidian") != true
 
@@ -248,15 +269,23 @@ defmodule Engram.Onboarding do
       |> then(&if not vault_required or has_vault, do: &1, else: ["vault" | &1])
       |> Enum.sort()
 
-    if missing == [] do
-      # All enforced gates pass even though wizard navigation isn't `:done`
-      # yet (e.g. obsidian user mid-flow whose plugin is about to first-sync).
-      # Runtime traffic permission and wizard state are intentionally
-      # decoupled — see `next_step/5`.
-      :ok = GateCache.mark_passed(user.id)
-      :ok
-    else
-      {:error, missing, next_step}
+    cond do
+      missing == [] ->
+        # All enforced gates pass even though wizard navigation isn't `:done`
+        # yet (e.g. obsidian user mid-flow whose plugin is about to first-sync).
+        # Runtime traffic permission and wizard state are intentionally
+        # decoupled — see `next_step/5`.
+        :ok = GateCache.mark_passed(user.id)
+        :ok
+
+      # Deliberately NOT cached. The cache is shared with the channel joins,
+      # which enforce the strict rule — writing a relaxed PASS here would hand
+      # the full sync path to a user `gate/1` rejects.
+      missing == ["vault"] and Keyword.get(opts, :skip_vault, false) ->
+        :ok
+
+      true ->
+        {:error, missing, next_step}
     end
   end
 

@@ -5,6 +5,9 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
   alias Engram.Auth.DeviceFlow
   alias Engram.Legal.VersionCache
   alias Engram.LegalFixtures
+  alias Engram.Onboarding
+  alias Engram.Onboarding.GateCache
+  alias Engram.Vaults
 
   setup %{conn: conn} do
     prev_enabled = Application.get_env(:engram, :billing_enabled)
@@ -34,11 +37,11 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
     end)
 
     user = insert_user()
-    _vault = insert(:vault, user: user, is_default: true)
+    vault = insert(:vault, user: user, is_default: true)
     {:ok, raw_key, _api_key} = Accounts.create_api_key(user, "test")
     grant_api_write!(user)
     conn = put_req_header(conn, "authorization", "Bearer #{raw_key}")
-    {:ok, conn: conn, user: user}
+    {:ok, conn: conn, user: user, vault: vault}
   end
 
   test "GET /api/folders returns 403 onboarding_required for new user", %{conn: conn} do
@@ -50,11 +53,11 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
   end
 
   test "GET /api/folders returns 200 after onboarding completes", %{conn: conn, user: user} do
-    {:ok, _} = Engram.Onboarding.accept_terms(user, "2026-05-15", %{})
+    {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
     insert(:subscription, user: user, status: "active")
     # Setup already inserts a vault — pair with uses_obsidian=false so the
     # new vault gate sees has_vault=true and lets the request through.
-    {:ok, _} = Engram.Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
+    {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
 
     conn = get(conn, "/api/folders")
     assert conn.status == 200
@@ -127,9 +130,9 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
     conn: conn,
     user: user
   } do
-    {:ok, _} = Engram.Onboarding.accept_terms(user, "2026-05-15", %{})
-    {:ok, _} = Engram.Onboarding.accept_free_tier(user)
-    {:ok, _} = Engram.Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+    {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+    {:ok, _} = Onboarding.accept_free_tier(user)
+    {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
 
     vault = insert(:vault, user: user)
     {:ok, auth} = DeviceFlow.start_device_flow("client_1")
@@ -143,13 +146,65 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
     assert json_response(resp, 200)["ok"] == true
   end
 
+  # Catch-22: `vault_id: "new"` is the endpoint that CREATES the first vault,
+  # so gating it on "you must already have a vault" makes it permanently
+  # unreachable for the exact user who needs it. `Vaults.delete_vault/2`
+  # evicts the gate cache on last-vault deletion specifically because it
+  # "can flip the onboarding gate back to failing" — so zero-vault users are
+  # an anticipated state, not a hypothetical.
+  test "device authorize with vault_id=new works for a user with NO vault", %{
+    conn: conn,
+    user: user,
+    vault: vault
+  } do
+    {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+    {:ok, _} = Onboarding.accept_free_tier(user)
+    # uses_obsidian=false is what makes the vault gate apply at all.
+    {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
+    # The real path into this state: delete_vault/2 evicts the gate cache
+    # itself, precisely because the last deletion can flip the gate.
+    {:ok, _} = Vaults.delete_vault(user, vault.id)
+    GateCache.evict_all()
+
+    refute Vaults.has_vault?(user)
+    {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+
+    resp =
+      post(conn, "/api/auth/device/authorize", %{
+        user_code: auth.user_code,
+        vault_id: "new",
+        vault_name: "First Vault"
+      })
+
+    assert json_response(resp, 200)["ok"] == true
+  end
+
+  # The relaxed verdict must never reach the cache: the channels read the same
+  # cache, and a cached PASS earned by skipping the vault rule would hand the
+  # full sync path to a user the strict rule rejects.
+  test "skip_vault passes WITHOUT caching the verdict" do
+    user = insert_user()
+    {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+    {:ok, _} = Onboarding.accept_free_tier(user)
+    {:ok, user} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
+    GateCache.evict_all()
+
+    refute Vaults.has_vault?(user)
+
+    # `user` here is deliberately the struct from BEFORE accept_free_tier —
+    # gate/2 must re-read the row rather than trust it (socket-frozen structs).
+    assert :ok = Onboarding.gate(user, skip_vault: true)
+    refute GateCache.passed?(user.id)
+    assert {:error, ["vault"], _} = Onboarding.gate(user)
+  end
+
   test "suspended user gets 402 from RequireActiveSubscription on vault routes",
        %{conn: conn, user: user} do
     # Pass onboarding fully: terms accepted, Free tier accepted (counts as
     # subscription_ok), profile complete, vault present (setup already added one).
-    {:ok, _} = Engram.Onboarding.accept_terms(user, "2026-05-15", %{})
-    {:ok, user} = Engram.Onboarding.accept_free_tier(user)
-    {:ok, _} = Engram.Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
+    {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+    {:ok, user} = Onboarding.accept_free_tier(user)
+    {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
 
     # Now suspend the user — RequireOnboarding still passes (Free accepted),
     # but RequireActiveSubscription should halt with 402 account_suspended.

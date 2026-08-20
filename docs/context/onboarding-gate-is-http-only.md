@@ -22,13 +22,16 @@ normal state rather than a blocked one).
 `RequireOnboarding` was wired only on the vault-scoped **router** pipeline
 (`router.ex:55`). It correctly 403'd `/api/notes`, `/api/search`, `/api/folders`.
 But a Plug takes a `conn` and **never runs on a socket** — and sync had moved to
-Phoenix Channels. The live path checked exactly two things:
+Phoenix Channels. The live path checked token validity (`user_socket.ex`
+`connect/3`), `crdt_proto` version, `RotationGate.check/1` (DEK rotation lock),
+topic ownership, and `Vaults.check_api_key_access/2`. What it did **not** check
+was entitlement: nothing asked about ToS, plan, or wizard completion.
 
-- `lib/engram_web/user_socket.ex` `connect/3` — is the token valid?
-- `lib/engram_web/channels/crdt_channel.ex` `join/3` — do you own this vault, and is
-  `crdt_proto` new enough?
+Note the rotation check in that list — the gate is now ordered deliberately
+around it (see Gotchas). A summary that omits it gives a future reader no
+reason to preserve the ordering.
 
-Both yes → join → full read/write sync. The plugin barely touches REST, so it never
+All the existing checks passing → join → full read/write sync. The plugin barely touches REST, so it never
 met the gate it was supposed to fail. `POST /api/vaults/register` (user-scoped
 pipeline, intentionally ungated so the wizard can create a first vault) supplied the
 vault.
@@ -59,6 +62,22 @@ not — call `Onboarding.gate/1` from its `join/3`.**
   (284 → ~2 failures in `controllers/`); the dominant remainder is
   `missing: ["terms"]` from a `VersionCache` leak. See Gotchas.
 
+## Ordering (do not "tidy" this)
+In `CrdtChannel`: `crdt_proto` → `RotationGate.check/1` → **topic ownership
+match** → `Onboarding.gate/1` → vault resolve. In `SyncChannel`: topic
+ownership match → `Onboarding.gate/1` → vault resolve.
+
+The gate goes last because:
+- the ownership match is free, and the verdict costs ~4 DB round-trips
+  (including an RLS transaction) with **no join rate limiter** — a
+  `crdt:<other-user>:<uuid>` probe must not buy that;
+- the plugin's identity self-heal keys on `reason === "unauthorized"`
+  specifically (`channel.ts`, e2e test_84) — replacing that reason wedges it;
+- a user mid-DEK-rotation must still hear `rotation_in_progress` (T3.7).
+
+There are mutation-checked tests for all three in
+`onboarding_gate_channel_test.exs` ("gate ordering").
+
 ## Gotchas
 - **`POST /api/auth/device/authorize` does NOT inherit the gate.** It sits on the
   user-scoped pipeline because it must stay reachable for first-vault creation, so it
@@ -78,6 +97,26 @@ not — call `Onboarding.gate/1` from its `join/3`.**
 - Tests that need the real SaaS gate must `Application.put_env(:engram,
   :billing_enabled, true)` in setup **and** `GateCache.evict_all()` — the pass
   verdict is cached for 60s and is not sandboxed either.
+- **`gate/2` re-reads the user row.** `status/1` derives `subscription_ok`
+  partly from `user.free_tier_accepted_at` on the STRUCT while every other
+  input is queried fresh. `Plugs.Auth` reloads the user per HTTP request, but
+  `UserSocket` assigns `current_user` **once** at `connect/3` — so without the
+  re-read a Free user who clicks "Continue with Free" mid-session re-derives
+  from a stale struct on every rejoin and stays locked out for the life of the
+  connection (Free is the default cohort; paid users self-heal because
+  `Billing.tier/1` queries). `accept_free_tier/1` is a bare `Repo.update` with
+  no socket disconnect, unlike the billing paths which pair eviction with
+  `SessionInvalidator.disconnect_user/1`.
+- **`user:` has a catch-all `handle_in/3`** and needs it. Phoenix dispatches
+  inbound events unconditionally (`Phoenix.Channel.Server` → `handle_in/3`);
+  with no clause, one client frame kills the channel process. Server-push-only
+  is a client convention, not an enforced one — and this topic is reachable
+  pre-onboarding by design.
+- **`POST /api/auth/device/authorize` passes `skip_vault: true`.** It creates
+  the first vault, so gating it on "you already have one" makes it permanently
+  unreachable for the user who needs it. The relaxed verdict is deliberately
+  **not** written to `GateCache` — the channels read the same cache and enforce
+  the strict rule.
 - The factory user's "already onboarded" comment is only true because the flag is
   off. It has no `free_tier_accepted_at`.
 

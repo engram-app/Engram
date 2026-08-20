@@ -31,28 +31,31 @@ defmodule EngramWeb.SyncChannel do
   end
 
   defp do_join(ids, params, socket, user) do
-    # Enforced here, not by a router pipeline: `RequireOnboarding` is a Plug
-    # and Plugs never run on a socket. See `Engram.Onboarding.gate/1`.
-    case Engram.Onboarding.gate(user) do
-      :ok ->
-        do_join_onboarded(ids, params, socket, user)
-
-      {:error, missing, next_step} ->
-        {:error, %{reason: "onboarding_required", missing: missing, next_step: next_step}}
-    end
-  end
-
-  defp do_join_onboarded(ids, params, socket, user) do
     case String.split(ids, ":") do
       [user_id_str, vault_id_str] ->
         if to_string(user.id) == user_id_str do
-          resolve_vault_and_join(vault_id_str, params, socket, user)
+          gate_and_join(vault_id_str, params, socket, user)
         else
           {:error, %{reason: "unauthorized"}}
         end
 
       _ ->
         {:error, %{reason: "invalid_topic"}}
+    end
+  end
+
+  # Enforced here, not by a router pipeline: `RequireOnboarding` is a Plug and
+  # Plugs never run on a socket. Same verdict function as the plug
+  # (`Engram.Onboarding.gate/1`). Runs AFTER the topic ownership match, which
+  # is free — deriving the verdict costs ~4 DB round-trips and there is no
+  # join rate limiter, so a `sync:<other-user>:<uuid>` probe must not pay it.
+  defp gate_and_join(vault_id_str, params, socket, user) do
+    case Engram.Onboarding.gate(user) do
+      :ok ->
+        resolve_vault_and_join(vault_id_str, params, socket, user)
+
+      {:error, missing, next_step} ->
+        {:error, %{reason: "onboarding_required", missing: missing, next_step: next_step}}
     end
   end
 

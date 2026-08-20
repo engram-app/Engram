@@ -122,18 +122,7 @@ defmodule EngramWeb.CrdtChannel do
 
     user_id_str = to_string(user.id)
 
-    # The onboarding gate is enforced here, not by a router pipeline:
-    # `RequireOnboarding` is a Plug and Plugs never run on a socket. This is
-    # the live sync write path, so an account that skipped ToS / plan
-    # selection reached a full read-write vault through it while every REST
-    # route correctly 403'd. Same verdict function as the plug.
-    case Engram.Onboarding.gate(user) do
-      :ok ->
-        join_rotation_checked(ids, user, user_id_str, socket)
-
-      {:error, missing, next_step} ->
-        {:error, %{reason: "onboarding_required", missing: missing, next_step: next_step}}
-    end
+    join_rotation_checked(ids, user, user_id_str, socket)
   end
 
   defp join_rotation_checked(ids, user, user_id_str, socket) do
@@ -149,7 +138,36 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  # Enforced here, not by a router pipeline: `RequireOnboarding` is a Plug and
+  # Plugs never run on a socket, and this is the live sync write path — an
+  # account that skipped ToS / plan selection reached a full read-write vault
+  # through it while every REST route correctly 403'd. Same verdict function
+  # as the plug (`Engram.Onboarding.gate/1`).
+  #
+  # Deliberately positioned AFTER the topic ownership match and after
+  # `RotationGate.check/1`: the match is free, so a `crdt:<other-user>:<uuid>`
+  # probe must not buy ~4 DB round-trips (there is no join rate limiter), and
+  # a user mid-DEK-rotation must still get `rotation_in_progress` rather than
+  # this. The plugin's identity self-heal also keys on `unauthorized`
+  # specifically (channel.ts, e2e test_84) — gating ahead of the match would
+  # have replaced that reason and wedged the heal.
   defp join_vault("crdt:" <> ids, user, user_id_str, socket) do
+    case String.split(ids, ":") do
+      [^user_id_str, _vid] ->
+        case Engram.Onboarding.gate(user) do
+          :ok ->
+            join_gated_vault("crdt:" <> ids, user, user_id_str, socket)
+
+          {:error, missing, next_step} ->
+            {:error, %{reason: "onboarding_required", missing: missing, next_step: next_step}}
+        end
+
+      _ ->
+        {:error, %{reason: "unauthorized"}}
+    end
+  end
+
+  defp join_gated_vault("crdt:" <> ids, user, user_id_str, socket) do
     case String.split(ids, ":") do
       [^user_id_str, vid_str] ->
         case Ecto.UUID.cast(vid_str) do

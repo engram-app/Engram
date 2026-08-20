@@ -10,7 +10,14 @@ defmodule EngramWeb.DeviceAuthController do
   # `RequireOnboarding` from the vault-scoped pipeline — declare it here. The
   # socket-side gate in `SyncChannel`/`CrdtChannel` is the authority; this is
   # the readable error.
-  plug EngramWeb.Plugs.RequireOnboarding when action in [:authorize]
+  # `skip_vault: true`: this endpoint CREATES the first vault (`vault_id: "new"`),
+  # so gating it on "you already have one" makes it permanently unreachable for
+  # the exact user who needs it. `Vaults.delete_vault/2` evicts the gate cache
+  # on last-vault deletion precisely because zero-vault users are a real state.
+  # Every other requirement (terms, subscription, profile) still applies, and
+  # the sync channels enforce the vault rule too — nothing reaches data through
+  # this relaxation.
+  plug EngramWeb.Plugs.RequireOnboarding, [skip_vault: true] when action in [:authorize]
 
   # Gate new plugin connections at the per-tier obsidian cap. Only on
   # :authorize — start/token/refresh do not mint new connection families.

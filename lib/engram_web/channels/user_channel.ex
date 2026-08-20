@@ -22,4 +22,15 @@ defmodule EngramWeb.UserChannel do
       {:error, %{reason: "unauthorized"}}
     end
   end
+
+  # Server-push-only is a CLIENT convention; Phoenix does not enforce it.
+  # `Phoenix.Channel.Server.handle_info/2` dispatches inbound events straight
+  # to `socket.channel.handle_in/3`, so with no clause here any frame a client
+  # sends raises UndefinedFunctionError and kills the channel process. This
+  # topic is deliberately reachable before onboarding completes (the FTUX vault
+  # screen needs it), which means it is reachable by accounts that have
+  # accepted nothing and paid nothing — so it has to tolerate being talked to.
+  # Ignore rather than reply: there is no client request shape to answer.
+  @impl true
+  def handle_in(_event, _payload, socket), do: {:noreply, socket}
 end
