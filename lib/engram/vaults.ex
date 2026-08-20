@@ -199,7 +199,16 @@ defmodule Engram.Vaults do
           })
           |> inject_name_phase_b(user, vault_id)
 
-        case Repo.insert(Vault.changeset(%Vault{id: vault_id}, attrs)) do
+        # `mode: :savepoint` is load-bearing, not defensive. The lookup above is
+        # a read-then-insert, so two concurrent registers of the same client_id
+        # both see `nil` and both insert. The partial unique index on
+        # (user_id, client_id) correctly rejects the loser — but a constraint
+        # violation ABORTS the surrounding transaction, and without a savepoint
+        # to roll back to, `with_tenant`'s role reset then dies with 25P02
+        # `in_failed_sql_transaction` and the caller gets a 500. The savepoint
+        # keeps the transaction usable so we can turn the loss into the right
+        # answer below.
+        case Repo.insert(Vault.changeset(%Vault{id: vault_id}, attrs), mode: :savepoint) do
           {:ok, vault} ->
             emit_vault_count(user.id, :created)
             _ = Engram.Onboarding.record_action(user.id, :first_vault_created)
@@ -208,7 +217,16 @@ defmodule Engram.Vaults do
             {:ok, decrypted, :created}
 
           {:error, cs} ->
-            {:error, cs}
+            # Losing the race is not an error: idempotency means resolving to
+            # whichever vault won. Re-read rather than inspecting the changeset
+            # errors, because BOTH unique constraints here (user_id+client_id
+            # and user_id+slug) report on `:user_id`, so the error key cannot
+            # tell them apart. A genuine validation failure (blank name) finds
+            # nothing and still surfaces as the changeset.
+            case find_by_client_id(user.id, client_id) do
+              %Vault{} = vault -> {:ok, decrypt_vault_if_needed(vault, user), :existing}
+              nil -> {:error, cs}
+            end
         end
     end
   end
