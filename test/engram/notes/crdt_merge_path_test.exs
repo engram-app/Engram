@@ -4,7 +4,7 @@ defmodule Engram.Notes.CrdtMergePathTest do
   use Engram.DataCase, async: false
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog, Note}
 
   setup do
     user = insert(:user)
@@ -322,5 +322,59 @@ defmodule Engram.Notes.CrdtMergePathTest do
     end)
 
     :ok
+  end
+
+  # Spec 0a (docs/superpowers/specs/2026-08-19-detached-writes-room-decoupling-design.md).
+  #
+  # A live-room checkpoint passes no `:prune_ids`, so it takes the WATERMARK
+  # branch, which deletes every tail row at or below the watermark REGARDLESS of
+  # whether the doc it snapshotted folded them.
+  #
+  # That is safe only while a room is the sole tail writer, because then its doc
+  # provably reflects every row that exists. It is not a property of the
+  # checkpoint; it is a property of who else is allowed to append. The moment a
+  # second writer exists, a row landing after the room bound is snapshotted
+  # by nobody and pruned by the watermark: gone from the tail AND absent from
+  # crdt_state. That is the #285 class.
+  #
+  # Modelled here exactly as it happens: the room's doc is built from the
+  # snapshot alone (what `bind/3` had at the time), and the row lands after.
+  test "a tail row the checkpointed doc never folded is not pruned", ctx do
+    %{user: user, vault: vault} = ctx
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "unfolded.md", "content" => "BODY"})
+
+    # The room's in-memory doc, as of its bind: snapshot only.
+    raw = load_raw(user, note.id)
+    {:ok, state} = Crypto.decrypt_crdt_state(raw, user)
+    {:ok, live} = CrdtBridge.doc_from_state(state)
+
+    # A second writer appends AFTER that bind. The room's doc cannot contain it.
+    append_tail_update!(user, vault, note, " EXTRA")
+
+    # The live-room checkpoint: no :prune_ids, so the watermark branch runs.
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, live)
+
+    stored_text =
+      user
+      |> load_raw(note.id)
+      |> then(fn r -> Crypto.decrypt_crdt_state(r, user) end)
+      |> then(fn {:ok, s} -> s end)
+      |> CrdtBridge.doc_from_state()
+      |> then(fn {:ok, d} -> CrdtBridge.text_of(d) end)
+
+    {:ok, surviving_tail} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.aggregate(from(l in CrdtUpdateLog, where: l.note_id == ^note.id), :count)
+      end)
+
+    # Either the snapshot absorbed it or the tail still holds it. Neither is
+    # true today: the watermark pruned a row nothing folded.
+    assert stored_text =~ "EXTRA" or surviving_tail > 0,
+           """
+           the checkpoint pruned a tail row its doc never folded.
+           crdt_state projects #{inspect(stored_text)} and #{surviving_tail} tail
+           row(s) remain, so the " EXTRA" update exists nowhere: the next bind
+           replays an empty tail over a snapshot that never saw it. Unrecoverable.
+           """
   end
 end

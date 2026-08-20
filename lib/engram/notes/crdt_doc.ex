@@ -40,6 +40,12 @@ defmodule Engram.Notes.CrdtDoc do
     note_id = Keyword.fetch!(opts, :note_id)
     user_id = Keyword.fetch!(opts, :user_id)
     vault_id = Keyword.fetch!(opts, :vault_id)
+    # Which call path allocated this room. `count` alone answers "how many"
+    # but not "why", and the 2026-08-19 staging import needed exactly that:
+    # 406 rooms for 1,516 notes, with no way to tell which 27% of notes still
+    # demanded one. Defaults to :unknown so a caller that forgets shows up as
+    # a named bucket rather than silently joining a legitimate one.
+    source = Keyword.get(opts, :source, :unknown)
     name = Engram.Notes.CrdtRegistry.global_name(note_id)
 
     case Yex.Sync.SharedDoc.start_link(
@@ -60,7 +66,7 @@ defmodule Engram.Notes.CrdtDoc do
         # place a room process is actually created, so `already_started` races
         # and cluster-wide lookups that resolve to an existing room correctly do
         # NOT count as allocations.
-        :telemetry.execute(@start_event, %{count: 1}, %{})
+        :telemetry.execute(@start_event, %{count: 1}, %{source: source})
 
         # Start the debounced checkpoint timer linked to this room. The timer
         # exits when the room exits (Process.link inside CrdtCheckpointTimer.init).

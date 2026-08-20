@@ -93,15 +93,20 @@ defmodule Engram.Notes.CrdtRegistry do
   Returns `{:ok, pid}` whether the room was just started or was already
   running on any node in the cluster.
   """
-  @spec ensure_started(String.t(), String.t(), String.t()) ::
+  @spec ensure_started(String.t(), String.t(), String.t(), atom()) ::
           {:ok, pid()} | {:error, term()}
-  def ensure_started(user_id, vault_id, note_id) do
+  def ensure_started(user_id, vault_id, note_id, source \\ :unknown) do
     case :global.whereis_name({:crdt_doc, note_id}) do
       pid when is_pid(pid) ->
         {:ok, pid}
 
       :undefined ->
-        spec = {Engram.Notes.CrdtDoc, [note_id: note_id, user_id: user_id, vault_id: vault_id]}
+        # `source` rides along only to be attached to the room_start telemetry
+        # in CrdtDoc.start_link/1 — a lookup that resolves an existing room
+        # above never emits, so it is deliberately not tagged here.
+        spec =
+          {Engram.Notes.CrdtDoc,
+           [note_id: note_id, user_id: user_id, vault_id: vault_id, source: source]}
 
         case DynamicSupervisor.start_child(@sup, spec) do
           {:ok, pid} -> {:ok, pid}
@@ -121,10 +126,11 @@ defmodule Engram.Notes.CrdtRegistry do
   Returns `{:error, :room_unavailable}` if the room keeps auto-exiting across
   every attempt.
   """
-  @spec ensure_observed(String.t(), String.t(), String.t()) :: {:ok, pid()} | {:error, term()}
-  def ensure_observed(user_id, vault_id, note_id) do
+  @spec ensure_observed(String.t(), String.t(), String.t(), atom()) ::
+          {:ok, pid()} | {:error, term()}
+  def ensure_observed(user_id, vault_id, note_id, source \\ :unknown) do
     observe_with_retry(
-      fn -> ensure_started(user_id, vault_id, note_id) end,
+      fn -> ensure_started(user_id, vault_id, note_id, source) end,
       fn room -> SharedDoc.observe(room) end
     )
   end
