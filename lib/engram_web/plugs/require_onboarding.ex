@@ -8,10 +8,16 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
   profile + vault.
 
   This is the HTTP half of the gate only. The verdict itself lives in
-  `Engram.Onboarding.gate/1` because the WebSocket sync path (`sync:` /
+  `Engram.Onboarding.gate/2` because the WebSocket sync path (`sync:` /
   `crdt:` channel joins) must enforce the same rule and a Plug never runs
-  on a socket. Adding a route to the vault pipeline gets you this plug;
-  adding a *channel* does not — call `Onboarding.gate/1` from its `join/3`.
+  on a socket.
+
+  Adding a route to the vault pipeline gets you this plug. Adding a *channel*
+  gets you nothing — call `EngramWeb.ChannelGate.check/1` from its `join/3`,
+  NOT `Onboarding.gate/2` directly. `ChannelGate` composes onboarding with the
+  account-lifecycle gates and the liveness stamp; calling `gate/2` alone gives
+  you a channel with onboarding enforced and lifecycle silently missing, which
+  is the exact regression #1429 existed to close.
 
   Accepts the same options as `Engram.Onboarding.gate/2` — notably
   `skip_vault: true`, for routes whose own job is creating the first vault

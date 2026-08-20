@@ -133,8 +133,9 @@ defmodule EngramWeb.CrdtChannel do
     # the lock. In-flight sockets are drained separately (UserDekRotation).
     case RotationGate.check(user.id) do
       {:error, :rotation_in_progress} -> {:error, %{reason: "rotation_in_progress"}}
-      # :ok, or {:error, :user_not_found} — let the vault-auth path decide
-      # (a missing user falls through to "unauthorized", not a rotation reason).
+      # :ok, or {:error, :user_not_found} — let the downstream path decide.
+      # A missing user now reaches `ChannelGate.check/1`, which refuses with
+      # "account_deleted" (it used to fall through to "unauthorized").
       _ -> join_vault("crdt:" <> ids, user, user_id_str, socket)
     end
   end

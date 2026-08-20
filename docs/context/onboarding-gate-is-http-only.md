@@ -46,13 +46,36 @@ Two layers:
   vault-scoped pipeline. Composes lifecycle + onboarding and returns the map to
   reply straight from `join/3`. `SyncChannel` and `CrdtChannel` both call it.
 
-The pipeline runs three access gates; **all three now apply to sockets**:
+The vault scope pipes `:authed_api` (`router.ex:49-60`), which runs **eleven**
+plugs — not three. Do not trust a summary that says otherwise; that
+miscount is what let the gaps below go unnoticed.
 
-| `router.ex` plug | HTTP | Socket |
+| `:authed_api` plug | HTTP | Socket |
 |---|---|---|
-| `AccountLifecycle` | 410 `account_deleted` / 403 `account_suspended` | ✅ #1429 |
+| `AccountDeleted` | 410 `account_deleted` (`deleted_at` only) | ✅ #1429 |
 | `RequireOnboarding` | 403 `onboarding_required` | ✅ #1426 |
-| `RequireActiveSubscription` | 402 `account_suspended` | ✅ #1429 (collapses into the suspended check — since 2026-06-07 every tier passes, Free included; only `suspended_at` rejects) |
+| `RequireActiveSubscription` | 402 `account_suspended` | ✅ #1429 |
+| `BumpActivity` | stamps `last_active_at` | ✅ #1429 (see below — load-bearing) |
+| `RotationLockCheck` | 423 | ⚠️ `crdt:` only, `sync:` has none → #1434 |
+| `RequireApiWriteEnabled` | 402 | ❌ → #1433 |
+| `RequireApiRpsBudget` | 429 | ❌ → #1433 |
+| `EnforceSearchCap` | 402 | ❌ (no channel equivalent) |
+| `PreAuthRateLimit` | 429 | ❌ — **there is no join rate limiter at all** |
+| `DeviceFingerprint` | — | ❌ |
+| `Auth` | 401 | `UserSocket.connect/3` |
+
+`RequireActiveSubscription` collapses into the suspended check — since
+2026-06-07 every tier passes (Free included) and only `suspended_at` rejects.
+`AccountLifecycle` is a *different, richer* plug on the user-scoped and
+onboarding pipelines — **not** on `:authed_api`. Getting those two confused is
+how you conclude `RequireActiveSubscription` is redundant and drop it.
+
+**`BumpActivity` is not bookkeeping.** It is the only writer of
+`usage_meters.last_active_at`, and `Workers.InactivityCleanup` soft-deletes
+Free accounts whose stamp has aged out. Enforcing lifecycle on sockets without
+also stamping liveness there turns "plugin user who syncs over CRDT and rarely
+touches REST" into a permanently locked-out account in daily active use.
+Port the enforcement half and the liveness half together, always.
 
 **Adding a route to the vault pipeline gets you the plugs. Adding a _channel_
 gets you nothing — call `ChannelGate.check/1` from its `join/3`. And adding a
@@ -80,8 +103,8 @@ plumbing. #1429 closed the other two.
 
 ## Ordering (do not "tidy" this)
 In `CrdtChannel`: `crdt_proto` → `RotationGate.check/1` → **topic ownership
-match** → `Onboarding.gate/1` → vault resolve. In `SyncChannel`: topic
-ownership match → `Onboarding.gate/1` → vault resolve.
+match** → `ChannelGate.check/1` → vault resolve. In `SyncChannel`: topic
+ownership match → `ChannelGate.check/1` → vault resolve.
 
 The gate goes last because:
 - the ownership match is free, and the verdict costs ~4 DB round-trips

@@ -14,6 +14,8 @@ defmodule EngramWeb.LifecycleGateChannelTest do
   alias Engram.Onboarding
   alias Engram.Onboarding.GateCache
   alias Engram.Repo
+  alias Engram.UsageMeters
+  alias Engram.UsageMeters.ActivityCache
   alias Engram.Vaults
 
   setup do
@@ -64,8 +66,13 @@ defmodule EngramWeb.LifecycleGateChannelTest do
       |> Ecto.Changeset.change([{field, DateTime.utc_now()}])
       |> Repo.update()
 
-    # The gate caches PASS verdicts; a suspension must not be masked by one.
-    GateCache.evict_all()
+    # Deliberately NOT evicting GateCache here. Lifecycle is never cached by
+    # design, so eviction is not needed for these tests to pass — but a warm
+    # PASS entry (left by an earlier successful join in the same test) is the
+    # ONLY signal that catches someone "optimizing" the double read by putting
+    # lifecycle behind the cache. Evicting threw that detector away: the
+    # review proved a `GateCache.passed?` short-circuit in `check/1` left all
+    # 22 tests across both gate files green.
     user
   end
 
@@ -101,7 +108,14 @@ defmodule EngramWeb.LifecycleGateChannelTest do
       assert {:ok, _, joined} = join_crdt(user, vault)
       Sandbox.allow(Repo, self(), joined.channel_pid)
 
-      user = mark!(user, :suspended_at)
+      _suspended = mark!(user, :suspended_at)
+
+      # Rejoin on a socket built from the PRE-suspension struct — that is the
+      # real shape: `UserSocket` freezes `current_user` at `connect/3`, so the
+      # reconnecting client's socket predates the suspension. Passing the
+      # already-mutated struct (as this test used to) would keep passing even
+      # if `check/1` read `socket.assigns.current_user` instead of the DB,
+      # which is exactly the invariant the extra read exists to hold.
       assert {:error, %{reason: "account_suspended"}} = join_crdt(user, vault)
     end
 
@@ -118,7 +132,9 @@ defmodule EngramWeb.LifecycleGateChannelTest do
 
   describe "soft-deleted accounts" do
     test "crdt: join is refused", %{user: user, vault: vault} do
-      user = mark!(user, :deleted_at)
+      # `user` stays the PRE-deletion struct on purpose — see the suspension
+      # test above. The gate must read the row, not the socket.
+      _deleted = mark!(user, :deleted_at)
       assert {:error, %{reason: "account_deleted"}} = join_crdt(user, vault)
     end
 
@@ -166,6 +182,52 @@ defmodule EngramWeb.LifecycleGateChannelTest do
                  EngramWeb.SyncChannel,
                  "sync:#{user.id}:#{vault.id}"
                )
+    end
+  end
+
+  describe "liveness (the half that decides when deleted_at gets set)" do
+    # `EngramWeb.Plugs.BumpActivity` stamps `usage_meters.last_active_at` and
+    # runs ONLY on `:authed_api`. `InactivityCleanup.sweep_soft_delete/0`
+    # soft-deletes Free accounts whose stamp has aged past the window.
+    #
+    # So a plugin user who syncs daily over CRDT and rarely touches REST ages
+    # into that sweep while in constant active use. Before the lifecycle gate
+    # that was invisible — sync kept working. WITH the gate it becomes a
+    # permanent `account_deleted` refusal on a live account whose Qdrant points
+    # and S3 attachments the sweep already dropped.
+    #
+    # Porting the enforcement half of the pipeline without the liveness half
+    # is what turns a latent mis-classification into user-visible data loss.
+    test "a crdt: join stamps last_active_at", %{user: user, vault: vault} do
+      ActivityCache.clear_local()
+
+      assert {:ok, _, joined} = join_crdt(user, vault)
+      Sandbox.allow(Repo, self(), joined.channel_pid)
+
+      assert %DateTime{} = UsageMeters.last_active_at(user.id)
+    end
+
+    test "a sync: join stamps last_active_at", %{user: user, vault: vault} do
+      ActivityCache.clear_local()
+
+      assert {:ok, _, _} =
+               subscribe_and_join(
+                 user_socket(user),
+                 EngramWeb.SyncChannel,
+                 "sync:#{user.id}:#{vault.id}"
+               )
+
+      assert %DateTime{} = UsageMeters.last_active_at(user.id)
+    end
+
+    # A refused join is not activity — a suspended or un-onboarded client
+    # retrying forever must not keep its own account looking alive.
+    test "a REFUSED join does not stamp", %{user: user, vault: vault} do
+      ActivityCache.clear_local()
+      user = mark!(user, :suspended_at)
+
+      assert {:error, %{reason: "account_suspended"}} = join_crdt(user, vault)
+      assert is_nil(UsageMeters.last_active_at(user.id))
     end
   end
 
