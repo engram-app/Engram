@@ -159,6 +159,22 @@ describe("DeviceLinkPage", () => {
 		expect(await screen.findByRole("radio", { name: /personal/iu })).toBeInTheDocument();
 	});
 
+	// The auto-verify is asynchronous (it waits on /billing/status, then
+	// /vaults), so starting on the code step meant painting a form the user
+	// never has to touch and yanking it away a moment later. From their side
+	// that reads as being bounced past a screen they were still looking at.
+	it("shows a checking state instead of the code form when the code arrived in the URL", async () => {
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
+		renderPage("/link?code=ENGR-7X4K");
+
+		// Asserted on the FIRST paint, before any await: the form must never
+		// appear, not appear-and-vanish.
+		expect(screen.queryByPlaceholderText(/XXXX-XXXX/iu)).not.toBeInTheDocument();
+		expect(screen.getByRole("status")).toHaveTextContent(/checking your code/iu);
+
+		expect(await screen.findByRole("radio", { name: /personal/iu })).toBeInTheDocument();
+	});
+
 	// The signed-out arrival — the COMMON case, since the plugin opens
 	// verification_uri_complete for someone who has never signed in on this
 	// browser. Stripping the code out of `return_to` (so it never reaches the
@@ -302,6 +318,9 @@ describe("DeviceLinkPage", () => {
 
 		expect(await screen.findByRole("alert")).toHaveTextContent(/invalid or has expired/iu);
 		expect(screen.queryByRole("radio", { name: /personal/iu })).not.toBeInTheDocument();
+		// The checking state has to hand back a usable form, or a bad URL code
+		// leaves the user staring at a dead-end error with nowhere to retype.
+		expect(screen.getByPlaceholderText(/XXXX-XXXX/iu)).toHaveValue("ZZZZ-ZZZZ");
 	});
 
 	// A valid code whose plugin sent no vault-name hint reports

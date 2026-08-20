@@ -25,13 +25,16 @@ interface Vault {
 	note_count: number;
 }
 
-type Step = "enter-code" | "pick-vault" | "success";
+type Step = "enter-code" | "verifying" | "pick-vault" | "success";
 
 // The heading names the step you're on. It used to be a single ternary that
 // only special-cased pick-vault, so the success screen kept announcing "Link
 // Obsidian Vault" for a job that was already done.
 const STEP_TITLES: Record<Step, string> = {
 	"enter-code": "Link Obsidian Vault",
+	// Same job as enter-code, just without the form — keep the same title so
+	// the heading doesn't change under the user when the verify resolves.
+	verifying: "Link Obsidian Vault",
 	"pick-vault": "Choose a vault to sync",
 	success: "Finish in Obsidian",
 };
@@ -55,11 +58,6 @@ function DeviceLinkPage() {
 	const navigate = useNavigate();
 	const location = useLocation();
 	const qc = useQueryClient();
-	const [step, setStep] = useState<Step>("enter-code");
-	// The code field is the only thing to do on this step, and the user usually
-	// arrives from the plugin specifically to type into it — land with focus
-	// already there. Keyed on the step so returning to it re-focuses.
-	const codeRef = useAutofocus<HTMLInputElement>(step === "enter-code");
 	// Captured once at mount. `userCode` drifts as the user types, but whether
 	// the code ARRIVED from the plugin is fixed — and only that earns an
 	// automatic verify (see the effect below).
@@ -78,6 +76,16 @@ function DeviceLinkPage() {
 	// Did the plugin hand us the code, or did the user type it? Only the first
 	// skips RFC 8628's manual-entry speed bump, so only it needs the caution.
 	const arrivedWithCode = urlCode.length === 9;
+	// Arriving with a code means the code step has nothing left to ask, but the
+	// verify behind it is async (it waits on /billing/status, then /vaults) —
+	// so starting on "enter-code" painted a form the user never has to touch
+	// and yanked it away a moment later. Start on the spinner instead and fall
+	// BACK to the form only if the code turns out to be bad.
+	const [step, setStep] = useState<Step>(arrivedWithCode ? "verifying" : "enter-code");
+	// The code field is the only thing to do on that step, and the user usually
+	// arrives from the plugin specifically to type into it — land with focus
+	// already there. Keyed on the step so falling back to it re-focuses.
+	const codeRef = useAutofocus<HTMLInputElement>(step === "enter-code");
 	const [userCode, setUserCode] = useState(urlCode);
 	const [vaults, setVaults] = useState<Vault[]>([]);
 	// `selection` is the radio-row value: 'matched' (create new with the
@@ -115,6 +123,12 @@ function DeviceLinkPage() {
 		const formatted = userCode.toUpperCase().replace(/[^A-Z2-9]/gu, "");
 		if (formatted.length !== 8) {
 			setError("Code must be 8 characters (e.g., ENGR-7X4K)");
+			// Unreachable from "verifying" today (readCodeFromQuery only seeds a
+			// 9-char code, and the form can't be typed into behind the spinner),
+			// but every exit from this function has to restore a step the user
+			// can act on. Two of three doing it is how the third becomes a
+			// spinner with an error banner and no form under it.
+			setStep("enter-code");
 			return;
 		}
 
@@ -141,6 +155,7 @@ function DeviceLinkPage() {
 			setUserCode(formattedCode);
 			if (data.user_code_valid === false) {
 				setError("This code is invalid or has expired. Please try again from Obsidian.");
+				setStep("enter-code");
 				return;
 			}
 			setVaults(data.vaults ?? []);
@@ -171,6 +186,7 @@ function DeviceLinkPage() {
 			setStep("pick-vault");
 		} catch {
 			setError("Failed to load vaults. Please try again.");
+			setStep("enter-code");
 		} finally {
 			setLoading(false);
 		}
@@ -391,6 +407,8 @@ function DeviceLinkPage() {
 						</Button>
 					</div>
 				)}
+
+				{step === "verifying" && <SyncStatusPill message="Checking your code…" />}
 
 				{step === "pick-vault" && (
 					<div className="flex flex-col gap-3">
