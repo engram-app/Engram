@@ -2,7 +2,7 @@ defmodule Engram.Notes.CrdtDocTest do
   use Engram.DataCase, async: false
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtRegistry, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog, Note}
 
   setup do
     user = insert(:user)
@@ -61,5 +61,73 @@ defmodule Engram.Notes.CrdtDocTest do
     assert spec.shutdown == 15_000
     # Still :temporary — a crashed room must not be resurrected observer-less.
     assert spec.restart == :temporary
+  end
+
+  # The timer's tick path (#1146 spec 0a). `do_checkpoint/1` now folds the
+  # durable tail itself and passes the exact ids, because passing none used to
+  # take the watermark branch and delete rows nothing folded.
+  #
+  # This exists because the fold was shipped UNTESTED: the 0a unit test drives
+  # `CrdtCheckpoint.checkpoint/5` directly, so every checkpoint suite stayed
+  # green while the timer path was never executed once. Review then found that
+  # `replay_tail/3` issues a bare `Repo.all` and needs a tenant supplied by its
+  # caller — without one the fold returns no ids and compaction silently stops.
+  # A green suite that never runs the code is not coverage.
+  test "a tick checkpoint compacts the tail it folded", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    prev = Application.get_env(:engram, Engram.Notes.CrdtCheckpointTimer, [])
+
+    # Short enough that the tick fires on its own inside this test.
+    Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer,
+      settle_ms: 50,
+      ceiling_ms: 200,
+      eager_ms: 20
+    )
+
+    on_exit(fn -> Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer, prev) end)
+
+    {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+
+    # Goes through update_v1, which appends a tail row.
+    :ok =
+      Yex.Sync.SharedDoc.update_doc(room, fn doc ->
+        doc
+        |> Yex.Doc.get_text(CrdtBridge.text_name())
+        |> CrdtBridge.diff_into_text("before AND TICKED")
+      end)
+
+    tail_count = fn ->
+      {:ok, n} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.aggregate(from(l in CrdtUpdateLog, where: l.note_id == ^note.id), :count)
+        end)
+
+      n
+    end
+
+    assert tail_count.() > 0, "expected update_v1 to have appended a tail row"
+
+    # Wait for the tick to land rather than sleeping a fixed span.
+    assert eventually(fn -> tail_count.() == 0 end),
+           """
+           the tick checkpoint did not compact the tail it folded. Either the
+           fold produced no ids (a missing tenant makes replay_tail return
+           nothing) or the checkpoint never ran.
+           """
+
+    {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+    assert fresh.content == "before AND TICKED"
+  end
+
+  defp eventually(fun, attempts \\ 100) do
+    Enum.reduce_while(1..attempts, false, fn _, _ ->
+      if fun.() do
+        {:halt, true}
+      else
+        Process.sleep(50)
+        {:cont, false}
+      end
+    end)
   end
 end
