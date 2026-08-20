@@ -100,6 +100,7 @@ defmodule Engram.PromEx.Crdt do
   @drain_event [:engram, :crdt, :room_drain]
   @start_event [:engram, :crdt, :room_start]
   @checkpoint_event [:engram, :crdt, :index_checkpoint]
+  @abort_event [:engram, :crdt, :checkpoint_abort]
   @projection_event [:engram, :crdt, :index_projection]
 
   @impl true
@@ -134,6 +135,33 @@ defmodule Engram.PromEx.Crdt do
           description:
             "Per-vault CRDT index checkpoint outcomes by phase (ok | skipped_rotation | failed).",
           tags: [:phase]
+        ),
+        # #959. A note whose stored crdt_state cannot be decrypted aborts its
+        # checkpoint forever: content freezes at the last good checkpoint while
+        # every tick appends another tail row.
+        #
+        # `quarantined` is a DIMENSION, not a separate phase. Escalation must not
+        # move an abort off `phase="unreadable_state"`, or an alert written
+        # against that phase resolves the moment a note gets bad enough to cross
+        # the threshold — silence on the worst notes. Alert on the phase; use the
+        # dimension to sort by urgency.
+        #
+        # No note_id label. This is a per-note condition, but note_id is
+        # unbounded cardinality (2026-07-02 audit). The counter tells you to
+        # look; the log line carries the note_id and the tail depth.
+        #
+        # No depth gauge, deliberately. Tagged by phase it would flap between
+        # notes every tick, and the depth read is capped at the threshold, so it
+        # could never show the unbounded growth such a gauge would imply. Depth
+        # belongs on the log line, where it is per-note by construction.
+        counter(
+          metric_prefix ++ [:checkpoint_abort, :total],
+          event_name: @abort_event,
+          description:
+            "CRDT checkpoint aborts on unreadable stored state, by quarantine status. " <>
+              "Sustained non-zero means a note is frozen and its tail log is growing; " <>
+              "quarantined=true means it has crossed the depth threshold.",
+          tags: [:phase, :quarantined]
         ),
         # The WRITE side of the authority the projection metrics below read from.
         # Emitted by `Engram.Notes.Identity` (and by `Engram.Notes` for the
