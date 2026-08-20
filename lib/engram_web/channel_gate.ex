@@ -2,32 +2,47 @@ defmodule EngramWeb.ChannelGate do
   @moduledoc """
   The socket-side equivalent of the vault-scoped router pipeline's access
   gates. Both `EngramWeb.SyncChannel` and `EngramWeb.CrdtChannel` call
-  `check/1` from `join/3`.
+  `check/2` from `join/3`.
 
   A Plug takes a `conn` and never runs on a socket, so every rule the pipeline
   enforces has to be re-expressed here or it silently does not apply to sync.
+
   ## What is mirrored, and what is NOT
 
   The vault scope pipes `:authed_api` (`router.ex:49-60`), which runs
-  **eleven** plugs, in this order. This module mirrors six of them:
+  **eleven** plugs — not three, and not the shorter list an earlier version of
+  this doc claimed. Below in PIPELINE order, which is also the order `check/2`
+  applies them; derive one from the other only in that order.
 
-    * `AccountDeleted`            → 410 `account_deleted` (`deleted_at` only) ✅
-    * `RequireOnboarding`         → 403 `onboarding_required` ✅ (#1426)
-    * `RequireActiveSubscription` → 402 `account_suspended` ✅ (#1429)
+  Mirrored:
 
-    * `RotationLockCheck`         → 503 `rotation_in_progress` ✅ (#1434)
-    * `RequireApiRpsBudget`       → `api_access_not_available` at join for a
-      key whose tier has `api_rps_cap: 0` ✅ (#1433)
-    * `RequireApiWriteEnabled`    → WRITE frames only ✅ (#1433), see
-      `api_write_blocked?/2` and `CrdtChannel`'s `@write_events` clause
-
-  plus `BumpActivity`'s liveness stamp (see `## Activity`).
+    * `AccountDeleted`            → `account_deleted` (`deleted_at` only) ✅ #1429
+    * `RotationLockCheck`         → `rotation_in_progress` ✅ #1434
+    * `RequireOnboarding`         → `onboarding_required` ✅ #1426
+    * `RequireActiveSubscription` → `account_suspended` ✅ #1429
+    * `BumpActivity`              → liveness stamp ✅ #1429 (see `## Activity`)
+    * `RequireApiRpsBudget`       → `api_access_not_available`, but ONLY the
+      `cap == 0` case ✅ #1433
 
   **NOT mirrored — sockets are more permissive than HTTP here:**
 
+    * `RequireApiRpsBudget`'s POSITIVE caps. `CrdtChannel.check_rate/2` is not
+      a substitute: it uses fixed compile-time budgets per device and never
+      reads the plan, so Starter (10 req/s) and Pro (30 req/s) are metered
+      identically and both far above their REST entitlement. #1433.
+    * `RequireApiWriteEnabled`. Attempted and REVERTED: no tier has
+      `api_rps_cap > 0` with `api_write_enabled: false` (Free 0/false,
+      Starter 10/true, Pro 30/true), so it guards only an admin-override
+      state — while screening `crdt_msg` by payload broke reads twice.
+      SyncStep1 is a read, but the server answers it with its own SyncStep1
+      whose protocol-mandated reply is a SyncStep2, so "block SyncStep2"
+      breaks the handshake. Entitlement decided on a wire byte also sits
+      ahead of `ensure_room/3`, i.e. ahead of real side effects. If this is
+      ever wanted, gate it where the write happens, not on the frame. #1433.
     * `EnforceSearchCap`, `DeviceFingerprint`, `PreAuthRateLimit` — no channel
-      equivalent; `PreAuthRateLimit` notably means there is **no join rate
-      limiter** at all.
+      equivalent. `PreAuthRateLimit` notably means there is **no join rate
+      limiter** at all, which is why `check/2` sits behind the free topic
+      ownership match.
 
   `RequireActiveSubscription` collapses into the suspended check — since
   2026-06-07 it passes every tier (Free counts as active) and only rejects
@@ -35,7 +50,7 @@ defmodule EngramWeb.ChannelGate do
   user-scoped and onboarding pipelines, NOT this one.
 
   **Adding a plug to `:authed_api` does not add it here.** Decide explicitly
-  whether sync needs it, then either add it to `check/1` or add it to the NOT
+  whether sync needs it, then either add it to `check/2` or add it to the NOT
   list above with a reason.
 
   ## Why `user:` is not gated
@@ -133,6 +148,14 @@ defmodule EngramWeb.ChannelGate do
           # ultimately succeeds — a join later refused for `vault_not_found`
           # still stamps, exactly as an HTTP request to a missing vault does
           # (BumpActivity runs before VaultPlug).
+          #
+          # KNOWN TRADE-OFF: a Free PAT is refused at `api_access/2` on every
+          # join, so an abandoned install reconnecting in a loop keeps its own
+          # account looking active and `InactivityCleanup` never sweeps it.
+          # HTTP bounds that loop with `PreAuthRateLimit` (plug #1); the socket
+          # has no join limiter. Accepted deliberately: the opposite error is
+          # soft-DELETING a blocked-but-active account, and data loss beats a
+          # stale row. Revisit if a join limiter lands.
           stamp_activity(user_id)
           api_access(fresh, api_key)
         end
@@ -174,51 +197,28 @@ defmodule EngramWeb.ChannelGate do
   defp suspended(%{suspended_at: %DateTime{}}), do: {:error, %{reason: "account_suspended"}}
   defp suspended(%{suspended_at: nil}), do: :ok
 
-  @doc """
-  Pricing v2 §G write half, mirroring `EngramWeb.Plugs.RequireApiWriteEnabled`
-  (#1433). True when this socket's caller may not issue write frames.
-
-  JWT callers are exempt (the web UI hides write affordances for tiers that
-  lack the feature), matching the plug. Evaluated once at join and stashed in
-  assigns so the per-frame check is a pattern match, not a query — an
-  entitlement change takes effect on the next join, same as `plan_state`.
-  """
-  @spec api_write_blocked?(Ecto.UUID.t(), term()) :: boolean()
-  def api_write_blocked?(_user_id, nil), do: false
-
-  def api_write_blocked?(user_id, _api_key) do
-    # Takes an ID, not a struct, so a caller cannot accidentally hand it the
-    # socket's connect-time `current_user`. `Billing.check_feature/2` reads
-    # `plan_id` straight off whatever struct it is given.
-    case Accounts.get_user(user_id) do
-      nil -> true
-      user -> Billing.check_feature(user, :api_write_enabled) != :ok
-    end
-  end
-
   # Best-effort, and deliberately so. This is a DB WRITE on a path that was
   # read-only: an exception here would propagate out of `join/3`, kill the
   # channel process, and hand the client a transport error rather than a gate
   # reason — which it then retries, re-attempting the same write. Refusing to
   # sync because we could not record "you were here" is the wrong coupling.
   #
-  # Logged at :error rather than swallowed, because a persistently failing
-  # stamp is not cosmetic: `InactivityCleanup` reads this column to decide who
-  # gets soft-deleted, so silent failure re-creates the very lockout #1429
-  # exists to prevent. It has to be alertable.
+  # Logged rather than swallowed, because a persistently failing stamp is not
+  # cosmetic: `InactivityCleanup` reads this column to decide who gets
+  # soft-deleted, so silent failure re-creates the very lockout #1429 exists
+  # to prevent. It has to be alertable.
   #
-  # The plug keeps the loud behaviour — a failed write there fails one request,
-  # which is bounded; here it would fail the whole sync session.
+  # `:lifecycle`, not `:database` — there is no `:database` category and
+  # `with_category/3` RAISES on an unknown atom, so the first version of this
+  # handler blew up inside the rescue and killed the join it exists to save.
+  # `:reason`, not `:error`, because only allowlisted metadata keys are
+  # emitted. `safe_reason/1` / `safe_exit_reason/1` because a raw
+  # `%Postgrex.Error{}` renders "Failing row contains (...)" — a row value in
+  # a log line whose user_id is HMAC-hashed precisely to avoid that.
   defp stamp_activity(user_id) do
     UsageMeters.touch_active(user_id)
   rescue
     e ->
-      # `:lifecycle`, not `:database` — `Engram.Logger.Category` has no
-      # `:database`, and `with_category/3` RAISES on an unknown atom, so the
-      # rescue handler itself blew up and killed the join it exists to save.
-      # `:reason` (not `:error`) because only allowlisted metadata keys are
-      # emitted, and `safe_reason/1` because `Exception.message/1` on a
-      # `%Postgrex.Error{}` can carry a row value into the log.
       Logger.error(
         "activity stamp failed",
         Metadata.with_category(:error, :lifecycle,
@@ -237,7 +237,7 @@ defmodule EngramWeb.ChannelGate do
         Metadata.with_category(:error, :lifecycle,
           user_id: HMAC.hash_user_id(to_string(user_id)),
           reason_label: to_string(kind),
-          reason: inspect(reason)
+          reason: Metadata.safe_exit_reason(reason)
         )
       )
 
@@ -255,8 +255,11 @@ defmodule EngramWeb.ChannelGate do
   # `UserSocket.accept/4` ALWAYS sets that key (nil for JWT) — porting the
   # guard literally would gate every web and plugin user on the platform.
   #
-  # Positive caps are metered per-frame by `CrdtChannel.check_rate/2`; this is
-  # the "may you use the API at all" half.
+  # ONLY the `cap == 0` half is mirrored. `CrdtChannel.check_rate/2` is NOT
+  # the socket's `api_rps_cap`: it uses fixed compile-time budgets per device
+  # and never reads the plan, so a Starter key entitled to 10 req/s over REST
+  # sustains far more over the socket, and Starter and Pro are metered
+  # identically. See the NOT-mirrored list above.
   defp api_access(_user, nil), do: :ok
 
   defp api_access(user, _api_key) do

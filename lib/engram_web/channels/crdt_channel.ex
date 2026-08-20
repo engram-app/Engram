@@ -204,17 +204,11 @@ defmodule EngramWeb.CrdtChannel do
                        # Pricing v2 §G write gate (#1433). Resolved once here
                        # so the per-frame check below is a pattern match, not
                        # a query. JWT sockets are always false.
-                       # Resolved from a FRESH row, not `socket.assigns
-                       # .current_user` — that struct is frozen at
-                       # `connect/3`, and plugin sockets live for days, so a
-                       # Paddle downgrade or a revoked override would stay
-                       # invisible to this gate while `check/2` on the very
-                       # same join already saw it.
-                       api_write_blocked:
-                         ChannelGate.api_write_blocked?(
-                           user.id,
-                           socket.assigns[:current_api_key]
-                         ),
+                       rooms: %{},
+                       room_doc: %{},
+                       # Pricing v2 §G write gate (#1433). Resolved once here
+                       # so the per-frame check below is a pattern match, not
+                       # a query. JWT sockets are always false.
                        # doc_ids released by an idle drain (#1152), so the
                        # re-spin does not re-announce crdt_doc_ready. See
                        # start_and_observe_room.
@@ -239,27 +233,17 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   @impl true
-  # Pricing v2 §G, mirroring `EngramWeb.Plugs.RequireApiWriteEnabled` (#1433):
-  # an API-key caller whose tier lacks `api_write_enabled` is 402'd on every
-  # non-GET REST route, and must not be able to write through the socket
-  # instead. Reads (`crdt_catchup_since`, inbound fan-out) are deliberately
-  # NOT listed — the plug exempts GET, and a key that may read over REST may
-  # read here. Placed ahead of the write handlers and matched on an assign
-  # resolved at join, so the common path pays nothing.
-  # Unambiguous writes. `crdt_msg`/`crdt_index_msg` are NOT here: they also
-  # carry the Yjs sync handshake, and SyncStep1 (`<<0, 0, _>>`) is a pure
-  # state-vector REQUEST — the frame a client sends to ask for doc state.
-  # Blocking it would leave a read-entitled key joined but permanently deaf
-  # (no room is ever observed, so fan-out never fires either), and the plug
-  # this mirrors opens with `when m in ["GET", "HEAD"], do: conn` under
-  # "Reads are never gated." Those two events are screened by payload below.
-  @write_events ~w(crdt_create crdt_create_batch crdt_delete)
+  # `b64` must be a binary before anything touches it. `decode_frame/1`'s
+  # `when byte_size(b64) > @max_b64_bytes` guard does NOT reject a non-binary
+  # — a failing guard just falls through to the next clause, which calls
+  # `Base.decode64/1` (`when is_binary`) and raises FunctionClauseError,
+  # killing the channel and every room observed on it. Same posture as
+  # `cast_cursor/1`: reply, don't crash.
+  def handle_in("crdt_msg", %{"b64" => b64}, socket) when not is_binary(b64),
+    do: {:reply, {:error, %{reason: "bad_frame"}}, socket}
 
-  def handle_in(event, _payload, %{assigns: %{api_write_blocked: true}} = socket)
-      when event in @write_events do
-    {:reply, {:error, %{reason: "api_write_not_available", upgrade_url: "/#settings/billing"}},
-     socket}
-  end
+  def handle_in("crdt_index_msg", %{"b64" => b64}, socket) when not is_binary(b64),
+    do: {:reply, {:error, %{reason: "bad_frame"}}, socket}
 
   def handle_in("crdt_msg", %{"doc_id" => doc_id, "b64" => b64}, socket) do
     # Classify (O(1), first 4 b64 chars) BEFORE the rate check so sync
@@ -270,8 +254,7 @@ defmodule EngramWeb.CrdtChannel do
     # incident trigger). The full base64 decode runs only AFTER the limiter
     # allows the frame, so an over-budget flood is still rejected at ETS-lookup
     # cost, never at MB-scale decode cost.
-    with :ok <- api_write_ok(socket, b64),
-         :ok <- check_rate(socket, frame_class_b64(b64)),
+    with :ok <- check_rate(socket, frame_class_b64(b64)),
          {:ok, frame} <- decode_frame(b64),
          :ok <- guard_frame(frame),
          {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id, frame_class_b64(b64)),
@@ -283,11 +266,6 @@ defmodule EngramWeb.CrdtChannel do
       # the owner process's mailbox and the room's update_v1 path persists it.
       {:reply, {:ok, %{}}, socket}
     else
-      {:error, :api_write_not_available} ->
-        {:reply,
-         {:error, %{reason: "api_write_not_available", upgrade_url: "/#settings/billing"}},
-         socket}
-
       {:error, :rate_limited} ->
         {:reply, {:error, %{reason: "rate_limited"}}, socket}
 
@@ -365,19 +343,13 @@ defmodule EngramWeb.CrdtChannel do
   # behind the 2026-07-07 cross-file-overwrite incident.
   @impl true
   def handle_in("crdt_index_msg", %{"b64" => b64}, socket) do
-    with :ok <- api_write_ok(socket, b64),
-         :ok <- check_rate(socket, frame_class_b64(b64)),
+    with :ok <- check_rate(socket, frame_class_b64(b64)),
          {:ok, frame} <- decode_frame(b64),
          :ok <- guard_frame(frame),
          {:ok, socket, room} <- ensure_index_room(socket),
          :ok <- relay_frame(room, frame) do
       {:reply, {:ok, %{}}, socket}
     else
-      {:error, :api_write_not_available} ->
-        {:reply,
-         {:error, %{reason: "api_write_not_available", upgrade_url: "/#settings/billing"}},
-         socket}
-
       {:error, :rate_limited} ->
         {:reply, {:error, %{reason: "rate_limited"}}, socket}
 
@@ -1806,25 +1778,6 @@ defmodule EngramWeb.CrdtChannel do
   # edit budget. Without the size gate a client could relabel every edit as
   # STEP2 and mutate at 10x the intended cap.
   @hs_step2_max_b64 4096
-
-  # SyncStep1 only. `<<0, 1, _>>` (SyncStep2) carries the client's updates and
-  # is a write; `frame_class_b64/1` lumps both into `:handshake` because they
-  # share a RATE budget, which is a different question from entitlement.
-  defp read_only_frame?(<<prefix::binary-size(4), _::binary>>) do
-    match?({:ok, <<0, 0, _>>}, Base.decode64(prefix))
-  end
-
-  defp read_only_frame?(_), do: false
-
-  # Entitlement screen for the two events that carry BOTH reads and writes.
-  # SyncStep1 is a state-vector request and passes; SyncStep2 and edits carry
-  # state and are refused. Placed in the handlers' own `with` chains rather
-  # than a guard clause, because the decision needs the payload.
-  defp api_write_ok(%{assigns: %{api_write_blocked: true}}, b64) do
-    if read_only_frame?(b64), do: :ok, else: {:error, :api_write_not_available}
-  end
-
-  defp api_write_ok(_socket, _b64), do: :ok
 
   defp frame_class_b64(<<prefix::binary-size(4), _::binary>> = b64) do
     case Base.decode64(prefix) do

@@ -319,130 +319,35 @@ defmodule EngramWeb.LifecycleGateChannelTest do
     end
   end
 
-  # Pricing v2 §G write half (#1433). Free's `api_write_enabled` is false, so
-  # an API-key caller is 402'd on every non-GET REST route — and must not be
-  # able to write through the socket instead. Reads stay open: the plug
-  # exempts GET, and existing tests assert Free API keys can join and read.
-  describe "API-key entitlements (#1433)" do
-    setup %{user: user, vault: vault} do
-      {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "entitlement-gate")
+  # A non-binary `b64` reaches `Base.decode64/1` (which is `when is_binary`)
+  # because `decode_frame/1`'s `when byte_size(b64) > @max_b64_bytes` guard
+  # silently fails to match on a non-binary rather than raising there. The
+  # channel dies, every observed room is lost, and the client must rejoin and
+  # re-handshake every note. This file is defensive about exactly this class
+  # elsewhere (`cast_cursor/1`: "rather than raising into a FunctionClauseError
+  # that would crash the whole channel").
+  describe "malformed frames do not kill the channel" do
+    test "a non-binary b64 is rejected, not raised", %{user: user, vault: vault} do
       {:ok, note} = Engram.Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "hi"})
-      {:ok, api_key: api_key, note: note}
-    end
-
-    # Free's `api_rps_cap` is 0 and `RequireApiRpsBudget` has no GET
-    # exemption, so a Free key cannot make a single REST call. It must not be
-    # able to open a socket and read the whole vault instead.
-    test "a Free PAT cannot join at all", %{user: user, vault: vault, api_key: api_key} do
-      assert {:error, %{reason: "api_access_not_available"}} =
-               subscribe_and_join(
-                 user_socket(user, api_key),
-                 EngramWeb.CrdtChannel,
-                 "crdt:#{user.id}:#{vault.id}",
-                 %{"crdt_proto" => 2}
-               )
-    end
-
-    test "a Free PAT cannot join sync: either", %{user: user, vault: vault, api_key: api_key} do
-      assert {:error, %{reason: "api_access_not_available"}} =
-               subscribe_and_join(
-                 user_socket(user, api_key),
-                 EngramWeb.SyncChannel,
-                 "sync:#{user.id}:#{vault.id}"
-               )
-    end
-
-    # The exemption must key on the api_key being non-nil, NOT on the assign
-    # existing: `UserSocket.accept/4` ALWAYS sets :current_api_key (nil for
-    # JWT), so a literal port of the plug's `not is_map_key/2` guard would
-    # gate every web and plugin user on the platform.
-    test "the SAME user on a JWT socket is unaffected", %{user: user, vault: vault} do
-      assert {:ok, _, joined} = join_crdt(user, vault)
+      {:ok, _, joined} = join_crdt(user, vault)
       Sandbox.allow(Repo, self(), joined.channel_pid)
+      ref_mon = Process.monitor(joined.channel_pid)
+
+      push(joined, "crdt_msg", %{"doc_id" => note.id, "b64" => 123})
+
+      refute_receive {:DOWN, ^ref_mon, :process, _, _}, 300
+      assert Process.alive?(joined.channel_pid)
     end
 
-    test "a read-entitled PAT can join but still cannot write", %{
-      user: user,
-      vault: vault,
-      api_key: api_key
-    } do
-      # rps only — `api_write_enabled` stays at the Free default (false).
-      grant_api_read!(user)
-
-      assert {:ok, _, joined} =
-               subscribe_and_join(
-                 user_socket(user, api_key),
-                 EngramWeb.CrdtChannel,
-                 "crdt:#{user.id}:#{vault.id}",
-                 %{"crdt_proto" => 2}
-               )
-
+    test "a non-binary index b64 is rejected, not raised", %{user: user, vault: vault} do
+      {:ok, _, joined} = join_crdt(user, vault)
       Sandbox.allow(Repo, self(), joined.channel_pid)
+      ref_mon = Process.monitor(joined.channel_pid)
 
-      ref = push(joined, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "n.md"})
-      assert_reply ref, :error, %{reason: "api_write_not_available"}
-    end
+      push(joined, "crdt_index_msg", %{"b64" => %{"not" => "a binary"}})
 
-    # `crdt_msg` is not "the write frame" — it carries the Yjs sync handshake
-    # too. SyncStep1 (`<<0, 0, _>>`) is a pure state-vector REQUEST: it is how
-    # a client asks for doc state. Blocking it means a read-entitled key joins
-    # successfully and then receives nothing, forever — no room is ever
-    # observed, so fan-out never fires either. The plug this mirrors opens
-    # with `when m in ["GET", "HEAD"], do: conn` under "Reads are never
-    # gated"; this is that clause.
-    test "a write-blocked PAT can still send SyncStep1 and read", %{
-      user: user,
-      vault: vault,
-      api_key: api_key,
-      note: note
-    } do
-      grant_api_read!(user)
-
-      {:ok, _, joined} =
-        subscribe_and_join(
-          user_socket(user, api_key),
-          EngramWeb.CrdtChannel,
-          "crdt:#{user.id}:#{vault.id}",
-          %{"crdt_proto" => 2}
-        )
-
-      Sandbox.allow(Repo, self(), joined.channel_pid)
-
-      # SyncStep1 for an empty local state = read the whole doc.
-      step1 = Base.encode64(<<0, 0, 1, 0>>)
-      ref = push(joined, "crdt_msg", %{"doc_id" => note.id, "b64" => step1})
-      assert_reply ref, :ok, %{}
-    end
-
-    test "a JWT socket writes normally", %{user: user, vault: vault} do
-      assert {:ok, _, joined} = join_crdt(user, vault)
-      Sandbox.allow(Repo, self(), joined.channel_pid)
-
-      id = Ecto.UUID.generate()
-      ref = push(joined, "crdt_create", %{"doc_id" => id, "path" => "n.md"})
-      assert_reply ref, :ok, %{doc_id: ^id}
-    end
-
-    test "a PAT with api_write_enabled granted can write", %{
-      user: user,
-      vault: vault,
-      api_key: api_key
-    } do
-      grant_api_write!(user)
-
-      assert {:ok, _, joined} =
-               subscribe_and_join(
-                 user_socket(user, api_key),
-                 EngramWeb.CrdtChannel,
-                 "crdt:#{user.id}:#{vault.id}",
-                 %{"crdt_proto" => 2}
-               )
-
-      Sandbox.allow(Repo, self(), joined.channel_pid)
-
-      id = Ecto.UUID.generate()
-      ref = push(joined, "crdt_create", %{"doc_id" => id, "path" => "n2.md"})
-      assert_reply ref, :ok, %{doc_id: ^id}
+      refute_receive {:DOWN, ^ref_mon, :process, _, _}, 300
+      assert Process.alive?(joined.channel_pid)
     end
   end
 

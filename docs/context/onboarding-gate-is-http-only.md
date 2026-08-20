@@ -50,29 +50,22 @@ The vault scope pipes `:authed_api` (`router.ex:49-60`), which runs **eleven**
 plugs — not three. Do not trust a summary that says otherwise; that
 miscount is what let the gaps below go unnoticed.
 
-Listed in **pipeline execution order** (`router.ex:49-60`) — `ChannelGate`'s
-`with` chain follows this order deliberately, so a reader deriving one from
-the other must not be handed a re-sorted table:
+Listed in **pipeline execution order** (`router.ex:50-60`) — `ChannelGate`'s
+`with` chain follows the same order deliberately, so do not re-sort this.
 
-| # | `:authed_api` plug | HTTP | Socket |
-|---|---|---|---|
-| 1 | 2 | 3 | `AccountDeleted` | 410 `account_deleted` (`deleted_at` only) | ✅ #1429 |
-| 4 | 5 | `RotationLockCheck` | 503 `rotation_in_progress` | ✅ #1434 |
-| 6 | `RequireOnboarding` | 403 `onboarding_required` | ✅ #1426 |
-| 7 | `RequireActiveSubscription` | 402 `account_suspended` | ✅ #1429 |
-| 8 | `BumpActivity` | stamps `last_active_at` | ✅ #1429 (load-bearing, see below) |
-| 9 | `RequireApiRpsBudget` | 429 | ✅ #1433 — refuses the JOIN at `cap: 0` |
-| 10 | 11 | `RequireApiWriteEnabled` | 402 | ✅ #1433 — write frames only |
-| `EnforceSearchCap` | 402 | ❌ (no channel equivalent) |
+| `:authed_api` plug | HTTP | Socket |
+|---|---|---|
 | `PreAuthRateLimit` | 429 | ❌ — **there is no join rate limiter at all** |
-| `DeviceFingerprint` | — | ❌ |
 | `Auth` | 401 | `UserSocket.connect/3` |
-
-`RequireActiveSubscription` collapses into the suspended check — since
-2026-06-07 every tier passes (Free included) and only `suspended_at` rejects.
-`AccountLifecycle` is a *different, richer* plug on the user-scoped and
-onboarding pipelines — **not** on `:authed_api`. Getting those two confused is
-how you conclude `RequireActiveSubscription` is redundant and drop it.
+| `AccountDeleted` | 410 `account_deleted` | ✅ #1429 |
+| `DeviceFingerprint` | — | ❌ |
+| `RotationLockCheck` | 503 `rotation_in_progress` | ✅ #1434 |
+| `RequireOnboarding` | 403 `onboarding_required` | ✅ #1426 |
+| `RequireActiveSubscription` | 402 `account_suspended` | ✅ #1429 |
+| `BumpActivity` | stamps `last_active_at` | ✅ #1429 — load-bearing, see below |
+| `RequireApiRpsBudget` | 429 | ⚠️ #1433 — only the `cap == 0` case, at join |
+| `EnforceSearchCap` | 402 | ❌ |
+| `RequireApiWriteEnabled` | 402 | ❌ — attempted and reverted, see `channel_gate.ex` |
 
 **API-key sockets are gated; JWT sockets are not.** Pricing v2 §G is a
 paid-API entitlement, and the exemption keys on `current_api_key` being
@@ -134,9 +127,11 @@ The gate goes last because:
   `crdt:<other-user>:<uuid>` probe must not buy that;
 - the plugin's identity self-heal keys on `reason === "unauthorized"`
   specifically (`channel.ts`, e2e test_84) — replacing that reason wedges it;
-- a user mid-DEK-rotation must still hear `rotation_in_progress` (T3.7).
+- (retired) rotation used to be checked ahead of the match, so a mid-rotation
+  user on a foreign topic heard `rotation_in_progress`; #1434 moved rotation
+  into `ChannelGate`, so that case now correctly reports `unauthorized`.
 
-There are mutation-checked tests for all three in
+There are mutation-checked tests for the two live rules in
 `onboarding_gate_channel_test.exs` ("gate ordering").
 
 ## Gotchas

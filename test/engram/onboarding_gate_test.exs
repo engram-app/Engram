@@ -87,6 +87,25 @@ defmodule Engram.OnboardingGateTest do
     assert :ok = Onboarding.gate(done)
   end
 
+  # Pins the metadata the socket-side liveness rescue emits. That rescue
+  # shipped once with `:database`, which is not a category — and
+  # `with_category/3` RAISES on an unknown atom, so the handler written to
+  # keep a stamp failure from killing the join killed it instead. There is no
+  # seam to force a real meter-write failure in this suite, so pin the part
+  # that was actually wrong: the atoms.
+  test "the activity-stamp failure log is well-formed" do
+    assert Engram.Logger.Category.valid?(:lifecycle)
+
+    meta =
+      Engram.Logger.Metadata.with_category(:error, :lifecycle,
+        user_id: "hashed",
+        reason: "boom",
+        reason_label: "exit"
+      )
+
+    assert Keyword.get(meta, :category) == :lifecycle
+  end
+
   defp onboarded_user(opts \\ []) do
     uses_obsidian = Keyword.get(opts, :uses_obsidian, true)
     user = insert_user(onboarding_profile: %{})
