@@ -82,7 +82,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   """
   use GenServer
 
-  alias Engram.Accounts
+  alias Engram.{Accounts, Repo}
   alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, CrdtRegistry, CrdtRoomLru}
 
@@ -442,6 +442,14 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     # nil on read failure is NOT an unfenced write (it was, before #1360). The
     # version CAS is layered ON TOP of `snapshot_fence/2`, which applies to every
     # checkpoint write path unconditionally. nil just drops the extra layer.
+    #
+    # This read stays FIRST even though the fold below now adds DB work between
+    # it and the write, widening the CAS window. Moving it after the fold would
+    # invert the fence: the version could then post-date the doc state we
+    # encoded, so a REST write landing in the gap would MATCH on version while
+    # the snapshot lacks it, and the CAS would let a clobber through. A wider
+    # window only costs extra aborts, which are safe and retried on the next
+    # tick. Wrong order costs content.
     captured_version = CrdtCheckpoint.current_version(state.user_id, state.room_key)
     doc = Yex.Sync.SharedDoc.get_doc(room_pid)
 
@@ -465,15 +473,34 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     # different Yjs lineage and unions into a duplicated body. The room's own
     # doc is a NIF resource owned by the room process, so it is never mutated
     # from here.
-    user = Accounts.get_user!(state.user_id)
-    {:ok, encoded} = Yex.encode_state_as_update(doc)
-    {:ok, folded} = CrdtBridge.doc_from_state(encoded)
-    prune_ids = CrdtPersistence.replay_tail(folded, user, state.room_key)
+    # A deleted user is an expected lifecycle state (vault purge), not an error —
+    # same call and same verdict as `Workers.CheckpointNote.rebuild_detached/3`.
+    # `get_user!/1` would raise into the rescue below and log a "read failure"
+    # that never happened.
+    case Accounts.get_user(state.user_id) do
+      nil ->
+        :ok
 
-    CrdtCheckpoint.checkpoint(state.user_id, state.vault_id, state.room_key, folded,
-      captured_version: captured_version,
-      prune_ids: prune_ids
-    )
+      user ->
+        {:ok, encoded} = Yex.encode_state_as_update(doc)
+        {:ok, folded} = CrdtBridge.doc_from_state(encoded)
+
+        # `replay_tail/3` issues a BARE `Repo.all` — it sets no tenant of its
+        # own. Every other caller supplies one (`bind/3`,
+        # `CheckpointNote.rebuild_detached/3`, `CrdtChannel.fold_row_and_tail/4`
+        # all run it under `with_tenant`). Without one, RLS returns no rows,
+        # `prune_ids` comes back empty, and compaction silently stops — the
+        # tail grows forever and nothing reports it.
+        {:ok, prune_ids} =
+          Repo.with_tenant(state.user_id, fn ->
+            CrdtPersistence.replay_tail(folded, user, state.room_key)
+          end)
+
+        CrdtCheckpoint.checkpoint(state.user_id, state.vault_id, state.room_key, folded,
+          captured_version: captured_version,
+          prune_ids: prune_ids
+        )
+    end
   rescue
     err -> log_read_failure(state, err)
   catch
