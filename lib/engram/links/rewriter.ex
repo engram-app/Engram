@@ -365,7 +365,7 @@ defmodule Engram.Links.Rewriter do
 
               {:ok, snapshot} ->
                 if is_binary(snapshot), do: :ok = Yex.apply_update(doc, snapshot)
-                applied = CrdtPersistence.replay_tail(doc, user, note_id)
+                applied = CrdtPersistence.replay_tail(doc, user, note_id, note.vault_id)
                 head = tail_head(note_id)
 
                 if is_nil(snapshot) and applied == [] and CrdtBridge.project_doc(doc) == "" do

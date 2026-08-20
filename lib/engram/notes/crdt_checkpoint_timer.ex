@@ -558,7 +558,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   # compaction silently stops.
   defp fetch_tail_rows(state) do
     case Repo.with_tenant(state.user_id, fn ->
-           CrdtPersistence.tail_rows(state.room_key)
+           CrdtPersistence.tail_rows(state.room_key, state.vault_id)
          end) do
       {:ok, rows} when is_list(rows) -> rows
       _ -> []

@@ -37,7 +37,7 @@ defmodule Engram.Notes.CrdtPersistence do
   # and cache it in the state so the per-update hot path does NOT do an
   # `Accounts.get_user!` DB round-trip on every keystroke.
   @impl true
-  def bind(%{user_id: user_id, note_id: note_id} = state, _doc_name, doc) do
+  def bind(%{user_id: user_id, vault_id: vault_id, note_id: note_id} = state, _doc_name, doc) do
     # bind/3 runs INSIDE the room (SharedDoc.init). Trapping exits here makes
     # gen_server intercept the supervisor's :shutdown on deploys and run
     # terminate/2 → unbind → full checkpoint, instead of dying unflushed.
@@ -100,7 +100,7 @@ defmodule Engram.Notes.CrdtPersistence do
                 raise "CrdtPersistence.bind/3: crdt_state decrypt failed for note #{note_id} (#{inspect(reason)}) — refusing to bind an empty doc over existing state"
             end
 
-            _applied = replay_tail(doc, user, note_id)
+            _applied = replay_tail(doc, user, note_id, vault_id)
 
             # NOTE: the server no longer seeds the doc from `notes.content`
             # here. That seed made the SERVER a third writer of note content,
@@ -310,9 +310,9 @@ defmodule Engram.Notes.CrdtPersistence do
   # Must be called inside the caller's `Repo.with_tenant` transaction — it
   # queries `CrdtUpdateLog` which is tenant-scoped by RLS.
   @doc false
-  @spec replay_tail(Yex.Doc.t(), map(), String.t()) :: [Ecto.UUID.t()]
-  def replay_tail(doc, user, note_id) do
-    apply_tail_rows(doc, user, note_id, tail_rows(note_id))
+  @spec replay_tail(Yex.Doc.t(), map(), String.t(), String.t()) :: [Ecto.UUID.t()]
+  def replay_tail(doc, user, note_id, vault_id) do
+    apply_tail_rows(doc, user, note_id, tail_rows(note_id, vault_id))
   end
 
   @doc """
@@ -323,10 +323,10 @@ defmodule Engram.Notes.CrdtPersistence do
   paying to materialize a doc to fold it into. Most notes in a bulk import have
   an empty tail, and for those the fold is pure overhead.
   """
-  @spec tail_rows(String.t()) :: [struct()]
-  def tail_rows(note_id) do
+  @spec tail_rows(String.t(), String.t()) :: [struct()]
+  def tail_rows(note_id, vault_id) do
     CrdtUpdateLog
-    |> where([l], l.note_id == ^note_id)
+    |> where([l], l.note_id == ^note_id and l.vault_id == ^vault_id)
     |> order_by([l], asc: l.inserted_at)
     |> Repo.all()
   end
