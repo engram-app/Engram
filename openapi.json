@@ -2151,38 +2151,6 @@
         "x-struct": "Elixir.EngramWeb.Schemas.AttachmentsResponse",
         "x-validate": null
       },
-      "CreateVaultRequest": {
-        "example": {
-          "description": "Papers and reading notes.",
-          "is_default": false,
-          "name": "Research"
-        },
-        "properties": {
-          "description": {
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "is_default": {
-            "type": "boolean",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "name": {
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "title": "CreateVaultRequest",
-        "type": "object",
-        "x-struct": "Elixir.EngramWeb.Schemas.CreateVaultRequest",
-        "x-validate": null
-      },
       "AttachmentWithContent": {
         "properties": {
           "content_base64": {
@@ -4083,59 +4051,6 @@
           }
         },
         "summary": "List vaults",
-        "tags": [
-          "Vaults"
-        ]
-      },
-      "post": {
-        "callbacks": {},
-        "description": "Creates a new vault for the user and returns it with zeroed content counts. Returns 402 when the plan's vault cap is reached and 422 on validation errors.",
-        "operationId": "vaults-create",
-        "parameters": [],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateVaultRequest"
-              }
-            }
-          },
-          "description": "Vault attributes",
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/VaultResponse"
-                }
-              }
-            },
-            "description": "Created"
-          },
-          "402": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LimitError"
-                }
-              }
-            },
-            "description": "Vault cap reached"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Validation error"
-          }
-        },
-        "summary": "Create a vault",
         "tags": [
           "Vaults"
         ]
