@@ -90,7 +90,12 @@ defmodule EngramWeb.AttachmentsController do
     end
   end
 
-  defp text_only?(user), do: Billing.effective_limit(user, :attachments_text_only) == true
+  # Routes through the single source of truth rather than re-deriving the
+  # answer, so this gate cannot disagree with the `plan_state/1` payload the
+  # plugin pre-gates on (they did disagree: see Billing.attachments_all_types?/1).
+  # The 402 body still names `attachments_text_only` — that is a client-facing
+  # wire identifier, not a catalog lookup, and it changes in the contract step.
+  defp text_only?(user), do: not Billing.attachments_all_types?(user)
 
   defp text_mime?(nil), do: false
 

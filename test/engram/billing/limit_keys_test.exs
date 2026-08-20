@@ -66,7 +66,7 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:reranker_enabled, :free) == false
       assert LimitKeys.default_for(:api_write_enabled, :free) == false
       assert LimitKeys.default_for(:api_rps_cap, :free) == 0
-      assert LimitKeys.default_for(:inactivity_warn_60_days, :free) == true
+      assert LimitKeys.default_for(:inactivity_warnings_exempt, :free) == false
       assert LimitKeys.default_for(:inactivity_delete_days, :free) == 90
     end
 
@@ -144,12 +144,34 @@ defmodule Engram.Billing.LimitKeysTest do
     assert LimitKeys.default_for(:attachments_enabled, :pro) == true
   end
 
-  test "attachments_text_only restricts Free uploads to text/* MIMEs" do
-    assert LimitKeys.defined?(:attachments_text_only)
-    assert LimitKeys.type(:attachments_text_only) == :boolean
-    assert LimitKeys.default_for(:attachments_text_only, :free) == true
-    assert LimitKeys.default_for(:attachments_text_only, :starter) == false
-    assert LimitKeys.default_for(:attachments_text_only, :pro) == false
+  test "attachments_all_types grants Starter+ the non-text MIME surface" do
+    assert LimitKeys.defined?(:attachments_all_types)
+    assert LimitKeys.type(:attachments_all_types) == :boolean
+    assert LimitKeys.default_for(:attachments_all_types, :free) == false
+    assert LimitKeys.default_for(:attachments_all_types, :starter) == true
+    assert LimitKeys.default_for(:attachments_all_types, :pro) == true
+  end
+
+  test "the inverted attachments_text_only key is gone" do
+    # It was the only boolean whose `true` meant "denied". `capabilities/1`
+    # maps `:unlimited` (enforcement off) to `true` for every boolean, so that
+    # one key inverted the meaning of disabling enforcement and cost every
+    # self-hoster their images and PDFs.
+    refute LimitKeys.defined?(:attachments_text_only)
+  end
+
+  test "every boolean limit is grant-shaped: enforcement-off must never restrict" do
+    # The invariant that makes the whole class impossible. `:unlimited` maps to
+    # `true` for booleans, so a key may only use `true` to mean "the user gets
+    # the thing". A future key defaulting Free to `true` while Pro gets `false`
+    # is inverted by construction and fails here.
+    for key <- LimitKeys.all(), LimitKeys.type(key) == :boolean do
+      free = LimitKeys.default_for(key, :free)
+      pro = LimitKeys.default_for(key, :pro)
+
+      refute free == true and pro == false,
+             "#{key} is inverted (free=true, pro=false): `true` must mean granted"
+    end
   end
 
   test "search dial keys are defined with correct types" do

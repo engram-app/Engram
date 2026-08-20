@@ -35,9 +35,9 @@ defmodule Mix.Tasks.Engram.Lint.NoClientOnlyRateLimits do
     # The §C InactivityCleanup cron filters to Free via Billing.tier/1
     # rather than reading these keys. TODO: migrate cron to read the
     # catalog so per-user overrides take effect.
-    inactivity_warn_60_days:
+    inactivity_warnings_exempt:
       "TODO follow-up: InactivityCleanup hardcodes 60d/80d/90d windows; migrate to LimitKeys",
-    inactivity_delete_days: "TODO follow-up: same as inactivity_warn_60_days",
+    inactivity_delete_days: "TODO follow-up: same as inactivity_warnings_exempt",
     # Device-auth caps — TODO follow-up. DeviceAuthController already enforces
     # vaults_cap; needs explicit concurrent_devices + cooldown checks.
     concurrent_devices: "TODO follow-up: DeviceAuthController needs per-user device count check",

@@ -581,10 +581,26 @@ defmodule Engram.OAuth.CimdTest do
     test "our own fetch rate limiter is retryable" do
       stub(FetcherMock, :fetch, fn url -> {:ok, %{document() | "client_id" => url}} end)
 
-      for i <- 1..11, do: authorize("https://claude.ai/limiter-probe-#{i}")
+      # Burst until the limiter actually refuses, rather than firing a fixed 11
+      # and assuming the 12th is over. `@per_host_limit` is 10 per FIXED 60s
+      # window, so a burst that straddles a window boundary leaves the last
+      # probe in a fresh window and it is allowed — which failed this test with
+      # `{:ok, _}` for a reason unrelated to the behaviour it pins. Once the
+      # limiter refuses it keeps refusing for the rest of the window, so
+      # halting on the first refusal is stable.
+      #
+      # Bounded at 30 so a genuinely broken limiter fails instead of looping:
+      # comfortably over @per_host_limit even after one window roll, and under
+      # @discover_limit (60) so it stays the PER-HOST limiter being pinned.
+      result =
+        Enum.reduce_while(1..30, nil, fn i, _acc ->
+          case authorize("https://claude.ai/limiter-probe-#{i}") do
+            {:server_error, _} = refused -> {:halt, refused}
+            allowed -> {:cont, allowed}
+          end
+        end)
 
-      assert {:server_error, "temporarily_unavailable"} =
-               authorize("https://claude.ai/limiter-probe-over")
+      assert {:server_error, "temporarily_unavailable"} = result
     end
 
     test "a document we cannot bind or parse really is the client's fault" do
