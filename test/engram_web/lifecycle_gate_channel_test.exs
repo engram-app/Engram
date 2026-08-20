@@ -141,6 +141,34 @@ defmodule EngramWeb.LifecycleGateChannelTest do
     end
   end
 
+  describe "purged accounts (row gone)" do
+    # `Accounts.Lifecycle.hard_delete/2` removes the row outright, so the
+    # re-read returns nil. Falling back to the socket's frozen `current_user`
+    # there is fail-OPEN: that struct predates the deletion and carries no
+    # `deleted_at`, so lifecycle would pass and a purged account with a
+    # still-valid JWT would keep syncing. HTTP fails closed on this path —
+    # `Plugs.Auth` cannot resolve a missing user and 401s — so the socket must
+    # not be more permissive than the pipeline it is mirroring.
+    test "crdt: join is refused once the row is gone", %{user: user, vault: vault} do
+      Repo.delete!(user)
+      GateCache.evict_all()
+
+      assert {:error, %{reason: "account_deleted"}} = join_crdt(user, vault)
+    end
+
+    test "sync: join is refused once the row is gone", %{user: user, vault: vault} do
+      Repo.delete!(user)
+      GateCache.evict_all()
+
+      assert {:error, %{reason: "account_deleted"}} =
+               subscribe_and_join(
+                 user_socket(user),
+                 EngramWeb.SyncChannel,
+                 "sync:#{user.id}:#{vault.id}"
+               )
+    end
+  end
+
   describe "healthy accounts" do
     test "still join normally", %{user: user, vault: vault} do
       assert {:ok, _, joined} = join_crdt(user, vault)

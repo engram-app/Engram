@@ -47,12 +47,18 @@ defmodule EngramWeb.ChannelGate do
   from `join/3` (always carries a `:reason`).
   """
   @spec check(Engram.Accounts.User.t()) :: :ok | {:error, map()}
-  def check(%{id: user_id} = user) do
+  def check(%{id: user_id}) do
     # One read, shared by both checks — `gate/2` is told not to re-read.
-    fresh = Accounts.get_user(user_id) || user
-
-    with :ok <- lifecycle(fresh) do
-      onboarding(fresh)
+    #
+    # No `|| socket_user` fallback: `Accounts.Lifecycle.hard_delete/2` removes
+    # the row outright, and falling back to the socket's frozen `current_user`
+    # would be fail-OPEN — that struct predates the deletion and carries no
+    # `deleted_at`, so a purged account with a still-valid JWT would keep
+    # syncing. HTTP fails closed here (`Plugs.Auth` cannot resolve a missing
+    # user and 401s); the socket must not be more permissive.
+    case Accounts.get_user(user_id) do
+      nil -> {:error, %{reason: "account_deleted"}}
+      fresh -> with :ok <- lifecycle(fresh), do: onboarding(fresh)
     end
   end
 

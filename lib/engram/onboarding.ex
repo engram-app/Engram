@@ -239,6 +239,11 @@ defmodule Engram.Onboarding do
           do: user,
           else: Accounts.get_user(user_id) || user
 
+      # A purged row (`Accounts.Lifecycle.hard_delete/2`) leaves the `|| user`
+      # fallback above holding a struct that predates the deletion. Callers on
+      # the socket side go through `EngramWeb.ChannelGate`, which refuses
+      # outright before reaching here; this is the belt for any HTTP caller,
+      # where `Plugs.Auth` has already 401'd a missing user in practice.
       derive_gate(user, status(user), opts)
     end
   end
