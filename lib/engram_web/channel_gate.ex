@@ -79,9 +79,13 @@ defmodule EngramWeb.ChannelGate do
 
   alias Engram.Accounts
   alias Engram.Billing
+  alias Engram.Crypto.HMAC
   alias Engram.Crypto.RotationGate
+  alias Engram.Logger.Metadata
   alias Engram.Onboarding
   alias Engram.UsageMeters
+
+  require Logger
 
   @doc """
   `:ok`, or `{:error, payload}` where `payload` is the map to return straight
@@ -118,7 +122,7 @@ defmodule EngramWeb.ChannelGate do
           # Liveness, mirroring `EngramWeb.Plugs.BumpActivity` — see the
           # `## Activity` note above. Only on a PASS: a refused client
           # retrying forever must not keep its own account looking alive.
-          UsageMeters.touch_active(user_id)
+          stamp_activity(user_id)
         end
     end
   end
@@ -167,6 +171,34 @@ defmodule EngramWeb.ChannelGate do
 
   def api_write_blocked?(user, _api_key) do
     Billing.check_feature(user, :api_write_enabled) != :ok
+  end
+
+  # Best-effort, and deliberately so. This is a DB WRITE on a path that was
+  # read-only: an exception here would propagate out of `join/3`, kill the
+  # channel process, and hand the client a transport error rather than a gate
+  # reason — which it then retries, re-attempting the same write. Refusing to
+  # sync because we could not record "you were here" is the wrong coupling.
+  #
+  # Logged at :error rather than swallowed, because a persistently failing
+  # stamp is not cosmetic: `InactivityCleanup` reads this column to decide who
+  # gets soft-deleted, so silent failure re-creates the very lockout #1429
+  # exists to prevent. It has to be alertable.
+  #
+  # The plug keeps the loud behaviour — a failed write there fails one request,
+  # which is bounded; here it would fail the whole sync session.
+  defp stamp_activity(user_id) do
+    UsageMeters.touch_active(user_id)
+  rescue
+    e ->
+      Logger.error(
+        "activity stamp failed",
+        Metadata.with_category(:error, :database,
+          user_id: HMAC.hash_user_id(to_string(user_id)),
+          error: Exception.message(e)
+        )
+      )
+
+      :ok
   end
 
   # Pricing v2 §G, mirroring `RequireApiRpsBudget` (#1433). That plug has no
