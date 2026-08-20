@@ -232,7 +232,13 @@ defmodule Engram.Onboarding do
       # would re-derive from a stale struct on every rejoin and stay locked out
       # for the life of the connection. `accept_free_tier/1` is a bare
       # `Repo.update` with no socket disconnect, so nothing else would clear it.
-      user = Accounts.get_user(user_id) || user
+      # `fresh: true` means the caller already re-read this row this join
+      # (see `EngramWeb.ChannelGate.check/1`) — don't pay for it twice.
+      user =
+        if Keyword.get(opts, :fresh, false),
+          do: user,
+          else: Accounts.get_user(user_id) || user
+
       derive_gate(user, status(user), opts)
     end
   end

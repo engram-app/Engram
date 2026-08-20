@@ -29,6 +29,7 @@ defmodule EngramWeb.CrdtChannel do
   alias Engram.Notes.CrdtPersistence
   alias Engram.Notes.CrdtRegistry
   alias Engram.Notes.CrdtTransport
+  alias EngramWeb.ChannelGate
   alias Yex.Sync.SharedDoc
 
   require Logger
@@ -138,28 +139,23 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  # Enforced here, not by a router pipeline: `RequireOnboarding` is a Plug and
-  # Plugs never run on a socket, and this is the live sync write path — an
-  # account that skipped ToS / plan selection reached a full read-write vault
-  # through it while every REST route correctly 403'd. Same verdict function
-  # as the plug (`Engram.Onboarding.gate/1`).
+  # Plugs never run on a socket, so every vault-pipeline access gate is
+  # re-expressed in `EngramWeb.ChannelGate` and applied here. Read that
+  # moduledoc before adding a plug to the vault pipeline.
   #
   # Deliberately positioned AFTER the topic ownership match and after
   # `RotationGate.check/1`: the match is free, so a `crdt:<other-user>:<uuid>`
-  # probe must not buy ~4 DB round-trips (there is no join rate limiter), and
-  # a user mid-DEK-rotation must still get `rotation_in_progress` rather than
-  # this. The plugin's identity self-heal also keys on `unauthorized`
-  # specifically (channel.ts, e2e test_84) — gating ahead of the match would
-  # have replaced that reason and wedged the heal.
+  # probe must not buy the gate's DB round-trips (there is no join rate
+  # limiter), and a user mid-DEK-rotation must still get `rotation_in_progress`
+  # rather than this. The plugin's identity self-heal also keys on
+  # `unauthorized` specifically (channel.ts, e2e test_84) — gating ahead of the
+  # match would have replaced that reason and wedged the heal.
   defp join_vault("crdt:" <> ids, user, user_id_str, socket) do
     case String.split(ids, ":") do
       [^user_id_str, _vid] ->
-        case Engram.Onboarding.gate(user) do
-          :ok ->
-            join_gated_vault("crdt:" <> ids, user, user_id_str, socket)
-
-          {:error, missing, next_step} ->
-            {:error, %{reason: "onboarding_required", missing: missing, next_step: next_step}}
+        case ChannelGate.check(user) do
+          :ok -> join_gated_vault("crdt:" <> ids, user, user_id_str, socket)
+          {:error, payload} -> {:error, payload}
         end
 
       _ ->

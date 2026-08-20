@@ -36,16 +36,32 @@ met the gate it was supposed to fail. `POST /api/vaults/register` (user-scoped
 pipeline, intentionally ungated so the wizard can create a first vault) supplied the
 vault.
 
-## Where the gate lives now
-`Engram.Onboarding.gate/1` is the **single authority**. Returns `:ok` or
-`{:error, missing, next_step}` and keeps the `GateCache` pass-caching.
+## Where the gates live now
+Two layers:
 
-- `EngramWeb.Plugs.RequireOnboarding` — thin 403-shaping wrapper (HTTP).
-- `SyncChannel.join/3` + `CrdtChannel.join/3` — reply
-  `{:error, %{reason: "onboarding_required", missing: [...], next_step: ...}}`.
+- **`Engram.Onboarding.gate/2`** — the onboarding verdict itself. `:ok` or
+  `{:error, missing, next_step}`, with `GateCache` pass-caching.
+  `EngramWeb.Plugs.RequireOnboarding` is a thin 403-shaping wrapper over it.
+- **`EngramWeb.ChannelGate.check/1`** — the socket-side equivalent of the whole
+  vault-scoped pipeline. Composes lifecycle + onboarding and returns the map to
+  reply straight from `join/3`. `SyncChannel` and `CrdtChannel` both call it.
 
-**Adding a route to the vault pipeline gets you the plug. Adding a _channel_ does
-not — call `Onboarding.gate/1` from its `join/3`.**
+The pipeline runs three access gates; **all three now apply to sockets**:
+
+| `router.ex` plug | HTTP | Socket |
+|---|---|---|
+| `AccountLifecycle` | 410 `account_deleted` / 403 `account_suspended` | ✅ #1429 |
+| `RequireOnboarding` | 403 `onboarding_required` | ✅ #1426 |
+| `RequireActiveSubscription` | 402 `account_suspended` | ✅ #1429 (collapses into the suspended check — since 2026-06-07 every tier passes, Free included; only `suspended_at` rejects) |
+
+**Adding a route to the vault pipeline gets you the plugs. Adding a _channel_
+gets you nothing — call `ChannelGate.check/1` from its `join/3`. And adding a
+plug to the pipeline does NOT add it to sockets: decide explicitly and put it
+in `ChannelGate`.**
+
+#1426 shipped with only the middle row ported, which is exactly how the
+original bug happened one layer up — a rule that lived in one transport's
+plumbing. #1429 closed the other two.
 
 ## Failed Approaches / Dead Ends
 - **Gating `UserSocket.connect/3`.** Tidier-looking and wrong: it deadlocks signup.
@@ -112,6 +128,13 @@ There are mutation-checked tests for all three in
   with no clause, one client frame kills the channel process. Server-push-only
   is a client convention, not an enforced one — and this topic is reachable
   pre-onboarding by design.
+- **Lifecycle is never cached and never read off the socket struct.**
+  `ChannelGate.check/1` re-reads the row on every join. An admin suspension has
+  to bite on the *next* join: `SessionInvalidator` kills the live socket, but
+  the JWT stays valid and the client reconnects within seconds. `GateCache`
+  holds PASS verdicts for 60s, so routing the lifecycle check through it would
+  leave a suspended account syncing for up to a minute per node.
+  `Onboarding.gate/2` takes `fresh: true` so that shared read is not paid twice.
 - **`POST /api/auth/device/authorize` passes `skip_vault: true`.** It creates
   the first vault, so gating it on "you already have one" makes it permanently
   unreachable for the user who needs it. The relaxed verdict is deliberately
@@ -127,4 +150,8 @@ There are mutation-checked tests for all three in
 - `lib/engram_web/channels/{sync,crdt}_channel.ex`, `lib/engram_web/user_socket.ex`
 - `test/engram_web/onboarding_gate_channel_test.exs`,
   `test/engram_web/onboarding_gate_integration_test.exs`
-- PR #1426 (fix), issue #1427 (test-config follow-up), #142 (RequireOnboarding)
+- `lib/engram_web/channel_gate.ex` — the socket-side pipeline equivalent
+- `test/engram_web/lifecycle_gate_channel_test.exs`
+- PR #1426 (onboarding), PR for #1429 (lifecycle), issue #1427 (test-config
+  follow-up), #1430 (SPA drops writes on a refused join),
+  Engram-obsidian#455 (plugin degrades to a dead REST path), #142

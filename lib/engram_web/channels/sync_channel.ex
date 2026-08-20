@@ -17,6 +17,7 @@ defmodule EngramWeb.SyncChannel do
   alias Engram.Crypto.HMAC
   alias Engram.Logger.Metadata
   alias Engram.Vaults
+  alias EngramWeb.ChannelGate
   alias EngramWeb.Presence
 
   require Logger
@@ -44,18 +45,14 @@ defmodule EngramWeb.SyncChannel do
     end
   end
 
-  # Enforced here, not by a router pipeline: `RequireOnboarding` is a Plug and
-  # Plugs never run on a socket. Same verdict function as the plug
-  # (`Engram.Onboarding.gate/1`). Runs AFTER the topic ownership match, which
-  # is free — deriving the verdict costs ~4 DB round-trips and there is no
-  # join rate limiter, so a `sync:<other-user>:<uuid>` probe must not pay it.
+  # Plugs never run on a socket, so every vault-pipeline access gate is
+  # re-expressed in `EngramWeb.ChannelGate`. Runs AFTER the topic ownership
+  # match, which is free — the gate costs DB round-trips and there is no join
+  # rate limiter, so a `sync:<other-user>:<uuid>` probe must not pay for it.
   defp gate_and_join(vault_id_str, params, socket, user) do
-    case Engram.Onboarding.gate(user) do
-      :ok ->
-        resolve_vault_and_join(vault_id_str, params, socket, user)
-
-      {:error, missing, next_step} ->
-        {:error, %{reason: "onboarding_required", missing: missing, next_step: next_step}}
+    case ChannelGate.check(user) do
+      :ok -> resolve_vault_and_join(vault_id_str, params, socket, user)
+      {:error, payload} -> {:error, payload}
     end
   end
 
