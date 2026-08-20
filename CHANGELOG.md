@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.18.0](https://github.com/engram-app/Engram/compare/0.17.0...0.18.0) (2026-08-20)
+
+
+### Features
+
+* **crdt:** seed genesis content detached, no room per imported file ([#1424](https://github.com/engram-app/Engram/issues/1424)) ([58ba009](https://github.com/engram-app/Engram/commit/58ba009fabd5d5d0d0b234a1a554109d4c49b686))
+* **crdt:** tag room_start with the call path that allocated the room ([#1432](https://github.com/engram-app/Engram/issues/1432)) ([1a8a3e6](https://github.com/engram-app/Engram/commit/1a8a3e6cb68c901361f7106c818f0f932c4e670d))
+
+
+### Bug Fixes
+
+* **auth:** gate WebSocket sync joins on onboarding ([#1426](https://github.com/engram-app/Engram/issues/1426)) ([fc5e68a](https://github.com/engram-app/Engram/commit/fc5e68a5387ae6b9aec9541a0c7710d1e0108998))
+* **auth:** gate WebSocket sync on account lifecycle too ([#1431](https://github.com/engram-app/Engram/issues/1431)) ([d3ac780](https://github.com/engram-app/Engram/commit/d3ac78060b536c57c8c8c1ed5f05a319a45e64ec))
+* **billing:** one source of truth for limits, and no inverted flags ([#1439](https://github.com/engram-app/Engram/issues/1439)) ([596a617](https://github.com/engram-app/Engram/commit/596a6176229d5074e5e641c4e5d1b226c1887ded))
+* **crdt:** checkpoints prune only what they folded ([#1428](https://github.com/engram-app/Engram/issues/1428)) ([b90feb7](https://github.com/engram-app/Engram/commit/b90feb77b71395851d3658dd082da97496388595))
+* **crdt:** keep the channel alive when its room is gone ([#1417](https://github.com/engram-app/Engram/issues/1417)) ([736f09e](https://github.com/engram-app/Engram/commit/736f09e6684a373ed2d77b9c14f610f76b763eea)), closes [#1410](https://github.com/engram-app/Engram/issues/1410)
+* **crdt:** make a permanently unreadable checkpoint state visible ([#1406](https://github.com/engram-app/Engram/issues/1406)) ([a283966](https://github.com/engram-app/Engram/commit/a28396646235337b464674b8911d3c9b91604193))
+* **security:** always mark the refresh cookie Secure, pin CORS by path ([#1423](https://github.com/engram-app/Engram/issues/1423)) ([bdce8dd](https://github.com/engram-app/Engram/commit/bdce8ddb152dbec154a1bf0077cef44f7d6e0a2e))
+
+
+### Performance Improvements
+
+* **crdt:** skip the tick fold when the tail is empty ([#1437](https://github.com/engram-app/Engram/issues/1437)) ([a999423](https://github.com/engram-app/Engram/commit/a9994239932a0891a5846764dd1b0f64886bf769))
+* **sync:** fix the CPU + room-residency causes of the bulk-upload incident ([#1413](https://github.com/engram-app/Engram/issues/1413)) ([2d81298](https://github.com/engram-app/Engram/commit/2d81298de2105547bebee0bfa8b69016ad6e9db7))
+
 ## [0.17.0](https://github.com/engram-app/Engram/compare/0.16.0...0.17.0) (2026-08-18)
 
 
