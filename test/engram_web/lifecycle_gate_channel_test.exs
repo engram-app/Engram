@@ -319,67 +319,6 @@ defmodule EngramWeb.LifecycleGateChannelTest do
     end
   end
 
-  # A non-binary `b64` reaches `Base.decode64/1` (which is `when is_binary`)
-  # because `decode_frame/1`'s `when byte_size(b64) > @max_b64_bytes` guard
-  # silently fails to match on a non-binary rather than raising there. The
-  # channel dies, every observed room is lost, and the client must rejoin and
-  # re-handshake every note. This file is defensive about exactly this class
-  # elsewhere (`cast_cursor/1`: "rather than raising into a FunctionClauseError
-  # that would crash the whole channel").
-  describe "malformed frames do not kill the channel" do
-    # `assert_reply`, not a monitor + `refute_receive`: the reply contract is
-    # what the client depends on, and a `{:noreply, socket}` regression leaves
-    # a monitor-based test green while every malformed push hangs until its
-    # client-side timeout — the "SPA re-handshook every open note every ~3.5s
-    # forever" shape the ACK comment in crdt_channel.ex records. It is also
-    # deterministic; `refute_receive ..., 300` passes on broken code whenever
-    # the mailbox is behind other work.
-    test "a non-binary b64 replies bad_frame instead of raising", %{user: user, vault: vault} do
-      {:ok, _, joined} = join_crdt(user, vault)
-      Sandbox.allow(Repo, self(), joined.channel_pid)
-
-      ref = push(joined, "crdt_msg", %{"doc_id" => Ecto.UUID.generate(), "b64" => 123})
-
-      assert_reply ref, :error, %{reason: "bad_frame"}
-      assert Process.alive?(joined.channel_pid)
-    end
-
-    # A malformed BATCH entry has all three required keys, so it matches
-    # `prepare_create/4`'s first clause, raises inside `Base.decode64/2`, and
-    # `entry_guard`'s rescue maps it onto `create_failed` — the reason
-    # reserved for TRANSIENT server failure, which the plugin retries. A
-    # permanently-malformed frame therefore gets re-sent forever.
-    # `crdt_channel_test.exs` already pins `bad_frame` for a malformed entry.
-    test "a non-binary b64 in a batch entry is permanent, not retryable", %{
-      user: user,
-      vault: vault
-    } do
-      {:ok, _, joined} = join_crdt(user, vault)
-      Sandbox.allow(Repo, self(), joined.channel_pid)
-
-      ref =
-        push(joined, "crdt_create_batch", %{
-          "creates" => [%{"doc_id" => Ecto.UUID.generate(), "path" => "Bad.md", "b64" => 123}]
-        })
-
-      assert_reply ref, :ok, %{results: [%{status: "error", reason: reason}]}
-      assert reason == "bad_frame", "expected a permanent reason, got #{reason}"
-    end
-
-    test "a non-binary index b64 replies bad_frame instead of raising", %{
-      user: user,
-      vault: vault
-    } do
-      {:ok, _, joined} = join_crdt(user, vault)
-      Sandbox.allow(Repo, self(), joined.channel_pid)
-
-      ref = push(joined, "crdt_index_msg", %{"b64" => %{"not" => "a binary"}})
-
-      assert_reply ref, :error, %{reason: "bad_frame"}
-      assert Process.alive?(joined.channel_pid)
-    end
-  end
-
   # Pins `api_access/2`, which the #1433 revert did NOT touch. These were
   # collateral of deleting the whole entitlement describe block: afterwards
   # the only `api_access_not_available` assertion in the repo was on

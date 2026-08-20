@@ -35,10 +35,13 @@ defmodule EngramWeb.ChannelGate do
       this note claimed "no tier has `api_rps_cap > 0` with
       `api_write_enabled: false`". That is wrong: `Billing.do_effective_limit/2`
       resolves EACH KEY independently (override → env → plan → tier default),
-      so a single `user_limit_overrides` row raising a Free user's
-      `api_rps_cap` leaves `api_write_enabled` at false. That user is refused
-      every non-GET REST route and, after the revert, writes freely over
-      `crdt_create` / `crdt_delete` / `sync_update`. The mechanism is
+      so raising a Free user's `api_rps_cap` leaves `api_write_enabled` at
+      false. Three layers can do it — the `user_limit_overrides` table, the
+      `:plan_overrides` env config (which opens it for a whole TIER at once),
+      and the plan's own limits JSON. That user is refused
+      every non-GET REST route except `POST /api/search` (exempt as a read)
+      and, after the revert, writes freely over
+      `crdt_create`, `crdt_create_batch`, `crdt_delete`, `sync_update` and `crdt_index_msg`. The mechanism is
       first-class (dedicated table, pg NOTIFY trigger, OverrideCache, expiry
       sweeper), so treat it as reachable in prod.
 
@@ -55,8 +58,9 @@ defmodule EngramWeb.ChannelGate do
     * `DeviceFingerprint` (4) — no equivalent.
     * `EnforceSearchCap` (10) — no equivalent; there is no channel search.
 
-  (`Auth` (2) is not mirrored HERE because `UserSocket.connect/3` already is
-  it — that is the eleventh plug, and the one an 11-vs-10 count trips over.)
+  (`Auth` (2) is not listed above because `UserSocket.connect/3` IS it. That
+  is the plug an 11-vs-10 count trips over — the eleventh in router order is
+  `RequireApiWriteEnabled`, the gap declared open above.)
 
   `RequireActiveSubscription` collapses into the suspended check — since
   2026-06-07 it passes every tier (Free counts as active) and only rejects

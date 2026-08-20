@@ -76,8 +76,7 @@ Clerk tokens resolve with a nil key and are unaffected.
 
 Consequence for tests: any test that mints an API key to exercise something
 *else* (vault restriction, join tracing, channel logging) must first call
-`grant_api_write!/1` or `grant_api_read!/1` from
-`Engram.ApiEntitlementHelpers`, or it fails on entitlement before reaching
+`grant_api_write!/1` from `Engram.ApiEntitlementHelpers`, or it fails on entitlement before reaching
 what it is actually testing.
 
 **`BumpActivity` is not bookkeeping.** It is the only writer of

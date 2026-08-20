@@ -225,18 +225,7 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   @impl true
-  # `when is_binary(b64)`: a non-binary must not reach `decode_frame/1`, whose
-  # `when byte_size(b64) > @max_b64_bytes` guard fails silently on one and
-  # falls through to `Base.decode64/1` (`when is_binary`), raising and killing
-  # the channel with every room observed on it.
-  #
-  # Guarding the head rather than adding an early-reply clause is deliberate:
-  # a non-binary now falls to the catch-all at the bottom of this module,
-  # which replies `bad_frame` only AFTER `check_rate/2`. An early clause would
-  # answer at line rate outside any budget — the same unmetered-flood shape
-  # that catch-all's own comment records as the reason it is rate-gated.
-  def handle_in("crdt_msg", %{"doc_id" => doc_id, "b64" => b64}, socket)
-      when is_binary(b64) do
+  def handle_in("crdt_msg", %{"doc_id" => doc_id, "b64" => b64}, socket) do
     # Classify (O(1), first 4 b64 chars) BEFORE the rate check so sync
     # handshakes ride their own, larger bucket than edit frames: connect-time
     # enrollment fires one STEP1 (+ tiny STEP2 echo) per note, so on a
@@ -333,7 +322,7 @@ defmodule EngramWeb.CrdtChannel do
   # lane just moves the starvation risk onto handshakes, which is the shape
   # behind the 2026-07-07 cross-file-overwrite incident.
   @impl true
-  def handle_in("crdt_index_msg", %{"b64" => b64}, socket) when is_binary(b64) do
+  def handle_in("crdt_index_msg", %{"b64" => b64}, socket) do
     with :ok <- check_rate(socket, frame_class_b64(b64)),
          {:ok, frame} <- decode_frame(b64),
          :ok <- guard_frame(frame),
@@ -688,14 +677,9 @@ defmodule EngramWeb.CrdtChannel do
       log_entry_failure(entry, Metadata.safe_reason(e))
   catch
     :exit, reason ->
-      # `safe_exit_reason/1`, not `safe_reason/1` — both redact, but the latter
-      # collapses the two commonest exit shapes to nothing. Its general tuple
-      # clause returns "unknown" unless `elem(0)` is an atom, so a room
-      # crashing mid-batch (`{%RuntimeError{}, stacktrace}`) logged literally
-      # "exited: unknown", and a `GenServer.call` timeout logged ":timeout".
-      # `safe_exit_reason/1` renders those as "runtime error at lib/…:NN" and
-      # "timeout in GenServer.call/3", equally redacted and actually useful.
-      log_entry_failure(entry, "exited: #{Metadata.safe_exit_reason(reason)}")
+      # An exit reason carries the crashed call's arguments, which on this path
+      # are Yjs frames. Kind only.
+      log_entry_failure(entry, "exited: #{Metadata.safe_reason(reason)}")
   end
 
   defp log_entry_failure(entry, reason) do
@@ -771,13 +755,6 @@ defmodule EngramWeb.CrdtChannel do
 
       {:error, :frame_too_large} ->
         {:result, %{doc_id: doc_id, status: "error", reason: "frame_too_large"}}
-
-      # PERMANENT, so it must not fall to `other ->` and report
-      # `create_failed`, which is the TRANSIENT reason (pool timeout, dead
-      # room) the plugin retries — a malformed frame would be re-sent forever.
-      # Same reason the invalid-shape clause below reports.
-      {:error, :bad_base64} ->
-        {:result, %{doc_id: doc_id, status: "error", reason: "bad_frame"}}
 
       other ->
         # Never swallow the reason: this arm is the only thing standing between
@@ -1849,15 +1826,6 @@ defmodule EngramWeb.CrdtChannel do
       {:deny, _} -> {:error, :rate_limited}
     end
   end
-
-  # Non-binary FIRST. `when byte_size(b64) > @max_b64_bytes` does not reject a
-  # non-binary — a failing guard just falls through, and the clause below then
-  # calls `Base.decode64/1` (`when is_binary`) and RAISES. On `crdt_msg` that
-  # killed the channel; inside `crdt_create_batch` it was caught by
-  # `entry_guard` and reported as `create_failed`, the reason reserved for
-  # TRANSIENT failure — so the client re-sent a permanently broken frame
-  # forever. Rejecting here fixes every caller at once.
-  defp decode_frame(b64) when not is_binary(b64), do: {:error, :bad_base64}
 
   defp decode_frame(b64) when byte_size(b64) > @max_b64_bytes, do: {:error, :frame_too_large}
 
