@@ -12,12 +12,22 @@ defmodule EngramWeb.UserChannel do
 
   use Phoenix.Channel
 
+  alias EngramWeb.ChannelGate
+
   @impl true
   def join("user:" <> user_id_str, _params, socket) do
     user = socket.assigns.current_user
 
     if to_string(user.id) == user_id_str do
-      {:ok, %{plan: Engram.Billing.plan_state(user)}, socket}
+      # Deletion only. Suspension and onboarding are deliberately NOT gated
+      # here — a suspended user needs `subscription_activated` to pay their
+      # way out, and the FTUX vault screen blocks on `vault_created` /
+      # `vault_populated` before onboarding is complete. Deletion has no such
+      # exemption on the HTTP side and gets none here. (#1435)
+      case ChannelGate.check_not_deleted(user) do
+        :ok -> {:ok, %{plan: Engram.Billing.plan_state(user)}, socket}
+        {:error, payload} -> {:error, payload}
+      end
     else
       {:error, %{reason: "unauthorized"}}
     end
