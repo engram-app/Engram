@@ -252,7 +252,7 @@ defmodule EngramWeb.CrdtChannel do
     with :ok <- check_rate(socket, frame_class_b64(b64)),
          {:ok, frame} <- decode_frame(b64),
          :ok <- guard_frame(frame),
-         {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id),
+         {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id, frame_class_b64(b64)),
          :ok <- relay_frame(room, frame) do
       # ACK the push. Clients attach reply handlers to distinguish delivery
       # from loss; with no ack every successful push "times out" client-side —
@@ -490,7 +490,7 @@ defmodule EngramWeb.CrdtChannel do
           {entries, socket} =
             Enum.map_reduce(prepared, socket, fn
               {:created, note_id, frame}, sock ->
-                case ensure_room(sock, note_id) do
+                case ensure_room(sock, note_id, :create_batch) do
                   {:ok, sock, %{room: room}} ->
                     {{:enrolled, note_id, frame, room}, sock}
 
@@ -1865,7 +1865,10 @@ defmodule EngramWeb.CrdtChannel do
   # first reference, validates doc_id (the note_id) belongs to the vault, then
   # calls CrdtRegistry.ensure_started and SharedDoc.observe so {:yjs, frame, room}
   # broadcasts arrive as handle_info messages in this channel process.
-  defp ensure_room(socket, doc_id) do
+  # `source` names the call path for the room_start telemetry tag. It is only
+  # read when a room is actually CREATED — a cache hit or an existing-room
+  # lookup never emits.
+  defp ensure_room(socket, doc_id, source) do
     case Map.fetch(socket.assigns.rooms, doc_id) do
       {:ok, entry} ->
         {:ok, socket, entry}
@@ -1877,7 +1880,7 @@ defmodule EngramWeb.CrdtChannel do
         if map_size(socket.assigns.rooms) >= max_rooms() do
           {:error, :room_limit}
         else
-          start_and_observe_room(socket, doc_id)
+          start_and_observe_room(socket, doc_id, source)
         end
     end
   end
@@ -1899,12 +1902,12 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  defp start_and_observe_room(socket, doc_id) do
+  defp start_and_observe_room(socket, doc_id, source) do
     %{vault: vault} = socket.assigns
     user = socket.assigns.current_user
 
     with {:ok, note_id} <- resolve_note_id(user, vault, doc_id),
-         {:ok, room} <- CrdtRegistry.ensure_observed(user.id, vault.id, note_id) do
+         {:ok, room} <- CrdtRegistry.ensure_observed(user.id, vault.id, note_id, source) do
       # Watch the room: if it dies (crash, node loss), evict it from the cache so
       # the next crdt_msg re-creates it. Without this, send_yjs_message casts to a
       # dead pid return :ok and every subsequent edit is silently dropped.
