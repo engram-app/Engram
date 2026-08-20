@@ -202,7 +202,7 @@ defmodule Engram.Links.RewriterRoundtripTest do
 
         {:ok, _} =
           Repo.with_tenant(user.id, fn ->
-            Engram.Notes.CrdtPersistence.replay_tail(doc, user, source.id)
+            Engram.Notes.CrdtPersistence.replay_tail(doc, user, source.id, source.vault_id)
           end)
 
         sv = Yex.encode_state_vector!(doc)

@@ -7,12 +7,9 @@ defmodule EngramWeb.SyncController do
   alias Engram.Attachments.Attachment
   alias Engram.Crypto
   alias Engram.Crypto.PathCrypto
-  alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Repo
   alias EngramWeb.Schemas
-
-  require Logger
 
   operation(:manifest,
     operation_id: "sync-manifest",
@@ -58,30 +55,8 @@ defmodule EngramWeb.SyncController do
       # possible without a DEK (every upsert provisions one), so short-circuit
       # to an empty manifest instead of crashing on `{:ok, dek}` match.
       case Crypto.get_dek(user) do
-        {:ok, dek} ->
-          render_manifest(conn, user, vault, dek, current)
-
-        {:error, :no_dek} ->
-          render_empty_manifest(conn, current)
-
-        {:error, reason} ->
-          # Anything else (:unrecognised_blob, a propagated unwrap_dek/2
-          # failure) is a real crypto fault, not "this vault is empty".
-          # Reaching render_empty_manifest here would be worse than a 500:
-          # the plugin diffs this manifest against the local vault, so an
-          # empty one reads as "every note was deleted remotely". Fail
-          # loudly. Previously fell through to a CaseClauseError — same
-          # 500, but with nothing logged to diagnose it.
-          Logger.error(
-            "sync manifest: DEK unavailable, refusing to render",
-            Metadata.with_category(:error, :crypto,
-              user_id: user.id,
-              vault_id: vault.id,
-              reason: Crypto.format_dek_error(reason)
-            )
-          )
-
-          raise "sync manifest: DEK unavailable (#{Crypto.format_dek_error(reason)})"
+        {:ok, dek} -> render_manifest(conn, user, vault, dek, current)
+        {:error, :no_dek} -> render_empty_manifest(conn, current)
       end
     end
   end

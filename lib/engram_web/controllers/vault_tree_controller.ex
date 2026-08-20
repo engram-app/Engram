@@ -59,17 +59,26 @@ defmodule EngramWeb.VaultTreeController do
           Metadata.with_category(:error, :crypto,
             user_id: user.id,
             vault_id: vault.id,
-            reason: Crypto.format_dek_error(reason)
+            reason: format_error(reason)
           )
         )
 
-        raise "vault tree: DEK unavailable (#{Crypto.format_dek_error(reason)})"
+        raise "vault tree: DEK unavailable (#{format_error(reason)})"
     end
   end
 
   defp empty_tree(current_seq) do
     %{folders: [], notes: [], attachments: [], change_seq: current_seq}
   end
+
+  # Crypto.get_dek/1's error reasons are plain atoms defined in this
+  # codebase (:unrecognised_blob, :malformed_wrapped_blob,
+  # :kms_access_denied, ...) — safe to surface by name. Some KeyProvider
+  # errors nest an arbitrary term (e.g. `{:kms_decrypt_failed, reason}`,
+  # where `reason` can be a raw AWS SDK error); the catch-all keeps that
+  # out of both the log and the raised message instead of inspecting it.
+  defp format_error(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp format_error(_reason), do: "dek_unwrap_failed"
 
   defp render_tree(conn, user, vault, current_seq) do
     {:ok, notes} = Notes.list_tree_notes(user, vault)

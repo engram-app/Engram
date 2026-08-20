@@ -366,7 +366,7 @@ defmodule Engram.Links.Rewriter do
               {:ok, snapshot} ->
                 if is_binary(snapshot), do: :ok = Yex.apply_update(doc, snapshot)
                 applied = CrdtPersistence.replay_tail(doc, user, note_id, note.vault_id)
-                head = tail_head(note_id)
+                head = tail_head(note_id, note.vault_id)
 
                 if is_nil(snapshot) and applied == [] and CrdtBridge.project_doc(doc) == "" do
                   case Crypto.maybe_decrypt_note_fields(note, user) do
@@ -384,10 +384,10 @@ defmodule Engram.Links.Rewriter do
   end
 
   # Runs inside the caller's Repo.with_tenant (crdt_update_log is RLS-scoped).
-  defp tail_head(note_id) do
+  defp tail_head(note_id, vault_id) do
     Repo.one(
       from(l in CrdtUpdateLog,
-        where: l.note_id == ^note_id,
+        where: l.note_id == ^note_id and l.vault_id == ^vault_id,
         select: {count(l.id), max(l.inserted_at)}
       )
     )
@@ -446,7 +446,7 @@ defmodule Engram.Links.Rewriter do
   end
 
   defp persist_roomless(user, vault, note, doc, delta, head_at_load, rt) do
-    {:ok, head_now} = Repo.with_tenant(user.id, fn -> tail_head(note.id) end)
+    {:ok, head_now} = Repo.with_tenant(user.id, fn -> tail_head(note.id, note.vault_id) end)
 
     cond do
       head_now == head_at_load ->

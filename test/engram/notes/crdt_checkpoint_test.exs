@@ -720,7 +720,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     # Simulate the race: watermark is captured (pre-encode), THEN a new update
     # row lands (concurrent update_v1 during encode), THEN checkpoint completes.
     {:ok, watermark} =
-      Repo.with_tenant(user.id, fn -> CrdtCheckpoint.tail_watermark(note.id) end)
+      Repo.with_tenant(user.id, fn -> CrdtCheckpoint.tail_watermark(note.id, note.vault_id) end)
 
     {:ok, {ct, n}} = Crypto.encrypt_crdt_state("late_update", user, note.id)
 

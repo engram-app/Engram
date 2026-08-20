@@ -4382,11 +4382,36 @@ defmodule Engram.Notes do
         # checkpoint has since folded in is harmless. Holding them is strictly
         # safer than re-reading them, and it collapses one query per note into
         # one per chunk.
+        # Vault-scoped like every other tail read (the DEK-rotation rewrap is the
+        # one documented exemption). `ids` is a chunk of this user's notes and
+        # can span vaults, so the filter is the chunk's OWN vault set rather
+        # than a single id — note_id alone would fold a foreign vault's updates
+        # into this note's doc if an id ever appeared in two vaults (#1318).
+        chunk_vault_ids =
+          ids
+          |> Enum.map(&Map.get(by_id, &1))
+          |> Enum.reject(&is_nil/1)
+          |> Enum.map(& &1.vault_id)
+          |> Enum.uniq()
+
+        # Vault-filter ONLY when the candidates actually carried a vault_id.
+        # `candidates` can be a partial select, in which case chunk_vault_ids is
+        # empty and `l.vault_id in []` matches nothing — silently dropping every
+        # tail row and, with it, the room's unfolded ops (caught by #847's
+        # stale-fence test). Falling back to the unscoped read is exactly the
+        # prior behaviour, never worse.
+        tail_query =
+          if chunk_vault_ids == [] do
+            from(l in CrdtUpdateLog, where: l.note_id in ^ids, order_by: [asc: l.inserted_at])
+          else
+            from(l in CrdtUpdateLog,
+              where: l.note_id in ^ids and l.vault_id in ^chunk_vault_ids,
+              order_by: [asc: l.inserted_at]
+            )
+          end
+
         tails =
-          from(l in CrdtUpdateLog,
-            where: l.note_id in ^ids,
-            order_by: [asc: l.inserted_at]
-          )
+          tail_query
           |> Repo.all()
           |> Enum.group_by(& &1.note_id)
 
