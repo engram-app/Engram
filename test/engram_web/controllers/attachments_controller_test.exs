@@ -48,6 +48,38 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert is_binary(att["updated_at"])
     end
 
+    # `content_hash` has been computed and stored on every write since the
+    # encryption work, but no serializer ever returned it — so a client had no
+    # way to ask "do you already have these exact bytes?" and force-push paths
+    # had no choice but to re-send them. That gap is what let one looping
+    # client re-upload the same 667 attachments for 90 minutes on 2026-08-21.
+    test "returns content_hash so a client can skip re-sending known bytes", %{conn: conn} do
+      conn =
+        post(conn, "/api/attachments", %{
+          path: "photos/test.png",
+          content_base64: @sample_base64,
+          mtime: 1_709_234_567.0
+        })
+
+      assert %{"attachment" => att} = json_response(conn, 200)
+      assert is_binary(att["content_hash"])
+      assert att["content_hash"] != ""
+    end
+
+    test "the same bytes hash the same, different bytes differ", %{conn: conn} do
+      upload = fn path, b64 ->
+        conn
+        |> post("/api/attachments", %{path: path, content_base64: b64, mtime: 1.0})
+        |> json_response(200)
+        |> get_in(["attachment", "content_hash"])
+      end
+
+      # Stable across paths — the client compares hashes, so an unstable hash
+      # would silently reinstate the re-upload loop it exists to prevent.
+      assert upload.("a.png", @sample_base64) == upload.("b.png", @sample_base64)
+      refute upload.("c.png", @sample_base64) == upload.("d.png", @updated_base64)
+    end
+
     test "auto-detects MIME type from extension", %{conn: conn} do
       conn =
         post(conn, "/api/attachments", %{
@@ -451,6 +483,22 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert resp["attachments"] == []
     end
 
+    test "the listing carries content_hash", %{conn: conn} do
+      # The index is what a client sweeps before deciding what to push. Without
+      # a hash here it must either trust its own local stamp or re-send
+      # everything — and the force-push paths chose re-send.
+      conn
+      |> post("/api/attachments", %{
+        path: "diagrams/arch.png",
+        content_base64: Base.encode64("PNG"),
+        mtime: 1_000.0
+      })
+      |> json_response(200)
+
+      assert [a] = conn |> get("/api/attachments") |> json_response(200) |> Map.get("attachments")
+      assert is_binary(a["content_hash"])
+    end
+
     test "returns 401 without auth", %{conn: conn} do
       conn =
         conn
@@ -482,6 +530,51 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert response_content_type(resp, :png) =~ "image/png"
       assert resp.resp_body == "RAWBYTES"
       assert get_resp_header(resp, "content-disposition") == [~s(inline; filename="p.png")]
+    end
+
+    test "marks an already-compressed body no-transform so Bandit skips gzip",
+         %{conn: conn} do
+      # The pure predicate is covered in AttachmentCompressionTest; this is the
+      # WIRING check — without the `maybe_skip_compression/2` call in show/2
+      # everything else stays green while Bandit happily re-deflates every PNG.
+      _ =
+        conn
+        |> post("/api/attachments", %{
+          path: "p.png",
+          content_base64: Base.encode64("RAWBYTES"),
+          mtime: 1.0
+        })
+        |> json_response(200)
+
+      resp = get(conn, "/api/attachments/p.png?raw=1")
+
+      [cache_control] = get_resp_header(resp, "cache-control")
+      directives = Plug.Conn.Utils.list(cache_control)
+
+      assert "no-transform" in directives
+      # Phoenix's default directives must SURVIVE. Replacing the header instead
+      # of appending would strip `private` off attachment bytes as a side
+      # effect of a CPU fix — the whole point of asserting the list, not the
+      # string.
+      assert "private" in directives
+      assert "must-revalidate" in directives
+    end
+
+    test "leaves compressible bodies alone — gzip still earns its keep", %{conn: conn} do
+      _ =
+        conn
+        |> post("/api/attachments", %{
+          path: "notes.txt",
+          content_base64: Base.encode64("plain text, very compressible"),
+          mime_type: "text/plain",
+          mtime: 1.0
+        })
+        |> json_response(200)
+
+      resp = get(conn, "/api/attachments/notes.txt?raw=1")
+
+      [cache_control] = get_resp_header(resp, "cache-control")
+      refute "no-transform" in Plug.Conn.Utils.list(cache_control)
     end
 
     test "forces download for inline-script types (svg)", %{conn: conn} do

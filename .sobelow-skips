@@ -8,14 +8,14 @@ Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/crypto.ex:581,7EA51D6
 Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/crypto/user_dek_rotation.ex:1411,772DFE4
 Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:4647,3A4840D
 Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:4982,12982FE
-SQL.Query: SQL injection,lib/engram/attachments.ex:988,22EF6CC
+SQL.Query: SQL injection,lib/engram/attachments.ex:1049,2991CD5
 SQL.Query: SQL injection,lib/engram/notes.ex:6632,68DCD6B
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/legal/seeder.ex:84,12C6307
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/release/preflight.ex:114,30D4B80
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram_web/controllers/spa_controller.ex:58,5A4EB4C
 Traversal.FileModule: Directory Traversal in `File.read`,lib/engram/spa_integrity.ex:43,5D1BE94
-XSS.ContentType: XSS in `put_resp_content_type`,lib/engram_web/controllers/attachments_controller.ex:416,16CA695
-XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/attachments_controller.ex:418,779A094
+XSS.ContentType: XSS in `put_resp_content_type`,lib/engram_web/controllers/attachments_controller.ex:417,2CE3444
+XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/attachments_controller.ex:420,70EA2A0
 XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/oauth_authorize_controller.ex:119,4A1F9AA
 XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/oauth_authorize_controller.ex:139,46A4AE8
 XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/spa_controller.ex:7,589845D
