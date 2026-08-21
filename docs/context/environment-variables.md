@@ -40,6 +40,10 @@ Live. This is regenerated from `config/runtime.exs` (the ~90 vars it reads), wit
 
 > `RELEASE_COOKIE` is consumed by the Elixir release runtime (`rel/`/`mix release`), not read in `runtime.exs`.
 
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `BEAM_SCHEDULERS` | unset (auto-detect) | Scheduler pool size — exports `+S N:N +SDcpu N:N`. Read in `rel/env.sh.eex`, **not** `runtime.exs`, so `EnvVarDocsTest` does not enforce this row. **Set it to the task's vCPU count on Fargate**, where CPU is enforced on the task's microVM and the container cgroup reports no quota, so auto-detection cannot work — prod ran 2 normal + 2 dirty-CPU schedulers on a 0.5-vCPU task because of this. Elsewhere (self-host, Docker, local) leave it unset; the cgroup quota is readable and auto-detection is correct. Non-numeric or `0` is ignored with a warning and falls back to detection. Covered by `test/scripts/env_sh_scheduler_clamp_test.sh`. |
+
 ## Frontend / Hosts / CORS
 
 | Variable | Default | Purpose |

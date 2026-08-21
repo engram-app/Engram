@@ -2936,6 +2936,16 @@ jobs:
         # about. Cheap to run here, expensive to discover later.
         run: bash test/scripts/discord_release_notes_test.sh
 
+      - name: BEAM scheduler clamp self-check
+        # Guards rel/env.sh's scheduler sizing. It ran in prod for an unknown
+        # period doing NOTHING: written for cgroup quotas, but Fargate enforces
+        # CPU on the task's microVM so the container cgroup reports `max`, and
+        # the only echo sat on the success branch — "clamped" and "gave up"
+        # looked identical. Result was 2 normal + 2 dirty-CPU schedulers on a
+        # 0.5-vCPU task. Nothing else in CI boots a release, so a regression
+        # here is invisible until it is a production latency problem.
+        run: bash test/scripts/env_sh_scheduler_clamp_test.sh
+
       - name: Scan CLAUDE.md / AGENTS.md files for known-stale facts
         run: |
           set -euo pipefail
