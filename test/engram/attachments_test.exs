@@ -258,6 +258,54 @@ defmodule Engram.AttachmentsTest do
       assert second.size_bytes == byte_size("genuinely different bytes")
     end
 
+    test "a corrected mime_type still lands even when the bytes are identical", %{
+      user: user,
+      vault: vault
+    } do
+      # Re-uploading identical bytes with a corrected type is how a
+      # mis-detected MIME gets fixed. Gating the short-circuit on content
+      # ALONE silently swallowed the correction and answered 200 with the old
+      # type — found by adversarially reviewing the short-circuit, not by any
+      # existing test.
+      b64 = Base.encode64("PNGDATA")
+      expect(Engram.MockStorage, :put, 2, fn _key, _binary, _opts -> :ok end)
+
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img/a.png",
+          "content_base64" => b64,
+          "mime_type" => "image/jpeg"
+        })
+
+      {:ok, corrected} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img/a.png",
+          "content_base64" => b64,
+          "mime_type" => "image/png"
+        })
+
+      assert corrected.mime_type == "image/png"
+    end
+
+    test "delete then re-upload identical bytes resurrects the attachment", %{
+      user: user,
+      vault: vault
+    } do
+      # `fetch_existing` is `scoped_live`, so a tombstoned row is invisible to
+      # the short-circuit and resurrection takes the full write path. Pinned
+      # because "identical bytes are a no-op" is exactly the reasoning that
+      # would break it.
+      stub(Engram.MockStorage, :put, fn _key, _binary, _opts -> :ok end)
+      stub(Engram.MockStorage, :delete, fn _key -> :ok end)
+      params = %{"path" => @path, "content_base64" => @valid_content}
+
+      {:ok, _} = Attachments.upsert_attachment(user, vault, params)
+      :ok = Attachments.delete_attachment(user, vault, @path)
+      {:ok, _} = Attachments.upsert_attachment(user, vault, params)
+
+      assert @path in live_paths(user, vault)
+    end
+
     test "identical bytes at a DIFFERENT path still write", %{user: user, vault: vault} do
       # The short-circuit keys on (path, hash) — matching content under a new
       # path is a new attachment, not a no-op.

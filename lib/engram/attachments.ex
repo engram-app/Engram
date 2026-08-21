@@ -72,8 +72,9 @@ defmodule Engram.Attachments do
          # Re-offering bytes the server already holds is a no-op. Returning the
          # live row here skips the encrypt, the S3 PUT, the locked row write
          # AND the "upsert" broadcast every peer would otherwise chase. See
-         # `identical_or_changed/4`.
-         :changed <- identical_or_changed(user, existing0, plaintext, path) do
+         # `identical_or_changed/5`.
+         :changed <-
+           identical_or_changed(user, existing0, plaintext, path, explicit_mime) do
       basename_hmac = Crypto.hmac_field(filter_key, Links.basename_key(path))
 
       att_id0 =
@@ -194,30 +195,50 @@ defmodule Engram.Attachments do
   # first sync's ~240 MB/min). Rate is not what separates a loop from a bulk
   # import; redundancy is.
   #
+  # Gated on the effective MIME as well as the bytes. Content alone is NOT
+  # enough: re-uploading identical bytes with a corrected `mime_type` is the
+  # documented way to fix a mis-detected type, and short-circuiting on content
+  # alone silently discarded that correction while returning 200 with the OLD
+  # type. A MIME change falls through to the full write — wasteful for a
+  # metadata-only edit, but rare, and obviously correct.
+  #
+  # `mtime` deliberately does NOT gate. It is client-reported metadata that no
+  # read path consults: the plugin's `applyAttachmentChange` decides by
+  # comparing BYTES, not mtime, so a preserved-old mtime cannot strand or loop
+  # a client. Gating on it would spend a full re-encrypt + PUT on a field
+  # nothing reads.
+  #
   # ponytail: trusts the DB row, not S3. If an object vanished from the bucket
   # behind a live row, re-sending identical bytes no longer repairs it —
-  # delete-then-reupload does. Upgrade path if that ever bites: HEAD the
-  # storage key here before returning {:ok, att}.
-  defp identical_or_changed(_user, nil, _plaintext, _path), do: :changed
+  # delete-then-reupload does (verified: `fetch_existing` is `scoped_live`, so
+  # a tombstoned row is invisible here and resurrection takes the full path).
+  # Upgrade path if that ever bites: HEAD the storage key before returning.
+  defp identical_or_changed(_user, nil, _plaintext, _path, _explicit_mime), do: :changed
 
-  defp identical_or_changed(user, %Attachment{content_hash: stored} = att, plaintext, path)
+  defp identical_or_changed(
+         user,
+         %Attachment{content_hash: stored} = att,
+         plaintext,
+         path,
+         explicit_mime
+       )
        when is_binary(stored) do
-    case Crypto.dek_content_hash_key(user) do
-      # Not a secret comparison — both sides are HMACs over content the caller
-      # just supplied, so there is no oracle to time. Plain `==`.
-      {:ok, content_key} ->
-        if stored == Crypto.hmac_content_hash(content_key, plaintext),
-          # `path` is virtual (Phase B.3); splice it on so this return is
-          # shape-identical to the write path's.
-          do: {:ok, %{att | path: path}},
-          else: :changed
+    effective_mime = explicit_mime || MimeWhitelist.detect_mime(path)
 
-      _ ->
-        :changed
+    with true <- att.mime_type == effective_mime,
+         # Not a secret comparison — both sides are HMACs over content the
+         # caller just supplied, so there is no oracle to time. Plain `==`.
+         {:ok, content_key} <- Crypto.dek_content_hash_key(user),
+         true <- stored == Crypto.hmac_content_hash(content_key, plaintext) do
+      # `path` is virtual (Phase B.3); splice it on so this return is
+      # shape-identical to the write path's.
+      {:ok, %{att | path: path}}
+    else
+      _ -> :changed
     end
   end
 
-  defp identical_or_changed(_user, _existing, _plaintext, _path), do: :changed
+  defp identical_or_changed(_user, _existing, _plaintext, _path, _explicit_mime), do: :changed
 
   defp fetch_existing(user, vault_id, path_hmac) do
     Repo.with_tenant(user.id, fn ->
