@@ -91,4 +91,33 @@ for dir in v2 v1 nolimit; do
     || fail "8: clamp exited non-zero for $dir — this file runs on every boot"
 done
 
-echo "PASS: env.sh scheduler clamp (8 cases)"
+# --- 9: busy-wait defaults to the BEAM's own behaviour (no flags added) ---
+got=$(run_clamp v2 "true")
+case "$got" in
+  *sbwt*) fail "9: busy-wait must not be touched unless asked, got '$got'" ;;
+esac
+
+# --- 10: BEAM_BUSY_WAIT=none disables all three spin thresholds ---
+got=$(run_clamp v2 "BEAM_BUSY_WAIT=none; export BEAM_BUSY_WAIT")
+[ "$got" = "+S 1:1 +SDcpu 1:1 +sbwt none +sbwtdcpu none +sbwtdio none" ] \
+  || fail "10: busy-wait flags wrong, got '$got'"
+
+# --- 11: busy-wait applies even when sizing could NOT be determined ---
+# The two concerns are independent; nesting them would silently drop this.
+got=$(run_clamp nolimit "BEAM_BUSY_WAIT=none; export BEAM_BUSY_WAIT")
+[ "$got" = "+sbwt none +sbwtdcpu none +sbwtdio none" ] \
+  || fail "11: busy-wait lost when no quota was readable, got '$got'"
+
+# --- 12: an unrecognised value is rejected loudly, changing nothing ---
+got=$(run_clamp v2 "BEAM_BUSY_WAIT=medium; export BEAM_BUSY_WAIT")
+[ "$got" = "+S 1:1 +SDcpu 1:1" ] || fail "12: bad BEAM_BUSY_WAIT altered flags, got '$got'"
+stderr_of | grep -q "ignoring BEAM_BUSY_WAIT" \
+  || fail "12: rejecting a bad value must say so. stderr: $(stderr_of)"
+
+# --- 13: 'default' is explicitly accepted and is a no-op ---
+got=$(run_clamp v2 "BEAM_BUSY_WAIT=default; export BEAM_BUSY_WAIT")
+[ "$got" = "+S 1:1 +SDcpu 1:1" ] || fail "13: 'default' should add nothing, got '$got'"
+stderr_of | grep -q "ignoring BEAM_BUSY_WAIT" \
+  && fail "13: 'default' is valid and must not warn. stderr: $(stderr_of)"
+
+echo "PASS: env.sh scheduler clamp + busy-wait (13 cases)"
