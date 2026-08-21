@@ -4,10 +4,20 @@ defmodule Engram.Workers.BackgroundPriority do
 
   Indexing is already asynchronous (Oban), but async is not isolated: the
   `embed` and `indexing` queues run on the same schedulers as the Phoenix
-  channel processes serving a live sync. During a bulk upload seven workers
-  (`embed: 5`, `indexing: 2`) saturate a 2-vCPU task and the interactive path
-  gets starved — a 2026-08-20 prod profile of a 1.7k-note upload showed the
-  run queue at 7 and 10 while the user's sync was in flight.
+  channel processes serving a live sync, and the interactive path gets starved.
+
+  The prod task is **0.5 vCPU** (`cpu = "512"`, engram-infra
+  `main/envs/prod/ecs.tf`), so seven concurrent workers (`embed: 5`,
+  `indexing: 2`) are oversubscribed roughly 14x on their own. Those limits were
+  sized against MEMORY — see the `config/config.exs` comment deriving them from
+  the 1024 MB task ceiling — not against CPU. A 2026-08-20 profile of a
+  1.7k-note upload measured 1,847s of Oban job time in a 1,200s window across
+  both tasks: 1.54 cores of demand against 1.0 vCPU of total capacity, before
+  counting the sync itself. The run queue sat at 7 and 10.
+
+  Demoting does not create capacity — the arithmetic above is unchanged by it.
+  It decides who gets the contended core first, which is the part the user
+  feels.
 
   A `:low` process is only scheduled when no `:normal` process on that
   scheduler is runnable, which is exactly the ordering we want: the user's
