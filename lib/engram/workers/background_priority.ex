@@ -8,12 +8,23 @@ defmodule Engram.Workers.BackgroundPriority do
 
   The prod task is **0.5 vCPU** (`cpu = "512"`, engram-infra
   `main/envs/prod/ecs.tf`), so seven concurrent workers (`embed: 5`,
-  `indexing: 2`) are oversubscribed roughly 14x on their own. Those limits were
-  sized against MEMORY — see the `config/config.exs` comment deriving them from
-  the 1024 MB task ceiling — not against CPU. A 2026-08-20 profile of a
-  1.7k-note upload measured 1,847s of Oban job time in a 1,200s window across
-  both tasks: 1.54 cores of demand against 1.0 vCPU of total capacity, before
-  counting the sync itself. The run queue sat at 7 and 10.
+  `indexing: 2`) are heavily oversubscribed. Those limits were sized against
+  MEMORY — see the `config/config.exs` comment deriving them from the 1024 MB
+  task ceiling — not against CPU.
+
+  Evidence from the 2026-08-20 1.7k-note upload, and only what is actually
+  measurable: `beam_stats_run_queue_count` reached 7 and 10 (processes ready to
+  run with no scheduler free), and the operator observed ~100% task CPU. Note
+  that at 100% of a CFS quota you are BY DEFINITION being throttled — the
+  kernel freezes the cgroup for the remainder of each period.
+
+  Deliberately NOT quantified here as "N cores of demand". Oban's
+  `job_processing_duration` is job WALL time and includes waiting on the Voyage
+  HTTP call, and the Pyroscope totals are not wall-clock CPU seconds either
+  (they exceed what the quota can physically supply). Container Insights, which
+  would give a trustworthy `CpuUtilized`, is off for cost. An earlier draft of
+  this moduledoc derived "1.54 cores" from the Oban durations; that conflated
+  wall time with CPU time and is retracted rather than quietly deleted.
 
   Demoting does not create capacity — the arithmetic above is unchanged by it.
   It decides who gets the contended core first, which is the part the user
