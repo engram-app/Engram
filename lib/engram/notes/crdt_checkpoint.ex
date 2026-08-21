@@ -218,19 +218,38 @@ defmodule Engram.Notes.CrdtCheckpoint do
                 # all of them outside test/support/checkpoint_interleave.ex.
                 interleave_hook(:after_row_read)
 
-                if markdown?(note.path) do
-                  do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user)
-                else
-                  do_structural_checkpoint(note, vault_id, note_id, live_state, prune, user)
+                result =
+                  if markdown?(note.path) do
+                    do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user)
+                  else
+                    do_structural_checkpoint(note, vault_id, note_id, live_state, prune, user)
+                  end
+
+                # Carry the PRE-checkpoint embed state out for the post-commit
+                # enqueue below. This is the primary create path for web and
+                # plugin (#1229: CRDT genesis bypasses `upsert_note` entirely),
+                # so a first sync's whole flood is ranked here or nowhere — and
+                # reading `note` again after the commit would both cost a query
+                # and see the wrong (post-write) row.
+                case result do
+                  {prev_hash, new_hash, path} ->
+                    {prev_hash, new_hash, path, EmbedNote.priority_for(note)}
+
+                  other ->
+                    other
                 end
             end
           end)
 
         case outcome do
-          {prev_hash, new_hash, path} ->
+          {prev_hash, new_hash, path, embed_priority} ->
             _ =
               if prev_hash != new_hash do
-                _ = Enqueue.enqueue(EmbedNote.new_debounced(note_id), "embed_note")
+                _ =
+                  Enqueue.enqueue(
+                    EmbedNote.new_debounced(note_id, priority: embed_priority),
+                    "embed_note"
+                  )
 
                 # #648 lever 1 — see ExtractNoteLinks moduledoc. Covers the
                 # whole CRDT surface (genesis included: content only ever

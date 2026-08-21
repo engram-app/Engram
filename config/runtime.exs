@@ -112,6 +112,20 @@ if config_env() != :test do
     config :engram, :query_embed_model, query_model
   end
 
+  # BEAM scheduler priority for embed/indexing job processes. `:low` (default)
+  # means a job only runs when no `:normal` process — every Phoenix channel
+  # serving a live sync — is runnable on that scheduler, so a bulk upload can
+  # no longer starve the user's own sync. Kill-switch: set `normal` to revert
+  # without a deploy if indexing ever starves under sustained load. Only
+  # `normal` and `low` are accepted; anything else would be passed straight to
+  # `process_flag/2` and crash every job.
+  case System.get_env("BACKGROUND_JOB_PRIORITY") do
+    nil -> :ok
+    "normal" -> config :engram, :background_job_priority, :normal
+    "low" -> config :engram, :background_job_priority, :low
+    other -> raise "BACKGROUND_JOB_PRIORITY must be \"normal\" or \"low\", got: #{inspect(other)}"
+  end
+
   # Voyage 429 → snooze duration (seconds). Tune as Voyage RPM grows: lower
   # values churn jobs faster once budget is restored; higher values are gentler
   # on a small bucket. Default 60s suits both free-tier (3 RPM) and paid.

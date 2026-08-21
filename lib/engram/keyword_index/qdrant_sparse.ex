@@ -25,25 +25,34 @@ defmodule Engram.KeywordIndex.QdrantSparse do
     u32
   end
 
-  # Back-compat arity (language defaults to nil = raw-only). Retained for
-  # existing test call sites and as a convenience overload.
-  def encode_document(text, filter_key, doc_len, avgdl),
-    do: encode_document(text, filter_key, doc_len, avgdl, nil)
+  # Convenience arity (language defaults to nil = raw-only).
+  def encode_document(text, filter_key, avgdl),
+    do: encode_document(text, filter_key, avgdl, nil)
 
   def encode_query(query, filter_key), do: encode_query(query, filter_key, nil)
 
   @impl Engram.KeywordIndex
-  def encode_document(text, filter_key, doc_len, avgdl, language) do
-    text
-    |> Tokenizer.tokens(language)
-    |> Enum.frequencies()
-    |> Enum.reduce(%{}, fn {token, tf}, acc ->
-      d = dim(filter_key, token)
-      w = Bm25.tf_weight(tf, doc_len, avgdl)
-      # On a u32 collision, sum the colliding terms' weights.
-      Map.update(acc, d, w, &(&1 + w))
-    end)
-    |> to_sparse()
+  def encode_document(text, filter_key, avgdl, language) do
+    # `doc_len` is derived here rather than passed in: the caller could only
+    # get it by tokenizing the same text a second time, and it must be the RAW
+    # count (stems are recall dimensions, not document length). Keeping the
+    # derivation next to the tokens that produced it also keeps every
+    # plaintext-touching step inside this module + Tokenizer — the future TEE
+    # enclave boundary.
+    {tokens, doc_len} = Tokenizer.tokens_with_len(text, language)
+
+    sparse =
+      tokens
+      |> Enum.frequencies()
+      |> Enum.reduce(%{}, fn {token, tf}, acc ->
+        d = dim(filter_key, token)
+        w = Bm25.tf_weight(tf, doc_len, avgdl)
+        # On a u32 collision, sum the colliding terms' weights.
+        Map.update(acc, d, w, &(&1 + w))
+      end)
+      |> to_sparse()
+
+    {sparse, doc_len}
   end
 
   @impl Engram.KeywordIndex

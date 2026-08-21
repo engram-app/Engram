@@ -15,10 +15,22 @@ defmodule Engram.KeywordIndex.Tokenizer do
   the future TEE enclave boundary.
   """
 
+  alias Engram.KeywordIndex.StemCache
+
   @word_re ~r/[\p{L}\p{N}\p{M}_]+/u
 
   # Hiragana/Katakana, CJK Ext-A, CJK Unified, Hangul syllables, CJK compat.
-  @cjk_re ~r/[\x{3040}-\x{30FF}\x{3400}-\x{4DBF}\x{4E00}-\x{9FFF}\x{AC00}-\x{D7AF}\x{F900}-\x{FAFF}]/u
+  #
+  # A guard, NOT a regex, and the difference is worth 5% of a bulk upload's CPU.
+  # `expand/2` tests every GRAPHEME of every indexed note, and Elixir's
+  # `Regex.safe_run/3` calls `Regex.version/0` (`:re.version/0` +
+  # `system_info(:endian)`) on EVERY invocation to guard against a stale PCRE
+  # compile. At one call per character that dominated: a 2026-08-20 prod profile
+  # of a 1.7k-note upload put `Regex.version/0` alone at 43s and the surrounding
+  # `Regex.safe_run/3` at 106s. Integer range tests have no such preamble.
+  defguardp is_cjk(cp)
+            when cp in 0x3040..0x30FF or cp in 0x3400..0x4DBF or cp in 0x4E00..0x9FFF or
+                   cp in 0xAC00..0xD7AF or cp in 0xF900..0xFAFF
 
   # Strip combining marks that appear immediately after a Latin base character.
   # This removes casefold artifacts like Turkish İ → i + U+0307 (combining dot)
@@ -35,30 +47,67 @@ defmodule Engram.KeywordIndex.Tokenizer do
   @type lang :: atom() | nil
 
   @spec tokens(String.t() | any(), lang()) :: [String.t()]
-  def tokens(text, language \\ nil)
+  def tokens(text, language \\ nil), do: text |> tokens_with_len(language) |> elem(0)
 
-  def tokens(text, language) when is_binary(text) do
-    text
-    |> String.normalize(:nfkc)
-    |> String.downcase(:default)
-    |> String.replace(@strip_marks, "")
-    |> then(&Regex.scan(@word_re, &1))
-    |> Enum.map(&hd/1)
-    |> Enum.flat_map(&expand(&1, language))
+  @doc """
+  Tokenize, and return the RAW token count alongside the (possibly dual-emit)
+  token list — `{tokens, raw_len}`, where `raw_len == length(tokens(text, nil))`.
+
+  Indexing needs both: the dual-emit list for the sparse vector, and the raw
+  count for BM25 length normalization (`Bm25.tf_weight/4`) and the persisted
+  `chunks.token_count`. Getting the count by tokenizing a second time with
+  `language: nil` ran the whole normalize → casefold → strip-marks → scan
+  pipeline twice for every indexed chunk; only the `emit/2` tail differs
+  between the two calls.
+  """
+  @spec tokens_with_len(String.t() | any(), lang()) :: {[String.t()], non_neg_integer()}
+  def tokens_with_len(text, language \\ nil)
+
+  def tokens_with_len(text, language) when is_binary(text) do
+    {rev, raw} =
+      text
+      |> String.normalize(:nfkc)
+      |> String.downcase(:default)
+      |> String.replace(@strip_marks, "")
+      |> then(&Regex.scan(@word_re, &1))
+      |> Enum.reduce({[], 0}, fn [word | _], {acc, raw} ->
+        {emitted, n} = expand(word, language)
+        {Enum.reverse(emitted, acc), raw + n}
+      end)
+
+    {Enum.reverse(rev), raw}
   end
 
-  def tokens(_, _), do: []
+  def tokens_with_len(_, _), do: {[], 0}
 
-  # Split a word into maximal CJK / non-CJK runs.
-  # CJK runs → overlapping bigrams (never stemmed).
-  # Non-CJK runs → dual-emit raw + stem (deduped) when language is set.
+  # Split a word into maximal CJK / non-CJK runs, returning `{tokens, raw_len}`.
+  # CJK runs → overlapping bigrams (never stemmed), each bigram one raw token.
+  # Non-CJK runs → dual-emit raw + stem (deduped) when language is set; the
+  # stem never counts toward raw_len.
+  #
+  # The `has_cjk?/1` gate is the whole point: a word with no CJK codepoint
+  # chunks into exactly one non-CJK run, so `graphemes |> chunk_by |> join`
+  # provably reconstructs the word it was handed. For an all-Latin vault that
+  # is three traversals and a rebuilt binary per word to learn nothing.
   defp expand(word, language) do
-    word
-    |> String.graphemes()
-    |> Enum.chunk_by(&cjk?/1)
-    |> Enum.flat_map(fn [g | _] = run ->
-      if cjk?(g), do: bigrams(run), else: emit(Enum.join(run), language)
-    end)
+    if has_cjk?(word) do
+      {rev, raw} =
+        word
+        |> String.graphemes()
+        |> Enum.chunk_by(&cjk?/1)
+        |> Enum.reduce({[], 0}, fn [g | _] = run, {acc, raw} ->
+          if cjk?(g) do
+            bi = bigrams(run)
+            {Enum.reverse(bi, acc), raw + length(bi)}
+          else
+            {Enum.reverse(emit(Enum.join(run), language), acc), raw + 1}
+          end
+        end)
+
+      {Enum.reverse(rev), raw}
+    else
+      {emit(word, language), 1}
+    end
   end
 
   defp emit(token, nil), do: [token]
@@ -72,21 +121,40 @@ defmodule Engram.KeywordIndex.Tokenizer do
 
   # Stem via Snowball/text_stemmer. Routes non-Latin scripts to their default
   # Snowball language before checking support; Latin/other uses the passed language.
+  #
+  # The pure-ASCII gate short-circuits three `Regex.match?/2` calls per token
+  # for the overwhelmingly common case. It cannot change the answer: every
+  # codepoint in @cyrillic/@greek/@arabic is >= U+0370, so an all-ASCII token
+  # misses all three and falls through to `language` either way.
   defp stem(token, language) do
-    lang =
-      cond do
-        Regex.match?(@cyrillic, token) -> :ru
-        Regex.match?(@greek, token) -> :el
-        Regex.match?(@arabic, token) -> :ar
-        true -> language
-      end
+    lang = if ascii?(token), do: language, else: script_lang(token, language)
 
     if MapSet.member?(@supported_langs, lang) do
-      Text.Stemmer.stem(token, lang)
+      StemCache.stem(token, lang)
     else
       token
     end
   end
+
+  defp script_lang(token, language) do
+    cond do
+      Regex.match?(@cyrillic, token) -> :ru
+      Regex.match?(@greek, token) -> :el
+      Regex.match?(@arabic, token) -> :ar
+      true -> language
+    end
+  end
+
+  defp ascii?(<<cp::utf8, rest::binary>>) when cp < 128, do: ascii?(rest)
+  defp ascii?(<<>>), do: true
+  defp ascii?(_), do: false
+
+  # "Does this binary hold ANY CJK codepoint" — the same question the old
+  # `@cjk_re` asked of a grapheme, so `cjk?/1` keeps its exact semantics
+  # (a grapheme is CJK if its base or any combining mark is).
+  defp has_cjk?(<<cp::utf8, _rest::binary>>) when is_cjk(cp), do: true
+  defp has_cjk?(<<_cp::utf8, rest::binary>>), do: has_cjk?(rest)
+  defp has_cjk?(_), do: false
 
   defp bigrams([single]), do: [single]
 
@@ -96,5 +164,5 @@ defmodule Engram.KeywordIndex.Tokenizer do
     |> Enum.map(&Enum.join/1)
   end
 
-  defp cjk?(grapheme), do: Regex.match?(@cjk_re, grapheme)
+  defp cjk?(grapheme), do: has_cjk?(grapheme)
 end

@@ -17,6 +17,13 @@ config :engram, :pre_auth_rate_limit_override, 10_000
 # cover BootCanary directly via Engram.Crypto.BootCanaryTest.
 config :engram, :boot_canary_enabled, false
 
+# `Oban.Testing.perform_job/2` runs `perform/1` in the CALLING test process, so
+# a `:low` demote inside a worker would strand the test process at `:low` for
+# the rest of that test rather than dying with a job process. Keep background
+# jobs at `:normal` under test; `Engram.Workers.BackgroundPriorityTest` covers
+# the demote itself in an isolated process.
+config :engram, :background_job_priority, :normal
+
 # CheckpointGate inline limit raised out of the way for tests: the gate is a
 # process-global counter shared by the whole (partly async) suite, and many
 # tests spin real CRDT rooms whose unbind checkpoints acquire it. A low limit

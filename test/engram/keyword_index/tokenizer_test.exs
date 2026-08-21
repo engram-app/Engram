@@ -100,4 +100,58 @@ defmodule Engram.KeywordIndex.TokenizerTest do
     assert "run" in Tokenizer.tokens("running", :en)
     assert "running" in Tokenizer.tokens("running", :en)
   end
+
+  # tokens_with_len/2 — one pass yields both the dual-emit list and the RAW
+  # count. `Indexing` used to get the count by tokenizing a second time with
+  # language nil, doubling the tokenizer's cost on every indexed chunk.
+
+  describe "tokens_with_len/2" do
+    test "raw count excludes stems" do
+      assert Tokenizer.tokens_with_len("running cats", :en) ==
+               {["running", "run", "cats", "cat"], 2}
+    end
+
+    test "raw count agrees with tokens(text, nil) for every language" do
+      for text <- [
+            "Hello, World!",
+            "running cats deploying",
+            "東京都",
+            "abc東京 def",
+            "café résumé",
+            "мдрсة бегущий",
+            "",
+            "set PADDLE_API_KEY now"
+          ],
+          lang <- [nil, :en, :fr] do
+        {_tokens, raw} = Tokenizer.tokens_with_len(text, lang)
+
+        assert raw == length(Tokenizer.tokens(text, nil)),
+               "raw count mismatch for #{inspect(text)} / #{inspect(lang)}"
+      end
+    end
+
+    test "CJK bigrams each count as one raw token" do
+      assert Tokenizer.tokens_with_len("東京都", :en) == {["東京", "京都"], 2}
+    end
+
+    test "single CJK char counts once" do
+      assert Tokenizer.tokens_with_len("猫", :en) == {["猫"], 1}
+    end
+
+    test "mixed CJK/Latin run counts each emitted run" do
+      {tokens, raw} = Tokenizer.tokens_with_len("abc東京", nil)
+      assert tokens == ["abc", "東京"]
+      assert raw == 2
+    end
+
+    test "non-binary input yields empty list and zero" do
+      assert Tokenizer.tokens_with_len(nil, :en) == {[], 0}
+    end
+
+    test "tokens/2 stays the token half of tokens_with_len/2" do
+      for text <- ["running cats", "東京都", "مدرسة"], lang <- [nil, :en] do
+        assert Tokenizer.tokens(text, lang) == elem(Tokenizer.tokens_with_len(text, lang), 0)
+      end
+    end
+  end
 end

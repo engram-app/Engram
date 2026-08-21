@@ -40,6 +40,11 @@ Live. This is regenerated from `config/runtime.exs` (the ~90 vars it reads), wit
 
 > `RELEASE_COOKIE` is consumed by the Elixir release runtime (`rel/`/`mix release`), not read in `runtime.exs`.
 
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `BEAM_BUSY_WAIT` | unset (BEAM default) | `none` exports `+sbwt none +sbwtdcpu none +sbwtdio none`. A scheduler with no work spins before sleeping, betting new work arrives sooner than a sleep/wake round-trip costs — correct on dedicated hardware, **inverted under a CFS quota**, where spinning consumes the same budget as real work and you can be throttled by threads doing nothing. Set `none` on a CPU-capped task; leave unset on bare metal / self-host, where busy-waiting genuinely lowers latency. Applies independently of `BEAM_SCHEDULERS` (it still takes effect when the quota is unreadable). Anything other than `none`/`default` is ignored with a warning. Read in `rel/env.sh.eex`, so `EnvVarDocsTest` does not enforce this row. Covered by `test/scripts/env_sh_scheduler_clamp_test.sh`. |
+| `BEAM_SCHEDULERS` | unset (auto-detect) | Scheduler pool size — exports `+S N:N +SDcpu N:N`. Read in `rel/env.sh.eex`, **not** `runtime.exs`, so `EnvVarDocsTest` does not enforce this row. **Set it to the task's vCPU count on Fargate**, where CPU is enforced on the task's microVM and the container cgroup reports no quota, so auto-detection cannot work — prod ran 2 normal + 2 dirty-CPU schedulers on a 0.5-vCPU task because of this. Elsewhere (self-host, Docker, local) leave it unset; the cgroup quota is readable and auto-detection is correct. Non-numeric or `0` is ignored with a warning and falls back to detection. Covered by `test/scripts/env_sh_scheduler_clamp_test.sh`. |
+
 ## Frontend / Hosts / CORS
 
 | Variable | Default | Purpose |
@@ -82,6 +87,7 @@ Live. This is regenerated from `config/runtime.exs` (the ~90 vars it reads), wit
 | `EMBED_429_SNOOZE_SECONDS` | `60` | Voyage-429 snooze (worker reschedules without burning an attempt) (:118). |
 | `EMBED_SETTLE_SECONDS` | `30` | Settle debounce — a note must sit unedited this long before it embeds, collapsing a burst of saves into one Voyage call. Higher = cheaper, staler index. |
 | `EMBED_SETTLE_MAX_WAIT_SECONDS` | `300` | Starvation ceiling — a continuously-edited note embeds at most this long after its first pending edit. Keep **>** `EMBED_SETTLE_SECONDS`. |
+| `BACKGROUND_JOB_PRIORITY` | `low` | BEAM scheduler priority for embed/indexing job processes. `low` means a job runs only when no `normal` process — every Phoenix channel serving a live sync — is runnable, so a bulk upload cannot starve the user's own sync. Kill-switch: set `normal` to revert without a deploy if indexing ever starves under sustained load. Only `normal` and `low` are accepted; anything else raises at boot. |
 | `EMBED_POISON_COOLDOWN_SECONDS` | `21600` (6h) | Cooldown parked on a note that exhausts its embed attempts, before `ReconcileEmbeddings` retries. Caps re-billing on permanently-failing notes. |
 | `EMBED_TRANSIENT_COOLDOWN_SECONDS` | `300` | Shorter cooldown for *transient* failures (upstream unreachable / 5xx) so a provider blip doesn't strand notes for the full poison window. Effective recovery is bounded below by the ~15min reconcile sweep. |
 | `EMBED_RECONCILE_BACKOFF_SECONDS` | `1800` (30m) | Preemptive cooldown stamped on every note `ReconcileEmbeddings` enqueues (#897) — makes backoff crash-independent (an OOM that skips the graceful poison stamp still can't re-enqueue immediately). **MUST exceed the 15-min reconcile cron interval.** |

@@ -55,6 +55,7 @@ defmodule Engram.Workers.ExtractNoteLinks do
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vaults.Vault
+  alias Engram.Workers.BackgroundPriority
   alias Engram.Workers.RewriteNoteLinks
 
   @repair_window_seconds 600
@@ -62,6 +63,8 @@ defmodule Engram.Workers.ExtractNoteLinks do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
+    :ok = BackgroundPriority.demote()
+
     case Engram.Notes.fetch_note_for_worker(args["note_id"]) do
       {:discard, _reason} = discard ->
         discard

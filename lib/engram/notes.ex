@@ -443,7 +443,12 @@ defmodule Engram.Notes do
         {:ok, {:ok, {prev_hash, note, _merged_text, _content_hash}}} ->
           _ =
             if prev_hash != note.content_hash do
-              _ = Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
+              _ =
+                Enqueue.enqueue(
+                  EmbedNote.new_debounced(note.id, priority: EmbedNote.priority_for(note)),
+                  "embed_note"
+                )
+
               # #648 lever 1 — cheap edge extraction must not ride the embed
               # debounce (30s) or the embed budget gate; ~2s leading edge.
               Enqueue.enqueue(ExtractNoteLinks.new_debounced(note.id), "extract_note_links")
@@ -502,7 +507,12 @@ defmodule Engram.Notes do
           # new-path upsert until they next pull.
           _ =
             if prev_hash != note.content_hash do
-              _ = Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
+              _ =
+                Enqueue.enqueue(
+                  EmbedNote.new_debounced(note.id, priority: EmbedNote.priority_for(note)),
+                  "embed_note"
+                )
+
               # #648 lever 1 — cheap edge extraction must not ride the embed
               # debounce (30s) or the embed budget gate; ~2s leading edge.
               Enqueue.enqueue(ExtractNoteLinks.new_debounced(note.id), "extract_note_links")
@@ -3935,8 +3945,16 @@ defmodule Engram.Notes do
       |> Enum.filter(fn %{result: {:ok, info}} -> info.prev_hash != info.content_hash end)
       # clamp: false — Oban.insert_all ignores unique/replace, so the settle
       # ceiling is moot here; skip the per-note burst-start SELECT.
+      #
+      # `prev_hash == nil` (a create) stands in for `EmbedNote.priority_for/1`'s
+      # `embed_hash == nil` here: this path carries an `info` map, not a Note
+      # row. The two agree except for a note that exists but never embedded
+      # successfully, which this call would rank interactive — a bounded
+      # mis-rank that `ReconcileEmbeddings` re-enqueues at backfill priority
+      # anyway.
       |> Enum.map(fn %{result: {:ok, info}} ->
-        EmbedNote.new_debounced(info.id, clamp: false)
+        priority = if is_nil(info.prev_hash), do: EmbedNote.backfill_priority(), else: 0
+        EmbedNote.new_debounced(info.id, clamp: false, priority: priority)
       end)
 
     _ = if embed_jobs != [], do: Oban.insert_all(embed_jobs)

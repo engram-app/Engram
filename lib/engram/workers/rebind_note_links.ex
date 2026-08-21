@@ -11,6 +11,25 @@ defmodule Engram.Workers.RebindNoteLinks do
   (chained from `DeleteNoteIndex`) note deletion — a delete can un-shadow a
   shorter-path sibling that was losing the resolution tiebreak.
 
+  ## Why this stays per-basename, and carries no `unique`
+
+  A bulk import enqueues one job per created note — 1,700 notes, 1,700
+  DISTINCT basenames — so neither available lever helps that shape:
+
+  * **Per-vault coalescing** would collapse the import to one job, and regress
+    the common case badly: a lone note create in a 10k-note vault would
+    re-resolve every edge in the vault instead of the handful sharing one
+    basename. The per-basename job is already cheap when a new note has no
+    inbound references yet — one indexed lookup on `note_links_basename_idx`
+    and out.
+  * **`unique` on `[:vault_id, :basename_hmac]`** collapses nothing during an
+    import (distinct basenames) while silently swallowing the folder-rename
+    fan-out against still-pending create jobs. `rewrite_wiring_test.exs`
+    fences that fan-out and rightly failed when this was tried on 2026-08-20.
+
+  If this job ever does become the bottleneck, the lever is queue concurrency
+  or the `:low` priority demote below — not deduplication.
+
   Args carry `basename_hmac` (base64), not plaintext `basename_key` — see
   encryption tier-3 audit T3.2 / H3. Plaintext in `oban_jobs.args` JSONB
   defeats Phase B at-rest encryption for the duration of any in-flight or
@@ -25,6 +44,7 @@ defmodule Engram.Workers.RebindNoteLinks do
   alias Engram.Links
   alias Engram.Repo
   alias Engram.Vaults.Vault
+  alias Engram.Workers.BackgroundPriority
 
   @doc """
   Builds a rebind job for the raw `basename_hmac` bytes within `vault_id`.
@@ -50,6 +70,8 @@ defmodule Engram.Workers.RebindNoteLinks do
           "basename_hmac" => basename_hmac_b64
         }
       }) do
+    :ok = BackgroundPriority.demote()
+
     case Base.decode64(basename_hmac_b64) do
       {:ok, basename_hmac} ->
         case RotationGate.check(user_id) do
