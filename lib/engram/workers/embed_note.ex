@@ -35,11 +35,13 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Repo
   alias Engram.UsageMeters
   alias Engram.Vaults.Vault
+  alias Engram.Workers.BackgroundPriority
 
   require Logger
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args} = job) do
+    :ok = BackgroundPriority.demote()
     note_id = args["note_id"]
     # T3.2 — `old_path_hmac` is a base64-encoded HMAC, never plaintext path.
     old_path_hmac_b64 = args["old_path_hmac"]

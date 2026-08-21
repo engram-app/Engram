@@ -18,6 +18,14 @@ defmodule Engram.Cache.NodeLocalEts do
   ## Options
 
     * `:table` (required) — the ETS table name atom.
+    * `:access` — ETS access mode, default `:public`. Pass `:protected` for a
+      cache holding user data: foreign processes can still read (so `cache_*`
+      reads stay direct-ETS) but only the owner may write, which closes
+      cache-poisoning. **A `:protected` cache must route its writes through
+      the owner** — `ets_insert/1` rescues the `ArgumentError` a foreign write
+      raises and returns `:ok`, so a direct write would silently never land.
+    * `:sensitive` — when true, sets `:erlang.process_flag(:sensitive, true)`
+      on the owner, excluding the table's backing memory from `erl_crash.dump`.
     * `:ttl` — milliseconds. Injects `cache_lookup/1`, `cache_put/2`, and
       `cache_fetch/2` over `{key, value, expires_at}` rows (monotonic ms).
     * `:cache_sync` — when true, subscribes to `Engram.Cluster.CacheSync` in
@@ -56,6 +64,8 @@ defmodule Engram.Cache.NodeLocalEts do
       require Logger
 
       @nle_table Keyword.fetch!(opts, :table)
+      @nle_access Keyword.get(opts, :access, :public)
+      @nle_sensitive Keyword.get(opts, :sensitive, false)
       @nle_ttl Keyword.get(opts, :ttl)
       @nle_cache_sync Keyword.get(opts, :cache_sync, false)
       @nle_sync_evict Keyword.get(opts, :sync_evict)
@@ -81,15 +91,29 @@ defmodule Engram.Cache.NodeLocalEts do
         _ =
           :ets.new(@nle_table, [
             :named_table,
-            :public,
+            @nle_access,
             :set,
             read_concurrency: true,
             write_concurrency: true
           ])
 
+        :ok = mark_sensitive()
         :ok = subscribe_cache_sync()
         :ok = listen_pg()
         {:ok, %{}}
+      end
+
+      # `:sensitive` excludes this process's heap — which backs the ETS table —
+      # from any `erl_crash.dump`. Opt-in, for caches holding user data rather
+      # than derived scalars. Same reasoning as `Crypto.DekCache`, which
+      # predates this macro.
+      if @nle_sensitive do
+        defp mark_sensitive do
+          _ = :erlang.process_flag(:sensitive, true)
+          :ok
+        end
+      else
+        defp mark_sensitive, do: :ok
       end
 
       # Variant selection happens at compile time (module-body `if` on the
