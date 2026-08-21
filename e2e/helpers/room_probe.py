@@ -42,20 +42,33 @@ from helpers.backend_rpc import backend_rpc
 # RoomStarts — all three are read positionally.
 SOURCES = ("handshake", "edit", "create_batch", "unknown")
 
+# SOURCES is the ONE definition of both the slot count and the atom->slot
+# mapping. An earlier revision hard-coded `:counters.new(4, [])` and `1..4`
+# alongside it — three places encoding the same number, so adding a fifth
+# source would have silently under-counted (and `:counters.add` past the end
+# raises INSIDE the telemetry handler, which detaches it: the probe would then
+# report zeros, and zeros read as "no rooms allocated"). Derived, not repeated.
+_N = len(SOURCES)
+_LAST = _N  # the catch-all slot; SOURCES[-1] must stay "unknown"
+
+_CASE_ARMS = "; ".join(
+    f":{name} -> {i}" for i, name in enumerate(SOURCES[:-1], start=1)
+)
+
 _ARM_EXPR = (
-    ":persistent_term.put(:e2e_room_starts, :counters.new(4, [])); "
+    f":persistent_term.put(:e2e_room_starts, :counters.new({_N}, [])); "
     ':telemetry.detach("e2e-room-starts"); '
     ':telemetry.attach("e2e-room-starts", [:engram, :crdt, :room_start], '
     "fn _, _, meta, _ -> "
     ":counters.add(:persistent_term.get(:e2e_room_starts), "
-    "(case meta[:source] do :handshake -> 1; :edit -> 2; :create_batch -> 3; _ -> 4 end), 1) "
+    f"(case meta[:source] do {_CASE_ARMS}; _ -> {_LAST} end), 1) "
     "end, nil); "
     'IO.puts("armed")'
 )
 
 _READ_EXPR = (
     "c = :persistent_term.get(:e2e_room_starts); "
-    "1..4 |> Enum.map(&:counters.get(c, &1)) |> Enum.join(\",\") |> IO.puts()"
+    f"1..{_N} |> Enum.map(&:counters.get(c, &1)) |> Enum.join(\",\") |> IO.puts()"
 )
 
 
