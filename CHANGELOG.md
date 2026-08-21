@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.18.1](https://github.com/engram-app/Engram/compare/0.18.0...0.18.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* **link:** don't flash the code form on an auto-verified link ([#1444](https://github.com/engram-app/Engram/issues/1444)) ([4259b83](https://github.com/engram-app/Engram/commit/4259b83ef90b7404657eaa45eb2a659f053ddbb1))
+
+
+### Performance Improvements
+
+* **indexing:** cut bulk-upload CPU in the keyword-index path ([#1447](https://github.com/engram-app/Engram/issues/1447)) ([007c9e7](https://github.com/engram-app/Engram/commit/007c9e7d6e97189f48af963985aa0f87ece2a446))
+
 ## [0.18.0](https://github.com/engram-app/Engram/compare/0.17.0...0.18.0) (2026-08-20)
 
 
