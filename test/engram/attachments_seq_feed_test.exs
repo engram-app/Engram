@@ -18,10 +18,10 @@ defmodule Engram.AttachmentsSeqFeedTest do
     row
   end
 
-  defp put(user, vault, path) do
+  defp put(user, vault, path, content \\ nil) do
     Attachments.upsert_attachment(user, vault, %{
       "path" => path,
-      "content_base64" => b64(path),
+      "content_base64" => b64(content || path),
       "mime_type" => "image/png"
     })
   end
@@ -30,8 +30,26 @@ defmodule Engram.AttachmentsSeqFeedTest do
     {:ok, a} = put(user, vault, "a.png")
     assert att_row(user, a.id).version == 1
 
-    {:ok, _} = put(user, vault, "a.png")
+    # An UPDATE means different bytes. This used to re-send the identical
+    # payload (the helper defaulted content to the path) and still expect a
+    # bump — which is the behaviour the identical-content short-circuit
+    # deliberately removed, and is asserted below instead.
+    {:ok, _} = put(user, vault, "a.png", "genuinely new bytes")
     assert att_row(user, a.id).version == 2
+  end
+
+  test "re-sending identical bytes does not bump version", %{user: user, vault: vault} do
+    # `version` and `seq` drive the sync feed: bumping them for a write that
+    # changed nothing hands every other device a change to chase. A looping
+    # client did exactly this ~5,400 times on 2026-08-21.
+    {:ok, a} = put(user, vault, "a.png")
+    before = att_row(user, a.id)
+
+    {:ok, _} = put(user, vault, "a.png")
+    after_row = att_row(user, a.id)
+
+    assert after_row.version == before.version
+    assert after_row.seq == before.seq
   end
 
   test "attachment seq feed returns seq>cursor incl tombstones", %{user: user, vault: vault} do

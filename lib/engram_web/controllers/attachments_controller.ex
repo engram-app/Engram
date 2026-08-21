@@ -105,7 +105,7 @@ defmodule EngramWeb.AttachmentsController do
   # uploading `" text/plain"` got 402 `attachment_must_be_text` while
   # `MimeWhitelist.check/2` considered the same string text.
   defp text_mime?(mime) when is_binary(mime),
-    do: String.starts_with?(Engram.Storage.MimeWhitelist.normalize(mime), "text/")
+    do: String.starts_with?(MimeWhitelist.normalize(mime), "text/")
 
   defp do_upload(conn, user, vault, params) do
     case Attachments.upsert_attachment(user, vault, params) do
@@ -341,6 +341,7 @@ defmodule EngramWeb.AttachmentsController do
                 mime_type: a.mime_type,
                 size_bytes: a.size_bytes,
                 mtime: a.mtime,
+                content_hash: a.content_hash,
                 updated_at: a.updated_at
               }
             end)
@@ -415,6 +416,7 @@ defmodule EngramWeb.AttachmentsController do
           conn
           |> put_resp_content_type(att.mime_type || "application/octet-stream")
           |> put_resp_header("content-disposition", ~s(#{disposition}; filename="#{filename}"))
+          |> maybe_skip_compression(att.mime_type)
           |> send_resp(200, att.content)
         else
           json(conn, %{
@@ -423,6 +425,7 @@ defmodule EngramWeb.AttachmentsController do
             mime_type: att.mime_type,
             size_bytes: att.size_bytes,
             mtime: att.mtime,
+            content_hash: att.content_hash,
             content_base64: Base.encode64(att.content),
             created_at: att.created_at,
             updated_at: att.updated_at
@@ -505,7 +508,7 @@ defmodule EngramWeb.AttachmentsController do
     # serve gate must agree on what a value MEANS, or the same media type gets
     # opposite answers depending on whitespace. Normalizing here only, as an
     # earlier version of this fix did, was how that split appeared.
-    case Engram.Storage.MimeWhitelist.normalize(mime) do
+    case MimeWhitelist.normalize(mime) do
       "image/svg+xml" -> false
       "application/pdf" -> true
       "text/plain" -> true
@@ -513,6 +516,93 @@ defmodule EngramWeb.AttachmentsController do
     end
   end
 
+  # Bandit compresses ANY response body when the client sends `Accept-Encoding:
+  # gzip`: `Bandit.Compression.negotiate_content_encoding/2` defaults `compress`
+  # to true, and `new/5` applies NO content-type check. So a PNG, PDF or video
+  # gets deflated on the way out — CPU spent to produce a payload that is
+  # usually LARGER than the input. A 2026-08-21 prod profile put
+  # `:zlib.append_iolist/2` at 8.57s, 5.79% of all CPU, reached straight from
+  # this controller's `action/2`.
+  #
+  # `cache-control: no-transform` is the one opt-out Bandit honours
+  # (`response_indicates_no_transform/1`) that is also semantically correct:
+  # RFC 9111 no-transform tells intermediaries not to re-encode the payload,
+  # which is exactly the claim being made. The alternatives are worse — a
+  # `content-encoding: identity` header is not valid in a response per RFC 9110
+  # (identity is an Accept-Encoding-only token), and faking a strong ETag to
+  # suppress compression would be a lie about the representation.
+  #
+  # APPEND, never replace. Phoenix already sets `cache-control: max-age=0,
+  # private, must-revalidate` on these responses, so a `put_resp_header/3` with
+  # a bare `no-transform` silently drops `private` — quietly making attachment
+  # bytes shared-cacheable as a side effect of a CPU fix, which is exactly the
+  # class of accident docs/context/edge-cache-request-varying-headers.md is
+  # about. Bandit only needs the token present in the list, not alone.
+  @doc false
+  @spec no_transform_directive() :: String.t()
+  def no_transform_directive, do: "no-transform"
+
+  # Types whose bytes are already entropy-coded. Note the exclusions:
+  # `image/svg+xml` is XML, `image/bmp` and `image/tiff` are commonly stored
+  # uncompressed, and `application/octet-stream` says nothing about the
+  # payload — all keep gzip.
+  #
+  # Deliberately an allow-list, not a deny-list: an unrecognised type keeps
+  # compressing, so a stale list costs a little CPU rather than shipping a
+  # large payload uncompressed.
+  @precompressed_exact MapSet.new(~w(
+    application/pdf application/zip application/gzip application/x-gzip
+    application/x-7z-compressed application/x-rar-compressed application/x-bzip2
+    application/vnd.rar application/epub+zip
+    font/woff font/woff2
+  ))
+
+  @precompressed_prefixes ~w(video/ audio/)
+
+  @doc false
+  @spec precompressed?(String.t() | nil) :: boolean()
+  def precompressed?(mime) do
+    # Same normalizer as the upload gate and `inline_safe?/1`: a media type
+    # must not mean different things to different gates just because it
+    # carries a parameter or odd casing.
+    case MimeWhitelist.normalize(mime) do
+      nil -> false
+      "image/svg+xml" -> false
+      "image/bmp" -> false
+      "image/tiff" -> false
+      type -> precompressed_type?(type)
+    end
+  end
+
+  defp precompressed_type?(type) do
+    String.starts_with?(type, "image/") or
+      Enum.any?(@precompressed_prefixes, &String.starts_with?(type, &1)) or
+      MapSet.member?(@precompressed_exact, type)
+  end
+
+  defp maybe_skip_compression(conn, mime) do
+    if precompressed?(mime), do: append_no_transform(conn), else: conn
+  end
+
+  defp append_no_transform(conn) do
+    case get_resp_header(conn, "cache-control") do
+      [] ->
+        put_resp_header(conn, "cache-control", no_transform_directive())
+
+      [existing | _] ->
+        if no_transform_directive() in Plug.Conn.Utils.list(existing) do
+          conn
+        else
+          put_resp_header(conn, "cache-control", existing <> ", " <> no_transform_directive())
+        end
+    end
+  end
+
+  # `content_hash` is a keyed HMAC over the plaintext, scoped to this user's
+  # own DEK — it is not derivable by anyone else and tells its owner exactly
+  # one thing: whether the bytes they hold are the bytes we hold. Exposing it
+  # is what lets a client stop re-sending attachments the server already has
+  # (see Engram.Attachments.identical_or_changed/4).
   defp serialize_metadata(att) do
     %{
       id: att.id,
@@ -520,6 +610,7 @@ defmodule EngramWeb.AttachmentsController do
       mime_type: att.mime_type,
       size_bytes: att.size_bytes,
       mtime: att.mtime,
+      content_hash: att.content_hash,
       created_at: att.created_at,
       updated_at: att.updated_at
     }

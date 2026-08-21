@@ -78,7 +78,12 @@ defmodule EngramWeb.VaultTreeController do
     json(conn, %{
       folders: Notes.folders_payload(user, vault),
       notes: Enum.sort_by(notes, & &1.path),
-      attachments: Enum.sort_by(attachments, & &1.path),
+      # `list_attachments/2` carries content_hash for the sync-facing listing;
+      # the tree never reads it, and the whole point of this endpoint is that
+      # it does not ship per-file hashes (see the moduledoc). Dropped here so
+      # the attachment half keeps the promise the notes half already makes.
+      attachments:
+        attachments |> Enum.sort_by(& &1.path) |> Enum.map(&Map.delete(&1, :content_hash)),
       change_seq: current_seq
     })
   end
