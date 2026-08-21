@@ -9,7 +9,6 @@ defmodule Engram.Indexing do
   import Ecto.Query
 
   alias Engram.KeywordIndex
-  alias Engram.KeywordIndex.Tokenizer
   alias Engram.Notes.Chunk
   alias Engram.Parsers.Markdown
   alias Engram.Repo
@@ -309,10 +308,10 @@ defmodule Engram.Indexing do
       |> Enum.reduce_while({:ok, []}, fn {chunk, vector}, {:ok, acc} ->
         point_id = Ecto.UUID.generate()
 
-        doc_len = chunk.text |> Tokenizer.tokens(nil) |> length()
-
-        sparse =
-          KeywordIndex.module().encode_document(chunk.text, filter_key, doc_len, avgdl, language)
+        # One tokenization pass yields both the sparse vector and `doc_len`
+        # (the raw token count, also persisted as `chunks.token_count`).
+        {sparse, doc_len} =
+          KeywordIndex.module().encode_document(chunk.text, filter_key, avgdl, language)
 
         base_payload = %{
           user_id: to_string(note.user_id),

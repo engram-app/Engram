@@ -11,14 +11,19 @@ defmodule Engram.KeywordIndex do
 
   @type sparse :: %{indices: [non_neg_integer()], values: [float()]}
 
-  @doc "Encode a document chunk's plaintext into a BM25-weighted sparse vector."
+  @doc """
+  Encode a document chunk's plaintext into a BM25-weighted sparse vector.
+
+  Returns the vector *and* the chunk's raw token count — the impl derives the
+  length normalizer from the tokens it already produced, so the caller never
+  tokenizes a second time just to count.
+  """
   @callback encode_document(
               text :: String.t(),
               filter_key :: binary(),
-              doc_len :: non_neg_integer(),
               avgdl :: float(),
               language :: atom() | nil
-            ) :: sparse()
+            ) :: {sparse(), doc_len :: non_neg_integer()}
 
   @doc "Encode a query string into a sparse query vector (unit values)."
   @callback encode_query(query :: String.t(), filter_key :: binary(), language :: atom() | nil) ::

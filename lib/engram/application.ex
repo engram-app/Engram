@@ -44,6 +44,7 @@ defmodule Engram.Application do
         Engram.UsageMeters.ActivityCache,
         Engram.Usage.DailyCap.Cache,
         Engram.KeywordIndex.Stats.Cache,
+        Engram.KeywordIndex.StemCache,
         Engram.Onboarding.TermsCache,
         # Subscribe to CacheSync in init → must start after PubSub.
         Engram.Onboarding.GateCache,

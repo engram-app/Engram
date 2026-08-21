@@ -9,7 +9,7 @@ defmodule Engram.KeywordIndex.NoPlaintextTest do
     {:ok, key} = Crypto.dek_filter_key(user)
 
     text = "PADDLE_API_KEY secret rotation paddle"
-    %{indices: indices, values: values} = QdrantSparse.encode_document(text, key, 4, 4.0)
+    {%{indices: indices, values: values}, _doc_len} = QdrantSparse.encode_document(text, key, 4.0)
 
     # Only integers and floats are emitted — no token strings.
     assert Enum.all?(indices, &is_integer/1)
@@ -34,7 +34,9 @@ defmodule Engram.KeywordIndex.NoPlaintextTest do
     # With :en language the tokenizer dual-emits raw + stem for each word
     # where they differ: "running"→"run", "deploying"→"deploy", "changes"→"chang".
     text = "running deploying changes"
-    %{indices: indices, values: values} = QdrantSparse.encode_document(text, key, 3, 4.0, :en)
+
+    {%{indices: indices, values: values}, _doc_len} =
+      QdrantSparse.encode_document(text, key, 4.0, :en)
 
     # Only HMAC u32 integers and BM25 floats — no plaintext strings.
     assert Enum.all?(indices, &is_integer/1)

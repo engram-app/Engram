@@ -23,9 +23,10 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
   end
 
   test "encode_document returns aligned indices/values, no plaintext", %{key_a: key} do
-    %{indices: indices, values: values} =
-      QdrantSparse.encode_document("alpha alpha beta", key, 3, 3.0)
+    {%{indices: indices, values: values}, doc_len} =
+      QdrantSparse.encode_document("alpha alpha beta", key, 3.0, nil)
 
+    assert doc_len == 3
     assert length(indices) == 2
     assert length(values) == 2
     assert Enum.all?(indices, &(is_integer(&1) and &1 >= 0))
@@ -42,11 +43,17 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
   end
 
   test "empty text encodes to empty sparse vector", %{key_a: key} do
-    assert QdrantSparse.encode_document("", key, 0, 10.0) == %{indices: [], values: []}
+    assert QdrantSparse.encode_document("", key, 10.0, nil) == {%{indices: [], values: []}, 0}
+  end
+
+  test "encode_document derives doc_len from the same pass, excluding stems", %{key_a: key} do
+    # "running fast" → raw ["running", "fast"]; the :en stem "run" must not
+    # inflate the BM25 length normalizer.
+    assert {_sparse, 2} = QdrantSparse.encode_document("running fast", key, 10.0, :en)
   end
 
   test "a stemmed document and a stemmed query share a dimension (recall)", %{key_a: key} do
-    doc = QdrantSparse.encode_document("running fast", key, 2, 10.0, :en)
+    {doc, _doc_len} = QdrantSparse.encode_document("running fast", key, 10.0, :en)
     q = QdrantSparse.encode_query("run", key, :en)
     assert Enum.any?(q.indices, &(&1 in doc.indices))
   end

@@ -65,15 +65,23 @@ defmodule Engram.Links do
     {:ok, filter_key} = Crypto.dek_filter_key(user)
     now = DateTime.utc_now()
 
+    # Resolve every edge against ONE prefetch per table instead of a query per
+    # edge. `resolve_target/4` is a per-edge query (two, when the preferred
+    # table comes back dangling), and this runs on every note write: a
+    # 2026-08-20 prod profile of a 1.7k-note upload measured 65k `notes`
+    # SELECTs and 13k `attachments` SELECTs — ~37 per note, one per wikilink.
+    with_hmacs = Enum.map(parsed, &{&1, Crypto.hmac_field(filter_key, basename_key(&1.target))})
+    candidates = prefetch_candidates(user, vault, Enum.map(with_hmacs, &elem(&1, 1)))
+
     rows =
-      Enum.map(parsed, fn p ->
+      Enum.map(with_hmacs, fn {p, hmac} ->
         id = Engram.Notes.mint_id()
 
         {tct, tnonce} =
           Envelope.encrypt(p.target, dek, Crypto.aad_for_row(:note_links, :target_text, id))
 
         {target_note_id, target_attachment_id} =
-          case resolve_target(user, vault, p.target, p.link_type) do
+          case resolve_prefetched(candidates, hmac, p.target) do
             {:note, nid} -> {nid, nil}
             {:attachment, aid} -> {nil, aid}
             :dangling -> {nil, nil}
@@ -88,7 +96,7 @@ defmodule Engram.Links do
           target_attachment_id: target_attachment_id,
           target_text_ciphertext: tct,
           target_text_nonce: tnonce,
-          target_basename_hmac: Crypto.hmac_field(filter_key, basename_key(p.target)),
+          target_basename_hmac: hmac,
           link_type: p.link_type,
           position: p.position,
           dek_version: Crypto.row_version_aad_bound(),
@@ -124,6 +132,35 @@ defmodule Engram.Links do
   end
 
   defp lock_source_note!(source_note_id), do: Repo.advisory_lock!(to_string(source_note_id))
+
+  # Both tables for every distinct hmac in the note, in two queries. This
+  # forfeits `route_resolution/3`'s lazy short-circuit (it no longer skips the
+  # second table's *query*, only its filter), which trades at worst one extra
+  # query per note against one saved per link.
+  defp prefetch_candidates(user, vault, hmacs) do
+    uniq = Enum.uniq(hmacs)
+
+    %{
+      notes: fetch_candidates_by_hmac(user, vault, uniq, :notes),
+      attachments: fetch_candidates_by_hmac(user, vault, uniq, :attachments)
+    }
+  end
+
+  # Same extension-preference + cross-table-fallback rule as `resolve_target/4`,
+  # reading from the prefetch instead of the DB.
+  defp resolve_prefetched(candidates, hmac, target) do
+    ext = target |> Path.basename() |> Path.extname() |> String.downcase()
+
+    route_resolution(
+      ext,
+      fn -> candidates.notes |> Map.get(hmac, []) |> resolve_from_candidates(target, :note) end,
+      fn ->
+        candidates.attachments
+        |> Map.get(hmac, [])
+        |> resolve_from_candidates(target, :attachment)
+      end
+    )
+  end
 
   defp put_optional_envelope(row, field, nil, _dek, _id) do
     {ct_key, nonce_key} = envelope_keys(field)
@@ -209,59 +246,75 @@ defmodule Engram.Links do
   # Query + decrypt only (no target-dependent filtering) — the part that's
   # IDENTICAL for every edge sharing an hmac, so `bind_danglers_for_hmac/3`
   # can call this once per table instead of once per edge.
-  defp fetch_decrypted_candidates(user, vault, hmac, :notes) do
+  defp fetch_decrypted_candidates(user, vault, hmac, table) do
+    user
+    |> fetch_candidates_by_hmac(vault, [hmac], table)
+    |> Map.get(hmac, [])
+  end
+
+  # Batch form: `%{basename_hmac => [{id, decrypted_path}]}` for a set of
+  # hmacs, one query per table. `fetch_decrypted_candidates/4` is the
+  # single-hmac projection of this.
+  defp fetch_candidates_by_hmac(_user, _vault, [], _table), do: %{}
+
+  defp fetch_candidates_by_hmac(user, vault, hmacs, :notes) do
     from(n in Note,
       where:
         n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
-          n.basename_hmac == ^hmac and is_nil(n.deleted_at),
+          n.basename_hmac in ^hmacs and is_nil(n.deleted_at),
       select: %{
         id: n.id,
+        basename_hmac: n.basename_hmac,
         path_ciphertext: n.path_ciphertext,
         path_nonce: n.path_nonce,
         dek_version: n.dek_version
       }
     )
     |> Repo.all(skip_tenant_check: true)
-    |> decrypt_candidate_paths(user, :notes)
+    |> decrypt_and_group(user, :notes)
   end
 
-  defp fetch_decrypted_candidates(user, vault, hmac, :attachments) do
+  defp fetch_candidates_by_hmac(user, vault, hmacs, :attachments) do
     from(a in Attachment,
       where:
         a.user_id == ^user.id and a.vault_id == ^vault.id and
-          a.basename_hmac == ^hmac and is_nil(a.deleted_at),
+          a.basename_hmac in ^hmacs and is_nil(a.deleted_at),
       select: %{
         id: a.id,
+        basename_hmac: a.basename_hmac,
         path_ciphertext: a.path_ciphertext,
         path_nonce: a.path_nonce,
         dek_version: a.dek_version
       }
     )
     |> Repo.all(skip_tenant_check: true)
-    |> decrypt_candidate_paths(user, :attachments)
+    |> decrypt_and_group(user, :attachments)
   end
 
-  defp decrypt_candidate_paths([], _user, _table), do: []
+  # One `get_dek/1` per table per note, not one per link. Rows that fail to
+  # decrypt are dropped, same as before. Grouping reverses each bucket's query
+  # order, which `resolve_from_candidates/3` cannot observe: it sorts on
+  # `{String.length(path), path}`, and live rows in one vault have distinct
+  # paths, so that ordering is total and no stable-sort tie survives to break.
+  defp decrypt_and_group([], _user, _table), do: %{}
 
-  defp decrypt_candidate_paths(rows, user, table) do
+  defp decrypt_and_group(rows, user, table) do
     {:ok, dek} = Crypto.get_dek(user)
 
-    rows
-    |> Enum.map(fn row ->
-      path =
-        decrypt_field(
-          row.path_ciphertext,
-          row.path_nonce,
-          dek,
-          row.dek_version,
-          table,
-          :path,
-          row.id
-        )
-
-      {row.id, path}
+    Enum.reduce(rows, %{}, fn row, acc ->
+      case decrypt_field(
+             row.path_ciphertext,
+             row.path_nonce,
+             dek,
+             row.dek_version,
+             table,
+             :path,
+             row.id
+           ) do
+        nil -> acc
+        path -> Map.update(acc, row.basename_hmac, [{row.id, path}], &[{row.id, path} | &1])
+      end
     end)
-    |> Enum.reject(fn {_id, path} -> is_nil(path) end)
   end
 
   # Target-dependent filter + tiebreak — the part that varies per edge even

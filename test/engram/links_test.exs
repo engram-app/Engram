@@ -568,4 +568,104 @@ defmodule Engram.LinksTest do
              )
     end
   end
+
+  describe "replace_links/4 candidate prefetch" do
+    test "resolves every link with a bounded number of candidate queries",
+         %{user: user, vault: vault} do
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
+
+      targets =
+        for i <- 1..12 do
+          Engram.Fixtures.insert_note!(user, vault, %{path: "Target#{i}.md"})
+        end
+
+      content = Enum.map_join(1..12, " ", &"[[Target#{&1}]]")
+      parsed = Parser.extract(content)
+      assert length(parsed) == 12
+
+      {count, _} =
+        count_candidate_queries(fn ->
+          Links.replace_links(user, vault, source.id, parsed)
+        end)
+
+      # One prefetch per table, NOT one query per link. Before this was 12+.
+      assert count <= 2, "expected <= 2 candidate queries for 12 links, got #{count}"
+
+      # ...and the resolution is still correct for every edge.
+      {:ok, edges} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
+      assert length(edges) == 12
+
+      assert Enum.sort(Enum.map(edges, & &1.target_note_id)) ==
+               Enum.sort(Enum.map(targets, & &1.id))
+    end
+
+    test "a dangling link still resolves to nil without extra queries",
+         %{user: user, vault: vault} do
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
+      hit = Engram.Fixtures.insert_note!(user, vault, %{path: "Real.md"})
+      parsed = Parser.extract("[[Real]] [[Nope]] [[AlsoMissing]]")
+
+      {count, _} =
+        count_candidate_queries(fn ->
+          Links.replace_links(user, vault, source.id, parsed)
+        end)
+
+      assert count <= 2
+
+      {:ok, edges} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(from(l in NoteLink, order_by: l.position))
+        end)
+
+      assert Enum.map(edges, & &1.target_note_id) == [hit.id, nil, nil]
+    end
+
+    test "duplicate targets in one note share a single prefetched bucket",
+         %{user: user, vault: vault} do
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
+      target = Engram.Fixtures.insert_note!(user, vault, %{path: "Same.md"})
+      parsed = Parser.extract("[[Same]] [[Same]] [[Same]] [[Same]]")
+
+      {count, _} =
+        count_candidate_queries(fn ->
+          Links.replace_links(user, vault, source.id, parsed)
+        end)
+
+      assert count <= 2
+
+      {:ok, edges} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
+      assert length(edges) == 4
+      assert Enum.all?(edges, &(&1.target_note_id == target.id))
+    end
+  end
+
+  # Counts SELECTs against the candidate tables (notes/attachments) issued on
+  # this process while `fun` runs.
+  defp count_candidate_queries(fun) do
+    test_pid = self()
+    handler_id = "candidate-query-counter-#{System.unique_integer([:positive])}"
+    {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+    :telemetry.attach(
+      handler_id,
+      [:engram, :repo, :query],
+      fn _event, _measurements, meta, _config ->
+        query = meta[:query] || ""
+
+        if self() == test_pid and meta[:source] in ["notes", "attachments"] and
+             String.starts_with?(query, "SELECT") and String.contains?(query, "basename_hmac") do
+          Agent.update(counter, &(&1 + 1))
+        end
+      end,
+      nil
+    )
+
+    try do
+      result = fun.()
+      {Agent.get(counter, & &1), result}
+    after
+      :telemetry.detach(handler_id)
+      Agent.stop(counter)
+    end
+  end
 end
