@@ -95,7 +95,17 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         # clamp: false — insert_all ignores unique/replace, so the settle
         # ceiling is moot; skip the per-note burst-start SELECT (one per stale
         # note, up to @batch_size, every tick).
-        Oban.insert_all(Enum.map(note_ids, &EmbedNote.new_debounced(&1, clamp: false)))
+        #
+        # Backfill priority unconditionally: everything this worker finds is by
+        # definition catch-up — a note that fell through, a crash retry, or the
+        # tail of a bulk import. None of it has a user waiting on it, so none of
+        # it may outrank a live edit.
+        Oban.insert_all(
+          Enum.map(
+            note_ids,
+            &EmbedNote.new_debounced(&1, clamp: false, priority: EmbedNote.backfill_priority())
+          )
+        )
       end
 
     :ok

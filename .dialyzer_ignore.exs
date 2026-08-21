@@ -25,6 +25,13 @@
   # tests) can rely on, not today's specific cap. Same pattern as above.
   {"lib/engram/links.ex", :contract_supertype, 711},
 
+  # `EmbedNote.backfill_priority/0` is intentionally specced as `pos_integer()`
+  # rather than the literal `9` dialyzer infers from `@backfill_priority` — the
+  # spec documents the contract ("some priority that loses to interactive"),
+  # not today's value, so callers and tests don't bake the constant in a second
+  # place. Same pattern as `Links.backlinks_limit/0` above.
+  {"lib/engram/workers/embed_note.ex", :contract_supertype, 411},
+
   # `Links.live_basename_count/3` sums two `Repo.one(select: count(...))`
   # results. SQL `count()` is always a non-negative integer at runtime, but
   # `Repo.one/2` types as `term()`, so dialyzer widens the `+` to `number()`

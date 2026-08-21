@@ -385,6 +385,7 @@ defmodule Engram.Workers.EmbedNote do
     new(
       args,
       scheduled_at: scheduled_at,
+      priority: Keyword.get(opts, :priority, 0),
       replace: [:scheduled_at],
       # Override the worker default (60s) so dedup spans the full settle+ceiling
       # window — otherwise a burst longer than the period spawns a second job and
@@ -396,6 +397,45 @@ defmodule Engram.Workers.EmbedNote do
       ]
     )
   end
+
+  @backfill_priority 9
+
+  @doc """
+  Oban priority for backfill work. Oban fetches `priority ASC`, so a higher
+  number loses every tie to an interactive job.
+
+  9 is the lowest the `oban_jobs` schema allows (`non_negative_priority` checks
+  `>= 0`; Oban caps the usable range at 9). Nothing else in the codebase sets a
+  priority, so every other job is 0 and outranks these.
+  """
+  @spec backfill_priority() :: pos_integer()
+  def backfill_priority, do: @backfill_priority
+
+  @doc """
+  Priority for a note's embed job, from the note itself.
+
+  A note that has **never** been embedded (`embed_hash` nil) is bulk work: a
+  first sync, an import, a restore. A note being RE-embedded has been searchable
+  before and a user is waiting on their edit showing up, so it is interactive.
+
+  This is the whole fairness mechanism, and it deliberately needs no burst
+  detection, no per-user counter, and no new state — the discriminator is a
+  column already in hand at every enqueue site.
+
+  Why it matters: Oban is otherwise pure FIFO (nothing in this codebase set a
+  priority before). One user importing a 50k-note vault would put 50k jobs
+  ahead of every other user's live edit, so nobody's edits become searchable
+  until that import drains — hours. With this split, a live edit jumps the
+  entire backlog.
+
+  Note that low priority is NOT deferral: a demoted job runs immediately when
+  nothing else is queued. It only yields under contention, which is exactly
+  when yielding is correct. That is why demoting a genuinely-new note (a fresh
+  note in an idle system) costs nothing.
+  """
+  @spec priority_for(Note.t()) :: non_neg_integer()
+  def priority_for(%Note{embed_hash: nil}), do: @backfill_priority
+  def priority_for(%Note{}), do: 0
 
   defp settle_seconds, do: Application.get_env(:engram, :embed_settle_seconds, 30)
 
