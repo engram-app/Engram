@@ -135,6 +135,98 @@ defmodule EngramWeb.CrdtChannelTest do
     end
   end
 
+  # The `genesis_seed` telemetry is how a fallback rate gets ATTRIBUTED — the
+  # 2026-08-20 investigation could measure "70% of notes still open a room" but
+  # not why, until these reasons existed. An instrument nobody tests reports
+  # zeros when it breaks, and zeros read as "no declines", which is the same
+  # vacuously-green failure the room-start probe was built to avoid. So the
+  # instrument gets its own coverage.
+  describe "genesis_seed telemetry" do
+    setup do
+      test_pid = self()
+      handler = "genesis-seed-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :crdt, :genesis_seed],
+        fn _event, measurements, meta, _ ->
+          send(test_pid, {:genesis_seed, meta, measurements})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      :ok
+    end
+
+    test "a bodyless create reports :no_b64", %{socket: socket} do
+      ref =
+        push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "Notes/a.md"})
+
+      assert_reply ref, :ok, %{seeded: false}
+      assert_receive {:genesis_seed, %{reason: :no_b64}, %{count: 1}}
+    end
+
+    test "a body-bearing create reports :seeded", %{socket: socket} do
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => Ecto.UUID.generate(),
+          "path" => "Notes/b.md",
+          "b64" => frame_for_content("body")
+        })
+
+      assert_reply ref, :ok, %{seeded: true}
+      assert_receive {:genesis_seed, %{reason: :seeded}, %{count: 1}}
+    end
+
+    test "a non-markdown path reports :not_markdown, not a frame error", %{socket: socket} do
+      # `.canvas` rides these same creates but CRDT projects to notes.content
+      # for markdown only. Distinguishing it from a malformed frame is the whole
+      # reason the steps are tagged.
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => Ecto.UUID.generate(),
+          "path" => "Notes/board.canvas",
+          "b64" => frame_for_content("body")
+        })
+
+      assert_reply ref, :ok, %{seeded: false}
+      assert_receive {:genesis_seed, %{reason: :not_markdown}, _}
+    end
+
+    test "a malformed body reports :frame_decode_failed", %{socket: socket} do
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => Ecto.UUID.generate(),
+          "path" => "Notes/c.md",
+          "b64" => "!!!not base64!!!"
+        })
+
+      assert_reply ref, :ok, %{seeded: false}
+      assert_receive {:genesis_seed, %{reason: :frame_decode_failed}, _}
+    end
+
+    test "metadata carries ONLY the reason atom — never a payload-derived term", %{
+      socket: socket
+    } do
+      # These error terms are the class this module's line ~418 warns about
+      # ("error_kind/1, never inspect(reason)"): they can embed a wrapped DEK or
+      # a provider response body. A `detail` key shipped here once; nothing
+      # stopped a handler from `inspect`ing it into a log.
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => Ecto.UUID.generate(),
+          "path" => "Notes/d.md",
+          "b64" => "!!!not base64!!!"
+        })
+
+      assert_reply ref, :ok, %{seeded: false}
+      assert_receive {:genesis_seed, meta, _}
+      assert Map.keys(meta) == [:reason]
+      assert is_atom(meta.reason)
+    end
+  end
+
   describe "crdt_create with b64 (detached genesis seed)" do
     test "persists the body and creates NO room", %{socket: socket, user: user, vault: vault} do
       id = Ecto.UUID.generate()
