@@ -859,11 +859,14 @@ defmodule EngramWeb.CrdtChannel do
   # makes the plugin stamp its local body as the synced baseline and stop, so a
   # skipped checkpoint would silently lose the file with no later bind to replay
   # from. Every `false` path falls back to the client's existing crdt_msg seed.
-  defp maybe_seed_detached(_user, _vault, _note, nil), do: false
+  defp maybe_seed_detached(_user, _vault, _note, nil) do
+    seed_outcome(:no_b64)
+    false
+  end
 
   defp maybe_seed_detached(user, vault, %{id: note_id} = note, b64) when is_binary(b64) do
-    with {:ok, frame} <- decode_frame(b64),
-         :ok <- guard_frame(frame),
+    with {:ok, frame} <- decode_genesis_frame(b64),
+         :ok <- guard_genesis_frame(frame),
          # CRDT projects to `notes.content` for MARKDOWN only — `checkpoint/5`
          # routes a non-`.md` doc to `do_structural_checkpoint`, which never
          # touches content. A `.canvas` genesis frame therefore projects
@@ -873,8 +876,8 @@ defmodule EngramWeb.CrdtChannel do
          # and stops. Unreachable today only because the plugin gates `.md`
          # client-side; the server's contract must not depend on that (#1409).
          # Same `.md` test CrdtDeliver and CrdtCheckpoint already use.
-         true <- markdown_path?(note.path),
-         {:ok, {:sync, {:sync_update, update}}} <- Yex.Sync.message_decode(frame),
+         :ok <- require_markdown(note.path),
+         {:ok, update} <- take_sync_update(frame),
          # Two writers, one document: a room holds the doc in memory and would
          # later checkpoint over anything written behind its back. CheckpointNote
          # snoozes on this exact condition (checkpoint_note.ex:50); a channel
@@ -889,15 +892,90 @@ defmodule EngramWeb.CrdtChannel do
          # window on its own — a room merely starting never bumps `notes.version`,
          # only a COMMITTED checkpoint does. That window is closed AFTER the
          # write instead, by `evict_racing_room/1` below (#1409).
-         nil <- CrdtRegistry.lookup(note_id),
-         {:ok, doc} <- apply_detached(update) do
-      seed_detached(user, vault, note_id, doc)
+         :ok <- require_room_free(note_id),
+         {:ok, doc} <- apply_genesis_update(update) do
+      result = seed_detached(user, vault, note_id, doc)
+      seed_outcome(if result, do: :seeded, else: :write_declined)
+      result
     else
-      _ -> false
+      # Every arm here means "the client falls back to its crdt_msg seed", and
+      # THAT is what allocates a room per imported note (#1409). A bare
+      # `_ -> false` made all of them indistinguishable, so a 70%-fallback rate
+      # could be measured but never explained.
+      #
+      # Each step returns a DISTINCT reason atom rather than a bare
+      # `{:error, _}`, so this one arm still attributes precisely. Three of the
+      # underlying calls (decode, guard, apply) all answer `{:error, _}` and
+      # would otherwise collapse into one bucket — a malformed frame, a crafted
+      # state vector and a NIF apply failure are a client bug, an attack and a
+      # server fault respectively, and lumping them answers none of the
+      # questions you would ask next.
+      #
+      # Tagged tuples as `with` placeholders would be the obvious way to do
+      # this; credo forbids them (Credo.Check.Refactor.WithClauses), so the
+      # distinction lives in the step functions instead.
+      {:error, reason} ->
+        seed_outcome(reason)
+        false
     end
   end
 
-  defp maybe_seed_detached(_user, _vault, _note, _b64), do: false
+  defp maybe_seed_detached(_user, _vault, _note, _b64) do
+    seed_outcome(:b64_not_binary)
+    false
+  end
+
+  # `with` steps for maybe_seed_detached/4. Each maps its underlying call onto a
+  # reason atom unique to THAT step — the whole point of the split. Thin on
+  # purpose: the reasoning for each check stays at the call site above.
+  defp decode_genesis_frame(b64) do
+    case decode_frame(b64) do
+      {:ok, frame} -> {:ok, frame}
+      _ -> {:error, :frame_decode_failed}
+    end
+  end
+
+  defp guard_genesis_frame(frame) do
+    case guard_frame(frame) do
+      :ok -> :ok
+      _ -> {:error, :frame_unsafe}
+    end
+  end
+
+  defp require_markdown(path) do
+    if markdown_path?(path), do: :ok, else: {:error, :not_markdown}
+  end
+
+  defp take_sync_update(frame) do
+    case Yex.Sync.message_decode(frame) do
+      {:ok, {:sync, {:sync_update, update}}} -> {:ok, update}
+      _ -> {:error, :not_sync_update}
+    end
+  end
+
+  defp require_room_free(note_id) do
+    if CrdtRegistry.lookup(note_id) == nil, do: :ok, else: {:error, :room_already_exists}
+  end
+
+  defp apply_genesis_update(update) do
+    case apply_detached(update) do
+      {:ok, doc} -> {:ok, doc}
+      _ -> {:error, :apply_failed}
+    end
+  end
+
+  # Why a genesis body did or did not get seeded roomlessly.
+  #
+  # `reason` is a small CLOSED SET OF ATOMS and nothing else rides along. An
+  # earlier revision passed the raw error term as a `detail` key with a comment
+  # saying it must never become a tag — but nothing enforced that, and any
+  # handler doing `inspect(meta)` would have leaked it. These terms are exactly
+  # the class line 418 of this module warns about ("error_kind/1, never
+  # inspect(reason)"): they can embed a wrapped DEK or a provider response body.
+  # The per-step tags above carry the diagnostic value the term used to.
+  defp seed_outcome(reason) when is_atom(reason) do
+    :telemetry.execute([:engram, :crdt, :genesis_seed], %{count: 1}, %{reason: reason})
+  end
 
   defp markdown_path?(path), do: is_binary(path) and String.ends_with?(path, ".md")
 
