@@ -12,19 +12,29 @@ defmodule Engram.Workers.BackgroundPriority do
   MEMORY — see the `config/config.exs` comment deriving them from the 1024 MB
   task ceiling — not against CPU.
 
-  Evidence from the 2026-08-20 1.7k-note upload, and only what is actually
-  measurable: `beam_stats_run_queue_count` reached 7 and 10 (processes ready to
-  run with no scheduler free), and the operator observed ~100% task CPU. Note
-  that at 100% of a CFS quota you are BY DEFINITION being throttled — the
-  kernel freezes the cgroup for the remainder of each period.
+  Measured on the 2026-08-20 1.7k-note upload, from ECS Container Insights
+  (`ECS/ContainerInsights` `CpuUtilized`/`CpuReserved`, CPU units where
+  1024 = 1 vCPU) — the only trustworthy per-task CPU source:
 
-  Deliberately NOT quantified here as "N cores of demand". Oban's
-  `job_processing_duration` is job WALL time and includes waiting on the Voyage
-  HTTP call, and the Pyroscope totals are not wall-clock CPU seconds either
-  (they exceed what the quota can physically supply). Container Insights, which
-  would give a trustworthy `CpuUtilized`, is off for cost. An earlier draft of
-  this moduledoc derived "1.54 cores" from the Oban durations; that conflated
-  wall time with CPU time and is retracted rather than quietly deleted.
+      idle baseline   ~22 / 512   (4%)
+      during upload   388-454 avg / 512, peak 510.27 / 512  (99.7%)
+
+  So the task was pegged. `beam_stats_run_queue_count` reached 7 and 10 over the
+  same window, which is the same fact from the BEAM's side. And at ~100% of a
+  CFS quota you are BY DEFINITION throttled: the kernel freezes the cgroup for
+  the remainder of each period once the quota is spent.
+
+  Two caveats worth keeping:
+
+  `CpuUtilized` cannot exceed `CpuReserved`, so 510/512 means "consumed
+  everything available", NOT "needed exactly 510". True demand is >= that, by an
+  unknown margin — the cap hides it.
+
+  Do NOT substitute Oban's `job_processing_duration` for this. It is job WALL
+  time and includes waiting on the Voyage HTTP call. An earlier draft of this
+  moduledoc derived "1.54 cores of demand" from it; that conflated wall time
+  with CPU and is retracted rather than quietly deleted. The same mistake made
+  the two tasks look 89/11 imbalanced when their actual CPU was ~390 vs ~510.
 
   Demoting does not create capacity — the arithmetic above is unchanged by it.
   It decides who gets the contended core first, which is the part the user
