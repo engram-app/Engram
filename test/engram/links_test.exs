@@ -639,6 +639,67 @@ defmodule Engram.LinksTest do
     end
   end
 
+  describe "replace_links/4 statement sizing" do
+    @tag timeout: 120_000
+    test "a note with more links than one statement can bind still persists all of them",
+         %{user: user, vault: vault} do
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "MOC.md"})
+
+      # 5_000 edges x 17 binds = 85_000 parameters — past the protocol's 65535
+      # cap. Every edge carries BOTH optional envelopes so the row hits its
+      # widest column count; a version of this test without alias/anchor binds
+      # only 13 per row and would pass against the unchunked insert.
+      #
+      # Pre-fix this did not fail the assertion below, it KILLED the pooled
+      # connection ("Postgrex.Protocol disconnected: postgresql protocol can
+      # not handle 85000 parameters"), so the failure mode to watch for on a
+      # regression is a connection error, not a count mismatch.
+      parsed =
+        for i <- 0..4999 do
+          %{
+            target: "Target #{i}",
+            alias: "alias #{i}",
+            anchor: "anchor #{i}",
+            link_type: "wikilink",
+            position: i
+          }
+        end
+
+      :ok = Links.replace_links(user, vault, source.id, parsed)
+
+      {:ok, count} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.aggregate(from(l in NoteLink, where: l.source_note_id == ^source.id), :count)
+        end)
+
+      assert count == 5_000
+    end
+
+    test "replacing links is still last-writer-wins across the chunk boundary",
+         %{user: user, vault: vault} do
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "MOC.md"})
+
+      wide = for i <- 0..2_499, do: parsed_link("Target #{i}", i)
+      :ok = Links.replace_links(user, vault, source.id, wide)
+
+      # A chunked insert must not turn the delete+insert into a partial update:
+      # the second call spans fewer chunks than the first, and every row from
+      # the first must be gone.
+      :ok = Links.replace_links(user, vault, source.id, [parsed_link("Only", 0)])
+
+      {:ok, edges} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(from(l in NoteLink, where: l.source_note_id == ^source.id))
+        end)
+
+      assert length(edges) == 1
+    end
+  end
+
+  defp parsed_link(target, position) do
+    %{target: target, alias: nil, anchor: nil, link_type: "wikilink", position: position}
+  end
+
   # Counts SELECTs against the candidate tables (notes/attachments) issued on
   # this process while `fun` runs.
   defp count_candidate_queries(fun) do
