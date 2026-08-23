@@ -36,7 +36,21 @@ PUSH_TIME_BOUND_S = 120
 # and `crdt_msg` is what calls `ensure_room`. The headroom above 0 covers a note
 # open in the editor during the run and any seed that falls back to the
 # `crdt_msg` path (`seeded: false`, e.g. an ADOPT) — both allocate legitimately.
+#
+# Bounds `crdt_msg`-driven allocation ONLY (handshake is asserted separately
+# below). The local 0 did not hold in CI, which measured 544 HANDSHAKE rooms for
+# the same 1,000 notes — enrolment, not cold sends. Bounding the total at 8 would
+# therefore have asserted that #1409 is fully fixed when only its `crdt_msg` half
+# is; the split keeps a real fence on the part that IS fixed instead of a red X
+# on the part that is not.
 ROOM_ALLOC_BOUND = 8
+
+# Enrolment-driven rooms, the OPEN half of #1409. Recorded as a ratchet, not a
+# target: 544/1000 was the CI measurement on 2026-08-23. It exists so a change
+# that makes enrolment worse still fails, while the known O(N) baseline does not
+# spend every run red. TIGHTEN THIS as #1409's enrolment work lands; a run that
+# comes in far under it means the bound is stale, not that nothing happened.
+HANDSHAKE_ROOM_RATCHET = 700
 
 SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
@@ -161,12 +175,18 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
         # be counted, and the drain means residency would already have shed it.
         rooms = read_room_starts() - rooms_before
         print(f"\ntest_77 rooms allocated for {NOTE_COUNT} notes: {rooms}")
-        assert rooms.total <= ROOM_ALLOC_BOUND, (
+        cold_rooms = rooms.edit + rooms.create_batch + rooms.unknown
+        assert cold_rooms <= ROOM_ALLOC_BOUND, (
             f"bulk first sync of {NOTE_COUNT} notes allocated {rooms} — expected "
-            f"<= {ROOM_ALLOC_BOUND} (#1409: rooms are for notes open in an editor, "
-            "not for imported files). The per-source split names the path that "
-            "regressed; `unknown` means an allocation site shipped without a "
-            "source tag."
+            f"<= {ROOM_ALLOC_BOUND} rooms from the crdt_msg paths (#1409: rooms "
+            "are for notes open in an editor, not for imported files). The "
+            "per-source split names the path that regressed; `unknown` means an "
+            "allocation site shipped without a source tag."
+        )
+        assert rooms.handshake <= HANDSHAKE_ROOM_RATCHET, (
+            f"enrolment opened {rooms.handshake} handshake rooms for "
+            f"{NOTE_COUNT} notes, past the {HANDSHAKE_ROOM_RATCHET} ratchet. This "
+            "is #1409's open half — the ratchet only fails when it gets WORSE."
         )
     finally:
         await _cleanup_bulk_residue(vault_a, cdp_a, api_sync)

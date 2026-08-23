@@ -28,12 +28,6 @@ CI_POSTGRES_CONTAINER = os.environ.get("CI_POSTGRES_CONTAINER", "engram-postgres
 TEST_USER_OVERRIDES = {
     "api_write_enabled": True,
     "api_rps_cap": 1000,
-    # Free defaults to a SINGLE vault (limit_keys.ex `vaults_cap`), so any test
-    # that registers a second one gets a 402 with an empty body — which reads as
-    # "the register call is broken" rather than "the plan said no". test_98
-    # needs two: it re-syncs one local vault into a fresh server vault, which is
-    # the asymmetry the first-sync double-write needs.
-    "vaults_cap": -1,
     "obsidian_connections_cap": -1,
     "mcp_connections_cap": -1,
     # Free-tier launch (§G) gates attachments behind `attachments_enabled`
@@ -103,3 +97,34 @@ def grant_test_plan(email: str) -> str:
     user_id = lines[-1].strip()
     logger.info("Granted e2e plan overrides to user %s (id=%s)", email, user_id)
     return user_id
+
+
+def grant_vault_headroom(email: str) -> None:
+    """Lift `vaults_cap` for ONE user, for a test that legitimately needs a
+    second vault (test_98 re-syncs one local vault into a fresh server one).
+
+    Deliberately NOT in `TEST_USER_OVERRIDES`: that dict is applied by every
+    `grant_test_plan` caller, and `test_32_vault_api_key_isolation` asserts the
+    Free plan BLOCKS a second vault. Granting it globally turned that test's
+    expected 402 into a 201 — the same leak the comments in that dict warn
+    about, so the fix is opt-in rather than a wider default.
+    """
+    sql = (
+        "INSERT INTO user_limit_overrides (user_id, key, value, reason, set_by) "
+        f"VALUES ((SELECT id FROM users WHERE email = '{email}'), 'vaults_cap', "
+        f"'{json.dumps({'v': -1})}'::jsonb, 'e2e-test', 'e2e') "
+        "ON CONFLICT (user_id, key) DO UPDATE "
+        "SET value = EXCLUDED.value, set_at = NOW();"
+    )
+    result = subprocess.run(
+        [
+            "docker", "exec", "-i", CI_POSTGRES_CONTAINER,
+            "psql", "-U", "engram", "-d", "engram", "-tA", "-c", sql,
+        ],
+        capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"grant_vault_headroom({email}) failed: {result.stderr.strip()}"
+        )
+    logger.info("Lifted vaults_cap for %s", email)

@@ -32,6 +32,7 @@ import uuid
 
 import pytest
 
+from helpers.billing import grant_vault_headroom
 from helpers.lineage_probe import read_lineages
 from helpers.vault import write_note
 
@@ -73,10 +74,15 @@ async def _converge(cdp, api, prefix, expected):
 
 @pytest.mark.asyncio
 async def test_resync_into_fresh_vault_keeps_one_lineage(
-    vault_a, cdp_a, api_sync, sync_vault_id
+    vault_a, cdp_a, api_sync, sync_vault_id, sync_user
 ):
     run = uuid.uuid4().hex[:12]
     prefix = f"Resync-{run}"
+
+    # Opt in to a second vault for THIS user only. Free caps `vaults_cap` at
+    # 1, and lifting it globally in TEST_USER_OVERRIDES broke
+    # test_32_vault_api_key_isolation, which asserts Free blocks exactly this.
+    grant_vault_headroom(sync_user[0])
 
     await cdp_a.evaluate(SET_BLOCKED.format("true"))
 
