@@ -28,6 +28,12 @@ CI_POSTGRES_CONTAINER = os.environ.get("CI_POSTGRES_CONTAINER", "engram-postgres
 TEST_USER_OVERRIDES = {
     "api_write_enabled": True,
     "api_rps_cap": 1000,
+    # Free defaults to a SINGLE vault (limit_keys.ex `vaults_cap`), so any test
+    # that registers a second one gets a 402 with an empty body — which reads as
+    # "the register call is broken" rather than "the plan said no". test_98
+    # needs two: it re-syncs one local vault into a fresh server vault, which is
+    # the asymmetry the first-sync double-write needs.
+    "vaults_cap": -1,
     "obsidian_connections_cap": -1,
     "mcp_connections_cap": -1,
     # Free-tier launch (§G) gates attachments behind `attachments_enabled`
