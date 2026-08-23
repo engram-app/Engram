@@ -1142,6 +1142,13 @@
       },
       "AttachmentMeta": {
         "properties": {
+          "content_hash": {
+            "description": "Opaque content fingerprint. Stable for identical bytes and scoped to the owning account. Compare against a local copy to decide whether an upload is needed; re-uploading matching bytes is accepted but does no work.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "created_at": {
             "format": "date-time",
             "nullable": true,
@@ -2155,6 +2162,13 @@
         "properties": {
           "content_base64": {
             "description": "Base64-encoded file bytes.",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "content_hash": {
+            "description": "Opaque content fingerprint — see AttachmentMeta.content_hash.",
+            "nullable": true,
             "type": "string",
             "x-struct": null,
             "x-validate": null

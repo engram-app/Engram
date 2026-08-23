@@ -12,6 +12,14 @@ defmodule EngramWeb.Schemas.AttachmentMeta do
       mime_type: %Schema{type: :string, nullable: true},
       size_bytes: %Schema{type: :integer},
       mtime: %Schema{type: :number, format: :float, description: "Client mtime (epoch seconds)"},
+      content_hash: %Schema{
+        type: :string,
+        nullable: true,
+        description:
+          "Opaque content fingerprint. Stable for identical bytes and scoped to the " <>
+            "owning account. Compare against a local copy to decide whether an upload " <>
+            "is needed; re-uploading matching bytes is accepted but does no work."
+      },
       created_at: %Schema{type: :string, format: :"date-time", nullable: true},
       updated_at: %Schema{type: :string, format: :"date-time", nullable: true}
     },
@@ -33,6 +41,11 @@ defmodule EngramWeb.Schemas.AttachmentWithContent do
       mime_type: %Schema{type: :string, nullable: true},
       size_bytes: %Schema{type: :integer},
       mtime: %Schema{type: :number, format: :float},
+      content_hash: %Schema{
+        type: :string,
+        nullable: true,
+        description: "Opaque content fingerprint — see AttachmentMeta.content_hash."
+      },
       content_base64: %Schema{type: :string, description: "Base64-encoded file bytes."},
       created_at: %Schema{type: :string, format: :"date-time", nullable: true},
       updated_at: %Schema{type: :string, format: :"date-time", nullable: true}

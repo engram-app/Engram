@@ -197,6 +197,137 @@ defmodule Engram.AttachmentsTest do
     end
   end
 
+  # A client that re-sends bytes the server already has must not cost a
+  # re-encrypt, an S3 PUT, or a row write. On 2026-08-21 one looping Obsidian
+  # client re-uploaded the same 667 attachments for 90 minutes and held prod at
+  # ~30% CPU on a 0.5-vCPU task; every request was individually legal and no
+  # rate limit came close to firing (the loop ran at ~1 req/s against a 30 rps
+  # cap). `content_hash` is already computed and stored on every write — this
+  # makes the write path consult it.
+  describe "upsert_attachment/3 — identical-content short-circuit" do
+    test "re-uploading identical bytes does not touch storage again", %{
+      user: user,
+      vault: vault
+    } do
+      # Exactly ONE put across two upserts. Mox fails the test if a second
+      # arrives, which is the whole assertion.
+      expect(Engram.MockStorage, :put, 1, fn _key, _binary, _opts -> :ok end)
+
+      params = %{"path" => @path, "content_base64" => @valid_content}
+
+      assert {:ok, first} = Attachments.upsert_attachment(user, vault, params)
+      assert {:ok, second} = Attachments.upsert_attachment(user, vault, params)
+
+      assert second.id == first.id
+      assert second.content_hash == first.content_hash
+    end
+
+    test "the short-circuit does not bump the row (no spurious sync fan-out)", %{
+      user: user,
+      vault: vault
+    } do
+      expect(Engram.MockStorage, :put, 1, fn _key, _binary, _opts -> :ok end)
+      params = %{"path" => @path, "content_base64" => @valid_content}
+
+      {:ok, first} = Attachments.upsert_attachment(user, vault, params)
+      {:ok, second} = Attachments.upsert_attachment(user, vault, params)
+
+      # A bumped seq is a change event every other device would chase. The
+      # loop was writing ~1/s; without this the fan-out is the second bill.
+      assert second.seq == first.seq
+      assert second.updated_at == first.updated_at
+    end
+
+    test "different bytes at the same path still write", %{user: user, vault: vault} do
+      expect(Engram.MockStorage, :put, 2, fn _key, _binary, _opts -> :ok end)
+
+      {:ok, first} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => @path,
+          "content_base64" => @valid_content
+        })
+
+      {:ok, second} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => @path,
+          "content_base64" => Base.encode64("genuinely different bytes")
+        })
+
+      assert second.id == first.id
+      refute second.content_hash == first.content_hash
+      assert second.size_bytes == byte_size("genuinely different bytes")
+    end
+
+    test "a corrected mime_type still lands even when the bytes are identical", %{
+      user: user,
+      vault: vault
+    } do
+      # Re-uploading identical bytes with a corrected type is how a
+      # mis-detected MIME gets fixed. Gating the short-circuit on content
+      # ALONE silently swallowed the correction and answered 200 with the old
+      # type — found by adversarially reviewing the short-circuit, not by any
+      # existing test.
+      b64 = Base.encode64("PNGDATA")
+      expect(Engram.MockStorage, :put, 2, fn _key, _binary, _opts -> :ok end)
+
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img/a.png",
+          "content_base64" => b64,
+          "mime_type" => "image/jpeg"
+        })
+
+      {:ok, corrected} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img/a.png",
+          "content_base64" => b64,
+          "mime_type" => "image/png"
+        })
+
+      assert corrected.mime_type == "image/png"
+    end
+
+    test "delete then re-upload identical bytes resurrects the attachment", %{
+      user: user,
+      vault: vault
+    } do
+      # `fetch_existing` is `scoped_live`, so a tombstoned row is invisible to
+      # the short-circuit and resurrection takes the full write path. Pinned
+      # because "identical bytes are a no-op" is exactly the reasoning that
+      # would break it.
+      stub(Engram.MockStorage, :put, fn _key, _binary, _opts -> :ok end)
+      stub(Engram.MockStorage, :delete, fn _key -> :ok end)
+      params = %{"path" => @path, "content_base64" => @valid_content}
+
+      {:ok, _} = Attachments.upsert_attachment(user, vault, params)
+      :ok = Attachments.delete_attachment(user, vault, @path)
+      {:ok, _} = Attachments.upsert_attachment(user, vault, params)
+
+      assert @path in live_paths(user, vault)
+    end
+
+    test "identical bytes at a DIFFERENT path still write", %{user: user, vault: vault} do
+      # The short-circuit keys on (path, hash) — matching content under a new
+      # path is a new attachment, not a no-op.
+      expect(Engram.MockStorage, :put, 2, fn _key, _binary, _opts -> :ok end)
+
+      {:ok, a} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => @path,
+          "content_base64" => @valid_content
+        })
+
+      {:ok, b} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "photos/copy.png",
+          "content_base64" => @valid_content
+        })
+
+      refute b.id == a.id
+      assert b.path == "photos/copy.png"
+    end
+  end
+
   describe "upsert_attachment/3" do
     test "creates attachment with vault_id scoped correctly", %{user: user, vault: vault} do
       expect(Engram.MockStorage, :put, fn _key, _binary, _opts -> :ok end)
