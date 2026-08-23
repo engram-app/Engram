@@ -42,6 +42,63 @@ defmodule Engram.AttachmentsBroadcastTest do
         }
       }
     end
+
+    test "the upsert payload carries content_hash so peers can skip the blob fetch", %{
+      user: user,
+      vault: vault
+    } do
+      # Engram#961 (1): without the hash, a peer that ALREADY holds these exact
+      # bytes must GET the whole attachment — possibly many MB — only to
+      # byte-compare and discover nothing changed. The hash is in hand at every
+      # emit site; it just was not being sent.
+      Mox.stub(Engram.MockStorage, :put, fn _key, _bin, _opts -> :ok end)
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert {:ok, att} =
+               Attachments.upsert_attachment(user, vault, %{
+                 "path" => "photos/live.png",
+                 "content_base64" => Base.encode64("live delivery content")
+               })
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "upsert", "content_hash" => hash}
+      }
+
+      assert is_binary(hash)
+      # Must be the SAME value the REST endpoints serve, or a peer comparing
+      # the two would never match and the fetch-skip could never fire.
+      assert hash == att.content_hash
+    end
+
+    test "the move legs carry content_hash on both delete and upsert", %{
+      user: user,
+      vault: vault
+    } do
+      # A move fires delete(old) + upsert(new) through the same helper, so
+      # parity is structural — pin it so a future split cannot drop one leg.
+      Mox.stub(Engram.MockStorage, :put, fn _key, _bin, _opts -> :ok end)
+
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "old/pic.png",
+          "content_base64" => Base.encode64("bytes")
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      {:ok, _} = Attachments.move_attachment(user, vault, "old/pic.png", "new/pic.png")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        payload: %{"event_type" => "delete", "content_hash" => del_hash}
+      }
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        payload: %{"event_type" => "upsert", "content_hash" => up_hash}
+      }
+
+      assert del_hash == att.content_hash
+      assert up_hash == att.content_hash
+    end
   end
 
   describe "note_changed delete broadcast attribution (#970)" do

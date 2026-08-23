@@ -1105,7 +1105,13 @@ defmodule Engram.Attachments do
       "vault_id" => vault_id,
       "mime_type" => att.mime_type,
       "size_bytes" => att.size_bytes,
-      "mtime" => att.mtime
+      "mtime" => att.mtime,
+      # Engram#961 (1). Without this a peer that ALREADY holds these exact
+      # bytes has to GET the whole attachment — possibly many MB — purely to
+      # byte-compare and learn nothing changed. The value was in hand at every
+      # emit site; it just was not sent. Same value the REST endpoints serve,
+      # so a client can compare the two directly.
+      "content_hash" => att.content_hash
     }
 
     _ = Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", payload)
