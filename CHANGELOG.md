@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.19.0](https://github.com/engram-app/Engram/compare/0.18.1...0.19.0) (2026-08-23)
+
+
+### Features
+
+* **attachments:** send content_hash on the note_changed broadcast ([#1452](https://github.com/engram-app/Engram/issues/1452)) ([2aeca9e](https://github.com/engram-app/Engram/commit/2aeca9e2404e50a81b302f0d572ebf6fc4da8800))
+
+
+### Performance Improvements
+
+* **attachments:** stop paying for bytes the server already has ([#1448](https://github.com/engram-app/Engram/issues/1448)) ([2126032](https://github.com/engram-app/Engram/commit/21260325f0428d3298f9c8267ede7a6e754d826f))
+
 ## [0.18.1](https://github.com/engram-app/Engram/compare/0.18.0...0.18.1) (2026-08-21)
 
 
