@@ -35,7 +35,7 @@ from helpers.backend_rpc import backend_rpc
 # wrapper (same constraint room_probe.py documents).
 _PROBE = (
     '{{:ok, vb}} = Ecto.UUID.dump("{vault_id}"); '
-    '{{:ok, vr}} = Ecto.Adapters.SQL.query(Engram.Repo, '
+    "{{:ok, vr}} = Ecto.Adapters.SQL.query(Engram.Repo, "
     '"select user_id::text from vaults where id=$1", [vb]); '
     "u = Engram.Accounts.get_user!(hd(hd(vr.rows))); "
     "{{:ok, nr}} = Ecto.Adapters.SQL.query(Engram.Repo, "
@@ -43,12 +43,19 @@ _PROBE = (
     "ids = List.flatten(nr.rows); "
     "{{:ok, notes}} = Engram.Repo.with_tenant(u.id, fn -> "
     "Enum.map(ids, &Engram.Repo.get(Engram.Notes.Note, &1)) end); "
-    "counts = Enum.map(notes, fn n -> "
+    "pairs = Enum.map(notes, fn n -> "
     "{{:ok, st}} = Engram.Crypto.decrypt_crdt_state(n, u); "
-    "if st do {{:ok, d}} = Engram.Notes.CrdtBridge.doc_from_state(st); "
-    ":binary.first(Yex.encode_state_vector!(d)) else 0 end end); "
-    'IO.puts(Enum.join([length(counts), Enum.count(counts, &(&1 > 1)), '
-    "Enum.max(counts, fn -> 0 end)], \",\"))"
+    "c = if st do {{:ok, d}} = Engram.Notes.CrdtBridge.doc_from_state(st); "
+    ":binary.first(Yex.encode_state_vector!(d)) else 0 end; "
+    "p = case Engram.Crypto.maybe_decrypt_note_fields(n, u) do "
+    "{{:ok, %{{path: pp}}}} when is_binary(pp) -> pp; "
+    '_ -> "<undecryptable>" end; '
+    "{{c, p}} end); "
+    "counts = Enum.map(pairs, &elem(&1, 0)); "
+    "Enum.each(Enum.filter(pairs, fn {{c, _}} -> c > 1 end), fn {{c, p}} -> "
+    'IO.puts("LINEAGE_MULTI\\t" <> Integer.to_string(c) <> "\\t" <> p) end); '
+    "IO.puts(Enum.join([length(counts), Enum.count(counts, &(&1 > 1)), "
+    'Enum.max(counts, fn -> 0 end)], ","))'
 )
 
 
@@ -68,7 +75,14 @@ class Lineages:
 def read_lineages(vault_id: str) -> Lineages:
     """Sample every live note in `vault_id`. Raises if the probe misfires."""
     out = backend_rpc(_PROBE.format(vault_id=vault_id))
-    line = out.strip().splitlines()[-1]
-    parts = line.split(",")
-    assert len(parts) == 3, f"lineage probe returned {line!r}"
+    lines = out.strip().splitlines()
+    # DIAGNOSTIC (2026-08-24): print WHICH notes are multi-client. The probe
+    # samples the WHOLE vault, but every caller writes only its own prefixed
+    # fixture into a SESSION-scoped vault shared by the entire suite — so a
+    # failure cannot currently distinguish "my fixture doubled" from "some
+    # other test's note legitimately has two writers". These paths settle it.
+    for ml in (ln for ln in lines if ln.startswith("LINEAGE_MULTI\t")):
+        print(ml)
+    parts = lines[-1].split(",")
+    assert len(parts) == 3, f"lineage probe returned {lines[-1]!r}"
     return Lineages(*(int(p) for p in parts))
