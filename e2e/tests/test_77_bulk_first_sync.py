@@ -49,15 +49,27 @@ ROOM_ALLOC_BOUND = 8
 # target: it exists so a change that makes enrolment WORSE fails, while the
 # known-open O(N) baseline does not spend every run red.
 #
-# MEASURED 335/1000 on 2026-08-24 (CI, run 32774859300), down from the 544/1000
-# baseline of 2026-08-23 after plugin #466 gated the create-ack self-heal's
-# reset+enroll on isLiveBound. The bound below is that measurement plus headroom
-# for run-to-run variance.
+# THIS NUMBER IS HIGHLY VARIABLE — do not read it as a property of the code.
+# Measured on 2026-08-24 against the SAME commit, twice:
+#     run 32774859300 -> 335 rooms / 1000 notes
+#     run 32778220678 ->  57 rooms / 1000 notes
+# against a 544/1000 baseline on 2026-08-23 (before plugin #466 gated the
+# create-ack self-heal's reset+enroll on isLiveBound).
 #
-# 335 is still ~1 room per 3 imported notes, i.e. still O(N) when the #1409
-# acceptance criterion is O(open editors). This number going DOWN is the
-# remaining work; re-measure by setting this to 0 on a throwaway branch, since
-# test_77 prints its room split only on failure.
+# 335 vs 57 on identical code means this tracks run conditions — reconnects,
+# load, socket churn — as much as it tracks enrolment logic. So the bound is
+# deliberately set well above the worst OBSERVED value rather than snugly above
+# the best: a tight bound here buys a flaky job, not a real fence. It still
+# fails loudly on a return to the O(N)-per-note shape this issue is about.
+#
+# Attribution on the 57-room run (client enroll() bucketed by caller):
+#     fireCrdtReHandshake 20, applyChange 6  -> 26 enroll() calls for 57 rooms.
+# More than half the rooms never go through enroll(); the suspected path is
+# NoteProvider.setConnected(true) re-firing syncStep1 for every resident
+# advertised doc on a reconnect edge. See the #1409 thread.
+#
+# Re-measure by setting this to 0 on a throwaway branch — test_77 prints its
+# room split only on failure.
 HANDSHAKE_ROOM_RATCHET = 400
 
 SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
