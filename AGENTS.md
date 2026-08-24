@@ -436,6 +436,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Running OAuth/Clerk e2e tests locally (test_47/test_48) → `docs/context/local-oauth-e2e-testing.md`
 - `Vault not registered after 15s` E2E diagnostic ladder — don't just bump the timeout → `docs/context/e2e-vault-registration-diagnostics.md`
 - `Application.put_env` in `async: true` tests is a flake source → `docs/context/exunit-application-env-races.md`
+- An e2e assertion counts something vault-wide, or a test's failure count refuses to move across product fixes (the e2e vault is session-scoped and shared by ~110 tests) → `docs/context/e2e-session-vault-scoping-trap.md`
 - Why `prebuild-mix` recompiled everything despite cache hits (absolute-path compile manifest) → `docs/context/ci-mix-compile-cache-runner-path.md`
 - Bun lifecycle-script trust model, `trustedDependencies`, the pngquant CI flake (#975) → `docs/context/bun-postinstall-trust.md`
 
