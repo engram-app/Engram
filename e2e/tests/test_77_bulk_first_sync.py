@@ -46,11 +46,19 @@ PUSH_TIME_BOUND_S = 120
 ROOM_ALLOC_BOUND = 8
 
 # Enrolment-driven rooms, the OPEN half of #1409. Recorded as a ratchet, not a
-# target: 544/1000 was the CI measurement on 2026-08-23. It exists so a change
-# that makes enrolment worse still fails, while the known O(N) baseline does not
-# spend every run red. TIGHTEN THIS as #1409's enrolment work lands; a run that
-# comes in far under it means the bound is stale, not that nothing happened.
-HANDSHAKE_ROOM_RATCHET = 0  # MEASUREMENT ONLY — forces the assert to print the real count
+# target: it exists so a change that makes enrolment WORSE fails, while the
+# known-open O(N) baseline does not spend every run red.
+#
+# MEASURED 335/1000 on 2026-08-24 (CI, run 32774859300), down from the 544/1000
+# baseline of 2026-08-23 after plugin #466 gated the create-ack self-heal's
+# reset+enroll on isLiveBound. The bound below is that measurement plus headroom
+# for run-to-run variance.
+#
+# 335 is still ~1 room per 3 imported notes, i.e. still O(N) when the #1409
+# acceptance criterion is O(open editors). This number going DOWN is the
+# remaining work; re-measure by setting this to 0 on a throwaway branch, since
+# test_77 prints its room split only on failure.
+HANDSHAKE_ROOM_RATCHET = 400
 
 SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
