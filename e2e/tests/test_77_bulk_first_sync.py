@@ -1,11 +1,18 @@
-"""Test 77: 1k-note bulk first sync lands via crdt_create_batch in bounded time.
+"""Test 77: a 1k-note bulk first sync lands in bounded time, and does not
+allocate a CRDT room per note.
 
-CRDT single-push-path migration: pushGenesisBatch sends notes through the
-WS `crdt_create_batch` op in chunks, not POST /notes/batch (removed) — a
-1,000-note first sync is a handful of socket round-trips instead of 1,000.
-The duration bound is deliberately generous for CI noise but far below
-what the per-note path costs (1,000 paced requests), so a silent fallback
-to per-note pushes fails this test.
+Push path: `pushPartitioned` -> `pushFile` -> socket-native `crdt_create`,
+one bounded per-file work unit each (the `crdt_create_batch` RPC this test
+was originally written against was retired in the Relay-pattern rewrite, in
+favour of per-file failure isolation). The duration bound is deliberately
+generous for CI noise but far below what a REST per-note fallback costs
+(1,000 paced requests), so a silent regression to that path fails here.
+
+The room-allocation bound is the #1409 acceptance criterion. A room is a
+live-collaboration actor; an import has no collaborators, so genesis content
+is seeded detached (#1424) and rooms should be allocated only for notes
+actually open in an editor. Importing a 1,700-file vault once allocated
+~1,700 rooms and took prod's BEAM from 757 to 2,744 processes (2026-08-18).
 """
 
 import shutil
@@ -13,10 +20,37 @@ import time
 
 import pytest
 
+from helpers.room_probe import arm_room_starts, read_room_starts
 from helpers.vault import write_note
 
 NOTE_COUNT = 1000
 PUSH_TIME_BOUND_S = 120
+
+# Rooms this sync may allocate. The criterion is O(open editors), not O(N) —
+# the bound is a small constant on purpose, so a per-note regression fails by
+# two orders of magnitude rather than by a tuning argument. Raising this is
+# only correct alongside a reason a first sync needs more live actors.
+#
+# MEASURED 0 locally on 0.18.0 (2026-08-20, 1,000 notes): with the genesis body
+# riding `crdt_create` (#1424 + plugin #452) the import never sends a `crdt_msg`,
+# and `crdt_msg` is what calls `ensure_room`. The headroom above 0 covers a note
+# open in the editor during the run and any seed that falls back to the
+# `crdt_msg` path (`seeded: false`, e.g. an ADOPT) — both allocate legitimately.
+#
+# Bounds `crdt_msg`-driven allocation ONLY (handshake is asserted separately
+# below). The local 0 did not hold in CI, which measured 544 HANDSHAKE rooms for
+# the same 1,000 notes — enrolment, not cold sends. Bounding the total at 8 would
+# therefore have asserted that #1409 is fully fixed when only its `crdt_msg` half
+# is; the split keeps a real fence on the part that IS fixed instead of a red X
+# on the part that is not.
+ROOM_ALLOC_BOUND = 8
+
+# Enrolment-driven rooms, the OPEN half of #1409. Recorded as a ratchet, not a
+# target: 544/1000 was the CI measurement on 2026-08-23. It exists so a change
+# that makes enrolment worse still fails, while the known O(N) baseline does not
+# spend every run red. TIGHTEN THIS as #1409's enrolment work lands; a run that
+# comes in far under it means the bound is stale, not that nothing happened.
+HANDSHAKE_ROOM_RATCHET = 700
 
 SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
@@ -63,6 +97,12 @@ async def _cleanup_bulk_residue(vault_a, cdp_a, api_sync) -> None:
 @pytest.mark.asyncio
 async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
     try:
+        # Arm BEFORE the gate work: the counter is cumulative per node and the
+        # measured window is a delta, so arming early only widens what is
+        # attributed to this test — it can never under-count the sync.
+        arm_room_starts()
+        rooms_before = read_room_starts()
+
         # Close the sync gate FIRST: every raw write below fires the vault
         # watcher, and an open gate turns that into 1,000 debounced single-note
         # auto-pushes — a request storm that exhausts the rate budget and
@@ -129,6 +169,24 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
             f"bulk first sync converged only {bulk_count}/{NOTE_COUNT} notes in "
             f"{elapsed:.1f}s (bound {PUSH_TIME_BOUND_S}s) — did the plugin fall "
             "back to per-note pushes or stall?"
+        )
+
+        # Read AFTER convergence: a room allocated by the tail of the sync must
+        # be counted, and the drain means residency would already have shed it.
+        rooms = read_room_starts() - rooms_before
+        print(f"\ntest_77 rooms allocated for {NOTE_COUNT} notes: {rooms}")
+        cold_rooms = rooms.edit + rooms.create_batch + rooms.unknown
+        assert cold_rooms <= ROOM_ALLOC_BOUND, (
+            f"bulk first sync of {NOTE_COUNT} notes allocated {rooms} — expected "
+            f"<= {ROOM_ALLOC_BOUND} rooms from the crdt_msg paths (#1409: rooms "
+            "are for notes open in an editor, not for imported files). The "
+            "per-source split names the path that regressed; `unknown` means an "
+            "allocation site shipped without a source tag."
+        )
+        assert rooms.handshake <= HANDSHAKE_ROOM_RATCHET, (
+            f"enrolment opened {rooms.handshake} handshake rooms for "
+            f"{NOTE_COUNT} notes, past the {HANDSHAKE_ROOM_RATCHET} ratchet. This "
+            "is #1409's open half — the ratchet only fails when it gets WORSE."
         )
     finally:
         await _cleanup_bulk_residue(vault_a, cdp_a, api_sync)

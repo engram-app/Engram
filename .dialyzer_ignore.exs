@@ -23,7 +23,7 @@
   # rather than the literal `200` dialyzer infers from the current
   # `@backlinks_limit` value — the spec documents the contract callers (and
   # tests) can rely on, not today's specific cap. Same pattern as above.
-  {"lib/engram/links.ex", :contract_supertype, 711},
+  {"lib/engram/links.ex", :contract_supertype, 727},
 
   # `EmbedNote.backfill_priority/0` is intentionally specced as `pos_integer()`
   # rather than the literal `9` dialyzer infers from `@backfill_priority` — the
@@ -37,5 +37,5 @@
   # `Repo.one/2` types as `term()`, so dialyzer widens the `+` to `number()`
   # and flags `float()` as missing from the `non_neg_integer()` spec. The
   # spec states the real contract.
-  {"lib/engram/links.ex", :missing_range, 355}
+  {"lib/engram/links.ex", :missing_range, 371}
 ]

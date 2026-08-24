@@ -42,6 +42,12 @@ defmodule Engram.Links do
   @note_exts ~w(.md .canvas)
   @backlinks_limit 200
 
+  # Rows per `insert_all` statement. See replace_links/4: 17 binds per row
+  # against the protocol's 65535 cap leaves room for 3855, so 2000 is a
+  # deliberate half-margin — a new optional column must not silently re-arm
+  # the overflow.
+  @insert_chunk 2000
+
   @doc """
   Lowercased basename with `.md`/`.canvas` stripped (other extensions kept).
   Obsidian link resolution is case-insensitive and matches on basename
@@ -125,7 +131,17 @@ defmodule Engram.Links do
         skip_tenant_check: true
       )
 
-      if rows != [], do: Repo.insert_all(NoteLink, rows, skip_tenant_check: true)
+      # Chunked, not one statement: the wire protocol caps a query at 65535 bind
+      # parameters, and a NoteLink row binds up to 17 of them (13 base + the
+      # optional alias/anchor envelopes). One MOC-style note with a few thousand
+      # wikilinks therefore overflows the limit, and Postgrex answers that by
+      # KILLING the connection ("can not handle N parameters"), not by returning
+      # a query error — so a single oversized note costs a pooled connection and
+      # takes the whole extraction down with it. Observed on a real vault at
+      # 145792 params (8576 links). @insert_chunk keeps the worst case at 34k.
+      rows
+      |> Enum.chunk_every(@insert_chunk)
+      |> Enum.each(&Repo.insert_all(NoteLink, &1, skip_tenant_check: true))
     end)
 
     :ok
