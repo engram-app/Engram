@@ -26,6 +26,11 @@ Deliberately small (40 notes): this pins a correctness property that reproduced
 at 100% of notes, not a throughput bound. test_77 owns the bulk-timing bound and
 its 1,000-note fixture, which cannot run inside the 120s CDP evaluate cap on a
 loaded dev box (see docs/context/local-crdt-e2e-repro.md).
+
+Scoped to this test's own path prefix (2026-08-24). The vault fixture is
+session-scoped and shared by the whole suite, and a note legitimately edited by
+two devices holds two Yjs clients — so an unscoped sample has a non-zero floor
+this test can never drive to zero. See `helpers/lineage_probe`.
 """
 
 from __future__ import annotations
@@ -46,9 +51,7 @@ NOTE_COUNT = 15
 # and reports a generic timeout instead of "converged only N/M".
 CONVERGE_BOUND_S = 90
 
-SET_BLOCKED = (
-    "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
-)
+SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
 
 @pytest.mark.asyncio
@@ -118,7 +121,7 @@ async def test_first_sync_leaves_one_lineage_per_note(
 
     # Read from the SERVER. A client-side read would be answered by the very doc
     # whose lineage is in question, and viewing a note is what heals it.
-    lineages = read_lineages(sync_vault_id)
+    lineages = read_lineages(sync_vault_id, prefix)
     # Printed, and the note total asserted, because `multi_client == 0` is
     # satisfied vacuously by an empty vault.
     # Room split alongside the lineage count. The production run that corrupted

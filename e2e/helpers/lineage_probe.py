@@ -22,6 +22,24 @@ The state vector's leading varint IS the client count, so this reads one byte
 rather than decoding the whole structure. That is valid below 128 clients; a
 vault that somehow exceeded that would under-report, and 128 distinct writers on
 one note is already a far louder bug than this probe is looking for.
+
+## `path_prefix` is not optional in practice — pass it (2026-08-24)
+
+The e2e vault fixtures (`sync_vault_id`, `vault_a`) are `scope="session"`, so
+ONE vault is shared by the whole suite and its notes persist across tests. An
+unscoped sample therefore answers a question no caller is asking: it counts
+notes written by ~110 other tests, and **a note legitimately edited by two
+devices has two Yjs clients**. 34 e2e tests drive a second device, so the
+unscoped count has a permanent non-zero floor that no plugin fix can move.
+
+That floor is what made `test_97`/`98`/`100` fail on every CI run from the day
+they merged (#1455) — never once green — with counts that did not budge across
+plugin changes (12/135 and 12/146 in back-to-back runs; `test_98` contributed 11
+fresh notes and 0 new multi-client ones). Scoping to the caller's own prefix is
+what makes the assertion measure the fixture the caller actually controls.
+
+Filtering happens in Elixir AFTER decrypting each note, not in SQL: `path` is
+encrypted at rest, so there is no column to `LIKE` against.
 """
 
 from __future__ import annotations
@@ -51,8 +69,11 @@ _PROBE = (
     "{{:ok, %{{path: pp}}}} when is_binary(pp) -> pp; "
     '_ -> "<undecryptable>" end; '
     "{{c, p}} end); "
-    "counts = Enum.map(pairs, &elem(&1, 0)); "
-    "Enum.each(Enum.filter(pairs, fn {{c, _}} -> c > 1 end), fn {{c, p}} -> "
+    'pre = "{path_prefix}"; '
+    'scoped = if pre == "", do: pairs, '
+    "else: Enum.filter(pairs, fn {{_, p}} -> String.starts_with?(p, pre) end); "
+    "counts = Enum.map(scoped, &elem(&1, 0)); "
+    "Enum.each(Enum.filter(scoped, fn {{c, _}} -> c > 1 end), fn {{c, p}} -> "
     'IO.puts("LINEAGE_MULTI\\t" <> Integer.to_string(c) <> "\\t" <> p) end); '
     "IO.puts(Enum.join([length(counts), Enum.count(counts, &(&1 > 1)), "
     'Enum.max(counts, fn -> 0 end)], ","))'
@@ -72,15 +93,19 @@ class Lineages:
         )
 
 
-def read_lineages(vault_id: str) -> Lineages:
-    """Sample every live note in `vault_id`. Raises if the probe misfires."""
-    out = backend_rpc(_PROBE.format(vault_id=vault_id))
+def read_lineages(vault_id: str, path_prefix: str = "") -> Lineages:
+    """Sample live notes in `vault_id`, restricted to `path_prefix`.
+
+    PASS A PREFIX. The vault is session-scoped and shared by the whole suite,
+    so an unscoped sample counts other tests' notes — including legitimately
+    two-writer ones — and can never reach zero. See the module docstring.
+
+    Raises if the probe misfires.
+    """
+    out = backend_rpc(_PROBE.format(vault_id=vault_id, path_prefix=path_prefix))
     lines = out.strip().splitlines()
-    # DIAGNOSTIC (2026-08-24): print WHICH notes are multi-client. The probe
-    # samples the WHOLE vault, but every caller writes only its own prefixed
-    # fixture into a SESSION-scoped vault shared by the entire suite — so a
-    # failure cannot currently distinguish "my fixture doubled" from "some
-    # other test's note legitimately has two writers". These paths settle it.
+    # Print WHICH notes are multi-client, so a failure names the offending
+    # paths instead of only a count — the count alone cost a debugging cycle.
     for ml in (ln for ln in lines if ln.startswith("LINEAGE_MULTI\t")):
         print(ml)
     parts = lines[-1].split(",")
