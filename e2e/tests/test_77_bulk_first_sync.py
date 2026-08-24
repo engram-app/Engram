@@ -50,7 +50,7 @@ ROOM_ALLOC_BOUND = 8
 # that makes enrolment worse still fails, while the known O(N) baseline does not
 # spend every run red. TIGHTEN THIS as #1409's enrolment work lands; a run that
 # comes in far under it means the bound is stale, not that nothing happened.
-HANDSHAKE_ROOM_RATCHET = 700
+HANDSHAKE_ROOM_RATCHET = 0  # MEASUREMENT ONLY — forces the assert to print the real count
 
 SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
