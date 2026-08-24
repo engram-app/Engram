@@ -31,6 +31,11 @@ Verified to catch the defect: against the code before
 `applyLocalEdit`'s projection-equality guard, this reported 7 of 10 notes
 holding 2 lineages and 7 edit-class rooms — one per rewritten file. With the
 guard: 0 and 0.
+
+Scoped to this test's own path prefix (2026-08-24). The vault fixture is
+session-scoped and shared by the whole suite, and a note legitimately edited by
+two devices holds two Yjs clients — so an unscoped sample has a non-zero floor
+this test can never drive to zero. See `helpers/lineage_probe`.
 """
 
 from __future__ import annotations
@@ -50,16 +55,14 @@ from helpers.vault import write_note
 # and reports a generic timeout instead of "converged only N/M".
 CONVERGE_BOUND_S = 90
 
-SET_BLOCKED = (
-    "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
-)
+SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
 # Each shape is a separate way YAML can fail to survive a parse/serialise round
 # trip. Named so a failure says WHICH shape moved rather than just "bytes
 # differ".
 FRONTMATTER_SHAPES = {
     "inline-array": "---\ntags: [alpha, beta, gamma]\n---\n",
-    "quoted-scalar": '---\ntitle: "Quoted: with colon"\nstatus: \'single\'\n---\n',
+    "quoted-scalar": "---\ntitle: \"Quoted: with colon\"\nstatus: 'single'\n---\n",
     "comment": "---\ntags:\n  - a\n# a trailing comment\nreviewed: 2026-08-23\n---\n",
     "irregular-space": "---\ntags:\n    - deep\n    - indent\nkey:    spaced\n---\n",
     "nested-map": "---\nmeta:\n  author: todd\n  nested:\n    deeper: true\n---\n",
@@ -140,7 +143,7 @@ async def test_sync_leaves_disk_bytes_untouched(
         for rel in written
         if Path(vault_a, rel).read_text(encoding="utf-8") != written[rel]
     }
-    lineages = read_lineages(sync_vault_id)
+    lineages = read_lineages(sync_vault_id, prefix)
     rooms = read_room_starts() - rooms_before
     print(
         f"\ntest_100 rewritten-on-disk={sorted(rewritten)} | {lineages} | rooms: {rooms}"
@@ -155,6 +158,13 @@ async def test_sync_leaves_disk_bytes_untouched(
         "that the lineage assertion below is fencing. Did the frontmatter codec "
         "start round-tripping byte-for-byte? If so this fixture needs a new "
         "round-trip-hostile shape."
+    )
+
+    # The lineage sample is scoped to THIS test's prefix, so a broken filter
+    # would report 0/0 and satisfy the assertion below vacuously.
+    assert lineages.notes >= expected, (
+        f"lineage probe saw only {lineages.notes}/{expected} of this test's own "
+        "notes — the assertion below would pass vacuously"
     )
 
     assert lineages.multi_client == 0, (
