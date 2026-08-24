@@ -1,6 +1,26 @@
 # CRDT room lifetime — why `auto_exit` is not enough, and why an idle room is DRAINED, not stopped
 
-_Last verified: 2026-08-15_
+_Last verified: 2026-08-15. **SUPERSEDED IN PART 2026-08-18/23, see update below — do not trust
+this doc's "prod today" claims below without reading the update first.**_
+
+> **Update 2026-08-24:** the "Only drain-ENABLED rooms are tracked... prod today, where nothing
+> sets `idle_exit_ms`" claim below (and the identical claim in "Constraints this puts on #1150")
+> is **no longer true**. PR #1413 (`perf(sync): fix the CPU + room-residency causes of the
+> bulk-upload incident`, merged 2026-08-18, same day as the 757→2744-process incident this doc
+> already describes) flipped `CrdtCheckpointTimer`'s `idle_exit_ms` default from `nil` (opt-in,
+> armed only in CI) to **`@default_idle_exit_ms` = 300_000 ms (5 min), ON by default in every
+> environment** — see the "Idle drain" section of that module's moduledoc, which now says
+> outright: *"It used to be opt-in and nil by default... A residency bound that defaults off is
+> unbound in exactly the fleets that need it most."* Deployed to prod via `release-v0.19.0`
+> (tag `4a3b8bfc`, engram-infra#1041, 2026-08-23T09:26 UTC) — confirmed live: prod
+> `engram_prom_ex_beam_stats_process_count` has held flat (~745-760 per task) for the following
+> day with no runaway growth, and `engram_prom_ex_crdt_room_drain_total` shows real drain activity
+> (~73 `requested` + ~35 `lru_evicted` per day against ~119/day `room_start{source="handshake"}` —
+> roughly balanced, not accumulating). Rooms DO now auto-close in prod. The mechanism described
+> below (drain-then-`auto_exit`, never a hard kill) is otherwise unchanged and still accurate —
+> only the "off by default in prod" framing is stale. `CRDT_IDLE_EXIT_MS` (`ci/compose.yml`) still
+> separately overrides the window for CI/e2e and is CI-gated (silent no-op in a real task
+> definition) — that part of this doc is still correct.
 
 **TL;DR:** A `SharedDoc` room only exits when its **last observer leaves** (`auto_exit`). That
 bounds a *note* room, which is observed only while the note is open. It does **not** bound a
