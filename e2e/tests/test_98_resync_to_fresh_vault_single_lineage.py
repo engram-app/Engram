@@ -23,6 +23,11 @@ docs/context/crdt-wrong-mint-cross-file-overwrite.md.
 Asserts on lineage COUNT, not bytes, for the reasons in `lineage_probe`: the two
 insertions sometimes interleave rather than concatenate, and viewing a note
 heals it.
+
+Scoped to this test's own path prefix (2026-08-24). The vault fixture is
+session-scoped and shared by the whole suite, and a note legitimately edited by
+two devices holds two Yjs clients — so an unscoped sample has a non-zero floor
+this test can never drive to zero. See `helpers/lineage_probe`.
 """
 
 from __future__ import annotations
@@ -42,9 +47,7 @@ NOTE_COUNT = 10
 # and reports a generic timeout instead of "converged only N/M".
 CONVERGE_BOUND_S = 90
 
-SET_BLOCKED = (
-    "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
-)
+SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
 # Re-point the running plugin at a different server vault WITHOUT touching the
 # local vault directory — the device's docs and id map must survive, because
@@ -115,7 +118,13 @@ async def test_resync_into_fresh_vault_keeps_one_lineage(
     landed = await _converge(cdp_a, api_sync, prefix, NOTE_COUNT)
     assert landed >= NOTE_COUNT, f"first sync landed only {landed}/{NOTE_COUNT}"
 
-    first = read_lineages(sync_vault_id)
+    first = read_lineages(sync_vault_id, prefix)
+    # Scoped to this test's prefix, so an empty sample would satisfy the
+    # multi_client assertion vacuously.
+    assert first.notes >= NOTE_COUNT, (
+        f"lineage probe saw only {first.notes}/{NOTE_COUNT} of this test's own "
+        "notes in the first vault — the assertion below would pass vacuously"
+    )
     assert first.multi_client == 0, (
         f"the FIRST sync already doubled: {first}. That is test_97's scenario, "
         "so fix that before reading anything into this test."
@@ -148,7 +157,7 @@ async def test_resync_into_fresh_vault_keeps_one_lineage(
             "the lineage assertion below would be measuring a partial sync"
         )
 
-        second = read_lineages(fresh_id)
+        second = read_lineages(fresh_id, prefix)
         # Printed, not just asserted: a lineage count of 0/0 satisfies
         # `multi_client == 0` vacuously, so the note total has to be visible in
         # the run output for the pass to mean anything.
@@ -165,6 +174,4 @@ async def test_resync_into_fresh_vault_keeps_one_lineage(
             "a note converges it back down."
         )
     finally:
-        await cdp_a.evaluate(
-            REPOINT.format(vault_id=sync_vault_id), await_promise=True
-        )
+        await cdp_a.evaluate(REPOINT.format(vault_id=sync_vault_id), await_promise=True)
