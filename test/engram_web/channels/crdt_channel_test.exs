@@ -786,6 +786,54 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_reply ref, :ok, %{doc_id: ^id, seeded: false, genesis: "absent"}
     end
 
+    test "an idempotent retry over a row that HOLDS a body never reports absent", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # `:absent` is the one outcome the client trusts without verifying, so it
+      # must mean the row is empty. It did not: `genesis_crdt_note/4` answers
+      # `{:ok, note}` for an idempotent same-path retry, an E2 rename-as-move
+      # AND a tombstone resurrect — all of which can carry a full body — and the
+      # old code inferred "empty" from "we did not write". Proven by repro:
+      # `genesis: "absent"` with `row_content: "base body"`, which makes the
+      # client push a second copy into what it believes is an empty doc.
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Notes/holds-a-body.md",
+          "content" => "a body that must not be doubled"
+        })
+
+      # Bodyless create against that live id + same path = the idempotent retry.
+      ref =
+        push(socket, "crdt_create", %{"doc_id" => note.id, "path" => "Notes/holds-a-body.md"})
+
+      assert_reply ref, :ok, %{seeded: false, genesis: "occupied"}
+    end
+
+    test "an UNREADABLE row that is provably empty reports absent, not occupied", %{
+      socket: socket
+    } do
+      # The inverse lie. `fold_row_and_tail/4` collapses "note not found",
+      # "snapshot undecryptable" and "DEK unavailable" into one `:error`, which
+      # became `occupied` = "never push" for a row that is provably EMPTY. A
+      # transient KMS blip then told the client its body was unnecessary and
+      # nothing ever re-opened the note, so it stayed blank on every device.
+      #
+      # Driven here through the cheapest unreadable path: a frame the server
+      # cannot decode at all, against a freshly created (empty) row.
+      id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/undecodable.md",
+          "b64" => "!!!not-base64!!!"
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false, genesis: "absent"}
+    end
+
     test "a successful seed reports that the server holds our bytes", %{socket: socket} do
       id = Ecto.UUID.generate()
 

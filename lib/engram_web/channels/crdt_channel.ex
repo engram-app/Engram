@@ -367,7 +367,10 @@ defmodule EngramWeb.CrdtChannel do
              origin: socket.assigns[:client_type]
            ) do
         {:ok, note} ->
-          genesis = maybe_seed_detached(user, vault, note, b64)
+          genesis =
+            user
+            |> maybe_seed_detached(vault, note, b64)
+            |> reconcile_with_row(note)
 
           # `seeded` is retained for older plugins, but it is a LOSSY view of
           # `genesis` and must never again be the only thing on the wire (#476).
@@ -961,6 +964,48 @@ defmodule EngramWeb.CrdtChannel do
   # makes the plugin stamp its local body as the synced baseline and stop, so a
   # skipped checkpoint would silently lose the file with no later bind to replay
   # from. Every `false` path falls back to the client's existing crdt_msg seed.
+  # What the seed path did tells us about US; the ROW tells us what the client
+  # actually faces. Where they disagree the row wins.
+  #
+  # Inferring "the row is empty" from "we did not write" is what made `:absent`
+  # lie (#476, second wave): `genesis_crdt_note/4` answers `{:ok, note}` for an
+  # idempotent same-path retry, an E2 rename-as-move, and a tombstone resurrect
+  # — all of which can carry a full body — so a bodyless or undecodable create
+  # against any of them reported "push, the row is empty" and the client minted
+  # a rival lineage. Verified by repro: `reply=%{genesis: "absent"}` with
+  # `row_content="base body"`.
+  #
+  # The inverse lied too: `fold_row_and_tail/4` collapses "note not found",
+  # "snapshot undecryptable" and "DEK unavailable" into one `:error`, which
+  # became `:occupied` = "never push" for a row that is provably EMPTY. A
+  # transient KMS blip therefore told the client its body was unnecessary,
+  # permanently.
+  #
+  # `:room_busy` is deliberately NOT reconciled: `require_room_free/1` only
+  # proves a process is registered, and that room's in-memory doc can hold
+  # content the row has not seen, so the row is not authoritative for it. It
+  # reports `occupied`, which under the client's adopt-then-diff contract means
+  # "acquire the lineage, then send a diff" — correct whether or not the room
+  # actually holds anything.
+  defp reconcile_with_row(:stored, _note), do: :stored
+
+  # Authoritative: both read something fresher than the caller's note snapshot.
+  defp reconcile_with_row(:room_busy, _note), do: :occupied
+  defp reconcile_with_row(:declined, _note), do: :occupied
+
+  # Non-authoritative: we never read the row (`:absent`) or could not
+  # (`:unreadable`), so the snapshot is the best evidence there is.
+  defp reconcile_with_row(outcome, note) when outcome in [:absent, :unreadable] do
+    if row_has_body?(note), do: :occupied, else: :absent
+  end
+
+  # `genesis_crdt_note/4` returns a DECRYPTED note (`decrypt_or_raise!`), so
+  # `content` is plaintext here. A nil content means we could not establish
+  # emptiness — answer `:occupied`, which costs one adopt round trip and cannot
+  # double, where `:absent` would push blind.
+  defp row_has_body?(%{content: content}) when is_binary(content), do: content != ""
+  defp row_has_body?(_note), do: true
+
   defp maybe_seed_detached(_user, _vault, _note, nil) do
     seed_outcome(:no_b64)
     :absent
@@ -1024,7 +1069,7 @@ defmodule EngramWeb.CrdtChannel do
         # here — no/!binary b64, a non-markdown path, a frame we could not
         # decode, guard or apply — means the row we just created is untouched and
         # the client's push is the only thing that will ever fill it.
-        if reason == :room_already_exists, do: :occupied, else: :absent
+        if reason == :room_already_exists, do: :room_busy, else: :absent
     end
   end
 
@@ -1167,8 +1212,10 @@ defmodule EngramWeb.CrdtChannel do
             prune_ids
           )
 
+        # Could not READ the row (note gone, snapshot undecryptable, DEK/KMS
+        # down). Not a decline — we learned nothing about what the row holds.
         :error ->
-          {false, false}
+          {:unreadable, false}
       end
 
     # A CONFIRMED write, not merely an attempted one (#1409 M2). `wrote?` alone
@@ -1215,9 +1262,13 @@ defmodule EngramWeb.CrdtChannel do
     #                                  fold could not read it. Pushing here mints
     #                                  a rival lineage and doubles the note.
     cond do
+      seeded == :unreadable -> :unreadable
       seeded -> :stored
       wrote? -> :absent
-      true -> :occupied
+      # `seed_against/7`'s catch-all: it READ the row at fold time and found a
+      # different body. That read is FRESHER than the note snapshot the caller
+      # holds, so it is authoritative and must not be reconciled away.
+      true -> :declined
     end
   rescue
     e ->
@@ -1229,9 +1280,10 @@ defmodule EngramWeb.CrdtChannel do
         Metadata.with_category(:warning, :sync, error_kind: Engram.Telemetry.error_kind(e))
       )
 
-      # Row state unknown after a raise. `:occupied` is the safe pole: it costs
-      # a deferred body, where `:absent` would risk doubling one.
-      :occupied
+      # Row state unknown after a raise — reconcile against the row rather than
+      # guessing. Guessing `:occupied` here meant a transient fault told the
+      # client its body was unnecessary, permanently.
+      :unreadable
   end
 
   # ONE short tenant transaction: read the clause selector and fold the durable
