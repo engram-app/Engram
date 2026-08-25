@@ -176,7 +176,11 @@ defmodule EngramWeb.CrdtChannelTest do
         })
 
       assert_reply ref, :ok, %{seeded: true}
-      assert_receive {:genesis_seed, %{reason: :seeded}, %{count: 1}}
+      # The telemetry reason is the OUTCOME atom now, not a two-way collapse of
+      # it. `:write_declined` used to cover a benign concurrent-write decline,
+      # an unreadable row and a raised write alike — one bar on the dashboard
+      # for one routine event and two data-loss events (#1409 review).
+      assert_receive {:genesis_seed, %{reason: :stored}, %{count: 1}}
     end
 
     test "a non-markdown path reports :not_markdown, not a frame error", %{socket: socket} do
@@ -1015,6 +1019,38 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_reply ref, :error, reply
       assert reply.reason == "bad_doc_id"
       refute Map.has_key?(reply, :doc_id)
+    end
+
+    test "bills the handshake budget — it is the frame that REPLACES a handshake", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # The frame's own docstring says it "must bill the same budget or it would
+      # be a way to dodge it", and nothing enforced that: deleting `check_rate`
+      # was green (mutation B7). It matters more than a normal frame, not less —
+      # a syncStep1 amortizes against a cached room, while this does a full
+      # uncached rebuild (DB read, AES decrypt, apply, tail replay, encode) on
+      # the channel process, once per cold note during a bulk sync.
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/billed.md", "content" => "b"})
+
+      # Shrink the handshake bucket to 1 and prove the SECOND read is refused —
+      # which can only happen if the first one consumed the budget.
+      Application.put_env(:engram, :crdt_hs_rate_limit_override, 1)
+
+      on_exit(fn ->
+        Application.delete_env(:engram, :crdt_hs_rate_limit_override)
+        EngramWeb.RateLimiter.reset_buckets!()
+      end)
+
+      EngramWeb.RateLimiter.reset_buckets!()
+
+      ref1 = push(socket, "crdt_doc_state", %{"doc_id" => note.id})
+      assert_reply ref1, :ok, %{doc_id: _}
+
+      ref2 = push(socket, "crdt_doc_state", %{"doc_id" => note.id})
+      assert_reply ref2, :error, %{reason: "rate_limited"}
     end
 
     test "refuses to read a note in ANOTHER user's vault", %{socket: socket} do

@@ -1042,7 +1042,15 @@ defmodule EngramWeb.CrdtChannel do
          :ok <- require_room_free(note_id),
          {:ok, doc} <- apply_genesis_update(update) do
       outcome = seed_detached(user, vault, note_id, doc)
-      seed_outcome(if outcome == :stored, do: :seeded, else: :write_declined)
+
+      # Report the OUTCOME, not a two-way collapse of it. `:write_declined`
+      # covered a benign concurrent-write decline, an unreadable row, AND a
+      # raised write — the first is routine at import scale, the other two are
+      # data-loss events, and on the dashboard they were one bar. No alert could
+      # separate "concurrent writes are normal today" from "notes are losing
+      # their bodies". The three-way return exists precisely because a two-way
+      # boolean was lossy; flattening it again on the next line gave that up.
+      seed_outcome(outcome)
       outcome
     else
       # Every arm here means "the client falls back to its crdt_msg seed", and
@@ -1171,6 +1179,7 @@ defmodule EngramWeb.CrdtChannel do
   # protocol — same convention as CrdtCheckpoint.interleave_hook/1 and
   # Notes.interleave_hook/1. `nil` in every environment that doesn't arm it.
   defp seed_detached(user, vault, note_id, doc) do
+    _ = note_id
     interleave_hook(:genesis_seed_before_write)
 
     # The frame's OWN projection — what the CLIENT holds — captured before the
@@ -1275,9 +1284,16 @@ defmodule EngramWeb.CrdtChannel do
       # A raised query (connection loss, etc.) must cost this note its seed,
       # never the channel — same discipline as apply_detached/1.
       # `CrdtCheckpoint.checkpoint/5` itself still never raises.
+      # Carries `doc_id`, unlike the version this replaces. Without it an
+      # operator could see that a seed failed but not WHICH note lost its body,
+      # while every sibling log in this module (log_create_failed/3,
+      # log_dropped/3, evict_racing_room/1) already carried it.
       Logger.warning(
         "crdt genesis detached seed write failed",
-        Metadata.with_category(:warning, :sync, error_kind: Engram.Telemetry.error_kind(e))
+        Metadata.with_category(:warning, :sync,
+          doc_id: note_id,
+          error_kind: Engram.Telemetry.error_kind(e)
+        )
       )
 
       # Row state unknown after a raise — reconcile against the row rather than
