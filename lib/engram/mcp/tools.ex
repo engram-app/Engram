@@ -51,7 +51,8 @@ defmodule Engram.MCP.Tools do
       rename_folder_def(),
       delete_note_def(),
       delete_folder_def(),
-      move_attachment_def()
+      move_attachment_def(),
+      get_attachment_upload_target_def()
     ]
     |> Enum.map(&with_vault_id/1)
   end
@@ -504,6 +505,24 @@ defmodule Engram.MCP.Tools do
         "required" => ["folder"]
       },
       handler: &Handlers.handle("delete_folder", &1, &2, &3)
+    }
+  end
+
+  defp get_attachment_upload_target_def do
+    %{
+      name: "get_attachment_upload_target",
+      description:
+        "Get the endpoint and this account's limits for uploading an attachment " <>
+          "(image, PDF, audio, video). Returns a URL to POST the file to yourself " <>
+          "using the credential already authorizing this connection; the bytes do " <>
+          "not pass through this tool. Call before uploading to learn the size cap " <>
+          "and which file types the plan allows.",
+      inputSchema: %{
+        "type" => "object",
+        "properties" => %{},
+        "required" => []
+      },
+      handler: &Handlers.handle("get_attachment_upload_target", &1, &2, &3)
     }
   end
 

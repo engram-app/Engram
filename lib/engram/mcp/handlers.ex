@@ -523,6 +523,43 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
+  def handle("get_attachment_upload_target", user, vault, _args) do
+    base = attachment_api_base_url()
+    max_bytes = render_limit(Engram.Billing.effective_limit(user, :max_file_bytes))
+
+    types =
+      if Engram.Billing.attachments_all_types?(user),
+        do: "images, PDFs, audio, video and other whitelisted binary types",
+        else: "text/* only on this plan — images, PDFs, audio and video need a paid plan"
+
+    {:ok,
+     """
+     Attachments are uploaded over the REST API, not through this tool: the bytes
+     never pass through the model. POST the file yourself using the credential
+     already authorizing this MCP connection.
+
+     url:    #{base}/api/attachments
+     method: POST
+
+     headers:
+       content-type: application/json
+       authorization: Bearer <the same token this MCP connection uses>
+       x-vault-id: #{vault.id}
+
+     json body:
+       path            required — vault-relative destination, e.g. _attachments/diagram.png
+       content_base64  required — the file bytes, base64 encoded
+       mime_type       optional — inferred from the path extension when omitted
+       mtime           optional — unix timestamp
+
+     limits for this account:
+       max_bytes: #{max_bytes}
+       allowed:   #{types}
+
+     A 402 response means a plan limit was hit; the body names which one.
+     """}
+  end
+
   def handle(name, _user, _vault, _args) do
     {:error, "Unknown tool: #{name}"}
   end
@@ -759,4 +796,28 @@ defmodule Engram.MCP.Handlers do
 
   defp strip_frontmatter(content),
     do: Regex.replace(~r/\A\x{FEFF}?---\r?\n.*?\r?\n---/su, content, "")
+
+  # The upload URL must name the REST host, which on SaaS is NOT the host this
+  # MCP request arrived on: `mcp.engram.page` routes to the MCP endpoint and
+  # does not serve REST (see `EngramWeb.Plugs.HostRewrite`). Deriving it from
+  # the conn would advertise an endpoint that cannot accept an upload.
+  #
+  # Self-host sets no rewrite and serves everything canonically, so the
+  # endpoint URL is correct there. One code path, every deployment shape.
+  defp attachment_api_base_url do
+    canonical = EngramWeb.Endpoint.url()
+
+    with opts when is_list(opts) <- Application.get_env(:engram, :host_rewrite),
+         host when is_binary(host) and host != "" <- opts[:api_host] do
+      "#{URI.parse(canonical).scheme}://#{host}"
+    else
+      _ -> canonical
+    end
+  end
+
+  # `nil` in the limit catalog means "no enforcement" (see
+  # `Engram.Billing.LimitKeys`), which is unlimited rather than zero.
+  defp render_limit(nil), do: "unlimited"
+  defp render_limit(:unlimited), do: "unlimited"
+  defp render_limit(n), do: to_string(n)
 end
