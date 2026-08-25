@@ -4097,7 +4097,7 @@
     "/api/folders/*path": {
       "delete": {
         "callbacks": {},
-        "description": "Removes the folder marker for the given path. Idempotent — deleting a non-existent or never-encrypted folder still returns 204.",
+        "description": "Removes the folder marker for the given path. Idempotent — deleting a non-existent or never-encrypted folder still returns 204. Pass `recursive=true` to also delete every note and attachment under the path — required to remove a folder that has no marker of its own (one the server only derives from the paths of the notes inside it).",
         "operationId": "folders-delete",
         "parameters": [
           {
@@ -4105,6 +4105,17 @@
             "in": "path",
             "name": "path",
             "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "\"true\" also deletes every note and attachment under the path. Omit for marker-only. Declared as a string, not a boolean, because nothing casts query params here — a value this does not recognize would silently no-op a destructive call.",
+            "in": "query",
+            "name": "recursive",
+            "required": false,
             "schema": {
               "type": "string",
               "x-struct": null,
