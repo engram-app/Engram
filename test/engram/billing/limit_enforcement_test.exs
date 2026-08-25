@@ -23,12 +23,17 @@ defmodule Engram.Billing.LimitEnforcementTest do
   }
 
   test "every Free-restrictive limit key is referenced in lib/" do
-    # `lib/mix/tasks/` is excluded so a key named only inside a lint task's
-    # own docs can't count as an enforcement site.
+    # Exclusions: a key merely NAMED somewhere is not an enforcement site.
+    # `lib/mix/tasks/` covers lint tasks that list catalog keys in their docs,
+    # and the catalog itself is excluded because its own moduledoc carries
+    # `:notes_cap` in three usage examples — leaving it in meant that key
+    # passed on its own docstring no matter what enforced it.
     blob =
       "lib/**/*.ex"
       |> Path.wildcard()
-      |> Enum.reject(&String.contains?(&1, "lib/mix/tasks/"))
+      |> Enum.reject(fn f ->
+        String.contains?(f, "lib/mix/tasks/") or String.contains?(f, "billing/limit_keys.ex")
+      end)
       |> Enum.map_join("\n", &File.read!/1)
 
     missing =
