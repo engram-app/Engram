@@ -45,32 +45,32 @@ PUSH_TIME_BOUND_S = 120
 # on the part that is not.
 ROOM_ALLOC_BOUND = 8
 
-# Enrolment-driven rooms, the OPEN half of #1409. Recorded as a ratchet, not a
-# target: it exists so a change that makes enrolment WORSE fails, while the
-# known-open O(N) baseline does not spend every run red.
+# Enrolment-driven rooms, the OPEN half of #1409. A ratchet, not a target: it
+# fails when enrolment gets WORSE, and does not spend every run red on the
+# known-open O(N) baseline.
 #
-# THIS NUMBER IS HIGHLY VARIABLE — do not read it as a property of the code.
-# Measured on 2026-08-24 against the SAME commit, twice:
-#     run 32774859300 -> 335 rooms / 1000 notes
-#     run 32778220678 ->  57 rooms / 1000 notes
-# against a 544/1000 baseline on 2026-08-23 (before plugin #466 gated the
-# create-ack self-heal's reset+enroll on isLiveBound).
+# THE METRIC IS EXTREMELY NOISY — measure before you tighten this. Observed on
+# 2026-08-24/25 across runs of essentially the same code, post plugin #466:
+#     57, 81, 335, 583   rooms / 1000 notes
+# (baseline was 544 on 2026-08-23, pre-#466.) A 10x spread, because the count
+# tracks reconnects and socket churn as much as enrolment logic.
 #
-# 335 vs 57 on identical code means this tracks run conditions — reconnects,
-# load, socket churn — as much as it tracks enrolment logic. So the bound is
-# deliberately set well above the worst OBSERVED value rather than snugly above
-# the best: a tight bound here buys a flaky job, not a real fence. It still
-# fails loudly on a return to the O(N)-per-note shape this issue is about.
+# An earlier revision of THIS comment set the bound to 400 off a single 335
+# sample. The next run measured 583 and the job went red on a change that had
+# regressed nothing. Do not repeat that: a bound near the middle of this range
+# buys a flaky job, not a fence. 700 sits above every observed value while still
+# failing loudly on a true return to one-room-per-note (which would be ~1000).
 #
-# Attribution on the 57-room run (client enroll() bucketed by caller):
-#     fireCrdtReHandshake 20, applyChange 6  -> 26 enroll() calls for 57 rooms.
-# More than half the rooms never go through enroll(); the suspected path is
-# NoteProvider.setConnected(true) re-firing syncStep1 for every resident
-# advertised doc on a reconnect edge. See the #1409 thread.
+# Attribution (measured, see the #1409 thread): the rooms are ordinary enroll()
+# calls, dominated by fireCrdtReHandshake — which is a DELIVERY path for durably
+# queued edits and must NOT be gated to reduce this number. The reconnect
+# re-advertise theory was tested and falsified.
 #
-# Re-measure by setting this to 0 on a throwaway branch — test_77 prints its
-# room split only on failure.
-HANDSHAKE_ROOM_RATCHET = 400
+# Re-measure by setting this to 0 on a throwaway branch: test_77 prints its room
+# split only on failure. Also note read_room_starts() counts rooms server-wide
+# across ALL THREE Obsidian instances, while any cdp_a-based client probe sees
+# only device A — do not compare the two without accounting for that.
+HANDSHAKE_ROOM_RATCHET = 700
 
 SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
