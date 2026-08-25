@@ -982,6 +982,45 @@ defmodule EngramWeb.CrdtChannelTest do
       ref = push(socket, "crdt_doc_state", %{"doc_id" => note.id})
       assert_reply ref, :error, %{reason: "note_not_found"}
     end
+
+    test "an unreadable snapshot answers an error and leaves the CHANNEL ALIVE", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # `CrdtTransport.load_doc/3` deliberately raises on a decrypt/decode
+      # failure ("loud rather than silently returning an empty doc"). That was
+      # safe while `read_delta/4` had NO caller — its REST route was deleted in
+      # #1088. Wiring it to a socket frame made the raise live, and an
+      # uncontained raise here does not cost one note: it kills the channel
+      # process, taking `socket.assigns.rooms` and every monitor with it. The
+      # client then rejoins and re-handshakes EVERY note — the exact room storm
+      # #1409 exists to prevent — and since it retries the same frame, it loops.
+      #
+      # So the assertion that matters is not the error shape, it is that a
+      # SECOND frame still works afterwards.
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/poison.md", "content" => "body"})
+
+      {:ok, healthy} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/healthy.md", "content" => "fine"})
+
+      # Corrupt the persisted snapshot: ciphertext that cannot decrypt.
+      Repo.with_tenant(user.id, fn ->
+        from(n in "notes", where: n.id == type(^note.id, Ecto.UUID))
+        |> Repo.update_all(set: [crdt_state_ciphertext: :crypto.strong_rand_bytes(64)])
+      end)
+
+      ref = push(socket, "crdt_doc_state", %{"doc_id" => note.id})
+      assert_reply ref, :error, reply
+      # Never echo the raw failure — it can embed a wrapped DEK or provider body.
+      assert reply.reason == "doc_state_failed"
+
+      # THE assertion: the channel survived, so one poisoned note cannot cost
+      # the whole session its rooms.
+      ref2 = push(socket, "crdt_doc_state", %{"doc_id" => healthy.id})
+      assert_reply ref2, :ok, %{doc_id: _, b64: _, head: _}
+    end
   end
 
   # Single-path catch-up (Phase B): replay the seq-ordered op-log over the

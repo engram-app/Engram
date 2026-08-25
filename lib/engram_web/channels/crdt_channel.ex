@@ -586,8 +586,46 @@ defmodule EngramWeb.CrdtChannel do
       # id-map reconcile (backend #955) fires on it unchanged.
       {:error, :not_found} ->
         {:reply, {:error, %{reason: "note_not_found", doc_id: doc_id}}, socket}
+
+      # Everything else — `:unreadable` (undecryptable snapshot, DEK/KMS
+      # failure) and `:bad_since`, which had NO arm and raised WithClauseError.
+      # Answering is not optional here: this frame runs ON the channel process,
+      # so an unmatched clause costs the whole socket its rooms, not one note.
+      {:error, _} ->
+        log_doc_state_failed(note_id_or_nil(doc_id), :read_failed)
+        {:reply, {:error, %{reason: "doc_state_failed"}}, socket}
+    end
+  rescue
+    # Defense in depth for anything below `read_delta/4` that still raises —
+    # `replay_tail`, the encoder, a NIF. Same discipline as `apply_detached/1`
+    # in this module: a bad note costs this READ, never the channel. The reason
+    # term is never echoed to the client (it can embed a wrapped DEK).
+    e ->
+      log_doc_state_failed(note_id_or_nil(doc_id), Engram.Telemetry.error_kind(e))
+      {:reply, {:error, %{reason: "doc_state_failed"}}, socket}
+  end
+
+  # Carries the doc_id, unlike the genesis-seed rescue it mirrors — without it
+  # an operator cannot tell WHICH note is poisoned, and a poisoned note is
+  # exactly the thing that needs finding. Distinct telemetry event so this is
+  # alertable separately from the benign genesis declines (review MEDIUM-3).
+  defp log_doc_state_failed(note_id, kind) do
+    Logger.warning(
+      "crdt doc_state read failed",
+      Metadata.with_category(:warning, :sync, doc_id: note_id, error_kind: kind)
+    )
+
+    :telemetry.execute([:engram, :crdt, :doc_state_failed], %{count: 1}, %{reason: kind})
+  end
+
+  defp note_id_or_nil(doc_id) when is_binary(doc_id) do
+    case Ecto.UUID.cast(doc_id) do
+      {:ok, id} -> id
+      :error -> nil
     end
   end
+
+  defp note_id_or_nil(_), do: nil
 
   @impl true
   def handle_in("crdt_delete", %{"doc_id" => doc_id}, socket) do

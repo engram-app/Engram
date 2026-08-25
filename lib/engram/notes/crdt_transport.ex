@@ -48,7 +48,8 @@ defmodule Engram.Notes.CrdtTransport do
   the only place this can actually be stopped.
   """
   @spec read_delta(map(), map(), String.t(), binary() | nil) ::
-          {:ok, %{update: binary(), head: String.t()}} | {:error, :not_found | :bad_since}
+          {:ok, %{update: binary(), head: String.t()}}
+          | {:error, :not_found | :bad_since | :unreadable}
   def read_delta(user, vault, note_id, since_sv) do
     with {:ok, doc} <- load_doc(user, vault, note_id) do
       case encode_update(doc, since_sv) do
@@ -309,25 +310,44 @@ defmodule Engram.Notes.CrdtTransport do
 
   # Read-only reconstruction of the canonical doc: persisted snapshot + tail
   # replay, exactly the recipe bind/3 and maybe_merge_crdt use. Spawns no room
-  # and has no side effects. A decrypt/apply failure raises (loud) rather than
-  # silently returning an empty doc. No @spec: Dialyzer infers the concrete
+  # and has no side effects.
+  #
+  # An unreadable snapshot answers `{:error, :unreadable}` and must NEVER
+  # fabricate an empty doc — a caller reads that as "the server holds nothing"
+  # and pushes a full body into it. The bare matches this replaces existed to be
+  # "loud rather than silently empty"; an explicit error is equally loud without
+  # requiring every caller to be crash-tolerant.
+  #
+  # Being TOTAL is load-bearing now: `read_delta/4` had no caller after its REST
+  # route was deleted (#1088), so a raise only ever unwound into a Task. It is
+  # reachable from a socket frame today, where a raise kills the channel, takes
+  # `socket.assigns.rooms` and every monitor with it, and makes the client
+  # re-handshake EVERY note — the room storm #1409 exists to prevent, on a loop.
+  # No @spec: Dialyzer infers the concrete
   # %User{}/%Vault{} arg types from the private call sites, and a hand-written
   # map()/map() contract is a supertype of that (contract_supertype); the public
   # read_delta/2..4 specs already document the boundary types.
   defp load_doc(user, vault, note_id) do
     case Notes.get_note_by_id(user, vault, note_id) do
       {:ok, note} ->
-        {:ok, snapshot} = Crypto.decrypt_crdt_state(note, user)
-        {:ok, doc} = CrdtBridge.doc_from_state(snapshot)
+        with {:ok, snapshot} <- Crypto.decrypt_crdt_state(note, user),
+             {:ok, doc} <- CrdtBridge.doc_from_state(snapshot) do
+          Repo.with_tenant(user.id, fn ->
+            CrdtPersistence.replay_tail(doc, user, note_id, vault.id)
+          end)
 
-        Repo.with_tenant(user.id, fn ->
-          CrdtPersistence.replay_tail(doc, user, note_id, vault.id)
-        end)
-
-        {:ok, doc}
+          {:ok, doc}
+        else
+          _ -> {:error, :unreadable}
+        end
 
       {:error, :not_found} ->
         {:error, :not_found}
+
+      # `ensure_user_dek` and the KMS path answer errors other than :not_found;
+      # the old two-arm case raised CaseClauseError on those.
+      {:error, _} ->
+        {:error, :unreadable}
     end
   end
 end
