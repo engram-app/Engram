@@ -367,8 +367,14 @@ defmodule EngramWeb.CrdtChannel do
              origin: socket.assigns[:client_type]
            ) do
         {:ok, note} ->
-          seeded = maybe_seed_detached(user, vault, note, b64)
-          {:reply, {:ok, %{doc_id: note.id, seeded: seeded}}, socket}
+          genesis = maybe_seed_detached(user, vault, note, b64)
+
+          # `seeded` is retained for older plugins, but it is a LOSSY view of
+          # `genesis` and must never again be the only thing on the wire (#476).
+          {:reply,
+           {:ok,
+            %{doc_id: note.id, seeded: genesis == :stored, genesis: Atom.to_string(genesis)}},
+           socket}
 
         {:adopted, note} ->
           # Unchanged behaviour for the single create: the client's crdtCreate
@@ -380,7 +386,10 @@ defmodule EngramWeb.CrdtChannel do
           # adopting means the path is owned by a different live note, and applying our
           # frame to it would overwrite that note's body. The ADOPT path transfers
           # the body deliberately; this must not shortcut it.
-          {:reply, {:ok, %{doc_id: note.id, seeded: false}}, socket}
+          # `occupied`, not `absent`: the row at this path holds ANOTHER note's
+          # body. The ADOPT path transfers ours onto that lineage deliberately;
+          # a blind push would union two bodies into one note (#476).
+          {:reply, {:ok, %{doc_id: note.id, seeded: false, genesis: "occupied"}}, socket}
 
         {:error, :id_conflict, note} ->
           {:reply, {:error, %{reason: "id_conflict", doc_id: note.id}}, socket}
@@ -916,7 +925,7 @@ defmodule EngramWeb.CrdtChannel do
   # from. Every `false` path falls back to the client's existing crdt_msg seed.
   defp maybe_seed_detached(_user, _vault, _note, nil) do
     seed_outcome(:no_b64)
-    false
+    :absent
   end
 
   defp maybe_seed_detached(user, vault, %{id: note_id} = note, b64) when is_binary(b64) do
@@ -949,9 +958,9 @@ defmodule EngramWeb.CrdtChannel do
          # write instead, by `evict_racing_room/1` below (#1409).
          :ok <- require_room_free(note_id),
          {:ok, doc} <- apply_genesis_update(update) do
-      result = seed_detached(user, vault, note_id, doc)
-      seed_outcome(if result, do: :seeded, else: :write_declined)
-      result
+      outcome = seed_detached(user, vault, note_id, doc)
+      seed_outcome(if outcome == :stored, do: :seeded, else: :write_declined)
+      outcome
     else
       # Every arm here means "the client falls back to its crdt_msg seed", and
       # THAT is what allocates a room per imported note (#1409). A bare
@@ -971,13 +980,19 @@ defmodule EngramWeb.CrdtChannel do
       # distinction lives in the step functions instead.
       {:error, reason} ->
         seed_outcome(reason)
-        false
+        # A room owning the doc is NOT an empty server: its in-memory doc can
+        # hold content the row does not show yet, so pushing a full body against
+        # it is the same doubling hazard as a decline (#476). Every other reason
+        # here — no/!binary b64, a non-markdown path, a frame we could not
+        # decode, guard or apply — means the row we just created is untouched and
+        # the client's push is the only thing that will ever fill it.
+        if reason == :room_already_exists, do: :occupied, else: :absent
     end
   end
 
   defp maybe_seed_detached(_user, _vault, _note, _b64) do
     seed_outcome(:b64_not_binary)
-    false
+    :absent
   end
 
   # `with` steps for maybe_seed_detached/4. Each maps its underlying call onto a
@@ -1149,7 +1164,23 @@ defmodule EngramWeb.CrdtChannel do
       CrdtDeliver.fanout_idle(user.id, vault.id, note_id)
     end
 
-    seeded
+    # #476: the caller needs to know WHICH kind of `false` this was, because the
+    # two demand opposite things of the client. `wrote?` already separates them:
+    #
+    #   seeded            -> :stored   the row holds our bytes; the client adopts
+    #   not seeded, wrote -> :absent   the write clause ran and nothing landed
+    #                                  (a DEK-rotation skip, a stale snapshot).
+    #                                  The row is EMPTY, so the client MUST push
+    #                                  or the note stays blank forever.
+    #   not seeded, no    -> :occupied `seed_against/7` declined because the row
+    #                                  already carries a DIFFERENT body, or the
+    #                                  fold could not read it. Pushing here mints
+    #                                  a rival lineage and doubles the note.
+    cond do
+      seeded -> :stored
+      wrote? -> :absent
+      true -> :occupied
+    end
   rescue
     e ->
       # A raised query (connection loss, etc.) must cost this note its seed,
@@ -1160,7 +1191,9 @@ defmodule EngramWeb.CrdtChannel do
         Metadata.with_category(:warning, :sync, error_kind: Engram.Telemetry.error_kind(e))
       )
 
-      false
+      # Row state unknown after a raise. `:occupied` is the safe pole: it costs
+      # a deferred body, where `:absent` would risk doubling one.
+      :occupied
   end
 
   # ONE short tenant transaction: read the clause selector and fold the durable

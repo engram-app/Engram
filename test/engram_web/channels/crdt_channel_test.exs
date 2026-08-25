@@ -724,6 +724,104 @@ defmodule EngramWeb.CrdtChannelTest do
       assert note.content == ""
     end
 
+    test "a decline caused by a concurrent write is distinguishable from an empty server (#476)",
+         %{socket: socket, user: user, vault: vault} do
+      # THE #476 DOUBLING BUG. `seeded: false` collapses two server states that
+      # need OPPOSITE client actions:
+      #
+      #   "I wrote nothing and the row is empty"  -> the client MUST push
+      #   "I declined, the row holds another body" -> the client must NOT push
+      #
+      # In the second case the client pushed anyway, into what it still believed
+      # was an empty doc. Writing a body into an empty Y.Doc mints a fresh
+      # clientID, so that push is a RIVAL lineage carrying identical text, and
+      # YATA's job is to preserve both concurrent inserts. The union is the note,
+      # twice. Measured on a real 423-item import: 13 notes at exact 2x, the
+      # largest a 34 KB note stored as 68,520 bytes.
+      #
+      # No client-side guard can fix this: the client cannot be correct with one
+      # bit that does not distinguish the two. So the reply has to say WHICH.
+      #
+      # Reproduced deterministically by parking the seed at its pre-write seam
+      # and landing a different body in exactly that window — the same race the
+      # `seed_against/7` catch-all comment describes ("a concurrent write landed
+      # between genesis and here"), which real imports hit more often on large
+      # notes because a bigger frame means a longer decode/apply.
+      id = Ecto.UUID.generate()
+
+      on_exit(CheckpointInterleave.arm(:genesis_seed_before_write))
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/declined.md",
+          "b64" => frame_for_content("client body")
+        })
+
+      parked = CheckpointInterleave.await_parked(:genesis_seed_before_write, socket.channel_pid)
+
+      # The concurrent write the decline exists to protect.
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Notes/declined.md",
+          "content" => "a DIFFERENT body that must not be clobbered"
+        })
+
+      CheckpointInterleave.release(:genesis_seed_before_write, parked)
+
+      # `seeded: false` stays for older clients, but it is no longer the whole
+      # story: `genesis` names the outcome so the client can act on it.
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false, genesis: "occupied"}
+    end
+
+    test "a create the server could not seed at all reports an EMPTY server, so the client may push",
+         %{socket: socket} do
+      # The other half of the distinction. Nothing raced here: the server simply
+      # has no genesis bytes (no b64), the row it just created is empty, and
+      # pushing the body is not merely safe but REQUIRED — treating this as
+      # "occupied" would leave every such note permanently blank.
+      id = Ecto.UUID.generate()
+      ref = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/nob64.md"})
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false, genesis: "absent"}
+    end
+
+    test "a successful seed reports that the server holds our bytes", %{socket: socket} do
+      id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/stored.md",
+          "b64" => frame_for_content("body")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true, genesis: "stored"}
+    end
+
+    test "a room already holding the doc reports occupied, never absent", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # `require_room_free/1` declines because a room owns the document, and a
+      # room's in-memory doc can hold content the row does not show yet. Reading
+      # that as "the server has nothing" is the same data-loss shape as the
+      # decline above.
+      id = Ecto.UUID.generate()
+      {:ok, _room} = CrdtRegistry.ensure_started(user.id, vault.id, id)
+      on_exit(fn -> CrdtRegistry.terminate_room(id) end)
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/roombusy.md",
+          "b64" => frame_for_content("body")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false, genesis: "occupied"}
+    end
+
     test "a new room started after eviction re-binds against the seeded row (STEP2 carries the body)",
          %{socket: socket, user: user, vault: vault} do
       # The eviction test above ("a room that registers in the write window is
