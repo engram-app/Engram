@@ -110,6 +110,13 @@ in `test_100`. It does NOT fix #1409 generally.
 shapes, one vault pass. Red against the unfixed plugin at 7/11 doubled + 7
 edit-class rooms; green at 0 and 0.
 
+> **2026-08-24:** those red/green numbers only hold now that the probe is
+> prefix-scoped (#1459). As merged in #1455 the assertion sampled the WHOLE
+> session-scoped e2e vault, so it counted ~110 other tests' notes — including
+> legitimately two-device ones — and was red on every CI run regardless of the
+> plugin. Do not read a lineage count from before #1459 as a signal about this
+> defect. See `docs/context/e2e-session-vault-scoping-trap.md`.
+
 Unit equivalent (1 second instead of 40): `plugin/tests/crdt/seed-gate.test.ts`,
 "a second device re-seeding the SAME content adds no client" — reports
 `after: 2` against the old code.
