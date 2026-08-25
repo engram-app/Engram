@@ -65,8 +65,8 @@ export function formatPlanPrice(
 export const FREE_TIER = {
 	name: "Free",
 	price: "$0",
-	summary: "10k notes · 1 vault · markdown only",
-	features: ["10k notes", "1 vault", "Markdown only", "Upgrade anytime"],
+	summary: "10k notes · 1 vault · 1 GB attachments",
+	features: ["10k notes", "1 vault", "1 GB attachments", "2 devices"],
 } as const;
 
 // Single catalog source-of-truth: both onboarding (trial signup) and the
@@ -88,7 +88,7 @@ export const PLAN_CATALOG: Record<PlanTier, PlanCardCatalog> = {
 			"15 vaults",
 			"Unlimited devices",
 			"15 GB attachments",
-			"Unlimited AI",
+			"10,000 AI queries/day",
 			"Smart retrieval (coming)",
 		],
 	},

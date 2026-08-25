@@ -20,8 +20,14 @@ defmodule Engram.Billing.LimitKeys do
       defaults: %{free: 1_073_741_824, starter: 3_221_225_472, pro: 16_106_127_360}
     },
     attachments_enabled: %{type: :boolean, defaults: %{free: true, starter: true, pro: true}},
-    # Starter+ get the full MimeWhitelist surface (images, audio, video, PDFs,
-    # office docs); Free is text/* only.
+    # Every tier gets the full MimeWhitelist surface (images, audio, video,
+    # PDFs, office docs). Free used to be text/* only, which made
+    # `attachment_bytes_cap` unreachable — 10k notes of markdown is ~50 MB
+    # against a 1 GiB quota, so the quota never bound and the real Free limit
+    # was an invisible MIME rule. Worse, a normal Obsidian vault silently
+    # synced without its images, which reads as a broken product rather than a
+    # limited tier. Storage is now the honest lever: the 1 GiB cap binds, and
+    # a maxed Free user costs ~$0.02/mo of S3.
     #
     # POLARITY IS LOAD-BEARING. This replaces `attachments_text_only`, whose
     # `true` meant "restriction ON" — the only inverted boolean in this catalog.
@@ -33,7 +39,7 @@ defmodule Engram.Billing.LimitKeys do
     # the thing) and that whole failure class cannot come back.
     attachments_all_types: %{
       type: :boolean,
-      defaults: %{free: false, starter: true, pro: true}
+      defaults: %{free: true, starter: true, pro: true}
     },
     max_file_bytes: %{
       type: :integer,
@@ -43,7 +49,18 @@ defmodule Engram.Billing.LimitKeys do
       type: :integer,
       defaults: %{free: 20_000_000, starter: nil, pro: nil}
     },
-    concurrent_devices: %{type: :integer, defaults: %{free: 1, starter: nil, pro: nil}},
+    # Free gets 2 so the tier can actually DEMONSTRATE sync — laptop + phone is
+    # the floor for an Obsidian user, and a 1-device free tier can never show
+    # the thing it is selling. The 3rd device is the upgrade trigger.
+    #
+    # PAIRED WITH `obsidian_connections_cap`. Both keys gate the same count
+    # (`Connections.count_active(user.id, :obsidian)`) at two different
+    # endpoints: this one on the device-flow authorize (`EnforceDeviceCap`),
+    # that one on OAuth consent (`EnforceConnectionCap`). Raise one without the
+    # other and the un-raised path still 402s at the old number.
+    concurrent_devices: %{type: :integer, defaults: %{free: 2, starter: nil, pro: nil}},
+    # Kept at 24h alongside the 2-device cap: it closes the revoke-and-re-add
+    # rotation hole that would otherwise make the device cap advisory.
     device_swap_cooldown_hours: %{type: :integer, defaults: %{free: 24, starter: 0, pro: 0}},
     ai_conversations_per_day: %{type: :integer, defaults: %{free: 5, starter: nil, pro: nil}},
     ai_queries_per_conversation: %{
@@ -53,8 +70,19 @@ defmodule Engram.Billing.LimitKeys do
     ai_queries_per_day: %{type: :integer, defaults: %{free: nil, starter: 500, pro: 10_000}},
     conversation_window_minutes: %{type: :integer, defaults: %{free: 30, starter: 30, pro: 30}},
     reranker_enabled: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
-    api_write_enabled: %{type: :boolean, defaults: %{free: false, starter: true, pro: true}},
-    api_rps_cap: %{type: :integer, defaults: %{free: 0, starter: 10, pro: 30}},
+    # API KEYS ARE PRO-ONLY. Both keys gate ONLY API-key-authed traffic:
+    # `RequireApiWriteEnabled` and `RequireApiRpsBudget` exempt any request
+    # without `:current_api_key`, and `ChannelGate.api_access/2` only rejects
+    # when the cap is 0 for an API-key socket. MCP and the Obsidian plugin
+    # authenticate as `:internal_jwt` and the web app as a Clerk JWT — none of
+    # them set `:current_api_key`, so Starter keeps full MCP + vault sync +
+    # web app. Only programmatic access via a personal API key moves to Pro.
+    api_write_enabled: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
+    # 0 means "an API key cannot make a single call" — REST via
+    # `RequireApiRpsBudget`, socket via `ChannelGate`. Keep this at 0 on any
+    # tier where `api_write_enabled` is false, or a key gets read access to
+    # the whole vault through the sync socket while REST writes are refused.
+    api_rps_cap: %{type: :integer, defaults: %{free: 0, starter: 0, pro: 30}},
     # Rolling-24h search caps on the Free tier. Split by where the request
     # came from so a noisy MCP / PAT bot can't burn the user's in-app
     # budget and vice-versa. Both fire on POST /api/search only — note
@@ -79,8 +107,10 @@ defmodule Engram.Billing.LimitKeys do
     # Legacy keys preserved for back-compat with existing call sites
     cross_vault_search: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
     vault_scoped_keys: %{type: :boolean, defaults: %{free: false, starter: true, pro: true}},
-    # Connections caps — free tier capped at 1; paid tiers unlimited
-    obsidian_connections_cap: %{type: :integer, defaults: %{free: 1, starter: nil, pro: nil}},
+    # Connections caps — paid tiers unlimited. `obsidian_connections_cap` MUST
+    # track `concurrent_devices` (see the note there): same underlying count,
+    # two enforcement points.
+    obsidian_connections_cap: %{type: :integer, defaults: %{free: 2, starter: nil, pro: nil}},
     mcp_connections_cap: %{type: :integer, defaults: %{free: 1, starter: nil, pro: nil}},
     # Account export caps — free gets 1 lifetime, paid tiers get 1/24h with 200 GB size cap
     account_exports_lifetime: %{type: :integer, defaults: %{free: 1, starter: nil, pro: nil}},
