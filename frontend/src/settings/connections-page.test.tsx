@@ -30,7 +30,19 @@ vi.mock("../api/queries", async () => {
 			isLoading: false,
 			error: null,
 		}),
-		useBillingStatus: () => ({ data: { tier: mockTier } }),
+		// Mirror the real payload: the page reads `caps`, not the tier string.
+		// API keys are Pro-only, so only Pro resolves api_write_enabled true.
+		useBillingStatus: () => ({
+			data: {
+				tier: mockTier,
+				caps: {
+					api_write_enabled: mockTier === "pro",
+					obsidian_connections: mockTier === "free" ? 2 : null,
+					mcp_connections: mockTier === "free" ? 1 : null,
+					vaults: mockTier === "free" ? 1 : null,
+				},
+			},
+		}),
 		useRevokeOauthConnection: () => ({ mutate: vi.fn(), mutateAsync: mockRevokeOauth }),
 		useRevokeDeviceConnection: () => ({ mutate: vi.fn(), mutateAsync: mockRevokeDevice }),
 		useRevokePat: () => ({ mutate: vi.fn(), mutateAsync: mockRevokePat }),
@@ -326,9 +338,9 @@ describe("ConnectionsPage", () => {
 		).toBeInTheDocument();
 	});
 
-	it("shows create button when tier is paid", () => {
+	it("shows create button when tier is pro", () => {
 		mockConnections.splice(0, mockConnections.length, baseObs, basePat);
-		mockTier = "starter";
+		mockTier = "pro";
 		renderPage();
 		expect(screen.getByRole("button", { name: /\+ New Key/iu })).toBeInTheDocument();
 	});
@@ -337,7 +349,18 @@ describe("ConnectionsPage", () => {
 		mockConnections.splice(0, mockConnections.length, basePat);
 		mockTier = "free";
 		renderPage();
-		expect(screen.getByText(/Upgrade to Starter to create API keys/iu)).toBeInTheDocument();
+		expect(screen.getByText(/Upgrade to Pro to create API keys/iu)).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /\+ New Key/iu })).not.toBeInTheDocument();
+	});
+
+	// API keys moved to Pro-only. Starter is a PAID tier that still must not
+	// see the create affordance — the old gate keyed on "not free" and would
+	// have offered Starter a button the server refuses with 402.
+	it("shows upgrade CTA when tier is starter", () => {
+		mockConnections.splice(0, mockConnections.length, basePat);
+		mockTier = "starter";
+		renderPage();
+		expect(screen.getByText(/Upgrade to Pro to create API keys/iu)).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /\+ New Key/iu })).not.toBeInTheDocument();
 	});
 

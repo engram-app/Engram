@@ -104,7 +104,7 @@ defmodule EngramWeb.Plugs.RequireApiWriteEnabledTest do
     end
   end
 
-  describe "API-key-authed writes — Starter / Pro user (api_write_enabled=true)" do
+  describe "API-key-authed writes — Pro user (api_write_enabled=true)" do
     test "passes through when override grants the feature",
          %{conn: conn, user: user, api_key: api_key} do
       insert(:user_limit_override,
