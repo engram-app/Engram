@@ -872,7 +872,7 @@ defmodule EngramWeb.CrdtChannelTest do
     end
 
     test "refuses to read a note in ANOTHER user's vault", %{socket: socket} do
-      other = Fixtures.user_with_dek_fixture()
+      {:ok, other} = Fixtures.user_with_dek_fixture()
       other_vault = Fixtures.insert_vault!(other, "Other")
 
       {:ok, note} =
