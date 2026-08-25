@@ -59,8 +59,10 @@ defmodule Engram.MCP.HandlersUploadTargetTest do
     test "reports the caller's resolved plan limits", ctx do
       {:ok, text} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
 
-      assert text =~ "max_bytes"
-      assert text =~ to_string(Engram.Billing.effective_limit(ctx.user, :max_file_bytes))
+      # Asserting the literal free-tier cap rather than `to_string(effective_limit(...))`:
+      # that comparison is vacuous when the limit is nil (`text =~ ""` is always
+      # true) and otherwise just restates the implementation back to itself.
+      assert text =~ "max_bytes: 10485760"
     end
 
     # The vault is selected by the `x-vault-id` REQUEST HEADER (VaultPlug), not
@@ -71,7 +73,27 @@ defmodule Engram.MCP.HandlersUploadTargetTest do
       {:ok, text} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
 
       assert text =~ "x-vault-id: #{ctx.vault.id}"
-      refute text =~ "vault_id        required"
+      # Whitespace-insensitive: a heredoc reformat must not silently disarm this.
+      refute text =~ ~r/vault_id\s+required/
+    end
+
+    # `-1` is a documented "unlimited" sentinel (billing.ex:156), and
+    # `effective_limit/2` returns override values RAW — it does not normalize.
+    # Rendering it literally tells the model the cap is negative, which is
+    # either nonsense or reads as "uploads disabled".
+    test "renders the -1 unlimited sentinel as unlimited, not a negative cap", ctx do
+      insert(:user_limit_override,
+        user: ctx.user,
+        key: "max_file_bytes",
+        value: %{"v" => -1}
+      )
+
+      Engram.Billing.OverrideCache.evict(ctx.user.id)
+
+      {:ok, text} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
+
+      assert text =~ "max_bytes: unlimited"
+      refute text =~ "-1"
     end
   end
 

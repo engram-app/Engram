@@ -815,9 +815,21 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
-  # `nil` in the limit catalog means "no enforcement" (see
-  # `Engram.Billing.LimitKeys`), which is unlimited rather than zero.
+  # Three spellings of "no cap" reach here and all must render the same way.
+  # `nil` is "no enforcement" from the catalog (`Engram.Billing.LimitKeys`),
+  # `:unlimited` comes back when limits are disabled entirely (self-host with
+  # ENGRAM_LIMITS_ENFORCED=false), and `-1` is the documented unlimited
+  # sentinel (`Engram.Billing`, `check_limit/3`, `BillingController.cap_json/1`).
+  #
+  # `-1` is the one that bites: `effective_limit/2` returns per-user override
+  # values RAW, without passing them through `normalize_capability/2`, so an
+  # operator-set `-1` arrives here intact. Rendering it literally advertises a
+  # negative byte cap, which a model reads as "uploads are disabled".
+  #
+  # Only `-1` is special-cased on purpose. Any other negative is corrupt data
+  # and should stay visible rather than be silently laundered into "unlimited".
   defp render_limit(nil), do: "unlimited"
   defp render_limit(:unlimited), do: "unlimited"
+  defp render_limit(-1), do: "unlimited"
   defp render_limit(n), do: to_string(n)
 end
