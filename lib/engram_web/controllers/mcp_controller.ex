@@ -35,7 +35,8 @@ defmodule EngramWeb.McpController do
     "rename_note" => :rename_note,
     "rename_folder" => :rename_folder,
     "delete_note" => :delete_note,
-    "move_attachment" => :move_attachment
+    "move_attachment" => :move_attachment,
+    "get_attachment_upload_target" => :get_attachment_upload_target
   }
 
   def handle(conn, %{"jsonrpc" => "2.0", "id" => id, "method" => method} = params) do
