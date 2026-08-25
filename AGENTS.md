@@ -420,6 +420,8 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Login critical-path optimization (PR #673) — rolldown-vite `manualChunks` gotcha → `docs/context/frontend-login-load-optimization.md`
 - Login boot perf (PR #842) — chunk-size measurement, VLQ-decode under hidden sourcemaps → `docs/context/frontend-login-boot-perf.md`
 - Folder-tree `rebuildTree()` triggers, optimistic move/delete/duplicate → `docs/context/folder-tree-optimistic-rebuild.md`
+- A web-app folder delete reverts ~1s later, or you are touching any folder route (a folder is EITHER a `kind="folder"` marker row OR derived from the paths of the notes/attachments inside it) → `docs/context/derived-vs-marker-folders.md`
+- Adding a `?flag=true` query param to a controller (nothing casts query params here; `type: :boolean` in the OpenAPI op silently no-ops `?flag=1`) → `docs/context/derived-vs-marker-folders.md`
 - Mobile keyboard toolbar — why it hides on some phones, the decoy Yjs UndoManager, caret-after-insert → `docs/context/mobile-editor-toolbar.md`
 - Frontend/backend deploy-trigger skew (different pipelines) — 2026-06-20 incident + fix → `docs/context/frontend-backend-deploy-skew-cors.md`
 - Writing a CM6 live-preview decoration (lezer reads `[!type]` as a Link; one highlight tag serves many nodes; `syntaxTree` is lazy) → `docs/context/codemirror-live-preview-extensions.md`
