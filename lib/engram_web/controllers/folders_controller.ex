@@ -161,17 +161,64 @@ defmodule EngramWeb.FoldersController do
     summary: "Delete a folder by path",
     description:
       "Removes the folder marker for the given path. Idempotent — deleting a non-existent or " <>
-        "never-encrypted folder still returns 204.",
+        "never-encrypted folder still returns 204. Pass `recursive=true` to also delete every " <>
+        "note and attachment under the path — required to remove a folder that has no marker " <>
+        "of its own (one the server only derives from the paths of the notes inside it).",
     tags: ["Folders"],
-    parameters: [path: [in: :path, type: :string, required: true, description: "Folder path"]],
+    parameters: [
+      path: [in: :path, type: :string, required: true, description: "Folder path"],
+      recursive: [
+        in: :query,
+        type: :boolean,
+        required: false,
+        description: "Delete the folder's contents too (default false: marker only)"
+      ]
+    ],
     responses: [no_content: "Deleted (empty body)"]
   )
 
-  def delete(conn, %{"path" => path_segments}) do
+  def delete(conn, %{"path" => path_segments} = params) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
     folder = Enum.map_join(path_segments, "/", &URI.decode/1)
 
+    if params["recursive"] == "true" do
+      delete_recursive(conn, user, vault, folder)
+    else
+      delete_marker_only(conn, user, vault, folder)
+    end
+  end
+
+  # Most folders have no marker row of their own — the server derives them from
+  # the paths of the notes inside. Clearing a marker that was never there
+  # deletes nothing, so the folder re-derives from those same notes on the very
+  # next list and the client watches it come back. `recursive: true` deletes the
+  # contents, which is the only thing that actually removes a derived folder.
+  defp delete_recursive(conn, user, vault, folder) do
+    case Folders.delete(user, vault, folder, recursive: true) do
+      # ponytail: 0/0 means "nothing was removed" OR "an empty marker was cleared" --
+      # Folders.delete cannot tell us apart. Stay silent: a phantom folders.batch
+      # delete makes the plugin drop a live local folder, and the callers that
+      # pass recursive=true are deleting folders that HAVE content.
+      {:ok, %{notes: 0, attachments: 0}} ->
+        send_resp(conn, 204, "")
+
+      {:ok, _counts} ->
+        BatchOps.broadcast_batch(user, vault, "folders.batch", %{op: "delete", folder: folder})
+        send_resp(conn, 204, "")
+
+      {:error, :no_dek} ->
+        send_resp(conn, 204, "")
+
+      {:error, :root_delete_refused} ->
+        conn |> put_status(422) |> json(%{error: "folder must not be empty"})
+
+      {:error, reason} ->
+        conn |> put_status(500) |> json(%{error: format_error(reason)})
+    end
+  end
+
+  defp delete_marker_only(conn, user, vault, folder) do
     # Idempotent: treat :no_dek (user never encrypted anything) as "nothing to delete".
     case Notes.delete_folder_marker(user, vault, folder) do
       {:ok, :deleted} ->

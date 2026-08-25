@@ -543,7 +543,7 @@ describe("useDeleteFolder", () => {
 			await result.current.mutateAsync({ path: "my folder/sub" });
 		});
 
-		expect(del).toHaveBeenCalledWith("/folders/my%20folder/sub");
+		expect(del).toHaveBeenCalledWith("/folders/my%20folder/sub?recursive=true");
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
 	});

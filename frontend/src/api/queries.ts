@@ -2196,7 +2196,12 @@ export function useDeleteFolder() {
 		{ path: string },
 		DeleteFolderContext
 	>({
-		mutationFn: ({ path }) => api.del<{ deleted: boolean }>(`/folders/${encodePathSegments(path)}`),
+		// recursive=true: this hook only ever deletes a DERIVED folder (one with no
+		// marker row of its own). Without it the server clears a marker that was
+		// never there, deletes nothing, and the folder re-derives from the notes
+		// still inside it the moment we refetch.
+		mutationFn: ({ path }) =>
+			api.del<{ deleted: boolean }>(`/folders/${encodePathSegments(path)}?recursive=true`),
 		onMutate: async ({ path }) => {
 			// Coarse: drop the folder entry + its own folderNotes cache. We
 			// don't chase descendant folderNotes entries — the user will

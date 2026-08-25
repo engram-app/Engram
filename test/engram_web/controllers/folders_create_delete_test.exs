@@ -108,5 +108,43 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
 
       refute_receive %Phoenix.Socket.Broadcast{event: "folders.batch"}, 100
     end
+
+    test "recursive=true deletes a marker-less folder's notes", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, child} = Engram.Notes.upsert_note(user, vault, %{path: "Derived/a.md"})
+
+      assert response(delete(conn, ~p"/api/folders/Derived?recursive=true"), 204)
+      assert {:error, :not_found} = Engram.Notes.get_note_by_id(user, vault, child.id)
+    end
+
+    test "recursive=true broadcasts folders.batch delete", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} = Engram.Notes.upsert_note(user, vault, %{path: "Derived/a.md"})
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      delete(conn, ~p"/api/folders/Derived?recursive=true")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "folders.batch",
+        payload: %{op: "delete", folder: "Derived"}
+      }
+    end
+
+    test "without recursive, a populated folder keeps its notes", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, child} = Engram.Notes.upsert_note(user, vault, %{path: "Derived/a.md"})
+
+      assert response(delete(conn, ~p"/api/folders/Derived"), 204)
+      assert {:ok, _} = Engram.Notes.get_note_by_id(user, vault, child.id)
+    end
   end
 end
