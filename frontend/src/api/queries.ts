@@ -2247,6 +2247,13 @@ export function useDeleteFolder() {
 			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folders", vaultId] });
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
+			// synthesizeFolders builds rows from TWO sources: /api/folders and the
+			// attachments cache. A folder holding only attachments has no row in
+			// the former, so without this the recursive delete removes the
+			// attachment server-side while the stale cache keeps re-deriving the
+			// folder — the same revert this hook exists to stop.
+			qc.invalidateQueries({ queryKey: ["attachments", vaultId] });
+			qc.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 		},
 	});
 }

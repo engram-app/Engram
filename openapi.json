@@ -4112,12 +4112,12 @@
             }
           },
           {
-            "description": "Delete the folder's contents too (default false: marker only)",
+            "description": "\"true\" also deletes every note and attachment under the path. Omit for marker-only. Declared as a string, not a boolean, because nothing casts query params here — a value this does not recognize would silently no-op a destructive call.",
             "in": "query",
             "name": "recursive",
             "required": false,
             "schema": {
-              "type": "boolean",
+              "type": "string",
               "x-struct": null,
               "x-validate": null
             }

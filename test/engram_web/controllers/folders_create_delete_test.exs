@@ -136,6 +136,17 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
       }
     end
 
+    test "recursive=1 cascades too (an unrecognized value would silently no-op)", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, child} = Engram.Notes.upsert_note(user, vault, %{path: "Derived/a.md"})
+
+      assert response(delete(conn, ~p"/api/folders/Derived?recursive=1"), 204)
+      assert {:error, :not_found} = Engram.Notes.get_note_by_id(user, vault, child.id)
+    end
+
     test "without recursive, a populated folder keeps its notes", %{
       conn: conn,
       user: user,

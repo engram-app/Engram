@@ -546,6 +546,12 @@ describe("useDeleteFolder", () => {
 		expect(del).toHaveBeenCalledWith("/folders/my%20folder/sub?recursive=true");
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
+		// A folder holding only attachments is synthesized from the attachments
+		// cache, not from /api/folders. Skip this and the recursive delete removes
+		// the attachment server-side while the stale cache keeps re-deriving the
+		// folder — the same revert this hook exists to stop.
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
 	});
 
 	it("surfaces backend errors as ApiError", async () => {
