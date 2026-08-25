@@ -829,6 +829,63 @@ defmodule EngramWeb.CrdtChannelTest do
     end
   end
 
+  # #1409: the whole point of this frame is that it does NOT start a room.
+  # `crdt_msg` routes every syncStep1 through `ensure_room`, so obtaining a cold
+  # note's state cost one server room per note on a bulk first sync.
+  describe "crdt_doc_state (room-free full-state read)" do
+    test "returns the note's full Yjs state and starts NO room", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/cold.md", "content" => "cold body"})
+
+      refute CrdtRegistry.lookup(note.id), "precondition: no room before the read"
+
+      ref = push(socket, "crdt_doc_state", %{"doc_id" => note.id})
+      assert_reply ref, :ok, %{doc_id: doc_id, b64: b64, head: head}
+
+      assert doc_id == note.id
+      assert is_binary(head)
+
+      # The reply is real state, not an empty doc: it projects the body.
+      {:ok, update} = Base.decode64(b64)
+      {:ok, doc} = CrdtBridge.doc_from_state(update)
+      assert CrdtBridge.project_doc(doc) =~ "cold body"
+
+      # THE assertion this frame exists for.
+      refute CrdtRegistry.lookup(note.id),
+             "crdt_doc_state must not allocate a room (#1409)"
+    end
+
+    test "rejects an unknown note_id with the same signal crdt_msg sends", %{socket: socket} do
+      ref = push(socket, "crdt_doc_state", %{"doc_id" => Ecto.UUID.generate()})
+      assert_reply ref, :error, %{reason: "note_not_found"}
+    end
+
+    test "rejects a non-UUID doc_id without echoing it back", %{socket: socket} do
+      ref = push(socket, "crdt_doc_state", %{"doc_id" => "Notes/cleartext-path.md"})
+      assert_reply ref, :error, reply
+      assert reply.reason == "bad_doc_id"
+      refute Map.has_key?(reply, :doc_id)
+    end
+
+    test "refuses to read a note in ANOTHER user's vault", %{socket: socket} do
+      other = Fixtures.user_with_dek_fixture()
+      other_vault = Fixtures.insert_vault!(other, "Other")
+
+      {:ok, note} =
+        Notes.upsert_note(other, other_vault, %{
+          "path" => "Notes/theirs.md",
+          "content" => "secret"
+        })
+
+      ref = push(socket, "crdt_doc_state", %{"doc_id" => note.id})
+      assert_reply ref, :error, %{reason: "note_not_found"}
+    end
+  end
+
   # Single-path catch-up (Phase B): replay the seq-ordered op-log over the
   # socket. Each op carries FULL content (not an SV-diff), so it is causally
   # complete and can never pend — the e2e test_85 deaf-note fix.

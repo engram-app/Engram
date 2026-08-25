@@ -525,6 +525,61 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  # Room-FREE full-state read for a cold note (#1409).
+  #
+  # This is the whole point of the frame: `crdt_msg` routes every syncStep1
+  # through `ensure_room`, so the only way for a client to obtain a note's Yjs
+  # state was to start a server room for it. A bulk first sync converges most
+  # notes over fan-out, but every note that falls through to catch-up diverged
+  # and cold took the STEP1 path — one room per such note, for a note nobody
+  # has open in an editor. Attribution on a 250-note import put 100% of the
+  # rooms at exactly that one client call site (`catchup-diverged-cold`).
+  #
+  # `CrdtTransport.read_delta/4` was built for this in Phase 1 of the
+  # single-authority redesign ("pull deltas for cold notes") and never got a
+  # caller: it rebuilds the doc read-only from the persisted snapshot + tail
+  # replay, spawning no room and taking no locks. Its REST route was deleted in
+  # Phase E3 (#1088) on the rule that Yjs bytes travel ONLY over this topic —
+  # hence a frame here rather than a route back in the router.
+  #
+  # `since_sv` is deliberately NOT accepted. A cold note is one this device has
+  # no doc for, so the only useful answer is the full state, and refusing the
+  # parameter keeps the NIF-abort surface (`plausible_state_vector?` — a
+  # crafted 5-byte vector aborts the whole BEAM) off this frame entirely.
+  #
+  # Applying the reply is a Yjs MERGE, not an overwrite, so a checkpoint-lagged
+  # snapshot is safe here in a way the catch-up feed's plaintext `content` is
+  # not — that snapshot can revert a fresher live merge (the D2 stomp class),
+  # which is why the client site this replaces refused to write it.
+  #
+  # Handshake lane: this is the frame that REPLACES a handshake, so it must
+  # bill the same budget or it would be a way to dodge it.
+  @impl true
+  def handle_in("crdt_doc_state", %{"doc_id" => doc_id}, socket) do
+    with :ok <- check_rate(socket, :handshake),
+         {:ok, note_id} <- cast_doc_id(doc_id),
+         {:ok, %{update: update, head: head}} <-
+           CrdtTransport.read_delta(
+             socket.assigns.current_user,
+             socket.assigns.vault,
+             note_id,
+             nil
+           ) do
+      {:reply, {:ok, %{doc_id: note_id, b64: Base.encode64(update), head: head}}, socket}
+    else
+      {:error, :rate_limited} ->
+        {:reply, {:error, %{reason: "rate_limited"}}, socket}
+
+      {:error, :bad_doc_id} ->
+        {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
+
+      # Same signal `crdt_msg` sends for an unknown id, so the client's existing
+      # id-map reconcile (backend #955) fires on it unchanged.
+      {:error, :not_found} ->
+        {:reply, {:error, %{reason: "note_not_found", doc_id: doc_id}}, socket}
+    end
+  end
+
   @impl true
   def handle_in("crdt_delete", %{"doc_id" => doc_id}, socket) do
     with :ok <- check_rate(socket, :handshake),
