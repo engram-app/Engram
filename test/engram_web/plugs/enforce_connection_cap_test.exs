@@ -27,12 +27,16 @@ defmodule EngramWeb.Plugs.EnforceConnectionCapTest do
       refute conn.halted
     end
 
-    test "halts 402 at cap with full body (Free user, 1 existing obsidian connection)", %{
+    test "halts 402 at cap with full body (Free user, 2 existing obsidian connections)", %{
       conn: conn,
       user: user,
       obs: client
     } do
+      # Free's obsidian cap is 2. `oauth_active_count/2` counts DISTINCT
+      # client_id, so filling the cap needs two distinct obsidian clients.
+      other = insert(:oauth_client, kind: "obsidian")
       insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+      insert(:oauth_refresh_token, user_id: user.id, client_id: other.client_id)
 
       conn =
         conn
@@ -48,14 +52,14 @@ defmodule EngramWeb.Plugs.EnforceConnectionCapTest do
       assert body["error"] == "limit_exceeded"
       assert body["reason"] == "obsidian_connections_exceeded"
       assert body["limit_key"] == "obsidian_connections_cap"
-      assert body["current"] == 1
-      assert body["limit"] == 1
+      assert body["current"] == 2
+      assert body["limit"] == 2
       assert body["upgrade_url"] == "https://app.engram.page/#settings/billing"
       assert body["tier"] == "free"
     end
 
     test "obsidian cap does not affect mcp consent", %{conn: conn, user: user, obs: obs, mcp: mcp} do
-      # 1 obsidian connection exists (at obsidian cap of 1)
+      # 1 obsidian connection exists (under the obsidian cap of 2)
       insert(:oauth_refresh_token, user_id: user.id, client_id: obs.client_id)
 
       # But mcp consent for a different kind should still pass — mcp count is 0

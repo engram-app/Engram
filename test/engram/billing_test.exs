@@ -151,12 +151,12 @@ defmodule Engram.BillingTest do
   end
 
   describe "plan_state/1" do
-    test "free user: text-only true, numeric caps present" do
+    test "free user: all MIME types allowed, numeric caps present" do
       user = build(:user, free_tier_accepted_at: nil)
       state = Billing.plan_state(user)
       assert state.tier == :free
-      assert state.attachments_all_types == false
-      assert state.attachments_text_only == true
+      assert state.attachments_all_types == true
+      assert state.attachments_text_only == false
       assert is_integer(state.max_file_bytes)
       assert is_integer(state.attachment_bytes_cap) or is_nil(state.attachment_bytes_cap)
     end

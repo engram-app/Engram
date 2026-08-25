@@ -34,7 +34,15 @@ defmodule Engram.Billing.CapabilitiesTest do
     assert caps.tier == "starter"
     assert caps.limits["notes_cap"] == 50_000
     assert caps.limits["vaults_cap"] == 5
-    assert caps.limits["api_write_enabled"] == true
+    # API keys are Pro-only — Starter resolves the same `false` as Free here.
+    assert caps.limits["api_write_enabled"] == false
+  end
+
+  test "api_write_enabled is the Pro-only capability" do
+    user = insert(:user)
+    insert(:subscription, user: user, tier: "pro", status: "active")
+
+    assert Billing.capabilities(user).limits["api_write_enabled"] == true
   end
 
   test "exposes every defined limit key as a JSON-safe value" do
