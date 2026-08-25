@@ -93,7 +93,13 @@ defmodule Engram.MCP.HandlersUploadTargetTest do
       {:ok, text} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
 
       assert text =~ "max_bytes: unlimited"
-      refute text =~ "-1"
+
+      # Scoped to the limit line on purpose. A bare `refute text =~ "-1"`
+      # also matches the vault UUID (e.g. 707cb1f9-1fb6-4b14-...), so it
+      # passed or failed depending on which UUID the factory happened to
+      # generate — green locally, red in CI, for no reason connected to
+      # the behaviour under test.
+      refute text =~ "max_bytes: -1"
     end
   end
 
