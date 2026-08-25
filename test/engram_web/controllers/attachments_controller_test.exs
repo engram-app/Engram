@@ -295,19 +295,44 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert body["limit"] == 1_048_576
     end
 
-    test "Free user gets 402 attachment_must_be_text when uploading non-text MIME", %{
+    test "Free user CAN upload a non-text MIME — storage is the lever, not MIME", %{
       conn: conn,
       user: user
     } do
       # Demote the setup-Pro user back to Free by deleting the subscription.
-      # `tier/1` resolves to :free with no subscription row, which lights up
-      # the `attachments_text_only` flag per LimitKeys.
+      # `tier/1` resolves to :free with no subscription row. Free now carries
+      # `attachments_all_types: true`; the binding limit is the 1 GiB quota.
       sub =
         Engram.Repo.get_by(Engram.Billing.Subscription, [user_id: user.id],
           skip_tenant_check: true
         )
 
       Engram.Repo.delete!(sub, skip_tenant_check: true)
+
+      conn =
+        post(conn, "/api/attachments", %{
+          path: "allowed.png",
+          content_base64: @sample_base64,
+          mtime: 1.0
+        })
+
+      assert conn.status in [200, 201]
+    end
+
+    test "402 attachment_must_be_text still fires when an override revokes the surface", %{
+      conn: conn,
+      user: user
+    } do
+      # No tier defaults to text-only any more, but the gate is still reachable
+      # via an operator override — keep the 402 shape under test so the branch
+      # can't rot.
+      insert(:user_limit_override,
+        user: user,
+        key: "attachments_all_types",
+        value: %{"v" => false},
+        reason: "revoke for test",
+        set_by: "test"
+      )
 
       conn =
         post(conn, "/api/attachments", %{
@@ -320,8 +345,6 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert body["error"] == "limit_exceeded"
       assert body["reason"] == "attachment_must_be_text"
       assert body["limit_key"] == "attachments_text_only"
-      assert body["tier"] == "free"
-      assert body["limit"] == true
       assert Map.has_key?(body, "upgrade_url")
     end
 

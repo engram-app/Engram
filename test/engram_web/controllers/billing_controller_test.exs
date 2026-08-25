@@ -65,10 +65,11 @@ defmodule EngramWeb.BillingControllerTest do
     test "caps reflect free-tier defaults for connection limits", %{conn: conn} do
       # The shared setup grants api_write_enabled=true via grant_api_write!/1
       # (PAT auth precondition), so only obsidian/mcp connection caps still
-      # reflect the free-tier default of 1 here.
+      # reflect free-tier defaults here. Obsidian is 2 (it tracks
+      # concurrent_devices); MCP stays at 1.
       conn = get(conn, "/api/billing/status")
       body = json_response(conn, 200)
-      assert body["caps"]["obsidian_connections"] == 1
+      assert body["caps"]["obsidian_connections"] == 2
       assert body["caps"]["mcp_connections"] == 1
       assert body["caps"]["api_write_enabled"] == true
     end

@@ -43,7 +43,11 @@ function useTierCaps() {
 	return {
 		tier,
 		isFree,
-		apiWriteEnabled: caps?.api_write_enabled ?? !isFree,
+		// Fail CLOSED while caps are loading. This used to be `?? !isFree`,
+		// which granted the key UI to every paid tier — now that API keys are
+		// Pro-only, that fallback would offer Starter a button the server
+		// refuses.
+		apiWriteEnabled: caps?.api_write_enabled ?? false,
 		obsidianCap: caps ? caps.obsidian_connections : isFree ? 1 : null,
 		mcpCap: caps ? caps.mcp_connections : isFree ? 1 : null,
 	};
@@ -274,7 +278,7 @@ function PatSection({
 			{!canCreate && (
 				<aside className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/50 px-4 py-3">
 					<p className="text-muted-foreground text-sm">
-						Upgrade to Starter to create API keys for scripting and external integrations.
+						Upgrade to Pro to create API keys for scripting and external integrations.
 					</p>
 					<Link
 						to={settingsTo("billing", location.search)}
