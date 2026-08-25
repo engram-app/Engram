@@ -20,6 +20,7 @@ import time
 
 import pytest
 
+from helpers.residency_probe import read_resident_rooms
 from helpers.room_probe import arm_room_starts, read_room_starts
 from helpers.vault import write_note
 
@@ -45,12 +46,51 @@ PUSH_TIME_BOUND_S = 120
 # on the part that is not.
 ROOM_ALLOC_BOUND = 8
 
-# Enrolment-driven rooms, the OPEN half of #1409. Recorded as a ratchet, not a
-# target: 544/1000 was the CI measurement on 2026-08-23. It exists so a change
-# that makes enrolment worse still fails, while the known O(N) baseline does not
-# spend every run red. TIGHTEN THIS as #1409's enrolment work lands; a run that
-# comes in far under it means the bound is stale, not that nothing happened.
+# Enrolment-driven rooms, the OPEN half of #1409. A ratchet, not a target: it
+# fails when enrolment gets WORSE, and does not spend every run red on the
+# known-open O(N) baseline.
+#
+# THE METRIC IS EXTREMELY NOISY — measure before you tighten this. Observed on
+# 2026-08-24/25 across runs of essentially the same code, post plugin #466:
+#     57, 81, 335, 583   rooms / 1000 notes
+# (baseline was 544 on 2026-08-23, pre-#466.) A 10x spread, because the count
+# tracks reconnects and socket churn as much as enrolment logic.
+#
+# An earlier revision of THIS comment set the bound to 400 off a single 335
+# sample. The next run measured 583 and the job went red on a change that had
+# regressed nothing. Do not repeat that: a bound near the middle of this range
+# buys a flaky job, not a fence. 700 sits above every observed value while still
+# failing loudly on a true return to one-room-per-note (which would be ~1000).
+#
+# Attribution (measured, see the #1409 thread): the rooms are ordinary enroll()
+# calls, dominated by fireCrdtReHandshake — which is a DELIVERY path for durably
+# queued edits and must NOT be gated to reduce this number. The reconnect
+# re-advertise theory was tested and falsified.
+#
+# Re-measure by setting this to 0 on a throwaway branch: test_77 prints its room
+# split only on failure. Also note read_room_starts() counts rooms server-wide
+# across ALL THREE Obsidian instances, while any cdp_a-based client probe sees
+# only device A — do not compare the two without accounting for that.
 HANDSHAKE_ROOM_RATCHET = 700
+
+# Peak CONCURRENT rooms during the import. This is the bound that maps to
+# MEMORY, and it is the one #1409's incident was actually about: on 2026-08-18 a
+# 1.7k-file import left ~2000 rooms RESIDENT and took prod from 757 to 2744
+# processes.
+#
+# Unlike the allocation ratchet above (10x run-to-run spread), residency is
+# tight and stable: MEASURED 4 for 1000 notes on 2026-08-24, twice — once with
+# CI's 5s idle drain and once with the drain set to prod's 300s. It did not move,
+# because a note room exits on `auto_exit` when its last OBSERVER leaves, not on
+# the idle timer; the timer is a backstop for the per-vault index room, which is
+# observed for a whole session. Enrolment being gated to live-bound notes is what
+# lets observers leave promptly.
+#
+# 32 is ~8x the observed peak: a real regression to one-resident-room-per-note
+# would blow past it by two orders of magnitude, while normal churn stays far
+# under. If this ever fails, check whether something started enrolling idle notes
+# again — that is exactly the 2026-08-18 shape.
+PEAK_RESIDENT_ROOM_BOUND = 32
 
 SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
@@ -153,9 +193,14 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
         started = time.monotonic()
         deadline = started + PUSH_TIME_BOUND_S
         bulk_count = 0
+        # Sampled on EVERY pass, not once at the end: room_probe's docstring is
+        # right that a single trailing sample cannot see a burst come and go.
+        # A running peak across the whole import cannot be dodged that way.
+        peak_resident = read_resident_rooms()
         while time.monotonic() < deadline:
             await cdp_a.evaluate(SET_BLOCKED.format("false"))
             await cdp_a.trigger_full_sync()
+            peak_resident = max(peak_resident, read_resident_rooms())
             manifest = api_sync.get_manifest()
             bulk_count = sum(
                 1 for n in manifest["notes"] if n["path"].startswith("Bulk/")
@@ -163,6 +208,7 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
             if bulk_count >= NOTE_COUNT:
                 break
             time.sleep(2)
+            peak_resident = max(peak_resident, read_resident_rooms())
         elapsed = time.monotonic() - started
 
         assert bulk_count >= NOTE_COUNT, (
@@ -174,6 +220,7 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
         # Read AFTER convergence: a room allocated by the tail of the sync must
         # be counted, and the drain means residency would already have shed it.
         rooms = read_room_starts() - rooms_before
+        print(f"\ntest_77 peak resident rooms: {peak_resident}")
         print(f"\ntest_77 rooms allocated for {NOTE_COUNT} notes: {rooms}")
         cold_rooms = rooms.edit + rooms.create_batch + rooms.unknown
         assert cold_rooms <= ROOM_ALLOC_BOUND, (
@@ -182,6 +229,13 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
             "are for notes open in an editor, not for imported files). The "
             "per-source split names the path that regressed; `unknown` means an "
             "allocation site shipped without a source tag."
+        )
+        assert peak_resident <= PEAK_RESIDENT_ROOM_BOUND, (
+            f"peak {peak_resident} CONCURRENT rooms during the import, past the "
+            f"{PEAK_RESIDENT_ROOM_BOUND} bound. This is the memory-shaped half of "
+            "#1409 (2026-08-18: ~2000 resident rooms, 757 -> 2744 processes). A "
+            "note room exits on auto_exit when its last observer leaves, so a "
+            "climb here means something is enrolling — and holding — idle notes."
         )
         assert rooms.handshake <= HANDSHAKE_ROOM_RATCHET, (
             f"enrolment opened {rooms.handshake} handshake rooms for "
