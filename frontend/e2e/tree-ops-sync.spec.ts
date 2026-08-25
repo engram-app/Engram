@@ -439,6 +439,55 @@ test.describe("web tree ops sync (web to web)", () => {
 		await ctxB.close();
 	});
 
+	// Regression (web delete of a populated folder reverted after ~1s): a folder
+	// that exists ONLY because notes live under it has no marker row — the
+	// server derives it from those notes' paths, and the tree gives it a
+	// `syn:` id. The sibling test above calls `createFolder` first, so its
+	// folder always had a marker and always took the id-keyed cascade; nothing
+	// covered the derived shape every Obsidian-created folder actually has.
+	// The marker-only delete removed nothing, so the folder re-derived from the
+	// note still inside it on the next refetch and came straight back.
+	test("delete DERIVED (marker-less) non-empty folder stays deleted", async ({
+		browser,
+		baseURL,
+	}) => {
+		const email = `e2e-tree-delderiv-${Date.now()}@test.com`;
+		const token = await registerAndLogin(baseURL!, email);
+		const vault = await createVault(baseURL!, token, `treedelderiv-${Date.now()}`);
+		// No createFolder — "Derived" exists only as a prefix of this note's path.
+		await upsertNote(baseURL!, token, vault.id, "Derived/inside.md", "inside body\n");
+		const { id: anchorId } = await upsertNote(baseURL!, token, vault.id, "anchor.md", "anchor\n");
+
+		const ctxA = await browser.newContext();
+		const pageA = await ctxA.newPage();
+		const ctxB = await browser.newContext();
+		const pageB = await ctxB.newPage();
+		await signInForNote(pageA, email, vault.id, anchorId);
+		await signInForNote(pageB, email, vault.id, anchorId);
+
+		await expect(row(pageA, "Derived")).toBeVisible({ timeout: 10_000 });
+		await expect(row(pageB, "Derived")).toBeVisible({ timeout: 10_000 });
+
+		await openContextMenu(pageA, "Derived");
+		await pickAction(pageA, "Delete");
+		await confirmDelete(pageA);
+
+		await expect(row(pageA, "Derived")).toHaveCount(0, { timeout: 10_000 });
+		await expect(row(pageB, "Derived")).toHaveCount(0, { timeout: 10_000 });
+
+		// The reported symptom was a REVERT, not a failed delete: the optimistic
+		// drop looked correct, then the refetch re-derived the folder. Reload so
+		// the assertion reads the SERVER's answer with no optimistic state in
+		// front of it — that is the only way this test can fail on a marker-only
+		// delete, and the reason the two assertions above are not enough.
+		await pageA.reload();
+		await expect(row(pageA, "anchor")).toBeVisible({ timeout: 10_000 });
+		await expect(row(pageA, "Derived")).toHaveCount(0);
+
+		await ctxA.close();
+		await ctxB.close();
+	});
+
 	test("delete EMPTY folder propagates to a second tab", async ({ browser, baseURL }) => {
 		const email = `e2e-tree-delef-${Date.now()}@test.com`;
 		const token = await registerAndLogin(baseURL!, email);
