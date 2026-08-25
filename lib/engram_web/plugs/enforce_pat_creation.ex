@@ -1,8 +1,11 @@
 defmodule EngramWeb.Plugs.EnforcePatCreation do
   @moduledoc """
   Gates PAT (personal access token / API key) MINTING on the user's
-  `api_write_enabled` plan flag. Free tier default is `false` — Starter
-  and Pro both default `true`.
+  `api_write_enabled` plan flag. API keys are Pro-only: Free and Starter
+  both default `false`, Pro defaults `true`.
+
+  The rejection code is still `pat_disabled_on_free` for wire
+  compatibility with shipped clients; it now fires for Starter too.
 
   Distinct from `RequireApiWriteEnabled` which gates write *operations*
   via existing API keys on the vault-scoped pipeline. This plug runs on
