@@ -91,7 +91,7 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 			});
 			const url = acct?.verification?.externalVerificationRedirectURL;
 			if (url) {
-				window.location.href = url.toString();
+				window.location.assign(url.toString());
 			}
 		} catch (e) {
 			if (isReverificationCancelledError(e)) {

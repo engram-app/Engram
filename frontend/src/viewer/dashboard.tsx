@@ -1,9 +1,9 @@
-import { useEffect } from "react";
+import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router";
 import { type NoteSummary, useFolderNotes, useVaults } from "../api/queries";
 import { useActiveVaultSlug } from "../api/vault-slug";
 import { EmptyVaultState } from "../layout/empty-vault-state";
-import { useRightTools } from "../layout/right-tools-context";
+import { useRightToolSlot } from "../layout/right-tools-context";
 import { noteName } from "../lib/note-name";
 import NoteToc from "./note-toc";
 
@@ -81,18 +81,12 @@ export default function Dashboard() {
 	const [searchParams] = useSearchParams();
 	const folder = searchParams.get("folder") ?? "";
 	const { data: vaults } = useVaults();
-	const { setSlot } = useRightTools();
 
 	// No note open still looks like an open (empty) document: mount the same
 	// right-panel content an open note gets, so the panel chrome is present.
 	const showEmptyDoc = !folder && vaults !== undefined && vaults.length > 0;
-	useEffect(() => {
-		if (!showEmptyDoc) {
-			return;
-		}
-		setSlot("outline", <NoteToc content="" />);
-		return () => setSlot("outline", null);
-	}, [showEmptyDoc, setSlot]);
+	const emptyToc = useMemo(() => (showEmptyDoc ? <NoteToc content="" /> : null), [showEmptyDoc]);
+	useRightToolSlot("outline", emptyToc);
 
 	// Deleting the last vault leaves zero active vaults. Show a create-a-vault
 	// prompt instead of the (empty) note browser. Guard against the loading

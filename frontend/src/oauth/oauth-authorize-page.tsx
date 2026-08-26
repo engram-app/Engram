@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
@@ -101,25 +101,22 @@ export default function OAuthAuthorizePage() {
 	const connections = useConnections({ enabled: capCheck.atCap });
 	const existingPeer = (connections.data ?? []).find((c): c is Connection => c.kind === clientKind);
 
-	const [vaultChoice, setVaultChoice] = useState<string>("vault:*");
+	const [pickedVault, setVaultChoice] = useState<string>("vault:*");
+	// A picked vault that no longer exists in the fetched list resolves to "all
+	// vaults". That is a function of the current list, so it is computed here
+	// rather than written back into state from an effect one paint later.
+	const vaultChoice =
+		pickedVault.startsWith("vault:") &&
+		pickedVault !== "vault:*" &&
+		vaultsQuery.data &&
+		!vaultsQuery.data.some((v) => String(v.id) === pickedVault.slice("vault:".length))
+			? "vault:*"
+			: pickedVault;
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const [submitting, setSubmitting] = useState(false);
 	// At-cap users get a confirm modal before the implicit swap so they see
 	// EXACTLY what's about to be disconnected, not just an inline banner.
 	const [showSwapConfirm, setShowSwapConfirm] = useState(false);
-
-	useEffect(() => {
-		if (vaultChoice === "vault:*" || !vaultsQuery.data) {
-			return;
-		}
-		if (vaultChoice.startsWith("vault:")) {
-			const id = vaultChoice.slice("vault:".length);
-			const stillExists = id === "*" || vaultsQuery.data.some((v) => String(v.id) === id);
-			if (!stillExists) {
-				setVaultChoice("vault:*");
-			}
-		}
-	}, [vaultsQuery.data, vaultChoice]);
 
 	if (missing.length > 0) {
 		return (

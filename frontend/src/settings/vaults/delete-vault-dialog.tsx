@@ -1,5 +1,5 @@
 import { Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { useDeleteVault, type Vault } from "@/api/queries";
 import { Button } from "@/components/ui/button";
@@ -27,12 +27,6 @@ export function DeleteVaultDialog({
 	const del = useDeleteVault();
 	const [phrase, setPhrase] = useState("");
 
-	useEffect(() => {
-		if (!open) {
-			setPhrase("");
-		}
-	}, [open]);
-
 	const noteCount = vault.note_count ?? 0;
 	const attachmentCount = vault.attachment_count ?? 0;
 
@@ -47,7 +41,17 @@ export function DeleteVaultDialog({
 	}
 
 	return (
-		<Dialog open={open} onOpenChange={onOpenChange}>
+		<Dialog
+			open={open}
+			onOpenChange={(next) => {
+				// Clearing the typed phrase belongs to the close EVENT, not to a
+				// synchronization effect watching `open`.
+				if (!next) {
+					setPhrase("");
+				}
+				onOpenChange(next);
+			}}
+		>
 			<DialogContent>
 				<DialogHeader>
 					<DialogTitle>Delete "{vault.name}"?</DialogTitle>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useMe, useUpdateProfile } from "../../api/queries";
@@ -12,10 +12,14 @@ export function ProfileSectionLocal() {
 	const update = useUpdateProfile();
 	const current = data?.display_name ?? "";
 	const [value, setValue] = useState(current);
-
-	useEffect(() => {
+	// Re-seed the draft only when the server value itself changes, comparing
+	// against the last one we saw. The effect this replaces ran on every
+	// `current` identity change, so a refetch could overwrite an in-flight edit.
+	const [seeded, setSeeded] = useState(current);
+	if (seeded !== current) {
+		setSeeded(current);
 		setValue(current);
-	}, [current]);
+	}
 
 	const dirty = value.trim() !== (current ?? "").trim();
 

@@ -1,31 +1,32 @@
-import { useEffect, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
+
+const supported = () => typeof window !== "undefined" && typeof window.matchMedia === "function";
 
 /**
  * SSR-safe matchMedia hook. Returns `false` on the server (no matchMedia),
- * then re-renders with the real value on mount. Subscribes to changes via
- * `addEventListener('change')` and cleans up on unmount.
+ * then re-renders with the real value on mount.
+ *
+ * useSyncExternalStore, not useState + useEffect: matchMedia IS an external
+ * store, and reading it during render removes the one-frame window where the
+ * hook reported a stale `false` before the mount effect corrected it.
  */
 export function useMediaQuery(query: string): boolean {
-	const getMatch = () => {
-		if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-			return false;
-		}
-		return window.matchMedia(query).matches;
-	};
+	const subscribe = useCallback(
+		(onChange: () => void) => {
+			if (!supported()) {
+				return () => {};
+			}
+			const mql = window.matchMedia(query);
+			mql.addEventListener("change", onChange);
+			return () => mql.removeEventListener("change", onChange);
+		},
+		[query],
+	);
 
-	const [matches, setMatches] = useState<boolean>(getMatch);
+	const getSnapshot = useCallback(
+		() => (supported() ? window.matchMedia(query).matches : false),
+		[query],
+	);
 
-	useEffect(() => {
-		if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-			return;
-		}
-		const mql = window.matchMedia(query);
-		const handler = (e: MediaQueryListEvent) => setMatches(e.matches);
-		// Sync once on mount in case the initial render mismatched (SSR / hydration).
-		setMatches(mql.matches);
-		mql.addEventListener("change", handler);
-		return () => mql.removeEventListener("change", handler);
-	}, [query]);
-
-	return matches;
+	return useSyncExternalStore(subscribe, getSnapshot, () => false);
 }

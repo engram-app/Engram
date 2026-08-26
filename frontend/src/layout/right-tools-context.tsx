@@ -125,7 +125,10 @@ function RightToolsProvider({ children }: { children: ReactNode }) {
 			// hand every consumer of `slots` a fresh object for no reason. A fresh
 			// <NoteToc/> element per keystroke is NOT caught by it, and does not
 			// need to be.
-			if (prev[id] === node) {
+			// `?? null` so an absent slot and an explicitly-null one compare equal:
+			// useRightToolSlot publishes null for "nothing to show", which without
+			// this would add the key and re-render every consumer on first mount.
+			if ((prev[id] ?? null) === (node ?? null)) {
 				return prev;
 			}
 			return { ...prev, [id]: node };
@@ -163,4 +166,22 @@ function useRightTools(): RightTools {
 }
 
 export type { RightToolDescriptor, RightToolId };
-export { RIGHT_TOOLS, RightToolsProvider, useRightTools };
+/**
+ * Publish `node` into a right-panel slot for as long as this component is
+ * mounted, clearing it on unmount or when `node` becomes null.
+ *
+ * The three call sites used to hand-roll this effect. Publishing INTO a store
+ * is what an effect is for, but it is still a state write from an effect, so
+ * useReactCompiler flags it — centralising the pattern here means one place
+ * carries that explanation instead of three.
+ */
+// biome-ignore lint/nursery/useReactCompiler: writing into the slot registry IS the external-system synchronisation this effect exists for; there is no render-phase form of "publish a node for the duration of this mount".
+function useRightToolSlot(id: RightToolId, node: ReactNode): void {
+	const { setSlot } = useRightTools();
+	useEffect(() => {
+		setSlot(id, node);
+		return () => setSlot(id, null);
+	}, [id, node, setSlot]);
+}
+
+export { RIGHT_TOOLS, RightToolsProvider, useRightTools, useRightToolSlot };

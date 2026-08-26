@@ -62,11 +62,11 @@ export function ExistingConnectionsPanel({
 		<div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
 			<p className="mb-2 font-medium text-foreground">Currently connected:</p>
 			<ul className="space-y-2">
-				{existing.map((c) => {
+				{existing.map((c, i) => {
 					const id = connectionId(c);
 					return (
 						<li
-							key={id ?? c.name ?? Math.random()}
+							key={id ?? c.name ?? `row-${i}`}
 							className="flex items-center justify-between gap-3"
 						>
 							<div className="flex min-w-0 items-center gap-2">

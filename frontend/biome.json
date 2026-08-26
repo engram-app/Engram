@@ -187,7 +187,8 @@
 					"nursery": {
 						"noPlaywrightWaitForTimeout": "off",
 						"noUnsafeTypeAssertion": "off",
-						"useConsistentTestIt": "off"
+						"useConsistentTestIt": "off",
+						"useReactCompiler": "off"
 					}
 				}
 			}

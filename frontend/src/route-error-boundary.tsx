@@ -11,16 +11,20 @@ import { captureError } from "./sentry";
 // same ErrorFallback the root boundary uses — one crash page for the whole app.
 export default function RouteErrorBoundary() {
 	const error = useRouteError();
-	const [report, setReport] = useState<{ eventId?: string; reported: boolean }>({
-		reported: false,
-	});
+	// Keyed by the error it describes. RR updates useRouteError in place (the
+	// errorElement instance persists across sequential route errors), so the
+	// report has to be discarded when the error changes — deriving it here does
+	// that during render, where the effect that used to clear it could not.
+	const [reported, setReported] = useState<{
+		error: unknown;
+		eventId?: string;
+	} | null>(null);
+	const report =
+		reported && reported.error === error
+			? { eventId: reported.eventId, reported: true }
+			: { eventId: undefined, reported: false };
 
 	useEffect(() => {
-		// New route error → clear any prior error's eventId/reported. RR updates
-		// useRouteError in place (the errorElement instance persists across
-		// sequential route errors), so without this a later crash could briefly
-		// show the previous crash's reference id.
-		setReport({ reported: false });
 		// isRouteErrorResponse => an expected HTTP-shaped throw. Skip Sentry for
 		// CLIENT errors (404 / redirect); a SERVER error (5xx) is a real failure,
 		// so let it fall through and report. (Latent until a data loader throws a
@@ -31,7 +35,7 @@ export default function RouteErrorBoundary() {
 		let alive = true;
 		captureError(error).then((eventId) => {
 			if (alive && eventId) {
-				setReport({ eventId, reported: true });
+				setReported({ error, eventId });
 			}
 		});
 		return () => {

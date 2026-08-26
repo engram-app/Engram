@@ -28,7 +28,7 @@ import {
 	openDoc,
 	subscribeToCrdtSyncStatus,
 } from "../crdt/session";
-import { useRightTools } from "../layout/right-tools-context";
+import { useRightToolSlot } from "../layout/right-tools-context";
 import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";
 import { rlog } from "../observability/remote-log";
@@ -133,7 +133,6 @@ export default function NotePage() {
 	const chromeIsPlaceholder = isPlaceholderData && shown?.note.id === validId && !shown.handle;
 
 	const { data: manifest } = useSyncManifest();
-	const { setSlot } = useRightTools();
 	const { setEditor } = useActiveEditor();
 
 	const navigate = useNavigate();
@@ -331,25 +330,19 @@ export default function NotePage() {
 	const notePath = shownPath;
 	const noteContent = shown?.note.content;
 	const liveContent = useLiveContent(handle?.ytext ?? null, noteContent ?? "");
-	useEffect(() => {
-		if (notePath === undefined) {
-			setSlot("outline", null);
-			return;
-		}
-		setSlot("outline", <NoteToc content={liveContent} />);
-		return () => setSlot("outline", null);
-	}, [notePath, liveContent, setSlot]);
+	const outlineNode = useMemo(
+		() => (notePath === undefined ? null : <NoteToc content={liveContent} />),
+		[notePath, liveContent],
+	);
+	useRightToolSlot("outline", outlineNode);
 
 	// Backlinks only need the note id (the panel fetches its own data), so this
 	// doesn't need to re-fire on every keystroke the way the ToC's effect does.
-	useEffect(() => {
-		if (shownId === null) {
-			setSlot("backlinks", null);
-			return;
-		}
-		setSlot("backlinks", <BacklinksPanel noteId={shownId} />);
-		return () => setSlot("backlinks", null);
-	}, [shownId, setSlot]);
+	const backlinksNode = useMemo(
+		() => (shownId === null ? null : <BacklinksPanel noteId={shownId} />),
+		[shownId],
+	);
+	useRightToolSlot("backlinks", backlinksNode);
 
 	// Consume the just-created flag exactly once: start renaming, then strip the
 	// state so a later back-navigation to this history entry doesn't reopen the
@@ -389,17 +382,20 @@ export default function NotePage() {
 	// stored, so it clears itself when the doc opens, when the user navigates
 	// elsewhere, and when the session recovers.
 	const stalled = shown !== null && shown.note.id !== validId;
-	const [stalledLong, setStalledLong] = useState(false);
+	const [longFor, setLongFor] = useState<string | null>(null);
+	// Which note the notice belongs to, not a bare boolean: it then clears
+	// itself during render on navigation or recovery, instead of needing the
+	// effect to write `false` back on every non-stalled pass.
+	const stalledLong = stalled && longFor === validId;
 	useEffect(() => {
 		if (!stalled) {
-			setStalledLong(false);
 			return;
 		}
 		// Not immediately: an ordinary open takes a moment, and a strip on every
 		// click is noise worse than the flash this page removed.
-		const timer = setTimeout(() => setStalledLong(true), STALL_NOTICE_MS);
+		const timer = setTimeout(() => setLongFor(validId), STALL_NOTICE_MS);
 		return () => clearTimeout(timer);
-	}, [stalled]);
+	}, [stalled, validId]);
 
 	// Publish the editor so right-sidebar tools (the markdown reference panel)
 	// can insert at the caret. Gated on the SAME condition that renders
