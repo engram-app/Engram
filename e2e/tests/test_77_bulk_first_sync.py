@@ -15,6 +15,7 @@ actually open in an editor. Importing a 1,700-file vault once allocated
 ~1,700 rooms and took prod's BEAM from 757 to 2,744 processes (2026-08-18).
 """
 
+import os
 import shutil
 import time
 
@@ -24,7 +25,11 @@ from helpers.residency_probe import read_resident_rooms
 from helpers.room_probe import arm_room_starts, read_room_starts
 from helpers.vault import write_note
 
-NOTE_COUNT = 1000
+# CI always runs the full 1,000 — the bounds below are calibrated against that
+# size and the default must never be lowered. The override exists so the LOCAL
+# repro loop (docs/context/local-crdt-e2e-repro.md) can run a smaller import on
+# a box where a 1,000-note `fullSync()` exceeds the 120s CDP evaluate timeout.
+NOTE_COUNT = int(os.environ.get("E2E_BULK_NOTE_COUNT", "1000"))
 PUSH_TIME_BOUND_S = 120
 
 # Rooms this sync may allocate. The criterion is O(open editors), not O(N) —
