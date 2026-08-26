@@ -90,7 +90,7 @@ let tokenRefreshInFlight = false;
 // the durable op queue (#1030) treats as "hold and retry" — so a send issued
 // before the room is joined is buffered, not lost.
 function joinedCrdtChannel(): PushChannel | null {
-	return getCrdtSyncStatus() === "synced" ? (crdtChannel as unknown as PushChannel | null) : null;
+	return getCrdtSyncStatus() === "synced" ? crdtChannel : null;
 }
 
 async function refreshTokenForRetry(): Promise<void> {
@@ -284,7 +284,10 @@ export function computeReconnectMs(
  *  hang or hammer. Non-positive windows (including 0) are rejected, forcing
  *  the client to fall back to the default floor rather than disabling jitter. */
 export function captureServerJitter(resp: unknown): void {
-	const raw = (resp as { reconnect_jitter_max_ms?: unknown })?.reconnect_jitter_max_ms;
+	const raw =
+		typeof resp === "object" && resp !== null && "reconnect_jitter_max_ms" in resp
+			? resp.reconnect_jitter_max_ms
+			: undefined;
 	const clamped = clampReconnectJitter(raw);
 	if (clamped !== null) {
 		serverJitterMs = clamped;
@@ -342,8 +345,8 @@ export function handleNoteChanged(
 	// Leg-B trace timing. Gate BEFORE any tracing work: disabled = one
 	// boolean, no id parse, no enqueue. Capture the start now so the beacon
 	// spans the actual apply below.
-	const traced = tracingEnabled() && Boolean(payload.traceparent);
-	const startUs = traced ? Date.now() * 1000 : 0;
+	const traceparent = tracingEnabled() ? payload.traceparent : undefined;
+	const startUs = traceparent ? Date.now() * 1000 : 0;
 
 	if (payload.id !== undefined) {
 		queryClient.invalidateQueries({ queryKey: ["note", activeVaultId, payload.id] });
@@ -379,8 +382,8 @@ export function handleNoteChanged(
 	// enqueue is O(1) and never networks on the render path; the shared
 	// buffer batches/flushes on its own timer. Best-effort: a bad traceparent
 	// just skips.
-	if (traced) {
-		const parsed = parseTraceparent(payload.traceparent as string);
+	if (traceparent) {
+		const parsed = parseTraceparent(traceparent);
 		if (parsed) {
 			beacon.enqueue({
 				trace_id: parsed.traceId,

@@ -98,6 +98,12 @@ export interface LimitCopy {
 	body: string;
 }
 
+// `reason` arrives off the wire, so it is a plain string; TABLE's own keys are
+// the authority on which ones we have copy for.
+function isLimitReason(k: string): k is LimitReason {
+	return k in TABLE;
+}
+
 export function copyFor(reason: string): LimitCopy {
-	return TABLE[reason as LimitReason] ?? FALLBACK;
+	return isLimitReason(reason) ? TABLE[reason] : FALLBACK;
 }

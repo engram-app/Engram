@@ -30,7 +30,7 @@ interface Props {
 function rowClass(instance: ItemInstance<LoaderItem>, active: boolean, menuOpen: boolean): string {
 	// `isDragTarget` is provided by dragAndDropFeature; guard in case the row is
 	// rendered without it (tests).
-	const dragOver = (instance as { isDragTarget?: () => boolean }).isDragTarget?.() ?? false;
+	const dragOver = "isDragTarget" in instance ? (instance.isDragTarget?.() ?? false) : false;
 	return [
 		// w-full so the folder <button> stretches like the note <a> (form controls
 		// shrink to content by default) — gives both the same full-width hover hit.
@@ -261,9 +261,10 @@ export function TreeRow({
 	}
 
 	const htProps = instance.getProps();
+	const htDrag: { onDragStart?: (ev: React.DragEvent) => void } = htProps;
 	const handleNoteDragStart = (e: React.DragEvent) => {
 		// Run HT's own drag init first (it tracks the drag via internal state).
-		(htProps.onDragStart as ((ev: React.DragEvent) => void) | undefined)?.(e);
+		htDrag.onDragStart?.(e);
 		// Then strip the <a href> link payload the browser auto-adds, so Chrome/Edge
 		// don't offer a split view / "open in new tab" while dragging the note within
 		// the tree. HT's move reads internal state, not dataTransfer, so this is safe.

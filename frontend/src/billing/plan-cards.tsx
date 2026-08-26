@@ -73,6 +73,8 @@ export const FREE_TIER = {
 // change-plan panel read display prices from here. Keep in sync with the
 // pricing model lock (Free / $7 / $14 monthly + $70/$140 annual — see
 // memory project_pricing_model). Updating Paddle prices means updating here.
+export const PLAN_TIERS: readonly PlanTier[] = ["starter", "pro"];
+
 export const PLAN_CATALOG: Record<PlanTier, PlanCardCatalog> = {
 	starter: {
 		name: "Starter",

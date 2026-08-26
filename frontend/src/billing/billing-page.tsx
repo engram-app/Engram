@@ -308,8 +308,14 @@ export default function BillingPage({
 						// whichever fires first (`?? Date.now()` guards against reset)
 						// so a dropped COMPLETED still surfaces the recovery banner
 						// instead of stranding the user on Paddle's inline frame.
+						const data: unknown = event.data;
 						const txn =
-							(event.data as { transaction_id?: string } | undefined)?.transaction_id ?? null;
+							typeof data === "object" &&
+							data !== null &&
+							"transaction_id" in data &&
+							typeof data.transaction_id === "string"
+								? data.transaction_id
+								: null;
 						setTransactionId(txn);
 						setCompletedAt((prev) => prev ?? Date.now());
 						invalidateBillingState(qc);

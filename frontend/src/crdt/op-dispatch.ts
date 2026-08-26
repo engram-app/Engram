@@ -79,7 +79,14 @@ export function makeCrdtOpSend(hooks: CrdtSendHooks): (op: CrdtOp) => Promise<Se
 		}
 		try {
 			if (op.kind === "create") {
-				const path = (op.payload as { path?: string })?.path ?? "";
+				const payload = op.payload;
+				const path =
+					typeof payload === "object" &&
+					payload !== null &&
+					"path" in payload &&
+					typeof payload.path === "string"
+						? payload.path
+						: "";
 				const serverId = await ch.crdtCreate(op.docId, path);
 				try {
 					await hooks.onCreated(op.docId, serverId, path);
