@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.20.0](https://github.com/engram-app/Engram/compare/0.19.1...0.20.0) (2026-08-26)
+
+
+### Features
+
+* **crdt:** room-free full-state read for cold notes ([#1409](https://github.com/engram-app/Engram/issues/1409)) ([#1467](https://github.com/engram-app/Engram/issues/1467)) ([4127401](https://github.com/engram-app/Engram/commit/41274016e57f27bd0252b7909020faf4cda0755c))
+* **mcp:** add get_attachment_upload_target tool ([#1468](https://github.com/engram-app/Engram/issues/1468)) ([f915e97](https://github.com/engram-app/Engram/commit/f915e973b850cd424f0bd9ba4b171867d3086a72))
+
+
+### Bug Fixes
+
+* **embed:** bulk enqueue must skip notes that already have a pending job ([#1476](https://github.com/engram-app/Engram/issues/1476)) ([1116b30](https://github.com/engram-app/Engram/commit/1116b30fdfbb9ecaffd68254a6919d449ed95712))
+* **folders:** web delete of a populated folder removes its contents ([#1472](https://github.com/engram-app/Engram/issues/1472)) ([4341fdc](https://github.com/engram-app/Engram/commit/4341fdc3fb529694ab727d370a63153eaf560691))
+
 ## [0.19.1](https://github.com/engram-app/Engram/compare/0.19.0...0.19.1) (2026-08-25)
 
 
