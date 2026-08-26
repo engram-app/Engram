@@ -3940,22 +3940,40 @@ defmodule Engram.Notes do
         _ -> false
       end)
 
-    embed_jobs =
+    # clamp: false — Oban.insert_all ignores unique/replace, so the settle
+    # ceiling is moot here; skip the per-note burst-start SELECT.
+    #
+    # `prev_hash == nil` (a create) stands in for `EmbedNote.priority_for/1`'s
+    # `embed_hash == nil` here: this path carries an `info` map, not a Note
+    # row. The two agree except for a note that exists but never embedded
+    # successfully, which this call would rank interactive — a bounded
+    # mis-rank that `ReconcileEmbeddings` re-enqueues at backfill priority
+    # anyway.
+    embed_candidates =
       ok_entries
       |> Enum.filter(fn %{result: {:ok, info}} -> info.prev_hash != info.content_hash end)
-      # clamp: false — Oban.insert_all ignores unique/replace, so the settle
-      # ceiling is moot here; skip the per-note burst-start SELECT.
-      #
-      # `prev_hash == nil` (a create) stands in for `EmbedNote.priority_for/1`'s
-      # `embed_hash == nil` here: this path carries an `info` map, not a Note
-      # row. The two agree except for a note that exists but never embedded
-      # successfully, which this call would rank interactive — a bounded
-      # mis-rank that `ReconcileEmbeddings` re-enqueues at backfill priority
-      # anyway.
       |> Enum.map(fn %{result: {:ok, info}} ->
         priority = if is_nil(info.prev_hash), do: EmbedNote.backfill_priority(), else: 0
-        EmbedNote.new_debounced(info.id, clamp: false, priority: priority)
+        {info.id, priority}
       end)
+
+    # `insert_all` ignoring `unique` means a note that already has a pending
+    # job would collect a second one here. Grouped by priority so an edit
+    # (priority 0) can PROMOTE a pending backfill job rather than be suppressed
+    # behind it — see EmbedNote.reject_already_queued/2. One indexed query per
+    # priority bucket, and there are only ever two.
+    enqueueable =
+      embed_candidates
+      |> Enum.group_by(&elem(&1, 1), &elem(&1, 0))
+      |> Enum.flat_map(fn {priority, ids} ->
+        EmbedNote.reject_already_queued(ids, priority)
+      end)
+      |> MapSet.new()
+
+    embed_jobs =
+      for {id, priority} <- embed_candidates, MapSet.member?(enqueueable, id) do
+        EmbedNote.new_debounced(id, clamp: false, priority: priority)
+      end
 
     _ = if embed_jobs != [], do: Oban.insert_all(embed_jobs)
 

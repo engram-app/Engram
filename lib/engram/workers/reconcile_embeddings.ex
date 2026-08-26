@@ -87,22 +87,39 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     _ =
       if note_ids != [] do
-        Logger.debug(
-          "reconcile_embeddings: queueing stale notes",
-          Engram.Logger.Metadata.with_category(:debug, :search, total_count: length(note_ids))
-        )
-
         # clamp: false — insert_all ignores unique/replace, so the settle
         # ceiling is moot; skip the per-note burst-start SELECT (one per stale
         # note, up to @batch_size, every tick).
+        #
+        # reject_already_queued/2 is what keeps this worker from being a
+        # ratchet. The eligibility query above filters on content/cooldown and
+        # NOT on "is a job already pending" — it used to assume `unique` covered
+        # that, which insert_all disables. So a note whose job was stuck
+        # collected one more job per backoff window: 61,536 jobs for 4,266 notes
+        # in dev on 2026-08-25, which is what kept the queue from draining.
         #
         # Backfill priority unconditionally: everything this worker finds is by
         # definition catch-up — a note that fell through, a crash retry, or the
         # tail of a bulk import. None of it has a user waiting on it, so none of
         # it may outrank a live edit.
+        fresh = EmbedNote.reject_already_queued(note_ids, EmbedNote.backfill_priority())
+
+        # Report BOTH numbers. `eligible` is what the stale-note query matched;
+        # `total_count` is what was actually enqueued. Logging only the former
+        # would claim a full batch on every tick while suppressing all of it —
+        # unreadable in exactly the backlog incident this guard exists for.
+        Logger.debug(
+          "reconcile_embeddings: queueing stale notes",
+          Engram.Logger.Metadata.with_category(:debug, :search,
+            total_count: length(fresh),
+            eligible_count: length(note_ids),
+            already_queued_count: length(note_ids) - length(fresh)
+          )
+        )
+
         Oban.insert_all(
           Enum.map(
-            note_ids,
+            fresh,
             &EmbedNote.new_debounced(&1, clamp: false, priority: EmbedNote.backfill_priority())
           )
         )
