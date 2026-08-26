@@ -31,6 +31,7 @@ function DesktopLayout() {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: rightRef.current exposes imperative panel handles, not reactive values; the effect intentionally keys on resolvedId alone.
 	useEffect(() => {
 		if (resolvedId === null) {
+			// biome-ignore lint/nursery/useReactCompiler: rightRef.current holds imperative panel handles, not reactive values; collapse()/expand() have no derived-state equivalent. Same reasoning as the useExhaustiveDependencies suppression above.
 			rightRef.current?.collapse();
 		} else if (rightRef.current?.isCollapsed()) {
 			rightRef.current?.expand();
@@ -135,11 +136,7 @@ export default function AppLayout() {
 		// billing or settings never opens a note. On a slow link the preload
 		// would also contend with the bootstrap/vault-tree requests that gate
 		// the sidebar, making the tree paint LATER for exactly those users.
-		const conn = (
-			navigator as Navigator & {
-				connection?: { saveData?: boolean; effectiveType?: string };
-			}
-		).connection;
+		const conn = navigator.connection;
 		if (conn?.saveData || conn?.effectiveType === "slow-2g" || conn?.effectiveType === "2g") {
 			return;
 		}

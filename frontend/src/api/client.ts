@@ -154,7 +154,7 @@ export const api = {
 	// needs to send a password, and a credential in a query string is written
 	// to every access log between the browser and Phoenix — plus Sentry's fetch
 	// breadcrumbs, which capture the URL.
-	async del<T>(path: string, body?: unknown): Promise<T> {
+	async del<T>(path: string, body?: unknown): Promise<T | undefined> {
 		const res = await authFetch(path, {
 			method: "DELETE",
 			body: body === undefined ? undefined : JSON.stringify(body),
@@ -162,7 +162,7 @@ export const api = {
 		// 204 No Content is the conventional REST response for DELETE; tolerate
 		// empty bodies so callers don't have to differentiate.
 		if (res.status === 204 || res.headers.get("content-length") === "0") {
-			return undefined as T;
+			return undefined;
 		}
 		return res.json();
 	},

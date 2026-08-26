@@ -8,6 +8,7 @@ import {
 	useMemo,
 	useState,
 } from "react";
+import { isMember } from "../lib/is-member";
 
 // The right sidebar used to be a single pushed slot: NotePage called
 // setContent(<NoteToc/>) on mount and setContent(null) on unmount, and the panel
@@ -73,7 +74,12 @@ function readStored(): RightToolId | null {
 	}
 	// Missing key or a stale id from an older build both fall back to the outline
 	// rather than to a collapsed panel — only an explicit "" means collapsed.
-	return RIGHT_TOOLS.some((tool) => tool.id === raw) ? (raw as RightToolId) : "outline";
+	return isMember(
+		RIGHT_TOOLS.map((tool) => tool.id),
+		raw,
+	)
+		? raw
+		: "outline";
 }
 
 interface RightTools {
@@ -119,7 +125,10 @@ function RightToolsProvider({ children }: { children: ReactNode }) {
 			// hand every consumer of `slots` a fresh object for no reason. A fresh
 			// <NoteToc/> element per keystroke is NOT caught by it, and does not
 			// need to be.
-			if (prev[id] === node) {
+			// `?? null` so an absent slot and an explicitly-null one compare equal:
+			// useRightToolSlot publishes null for "nothing to show", which without
+			// this would add the key and re-render every consumer on first mount.
+			if ((prev[id] ?? null) === (node ?? null)) {
 				return prev;
 			}
 			return { ...prev, [id]: node };
@@ -156,5 +165,23 @@ function useRightTools(): RightTools {
 	return ctx;
 }
 
+/**
+ * Publish `node` into a right-panel slot for as long as this component is
+ * mounted, clearing it on unmount or when `node` becomes null.
+ *
+ * The three call sites used to hand-roll this effect. Publishing INTO a store
+ * is what an effect is for, but it is still a state write from an effect, so
+ * useReactCompiler flags it — centralising the pattern here means one place
+ * carries that explanation instead of three.
+ */
+function useRightToolSlot(id: RightToolId, node: ReactNode): void {
+	const { setSlot } = useRightTools();
+	useEffect(() => {
+		// biome-ignore lint/nursery/useReactCompiler: publishing into the slot registry IS the external-system synchronisation this effect exists for; there is no render-phase form of "publish a node for the duration of this mount". Centralised here so the three call sites do not each carry it.
+		setSlot(id, node);
+		return () => setSlot(id, null);
+	}, [id, node, setSlot]);
+}
+
 export type { RightToolDescriptor, RightToolId };
-export { RIGHT_TOOLS, RightToolsProvider, useRightTools };
+export { RIGHT_TOOLS, RightToolsProvider, useRightToolSlot, useRightTools };

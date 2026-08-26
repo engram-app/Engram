@@ -2,11 +2,13 @@ import type { ThemeChoice } from "./storage";
 
 export type ResolvedTheme = "light" | "dark";
 
+export const PREFERS_DARK = "(prefers-color-scheme: dark)";
+
 export function getSystemPreference(): ResolvedTheme {
 	if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
 		return "light";
 	}
-	return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+	return window.matchMedia(PREFERS_DARK).matches ? "dark" : "light";
 }
 
 export function resolveTheme(choice: ThemeChoice, systemPref: ResolvedTheme): ResolvedTheme {

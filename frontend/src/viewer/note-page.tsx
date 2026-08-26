@@ -28,7 +28,7 @@ import {
 	openDoc,
 	subscribeToCrdtSyncStatus,
 } from "../crdt/session";
-import { useRightTools } from "../layout/right-tools-context";
+import { useRightToolSlot } from "../layout/right-tools-context";
 import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";
 import { rlog } from "../observability/remote-log";
@@ -133,7 +133,6 @@ export default function NotePage() {
 	const chromeIsPlaceholder = isPlaceholderData && shown?.note.id === validId && !shown.handle;
 
 	const { data: manifest } = useSyncManifest();
-	const { setSlot } = useRightTools();
 	const { setEditor } = useActiveEditor();
 
 	const navigate = useNavigate();
@@ -170,6 +169,7 @@ export default function NotePage() {
 	// manifest resolves them without the /wiki redirect flash, and a manifest
 	// refetch must not change these callbacks' identity.
 	const wikiManifestRef = useRef<{ id: string; path: string }[]>([]);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render is the point: it keeps the callback identity stable so the consuming effect does not re-fire on every render. See the comment above.
 	wikiManifestRef.current = manifest?.notes ?? [];
 	// useCallback keeps a stable identity so passing it to NoteEditor doesn't
 	// re-fire the decorationsCompartment reconfigure effect on every render.
@@ -200,6 +200,7 @@ export default function NotePage() {
 	// reasoning documented in note-editor.tsx).
 	const manifestPaths = useMemo(() => manifest?.notes.map((n) => n.path) ?? [], [manifest]);
 	const manifestPathsRef = useRef<string[]>([]);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render is the point: it keeps the callback identity stable so the consuming effect does not re-fire on every render. See the comment above.
 	manifestPathsRef.current = manifestPaths;
 	const wikiCompletionPaths = useCallback(() => manifestPathsRef.current, []);
 
@@ -331,25 +332,19 @@ export default function NotePage() {
 	const notePath = shownPath;
 	const noteContent = shown?.note.content;
 	const liveContent = useLiveContent(handle?.ytext ?? null, noteContent ?? "");
-	useEffect(() => {
-		if (notePath === undefined) {
-			setSlot("outline", null);
-			return;
-		}
-		setSlot("outline", <NoteToc content={liveContent} />);
-		return () => setSlot("outline", null);
-	}, [notePath, liveContent, setSlot]);
+	const outlineNode = useMemo(
+		() => (notePath === undefined ? null : <NoteToc content={liveContent} />),
+		[notePath, liveContent],
+	);
+	useRightToolSlot("outline", outlineNode);
 
 	// Backlinks only need the note id (the panel fetches its own data), so this
 	// doesn't need to re-fire on every keystroke the way the ToC's effect does.
-	useEffect(() => {
-		if (shownId === null) {
-			setSlot("backlinks", null);
-			return;
-		}
-		setSlot("backlinks", <BacklinksPanel noteId={shownId} />);
-		return () => setSlot("backlinks", null);
-	}, [shownId, setSlot]);
+	const backlinksNode = useMemo(
+		() => (shownId === null ? null : <BacklinksPanel noteId={shownId} />),
+		[shownId],
+	);
+	useRightToolSlot("backlinks", backlinksNode);
 
 	// Consume the just-created flag exactly once: start renaming, then strip the
 	// state so a later back-navigation to this history entry doesn't reopen the
@@ -360,11 +355,16 @@ export default function NotePage() {
 	// name and clears the flag, so Enter renames that note and the new one never
 	// enters rename mode at all.
 	const location = useLocation();
-	const justCreated = Boolean((location.state as { justCreated?: boolean } | null)?.justCreated);
+	const state: unknown = location.state;
+	const justCreated =
+		typeof state === "object" && state !== null && "justCreated" in state
+			? Boolean(state.justCreated)
+			: false;
 	useEffect(() => {
 		if (!(justCreated && shownId && shownId === validId)) {
 			return;
 		}
+		// biome-ignore lint/nursery/useReactCompiler: consumes a one-shot router flag: it must both start the rename AND strip history state, so it cannot be derived. Guarded to run once per (justCreated, shownId).
 		setRenaming({ id: shownId, at: "title" });
 		navigate(location.pathname, { replace: true, state: {} });
 	}, [justCreated, shownId, validId, navigate, location.pathname]);
@@ -388,6 +388,10 @@ export default function NotePage() {
 	const [stalledLong, setStalledLong] = useState(false);
 	useEffect(() => {
 		if (!stalled) {
+			// Must reset, not just skip: without this the flag would mean "stalled
+			// at some point during this mount", and coming back to a note that
+			// stalled once would flash the strip with no debounce at all.
+			// biome-ignore lint/nursery/useReactCompiler: the reset has no render-phase form -- deriving it from `stalled` alone loses the 1.5s debounce, and keying it on the note id leaks across visits.
 			setStalledLong(false);
 			return;
 		}
@@ -574,7 +578,7 @@ export default function NotePage() {
 	};
 
 	return (
-		<section className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]">
+		<section className="mx-auto flex size-full min-h-0 min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]">
 			{syncStatus === "error" && (
 				<p role="status" className="shrink-0 bg-destructive/10 px-4 py-1 text-destructive text-xs">
 					Not syncing - reconnecting...
@@ -676,7 +680,7 @@ export default function NotePage() {
 							/>
 						</div>
 					) : (
-						<Suspense fallback={<p className="px-5 py-5 text-muted-foreground">Loading editor…</p>}>
+						<Suspense fallback={<p className="p-5 text-muted-foreground">Loading editor…</p>}>
 							{handle ? (
 								<NoteEditor
 									ytext={handle.ytext}
@@ -701,7 +705,7 @@ export default function NotePage() {
 									}}
 								/>
 							) : (
-								<p className="px-5 py-5 text-muted-foreground">Connecting…</p>
+								<p className="p-5 text-muted-foreground">Connecting…</p>
 							)}
 						</Suspense>
 					)}

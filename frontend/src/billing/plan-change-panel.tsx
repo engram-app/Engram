@@ -11,7 +11,7 @@ import {
 	useConfirmPlanChange,
 	usePlanChangePreview,
 } from "../api/queries";
-import { CadenceToggle, PLAN_CATALOG, PlanCard, type PlanTier } from "./plan-cards";
+import { CadenceToggle, PLAN_CATALOG, PLAN_TIERS, PlanCard, type PlanTier } from "./plan-cards";
 
 interface PlanChangePanelProps {
 	billing: BillingStatus;
@@ -118,7 +118,7 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 			/>
 
 			<ul className="grid items-stretch gap-4 sm:grid-cols-2">
-				{(Object.keys(PLAN_CATALOG) as PlanTier[]).map((tier) => {
+				{PLAN_TIERS.map((tier) => {
 					const meta = PLAN_CATALOG[tier];
 					// 'Current' only matches when the toggle is on the user's
 					// existing cadence — flipping to Annual surfaces Pro again as a

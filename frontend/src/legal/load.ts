@@ -1,10 +1,10 @@
 import manifest from "./versions/legal-manifest.json" with { type: "json" };
 
-const mds = import.meta.glob("./versions/*.md", {
+const mds: Record<string, unknown> = import.meta.glob("./versions/*.md", {
 	query: "?raw",
 	import: "default",
 	eager: true,
-}) as Record<string, string>;
+});
 
 export async function sha256Hex(text: string): Promise<string> {
 	const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
@@ -13,7 +13,7 @@ export async function sha256Hex(text: string): Promise<string> {
 
 export function loadVersion(doc: "terms" | "privacy", version: string): string {
 	const text = mds[`./versions/${doc}-${version}.md`];
-	if (text === undefined) {
+	if (typeof text !== "string") {
 		throw new Error(`legal: missing bundled ${doc}-${version}.md — run "bun run sync-theme"`);
 	}
 	return text;

@@ -26,7 +26,7 @@ import VaultSwitcher from "./vault-switcher";
 // Buttons (e.g. folder-expand toggles in FolderTree) must keep the drawer open.
 function closeOnLinkClick(close: () => void) {
 	return (event: MouseEvent<HTMLDivElement>) => {
-		if ((event.target as HTMLElement).closest("a")) {
+		if (event.target instanceof Element && event.target.closest("a")) {
 			close();
 		}
 	};
@@ -54,17 +54,19 @@ export default function MobileLayout() {
 	// editor isn't hidden behind a still-open sheet on small screens.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: pathname is a change trigger, not a captured value (the effect only calls setters); keying on it is required to close both drawers on navigation.
 	useEffect(() => {
+		// biome-ignore lint/nursery/useReactCompiler: closing the drawers is a reaction to navigation, which has no render-phase form -- programmatic navigations (FolderActions' "New note") never pass through the click handler, and keying the Sheets on pathname would remount FolderTree on every route change.
 		setLeftOpen(false);
 		setRightOpen(false);
+		// biome-ignore lint/nursery/useReactCompiler: pathname is a change trigger, not a captured value -- the effect only calls setters. Same reasoning as the useExhaustiveDependencies suppression above.
 	}, [pathname]);
 
 	return (
 		<section className="flex h-dvh flex-col bg-background text-foreground">
-			<header className="sticky top-0 z-20 flex shrink-0 items-center justify-between border-border border-b bg-card px-2 py-2">
+			<header className="sticky top-0 z-20 flex shrink-0 items-center justify-between border-border border-b bg-card p-2">
 				<section className="flex items-center gap-1">
 					<Sheet open={leftOpen} onOpenChange={setLeftOpen}>
 						<SheetTrigger asChild>
-							<Button variant="ghost" size="icon" aria-label="Open files" className="h-11 w-11">
+							<Button variant="ghost" size="icon" aria-label="Open files" className="size-11">
 								<Menu />
 							</Button>
 						</SheetTrigger>
@@ -125,7 +127,7 @@ export default function MobileLayout() {
 								variant="ghost"
 								size="icon"
 								aria-label="Open tools"
-								className="h-11 w-11"
+								className="size-11"
 								onClick={openRight}
 							>
 								<PanelRightOpen />

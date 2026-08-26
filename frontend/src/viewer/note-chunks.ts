@@ -71,7 +71,7 @@ function preloadable<P extends object>(load: () => Promise<{ default: ComponentT
 		// element type from Lazy to the concrete component the moment a preload
 		// landed mid-life, and React remounts the whole subtree on an element-type
 		// change — which for NotePage means tearing down a live editor.
-		const [Impl] = useState<ComponentType<P>>(() => loaded ?? (Lazy as ComponentType<P>));
+		const [Impl] = useState<ComponentType<P> | typeof Lazy>(() => loaded ?? Lazy);
 		return createElement(Impl, props);
 	};
 

@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { copyToClipboard } from "@/lib/clipboard";
 import { adminApi, type Invite } from "./api";
 
+const INVITES_KEY = ["admin", "invites"] as const;
+
 export default function InvitesTab() {
-	const [invites, setInvites] = useState<Invite[]>([]);
-	const [loading, setLoading] = useState(true);
+	const qc = useQueryClient();
 	const [label, setLabel] = useState("");
 	const [maxUses, setMaxUses] = useState(1);
 	const [days, setDays] = useState(7);
@@ -14,21 +16,19 @@ export default function InvitesTab() {
 	// The raw URL is shown ONCE — backend never returns it again. Don't persist.
 	const [lastUrl, setLastUrl] = useState<string | null>(null);
 
-	const refresh = useCallback(async () => {
-		try {
-			const res = await adminApi.listInvites();
-			setInvites(res.invites);
-		} catch (e) {
-			const msg = e instanceof ApiError ? e.message : "Failed to load invites";
-			toast.error(msg);
-		} finally {
-			setLoading(false);
-		}
-	}, []);
+	// useQuery, not fetch-in-an-effect: the rest of the app already reads through
+	// the query client, and the manual version had to mirror the response into
+	// state from inside the effect.
+	const invitesQuery = useQuery({
+		queryKey: INVITES_KEY,
+		queryFn: () => adminApi.listInvites(),
+		// See MembersTab: the effect this replaced fetched on every mount.
+		staleTime: 0,
+	});
+	const invites: Invite[] = invitesQuery.data?.invites ?? [];
+	const loading = invitesQuery.isPending;
 
-	useEffect(() => {
-		refresh();
-	}, [refresh]);
+	const refresh = useCallback(() => qc.invalidateQueries({ queryKey: INVITES_KEY }), [qc]);
 
 	async function create(e: React.FormEvent) {
 		e.preventDefault();
@@ -150,6 +150,12 @@ export default function InvitesTab() {
 
 			{loading ? (
 				<p className="text-muted-foreground text-sm">Loading invites…</p>
+			) : invitesQuery.error ? (
+				<p role="alert" className="text-destructive text-sm">
+					{invitesQuery.error instanceof ApiError
+						? invitesQuery.error.message
+						: "Failed to load invites"}
+				</p>
 			) : invites.length === 0 ? (
 				<p className="text-muted-foreground text-sm">No active invites.</p>
 			) : (

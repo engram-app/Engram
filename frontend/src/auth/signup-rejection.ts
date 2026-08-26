@@ -5,11 +5,17 @@
 // so the sign-in page can ask the backend why, and show a real message.
 
 import { getApiBase, joinApiUrl } from "../api/base";
+import { isMember } from "../lib/is-member";
 
 const KEY = "engram:pending-signup";
 const WINDOW_MS = 2 * 60 * 1000;
 
-export type SignupRejectionReason = "duplicate_identity";
+type SignupRejectionReason = "duplicate_identity";
+
+const REJECTION_REASONS: readonly SignupRejectionReason[] = ["duplicate_identity"];
+
+const isSignupRejectionReason = (v: unknown): v is SignupRejectionReason =>
+	isMember(REJECTION_REASONS, v);
 
 export function rememberSignupUser(clerkUserId: string): void {
 	try {
@@ -28,8 +34,12 @@ export function takePendingSignupUser(): string | null {
 			return null;
 		}
 		sessionStorage.removeItem(KEY);
-		const { id, ts } = JSON.parse(raw) as { id?: string; ts?: number };
-		if (!(id && ts) || Date.now() - ts > WINDOW_MS) {
+		const parsed: unknown = JSON.parse(raw);
+		if (typeof parsed !== "object" || parsed === null || !("id" in parsed && "ts" in parsed)) {
+			return null;
+		}
+		const { id, ts } = parsed;
+		if (typeof id !== "string" || typeof ts !== "number" || Date.now() - ts > WINDOW_MS) {
 			return null;
 		}
 		return id;
@@ -53,8 +63,11 @@ export async function fetchSignupRejection(
 		if (!res.ok) {
 			return null;
 		}
-		const body = (await res.json()) as { reason?: SignupRejectionReason | null };
-		return body.reason ?? null;
+		const body: unknown = await res.json();
+		if (typeof body !== "object" || body === null || !("reason" in body)) {
+			return null;
+		}
+		return isSignupRejectionReason(body.reason) ? body.reason : null;
 	} catch (err) {
 		// A transport failure (network/DNS/CORS) is distinct from a 404 "not
 		// rejected" — we still degrade to null for UX, but surface it for debugging.
@@ -62,3 +75,5 @@ export async function fetchSignupRejection(
 		return null;
 	}
 }
+
+export type { SignupRejectionReason };

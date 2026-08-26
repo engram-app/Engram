@@ -41,13 +41,20 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
 		})
 			.then(async (res) => {
 				if (res.ok) {
-					const data = await res.json();
-					const payload = parseJwtPayload(data.access_token);
-					setAccessToken(data.access_token);
-					if (payload?.email) {
-						setUser({ email: payload.email as string });
+					const data: unknown = await res.json();
+					const token =
+						typeof data === "object" &&
+						data !== null &&
+						"access_token" in data &&
+						typeof data.access_token === "string"
+							? data.access_token
+							: null;
+					const payload = token ? parseJwtPayload(token) : null;
+					setAccessToken(token);
+					if (typeof payload?.email === "string") {
+						setUser({ email: payload.email });
 					}
-					return data.access_token as string;
+					return token;
 				}
 				setAccessToken(null);
 				setUser(null);
@@ -80,7 +87,7 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
 
 		// Check if token is expired (with 60s buffer)
 		const payload = parseJwtPayload(accessToken);
-		if (payload && (payload.exp as number) * 1000 >= Date.now() + 60_000) {
+		if (typeof payload?.exp === "number" && payload.exp * 1000 >= Date.now() + 60_000) {
 			return accessToken;
 		}
 

@@ -121,7 +121,7 @@ export function ToolBadge({ slug, fallbackLabel }: { slug: string; fallbackLabel
 			<span className="inline-flex items-center gap-2">
 				<span
 					aria-hidden
-					className="inline-flex h-5 w-5 shrink-0 items-center justify-center [&_svg]:h-full [&_svg]:w-full"
+					className="inline-flex size-5 shrink-0 items-center justify-center [&_svg]:size-full"
 					dangerouslySetInnerHTML={{ __html: brand.mark }}
 				/>
 				{brand.wordmark ? (

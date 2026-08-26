@@ -30,7 +30,7 @@ interface Props {
 function rowClass(instance: ItemInstance<LoaderItem>, active: boolean, menuOpen: boolean): string {
 	// `isDragTarget` is provided by dragAndDropFeature; guard in case the row is
 	// rendered without it (tests).
-	const dragOver = (instance as { isDragTarget?: () => boolean }).isDragTarget?.() ?? false;
+	const dragOver = "isDragTarget" in instance ? (instance.isDragTarget?.() ?? false) : false;
 	return [
 		// w-full so the folder <button> stretches like the note <a> (form controls
 		// shrink to content by default) — gives both the same full-width hover hit.
@@ -107,7 +107,7 @@ function Chevron({ open }: { open: boolean }) {
 	return (
 		<ChevronRight
 			aria-hidden="true"
-			className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
+			className={`size-4 shrink-0 text-muted-foreground transition-transform ${
 				open ? "rotate-90" : ""
 			}`}
 		/>
@@ -245,7 +245,7 @@ export function TreeRow({
 				    against a near-black background is unreadable. */}
 				<Icon
 					aria-hidden="true"
-					className={`h-3.5 w-3.5 shrink-0 ${active ? "opacity-75" : "text-muted-foreground"}`}
+					className={`size-3.5 shrink-0 ${active ? "opacity-75" : "text-muted-foreground"}`}
 				/>
 				{/* Base name only — the badge beside it already carries the type,
 				    and this keeps the row consistent with note rows and with what
@@ -261,9 +261,10 @@ export function TreeRow({
 	}
 
 	const htProps = instance.getProps();
+	const htDrag: { onDragStart?: (ev: React.DragEvent) => void } = htProps;
 	const handleNoteDragStart = (e: React.DragEvent) => {
 		// Run HT's own drag init first (it tracks the drag via internal state).
-		(htProps.onDragStart as ((ev: React.DragEvent) => void) | undefined)?.(e);
+		htDrag.onDragStart?.(e);
 		// Then strip the <a href> link payload the browser auto-adds, so Chrome/Edge
 		// don't offer a split view / "open in new tab" while dragging the note within
 		// the tree. HT's move reads internal state, not dataTransfer, so this is safe.

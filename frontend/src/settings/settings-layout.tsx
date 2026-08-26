@@ -140,7 +140,7 @@ export default function SettingsDialog({ section }: { section: SettingsSectionKe
 					// — a 96vw gap, a border, a rounded corner — before any content, and
 					// none of that earns its keep at 400px. 100dvh not 100vh so the
 					// browser's collapsing chrome can't crop the bottom of the panel.
-					className="data-open:fade-in-0 data-closed:fade-out-0 md:data-open:zoom-in-95 md:data-closed:zoom-out-95 fixed inset-0 z-50 flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden bg-card duration-200 data-closed:animate-out data-open:animate-in md:inset-auto md:top-1/2 md:left-1/2 md:h-[88vh] md:w-[min(96vw,1100px)] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-xl md:border md:border-border md:shadow-xl"
+					className="data-open:fade-in-0 data-closed:fade-out-0 md:data-open:zoom-in-95 md:data-closed:zoom-out-95 md:-translate-1/2 fixed inset-0 z-50 flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden bg-card duration-200 data-closed:animate-out data-open:animate-in md:inset-auto md:top-1/2 md:left-1/2 md:h-[88vh] md:w-[min(96vw,1100px)] md:rounded-xl md:border md:border-border md:shadow-xl"
 				>
 					<DialogPrimitive.Title className="sr-only">Settings</DialogPrimitive.Title>
 					<DialogPrimitive.Close asChild>
@@ -151,7 +151,7 @@ export default function SettingsDialog({ section }: { section: SettingsSectionKe
 							title="Close settings"
 							className="absolute top-2 right-2 z-30 text-muted-foreground hover:text-foreground"
 						>
-							<X className="h-4 w-4" />
+							<X className="size-4" />
 						</Button>
 					</DialogPrimitive.Close>
 					{/* Mobile: section switcher row */}

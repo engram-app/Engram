@@ -42,7 +42,7 @@ function ViewButton({ id, label, Icon }: { id: RailView; label: string; Icon: ty
 			onClick={onClick}
 			className={railButtonClass(active)}
 		>
-			<Icon className="h-5 w-5" />
+			<Icon className="size-5" />
 		</button>
 	);
 }
@@ -63,7 +63,7 @@ function ToolButton({ tool }: { tool: RightToolDescriptor }) {
 			onClick={() => toggleActive(tool.id)}
 			className={`${railButtonClass(active)} disabled:pointer-events-none disabled:opacity-40`}
 		>
-			<tool.Icon className="h-5 w-5" />
+			<tool.Icon className="size-5" />
 		</button>
 	);
 }
@@ -79,7 +79,7 @@ export default function Rail() {
 			<NavLink
 				to="/"
 				aria-label="Engram home"
-				className="mb-3 flex h-10 w-10 items-center justify-center rounded-md"
+				className="mb-3 flex size-10 items-center justify-center rounded-md"
 			>
 				<img src="/engram-mark.svg" alt="" className="size-8" />
 			</NavLink>
@@ -101,7 +101,7 @@ export default function Rail() {
 				aria-current={onSettings ? "page" : undefined}
 				className={railButtonClass(onSettings)}
 			>
-				<Settings className="h-5 w-5" />
+				<Settings className="size-5" />
 			</Link>
 			<UserMenu />
 		</nav>

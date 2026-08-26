@@ -9,7 +9,7 @@ export default function LoadingPane({ label }: { label?: string }) {
 		<div
 			role="status"
 			aria-busy="true"
-			className="flex h-full min-h-[60vh] w-full flex-col items-center justify-center gap-3 text-muted-foreground"
+			className="flex size-full min-h-[60vh] flex-col items-center justify-center gap-3 text-muted-foreground"
 		>
 			<Loader2 aria-hidden className="size-8 animate-spin" />
 			{label ? <p className="text-sm">{label}</p> : <span className="sr-only">Loading</span>}

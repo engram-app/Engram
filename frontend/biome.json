@@ -85,9 +85,6 @@
 						"useUniqueElementIds": "off"
 					},
 					"nursery": {
-						"noUnsafeTypeAssertion": "off",
-						"useReactCompiler": "off",
-						"useTailwindShorthandClasses": "off",
 						"useExplicitType": "off",
 						"useExplicitReturnType": "off",
 						"noReactNativeRawText": "off",
@@ -150,6 +147,10 @@
 			}
 		},
 		{
+			"includes": ["src/components/ui/input-group.tsx"],
+			"linter": { "rules": { "nursery": { "useTailwindShorthandClasses": "off" } } }
+		},
+		{
 			"includes": ["vite.config.ts", "playwright.config.ts", "scripts/**", "**/*.config.ts"],
 			"linter": {
 				"rules": {
@@ -189,7 +190,9 @@
 					"performance": { "noDelete": "off" },
 					"nursery": {
 						"noPlaywrightWaitForTimeout": "off",
-						"useConsistentTestIt": "off"
+						"noUnsafeTypeAssertion": "off",
+						"useConsistentTestIt": "off",
+						"useReactCompiler": "off"
 					}
 				}
 			}

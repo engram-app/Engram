@@ -1,7 +1,11 @@
 // CheckoutSettings from the SDK, widened to include "express" in the variant
 // union. The express variant is a valid Paddle.js variant not yet reflected in
 // the SDK's Variant type ('multi-page' | 'one-page').
-import type { CheckoutCustomer, CheckoutSettings as SDKCheckoutSettings } from "@paddle/paddle-js";
+import type {
+	CheckoutCustomer,
+	Paddle,
+	CheckoutSettings as SDKCheckoutSettings,
+} from "@paddle/paddle-js";
 
 export type {
 	CheckoutCustomer,
@@ -48,3 +52,24 @@ export interface OpenCheckoutOptions {
 	/** Must be an absolute URL (starting with `https://` or `http://`) */
 	successUrl?: string;
 }
+
+// ---
+// Runtime-ahead-of-types widenings
+//
+// Each entry below is an API Paddle.js ships at runtime that its published
+// .d.ts does not describe yet. Declaring the gap here keeps it in ONE place
+// with a reason attached, instead of an `as` at each call site that reads as
+// "we gave up" and gives the next reader nothing to check against.
+// ---
+
+/** `showNonExpressPaymentMethods` is live in Paddle.js, not yet in the types. */
+export type CheckoutOpenSettings = NonNullable<
+	Parameters<Paddle["Checkout"]["open"]>[0]["settings"]
+> & {
+	showNonExpressPaymentMethods?: boolean;
+};
+
+/** `Checkout.updateItems` is live in Paddle.js, not yet in the types. */
+export type CheckoutWithUpdateItems = Paddle["Checkout"] & {
+	updateItems?: (items: Array<{ priceId: string; quantity: number }>) => void;
+};

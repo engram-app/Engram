@@ -86,7 +86,7 @@ export function usePaddlePrices(args: UsePaddlePricesArgs): {
 			return;
 		}
 
-		const paddlePricePreviewRequest: Partial<PricePreviewParams> = {
+		const paddlePricePreviewRequest: PricePreviewParams = {
 			items: priceIdList.map((priceId) => ({ priceId, quantity: 1 })),
 			...(countryCode && { address: { countryCode } }),
 			...(discountId && { discountId }),
@@ -95,9 +95,7 @@ export function usePaddlePrices(args: UsePaddlePricesArgs): {
 		setLoading(true);
 
 		try {
-			const priceResponse = await paddle.PricePreview(
-				paddlePricePreviewRequest as PricePreviewParams,
-			);
+			const priceResponse = await paddle.PricePreview(paddlePricePreviewRequest);
 			setPrices(getPriceAmounts(priceResponse));
 			setError(null);
 		} catch (err) {

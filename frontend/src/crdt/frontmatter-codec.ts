@@ -13,7 +13,7 @@ function sortDeep(v: unknown): unknown {
 		return v.map(sortDeep);
 	}
 	if (v !== null && typeof v === "object") {
-		const rec = v as Record<string, unknown>;
+		const rec: Record<string, unknown> = Object.fromEntries(Object.entries(v));
 		const out: Record<string, unknown> = {};
 		for (const k of Object.keys(rec).sort()) {
 			out[k] = sortDeep(rec[k]);
@@ -90,7 +90,7 @@ export function parseFrontmatter(
 	if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
 		return null;
 	}
-	const map = doc as Record<string, unknown>;
+	const map: Record<string, unknown> = Object.fromEntries(Object.entries(doc));
 	const order = topLevelKeyOrder(fmBlock, map);
 	const values: Record<string, string> = {};
 	for (const k of Object.keys(map)) {

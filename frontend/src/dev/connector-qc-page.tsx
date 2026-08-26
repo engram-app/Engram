@@ -43,7 +43,7 @@ function conn(over: Partial<Connection>): Connection {
 		redirect_uris: [],
 		cimd_url: null,
 		...over,
-	} as Connection;
+	};
 }
 
 // Every row below is a real registration observed in prod on 2026-07-30, except
@@ -160,7 +160,15 @@ const TOOLS = [
 	"other_mcp",
 ];
 
-const CONFIG = { billingEnabled: true } as EngramConfig;
+const CONFIG: EngramConfig = {
+	authProvider: "local",
+	clerkPublishableKey: "",
+	billingEnabled: true,
+	clerkWaitlistMode: false,
+	apiBase: "",
+	wsBase: "",
+	tracingEnabled: false,
+};
 
 function status(over: Partial<OnboardingStatus> = {}): OnboardingStatus {
 	return {
@@ -171,7 +179,7 @@ function status(over: Partial<OnboardingStatus> = {}): OnboardingStatus {
 		vault_count: 1,
 		profile: { uses_obsidian: false, tools: TOOLS },
 		...over,
-	} as OnboardingStatus;
+	};
 }
 
 /** Each panel gets its own client so one panel's cache can't leak into another. */
@@ -193,7 +201,7 @@ function Panel({
 	});
 	qc.setQueryData(["connections"], connections ?? []);
 	qc.setQueryData(["onboarding", "status"], onboarding ?? status());
-	qc.setQueryData(["billing", "status"], { tier: "pro", active: true } as BillingStatus);
+	qc.setQueryData<Partial<BillingStatus>>(["billing", "status"], { tier: "pro", active: true });
 
 	return (
 		<section className="flex flex-col gap-3 border-border border-t pt-8">
