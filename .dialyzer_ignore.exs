@@ -30,7 +30,7 @@
   # spec documents the contract ("some priority that loses to interactive"),
   # not today's value, so callers and tests don't bake the constant in a second
   # place. Same pattern as `Links.backlinks_limit/0` above.
-  {"lib/engram/workers/embed_note.ex", :contract_supertype, 411},
+  {"lib/engram/workers/embed_note.ex", :contract_supertype, 519},
 
   # `Links.live_basename_count/3` sums two `Repo.one(select: count(...))`
   # results. SQL `count()` is always a non-negative integer at runtime, but
