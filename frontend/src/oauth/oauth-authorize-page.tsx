@@ -44,7 +44,15 @@ function readParams(search: URLSearchParams): {
 	resource: string | null;
 	missing: RequiredParam[];
 } {
-	const values = {} as Record<RequiredParam, string> & { scope: string };
+	const values: Record<RequiredParam, string> & { scope: string } = {
+		client_id: "",
+		redirect_uri: "",
+		response_type: "",
+		code_challenge: "",
+		code_challenge_method: "",
+		state: "",
+		scope: "",
+	};
 	const missing: RequiredParam[] = [];
 
 	for (const key of REQUIRED_PARAMS) {

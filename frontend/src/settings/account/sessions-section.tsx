@@ -1,8 +1,12 @@
 import { useSession, useSessionList } from "@clerk/react";
-import type { SessionWithActivitiesResource } from "@clerk/shared/types";
+import type { SessionResource, SessionWithActivitiesResource } from "@clerk/shared/types";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { SettingsSectionCard } from "./section-card";
+
+function hasActivities(s: SessionResource): s is SessionResource & SessionWithActivitiesResource {
+	return "latestActivity" in s && "revoke" in s && typeof s.revoke === "function";
+}
 
 export function SessionsSection() {
 	const { isLoaded, sessions } = useSessionList();
@@ -14,7 +18,10 @@ export function SessionsSection() {
 
 	// `useSessionList()` is typed as `SessionResource[]`, but at runtime returns
 	// session-with-activities resources carrying `latestActivity` + `revoke()`.
-	const list = (sessions ?? []) as unknown as SessionWithActivitiesResource[];
+	// Check for those members rather than declaring every element has them: a
+	// Clerk build that stops sending them drops the row instead of rendering
+	// `undefined` into the activity line.
+	const list = (sessions ?? []).filter(hasActivities);
 
 	async function revoke(s: SessionWithActivitiesResource) {
 		try {

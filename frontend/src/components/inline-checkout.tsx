@@ -7,7 +7,6 @@ import { addPaddleEventListener } from "@/lib/paddle-instance";
 import {
 	type CheckoutCustomer,
 	CheckoutEventNames,
-	type CheckoutEventsData,
 	type CheckoutOpenLineItem,
 	type Environments,
 	type PaddleEventData,
@@ -193,7 +192,7 @@ export function InlineCheckout({
 			}
 
 			if (event.name && SUMMARY_EVENT_NAMES.has(event.name) && event.data) {
-				setSummaryData(mapCheckoutEventsToSummary(event.data as CheckoutEventsData));
+				setSummaryData(mapCheckoutEventsToSummary(event.data));
 			}
 		});
 

@@ -135,11 +135,7 @@ export default function AppLayout() {
 		// billing or settings never opens a note. On a slow link the preload
 		// would also contend with the bootstrap/vault-tree requests that gate
 		// the sidebar, making the tree paint LATER for exactly those users.
-		const conn = (
-			navigator as Navigator & {
-				connection?: { saveData?: boolean; effectiveType?: string };
-			}
-		).connection;
+		const conn = navigator.connection;
 		if (conn?.saveData || conn?.effectiveType === "slow-2g" || conn?.effectiveType === "2g") {
 			return;
 		}

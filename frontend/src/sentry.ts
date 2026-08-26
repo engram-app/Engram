@@ -72,7 +72,7 @@ export const sentryReady: Promise<SentrySdk | null> | null = sentryDsn
 				for (const err of earlyErrors.splice(0)) {
 					Sentry.captureException(err);
 				}
-				return Sentry as SentrySdk;
+				return Sentry;
 			})
 			.catch((err) => {
 				window.removeEventListener("error", onEarlyError);

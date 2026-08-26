@@ -360,7 +360,11 @@ export default function NotePage() {
 	// name and clears the flag, so Enter renames that note and the new one never
 	// enters rename mode at all.
 	const location = useLocation();
-	const justCreated = Boolean((location.state as { justCreated?: boolean } | null)?.justCreated);
+	const state: unknown = location.state;
+	const justCreated =
+		typeof state === "object" && state !== null && "justCreated" in state
+			? Boolean(state.justCreated)
+			: false;
 	useEffect(() => {
 		if (!(justCreated && shownId && shownId === validId)) {
 			return;
