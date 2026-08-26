@@ -89,6 +89,10 @@ export default function MembersTab({
 		queryKey: USERS_KEY,
 		queryFn: () => adminApi.listUsers(),
 		select: (res) => sortUsers(res.users),
+		// The effect this replaced fetched on every mount. Without this the query
+		// inherits the client's 30s staleTime and reopening Settings inside that
+		// window shows a roster another admin may already have changed.
+		staleTime: 0,
 	});
 	const users: AdminUser[] = usersQuery.data ?? [];
 	const loading = usersQuery.isPending;

@@ -5,7 +5,12 @@ import { Button } from "@/components/ui/button";
 import { SettingsSectionCard } from "./section-card";
 
 function hasActivities(s: SessionResource): s is SessionResource & SessionWithActivitiesResource {
-	return "latestActivity" in s && "revoke" in s && typeof s.revoke === "function";
+	// Only revoke() is required. `latestActivity` comes from the CDN-loaded
+	// clerk-js runtime, which nothing in this repo can typecheck or test, and the
+	// row below already falls back to "Device · Browser" without it — gating on
+	// it would empty the whole list (and the ability to sign other devices out)
+	// the first time a Clerk build set it conditionally.
+	return "revoke" in s && typeof s.revoke === "function";
 }
 
 export function SessionsSection() {
@@ -18,9 +23,8 @@ export function SessionsSection() {
 
 	// `useSessionList()` is typed as `SessionResource[]`, but at runtime returns
 	// session-with-activities resources carrying `latestActivity` + `revoke()`.
-	// Check for those members rather than declaring every element has them: a
-	// Clerk build that stops sending them drops the row instead of rendering
-	// `undefined` into the activity line.
+	// Checked rather than declared, so a Clerk build that stops sending revoke()
+	// drops that row instead of throwing when the button is pressed.
 	const list = (sessions ?? []).filter(hasActivities);
 
 	async function revoke(s: SessionWithActivitiesResource) {

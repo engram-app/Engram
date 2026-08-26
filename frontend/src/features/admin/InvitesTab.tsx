@@ -22,6 +22,8 @@ export default function InvitesTab() {
 	const invitesQuery = useQuery({
 		queryKey: INVITES_KEY,
 		queryFn: () => adminApi.listInvites(),
+		// See MembersTab: the effect this replaced fetched on every mount.
+		staleTime: 0,
 	});
 	const invites: Invite[] = invitesQuery.data?.invites ?? [];
 	const loading = invitesQuery.isPending;

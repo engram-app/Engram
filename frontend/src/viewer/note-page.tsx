@@ -385,20 +385,21 @@ export default function NotePage() {
 	// stored, so it clears itself when the doc opens, when the user navigates
 	// elsewhere, and when the session recovers.
 	const stalled = shown !== null && shown.note.id !== validId;
-	const [longFor, setLongFor] = useState<string | null>(null);
-	// Which note the notice belongs to, not a bare boolean: it then clears
-	// itself during render on navigation or recovery, instead of needing the
-	// effect to write `false` back on every non-stalled pass.
-	const stalledLong = stalled && longFor === validId;
+	const [stalledLong, setStalledLong] = useState(false);
 	useEffect(() => {
 		if (!stalled) {
+			// Must reset, not just skip: without this the flag would mean "stalled
+			// at some point during this mount", and coming back to a note that
+			// stalled once would flash the strip with no debounce at all.
+			// biome-ignore lint/nursery/useReactCompiler: the reset has no render-phase form -- deriving it from `stalled` alone loses the 1.5s debounce, and keying it on the note id leaks across visits.
+			setStalledLong(false);
 			return;
 		}
 		// Not immediately: an ordinary open takes a moment, and a strip on every
 		// click is noise worse than the flash this page removed.
-		const timer = setTimeout(() => setLongFor(validId), STALL_NOTICE_MS);
+		const timer = setTimeout(() => setStalledLong(true), STALL_NOTICE_MS);
 		return () => clearTimeout(timer);
-	}, [stalled, validId]);
+	}, [stalled]);
 
 	// Publish the editor so right-sidebar tools (the markdown reference panel)
 	// can insert at the caret. Gated on the SAME condition that renders
