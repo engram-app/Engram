@@ -1,6 +1,6 @@
 import remarkCallouts from "@portaljs/remark-callouts";
 import matter from "gray-matter";
-import { memo, useMemo } from "react";
+import { type CSSProperties, memo, useMemo } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { Link, useParams } from "react-router";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
@@ -176,13 +176,15 @@ function NoteView({ content, tags, links, manifestNotes }: NoteViewProps) {
 						// property so CSS can reuse that exact colour (for the title text)
 						// without keeping a second palette that drifts from it.
 						blockquote({ node: _node, children, ...rest }) {
-							const style = rest.style;
+							const { style } = rest;
 							const color = style?.borderLeftColor;
+							// Custom properties are not part of CSSProperties, so the merged
+							// object is typed through a `--*` Record to carry the extra key.
+							const tinted: (CSSProperties & Record<`--${string}`, string>) | undefined = color
+								? { ...style, "--callout-color": String(color) }
+								: undefined;
 							return (
-								<blockquote
-									{...rest}
-									style={color ? Object.assign({}, style, { "--callout-color": color }) : style}
-								>
+								<blockquote {...rest} style={tinted ?? style}>
 									{children}
 								</blockquote>
 							);
@@ -218,13 +220,7 @@ function NoteView({ content, tags, links, manifestNotes }: NoteViewProps) {
 								}
 								return <AttachmentImg path={path} alt={alt} />;
 							}
-							return (
-								<img
-									src={src}
-									alt={alt ?? ""}
-									className="my-2 max-w-full rounded"
-								/>
-							);
+							return <img src={src} alt={alt ?? ""} className="my-2 max-w-full rounded" />;
 						},
 					}}
 				>

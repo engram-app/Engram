@@ -103,7 +103,6 @@ describe("scrubUrl", () => {
 	// allowlist, not to keep an unrecognised segment.
 	it("redacts an unknown first segment when there is no window to compare", () => {
 		const realWindow = globalThis.window;
-		// biome-ignore lint/performance/noDelete: restoring the global needs a true delete
 		delete (globalThis as { window?: unknown }).window;
 		try {
 			expect(scrubUrl("https://app.engram.page/divorce-2026/x")).toBe(

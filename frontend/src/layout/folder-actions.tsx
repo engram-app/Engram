@@ -13,9 +13,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { uuid7 } from "@/crdt/uuid7";
+import { isMember } from "../lib/is-member";
 import { useAttachmentUpload } from "../viewer/attachment-upload/provider";
 import { type SortKey, useFolderTreeState } from "./folder-tree-context";
-import { isMember } from "../lib/is-member";
 
 const ICON = "size-5";
 const BUTTON = "size-10";

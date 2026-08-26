@@ -206,6 +206,7 @@ export default function BillingPage({
 	// on a trial→active flip).
 	const onActivatedFiredRef = useRef(false);
 	const onActivatedRef = useRef(onActivated);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render is the point: it keeps the callback identity stable so the consuming effect does not re-fire on every render. See the comment above.
 	onActivatedRef.current = onActivated;
 
 	// Cooldown timer — starts on CHECKOUT_COMPLETED. If the activation push
@@ -279,6 +280,7 @@ export default function BillingPage({
 		if (!onActivatedRef.current) {
 			return;
 		}
+		// biome-ignore lint/nursery/useReactCompiler: mount-only cache probe: billing?.active is intentionally sampled on first paint, and onActivated is read through a ref. Same reasoning as the useExhaustiveDependencies suppression above.
 		if (!billing?.active) {
 			return;
 		}
@@ -450,6 +452,7 @@ export default function BillingPage({
 	// link during payment. Ref-mirrored so the effect only depends on the boolean.
 	const checkoutActive = isInline && (checkingOut || slow || finalizing);
 	const onCheckoutActiveChangeRef = useRef(onCheckoutActiveChange);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render is the point: it keeps the callback identity stable so the consuming effect does not re-fire on every render. See the comment above.
 	onCheckoutActiveChangeRef.current = onCheckoutActiveChange;
 	useEffect(() => {
 		onCheckoutActiveChangeRef.current?.(checkoutActive);

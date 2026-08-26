@@ -147,6 +147,10 @@
 			}
 		},
 		{
+			"includes": ["src/components/ui/input-group.tsx"],
+			"linter": { "rules": { "nursery": { "useTailwindShorthandClasses": "off" } } }
+		},
+		{
 			"includes": ["vite.config.ts", "playwright.config.ts", "scripts/**", "**/*.config.ts"],
 			"linter": {
 				"rules": {

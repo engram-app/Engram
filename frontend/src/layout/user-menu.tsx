@@ -11,10 +11,10 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
+import { isMember } from "../lib/is-member";
 import { settingsTo } from "../settings/settings-hash";
 import type { ThemeChoice } from "../theme/storage";
 import { useTheme } from "../theme/theme-provider";
-import { isMember } from "../lib/is-member";
 
 // One avatar dropdown for both auth modes — the auth adapter exposes email,
 // avatar, and logout regardless of provider, so Clerk's own UserButton isn't

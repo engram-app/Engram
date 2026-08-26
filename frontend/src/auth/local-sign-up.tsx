@@ -27,8 +27,7 @@ export default function LocalSignUp() {
 		invite: string;
 		preview: InvitePreview;
 	} | null>(null);
-	const invitePreview =
-		invite && fetchedPreview?.invite === invite ? fetchedPreview.preview : null;
+	const invitePreview = invite && fetchedPreview?.invite === invite ? fetchedPreview.preview : null;
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
 	const [confirm, setConfirm] = useState("");

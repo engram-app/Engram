@@ -74,7 +74,7 @@ const FALLBACK: LimitCopy = {
 	body: "Upgrade to continue.",
 };
 
-export type LimitReason =
+type LimitReason =
 	| "notes_cap_exceeded"
 	| "vaults_cap_exceeded"
 	| "attachments_disabled"
@@ -93,7 +93,7 @@ export type LimitReason =
 	| "account_suspended"
 	| "no_tier";
 
-export interface LimitCopy {
+interface LimitCopy {
 	title: string;
 	body: string;
 }
@@ -107,3 +107,5 @@ function isLimitReason(k: string): k is LimitReason {
 export function copyFor(reason: string): LimitCopy {
 	return isLimitReason(reason) ? TABLE[reason] : FALLBACK;
 }
+
+export type { LimitCopy, LimitReason };

@@ -169,6 +169,7 @@ export default function NotePage() {
 	// manifest resolves them without the /wiki redirect flash, and a manifest
 	// refetch must not change these callbacks' identity.
 	const wikiManifestRef = useRef<{ id: string; path: string }[]>([]);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render is the point: it keeps the callback identity stable so the consuming effect does not re-fire on every render. See the comment above.
 	wikiManifestRef.current = manifest?.notes ?? [];
 	// useCallback keeps a stable identity so passing it to NoteEditor doesn't
 	// re-fire the decorationsCompartment reconfigure effect on every render.
@@ -199,6 +200,7 @@ export default function NotePage() {
 	// reasoning documented in note-editor.tsx).
 	const manifestPaths = useMemo(() => manifest?.notes.map((n) => n.path) ?? [], [manifest]);
 	const manifestPathsRef = useRef<string[]>([]);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render is the point: it keeps the callback identity stable so the consuming effect does not re-fire on every render. See the comment above.
 	manifestPathsRef.current = manifestPaths;
 	const wikiCompletionPaths = useCallback(() => manifestPathsRef.current, []);
 
@@ -362,6 +364,7 @@ export default function NotePage() {
 		if (!(justCreated && shownId && shownId === validId)) {
 			return;
 		}
+		// biome-ignore lint/nursery/useReactCompiler: consumes a one-shot router flag: it must both start the rename AND strip history state, so it cannot be derived. Guarded to run once per (justCreated, shownId).
 		setRenaming({ id: shownId, at: "title" });
 		navigate(location.pathname, { replace: true, state: {} });
 	}, [justCreated, shownId, validId, navigate, location.pathname]);

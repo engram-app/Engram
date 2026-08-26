@@ -12,6 +12,7 @@ export function useLiveContent(ytext: Y.Text | null, fallback: string): string {
 
 	useEffect(() => {
 		if (!ytext) {
+			// biome-ignore lint/nursery/useReactCompiler: this effect IS the external-system subscription the rule asks for -- it observes a Y.Text. The write is the debounced re-read; a synchronous getSnapshot (useSyncExternalStore) would drop the debounce and re-render the reading view on every keystroke.
 			setText(fallback);
 			return;
 		}

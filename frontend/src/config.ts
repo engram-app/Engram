@@ -1,4 +1,5 @@
 import { isMember } from "./lib/is-member";
+
 const VALID_PROVIDERS = ["local", "clerk"] as const;
 
 const REGISTRATION_MODES: readonly NonNullable<EngramConfig["bootstrap"]>["registration_mode"][] = [

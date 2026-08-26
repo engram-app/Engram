@@ -1,4 +1,5 @@
 import { isMember } from "../lib/is-member";
+
 // Pure type model for the frontmatter properties widget. No React, no Yjs.
 // Values here are already-decoded JS values (the result of JSON.parse on a
 // Y.Map("frontmatter") entry), not YAML text.

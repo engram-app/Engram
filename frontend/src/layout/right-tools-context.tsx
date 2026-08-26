@@ -165,7 +165,6 @@ function useRightTools(): RightTools {
 	return ctx;
 }
 
-export type { RightToolDescriptor, RightToolId };
 /**
  * Publish `node` into a right-panel slot for as long as this component is
  * mounted, clearing it on unmount or when `node` becomes null.
@@ -175,13 +174,14 @@ export type { RightToolDescriptor, RightToolId };
  * useReactCompiler flags it — centralising the pattern here means one place
  * carries that explanation instead of three.
  */
-// biome-ignore lint/nursery/useReactCompiler: writing into the slot registry IS the external-system synchronisation this effect exists for; there is no render-phase form of "publish a node for the duration of this mount".
 function useRightToolSlot(id: RightToolId, node: ReactNode): void {
 	const { setSlot } = useRightTools();
 	useEffect(() => {
+		// biome-ignore lint/nursery/useReactCompiler: publishing into the slot registry IS the external-system synchronisation this effect exists for; there is no render-phase form of "publish a node for the duration of this mount". Centralised here so the three call sites do not each carry it.
 		setSlot(id, node);
 		return () => setSlot(id, null);
 	}, [id, node, setSlot]);
 }
 
-export { RIGHT_TOOLS, RightToolsProvider, useRightTools, useRightToolSlot };
+export type { RightToolDescriptor, RightToolId };
+export { RIGHT_TOOLS, RightToolsProvider, useRightToolSlot, useRightTools };

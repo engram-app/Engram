@@ -14,7 +14,8 @@ export function useMediaQuery(query: string): boolean {
 	const subscribe = useCallback(
 		(onChange: () => void) => {
 			if (!supported()) {
-				return () => {};
+				// Nothing to unsubscribe from.
+				return () => undefined;
 			}
 			const mql = window.matchMedia(query);
 			mql.addEventListener("change", onChange);

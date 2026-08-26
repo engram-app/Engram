@@ -1,5 +1,6 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Loader2 } from "lucide-react";
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { cn } from "@/lib/utils";
@@ -45,6 +46,8 @@ function ActionButton({
 	);
 }
 
+const USERS_KEY = ["admin", "users"] as const;
+
 export default function MembersTab({
 	currentUserId,
 	onResetIssued,
@@ -54,8 +57,7 @@ export default function MembersTab({
 	// the Members card — above it, where it's visually separated.
 	onResetIssued: (url: string) => void;
 }) {
-	const [users, setUsers] = useState<AdminUser[]>([]);
-	const [loading, setLoading] = useState(true);
+	const qc = useQueryClient();
 	const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 	// One open at a time keeps the table calm. null = all collapsed.
 	const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -80,20 +82,27 @@ export default function MembersTab({
 		[currentUserId],
 	);
 
-	const refresh = useCallback(async () => {
-		try {
-			const res = await adminApi.listUsers();
-			setUsers(sortUsers(res.users));
-		} catch (e) {
-			toast.error(e instanceof ApiError ? e.message : "Failed to load users");
-		} finally {
-			setLoading(false);
-		}
-	}, [sortUsers]);
+	// useQuery, not fetch-in-an-effect. The cache holds the RAW list and the
+	// current-user-first ordering is applied on read, so an optimistic patch
+	// below never has to re-sort.
+	const usersQuery = useQuery({
+		queryKey: USERS_KEY,
+		queryFn: () => adminApi.listUsers(),
+		select: (res) => sortUsers(res.users),
+	});
+	const users: AdminUser[] = usersQuery.data ?? [];
+	const loading = usersQuery.isPending;
 
-	useEffect(() => {
-		refresh();
-	}, [refresh]);
+	const refresh = useCallback(() => qc.invalidateQueries({ queryKey: USERS_KEY }), [qc]);
+
+	const patchCached = useCallback(
+		(fn: (prev: AdminUser[]) => AdminUser[]) => {
+			qc.setQueryData<{ users: AdminUser[] }>(USERS_KEY, (prev) =>
+				prev ? { ...prev, users: fn(prev.users) } : prev,
+			);
+		},
+		[qc],
+	);
 
 	// Optimistic mutation: patch the local row immediately so the UI
 	// reflects the intent on the next paint. On success we refresh from
@@ -105,18 +114,21 @@ export default function MembersTab({
 		patch: Partial<AdminUser> | "remove",
 		fn: () => Promise<T>,
 	) {
-		const snapshot = users;
+		const snapshot = qc.getQueryData<{ users: AdminUser[] }>(USERS_KEY);
 		setPending((p) => ({ ...p, [id]: kind }));
 		if (patch === "remove") {
-			setUsers((prev) => prev.filter((u) => u.id !== id));
+			patchCached((prev) => prev.filter((u) => u.id !== id));
 		} else {
-			setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, ...patch } : u)));
+			patchCached((prev) => prev.map((u) => (u.id === id ? { ...u, ...patch } : u)));
 		}
 		try {
 			await fn();
 			await refresh();
 		} catch (e) {
-			setUsers(snapshot); // explicit rollback before refresh races
+			// explicit rollback before refresh races
+			if (snapshot) {
+				qc.setQueryData(USERS_KEY, snapshot);
+			}
 			const raw = e instanceof ApiError ? e.message : "unknown error";
 			const friendly = raw === "last_admin" ? "Can't remove the last admin." : raw;
 			toast.error(`${label}: ${friendly}`);
@@ -172,6 +184,10 @@ export default function MembersTab({
 		<section>
 			{loading ? (
 				<p className="p-4 text-muted-foreground text-sm">Loading…</p>
+			) : usersQuery.error ? (
+				<p role="alert" className="p-4 text-destructive text-sm">
+					{usersQuery.error instanceof ApiError ? usersQuery.error.message : "Failed to load users"}
+				</p>
 			) : users.length === 0 ? (
 				<p className="p-4 text-muted-foreground text-sm">No users.</p>
 			) : (

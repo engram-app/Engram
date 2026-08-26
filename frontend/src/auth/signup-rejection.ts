@@ -10,7 +10,7 @@ import { isMember } from "../lib/is-member";
 const KEY = "engram:pending-signup";
 const WINDOW_MS = 2 * 60 * 1000;
 
-export type SignupRejectionReason = "duplicate_identity";
+type SignupRejectionReason = "duplicate_identity";
 
 const REJECTION_REASONS: readonly SignupRejectionReason[] = ["duplicate_identity"];
 
@@ -75,3 +75,5 @@ export async function fetchSignupRejection(
 		return null;
 	}
 }
+
+export type { SignupRejectionReason };

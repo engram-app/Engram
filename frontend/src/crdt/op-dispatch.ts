@@ -79,7 +79,7 @@ export function makeCrdtOpSend(hooks: CrdtSendHooks): (op: CrdtOp) => Promise<Se
 		}
 		try {
 			if (op.kind === "create") {
-				const payload = op.payload;
+				const { payload } = op;
 				const path =
 					typeof payload === "object" &&
 					payload !== null &&

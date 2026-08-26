@@ -31,6 +31,7 @@ function DesktopLayout() {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: rightRef.current exposes imperative panel handles, not reactive values; the effect intentionally keys on resolvedId alone.
 	useEffect(() => {
 		if (resolvedId === null) {
+			// biome-ignore lint/nursery/useReactCompiler: rightRef.current holds imperative panel handles, not reactive values; collapse()/expand() have no derived-state equivalent. Same reasoning as the useExhaustiveDependencies suppression above.
 			rightRef.current?.collapse();
 		} else if (rightRef.current?.isCollapsed()) {
 			rightRef.current?.expand();

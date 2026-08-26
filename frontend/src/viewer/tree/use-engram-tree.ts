@@ -304,6 +304,7 @@ export function useEngramTree(deps: Deps) {
 
 	const items = tree.getItems();
 
+	// biome-ignore lint/nursery/useReactCompiler: useVirtualizer's internals, not ours. Nothing in this file can satisfy the rule short of dropping @tanstack/react-virtual.
 	const virtualizer = useVirtualizer({
 		count: items.length,
 		getScrollElement: () => deps.scrollParentRef.current,

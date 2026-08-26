@@ -1,11 +1,18 @@
 import { isMember } from "../lib/is-member";
+
 // Settings is addressed by hash, not path, so the dialog overlays whatever page
 // you were on and closing can simply strip the hash instead of inventing a
 // destination (the old `/settings/*` path route hardcoded `navigate("/")`,
 // which dumped you on the dashboard even if you came from a note).
 const PREFIX = "#settings";
 
-const KNOWN: readonly SettingsSectionKey[] = ["account", "vaults", "connections", "billing", "admin"];
+const KNOWN: readonly SettingsSectionKey[] = [
+	"account",
+	"vaults",
+	"connections",
+	"billing",
+	"admin",
+];
 
 // Carried over from the old `/settings/api-keys` route alias so existing links
 // and bookmarks keep landing on Connections.

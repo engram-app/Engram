@@ -163,12 +163,14 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 	// Read by the click-away effect, which must not re-subscribe on every
 	// keystroke just to see the latest text.
 	const leaving = useRef<{ commit: typeof commitNewKey; cancel: () => void } | null>(null);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render is the point: it keeps the callback identity stable so the consuming effect does not re-fire on every render. See the comment above.
 	leaving.current = { commit: commitNewKey, cancel: cancelAdding };
 
 	// The `---` gesture means "I want a property", so it opens the new row
 	// directly rather than making the user find the button.
 	useEffect(() => {
 		if (draft) {
+			// biome-ignore lint/nursery/useReactCompiler: opening the new-property row is a reaction to the `---` gesture, not derived state -- `adding` is also cleared by cancelAdding() while `draft` is still set, so deriving it from `draft` would make the row impossible to close.
 			setAdding(true);
 		}
 	}, [draft]);

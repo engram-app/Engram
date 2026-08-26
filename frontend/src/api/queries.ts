@@ -2051,7 +2051,7 @@ export function useRenameFolder() {
 			// Snapshot + drop every cached folderNotes entry under the old prefix.
 			const all = qc.getQueryCache().findAll({ queryKey: ["folderNotes", vaultId] });
 			for (const q of all) {
-				const folder = q.queryKey[2];
+				const [, , folder] = q.queryKey;
 				if (typeof folder !== "string") {
 					continue;
 				}
@@ -2528,7 +2528,7 @@ export function useBatchMoveNotes() {
 					continue;
 				}
 				snapshots.push({ key: q.queryKey, data });
-				const folderId = q.queryKey[2];
+				const [, , folderId] = q.queryKey;
 				// Resolve this source list's folder PATH so the count decrement matches
 				// the raw folders cache by name (root sentinel → '', syn:<path> → path,
 				// real id → its cached name).
