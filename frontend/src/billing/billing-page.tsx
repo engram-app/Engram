@@ -175,7 +175,13 @@ export default function BillingPage({
 	// Ref mirror of `paddle` so the eventCallback (captured pre-instance) can
 	// call Checkout.close() on push activation or cooldown without re-init.
 	const paddleRef = useRef<Paddle | undefined>(undefined);
-	const [cadence, setCadence] = useState<BillingCadence>("monthly");
+	// Annual by default: it buys RETENTION, not payment-fee savings. The 17%
+	// discount costs more than the flat $0.50/transaction fee saves ($66.00 vs
+	// $73.80 net per year at list). It wins on churn — a monthly cohort at 5%/mo
+	// averages ~9.3 paid months in year one ($57.20 net). Do not "improve" this
+	// by discounting further to save fees; that rationale is arithmetically
+	// false. See docs/context/pricing-tiers-v2-decisions.md.
+	const [cadence, setCadence] = useState<BillingCadence>("annual");
 	// Mobile tier accordion: which row is expanded. Exactly one is always open
 	// (re-clicking the open tier keeps it open); Pro is the default.
 	const [openTier, setOpenTier] = useState<"pro" | "starter" | "free">("pro");

@@ -67,7 +67,11 @@ defmodule Engram.Billing.LimitKeys do
       type: :integer,
       defaults: %{free: 50, starter: nil, pro: nil}
     },
-    ai_queries_per_day: %{type: :integer, defaults: %{free: nil, starter: 500, pro: 10_000}},
+    # Starter at 150/day, not 500. A heavy Claude user runs ~50-200/day, so a
+    # 500 ceiling never binds and the Starter -> Pro AI ladder does nothing.
+    # 150 is a starting number, not a researched one — raise it on real usage
+    # data (raising is the safe direction; lowering post-launch is not).
+    ai_queries_per_day: %{type: :integer, defaults: %{free: nil, starter: 150, pro: 10_000}},
     conversation_window_minutes: %{type: :integer, defaults: %{free: 30, starter: 30, pro: 30}},
     reranker_enabled: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
     # API KEYS ARE PRO-ONLY. Both keys gate ONLY API-key-authed traffic:

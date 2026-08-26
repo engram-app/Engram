@@ -76,7 +76,7 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:attachment_bytes_cap, :starter) == 3_221_225_472
       assert LimitKeys.default_for(:max_file_bytes, :starter) == 209_715_200
       assert LimitKeys.default_for(:lifetime_embed_token_cap, :starter) == nil
-      assert LimitKeys.default_for(:ai_queries_per_day, :starter) == 500
+      assert LimitKeys.default_for(:ai_queries_per_day, :starter) == 150
       # API keys are Pro-only. Starter keeps MCP + vault sync + web app,
       # which authenticate without an API key and so bypass both gates.
       assert LimitKeys.default_for(:api_write_enabled, :starter) == false

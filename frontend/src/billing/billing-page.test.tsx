@@ -200,6 +200,23 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(settings.frameTarget).toBe("paddle-checkout");
 	});
 
+	// Annual is the default cadence because it buys retention, NOT because it
+	// saves on Paddle fees — the 17% discount costs more than the flat $0.50
+	// per-transaction fee saves. See pricing-tiers-v2-decisions.md.
+	it("plan picker defaults to the annual cadence", async () => {
+		mockBillingApi();
+		initializePaddleMock.mockImplementation(async () => ({
+			Checkout: { open: vi.fn(), close: vi.fn() },
+		}));
+
+		renderBilling({ inline: false });
+
+		const annual = await screen.findByRole("radio", { name: /annual/iu });
+		expect((annual as HTMLInputElement).checked).toBe(true);
+		const monthly = screen.getByRole("radio", { name: /monthly/iu });
+		expect((monthly as HTMLInputElement).checked).toBe(false);
+	});
+
 	it("settings (overlay): initializes Paddle with displayMode=overlay", async () => {
 		mockBillingApi();
 		initializePaddleMock.mockImplementation(async () => ({
