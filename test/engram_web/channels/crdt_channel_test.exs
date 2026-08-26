@@ -851,6 +851,143 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_reply ref, :ok, %{doc_id: ^id, seeded: true, genesis: "stored"}
     end
 
+    test "a write ABORTED by a concurrent one reports occupied, not absent", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # #476, third wave. The decline test above catches the concurrent write at
+      # FOLD time. This one lands it later — after the fold, inside
+      # `checkpoint/5`, in the gap its own `:after_row_read` seam exists for —
+      # so the fenced write ABORTS instead of declining.
+      #
+      # The outcome used to be derived from `wrote?`: the write CLAUSE ran, so
+      # the answer was `:absent` = "the row is empty, you must push". It was the
+      # opposite of true. The write aborted precisely BECAUSE the row had just
+      # been filled, and the client then pushed a body into a history-less doc,
+      # minting the rival lineage this whole path exists to prevent.
+      #
+      # `row_state_after_write/4` was already re-reading the row and throwing
+      # the answer away.
+      id = Ecto.UUID.generate()
+
+      # A BESPOKE hook rather than `CheckpointInterleave.arm/1`, and the reason
+      # is the point that matters if you copy this: every existing interleave
+      # test in this file arms `:genesis_seed_before_write`, which ONLY the
+      # genesis path fires. `:after_row_read` fires on EVERY checkpoint —
+      # including the background room-drain and checkpoint-timer ones this suite
+      # leaves running. A global one-shot park would be consumed by whichever
+      # checkpoint reached it first, stalling an unrelated room for the full
+      # park timeout and starving later tests' channels. Parking only when the
+      # parked process IS this channel confines it to the write under test.
+      test_pid = self()
+      channel_pid = socket.channel_pid
+      armed = :counters.new(1, [:atomics])
+      prev = Application.get_env(:engram, :checkpoint_interleave_hook)
+
+      Application.put_env(:engram, :checkpoint_interleave_hook, fn
+        :after_row_read ->
+          if self() == channel_pid and :counters.get(armed, 1) == 0 do
+            :counters.add(armed, 1, 1)
+            send(test_pid, {:parked_here, self()})
+
+            receive do
+              :release_park -> :ok
+            after
+              5_000 -> :ok
+            end
+          end
+
+          :ok
+
+        _other ->
+          :ok
+      end)
+
+      on_exit(fn ->
+        if is_nil(prev),
+          do: Application.delete_env(:engram, :checkpoint_interleave_hook),
+          else: Application.put_env(:engram, :checkpoint_interleave_hook, prev)
+      end)
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/aborted.md",
+          "b64" => frame_for_content("client body")
+        })
+
+      assert_receive {:parked_here, ^channel_pid}, 5_000
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Notes/aborted.md",
+          "content" => "the concurrent body that won the fence"
+        })
+
+      send(channel_pid, :release_park)
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: false, genesis: "occupied"}
+      # ...and the winner's body survives. An `absent` reply would have had the
+      # client union a second lineage over exactly this.
+      assert_note_content_eventually(user, vault, id, "the concurrent body that won the fence")
+    end
+
+    test "a RAISED seed costs that note its seed, never the channel", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # `seed_detached/4` wraps itself in a rescue for one reason: a raised query
+      # (connection loss, a crypto fault) must cost THIS note its seed and
+      # nothing else. Without it the channel process dies, taking every room
+      # binding on the socket with it, and the client sees no reply at all.
+      #
+      # So this asserts BOTH halves — the honest per-note answer AND that the
+      # socket is still serving afterwards. Asserting only the outcome would
+      # pass with the rescue deleted in some orderings, since a dead channel and
+      # a declined seed can look alike from one assertion.
+      #
+      # Driven by making the pre-write seam RAISE rather than park, which is the
+      # cheapest way to reach the rescue without a fake.
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Notes/raised.md",
+          "content" => "a body a transient fault must not endanger"
+        })
+
+      prev = Application.get_env(:engram, :checkpoint_interleave_hook)
+
+      Application.put_env(:engram, :checkpoint_interleave_hook, fn
+        :genesis_seed_before_write -> raise "transient fault"
+        _other -> :ok
+      end)
+
+      on_exit(fn ->
+        if is_nil(prev),
+          do: Application.delete_env(:engram, :checkpoint_interleave_hook),
+          else: Application.put_env(:engram, :checkpoint_interleave_hook, prev)
+      end)
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => note.id,
+          "path" => "Notes/raised.md",
+          "b64" => frame_for_content("client body")
+        })
+
+      # `:unreadable` reconciled against the caller's snapshot, which HAS a body.
+      # A transient fault must never tell the client to push into a filled row.
+      assert_reply ref, :ok, %{doc_id: _, seeded: false, genesis: "occupied"}
+
+      # The channel is still alive and serving — the whole point of the rescue.
+      # (The hook only raises on the genesis seam, so this bodyless create runs
+      # clean.)
+      id2 = Ecto.UUID.generate()
+      ref2 = push(socket, "crdt_create", %{"doc_id" => id2, "path" => "Notes/after-raise.md"})
+      assert_reply ref2, :ok, %{doc_id: ^id2}
+    end
+
     test "a room already holding the doc reports occupied, never absent", %{
       socket: socket,
       user: user,
@@ -2177,11 +2314,19 @@ defmodule EngramWeb.CrdtChannelTest do
       step1_b64 = Base.encode64(<<0, 0, 0>>)
       absent = Ecto.UUID.generate()
 
+      # The sibling tests await each reply so the three pushes do not share one
+      # window. That is not available HERE: a `<<0, 0, 0>>` frame is the point of
+      # this test (it classes as :handshake) and the state-vector guard DROPS it
+      # with no reply at all, so the first two are unobservable. The channel
+      # processes its mailbox in order, so the third reply still proves all
+      # three were seen — the only lever is the window, and 3s was too tight for
+      # a loaded sync suite (observed twice: empty mailbox, i.e. the limiter
+      # working perfectly and reported as a limiter bug).
       push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => step1_b64})
       push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => step1_b64})
       ref = push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => step1_b64})
 
-      assert_reply ref, :error, %{reason: "rate_limited"}, 3000
+      assert_reply ref, :error, %{reason: "rate_limited"}, 10_000
     end
 
     @tag capture_log: true
@@ -2190,8 +2335,15 @@ defmodule EngramWeb.CrdtChannelTest do
       Application.put_env(:engram, :crdt_hs_rate_limit_override, 2)
       on_exit(fn -> Application.delete_env(:engram, :crdt_hs_rate_limit_override) end)
 
-      push(socket, "crdt_catchup_since", %{})
-      push(socket, "crdt_catchup_since", %{})
+      # Await each reply rather than firing three and asserting only the last
+      # (the sibling per-device test below already does this, for this reason):
+      # the three pushes otherwise SHARE one 3s window, so a loaded scheduler
+      # makes the assertion fail with an empty mailbox — the limiter working
+      # perfectly, reported as a limiter bug. Observed twice in this file.
+      ref1 = push(socket, "crdt_catchup_since", %{})
+      assert_reply ref1, :ok, _, 3000
+      ref2 = push(socket, "crdt_catchup_since", %{})
+      assert_reply ref2, :ok, _, 3000
       ref = push(socket, "crdt_catchup_since", %{})
 
       assert_reply ref, :error, %{reason: "rate_limited"}, 3000
@@ -2208,8 +2360,15 @@ defmodule EngramWeb.CrdtChannelTest do
       tiny_b64 = Base.encode64(<<0>>)
       absent = Ecto.UUID.generate()
 
-      push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
-      push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      # Await each reply rather than firing three and asserting only the last
+      # (the sibling per-device test below already does this, for this reason):
+      # the three pushes otherwise SHARE one 3s window, so a loaded scheduler
+      # makes the assertion fail with an empty mailbox — the limiter working
+      # perfectly, reported as a limiter bug. Observed twice in this file.
+      ref1 = push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      assert_reply ref1, :error, %{reason: "note_not_found"}, 3000
+      ref2 = push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      assert_reply ref2, :error, %{reason: "note_not_found"}, 3000
       ref = push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
 
       assert_reply ref, :error, %{reason: "rate_limited"}, 3000

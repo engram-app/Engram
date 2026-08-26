@@ -327,27 +327,32 @@ defmodule Engram.Notes.CrdtTransport do
   # %User{}/%Vault{} arg types from the private call sites, and a hand-written
   # map()/map() contract is a supertype of that (contract_supertype); the public
   # read_delta/2..4 specs already document the boundary types.
+  # ONE flat `with`, not a `case` wrapping a `with`.
+  #
+  # The nested shape needed an explicit `{:error, _}` arm on the outer `case` to
+  # be total, and Dialyzer rejects that arm as dead: it infers
+  # `get_note_by_id/3` as returning exactly `{:ok, %Note{}} | {:error,
+  # :not_found}` today. Deleting the arm to satisfy it would give up the
+  # totality this function was made total FOR — `ensure_user_dek` and the KMS
+  # path can grow error terms, and a CaseClauseError here kills the channel,
+  # taking `socket.assigns.rooms` and every monitor with it.
+  #
+  # Flattened, the `else` catch-all is genuinely reachable (the decrypt and
+  # decode legs contribute their own error shapes), so it is total AND has no
+  # dead pattern. `:not_found` keeps its own arm because the caller
+  # distinguishes it.
   defp load_doc(user, vault, note_id) do
-    case Notes.get_note_by_id(user, vault, note_id) do
-      {:ok, note} ->
-        with {:ok, snapshot} <- Crypto.decrypt_crdt_state(note, user),
-             {:ok, doc} <- CrdtBridge.doc_from_state(snapshot) do
-          Repo.with_tenant(user.id, fn ->
-            CrdtPersistence.replay_tail(doc, user, note_id, vault.id)
-          end)
+    with {:ok, note} <- Notes.get_note_by_id(user, vault, note_id),
+         {:ok, snapshot} <- Crypto.decrypt_crdt_state(note, user),
+         {:ok, doc} <- CrdtBridge.doc_from_state(snapshot) do
+      Repo.with_tenant(user.id, fn ->
+        CrdtPersistence.replay_tail(doc, user, note_id, vault.id)
+      end)
 
-          {:ok, doc}
-        else
-          _ -> {:error, :unreadable}
-        end
-
-      {:error, :not_found} ->
-        {:error, :not_found}
-
-      # `ensure_user_dek` and the KMS path answer errors other than :not_found;
-      # the old two-arm case raised CaseClauseError on those.
-      {:error, _} ->
-        {:error, :unreadable}
+      {:ok, doc}
+    else
+      {:error, :not_found} -> {:error, :not_found}
+      _ -> {:error, :unreadable}
     end
   end
 end

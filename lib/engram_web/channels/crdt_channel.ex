@@ -608,28 +608,6 @@ defmodule EngramWeb.CrdtChannel do
       {:reply, {:error, %{reason: "doc_state_failed"}}, socket}
   end
 
-  # Carries the doc_id, unlike the genesis-seed rescue it mirrors — without it
-  # an operator cannot tell WHICH note is poisoned, and a poisoned note is
-  # exactly the thing that needs finding. Distinct telemetry event so this is
-  # alertable separately from the benign genesis declines (review MEDIUM-3).
-  defp log_doc_state_failed(note_id, kind) do
-    Logger.warning(
-      "crdt doc_state read failed",
-      Metadata.with_category(:warning, :sync, doc_id: note_id, error_kind: kind)
-    )
-
-    :telemetry.execute([:engram, :crdt, :doc_state_failed], %{count: 1}, %{reason: kind})
-  end
-
-  defp note_id_or_nil(doc_id) when is_binary(doc_id) do
-    case Ecto.UUID.cast(doc_id) do
-      {:ok, id} -> id
-      :error -> nil
-    end
-  end
-
-  defp note_id_or_nil(_), do: nil
-
   @impl true
   def handle_in("crdt_delete", %{"doc_id" => doc_id}, socket) do
     with :ok <- check_rate(socket, :handshake),
@@ -723,6 +701,28 @@ defmodule EngramWeb.CrdtChannel do
       {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
     end
   end
+
+  # Carries the doc_id, unlike the genesis-seed rescue it mirrors — without it
+  # an operator cannot tell WHICH note is poisoned, and a poisoned note is
+  # exactly the thing that needs finding. Distinct telemetry event so this is
+  # alertable separately from the benign genesis declines (review MEDIUM-3).
+  defp log_doc_state_failed(note_id, kind) do
+    Logger.warning(
+      "crdt doc_state read failed",
+      Metadata.with_category(:warning, :sync, doc_id: note_id, error_kind: kind)
+    )
+
+    :telemetry.execute([:engram, :crdt, :doc_state_failed], %{count: 1}, %{reason: kind})
+  end
+
+  defp note_id_or_nil(doc_id) when is_binary(doc_id) do
+    case Ecto.UUID.cast(doc_id) do
+      {:ok, id} -> id
+      :error -> nil
+    end
+  end
+
+  defp note_id_or_nil(_), do: nil
 
   # Concurrency for the crdt_create_batch phase-1 and phase-3 streams. Bounded
   # by the DB POOL, not the scheduler count: each entry opens its own
@@ -1170,8 +1170,9 @@ defmodule EngramWeb.CrdtChannel do
   # selector. `checkpoint_write/6` is what actually fences — unconditionally on
   # `snapshot_fence/2` (the row's `seq` + `crdt_state_nonce` pre-image, #1360)
   # and, layered on top, the `captured_version` CAS (#902). A REST/MCP write
-  # landing in the gap fails one of those, the write aborts, `seed_landed?/4`
-  # reports false, and the client falls back to its crdt_msg seed.
+  # landing in the gap fails one of those, the write aborts, `row_state_after_write/4`
+  # reports `:occupied` (a concurrent write filled the row), and the client
+  # adopts that lineage instead of pushing a rival one.
   #
   # The interleave hook fires before the fold so a test can register a room in
   # the window `evict_racing_room/1` cleans up after. Reuses
@@ -1187,30 +1188,29 @@ defmodule EngramWeb.CrdtChannel do
     # load-bearing (#1409).
     genesis_text = CrdtBridge.text_of(doc)
 
-    {seeded, wrote?} =
+    {row_state, wrote?} =
       case fold_row_and_tail(user, vault, note_id, doc) do
         # Already exactly this body: an idempotent retry with nothing to write.
-        # Report true — the client's file IS synced, which is what `seeded`
-        # means — and take no room.
+        # Report `:stored` — the client's file IS synced — and take no room.
         #
         # Asked against `genesis_text`, NOT the post-fold union, and that is the
         # whole point. The realistic retry (a lost ack) rebuilds the frame with a
         # FRESH Yjs clientID, so folding the stored snapshot in yields two
         # concurrent inserts of the same text: under YATA the union projects the
         # body TWICE. Comparing the union here would decline every such retry
-        # (`seeded: false`) and push the client onto its crdt_msg fallback, which
+        # (as `:occupied`) and push the client onto its crdt_msg fallback, which
         # is safe but spends a room per retry — precisely what this change exists
         # to stop, in precisely the bulk-import conditions where acks get lost.
         #
         # The union is not the right question for "is the client synced": it is
         # what a WRITE would commit, and it is used for exactly that below.
         {:ok, ^genesis_text, _prune_ids} ->
-          {true, false}
+          {:stored, false}
 
         {:ok, row_content, prune_ids} ->
           # The union is read AFTER the fold: with the stored snapshot and any
           # tail rows folded in, THIS is what `checkpoint/5` commits and what
-          # `seed_landed?/4` must compare the row against.
+          # `row_state_after_write/4` must compare the row against.
           seed_against(
             user,
             vault,
@@ -1234,12 +1234,13 @@ defmodule EngramWeb.CrdtChannel do
     # kills a room that is still perfectly consistent with the row. That is not
     # free: `handle_info({:DOWN, ...})` only clears server-side assigns, so no
     # frame reaches the socket and an open-but-idle editor stays bound to a dead
-    # room until its next outbound message. `seeded` alone is not the gate
+    # room until its next outbound message. `row_state == :stored` alone is not
+    # the gate
     # either — it is `true` for the idempotent no-write clause, whose racing room
     # is equally innocent. Both together mean "we changed the row", which is
     # exactly when a racing room can be stale and the fan-out has something true
     # to say.
-    if wrote? and seeded do
+    if wrote? and row_state == :stored do
       evict_racing_room(note_id)
 
       # The other half of removing the room (#1409, found by the first paired
@@ -1258,26 +1259,40 @@ defmodule EngramWeb.CrdtChannel do
       CrdtDeliver.fanout_idle(user.id, vault.id, note_id)
     end
 
-    # #476: the caller needs to know WHICH kind of `false` this was, because the
-    # two demand opposite things of the client. `wrote?` already separates them:
+    # #476: the caller needs to know WHICH kind of "not stored" this was, because
+    # they demand opposite things of the client.
     #
-    #   seeded            -> :stored   the row holds our bytes; the client adopts
-    #   not seeded, wrote -> :absent   the write clause ran and nothing landed
-    #                                  (a DEK-rotation skip, a stale snapshot).
-    #                                  The row is EMPTY, so the client MUST push
-    #                                  or the note stays blank forever.
-    #   not seeded, no    -> :occupied `seed_against/7` declined because the row
-    #                                  already carries a DIFFERENT body, or the
-    #                                  fold could not read it. Pushing here mints
-    #                                  a rival lineage and doubles the note.
-    cond do
-      seeded == :unreadable -> :unreadable
-      seeded -> :stored
-      wrote? -> :absent
-      # `seed_against/7`'s catch-all: it READ the row at fold time and found a
-      # different body. That read is FRESHER than the note snapshot the caller
-      # holds, so it is authoritative and must not be reconciled away.
-      true -> :declined
+    # This used to be derived from `{seeded?, wrote?}`, where `wrote?` alone
+    # decided between `:absent` and `:declined` — i.e. the CODE PATH decided what
+    # the row contained. That is the same inference this module already learned
+    # not to make: a write that aborts under `snapshot_fence/2` or the
+    # `captured_version` CAS aborts precisely BECAUSE the row was filled by a
+    # concurrent write, and it reported `:absent` ("the row is empty, push").
+    #
+    # Now every arm comes from something that actually READ the row.
+    case row_state do
+      # The row projects our bytes. The client adopts; nothing to send.
+      :stored ->
+        :stored
+
+      # The post-write read-back found the row genuinely EMPTY: the checkpoint
+      # silently skipped (DEK rotation, `{:skip, :no_crdt_state}`). Nothing but
+      # the client's push will ever fill it, so it must push — reconciled against
+      # the caller's note snapshot, which is the more conservative of the two
+      # reads and the only one that knows about resurrects and renames.
+      :empty ->
+        :absent
+
+      # Either `seed_against/7`'s catch-all (it read a DIFFERENT body at fold
+      # time) or the post-write read-back finding one. Both reads are FRESHER
+      # than the note snapshot the caller holds, so this is authoritative and
+      # must not be reconciled away.
+      :occupied ->
+        :declined
+
+      # We never managed to read the row at all.
+      :unreadable ->
+        :unreadable
     end
   rescue
     e ->
@@ -1427,9 +1442,23 @@ defmodule EngramWeb.CrdtChannel do
   # top), so a REST/MCP write landing in the remaining gap aborts our write
   # rather than doubling the body via `union_with_row_state` (#846).
   #
-  # Returns `{seeded?, wrote?}`. `seeded?` is the honest read-back the reply
-  # carries; `wrote?` says only that the write CLAUSE ran. seed_detached/4 needs
-  # both to tell a confirmed row change from a no-op — see its eviction gate.
+  # Returns `{row_state, wrote?}`. `row_state` is the honest read-back the reply
+  # carries — `:stored | :empty | :occupied` — and `wrote?` says only that the
+  # write CLAUSE ran. seed_detached/4 needs both to tell a confirmed row change
+  # from a no-op — see its eviction gate.
+  #
+  # `row_state` was a BOOLEAN and that was the #476 hole (third wave). A write
+  # can abort under `snapshot_fence/2` or the `captured_version` CAS, which
+  # happens for exactly one reason: a concurrent write landed and filled the row.
+  # `false` + `wrote? == true` then reported `:absent` — "the row is empty, you
+  # must push" — about a row that had just been filled by someone else. The
+  # client pushed a body into a history-less doc, minting the rival lineage this
+  # whole path exists to prevent.
+  #
+  # The evidence to answer correctly was already being read and thrown away:
+  # `seed_landed?/4` re-reads the row post-write. It now reports WHAT it found
+  # instead of only whether it matched, and that read is the freshest thing
+  # anyone here has.
   #
   # The "row already holds exactly this body" case does NOT live here: it is
   # answered against the frame's own pre-fold projection by seed_detached/4,
@@ -1456,14 +1485,14 @@ defmodule EngramWeb.CrdtChannel do
         prune_ids: prune_ids
       )
 
-    {seed_landed?(user, vault, note_id, union_text), true}
+    {row_state_after_write(user, vault, note_id, union_text), true}
   end
 
   # The row already carries a DIFFERENT body — a concurrent write landed between
   # genesis and here. Merging two lineages is exactly what a room is for; decline
   # and let the client's crdt_msg seed go through one.
   defp seed_against(_user, _vault, _note_id, _doc, _union_text, _row_content, _prune_ids),
-    do: {false, false}
+    do: {:occupied, false}
 
   # Same convention as CrdtCheckpoint.interleave_hook/1 and
   # Notes.interleave_hook/1 (SAME `:checkpoint_interleave_hook` app env key —
@@ -1513,15 +1542,26 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   # Read-back, not a rotation pre-check: `checkpoint/5` can skip for reasons
-  # beyond rotation and reports none of them, so the only honest signal is
-  # whether the row now projects the body we applied. One indexed primary-key
-  # read is noise next to the SharedDoc process this replaces. A re-seed of an
-  # already-correct row returns true (idempotent), which is what the #846 retry
-  # case needs.
-  defp seed_landed?(user, vault, note_id, expected) do
+  # beyond rotation and reports none of them, so the only honest signal is what
+  # the row projects NOW. One indexed primary-key read is noise next to the
+  # SharedDoc process this replaces. A re-seed of an already-correct row reports
+  # `:stored` (idempotent), which is what the #846 retry case needs.
+  #
+  # Three answers, not two. The `:occupied` one is the point: a write that
+  # aborted under `snapshot_fence/2` or the `captured_version` CAS aborted
+  # BECAUSE a concurrent write filled the row, and collapsing that into the same
+  # `false` as "the checkpoint silently skipped" told the client the row was
+  # empty and it must push. It then minted a rival lineage into a row that
+  # already had a body — #476, third wave.
+  #
+  # An unreadable row reports `:occupied` rather than `:empty`: we could not
+  # establish emptiness, and the cost of being wrong is one adopt round trip
+  # versus a permanently doubled note.
+  defp row_state_after_write(user, vault, note_id, expected) do
     case Notes.get_note_by_id(user, vault, note_id) do
-      {:ok, %{content: ^expected}} -> true
-      _ -> false
+      {:ok, %{content: ^expected}} -> :stored
+      {:ok, %{content: ""}} -> :empty
+      _ -> :occupied
     end
   end
 
