@@ -67,6 +67,16 @@ defmodule Engram.Billing.LimitKeys do
       type: :integer,
       defaults: %{free: 50, starter: nil, pro: nil}
     },
+    # NOT "AI questions per day" — ConversationMeter.tick/1 fires on EVERY MCP
+    # tools/call (mcp_controller.ex:93): get_note, list_folder, create_note,
+    # search_notes all count. One user question through Claude costs 5-20 ticks,
+    # so 500 here is roughly 25-100 real questions, not 500.
+    #
+    # Do not lower this without re-deriving the floor. Free resolves `nil`
+    # (uncapped) and is bounded only by ai_conversations_per_day (5) x
+    # ai_queries_per_conversation (50) ~= 250 ticks/day. Any Starter value under
+    # ~250 makes the paid tier strictly WORSE than Free on the axis it is sold
+    # on. 150 was proposed and rejected for exactly that reason (#1479).
     ai_queries_per_day: %{type: :integer, defaults: %{free: nil, starter: 500, pro: 10_000}},
     conversation_window_minutes: %{type: :integer, defaults: %{free: 30, starter: 30, pro: 30}},
     reranker_enabled: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
