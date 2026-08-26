@@ -4,8 +4,6 @@
 
 ![Engram — your notes are your AI's memory, synced everywhere and read by your AI](assets/vault-banner.gif)
 
-**Your notes are your AI's memory.**
-
 MCP-native · semantic + keyword search · real-time sync · self-hostable · source-available · Elixir/Phoenix
 
 [![MCP](https://img.shields.io/badge/MCP-native-8A2BE2)](https://modelcontextprotocol.io)

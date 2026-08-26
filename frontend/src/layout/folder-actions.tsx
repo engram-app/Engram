@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { uuid7 } from "@/crdt/uuid7";
+import { isMember } from "../lib/is-member";
 import { useAttachmentUpload } from "../viewer/attachment-upload/provider";
 import { type SortKey, useFolderTreeState } from "./folder-tree-context";
 
@@ -47,6 +48,10 @@ const SORT_SECTIONS: readonly SortSection[] = [
 		],
 	},
 ];
+
+// Radix hands onValueChange a bare string; check it against the same list the
+// items are rendered from rather than asserting the cast.
+const SORT_KEYS: readonly SortKey[] = SORT_SECTIONS.flatMap((s) => s.options.map((o) => o.value));
 
 export default function FolderActions() {
 	const { collapseAll, sort, setSort, requestFolderRename } = useFolderTreeState();
@@ -130,7 +135,14 @@ export default function FolderActions() {
 						<TooltipContent>Sort</TooltipContent>
 					</Tooltip>
 					<DropdownMenuContent align="end" className="w-[min(95vw,20rem)]">
-						<DropdownMenuRadioGroup value={sort} onValueChange={(v) => setSort(v as SortKey)}>
+						<DropdownMenuRadioGroup
+							value={sort}
+							onValueChange={(v) => {
+								if (isMember(SORT_KEYS, v)) {
+									setSort(v);
+								}
+							}}
+						>
 							{SORT_SECTIONS.map((section, i) => (
 								// Fragment (not <section>) so Radix's roving keyboard nav across
 								// DropdownMenuRadioItem siblings keeps working — wrapping them in

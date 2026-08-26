@@ -161,17 +161,76 @@ defmodule EngramWeb.FoldersController do
     summary: "Delete a folder by path",
     description:
       "Removes the folder marker for the given path. Idempotent — deleting a non-existent or " <>
-        "never-encrypted folder still returns 204.",
+        "never-encrypted folder still returns 204. Pass `recursive=true` to also delete every " <>
+        "note and attachment under the path — required to remove a folder that has no marker " <>
+        "of its own (one the server only derives from the paths of the notes inside it).",
     tags: ["Folders"],
-    parameters: [path: [in: :path, type: :string, required: true, description: "Folder path"]],
+    parameters: [
+      path: [in: :path, type: :string, required: true, description: "Folder path"],
+      recursive: [
+        in: :query,
+        type: :string,
+        required: false,
+        description:
+          "\"true\" also deletes every note and attachment under the path. Omit for " <>
+            "marker-only. Declared as a string, not a boolean, because nothing casts " <>
+            "query params here — a value this does not recognize would silently no-op " <>
+            "a destructive call."
+      ]
+    ],
     responses: [no_content: "Deleted (empty body)"]
   )
 
-  def delete(conn, %{"path" => path_segments}) do
+  def delete(conn, %{"path" => path_segments} = params) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
     folder = Enum.map_join(path_segments, "/", &URI.decode/1)
 
+    if truthy?(params["recursive"]) do
+      delete_recursive(conn, user, vault, folder)
+    else
+      delete_marker_only(conn, user, vault, folder)
+    end
+  end
+
+  # Accept the spellings a real client actually sends. An unrecognized value
+  # falls through to marker-only and answers 204 having deleted nothing, so
+  # being strict here buys a silent no-op on a destructive endpoint.
+  defp truthy?(v) when is_binary(v), do: String.downcase(v) in ~w(true 1 yes)
+  defp truthy?(true), do: true
+  defp truthy?(_), do: false
+
+  # Most folders have no marker row of their own — the server derives them from
+  # the paths of the notes inside. Clearing a marker that was never there
+  # deletes nothing, so the folder re-derives from those same notes on the very
+  # next list and the client watches it come back. `recursive: true` deletes the
+  # contents, which is the only thing that actually removes a derived folder.
+  defp delete_recursive(conn, user, vault, folder) do
+    case Folders.delete(user, vault, folder, recursive: true) do
+      # Broadcast on every success, including 0/0. `Folders.delete/4` reports
+      # content counts only, so 0/0 cannot distinguish "nothing was there" from
+      # "a nested empty marker was cleared" — and a broadcast on the former
+      # costs nothing. The plugin's `folders.batch` handler ignores the payload
+      # entirely: it re-polls GET /folders/explicit and trashes only a folder
+      # the server no longer lists AND that is empty on disk (see
+      # `syncExplicitFolders` in plugin/src/sync.ts). A phantom event is one
+      # extra GET, not a lost local folder.
+      {:ok, _counts} ->
+        BatchOps.broadcast_batch(user, vault, "folders.batch", %{op: "delete", folder: folder})
+        send_resp(conn, 204, "")
+
+      {:error, :no_dek} ->
+        send_resp(conn, 204, "")
+
+      {:error, :root_delete_refused} ->
+        conn |> put_status(422) |> json(%{error: "Refusing to delete the vault root."})
+
+      {:error, reason} ->
+        conn |> put_status(500) |> json(%{error: format_error(reason)})
+    end
+  end
+
+  defp delete_marker_only(conn, user, vault, folder) do
     # Idempotent: treat :no_dek (user never encrypted anything) as "nothing to delete".
     case Notes.delete_folder_marker(user, vault, folder) do
       {:ok, :deleted} ->

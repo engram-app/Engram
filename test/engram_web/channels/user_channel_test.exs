@@ -29,7 +29,9 @@ defmodule EngramWeb.UserChannelTest do
       {:ok, reply, _socket} = subscribe_and_join(socket, "user:#{free_user.id}", %{})
 
       assert reply.plan.tier == :free
-      assert reply.plan.attachments_text_only == true
+      # Free now gets every attachment MIME type; storage quota is the lever.
+      assert reply.plan.attachments_text_only == false
+      assert reply.plan.attachments_all_types == true
     end
 
     test "rejects joining another user's topic", %{other_user: other_user} do

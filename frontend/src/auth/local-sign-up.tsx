@@ -20,7 +20,14 @@ export default function LocalSignUp() {
 	const [searchParams] = useSearchParams();
 	const invite = searchParams.get("invite") ?? "";
 	const bootstrap = useBootstrap();
-	const [invitePreview, setInvitePreview] = useState<InvitePreview | null>(null);
+	// Keyed by the invite it was fetched for, so switching to a different (or
+	// absent) invite yields null during render instead of leaving the previous
+	// invite's banner up until an effect clears it.
+	const [fetchedPreview, setFetchedPreview] = useState<{
+		invite: string;
+		preview: InvitePreview;
+	} | null>(null);
+	const invitePreview = invite && fetchedPreview?.invite === invite ? fetchedPreview.preview : null;
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
 	const [confirm, setConfirm] = useState("");
@@ -37,13 +44,12 @@ export default function LocalSignUp() {
 	// Preview the invite (non-enumerating: bad/expired/revoked → {valid:false}).
 	useEffect(() => {
 		if (!invite) {
-			setInvitePreview(null);
 			return;
 		}
 		fetch(joinApiUrl(getApiBase(), `/api/auth/invite/${encodeURIComponent(invite)}`))
 			.then((r) => r.json())
-			.then((p: InvitePreview) => setInvitePreview(p))
-			.catch(() => setInvitePreview({ valid: false }));
+			.then((p: InvitePreview) => setFetchedPreview({ invite, preview: p }))
+			.catch(() => setFetchedPreview({ invite, preview: { valid: false } }));
 	}, [invite]);
 
 	async function handleSubmit(e: FormEvent) {

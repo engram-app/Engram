@@ -16,7 +16,7 @@ export function ContextMenu({ actions, position, onPick, onClose }: Props) {
 			}
 		};
 		const onClick = (e: MouseEvent) => {
-			if (!(e.target as HTMLElement).closest("[data-tree-context-menu]")) {
+			if (!(e.target instanceof Element && e.target.closest("[data-tree-context-menu]"))) {
 				onClose();
 			}
 		};
@@ -57,7 +57,7 @@ export function ContextMenu({ actions, position, onPick, onClose }: Props) {
 						}`}
 					>
 						{/* aria-hidden so the menuitem's accessible name stays the label */}
-						<Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+						<Icon aria-hidden="true" className="size-3.5 shrink-0" />
 						{a.label}
 					</button>
 				);

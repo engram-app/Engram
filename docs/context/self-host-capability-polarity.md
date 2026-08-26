@@ -66,8 +66,8 @@ Not just call sites. A key is an identifier in four places:
 2. **Env** — `env_var_names/0` DERIVES `ENGRAM_<TIER>_<KEY>` from the catalog,
    so dropping a key silently stops parsing its env var. No boot error.
 3. **Plan rows** — `plans.limits` JSONB keyed by the old string.
-4. **The lint opt-out list** in `engram.lint.no_client_only_rate_limits`, which
-   has a self-scanning meta-test that fails on an unknown key.
+4. **The `@unenforced` list** in `test/engram/billing/limit_enforcement_test.exs`,
+   which fails on an unknown key.
 
 `@legacy_inverted_keys` in `billing.ex` resolves the old spellings across
 (1)–(3) and **flips the sense**. Without it an operator who deliberately

@@ -41,7 +41,7 @@ export function ActionDrawer({ title, actions, onPick, onClose, onSelectMore }: 
 							}`}
 						>
 							{/* aria-hidden so the menuitem's accessible name stays the label */}
-							<Icon aria-hidden="true" className="h-4 w-4 shrink-0" />
+							<Icon aria-hidden="true" className="size-4 shrink-0" />
 							{a.label}
 						</button>
 					);
@@ -55,7 +55,7 @@ export function ActionDrawer({ title, actions, onPick, onClose, onSelectMore }: 
 						}}
 						className="flex w-full items-center gap-3 border-border border-t px-4 py-3 text-left text-base"
 					>
-						<ListChecks aria-hidden="true" className="h-4 w-4 shrink-0" />
+						<ListChecks aria-hidden="true" className="size-4 shrink-0" />
 						Select more
 					</button>
 				) : null}

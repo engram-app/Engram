@@ -55,7 +55,7 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:attachment_bytes_cap, :free) == 1_073_741_824
       assert LimitKeys.default_for(:max_file_bytes, :free) == 10_485_760
       assert LimitKeys.default_for(:lifetime_embed_token_cap, :free) == 20_000_000
-      assert LimitKeys.default_for(:concurrent_devices, :free) == 1
+      assert LimitKeys.default_for(:concurrent_devices, :free) == 2
       assert LimitKeys.default_for(:device_swap_cooldown_hours, :free) == 24
       assert LimitKeys.default_for(:external_ai_searches_per_day, :free) == 15
       assert LimitKeys.default_for(:inapp_searches_per_day, :free) == 60
@@ -77,7 +77,10 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:max_file_bytes, :starter) == 209_715_200
       assert LimitKeys.default_for(:lifetime_embed_token_cap, :starter) == nil
       assert LimitKeys.default_for(:ai_queries_per_day, :starter) == 500
-      assert LimitKeys.default_for(:api_rps_cap, :starter) == 10
+      # API keys are Pro-only. Starter keeps MCP + vault sync + web app,
+      # which authenticate without an API key and so bypass both gates.
+      assert LimitKeys.default_for(:api_write_enabled, :starter) == false
+      assert LimitKeys.default_for(:api_rps_cap, :starter) == 0
     end
 
     test "pro tier matrix matches spec §9.2" do
@@ -87,6 +90,7 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:max_file_bytes, :pro) == 524_288_000
       assert LimitKeys.default_for(:reranker_enabled, :pro) == true
       assert LimitKeys.default_for(:ai_queries_per_day, :pro) == 10_000
+      assert LimitKeys.default_for(:api_write_enabled, :pro) == true
       assert LimitKeys.default_for(:api_rps_cap, :pro) == 30
     end
 
@@ -121,11 +125,23 @@ defmodule Engram.Billing.LimitKeysTest do
   end
 
   describe "connections caps" do
-    test "obsidian_connections_cap is 1 on free, nil on paid" do
+    test "obsidian_connections_cap is 2 on free, nil on paid" do
       assert LimitKeys.defined?(:obsidian_connections_cap)
-      assert LimitKeys.default_for(:obsidian_connections_cap, :free) == 1
+      assert LimitKeys.default_for(:obsidian_connections_cap, :free) == 2
       assert LimitKeys.default_for(:obsidian_connections_cap, :starter) == nil
       assert LimitKeys.default_for(:obsidian_connections_cap, :pro) == nil
+    end
+
+    # Both keys gate the same count at two endpoints (EnforceDeviceCap on the
+    # device-flow authorize, EnforceConnectionCap on OAuth consent). Raising
+    # one alone leaves the other path rejecting at the old number, which reads
+    # to the user as "the device limit is a lie".
+    test "obsidian_connections_cap tracks concurrent_devices on every tier" do
+      for tier <- LimitKeys.tiers() do
+        assert LimitKeys.default_for(:obsidian_connections_cap, tier) ==
+                 LimitKeys.default_for(:concurrent_devices, tier),
+               "obsidian_connections_cap and concurrent_devices disagree on #{tier}"
+      end
     end
 
     test "mcp_connections_cap is 1 on free, nil on paid" do
@@ -144,10 +160,10 @@ defmodule Engram.Billing.LimitKeysTest do
     assert LimitKeys.default_for(:attachments_enabled, :pro) == true
   end
 
-  test "attachments_all_types grants Starter+ the non-text MIME surface" do
+  test "attachments_all_types grants every tier the non-text MIME surface" do
     assert LimitKeys.defined?(:attachments_all_types)
     assert LimitKeys.type(:attachments_all_types) == :boolean
-    assert LimitKeys.default_for(:attachments_all_types, :free) == false
+    assert LimitKeys.default_for(:attachments_all_types, :free) == true
     assert LimitKeys.default_for(:attachments_all_types, :starter) == true
     assert LimitKeys.default_for(:attachments_all_types, :pro) == true
   end

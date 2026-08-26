@@ -23,6 +23,20 @@ interface CalloutStyle {
 	svg: string;
 }
 
+// The map is third-party note-driven data, so an entry can be any shape.
+function isCalloutStyle(v: unknown): v is CalloutStyle {
+	return (
+		typeof v === "object" &&
+		v !== null &&
+		"keyword" in v &&
+		typeof v.keyword === "string" &&
+		"color" in v &&
+		typeof v.color === "string" &&
+		"svg" in v &&
+		typeof v.svg === "string"
+	);
+}
+
 /**
  * Resolve a callout type to its icon + color using the SAME map Reading mode
  * renders from (`@portaljs/remark-callouts`), so the two views can't drift.
@@ -39,7 +53,7 @@ function resolveStyle(type: string): CalloutStyle | null {
 	}
 	const entry = types[type];
 	const base = typeof entry === "string" ? types[entry] : entry;
-	return base && typeof base === "object" ? (base as CalloutStyle) : null;
+	return isCalloutStyle(base) ? base : null;
 }
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);

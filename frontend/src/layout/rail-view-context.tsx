@@ -1,4 +1,5 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
+import { isMember } from "../lib/is-member";
 
 const STORAGE_KEY = "engram:rail-view";
 
@@ -8,14 +9,14 @@ interface Ctx {
 }
 const RailViewCtx = createContext<Ctx | null>(null);
 
-const VALID: ReadonlySet<RailView> = new Set(["files", "search"]);
+const VALID: readonly RailView[] = ["files", "search"];
 
 function readStored(): RailView {
 	if (typeof window === "undefined") {
 		return "files";
 	}
 	const raw = window.localStorage.getItem(STORAGE_KEY);
-	return raw && VALID.has(raw as RailView) ? (raw as RailView) : "files";
+	return isMember(VALID, raw) ? raw : "files";
 }
 
 export type RailView = "files" | "search";

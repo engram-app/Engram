@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { applyThemeClass, getSystemPreference, type ResolvedTheme, resolveTheme } from "./resolve";
+import { useMediaQuery } from "../hooks/use-media-query";
+import { applyThemeClass, PREFERS_DARK, type ResolvedTheme, resolveTheme } from "./resolve";
 import { getStoredTheme, setStoredTheme, type ThemeChoice } from "./storage";
 
 interface ThemeContextValue {
@@ -13,29 +14,17 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
 	const [theme, setThemeState] = useState<ThemeChoice>(() => getStoredTheme());
-	const [systemPref, setSystemPref] = useState<ResolvedTheme>(() => getSystemPreference());
+	// matchMedia is an external store, so it is read during render rather than
+	// mirrored into state by an effect. resolveTheme ignores systemPref unless
+	// the choice is "system", so subscribing unconditionally costs one listener
+	// and removes a re-subscribe on every theme toggle.
+	const systemPref: ResolvedTheme = useMediaQuery(PREFERS_DARK) ? "dark" : "light";
 
 	const resolved = useMemo(() => resolveTheme(theme, systemPref), [theme, systemPref]);
 
 	useEffect(() => {
 		applyThemeClass(resolved);
 	}, [resolved]);
-
-	useEffect(() => {
-		if (theme !== "system") {
-			return;
-		}
-		if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-			return;
-		}
-
-		const mql = window.matchMedia("(prefers-color-scheme: dark)");
-		const handler = (e: MediaQueryListEvent) => setSystemPref(e.matches ? "dark" : "light");
-
-		setSystemPref(mql.matches ? "dark" : "light");
-		mql.addEventListener("change", handler);
-		return () => mql.removeEventListener("change", handler);
-	}, [theme]);
 
 	const setTheme = useCallback((next: ThemeChoice) => {
 		setStoredTheme(next);

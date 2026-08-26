@@ -10,6 +10,7 @@ import rehypeSlug from "rehype-slug";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkWikiLink from "remark-wiki-link";
+import type { PluggableList } from "unified";
 // hljs + KaTeX styles ride this lazy chunk, not the eager main stylesheet.
 import "./markdown.css";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
@@ -56,22 +57,21 @@ const remarkPluginsFor = (
 	slug: string | undefined,
 	map: Map<string, NoteLinkEdge>,
 	manifestNotes?: ManifestNote[],
-) =>
+): PluggableList => [
+	remarkGfm,
+	remarkMath,
+	remarkCallouts,
 	[
-		remarkGfm,
-		remarkMath,
-		remarkCallouts,
-		[
-			remarkWikiLink,
-			{
-				pageResolver: (name: string) => [name],
-				hrefTemplate: (permalink: string) => wikiHref(permalink, slug, map, manifestNotes),
-				aliasDivider: "|",
-			},
-		],
-	] as const;
+		remarkWikiLink,
+		{
+			pageResolver: (name: string) => [name],
+			hrefTemplate: (permalink: string) => wikiHref(permalink, slug, map, manifestNotes),
+			aliasDivider: "|",
+		},
+	],
+];
 
-const rehypePlugins = [
+const rehypePlugins: PluggableList = [
 	rehypeSlug,
 	[
 		rehypeAutolinkHeadings,
@@ -126,8 +126,8 @@ function NoteView({ content, tags, links, manifestNotes }: NoteViewProps) {
 			</header>
 			<section className="prose prose-neutral dark:prose-invert max-w-none">
 				<ReactMarkdown
-					remarkPlugins={remarkPlugins as never}
-					rehypePlugins={rehypePlugins as never}
+					remarkPlugins={remarkPlugins}
+					rehypePlugins={rehypePlugins}
 					// react-markdown@10 strips URLs with schemes outside its safe list;
 					// preserve our internal `engram-attachment:` sentinel so the img
 					// component override can route it to AttachmentImg / fallback.
@@ -176,13 +176,15 @@ function NoteView({ content, tags, links, manifestNotes }: NoteViewProps) {
 						// property so CSS can reuse that exact colour (for the title text)
 						// without keeping a second palette that drifts from it.
 						blockquote({ node: _node, children, ...rest }) {
-							const style = rest.style as CSSProperties | undefined;
+							const { style } = rest;
 							const color = style?.borderLeftColor;
+							// Custom properties are not part of CSSProperties, so the merged
+							// object is typed through a `--*` Record to carry the extra key.
+							const tinted: (CSSProperties & Record<`--${string}`, string>) | undefined = color
+								? { ...style, "--callout-color": String(color) }
+								: undefined;
 							return (
-								<blockquote
-									{...rest}
-									style={color ? ({ ...style, "--callout-color": color } as CSSProperties) : style}
-								>
+								<blockquote {...rest} style={tinted ?? style}>
 									{children}
 								</blockquote>
 							);
@@ -194,7 +196,7 @@ function NoteView({ content, tags, links, manifestNotes }: NoteViewProps) {
 						div({ node: _node, className, children, ...rest }) {
 							const cls = String(className ?? "");
 							if (cls.includes("callout-title")) {
-								const { style: _tint, ...untinted } = rest as Record<string, unknown>;
+								const { style: _tint, ...untinted } = rest;
 								return (
 									<div className={cls} {...untinted}>
 										{children}
@@ -218,13 +220,7 @@ function NoteView({ content, tags, links, manifestNotes }: NoteViewProps) {
 								}
 								return <AttachmentImg path={path} alt={alt} />;
 							}
-							return (
-								<img
-									src={src as string | undefined}
-									alt={alt ?? ""}
-									className="my-2 max-w-full rounded"
-								/>
-							);
+							return <img src={src} alt={alt ?? ""} className="my-2 max-w-full rounded" />;
 						},
 					}}
 				>

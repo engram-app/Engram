@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.19.1](https://github.com/engram-app/Engram/compare/0.19.0...0.19.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **billing:** correct the free-tier limits and make API keys Pro-only ([#1465](https://github.com/engram-app/Engram/issues/1465)) ([49afb36](https://github.com/engram-app/Engram/commit/49afb3649201c61b4fd64207c84c7a53ca94926f))
+* **crdt:** first-sync double-write — telemetry, e2e lineage fence, note_links cap ([#1455](https://github.com/engram-app/Engram/issues/1455)) ([8029a84](https://github.com/engram-app/Engram/commit/8029a84b8018d12570686153caa21a58eb855559))
+* **e2e:** scope the lineage assertion to each test's own notes ([#1459](https://github.com/engram-app/Engram/issues/1459)) ([5e9f061](https://github.com/engram-app/Engram/commit/5e9f06173c209a48b5c1660053c4552ecc9f59f9))
+
 ## [0.19.0](https://github.com/engram-app/Engram/compare/0.18.1...0.19.0) (2026-08-23)
 
 

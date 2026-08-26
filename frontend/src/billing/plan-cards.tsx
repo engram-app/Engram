@@ -65,14 +65,16 @@ export function formatPlanPrice(
 export const FREE_TIER = {
 	name: "Free",
 	price: "$0",
-	summary: "10k notes · 1 vault · markdown only",
-	features: ["10k notes", "1 vault", "Markdown only", "Upgrade anytime"],
+	summary: "10k notes · 1 vault · 1 GB attachments",
+	features: ["10k notes", "1 vault", "1 GB attachments", "2 devices"],
 } as const;
 
 // Single catalog source-of-truth: both onboarding (trial signup) and the
 // change-plan panel read display prices from here. Keep in sync with the
 // pricing model lock (Free / $7 / $14 monthly + $70/$140 annual — see
 // memory project_pricing_model). Updating Paddle prices means updating here.
+export const PLAN_TIERS: readonly PlanTier[] = ["starter", "pro"];
+
 export const PLAN_CATALOG: Record<PlanTier, PlanCardCatalog> = {
 	starter: {
 		name: "Starter",
@@ -88,7 +90,7 @@ export const PLAN_CATALOG: Record<PlanTier, PlanCardCatalog> = {
 			"15 vaults",
 			"Unlimited devices",
 			"15 GB attachments",
-			"Unlimited AI",
+			"10,000 AI queries/day",
 			"Smart retrieval (coming)",
 		],
 	},

@@ -1,3 +1,5 @@
+import { isMember } from "../lib/is-member";
+
 // Pure type model for the frontmatter properties widget. No React, no Yjs.
 // Values here are already-decoded JS values (the result of JSON.parse on a
 // Y.Map("frontmatter") entry), not YAML text.
@@ -20,7 +22,7 @@ function scalarToString(v: unknown): string {
 export type PropertyType = "text" | "list" | "number" | "checkbox" | "date" | "datetime";
 
 export function isPropertyType(s: unknown): s is PropertyType {
-	return typeof s === "string" && (ALL as readonly string[]).includes(s);
+	return isMember(ALL, s);
 }
 
 export function inferType(value: unknown): PropertyType {

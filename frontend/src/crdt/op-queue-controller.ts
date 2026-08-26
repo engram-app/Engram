@@ -135,15 +135,31 @@ export class CrdtOpQueueController {
 
 	/** Enqueue a genesis create; resolves with the authoritative server id. */
 	enqueueCreate(docId: string, path: string): Promise<string> {
-		return this.enqueue<string>({ kind: "create", docId, payload: { path } });
+		return this.enqueue({ kind: "create", docId, payload: { path } }, (v) => {
+			if (typeof v !== "string") {
+				throw new CrdtOpError("bad_ack", `crdt_op:${docId}`);
+			}
+			return v;
+		});
 	}
 
 	/** Enqueue a delete; resolves once the server acks. */
 	enqueueDelete(docId: string): Promise<{ doc_id: string }> {
-		return this.enqueue<{ doc_id: string }>({ kind: "delete", docId, payload: {} });
+		return this.enqueue({ kind: "delete", docId, payload: {} }, (v) => {
+			if (typeof v !== "object" || v === null || !("doc_id" in v) || typeof v.doc_id !== "string") {
+				throw new CrdtOpError("bad_ack", `crdt_op:${docId}`);
+			}
+			return { doc_id: v.doc_id };
+		});
 	}
 
-	private enqueue<T>(spec: Pick<CrdtOp, "kind" | "docId" | "payload">): Promise<T> {
+	// `parse` is what makes the deferred map monomorphic: it holds
+	// Deferred<unknown>, and each caller says how to turn an ack into its own T.
+	// A malformed ack rejects the op instead of resolving it with a wrong shape.
+	private enqueue<T>(
+		spec: Pick<CrdtOp, "kind" | "docId" | "payload">,
+		parse: (v: unknown) => T,
+	): Promise<T> {
 		// A newer op for the same doc supersedes the queued one — settle the prior
 		// caller so its promise doesn't hang (the note's fate is now the new op's).
 		const prior = this.deferreds.get(spec.docId);
@@ -160,7 +176,16 @@ export class CrdtOpQueueController {
 			attempts: 0,
 		};
 		return new Promise<T>((resolve, reject) => {
-			this.deferreds.set(spec.docId, { resolve: resolve as (v: unknown) => void, reject });
+			this.deferreds.set(spec.docId, {
+				resolve: (v: unknown) => {
+					try {
+						resolve(parse(v));
+					} catch (err) {
+						reject(err);
+					}
+				},
+				reject,
+			});
 			this.queue.enqueue(op);
 			// Kick an immediate flush so an op issued while joined sends now rather
 			// than waiting up to tickMs; a no-op when the topic isn't joined (held).

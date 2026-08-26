@@ -1,9 +1,33 @@
+import { isMember } from "./lib/is-member";
+
 const VALID_PROVIDERS = ["local", "clerk"] as const;
 
+const REGISTRATION_MODES: readonly NonNullable<EngramConfig["bootstrap"]>["registration_mode"][] = [
+	"open",
+	"invite_only",
+	"closed",
+];
+
+function normalizeBootstrap(raw: unknown): EngramConfig["bootstrap"] {
+	if (typeof raw !== "object" || raw === null) {
+		// null and undefined mean different things here (see EngramConfig), so
+		// pass the absent value through rather than collapsing both to null.
+		return raw === null ? null : undefined;
+	}
+	if (!("bootstrap_pending" in raw && "registration_mode" in raw)) {
+		return undefined;
+	}
+	if (!isMember(REGISTRATION_MODES, raw.registration_mode)) {
+		return undefined;
+	}
+	return {
+		bootstrap_pending: raw.bootstrap_pending === true,
+		registration_mode: raw.registration_mode,
+	};
+}
+
 function normalize(raw: Record<string, unknown>): EngramConfig {
-	const provider = VALID_PROVIDERS.includes(raw.authProvider as (typeof VALID_PROVIDERS)[number])
-		? (raw.authProvider as "local" | "clerk")
-		: "local";
+	const provider = isMember(VALID_PROVIDERS, raw.authProvider) ? raw.authProvider : "local";
 
 	return {
 		authProvider: provider,
@@ -13,13 +37,15 @@ function normalize(raw: Record<string, unknown>): EngramConfig {
 		apiBase: typeof raw.apiBase === "string" ? raw.apiBase : "",
 		wsBase: typeof raw.wsBase === "string" ? raw.wsBase : "",
 		tracingEnabled: raw.tracingEnabled === true,
-		bootstrap: raw.bootstrap as EngramConfig["bootstrap"],
+		bootstrap: normalizeBootstrap(raw.bootstrap),
 	};
 }
 
 function defaultConfig(): EngramConfig {
 	return {
-		authProvider: (import.meta.env.VITE_AUTH_PROVIDER as "local" | "clerk") ?? "local",
+		authProvider: isMember(VALID_PROVIDERS, import.meta.env.VITE_AUTH_PROVIDER)
+			? import.meta.env.VITE_AUTH_PROVIDER
+			: "local",
 		clerkPublishableKey: import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ?? "",
 		billingEnabled: import.meta.env.VITE_BILLING_ENABLED === "true",
 		clerkWaitlistMode: import.meta.env.VITE_CLERK_WAITLIST_MODE === "true",
@@ -66,8 +92,7 @@ export interface EngramConfig {
 // defaults if both fail — emit a single console error in prod so a missing
 // /config.json deploy is loud rather than silently broken.
 export async function loadConfig(): Promise<EngramConfig> {
-	const injected = (window as unknown as { __ENGRAM_CONFIG__?: Record<string, unknown> })
-		.__ENGRAM_CONFIG__;
+	const injected = window.__ENGRAM_CONFIG__;
 
 	if (injected) {
 		return normalize(injected);

@@ -26,14 +26,21 @@ export default function AttachmentPage() {
 	// 'missing' = real 404; 'failed' = transient (5xx/network) — don't conflate.
 	const [error, setError] = useState<"missing" | "failed" | null>(null);
 
+	// A new `path` is a new resource: drop the previous blob url and error
+	// during render rather than one paint later from inside the effect.
+	const [seededPath, setSeededPath] = useState(path);
+	if (seededPath !== path) {
+		setSeededPath(path);
+		setUrl(null);
+		setError(null);
+	}
+
 	useEffect(() => {
 		if (!path) {
 			return;
 		}
 		let revoke: string | null = null;
 		let cancelled = false;
-		setUrl(null);
-		setError(null);
 		const encoded = path.split("/").map(encodeURIComponent).join("/");
 		api
 			.getBlob(`/attachments/${encoded}?raw=1`)

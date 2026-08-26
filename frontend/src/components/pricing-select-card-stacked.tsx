@@ -47,7 +47,7 @@ export function PricingSelectCardStacked({
 				<Skeleton className="mb-2 h-4 w-24" />
 				<Skeleton className="mb-1 h-8 w-32" />
 				<Skeleton className="h-3 w-16" />
-				{Boolean(icon) && <Skeleton className="absolute top-6 right-6 h-12 w-12 rounded-lg" />}
+				{Boolean(icon) && <Skeleton className="absolute top-6 right-6 size-12 rounded-lg" />}
 			</Card>
 		);
 	}
@@ -93,7 +93,7 @@ export function PricingSelectCardStacked({
 						)}
 					</CardHeader>
 
-					{Boolean(icon) && <div className="h-12 w-12 shrink-0 rounded-lg">{icon}</div>}
+					{Boolean(icon) && <div className="size-12 shrink-0 rounded-lg">{icon}</div>}
 				</div>
 			</Card>
 		</RadioGroupPrimitive.Item>

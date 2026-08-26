@@ -35,9 +35,13 @@ function isLimitExceededError(err: unknown): err is LimitExceededError {
 	);
 }
 
+function isApiError(err: unknown): err is ApiError {
+	return err instanceof ApiError || (err instanceof Error && err.name === "ApiError");
+}
+
 function messageFor(err: unknown): string {
 	if (isLimitExceededError(err)) {
-		switch ((err as LimitExceededError).reason) {
+		switch (err.reason) {
 			case "attachments_disabled":
 				return "Upgrade to upload attachments";
 			case "attachment_must_be_text":
@@ -50,12 +54,11 @@ function messageFor(err: unknown): string {
 				return "Upgrade required";
 		}
 	}
-	if (err instanceof ApiError || (err instanceof Error && err.name === "ApiError")) {
-		const apiErr = err as ApiError;
-		if (apiErr.status === 415) {
+	if (isApiError(err)) {
+		if (err.status === 415) {
 			return "This file type is not allowed";
 		}
-		return apiErr.message || "Upload failed";
+		return err.message || "Upload failed";
 	}
 	return "Upload failed";
 }
@@ -67,7 +70,7 @@ const optionId = (i: number): string => `upload-folder-opt-${i}`;
 
 export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, onClose }: Props) {
 	const [rows, setRows] = useState<Row[]>(() =>
-		initialFiles.map((file) => ({ file, status: "pending" as RowStatus })),
+		initialFiles.map((file): Row => ({ file, status: "pending" })),
 	);
 	const [folder, setFolder] = useState(defaultFolder ?? ""); // '' = vault root
 	const [busy, setBusy] = useState(false);
@@ -131,7 +134,7 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 	function addFiles(picked: FileList | null) {
 		const more = Array.from(picked ?? []);
 		if (more.length > 0) {
-			setRows((r) => [...r, ...more.map((file) => ({ file, status: "pending" as RowStatus }))]);
+			setRows((r) => [...r, ...more.map((file): Row => ({ file, status: "pending" }))]);
 		}
 	}
 

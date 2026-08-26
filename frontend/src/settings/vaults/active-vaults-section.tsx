@@ -109,6 +109,8 @@ export function ActiveVaultsSection() {
 	const vaultsCap = billing?.caps.vaults ?? null;
 	const vaultCount = vaults?.length ?? 0;
 	const atCap = typeof vaultsCap === "number" && vaultsCap > 0 && vaultCount >= vaultsCap;
+	const planLabel =
+		billing?.tier === "pro" ? "Pro" : billing?.tier === "starter" ? "Starter" : "Free";
 	const titleSuffix = vaultsCap === null ? "" : ` (${vaultCount} / ${vaultsCap})`;
 
 	return (
@@ -126,7 +128,11 @@ export function ActiveVaultsSection() {
 			{Boolean(atCap) && (
 				<aside className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
 					<p className="text-foreground text-sm">
-						Your Free plan allows {vaultsCap} vault. Upgrade to Starter for more vaults.
+						{/* Cap is per-tier (Free 1, Starter 5), so the banner names the
+						    user's actual plan — it hardcoded "Free" and told a Starter
+						    user at 5 vaults that their Free plan allowed 5. */}
+						Your {planLabel} plan allows {vaultsCap} {vaultsCap === 1 ? "vault" : "vaults"}. Upgrade
+						for more vaults.
 					</p>
 					<Link
 						to={settingsTo("billing", location.search)}

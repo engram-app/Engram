@@ -30,7 +30,7 @@ function PlanChangePreviewSkeleton({ className }: { className?: string }) {
 						<Skeleton className="h-3 w-16" />
 					</div>
 					<div className="flex items-center">
-						<Skeleton className="h-4 w-4 rounded" />
+						<Skeleton className="size-4 rounded" />
 					</div>
 					<div className="flex-1 space-y-2 rounded-lg border p-3">
 						<Skeleton className="h-3 w-16" />

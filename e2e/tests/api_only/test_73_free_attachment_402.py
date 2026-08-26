@@ -1,39 +1,28 @@
-"""E2E test 73 (Free-tier launch §8.4.2): Free user non-text attachment
-upload → 402, markdown note alongside it sails through.
+"""E2E test 73: Free-tier attachment behaviour and the 402 wire contract.
 
-Covers the Phase 3 backend behavior:
-  - POST /api/attachments with image/png on Free tier returns 402 with the
-    standardized LimitResponse shape ({error: "limit_exceeded", reason:
-    "attachment_must_be_text", limit_key: "attachments_text_only", ...})
-    BEFORE doing any S3 work. Free CAN upload text/* attachments; the cap
-    is "text-only", not "no attachments".
+Free carries `attachments_all_types: true`, so a Free user uploads images
+and PDFs like anyone else. The binding Free limit is the 1 GiB
+`attachment_bytes_cap`, not the MIME type. This test asserts:
+
+  - POST /api/attachments with image/png on Free succeeds.
+  - With `attachments_all_types` revoked by operator override, the same
+    upload returns 402 carrying the standardized LimitResponse shape
+    ({error: "limit_exceeded", reason: "attachment_must_be_text",
+    limit_key: "attachments_text_only", ...}) BEFORE doing any S3 work.
   - POST /api/notes for a plain .md note from the same Free user succeeds.
-  - GET /api/notes/<path> returns the note; GET /api/attachments/<path>
-    returns 404 (the upload never landed).
+  - The successful image is readable; the blocked one is 404.
 
-Why API-only (and what's NOT covered here):
-  Plan §8.4.2 also wants:
-    - A Sync Center "needs Pro" marker on the attachment row in the
-      plugin's UI.
-    - A toast matching /attachment.*skipped/i.
-  Those assertions live in the plugin (Phase 7), which has not shipped
-  in this repo. The plugin lives in a sibling repo (engram-app/
-  Engram-obsidian) and the session-scoped Obsidian fixtures here
-  provision Pro-equivalent users via grant_test_plan() — so even if
-  Phase 7 shipped, this fixture wouldn't observe the 402 path. The
-  plugin-side coverage of the marker + toast will be added either to
-  the plugin's own Jest suite or as a follow-up e2e with a Free-tier
-  Obsidian fixture variant.
-
-  This test stays as the backend-contract guardrail: when the wire
-  returns 402 reason="attachments_disabled", the body shape is exactly
-  what the plugin reads to make its "needs Pro" decision.
+The 402 half is kept even though no tier reaches it by default: the plugin
+reads that exact body to decide its "needs Pro" marker, so the wire
+contract still needs a guardrail. The plugin-side marker + toast
+assertions live in the plugin repo's own suite.
 """
 from __future__ import annotations
 
 import logging
 import os
 import secrets
+import subprocess
 from datetime import datetime
 
 import pytest
@@ -65,8 +54,37 @@ def _ts() -> str:
     return datetime.now().strftime("%Y%m%d%H%M%S%f")
 
 
-def test_free_attachment_blocked_note_passes():
-    """Free user: attachment upload 402, markdown upsert 200."""
+CI_POSTGRES_CONTAINER = os.environ.get("CI_POSTGRES_CONTAINER", "engram-postgres-1")
+
+
+def _revoke_all_types(email: str) -> None:
+    """Turn attachments_all_types OFF for one user via an operator override.
+
+    No tier defaults to text-only since Free gained every MIME type, so this
+    is the only way left to exercise the attachment_must_be_text branch. A DB
+    trigger pg_notifies on user_limit_overrides writes, so the per-node
+    OverrideCache picks this up without a restart.
+    """
+    sql = (
+        f"INSERT INTO user_limit_overrides (user_id, key, value, reason, set_by) "
+        f"VALUES ((SELECT id FROM users WHERE email = '{email}'), "
+        f"'attachments_all_types', '{{\"v\": false}}'::jsonb, 'e2e-test', 'e2e') "
+        f"ON CONFLICT (user_id, key) DO UPDATE "
+        f"SET value = EXCLUDED.value, set_at = NOW()"
+    )
+    result = subprocess.run(
+        [
+            "docker", "exec", "-i", CI_POSTGRES_CONTAINER,
+            "psql", "-U", "engram", "-d", "engram", "-c", sql,
+        ],
+        capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"_revoke_all_types failed: {result.stderr.strip()}")
+
+
+def test_free_attachment_uploads_and_402_shape():
+    """Free user: image upload 200, override -> 402, markdown upsert 200."""
 
     clerk = ClerkClient(CLERK_SECRET)
     email = f"e2e-free-att-{_ts()}+clerk_test@example.com"
@@ -109,9 +127,11 @@ def test_free_attachment_blocked_note_passes():
         f"server note path mismatch: {server_note}"
     )
 
-    # ── Attachment upload: must 402 with the standardized shape ──────────
-    # We hit the raw session so we can inspect status code + body without
-    # ApiClient.upload_attachment swallowing the response.
+    # ── Attachment upload on Free: must SUCCEED ──────────────────────────
+    # Free carries attachments_all_types=true. The binding Free limit is the
+    # 1 GiB attachment_bytes_cap, not the MIME type. We hit the raw session so
+    # we can inspect status code + body without ApiClient.upload_attachment
+    # swallowing the response.
     import base64, time
     payload = {
         "path": "image.png",
@@ -122,12 +142,26 @@ def test_free_attachment_blocked_note_passes():
     att_resp = api_v.session.post(
         f"{api_v.base_url}/attachments", json=payload, timeout=10,
     )
-    assert att_resp.status_code == 402, (
-        f"Free attachment upload must 402; got {att_resp.status_code}: "
+    assert att_resp.status_code in (200, 201), (
+        f"Free PNG upload must succeed; got {att_resp.status_code}: "
         f"{att_resp.text[:300]}"
     )
 
-    body = att_resp.json()
+    # ── With the grant revoked: 402 in the standardized shape ────────────
+    # No tier defaults to text-only any more, but the gate is still reachable
+    # by operator override. The plugin reads this exact body to decide its
+    # "needs Pro" marker, so keep the wire contract under test.
+    _revoke_all_types(email)
+    payload2 = dict(payload, path="image2.png", mtime=time.time())
+    blocked = api_v.session.post(
+        f"{api_v.base_url}/attachments", json=payload2, timeout=10,
+    )
+    assert blocked.status_code == 402, (
+        f"revoked attachments_all_types must 402; got {blocked.status_code}: "
+        f"{blocked.text[:300]}"
+    )
+
+    body = blocked.json()
     # LimitResponse shape (per spec §4.5):
     #   {error: "limit_exceeded", reason: "<machine_key>",
     #    tier: "free"|"starter"|"pro"|null, limit_key: "<key>"|null,
@@ -135,9 +169,6 @@ def test_free_attachment_blocked_note_passes():
     assert body.get("error") == "limit_exceeded", (
         f"402 body should carry error=limit_exceeded; got: {body}"
     )
-    # Free's attachments_enabled flag now defaults true (Free CAN upload),
-    # but a Free user is restricted to text/* MIMEs via the
-    # `attachments_text_only` gate. PNG → 402 attachment_must_be_text.
     assert body.get("reason") == "attachment_must_be_text", (
         f"402 body should carry reason=attachment_must_be_text; got: {body}"
     )
@@ -155,13 +186,19 @@ def test_free_attachment_blocked_note_passes():
     )
 
     att_after = api_v.get_attachment("image.png")
-    assert att_after.status_code == 404, (
-        f"image.png must be absent (404) after 402 upload; got "
+    assert att_after.status_code == 200, (
+        f"image.png must be present after a successful Free upload; got "
         f"{att_after.status_code}: {att_after.text[:200]}"
+    )
+
+    blocked_after = api_v.get_attachment("image2.png")
+    assert blocked_after.status_code == 404, (
+        f"image2.png must be absent (404) after the 402; got "
+        f"{blocked_after.status_code}: {blocked_after.text[:200]}"
     )
 
 # NOTE: the plugin-side Sync Center "needs Pro" marker + attachment-skipped
 # toast assertions are NOT covered here — they belong in the plugin's own UI
 # tests once that surface ships. The backend 402 contract is covered by
-# test_free_attachment_blocked_note_passes above. (Removed a perpetually-skipped
+# test_free_attachment_uploads_and_402_shape above. (Removed a perpetually-skipped
 # NotImplementedError placeholder that never ran — see the no-skip policy.)

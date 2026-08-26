@@ -289,14 +289,14 @@ function SearchPanel({
 						title="Return to files"
 						onClick={close}
 					>
-						<X className="h-4 w-4" />
+						<X className="size-4" />
 					</Button>
 				</header>
 			)}
 			<div className="border-border border-b p-2">
 				<div className="flex items-center gap-1.5">
 					<label className="relative block flex-1">
-						<Search className="pointer-events-none absolute top-1/2 left-2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+						<Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
 						<input
 							ref={inputRef}
 							type="search"

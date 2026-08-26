@@ -9,19 +9,23 @@
  * so they stay pure and unit-testable; `channel.ts` supplies the live singleton.
  */
 
-interface PushReceiver {
-	receive(status: "ok" | "error" | "timeout", cb: (resp?: unknown) => void): PushReceiver;
+interface PushReceiver<TOk = unknown> {
+	receive(status: "ok", cb: (resp: TOk) => void): PushReceiver<TOk>;
+	receive(status: "error" | "timeout", cb: (resp?: unknown) => void): PushReceiver<TOk>;
 }
 
 function reasonOf(resp: unknown): string {
 	if (resp && typeof resp === "object" && "reason" in resp) {
-		return String((resp as { reason: unknown }).reason);
+		return String(resp.reason);
 	}
 	return "unknown";
 }
 
 export interface PushChannel {
-	push(event: string, payload: unknown): PushReceiver;
+	// The reply shape is the caller's claim about a server event it named — the
+	// wire carries no type. Declaring it here keeps that claim in ONE place
+	// instead of an `as T` at every await site.
+	push<TOk = unknown>(event: string, payload: unknown): PushReceiver<TOk>;
 }
 
 /**
@@ -56,8 +60,8 @@ export function pushRequest<T = unknown>(
 	}
 	return new Promise<T>((resolve, reject) => {
 		channel
-			.push(event, payload)
-			.receive("ok", (resp) => resolve(resp as T))
+			.push<T>(event, payload)
+			.receive("ok", (resp) => resolve(resp))
 			.receive("error", (resp) => reject(new CrdtOpError(reasonOf(resp), event)))
 			.receive("timeout", () => reject(new CrdtOpError("timeout", event)));
 	});

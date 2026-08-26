@@ -558,11 +558,27 @@ def revoke_device(jwt_token: str, family_id: str) -> int:
 
 
 def _set_obsidian_cap(email: str, cap: int) -> None:
-    """Set obsidian_connections_cap override via docker exec SQL."""
+    """Pin BOTH obsidian device caps for a user, via docker exec SQL.
+
+    `obsidian_connections_cap` and `concurrent_devices` count the same thing
+    (`Connections.count_active(user_id, :obsidian)`) but gate two different
+    endpoints: OAuth consent uses the former, device-flow authorize the
+    latter. This helper used to set only `obsidian_connections_cap`, and the
+    device-flow test passed anyway because both defaulted to 1 — so it was
+    asserting against a default it never actually pinned. When Free moved to
+    2 devices the coincidence broke and the test went red against correct
+    behaviour. Setting both keeps the pin honest whichever endpoint is under
+    test.
+    """
+    keys = ("obsidian_connections_cap", "concurrent_devices")
+    values = ", ".join(
+        f"((SELECT id FROM users WHERE email = '{email}'), "
+        f"'{key}', '{{\"v\": {cap}}}'::jsonb, 'e2e-test', 'e2e')"
+        for key in keys
+    )
     sql = (
         f"INSERT INTO user_limit_overrides (user_id, key, value, reason, set_by) "
-        f"VALUES ((SELECT id FROM users WHERE email = '{email}'), "
-        f"'obsidian_connections_cap', '{{\"v\": {cap}}}'::jsonb, 'e2e-test', 'e2e') "
+        f"VALUES {values} "
         f"ON CONFLICT (user_id, key) DO UPDATE "
         f"SET value = EXCLUDED.value, set_at = NOW()"
     )
@@ -696,8 +712,11 @@ async def test_device_flow_vault_name_hint_surfaces_on_link_page(clerk_client):
 
 @pytest.mark.asyncio
 async def test_free_tier_cap_blocks_second_device_authorize(clerk_client):
-    """Free-tier device cap (obsidian_connections_cap=1):
-    first plugin authorize succeeds, second authorize returns 402.
+    """Device cap pinned to 1: first plugin authorize succeeds, second 402s.
+
+    The cap is pinned by override rather than taken from the Free default,
+    which is 2 devices. What is under test is the enforcement, not the
+    number.
     """
     clerk_user_id, jwt, email = _make_clerk_user(clerk_client)
     _set_obsidian_cap(email, 1)

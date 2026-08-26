@@ -3,7 +3,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { addPaddleEventListener, getOrCreatePaddle } from "@/lib/paddle-instance";
 import {
 	CheckoutEventNames,
+	type CheckoutOpenSettings,
 	type CheckoutSettings,
+	type CheckoutWithUpdateItems,
 	type OpenCheckoutOptions,
 } from "@/lib/paddle-sdk-types";
 import type { CheckoutCompleteData } from "@/lib/paddle-types";
@@ -115,11 +117,10 @@ export function useCheckout(args: UseCheckoutArgs) {
 					frameStyle: checkoutSettings.frameStyle ?? "width: 100%; border: 0;",
 					...(theme && { theme }),
 					...(locale && { locale }),
-					// Not yet in @paddle/paddle-js SDK types, landing soon
 					...(showNonExpressPaymentMethods !== undefined && {
 						showNonExpressPaymentMethods,
 					}),
-				} as Record<string, unknown>,
+				} satisfies CheckoutOpenSettings,
 			});
 		},
 		[paddle, isReady, checkoutSettings, theme, locale, showNonExpressPaymentMethods],
@@ -137,9 +138,8 @@ export function useCheckout(args: UseCheckoutArgs) {
 				console.warn("Paddle not initialized yet");
 				return;
 			}
-			(
-				paddle.Checkout as Record<string, unknown> & { updateItems?: (items: unknown) => void }
-			).updateItems?.(items);
+			const checkout: CheckoutWithUpdateItems = paddle.Checkout;
+			checkout.updateItems?.(items);
 		},
 		[paddle, isReady],
 	);

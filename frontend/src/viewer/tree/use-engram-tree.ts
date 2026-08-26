@@ -83,8 +83,8 @@ function noteListFingerprint(data: unknown): string {
 	// blind to a timestamp-only change (e.g. a background write that bumps
 	// updated_at without bumping version) would skip the rebuild and leave that
 	// sort order stale.
-	return (data as NoteSummary[])
-		.map((n) => `${n.id}:${n.version}:${n.path}:${n.updated_at}:${n.created_at}`)
+	return data
+		.map((n: NoteSummary) => `${n.id}:${n.version}:${n.path}:${n.updated_at}:${n.created_at}`)
 		.sort()
 		.join("|");
 }
@@ -217,7 +217,7 @@ export function useEngramTree(deps: Deps) {
 			// HT normalizes `target.item` to the destination container (the parent
 			// folder for between-siblings, or the folder dropped onto). We ignore the
 			// insertion index and reparent into it. See drop-redirect.ts.
-			const destId = (target as { item?: ItemInstance<Data> }).item?.getId();
+			const destId = "item" in target ? target.item?.getId() : undefined;
 			const sources = dragged.map((i) => ({
 				id: i.getId(),
 				parentId: i.getParent()?.getId(),
@@ -304,6 +304,7 @@ export function useEngramTree(deps: Deps) {
 
 	const items = tree.getItems();
 
+	// biome-ignore lint/nursery/useReactCompiler: useVirtualizer's internals, not ours. Nothing in this file can satisfy the rule short of dropping @tanstack/react-virtual.
 	const virtualizer = useVirtualizer({
 		count: items.length,
 		getScrollElement: () => deps.scrollParentRef.current,
