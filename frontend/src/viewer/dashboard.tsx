@@ -117,7 +117,7 @@ export default function Dashboard() {
 	return (
 		<section
 			aria-label="No note open"
-			className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]"
+			className="mx-auto flex size-full min-h-0 min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]"
 		>
 			<p className="m-auto text-muted-foreground text-sm">No note is open</p>
 		</section>

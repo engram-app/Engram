@@ -3,12 +3,13 @@ import { type OnboardingStep, useOnboardingStatus } from "../api/queries";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
 import AuthShell from "../layout/auth-shell";
 import LoadingScreen from "../layout/loading-screen";
+import { isMember } from "../lib/is-member";
 
 const STEP_PATHS: OnboardingStep[] = ["agreement", "billing", "tools", "vault"];
 
 function stepFromPath(pathname: string): OnboardingStep | null {
 	const last = pathname.split("/").pop() ?? "";
-	return (STEP_PATHS as readonly string[]).includes(last) ? (last as OnboardingStep) : null;
+	return isMember(STEP_PATHS, last) ? last : null;
 }
 
 export default function OnboardLayout() {

@@ -1,9 +1,8 @@
+import { isMember } from "./lib/is-member";
 const VALID_PROVIDERS = ["local", "clerk"] as const;
 
 function normalize(raw: Record<string, unknown>): EngramConfig {
-	const provider = VALID_PROVIDERS.includes(raw.authProvider as (typeof VALID_PROVIDERS)[number])
-		? (raw.authProvider as "local" | "clerk")
-		: "local";
+	const provider = isMember(VALID_PROVIDERS, raw.authProvider) ? raw.authProvider : "local";
 
 	return {
 		authProvider: provider,

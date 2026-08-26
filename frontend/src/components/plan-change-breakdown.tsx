@@ -129,7 +129,7 @@ function PlanChangeBreakdownSkeleton({ className }: { className?: string }) {
 			<CardContent className="flex flex-col gap-6">
 				<div className="flex items-center justify-between rounded-lg bg-muted p-4">
 					<div className="flex items-center gap-2">
-						<Skeleton className="h-5 w-5 rounded" />
+						<Skeleton className="size-5 rounded" />
 						<Skeleton className="h-4 w-28" />
 					</div>
 					<Skeleton className="h-6 w-16" />

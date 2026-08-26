@@ -265,7 +265,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 								type="button"
 								aria-label={`Remove ${row.key}`}
 								onClick={() => removeKey(doc, row.key)}
-								className="mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+								className="mr-1 flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
 							>
 								<X aria-hidden="true" className="size-3.5" />
 							</button>

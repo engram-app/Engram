@@ -163,7 +163,7 @@ export function moveKey(doc: Y.Doc, key: string, dir: "up" | "down"): void {
 
 export function sortRowsOkfFirst(rows: PropertyRow[]): PropertyRow[] {
 	const rank = (key: string) => {
-		const i = (OKF_KEY_ORDER as readonly string[]).indexOf(key);
+		const i = OKF_KEY_ORDER.findIndex((okf) => okf === key);
 		return i === -1 ? OKF_KEY_ORDER.length : i;
 	};
 	// Array.prototype.sort is stable: equal-rank (custom) keys keep order.

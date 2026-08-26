@@ -42,7 +42,7 @@ export function PricingSelectCardGrid({
 			<Card className={cn("relative p-5 text-center", className)}>
 				<Skeleton className="mx-auto mb-2 h-5 w-20" />
 				<Skeleton className="mx-auto mb-6 h-8 w-24" />
-				<Skeleton className="mx-auto h-5 w-5 rounded-full" />
+				<Skeleton className="mx-auto size-5 rounded-full" />
 			</Card>
 		);
 	}

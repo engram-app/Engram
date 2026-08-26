@@ -60,11 +60,11 @@ export default function MobileLayout() {
 
 	return (
 		<section className="flex h-dvh flex-col bg-background text-foreground">
-			<header className="sticky top-0 z-20 flex shrink-0 items-center justify-between border-border border-b bg-card px-2 py-2">
+			<header className="sticky top-0 z-20 flex shrink-0 items-center justify-between border-border border-b bg-card p-2">
 				<section className="flex items-center gap-1">
 					<Sheet open={leftOpen} onOpenChange={setLeftOpen}>
 						<SheetTrigger asChild>
-							<Button variant="ghost" size="icon" aria-label="Open files" className="h-11 w-11">
+							<Button variant="ghost" size="icon" aria-label="Open files" className="size-11">
 								<Menu />
 							</Button>
 						</SheetTrigger>
@@ -125,7 +125,7 @@ export default function MobileLayout() {
 								variant="ghost"
 								size="icon"
 								aria-label="Open tools"
-								className="h-11 w-11"
+								className="size-11"
 								onClick={openRight}
 							>
 								<PanelRightOpen />

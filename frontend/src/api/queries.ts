@@ -82,7 +82,7 @@ const effectiveFolderId = (f: RawFolder): string => f.id ?? syntheticFolderId(f.
 const selectFolders = (data: RawFoldersCache): Folder[] =>
 	data.folders
 		.filter((f) => f.name !== "")
-		.map((f) => (f.id === null ? { ...f, id: syntheticFolderId(f.name) } : (f as Folder)));
+		.map((f) => ({ ...f, id: f.id ?? syntheticFolderId(f.name) }));
 
 const selectNotes = (data: { notes: NoteSummary[] }) => data.notes;
 
@@ -138,11 +138,11 @@ function updateCachedList<T>(
 	key: readonly unknown[],
 	mut: (data: { notes: T[] }) => { notes: T[] },
 ) {
-	const prev = qc.getQueryData<{ notes: T[] }>(key as readonly unknown[]);
+	const prev = qc.getQueryData<{ notes: T[] }>(key);
 	if (!prev) {
 		return;
 	}
-	qc.setQueryData(key as readonly unknown[], mut(prev));
+	qc.setQueryData(key, mut(prev));
 }
 
 // 409/404/etc → human-grade toast copy. Centralised so all four
@@ -636,7 +636,7 @@ export function useFolderNotesById(folderId: string | null, opts: { enabled?: bo
 	const vaultId = useActiveVaultId();
 	const qc = useQueryClient();
 	return useQuery({
-		...folderNotesByIdQueryOptions(qc, vaultId, folderId as string),
+		...folderNotesByIdQueryOptions(qc, vaultId, folderId ?? ""),
 		enabled: folderId !== null && Boolean(vaultId) && (opts.enabled ?? true),
 	});
 }
@@ -746,7 +746,7 @@ export function useNote(id: string | null) {
 	);
 	return useQuery({
 		queryKey: ["note", vaultId, id],
-		queryFn: () => fetchNoteById(id as string),
+		queryFn: () => fetchNoteById(id ?? ""),
 		enabled: id !== null,
 		// Two different blank-outs, one setting.
 		//
@@ -1821,7 +1821,7 @@ export function useRenameNote() {
 				const cached = qc
 					.getQueryCache()
 					.findAll({ queryKey: ["note", vaultId] })
-					.map((q) => q.state.data as Note | undefined)
+					.map((q) => qc.getQueryData<Note>(q.queryKey))
 					.find((n) => n?.path === old_path);
 				if (cached) {
 					noteId = cached.id;
@@ -1840,7 +1840,9 @@ export function useRenameNote() {
 				noteId === null ? n.path === old_path : n.id === noteId;
 			const byIdLists: RenameNoteContext["byIdLists"] = [];
 			for (const q of qc.getQueryCache().findAll({ queryKey: ["folder-notes-by-id", vaultId] })) {
-				const rows = q.state.data as NoteSummary[] | undefined;
+				// NOT `.filter(...)`: `rows` is the rollback snapshot written back
+				// verbatim in onError, so it must stay the cache's own array.
+				const rows = qc.getQueryData<NoteSummary[]>(q.queryKey);
 				if (!rows?.some(matchesRow)) {
 					continue;
 				}
@@ -2049,7 +2051,7 @@ export function useRenameFolder() {
 			// Snapshot + drop every cached folderNotes entry under the old prefix.
 			const all = qc.getQueryCache().findAll({ queryKey: ["folderNotes", vaultId] });
 			for (const q of all) {
-				const folder = q.queryKey[2] as string | undefined;
+				const folder = q.queryKey[2];
 				if (typeof folder !== "string") {
 					continue;
 				}
@@ -2526,7 +2528,7 @@ export function useBatchMoveNotes() {
 					continue;
 				}
 				snapshots.push({ key: q.queryKey, data });
-				const folderId = q.queryKey[2] as string | null | undefined;
+				const folderId = q.queryKey[2];
 				// Resolve this source list's folder PATH so the count decrement matches
 				// the raw folders cache by name (root sentinel → '', syn:<path> → path,
 				// real id → its cached name).

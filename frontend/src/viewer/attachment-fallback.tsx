@@ -15,7 +15,7 @@ export function AttachmentFallback({ filename }: { filename: string }) {
 			title="Upgrade to view attachments"
 			className="my-2 inline-flex items-center gap-2 rounded border border-border border-dashed px-3 py-2 text-muted-foreground text-sm hover:bg-muted"
 		>
-			<Lock className="h-4 w-4" aria-hidden="true" />
+			<Lock className="size-4" aria-hidden="true" />
 			<span>{filename}</span>
 		</button>
 	);

@@ -24,7 +24,7 @@ export default function RightToolPanel({ onCollapse }: { onCollapse: () => void 
 
 	return (
 		<section className="flex h-full min-h-0 flex-col">
-			<header className="flex shrink-0 items-center gap-1 border-border border-b px-1 py-1">
+			<header className="flex shrink-0 items-center gap-1 border-border border-b p-1">
 				{/* Plain container, not <nav>: role="tablist" is a widget role, and
 				    layering it over landmark semantics is what a11y linters flag. */}
 				<div role="tablist" aria-label="Sidebar tools" className="flex min-w-0 flex-1 gap-1">

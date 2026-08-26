@@ -574,7 +574,7 @@ export default function NotePage() {
 	};
 
 	return (
-		<section className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]">
+		<section className="mx-auto flex size-full min-h-0 min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]">
 			{syncStatus === "error" && (
 				<p role="status" className="shrink-0 bg-destructive/10 px-4 py-1 text-destructive text-xs">
 					Not syncing - reconnecting...
@@ -676,7 +676,7 @@ export default function NotePage() {
 							/>
 						</div>
 					) : (
-						<Suspense fallback={<p className="px-5 py-5 text-muted-foreground">Loading editor…</p>}>
+						<Suspense fallback={<p className="p-5 text-muted-foreground">Loading editor…</p>}>
 							{handle ? (
 								<NoteEditor
 									ytext={handle.ytext}
@@ -701,7 +701,7 @@ export default function NotePage() {
 									}}
 								/>
 							) : (
-								<p className="px-5 py-5 text-muted-foreground">Connecting…</p>
+								<p className="p-5 text-muted-foreground">Connecting…</p>
 							)}
 						</Suspense>
 					)}

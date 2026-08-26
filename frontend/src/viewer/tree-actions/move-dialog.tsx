@@ -35,7 +35,7 @@ export function MoveDialog({ folders, nodes, onPick, onCancel }: Props) {
 	return (
 		<dialog
 			open
-			className="fixed inset-0 z-50 m-auto h-96 w-96 rounded-lg border border-border bg-popover text-popover-foreground shadow-xl"
+			className="fixed inset-0 z-50 m-auto size-96 rounded-lg border border-border bg-popover text-popover-foreground shadow-xl"
 		>
 			{nodes.length > 1 && (
 				<p className="border-border border-b px-3 py-2 font-medium text-sm">{placeholder}</p>

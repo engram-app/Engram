@@ -8,6 +8,7 @@ import {
 	useMemo,
 	useState,
 } from "react";
+import { isMember } from "../lib/is-member";
 
 // The right sidebar used to be a single pushed slot: NotePage called
 // setContent(<NoteToc/>) on mount and setContent(null) on unmount, and the panel
@@ -73,7 +74,12 @@ function readStored(): RightToolId | null {
 	}
 	// Missing key or a stale id from an older build both fall back to the outline
 	// rather than to a collapsed panel — only an explicit "" means collapsed.
-	return RIGHT_TOOLS.some((tool) => tool.id === raw) ? (raw as RightToolId) : "outline";
+	return isMember(
+		RIGHT_TOOLS.map((tool) => tool.id),
+		raw,
+	)
+		? raw
+		: "outline";
 }
 
 interface RightTools {

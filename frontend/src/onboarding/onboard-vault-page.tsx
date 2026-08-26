@@ -157,7 +157,7 @@ function SourceScreen({
 					icon={
 						<span
 							aria-hidden
-							className="inline-flex h-6 w-6 shrink-0 items-center justify-center [&_svg]:h-full [&_svg]:w-full"
+							className="inline-flex size-6 shrink-0 items-center justify-center [&_svg]:size-full"
 							dangerouslySetInnerHTML={{ __html: obsidianMark }}
 						/>
 					}
@@ -167,7 +167,7 @@ function SourceScreen({
 					onClick={() => onPickSource("obsidian")}
 				/>
 				<SourceCard
-					icon={<FilePlus2 aria-hidden className="h-6 w-6 shrink-0 text-foreground" />}
+					icon={<FilePlus2 aria-hidden className="size-6 shrink-0 text-foreground" />}
 					title="I'm starting fresh"
 					body="We'll create your first vault right now. You can rename it or add more later from settings."
 					selected={source === "fresh"}

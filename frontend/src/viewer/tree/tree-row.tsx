@@ -107,7 +107,7 @@ function Chevron({ open }: { open: boolean }) {
 	return (
 		<ChevronRight
 			aria-hidden="true"
-			className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
+			className={`size-4 shrink-0 text-muted-foreground transition-transform ${
 				open ? "rotate-90" : ""
 			}`}
 		/>
@@ -245,7 +245,7 @@ export function TreeRow({
 				    against a near-black background is unreadable. */}
 				<Icon
 					aria-hidden="true"
-					className={`h-3.5 w-3.5 shrink-0 ${active ? "opacity-75" : "text-muted-foreground"}`}
+					className={`size-3.5 shrink-0 ${active ? "opacity-75" : "text-muted-foreground"}`}
 				/>
 				{/* Base name only — the badge beside it already carries the type,
 				    and this keeps the row consistent with note rows and with what

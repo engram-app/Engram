@@ -40,9 +40,9 @@ export default function UserMenu() {
 				className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 			>
 				{user?.imageUrl ? (
-					<img src={user.imageUrl} alt="" className="h-9 w-9 rounded-full object-cover" />
+					<img src={user.imageUrl} alt="" className="size-9 rounded-full object-cover" />
 				) : (
-					<span className="flex h-9 w-9 items-center justify-center rounded-full bg-primary font-medium text-primary-foreground text-xs">
+					<span className="flex size-9 items-center justify-center rounded-full bg-primary font-medium text-primary-foreground text-xs">
 						{initial}
 					</span>
 				)}
@@ -54,7 +54,7 @@ export default function UserMenu() {
 				<DropdownMenuSeparator />
 				<DropdownMenuItem asChild className="gap-2.5 px-3 py-2.5 text-sm">
 					<Link to={settingsTo("account", location.search)}>
-						<Settings className="h-4 w-4" />
+						<Settings className="size-4" />
 						Settings
 					</Link>
 				</DropdownMenuItem>
@@ -65,7 +65,7 @@ export default function UserMenu() {
 				<DropdownMenuRadioGroup value={theme} onValueChange={(v) => setTheme(v as ThemeChoice)}>
 					{THEME_OPTIONS.map(({ value, label, Icon }) => (
 						<DropdownMenuRadioItem key={value} value={value} className="gap-2.5 px-3 py-2 text-sm">
-							<Icon className="h-4 w-4" />
+							<Icon className="size-4" />
 							{label}
 						</DropdownMenuRadioItem>
 					))}
@@ -77,7 +77,7 @@ export default function UserMenu() {
 						logout();
 					}}
 				>
-					<LogOut className="h-4 w-4" />
+					<LogOut className="size-4" />
 					Sign out
 				</DropdownMenuItem>
 			</DropdownMenuContent>

@@ -108,14 +108,23 @@ export default function FolderTree() {
 	// Rename handler — TreeRow already wires HT's renaming state. HT calls
 	// back with the new leaf-name; we rebuild the new full path from the
 	// existing item path's folder + new leaf name.
+	// The by-id note cache is spread across many query entries and TanStack types
+	// `state.data` as unknown, so every reader used to assert its shape. Validate
+	// once here instead: a row that fails the check is dropped, not trusted.
+	const cachedNoteRows = (): Array<{ id: string; path: string; title?: string }> =>
+		qc
+			.getQueryCache()
+			.findAll({ queryKey: ["folder-notes-by-id", vaultId] })
+			.flatMap((q) => (Array.isArray(q.state.data) ? q.state.data : []))
+			.filter(
+				(n): n is { id: string; path: string; title?: string } =>
+					typeof n?.id === "string" && typeof n?.path === "string",
+			);
+
 	const onRenameCommit = (itemId: string, newName: string) => {
 		const p = parseItemId(itemId);
 		if (p.kind === "note") {
-			const item = qc
-				.getQueryCache()
-				.findAll({ queryKey: ["folder-notes-by-id", vaultId] })
-				.flatMap((q) => (q.state.data as Array<{ id: string; path: string }> | undefined) ?? [])
-				.find((n) => n.id === p.id);
+			const item = cachedNoteRows().find((n) => n.id === p.id);
 			if (!item) {
 				return;
 			}
@@ -148,10 +157,7 @@ export default function FolderTree() {
 	// from each note's CURRENT path. Resolve those here (from the by-id cache the
 	// tree renders) BEFORE the optimistic onMutate re-paths the rows.
 	const resolveNotePaths = (ids: string[]): Record<string, string> => {
-		const all = qc
-			.getQueryCache()
-			.findAll({ queryKey: ["folder-notes-by-id", vaultId] })
-			.flatMap((q) => (q.state.data as Array<{ id: string; path: string }> | undefined) ?? []);
+		const all = cachedNoteRows();
 		const out: Record<string, string> = {};
 		for (const id of ids) {
 			const p = all.find((n) => n.id === id)?.path;
@@ -168,19 +174,17 @@ export default function FolderTree() {
 			return;
 		}
 		const parsed = sourceIds.map(parseItemId);
-		const noteIds = parsed.filter((p) => p.kind === "note").map((p) => (p as { id: string }).id);
+		const noteIds = parsed.flatMap((p) => (p.kind === "note" ? [p.id] : []));
 		// Real-marker folders move by id; derived ones have no id, so they take the
 		// same path-based rename the Move dialog uses. Splitting them keeps drag
 		// and the dialog capable of the same things.
-		const folderIds = parsed
-			.filter((p) => p.kind === "folder" && !isSyntheticFolderId((p as { id: string }).id))
-			.map((p) => (p as { id: string }).id);
-		const derivedFolderPaths = parsed
-			.filter((p) => p.kind === "folder" && isSyntheticFolderId((p as { id: string }).id))
-			.map((p) => syntheticFolderPath((p as { id: string }).id));
-		const attachmentPaths = parsed
-			.filter((p) => p.kind === "attachment")
-			.map((p) => (p as { path: string }).path);
+		const folderIds = parsed.flatMap((p) =>
+			p.kind === "folder" && !isSyntheticFolderId(p.id) ? [p.id] : [],
+		);
+		const derivedFolderPaths = parsed.flatMap((p) =>
+			p.kind === "folder" && isSyntheticFolderId(p.id) ? [syntheticFolderPath(p.id)] : [],
+		);
+		const attachmentPaths = parsed.flatMap((p) => (p.kind === "attachment" ? [p.path] : []));
 		// Destination PATH ('' = vault root). Resolved from the synthesized tree so
 		// a derived folder (syn: id) yields its path — moves into it work by path.
 		const destFolder =
@@ -260,15 +264,22 @@ export default function FolderTree() {
 		[tree],
 	);
 
+	// getContainerProps is typed Record<string, any>; name the two handlers we
+	// chain so the calls below are checked rather than asserted.
+	const containerDrag: {
+		onDragOver?: (ev: React.DragEvent) => void;
+		onDrop?: (ev: React.DragEvent) => void;
+	} = containerProps;
+
 	const [rootDragOver, setRootDragOver] = useState(false);
 	const onContainerDragOver = (e: React.DragEvent) => {
-		(containerProps.onDragOver as ((ev: React.DragEvent) => void) | undefined)?.(e);
+		containerDrag.onDragOver?.(e);
 		setRootDragOver(true);
 	};
 	const onContainerDragLeave = () => setRootDragOver(false);
 	const onContainerDrop = (e: React.DragEvent) => {
 		setRootDragOver(false);
-		(containerProps.onDrop as ((ev: React.DragEvent) => void) | undefined)?.(e);
+		containerDrag.onDrop?.(e);
 	};
 
 	// Auto-expand the chain leading to the active note so users can see
@@ -353,6 +364,8 @@ export default function FolderTree() {
 	}, [pendingFolderRename, allFolders, tree, clearFolderRename]);
 
 	// Resolve a single item id → the row shape DeleteConfirm / MoveDialog accept.
+	function rowsFor(itemId: string, mode: "delete"): DeleteRow[];
+	function rowsFor(itemId: string, mode: "move"): MoveRow[];
 	function rowsFor(itemId: string, mode: "delete" | "move"): DeleteRow[] | MoveRow[] {
 		const p = parseItemId(itemId);
 		if (p.kind === "note") {
@@ -387,14 +400,7 @@ export default function FolderTree() {
 	}
 
 	function lookupNote(id: string): { id: string; path: string; title?: string } | undefined {
-		const cached = qc
-			.getQueryCache()
-			.findAll({ queryKey: ["folder-notes-by-id", vaultId] })
-			.flatMap(
-				(q) =>
-					(q.state.data as Array<{ id: string; path: string; title?: string }> | undefined) ?? [],
-			)
-			.find((n) => n.id === id);
+		const cached = cachedNoteRows().find((n) => n.id === id);
 		if (cached) {
 			return cached;
 		}
@@ -447,12 +453,12 @@ export default function FolderTree() {
 	}
 
 	function openDelete(itemIds: string[]) {
-		const nodes = itemIds.flatMap((id) => rowsFor(id, "delete")) as DeleteRow[];
+		const nodes = itemIds.flatMap((id) => rowsFor(id, "delete"));
 		setDialog({ kind: "delete", nodes, itemIds });
 	}
 
 	function openMove(itemIds: string[]) {
-		const nodes = itemIds.flatMap((id) => rowsFor(id, "move")) as MoveRow[];
+		const nodes = itemIds.flatMap((id) => rowsFor(id, "move"));
 		setDialog({ kind: "move", nodes, itemIds });
 	}
 
@@ -675,7 +681,7 @@ export default function FolderTree() {
 				data-testid="folder-tree-root"
 				// px-2 insets the rows from the sidebar edges — rows are w-full, so
 				// without it the hover/selection chip runs edge to edge.
-				className={`relative min-h-0 flex-1 overflow-auto px-2 py-2 text-base ${
+				className={`relative min-h-0 flex-1 overflow-auto p-2 text-base ${
 					rootDragOver ? "bg-primary/10 ring-1 ring-ring ring-inset" : ""
 				}`}
 			>

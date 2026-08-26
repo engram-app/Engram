@@ -227,7 +227,7 @@ export default function MembersTab({
 									</tr>
 									{isExpanded && (
 										<tr className="border-border border-t bg-accent/20">
-											<td colSpan={5} className="px-4 py-4">
+											<td colSpan={5} className="p-4">
 												{pendingDelete === u.id ? (
 													<div className="flex flex-wrap items-center justify-between gap-3">
 														<span className="text-muted-foreground text-xs">
