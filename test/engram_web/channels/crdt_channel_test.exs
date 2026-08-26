@@ -988,6 +988,42 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_reply ref2, :ok, %{doc_id: ^id2}
     end
 
+    test "an ADOPT reports occupied, and never applies our frame to the adopted note", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # The single-create ADOPT arm — the path is already owned by a LIVE note
+      # under a different id, so `genesis_crdt_note/4` answers `{:adopted,
+      # note}` and the reply carries the AUTHORITATIVE id.
+      #
+      # Its `genesis` is a hardcoded "occupied", and that is the one arm of the
+      # decision table nothing exercised. It matters as much as any other:
+      # `absent` here would tell the client to push a whole body onto a lineage
+      # that already carries another note's, unioning the two under YATA. The
+      # client's ADOPT path transfers ours deliberately instead.
+      {:ok, existing} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Notes/adopted.md",
+          "content" => "the note that already owns this path"
+        })
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => Ecto.UUID.generate(),
+          "path" => "Notes/adopted.md",
+          "b64" => frame_for_content("our body")
+        })
+
+      existing_id = existing.id
+      assert_reply ref, :ok, %{doc_id: ^existing_id, seeded: false, genesis: "occupied"}
+
+      # And the frame was NOT merged into it — the ADOPT transfer is the client's
+      # job, on a lineage it has first acquired.
+      {:ok, still} = Notes.get_note(user, vault, "Notes/adopted.md")
+      assert still.content == "the note that already owns this path"
+    end
+
     test "a room already holding the doc reports occupied, never absent", %{
       socket: socket,
       user: user,
