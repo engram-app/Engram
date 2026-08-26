@@ -1,9 +1,11 @@
 # `prebuild-ci-image` fails Mondays ~04:00: the appdata backup stopped the registry
 
-> **FIXED 2026-08-03** — `LocalCIRegistry` now has `skip: yes` + `dontStop: yes`
-> in the plugin config, matching the `DockerRegistry` entry that was already
-> there. Kept as a diagnosis record, and because the same shape recurs for any
-> container the backup stops.
+> **FIXED 2026-08-03 (half of it) — COMPLETED 2026-08-23.** `dontStop: yes` did
+> work: the registry stopped going down on Mondays, so CI stopped breaking. But
+> `skip: yes` silently did nothing, and the backup kept tarring 57G of live
+> registry every week. See [The `skip` trap](#the-skip-trap) — the working key is
+> **`skipBackup`**, now set. Kept as a diagnosis record, and because the same
+> shape recurs for any container the backup stops.
 
 **Trigger:** CI fails with the image *built fine* and only the push failing:
 
@@ -93,6 +95,128 @@ Added, copied verbatim from the `DockerRegistry` entry:
 container during the run.
 
 Backup of the previous config: `config.json.bak-20260803-claude`.
+
+<a id="the-skip-trap"></a>
+
+## The `skip` trap — why that config looked right and wasn't (2026-08-23)
+
+The entry above reads as "don't back it up, don't stop it". Only the second
+half was true. Every Monday for the next three weeks the plugin still spent
+**32 minutes tarring the 57G registry while it was running**, tar reported
+
+```
+tar: /mnt/cache/appdata/local-ci-registry/docker/registry/v2/repositories/ci-pass/_manifests/tags: file changed as we read it
+```
+
+and the whole run was marked `-failed`. CI was fine — `dontStop` held — so
+nothing pointed back here.
+
+**`skip` is only honoured for containers listed in `containerOrder`.** From
+`ABHelper.php::sortContainers()`:
+
+```php
+foreach ($order as $name) {                          // $order = containerOrder
+    $containerSettings = $abSettings->getContainerSpecificSettings($name, $removeSkipped);
+    if ($containerSettings['skip'] == 'yes' && $removeSkipped) {
+        unset($_containers[$name]);                  // <- the only place skip is read
+        continue;
+    }
+    ...
+}
+return array_merge($sortedContainers, $_containers); // <- unknown containers, unchecked
+```
+
+`containerOrder` is a 58-name list written when you hit Save on the settings
+page. `LocalCIRegistry` and `minio` were both created *after* the last save, so
+neither is in it, so the loop never sees them, so `skip` is never read and they
+fall straight through the `array_merge` into the backup.
+
+This is why `Lancache` and `JinaReranker` — same `skip: yes` — *are* correctly
+excluded, and the debug log shows `Not adding Lancache to sorted containers:
+should be ignored` for them but nothing at all for `LocalCIRegistry`. Same
+setting, opposite outcome, purely because of list membership.
+
+### Use `skipBackup`, not `skip`
+
+`skipBackup` is checked inside `backupContainer()`, which runs for every
+container regardless of order:
+
+```php
+if ($containerSettings['skipBackup'] == 'yes') {
+    self::backupLog("Should NOT backup this container at all. Only include it in stop/start. Skipping backup...");
+```
+
+Applied 2026-08-23 (`config.json.bak-20260823-claude`):
+
+```json
+"LocalCIRegistry": {
+    "skipBackup": "yes",          // the one that actually gates the tar
+    "dontStop": "yes",            // still load-bearing: this is what broke CI
+    "skip": "yes",                // harmless, but do NOT rely on it
+    "ignoreBackupErrors": "no",   // was "yes" — a bandaid added 2026-08-17 04:39
+    "group": "", "backupExtVolumes": "no", "updateContainer": "",
+    "exclude": "", "verifyBackup": ""
+}
+```
+
+`ignoreBackupErrors: yes` had been added minutes after the 2026-08-17 failure.
+It mutes the alert and changes nothing else — the 32 minutes and 47G still get
+spent. Removed.
+
+**Rule of thumb:** to keep a container out of the backup, set `skipBackup`. Only
+trust `skip` for a container you know is in `containerOrder`, and re-saving the
+settings page is what puts it there.
+
+### The knock-on: retention stops, and `-failed` dirs are immortal
+
+A failed run short-circuits cleanup — `backup.php`:
+
+```
+An error occurred during backup! RETENTION WILL NOT BE CHECKED!
+```
+
+So three weeks of failures meant zero pruning. Worse, the retention pass cannot
+parse its own failure-suffixed directory names and keeps them "to be safe":
+
+```php
+$backupDate = date_create_from_format("??_Ymd_His", $correctedItem);
+if (!$backupDate) { $toKeep[] = $backupItem; continue; }   // Better safe than sorry
+```
+
+```
+php > date_create_from_format("??_Ymd_His", "ab_20260817_030002-failed");  // false
+php > date_create_from_format("??_Ymd_His", "ab_20260810_040002");         // 2026-08-10
+```
+
+`-failed` dirs are therefore **never** deleted by the plugin. Cleared by hand on
+2026-08-23: 1 on FastRaid (188G), 6 on SlowRaid going back to April (83G) —
+**271G**. Worth checking for these whenever a backup has been red for a while.
+
+### `minio` had the same shape
+
+Also missing from `containerOrder`, and holding `gha-cache` — 110G of Actions
+buildx cache, 95 minutes of tar plus 19 minutes of verify, retained ×7. The
+bucket is **not** growing unbounded: it has a working 14-day ILM expiry and sits
+at a steady ~110G / 835 objects. It simply never belonged in a backup. Excluded
+by path rather than skipping the container, because the other minio buckets
+(`engram-*-attachments`) are real data:
+
+```json
+"minio": { "exclude": "/mnt/cache/appdata/minio/gha-cache", ... }
+```
+
+`exclude` becomes `tar --exclude '<abs path>'`. Verified on the host — the
+minio tar went from 95 minutes to **1.5 seconds**, still capturing the
+attachment buckets and the 25K of `.minio.sys/buckets/gha-cache` metadata that
+carries the ILM rule (you want that back on a restore).
+
+### Same trap, different host
+
+SlowRaid's `media-preview-generator` mounts Plex's live appdata `rw`. The backup
+stopped only that container, Plex kept writing, tar hit the same `file changed
+as we read it`. Also absent from `containerOrder`, also "fixed" with `skip: yes`.
+Now `skipBackup: yes` — and its 13G of Plex data was a duplicate of `plex.tar.gz`
+anyway.
 
 ## Registry size and why GC alone will not help
 
