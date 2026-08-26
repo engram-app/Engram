@@ -443,34 +443,67 @@ defmodule Engram.Workers.EmbedNote do
   Still far cheaper than the per-note `existing_burst_start/1` SELECT that
   `clamp: false` exists to avoid: `@batch_size` notes cost 10 queries, not 500.
 
+  Suppressing a more urgent enqueue would invert `priority_for/1`, which is the
+  whole fairness mechanism: during an import every note holds a pending
+  backfill job (priority 9), so a live edit — priority 0 — would be swallowed
+  and inherit position behind the entire backlog, the exact outcome that
+  function exists to prevent. So `new_priority` PROMOTES a pending job that is
+  ranked worse than the incoming one rather than dropping the enqueue on the
+  floor. Oban fetches `priority ASC`, so lowering the number is the promotion.
+  That keeps the "at most one pending job per note" invariant while preserving
+  the jump-the-queue behaviour.
+
   Not a uniqueness guarantee: two bulk callers racing between this read and
   their inserts can still produce two jobs, and an `executing` job never
   suppresses (see `@pending_states`). Both are bounded and self-correcting —
   the extra job is a no-op once `embed_hash` is stamped — which is the whole
   difference between a duplicate and a ratchet.
   """
-  @spec reject_already_queued([Ecto.UUID.t()]) :: [Ecto.UUID.t()]
-  def reject_already_queued([]), do: []
+  @spec reject_already_queued([Ecto.UUID.t()], non_neg_integer()) :: [Ecto.UUID.t()]
+  def reject_already_queued(note_ids, new_priority \\ 0)
 
-  def reject_already_queued(note_ids) do
+  def reject_already_queued([], _new_priority), do: []
+
+  def reject_already_queued(note_ids, new_priority) do
     queued =
       note_ids
       |> Enum.map(&to_string/1)
       |> Enum.chunk_every(@lookup_chunk)
-      |> Enum.flat_map(&queued_ids/1)
+      |> Enum.flat_map(&promote_and_list(&1, new_priority))
       |> MapSet.new()
 
     Enum.reject(note_ids, &MapSet.member?(queued, to_string(&1)))
   end
 
-  defp queued_ids(wanted) do
+  # Read priorities with the ids so the UPDATE only runs when something is
+  # actually ranked worse than the incoming job. The common case — nothing
+  # pending, or pending at an equal-or-better priority — stays one query per
+  # chunk; the promotion write is the exception, not the toll.
+  defp promote_and_list(wanted, new_priority) do
+    rows =
+      pending_for(wanted)
+      |> select([j], {fragment("? ->> 'note_id'", j.args), j.priority})
+      |> Repo.all()
+
+    case for({id, priority} <- rows, priority > new_priority, do: id) do
+      [] ->
+        :ok
+
+      outranked ->
+        pending_for(outranked)
+        |> where([j], j.priority > ^new_priority)
+        |> Repo.update_all(set: [priority: new_priority])
+    end
+
+    Enum.map(rows, &elem(&1, 0))
+  end
+
+  defp pending_for(wanted) do
     from(j in Oban.Job,
       where: j.worker == "Engram.Workers.EmbedNote",
       where: j.state in @pending_states,
-      where: fragment("? ->> 'note_id'", j.args) in ^wanted,
-      select: fragment("? ->> 'note_id'", j.args)
+      where: fragment("? ->> 'note_id'", j.args) in ^wanted
     )
-    |> Repo.all()
   end
 
   @backfill_priority 9

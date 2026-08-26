@@ -3958,11 +3958,16 @@ defmodule Engram.Notes do
       end)
 
     # `insert_all` ignoring `unique` means a note that already has a pending
-    # job would collect a second one here. One indexed query for the batch.
+    # job would collect a second one here. Grouped by priority so an edit
+    # (priority 0) can PROMOTE a pending backfill job rather than be suppressed
+    # behind it — see EmbedNote.reject_already_queued/2. One indexed query per
+    # priority bucket, and there are only ever two.
     enqueueable =
       embed_candidates
-      |> Enum.map(&elem(&1, 0))
-      |> EmbedNote.reject_already_queued()
+      |> Enum.group_by(&elem(&1, 1), &elem(&1, 0))
+      |> Enum.flat_map(fn {priority, ids} ->
+        EmbedNote.reject_already_queued(ids, priority)
+      end)
       |> MapSet.new()
 
     embed_jobs =

@@ -27,7 +27,7 @@ defmodule Engram.Workers.EmbedNoteBulkDedupTest do
   # `executing` is deliberately absent and gets its own test below.
   @pending ~w(scheduled available retryable)
 
-  defp insert_job!(note_id, state) do
+  defp insert_job!(note_id, state, priority \\ 0) do
     now = DateTime.utc_now(:second)
 
     Repo.insert_all("oban_jobs", [
@@ -36,6 +36,7 @@ defmodule Engram.Workers.EmbedNoteBulkDedupTest do
         queue: "embed",
         worker: "Engram.Workers.EmbedNote",
         args: %{"note_id" => note_id},
+        priority: priority,
         inserted_at: now,
         scheduled_at: now
       }
@@ -112,6 +113,73 @@ defmodule Engram.Workers.EmbedNoteBulkDedupTest do
 
     test "is a no-op on an empty list and issues no query" do
       assert EmbedNote.reject_already_queued([]) == []
+    end
+  end
+
+  describe "priority is not inverted by suppression" do
+    defp priority_of(note_id) do
+      from(j in "oban_jobs",
+        where: j.worker == "Engram.Workers.EmbedNote",
+        where: j.state in @pending,
+        where: fragment("? ->> 'note_id' = ?", j.args, ^note_id),
+        select: j.priority
+      )
+      |> Repo.one()
+    end
+
+    test "an urgent enqueue PROMOTES the pending backfill job it suppresses" do
+      # The scenario priority_for/1 exists for: during an import every note
+      # holds a pending backfill job, then the user edits one. Suppressing that
+      # edit without promoting would park it behind the whole backlog.
+      note_id = Ecto.UUID.generate()
+      insert_job!(note_id, "available", EmbedNote.backfill_priority())
+
+      assert EmbedNote.reject_already_queued([note_id], 0) == [],
+             "still exactly one job — promotion, not a duplicate"
+
+      assert priority_of(note_id) == 0,
+             "the pending job must be promoted to the incoming priority, or the edit " <>
+               "inherits position behind every backfill job in the queue"
+    end
+
+    test "a catch-up enqueue never demotes an interactive job" do
+      note_id = Ecto.UUID.generate()
+      insert_job!(note_id, "available", 0)
+
+      assert EmbedNote.reject_already_queued([note_id], EmbedNote.backfill_priority()) == []
+      assert priority_of(note_id) == 0, "reconcile must not demote a live edit"
+    end
+
+    test "promoting never demotes a sibling job for the same note" do
+      # Two pending jobs for one note is rare but reachable — the documented
+      # race between a bulk caller's read and its insert. Promotion selects by
+      # note_id, so without a priority guard on the UPDATE the better-ranked
+      # sibling gets dragged down to the incoming priority.
+      note_id = Ecto.UUID.generate()
+      insert_job!(note_id, "available", EmbedNote.backfill_priority())
+      insert_job!(note_id, "available", 0)
+
+      assert EmbedNote.reject_already_queued([note_id], 5) == []
+
+      priorities =
+        from(j in "oban_jobs",
+          where: j.worker == "Engram.Workers.EmbedNote",
+          where: fragment("? ->> 'note_id' = ?", j.args, ^note_id),
+          select: j.priority
+        )
+        |> Repo.all()
+        |> Enum.sort()
+
+      assert priorities == [0, 5],
+             "the backfill job promotes 9 -> 5; the interactive job must stay at 0"
+    end
+
+    test "equal priority leaves the pending job untouched" do
+      note_id = Ecto.UUID.generate()
+      insert_job!(note_id, "available", 5)
+
+      assert EmbedNote.reject_already_queued([note_id], 5) == []
+      assert priority_of(note_id) == 5
     end
   end
 
