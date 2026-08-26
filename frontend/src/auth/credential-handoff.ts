@@ -91,8 +91,14 @@ export function takeCredential(name: string, pathname: string): string {
 		// tab that was open across the deploy. Unstamped means unverifiable,
 		// so drop it: the user retypes, which is what they did before any of
 		// this existed.
-		const parsed = JSON.parse(raw) as { value?: string; pathname?: string };
-		return parsed?.pathname === normalizePath(pathname) ? (parsed.value ?? "") : "";
+		const parsed: unknown = JSON.parse(raw);
+		if (typeof parsed !== "object" || parsed === null || !("pathname" in parsed)) {
+			return "";
+		}
+		if (parsed.pathname !== normalizePath(pathname)) {
+			return "";
+		}
+		return "value" in parsed && typeof parsed.value === "string" ? parsed.value : "";
 	} catch {
 		return "";
 	}

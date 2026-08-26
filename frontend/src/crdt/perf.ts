@@ -98,8 +98,8 @@ function on(): boolean {
 // declarations, so they hoist — wiring them here keeps every export last.
 // Guarded so it never throws in a non-browser (test/SSR) context.
 if (typeof window !== "undefined") {
-	(window as unknown as { __engramCrdtPerf: typeof report }).__engramCrdtPerf = report;
-	(window as unknown as { __engramCrdtPerfReset: typeof reset }).__engramCrdtPerfReset = reset;
+	window.__engramCrdtPerf = report;
+	window.__engramCrdtPerfReset = reset;
 }
 
 /** One note open: each phase as ms elapsed since that open's `open:start`. */

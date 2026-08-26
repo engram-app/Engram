@@ -16,7 +16,7 @@ export function ContextMenu({ actions, position, onPick, onClose }: Props) {
 			}
 		};
 		const onClick = (e: MouseEvent) => {
-			if (!(e.target as HTMLElement).closest("[data-tree-context-menu]")) {
+			if (!(e.target instanceof Element && e.target.closest("[data-tree-context-menu]"))) {
 				onClose();
 			}
 		};

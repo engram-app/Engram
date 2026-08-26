@@ -26,7 +26,7 @@ import VaultSwitcher from "./vault-switcher";
 // Buttons (e.g. folder-expand toggles in FolderTree) must keep the drawer open.
 function closeOnLinkClick(close: () => void) {
 	return (event: MouseEvent<HTMLDivElement>) => {
-		if ((event.target as HTMLElement).closest("a")) {
+		if (event.target instanceof Element && event.target.closest("a")) {
 			close();
 		}
 	};

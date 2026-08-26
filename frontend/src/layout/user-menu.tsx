@@ -14,6 +14,7 @@ import { useAuthAdapter } from "../auth/use-auth-adapter";
 import { settingsTo } from "../settings/settings-hash";
 import type { ThemeChoice } from "../theme/storage";
 import { useTheme } from "../theme/theme-provider";
+import { isMember } from "../lib/is-member";
 
 // One avatar dropdown for both auth modes — the auth adapter exposes email,
 // avatar, and logout regardless of provider, so Clerk's own UserButton isn't
@@ -26,6 +27,9 @@ const THEME_OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: string; Icon: ty
 	{ value: "dark", label: "Dark", Icon: Moon },
 	{ value: "system", label: "System", Icon: Monitor },
 ];
+
+// Radix hands onValueChange a bare string; check it against the rendered list.
+const THEME_KEYS: readonly ThemeChoice[] = THEME_OPTIONS.map((o) => o.value);
 
 export default function UserMenu() {
 	const { user, logout } = useAuthAdapter();
@@ -62,7 +66,14 @@ export default function UserMenu() {
 				<DropdownMenuLabel className="px-3 pt-2 pb-1 text-muted-foreground text-xs uppercase tracking-wide">
 					Theme
 				</DropdownMenuLabel>
-				<DropdownMenuRadioGroup value={theme} onValueChange={(v) => setTheme(v as ThemeChoice)}>
+				<DropdownMenuRadioGroup
+					value={theme}
+					onValueChange={(v) => {
+						if (isMember(THEME_KEYS, v)) {
+							setTheme(v);
+						}
+					}}
+				>
 					{THEME_OPTIONS.map(({ value, label, Icon }) => (
 						<DropdownMenuRadioItem key={value} value={value} className="gap-2.5 px-3 py-2 text-sm">
 							<Icon className="size-4" />

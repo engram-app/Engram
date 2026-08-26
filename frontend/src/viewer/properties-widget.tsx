@@ -191,7 +191,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 		}
 		const dismiss = (event: Event) => {
 			const root = rootRef.current;
-			const target = event.target as Element | null;
+			const target = event.target instanceof Element ? event.target : null;
 			if (!root || root.contains(target)) {
 				return;
 			}

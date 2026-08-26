@@ -65,8 +65,7 @@ export interface EngramConfig {
 // defaults if both fail — emit a single console error in prod so a missing
 // /config.json deploy is loud rather than silently broken.
 export async function loadConfig(): Promise<EngramConfig> {
-	const injected = (window as unknown as { __ENGRAM_CONFIG__?: Record<string, unknown> })
-		.__ENGRAM_CONFIG__;
+	const injected = window.__ENGRAM_CONFIG__;
 
 	if (injected) {
 		return normalize(injected);

@@ -155,7 +155,7 @@ function ChecklistWidget() {
 						dismissed: isDismissed("install_obsidian_plugin"),
 						docUrl: DOC_URLS.install_obsidian_plugin,
 						dismissible: true,
-					} as Item,
+					} satisfies Item,
 				]
 			: []),
 		...tools.map(
