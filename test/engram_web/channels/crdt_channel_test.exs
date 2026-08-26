@@ -1865,6 +1865,81 @@ defmodule EngramWeb.CrdtChannelTest do
   # crdt_msg — sync step1 → step2 reply
   # ---------------------------------------------------------------------------
 
+  # #1409: a room is `auto_exit: true` — it dies when its LAST OBSERVER leaves.
+  # The channel becomes an observer on first contact and the only thing that
+  # ever releases it is the room asking, which happens after `idle_exit_ms`
+  # (5 minutes). So a room cannot close early no matter how briefly it was
+  # needed: a 2,000-note first sync holds 2,000 rooms for five minutes past
+  # their last frame, bounded only by the LRU cap force-evicting them.
+  #
+  # `crdt_release` is the client saying "done with this note" — the manual
+  # close. Interactive editing keeps the 5-minute idle behaviour; a bulk import
+  # releases each note the moment it has converged.
+  #
+  # It is a SEPARATE frame rather than a flag on `crdt_msg` because releasing
+  # inside the `crdt_msg` handler would race the STEP2 the client is still
+  # waiting for: `relay_frame` is a cast and the room answers observers
+  # asynchronously, so unobserving on the way out of a STEP1 can drop the very
+  # reply that makes convergence work. Only the client knows the exchange is
+  # finished.
+  describe "crdt_release" do
+    test "releases this channel's observation and lets the room auto_exit", %{
+      socket: socket,
+      doc_id: doc_id
+    } do
+      client = CrdtBridge.new_doc()
+      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+      {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+      push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(frame)})
+      assert_push "crdt_msg", %{"doc_id" => ^doc_id}, 3000
+
+      room = CrdtRegistry.lookup(doc_id)
+      assert is_pid(room)
+      room_ref = Process.monitor(room)
+
+      ref = push(socket, "crdt_release", %{"doc_id" => doc_id})
+      assert_reply ref, :ok, %{}
+
+      # THE point: milliseconds, not the 5-minute idle timer.
+      assert_receive {:DOWN, ^room_ref, :process, ^room, _}, 2_000
+      assert CrdtRegistry.lookup(doc_id) == nil
+    end
+
+    test "the checkpoint still lands — release must not lose the edit", %{
+      socket: socket,
+      user: user,
+      vault: vault,
+      doc_id: doc_id
+    } do
+      # auto_exit -> terminate/2 -> unbind -> checkpoint is what persists the
+      # room's doc. Releasing early is only safe because it goes through that
+      # same path; a brutal kill here would drop the body.
+      client = CrdtBridge.new_doc()
+      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+      {:ok, f1} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+      push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(f1)})
+      assert_push "crdt_msg", %{"doc_id" => ^doc_id, "b64" => b64}, 3000
+      {:ok, {:sync, {:sync_step2, update}}} = Yex.Sync.message_decode(Base.decode64!(b64))
+      :ok = Yex.apply_update(client, update)
+
+      CrdtBridge.text_of(client)
+      Yex.Text.insert(Yex.Doc.get_text(client, "content"), 0, "RELEASED-")
+      {:ok, edit} = Yex.encode_state_as_update(client)
+      {:ok, f2} = Yex.Sync.message_encode({:sync, {:sync_update, edit}})
+      push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(f2)})
+
+      ref = push(socket, "crdt_release", %{"doc_id" => doc_id})
+      assert_reply ref, :ok, %{}
+
+      assert_note_content_eventually(user, vault, doc_id, "RELEASED-base")
+    end
+
+    test "an unknown or unobserved doc_id is a quiet no-op, not an error", %{socket: socket} do
+      ref = push(socket, "crdt_release", %{"doc_id" => Ecto.UUID.generate()})
+      assert_reply ref, :ok, %{}
+    end
+  end
+
   describe "crdt_msg" do
     test "sync step1 for existing doc yields a step2 crdt_msg reply with server content",
          %{socket: socket, doc_id: doc_id} do

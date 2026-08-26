@@ -694,6 +694,52 @@ defmodule EngramWeb.CrdtChannel do
   # Gated on the same :handshake rate budget as every real frame above — an
   # unguarded fallback let malformed/unknown frames flood the channel outside
   # any budget.
+  # #1409: the client is DONE with this note — release it now instead of holding
+  # it for `idle_exit_ms`.
+  #
+  # A room is `auto_exit: true`, so it dies when its last observer leaves. The
+  # channel becomes an observer on first contact and the ONLY thing that ever
+  # released it was the room's own idle drain, five minutes after the last
+  # frame. That is right for an open editor and badly wrong for a bulk first
+  # sync, where each note needs its room for milliseconds and held it for
+  # minutes — 2,000 rooms resident, bounded only by the LRU force-evicting them.
+  #
+  # A separate frame rather than a flag on `crdt_msg`, because releasing inside
+  # that handler would race the reply: `relay_frame` is a cast and the room
+  # answers observers asynchronously, so unobserving on the way out of a STEP1
+  # can drop the STEP2 the client is waiting for. Only the client knows the
+  # exchange is finished.
+  #
+  # Reuses the idle drain's own release + bookkeeping (`handle_note_room_drain`)
+  # rather than adding a second teardown: that path unobserves and lets
+  # `auto_exit` run `terminate/2` -> unbind -> checkpoint, so the body is
+  # persisted. `CrdtRegistry.terminate_room/1` would NOT do — it brutal-kills to
+  # avoid unioning a second lineage, which is correct for eviction and would
+  # silently drop this room's edits.
+  #
+  # Rides the :handshake bucket: it is once-per-note connection bookkeeping, the
+  # same shape as the STEP1 that opened the room.
+  @impl true
+  def handle_in("crdt_release", %{"doc_id" => doc_id}, socket) do
+    case check_rate(socket, :handshake) do
+      {:error, :rate_limited} ->
+        {:reply, {:error, %{reason: "rate_limited"}}, socket}
+
+      :ok ->
+        case Map.get(socket.assigns.rooms, doc_id) do
+          # Never observed here (already released, another channel's, or an id we
+          # do not know). A no-op, not an error: the client releases
+          # optimistically and must not have to track what the server holds.
+          nil ->
+            {:reply, {:ok, %{}}, socket}
+
+          %{room: room} ->
+            {:noreply, socket} = handle_note_room_drain(room, socket)
+            {:reply, {:ok, %{}}, socket}
+        end
+    end
+  end
+
   @impl true
   def handle_in(_event, _payload, socket) do
     case check_rate(socket, :handshake) do
