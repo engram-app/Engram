@@ -9,11 +9,15 @@ defmodule Engram.Folders do
   **batch-delete**, and **batch-move** (REST + MCP) — routes through here so no
   caller can forget the attachment leg.
 
-  The marker-only single DELETE (`DELETE /api/folders/:path`) intentionally does
-  NOT route through here: it calls `Notes.delete_folder_marker/3`, which removes
-  just the folder marker and deletes no content — the notes AND attachments under
-  that path stay live. With nothing deleted, there is nothing to cascade, so a
-  coordinator hop would be a no-op.
+  `DELETE /api/folders/:path` picks one of two paths. Without `recursive=true`
+  it stays marker-only — `Notes.delete_folder_marker/3` removes just the folder
+  marker and deletes no content, so the notes AND attachments under that path
+  stay live; with nothing deleted there is nothing to cascade and a coordinator
+  hop would be a no-op. That is the shape the Obsidian plugin pushes, because
+  Obsidian sends its own per-note deletes alongside the folder delete. With
+  `recursive=true` (what the web app sends) it routes through `delete/4` here,
+  because a folder with no marker of its own — one the server only derives from
+  the paths of the notes inside it — cannot be removed any other way.
 
   Consistency is atomic across BOTH tables: each op wraps the notes leg and the
   attachment leg in a single `Repo.transaction` (the legs' own
