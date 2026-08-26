@@ -398,6 +398,81 @@ defmodule Engram.Workers.EmbedNote do
     )
   end
 
+  # Deliberately NOT Oban's full :incomplete set — `executing` is excluded.
+  # A running job may already have read the previous content, so a fresh edit
+  # genuinely needs its own job; suppressing on `executing` would leave that
+  # edit unsearchable until ReconcileEmbeddings swept it (~45 min). Jobs in
+  # these three states have not started and will read whatever the row holds
+  # when they run, so a second job for the same note is pure waste.
+  #
+  # Subset of the predicate on oban_jobs_embed_note_note_id_index, which is
+  # what keeps this index-backed rather than a scan of the embed backlog
+  # (guarded by embed_note_burst_index_test.exs).
+  @pending_states ~w(scheduled available retryable)
+
+  # Ids per lookup query. 50 is the measured cliff: at/below it Postgres plans
+  # an index scan on the expression index; above it the row estimate blows up
+  # and it reverts to a Seq Scan of the whole backlog. See
+  # reject_already_queued/1 and embed_note_bulk_dedup_test.exs.
+  @lookup_chunk 50
+
+  @doc """
+  Drop note ids that already have an in-flight `EmbedNote` job.
+
+  `unique:` is enforced by Oban's `insert/3` advisory lock. Bulk callers use
+  `Oban.insert_all/2`, and **the basic engine ignores `unique` there** — bulk
+  unique is an Oban Pro (Smart Engine) feature. So every bulk enqueue site is
+  free to stack a second job onto a note that already has one pending.
+
+  On its own that is a duplicate. Combined with `ReconcileEmbeddings` it is a
+  ratchet: that worker selects notes whose `embed_hash != content_hash` and
+  whose cooldown has lapsed, and never asks whether a job is already pending
+  (its own comment assumed "EmbedNote is uniq-deduped"). A note whose job is
+  stuck therefore collects one more job per backoff window, forever. Measured
+  in dev on 2026-08-25: 61,536 pending jobs for 4,266 notes, one note queued
+  184 times across five days, which then kept the backlog from ever draining.
+
+  Chunked at `@lookup_chunk` ids per query, which is a plan decision, not
+  taste. Postgres estimates `args->>'note_id' = ANY($1)` badly for a large
+  array: measured on a 40k-row `oban_jobs`, arrays of 25-50 planned as a Bitmap
+  Heap Scan on `oban_jobs_embed_note_note_id_index` (0.4-2.8 ms), while 100+
+  flipped to a Seq Scan (23-31 ms). The seq scan is O(backlog) — it degrades
+  precisely as the backlog grows, i.e. exactly when this guard is load-bearing.
+  Ten small index probes beat one scan that gets worse over time.
+
+  Still far cheaper than the per-note `existing_burst_start/1` SELECT that
+  `clamp: false` exists to avoid: `@batch_size` notes cost 10 queries, not 500.
+
+  Not a uniqueness guarantee: two bulk callers racing between this read and
+  their inserts can still produce two jobs, and an `executing` job never
+  suppresses (see `@pending_states`). Both are bounded and self-correcting —
+  the extra job is a no-op once `embed_hash` is stamped — which is the whole
+  difference between a duplicate and a ratchet.
+  """
+  @spec reject_already_queued([Ecto.UUID.t()]) :: [Ecto.UUID.t()]
+  def reject_already_queued([]), do: []
+
+  def reject_already_queued(note_ids) do
+    queued =
+      note_ids
+      |> Enum.map(&to_string/1)
+      |> Enum.chunk_every(@lookup_chunk)
+      |> Enum.flat_map(&queued_ids/1)
+      |> MapSet.new()
+
+    Enum.reject(note_ids, &MapSet.member?(queued, to_string(&1)))
+  end
+
+  defp queued_ids(wanted) do
+    from(j in Oban.Job,
+      where: j.worker == "Engram.Workers.EmbedNote",
+      where: j.state in @pending_states,
+      where: fragment("? ->> 'note_id'", j.args) in ^wanted,
+      select: fragment("? ->> 'note_id'", j.args)
+    )
+    |> Repo.all()
+  end
+
   @backfill_priority 9
 
   @doc """

@@ -96,13 +96,21 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         # ceiling is moot; skip the per-note burst-start SELECT (one per stale
         # note, up to @batch_size, every tick).
         #
+        # reject_already_queued/1 is what keeps this worker from being a
+        # ratchet. The eligibility query above filters on content/cooldown and
+        # NOT on "is a job already pending" — it used to assume `unique` covered
+        # that, which insert_all disables. So a note whose job was stuck
+        # collected one more job per backoff window: 61,536 jobs for 4,266 notes
+        # in dev on 2026-08-25, which is what kept the queue from draining.
+        #
         # Backfill priority unconditionally: everything this worker finds is by
         # definition catch-up — a note that fell through, a crash retry, or the
         # tail of a bulk import. None of it has a user waiting on it, so none of
         # it may outrank a live edit.
         Oban.insert_all(
-          Enum.map(
-            note_ids,
+          note_ids
+          |> EmbedNote.reject_already_queued()
+          |> Enum.map(
             &EmbedNote.new_debounced(&1, clamp: false, priority: EmbedNote.backfill_priority())
           )
         )

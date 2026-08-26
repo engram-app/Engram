@@ -36,8 +36,15 @@ defmodule Engram.Workers.ReindexKeyword do
       )
       |> Repo.all(skip_tenant_check: true)
 
-    jobs = Enum.map(note_ids, fn id -> EmbedNote.new(%{note_id: to_string(id)}) end)
-    _ = Oban.insert_all(jobs)
+    # insert_all ignores `unique`, so re-running a reindex over a vault that
+    # still has embeds in flight would double every one of them. See
+    # EmbedNote.reject_already_queued/1.
+    jobs =
+      note_ids
+      |> EmbedNote.reject_already_queued()
+      |> Enum.map(fn id -> EmbedNote.new(%{note_id: to_string(id)}) end)
+
+    _ = if jobs != [], do: Oban.insert_all(jobs)
     :ok
   end
 end
