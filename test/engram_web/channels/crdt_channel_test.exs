@@ -933,35 +933,6 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_note_content_eventually(user, vault, id, "the concurrent body that won the fence")
     end
 
-    test "an unexpected info message is ignored, never fatal to the channel", %{
-      socket: socket,
-      user: user,
-      vault: vault
-    } do
-      # A channel is a GenServer, so an unmatched handle_info/2 kills it — and
-      # killing this one drops every room the device has open, its whole sync
-      # session, over a message we did not care about. Late replies from
-      # timed-out calls, transport noise, and stale monitors all land here.
-      id = Ecto.UUID.generate()
-      channel_pid = socket.channel_pid
-
-      send(channel_pid, :some_message_nobody_handles)
-      send(channel_pid, {:tuple, :form, 3})
-
-      assert Process.alive?(channel_pid)
-
-      # And it still works afterwards — not merely alive, but serving.
-      ref =
-        push(socket, "crdt_create", %{
-          "doc_id" => id,
-          "path" => "Notes/after-stray-message.md",
-          "b64" => frame_for_content("still working")
-        })
-
-      assert_reply ref, :ok, %{doc_id: ^id}
-      assert_note_content_eventually(user, vault, id, "still working")
-    end
-
     test "a RAISED seed costs that note its seed, never the channel", %{
       socket: socket,
       user: user,

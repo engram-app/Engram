@@ -1811,34 +1811,6 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  # Catch-all, mirroring the one `handle_in/3` already has. A channel is a
-  # GenServer: without this, ANY unmatched message kills it, and killing this
-  # channel drops every room the device has open — its whole sync session — to
-  # recover from a message we simply did not care about. The blast radius is
-  # wildly out of proportion to the cause, and the cause is not always ours:
-  # a late reply from a timed-out call, a `:ssl_closed` from a dependency, a
-  # monitor we no longer track all arrive here.
-  #
-  # This is not hypothetical. A test hook parked this process mid-checkpoint
-  # with a receive-timeout and released it by message; under CI load the
-  # timeout won the race, the channel was back in its own loop, and the release
-  # landed here and crashed it. Same shape as any late/stray message in prod.
-  #
-  # Logged at warning rather than swallowed, so an unexpected message is still
-  # visible instead of becoming a silent drop.
-  def handle_info(message, socket) do
-    Logger.warning(
-      "crdt channel ignoring unexpected message",
-      Metadata.with_category(:warning, :sync,
-        user_id: socket.assigns.current_user.id,
-        vault_id: socket.assigns.vault.id,
-        message_kind: Engram.Telemetry.error_kind(message)
-      )
-    )
-
-    {:noreply, socket}
-  end
-
   @doc """
   Let go of `room` in response to a drain (#1152).
 
