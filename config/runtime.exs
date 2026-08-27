@@ -688,6 +688,34 @@ if config_env() == :prod do
     config :engram, EngramWeb.RateLimiter, backend: :distributed_ets
   end
 
+  # Node role. `queues: false` supervises no producers while leaving
+  # `Oban.insert/1` fully working, so a node that holds user sockets still
+  # ENQUEUES embed/index/checkpoint work but never EXECUTES it. That is the
+  # whole split: `embed: 5` (peak ≈ 560 MB) and `indexing: 2` can no longer
+  # take schedulers or pool connections from the node a user is typing into.
+  #
+  # The flag is opt-OUT, and that direction is load-bearing. Unset means "run
+  # every queue", so a single-node deploy (self-host, and any SaaS node brought
+  # up before the worker service exists) keeps the full list from
+  # config/config.exs and behaves exactly as today. Only a node explicitly
+  # marked `web` stops executing. An opt-IN flag would invert the failure: one
+  # unset variable on the worker service and NOTHING in the cluster drains the
+  # queues — silently, since enqueues keep succeeding.
+  #
+  # Plugins stay on EVERY node on purpose. Cron/Pruner/Lifeline are
+  # leader-elected through Oban's Postgres peer table, and Cron only INSERTS
+  # jobs — the worker is what runs them. Disabling plugins here would mean a
+  # web node winning leadership silently stops all cron work.
+  #
+  # The worker MUST share DNS_CLUSTER_QUERY with the web nodes:
+  # `Workers.CheckpointNote` guards on `CrdtRegistry.lookup/1`, which is
+  # `:global`. Unclustered, it cannot see a room live on a web node, stops
+  # snoozing, and checkpoints a note someone has open — writing behind the
+  # room's back.
+  if System.get_env("ENGRAM_NODE_ROLE") == "web" do
+    config :engram, Oban, queues: false
+  end
+
   config :engram, EngramWeb.Endpoint,
     http: [
       # Enable IPv6 and bind on all interfaces.
