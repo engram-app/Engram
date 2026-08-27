@@ -37,6 +37,7 @@ Live. This is regenerated from `config/runtime.exs` (the ~90 vars it reads), wit
 | `SECRET_KEY_BASE` | — (required in prod, :597) | Phoenix cookie/secret signing. |
 | `JWT_SECRET` | — (required in prod, :604) | Joken default signer for internal JWTs (:610). |
 | `DNS_CLUSTER_QUERY` | unset | libcluster DNS query for BEAM node discovery (:612). When set, the rate limiter auto-selects the distributed ETS + Phoenix.PubSub backend; unset → plain ETS. |
+| `ENGRAM_NODE_ROLE` | unset (= runs every queue) | Set to `web` to supervise NO Oban queues on this node — it still enqueues, a worker executes. Opt-out on purpose: unset keeps the full queue list, so self-host and single-node deploys need no configuration. A `web` node without `DNS_CLUSTER_QUERY` warns at boot (nothing would drain the queues, and `CheckpointNote`'s live-room guard is a `:global` lookup that needs the cluster). |
 
 > `RELEASE_COOKIE` is consumed by the Elixir release runtime (`rel/`/`mix release`), not read in `runtime.exs`.
 
