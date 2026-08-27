@@ -17,6 +17,7 @@ defmodule Engram.Application do
     Engram.Crypto.Config.validate!()
     verify_spa_integrity!()
     warn_if_refresh_cookie_insecure()
+    warn_if_queues_disabled_without_cluster()
     install_log_redaction_filter()
     # Sentry logger handler must attach AFTER the redaction filter so
     # error logs sent to Sentry have already had secrets scrubbed by
@@ -177,6 +178,48 @@ defmodule Engram.Application do
   #
   # Only fires where the cookie actually exists (local credentials, i.e.
   # self-host) and only in a release build, so dev and test stay quiet.
+  # ENGRAM_NODE_ROLE=web disables this node's Oban producers. That is only safe
+  # when some OTHER node is draining the queues, and this node cannot see one —
+  # Oban peers meet through Postgres, not the cluster. So we check the closest
+  # available proxy: BEAM clustering. Both plausible mistakes fail this test.
+  #
+  # A single self-hosted node marked `web` executes nothing at all — no embeds,
+  # no checkpoints, no cron sweeps — and stays silent about it, because
+  # `Oban.insert/1` still succeeds with no producer behind it. The backlog is
+  # only visible in a table nobody reads until search has been stale for days.
+  #
+  # A web/worker pair running unclustered is the subtler one, and it is worse
+  # than a backlog. `Workers.CheckpointNote` refuses to run when the note has a
+  # live room, via `CrdtRegistry.lookup/1` — a `:global` lookup. Unclustered,
+  # the worker cannot see a room on the web node, so the guard reads "no room"
+  # and it checkpoints a note somebody has open, writing behind that room.
+  #
+  # Warn, never refuse: a legitimate cluster can form a beat after boot, and
+  # halting here would turn a recoverable misconfiguration into a crash loop.
+  defp warn_if_queues_disabled_without_cluster do
+    queues = :engram |> Application.get_env(Oban, []) |> Keyword.get(:queues)
+
+    if queues == false and is_nil(Application.get_env(:engram, :dns_cluster_query)) do
+      Logger.warning("""
+      ENGRAM_NODE_ROLE=web, so this node runs NO Oban queues — but no cluster
+      is configured (DNS_CLUSTER_QUERY is unset).
+
+      Nothing here will embed notes, checkpoint CRDT docs, or run the cron
+      sweeps. Enqueues keep succeeding, so the only symptom is work quietly
+      piling up in oban_jobs.
+
+      If you self-host a single node, UNSET ENGRAM_NODE_ROLE — the default runs
+      every queue and needs no configuration.
+
+      If you do run a separate worker, set DNS_CLUSTER_QUERY on both so they
+      form one cluster. Without it, CheckpointNote cannot see a live CRDT room
+      on this node and will checkpoint notes that are currently open.
+      """)
+    end
+
+    :ok
+  end
+
   defp warn_if_refresh_cookie_insecure do
     url = :engram |> Application.get_env(EngramWeb.Endpoint, []) |> Keyword.get(:url, [])
     scheme = Keyword.get(url, :scheme, "http")
