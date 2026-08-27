@@ -15,6 +15,19 @@ defmodule Engram.Workers.EmbedNoteTest do
 
   setup :verify_on_exit!
 
+  defp grant_semantic!(user) do
+    Engram.Repo.insert!(%Engram.Billing.UserLimitOverride{
+      user_id: user.id,
+      key: "search_semantic_enabled",
+      value: %{"v" => true},
+      reason: "test fixture: exercise the dense embed path",
+      set_by: "test"
+    })
+
+    Engram.Billing.OverrideCache.evict(user.id)
+    :ok
+  end
+
   setup do
     bypass = Bypass.open()
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
@@ -22,6 +35,10 @@ defmodule Engram.Workers.EmbedNoteTest do
 
     user = insert(:user)
     {:ok, user} = Crypto.ensure_user_dek(user)
+    # Factory users resolve to the Free tier, which is keyword-only and never
+    # calls the embedder. Every test in this file exercises the DENSE path, so
+    # the fixture user has to be one that is actually entitled to it.
+    :ok = grant_semantic!(user)
     vault = insert(:vault, user: user)
 
     # Phase B.3 requires Phase B ciphertext on every note row, so go through
@@ -69,14 +86,67 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert updated.embed_hash == updated.content_hash
     end
 
-    test "skips embedding when embed_hash matches content_hash", %{note: note} do
-      # Pre-set embed_hash to match content_hash
+    test "skips embedding when both hashes match content_hash", %{note: note} do
       import Ecto.Query
 
       from(n in Note, where: n.id == ^note.id)
-      |> Repo.update_all([set: [embed_hash: note.content_hash]], skip_tenant_check: true)
+      |> Repo.update_all(
+        [set: [embed_hash: note.content_hash, dense_indexed_hash: note.content_hash]],
+        skip_tenant_check: true
+      )
 
       # No mock expectations — if it tried to embed, Mox would fail
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+    end
+
+    test "re-embeds an entitled user's note that has no dense vectors (upgrade backfill)", %{
+      bypass: bypass,
+      note: note
+    } do
+      import Ecto.Query
+
+      # The shape a note is left in by a keyword-only tier: content IS indexed
+      # (embed_hash stamped, so ReconcileEmbeddings leaves it alone) but it has
+      # no dense vectors. Once the user is entitled, this must re-embed —
+      # otherwise someone pays for semantic search and gets zero vectors.
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(
+        [set: [embed_hash: note.content_hash, dense_indexed_hash: nil]],
+        skip_tenant_check: true
+      )
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert Repo.get!(Note, note.id, skip_tenant_check: true).dense_indexed_hash ==
+               note.content_hash
+    end
+
+    test "does NOT re-embed a keyword-only user's note with no dense vectors", %{note: note} do
+      import Ecto.Query
+
+      # Same row shape as above, but the user is not entitled. This MUST be a
+      # no-op: ReconcileEmbeddings re-enqueues on a 15-minute cron, so embedding
+      # here would bill Voyage for a free user every 15 minutes, forever.
+      Engram.Repo.delete_all(
+        from(o in Engram.Billing.UserLimitOverride,
+          where: o.user_id == ^note.user_id and o.key == "search_semantic_enabled"
+        )
+      )
+
+      Engram.Billing.OverrideCache.evict(note.user_id)
+
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(
+        [set: [embed_hash: note.content_hash, dense_indexed_hash: nil]],
+        skip_tenant_check: true
+      )
+
+      # No mock expectations — any embed call fails the test.
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
     end
 
@@ -243,6 +313,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       user = insert(:user)
       {:ok, user} = Crypto.ensure_user_dek(user)
+      :ok = grant_semantic!(user)
       vault = insert(:vault, user: user)
 
       # upsert_note encrypts content on the way in

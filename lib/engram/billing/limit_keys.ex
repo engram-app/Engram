@@ -80,6 +80,22 @@ defmodule Engram.Billing.LimitKeys do
     ai_queries_per_day: %{type: :integer, defaults: %{free: nil, starter: 500, pro: 10_000}},
     conversation_window_minutes: %{type: :integer, defaults: %{free: 30, starter: 30, pro: 30}},
     reranker_enabled: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
+    # Grant-shaped, like every boolean here: `true` == this user gets semantic
+    # (dense-vector) retrieval. Free is keyword-only (BM25 over Qdrant sparse
+    # vectors). Enforced in `Engram.Search.do_search/4` via `SearchProfile`, NOT
+    # in the controller — `Engram.MCP.Handlers` calls `Search.search/4` directly
+    # at four sites, two of which pass no mode at all, so a controller-level gate
+    # would leave MCP (the Free tier's whole demo path) on dense retrieval.
+    search_semantic_enabled: %{
+      type: :boolean,
+      defaults: %{free: false, starter: true, pro: true}
+    },
+    # How many of a user's notes get indexed at all. NOT a cap on how many sync —
+    # capping sync leaves a half-synced vault on first sync and the user bounces.
+    # Ranked by server-side creation time among LIVE notes, so deleting frees a
+    # slot. The consequence is that a user's NEWEST work falls outside the cap,
+    # which is why the count is surfaced in the UI rather than failing silently.
+    indexed_notes_cap: %{type: :integer, defaults: %{free: 2_000, starter: nil, pro: nil}},
     # API KEYS ARE PRO-ONLY. Both keys gate ONLY API-key-authed traffic:
     # `RequireApiWriteEnabled` and `RequireApiRpsBudget` exempt any request
     # without `:current_api_key`, and `ChannelGate.api_access/2` only rejects

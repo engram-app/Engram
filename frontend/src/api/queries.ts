@@ -1337,9 +1337,19 @@ export interface Capabilities {
 	limits: Record<string, number | boolean | null>;
 }
 
+// Live note counters. Deliberately NOT part of `capabilities`: that matrix is
+// ETS-cached for 24h server-side, and these move every time the user writes a
+// note. `indexed` is min(total, cap) — the cap is the contract; how far the
+// index queue has drained is an implementation detail we don't surface.
+export interface IndexStatus {
+	indexed: number;
+	total: number;
+}
+
 export interface BootstrapPayload {
 	onboarding: OnboardingStatus;
 	capabilities: Capabilities;
+	index_status: IndexStatus;
 	vaults: { vaults: Vault[] };
 	// Present only when billing is enabled (SaaS); absent on self-host.
 	billing?: BillingStatus;
@@ -1352,6 +1362,23 @@ export function useCapabilities() {
 		// Infinity → no fetch). The queryFn is a fallback for any consumer that
 		// mounts before the gate's bootstrap seed lands.
 		queryFn: () => api.get<BootstrapPayload>("/bootstrap").then((b) => b.capabilities),
+		staleTime: Number.POSITIVE_INFINITY,
+	});
+}
+
+/**
+ * Cache-only: reads what useAppBootstrap seeded and never fetches on its own.
+ *
+ * Unlike useCapabilities, this has no fallback queryFn. The value drives one
+ * advisory line ("Searching 2,000 of 4,312 notes"), so a consumer that mounts
+ * before the bootstrap seed should render nothing rather than issue a second
+ * /bootstrap round-trip — and a component test shouldn't hit the network to
+ * render a search box.
+ */
+export function useIndexStatus() {
+	return useQuery<IndexStatus>({
+		queryKey: ["index_status"],
+		enabled: false,
 		staleTime: Number.POSITIVE_INFINITY,
 	});
 }
@@ -1371,6 +1398,7 @@ export function useAppBootstrap() {
 			const data = await api.get<BootstrapPayload>("/bootstrap");
 			qc.setQueryData(["onboarding", "status"], data.onboarding);
 			qc.setQueryData(["capabilities"], data.capabilities);
+			qc.setQueryData(["index_status"], data.index_status);
 			qc.setQueryData(["vaults"], data.vaults);
 			// Runs here, not in an effect: parent effects fire AFTER their
 			// children's, so a gate-level effect would land one render too late and

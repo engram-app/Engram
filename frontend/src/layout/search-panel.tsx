@@ -19,6 +19,7 @@ import {
 	type SearchFilters,
 	type SearchResult,
 	useFolders,
+	useIndexStatus,
 	useSearch,
 	useTags,
 	useTypes,
@@ -221,6 +222,11 @@ function SearchPanel({
 	// search (Voyage embed + Qdrant) per character typed.
 	const deferred = useDebouncedValue(input.trim(), 300);
 	const { data: results, isLoading, error } = useSearch(deferred, filters);
+	const { data: indexStatus } = useIndexStatus();
+	// A capped user's un-indexed notes are simply absent from results. Without
+	// this the only signal is an empty result list, which reads as "search is
+	// broken" rather than "this note is not indexed yet".
+	const capped = Boolean(indexStatus && indexStatus.indexed < indexStatus.total);
 	const [recent, setRecent] = useState<string[]>(() => readRecent());
 
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -586,6 +592,14 @@ function SearchPanel({
 				{deferred && results && results.length === 0 && !isLoading && (
 					<p className="px-3 py-2 text-muted-foreground text-xs">No results for "{deferred}"</p>
 				)}
+				{capped && deferred && !isLoading && indexStatus ? (
+					<p className="px-3 pb-2 text-muted-foreground text-xs">
+						{`Searching ${indexStatus.indexed.toLocaleString()} of ${indexStatus.total.toLocaleString()} notes. `}
+						<Link className="underline underline-offset-2" to="/billing">
+							Upgrade to search everything
+						</Link>
+					</p>
+				) : null}
 				{results && results.length > 0 && (
 					<>
 						<p className="px-3 pt-2 text-muted-foreground text-xs" aria-live="polite">
