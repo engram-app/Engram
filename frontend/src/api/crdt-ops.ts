@@ -84,16 +84,31 @@ export async function sendCrdtCreate(
 	return res.doc_id;
 }
 
-export interface CrdtCreateBatchResult {
-	results: { doc_id: string; status: "ok" | "error"; reason?: string; limit?: number }[];
+/** What the server did with a genesis `b64`, verbatim from the reply.
+ *  `stored` is the ONLY outcome that means the body is durably readable —
+ *  `absent` (nothing seeded, the row is empty) and `occupied` (the row holds
+ *  another lineage's body) both mean our content did not land. */
+export type GenesisOutcome = "stored" | "absent" | "occupied";
+
+export interface CrdtCreateWithContentResult {
+	doc_id: string;
+	genesis: GenesisOutcome;
 }
 
-/** Batch genesis-with-content (server caps at 100 creates/request). */
-export function sendCrdtCreateBatch(
+/** Genesis a note row AND seed its body in one round trip. Same frame as
+ *  `sendCrdtCreate`, plus the `b64` genesis update the server applies
+ *  roomlessly. */
+export function sendCrdtCreateWithContent(
 	channel: PushChannel | null,
-	creates: { doc_id: string; path: string; b64: string }[],
-): Promise<CrdtCreateBatchResult> {
-	return pushRequest<CrdtCreateBatchResult>(channel, "crdt_create_batch", { creates });
+	docId: string,
+	path: string,
+	b64: string,
+): Promise<CrdtCreateWithContentResult> {
+	return pushRequest<CrdtCreateWithContentResult>(channel, "crdt_create", {
+		doc_id: docId,
+		path,
+		b64,
+	});
 }
 
 /** Delete a note by id, awaiting the server ack (idempotent — resolves even if

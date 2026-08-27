@@ -21,7 +21,10 @@ WebSocket connect: wss://api.engram.page/socket/websocket?token=<api_key|jwt>
 ## Client → Server Events
 
 None. All writes ride the `crdt:` channel (`crdt_msg`, `crdt_create`,
-`crdt_create_batch`, `crdt_delete`, `crdt_catchup_since`). The legacy inbound
+`crdt_delete`, `crdt_catchup_since`). A brand-new note's body rides
+`crdt_create`'s optional `b64` genesis frame; the separate `crdt_create_batch`
+frame was removed once the plugin retired it and the web app was the only
+caller left, always sending a single entry. The legacy inbound
 ops (`push_note`, `delete_note`, `rename_note`, `pull_changes`) had no caller
 in any shipped client and were removed; a stray frame gets a
 `{"reason": "gone", "use": "crdt channel"}` error reply (catch-all — the

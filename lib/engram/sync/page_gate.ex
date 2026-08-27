@@ -37,9 +37,9 @@ defmodule Engram.Sync.PageGate do
   # silently the moment POOL_SIZE moves (it went 10 -> 15 without this file
   # knowing), which is exactly the class of bug a derived value cannot have.
   #
-  # A third, matching the spirit of crdt_channel.batch_concurrency taking a
-  # quarter: enough to overlap real work, not enough to monopolise the pool. A
-  # page is ~250 ms, so even 5 slots clears ~20 vaults/second.
+  # A third: enough to overlap real work, not enough to monopolise the pool. A
+  # page is ~250 ms, so even 5 slots clears ~20 vaults/second. (The sibling this
+  # used to cite, crdt_channel.batch_concurrency, went with crdt_create_batch.)
   @pool_divisor 3
   @min_limit 2
 

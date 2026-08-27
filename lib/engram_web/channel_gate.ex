@@ -41,7 +41,7 @@ defmodule EngramWeb.ChannelGate do
       and the plan's own limits JSON. That user is refused
       every non-GET REST route except `POST /api/search` (exempt as a read)
       and, after the revert, writes freely over
-      `crdt_create`, `crdt_create_batch`, `crdt_delete`, `sync_update` and `crdt_index_msg`. The mechanism is
+      `crdt_create`, `crdt_delete`, `sync_update` and `crdt_index_msg`. The mechanism is
       first-class (dedicated table, pg NOTIFY trigger, OverrideCache, expiry
       sweeper), so treat it as reachable in prod.
 

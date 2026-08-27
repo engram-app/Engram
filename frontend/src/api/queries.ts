@@ -2282,7 +2282,7 @@ export function useDuplicateNote() {
 		DuplicateNoteContext
 	>({
 		// Read the source over REST (reads stay REST), then genesis-create the copy
-		// WITH content over the crdt channel (crdt_create_batch) — replaces the
+		// WITH content over the crdt channel (crdt_create + b64) — replaces the
 		// second leg's POST /notes. The ok reply echoes our minted id.
 		mutationFn: async ({ src_path, new_path }) => {
 			const src = await api.get<Note>(`/notes/${encodePathSegments(src_path)}`);

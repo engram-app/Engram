@@ -3,7 +3,7 @@ import {
 	CrdtOpError,
 	pushRequest,
 	sendCrdtCreate,
-	sendCrdtCreateBatch,
+	sendCrdtCreateWithContent,
 	sendCrdtDelete,
 } from "./crdt-ops";
 
@@ -76,15 +76,30 @@ describe("sendCrdtDelete", () => {
 	});
 });
 
-describe("sendCrdtCreateBatch", () => {
-	it("pushes crdt_create_batch with the creates list and returns results", async () => {
-		const creates = [{ doc_id: "n1", path: "a.md", b64: "AAA" }];
+describe("sendCrdtCreateWithContent", () => {
+	it("pushes crdt_create carrying the genesis b64 and returns the outcome", async () => {
 		const { channel, push } = mockChannel({
 			status: "ok",
-			response: { results: [{ doc_id: "n1", status: "ok" }] },
+			response: { doc_id: "n1", genesis: "stored" },
 		});
-		const res = await sendCrdtCreateBatch(channel, creates);
-		expect(push).toHaveBeenCalledWith("crdt_create_batch", { creates });
-		expect(res.results[0]).toEqual({ doc_id: "n1", status: "ok" });
+		const res = await sendCrdtCreateWithContent(channel, "n1", "a.md", "AAA");
+		expect(push).toHaveBeenCalledWith("crdt_create", {
+			doc_id: "n1",
+			path: "a.md",
+			b64: "AAA",
+		});
+		expect(res).toEqual({ doc_id: "n1", genesis: "stored" });
+	});
+
+	// The retired crdt_create_batch reported `status: "ok"` whether or not its
+	// seed actually took, so a declined genesis read as success and produced a
+	// silently empty note. The outcome has to reach the caller verbatim.
+	it("returns a non-stored outcome rather than flattening it to success", async () => {
+		const { channel } = mockChannel({
+			status: "ok",
+			response: { doc_id: "n1", genesis: "absent" },
+		});
+		const res = await sendCrdtCreateWithContent(channel, "n1", "a.canvas", "AAA");
+		expect(res.genesis).toBe("absent");
 	});
 });
