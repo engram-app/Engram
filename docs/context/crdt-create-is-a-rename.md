@@ -87,8 +87,6 @@ can reuse). It does not:
 - **`crdt_delete`** → `Notes.delete_note_by_id/4`, which is a thin wrapper that
   resolves the id and delegates to `delete_note/4` — the same function the REST
   path uses, and it already enqueues `Engram.Workers.ReleaseIndexEntries`.
-- **`crdt_create_batch`** → `prepare_create/4` → the same `genesis_crdt_note/5`,
-  so it inherits the claim above with no separate change.
 
 The relocate leg was the only gap, because it is the only one that reached the
 row through a path the REST equivalent does not share.

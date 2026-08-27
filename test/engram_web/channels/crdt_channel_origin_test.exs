@@ -40,8 +40,8 @@ defmodule EngramWeb.CrdtChannelOriginTest do
   end
 
   # Mirrors crdt_channel_test.exs's frame_for_content/1 — a genesis
-  # sync_update frame carrying real content, so crdt_create_batch's phase-1
-  # genesis leg resolves "ok" instead of some other status.
+  # sync_update frame carrying real content, so the roomless seed has a body
+  # to apply and reports `genesis: "stored"` rather than declining.
   defp frame_for_content(content) do
     doc = CrdtBridge.new_doc()
     :ok = CrdtBridge.ingest_plaintext(doc, content)
@@ -80,22 +80,22 @@ defmodule EngramWeb.CrdtChannelOriginTest do
     assert job.args["target_id"] == note.id
   end
 
-  test "batch-path relocate carries the same origin",
+  test "genesis-with-content relocate carries the same origin",
        %{user: user, vault: vault, note: note} do
     socket = join!(user, vault, %{"crdt_proto" => 2, "client_type" => "web"})
 
-    # note.id already exists (setup, path "Old.md") — reusing it at a new,
-    # free path through crdt_create_batch takes the SAME relocate leg
-    # (genesis_relocate_live) that crdt_create does, exercising
-    # prepare_create/4's origin threading rather than a plain genesis.
+    # note.id already exists (setup, path "Old.md") — reusing it at a new, free
+    # path takes the relocate leg (genesis_relocate_live) rather than a plain
+    # genesis. Sent WITH a b64 body on purpose: the seeding path is a separate
+    # leg from the bare create above, and origin has to thread through it too.
     ref =
-      push(socket, "crdt_create_batch", %{
-        "creates" => [
-          %{"doc_id" => note.id, "path" => "Fresh.md", "b64" => frame_for_content("body")}
-        ]
+      push(socket, "crdt_create", %{
+        "doc_id" => note.id,
+        "path" => "Fresh.md",
+        "b64" => frame_for_content("body")
       })
 
-    assert_reply ref, :ok, %{results: [%{status: "ok"}]}
+    assert_reply ref, :ok, %{doc_id: _}
     assert [_job] = all_enqueued(worker: RewriteNoteLinks)
   end
 end

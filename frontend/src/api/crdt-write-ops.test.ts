@@ -109,10 +109,10 @@ describe("crdtCreateNote / crdtDeleteNote — offline gate", () => {
 });
 
 describe("crdtCreateNoteWithContent — adopt detection (occupied path)", () => {
-	const batchReply = (entry: { doc_id: string; status: "ok" | "error"; reason?: string }) => ({
+	const createReply = (reply: { doc_id: string; genesis: string }) => ({
 		receive(status: string, cb: (r?: unknown) => void) {
 			if (status === "ok") {
-				cb({ results: [entry] });
+				cb(reply);
 			}
 			return this;
 		},
@@ -121,10 +121,14 @@ describe("crdtCreateNoteWithContent — adopt detection (occupied path)", () => 
 	it("returns the doc_id when the server CREATES our note (id echoed back)", async () => {
 		await connectChannel(opts);
 		h.joins.ok?.();
-		h.crdtPush.mockReturnValue(batchReply({ doc_id: "minted-new", status: "ok" }));
+		h.crdtPush.mockReturnValue(createReply({ doc_id: "minted-new", genesis: "stored" }));
 
 		await expect(crdtCreateNoteWithContent("minted-new", "folder/copy.md", "# copy")).resolves.toBe(
 			"minted-new",
+		);
+		expect(h.crdtPush).toHaveBeenCalledWith(
+			"crdt_create",
+			expect.objectContaining({ doc_id: "minted-new", path: "folder/copy.md" }),
 		);
 	});
 
@@ -133,10 +137,25 @@ describe("crdtCreateNoteWithContent — adopt detection (occupied path)", () => 
 		h.joins.ok?.();
 		// Path already held by another live note → backend genesis_adopt_or_insert
 		// returns {:ok, live} with the OCCUPANT's id, never seeding our content.
-		h.crdtPush.mockReturnValue(batchReply({ doc_id: "existing-occupant", status: "ok" }));
+		h.crdtPush.mockReturnValue(createReply({ doc_id: "existing-occupant", genesis: "occupied" }));
 
 		await expect(
 			crdtCreateNoteWithContent("minted-new", "folder/taken.md", "# copy"),
 		).rejects.toMatchObject({ reason: "create_failed" });
+	});
+
+	// Our id came back, so the ROW is ours — but the server declined to seed the
+	// body (the roomless genesis refuses a non-markdown path, since projecting a
+	// markdown body over a canvas would erase the board). The retired
+	// crdt_create_batch reported `status: "ok"` here and the caller saved a
+	// silently EMPTY duplicate; the outcome has to reach the caller instead.
+	it("throws when the row is ours but the body was NOT seeded", async () => {
+		await connectChannel(opts);
+		h.joins.ok?.();
+		h.crdtPush.mockReturnValue(createReply({ doc_id: "minted-new", genesis: "absent" }));
+
+		await expect(
+			crdtCreateNoteWithContent("minted-new", "folder/board.canvas", "# copy"),
+		).rejects.toMatchObject({ reason: "not_seeded" });
 	});
 });

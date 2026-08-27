@@ -90,8 +90,8 @@ config :engram,
          # A DIFFERENT mechanism from the pool sizing above, and the pool_size
          # knob cannot help it: processes a test spawns do not take their own
          # connection, they share the OWNER's single checked-out one. So a batch
-         # that fans out to N processes (crdt_create_batch → one crdt_doc process
-         # per entry) serializes all N transactions through one connection, and
+         # that fans out to N processes (any Task.async_stream over per-entry
+         # transactions) serializes all N through one connection, and
          # queueing there is the designed behaviour rather than a shortage.
          #
          # DBConnection's defaults (queue_target 50ms / queue_interval 1000ms)

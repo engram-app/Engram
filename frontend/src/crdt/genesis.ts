@@ -13,7 +13,7 @@ function toB64(bytes: Uint8Array): string {
 
 /**
  * Build the base64 `messageSync` update frame that seeds a brand-new note's
- * content in one `crdt_create_batch` entry (the web's create-with-content path,
+ * content on the `crdt_create` frame (the web's create-with-content path,
  * e.g. duplicate + onboarding welcome-note — issue #1101).
  *
  * A note's Y.Doc holds the body in the `content` Y.Text and frontmatter in the

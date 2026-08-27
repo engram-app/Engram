@@ -484,9 +484,7 @@ describe("useDuplicateNote", () => {
 
 	it("surfaces create_failed (target occupied) so callers can toast", async () => {
 		get.mockResolvedValue({ content: "x" });
-		crdtCreateNoteWithContent.mockRejectedValue(
-			new CrdtOpError("create_failed", "crdt_create_batch"),
-		);
+		crdtCreateNoteWithContent.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
 
 		const { result } = renderHook(() => useDuplicateNote(), { wrapper });
 		await expect(

@@ -22,11 +22,10 @@ import { rlog } from "../observability/remote-log";
 import { beacon, newTraceContext, parseTraceparent, tracingEnabled } from "../observability/trace";
 import { getWsBase, joinWsUrl } from "./base";
 import {
-	type CrdtCreateBatchResult,
 	CrdtOpError,
 	type PushChannel,
 	sendCrdtCreate,
-	sendCrdtCreateBatch,
+	sendCrdtCreateWithContent,
 	sendCrdtDelete,
 } from "./crdt-ops";
 import { folderIdForPath, invalidateVaultTree } from "./queries";
@@ -653,18 +652,12 @@ export function crdtDeleteNote(docId: string): Promise<{ doc_id: string }> {
 	return opQueue ? opQueue.enqueueDelete(docId) : sendCrdtDelete(joinedCrdtChannel(), docId);
 }
 
-export function crdtCreateNotesBatch(
-	creates: { doc_id: string; path: string; b64: string }[],
-): Promise<CrdtCreateBatchResult> {
-	return sendCrdtCreateBatch(joinedCrdtChannel(), creates);
-}
-
 /**
  * Create a note WITH content in one round trip: build a genesis frame from the
- * markdown and send it as a single-entry crdt_create_batch. Returns the server's
- * authoritative doc_id, or rejects with a CrdtOpError carrying the entry's
- * reason. The socket-native replacement for `POST /notes {path, content}` (the
- * copy-note / seed paths — issue #1101).
+ * markdown and send it with the `crdt_create` frame. Returns the server's
+ * authoritative doc_id, or rejects with a CrdtOpError. The socket-native
+ * replacement for `POST /notes {path, content}` (the copy-note / seed paths —
+ * issue #1101).
  */
 export async function crdtCreateNoteWithContent(
 	docId: string,
@@ -672,21 +665,32 @@ export async function crdtCreateNoteWithContent(
 	markdown: string,
 ): Promise<string> {
 	const b64 = buildGenesisFrame(markdown);
-	const { results } = await crdtCreateNotesBatch([{ doc_id: docId, path, b64 }]);
-	const [r] = results;
-	if (!r || r.status === "error") {
-		throw new CrdtOpError(r?.reason ?? "create_failed", "crdt_create_batch");
-	}
+	const res = await sendCrdtCreateWithContent(joinedCrdtChannel(), docId, path, b64);
 	// ADOPT guard: unlike a bare crdt_create (adopt-safe — no content to lose),
 	// a create-WITH-content that adopts a DIFFERENT note at an occupied path
 	// silently drops our genesis frame (backend skips seeding a non-empty doc,
 	// or worse seeds our content into an unrelated empty occupant). A mismatched
 	// doc_id means the path was taken — surface it as the same conflict the old
 	// POST /notes 409 produced so the caller can toast, not vanish the copy.
-	if (r.doc_id !== docId) {
-		throw new CrdtOpError("create_failed", "crdt_create_batch");
+	if (res.doc_id !== docId) {
+		throw new CrdtOpError("create_failed", "crdt_create");
 	}
-	return r.doc_id;
+	// Only `stored` means the body actually landed. The retired batch frame
+	// reported `status: "ok"` whether or not its seed took, so a copy whose
+	// genesis was declined looked like a success and produced a silently EMPTY
+	// duplicate. `crdt_create` reports the real outcome — surface it, so the
+	// caller's existing toast fires instead of the user finding a blank note.
+	//
+	// The reachable case is a non-markdown source (`.canvas`): the roomless
+	// seed refuses it deliberately, because a canvas keeps its data in Y.Maps
+	// and would project an empty markdown body over the only copy of the board.
+	if (res.genesis !== "stored") {
+		throw new CrdtOpError(
+			res.genesis === "occupied" ? "create_failed" : "not_seeded",
+			"crdt_create",
+		);
+	}
+	return res.doc_id;
 }
 
 /** True when the live-sync socket exists and Phoenix reports it OPEN. Note: a
