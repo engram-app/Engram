@@ -712,8 +712,41 @@ if config_env() == :prod do
   # `:global`. Unclustered, it cannot see a room live on a web node, stops
   # snoozing, and checkpoints a note someone has open — writing behind the
   # room's back.
-  if System.get_env("ENGRAM_NODE_ROLE") == "web" do
-    config :engram, Oban, queues: false
+  # Matched against a CLOSED SET rather than testing for "web", because the
+  # opt-out direction that makes the unset case safe also makes every typo
+  # silent: `WEB`, `web ` or `wbe` would all mean "run every queue" on a node
+  # that was meant to run none. That is not the harmless direction it looks
+  # like — the whole fleet executing is how you get a checkpoint racing a live
+  # room. Case and whitespace are forgiven (an ECS task definition is
+  # hand-edited); an unrecognised value is not.
+  #
+  # Raising is right HERE and wrong for the cluster check below: a typo is
+  # static and no amount of retrying fixes it, so failing the boot is the only
+  # way the operator finds out. Matches how this file already treats a missing
+  # DATABASE_URL.
+  case System.get_env("ENGRAM_NODE_ROLE") do
+    nil ->
+      :ok
+
+    role ->
+      case role |> String.trim() |> String.downcase() do
+        "web" ->
+          config :engram, :node_role, :web
+          config :engram, Oban, queues: false
+
+        "worker" ->
+          # No Oban change — a worker runs the config/config.exs list. Recorded
+          # anyway because DECLARING a role is what tells the boot check this is
+          # a split fleet, and the unclustered *worker* is the node that can
+          # actually corrupt data (see Application.warn_if_split_fleet_unclustered/0).
+          config :engram, :node_role, :worker
+
+        "" ->
+          :ok
+
+        other ->
+          raise "ENGRAM_NODE_ROLE must be \"web\" or \"worker\", got: #{inspect(other)}"
+      end
   end
 
   config :engram, EngramWeb.Endpoint,

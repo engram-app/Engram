@@ -664,6 +664,15 @@ export async function crdtCreateNoteWithContent(
 	path: string,
 	markdown: string,
 ): Promise<string> {
+	// Refuse BEFORE the create, not after. `buildGenesisFrame` encodes markdown
+	// into the `content` Y.Text, and the server's roomless seed declines any
+	// non-`.md` path for that exact reason — a canvas keeps its board in Y.Maps,
+	// so a markdown projection over it writes an empty body. Sending anyway gets
+	// `genesis: "absent"`: the ROW is created and the body is not, leaving an
+	// orphan empty note behind a failed mutation. Nothing downstream deletes it.
+	if (!path.endsWith(".md")) {
+		throw new CrdtOpError("not_markdown", "crdt_create");
+	}
 	const b64 = buildGenesisFrame(markdown);
 	const res = await sendCrdtCreateWithContent(joinedCrdtChannel(), docId, path, b64);
 	// ADOPT guard: unlike a bare crdt_create (adopt-safe — no content to lose),
@@ -681,14 +690,46 @@ export async function crdtCreateNoteWithContent(
 	// duplicate. `crdt_create` reports the real outcome — surface it, so the
 	// caller's existing toast fires instead of the user finding a blank note.
 	//
-	// The reachable case is a non-markdown source (`.canvas`): the roomless
-	// seed refuses it deliberately, because a canvas keeps its data in Y.Maps
-	// and would project an empty markdown body over the only copy of the board.
+	// With the `.md` guard above, the one PREDICTABLE decline is gone, and
+	// everything left here is a server-side surprise: a frame we built that the
+	// server could not decode, guard or apply. Those collapse to `absent` on the
+	// wire (`maybe_seed_detached`'s reason atoms are telemetry-only), so this
+	// cannot say which — hence one reason rather than a fake taxonomy.
+	//
+	// NOTE the asymmetry with the guard above: by here the row EXISTS and is
+	// empty. Rejecting rolls the caller's optimistic placeholder back while the
+	// server keeps the row, so the empty note reappears on the next refetch.
+	// That is the lesser evil — the alternative is reporting success for a
+	// duplicate that lost its content — but it is why the predictable case is
+	// caught before the create rather than here.
+	//
+	// NOT remapped to `create_failed` on `occupied`. The id-mismatch check above
+	// already owns the adopt case, so reaching here with `occupied` means the id
+	// MATCHED — the row is ours and `reconcile_with_row` saw `:declined`, a
+	// concurrent write that beat our CAS on our own fresh row. Calling that a
+	// name collision toasts "a note with that name already exists" for a path
+	// that was free.
 	if (res.genesis !== "stored") {
-		throw new CrdtOpError(
-			res.genesis === "occupied" ? "create_failed" : "not_seeded",
-			"crdt_create",
-		);
+		// Clean up the row we just created but could not fill. The server commits
+		// genesis BEFORE seeding, so throwing alone leaves a blank note behind: the
+		// caller's onError rolls back its optimistic placeholder, then onSettled
+		// refetches and the server's empty copy appears anyway — an error toast AND
+		// the blank note, which is worse than the silent blank note this replaced.
+		//
+		// ONLY on `absent`, which is the one outcome that means the row is provably
+		// empty (`reconcile_with_row` downgrades to `occupied` whenever the note
+		// snapshot shows a body). Deleting on `occupied` would destroy the
+		// concurrent write that filled it. Best-effort: the throw is the contract,
+		// so a failed cleanup must not replace the real reason with a delete error.
+		if (res.genesis === "absent") {
+			try {
+				await crdtDeleteNote(res.doc_id);
+			} catch {
+				// Left an empty note behind. Recoverable by hand, and reporting the
+				// delete's failure instead of the seed's would hide why we are here.
+			}
+		}
+		throw new CrdtOpError("not_seeded", "crdt_create");
 	}
 	return res.doc_id;
 }

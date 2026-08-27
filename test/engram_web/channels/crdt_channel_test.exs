@@ -1098,6 +1098,49 @@ defmodule EngramWeb.CrdtChannelTest do
       :ok = Yex.apply_update(client, update)
       assert CrdtBridge.text_of(client) == "seeded body"
     end
+
+    test "an id owned by another of the user's vaults is re-minted, with content", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # Ported from the deleted crdt_create_batch suite, because the incident it
+      # guards is not batch-specific. `genesis_crdt_note/4` re-mints a colliding
+      # id, and the caller then has TWO id-sensitive sites that must both use the
+      # NEW id: the reply, and `maybe_seed_detached(user, vault, note, b64)`.
+      # The batch leg got this wrong by forwarding the id we SENT — every
+      # re-minted entry then failed to resolve and committed its row EMPTY.
+      # Asserting the CONTENT, not just a non-colliding id, is what makes this a
+      # regression test rather than a shape check.
+      {:ok, other_vault, _} =
+        Vaults.register_vault(user, "CrdtChannelTestB", Ecto.UUID.generate())
+
+      {:ok, foreign} =
+        Notes.upsert_note(user, other_vault, %{"path" => "Copied.md", "content" => "vault B body"})
+
+      {new_id, log} =
+        with_log(fn ->
+          ref =
+            push(socket, "crdt_create", %{
+              "doc_id" => foreign.id,
+              "path" => "Copied.md",
+              "b64" => frame_for_content("copied-body")
+            })
+
+          assert_reply ref, :ok, %{doc_id: id, genesis: "stored"}
+          id
+        end)
+
+      refute new_id == foreign.id, "the colliding id was not re-minted"
+      assert log =~ "already taken"
+
+      # Landed in THIS vault, under the new id, carrying the frame's content.
+      assert_note_content_eventually(user, vault, new_id, "copied-body")
+
+      # The vault that owns the id keeps its note and its content.
+      assert {:ok, untouched} = Notes.get_note_by_id(user, other_vault, foreign.id)
+      assert untouched.content =~ "vault B body"
+    end
   end
 
   describe "crdt_delete" do

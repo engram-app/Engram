@@ -95,7 +95,24 @@ defmodule EngramWeb.CrdtChannelOriginTest do
         "b64" => frame_for_content("body")
       })
 
-    assert_reply ref, :ok, %{doc_id: _}
+    # Assert `genesis`, not just a bare `doc_id`. A reply of `%{doc_id: _}` is
+    # byte-identical to the no-b64 create above, so it would pass even if the
+    # server ignored the frame outright — which is exactly the leg this covers.
+    #
+    # `occupied`, NOT `stored`, and that is the correct answer rather than a
+    # tolerated one: a relocate moves a row that already holds a body, so
+    # `fold_row_and_tail` reads non-empty and `seed_against/7` declines. A
+    # `stored` here would mean the frame overwrote the note being renamed.
+    assert_reply ref, :ok, %{doc_id: id, genesis: "occupied"}
+
+    # RewriteNoteLinks is what proves the RELOCATE leg specifically: a plain
+    # genesis enqueues RebindNoteLinks (notes.ex:1523), only
+    # genesis_relocate_live enqueues a rewrite (notes.ex:1362).
     assert [_job] = all_enqueued(worker: RewriteNoteLinks)
+
+    # The relocated body survived the declined seed — the point of declining.
+    {:ok, stored} = Notes.get_note_by_id(user, vault, id)
+    assert stored.content == "# t"
+    assert stored.path == "Fresh.md"
   end
 end
