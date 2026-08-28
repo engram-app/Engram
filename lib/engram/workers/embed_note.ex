@@ -33,6 +33,7 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Repo
+  alias Engram.Search.SearchProfile
   alias Engram.UsageMeters
   alias Engram.Vaults.Vault
   alias Engram.Workers.BackgroundPriority
@@ -50,43 +51,60 @@ defmodule Engram.Workers.EmbedNote do
       {:discard, _reason} = discard ->
         discard
 
-      {:ok, %Note{content_hash: hash, embed_hash: hash}}
+      {:ok, %Note{content_hash: hash, embed_hash: hash, dense_indexed_hash: hash}}
       when hash != nil and is_nil(old_path_hmac_b64) ->
-        # Already embedded this exact content and no rename pending — skip
+        # Already indexed this exact content WITH dense vectors, no rename
+        # pending — skip.
         :ok
 
+      {:ok, %Note{content_hash: hash, embed_hash: hash} = note}
+      when hash != nil and is_nil(old_path_hmac_b64) ->
+        # Content is indexed but has no dense vectors. Either the user is
+        # keyword-only (correct — skip, or ReconcileEmbeddings would re-enqueue
+        # this note every 15 minutes forever), or they just upgraded and this is
+        # the backfill (re-index to add the dense leg).
+        if SearchProfile.resolve(Accounts.get_user!(note.user_id)).semantic do
+          run_and_stamp(note, old_path_hmac_b64, job)
+        else
+          :ok
+        end
+
       {:ok, note} ->
-        # T3.7 — gate writes during DEK rotation. The worker may have been
-        # enqueued before the lock was acquired; re-check the live row.
-        case RotationGate.check(note.user_id) do
-          {:error, :rotation_in_progress} ->
-            :telemetry.execute(
-              [:engram, :crypto, :rotate, :dek, :gate_blocked],
-              %{count: 1},
-              %{gate_path: :worker, op: :embed_note}
-            )
+        run_and_stamp(note, old_path_hmac_b64, job)
+    end
+  end
 
-            {:snooze, 60}
+  # T3.7 — gate writes during DEK rotation. The worker may have been enqueued
+  # before the lock was acquired; re-check the live row.
+  defp run_and_stamp(note, old_path_hmac_b64, job) do
+    case RotationGate.check(note.user_id) do
+      {:error, :rotation_in_progress} ->
+        :telemetry.execute(
+          [:engram, :crypto, :rotate, :dek, :gate_blocked],
+          %{count: 1},
+          %{gate_path: :worker, op: :embed_note}
+        )
 
-          {:error, :user_not_found} ->
-            {:discard, :user_deleted}
+        {:snooze, 60}
 
+      {:error, :user_not_found} ->
+        {:discard, :user_deleted}
+
+      :ok ->
+        case embed_budget_gate(note) do
           :ok ->
-            case embed_budget_gate(note) do
+            case run_embed(note, old_path_hmac_b64) do
               :ok ->
-                case run_embed(note, old_path_hmac_b64) do
-                  :ok ->
-                    _ = record_embed_tokens(note)
-                    :ok
+                _ = record_embed_tokens(note)
+                :ok
 
-                  other ->
-                    _ = maybe_mark_poison(note, other, job)
-                    other
-                end
-
-              {:cancel, reason} ->
-                {:cancel, reason}
+              other ->
+                _ = maybe_mark_poison(note, other, job)
+                other
             end
+
+          {:cancel, reason} ->
+            {:cancel, reason}
         end
     end
   end
@@ -263,7 +281,7 @@ defmodule Engram.Workers.EmbedNote do
 
             case Indexing.index_note(decrypted_note, vault) do
               {:ok, _count} ->
-                stamp_embed_hash(note)
+                stamp_embed_hash(note, user)
                 :ok
 
               # Voyage 429 — back off without burning an Oban attempt. Voyage's
@@ -322,16 +340,30 @@ defmodule Engram.Workers.EmbedNote do
   # the reconciliation cron or the next debounced job will pick up the new version.
   # Also clears any embed_retry_after poison cooldown — a successful embed means
   # the note is no longer broken.
-  defp stamp_embed_hash(%Note{content_hash: nil}), do: :ok
+  defp stamp_embed_hash(%Note{content_hash: nil}, _user), do: :ok
 
-  defp stamp_embed_hash(note) do
+  defp stamp_embed_hash(note, user) do
+    # `embed_hash` = "this content is indexed" (keyword and/or dense).
+    # `dense_indexed_hash` = "this content has dense vectors in Qdrant", set
+    # ONLY when the user was entitled to semantic search at index time. Keeping
+    # them separate is what lets ReconcileEmbeddings stay quiet for keyword-only
+    # users while still backfilling them the moment they upgrade.
+    set =
+      if SearchProfile.resolve(user).semantic do
+        [
+          embed_hash: note.content_hash,
+          dense_indexed_hash: note.content_hash,
+          embed_retry_after: nil
+        ]
+      else
+        [embed_hash: note.content_hash, embed_retry_after: nil]
+      end
+
     {count, _} =
       from(n in Note,
         where: n.id == ^note.id and n.content_hash == ^note.content_hash
       )
-      |> Repo.update_all([set: [embed_hash: note.content_hash, embed_retry_after: nil]],
-        skip_tenant_check: true
-      )
+      |> Repo.update_all([set: set], skip_tenant_check: true)
 
     if count == 0 do
       Logger.debug(

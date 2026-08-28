@@ -190,8 +190,26 @@ defmodule Engram.Search do
   @spec clamp_limit(integer()) :: pos_integer()
   def clamp_limit(n) when is_integer(n), do: n |> max(1) |> min(@max_context_limit)
 
+  @doc """
+  Clamps a caller-requested search mode to what the user is entitled to.
+
+  A user without `search_semantic_enabled` gets `:keyword` no matter what was
+  asked for — an explicit `?mode=vector`, an MCP tool arg, or the `:vector`
+  default all collapse to keyword-only. Pure so the gate is testable without
+  Qdrant.
+
+  Typed `term() -> term()` on purpose. `:mode` is caller-supplied external
+  input, so an unrecognised value has to pass through to `run_legs/5`'s
+  invalid-mode clause and become `{:error, :invalid_mode}`. Narrowing this spec
+  to the three valid atoms lets dialyzer prove that clause unreachable, which
+  deletes the guard protecting us from a bad MCP arg.
+  """
+  @spec effective_mode(term(), SearchProfile.t()) :: term()
+  def effective_mode(_requested, %SearchProfile{semantic: false}), do: :keyword
+  def effective_mode(requested, %SearchProfile{}), do: requested
+
   defp do_search(user, vault, query, opts) do
-    mode = Keyword.get(opts, :mode, :vector)
+    requested_mode = Keyword.get(opts, :mode, :vector)
     limit = opts |> Keyword.get(:limit, 5) |> clamp_limit()
     tags = Keyword.get(opts, :tags)
     folder = Keyword.get(opts, :folder)
@@ -201,6 +219,9 @@ defmodule Engram.Search do
     # On the grouped path `limit` is the NOTE count, not the chunk count.
     group? = Keyword.get(opts, :group_by_note, false)
     profile = SearchProfile.resolve(user)
+    # Entitlement gate lives HERE, not in the controller: MCP calls
+    # Search.search/4 directly and two of its call sites pass no mode at all.
+    mode = effective_mode(requested_mode, profile)
     # Caller `:diversity` opt overrides the profile default; nil → profile
     # default. Clamped to [0.0, 1.0]. diversity > 0 ⇒ MMR pass ⇒ we need the
     # dense vectors back from Qdrant.

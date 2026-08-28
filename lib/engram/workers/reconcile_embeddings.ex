@@ -49,11 +49,40 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # Eligible stale notes, oldest-first, capped — kept as a subquery so the
     # whole select-and-stamp is ONE statement (see the UPDATE below).
     eligible =
-      Note
+      from(n in Note, as: :note)
       |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
       |> where([n], n.kind == "note")
       |> where([n], is_nil(n.deleted_at))
-      |> where([n], is_nil(n.embed_hash) or n.embed_hash != n.content_hash)
+      # Two ways a note is stale:
+      #   1. content changed since it was indexed (or was never indexed)
+      #   2. it is indexed but has NO dense vectors, and the user is on a paid
+      #      plan — i.e. they upgraded from a keyword-only tier and their
+      #      backlog needs the dense leg added
+      #
+      # (2) is what makes an upgrade self-healing: no hook on the billing path
+      # to forget or silently fail, just this cron noticing on its next tick.
+      #
+      # The subscription join is a SQL-expressible PROXY for
+      # `SearchProfile.resolve(user).semantic`, which is a 4-layer resolver and
+      # cannot be expressed here. Over-selecting is harmless — `EmbedNote`
+      # re-checks the real entitlement and no-ops for a user who is not actually
+      # semantic. Under-selecting only affects a Free user holding a per-user
+      # override, who is re-indexed on their next edit anyway. What we must NOT
+      # do is select every keyword-only note every tick: that is the 15-minute
+      # forever-loop this whole column split exists to prevent.
+      |> where(
+        [n],
+        is_nil(n.embed_hash) or n.embed_hash != n.content_hash or
+          (is_nil(n.dense_indexed_hash) and
+             exists(
+               from(s in Engram.Billing.Subscription,
+                 where:
+                   s.user_id == parent_as(:note).user_id and
+                     s.status in ["active", "trialing"],
+                 select: 1
+               )
+             ))
+      )
       # Poison-loop guard: a note that exhausts its EmbedNote attempts gets an
       # embed_retry_after cooldown stamp. Skip it until the cooldown elapses so a
       # permanently-failing note re-bills Voyage at most once per window, not

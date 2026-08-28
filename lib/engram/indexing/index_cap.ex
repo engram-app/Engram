@@ -1,0 +1,206 @@
+defmodule Engram.Indexing.IndexCap do
+  @moduledoc """
+  Per-user cap on how many notes get indexed for search.
+
+  This caps what is **indexed**, never what **syncs**. A user's whole vault
+  always syncs; only the first N notes become searchable. Capping sync would
+  leave a half-synced vault on first sync, which reads as "Engram is broken"
+  rather than "Engram is limited" — see the pricing decision log.
+
+  Rank is server-side creation time among **live** notes, so deleting a note
+  frees a slot. The consequence is that a user's NEWEST work is what falls
+  outside the cap, which is why `counts/1` exists: the number is surfaced in the
+  UI rather than letting note 2001 silently return nothing.
+  """
+
+  import Ecto.Query
+
+  alias Engram.Billing
+  alias Engram.Notes.Chunk
+  alias Engram.Notes.Note
+  alias Engram.Repo
+
+  @doc """
+  True when this note is inside the user's indexed-note cap.
+
+  Uncapped tiers (`nil` / `:unlimited`) short-circuit without touching the DB —
+  this runs on every index, so the paid path must stay free.
+  """
+  @spec within_cap?(Note.t()) :: boolean()
+  def within_cap?(%Note{} = note) do
+    user = Engram.Accounts.get_user!(note.user_id)
+
+    case Billing.effective_limit(user, :indexed_notes_cap) do
+      cap when is_integer(cap) and cap >= 0 ->
+        rank_below_cap?(note, cap)
+
+      # -1 is this codebase's "unlimited" sentinel (see check_limit/3 and
+      # normalize_capability/2), and it is what the e2e overrides use. Without
+      # this clause `rank < -1` is false for every note and NOTHING gets
+      # indexed — the exact inversion the LimitKeys moduledoc warns about.
+      _ ->
+        true
+    end
+  end
+
+  @doc """
+  `%{indexed: n, total: m}` live notes for a user — what the UI renders as
+  "2,000 of 4,312 notes indexed".
+
+  `indexed` is `min(total, cap)`, not a count of rows actually in Qdrant. That
+  is deliberate: the true count lags by the Oban queue depth, so reporting it
+  would make the number drift during a bulk import and read as data loss. The
+  cap is the contract; the queue is an implementation detail.
+  """
+  @spec counts(map()) :: %{indexed: non_neg_integer(), total: non_neg_integer()}
+  def counts(user) do
+    total = live_note_count(user.id)
+
+    indexed =
+      case Billing.effective_limit(user, :indexed_notes_cap) do
+        cap when is_integer(cap) and cap >= 0 -> min(total, cap)
+        _ -> total
+      end
+
+    %{indexed: indexed, total: total}
+  end
+
+  @doc """
+  Re-opens indexing for notes that a deletion just brought inside the cap.
+
+  Deleting a note frees a slot, but the note that inherits it already carries a
+  stamped `embed_hash` from the pass that skipped it — so neither `EmbedNote`
+  nor `ReconcileEmbeddings` would ever look at it again, and it would stay
+  unsearchable until the user happened to edit it.
+
+  Nulling `embed_hash` puts it back in the reconcile cron's normal stale-note
+  query, which re-indexes it at backfill priority. No new worker, no new state.
+
+  Scoped to in-cap notes that have no chunk rows, so it is a no-op for anyone
+  already fully indexed and for every uncapped tier.
+  """
+  @spec backfill_freed_slots(Ecto.UUID.t()) :: :ok
+  def backfill_freed_slots(user_id) when is_binary(user_id) do
+    user = Engram.Accounts.get_user!(user_id)
+
+    case Billing.effective_limit(user, :indexed_notes_cap) do
+      cap when is_integer(cap) and cap >= 0 ->
+        in_cap =
+          from(n in Note,
+            where: n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at),
+            order_by: [asc: n.created_at, asc: n.id],
+            limit: ^cap,
+            select: n.id
+          )
+
+        # Notes with zero chunk rows are the ones a prior pass skipped for the
+        # cap; anything already indexed is left alone.
+        unindexed =
+          from(n in Note,
+            as: :n,
+            where: n.id in subquery(in_cap),
+            where: not exists(from(c in Chunk, where: c.note_id == parent_as(:n).id, select: 1)),
+            select: n.id
+          )
+
+        {count, _} =
+          from(n in Note, where: n.kind == "note" and n.id in subquery(unindexed))
+          |> Repo.update_all([set: [embed_hash: nil]], skip_tenant_check: true)
+
+        if count > 0 do
+          :telemetry.execute(
+            [:engram, :indexing, :cap_slots_freed],
+            %{count: count},
+            %{user_id: user_id}
+          )
+        end
+
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  @doc """
+  Drops a user's dense vectors after they lose semantic entitlement.
+
+  Without this a downgraded user keeps every dense vector in Qdrant forever —
+  ~$0.53/mo of RAM on a tier priced at $0.11 — which is exactly the
+  accumulation problem the keyword-only tier exists to fix.
+
+  Nulls BOTH hashes rather than just `dense_indexed_hash`: with only the dense
+  one cleared, `EmbedNote`'s skip clause sees `embed_hash == content_hash` and a
+  now-unentitled user, and correctly does nothing. Clearing `embed_hash` too
+  puts the notes back in the reconcile cron's stale query, and because
+  `commit_index/1` deletes a note's points before inserting the new ones, the
+  rebuild replaces dense+sparse points with sparse-only ones. The vectors go
+  away as a side effect of normal re-indexing.
+  """
+  @spec revoke_dense_index(Ecto.UUID.t()) :: :ok
+  def revoke_dense_index(user_id) when is_binary(user_id) do
+    {count, _} =
+      from(n in Note,
+        where: n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at),
+        where: not is_nil(n.dense_indexed_hash)
+      )
+      |> Repo.update_all([set: [embed_hash: nil, dense_indexed_hash: nil]],
+        skip_tenant_check: true
+      )
+
+    if count > 0 do
+      :telemetry.execute(
+        [:engram, :indexing, :dense_revoked],
+        %{count: count},
+        %{user_id: user_id}
+      )
+    end
+
+    :ok
+  end
+
+  # True when fewer than `cap` live notes are older than this one.
+  #
+  # Deliberately a BOUNDED count, not `count(*)`: this runs once per indexed
+  # note, so an unbounded rank scan makes a bulk import O(N^2) — 1,000 notes
+  # meant 1,000 full scans over a growing table, which timed out the 120s
+  # bulk-first-sync e2e. `LIMIT cap` caps each scan at `cap` index rows no
+  # matter how large the vault is, and the common case (a user well under the
+  # cap) stops early because there simply are not that many older rows.
+  #
+  # An earlier version short-circuited on `usage_meters.notes_count`, which is
+  # O(1) — but that counter is maintained at only three call sites, and an
+  # UNDER-count silently admits everything. Wrong direction for a billing cap,
+  # and worst exactly during a bulk import. The source of truth stays the rows.
+  #
+  # Ties on created_at break by id so the rank is stable rather than flapping
+  # between two notes written in the same microsecond, which is common during a
+  # bulk first sync.
+  defp rank_below_cap?(%Note{} = note, cap) do
+    older =
+      from(n in Note,
+        where: n.user_id == ^note.user_id and n.kind == "note" and is_nil(n.deleted_at),
+        where:
+          n.created_at < ^note.created_at or
+            (n.created_at == ^note.created_at and n.id < ^note.id),
+        order_by: [asc: n.created_at, asc: n.id],
+        limit: ^cap,
+        select: n.id
+      )
+
+    count =
+      Repo.one(from(o in subquery(older), select: count(o.id)), skip_tenant_check: true) || 0
+
+    count < cap
+  end
+
+  defp live_note_count(user_id) do
+    Repo.one(
+      from(n in Note,
+        where: n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at),
+        select: count(n.id)
+      ),
+      skip_tenant_check: true
+    ) || 0
+  end
+end

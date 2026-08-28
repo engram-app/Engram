@@ -34,6 +34,40 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
+  Grants a user semantic (dense-vector) search.
+
+  The Free tier is keyword-only and never calls the embedder, so any test that
+  asserts on `MockEmbedder.embed_texts/1` — or on dense search results — needs a
+  fixture user actually entitled to the dense path. Without this the mock is
+  simply never invoked and the test fails in `verify_on_exit!` rather than at
+  the assertion, which is a confusing place to land.
+
+  Deliberately per-user rather than a test-env plan override: flipping the Free
+  default globally in `config/test.exs` would mean the suite never exercises the
+  tier default that ships to production.
+  """
+  @spec grant_semantic!(map()) :: :ok
+  def grant_semantic!(user) do
+    # Idempotent: some tests grant on a setup user and again on a locally-built
+    # one that turns out to be the same row. `user_limit_overrides` is unique on
+    # (user_id, key), so a plain insert! would raise on the second call.
+    Engram.Repo.insert!(
+      %Engram.Billing.UserLimitOverride{
+        user_id: user.id,
+        key: "search_semantic_enabled",
+        value: %{"v" => true},
+        reason: "test fixture: exercise the dense embed path",
+        set_by: "test"
+      },
+      on_conflict: :nothing,
+      conflict_target: [:user_id, :key]
+    )
+
+    Engram.Billing.OverrideCache.evict(user.id)
+    :ok
+  end
+
+  @doc """
   Inserts a Note row directly with valid Phase B ciphertext + HMAC fields,
   skipping the side effects of `Notes.upsert_note/3` (Oban enqueue,
   broadcast, embed worker). Use this in test setups that previously relied

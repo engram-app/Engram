@@ -4,9 +4,9 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 31 catalog keys" do
+    test "returns the 33 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 31
+      assert length(keys) == 33
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
@@ -64,6 +64,8 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:ai_queries_per_day, :free) == nil
       assert LimitKeys.default_for(:conversation_window_minutes, :free) == 30
       assert LimitKeys.default_for(:reranker_enabled, :free) == false
+      assert LimitKeys.default_for(:search_semantic_enabled, :free) == false
+      assert LimitKeys.default_for(:indexed_notes_cap, :free) == 2_000
       assert LimitKeys.default_for(:api_write_enabled, :free) == false
       assert LimitKeys.default_for(:api_rps_cap, :free) == 0
       assert LimitKeys.default_for(:inactivity_warnings_exempt, :free) == false
@@ -77,6 +79,8 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:max_file_bytes, :starter) == 209_715_200
       assert LimitKeys.default_for(:lifetime_embed_token_cap, :starter) == nil
       assert LimitKeys.default_for(:ai_queries_per_day, :starter) == 500
+      assert LimitKeys.default_for(:search_semantic_enabled, :starter) == true
+      assert LimitKeys.default_for(:indexed_notes_cap, :starter) == nil
       # API keys are Pro-only. Starter keeps MCP + vault sync + web app,
       # which authenticate without an API key and so bypass both gates.
       assert LimitKeys.default_for(:api_write_enabled, :starter) == false
@@ -90,6 +94,8 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:max_file_bytes, :pro) == 524_288_000
       assert LimitKeys.default_for(:reranker_enabled, :pro) == true
       assert LimitKeys.default_for(:ai_queries_per_day, :pro) == 10_000
+      assert LimitKeys.default_for(:search_semantic_enabled, :pro) == true
+      assert LimitKeys.default_for(:indexed_notes_cap, :pro) == nil
       assert LimitKeys.default_for(:api_write_enabled, :pro) == true
       assert LimitKeys.default_for(:api_rps_cap, :pro) == 30
     end
@@ -104,9 +110,9 @@ defmodule Engram.Billing.LimitKeysTest do
   end
 
   describe "env_var_names/0" do
-    test "emits 93 tuples (31 keys × 3 tiers)" do
+    test "emits 99 tuples (33 keys × 3 tiers)" do
       tuples = LimitKeys.env_var_names()
-      assert length(tuples) == 93
+      assert length(tuples) == 99
     end
 
     test "includes ENGRAM_FREE_NOTES_CAP" do

@@ -129,6 +129,11 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # has to be put in scope or written down here with a reason. That turns an
   # omission into a decision.
   @out_of_scope [
+    # Counts rows and compares created_at/id. Selects only count(n.id) — never
+    # content, path, title or a query — and has no Logger call at all. Listed as
+    # the specific file, not `lib/engram/indexing/`, so a future sibling module
+    # that CAN reach content still trips this test.
+    "lib/engram/indexing/index_cap.ex",
     # Auth, identity and OAuth — tokens and emails, never note data.
     "lib/engram/abuse/",
     "lib/engram/auth.ex",

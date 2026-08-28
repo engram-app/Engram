@@ -8,10 +8,12 @@ defmodule Engram.Indexing do
 
   import Ecto.Query
 
+  alias Engram.Indexing.IndexCap
   alias Engram.KeywordIndex
   alias Engram.Notes.Chunk
   alias Engram.Parsers.Markdown
   alias Engram.Repo
+  alias Engram.Search.SearchProfile
   alias Engram.Vector.Qdrant
 
   @default_dims 1024
@@ -73,26 +75,39 @@ defmodule Engram.Indexing do
     link_rows = Engram.Links.Parser.extract(note.content || "")
     chunks = Markdown.parse(note.content || "", note.path)
 
-    if chunks == [] do
-      {:ok, {:no_chunks, link_rows}}
-    else
-      context_texts = Enum.map(chunks, & &1.context_text)
-      dims = Application.get_env(:engram, :embed_dims, @default_dims)
-      user = Engram.Accounts.get_user!(note.user_id)
+    cond do
+      chunks == [] ->
+        {:ok, {:no_chunks, link_rows}}
 
-      with :ok <- Qdrant.ensure_collection(collection(), dims),
-           {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user),
-           {:ok, vectors} <- embed_for_indexing(context_texts) do
-        avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id)
-        build_prepared(note, user, vault, chunks, vectors, filter_key, avgdl, link_rows)
-      else
-        {:error, :no_dek} = err ->
-          emit_no_dek_telemetry(note)
-          err
+      # Outside the user's indexed-note cap: persist link rows (the graph is not
+      # search and is not capped) but write no chunks and no Qdrant points.
+      not IndexCap.within_cap?(note) ->
+        {:ok, {:no_chunks, link_rows}}
 
-        other ->
-          other
-      end
+      true ->
+        context_texts = Enum.map(chunks, & &1.context_text)
+        dims = Application.get_env(:engram, :embed_dims, @default_dims)
+        user = Engram.Accounts.get_user!(note.user_id)
+
+        # Keyword-only tiers never call Voyage. `nil` vectors flow through
+        # build_prepared/8, which emits a sparse-only named vector — the BM25
+        # leg is computed locally from the chunk text, so keyword search is
+        # fully functional with zero embedding spend.
+        semantic? = SearchProfile.resolve(user).semantic
+
+        with :ok <- Qdrant.ensure_collection(collection(), dims),
+             {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user),
+             {:ok, vectors} <- maybe_embed(semantic?, context_texts) do
+          avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id)
+          build_prepared(note, user, vault, chunks, vectors, filter_key, avgdl, link_rows)
+        else
+          {:error, :no_dek} = err ->
+            emit_no_dek_telemetry(note)
+            err
+
+          other ->
+            other
+        end
     end
   end
 
@@ -241,6 +256,11 @@ defmodule Engram.Indexing do
   # documented batch sweet spot and stays far below every API limit.
   @embed_batch_size 128
 
+  # `false` yields a nil vector per chunk. Kept as an explicit list (not a bare
+  # nil) so build_prepared/8 can zip chunks with vectors either way.
+  defp maybe_embed(false, texts), do: {:ok, Enum.map(texts, fn _ -> nil end)}
+  defp maybe_embed(true, texts), do: embed_for_indexing(texts)
+
   defp embed_for_indexing(texts) do
     texts
     |> Enum.chunk_every(@embed_batch_size)
@@ -351,9 +371,18 @@ defmodule Engram.Indexing do
               created_at: now
             }
 
+            # Omit the dense named vector entirely when there is none —
+            # Qdrant rejects a null vector, and a partial named-vector upsert
+            # is the supported way to store sparse-only points.
+            named_vectors =
+              case vector do
+                nil -> %{"keyword" => sparse}
+                v -> %{"dense" => v, "keyword" => sparse}
+              end
+
             point = %{
               id: point_id,
-              vector: %{"dense" => vector, "keyword" => sparse},
+              vector: named_vectors,
               payload: payload
             }
 

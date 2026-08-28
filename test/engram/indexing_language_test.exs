@@ -37,6 +37,7 @@ defmodule Engram.IndexingLanguageTest do
     on_exit(fn -> Application.delete_env(:engram, :keyword_index) end)
 
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
+    :ok = Engram.Fixtures.grant_semantic!(user)
     vault = insert(:vault, user: user)
 
     %{bypass: bypass, user: user, vault: vault}

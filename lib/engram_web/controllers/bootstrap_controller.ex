@@ -26,6 +26,7 @@ defmodule EngramWeb.BootstrapController do
   use EngramWeb, :controller
 
   alias Engram.Billing
+  alias Engram.Indexing.IndexCap
   alias EngramWeb.BillingController
   alias EngramWeb.OnboardingController
   alias EngramWeb.VaultsController
@@ -36,6 +37,12 @@ defmodule EngramWeb.BootstrapController do
     payload = %{
       onboarding: OnboardingController.status_payload(user),
       capabilities: Billing.capabilities(user),
+      # Two live counters, not part of the cached capability matrix: these move
+      # as the user writes notes, and `capabilities` is ETS-cached for 24h.
+      # Clients render "2,000 of 4,312 notes indexed" from this — a capped note
+      # that silently returns nothing is the support ticket the cap exists to
+      # avoid.
+      index_status: IndexCap.counts(user),
       vaults: VaultsController.index_payload(user)
     }
 

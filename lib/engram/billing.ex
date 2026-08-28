@@ -667,6 +667,13 @@ defmodule Engram.Billing do
                 %{count: 1},
                 %{user_id: user.id, from: prev_tier, to: :free}
               )
+
+              # Free is keyword-only, so this user's dense vectors are now dead
+              # weight in Qdrant — ~$0.53/mo of RAM on a tier priced at $0.11.
+              # Nulls both index hashes; ReconcileEmbeddings rebuilds the notes
+              # sparse-only on its next tick and the dense points go with the
+              # replace. See IndexCap.revoke_dense_index/1.
+              _ = Engram.Indexing.IndexCap.revoke_dense_index(user.id)
             end
 
             {:ok, updated}
@@ -710,6 +717,15 @@ defmodule Engram.Billing do
             if updated.tier != prev_tier or updated.status != prev_status do
               Engram.Auth.SessionInvalidator.disconnect_user(updated.user_id)
             end
+
+            # NOTE: no IndexCap.revoke_dense_index/1 here, unlike the
+            # subscription.canceled clause. A past_due/paused status makes
+            # tier/1 resolve to :free, so this user IS keyword-only right now —
+            # but dropping their dense vectors would re-embed their entire vault
+            # on a transient dunning state, and again when payment recovers.
+            # Paddle's dunning window is bounded and ends in
+            # subscription.canceled, which does revoke. Trading a bounded window
+            # of stale vectors for avoiding two full re-embeds per failed charge.
 
             {:ok, updated}
 
