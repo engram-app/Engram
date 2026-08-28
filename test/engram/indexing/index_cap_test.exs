@@ -62,8 +62,28 @@ defmodule Engram.Indexing.IndexCapTest do
       assert IndexCap.within_cap?(note_at(u, v, 0))
     end
 
-    test "nil and :unlimited resolve to uncapped", %{user: u} do
+    test "no override resolves to the Free tier default", %{user: u} do
       assert IndexCap.resolve_cap(Engram.Accounts.get_user!(u.id)) == {:cap, 2_000}
+    end
+
+    test "a paid tier resolves to uncapped (the nil clause)", %{user: u} do
+      insert(:subscription, user: u, tier: "pro", status: "active")
+      assert IndexCap.resolve_cap(Engram.Accounts.get_user!(u.id)) == :unlimited
+    end
+
+    test "limits disabled resolves to uncapped (the :unlimited clause)", %{user: u} do
+      # Self-host. A regression making this return {:cap, 0} would index
+      # nothing for every self-hosted deployment.
+      prev = Application.get_env(:engram, :limits_enforced)
+      Application.put_env(:engram, :limits_enforced, false)
+
+      on_exit(fn ->
+        if is_nil(prev),
+          do: Application.delete_env(:engram, :limits_enforced),
+          else: Application.put_env(:engram, :limits_enforced, prev)
+      end)
+
+      assert IndexCap.resolve_cap(Engram.Accounts.get_user!(u.id)) == :unlimited
     end
 
     test "a malformed cap falls back to the tier default, never to unlimited", %{user: u} do
@@ -72,11 +92,21 @@ defmodule Engram.Indexing.IndexCapTest do
       # resolver. Reading those as "no cap" would silently uncap the one key
       # that exists to bound Qdrant spend — the opposite of the operator's
       # intent, since they were trying to SET a cap.
+      # A subscription puts the tier default at `nil` (uncapped), so a
+      # malformed value that fell through to "no cap" is INDISTINGUISHABLE from
+      # one that fell back correctly. Stay on Free, where the two differ, and
+      # pin the discriminating value rather than one shared with the no-override
+      # case: any result other than {:cap, 2_000} means the fallback did not run.
       for bad <- ["500", 500.0, true, %{"nested" => 1}] do
         :ok = raw_cap!(u, bad)
 
+        # Proves raw_cap!/2 is not a silent no-op: the row must be readable
+        # back as the malformed shape we wrote.
+        assert %UserLimitOverride{value: %{"v" => ^bad}} =
+                 Repo.get_by!(UserLimitOverride, user_id: u.id, key: "indexed_notes_cap")
+
         assert IndexCap.resolve_cap(Engram.Accounts.get_user!(u.id)) == {:cap, 2_000},
-               "#{inspect(bad)} resolved to unlimited"
+               "#{inspect(bad)} did not fall back to the tier default"
 
         Repo.delete_all(
           from(o in UserLimitOverride,

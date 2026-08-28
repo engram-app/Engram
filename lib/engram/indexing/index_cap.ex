@@ -172,6 +172,14 @@ defmodule Engram.Indexing.IndexCap do
   every note and NOTHING is indexed.
 
   Everything else falls back to the tier DEFAULT rather than to unlimited.
+  That is the conservative FLOOR, deliberately not the configured value: the
+  malformed value can come from any layer of the resolver (user override, env
+  override, or the plan row's JSONB), so there is no well-defined layer to
+  "skip". Falling to the floor can only ever be more restrictive than what was
+  configured, which is the safe direction for a cost cap — but it does mean an
+  operator who set `ENGRAM_FREE_INDEXED_NOTES_CAP=10000` alongside a malformed
+  per-user override silently gets 2,000. The warning below is the only signal;
+  the real fix is validating these values at the WRITE boundary.
   `effective_limit/2` reads overrides straight out of untyped JSONB, so a
   hand-written `%{"v" => "500"}` or a float from a JSON round-trip reaches
   here; treating those as "no cap" would silently uncap the one key that

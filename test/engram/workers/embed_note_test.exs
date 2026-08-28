@@ -6,6 +6,7 @@ defmodule Engram.Workers.EmbedNoteTest do
   import Mox
 
   alias Engram.Accounts.User
+  alias Engram.Billing.OverrideCache
   alias Engram.Crypto
   alias Engram.Crypto.DekCache
   alias Engram.Notes
@@ -125,7 +126,7 @@ defmodule Engram.Workers.EmbedNoteTest do
         )
       )
 
-      Engram.Billing.OverrideCache.evict(note.user_id)
+      OverrideCache.evict(note.user_id)
 
       from(n in Note, where: n.id == ^note.id)
       |> Repo.update_all(
@@ -680,7 +681,7 @@ defmodule Engram.Workers.EmbedNoteTest do
         skip_tenant_check: true
       )
 
-      Engram.Billing.OverrideCache.evict(user.id)
+      OverrideCache.evict(user.id)
 
       {:ok, note} =
         Notes.upsert_note(
@@ -698,6 +699,32 @@ defmodule Engram.Workers.EmbedNoteTest do
       # Leaving the old hash would make ReconcileEmbeddings' upgrade backfill
       # (which selects on `is_nil(dense_indexed_hash)`) skip this note forever:
       # the user would pay for semantic search over a silent hole.
+      assert %Note{dense_indexed_hash: nil} = Repo.get!(Note, note.id, skip_tenant_check: true)
+    end
+  end
+
+  describe "perform/1 — entitled but over the index cap" do
+    test "an over-cap note is not stamped as dense-indexed, so raising the cap re-opens it",
+         %{user: user, note: note} do
+      # A SEMANTIC user can still be over an indexed_notes_cap — a per-user
+      # override is exactly how a promo grant or a throttled abuser is
+      # expressed. Entitlement alone must not stamp the dense hash: nothing
+      # was written, and ReconcileEmbeddings' backfill selects on
+      # `is_nil(dense_indexed_hash)`, so a stamp locks the note out forever.
+      Repo.insert!(%Engram.Billing.UserLimitOverride{
+        user_id: user.id,
+        key: "indexed_notes_cap",
+        value: %{"v" => 0},
+        reason: "test",
+        set_by: "test"
+      })
+
+      OverrideCache.evict(user.id)
+
+      # No MockEmbedder expectation and no Qdrant stub: an over-cap note must
+      # reach neither.
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
       assert %Note{dense_indexed_hash: nil} = Repo.get!(Note, note.id, skip_tenant_check: true)
     end
   end

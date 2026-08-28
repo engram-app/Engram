@@ -94,7 +94,7 @@ defmodule Engram.Workers.EmbedNote do
         case embed_budget_gate(note) do
           :ok ->
             case run_embed(note, old_path_hmac_b64) do
-              {:ok, chunk_count} ->
+              {:ok, chunk_count, semantic?} ->
                 # Charge the embed meter only when Voyage was actually called.
                 # `chunk_count == 0` is index_note/2's no-chunks outcome: the
                 # note was empty OR outside the user's indexed-note cap, and in
@@ -106,7 +106,7 @@ defmodule Engram.Workers.EmbedNote do
                 # then cancels indexing entirely — so a Free user who spent
                 # nothing would lose their BM25 index too.
                 _ =
-                  if chunk_count > 0 and semantic?(note.user_id) do
+                  if chunk_count > 0 and semantic? do
                     record_embed_tokens(note)
                   end
 
@@ -122,8 +122,6 @@ defmodule Engram.Workers.EmbedNote do
         end
     end
   end
-
-  defp semantic?(user_id), do: SearchProfile.resolve(Accounts.get_user!(user_id)).semantic
 
   # Voyage/Qdrant non-2xx surface as {status, body}; pull the bounded HTTP
   # status (401 vs 429 vs 500 vs 503 is the on-call triage signal). nil for a
@@ -311,8 +309,15 @@ defmodule Engram.Workers.EmbedNote do
 
             case Indexing.index_note(decrypted_note, vault) do
               {:ok, count} ->
-                stamp_embed_hash(note, user)
-                {:ok, count}
+                # Resolve entitlement ONCE, from the user already loaded above,
+                # and hand it to both the stamp and the meter. Re-deriving it
+                # after the Voyage call would read a DIFFERENT value when a
+                # time-boxed override expires or a cancel webhook lands
+                # mid-job (OverrideCache TTL is 60s; a 128-chunk batch with
+                # retries outlives that) — and the spend would go unmetered.
+                semantic? = SearchProfile.resolve(user).semantic
+                stamp_embed_hash(note, semantic?, count)
+                {:ok, count, semantic?}
 
               # Voyage 429 — back off without burning an Oban attempt. Voyage's
               # paid-tier RPM is finite; without this guard five consecutive
@@ -370,31 +375,32 @@ defmodule Engram.Workers.EmbedNote do
   # the reconciliation cron or the next debounced job will pick up the new version.
   # Also clears any embed_retry_after poison cooldown — a successful embed means
   # the note is no longer broken.
-  defp stamp_embed_hash(%Note{content_hash: nil}, _user), do: :ok
+  defp stamp_embed_hash(%Note{content_hash: nil}, _semantic?, _count), do: :ok
 
-  defp stamp_embed_hash(note, user) do
+  defp stamp_embed_hash(note, semantic?, chunk_count) do
     # `embed_hash` = "this content is indexed" (keyword and/or dense).
-    # `dense_indexed_hash` = "this content has dense vectors in Qdrant", set
-    # ONLY when the user was entitled to semantic search at index time. Keeping
-    # them separate is what lets ReconcileEmbeddings stay quiet for keyword-only
-    # users while still backfilling them the moment they upgrade.
+    # `dense_indexed_hash` = "this content has dense vectors in Qdrant".
+    # Keeping them separate is what lets ReconcileEmbeddings stay quiet for
+    # keyword-only users while still backfilling them the moment they upgrade.
+    #
+    # ONE rule: the dense hash is set only when dense vectors were actually
+    # written. Entitlement alone is not enough — `chunk_count == 0` is
+    # index_note/2's no-chunks outcome (empty note, or outside the user's
+    # indexed-note cap), and in both cases the pass just PURGED this note's
+    # points. Stamping it anyway makes the column assert a false fact, and
+    # ReconcileEmbeddings' backfill selects on `is_nil(dense_indexed_hash)`,
+    # so the note would be skipped forever. That is not hypothetical for an
+    # entitled user: a per-user `indexed_notes_cap` override (a promo grant, a
+    # throttled abuser) puts a semantic user over the cap, and nothing but a
+    # content edit would ever re-open the note.
     set =
-      if SearchProfile.resolve(user).semantic do
+      if semantic? and chunk_count > 0 do
         [
           embed_hash: note.content_hash,
           dense_indexed_hash: note.content_hash,
           embed_retry_after: nil
         ]
       else
-        # `dense_indexed_hash: nil` is NOT redundant. The pass that just ran
-        # rebuilt this note's Qdrant points sparse-only — commit_index/1
-        # deletes a note's points before re-upserting, and the no-chunks path
-        # purges them outright — so any dense vectors the column was claiming
-        # are gone. Leaving a stale hash makes the column assert a false fact,
-        # and ReconcileEmbeddings' upgrade backfill selects on
-        # `is_nil(dense_indexed_hash)`: the note would be skipped forever and
-        # the user would pay for semantic search over a silent hole. Only a
-        # further content edit would heal it.
         [embed_hash: note.content_hash, dense_indexed_hash: nil, embed_retry_after: nil]
       end
 

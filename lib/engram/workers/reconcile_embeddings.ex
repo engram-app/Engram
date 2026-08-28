@@ -66,10 +66,17 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       # `SearchProfile.resolve(user).semantic`, which is a 4-layer resolver and
       # cannot be expressed here. Over-selecting is harmless — `EmbedNote`
       # re-checks the real entitlement and no-ops for a user who is not actually
-      # semantic. Under-selecting is the dangerous direction: it strands a
-      # backlog silently. Hence `entitled_statuses/0` rather than a hand-rolled
-      # subset — dropping `past_due` here stalled the backfill for users who
-      # were still paying and still entitled. What we must NOT
+      # semantic. Under-selecting strands a backlog silently, hence
+      # `entitled_statuses/0` rather than a hand-rolled subset — dropping
+      # `past_due` stalled the backfill for users who were still paying.
+      #
+      # The `tier` filter is equally load-bearing: `tier/1` requires BOTH an
+      # entitled status AND a paid tier, and `subscriptions.tier` legitimately
+      # accepts "free" while `status` DEFAULTS to "trialing". Matching on
+      # status alone selects a keyword-only user's notes; EmbedNote's skip
+      # clause then returns `:ok` WITHOUT clearing the `embed_retry_after` this
+      # worker just stamped, so the note comes back every 30 minutes forever.
+      # Over-selecting is not harmless here. What we must NOT
       # do is select every keyword-only note every tick: that is the 15-minute
       # forever-loop this whole column split exists to prevent.
       |> where(
@@ -80,7 +87,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
                from(s in Engram.Billing.Subscription,
                  where:
                    s.user_id == parent_as(:note).user_id and
-                     s.status in ^Engram.Billing.entitled_statuses(),
+                     s.status in ^Engram.Billing.entitled_statuses() and
+                     s.tier in ["starter", "pro"],
                  select: 1
                )
              ))

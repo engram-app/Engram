@@ -13,13 +13,20 @@ defmodule Engram.Repo.Migrations.IndexNotesCreatedRankExpand do
   @disable_ddl_transaction true
   @disable_migration_lock true
 
+  # Plain `create`, not `create_if_not_exists`: a CREATE INDEX CONCURRENTLY that
+  # aborts (deploy timeout, lock conflict, dropped connection) leaves an INVALID
+  # index behind. `IF NOT EXISTS` would then see the relation on the next deploy
+  # and skip it, so the index stays invalid forever, the planner never uses it,
+  # and the O(N^2) bulk import this migration exists to fix silently persists
+  # behind a green migration log. Plain `create` fails loudly and forces a
+  # DROP INDEX + re-run.
   def change do
-    create_if_not_exists index(
-                           :notes,
-                           [:user_id, :created_at, :id],
-                           name: :idx_notes_user_created_rank,
-                           where: "kind = 'note' AND deleted_at IS NULL",
-                           concurrently: true
-                         )
+    create index(
+             :notes,
+             [:user_id, :created_at, :id],
+             name: :idx_notes_user_created_rank,
+             where: "kind = 'note' AND deleted_at IS NULL",
+             concurrently: true
+           )
   end
 end
