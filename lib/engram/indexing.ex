@@ -91,36 +91,34 @@ defmodule Engram.Indexing do
     else
       user = user || Engram.Accounts.get_user!(note.user_id)
 
-      cond do
+      if IndexCap.within_cap?(note, user) do
+        context_texts = Enum.map(chunks, & &1.context_text)
+        dims = Application.get_env(:engram, :embed_dims, @default_dims)
+
+        # Keyword-only tiers never call Voyage. `nil` vectors flow through
+        # build_prepared/8, which emits a sparse-only named vector — the BM25
+        # leg is computed locally from the chunk text, so keyword search is
+        # fully functional with zero embedding spend.
+        semantic? = SearchProfile.resolve(user).semantic
+
+        with :ok <- Qdrant.ensure_collection(collection(), dims),
+             {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user),
+             {:ok, vectors} <- maybe_embed(semantic?, context_texts) do
+          avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id)
+          build_prepared(note, user, vault, chunks, vectors, filter_key, avgdl, link_rows)
+        else
+          {:error, :no_dek} = err ->
+            emit_no_dek_telemetry(note)
+            err
+
+          other ->
+            other
+        end
+      else
         # Outside the user's indexed-note cap: persist link rows (the graph is
         # not search and is not capped) but write no chunks and no Qdrant
         # points.
-        not IndexCap.within_cap?(note, user) ->
-          {:ok, {:no_chunks, link_rows}}
-
-        true ->
-          context_texts = Enum.map(chunks, & &1.context_text)
-          dims = Application.get_env(:engram, :embed_dims, @default_dims)
-
-          # Keyword-only tiers never call Voyage. `nil` vectors flow through
-          # build_prepared/8, which emits a sparse-only named vector — the BM25
-          # leg is computed locally from the chunk text, so keyword search is
-          # fully functional with zero embedding spend.
-          semantic? = SearchProfile.resolve(user).semantic
-
-          with :ok <- Qdrant.ensure_collection(collection(), dims),
-               {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user),
-               {:ok, vectors} <- maybe_embed(semantic?, context_texts) do
-            avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id)
-            build_prepared(note, user, vault, chunks, vectors, filter_key, avgdl, link_rows)
-          else
-            {:error, :no_dek} = err ->
-              emit_no_dek_telemetry(note)
-              err
-
-            other ->
-              other
-          end
+        {:ok, {:no_chunks, link_rows}}
       end
     end
   end
