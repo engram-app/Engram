@@ -35,13 +35,24 @@ defmodule Engram.Accounts do
   """
   @spec get_user_with_subscription(Ecto.UUID.t()) :: User.t() | nil
   def get_user_with_subscription(id) do
-    Repo.one(
-      from(u in User,
-        where: u.id == ^id,
-        left_join: s in assoc(u, :subscription),
-        preload: [subscription: s]
-      ),
-      skip_tenant_check: true
+    Repo.one(with_subscription_query(id), skip_tenant_check: true)
+  end
+
+  @doc """
+  `get_user_with_subscription/1` that raises, for callers replacing a
+  `get_user!/1` and relying on a missing user being an error rather than a
+  `nil` that flows onward.
+  """
+  @spec get_user_with_subscription!(Ecto.UUID.t()) :: User.t()
+  def get_user_with_subscription!(id) do
+    Repo.one!(with_subscription_query(id), skip_tenant_check: true)
+  end
+
+  defp with_subscription_query(id) do
+    from(u in User,
+      where: u.id == ^id,
+      left_join: s in assoc(u, :subscription),
+      preload: [subscription: s]
     )
   end
 

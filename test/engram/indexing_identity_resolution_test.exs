@@ -80,11 +80,36 @@ defmodule Engram.IndexingIdentityResolutionTest do
              "observing the query it is supposed to guard. See #1502."
   end
 
+  # The `users` budget above says nothing about `subscriptions`, and that is
+  # where this path actually leaked: `IndexCap.within_cap?/2` (#1486) and
+  # `SearchProfile.resolve/1` each resolve the tier, and on a bare `get_user!/1`
+  # struct each costs its own round trip. EmbedNote never hit it because it
+  # threads a `get_user_with_subscription/1` user down; the two-arg form,
+  # which resolves its own, did — and nothing covered it. See #1502.
+  test "index_note/2 issues NO subscriptions queries when it resolves its own user",
+       %{bypass: bypass, note: note, vault: vault} do
+    stub_embedder()
+    stub_qdrant(bypass)
+
+    {count, result} =
+      count_queries("subscriptions", fn -> Indexing.index_note(note, vault) end)
+
+    assert match?({:ok, _}, result), "index_note failed: #{inspect(result)}"
+
+    assert count == 0,
+           "index_note/2 ran #{count} `subscriptions` quer#{plural(count)}, expected 0.\n" <>
+             "It resolves the user with `get_user_with_subscription!/1`, so the association\n" <>
+             "is loaded and every downstream `effective_limit/2` reads it from the struct.\n" <>
+             "A non-zero count means something re-loaded the user without the join."
+  end
+
   # Counts Ecto queries against the `users` source for the duration of `fun`.
   # Ecto tags each query with its schema source, which is what the prod
   # `sum by (source) (rate(ecto_repo_query_total_time_milliseconds_count))`
   # measurement keys on — so this test counts the same thing the dashboard does.
-  defp count_user_queries(fun) do
+  defp count_user_queries(fun), do: count_queries("users", fun)
+
+  defp count_queries(source, fun) do
     ref = make_ref()
     test_pid = self()
     handler_id = {__MODULE__, ref}
@@ -93,7 +118,7 @@ defmodule Engram.IndexingIdentityResolutionTest do
       handler_id,
       [:engram, :repo, :query],
       fn _event, _measure, meta, _cfg ->
-        if meta[:source] == "users", do: send(test_pid, {ref, :users_query})
+        if meta[:source] == source, do: send(test_pid, {ref, :users_query})
       end,
       nil
     )

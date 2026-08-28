@@ -41,8 +41,13 @@ defmodule Engram.Indexing do
     # round trips for one note (here, prepare_index, and twice more in
     # EmbedNote). Measured 2.1 users/job in prod on 2026-08-28. The argument is
     # optional so the six test modules and any future caller can keep passing
-    # two args; the hot path passes the user it already has. See #1502.
-    user = user || Engram.Accounts.get_user!(note.user_id)
+    # two args; the hot path passes the user it already has.
+    #
+    # `_with_subscription`: everything downstream asks about a limit —
+    # `IndexCap.within_cap?/2` and `SearchProfile.resolve/1` each resolve the
+    # tier — and on a bare `get_user!/1` struct that is one `subscriptions`
+    # query apiece. The join folds both into this fetch. See #1502.
+    user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
 
     case prepare_index(note, vault, user) do
       {:ok, {:no_chunks, link_rows}} ->
@@ -89,7 +94,7 @@ defmodule Engram.Indexing do
     if chunks == [] do
       {:ok, {:no_chunks, link_rows}}
     else
-      user = user || Engram.Accounts.get_user!(note.user_id)
+      user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
 
       if IndexCap.within_cap?(note, user) do
         context_texts = Enum.map(chunks, & &1.context_text)
