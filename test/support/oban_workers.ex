@@ -18,9 +18,11 @@ defmodule Engram.Test.ObanWorkers do
   @doc "All `Oban.Worker` modules in the `:engram` application, loaded."
   @spec all() :: [module()]
   def all do
+    # `Application.app_dir/2`, not `:code.lib_dir/2` — the latter is deprecated
+    # on newer OTP and CI compiles with `--warnings-as-errors`, so it is fatal
+    # there while staying silent on an older local OTP.
     :engram
-    |> :code.lib_dir(:ebin)
-    |> List.to_string()
+    |> Application.app_dir("ebin")
     |> Path.join("*.beam")
     |> Path.wildcard()
     |> Enum.flat_map(&worker_module/1)
