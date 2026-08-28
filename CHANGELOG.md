@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.21.2](https://github.com/engram-app/Engram/compare/0.21.1...0.21.2) (2026-08-28)
+
+
+### Bug Fixes
+
+* **promex:** stop web nodes publishing an Oban gauge they cannot observe ([#1498](https://github.com/engram-app/Engram/issues/1498)) ([888998f](https://github.com/engram-app/Engram/commit/888998fcb99d0c0677b4f1daf43a15d906e018cc))
+
+## [0.21.1](https://github.com/engram-app/Engram/compare/0.21.0...0.21.1) (2026-08-28)
+
+
+### Bug Fixes
+
+* **oban:** scope crdt_checkpoint 6 to the worker, not every node ([#1488](https://github.com/engram-app/Engram/issues/1488)) ([7be40d5](https://github.com/engram-app/Engram/commit/7be40d5fedc208ffa4c26cc0836b6a32ea215ae1))
+
 ## [0.21.0](https://github.com/engram-app/Engram/compare/0.20.0...0.21.0) (2026-08-28)
 
 
