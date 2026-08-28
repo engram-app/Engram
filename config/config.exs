@@ -41,6 +41,10 @@ config :engram, :trust_cf_connecting_ip, false
 # Grafana dashboard uploads (managed via Terraform-as-code, not runtime).
 config :engram, Engram.PromEx,
   manual_metrics_start_delay: :no_delay,
+  # Overridden per node role in config/runtime.exs — a web node
+  # (`ENGRAM_NODE_ROLE=web`, `queues: false`) drops
+  # `:oban_queue_poll_metrics` because it cannot observe queue depth and
+  # PromEx `last_value` gauges never expire. See Engram.PromEx.drop_metrics_groups/1.
   drop_metrics_groups: [],
   grafana: :disabled,
   metrics_server: :disabled

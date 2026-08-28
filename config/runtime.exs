@@ -734,6 +734,21 @@ if config_env() == :prod do
           config :engram, :node_role, :web
           config :engram, Oban, queues: false
 
+          # `queues: false` leaves this node unable to observe queue depth, and
+          # PromEx's `:oban_queue_poll_metrics` are `last_value` gauges that
+          # never expire — so a poller with nothing to poll does not go quiet,
+          # it freezes and serves its final sample forever. Prod 2026-08-28:
+          # web published a 494-job embed backlog for 40+ minutes against an
+          # empty queue, and every dashboard and alert that selects
+          # `max by (queue)` across roles read that copy instead of the
+          # worker's live one. Absent beats wrong. See #1497.
+          # Literal, NOT a call to Engram.PromEx.drop_metrics_groups/1. This file
+          # is evaluated by a Config.Provider during release boot, before any
+          # application starts; calling into app code there is a boot-crash risk
+          # for no gain. PromExObanPollGroupTest asserts this literal and that
+          # function stay in agreement.
+          config :engram, Engram.PromEx, drop_metrics_groups: [:oban_queue_poll_metrics]
+
         "worker" ->
           # Recorded because DECLARING a role is what tells the boot check this
           # is a split fleet, and the unclustered *worker* is the node that can
