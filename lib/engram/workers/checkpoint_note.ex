@@ -28,6 +28,9 @@ defmodule Engram.Workers.CheckpointNote do
   require Logger
 
   @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(5)
+
+  @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
     %{"user_id" => user_id, "vault_id" => vault_id, "note_id" => note_id} = args
 

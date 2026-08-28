@@ -92,6 +92,9 @@ defmodule Engram.Workers.ProjectVaultIndex do
   @event [:engram, :crdt, :index_projection]
 
   @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(5)
+
+  @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id, "vault_id" => vault_id}}) do
     case Accounts.get_user(user_id) do
       nil ->

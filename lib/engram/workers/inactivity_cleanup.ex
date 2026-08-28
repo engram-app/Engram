@@ -41,6 +41,9 @@ defmodule Engram.Workers.InactivityCleanup do
   @soft_delete_sql_floor_days 30
 
   @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(15)
+
+  @impl Oban.Worker
   def perform(%Oban.Job{}) do
     sweep_60_day_warning()
     sweep_80_day_warning()

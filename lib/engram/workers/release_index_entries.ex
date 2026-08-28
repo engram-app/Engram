@@ -53,6 +53,9 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   alias Engram.Crypto.RotationGate
   alias Engram.Notes.Identity
 
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(5)
+
   @doc """
   Build a release job. Returns `:skip` for an empty id list so callers do not
   each need their own guard (`Enqueue.enqueue/3` no-ops on `:skip`).

@@ -40,6 +40,9 @@ defmodule Engram.Workers.OrphanSweep do
   @qdrant_scroll_limit 500
 
   @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(15)
+
+  @impl Oban.Worker
   def perform(%Oban.Job{}) do
     live_ids = live_user_ids()
 

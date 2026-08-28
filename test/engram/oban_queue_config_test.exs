@@ -10,12 +10,8 @@ defmodule Engram.ObanQueueConfigTest do
   test "every Oban worker's queue is registered in the Oban queues config" do
     configured = MapSet.new(configured_queues())
 
-    {:ok, modules} = :application.get_key(:engram, :modules)
-
     offenders =
-      for mod <- modules,
-          Code.ensure_loaded?(mod),
-          oban_worker?(mod),
+      for mod <- Engram.Test.ObanWorkers.all(),
           queue = worker_queue(mod),
           queue not in configured,
           do: {mod, queue}
@@ -115,10 +111,6 @@ defmodule Engram.ObanQueueConfigTest do
             inspect(other)
         )
     end
-  end
-
-  defp oban_worker?(mod) do
-    Oban.Worker in (mod.module_info(:attributes)[:behaviour] || [])
   end
 
   # Pull the worker's actual queue from a built changeset so it reflects the

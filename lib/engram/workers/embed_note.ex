@@ -5,7 +5,8 @@ defmodule Engram.Workers.EmbedNote do
   Debounce: 5-second scheduled_at delay, replaced on re-insert so rapid edits
   trigger only one Voyage API call.
 
-  Dedup: unique per note_id in available/scheduled states, 60-second window.
+  Dedup: unique per note_id across all `:incomplete` states (which includes
+  `executing` and `retryable`, not just available/scheduled), 60-second window.
 
   Idempotency: skips embedding when embed_hash already matches content_hash
   (content hasn't changed since last successful embed). On success, sets
@@ -39,6 +40,9 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Workers.BackgroundPriority
 
   require Logger
+
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(10)
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args} = job) do
