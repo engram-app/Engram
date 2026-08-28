@@ -16,6 +16,7 @@ defmodule Engram.Indexing.IndexCap do
   import Ecto.Query
 
   alias Engram.Billing
+  alias Engram.Notes.Chunk
   alias Engram.Notes.Note
   alias Engram.Repo
 
@@ -30,7 +31,11 @@ defmodule Engram.Indexing.IndexCap do
     user = Engram.Accounts.get_user!(note.user_id)
 
     case Billing.effective_limit(user, :indexed_notes_cap) do
-      cap when is_integer(cap) -> rank_of(note) < cap
+      cap when is_integer(cap) and cap >= 0 -> rank_of(note) < cap
+      # -1 is this codebase's "unlimited" sentinel (see check_limit/3 and
+      # normalize_capability/2), and it is what the e2e overrides use. Without
+      # this clause `rank < -1` is false for every note and NOTHING gets
+      # indexed — the exact inversion the LimitKeys moduledoc warns about.
       _ -> true
     end
   end
@@ -50,11 +55,105 @@ defmodule Engram.Indexing.IndexCap do
 
     indexed =
       case Billing.effective_limit(user, :indexed_notes_cap) do
-        cap when is_integer(cap) -> min(total, cap)
+        cap when is_integer(cap) and cap >= 0 -> min(total, cap)
         _ -> total
       end
 
     %{indexed: indexed, total: total}
+  end
+
+  @doc """
+  Re-opens indexing for notes that a deletion just brought inside the cap.
+
+  Deleting a note frees a slot, but the note that inherits it already carries a
+  stamped `embed_hash` from the pass that skipped it — so neither `EmbedNote`
+  nor `ReconcileEmbeddings` would ever look at it again, and it would stay
+  unsearchable until the user happened to edit it.
+
+  Nulling `embed_hash` puts it back in the reconcile cron's normal stale-note
+  query, which re-indexes it at backfill priority. No new worker, no new state.
+
+  Scoped to in-cap notes that have no chunk rows, so it is a no-op for anyone
+  already fully indexed and for every uncapped tier.
+  """
+  @spec backfill_freed_slots(Ecto.UUID.t()) :: :ok
+  def backfill_freed_slots(user_id) when is_binary(user_id) do
+    user = Engram.Accounts.get_user!(user_id)
+
+    case Billing.effective_limit(user, :indexed_notes_cap) do
+      cap when is_integer(cap) and cap >= 0 ->
+        in_cap =
+          from(n in Note,
+            where: n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at),
+            order_by: [asc: n.created_at, asc: n.id],
+            limit: ^cap,
+            select: n.id
+          )
+
+        # Notes with zero chunk rows are the ones a prior pass skipped for the
+        # cap; anything already indexed is left alone.
+        unindexed =
+          from(n in Note,
+            as: :n,
+            where: n.id in subquery(in_cap),
+            where: not exists(from(c in Chunk, where: c.note_id == parent_as(:n).id, select: 1)),
+            select: n.id
+          )
+
+        {count, _} =
+          from(n in Note, where: n.kind == "note" and n.id in subquery(unindexed))
+          |> Repo.update_all([set: [embed_hash: nil]], skip_tenant_check: true)
+
+        if count > 0 do
+          :telemetry.execute(
+            [:engram, :indexing, :cap_slots_freed],
+            %{count: count},
+            %{user_id: user_id}
+          )
+        end
+
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  @doc """
+  Drops a user's dense vectors after they lose semantic entitlement.
+
+  Without this a downgraded user keeps every dense vector in Qdrant forever —
+  ~$0.53/mo of RAM on a tier priced at $0.11 — which is exactly the
+  accumulation problem the keyword-only tier exists to fix.
+
+  Nulls BOTH hashes rather than just `dense_indexed_hash`: with only the dense
+  one cleared, `EmbedNote`'s skip clause sees `embed_hash == content_hash` and a
+  now-unentitled user, and correctly does nothing. Clearing `embed_hash` too
+  puts the notes back in the reconcile cron's stale query, and because
+  `commit_index/1` deletes a note's points before inserting the new ones, the
+  rebuild replaces dense+sparse points with sparse-only ones. The vectors go
+  away as a side effect of normal re-indexing.
+  """
+  @spec revoke_dense_index(Ecto.UUID.t()) :: :ok
+  def revoke_dense_index(user_id) when is_binary(user_id) do
+    {count, _} =
+      from(n in Note,
+        where: n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at),
+        where: not is_nil(n.dense_indexed_hash)
+      )
+      |> Repo.update_all([set: [embed_hash: nil, dense_indexed_hash: nil]],
+        skip_tenant_check: true
+      )
+
+    if count > 0 do
+      :telemetry.execute(
+        [:engram, :indexing, :dense_revoked],
+        %{count: count},
+        %{user_id: user_id}
+      )
+    end
+
+    :ok
   end
 
   # Live notes this user created BEFORE this one. Ties on created_at break by

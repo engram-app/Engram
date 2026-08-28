@@ -5,6 +5,8 @@ defmodule Engram.Indexing.IndexCapTest do
 
   alias Engram.Billing.UserLimitOverride
   alias Engram.Indexing.IndexCap
+  alias Engram.Notes.Chunk
+  alias Engram.Notes.Note
   alias Engram.Repo
 
   # Free defaults to 2_000, which would need 2k rows to exercise. Override to a
@@ -69,6 +71,7 @@ defmodule Engram.Indexing.IndexCapTest do
     end
 
     test "an uncapped tier admits everything", %{user: u, vault: v} do
+      :ok = cap!(u, -1)
       notes = for s <- 0..5, do: note_at(u, v, s * 10)
       assert Enum.all?(notes, &IndexCap.within_cap?/1)
     end
@@ -87,6 +90,97 @@ defmodule Engram.Indexing.IndexCapTest do
       for s <- 0..2, do: note_at(u, v, s * 10)
 
       assert %{indexed: 3, total: 3} = IndexCap.counts(u)
+    end
+  end
+
+  describe "backfill_freed_slots/1" do
+    test "re-opens an in-cap note that has no chunks", %{user: u, vault: v} do
+      :ok = cap!(u, 2)
+
+      # Shape a prior indexing pass leaves behind for a note it skipped for the
+      # cap: embed_hash stamped (so reconcile ignores it) but no chunk rows.
+      note = note_at(u, v, 0)
+
+      note
+      |> Ecto.Changeset.change(embed_hash: note.content_hash)
+      |> Repo.update!()
+
+      :ok = IndexCap.backfill_freed_slots(u.id)
+
+      # embed_hash nulled -> ReconcileEmbeddings' stale-note query picks it up.
+      assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_hash == nil
+    end
+
+    test "leaves an already-indexed note alone", %{user: u, vault: v} do
+      :ok = cap!(u, 2)
+      note = note_at(u, v, 0)
+
+      note
+      |> Ecto.Changeset.change(embed_hash: note.content_hash)
+      |> Repo.update!()
+
+      Repo.insert!(%Chunk{
+        note_id: note.id,
+        user_id: u.id,
+        vault_id: v.id,
+        position: 0,
+        char_start: 0,
+        char_end: 10,
+        token_count: 2,
+        qdrant_point_id: Ecto.UUID.generate()
+      })
+
+      :ok = IndexCap.backfill_freed_slots(u.id)
+
+      assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_hash == note.content_hash
+    end
+
+    test "is a no-op on an uncapped tier", %{user: u, vault: v} do
+      :ok = cap!(u, -1)
+      note = note_at(u, v, 0)
+
+      note
+      |> Ecto.Changeset.change(embed_hash: note.content_hash)
+      |> Repo.update!()
+
+      :ok = IndexCap.backfill_freed_slots(u.id)
+
+      assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_hash == note.content_hash
+    end
+  end
+
+  describe "revoke_dense_index/1" do
+    test "nulls both hashes so the rebuild drops the dense vectors", %{user: u, vault: v} do
+      note = note_at(u, v, 0)
+
+      note
+      |> Ecto.Changeset.change(
+        embed_hash: note.content_hash,
+        dense_indexed_hash: note.content_hash
+      )
+      |> Repo.update!()
+
+      :ok = IndexCap.revoke_dense_index(u.id)
+
+      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+      # BOTH must be nil. Clearing only dense_indexed_hash would leave
+      # EmbedNote's skip clause matching for a now-unentitled user, so nothing
+      # would ever rebuild and the dense vectors would stay in Qdrant.
+      assert reloaded.embed_hash == nil
+      assert reloaded.dense_indexed_hash == nil
+    end
+
+    test "leaves a note that never had dense vectors untouched", %{user: u, vault: v} do
+      note = note_at(u, v, 0)
+
+      note
+      |> Ecto.Changeset.change(embed_hash: note.content_hash, dense_indexed_hash: nil)
+      |> Repo.update!()
+
+      :ok = IndexCap.revoke_dense_index(u.id)
+
+      # Not re-queued: it is already sparse-only, so a rebuild would be pure waste.
+      assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_hash == note.content_hash
     end
   end
 end

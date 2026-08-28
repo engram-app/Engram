@@ -667,6 +667,13 @@ defmodule Engram.Billing do
                 %{count: 1},
                 %{user_id: user.id, from: prev_tier, to: :free}
               )
+
+              # Free is keyword-only, so this user's dense vectors are now dead
+              # weight in Qdrant — ~$0.53/mo of RAM on a tier priced at $0.11.
+              # Nulls both index hashes; ReconcileEmbeddings rebuilds the notes
+              # sparse-only on its next tick and the dense points go with the
+              # replace. See IndexCap.revoke_dense_index/1.
+              _ = Engram.Indexing.IndexCap.revoke_dense_index(user.id)
             end
 
             {:ok, updated}
