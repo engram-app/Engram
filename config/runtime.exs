@@ -734,12 +734,45 @@ if config_env() == :prod do
           config :engram, :node_role, :web
           config :engram, Oban, queues: false
 
+          # `queues: false` leaves this node unable to observe queue depth, and
+          # PromEx's `:oban_queue_poll_metrics` are `last_value` gauges that
+          # never expire — so a poller with nothing to poll does not go quiet,
+          # it freezes and serves its final sample forever. Prod 2026-08-28:
+          # web published a 494-job embed backlog for 40+ minutes against an
+          # empty queue, and every dashboard and alert that selects
+          # `max by (queue)` across roles read that copy instead of the
+          # worker's live one. Absent beats wrong. See #1497.
+          # Literal, NOT a call to Engram.PromEx.drop_metrics_groups/1. This file
+          # is evaluated by a Config.Provider during release boot, before any
+          # application starts; calling into app code there is a boot-crash risk
+          # for no gain. PromExObanPollGroupTest asserts this literal and that
+          # function stay in agreement.
+          config :engram, Engram.PromEx, drop_metrics_groups: [:oban_queue_poll_metrics]
+
         "worker" ->
-          # No Oban change — a worker runs the config/config.exs list. Recorded
-          # anyway because DECLARING a role is what tells the boot check this is
-          # a split fleet, and the unclustered *worker* is the node that can
+          # Recorded because DECLARING a role is what tells the boot check this
+          # is a split fleet, and the unclustered *worker* is the node that can
           # actually corrupt data (see Application.warn_if_split_fleet_unclustered/0).
           config :engram, :node_role, :worker
+
+          # The ONLY queue that differs from the unsplit default, and it belongs
+          # here rather than in config/config.exs because it is only safe on a
+          # node shaped like this one. A worker never binds a CRDT room, so it
+          # never runs the inline CheckpointGate (3) that a web or unsplit node
+          # spends alongside this lane — and its POOL_SIZE is 25, not 15. Both
+          # halves of that are what make 6 affordable.
+          #
+          # 6 restores the capacity the cluster already had: the lane used to run
+          # on BOTH web nodes (2 x 3), so consolidating it onto one worker at 3
+          # would have halved overflow throughput for exactly the reconnect storm
+          # the lane exists to absorb.
+          #
+          # Partial `queues:` overrides deep-merge into the base keyword list
+          # (Config merges nested keyword lists), so the other eight queues are
+          # untouched. ObanQueueConfigTest pins that behaviour — if it ever
+          # became a wholesale replace, the worker would boot with
+          # crdt_checkpoint as its only queue and embedding would stop.
+          config :engram, Oban, queues: [crdt_checkpoint: 6]
 
         "" ->
           :ok
