@@ -98,21 +98,22 @@ config :engram, Oban,
     # Overflow lane for CRDT unbind checkpoints under a reconnect storm (see
     # Engram.Notes.CheckpointGate + Engram.Workers.CheckpointNote).
     #
-    # The two halves of this path now live on DIFFERENT NODES. The inline gate
-    # (CheckpointGate, default 3) runs wherever the room is — a web node. This
-    # lane runs only where queues are enabled — the worker. So the old "inline
-    # 3 + lane 3 = 6 connections" arithmetic no longer describes any single
-    # pool: a web node spends 3 on this path, the worker spends what is set
-    # here, and neither sees the other's.
+    # 3 is the UNSPLIT default and this file is where the unsplit default lives.
+    # A node with no ENGRAM_NODE_ROLE runs the inline gate (CheckpointGate, 3)
+    # AND this lane, both against one pool, so the pair costs 6 connections
+    # there. That is the number POOL_SIZE 15 was budgeted around.
     #
-    # 6, not 3. Cluster-wide overflow capacity used to be 2 web nodes x 3 = 6
-    # concurrent jobs. Pinning the lane to one worker would have quietly halved
-    # it to 3, doubling drain time for exactly the reconnect storm this lane
-    # exists to absorb. 6 on the single worker restores the capacity the
-    # cluster actually had, and now states it as ONE explicit number instead of
-    # a per-node limit that silently scaled with desired_count.
+    # The dedicated worker raises this to 6 in config/runtime.exs, under the
+    # ENGRAM_NODE_ROLE=worker arm — NOT here. It can afford to: it never binds
+    # a room so it never runs the inline gate, and its pool is 25. Raising it
+    # here instead would put 6 + 3 = 9 on every unsplit node's pool of 15,
+    # which with embed at 5 is the 2026-07-09 exhaustion shape. ObanQueueConfigTest
+    # holds the 1..3 ceiling on this value as a tripwire.
     #
-    # It fits the worker pool: its queues sum to 20 of POOL_SIZE 25.
+    # Why the worker gets 6 and not 3: cluster-wide overflow capacity used to be
+    # 2 web nodes x 3 = 6 concurrent jobs. Consolidating the lane onto one
+    # worker at 3 would have quietly halved it, doubling drain time for exactly
+    # the reconnect storm this lane exists to absorb.
     #
     # These are ABSOLUTE limits — do NOT scale them with POOL_SIZE. They are
     # the backpressure that bounds a fan-out storm (2026-07-09), and raising
@@ -129,7 +130,7 @@ config :engram, Oban,
     # engram-infra (main/envs/prod/ecs.tf) and nothing there points back here,
     # so a copy in this repo would silently go stale — the same cross-file rot
     # that made the original 10 a leftover rather than a decision.
-    crdt_checkpoint: 6,
+    crdt_checkpoint: 3,
     default: 1
   ],
   plugins: [

@@ -735,11 +735,29 @@ if config_env() == :prod do
           config :engram, Oban, queues: false
 
         "worker" ->
-          # No Oban change — a worker runs the config/config.exs list. Recorded
-          # anyway because DECLARING a role is what tells the boot check this is
-          # a split fleet, and the unclustered *worker* is the node that can
+          # Recorded because DECLARING a role is what tells the boot check this
+          # is a split fleet, and the unclustered *worker* is the node that can
           # actually corrupt data (see Application.warn_if_split_fleet_unclustered/0).
           config :engram, :node_role, :worker
+
+          # The ONLY queue that differs from the unsplit default, and it belongs
+          # here rather than in config/config.exs because it is only safe on a
+          # node shaped like this one. A worker never binds a CRDT room, so it
+          # never runs the inline CheckpointGate (3) that a web or unsplit node
+          # spends alongside this lane — and its POOL_SIZE is 25, not 15. Both
+          # halves of that are what make 6 affordable.
+          #
+          # 6 restores the capacity the cluster already had: the lane used to run
+          # on BOTH web nodes (2 x 3), so consolidating it onto one worker at 3
+          # would have halved overflow throughput for exactly the reconnect storm
+          # the lane exists to absorb.
+          #
+          # Partial `queues:` overrides deep-merge into the base keyword list
+          # (Config merges nested keyword lists), so the other eight queues are
+          # untouched. ObanQueueConfigTest pins that behaviour — if it ever
+          # became a wholesale replace, the worker would boot with
+          # crdt_checkpoint as its only queue and embedding would stop.
+          config :engram, Oban, queues: [crdt_checkpoint: 6]
 
         "" ->
           :ok
