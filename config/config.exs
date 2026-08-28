@@ -62,6 +62,25 @@ config :engram, Oban,
   # of the source-less BEGIN/COMMIT/SELECT staging churn with no fresh-insert
   # latency cost.
   stage_interval: :timer.seconds(5),
+  # How long Oban waits for executing jobs to finish after SIGTERM before it
+  # stops the producers out from under them. Oban's default is 15s, which was
+  # survivable when every node ran queues and a replacement was rare. With the
+  # dedicated worker service (ENGRAM_NODE_ROLE=worker) every deploy replaces
+  # the ONE node executing jobs, so the default runs on every release.
+  #
+  # An embed job spends most of its life blocked on the Voyage API and routinely
+  # exceeds 15s. Cut short, it stays `executing` in the DB with a dead owner and
+  # nothing retries it until Oban.Plugins.Lifeline's rescue_after fires — 60
+  # minutes by default. That is an hour of a note having no embedding, and it
+  # looks exactly like "the queue is not draining".
+  #
+  # 45s, not more: the ECS container stopTimeout is 90s and the ALB
+  # deregistration_delay is 60s (engram-infra main/envs/prod/{ecs,alb}.tf).
+  # Oban's grace and the endpoint drain are siblings in the supervision tree,
+  # so assume they can serialize — 45 keeps the worst case under the 90s
+  # SIGKILL with room for BEAM teardown. On a web node this costs nothing:
+  # queues: false means there is nothing executing to wait for.
+  shutdown_grace_period: :timer.seconds(45),
   queues: [
     # The 2026-07-03 OOM crash-loop was NOT caused by embed concurrency — it was
     # the Lingua language-detector loading ~945 MB of full-accuracy n-gram models
@@ -77,10 +96,23 @@ config :engram, Oban,
     cleanup: 1,
     indexing: 2,
     # Overflow lane for CRDT unbind checkpoints under a reconnect storm (see
-    # Engram.Notes.CheckpointGate + Engram.Workers.CheckpointNote). Combined
-    # peak DB-connection budget on this path is inline (CheckpointGate default
-    # 3) + this lane (3) = 6 connections; excess unbind checkpoints wait in
-    # Postgres, not on the pool.
+    # Engram.Notes.CheckpointGate + Engram.Workers.CheckpointNote).
+    #
+    # The two halves of this path now live on DIFFERENT NODES. The inline gate
+    # (CheckpointGate, default 3) runs wherever the room is — a web node. This
+    # lane runs only where queues are enabled — the worker. So the old "inline
+    # 3 + lane 3 = 6 connections" arithmetic no longer describes any single
+    # pool: a web node spends 3 on this path, the worker spends what is set
+    # here, and neither sees the other's.
+    #
+    # 6, not 3. Cluster-wide overflow capacity used to be 2 web nodes x 3 = 6
+    # concurrent jobs. Pinning the lane to one worker would have quietly halved
+    # it to 3, doubling drain time for exactly the reconnect storm this lane
+    # exists to absorb. 6 on the single worker restores the capacity the
+    # cluster actually had, and now states it as ONE explicit number instead of
+    # a per-node limit that silently scaled with desired_count.
+    #
+    # It fits the worker pool: its queues sum to 20 of POOL_SIZE 25.
     #
     # These are ABSOLUTE limits — do NOT scale them with POOL_SIZE. They are
     # the backpressure that bounds a fan-out storm (2026-07-09), and raising
@@ -97,7 +129,7 @@ config :engram, Oban,
     # engram-infra (main/envs/prod/ecs.tf) and nothing there points back here,
     # so a copy in this repo would silently go stale — the same cross-file rot
     # that made the original 10 a leftover rather than a decision.
-    crdt_checkpoint: 3,
+    crdt_checkpoint: 6,
     default: 1
   ],
   plugins: [

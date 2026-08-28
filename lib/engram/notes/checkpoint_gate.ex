@@ -32,9 +32,17 @@ defmodule Engram.Notes.CheckpointGate do
   """
   use GenServer
 
-  # Kept comfortably under POOL_SIZE (default 10) so inline checkpoints + the
-  # crdt_checkpoint Oban lane (concurrency 3) + ungated room binds still leave
-  # the pool headroom for REST/search/embed. Configurable via
+  # Kept comfortably under POOL_SIZE so inline checkpoints + ungated room binds
+  # still leave the pool headroom for REST/search/embed.
+  #
+  # This gate and its overflow lane no longer share a pool. The gate runs
+  # wherever the room is bound (a web node); the `crdt_checkpoint` Oban lane
+  # runs only where queues are enabled (the worker, ENGRAM_NODE_ROLE). So this
+  # limit is 3 connections on a WEB node's pool and the lane's 6 is 6 on the
+  # WORKER's — do not add them together when budgeting either pool. See the
+  # crdt_checkpoint entry in config/config.exs.
+  #
+  # Configurable via
   # `:checkpoint_inline_limit` so the test env can raise it out of the way
   # (many async tests spin real rooms that share this process-global gate).
   @default_limit 3
