@@ -136,8 +136,22 @@ defmodule Engram.Workers.EmbedNote do
             case embed_budget_gate(note, user) do
               :ok ->
                 case run_embed(note, user, old_path_hmac_b64) do
-                  :ok ->
-                    _ = record_embed_tokens(note)
+                  {:ok, chunk_count, semantic?} ->
+                    # Charge the embed meter only when Voyage was actually
+                    # called. `chunk_count == 0` is index_note/2's no-chunks
+                    # outcome: the note was empty OR outside the user's
+                    # indexed-note cap, and in neither case did a single token
+                    # get spent. Keyword-only users never call Voyage at all.
+                    #
+                    # Charging regardless was not merely cosmetic: phantom
+                    # tokens accumulate to the 20M lifetime cap, and
+                    # embed_budget_gate/2 then cancels indexing entirely — so a
+                    # Free user who spent nothing would lose their BM25 index.
+                    _ =
+                      if chunk_count > 0 and semantic? do
+                        record_embed_tokens(note)
+                      end
+
                     :ok
 
                   other ->
@@ -161,6 +175,12 @@ defmodule Engram.Workers.EmbedNote do
   # Pricing v2 §B — block embeds when the user has exhausted their lifetime
   # token budget. Resolver returns nil for Starter/Pro (unmetered), so this is
   # effectively Free-only. Per-user overrides via Billing.UserLimitOverride.
+  #
+  # Skipped entirely for keyword-only users: this job spends zero Voyage tokens
+  # for them, so a cap on token SPEND has nothing to say about it. Enforcing it
+  # anyway turns an embed-budget cap into a total indexing blackout (no BM25
+  # either) for the one tier that cannot overspend. Checked first because it is
+  # free — `user` is already resolved and threaded in.
   defp embed_budget_gate(%Note{user_id: user_id} = note, %{} = user) do
     # Resolve the cap BEFORE measuring usage. `check_limit/3` answers `:ok` for
     # `:unlimited`/`nil`/`-1` without ever reading `current_count`, and the
@@ -168,7 +188,8 @@ defmodule Engram.Workers.EmbedNote do
     # `lifetime_embed_tokens/1` aggregate below was computed and thrown away,
     # once per job. On a 1.4k-note import that is 1.4k wasted aggregates.
     # See #1502.
-    if Billing.limit_enforced?(user, :lifetime_embed_token_cap) do
+    if SearchProfile.resolve(user).semantic and
+         Billing.limit_enforced?(user, :lifetime_embed_token_cap) do
       enforce_embed_budget(note, user, user_id)
     else
       :ok
@@ -334,9 +355,16 @@ defmodule Engram.Workers.EmbedNote do
               end
 
             case Indexing.index_note(decrypted_note, vault, user) do
-              {:ok, _count} ->
-                stamp_embed_hash(note, user)
-                :ok
+              {:ok, count} ->
+                # `user` is the row threaded down from run_and_stamp — the same
+                # one Indexing used to decide whether to call Voyage. Do NOT
+                # re-resolve: a second read lands a DIFFERENT value when a
+                # time-boxed override expires or a cancel webhook arrives
+                # mid-job (OverrideCache TTL is 60s; a 128-chunk batch with
+                # retries outlives it), and the spend would go unmetered.
+                semantic? = SearchProfile.resolve(user).semantic
+                stamp_embed_hash(note, semantic?, count)
+                {:ok, count, semantic?}
 
               # Voyage 429 — back off without burning an Oban attempt. Voyage's
               # paid-tier RPM is finite; without this guard five consecutive
@@ -394,23 +422,33 @@ defmodule Engram.Workers.EmbedNote do
   # the reconciliation cron or the next debounced job will pick up the new version.
   # Also clears any embed_retry_after poison cooldown — a successful embed means
   # the note is no longer broken.
-  defp stamp_embed_hash(%Note{content_hash: nil}, _user), do: :ok
+  defp stamp_embed_hash(%Note{content_hash: nil}, _semantic?, _count), do: :ok
 
-  defp stamp_embed_hash(note, user) do
+  defp stamp_embed_hash(note, semantic?, chunk_count) do
     # `embed_hash` = "this content is indexed" (keyword and/or dense).
-    # `dense_indexed_hash` = "this content has dense vectors in Qdrant", set
-    # ONLY when the user was entitled to semantic search at index time. Keeping
-    # them separate is what lets ReconcileEmbeddings stay quiet for keyword-only
-    # users while still backfilling them the moment they upgrade.
+    # `dense_indexed_hash` = "this content has dense vectors in Qdrant".
+    # Keeping them separate is what lets ReconcileEmbeddings stay quiet for
+    # keyword-only users while still backfilling them the moment they upgrade.
+    #
+    # ONE rule: the dense hash is set only when dense vectors were actually
+    # written. Entitlement alone is not enough — `chunk_count == 0` is
+    # index_note/2's no-chunks outcome (empty note, or outside the user's
+    # indexed-note cap), and in both cases the pass just PURGED this note's
+    # points. Stamping it anyway makes the column assert a false fact, and
+    # ReconcileEmbeddings' backfill selects on `is_nil(dense_indexed_hash)`,
+    # so the note would be skipped forever. That is not hypothetical for an
+    # entitled user: a per-user `indexed_notes_cap` override (a promo grant, a
+    # throttled abuser) puts a semantic user over the cap, and nothing but a
+    # content edit would ever re-open the note.
     set =
-      if SearchProfile.resolve(user).semantic do
+      if semantic? and chunk_count > 0 do
         [
           embed_hash: note.content_hash,
           dense_indexed_hash: note.content_hash,
           embed_retry_after: nil
         ]
       else
-        [embed_hash: note.content_hash, embed_retry_after: nil]
+        [embed_hash: note.content_hash, dense_indexed_hash: nil, embed_retry_after: nil]
       end
 
     {count, _} =

@@ -90,7 +90,10 @@ defmodule Engram.IndexingLinksTest do
         "mtime" => 2_000.0
       })
 
-    # no_chunks short-circuit: no embed call, no Qdrant call expected here.
+    # no_chunks: no EMBED call (nothing to embed), but this note has chunk rows
+    # from the index above, so purge_stale_index/1 does issue a Qdrant
+    # points/delete — emptying a note must remove its stale index, not just
+    # decline to add to it.
     assert {:ok, 0} = Indexing.index_note(emptied, vault)
 
     assert [] =

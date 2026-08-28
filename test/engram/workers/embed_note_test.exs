@@ -6,6 +6,7 @@ defmodule Engram.Workers.EmbedNoteTest do
   import Mox
 
   alias Engram.Accounts.User
+  alias Engram.Billing.OverrideCache
   alias Engram.Crypto
   alias Engram.Crypto.DekCache
   alias Engram.Notes
@@ -125,7 +126,7 @@ defmodule Engram.Workers.EmbedNoteTest do
         )
       )
 
-      Engram.Billing.OverrideCache.evict(note.user_id)
+      OverrideCache.evict(note.user_id)
 
       from(n in Note, where: n.id == ^note.id)
       |> Repo.update_all(
@@ -643,6 +644,91 @@ defmodule Engram.Workers.EmbedNoteTest do
     end
   end
 
+  # A user with no semantic override — the real Free tier. Cannot reuse the
+  # setup fixture, which grants semantic to exercise the dense path.
+  defp keyword_only_user! do
+    user = insert(:user)
+    {:ok, user} = Crypto.ensure_user_dek(user)
+    vault = insert(:vault, user: user)
+
+    note =
+      Engram.Fixtures.insert_note!(user, vault, %{
+        path: "Test/Keyword.md",
+        content: "# Keyword\n\nOnly."
+      })
+
+    {user, note}
+  end
+
+  describe "perform/1 — losing semantic entitlement" do
+    test "a keyword-only re-index clears dense_indexed_hash, so an upgrade can backfill it",
+         %{bypass: bypass, user: user, note: note} do
+      # Index once WITH dense vectors (setup user is entitled).
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+
+      stub_qdrant(bypass)
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      assert %Note{dense_indexed_hash: dense} = Repo.get!(Note, note.id, skip_tenant_check: true)
+      refute is_nil(dense)
+
+      # Lose entitlement, then edit. The re-index rebuilds the note's points
+      # sparse-only, so the dense vectors this column names no longer exist.
+      Repo.delete_all(
+        from(o in Engram.Billing.UserLimitOverride,
+          where: o.user_id == ^user.id and o.key == "search_semantic_enabled"
+        ),
+        skip_tenant_check: true
+      )
+
+      OverrideCache.evict(user.id)
+
+      {:ok, note} =
+        Notes.upsert_note(
+          user,
+          Repo.get!(Engram.Vaults.Vault, note.vault_id, skip_tenant_check: true),
+          %{
+            "path" => note.path,
+            "content" => "# Hello\n\nDifferent words entirely.",
+            "mtime" => 2_000.0
+          }
+        )
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      # Leaving the old hash would make ReconcileEmbeddings' upgrade backfill
+      # (which selects on `is_nil(dense_indexed_hash)`) skip this note forever:
+      # the user would pay for semantic search over a silent hole.
+      assert %Note{dense_indexed_hash: nil} = Repo.get!(Note, note.id, skip_tenant_check: true)
+    end
+  end
+
+  describe "perform/1 — entitled but over the index cap" do
+    test "an over-cap note is not stamped as dense-indexed, so raising the cap re-opens it",
+         %{user: user, note: note} do
+      # A SEMANTIC user can still be over an indexed_notes_cap — a per-user
+      # override is exactly how a promo grant or a throttled abuser is
+      # expressed. Entitlement alone must not stamp the dense hash: nothing
+      # was written, and ReconcileEmbeddings' backfill selects on
+      # `is_nil(dense_indexed_hash)`, so a stamp locks the note out forever.
+      Repo.insert!(%Engram.Billing.UserLimitOverride{
+        user_id: user.id,
+        key: "indexed_notes_cap",
+        value: %{"v" => 0},
+        reason: "test",
+        set_by: "test"
+      })
+
+      OverrideCache.evict(user.id)
+
+      # No MockEmbedder expectation and no Qdrant stub: an over-cap note must
+      # reach neither.
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert %Note{dense_indexed_hash: nil} = Repo.get!(Note, note.id, skip_tenant_check: true)
+    end
+  end
+
   describe "perform/1 — lifetime embed-token budget (pricing v2 §B)" do
     setup do
       # Users without a Subscription default to :free tier (Billing.tier/1).
@@ -700,6 +786,33 @@ defmodule Engram.Workers.EmbedNoteTest do
       stub_qdrant(bypass)
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+    end
+
+    test "keyword-only users accrue no embed tokens — they never call Voyage",
+         %{bypass: bypass} do
+      {user, note} = keyword_only_user!()
+      stub_qdrant(bypass)
+
+      # No MockEmbedder expectation: a Voyage call here would fail the test.
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      # Charging anyway is not cosmetic — phantom tokens reach the 20M cap and
+      # embed_budget_gate/1 then cancels the job, costing the user their BM25
+      # index for spend that never happened.
+      assert Engram.UsageMeters.lifetime_embed_tokens(user.id) == 0
+    end
+
+    test "an exhausted token budget does not block a keyword-only user's indexing",
+         %{bypass: bypass} do
+      {user, note} = keyword_only_user!()
+      Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert Repo.exists?(from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id),
+               skip_tenant_check: true
+             )
     end
   end
 end

@@ -361,6 +361,44 @@ defmodule Engram.AttachmentsTest do
                })
     end
 
+    test "a negative max_file_bytes override means unlimited, not reject-everything",
+         %{user: user, vault: vault} do
+      expect(Engram.MockStorage, :put, fn _key, _binary, _opts -> :ok end)
+
+      # -1 is the codebase-wide "unlimited" sentinel (check_limit/3,
+      # normalize_capability/2). Read as a literal ceiling it rejects every
+      # upload, and the client's own pre-gate still passes because plan_state
+      # serializes negatives to nil — so the rejection looks like a server bug.
+      Engram.Factory.insert(:user_limit_override,
+        user: user,
+        key: "max_file_bytes",
+        value: %{"v" => -1}
+      )
+
+      assert {:ok, _att} =
+               Attachments.upsert_attachment(user, vault, %{
+                 "path" => @path,
+                 "content_base64" => Base.encode64(:binary.copy("x", 4_000_000))
+               })
+    end
+
+    test "a negative attachment_bytes_cap override means unlimited, not reject-everything",
+         %{user: user, vault: vault} do
+      expect(Engram.MockStorage, :put, fn _key, _binary, _opts -> :ok end)
+
+      Engram.Factory.insert(:user_limit_override,
+        user: user,
+        key: "attachment_bytes_cap",
+        value: %{"v" => -1}
+      )
+
+      assert {:ok, _att} =
+               Attachments.upsert_attachment(user, vault, %{
+                 "path" => @path,
+                 "content_base64" => @valid_content
+               })
+    end
+
     test "returns error for invalid base64 content", %{user: user, vault: vault} do
       assert {:error, :invalid_base64} =
                Attachments.upsert_attachment(user, vault, %{

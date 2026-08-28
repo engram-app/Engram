@@ -53,8 +53,22 @@ defmodule Engram.Indexing do
       {:ok, {:no_chunks, link_rows}} ->
         case Engram.Crypto.get_dek(user) do
           {:ok, _dek} ->
-            :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
-            {:ok, 0}
+            # `:no_chunks` means this note must end up with ZERO index
+            # artifacts, and it is reached two ways: the note was emptied, or
+            # it fell outside the user's indexed-note cap. Both need the
+            # PREVIOUS artifacts gone, and neither got that before — the
+            # branch only wrote links and returned. A Pro->Free downgrade left
+            # notes past the cap fully searchable with their dense vectors
+            # intact, which is precisely the RAM the cap exists to reclaim.
+            #
+            # Errors PROPAGATE. Swallowing a failed Qdrant delete here would
+            # let the caller stamp `embed_hash` and never revisit the note, so
+            # the points it failed to remove would stay searchable forever.
+            # Returning the error costs one Oban retry.
+            with :ok <- purge_stale_index(note) do
+              :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
+              {:ok, 0}
+            end
 
           {:error, :no_dek} = err ->
             emit_no_dek_telemetry(note)
@@ -125,6 +139,17 @@ defmodule Engram.Indexing do
         # points.
         {:ok, {:no_chunks, link_rows}}
       end
+    end
+  end
+
+  # Guarded on chunk rows existing so the overwhelmingly common case (a note
+  # that never had chunks) does not pay a Qdrant round trip on every index.
+  # The cheap Postgres existence check gates the expensive remote delete.
+  defp purge_stale_index(note) do
+    if Repo.exists?(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true) do
+      delete_note_index(note)
+    else
+      :ok
     end
   end
 

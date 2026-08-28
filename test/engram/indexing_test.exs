@@ -62,6 +62,40 @@ defmodule Engram.IndexingTest do
       assert length(chunks) == chunk_count
     end
 
+    test "a note that falls outside the index cap loses its existing chunks",
+         %{bypass: bypass, user: user, note: note, vault: vault} do
+      # Index it normally first, so there ARE artifacts to reclaim.
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+
+      Bypass.expect(bypass, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": true}))
+      end)
+
+      assert {:ok, n} = Indexing.index_note(note, vault)
+      assert n > 0
+
+      # Now put the user past their cap — the shape of a Pro -> Free downgrade.
+      # A re-index must REMOVE the stale index, not merely decline to add to it:
+      # the dense vectors it holds are the RAM the cap exists to reclaim.
+      Engram.Repo.insert!(%Engram.Billing.UserLimitOverride{
+        user_id: user.id,
+        key: "indexed_notes_cap",
+        value: %{"v" => 0},
+        reason: "test",
+        set_by: "test"
+      })
+
+      Engram.Billing.OverrideCache.evict(user.id)
+
+      assert {:ok, 0} = Indexing.index_note(note, vault)
+
+      import Ecto.Query
+      assert Engram.Repo.all(from(c in Engram.Notes.Chunk), skip_tenant_check: true) == []
+    end
+
     test "uses doc embed model when configured", %{bypass: bypass, note: note, vault: vault} do
       Application.put_env(:engram, :doc_embed_model, "voyage-4-large")
       on_exit(fn -> Application.delete_env(:engram, :doc_embed_model) end)
