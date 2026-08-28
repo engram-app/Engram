@@ -71,6 +71,20 @@ defmodule Engram.Workers.EmbedNoteQueryBudgetTest do
              "take the struct. Something re-resolved it. See #1502."
   end
 
+  test "a full EmbedNote job issues NO subscriptions queries", %{note: note} do
+    {count, result} =
+      count_queries("subscriptions", fn -> perform_job(EmbedNote, %{note_id: note.id}) end)
+
+    assert result == :ok, "job did not succeed: #{inspect(result)}"
+
+    assert count == 0,
+           "EmbedNote ran #{count} `subscriptions` quer#{if count == 1, do: "y", else: "ies"}, expected 0.\n" <>
+             "The user is loaded with `get_user_with_subscription/1`, so the association is\n" <>
+             "already populated and `Billing.get_subscription/1` short-circuits. A non-zero\n" <>
+             "count means something re-loaded the user without the join — the budget gate\n" <>
+             "resolves the tier twice, so this silently doubles. See #1502."
+  end
+
   test "the rotation gate still blocks, reading the lock from the single fetch",
        %{note: note, user: user, bypass: bypass} do
     # This job must snooze BEFORE touching Qdrant, so the setup's Bypass

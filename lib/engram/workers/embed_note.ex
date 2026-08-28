@@ -66,12 +66,16 @@ defmodule Engram.Workers.EmbedNote do
         # Loaded once here and handed to run_and_stamp — it needs the same row
         # for the rotation gate, so re-resolving would cost a second read on
         # exactly the path that already paid for one. See #1502.
-        user = Accounts.get_user!(note.user_id)
+        case Accounts.get_user_with_subscription(note.user_id) do
+          nil ->
+            {:discard, :user_deleted}
 
-        if SearchProfile.resolve(user).semantic do
-          run_and_stamp(note, old_path_hmac_b64, job, user)
-        else
-          :ok
+          user ->
+            if SearchProfile.resolve(user).semantic do
+              run_and_stamp(note, old_path_hmac_b64, job, user)
+            else
+              :ok
+            end
         end
 
       {:ok, note} ->
@@ -103,7 +107,13 @@ defmodule Engram.Workers.EmbedNote do
   # both halves of Indexing all take it. Nothing below may re-resolve it.
   # See #1502.
   defp run_and_stamp(note, old_path_hmac_b64, job, user \\ nil) do
-    case user || Accounts.get_user(note.user_id) do
+    # `_with_subscription`: the budget gate calls `Billing.limit_enforced?/2`
+    # and then `check_limit/3`, and each resolves the tier via
+    # `get_subscription/1` — which queries unless the association is already
+    # loaded. On a bare `get_user/1` struct that is two `subscriptions`
+    # round trips per job. The join makes them zero at no extra query, since
+    # this fetch has to happen anyway. See #1502.
+    case user || Accounts.get_user_with_subscription(note.user_id) do
       nil ->
         {:discard, :user_deleted}
 
