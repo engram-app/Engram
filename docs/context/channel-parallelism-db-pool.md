@@ -15,6 +15,12 @@ changed from a serial `Enum.map_reduce` to `Task.async_stream`. Together they
 turn one transient DB slowdown into a dead WebSocket topic that the client
 retries against until it reconnects.
 
+> `crdt_create_batch` itself is GONE (the plugin retired it; the web app was the
+> last caller and only ever sent one entry). This doc stays because the traps are
+> properties of `Task.async_stream` over per-entry transactions in a channel
+> process, not of that frame — they apply to the next place someone reaches for
+> the same shape.
+
 ## The two traps
 
 ### 1. Concurrency sized off the CPU, not the contended resource

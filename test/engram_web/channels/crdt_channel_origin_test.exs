@@ -40,8 +40,8 @@ defmodule EngramWeb.CrdtChannelOriginTest do
   end
 
   # Mirrors crdt_channel_test.exs's frame_for_content/1 — a genesis
-  # sync_update frame carrying real content, so crdt_create_batch's phase-1
-  # genesis leg resolves "ok" instead of some other status.
+  # sync_update frame carrying real content, so the roomless seed has a body
+  # to apply and reports `genesis: "stored"` rather than declining.
   defp frame_for_content(content) do
     doc = CrdtBridge.new_doc()
     :ok = CrdtBridge.ingest_plaintext(doc, content)
@@ -80,22 +80,39 @@ defmodule EngramWeb.CrdtChannelOriginTest do
     assert job.args["target_id"] == note.id
   end
 
-  test "batch-path relocate carries the same origin",
+  test "genesis-with-content relocate carries the same origin",
        %{user: user, vault: vault, note: note} do
     socket = join!(user, vault, %{"crdt_proto" => 2, "client_type" => "web"})
 
-    # note.id already exists (setup, path "Old.md") — reusing it at a new,
-    # free path through crdt_create_batch takes the SAME relocate leg
-    # (genesis_relocate_live) that crdt_create does, exercising
-    # prepare_create/4's origin threading rather than a plain genesis.
+    # note.id already exists (setup, path "Old.md") — reusing it at a new, free
+    # path takes the relocate leg (genesis_relocate_live) rather than a plain
+    # genesis. Sent WITH a b64 body on purpose: the seeding path is a separate
+    # leg from the bare create above, and origin has to thread through it too.
     ref =
-      push(socket, "crdt_create_batch", %{
-        "creates" => [
-          %{"doc_id" => note.id, "path" => "Fresh.md", "b64" => frame_for_content("body")}
-        ]
+      push(socket, "crdt_create", %{
+        "doc_id" => note.id,
+        "path" => "Fresh.md",
+        "b64" => frame_for_content("body")
       })
 
-    assert_reply ref, :ok, %{results: [%{status: "ok"}]}
+    # Assert `genesis`, not just a bare `doc_id`. A reply of `%{doc_id: _}` is
+    # byte-identical to the no-b64 create above, so it would pass even if the
+    # server ignored the frame outright — which is exactly the leg this covers.
+    #
+    # `occupied`, NOT `stored`, and that is the correct answer rather than a
+    # tolerated one: a relocate moves a row that already holds a body, so
+    # `fold_row_and_tail` reads non-empty and `seed_against/7` declines. A
+    # `stored` here would mean the frame overwrote the note being renamed.
+    assert_reply ref, :ok, %{doc_id: id, genesis: "occupied"}
+
+    # RewriteNoteLinks is what proves the RELOCATE leg specifically: a plain
+    # genesis enqueues RebindNoteLinks (notes.ex:1523), only
+    # genesis_relocate_live enqueues a rewrite (notes.ex:1362).
     assert [_job] = all_enqueued(worker: RewriteNoteLinks)
+
+    # The relocated body survived the declined seed — the point of declining.
+    {:ok, stored} = Notes.get_note_by_id(user, vault, id)
+    assert stored.content == "# t"
+    assert stored.path == "Fresh.md"
   end
 end

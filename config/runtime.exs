@@ -688,6 +688,67 @@ if config_env() == :prod do
     config :engram, EngramWeb.RateLimiter, backend: :distributed_ets
   end
 
+  # Node role. `queues: false` supervises no producers while leaving
+  # `Oban.insert/1` fully working, so a node that holds user sockets still
+  # ENQUEUES embed/index/checkpoint work but never EXECUTES it. That is the
+  # whole split: `embed: 5` (peak ≈ 560 MB) and `indexing: 2` can no longer
+  # take schedulers or pool connections from the node a user is typing into.
+  #
+  # The flag is opt-OUT, and that direction is load-bearing. Unset means "run
+  # every queue", so a single-node deploy (self-host, and any SaaS node brought
+  # up before the worker service exists) keeps the full list from
+  # config/config.exs and behaves exactly as today. Only a node explicitly
+  # marked `web` stops executing. An opt-IN flag would invert the failure: one
+  # unset variable on the worker service and NOTHING in the cluster drains the
+  # queues — silently, since enqueues keep succeeding.
+  #
+  # Plugins stay on EVERY node on purpose. Cron/Pruner/Lifeline are
+  # leader-elected through Oban's Postgres peer table, and Cron only INSERTS
+  # jobs — the worker is what runs them. Disabling plugins here would mean a
+  # web node winning leadership silently stops all cron work.
+  #
+  # The worker MUST share DNS_CLUSTER_QUERY with the web nodes:
+  # `Workers.CheckpointNote` guards on `CrdtRegistry.lookup/1`, which is
+  # `:global`. Unclustered, it cannot see a room live on a web node, stops
+  # snoozing, and checkpoints a note someone has open — writing behind the
+  # room's back.
+  # Matched against a CLOSED SET rather than testing for "web", because the
+  # opt-out direction that makes the unset case safe also makes every typo
+  # silent: `WEB`, `web ` or `wbe` would all mean "run every queue" on a node
+  # that was meant to run none. That is not the harmless direction it looks
+  # like — the whole fleet executing is how you get a checkpoint racing a live
+  # room. Case and whitespace are forgiven (an ECS task definition is
+  # hand-edited); an unrecognised value is not.
+  #
+  # Raising is right HERE and wrong for the cluster check below: a typo is
+  # static and no amount of retrying fixes it, so failing the boot is the only
+  # way the operator finds out. Matches how this file already treats a missing
+  # DATABASE_URL.
+  case System.get_env("ENGRAM_NODE_ROLE") do
+    nil ->
+      :ok
+
+    role ->
+      case role |> String.trim() |> String.downcase() do
+        "web" ->
+          config :engram, :node_role, :web
+          config :engram, Oban, queues: false
+
+        "worker" ->
+          # No Oban change — a worker runs the config/config.exs list. Recorded
+          # anyway because DECLARING a role is what tells the boot check this is
+          # a split fleet, and the unclustered *worker* is the node that can
+          # actually corrupt data (see Application.warn_if_split_fleet_unclustered/0).
+          config :engram, :node_role, :worker
+
+        "" ->
+          :ok
+
+        other ->
+          raise "ENGRAM_NODE_ROLE must be \"web\" or \"worker\", got: #{inspect(other)}"
+      end
+  end
+
   config :engram, EngramWeb.Endpoint,
     http: [
       # Enable IPv6 and bind on all interfaces.
