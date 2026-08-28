@@ -27,6 +27,14 @@ defmodule Engram.Workers.CheckpointNote do
 
   require Logger
 
+  # BEST-EFFORT here, unlike every other worker. Oban implements `timeout/1`
+  # with `:timer.exit_after/2`, and an exit signal is only handled when the
+  # process yields. This worker replays Yjs updates through y_ex, whose 131
+  # NIFs are all plain `#[rustler::nif]` — none dirty-scheduled — so a process
+  # inside `Yex.apply_update/2` cannot be preempted and will hold its slot past
+  # the deadline until the NIF returns. The timeout still covers everything
+  # around the replay (the DB reads, the encrypt, the commit), which is where
+  # the queue's blocking work otherwise lives. See #1496.
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
 
