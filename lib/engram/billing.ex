@@ -272,13 +272,25 @@ defmodule Engram.Billing do
       # plugin reads `attachments_all_types`.
       attachments_text_only: not all_types?,
       max_file_bytes: numeric_limit(user, :max_file_bytes),
-      attachment_bytes_cap: numeric_limit(user, :attachment_bytes_cap)
+      attachment_bytes_cap: numeric_limit(user, :attachment_bytes_cap),
+      # How many notes this plan indexes for search. The plugin pairs it with
+      # its own vault file count to tell the user "Searching 2,000 of 4,312
+      # notes" — a capped note that silently returns nothing reads as broken
+      # search, and the capped-out notes are the user's NEWEST.
+      indexed_notes_cap: numeric_limit(user, :indexed_notes_cap)
     }
   end
 
   defp numeric_limit(user, key) do
     case effective_limit(user, key) do
       :unlimited -> nil
+      # -1 is this codebase's "unlimited" sentinel — check_limit/3 documents it
+      # and normalize_capability/2 already maps it to nil. Passing it through as
+      # a literal -1 means every client has to know the convention, and one that
+      # does not inverts the limit: a cap of -1 reads as "nothing is allowed" on
+      # the most permissive plan. Same class as attachments_text_only blocking
+      # self-host attachments. Normalise it here, once.
+      n when is_integer(n) and n < 0 -> nil
       n when is_integer(n) -> n
       _ -> nil
     end
