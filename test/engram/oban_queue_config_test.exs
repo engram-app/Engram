@@ -46,6 +46,55 @@ defmodule Engram.ObanQueueConfigTest do
              "see docs/context/lingua-language-detection-memory.md."
   end
 
+  # Tripwire against sizing crdt_checkpoint for the WRONG node.
+  #
+  # This lane is the overflow for CRDT unbind checkpoints; the inline half is
+  # Engram.Notes.CheckpointGate. On a split fleet they live on different nodes,
+  # so the worker can afford a big lane (it never runs the gate, and its pool is
+  # larger). But config/config.exs is the DEFAULT — it is what an unsplit node
+  # runs, and an unsplit node runs BOTH. There the two stack on one pool:
+  #
+  #     sum(queues) + CheckpointGate.limit()  must fit POOL_SIZE
+  #
+  # A value tuned for the worker landing here is exactly how you rebuild the
+  # 2026-07-09 pool-exhaustion loop on every node that has no role set. Raise
+  # the lane for the worker in config/runtime.exs (the ENGRAM_NODE_ROLE=worker
+  # arm), never here.
+  test "crdt_checkpoint default is sized for a node that ALSO runs the inline gate" do
+    lane = configured_queue_limit(:crdt_checkpoint)
+
+    assert is_integer(lane) and lane >= 1 and lane <= 3,
+           "crdt_checkpoint default should be 1..3 (got #{inspect(lane)}).\n" <>
+             "This is the default every UNSPLIT node runs, and an unsplit node also\n" <>
+             "runs the inline CheckpointGate — the two stack on one pool. If you are\n" <>
+             "raising this for the dedicated worker, do it in config/runtime.exs\n" <>
+             "under the ENGRAM_NODE_ROLE=worker arm instead."
+  end
+
+  # The whole point of the runtime override is that it raises ONE queue without
+  # dropping the other eight. Config deep-merges nested keyword lists, but that
+  # is a language guarantee this config leans on hard enough to pin down: get it
+  # wrong and the worker silently boots with crdt_checkpoint as its ONLY queue,
+  # and embeds stop for everyone.
+  test "a partial queues override merges into the base list rather than replacing it" do
+    base = Application.fetch_env!(:engram, Oban)
+
+    merged =
+      Config.__merge__(
+        [engram: [{Oban, base}]],
+        engram: [{Oban, [queues: [crdt_checkpoint: 6]]}]
+      )
+
+    queues = merged[:engram][Oban][:queues]
+
+    assert Keyword.get(queues, :crdt_checkpoint) == 6
+    assert Keyword.get(queues, :embed) == configured_queue_limit(:embed)
+
+    assert Enum.sort(Keyword.keys(queues)) ==
+             Enum.sort(Keyword.keys(Application.fetch_env!(:engram, Oban)[:queues])),
+           "the override dropped or added a queue — the worker would boot with the wrong set"
+  end
+
   defp configured_queue_limit(queue) do
     Application.fetch_env!(:engram, Oban)[:queues] |> Keyword.get(queue)
   end

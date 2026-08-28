@@ -35,12 +35,16 @@ defmodule Engram.Notes.CheckpointGate do
   # Kept comfortably under POOL_SIZE so inline checkpoints + ungated room binds
   # still leave the pool headroom for REST/search/embed.
   #
-  # This gate and its overflow lane no longer share a pool. The gate runs
-  # wherever the room is bound (a web node); the `crdt_checkpoint` Oban lane
-  # runs only where queues are enabled (the worker, ENGRAM_NODE_ROLE). So this
-  # limit is 3 connections on a WEB node's pool and the lane's 6 is 6 on the
-  # WORKER's — do not add them together when budgeting either pool. See the
-  # crdt_checkpoint entry in config/config.exs.
+  # Whether this gate and its overflow lane share a pool depends on the role:
+  #
+  #   * UNSPLIT node (no ENGRAM_NODE_ROLE) — runs both. 3 here + the lane's
+  #     default 3 = 6 connections on one pool. This is what prod runs today.
+  #   * SPLIT fleet — the gate runs where the room is bound (web, queues off),
+  #     the lane runs on the worker (which never binds a room, so never reaches
+  #     this gate). 3 on a web pool, 6 on the worker's. Do NOT add them.
+  #
+  # That is why the lane's 6 lives in config/runtime.exs under the worker arm
+  # and not in config/config.exs — see the crdt_checkpoint entry in both.
   #
   # Configurable via
   # `:checkpoint_inline_limit` so the test env can raise it out of the way
