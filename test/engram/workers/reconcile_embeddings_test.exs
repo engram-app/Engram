@@ -28,6 +28,47 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
     end
 
+    test "backfills dense vectors for every entitled status, past_due included" do
+      # The subscription join is a SQL proxy for the real 4-layer entitlement
+      # resolver. A hand-rolled subset that dropped `past_due` stranded the
+      # dense backfill for users who were still paying and still entitled —
+      # under-selecting here is silent, so it must track @entitled_statuses.
+      for status <- Engram.Billing.entitled_statuses() do
+        user = insert(:user)
+        insert(:subscription, user: user, tier: "pro", status: status)
+
+        note =
+          insert(:note,
+            user: user,
+            content_hash: "abc123",
+            embed_hash: "abc123",
+            dense_indexed_hash: nil
+          )
+
+        assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+        # Failure here means `status` is entitled but was not selected for the
+        # dense backfill.
+        assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      end
+    end
+
+    test "does not backfill dense vectors for an unentitled subscription" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "canceled")
+
+      _note =
+        insert(:note,
+          user: user,
+          content_hash: "abc123",
+          embed_hash: "abc123",
+          dense_indexed_hash: nil
+        )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      refute_enqueued(worker: EmbedNote)
+    end
+
     test "skips notes where embed_hash matches content_hash" do
       user = insert(:user)
       _note = insert(:note, user: user, content_hash: "abc123", embed_hash: "abc123")

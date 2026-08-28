@@ -16,9 +16,13 @@ defmodule Engram.Indexing.IndexCap do
   import Ecto.Query
 
   alias Engram.Billing
+  alias Engram.Billing.LimitKeys
+  alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
   alias Engram.Notes.Note
   alias Engram.Repo
+
+  require Logger
 
   @doc """
   True when this note is inside the user's indexed-note cap.
@@ -30,16 +34,9 @@ defmodule Engram.Indexing.IndexCap do
   def within_cap?(%Note{} = note) do
     user = Engram.Accounts.get_user!(note.user_id)
 
-    case Billing.effective_limit(user, :indexed_notes_cap) do
-      cap when is_integer(cap) and cap >= 0 ->
-        rank_below_cap?(note, cap)
-
-      # -1 is this codebase's "unlimited" sentinel (see check_limit/3 and
-      # normalize_capability/2), and it is what the e2e overrides use. Without
-      # this clause `rank < -1` is false for every note and NOTHING gets
-      # indexed — the exact inversion the LimitKeys moduledoc warns about.
-      _ ->
-        true
+    case resolve_cap(user) do
+      {:cap, cap} -> rank_below_cap?(note, cap)
+      :unlimited -> true
     end
   end
 
@@ -57,9 +54,9 @@ defmodule Engram.Indexing.IndexCap do
     total = live_note_count(user.id)
 
     indexed =
-      case Billing.effective_limit(user, :indexed_notes_cap) do
-        cap when is_integer(cap) and cap >= 0 -> min(total, cap)
-        _ -> total
+      case resolve_cap(user) do
+        {:cap, cap} -> min(total, cap)
+        :unlimited -> total
       end
 
     %{indexed: indexed, total: total}
@@ -83,8 +80,8 @@ defmodule Engram.Indexing.IndexCap do
   def backfill_freed_slots(user_id) when is_binary(user_id) do
     user = Engram.Accounts.get_user!(user_id)
 
-    case Billing.effective_limit(user, :indexed_notes_cap) do
-      cap when is_integer(cap) and cap >= 0 ->
+    case resolve_cap(user) do
+      {:cap, cap} ->
         in_cap =
           from(n in Note,
             where: n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at),
@@ -117,7 +114,7 @@ defmodule Engram.Indexing.IndexCap do
 
         :ok
 
-      _ ->
+      :unlimited ->
         :ok
     end
   end
@@ -157,6 +154,54 @@ defmodule Engram.Indexing.IndexCap do
     end
 
     :ok
+  end
+
+  @doc """
+  Resolves `:indexed_notes_cap` to `{:cap, n}` or `:unlimited`.
+
+  The ONE place this key is interpreted, so the three call sites cannot drift.
+  Public because the fail-CLOSED behaviour on a malformed value is a contract
+  worth pinning directly: at small note counts a capped user and an uncapped
+  one are behaviourally identical, so no test of `within_cap?/1` or `counts/1`
+  can tell them apart.
+
+  `nil` (starter/pro) and `:unlimited` (self-host) are the only values that
+  mean uncapped, plus a NEGATIVE integer — the codebase-wide `unlimited`
+  sentinel that `check_limit/3` and `normalize_capability/2` use and that the
+  e2e overrides rely on. Without the negative clause `rank < -1` is false for
+  every note and NOTHING is indexed.
+
+  Everything else falls back to the tier DEFAULT rather than to unlimited.
+  `effective_limit/2` reads overrides straight out of untyped JSONB, so a
+  hand-written `%{"v" => "500"}` or a float from a JSON round-trip reaches
+  here; treating those as "no cap" would silently uncap the one key that
+  exists to bound Qdrant spend. Same fail-CLOSED rule as
+  `Billing.attachments_all_types?/1`.
+  """
+  @spec resolve_cap(map()) :: {:cap, non_neg_integer()} | :unlimited
+  def resolve_cap(user) do
+    case Billing.effective_limit(user, :indexed_notes_cap) do
+      cap when is_integer(cap) and cap >= 0 -> {:cap, cap}
+      cap when is_integer(cap) -> :unlimited
+      nil -> :unlimited
+      :unlimited -> :unlimited
+      other -> fallback_cap(user, other)
+    end
+  end
+
+  defp fallback_cap(user, other) do
+    Logger.warning(
+      "indexed_notes_cap resolved to a non-integer; falling back to the tier default",
+      Metadata.with_category(:warning, :search,
+        user_id: user.id,
+        value_type: inspect(other) |> String.slice(0, 40)
+      )
+    )
+
+    case LimitKeys.default_for(:indexed_notes_cap, Billing.tier(user)) do
+      cap when is_integer(cap) and cap >= 0 -> {:cap, cap}
+      _ -> :unlimited
+    end
   end
 
   # True when fewer than `cap` live notes are older than this one.

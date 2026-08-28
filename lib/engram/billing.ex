@@ -235,6 +235,17 @@ defmodule Engram.Billing do
   @entitled_statuses ~w(active trialing past_due)
 
   @doc """
+  The subscription statuses that entitle a user to their paid tier.
+
+  Public so SQL-side callers that cannot run the full `tier/1` resolver
+  (`Engram.Workers.ReconcileEmbeddings`) can filter on the same list instead of
+  hand-rolling a subset. A hand-rolled subset that dropped `past_due` silently
+  stalled the dense backfill for entitled users in dunning.
+  """
+  @spec entitled_statuses() :: [String.t()]
+  def entitled_statuses, do: @entitled_statuses
+
+  @doc """
   Returns the user's effective tier as an atom in `[:free, :starter, :pro]`.
 
   An `active`, `trialing`, or `past_due` paid subscription resolves to
@@ -731,13 +742,13 @@ defmodule Engram.Billing do
             end
 
             # NOTE: no IndexCap.revoke_dense_index/1 here, unlike the
-            # subscription.canceled clause. A past_due/paused status makes
-            # tier/1 resolve to :free, so this user IS keyword-only right now —
-            # but dropping their dense vectors would re-embed their entire vault
-            # on a transient dunning state, and again when payment recovers.
-            # Paddle's dunning window is bounded and ends in
-            # subscription.canceled, which does revoke. Trading a bounded window
-            # of stale vectors for avoiding two full re-embeds per failed charge.
+            # subscription.canceled clause. `past_due` is in
+            # @entitled_statuses, so tier/1 still resolves to starter/pro and
+            # the user remains semantically entitled through Paddle's dunning
+            # window — revoking would be wrong, not merely expensive. It would
+            # also re-embed the whole vault on a transient failed charge and
+            # again when payment recovers. The window is bounded and ends in
+            # subscription.canceled, which does revoke.
 
             {:ok, updated}
 
@@ -803,6 +814,15 @@ defmodule Engram.Billing do
     # from plan_state (allowlist) — a future field added to plan_state/1 can't
     # silently leak into the broadcast, and this branch stays symmetric with
     # the fallback below. The attachment limit fields are the new payload.
+    #
+    # BUT the allowlist cuts both ways: the plugin REPLACES its plan snapshot
+    # wholesale from this payload (`sync.ts` planState = parsePlanState(...)),
+    # so a plan field that is missing here reads as absent/permissive, not as
+    # unchanged. `indexed_notes_cap` was omitted when it was added to
+    # plan_state/1 and the effect was a Free user being told their whole vault
+    # is searchable while only the oldest 2,000 notes are indexed — the exact
+    # silent failure the visible cap counter exists to prevent. Anything
+    # plan_state/1 publishes that a client acts on belongs in BOTH lists.
     plan_fields =
       case Engram.Accounts.get_user(user_id) do
         %Engram.Accounts.User{} = u ->
@@ -811,7 +831,8 @@ defmodule Engram.Billing do
             :attachments_all_types,
             :attachments_text_only,
             :max_file_bytes,
-            :attachment_bytes_cap
+            :attachment_bytes_cap,
+            :indexed_notes_cap
           ])
 
         _ ->
@@ -819,7 +840,8 @@ defmodule Engram.Billing do
             attachments_all_types: nil,
             attachments_text_only: nil,
             max_file_bytes: nil,
-            attachment_bytes_cap: nil
+            attachment_bytes_cap: nil,
+            indexed_notes_cap: nil
           }
       end
 

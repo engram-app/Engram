@@ -66,8 +66,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       # `SearchProfile.resolve(user).semantic`, which is a 4-layer resolver and
       # cannot be expressed here. Over-selecting is harmless — `EmbedNote`
       # re-checks the real entitlement and no-ops for a user who is not actually
-      # semantic. Under-selecting only affects a Free user holding a per-user
-      # override, who is re-indexed on their next edit anyway. What we must NOT
+      # semantic. Under-selecting is the dangerous direction: it strands a
+      # backlog silently. Hence `entitled_statuses/0` rather than a hand-rolled
+      # subset — dropping `past_due` here stalled the backfill for users who
+      # were still paying and still entitled. What we must NOT
       # do is select every keyword-only note every tick: that is the 15-minute
       # forever-loop this whole column split exists to prevent.
       |> where(
@@ -78,7 +80,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
                from(s in Engram.Billing.Subscription,
                  where:
                    s.user_id == parent_as(:note).user_id and
-                     s.status in ["active", "trialing"],
+                     s.status in ^Engram.Billing.entitled_statuses(),
                  select: 1
                )
              ))

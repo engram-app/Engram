@@ -1328,6 +1328,12 @@ defmodule Engram.Attachments do
   # returns `:unlimited` and uploads are unbounded — operator's call.
   defp validate_size(binary, user) do
     case Billing.effective_limit(user, :max_file_bytes) do
+      # A NEGATIVE limit is the "unlimited" sentinel (check_limit/3,
+      # normalize_capability/2, Billing.plan_state/1), never a real ceiling.
+      # Without this clause an operator lifting the cap with -1 rejects EVERY
+      # upload as {:too_large, -1} — and since the client is told the limit is
+      # nil, its own pre-gate passes and the rejection arrives unexplained.
+      n when is_integer(n) and n < 0 -> :ok
       n when is_integer(n) and byte_size(binary) > n -> {:error, {:too_large, n}}
       _ -> :ok
     end
@@ -1340,6 +1346,10 @@ defmodule Engram.Attachments do
   # advisory lock for consistency with the writer's view of `existing`.
   defp validate_storage_cap(user, existing, new_size) do
     case Billing.effective_limit(user, :attachment_bytes_cap) do
+      # Same unlimited sentinel as validate_size/2 above.
+      n when is_integer(n) and n < 0 ->
+        :ok
+
       n when is_integer(n) ->
         {:ok, %{used_bytes: current}} = storage_usage(user)
         prior = if existing, do: existing.size_bytes, else: 0
