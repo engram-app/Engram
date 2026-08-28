@@ -30,7 +30,12 @@
   # spec documents the contract ("some priority that loses to interactive"),
   # not today's value, so callers and tests don't bake the constant in a second
   # place. Same pattern as `Links.backlinks_limit/0` above.
-  {"lib/engram/workers/embed_note.ex", :contract_supertype, 553},
+  # NO line number, deliberately. This pin broke three times in a single
+  # change-set (519 -> 553 -> 551) because dialyxir line-matches the @spec and
+  # any edit ABOVE it in this module shifts it — each break costing a full CI
+  # round-trip. `embed_note.ex` has exactly one contract_supertype, so scoping
+  # to (file, warning_type) stays narrow while surviving unrelated edits.
+  {"lib/engram/workers/embed_note.ex", :contract_supertype},
 
   # `Links.live_basename_count/3` sums two `Repo.one(select: count(...))`
   # results. SQL `count()` is always a non-negative integer at runtime, but
