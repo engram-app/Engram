@@ -8,6 +8,8 @@ defmodule Engram.Vector.Qdrant do
   - QDRANT_API_KEY env var — API key for Qdrant Cloud (optional for local)
   """
 
+  use Engram.Cache.PersistentTerm
+
   alias Engram.ServiceConfig
 
   @default_url "http://localhost:6333"
@@ -120,7 +122,45 @@ defmodule Engram.Vector.Qdrant do
   """
   def ensure_collection(col \\ nil, dims) do
     col = col || collection()
+    key = {base_url(), col, dims}
 
+    # Memoised per node, per {url, collection, dims}. `Indexing.prepare_index/3`
+    # calls this for EVERY note, and on an existing collection the work is two
+    # network round trips that cannot produce a different answer: a PUT that
+    # 409s, then a `collection_info` GET to verify shape. Measured in prod
+    # 2026-08-28 — 853 `ensure_collection` and 853 `collection_info` calls
+    # against 853 upserts, a 1:1:1 ratio, inside the slowest queue we have
+    # (embed averages 738 ms). See #1501.
+    #
+    # Keyed on the resolved base URL, not just the collection name, so the
+    # async Bypass suites stay isolated: each test's port is its own key.
+    #
+    # ONLY success is memoised. A failure erases the entry so the next caller
+    # retries — otherwise one transient Qdrant blip would be cached for the
+    # life of the node and every subsequent index would fail against a
+    # collection that was fine.
+    case pt_fetch(key, fn -> do_ensure_collection(col, dims) end) do
+      :ok ->
+        :ok
+
+      {:error, _} = error ->
+        pt_erase(key)
+        error
+    end
+  end
+
+  @doc """
+  Drop the memoised "this collection is ready" marker for the current node.
+
+  Needed if the collection is dropped or recreated out of band: without this
+  the node keeps skipping `ensure_collection` and upserts fail against a
+  collection that no longer exists. Not wired to anything automatic — a
+  drop/recreate is a deliberate operator action, and this is the deliberate
+  counterpart.
+  """
+  def forget_collection_memo, do: pt_erase_all()
+
+  defp do_ensure_collection(col, dims) do
     case create_collection(col, dims) do
       {:ok, :created} -> ensure_payload_indexes(col)
       {:ok, :exists} -> :ok
