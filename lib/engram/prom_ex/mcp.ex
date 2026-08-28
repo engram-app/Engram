@@ -6,7 +6,9 @@ defmodule Engram.PromEx.Mcp do
 
     * `[:engram, :mcp, :tool, :stop]` — `%{duration: native,
       result_bytes: integer}`, metadata `%{tool: atom, status: :ok |
-      :error}`.
+      :error | :invalid_args}`. `:invalid_args` covers a call rejected at
+      the JSON-RPC dispatch layer before any handler ran (missing/wrong-type
+      arguments — see `EngramWeb.McpController.validate_tool_args/2`).
 
   Metrics:
 
@@ -17,9 +19,9 @@ defmodule Engram.PromEx.Mcp do
       response payload size; useful for capacity planning (LLM context
       consumption).
 
-  Cardinality contract: `:tool` is a closed-set atom (~16 tools, see
-  `Engram.MCP.Tools.list/0`). `:status` is `:ok | :error`. NEVER add
-  user_id or args.
+  Cardinality contract: `:tool` is a closed-set atom (21 tools, see
+  `Engram.MCP.Tools.list/0`). `:status` is `:ok | :error | :invalid_args`.
+  NEVER add user_id or args.
   """
 
   use PromEx.Plugin

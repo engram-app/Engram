@@ -16,7 +16,9 @@ defmodule EngramWeb.McpController do
   # engram-app/engram-infra#340 — closed-set map from tool name strings to
   # atoms, used as the cardinality-bounded `:tool` tag on MCP PromEx
   # metrics. Keeps `String.to_atom/1` (atom-table pollution) out of the
-  # hot path while keeping the tag stable.
+  # hot path while keeping the tag stable. Must stay in sync with every
+  # tool in `Engram.MCP.Tools.list/0` (21 as of #1491/#1492) — a tool
+  # missing here silently degrades to the `:unknown` bucket.
   @tool_atoms %{
     "list_vaults" => :list_vaults,
     "set_vault" => :set_vault,
@@ -27,6 +29,7 @@ defmodule EngramWeb.McpController do
     "create_folder" => :create_folder,
     "suggest_folder" => :suggest_folder,
     "get_note" => :get_note,
+    "get_notes" => :get_notes,
     "create_note" => :create_note,
     "write_note" => :write_note,
     "append_to_note" => :append_to_note,
@@ -35,6 +38,7 @@ defmodule EngramWeb.McpController do
     "rename_note" => :rename_note,
     "rename_folder" => :rename_folder,
     "delete_note" => :delete_note,
+    "delete_folder" => :delete_folder,
     "move_attachment" => :move_attachment,
     "get_attachment_upload_target" => :get_attachment_upload_target
   }
@@ -84,29 +88,34 @@ defmodule EngramWeb.McpController do
   end
 
   defp dispatch(conn, "tools/call", %{"name" => name, "arguments" => args}) do
-    case Tools.get(name) do
-      {:ok, tool} ->
-        case invalid_required_args(tool, args) do
-          [] ->
-            user = conn.assigns.current_user
-            # §E — record origin fingerprint for daily-rollup aggregation.
-            _ = OriginStats.record(user.id, get_req_header_first(conn, "user-agent"))
+    start_mono = System.monotonic_time()
 
-            case ConversationMeter.tick(user.id) do
-              {:rate_limited, reason} ->
-                {:error, -32_005, "rate_limited: #{reason}"}
-
-              :ok ->
-                dispatch_tool(tool, user, args, conn)
-            end
-
-          invalid ->
-            {:error, -32_602,
-             "Invalid or missing required argument(s): #{Enum.join(invalid, ", ")}"}
-        end
-
+    # Order matters: OriginStats/ConversationMeter must run for every call
+    # against a KNOWN tool regardless of whether its arguments turn out to
+    # be valid — otherwise a client that always sends malformed args is
+    # invisible to abuse fingerprinting and never counts against its daily
+    # quota (found in adversarial review of #1491/#1492's fix). Argument
+    # validation therefore runs LAST, right where the handler used to run.
+    with {:ok, tool} <- Tools.get(name),
+         user = conn.assigns.current_user,
+         # §E — record origin fingerprint for daily-rollup aggregation.
+         _ = OriginStats.record(user.id, get_req_header_first(conn, "user-agent")),
+         :ok <- ConversationMeter.tick(user.id),
+         :ok <- validate_tool_args(tool, args) do
+      dispatch_tool(tool, user, normalize_args(tool, args), conn)
+    else
       :error ->
-        {:error, -32_602, "Unknown tool: #{name}"}
+        {:error, -32_602, "Unknown tool: #{tool_name_label(name)}"}
+
+      {:rate_limited, reason} ->
+        {:error, -32_005, "rate_limited: #{reason}"}
+
+      {:error, tool_name, msg} ->
+        # `with`/`else` doesn't carry earlier clauses' bindings into `else` —
+        # validate_tool_args threads the tool name through its own error
+        # value rather than relying on an outer `tool` binding here.
+        emit_rejected_call_telemetry(tool_name, start_mono, msg)
+        {:error, -32_602, msg}
     end
   end
 
@@ -118,40 +127,105 @@ defmodule EngramWeb.McpController do
     {:error, -32_601, "Method not found"}
   end
 
+  # A non-binary `name` (client sent an object/array/number) can't match any
+  # tool, but MUST NOT crash the "Unknown tool" message itself — `name` may
+  # not implement String.Chars (e.g. a bare map). Describes the JSON shape,
+  # not its contents — `inspect/1` is banned in controllers (T3.0.6) even
+  # for client-echoed data, so this stays a controller-side type label, not
+  # a dump of the value.
+  defp tool_name_label(name) when is_binary(name), do: name
+  defp tool_name_label(name) when is_map(name), do: "<object>"
+  defp tool_name_label(name) when is_list(name), do: "<array>"
+  defp tool_name_label(name) when is_boolean(name), do: to_string(name)
+  defp tool_name_label(name) when is_number(name), do: to_string(name)
+  defp tool_name_label(nil), do: "null"
+
+  # Emits the same [:engram, :mcp, :tool, :stop] event `call_tool/4` emits on
+  # a real dispatch, so a call rejected by argument validation is still
+  # visible on the MCP PromEx dashboards instead of disappearing entirely
+  # (found in adversarial review of #1491/#1492's fix).
+  defp emit_rejected_call_telemetry(tool_name, start_mono, msg) do
+    tool_atom = Map.get(@tool_atoms, tool_name, :unknown)
+
+    :telemetry.execute(
+      [:engram, :mcp, :tool, :stop],
+      %{duration: System.monotonic_time() - start_mono, result_bytes: byte_size_safe(msg)},
+      %{tool: tool_atom, status: :invalid_args}
+    )
+  end
+
   # #1491/#1492 — the JSON-RPC layer never checked a call's arguments against
-  # the tool's own advertised inputSchema["required"], so a caller using the
-  # wrong key name (or omitting a required arg) fell through to each
-  # handler's `args["key"] || default` fallback and silently ran against
-  # that default (e.g. vault root) instead of erroring. A key is invalid if
-  # absent, explicitly `null`, or the wrong JSON type for its schema — any
-  # of those would either crash the handler's pattern match or hit its
-  # `|| default` fallback — but an explicit "" stays valid for tools like
-  # list_folder that use it to mean "root". `arguments` itself may not be a
-  # JSON object at all (client sent a string/array/null); guard that so a
-  # malformed call still gets a clean -32602 instead of a BadMapError.
-  defp invalid_required_args(tool, args) when is_map(args) do
+  # the tool's own advertised inputSchema, so a caller using the wrong key
+  # name (or an absent/null/wrong-typed arg) fell through each handler's
+  # `args["key"] || default` fallback and silently ran against that default
+  # (e.g. vault root) instead of erroring. Validates EVERY declared property
+  # present in `args` (not just required ones — an optional arg like
+  # `vault_id` sent as the wrong type is the same silent-wrong-target failure
+  # class), plus presence for required ones. An explicit "" stays valid for
+  # tools like list_folder that use it to mean "root". `arguments` itself may
+  # not be a JSON object at all (client sent a string/array/null) — reject
+  # that outright, independent of whether the tool has any required args, so
+  # it can't reach a handler's map access.
+  defp validate_tool_args(tool, args) when not is_map(args) do
+    {:error, tool.name, "Arguments must be an object"}
+  end
+
+  defp validate_tool_args(tool, args) do
+    properties = get_in(tool.inputSchema, ["properties"]) || %{}
     required = get_in(tool.inputSchema, ["required"]) || []
+
+    invalid =
+      Enum.filter(Map.keys(properties), fn key ->
+        case Map.get(args, key) do
+          nil -> key in required
+          value -> not matches_schema_type?(value, Map.get(properties, key))
+        end
+      end)
+
+    case invalid do
+      [] -> :ok
+      _ -> {:error, tool.name, "Invalid or missing argument(s): #{Enum.join(invalid, ", ")}"}
+    end
+  end
+
+  # Coerces a whole-number float (e.g. `2.0`) into a real integer for any
+  # property whose schema declares `"type" => "integer"`, so handlers that
+  # pattern-match on integer literals (e.g. patch_note's `occurrence: -1`)
+  # get an actual integer rather than a float that passed validation but
+  # can't match those clauses (found in adversarial review of #1491/#1492's
+  # fix — update_section's `level` and patch_note's `occurrence` are both
+  # declared `"integer"` but were never coerced, so a JSON client that always
+  # encodes numbers as floats could pass validation and still misbehave).
+  defp normalize_args(tool, args) when is_map(args) do
     properties = get_in(tool.inputSchema, ["properties"]) || %{}
 
-    Enum.filter(required, fn key ->
-      case Map.get(args, key) do
-        nil -> true
-        value -> not matches_schema_type?(value, get_in(properties, [key, "type"]))
+    Enum.reduce(properties, args, fn {key, schema}, acc ->
+      case {schema["type"], Map.get(acc, key)} do
+        {"integer", value} when is_float(value) -> Map.put(acc, key, trunc(value))
+        _ -> acc
       end
     end)
   end
 
-  defp invalid_required_args(tool, _args) do
-    get_in(tool.inputSchema, ["required"]) || []
+  defp normalize_args(_tool, args), do: args
+
+  defp matches_schema_type?(value, %{"type" => "string"}), do: is_binary(value)
+  defp matches_schema_type?(value, %{"type" => "boolean"}), do: is_boolean(value)
+  defp matches_schema_type?(value, %{"type" => "number"}), do: is_number(value)
+
+  defp matches_schema_type?(value, %{"type" => "integer"}),
+    do: is_integer(value) or (is_float(value) and value == trunc(value))
+
+  defp matches_schema_type?(value, %{"type" => "array"} = schema) do
+    is_list(value) and
+      (is_nil(schema["items"]) or Enum.all?(value, &matches_schema_type?(&1, schema["items"])))
   end
 
-  defp matches_schema_type?(_value, nil), do: true
-  defp matches_schema_type?(value, "string"), do: is_binary(value)
-  defp matches_schema_type?(value, "boolean"), do: is_boolean(value)
-  defp matches_schema_type?(value, "number"), do: is_number(value)
-  defp matches_schema_type?(value, "integer"), do: is_integer(value)
-  defp matches_schema_type?(value, "array"), do: is_list(value)
-  defp matches_schema_type?(value, "object"), do: is_map(value)
+  defp matches_schema_type?(value, %{"type" => "object"}), do: is_map(value)
+  # No declared type, or a type this validator doesn't model (e.g. a future
+  # JSON-Schema union type) — fail open rather than crash the whole
+  # validation gate on a schema shape we don't recognize.
+  defp matches_schema_type?(_value, _schema), do: true
 
   defp call_tool(tool, user, vault, args) do
     # engram-app/engram-infra#340 — span emits

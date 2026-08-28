@@ -62,7 +62,7 @@ defmodule Engram.MCP.Tools do
   # search_notes spans all vaults by default, so vault_id is an optional narrower
   # there — not the "required when multi-vault" contract the other tools carry.
   defp with_vault_id(%{name: "search_notes"} = tool) do
-    put_in(tool, [:inputSchema, "properties", "vault_id"], %{
+    put_vault_id_property(tool, %{
       "type" => "string",
       "format" => "uuid",
       "description" =>
@@ -71,8 +71,18 @@ defmodule Engram.MCP.Tools do
     })
   end
 
-  defp with_vault_id(tool),
-    do: put_in(tool, [:inputSchema, "properties", "vault_id"], @vault_id_property)
+  defp with_vault_id(tool), do: put_vault_id_property(tool, @vault_id_property)
+
+  # `put_in(tool, [:inputSchema, "properties", "vault_id"], ...)` would raise
+  # if a future tool def ever omitted "properties" — a single malformed tool
+  # def would then crash Tools.list/0 for every tool, since it's rebuilt on
+  # every request (found in adversarial review of #1491/#1492's fix).
+  defp put_vault_id_property(tool, property) do
+    update_in(tool, [:inputSchema, "properties"], fn
+      nil -> %{"vault_id" => property}
+      properties -> Map.put(properties, "vault_id", property)
+    end)
+  end
 
   @spec get(String.t()) :: {:ok, tool_def()} | :error
   def get(name) do
