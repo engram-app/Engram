@@ -5,6 +5,7 @@ defmodule EngramWeb.VaultTreeControllerTest do
   import ExUnit.CaptureLog
 
   alias Engram.Attachments.Attachment
+  alias Engram.TenantQueryCounter
 
   setup %{conn: conn} do
     user = insert(:user)
@@ -16,41 +17,10 @@ defmodule EngramWeb.VaultTreeControllerTest do
     %{conn: authed, user: user, vault: vault}
   end
 
-  # Counts `with_tenant/2` invocations that actually open a transaction (one
-  # combined `SELECT set_config(...)` statement each). Same technique as
-  # Engram.RepoTenantRoundtripsTest / EngramWeb.SyncControllerTest, scoped
-  # here so it's a self-contained regression guard.
-  defp count_tenant_enters(fun) do
-    test_pid = self()
-    handler_id = {__MODULE__, make_ref()}
-
-    :telemetry.attach(
-      handler_id,
-      [:engram, :repo, :query],
-      fn _e, _m, %{query: q}, _c ->
-        if self() == test_pid and q =~ "app.current_tenant" do
-          send(test_pid, {:tenant_enter, q})
-        end
-      end,
-      nil
-    )
-
-    try do
-      fun.()
-    after
-      :telemetry.detach(handler_id)
-    end
-
-    collect_tenant_enters()
-  end
-
-  defp collect_tenant_enters(acc \\ []) do
-    receive do
-      {:tenant_enter, q} -> collect_tenant_enters([q | acc])
-    after
-      0 -> Enum.reverse(acc)
-    end
-  end
+  # Counts `with_tenant/2` invocations that actually open a transaction —
+  # see Engram.TenantQueryCounter (#1211 regression guard, shared with
+  # SyncControllerTest and RepoTenantRoundtripsTest).
+  defp count_tenant_enters(fun), do: TenantQueryCounter.count_tenant_enters(fun)
 
   describe "GET /vault/tree with_tenant round trips" do
     # Floor is 2, not 1: EngramWeb.Plugs.VaultPlug resolves `current_vault`

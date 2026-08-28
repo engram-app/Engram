@@ -40,6 +40,13 @@ defmodule EngramWeb.VaultTreeController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
+    # Computed once, before the transaction opens — no DB access (a pure
+    # struct decrypt), so nothing is lost by resolving it up front instead
+    # of inside with_tenant. Branching on the precomputed value below (never
+    # calling Crypto.get_dek/1 again) means a DEK failure doesn't also pay
+    # for the note/folder/attachment queries it can't use.
+    dek_result = Crypto.get_dek(user)
+
     # One with_tenant block for every DB read this endpoint needs (was 5:
     # current_seq + notes + folder counts + folder markers + attachments,
     # each its own transaction). Decrypt happens entirely below, OUTSIDE
@@ -47,22 +54,33 @@ defmodule EngramWeb.VaultTreeController do
     # the shape behind the 2026-07-09 CRDT pool-exhaustion incident (#1211).
     {:ok, raw} =
       Repo.with_tenant(user.id, fn ->
-        %{
-          seq: Vaults.raw_current_seq(vault.id),
-          tree_rows: Notes.raw_tree_rows(user, vault),
-          attachment_rows: Attachments.raw_tree_rows(user, vault)
-        }
+        seq = Vaults.raw_current_seq(vault.id)
+
+        case dek_result do
+          {:ok, _dek} ->
+            %{
+              seq: seq,
+              note_rows: Notes.raw_tree_note_rows(user, vault),
+              folder_count_rows: Notes.raw_folder_count_rows(user, vault),
+              folder_marker_rows: Notes.raw_folder_marker_rows(user, vault),
+              attachment_rows: Attachments.raw_tree_rows(user, vault)
+            }
+
+          _ ->
+            # No usable DEK: nothing decryptable exists to fetch (:no_dek) or
+            # the caller is about to 500 without using rows anyway (any other
+            # error) — skip the note/folder/attachment queries entirely.
+            %{seq: seq}
+        end
       end)
 
-    case Crypto.get_dek(user) do
+    case dek_result do
       {:ok, dek} ->
         render_tree(conn, raw, dek, user)
 
       {:error, :no_dek} ->
         # Brand-new user, zero writes yet: every upsert provisions a DEK, so
-        # no DEK means nothing encrypted exists to render. raw.tree_rows /
-        # raw.attachment_rows are already known empty in this case — no
-        # extra query cost, just skipped decrypt.
+        # no DEK means nothing encrypted exists to render.
         json(conn, empty_tree(raw.seq))
 
       {:error, reason} ->
@@ -89,7 +107,10 @@ defmodule EngramWeb.VaultTreeController do
   end
 
   defp render_tree(conn, raw, dek, user) do
-    %{notes: notes, folders: folders} = Notes.build_tree_payload(raw.tree_rows, dek)
+    notes = Notes.decrypt_tree_note_rows(raw.note_rows, dek)
+    folder_counts = Notes.decrypt_folder_count_rows(raw.folder_count_rows, dek)
+    folder_markers = Notes.decrypt_folder_marker_rows(raw.folder_marker_rows, dek)
+    folders = Notes.combine_folders_payload(folder_counts, folder_markers)
     attachments = Attachments.decrypt_tree_rows(raw.attachment_rows, user)
 
     json(conn, %{

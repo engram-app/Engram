@@ -1187,8 +1187,8 @@ defmodule Engram.Attachments do
   `decrypt_tree_rows/2` (and every current caller of `list_attachments/2`)
   actually reads. MUST run inside the caller's `Repo.with_tenant/2` — pair
   with `decrypt_tree_rows/2`, which does the decrypt work OUTSIDE any
-  transaction. See `Notes.raw_tree_rows/2` for the notes/folders
-  equivalent, and #1211 for why decrypt must stay outside the transaction.
+  transaction. See `Notes.raw_tree_note_rows/2` for the notes equivalent,
+  and #1211 for why decrypt must stay outside the transaction.
   """
   @spec raw_tree_rows(map(), map()) :: [Attachment.t()]
   def raw_tree_rows(user, vault) do
@@ -1208,6 +1208,12 @@ defmodule Engram.Attachments do
   """
   @spec decrypt_tree_rows([Attachment.t()], map()) :: [map()]
   def decrypt_tree_rows(atts, user) do
+    # Reload if the caller's struct predates an earlier write's DEK
+    # provisioning — same discipline scan_attachments/2 applies before its
+    # own decrypt_each call, now enforced here instead of trusting every
+    # caller (e.g. VaultTreeController) to remember it.
+    user = fresh_user(user)
+
     # Measured like every other bulk path decrypt (:notes, :vault_tree_notes,
     # :manifest_*). Label is caller-agnostic — per-endpoint attribution comes
     # from the OTel request span, not this tag.

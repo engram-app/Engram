@@ -4838,29 +4838,43 @@ defmodule Engram.Notes do
   def list_folder_markers(user, vault) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user) do
-      # Callers only consume `.id` + `.folder` (hydrated below) — project
-      # just the decrypt inputs instead of full rows so a marker-heavy
-      # vault doesn't pay for ~20 unused columns per row.
-      {:ok, markers} =
-        Repo.with_tenant(user.id, fn ->
-          Repo.all(
-            from(n in scoped_live(user, vault),
-              where: n.kind == "folder",
-              select: %Note{
-                id: n.id,
-                dek_version: n.dek_version,
-                folder_ciphertext: n.folder_ciphertext,
-                folder_nonce: n.folder_nonce,
-                folder_hmac: n.folder_hmac
-              }
-            )
-          )
-        end)
-
-      Enum.map(markers, &hydrate_folder_marker(&1, dek))
+      {:ok, markers} = Repo.with_tenant(user.id, fn -> raw_folder_marker_rows(user, vault) end)
+      decrypt_folder_marker_rows(markers, dek)
     else
       {:error, :no_dek} -> []
     end
+  end
+
+  @doc """
+  Raw rows for `list_folder_markers/2`. MUST run inside the caller's
+  `Repo.with_tenant/2` — pair with `decrypt_folder_marker_rows/2`, which
+  does the decrypt work OUTSIDE any transaction. Extracted so
+  `VaultTreeController` can fetch this alongside the note/folder-count/
+  attachment queries in one transaction instead of separate ones (#1211).
+  """
+  @spec raw_folder_marker_rows(map(), map()) :: [Note.t()]
+  def raw_folder_marker_rows(user, vault) do
+    # Callers only consume `.id` + `.folder` (hydrated below) — project
+    # just the decrypt inputs instead of full rows so a marker-heavy
+    # vault doesn't pay for ~20 unused columns per row.
+    Repo.all(
+      from(n in scoped_live(user, vault),
+        where: n.kind == "folder",
+        select: %Note{
+          id: n.id,
+          dek_version: n.dek_version,
+          folder_ciphertext: n.folder_ciphertext,
+          folder_nonce: n.folder_nonce,
+          folder_hmac: n.folder_hmac
+        }
+      )
+    )
+  end
+
+  @doc "Decrypts `raw_folder_marker_rows/2`'s rows. Pure — no DB access."
+  @spec decrypt_folder_marker_rows([Note.t()], binary()) :: [Note.t()]
+  def decrypt_folder_marker_rows(markers, dek) do
+    Enum.map(markers, &hydrate_folder_marker(&1, dek))
   end
 
   @doc """
@@ -4871,10 +4885,26 @@ defmodule Engram.Notes do
   would make the root its own parent if a root marker ever exists, handing
   a cycle to the tree renderer.
   """
-  @spec folders_payload(map(), map()) :: [map()]
+  @spec folders_payload(Engram.Accounts.User.t(), map()) :: [map()]
   def folders_payload(user, vault) do
     {:ok, folders} = list_folders_with_counts(user, vault)
     markers = list_folder_markers(user, vault)
+    combine_folders_payload(folders, markers)
+  end
+
+  @doc """
+  Combines `list_folders_with_counts/2`'s `[%{folder:, count:}]` and
+  `list_folder_markers/2`'s hydrated marker rows into the id/name/count/
+  parent_id shape `folders_payload/2` returns. Pure — no DB access. Split
+  out so `VaultTreeController` can call it directly after fetching both
+  row sets inside one transaction instead of the two separate transactions
+  `folders_payload/2` would open (#1211) — this is the SAME business rule
+  as `folders_payload/2`, not a second implementation of it.
+  """
+  @spec combine_folders_payload([%{folder: String.t(), count: integer()}], [Note.t()]) :: [
+          map()
+        ]
+  def combine_folders_payload(folders, markers) do
     id_by_path = Map.new(markers, fn m -> {m.folder, m.id} end)
 
     Enum.map(folders, fn f ->
@@ -4904,153 +4934,46 @@ defmodule Engram.Notes do
   """
   @spec list_tree_notes(map(), map()) :: {:ok, [map()]}
   def list_tree_notes(user, vault) do
-    {:ok, rows} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in scoped_live(user, vault),
-            where: n.kind == "note",
-            select:
-              {n.id, n.dek_version, n.path_ciphertext, n.path_nonce, n.created_at, n.updated_at}
-          )
-        )
-      end)
-
+    {:ok, rows} = Repo.with_tenant(user.id, fn -> raw_tree_note_rows(user, vault) end)
     {:ok, dek} = Crypto.get_dek(user)
-
-    # Sequential on purpose — SyncController measured path-sized decrypts at
-    # ~4µs each (10k in ~43ms) and found chunked parallel SLOWER, because
-    # copying results back to the caller's heap rivals the AES-GCM work.
-    notes =
-      Crypto.measure_decrypt_batch(:vault_tree_notes, length(rows), fn ->
-        Enum.map(rows, fn {id, dek_version, path_ct, path_nonce, created, updated} ->
-          aad = PathCrypto.aad(:notes, id, dek_version)
-
-          %{
-            id: id,
-            path: PathCrypto.decrypt!(path_ct, path_nonce, dek, aad),
-            created_at: created,
-            updated_at: updated
-          }
-        end)
-      end)
-
-    {:ok, notes}
+    {:ok, decrypt_tree_note_rows(rows, dek)}
   end
 
   @doc """
-  Raw rows for GET /vault/tree's notes + folders halves, in one query:
-  every live note AND folder-marker row's kind, decrypt inputs, and
-  folder_hmac. MUST run inside the caller's `Repo.with_tenant/2` — pair
-  with `build_tree_payload/2`, which does the decrypt/derive work OUTSIDE
-  any transaction (holding a DB connection across CPU-bound decrypt is the
-  2026-07-09 CRDT pool-exhaustion shape — see #1211).
-
-  Replaces what were 3 separate with_tenant round trips (`list_tree_notes/2`
-  + `list_folders_with_counts/2` + `list_folder_markers/2`, each its own
-  query) with 1.
+  Raw rows for `list_tree_notes/2`. MUST run inside the caller's
+  `Repo.with_tenant/2` — pair with `decrypt_tree_note_rows/2`, which does
+  the decrypt work OUTSIDE any transaction (holding a DB connection across
+  CPU-bound decrypt is the 2026-07-09 CRDT pool-exhaustion shape — see
+  #1211). Extracted so `VaultTreeController` can fetch this alongside the
+  folder-count/folder-marker/attachment queries in one transaction.
   """
-  @spec raw_tree_rows(map(), map()) :: [map()]
-  def raw_tree_rows(user, vault) do
+  @spec raw_tree_note_rows(map(), map()) :: [tuple()]
+  def raw_tree_note_rows(user, vault) do
     Repo.all(
       from(n in scoped_live(user, vault),
-        select: %{
-          id: n.id,
-          kind: n.kind,
-          dek_version: n.dek_version,
-          path_ciphertext: n.path_ciphertext,
-          path_nonce: n.path_nonce,
-          folder_ciphertext: n.folder_ciphertext,
-          folder_nonce: n.folder_nonce,
-          folder_hmac: n.folder_hmac,
-          created_at: n.created_at,
-          updated_at: n.updated_at
-        }
+        where: n.kind == "note",
+        select: {n.id, n.dek_version, n.path_ciphertext, n.path_nonce, n.created_at, n.updated_at}
       )
     )
   end
 
-  @doc """
-  Builds the `%{notes:, folders:}` halves of the /vault/tree payload from
-  `raw_tree_rows/2`'s rows — the decrypt/derive half of `list_tree_notes/2`
-  + `folders_payload/2` combined, operating on one query's rows instead of
-  three. Caller must already hold `dek` (e.g. via `Crypto.get_dek/1`); this
-  does no DB access and is meant to run OUTSIDE any transaction.
-  """
-  @spec build_tree_payload([map()], binary()) :: %{notes: [map()], folders: [map()]}
-  def build_tree_payload(rows, dek) do
-    notes =
-      Crypto.measure_decrypt_batch(:vault_tree_notes, length(rows), fn ->
-        rows
-        |> Enum.filter(&(&1.kind == "note"))
-        |> Enum.map(fn row ->
-          aad = PathCrypto.aad(:notes, row.id, row.dek_version)
+  @doc "Decrypts `raw_tree_note_rows/2`'s rows. Pure — no DB access."
+  @spec decrypt_tree_note_rows([tuple()], binary()) :: [map()]
+  def decrypt_tree_note_rows(rows, dek) do
+    # Sequential on purpose — SyncController measured path-sized decrypts at
+    # ~4µs each (10k in ~43ms) and found chunked parallel SLOWER, because
+    # copying results back to the caller's heap rivals the AES-GCM work.
+    Crypto.measure_decrypt_batch(:vault_tree_notes, length(rows), fn ->
+      Enum.map(rows, fn {id, dek_version, path_ct, path_nonce, created, updated} ->
+        aad = PathCrypto.aad(:notes, id, dek_version)
 
-          %{
-            id: row.id,
-            path: PathCrypto.decrypt!(row.path_ciphertext, row.path_nonce, dek, aad),
-            created_at: row.created_at,
-            updated_at: row.updated_at
-          }
-        end)
+        %{
+          id: id,
+          path: PathCrypto.decrypt!(path_ct, path_nonce, dek, aad),
+          created_at: created,
+          updated_at: updated
+        }
       end)
-
-    %{notes: notes, folders: build_folders_payload(rows, dek)}
-  end
-
-  # Same algorithm as list_folders_with_counts/2 + list_folder_markers/2 +
-  # folders_payload/2 combined, sourced from raw_tree_rows/2's single-query
-  # rows instead of two separate queries. `id` in the output comes ONLY
-  # from a kind=="folder" row (an explicit marker) — a folder that exists
-  # only implicitly (some note's folder_hmac points to it, no marker ever
-  # created) gets `id: nil`, matching folders_payload/2's existing contract.
-  defp build_folders_payload(rows, dek) do
-    grouped =
-      rows
-      |> Enum.filter(&(not is_nil(&1.folder_hmac)))
-      |> Enum.group_by(& &1.folder_hmac)
-
-    folders =
-      grouped
-      |> Enum.map(fn {_hmac, group} ->
-        # DISTINCT ON semantics: any one row per folder_hmac decrypts to the
-        # same plaintext folder path — which row is picked doesn't matter.
-        representative = hd(group)
-        count = Enum.count(group, &(&1.kind == "note"))
-
-        folder =
-          decrypt_envelope!(
-            representative.folder_ciphertext,
-            representative.folder_nonce,
-            dek,
-            row_aad(:notes, :folder, representative.id, representative.dek_version)
-          )
-
-        %{folder: folder, count: count}
-      end)
-      |> Enum.sort_by(& &1.folder)
-
-    id_by_path =
-      rows
-      |> Enum.filter(&(&1.kind == "folder"))
-      |> Map.new(fn row ->
-        folder =
-          decrypt_envelope!(
-            row.folder_ciphertext,
-            row.folder_nonce,
-            dek,
-            row_aad(:notes, :folder, row.id, row.dek_version)
-          )
-
-        {folder, row.id}
-      end)
-
-    Enum.map(folders, fn f ->
-      %{
-        id: Map.get(id_by_path, f.folder),
-        name: f.folder,
-        count: f.count,
-        parent_id: Map.get(id_by_path, folder_parent_path(f.folder))
-      }
     end)
   end
 
@@ -5156,52 +5079,68 @@ defmodule Engram.Notes do
     case Crypto.dek_filter_key(user) do
       {:ok, _filter_key} ->
         {:ok, dek} = Crypto.get_dek(user)
-
-        # Per folder_hmac, pick any one row (for envelope decryption) and
-        # count only kind='note' rows. Marker-only folders yield count 0;
-        # mixed folders yield the note count (markers excluded).
-        #
-        # The count MUST equal what `list_notes_in_folder/3` returns for the
-        # same folder (both read kind='note' rows grouped by folder_hmac) — the
-        # MCP `list_folders` vs `list_folder` contract (#728). Guarded by the
-        # "invariant vs list_notes_in_folder/3 (#728)" tests in notes_test.exs.
-        {:ok, rows} =
-          Repo.with_tenant(user.id, fn ->
-            Repo.all(
-              from(n in scoped_live(user, vault),
-                where: not is_nil(n.folder_hmac),
-                distinct: n.folder_hmac,
-                select: %{
-                  id: n.id,
-                  dv: n.dek_version,
-                  ct: n.folder_ciphertext,
-                  nonce: n.folder_nonce,
-                  count:
-                    fragment(
-                      "COUNT(*) FILTER (WHERE ? = 'note') OVER (PARTITION BY ?)",
-                      n.kind,
-                      n.folder_hmac
-                    )
-                }
-              )
-            )
-          end)
-
-        folders =
-          rows
-          |> Enum.map(fn %{id: id, dv: dv, ct: ct, nonce: nonce, count: count} ->
-            %{
-              folder: decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv)),
-              count: count
-            }
-          end)
-          |> Enum.sort_by(& &1.folder)
-
-        {:ok, folders}
+        {:ok, rows} = Repo.with_tenant(user.id, fn -> raw_folder_count_rows(user, vault) end)
+        {:ok, decrypt_folder_count_rows(rows, dek)}
 
       {:error, :no_dek} ->
         {:ok, []}
     end
+  end
+
+  @doc """
+  Raw rows for `list_folders_with_counts/2` — per folder_hmac, one
+  representative row (for envelope decryption) plus a SQL-side
+  window-function count of `kind='note'` rows in that folder. MUST run
+  inside the caller's `Repo.with_tenant/2` — pair with
+  `decrypt_folder_count_rows/2`. Extracted so `VaultTreeController` can
+  fetch this alongside the note/folder-marker/attachment queries in one
+  transaction (#1211) WITHOUT losing the SQL-side aggregation — pulling
+  every live row and grouping in Elixir instead would regress on large
+  vaults; this keeps Postgres doing the aggregate work it already does
+  well, at the cost of one more query in the same transaction rather than
+  zero.
+
+  The count MUST equal what `list_notes_in_folder/3` returns for the same
+  folder (both read kind='note' rows grouped by folder_hmac) — the MCP
+  `list_folders` vs `list_folder` contract (#728). Guarded by the
+  "invariant vs list_notes_in_folder/3 (#728)" tests in notes_test.exs.
+  """
+  @spec raw_folder_count_rows(map(), map()) :: [map()]
+  def raw_folder_count_rows(user, vault) do
+    # Per folder_hmac, pick any one row (for envelope decryption) and
+    # count only kind='note' rows. Marker-only folders yield count 0;
+    # mixed folders yield the note count (markers excluded).
+    Repo.all(
+      from(n in scoped_live(user, vault),
+        where: not is_nil(n.folder_hmac),
+        distinct: n.folder_hmac,
+        select: %{
+          id: n.id,
+          dv: n.dek_version,
+          ct: n.folder_ciphertext,
+          nonce: n.folder_nonce,
+          count:
+            fragment(
+              "COUNT(*) FILTER (WHERE ? = 'note') OVER (PARTITION BY ?)",
+              n.kind,
+              n.folder_hmac
+            )
+        }
+      )
+    )
+  end
+
+  @doc "Decrypts `raw_folder_count_rows/2`'s rows. Pure — no DB access."
+  @spec decrypt_folder_count_rows([map()], binary()) :: [%{folder: String.t(), count: integer()}]
+  def decrypt_folder_count_rows(rows, dek) do
+    rows
+    |> Enum.map(fn %{id: id, dv: dv, ct: ct, nonce: nonce, count: count} ->
+      %{
+        folder: decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv)),
+        count: count
+      }
+    end)
+    |> Enum.sort_by(& &1.folder)
   end
 
   @doc """

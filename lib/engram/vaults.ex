@@ -107,9 +107,19 @@ defmodule Engram.Vaults do
   that already need a tenant-scoped transaction for other reads (e.g.
   `VaultTreeController`, batching this alongside note/attachment fetches)
   can fold this query in instead of paying for a separate transaction.
+
+  Raw SQL (not an `Ecto.Query`), so `Repo.prepare_query/3`'s structural
+  tenant guard — which only hooks `Ecto.Query` operations — can't catch a
+  misuse the way it would for a bare Ecto query against a tenant table.
+  This explicit check is the substitute for that missing structural net.
   """
   @spec raw_current_seq(term()) :: integer()
   def raw_current_seq(vault_id) do
+    if is_nil(Process.get(:engram_tenant)) do
+      raise Engram.TenantError,
+        message: "Tenant context not set! raw_current_seq/1 must run inside Repo.with_tenant/2."
+    end
+
     %{rows: [[seq]]} =
       Repo.query!(
         "SELECT change_seq FROM vaults WHERE id = $1",
