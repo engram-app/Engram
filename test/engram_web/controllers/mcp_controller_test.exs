@@ -132,6 +132,142 @@ defmodule EngramWeb.McpControllerTest do
       assert resp["error"]["message"] =~ "Unknown tool"
     end
 
+    # Adversarial-review finding: a non-binary "name" (e.g. a bare JSON
+    # object) can't match any tool, so Tools.get/1 correctly returns :error
+    # — but interpolating it straight into "Unknown tool: #{name}" crashed,
+    # since Map doesn't implement String.Chars.
+    test "unknown tool with a non-string name returns -32_602, not a 500", %{conn: conn} do
+      conn = call_tool(conn, %{"foo" => "bar"}, %{})
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "Unknown tool"
+    end
+
+    # #1491/#1492 — a caller (any MCP client) that sends the wrong argument
+    # name for a required param, e.g. "path" instead of the schema's
+    # "folder", used to silently fall through to the handler's `|| ""`
+    # default and operate on the vault root with no error. Required params
+    # must be validated against inputSchema before the handler ever runs.
+    test "tools/call with a missing required argument returns -32_602, not a silent default", %{
+      conn: conn
+    } do
+      conn = call_tool(conn, "list_folder", %{"path" => "Health"})
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "folder"
+    end
+
+    test "delete_folder with a missing required argument returns -32_602, not a vault-root delete",
+         %{conn: conn} do
+      conn = call_tool(conn, "delete_folder", %{"path" => "Health", "recursive" => true})
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "folder"
+    end
+
+    test "delete_folder with an explicit null for the required argument returns -32_602, not a vault-root delete",
+         %{conn: conn} do
+      conn = call_tool(conn, "delete_folder", %{"folder" => nil, "recursive" => true})
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "folder"
+    end
+
+    test "tools/call with non-object arguments returns -32_602, not a 500", %{conn: conn} do
+      conn = call_tool(conn, "delete_folder", "oops")
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "object"
+    end
+
+    # Adversarial-review finding: a zero-required-arg tool (list_tags has no
+    # required properties at all) previously let non-object `arguments`
+    # through unrejected, since the old check only ever inspected the
+    # tool's `required` list — empty for this tool, so nothing was "missing".
+    # It then crashed downstream in resolve_mcp_vault's `args["vault_id"]`.
+    test "tools/call with non-object arguments on a zero-required-arg tool returns -32_602, not a 500",
+         %{conn: conn} do
+      conn = call_tool(conn, "list_tags", "oops")
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "object"
+    end
+
+    test "create_folder with the wrong JSON type for a required string arg returns -32_602, not a generic FunctionClauseError",
+         %{conn: conn} do
+      conn = call_tool(conn, "create_folder", %{"folder" => 123})
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "folder"
+    end
+
+    test "get_notes with the wrong JSON type for a required array arg returns -32_602", %{
+      conn: conn
+    } do
+      conn = call_tool(conn, "get_notes", %{"paths" => "Health/Supplements.md"})
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "paths"
+    end
+
+    # Adversarial-review finding: the array-typed check only validated
+    # `is_list/1`, not each element's declared `items` type. `paths` is
+    # declared `array of string`, so an array of numbers must still be
+    # rejected instead of reaching get_notes' own redundant handler-side
+    # check.
+    test "get_notes with wrong-typed elements inside a correctly-shaped array returns -32_602",
+         %{conn: conn} do
+      conn = call_tool(conn, "get_notes", %{"paths" => [1, 2, 3]})
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "paths"
+    end
+
+    # Adversarial-review finding: only REQUIRED args were type-checked —
+    # `vault_id` is optional on nearly every tool, so a wrong-typed vault_id
+    # (e.g. a number instead of the schema's string/uuid) used to be treated
+    # as silently absent by `is_binary(args["vault_id"])` checks downstream,
+    # not rejected — the same silent-wrong-target failure class #1491/#1492
+    # targeted, just for an optional field.
+    test "an optional argument with the wrong JSON type returns -32_602, not silent fallback", %{
+      conn: conn
+    } do
+      conn = call_tool(conn, "search_notes", %{"query" => "anything", "vault_id" => 12_345})
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "vault_id"
+    end
+
+    # Proves the fix lives at the shared dispatch choke point, not as a
+    # per-tool patch that happens to cover list_folder/delete_folder/
+    # create_folder/get_notes and nothing else.
+    test "every tool with required arguments rejects an empty arguments map with -32_602", %{
+      conn: conn
+    } do
+      tools_with_required =
+        Enum.filter(Engram.MCP.Tools.list(), fn t -> (t.inputSchema["required"] || []) != [] end)
+
+      assert tools_with_required != []
+
+      Enum.each(tools_with_required, fn tool ->
+        result_conn = call_tool(conn, tool.name, %{})
+        resp = json_response(result_conn, 200)
+
+        assert resp["error"]["code"] == -32_602,
+               "expected #{tool.name} to reject an empty arguments map, got: #{inspect(resp)}"
+      end)
+    end
+
     test "unauthenticated request returns 401" do
       conn = build_conn()
 
@@ -364,11 +500,14 @@ defmodule EngramWeb.McpControllerTest do
       assert text =~ "folder"
     end
 
+    # Missing (not just empty) required args are now caught at the dispatch
+    # layer, before the handler runs — see #1491/#1492.
     test "rejects missing folder param", %{conn: conn} do
       conn = call_tool(conn, "create_folder", %{})
-      text = tool_text(conn)
+      resp = json_response(conn, 200)
 
-      assert text =~ "folder"
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "folder"
     end
   end
 
@@ -532,6 +671,52 @@ defmodule EngramWeb.McpControllerTest do
       assert text =~ "Text not found"
     end
 
+    # Adversarial-review finding: `occurrence` is declared `"type": "integer"`
+    # but was never coerced — a JSON client that always encodes whole
+    # numbers as floats (common in JS) sent 0.0-style values straight into
+    # `do_replace/4`'s integer-literal pattern match, which never matched,
+    # silently falling through to `Enum.take/2` with a float count and
+    # crashing. The dispatch layer now normalizes whole-number floats to
+    # real integers before the handler ever sees them.
+    test "replaces all occurrences with a whole-number float -1.0", %{conn: conn, user: user} do
+      {:ok, vault} = Engram.Vaults.get_default_vault(user)
+
+      Engram.Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Test/DupesFloat.md",
+          "content" => "foo bar foo baz foo",
+          "mtime" => 1_000.0
+        }
+      )
+
+      conn =
+        call_tool(conn, "patch_note", %{
+          "path" => "Test/DupesFloat.md",
+          "find" => "foo",
+          "replace" => "qux",
+          "occurrence" => -1.0
+        })
+
+      text = tool_text(conn)
+      assert text =~ "Replaced 3 occurrence(s)"
+    end
+
+    test "rejects a fractional occurrence instead of crashing", %{conn: conn} do
+      conn =
+        call_tool(conn, "patch_note", %{
+          "path" => "Health/Supplements.md",
+          "find" => "Omega 3",
+          "replace" => "Fish Oil",
+          "occurrence" => 1.5
+        })
+
+      resp = json_response(conn, 200)
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "occurrence"
+    end
+
     test "returns error when note not found", %{conn: conn} do
       conn =
         call_tool(conn, "patch_note", %{
@@ -568,6 +753,50 @@ defmodule EngramWeb.McpControllerTest do
       refute result =~ "Vitamin D"
       # Content after the section should still be there
       assert result =~ "Take with food."
+    end
+
+    # Adversarial-review finding: `level` is declared `"type": "integer"` but
+    # was never coerced, and the handler's `h_level <= level` comparison
+    # relies on `level` actually being an integer — a whole-number float
+    # like 2.0 must behave identically to the integer 2, not silently
+    # mis-scan the section boundary.
+    test "a whole-number float level behaves identically to the equivalent integer", %{
+      conn: conn
+    } do
+      conn =
+        call_tool(conn, "update_section", %{
+          "path" => "Health/Supplements.md",
+          "heading" => "Shopping List",
+          "content" => "- Fish Oil\n- Magnesium",
+          "level" => 2.0
+        })
+
+      text = tool_text(conn)
+      assert text =~ "Section 'Shopping List' updated"
+
+      conn =
+        call_tool(build_authed(conn), "get_note", %{"source_path" => "Health/Supplements.md"})
+
+      result = tool_text(conn)
+      assert result =~ "Fish Oil"
+      refute result =~ "Omega 3"
+      assert result =~ "Take with food."
+    end
+
+    test "rejects a fractional level instead of silently mis-scanning the section", %{
+      conn: conn
+    } do
+      conn =
+        call_tool(conn, "update_section", %{
+          "path" => "Health/Supplements.md",
+          "heading" => "Shopping List",
+          "content" => "new stuff",
+          "level" => 2.5
+        })
+
+      resp = json_response(conn, 200)
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "level"
     end
 
     test "returns error when heading not found", %{conn: conn} do
