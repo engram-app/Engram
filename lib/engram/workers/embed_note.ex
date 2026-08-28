@@ -91,9 +91,16 @@ defmodule Engram.Workers.EmbedNote do
         {:discard, :user_deleted}
 
       :ok ->
-        case embed_budget_gate(note) do
+        # Resolved ONCE per job and threaded from here down. The budget gate,
+        # the decrypt in run_embed and both halves of Indexing all need the
+        # same `%User{}`; each used to fetch its own, so a single note cost up
+        # to four identical `get_user!` round trips (measured 2.1/job in prod
+        # 2026-08-28). Nothing below may re-resolve it. See #1502.
+        user = Accounts.get_user!(note.user_id)
+
+        case embed_budget_gate(note, user) do
           :ok ->
-            case run_embed(note, old_path_hmac_b64) do
+            case run_embed(note, user, old_path_hmac_b64) do
               :ok ->
                 _ = record_embed_tokens(note)
                 :ok
@@ -118,8 +125,7 @@ defmodule Engram.Workers.EmbedNote do
   # Pricing v2 §B — block embeds when the user has exhausted their lifetime
   # token budget. Resolver returns nil for Starter/Pro (unmetered), so this is
   # effectively Free-only. Per-user overrides via Billing.UserLimitOverride.
-  defp embed_budget_gate(%Note{user_id: user_id} = note) do
-    user = Accounts.get_user!(user_id)
+  defp embed_budget_gate(%Note{user_id: user_id} = note, %{} = user) do
     current = UsageMeters.lifetime_embed_tokens(user_id)
     estimated = estimate_note_tokens(note)
 
@@ -260,9 +266,7 @@ defmodule Engram.Workers.EmbedNote do
 
   defp maybe_mark_poison(_note, _result, _job), do: :ok
 
-  defp run_embed(note, old_path_hmac_b64) do
-    user = Accounts.get_user!(note.user_id)
-
+  defp run_embed(note, user, old_path_hmac_b64) do
     # Load vault up front so we can drive both the decrypt path (future) and
     # the index call. skip_tenant_check: trusted internal worker.
     # Missing vault means the note is orphaned — nothing to index, discard.
@@ -279,7 +283,7 @@ defmodule Engram.Workers.EmbedNote do
                 Indexing.delete_points_by_path_hmac(decrypted_note, old_path_hmac_b64)
               end
 
-            case Indexing.index_note(decrypted_note, vault) do
+            case Indexing.index_note(decrypted_note, vault, user) do
               {:ok, _count} ->
                 stamp_embed_hash(note, user)
                 :ok

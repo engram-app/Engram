@@ -34,11 +34,18 @@ defmodule Engram.Indexing do
   embedding call outside a transaction can call those two directly and run the
   commit step inside a per-note `Repo.with_tenant/2`.
   """
-  def index_note(note, %Engram.Vaults.Vault{} = vault) do
-    case prepare_index(note, vault) do
-      {:ok, {:no_chunks, link_rows}} ->
-        user = Engram.Accounts.get_user!(note.user_id)
+  def index_note(note, %Engram.Vaults.Vault{} = vault, user \\ nil) do
+    # Resolve identity ONCE for the whole call. This function and
+    # prepare_index/3 below both need the same `%User{}`, and both used to
+    # fetch it independently — on the embed path that made four `get_user!`
+    # round trips for one note (here, prepare_index, and twice more in
+    # EmbedNote). Measured 2.1 users/job in prod on 2026-08-28. The argument is
+    # optional so the six test modules and any future caller can keep passing
+    # two args; the hot path passes the user it already has. See #1502.
+    user = user || Engram.Accounts.get_user!(note.user_id)
 
+    case prepare_index(note, vault, user) do
+      {:ok, {:no_chunks, link_rows}} ->
         case Engram.Crypto.get_dek(user) do
           {:ok, _dek} ->
             :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
@@ -71,7 +78,7 @@ defmodule Engram.Indexing do
     * `{:ok, prepared}` — ready to hand to `commit_index/1`
     * `{:error, reason}` — embed failed, encryption failed, etc.
   """
-  def prepare_index(note, %Engram.Vaults.Vault{} = vault) do
+  def prepare_index(note, %Engram.Vaults.Vault{} = vault, user \\ nil) do
     link_rows = Engram.Links.Parser.extract(note.content || "")
     chunks = Markdown.parse(note.content || "", note.path)
 
@@ -87,7 +94,7 @@ defmodule Engram.Indexing do
       true ->
         context_texts = Enum.map(chunks, & &1.context_text)
         dims = Application.get_env(:engram, :embed_dims, @default_dims)
-        user = Engram.Accounts.get_user!(note.user_id)
+        user = user || Engram.Accounts.get_user!(note.user_id)
 
         # Keyword-only tiers never call Voyage. `nil` vectors flow through
         # build_prepared/8, which emits a sparse-only named vector — the BM25
