@@ -63,8 +63,13 @@ defmodule Engram.Workers.EmbedNote do
         # keyword-only (correct — skip, or ReconcileEmbeddings would re-enqueue
         # this note every 15 minutes forever), or they just upgraded and this is
         # the backfill (re-index to add the dense leg).
-        if SearchProfile.resolve(Accounts.get_user!(note.user_id)).semantic do
-          run_and_stamp(note, old_path_hmac_b64, job)
+        # Loaded once here and handed to run_and_stamp — it needs the same row
+        # for the rotation gate, so re-resolving would cost a second read on
+        # exactly the path that already paid for one. See #1502.
+        user = Accounts.get_user!(note.user_id)
+
+        if SearchProfile.resolve(user).semantic do
+          run_and_stamp(note, old_path_hmac_b64, job, user)
         else
           :ok
         end
@@ -75,43 +80,60 @@ defmodule Engram.Workers.EmbedNote do
   end
 
   # T3.7 — gate writes during DEK rotation. The worker may have been enqueued
-  # before the lock was acquired; re-check the live row.
-  defp run_and_stamp(note, old_path_hmac_b64, job) do
-    case RotationGate.check(note.user_id) do
-      {:error, :rotation_in_progress} ->
-        :telemetry.execute(
-          [:engram, :crypto, :rotate, :dek, :gate_blocked],
-          %{count: 1},
-          %{gate_path: :worker, op: :embed_note}
-        )
-
-        {:snooze, 60}
-
-      {:error, :user_not_found} ->
+  # before the lock was acquired, so this must read live state.
+  #
+  # ONE read, not two. This used to call `RotationGate.check/1` (which selects
+  # `{id, dek_rotation_locked_at}`) and then `get_user!/1` for the full row —
+  # two `users` queries per job for the same row, which is the 2.1/job measured
+  # in prod 2026-08-28. The full row already carries `dek_rotation_locked_at`,
+  # so `check_user/1` answers the same question from the struct we need anyway.
+  #
+  # This is also strictly MORE consistent than the two-query form. With separate
+  # reads, a rotation starting between them let a job pass a pre-rotation check
+  # and then operate on a post-rotation user. Gating on the same struct that
+  # gets used closes that window.
+  #
+  # The moduledoc's advice to prefer `check/1` is about structs loaded LONG
+  # before use (an open socket, a job enqueued seconds before the lock). It does
+  # not apply to one fetched at the top of this job: the read is exactly as
+  # fresh as `check/1` was, and it is the read whose result is actually used.
+  #
+  # `user` is threaded from the caller when it already has one. Resolved once
+  # and passed down from here — the budget gate, the decrypt in run_embed and
+  # both halves of Indexing all take it. Nothing below may re-resolve it.
+  # See #1502.
+  defp run_and_stamp(note, old_path_hmac_b64, job, user \\ nil) do
+    case user || Accounts.get_user(note.user_id) do
+      nil ->
         {:discard, :user_deleted}
 
-      :ok ->
-        # Resolved ONCE per job and threaded from here down. The budget gate,
-        # the decrypt in run_embed and both halves of Indexing all need the
-        # same `%User{}`; each used to fetch its own, so a single note cost up
-        # to four identical `get_user!` round trips (measured 2.1/job in prod
-        # 2026-08-28). Nothing below may re-resolve it. See #1502.
-        user = Accounts.get_user!(note.user_id)
+      user ->
+        case RotationGate.check_user(user) do
+          {:error, :rotation_in_progress} ->
+            :telemetry.execute(
+              [:engram, :crypto, :rotate, :dek, :gate_blocked],
+              %{count: 1},
+              %{gate_path: :worker, op: :embed_note}
+            )
 
-        case embed_budget_gate(note, user) do
+            {:snooze, 60}
+
           :ok ->
-            case run_embed(note, user, old_path_hmac_b64) do
+            case embed_budget_gate(note, user) do
               :ok ->
-                _ = record_embed_tokens(note)
-                :ok
+                case run_embed(note, user, old_path_hmac_b64) do
+                  :ok ->
+                    _ = record_embed_tokens(note)
+                    :ok
 
-              other ->
-                _ = maybe_mark_poison(note, other, job)
-                other
+                  other ->
+                    _ = maybe_mark_poison(note, other, job)
+                    other
+                end
+
+              {:cancel, reason} ->
+                {:cancel, reason}
             end
-
-          {:cancel, reason} ->
-            {:cancel, reason}
         end
     end
   end
