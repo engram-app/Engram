@@ -132,6 +132,86 @@ defmodule EngramWeb.McpControllerTest do
       assert resp["error"]["message"] =~ "Unknown tool"
     end
 
+    # #1491/#1492 — a caller (any MCP client) that sends the wrong argument
+    # name for a required param, e.g. "path" instead of the schema's
+    # "folder", used to silently fall through to the handler's `|| ""`
+    # default and operate on the vault root with no error. Required params
+    # must be validated against inputSchema before the handler ever runs.
+    test "tools/call with a missing required argument returns -32_602, not a silent default", %{
+      conn: conn
+    } do
+      conn = call_tool(conn, "list_folder", %{"path" => "Health"})
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "folder"
+    end
+
+    test "delete_folder with a missing required argument returns -32_602, not a vault-root delete",
+         %{conn: conn} do
+      conn = call_tool(conn, "delete_folder", %{"path" => "Health", "recursive" => true})
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "folder"
+    end
+
+    test "delete_folder with an explicit null for the required argument returns -32_602, not a vault-root delete",
+         %{conn: conn} do
+      conn = call_tool(conn, "delete_folder", %{"folder" => nil, "recursive" => true})
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "folder"
+    end
+
+    test "tools/call with non-object arguments returns -32_602, not a 500", %{conn: conn} do
+      conn = call_tool(conn, "delete_folder", "oops")
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "folder"
+    end
+
+    test "create_folder with the wrong JSON type for a required string arg returns -32_602, not a generic FunctionClauseError",
+         %{conn: conn} do
+      conn = call_tool(conn, "create_folder", %{"folder" => 123})
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "folder"
+    end
+
+    test "get_notes with the wrong JSON type for a required array arg returns -32_602", %{
+      conn: conn
+    } do
+      conn = call_tool(conn, "get_notes", %{"paths" => "Health/Supplements.md"})
+      resp = json_response(conn, 200)
+
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "paths"
+    end
+
+    # Proves the fix lives at the shared dispatch choke point, not as a
+    # per-tool patch that happens to cover list_folder/delete_folder/
+    # create_folder/get_notes and nothing else.
+    test "every tool with required arguments rejects an empty arguments map with -32_602", %{
+      conn: conn
+    } do
+      tools_with_required =
+        Enum.filter(Engram.MCP.Tools.list(), fn t -> (t.inputSchema["required"] || []) != [] end)
+
+      assert tools_with_required != []
+
+      Enum.each(tools_with_required, fn tool ->
+        result_conn = call_tool(conn, tool.name, %{})
+        resp = json_response(result_conn, 200)
+
+        assert resp["error"]["code"] == -32_602,
+               "expected #{tool.name} to reject an empty arguments map, got: #{inspect(resp)}"
+      end)
+    end
+
     test "unauthenticated request returns 401" do
       conn = build_conn()
 
@@ -364,11 +444,14 @@ defmodule EngramWeb.McpControllerTest do
       assert text =~ "folder"
     end
 
+    # Missing (not just empty) required args are now caught at the dispatch
+    # layer, before the handler runs — see #1491/#1492.
     test "rejects missing folder param", %{conn: conn} do
       conn = call_tool(conn, "create_folder", %{})
-      text = tool_text(conn)
+      resp = json_response(conn, 200)
 
-      assert text =~ "folder"
+      assert resp["error"]["code"] == -32_602
+      assert resp["error"]["message"] =~ "folder"
     end
   end
 

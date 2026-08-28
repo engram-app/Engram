@@ -86,16 +86,23 @@ defmodule EngramWeb.McpController do
   defp dispatch(conn, "tools/call", %{"name" => name, "arguments" => args}) do
     case Tools.get(name) do
       {:ok, tool} ->
-        user = conn.assigns.current_user
-        # §E — record origin fingerprint for daily-rollup aggregation.
-        _ = OriginStats.record(user.id, get_req_header_first(conn, "user-agent"))
+        case invalid_required_args(tool, args) do
+          [] ->
+            user = conn.assigns.current_user
+            # §E — record origin fingerprint for daily-rollup aggregation.
+            _ = OriginStats.record(user.id, get_req_header_first(conn, "user-agent"))
 
-        case ConversationMeter.tick(user.id) do
-          {:rate_limited, reason} ->
-            {:error, -32_005, "rate_limited: #{reason}"}
+            case ConversationMeter.tick(user.id) do
+              {:rate_limited, reason} ->
+                {:error, -32_005, "rate_limited: #{reason}"}
 
-          :ok ->
-            dispatch_tool(tool, user, args, conn)
+              :ok ->
+                dispatch_tool(tool, user, args, conn)
+            end
+
+          invalid ->
+            {:error, -32_602,
+             "Invalid or missing required argument(s): #{Enum.join(invalid, ", ")}"}
         end
 
       :error ->
@@ -110,6 +117,41 @@ defmodule EngramWeb.McpController do
   defp dispatch(_conn, _method, _params) do
     {:error, -32_601, "Method not found"}
   end
+
+  # #1491/#1492 — the JSON-RPC layer never checked a call's arguments against
+  # the tool's own advertised inputSchema["required"], so a caller using the
+  # wrong key name (or omitting a required arg) fell through to each
+  # handler's `args["key"] || default` fallback and silently ran against
+  # that default (e.g. vault root) instead of erroring. A key is invalid if
+  # absent, explicitly `null`, or the wrong JSON type for its schema — any
+  # of those would either crash the handler's pattern match or hit its
+  # `|| default` fallback — but an explicit "" stays valid for tools like
+  # list_folder that use it to mean "root". `arguments` itself may not be a
+  # JSON object at all (client sent a string/array/null); guard that so a
+  # malformed call still gets a clean -32602 instead of a BadMapError.
+  defp invalid_required_args(tool, args) when is_map(args) do
+    required = get_in(tool.inputSchema, ["required"]) || []
+    properties = get_in(tool.inputSchema, ["properties"]) || %{}
+
+    Enum.filter(required, fn key ->
+      case Map.get(args, key) do
+        nil -> true
+        value -> not matches_schema_type?(value, get_in(properties, [key, "type"]))
+      end
+    end)
+  end
+
+  defp invalid_required_args(tool, _args) do
+    get_in(tool.inputSchema, ["required"]) || []
+  end
+
+  defp matches_schema_type?(_value, nil), do: true
+  defp matches_schema_type?(value, "string"), do: is_binary(value)
+  defp matches_schema_type?(value, "boolean"), do: is_boolean(value)
+  defp matches_schema_type?(value, "number"), do: is_number(value)
+  defp matches_schema_type?(value, "integer"), do: is_integer(value)
+  defp matches_schema_type?(value, "array"), do: is_list(value)
+  defp matches_schema_type?(value, "object"), do: is_map(value)
 
   defp call_tool(tool, user, vault, args) do
     # engram-app/engram-infra#340 — span emits
