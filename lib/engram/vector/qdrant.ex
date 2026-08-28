@@ -139,13 +139,26 @@ defmodule Engram.Vector.Qdrant do
     # retries — otherwise one transient Qdrant blip would be cached for the
     # life of the node and every subsequent index would fail against a
     # collection that was fine.
-    case pt_fetch(key, fn -> do_ensure_collection(col, dims) end) do
+    # Deliberately NOT `pt_fetch/2`: that helper is read-through and caches
+    # whatever the loader returns, so an error would be written and only then
+    # erased. In the window between those two steps a concurrent caller reads
+    # the cached error and fails WITHOUT attempting the network — turning one
+    # transient Qdrant blip into several. Writing only on success closes that
+    # window rather than cleaning up after it. Same `{__MODULE__, key}`
+    # namespace, so `pt_erase_all/0` still finds these.
+    case :persistent_term.get({__MODULE__, key}, :__miss__) do
       :ok ->
         :ok
 
-      {:error, _} = error ->
-        pt_erase(key)
-        error
+      :__miss__ ->
+        case do_ensure_collection(col, dims) do
+          :ok ->
+            :persistent_term.put({__MODULE__, key}, :ok)
+            :ok
+
+          {:error, _} = error ->
+            error
+        end
     end
   end
 

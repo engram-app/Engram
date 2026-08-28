@@ -136,7 +136,14 @@ defmodule Engram.Workers.EmbedNoteQueryBudgetTest do
     receive do
       {^ref, :hit} -> drain(ref, acc + 1)
     after
-      0 -> acc
+      # NOT 0. Telemetry handlers run in the process that emits the query and
+      # `send/2` to the test process is asynchronous, so a query emitted from a
+      # spawned process can still be in flight when the work returns. With a
+      # zero timeout we would undercount — and for a BUDGET assertion the
+      # dangerous direction is a false PASS, not a false failure. 100ms is long
+      # enough for an already-sent message and still instant in practice, since
+      # the loop only waits once the queue is genuinely drained.
+      100 -> acc
     end
   end
 end
