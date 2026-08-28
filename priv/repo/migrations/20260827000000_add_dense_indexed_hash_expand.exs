@@ -26,7 +26,7 @@ defmodule Engram.Repo.Migrations.AddDenseIndexedHashExpand do
 
   def up do
     alter table(:notes) do
-      add :dense_indexed_hash, :string
+      add :dense_indexed_hash, :text
     end
 
     # `notes` carries FORCE ROW LEVEL SECURITY and the migrator role has no

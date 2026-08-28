@@ -52,6 +52,16 @@ TEST_USER_OVERRIDES = {
     # the cap to unlimited. Tests that need to assert the 1-device gate
     # (test_71 connections cap) do NOT call grant_test_plan.
     "concurrent_devices": -1,
+    # Free is keyword-only (BM25 over Qdrant sparse vectors) and writes no
+    # dense vector at all, so any test that queries the DENSE index — test_50's
+    # binary-quantization round-trip is the direct one — gets 0 results without
+    # this. Tests that need to assert the Free keyword-only behaviour do NOT
+    # call grant_test_plan, so this does not leak to them.
+    "search_semantic_enabled": True,
+    # Free indexes only its first 2,000 notes. -1 lifts the cap so a long-lived
+    # e2e user that accumulates notes across a run cannot silently stop being
+    # searchable partway through the suite.
+    "indexed_notes_cap": -1,
 }
 
 
