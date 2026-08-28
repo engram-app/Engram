@@ -281,7 +281,7 @@ defmodule Engram.Workers.EmbedNote do
 
             case Indexing.index_note(decrypted_note, vault) do
               {:ok, _count} ->
-                stamp_embed_hash(note)
+                stamp_embed_hash(note, user)
                 :ok
 
               # Voyage 429 — back off without burning an Oban attempt. Voyage's
@@ -340,16 +340,14 @@ defmodule Engram.Workers.EmbedNote do
   # the reconciliation cron or the next debounced job will pick up the new version.
   # Also clears any embed_retry_after poison cooldown — a successful embed means
   # the note is no longer broken.
-  defp stamp_embed_hash(%Note{content_hash: nil}), do: :ok
+  defp stamp_embed_hash(%Note{content_hash: nil}, _user), do: :ok
 
-  defp stamp_embed_hash(note) do
+  defp stamp_embed_hash(note, user) do
     # `embed_hash` = "this content is indexed" (keyword and/or dense).
     # `dense_indexed_hash` = "this content has dense vectors in Qdrant", set
     # ONLY when the user was entitled to semantic search at index time. Keeping
     # them separate is what lets ReconcileEmbeddings stay quiet for keyword-only
     # users while still backfilling them the moment they upgrade.
-    user = Accounts.get_user!(note.user_id)
-
     set =
       if SearchProfile.resolve(user).semantic do
         [

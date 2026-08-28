@@ -31,12 +31,15 @@ defmodule Engram.Indexing.IndexCap do
     user = Engram.Accounts.get_user!(note.user_id)
 
     case Billing.effective_limit(user, :indexed_notes_cap) do
-      cap when is_integer(cap) and cap >= 0 -> rank_of(note) < cap
+      cap when is_integer(cap) and cap >= 0 ->
+        rank_below_cap?(note, cap)
+
       # -1 is this codebase's "unlimited" sentinel (see check_limit/3 and
       # normalize_capability/2), and it is what the e2e overrides use. Without
       # this clause `rank < -1` is false for every note and NOTHING gets
       # indexed — the exact inversion the LimitKeys moduledoc warns about.
-      _ -> true
+      _ ->
+        true
     end
   end
 
@@ -156,20 +159,39 @@ defmodule Engram.Indexing.IndexCap do
     :ok
   end
 
-  # Live notes this user created BEFORE this one. Ties on created_at break by
-  # id so the rank is stable rather than flapping between two notes written in
-  # the same microsecond — which is common during a bulk first sync.
-  defp rank_of(%Note{} = note) do
-    Repo.one(
+  # True when fewer than `cap` live notes are older than this one.
+  #
+  # Deliberately a BOUNDED count, not `count(*)`: this runs once per indexed
+  # note, so an unbounded rank scan makes a bulk import O(N^2) — 1,000 notes
+  # meant 1,000 full scans over a growing table, which timed out the 120s
+  # bulk-first-sync e2e. `LIMIT cap` caps each scan at `cap` index rows no
+  # matter how large the vault is, and the common case (a user well under the
+  # cap) stops early because there simply are not that many older rows.
+  #
+  # An earlier version short-circuited on `usage_meters.notes_count`, which is
+  # O(1) — but that counter is maintained at only three call sites, and an
+  # UNDER-count silently admits everything. Wrong direction for a billing cap,
+  # and worst exactly during a bulk import. The source of truth stays the rows.
+  #
+  # Ties on created_at break by id so the rank is stable rather than flapping
+  # between two notes written in the same microsecond, which is common during a
+  # bulk first sync.
+  defp rank_below_cap?(%Note{} = note, cap) do
+    older =
       from(n in Note,
         where: n.user_id == ^note.user_id and n.kind == "note" and is_nil(n.deleted_at),
         where:
           n.created_at < ^note.created_at or
             (n.created_at == ^note.created_at and n.id < ^note.id),
-        select: count(n.id)
-      ),
-      skip_tenant_check: true
-    ) || 0
+        order_by: [asc: n.created_at, asc: n.id],
+        limit: ^cap,
+        select: n.id
+      )
+
+    count =
+      Repo.one(from(o in subquery(older), select: count(o.id)), skip_tenant_check: true) || 0
+
+    count < cap
   end
 
   defp live_note_count(user_id) do
