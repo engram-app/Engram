@@ -197,8 +197,14 @@ defmodule Engram.Search do
   asked for — an explicit `?mode=vector`, an MCP tool arg, or the `:vector`
   default all collapse to keyword-only. Pure so the gate is testable without
   Qdrant.
+
+  Typed `term() -> term()` on purpose. `:mode` is caller-supplied external
+  input, so an unrecognised value has to pass through to `run_legs/5`'s
+  invalid-mode clause and become `{:error, :invalid_mode}`. Narrowing this spec
+  to the three valid atoms lets dialyzer prove that clause unreachable, which
+  deletes the guard protecting us from a bad MCP arg.
   """
-  @spec effective_mode(atom(), SearchProfile.t()) :: :vector | :keyword | :hybrid
+  @spec effective_mode(term(), SearchProfile.t()) :: term()
   def effective_mode(_requested, %SearchProfile{semantic: false}), do: :keyword
   def effective_mode(requested, %SearchProfile{}), do: requested
 

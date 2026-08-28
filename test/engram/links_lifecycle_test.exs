@@ -25,6 +25,7 @@ defmodule Engram.LinksLifecycleTest do
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
+    :ok = Engram.Fixtures.grant_semantic!(user)
     vault = insert(:vault, user: user)
 
     %{user: user, vault: vault, bypass: bypass}

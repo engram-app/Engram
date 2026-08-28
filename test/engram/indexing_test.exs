@@ -16,6 +16,7 @@ defmodule Engram.IndexingTest do
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
     user = insert(:user)
+    :ok = Engram.Fixtures.grant_semantic!(user)
     vault = insert(:vault, user: user)
 
     {:ok, note} =
@@ -188,6 +189,7 @@ defmodule Engram.IndexingTest do
     test "encrypts text/title/heading_path in Qdrant payload", %{bypass: bypass, user: user} do
       DekCache.invalidate_all()
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      :ok = Engram.Fixtures.grant_semantic!(user)
       vault = insert(:vault, user: user)
 
       {:ok, note} =
@@ -242,6 +244,7 @@ defmodule Engram.IndexingTest do
          %{bypass: bypass, user: user} do
       DekCache.invalidate_all()
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      :ok = Engram.Fixtures.grant_semantic!(user)
       vault = insert(:vault, user: user)
 
       {:ok, note} =
@@ -296,6 +299,7 @@ defmodule Engram.IndexingTest do
          %{bypass: bypass, user: user} do
       DekCache.invalidate_all()
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      :ok = Engram.Fixtures.grant_semantic!(user)
       vault = insert(:vault, user: user)
 
       {:ok, note} =
@@ -350,6 +354,7 @@ defmodule Engram.IndexingTest do
       # The [:engram, :indexing, :encrypt_failed] metric must still fire so the
       # "DEK-missing-at-index-time" counter doesn't silently read zero.
       user = insert(:user)
+      :ok = Engram.Fixtures.grant_semantic!(user)
       vault = insert(:vault, user: user)
 
       {:ok, note} =
@@ -413,6 +418,7 @@ defmodule Engram.IndexingTest do
       # mutation.
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      :ok = Engram.Fixtures.grant_semantic!(user)
       vault = insert(:vault, user: user)
 
       {:ok, note} =
@@ -488,6 +494,7 @@ defmodule Engram.IndexingTest do
       # every re-index → orphaned ghost chunks accumulate per edit.
       DekCache.invalidate_all()
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      :ok = Engram.Fixtures.grant_semantic!(user)
       vault = insert(:vault, user: user)
 
       {:ok, note} =
@@ -590,6 +597,7 @@ defmodule Engram.IndexingTest do
 
     test "repath_points PATCHes current path/folder hmac onto old-path points", %{bypass: bypass} do
       user = insert(:user)
+      :ok = Engram.Fixtures.grant_semantic!(user)
       vault = insert(:vault, user: user)
 
       note = %Engram.Notes.Note{
@@ -620,6 +628,7 @@ defmodule Engram.IndexingTest do
 
     test "count_points_by_path_hmac returns the count", %{bypass: bypass} do
       user = insert(:user)
+      :ok = Engram.Fixtures.grant_semantic!(user)
       vault = insert(:vault, user: user)
       note = %Engram.Notes.Note{id: Ecto.UUID.generate(), user_id: user.id, vault_id: vault.id}
 

@@ -9,6 +9,7 @@ defmodule EngramWeb.SearchControllerTest do
   setup %{conn: conn} do
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    :ok = Engram.Fixtures.grant_semantic!(user)
     vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     grant_api_write!(user)

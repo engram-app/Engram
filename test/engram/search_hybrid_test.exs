@@ -14,6 +14,7 @@ defmodule Engram.SearchHybridTest do
     bypass = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
     {:ok, user} = insert(:user) |> Engram.Crypto.ensure_user_dek()
+    :ok = Engram.Fixtures.grant_semantic!(user)
     vault = insert(:vault, user: user)
     %{bypass: bypass, user: user, vault: vault}
   end

@@ -29,7 +29,17 @@ defmodule Engram.Repo.Migrations.AddDenseIndexedHashExpand do
       add :dense_indexed_hash, :string
     end
 
-    execute "UPDATE notes SET dense_indexed_hash = embed_hash WHERE embed_hash IS NOT NULL"
+    # `notes` carries FORCE ROW LEVEL SECURITY and the migrator role has no
+    # tenant context, so a bare UPDATE here filters to ZERO rows on prod while
+    # passing silently in dev/CI (superuser bypasses RLS). Left unwrapped, every
+    # existing note would keep a NULL dense_indexed_hash and ReconcileEmbeddings
+    # would re-embed the entire corpus of every paying user. Caught by
+    # Engram.MigrationRlsLintTest.
+    execute("ALTER TABLE notes NO FORCE ROW LEVEL SECURITY")
+
+    execute("UPDATE notes SET dense_indexed_hash = embed_hash WHERE embed_hash IS NOT NULL")
+
+    execute("ALTER TABLE notes FORCE ROW LEVEL SECURITY")
   end
 
   def down do

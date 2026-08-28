@@ -15,19 +15,6 @@ defmodule Engram.Workers.EmbedNoteTest do
 
   setup :verify_on_exit!
 
-  defp grant_semantic!(user) do
-    Engram.Repo.insert!(%Engram.Billing.UserLimitOverride{
-      user_id: user.id,
-      key: "search_semantic_enabled",
-      value: %{"v" => true},
-      reason: "test fixture: exercise the dense embed path",
-      set_by: "test"
-    })
-
-    Engram.Billing.OverrideCache.evict(user.id)
-    :ok
-  end
-
   setup do
     bypass = Bypass.open()
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
@@ -38,7 +25,7 @@ defmodule Engram.Workers.EmbedNoteTest do
     # Factory users resolve to the Free tier, which is keyword-only and never
     # calls the embedder. Every test in this file exercises the DENSE path, so
     # the fixture user has to be one that is actually entitled to it.
-    :ok = grant_semantic!(user)
+    :ok = Engram.Fixtures.grant_semantic!(user)
     vault = insert(:vault, user: user)
 
     # Phase B.3 requires Phase B ciphertext on every note row, so go through
@@ -313,7 +300,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       user = insert(:user)
       {:ok, user} = Crypto.ensure_user_dek(user)
-      :ok = grant_semantic!(user)
+      :ok = Engram.Fixtures.grant_semantic!(user)
       vault = insert(:vault, user: user)
 
       # upsert_note encrypts content on the way in
