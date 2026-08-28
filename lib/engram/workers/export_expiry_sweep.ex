@@ -29,6 +29,9 @@ defmodule Engram.Workers.ExportExpirySweep do
   require Logger
 
   @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(15)
+
+  @impl Oban.Worker
   def perform(_job) do
     adapter = Engram.Storage.adapter()
     now = DateTime.utc_now()

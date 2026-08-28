@@ -38,7 +38,14 @@ defmodule EngramWeb.CrdtChannelRelayTest do
   defp dead_pid do
     pid = spawn(fn -> :ok end)
     ref = Process.monitor(pid)
-    assert_receive {:DOWN, ^ref, :process, ^pid, _}, 1_000
+    # 10s, not 1s. Nothing here is a latency assertion — every test in this
+    # file asserts SURVIVAL and a return shape. The bound only has to outlast
+    # scheduling, and `dead_pid/0` is called from inside a spawned process in
+    # the test below, where a miss raises in that process and surfaces as the
+    # test's own `assert_receive` timing out against an empty mailbox. On a
+    # loaded box that reads as "relay_frame took its caller down", which is the
+    # opposite of what happened.
+    assert_receive {:DOWN, ^ref, :process, ^pid, _}, 10_000
     refute Process.alive?(pid)
     pid
   end
@@ -63,7 +70,7 @@ defmodule EngramWeb.CrdtChannelRelayTest do
         receive do: (:stop -> :ok)
       end)
 
-    assert_receive {:result, {:error, :room_unavailable}}, 2_000
+    assert_receive {:result, {:error, :room_unavailable}}, 10_000
     assert Process.alive?(caller), "relay_frame took its caller down with the dead room"
     send(caller, :stop)
   end

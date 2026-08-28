@@ -158,12 +158,34 @@ defmodule Engram.Billing do
   """
   def check_limit(user, key, current_count) do
     case effective_limit(user, key) do
-      :unlimited -> :ok
-      nil -> :ok
-      -1 -> :ok
+      limit when limit in [:unlimited, nil, -1] -> :ok
       limit when is_integer(limit) and current_count < limit -> :ok
       _ -> {:error, :limit_reached}
     end
+  end
+
+  @doc """
+  Whether `key` imposes a real ceiling on this user.
+
+  `check_limit/3` answers `:ok` for `:unlimited`, `nil` and `-1` **without ever
+  reading `current_count`** — so a caller that computes an expensive count and
+  then passes it in has done that work for nothing whenever the cap does not
+  apply. On the embed path that was one `usage_meters` aggregate per job for
+  every Starter/Pro user, since the resolver returns `nil` for unmetered plans.
+
+  Call this first and skip measuring when it returns `false`:
+
+      if Billing.limit_enforced?(user, :some_cap) do
+        case Billing.check_limit(user, :some_cap, expensive_count()) do
+  ...
+
+  Shares `effective_limit/2` with `check_limit/3` so the two cannot disagree
+  about what "unlimited" means — the predicate exists to reorder the work, not
+  to re-encode the rule. `BillingLimitPredicateTest` pins that agreement.
+  """
+  @spec limit_enforced?(term(), atom()) :: boolean()
+  def limit_enforced?(user, key) when is_atom(key) do
+    effective_limit(user, key) not in [:unlimited, nil, -1]
   end
 
   @doc """

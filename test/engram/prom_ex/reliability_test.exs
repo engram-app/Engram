@@ -68,6 +68,18 @@ defmodule Engram.PromEx.ReliabilityTest do
       assert :error_kind in tags
     end
 
+    # #1496: the discard counter is a LAGGING indicator — on `embed` it only
+    # moves after five attempts of exponential backoff, hours after the queue
+    # has stopped. Timeouts are the leading one, and occupancy metrics show
+    # nothing at all while slots are held (`executing` pinned at the limit
+    # reads as healthy). `job_id` is deliberately not a tag: unbounded.
+    test "counts Oban timeouts tagged by worker/queue (not job_id)" do
+      assert %{tags: tags} = counter_for([:engram, :oban, :timeout])
+      assert :worker in tags
+      assert :queue in tags
+      refute :job_id in tags
+    end
+
     # #1004: the pacer already emitted [:engram, :fanout_pacer, :drain] but
     # nothing exported it, so a cold queue backing up in prod was invisible.
     # These are last_value gauges, not counters — depth is a level, not a rate.

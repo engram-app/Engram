@@ -13,6 +13,13 @@ defmodule Engram.SearchHybridTest do
   setup do
     bypass = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+
+    # The search path's prod budget is 5s (`:qdrant_search_timeout`), tuned for
+    # a real network. These tests assert query SHAPE, and a localhost Bypass
+    # round trip can pass 5s through pure scheduler starvation on a loaded box
+    # — surfacing as `%Req.TransportError{reason: :timeout}`, which reads like
+    # a query-construction bug.
+    ServiceConfig.put_override(:qdrant_search_timeout, 30_000)
     {:ok, user} = insert(:user) |> Engram.Crypto.ensure_user_dek()
     :ok = Engram.Fixtures.grant_semantic!(user)
     vault = insert(:vault, user: user)

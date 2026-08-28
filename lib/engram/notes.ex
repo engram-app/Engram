@@ -601,7 +601,11 @@ defmodule Engram.Notes do
     # matches the COUNT(*) approach it replaced (same TOCTOU window) and is fine
     # for a soft abuse-deterrent cap. A hard cap would need a conditional
     # UPDATE ... WHERE notes_count < limit gating the insert.
-    current_count = UsageMeters.notes_count(user.id)
+    # `nil` when the plan is unmetered: `check_limit/3` ignores the count there,
+    # so the COUNT is pure waste on every create. The cap branch below guards on
+    # the nil rather than calling check_limit with it. See #1502.
+    current_count =
+      if Billing.limit_enforced?(user, :notes_cap), do: UsageMeters.notes_count(user.id)
 
     cond do
       recently_deleted_twin?(user, base_attrs.vault_id, sanitized_path, base_attrs.content_hash) ->
@@ -613,7 +617,8 @@ defmodule Engram.Notes do
         # reaches here — it takes move_note's branch on a client-id match.
         {:error, :recently_deleted}
 
-      match?({:error, :limit_reached}, Billing.check_limit(user, :notes_cap, current_count)) ->
+      current_count &&
+          match?({:error, :limit_reached}, Billing.check_limit(user, :notes_cap, current_count)) ->
         # Free-tier launch §4.5 — carry the resolved limit + current count
         # back to the controller so the 402 body can populate them. The
         # resolver call here is the same one check_limit already made
@@ -1504,9 +1509,13 @@ defmodule Engram.Notes do
       updated_at: now
     }
 
-    current_count = UsageMeters.notes_count(user.id)
+    # `nil` when the plan is unmetered — `check_limit/3` would ignore the count,
+    # so skip the COUNT rather than compute and discard it. See #1502.
+    current_count =
+      if Billing.limit_enforced?(user, :notes_cap), do: UsageMeters.notes_count(user.id)
 
-    if match?({:error, :limit_reached}, Billing.check_limit(user, :notes_cap, current_count)) do
+    if current_count &&
+         match?({:error, :limit_reached}, Billing.check_limit(user, :notes_cap, current_count)) do
       limit = Billing.effective_limit(user, :notes_cap)
       {:error, {:notes_cap_reached, limit, current_count}}
     else
@@ -3662,6 +3671,17 @@ defmodule Engram.Notes do
   defp check_batch_notes_cap!(_user, 0), do: :ok
 
   defp check_batch_notes_cap!(user, to_insert) do
+    # Resolve the cap before counting. `check_limit/3` ignores `current_count`
+    # entirely when the plan is unmetered, so on Starter/Pro this COUNT was
+    # computed and discarded on every batch insert. See #1502.
+    if Billing.limit_enforced?(user, :notes_cap) do
+      enforce_batch_notes_cap!(user, to_insert)
+    else
+      :ok
+    end
+  end
+
+  defp enforce_batch_notes_cap!(user, to_insert) do
     current_count = UsageMeters.notes_count(user.id)
 
     case Billing.check_limit(user, :notes_cap, current_count + to_insert - 1) do

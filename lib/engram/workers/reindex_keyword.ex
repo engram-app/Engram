@@ -20,6 +20,9 @@ defmodule Engram.Workers.ReindexKeyword do
   alias Engram.Workers.EmbedNote
 
   @spec enqueue(Ecto.UUID.t()) :: :ok | {:error, term()}
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(10)
+
   def enqueue(vault_id) do
     case %{vault_id: to_string(vault_id)} |> new() |> Oban.insert() do
       {:ok, _job} -> :ok

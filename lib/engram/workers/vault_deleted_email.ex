@@ -18,6 +18,9 @@ defmodule Engram.Workers.VaultDeletedEmail do
 
   @retention_days 30
 
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(15)
+
   def enqueue(user_id, vault_id) do
     %{user_id: user_id, vault_id: vault_id}
     |> new()

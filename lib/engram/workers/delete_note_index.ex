@@ -16,6 +16,9 @@ defmodule Engram.Workers.DeleteNoteIndex do
   alias Engram.Notes.Enqueue
   alias Engram.Workers.RebindNoteLinks
 
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(5)
+
   # T3.7 — NO rotation gate needed here. `Indexing.delete_note_index/1` only
   # uses `path_hmac` as a filter key to delete Qdrant points and DB chunk rows;
   # `Links.on_note_soft_deleted/2` is raw SQL (no decrypt). Neither touches

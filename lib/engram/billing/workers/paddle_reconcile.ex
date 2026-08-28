@@ -21,6 +21,9 @@ defmodule Engram.Billing.Workers.PaddleReconcile do
     unique: [period: 60, fields: [:worker]]
 
   @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(15)
+
+  @impl Oban.Worker
   def perform(_job) do
     result = Engram.Billing.Reconciliation.run(7)
     outcome = result.skipped || :ok

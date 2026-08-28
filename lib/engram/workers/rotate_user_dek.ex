@@ -36,6 +36,25 @@ defmodule Engram.Workers.RotateUserDek do
 
   alias Engram.Crypto.UserDekRotation
 
+  # 60 min, the Lifeline `rescue_after` ceiling — the longest value that is
+  # not dead code. Generous because this queue is operator-triggered and
+  # not user-facing, so a held slot costs little.
+  #
+  # A kill here is survivable but not free. The note sweep is designed to
+  # resume: `dek_version_pending` is written in its own transaction as a
+  # crash marker before the flip, so a retry picks up where it stopped.
+  # The ATTACHMENT phase is not — a crash mid-attachment leaves
+  # `:half_state_pending`, which `RotationLock.acquire/1` then refuses
+  # until an operator clears it by hand. The lock itself never strands:
+  # it is a `pg_advisory_xact_lock`, released with its transaction.
+  #
+  # Note the mismatch this exposes: `RotationLock` treats a lock older
+  # than 10 minutes as stale and steals it, so a rotation running longer
+  # than that is already unprotected regardless of this timeout. See
+  # #1496 for the timeout and #1507 for that gap.
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(60)
+
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id}, attempt: attempt})
       when is_binary(user_id) do

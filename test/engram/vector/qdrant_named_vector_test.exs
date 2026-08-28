@@ -7,6 +7,15 @@ defmodule Engram.Vector.QdrantNamedVectorTest do
   setup do
     bypass = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+
+    # The search path's prod budget is 5s (`:qdrant_search_timeout`), which is
+    # tuned for a real network and is not what these tests are about — they
+    # assert the request SHAPE (named vectors in, `using: "dense"` out). On a
+    # box running the suite under load a localhost Bypass round trip can pass
+    # 5s through pure scheduler starvation, which then fails as a
+    # `%Req.TransportError{reason: :timeout}` and reads like a routing bug.
+    ServiceConfig.put_override(:qdrant_search_timeout, 30_000)
+
     %{bypass: bypass}
   end
 

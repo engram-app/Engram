@@ -9,6 +9,9 @@ defmodule Engram.Workers.CleanupDeviceAuthWorker do
   alias Engram.OAuth
 
   @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(15)
+
+  @impl Oban.Worker
   def perform(%Oban.Job{}) do
     _ = DeviceFlow.cleanup_expired()
     _ = OAuth.cleanup_expired()

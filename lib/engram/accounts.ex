@@ -17,6 +17,45 @@ defmodule Engram.Accounts do
 
   def get_user(id), do: Repo.get(User, id, skip_tenant_check: true)
 
+  @doc """
+  Load a user with `:subscription` already populated, in ONE query.
+
+  `Billing.get_subscription/1` short-circuits when the association is loaded and
+  otherwise queries — and `tier/1` calls it, so every `effective_limit/2` on a
+  bare `get_user/1` struct costs a `subscriptions` round trip. A worker that
+  checks a limit even twice therefore pays for two.
+
+  `left_join` + `preload` rather than `Repo.preload/2`: the latter issues a
+  SECOND query, which is the cost this exists to remove. A user with no
+  subscription gets `nil`, which `get_subscription/1` also treats as loaded — so
+  the free tier benefits too rather than falling through to a query.
+
+  For request paths that never consult a limit, prefer `get_user/1`; the join is
+  only worth it when something downstream will ask about entitlements.
+  """
+  @spec get_user_with_subscription(Ecto.UUID.t()) :: User.t() | nil
+  def get_user_with_subscription(id) do
+    Repo.one(with_subscription_query(id), skip_tenant_check: true)
+  end
+
+  @doc """
+  `get_user_with_subscription/1` that raises, for callers replacing a
+  `get_user!/1` and relying on a missing user being an error rather than a
+  `nil` that flows onward.
+  """
+  @spec get_user_with_subscription!(Ecto.UUID.t()) :: User.t()
+  def get_user_with_subscription!(id) do
+    Repo.one!(with_subscription_query(id), skip_tenant_check: true)
+  end
+
+  defp with_subscription_query(id) do
+    from(u in User,
+      where: u.id == ^id,
+      left_join: s in assoc(u, :subscription),
+      preload: [subscription: s]
+    )
+  end
+
   # ── Clerk Auth ─────────────────────────────────────────────────
 
   @doc """
