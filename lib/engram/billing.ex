@@ -718,6 +718,15 @@ defmodule Engram.Billing do
               Engram.Auth.SessionInvalidator.disconnect_user(updated.user_id)
             end
 
+            # NOTE: no IndexCap.revoke_dense_index/1 here, unlike the
+            # subscription.canceled clause. A past_due/paused status makes
+            # tier/1 resolve to :free, so this user IS keyword-only right now —
+            # but dropping their dense vectors would re-embed their entire vault
+            # on a transient dunning state, and again when payment recovers.
+            # Paddle's dunning window is bounded and ends in
+            # subscription.canceled, which does revoke. Trading a bounded window
+            # of stale vectors for avoiding two full re-embeds per failed charge.
+
             {:ok, updated}
 
           err ->
