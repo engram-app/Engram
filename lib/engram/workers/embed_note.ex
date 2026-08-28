@@ -148,6 +148,20 @@ defmodule Engram.Workers.EmbedNote do
   # token budget. Resolver returns nil for Starter/Pro (unmetered), so this is
   # effectively Free-only. Per-user overrides via Billing.UserLimitOverride.
   defp embed_budget_gate(%Note{user_id: user_id} = note, %{} = user) do
+    # Resolve the cap BEFORE measuring usage. `check_limit/3` answers `:ok` for
+    # `:unlimited`/`nil`/`-1` without ever reading `current_count`, and the
+    # resolver returns `nil` for Starter/Pro — so for every paying user the
+    # `lifetime_embed_tokens/1` aggregate below was computed and thrown away,
+    # once per job. On a 1.4k-note import that is 1.4k wasted aggregates.
+    # See #1502.
+    if Billing.limit_enforced?(user, :lifetime_embed_token_cap) do
+      enforce_embed_budget(note, user, user_id)
+    else
+      :ok
+    end
+  end
+
+  defp enforce_embed_budget(note, user, user_id) do
     current = UsageMeters.lifetime_embed_tokens(user_id)
     estimated = estimate_note_tokens(note)
 
