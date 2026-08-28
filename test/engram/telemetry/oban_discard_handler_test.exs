@@ -26,6 +26,84 @@ defmodule Engram.Telemetry.ObanDiscardHandlerTest do
     :ok
   end
 
+  describe "handle_event/4 — timeouts" do
+    # A timeout on a NON-final attempt used to be silent: the discard clause
+    # only fires once `max_attempts` is burned, which on `embed` (5 attempts,
+    # exponential backoff) is hours after the queue has already stopped. The
+    # 2026-08-28 prod stall was exactly that hole — both queues fully occupied,
+    # zero log lines anywhere. See #1496.
+    test "logs a warning and emits [:engram, :oban, :timeout] on the FIRST attempt" do
+      test_pid = self()
+      key = {__MODULE__, :timeout, test_pid}
+
+      :telemetry.attach(
+        key,
+        [:engram, :oban, :timeout],
+        fn _name, measurements, metadata, _config ->
+          send(test_pid, {:timeout_emitted, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(key) end)
+
+      metadata = %{
+        # NOT :discarded — attempt 1 of 5, which is the case that was silent.
+        state: :failure,
+        worker: "Engram.Workers.EmbedNote",
+        queue: :embed,
+        job: %{id: 42, args: %{"note_id" => 7}, attempt: 1, max_attempts: 5},
+        kind: :exit,
+        reason: %Oban.TimeoutError{
+          message: "Engram.Workers.EmbedNote timed out after 600000ms",
+          reason: :timeout
+        }
+      }
+
+      logs =
+        capture_log(fn ->
+          :telemetry.execute(
+            [:oban, :job, :exception],
+            %{duration: System.convert_time_unit(600_000, :millisecond, :native)},
+            metadata
+          )
+
+          Process.sleep(10)
+        end)
+
+      assert logs =~ "Oban job timed out"
+      assert logs =~ "Engram.Workers.EmbedNote"
+      assert logs =~ "attempt=1/5"
+      assert logs =~ "ran_ms=600000"
+
+      assert_received {:timeout_emitted, %{count: 1}, m}
+      assert m.worker == "Engram.Workers.EmbedNote"
+      assert m.queue == :embed
+    end
+
+    # Clause order matters: a timeout that also exhausts max_attempts must read
+    # as the terminal fact, not as one more timeout among five.
+    test "a timeout on the FINAL attempt logs the discard, not the timeout" do
+      metadata = %{
+        state: :discarded,
+        worker: "Engram.Workers.EmbedNote",
+        queue: :embed,
+        job: %{id: 43, args: %{}, attempt: 5, max_attempts: 5},
+        kind: :exit,
+        reason: %Oban.TimeoutError{message: "timed out after 600000ms", reason: :timeout}
+      }
+
+      logs =
+        capture_log(fn ->
+          :telemetry.execute([:oban, :job, :exception], %{duration: 1_000}, metadata)
+          Process.sleep(10)
+        end)
+
+      assert logs =~ "Oban job discarded"
+      refute logs =~ "Oban job timed out"
+    end
+  end
+
   describe "handle_event/4 — discarded jobs" do
     test "logs a warning and re-emits [:engram, :oban, :discarded] when state is :discarded" do
       measurements = %{duration: 1_000, queue_time: 0}

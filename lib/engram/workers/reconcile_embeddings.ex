@@ -33,6 +33,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   @batch_size 500
 
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(15)
+
   # T3.7 — NO rotation gate needed here. This worker only queries note IDs and
   # enqueues `EmbedNote` jobs — it never decrypts or re-encrypts any payload.
   # The enqueued EmbedNote workers are individually gated via `RotationGate`.

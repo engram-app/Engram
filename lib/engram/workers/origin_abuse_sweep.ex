@@ -20,6 +20,9 @@ defmodule Engram.Workers.OriginAbuseSweep do
   @consecutive 3
 
   @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(5)
+
+  @impl Oban.Worker
   def perform(%Oban.Job{}) do
     case OriginStats.users_exceeding_cap(@cap, @consecutive) do
       [] ->

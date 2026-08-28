@@ -34,6 +34,13 @@ defmodule Engram.Workers.AccountExport do
   # blobs.
   @ready_ttl_seconds 7 * 86_400
 
+  # 60 min, the Lifeline `rescue_after` ceiling. This walks every row it
+  # owns, and none of the long queues (crypto_backfill/export/cleanup) is
+  # user-facing — a slot held here costs nothing, while a kill mid-rotation
+  # costs a lot. Finite is the point, not tight. See #1496.
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(60)
+
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"export_id" => id}}) do
     with {:ok, export} <- fetch_for_worker(id),

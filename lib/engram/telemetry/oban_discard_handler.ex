@@ -4,10 +4,15 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
   and re-emits a `[:engram, :oban, :discarded]` counter event.
 
   Oban emits `[:oban, :job, :exception]` for every job that ends in failure,
-  cancellation, snooze, or discard. We only act on `state: :discarded` — the
-  terminal state where Oban has burned `max_attempts` and dropped the work.
-  These are the cases that need attention; transient `:failure` retries are
-  expected and noisy.
+  cancellation, snooze, or discard. We act on two of them:
+
+    * `state: :discarded` — the terminal state where Oban has burned
+      `max_attempts` and dropped the work. Transient `:failure` retries are
+      expected and noisy, so they are otherwise ignored.
+
+    * any attempt whose reason is an `Oban.TimeoutError` — a wedged job, which
+      must be visible on the FIRST attempt rather than hours later when the
+      retries run out. See #1496.
 
   Wires from `Engram.Application.start/2` so the handler is live for the
   lifetime of the VM. The `@handler_id` atom is global; any test attaching
@@ -75,6 +80,52 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
       [:engram, :oban, :discarded],
       %{count: 1},
       %{worker: worker, queue: queue, job_id: Map.get(job, :id), error_kind: error_kind}
+    )
+  end
+
+  @doc false
+  # A TIMEOUT on any attempt, not just the last one.
+  #
+  # This clause exists because of the 2026-08-28 prod stall (#1496): the
+  # `embed` and `indexing` queues were fully occupied by jobs that would never
+  # finish, and nothing anywhere emitted a single line. Timeouts were only
+  # visible once a job burned all `max_attempts` and reached `:discarded` —
+  # five attempts of exponential backoff later, i.e. hours after the queue had
+  # already stopped. The whole point of giving workers a finite `timeout/1` is
+  # to make a wedged job observable, so the FIRST timeout has to say so.
+  #
+  # Not noisy by construction: a timeout means a job ran past 5-60 minutes.
+  # If these ever become frequent, that is the signal, not the noise.
+  #
+  # `:discarded` is matched above, so a timeout on the final attempt logs the
+  # discard line rather than this one — the terminal state is the louder fact.
+  def handle_event(@event, measurements, %{reason: %Oban.TimeoutError{}} = metadata, _config) do
+    worker = metadata[:worker]
+    queue = metadata[:queue]
+    job = metadata[:job] || %{}
+
+    # `duration` is native time units, and is how long the job actually ran —
+    # which is the configured timeout, so it tells an operator which ceiling
+    # was hit without reading the exception message.
+    ran_ms = System.convert_time_unit(measurements[:duration] || 0, :native, :millisecond)
+
+    Logger.warning(
+      "Oban job timed out: worker=#{worker} queue=#{inspect(queue)} job_id=#{inspect(Map.get(job, :id))} attempt=#{inspect(Map.get(job, :attempt))}/#{inspect(Map.get(job, :max_attempts))} ran_ms=#{ran_ms}",
+      Engram.Logger.Metadata.with_category(:warning, :oban,
+        worker: worker,
+        queue: queue,
+        job_id: Map.get(job, :id),
+        attempt: Map.get(job, :attempt),
+        max_attempts: Map.get(job, :max_attempts),
+        ran_ms: ran_ms,
+        reason_label: :oban_timeout
+      )
+    )
+
+    :telemetry.execute(
+      [:engram, :oban, :timeout],
+      %{count: 1, ran_ms: ran_ms},
+      %{worker: worker, queue: queue, job_id: Map.get(job, :id)}
     )
   end
 

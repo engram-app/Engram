@@ -38,6 +38,9 @@ defmodule Engram.Workers.RepathNoteIndex do
 
   require Logger
 
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(10)
+
   @doc """
   Build a deduped job. `old_path_hmac` is the base64 HMAC of the pre-rename
   path (T3.2 — never plaintext). Scheduled a few seconds out so the rename

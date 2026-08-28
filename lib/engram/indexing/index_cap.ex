@@ -30,9 +30,15 @@ defmodule Engram.Indexing.IndexCap do
   Uncapped tiers (`nil` / `:unlimited`) short-circuit without touching the DB —
   this runs on every index, so the paid path must stay free.
   """
-  @spec within_cap?(Note.t()) :: boolean()
-  def within_cap?(%Note{} = note) do
-    user = Engram.Accounts.get_user!(note.user_id)
+  # Takes the caller's `%User{}` when it has one. This runs on EVERY index and
+  # the caller (`Indexing.prepare_index/3`) has already resolved the same row,
+  # so fetching our own made the "must stay free" claim above false by one
+  # `users` query per note — and one `subscriptions` query too, since a bare
+  # `get_user!/1` struct has no association loaded for `effective_limit/2` to
+  # read. See #1502.
+  @spec within_cap?(Note.t(), Engram.Accounts.User.t() | nil) :: boolean()
+  def within_cap?(%Note{} = note, user \\ nil) do
+    user = user || Engram.Accounts.get_user!(note.user_id)
 
     case resolve_cap(user) do
       {:cap, cap} -> rank_below_cap?(note, cap)

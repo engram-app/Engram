@@ -46,6 +46,9 @@ defmodule Engram.Workers.RebindNoteLinks do
   alias Engram.Vaults.Vault
   alias Engram.Workers.BackgroundPriority
 
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(5)
+
   @doc """
   Builds a rebind job for the raw `basename_hmac` bytes within `vault_id`.
 

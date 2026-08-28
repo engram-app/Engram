@@ -34,11 +34,23 @@ defmodule Engram.Indexing do
   embedding call outside a transaction can call those two directly and run the
   commit step inside a per-note `Repo.with_tenant/2`.
   """
-  def index_note(note, %Engram.Vaults.Vault{} = vault) do
-    case prepare_index(note, vault) do
-      {:ok, {:no_chunks, link_rows}} ->
-        user = Engram.Accounts.get_user!(note.user_id)
+  def index_note(note, %Engram.Vaults.Vault{} = vault, user \\ nil) do
+    # Resolve identity ONCE for the whole call. This function and
+    # prepare_index/3 below both need the same `%User{}`, and both used to
+    # fetch it independently — on the embed path that made four `get_user!`
+    # round trips for one note (here, prepare_index, and twice more in
+    # EmbedNote). Measured 2.1 users/job in prod on 2026-08-28. The argument is
+    # optional so the six test modules and any future caller can keep passing
+    # two args; the hot path passes the user it already has.
+    #
+    # `_with_subscription`: everything downstream asks about a limit —
+    # `IndexCap.within_cap?/2` and `SearchProfile.resolve/1` each resolve the
+    # tier — and on a bare `get_user!/1` struct that is one `subscriptions`
+    # query apiece. The join folds both into this fetch. See #1502.
+    user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
 
+    case prepare_index(note, vault, user) do
+      {:ok, {:no_chunks, link_rows}} ->
         case Engram.Crypto.get_dek(user) do
           {:ok, _dek} ->
             # `:no_chunks` means this note must end up with ZERO index
@@ -85,23 +97,22 @@ defmodule Engram.Indexing do
     * `{:ok, prepared}` — ready to hand to `commit_index/1`
     * `{:error, reason}` — embed failed, encryption failed, etc.
   """
-  def prepare_index(note, %Engram.Vaults.Vault{} = vault) do
+  def prepare_index(note, %Engram.Vaults.Vault{} = vault, user \\ nil) do
     link_rows = Engram.Links.Parser.extract(note.content || "")
     chunks = Markdown.parse(note.content || "", note.path)
 
-    cond do
-      chunks == [] ->
-        {:ok, {:no_chunks, link_rows}}
+    # An empty note needs no identity at all, so that branch stays ahead of the
+    # fetch. Everything past it does: the cap check and the embed below both
+    # want the same `%User{}`, and resolving it once here is what keeps this
+    # path at one `users` query per note. See #1502.
+    if chunks == [] do
+      {:ok, {:no_chunks, link_rows}}
+    else
+      user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
 
-      # Outside the user's indexed-note cap: persist link rows (the graph is not
-      # search and is not capped) but write no chunks and no Qdrant points.
-      not IndexCap.within_cap?(note) ->
-        {:ok, {:no_chunks, link_rows}}
-
-      true ->
+      if IndexCap.within_cap?(note, user) do
         context_texts = Enum.map(chunks, & &1.context_text)
         dims = Application.get_env(:engram, :embed_dims, @default_dims)
-        user = Engram.Accounts.get_user!(note.user_id)
 
         # Keyword-only tiers never call Voyage. `nil` vectors flow through
         # build_prepared/8, which emits a sparse-only named vector — the BM25
@@ -122,6 +133,12 @@ defmodule Engram.Indexing do
           other ->
             other
         end
+      else
+        # Outside the user's indexed-note cap: persist link rows (the graph is
+        # not search and is not capped) but write no chunks and no Qdrant
+        # points.
+        {:ok, {:no_chunks, link_rows}}
+      end
     end
   end
 

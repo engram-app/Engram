@@ -6,6 +6,9 @@ defmodule Engram.Workers.TestWorker do
   use Oban.Worker, queue: :maintenance
 
   @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(15)
+
+  @impl Oban.Worker
   def perform(%Oban.Job{args: %{"message" => _message}}) do
     :ok
   end

@@ -64,7 +64,17 @@ defmodule Engram.NotesTest do
             })
         end)
 
-      refute log =~ "note_path_rewritten"
+      # `capture_log/1` captures the whole VM, not this process, and this module
+      # is `async: true` — so a bare `refute log =~ "note_path_rewritten"`
+      # asserts "no note anywhere was rewritten while this ran", which is not
+      # the intent and fails whenever a concurrent test upserts a dirty path.
+      # Scope it to this test's own user instead: factory users are unique, so
+      # a line carrying both markers can only be ours.
+      refute Enum.any?(
+               String.split(log, "\n"),
+               &(&1 =~ "note_path_rewritten" and &1 =~ "user_id=#{user.id}")
+             ),
+             "a clean path produced a rewrite log for this user"
     end
 
     test "logs a summary when a batch upsert partially rejects entries", %{

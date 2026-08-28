@@ -5,7 +5,8 @@ defmodule Engram.Workers.EmbedNote do
   Debounce: 5-second scheduled_at delay, replaced on re-insert so rapid edits
   trigger only one Voyage API call.
 
-  Dedup: unique per note_id in available/scheduled states, 60-second window.
+  Dedup: unique per note_id across all `:incomplete` states (which includes
+  `executing` and `retryable`, not just available/scheduled), 60-second window.
 
   Idempotency: skips embedding when embed_hash already matches content_hash
   (content hasn't changed since last successful embed). On success, sets
@@ -41,6 +42,9 @@ defmodule Engram.Workers.EmbedNote do
   require Logger
 
   @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(10)
+
+  @impl Oban.Worker
   def perform(%Oban.Job{args: args} = job) do
     :ok = BackgroundPriority.demote()
     note_id = args["note_id"]
@@ -63,10 +67,19 @@ defmodule Engram.Workers.EmbedNote do
         # keyword-only (correct — skip, or ReconcileEmbeddings would re-enqueue
         # this note every 15 minutes forever), or they just upgraded and this is
         # the backfill (re-index to add the dense leg).
-        if SearchProfile.resolve(Accounts.get_user!(note.user_id)).semantic do
-          run_and_stamp(note, old_path_hmac_b64, job)
-        else
-          :ok
+        # Loaded once here and handed to run_and_stamp — it needs the same row
+        # for the rotation gate, so re-resolving would cost a second read on
+        # exactly the path that already paid for one. See #1502.
+        case Accounts.get_user_with_subscription(note.user_id) do
+          nil ->
+            {:discard, :user_deleted}
+
+          user ->
+            if SearchProfile.resolve(user).semantic do
+              run_and_stamp(note, old_path_hmac_b64, job, user)
+            else
+              :ok
+            end
         end
 
       {:ok, note} ->
@@ -75,50 +88,80 @@ defmodule Engram.Workers.EmbedNote do
   end
 
   # T3.7 — gate writes during DEK rotation. The worker may have been enqueued
-  # before the lock was acquired; re-check the live row.
-  defp run_and_stamp(note, old_path_hmac_b64, job) do
-    case RotationGate.check(note.user_id) do
-      {:error, :rotation_in_progress} ->
-        :telemetry.execute(
-          [:engram, :crypto, :rotate, :dek, :gate_blocked],
-          %{count: 1},
-          %{gate_path: :worker, op: :embed_note}
-        )
-
-        {:snooze, 60}
-
-      {:error, :user_not_found} ->
+  # before the lock was acquired, so this must read live state.
+  #
+  # ONE read, not two. This used to call `RotationGate.check/1` (which selects
+  # `{id, dek_rotation_locked_at}`) and then `get_user!/1` for the full row —
+  # two `users` queries per job for the same row, which is the 2.1/job measured
+  # in prod 2026-08-28. The full row already carries `dek_rotation_locked_at`,
+  # so `check_user/1` answers the same question from the struct we need anyway.
+  #
+  # This is also strictly MORE consistent than the two-query form. With separate
+  # reads, a rotation starting between them let a job pass a pre-rotation check
+  # and then operate on a post-rotation user. Gating on the same struct that
+  # gets used closes that window.
+  #
+  # The moduledoc's advice to prefer `check/1` is about structs loaded LONG
+  # before use (an open socket, a job enqueued seconds before the lock). It does
+  # not apply to one fetched at the top of this job: the read is exactly as
+  # fresh as `check/1` was, and it is the read whose result is actually used.
+  #
+  # `user` is threaded from the caller when it already has one. Resolved once
+  # and passed down from here — the budget gate, the decrypt in run_embed and
+  # both halves of Indexing all take it. Nothing below may re-resolve it.
+  # See #1502.
+  defp run_and_stamp(note, old_path_hmac_b64, job, user \\ nil) do
+    # `_with_subscription`: the budget gate calls `Billing.limit_enforced?/2`
+    # and then `check_limit/3`, and each resolves the tier via
+    # `get_subscription/1` — which queries unless the association is already
+    # loaded. On a bare `get_user/1` struct that is two `subscriptions`
+    # round trips per job. The join makes them zero at no extra query, since
+    # this fetch has to happen anyway. See #1502.
+    case user || Accounts.get_user_with_subscription(note.user_id) do
+      nil ->
         {:discard, :user_deleted}
 
-      :ok ->
-        case embed_budget_gate(note) do
+      user ->
+        case RotationGate.check_user(user) do
+          {:error, :rotation_in_progress} ->
+            :telemetry.execute(
+              [:engram, :crypto, :rotate, :dek, :gate_blocked],
+              %{count: 1},
+              %{gate_path: :worker, op: :embed_note}
+            )
+
+            {:snooze, 60}
+
           :ok ->
-            case run_embed(note, old_path_hmac_b64) do
-              {:ok, chunk_count, semantic?} ->
-                # Charge the embed meter only when Voyage was actually called.
-                # `chunk_count == 0` is index_note/2's no-chunks outcome: the
-                # note was empty OR outside the user's indexed-note cap, and in
-                # neither case did a single token get spent. Keyword-only users
-                # never call Voyage at all.
-                #
-                # Charging regardless was not merely cosmetic: phantom tokens
-                # accumulate to the 20M lifetime cap, and embed_budget_gate/1
-                # then cancels indexing entirely — so a Free user who spent
-                # nothing would lose their BM25 index too.
-                _ =
-                  if chunk_count > 0 and semantic? do
-                    record_embed_tokens(note)
-                  end
+            case embed_budget_gate(note, user) do
+              :ok ->
+                case run_embed(note, user, old_path_hmac_b64) do
+                  {:ok, chunk_count, semantic?} ->
+                    # Charge the embed meter only when Voyage was actually
+                    # called. `chunk_count == 0` is index_note/2's no-chunks
+                    # outcome: the note was empty OR outside the user's
+                    # indexed-note cap, and in neither case did a single token
+                    # get spent. Keyword-only users never call Voyage at all.
+                    #
+                    # Charging regardless was not merely cosmetic: phantom
+                    # tokens accumulate to the 20M lifetime cap, and
+                    # embed_budget_gate/2 then cancels indexing entirely — so a
+                    # Free user who spent nothing would lose their BM25 index.
+                    _ =
+                      if chunk_count > 0 and semantic? do
+                        record_embed_tokens(note)
+                      end
 
-                :ok
+                    :ok
 
-              other ->
-                _ = maybe_mark_poison(note, other, job)
-                other
+                  other ->
+                    _ = maybe_mark_poison(note, other, job)
+                    other
+                end
+
+              {:cancel, reason} ->
+                {:cancel, reason}
             end
-
-          {:cancel, reason} ->
-            {:cancel, reason}
         end
     end
   end
@@ -133,21 +176,27 @@ defmodule Engram.Workers.EmbedNote do
   # token budget. Resolver returns nil for Starter/Pro (unmetered), so this is
   # effectively Free-only. Per-user overrides via Billing.UserLimitOverride.
   #
-  # Skipped entirely for keyword-only users: this job spends zero Voyage
-  # tokens for them, so a cap on token spend has nothing to say about it.
-  # Enforcing it anyway turns an embed-budget cap into a total indexing
-  # blackout (no BM25 either) for the one tier that cannot overspend.
-  defp embed_budget_gate(%Note{user_id: user_id} = note) do
-    user = Accounts.get_user!(user_id)
-
-    if SearchProfile.resolve(user).semantic do
-      do_embed_budget_gate(note, user)
+  # Skipped entirely for keyword-only users: this job spends zero Voyage tokens
+  # for them, so a cap on token SPEND has nothing to say about it. Enforcing it
+  # anyway turns an embed-budget cap into a total indexing blackout (no BM25
+  # either) for the one tier that cannot overspend. Checked first because it is
+  # free — `user` is already resolved and threaded in.
+  defp embed_budget_gate(%Note{user_id: user_id} = note, %{} = user) do
+    # Resolve the cap BEFORE measuring usage. `check_limit/3` answers `:ok` for
+    # `:unlimited`/`nil`/`-1` without ever reading `current_count`, and the
+    # resolver returns `nil` for Starter/Pro — so for every paying user the
+    # `lifetime_embed_tokens/1` aggregate below was computed and thrown away,
+    # once per job. On a 1.4k-note import that is 1.4k wasted aggregates.
+    # See #1502.
+    if SearchProfile.resolve(user).semantic and
+         Billing.limit_enforced?(user, :lifetime_embed_token_cap) do
+      enforce_embed_budget(note, user, user_id)
     else
       :ok
     end
   end
 
-  defp do_embed_budget_gate(%Note{user_id: user_id} = note, user) do
+  defp enforce_embed_budget(note, user, user_id) do
     current = UsageMeters.lifetime_embed_tokens(user_id)
     estimated = estimate_note_tokens(note)
 
@@ -288,9 +337,7 @@ defmodule Engram.Workers.EmbedNote do
 
   defp maybe_mark_poison(_note, _result, _job), do: :ok
 
-  defp run_embed(note, old_path_hmac_b64) do
-    user = Accounts.get_user!(note.user_id)
-
+  defp run_embed(note, user, old_path_hmac_b64) do
     # Load vault up front so we can drive both the decrypt path (future) and
     # the index call. skip_tenant_check: trusted internal worker.
     # Missing vault means the note is orphaned — nothing to index, discard.
@@ -307,14 +354,14 @@ defmodule Engram.Workers.EmbedNote do
                 Indexing.delete_points_by_path_hmac(decrypted_note, old_path_hmac_b64)
               end
 
-            case Indexing.index_note(decrypted_note, vault) do
+            case Indexing.index_note(decrypted_note, vault, user) do
               {:ok, count} ->
-                # Resolve entitlement ONCE, from the user already loaded above,
-                # and hand it to both the stamp and the meter. Re-deriving it
-                # after the Voyage call would read a DIFFERENT value when a
-                # time-boxed override expires or a cancel webhook lands
+                # `user` is the row threaded down from run_and_stamp — the same
+                # one Indexing used to decide whether to call Voyage. Do NOT
+                # re-resolve: a second read lands a DIFFERENT value when a
+                # time-boxed override expires or a cancel webhook arrives
                 # mid-job (OverrideCache TTL is 60s; a 128-chunk batch with
-                # retries outlives that) — and the spend would go unmetered.
+                # retries outlives it), and the spend would go unmetered.
                 semantic? = SearchProfile.resolve(user).semantic
                 stamp_embed_hash(note, semantic?, count)
                 {:ok, count, semantic?}

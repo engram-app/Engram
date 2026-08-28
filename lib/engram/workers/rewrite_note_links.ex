@@ -97,6 +97,9 @@ defmodule Engram.Workers.RewriteNoteLinks do
     :old_path_unrecoverable
   ]
 
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(5)
+
   @doc """
   Build a rewrite job. `old_path_hmac_b64`/`old_basename_hmac_b64` are
   ALREADY base64 — every enqueue site computes them from plaintext it has

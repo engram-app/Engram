@@ -18,6 +18,9 @@ defmodule Engram.Workers.ClientLogsPruner do
   @batch 5_000
 
   @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(15)
+
+  @impl Oban.Worker
   def perform(%Oban.Job{}) do
     days = Application.get_env(:engram, :client_logs_retention_days, 30)
     # NaiveDateTime to match the physical `timestamp without time zone` column.

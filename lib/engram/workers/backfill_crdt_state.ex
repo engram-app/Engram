@@ -73,6 +73,13 @@ defmodule Engram.Workers.BackfillCrdtState do
   @default_batch_size 100
   @start_cursor "00000000-0000-0000-0000-000000000000"
 
+  # 60 min, the Lifeline `rescue_after` ceiling. This walks every row it
+  # owns, and none of the long queues (crypto_backfill/export/cleanup) is
+  # user-facing — a slot held here costs nothing, while a kill mid-rotation
+  # costs a lot. Finite is the point, not tight. See #1496.
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(60)
+
   # Config-overridable so a test can exercise the cursor re-enqueue loop without
   # inserting @default_batch_size+1 notes. Prod uses the default.
   defp batch_size,

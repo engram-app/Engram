@@ -62,6 +62,9 @@ defmodule Engram.Workers.ExtractNoteLinks do
   @start_cursor "00000000-0000-0000-0000-000000000000"
 
   @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(5)
+
+  @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
     :ok = BackgroundPriority.demote()
 

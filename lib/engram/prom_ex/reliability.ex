@@ -22,6 +22,13 @@ defmodule Engram.PromEx.Reliability do
       terminal Oban discard.
     * `[:engram, :oban, :discarded]` → `..._oban_discarded_total`, tags
       `[:worker, :queue, :error_kind]` — jobs dropped after max_attempts.
+    * `[:engram, :oban, :timeout]` → `..._oban_timeout_total`, tags
+      `[:worker, :queue]` — jobs killed by their worker `timeout/1` on ANY
+      attempt, not just the last. This is the leading indicator for the
+      2026-08-28 stall class (#1496): a queue whose slots are being held by
+      wedged jobs shows a rising timeout rate long before anything is
+      discarded, and occupancy metrics show nothing at all — `executing` sits
+      pinned at the limit and looks maximally healthy. Alert on the rate.
     * `[:engram, :fanout_pacer, :drain]` → `..._fanout_pacer_queue_depth`,
       `..._fanout_pacer_queued`, `..._fanout_pacer_topics` (#1004) — the
       vault-channel pacer's cold-queue state, sampled on every drain tick.
@@ -85,6 +92,12 @@ defmodule Engram.PromEx.Reliability do
           event_name: [:engram, :oban, :discarded],
           description: "Oban jobs discarded after max_attempts.",
           tags: [:worker, :queue, :error_kind]
+        ),
+        counter(
+          metric_prefix ++ [:oban, :timeout, :total],
+          event_name: [:engram, :oban, :timeout],
+          description: "Oban jobs killed by their worker timeout, on any attempt.",
+          tags: [:worker, :queue]
         ),
         last_value(
           metric_prefix ++ [:fanout_pacer, :queue_depth],

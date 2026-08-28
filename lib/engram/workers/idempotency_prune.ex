@@ -7,6 +7,9 @@ defmodule Engram.Workers.IdempotencyPrune do
   use Oban.Worker, queue: :maintenance, max_attempts: 3
 
   @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(15)
+
+  @impl Oban.Worker
   def perform(_job) do
     {:ok, keys} = Engram.Idempotency.prune_expired()
     {:ok, webhooks} = Engram.Webhooks.Idempotency.prune()

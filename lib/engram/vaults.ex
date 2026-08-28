@@ -173,6 +173,11 @@ defmodule Engram.Vaults do
 
   # Runs inside the caller's `Repo.with_tenant/2` transaction.
   defp insert_vault(user, name, client_id, extra_attrs) do
+    # NOT reordered behind `Billing.limit_enforced?/2` like the other cap checks
+    # (#1502). The count has a SECOND consumer here — `is_default: current_count
+    # == 0` below — so skipping it when no cap applies would mark every vault as
+    # the default and collide on the unique index. The name says "current_count"
+    # and reads like limit bookkeeping; it is also a business decision.
     current_count = count_vaults(user.id)
 
     case Billing.check_limit(user, :vaults_cap, current_count) do
@@ -598,7 +603,13 @@ defmodule Engram.Vaults do
           {:error, :not_found}
 
         vault ->
-          active_count = count_vaults(user.id)
+          # Skip the COUNT when no cap applies (#1502). Unlike insert_vault/4
+          # this count has no second consumer — it feeds `check_limit/3` and the
+          # 402 body, nothing else. The `0` is never observable: it can only
+          # reach the error tuple below via `{:error, :limit_reached}`, which
+          # `check_limit/3` cannot return when the cap is unenforced.
+          active_count =
+            if Billing.limit_enforced?(user, :vaults_cap), do: count_vaults(user.id), else: 0
 
           case Billing.check_limit(user, :vaults_cap, active_count) do
             {:error, :limit_reached} ->
