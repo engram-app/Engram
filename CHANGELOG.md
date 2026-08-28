@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.21.0](https://github.com/engram-app/Engram/compare/0.20.0...0.21.0) (2026-08-28)
+
+
+### Features
+
+* **oban:** split worker execution off web nodes; remove crdt_create_batch ([#1485](https://github.com/engram-app/Engram/issues/1485)) ([84883b5](https://github.com/engram-app/Engram/commit/84883b57abe5891b15f78e5d441ef8bd63f5a649))
+
+
+### Bug Fixes
+
+* **billing:** checkout defaults to annual ([#1483](https://github.com/engram-app/Engram/issues/1483)) ([9f2ed7e](https://github.com/engram-app/Engram/commit/9f2ed7e00fdf00dd8e887915812a7e427d443158))
+* **oban:** survive worker replacement; keep overflow capacity after the split ([#1487](https://github.com/engram-app/Engram/issues/1487)) ([48fedb7](https://github.com/engram-app/Engram/commit/48fedb79bef8778cff7bef5bc841a5c23cc743ce))
+
 ## [0.20.0](https://github.com/engram-app/Engram/compare/0.19.1...0.20.0) (2026-08-26)
 
 
