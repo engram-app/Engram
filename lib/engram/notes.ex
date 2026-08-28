@@ -4937,6 +4937,123 @@ defmodule Engram.Notes do
     {:ok, notes}
   end
 
+  @doc """
+  Raw rows for GET /vault/tree's notes + folders halves, in one query:
+  every live note AND folder-marker row's kind, decrypt inputs, and
+  folder_hmac. MUST run inside the caller's `Repo.with_tenant/2` — pair
+  with `build_tree_payload/2`, which does the decrypt/derive work OUTSIDE
+  any transaction (holding a DB connection across CPU-bound decrypt is the
+  2026-07-09 CRDT pool-exhaustion shape — see #1211).
+
+  Replaces what were 3 separate with_tenant round trips (`list_tree_notes/2`
+  + `list_folders_with_counts/2` + `list_folder_markers/2`, each its own
+  query) with 1.
+  """
+  @spec raw_tree_rows(map(), map()) :: [map()]
+  def raw_tree_rows(user, vault) do
+    Repo.all(
+      from(n in scoped_live(user, vault),
+        select: %{
+          id: n.id,
+          kind: n.kind,
+          dek_version: n.dek_version,
+          path_ciphertext: n.path_ciphertext,
+          path_nonce: n.path_nonce,
+          folder_ciphertext: n.folder_ciphertext,
+          folder_nonce: n.folder_nonce,
+          folder_hmac: n.folder_hmac,
+          created_at: n.created_at,
+          updated_at: n.updated_at
+        }
+      )
+    )
+  end
+
+  @doc """
+  Builds the `%{notes:, folders:}` halves of the /vault/tree payload from
+  `raw_tree_rows/2`'s rows — the decrypt/derive half of `list_tree_notes/2`
+  + `folders_payload/2` combined, operating on one query's rows instead of
+  three. Caller must already hold `dek` (e.g. via `Crypto.get_dek/1`); this
+  does no DB access and is meant to run OUTSIDE any transaction.
+  """
+  @spec build_tree_payload([map()], binary()) :: %{notes: [map()], folders: [map()]}
+  def build_tree_payload(rows, dek) do
+    notes =
+      Crypto.measure_decrypt_batch(:vault_tree_notes, length(rows), fn ->
+        rows
+        |> Enum.filter(&(&1.kind == "note"))
+        |> Enum.map(fn row ->
+          aad = PathCrypto.aad(:notes, row.id, row.dek_version)
+
+          %{
+            id: row.id,
+            path: PathCrypto.decrypt!(row.path_ciphertext, row.path_nonce, dek, aad),
+            created_at: row.created_at,
+            updated_at: row.updated_at
+          }
+        end)
+      end)
+
+    %{notes: notes, folders: build_folders_payload(rows, dek)}
+  end
+
+  # Same algorithm as list_folders_with_counts/2 + list_folder_markers/2 +
+  # folders_payload/2 combined, sourced from raw_tree_rows/2's single-query
+  # rows instead of two separate queries. `id` in the output comes ONLY
+  # from a kind=="folder" row (an explicit marker) — a folder that exists
+  # only implicitly (some note's folder_hmac points to it, no marker ever
+  # created) gets `id: nil`, matching folders_payload/2's existing contract.
+  defp build_folders_payload(rows, dek) do
+    grouped =
+      rows
+      |> Enum.filter(&(not is_nil(&1.folder_hmac)))
+      |> Enum.group_by(& &1.folder_hmac)
+
+    folders =
+      grouped
+      |> Enum.map(fn {_hmac, group} ->
+        # DISTINCT ON semantics: any one row per folder_hmac decrypts to the
+        # same plaintext folder path — which row is picked doesn't matter.
+        representative = hd(group)
+        count = Enum.count(group, &(&1.kind == "note"))
+
+        folder =
+          decrypt_envelope!(
+            representative.folder_ciphertext,
+            representative.folder_nonce,
+            dek,
+            row_aad(:notes, :folder, representative.id, representative.dek_version)
+          )
+
+        %{folder: folder, count: count}
+      end)
+      |> Enum.sort_by(& &1.folder)
+
+    id_by_path =
+      rows
+      |> Enum.filter(&(&1.kind == "folder"))
+      |> Map.new(fn row ->
+        folder =
+          decrypt_envelope!(
+            row.folder_ciphertext,
+            row.folder_nonce,
+            dek,
+            row_aad(:notes, :folder, row.id, row.dek_version)
+          )
+
+        {folder, row.id}
+      end)
+
+    Enum.map(folders, fn f ->
+      %{
+        id: Map.get(id_by_path, f.folder),
+        name: f.folder,
+        count: f.count,
+        parent_id: Map.get(id_by_path, folder_parent_path(f.folder))
+      }
+    end)
+  end
+
   # nil for top-level ("Projects") and root (""). Joined parent path for
   # nested ("Projects/Engram" -> "Projects").
   defp folder_parent_path(""), do: nil

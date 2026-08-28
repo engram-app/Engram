@@ -16,6 +16,69 @@ defmodule EngramWeb.VaultTreeControllerTest do
     %{conn: authed, user: user, vault: vault}
   end
 
+  # Counts `with_tenant/2` invocations that actually open a transaction (one
+  # combined `SELECT set_config(...)` statement each). Same technique as
+  # Engram.RepoTenantRoundtripsTest / EngramWeb.SyncControllerTest, scoped
+  # here so it's a self-contained regression guard.
+  defp count_tenant_enters(fun) do
+    test_pid = self()
+    handler_id = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      handler_id,
+      [:engram, :repo, :query],
+      fn _e, _m, %{query: q}, _c ->
+        if self() == test_pid and q =~ "app.current_tenant" do
+          send(test_pid, {:tenant_enter, q})
+        end
+      end,
+      nil
+    )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler_id)
+    end
+
+    collect_tenant_enters()
+  end
+
+  defp collect_tenant_enters(acc \\ []) do
+    receive do
+      {:tenant_enter, q} -> collect_tenant_enters([q | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
+  describe "GET /vault/tree with_tenant round trips" do
+    # Floor is 2, not 1: EngramWeb.Plugs.VaultPlug resolves `current_vault`
+    # (Vaults.get_default_vault/1) in its own with_tenant block before the
+    # controller action runs, on every authed API request — same reasoning
+    # as SyncControllerTest's equivalent guard for #1211. Only the
+    # controller-owned blocks (current_seq + notes + folder counts + folder
+    # markers + attachments — 5 of them) are being collapsed, into 1.
+    test "a populated tree opens at most 2 with_tenant blocks", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "Test/A.md", content: "# A", mtime: 1_000.0})
+
+      post(conn, "/api/attachments", %{
+        path: "img.png",
+        content_base64: Base.encode64("hi"),
+        mtime: 1_000.0
+      })
+
+      enters =
+        count_tenant_enters(fn ->
+          conn |> get("/api/vault/tree") |> json_response(200)
+        end)
+
+      assert length(enters) <= 2,
+             "expected at most 2 with_tenant blocks (VaultPlug + one combined " <>
+               "seq/notes/folders/attachments fetch), got #{length(enters)}: #{inspect(enters)}"
+    end
+  end
+
   describe "GET /vault/tree" do
     test "returns an empty tree for a new user", %{conn: conn} do
       # insert(:user) provisions no DEK, so this exercises the
