@@ -82,39 +82,46 @@ defmodule Engram.Indexing do
     link_rows = Engram.Links.Parser.extract(note.content || "")
     chunks = Markdown.parse(note.content || "", note.path)
 
-    cond do
-      chunks == [] ->
-        {:ok, {:no_chunks, link_rows}}
+    # An empty note needs no identity at all, so that branch stays ahead of the
+    # fetch. Everything past it does: the cap check and the embed below both
+    # want the same `%User{}`, and resolving it once here is what keeps this
+    # path at one `users` query per note. See #1502.
+    if chunks == [] do
+      {:ok, {:no_chunks, link_rows}}
+    else
+      user = user || Engram.Accounts.get_user!(note.user_id)
 
-      # Outside the user's indexed-note cap: persist link rows (the graph is not
-      # search and is not capped) but write no chunks and no Qdrant points.
-      not IndexCap.within_cap?(note) ->
-        {:ok, {:no_chunks, link_rows}}
+      cond do
+        # Outside the user's indexed-note cap: persist link rows (the graph is
+        # not search and is not capped) but write no chunks and no Qdrant
+        # points.
+        not IndexCap.within_cap?(note, user) ->
+          {:ok, {:no_chunks, link_rows}}
 
-      true ->
-        context_texts = Enum.map(chunks, & &1.context_text)
-        dims = Application.get_env(:engram, :embed_dims, @default_dims)
-        user = user || Engram.Accounts.get_user!(note.user_id)
+        true ->
+          context_texts = Enum.map(chunks, & &1.context_text)
+          dims = Application.get_env(:engram, :embed_dims, @default_dims)
 
-        # Keyword-only tiers never call Voyage. `nil` vectors flow through
-        # build_prepared/8, which emits a sparse-only named vector — the BM25
-        # leg is computed locally from the chunk text, so keyword search is
-        # fully functional with zero embedding spend.
-        semantic? = SearchProfile.resolve(user).semantic
+          # Keyword-only tiers never call Voyage. `nil` vectors flow through
+          # build_prepared/8, which emits a sparse-only named vector — the BM25
+          # leg is computed locally from the chunk text, so keyword search is
+          # fully functional with zero embedding spend.
+          semantic? = SearchProfile.resolve(user).semantic
 
-        with :ok <- Qdrant.ensure_collection(collection(), dims),
-             {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user),
-             {:ok, vectors} <- maybe_embed(semantic?, context_texts) do
-          avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id)
-          build_prepared(note, user, vault, chunks, vectors, filter_key, avgdl, link_rows)
-        else
-          {:error, :no_dek} = err ->
-            emit_no_dek_telemetry(note)
-            err
+          with :ok <- Qdrant.ensure_collection(collection(), dims),
+               {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user),
+               {:ok, vectors} <- maybe_embed(semantic?, context_texts) do
+            avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id)
+            build_prepared(note, user, vault, chunks, vectors, filter_key, avgdl, link_rows)
+          else
+            {:error, :no_dek} = err ->
+              emit_no_dek_telemetry(note)
+              err
 
-          other ->
-            other
-        end
+            other ->
+              other
+          end
+      end
     end
   end
 
