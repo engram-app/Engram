@@ -23,7 +23,9 @@ defmodule Engram.BillingLimitPredicateTest do
 
   alias Engram.Billing
 
-  @key :lifetime_embed_token_cap
+  # The key is written out at every call site rather than held in `@key`: the
+  # `engram.lint.limit_keys` task scans for literal atoms so every use of a
+  # limit key is greppable, and a module attribute hides them from it.
   @huge 10_000_000_000
 
   setup do
@@ -36,28 +38,29 @@ defmodule Engram.BillingLimitPredicateTest do
     Application.put_env(:engram, :limits_enforced, false)
     user = insert(:user)
 
-    refute Billing.limit_enforced?(user, @key)
+    refute Billing.limit_enforced?(user, :lifetime_embed_token_cap)
 
-    assert Billing.check_limit(user, @key, 0) == :ok
-    assert Billing.check_limit(user, @key, @huge) == :ok
+    assert Billing.check_limit(user, :lifetime_embed_token_cap, 0) == :ok
+    assert Billing.check_limit(user, :lifetime_embed_token_cap, @huge) == :ok
   end
 
   test "with enforcement ON the predicate matches whether the count is consulted" do
     Application.put_env(:engram, :limits_enforced, true)
     user = insert(:user)
 
-    if Billing.limit_enforced?(user, @key) do
+    if Billing.limit_enforced?(user, :lifetime_embed_token_cap) do
       # A real ceiling: an absurd count MUST be rejected. If this passes, the
       # predicate claimed a cap that check_limit does not actually apply.
-      assert Billing.check_limit(user, @key, @huge) == {:error, :limit_reached},
+      assert Billing.check_limit(user, :lifetime_embed_token_cap, @huge) ==
+               {:error, :limit_reached},
              "limit_enforced? said this plan has a ceiling, but check_limit accepted a\n" <>
                "count of #{@huge}. The two disagree about what a cap is."
     else
       # No ceiling: EVERY count must pass. This is the property that makes
       # skipping the measurement safe.
-      assert Billing.check_limit(user, @key, 0) == :ok
+      assert Billing.check_limit(user, :lifetime_embed_token_cap, 0) == :ok
 
-      assert Billing.check_limit(user, @key, @huge) == :ok,
+      assert Billing.check_limit(user, :lifetime_embed_token_cap, @huge) == :ok,
              "limit_enforced? said there is no cap, so the caller will not measure usage —\n" <>
                "but check_limit rejected a large count. Skipping would bypass a real limit."
     end
