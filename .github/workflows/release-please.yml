@@ -74,7 +74,13 @@ jobs:
           PR=$(jq -r '.number' <<<"$RP_PR")
           BASE=$(git tag -l 'release-v*' --sort=-v:refname | head -1)
           [ -n "$BASE" ] || BASE=$(git rev-list --max-parents=0 HEAD | head -1)
-          IMPACT=$(bash scripts/generate_schema_impact_notes.sh "$BASE" HEAD || true)
+          # No `|| true` here: the script's own `::error::` + exit 1 on a
+          # gh/git failure is meant to fail CI loud (see its header
+          # comment) rather than silently fall through to "no schema
+          # impact" — that would be the exact failure mode the script
+          # exists to prevent. deploy-prod.yml's caller doesn't swallow it
+          # either; this one shouldn't diverge.
+          IMPACT=$(bash scripts/generate_schema_impact_notes.sh "$BASE" HEAD)
           [ -n "$IMPACT" ] || { echo "no schema impact"; exit 0; }
           CUR=$(gh pr view "$PR" --json body -q .body)
           gh pr edit "$PR" --body "$(printf '%s\n\n%s' "$IMPACT" "$CUR")"
