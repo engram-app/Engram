@@ -57,15 +57,24 @@ defmodule Engram.Indexing.IndexCap do
   """
   @spec counts(map()) :: %{indexed: non_neg_integer(), total: non_neg_integer()}
   def counts(user) do
-    total = live_note_count(user.id)
+    case resolve_cap(user) do
+      {:cap, cap} ->
+        total = live_note_count(user.id)
+        %{indexed: min(total, cap), total: total}
 
-    indexed =
-      case resolve_cap(user) do
-        {:cap, cap} -> min(total, cap)
-        :unlimited -> total
-      end
-
-    %{indexed: indexed, total: total}
+      # Resolve the cap BEFORE counting, and for an uncapped user do not count
+      # at all. `counts/1` is wired into `/bootstrap`, which runs on every page
+      # load and every tab, and `live_note_count/1`'s predicate is a whole-vault
+      # aggregate — an 80k-note Pro user paid for three of them to open three
+      # tabs, to populate a banner their tier never renders.
+      #
+      # Equal values are the COMPLETE answer here: the sole consumer asks
+      # `indexed < total` (see `search-panel.tsx`), which is false either way
+      # for someone with no cap. Zeros rather than a fabricated vault size, so
+      # nothing downstream can mistake this for a measurement we did not take.
+      :unlimited ->
+        %{indexed: 0, total: 0}
+    end
   end
 
   @doc """

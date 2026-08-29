@@ -31,6 +31,20 @@ defmodule EngramWeb.BootstrapController do
   alias EngramWeb.OnboardingController
   alias EngramWeb.VaultsController
 
+  @doc """
+  Just the two index counters, refetchable on its own.
+
+  `/bootstrap` seeds these once at page load, but they move as the user writes
+  and delete notes — and the banner they drive ("2,000 of 4,312 notes indexed")
+  is the only thing that stops a note past the cap returning nothing from
+  reading as broken search. A user who crossed the cap mid-session saw no
+  banner until a full reload. Cheap for uncapped users: `counts/1` resolves the
+  cap first and skips the aggregate entirely.
+  """
+  def index_status(conn, _params) do
+    json(conn, IndexCap.counts(conn.assigns.current_user))
+  end
+
   def show(conn, _params) do
     user = conn.assigns.current_user
 

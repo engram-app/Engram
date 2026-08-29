@@ -727,6 +727,11 @@ export function vaultTreeQueryOptions(vaultId: string | null | undefined) {
 export function invalidateVaultTree(qc: QueryClient, vaultId: string | null | undefined): void {
 	treeInvalidationGen++;
 	qc.invalidateQueries({ queryKey: ["vault-tree", vaultId] });
+	// Every caller of this is a note/folder create, delete, or move — exactly
+	// the mutations that change how many notes exist, and therefore whether the
+	// user is over their index cap. Riding the tree invalidation rather than
+	// hand-listing the mutations means a future write path cannot forget it.
+	qc.invalidateQueries({ queryKey: ["index_status"] });
 }
 
 export function useVaultTree() {
@@ -1378,8 +1383,15 @@ export function useCapabilities() {
 export function useIndexStatus() {
 	return useQuery<IndexStatus>({
 		queryKey: ["index_status"],
-		enabled: false,
-		staleTime: Number.POSITIVE_INFINITY,
+		queryFn: () => api.get<IndexStatus>("/index-status"),
+		// Seeded by /bootstrap, so the first render costs no request. But these
+		// counters move as the user writes and deletes notes, and they drive the
+		// only signal that stops a note past the cap returning nothing from
+		// reading as broken search — frozen at page load, a user who crossed the
+		// cap mid-session saw no banner until a full reload. A finite staleTime
+		// plus invalidation on create/delete keeps it honest; the refetch is
+		// cheap, and free for uncapped users (counts/1 skips the aggregate).
+		staleTime: 60_000,
 	});
 }
 

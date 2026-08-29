@@ -408,6 +408,12 @@ defmodule EngramWeb.Router do
     # complete to learn `next_step`.
     get "/bootstrap", BootstrapController, :show
 
+    # The index counters on their own, so the SPA can refresh the cap banner
+    # after a note create/delete without re-running the whole first-load
+    # payload. Same pipeline as /bootstrap deliberately: it is seeded from
+    # there and must stay reachable under the same conditions.
+    get "/index-status", BootstrapController, :index_status
+
     # Onboarding wizard — status + TOS acceptance. Exempt from
     # RequireOnboarding (the plug is only on the vault-scoped pipeline)
     # so the wizard can actually function before completion.
