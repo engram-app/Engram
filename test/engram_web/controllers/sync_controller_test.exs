@@ -3,6 +3,8 @@ defmodule EngramWeb.SyncControllerTest do
 
   import ExUnit.CaptureLog
 
+  alias Engram.TenantQueryCounter
+
   setup %{conn: conn} do
     user = insert(:user)
     # Free-tier launch §4.5 — attachment uploads now gate on attachments_enabled,
@@ -14,6 +16,65 @@ defmodule EngramWeb.SyncControllerTest do
     grant_api_write!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
     %{conn: authed, user: user, vault: vault}
+  end
+
+  # Counts `with_tenant/2` invocations that actually open a transaction —
+  # see Engram.TenantQueryCounter (#1211 regression guard, shared with
+  # VaultTreeControllerTest and RepoTenantRoundtripsTest).
+  defp count_tenant_enters(fun), do: TenantQueryCounter.count_tenant_enters(fun)
+
+  describe "GET /sync/manifest with_tenant round trips (#1211)" do
+    # The floor here is 2 blocks, not 1: EngramWeb.Plugs.VaultPlug resolves
+    # `current_vault` (Vaults.get_default_vault/1) in its own with_tenant
+    # block before the controller action ever runs — on every authed API
+    # request, not just this one. Collapsing that into the controller's
+    # transaction would mean holding a DB connection open across arbitrary
+    # downstream plug/controller work, the exact anti-pattern #1211's "trap"
+    # section warns against for decrypt. Out of scope here; only the two
+    # *adjacent* blocks inside render_manifest/5 (notes fetch + attachments
+    # fetch) are being collapsed.
+    test "a changed manifest opens at most 3 with_tenant blocks", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1_000.0})
+
+      post(conn, "/api/attachments", %{
+        path: "img.png",
+        content_base64: Base.encode64("hi"),
+        mtime: 1_000.0
+      })
+
+      enters =
+        count_tenant_enters(fn ->
+          conn |> get("/api/sync/manifest") |> json_response(200)
+        end)
+
+      # VaultPlug's vault resolve + Vaults.current_seq/2 + one combined block
+      # for the notes/attachments fetch. Was 4 (VaultPlug + current_seq +
+      # separate notes block + separate attachments block).
+      assert length(enters) <= 3,
+             "expected at most 3 with_tenant blocks (VaultPlug + current_seq + one " <>
+               "combined notes/attachments fetch), got #{length(enters)}: #{inspect(enters)}"
+    end
+
+    test "an unchanged manifest still opens exactly 2 with_tenant blocks", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1_000.0})
+
+      current =
+        conn |> get("/api/sync/manifest") |> json_response(200) |> Map.fetch!("change_seq")
+
+      enters =
+        count_tenant_enters(fn ->
+          conn
+          |> get("/api/sync/manifest?since_seq=#{current}")
+          |> json_response(200)
+        end)
+
+      # VaultPlug's vault resolve + Vaults.current_seq/2. The short-circuit
+      # path was already minimal (skips notes/attachments entirely) — this
+      # just guards it from regressing.
+      assert length(enters) == 2,
+             "short-circuit path must not regress past 2 with_tenant blocks, " <>
+               "got #{length(enters)}: #{inspect(enters)}"
+    end
   end
 
   describe "GET /sync/manifest" do
