@@ -96,16 +96,35 @@ defmodule Engram.Vaults do
   raw-SQL + `Ecto.UUID.dump!/1` access idiom otherwise.
   """
   def current_seq(user_id, vault_id) do
-    {:ok, seq} =
-      Repo.with_tenant(user_id, fn ->
-        %{rows: [[seq]]} =
-          Repo.query!(
-            "SELECT change_seq FROM vaults WHERE id = $1",
-            [Ecto.UUID.dump!(vault_id)]
-          )
+    {:ok, seq} = Repo.with_tenant(user_id, fn -> raw_current_seq(vault_id) end)
 
-        seq
-      end)
+    seq
+  end
+
+  @doc """
+  The `current_seq/2` query without the `with_tenant/2` wrapper — MUST run
+  inside the caller's own `Repo.with_tenant/2` block. Extracted so callers
+  that already need a tenant-scoped transaction for other reads (e.g.
+  `VaultTreeController`, batching this alongside note/attachment fetches)
+  can fold this query in instead of paying for a separate transaction.
+
+  Raw SQL (not an `Ecto.Query`), so `Repo.prepare_query/3`'s structural
+  tenant guard — which only hooks `Ecto.Query` operations — can't catch a
+  misuse the way it would for a bare Ecto query against a tenant table.
+  This explicit check is the substitute for that missing structural net.
+  """
+  @spec raw_current_seq(term()) :: integer()
+  def raw_current_seq(vault_id) do
+    if is_nil(Process.get(:engram_tenant)) do
+      raise Engram.TenantError,
+        message: "Tenant context not set! raw_current_seq/1 must run inside Repo.with_tenant/2."
+    end
+
+    %{rows: [[seq]]} =
+      Repo.query!(
+        "SELECT change_seq FROM vaults WHERE id = $1",
+        [Ecto.UUID.dump!(vault_id)]
+      )
 
     seq
   end

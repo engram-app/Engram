@@ -22,6 +22,8 @@ defmodule EngramWeb.VaultTreeController do
   alias Engram.Crypto
   alias Engram.Logger.Metadata
   alias Engram.Notes
+  alias Engram.Repo
+  alias Engram.Vaults
   alias EngramWeb.Schemas
 
   require Logger
@@ -37,16 +39,49 @@ defmodule EngramWeb.VaultTreeController do
   def show(conn, _params) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
-    current = Engram.Vaults.current_seq(user.id, vault.id)
 
-    case Crypto.get_dek(user) do
-      {:ok, _dek} ->
-        render_tree(conn, user, vault, current)
+    # Computed once, before the transaction opens — no DB access (a pure
+    # struct decrypt), so nothing is lost by resolving it up front instead
+    # of inside with_tenant. Branching on the precomputed value below (never
+    # calling Crypto.get_dek/1 again) means a DEK failure doesn't also pay
+    # for the note/folder/attachment queries it can't use.
+    dek_result = Crypto.get_dek(user)
+
+    # One with_tenant block for every DB read this endpoint needs (was 5:
+    # current_seq + notes + folder counts + folder markers + attachments,
+    # each its own transaction). Decrypt happens entirely below, OUTSIDE
+    # this block — holding a DB connection across that CPU-bound work is
+    # the shape behind the 2026-07-09 CRDT pool-exhaustion incident (#1211).
+    {:ok, raw} =
+      Repo.with_tenant(user.id, fn ->
+        seq = Vaults.raw_current_seq(vault.id)
+
+        case dek_result do
+          {:ok, _dek} ->
+            %{
+              seq: seq,
+              note_rows: Notes.raw_tree_note_rows(user, vault),
+              folder_count_rows: Notes.raw_folder_count_rows(user, vault),
+              folder_marker_rows: Notes.raw_folder_marker_rows(user, vault),
+              attachment_rows: Attachments.raw_tree_rows(user, vault)
+            }
+
+          _ ->
+            # No usable DEK: nothing decryptable exists to fetch (:no_dek) or
+            # the caller is about to 500 without using rows anyway (any other
+            # error) — skip the note/folder/attachment queries entirely.
+            %{seq: seq}
+        end
+      end)
+
+    case dek_result do
+      {:ok, dek} ->
+        render_tree(conn, raw, dek, user)
 
       {:error, :no_dek} ->
         # Brand-new user, zero writes yet: every upsert provisions a DEK, so
         # no DEK means nothing encrypted exists to render.
-        json(conn, empty_tree(current))
+        json(conn, empty_tree(raw.seq))
 
       {:error, reason} ->
         # Anything else (:unrecognised_blob, a propagated unwrap_dek/2
@@ -71,20 +106,23 @@ defmodule EngramWeb.VaultTreeController do
     %{folders: [], notes: [], attachments: [], change_seq: current_seq}
   end
 
-  defp render_tree(conn, user, vault, current_seq) do
-    {:ok, notes} = Notes.list_tree_notes(user, vault)
-    {:ok, attachments} = Attachments.list_attachments(user, vault)
+  defp render_tree(conn, raw, dek, user) do
+    notes = Notes.decrypt_tree_note_rows(raw.note_rows, dek)
+    folder_counts = Notes.decrypt_folder_count_rows(raw.folder_count_rows, dek)
+    folder_markers = Notes.decrypt_folder_marker_rows(raw.folder_marker_rows, dek)
+    folders = Notes.combine_folders_payload(folder_counts, folder_markers)
+    attachments = Attachments.decrypt_tree_rows(raw.attachment_rows, user)
 
     json(conn, %{
-      folders: Notes.folders_payload(user, vault),
+      folders: folders,
       notes: Enum.sort_by(notes, & &1.path),
-      # `list_attachments/2` carries content_hash for the sync-facing listing;
+      # decrypt_tree_rows/2 carries content_hash for the sync-facing listing;
       # the tree never reads it, and the whole point of this endpoint is that
       # it does not ship per-file hashes (see the moduledoc). Dropped here so
       # the attachment half keeps the promise the notes half already makes.
       attachments:
         attachments |> Enum.sort_by(& &1.path) |> Enum.map(&Map.delete(&1, :content_hash)),
-      change_seq: current_seq
+      change_seq: raw.seq
     })
   end
 end
