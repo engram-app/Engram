@@ -6,6 +6,7 @@ import { uuid7 } from "../crdt/uuid7";
 import AuthPanel from "../layout/auth-panel";
 import AuthShell from "../layout/auth-shell";
 import NotFoundPage from "../not-found";
+import { vaultPath } from "../routes";
 import LoadingPane from "./loading-pane";
 import { resolveWikiTarget, stripMd, wikiCreatePath } from "./wiki-link";
 
@@ -32,7 +33,7 @@ export default function WikiLinkRedirect() {
 	}
 	const note = resolveWikiTarget(target ?? "", manifest?.notes ?? []);
 	if (note && slug) {
-		return <Navigate to={{ pathname: `/${slug}/${note.id}`, hash: location.hash }} replace />;
+		return <Navigate to={{ pathname: vaultPath(slug, note.id), hash: location.hash }} replace />;
 	}
 	// Route always provides :slug in practice; this guard just keeps the type
 	// narrowed for the mutate() call below, same as the old resolved-branch check.

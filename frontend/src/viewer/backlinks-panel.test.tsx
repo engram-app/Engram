@@ -13,9 +13,9 @@ vi.mock("../api/queries", () => ({
 
 function renderPanel(noteId: string | null = "note-1") {
 	return render(
-		<MemoryRouter initialEntries={["/work/note-1"]}>
+		<MemoryRouter initialEntries={["/v/work/note-1"]}>
 			<Routes>
-				<Route path="/:slug/:itemId" element={<BacklinksPanel noteId={noteId} />} />
+				<Route path="/v/:slug/:itemId" element={<BacklinksPanel noteId={noteId} />} />
 			</Routes>
 		</MemoryRouter>,
 	);
@@ -43,9 +43,9 @@ describe("BacklinksPanel", () => {
 		renderPanel();
 
 		const alpha = screen.getByRole("link", { name: "Alpha" });
-		expect(alpha).toHaveAttribute("href", "/work/src-1");
+		expect(alpha).toHaveAttribute("href", "/v/work/src-1");
 		const beta = screen.getByRole("link", { name: "Beta" });
-		expect(beta).toHaveAttribute("href", "/work/src-2");
+		expect(beta).toHaveAttribute("href", "/v/work/src-2");
 	});
 
 	it("falls back to the path basename when the source title is null", () => {
@@ -61,7 +61,7 @@ describe("BacklinksPanel", () => {
 		mockIsLoading = false;
 		renderPanel();
 
-		expect(screen.getByRole("link", { name: "Gamma" })).toHaveAttribute("href", "/work/src-3");
+		expect(screen.getByRole("link", { name: "Gamma" })).toHaveAttribute("href", "/v/work/src-3");
 	});
 
 	it("shows an empty state when there are no backlinks", () => {

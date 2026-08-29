@@ -79,3 +79,42 @@ describe("createAppRouter - settings overlay mount point", () => {
 		);
 	});
 });
+
+describe("createAppRouter - vault routes are namespaced under /v", () => {
+	type RouteLike = { path?: string; children?: RouteLike[] };
+
+	/** Flattens the router config to full paths, resolving RR's relative children. */
+	function fullPaths(routes: RouteLike[], parent = ""): string[] {
+		return routes.flatMap((r) => {
+			const self = r.path?.startsWith("/")
+				? r.path
+				: r.path
+					? `${parent}/${r.path}`.replace(/\/+/gu, "/")
+					: parent;
+			const here = r.path ? [self] : [];
+			return [...here, ...fullPaths(r.children ?? [], self)];
+		});
+	}
+
+	const paths = fullPaths(createAppRouter(config).routes as RouteLike[]);
+
+	it("mounts the vault subtree at /v/:slug", () => {
+		expect(paths).toContain("/v/:slug");
+		expect(paths).toContain("/v/:slug/:itemId");
+	});
+
+	// THE regression guard for this whole refactor. Vault slugs are derived
+	// from user-supplied names, so a dynamic segment at the root makes every
+	// top-level route ambiguous: a vault named "link" is shadowed by /link,
+	// and a typo'd /api/notez matches /:slug/:id. That ambiguity is what the
+	// deleted reserved-slug list existed to paper over, and it silently
+	// widened every time someone added a top-level route.
+	//
+	// Fails loudly if anyone re-introduces a root-level `/:param` route.
+	// The bare catch-all "*" is exempt: it is the 404 handler and RR ranks it
+	// last, so it shadows nothing.
+	it("has no dynamic segment at the root", () => {
+		const rootDynamic = paths.filter((p) => /^\/:/u.test(p));
+		expect(rootDynamic).toEqual([]);
+	});
+});

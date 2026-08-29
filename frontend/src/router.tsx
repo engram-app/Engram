@@ -9,7 +9,7 @@ import { UpgradeDialogProvider } from "./billing/upgrade-dialog-provider";
 import type { EngramConfig } from "./config";
 import LoadingScreen from "./layout/loading-screen";
 import RouteErrorBoundary from "./route-error-boundary";
-import { ROUTES } from "./routes";
+import { ROUTES, VAULT_PREFIX } from "./routes";
 import LoadingPane from "./viewer/loading-pane";
 import { VaultItemPage } from "./viewer/note-chunks";
 
@@ -200,13 +200,13 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 														// Bare `/` picks a vault; `/note/:id` is the pre-vault-scoping URL shape.
 														{ path: ROUTES.HOME, element: suspended(<VaultRedirect />) },
 														{ path: "/note/:id", element: suspended(<LegacyNoteRedirect />) },
-														// Vault-scoped. Listed last for readability only. React Router's
-														// route ranking already scores static segments above dynamic ones
-														// as part of matching, independent of declaration order, so
-														// position does not decide this. Verified against react-router
-														// 8.3.0's computeScore.
+														// Vault-scoped, under the `/v` prefix. The prefix is what keeps a
+														// user-named vault from ever shadowing (or being shadowed by) a
+														// top-level route — no reserved-slug list required. Listed last
+														// for readability only; RR ranks static segments above dynamic
+														// ones during matching regardless of declaration order.
 														{
-															path: "/:slug",
+															path: `${VAULT_PREFIX}/:slug`,
 															element: suspended(<VaultRoute />),
 															children: [
 																{ index: true, element: suspended(<Dashboard />) },

@@ -1,6 +1,6 @@
 import type { Breadcrumb } from "@sentry/react";
 import type { ErrorInfo } from "react";
-import { ROUTES } from "./routes";
+import { ROUTES, VAULT_PREFIX } from "./routes";
 
 /** First path segments that are ours, not the user's.
  *
@@ -19,6 +19,11 @@ const KNOWN_FIRST_SEGMENTS = new Set<string>([
 		const [, segment] = route.split("/");
 		return segment ? [segment] : [];
 	}),
+	// The vault prefix. Keeping it un-redacted is safe AND strictly better for
+	// privacy than the old root-level shape: the slug is now always segment 2,
+	// which is unconditionally ":seg". Previously the slug WAS segment 1, so it
+	// stayed out of Sentry only because it missed this allowlist.
+	VAULT_PREFIX.slice(1),
 	// Router literals with no ROUTES constant.
 	"onboard",
 	"settings",

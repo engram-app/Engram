@@ -663,10 +663,21 @@ defmodule EngramWeb.Router do
     match :*, "/engram-mark.svg", SpaController, :not_found
     match :*, "/robots.txt", SpaController, :not_found
 
-    # Vault-scoped SPA routes. `/:slug` is a vault, `/:slug/:id` a note or
-    # attachment. Kept last so every static route and the deny-list above
-    # wins.
-    get "/:slug", SpaController, :index
-    get "/:slug/:id", SpaController, :index
+    # Vault-scoped SPA routes, all under the `/v` prefix. `/v/:slug` is a
+    # vault, `/v/:slug/:id` a note or attachment.
+    #
+    # The prefix is load-bearing. While these were `/:slug` and `/:slug/:id`
+    # at the root, every top-level segment was ambiguous: a vault named
+    # "link" or "settings" was shadowed by a static SPA route, and a typo'd
+    # `/api/notez` matched `/:slug/:id` and served an HTML 200. That needed a
+    # hand-maintained reserved-slug list (mirrored in Elixir AND TS) plus the
+    # deny-list below, and every new top-level route silently widened the
+    # hazard. Nothing dynamic sits at the root now, so the whole class is
+    # gone and the reserved list with it.
+    #
+    # The deny-list above still earns its keep: it returns a clean non-HTML
+    # 404 for API-shaped paths instead of Phoenix's default HTML error page.
+    get "/v/:slug", SpaController, :index
+    get "/v/:slug/:id", SpaController, :index
   end
 end

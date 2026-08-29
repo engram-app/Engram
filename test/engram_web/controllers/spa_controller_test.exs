@@ -22,15 +22,13 @@ defmodule EngramWeb.SpaControllerTest do
     assert response(conn, 200) =~ "<!DOCTYPE html>"
   end
 
-  test "GET /share/abc123 now serves the SPA as a vault-scoped route", %{conn: conn} do
-    # Was a dedicated 404 test pre-Task-7: the whitelist had no /share entry
-    # and there was no catch-all, so it 404'd. Task 7 adds /:slug/:id as a
-    # generic 2-segment dynamic route for ANY slug, so /share/abc123 is now
-    # indistinguishable from /my-vault/<id> at the router level ("share" is
-    # just a slug value). No share feature was revived; the frontend/vault
-    # lookup decides what "share" resolves to. Deeper (3+ segment) paths
-    # still have no matching route and 404, asserted below.
-    assert conn |> get("/share/abc123") |> response(200)
+  test "GET /share/abc123 404s now that vault routes are prefixed", %{conn: conn} do
+    # History: pre-Task-7 this 404'd (no /share entry, no catch-all); Task 7's
+    # generic `/:slug/:id` made it a 200 because "share" was indistinguishable
+    # from a vault slug at the router level. Moving vault routes under `/v/`
+    # removes the root wildcard entirely, so it 404s again -- and this time
+    # nothing at the root can ever be mistaken for a vault.
+    assert conn |> get("/share/abc123") |> response(404)
   end
 
   test "GET /share/abc123/folder/note still 404s (no 3-segment SPA route)", %{conn: conn} do
@@ -164,12 +162,12 @@ defmodule EngramWeb.SpaControllerTest do
 
   describe "vault-scoped SPA routes" do
     test "serves the SPA for a bare vault slug", %{conn: conn} do
-      conn = get(conn, "/my-vault")
+      conn = get(conn, "/v/my-vault")
       assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
     end
 
     test "serves the SPA for a vault-scoped note", %{conn: conn} do
-      conn = get(conn, "/my-vault/018f2b3c-0000-7000-8000-000000000000")
+      conn = get(conn, "/v/my-vault/018f2b3c-0000-7000-8000-000000000000")
       assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
     end
   end
@@ -283,13 +281,12 @@ defmodule EngramWeb.SpaControllerTest do
       refute response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
     end
 
-    test "a bogus sibling single-segment path still reaches the SPA", %{conn: conn} do
-      # /nonexistent.txt isn't a real static file and isn't in the deny-list,
-      # so it must still fall through to the vault-scoped /:slug route like
-      # any other unrecognized single segment. Proves the new exact entries
-      # above are scoped to their four literal paths, not a blanket sweep.
-      conn = get(conn, "/nonexistent.txt")
-      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    test "a bogus sibling single-segment path 404s (root is no longer a wildcard)", %{conn: conn} do
+      # Before the `/v/` prefix this fell through to `get "/:slug"` and served
+      # an HTML 200, because any unrecognized single segment was a candidate
+      # vault slug. With vault routes under `/v/`, the root has no wildcard
+      # left, so an unknown single segment is simply not a route.
+      assert conn |> get("/nonexistent.txt") |> response(404)
     end
 
     test "on a Plug.Static miss (deploy skew), the router-level entries 404 instead of an HTML 200" do

@@ -3,6 +3,7 @@ import { getActiveVaultId } from "../api/active-vault";
 import { useVaults } from "../api/queries";
 import { preferredVault } from "../api/vault-slug";
 import NotFoundPage from "../not-found";
+import { vaultPath } from "../routes";
 import LoadingPane from "./loading-pane";
 
 // Old `/note/:id` links. A note id alone does not name its vault, so this is
@@ -24,7 +25,7 @@ export default function LegacyNoteRedirect() {
 	}
 	return (
 		<Navigate
-			to={{ pathname: `/${vault.slug}/${id}`, search: location.search, hash: location.hash }}
+			to={{ pathname: vaultPath(vault.slug, id), search: location.search, hash: location.hash }}
 			replace
 		/>
 	);
