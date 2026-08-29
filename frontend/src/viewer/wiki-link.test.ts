@@ -195,11 +195,15 @@ describe("wikiHref layered manifest fallback", () => {
 	});
 
 	test("heading hash preserved on manifest hit", () => {
-		expect(wikiHref("Renamed Note#A Heading", "work", map, notes)).toBe("/v/work/fresh-id#a-heading");
+		expect(wikiHref("Renamed Note#A Heading", "work", map, notes)).toBe(
+			"/v/work/fresh-id#a-heading",
+		);
 	});
 
 	test("heading hash preserved on wiki fallback", () => {
-		expect(wikiHref("Brand New#A Heading", "work", map, notes)).toBe("/v/work/wiki/Brand%20New#a-heading");
+		expect(wikiHref("Brand New#A Heading", "work", map, notes)).toBe(
+			"/v/work/wiki/Brand%20New#a-heading",
+		);
 	});
 });
 
@@ -232,7 +236,9 @@ describe("markdownLinkHref", () => {
 	});
 
 	test("keeps the anchor as a slugged hash", () => {
-		expect(markdownLinkHref("My%20Note.md#Some%20Heading", "work", map)).toBe("/v/work/n-1#some-heading");
+		expect(markdownLinkHref("My%20Note.md#Some%20Heading", "work", map)).toBe(
+			"/v/work/n-1#some-heading",
+		);
 	});
 
 	test("falls back to the sync manifest when no edge is indexed yet", () => {
