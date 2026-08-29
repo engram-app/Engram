@@ -4,7 +4,7 @@
 
 ## How it works (since PR #1223)
 
-Note routes are id-keyed (`/:slug/:itemId`), but a wikilink names a note by
+Note routes are id-keyed (`/v/:slug/:itemId`), but a wikilink names a note by
 path or bare title. Bridging happens in three pieces, all in `frontend/src`:
 
 1. **`viewer/wiki-link.ts`** (pure) — `parseWikiTarget` splits `Page#Heading`
@@ -12,11 +12,11 @@ path or bare title. Bridging happens in three pieces, all in `frontend/src`:
    uses, so the hash lands on a real anchor). `resolveWikiTarget` applies
    Obsidian rules against a `{id, path}` list: exact path (with/without
    `.md`) first, then vault-wide basename, shortest path wins, all
-   case-insensitive. `wikiHref` builds `/:slug/wiki/<segment-encoded target>`.
-2. **`viewer/wiki-link-redirect.tsx`** at route `/:slug/wiki/*` — fetches
+   case-insensitive. `wikiHref` builds `/v/:slug/wiki/<segment-encoded target>`.
+2. **`viewer/wiki-link-redirect.tsx`** at route `/v/:slug/wiki/*` — fetches
    `GET /api/sync/manifest` (`useSyncManifest`, react-query, 30s staleTime;
    the manifest is the one endpoint with the vault-wide path→id inventory)
-   and `<Navigate replace>`s to `/:slug/:id`, hash preserved. Unresolvable →
+   and `<Navigate replace>`s to `/v/:slug/:id`, hash preserved. Unresolvable →
    NotFoundPage. Manifest is only fetched when a wikilink is followed.
 3. **Two producers, one helper** — Reading mode (`note-view.tsx`
    remark-wiki-link config) and the CodeMirror editor (`note-page.tsx`
