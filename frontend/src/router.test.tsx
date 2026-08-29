@@ -81,7 +81,10 @@ describe("createAppRouter - settings overlay mount point", () => {
 });
 
 describe("createAppRouter - vault routes are namespaced under /v", () => {
-	type RouteLike = { path?: string; children?: RouteLike[] };
+	interface RouteLike {
+		path?: string;
+		children?: RouteLike[];
+	}
 
 	/** Flattens the router config to full paths, resolving RR's relative children. */
 	function fullPaths(routes: RouteLike[], parent = ""): string[] {

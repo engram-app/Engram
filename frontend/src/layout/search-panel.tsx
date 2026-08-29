@@ -25,6 +25,7 @@ import {
 	useTypes,
 } from "../api/queries";
 import { useActiveVaultSlug } from "../api/vault-slug";
+import { vaultPath } from "../routes";
 import { useRailView } from "./rail-view-context";
 import { pushRecent, readRecent } from "./recent-searches";
 
@@ -676,7 +677,7 @@ function ResultRow({
 	if (result.id === null) {
 		return null;
 	}
-	const href = slug ? `/${slug}/${result.id}` : `/note/${result.id}`;
+	const href = slug ? vaultPath(slug, result.id) : `/note/${result.id}`;
 	return (
 		<Link
 			ref={ref}

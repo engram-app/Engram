@@ -5,6 +5,7 @@ import { useActiveVaultSlug } from "../api/vault-slug";
 import { EmptyVaultState } from "../layout/empty-vault-state";
 import { useRightToolSlot } from "../layout/right-tools-context";
 import { noteName } from "../lib/note-name";
+import { vaultPath } from "../routes";
 import NoteToc from "./note-toc";
 
 function formatDate(iso: string): string {
@@ -24,7 +25,7 @@ function NoteRow({ note }: NoteRowProps) {
 	return (
 		<article className="border-gray-100 border-b py-3 last:border-0 dark:border-gray-800">
 			<Link
-				to={slug ? `/${slug}/${note.id}` : `/note/${note.id}`}
+				to={slug ? vaultPath(slug, note.id) : `/note/${note.id}`}
 				className="block hover:text-blue-700"
 			>
 				<h3 className="font-medium text-gray-900 text-sm dark:text-gray-100">

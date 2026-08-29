@@ -1,4 +1,5 @@
 import GithubSlugger from "github-slugger";
+import { vaultPath } from "../routes";
 
 // Obsidian-style wikilink resolution against the vault manifest. Pure module —
 // the /:slug/wiki/* redirect route and both link producers (note-view's
@@ -102,14 +103,14 @@ export function wikiHref(
 	}
 	const resolved = map?.get(page.toLowerCase());
 	if (resolved?.target_note_id) {
-		return `/${slug}/${resolved.target_note_id}${hash}`;
+		return `${vaultPath(slug, resolved.target_note_id)}${hash}`;
 	}
 	const fromManifest = manifestNotes ? resolveWikiTarget(page, manifestNotes) : null;
 	if (fromManifest) {
-		return `/${slug}/${fromManifest.id}${hash}`;
+		return `${vaultPath(slug, fromManifest.id)}${hash}`;
 	}
 	const encoded = page.split("/").map(encodeURIComponent).join("/");
-	return `/${slug}/wiki/${encoded}${hash}`;
+	return `${vaultPath(slug)}/wiki/${encoded}${hash}`;
 }
 
 // Markdown-syntax link resolution (#1302). Obsidian writes
@@ -158,8 +159,8 @@ export function markdownLinkHref(
 
 	const resolved = map?.get(page.toLowerCase());
 	if (resolved?.target_note_id) {
-		return `/${slug}/${resolved.target_note_id}${hash}`;
+		return `${vaultPath(slug, resolved.target_note_id)}${hash}`;
 	}
 	const fromManifest = manifestNotes ? resolveWikiTarget(page, manifestNotes) : null;
-	return fromManifest ? `/${slug}/${fromManifest.id}${hash}` : null;
+	return fromManifest ? `${vaultPath(slug, fromManifest.id)}${hash}` : null;
 }

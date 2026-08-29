@@ -74,15 +74,15 @@ describe("resolveWikiTarget", () => {
 
 describe("wikiHref", () => {
 	test("routes into the vault wiki resolver, segment-encoded", () => {
-		expect(wikiHref("Folder/My Note", "my-vault")).toBe("/my-vault/wiki/Folder/My%20Note");
+		expect(wikiHref("Folder/My Note", "my-vault")).toBe("/v/my-vault/wiki/Folder/My%20Note");
 	});
 
 	test("carries the heading as a slugged hash", () => {
-		expect(wikiHref("Note#Some Heading", "v")).toBe("/v/wiki/Note#some-heading");
+		expect(wikiHref("Note#Some Heading", "work")).toBe("/v/work/wiki/Note#some-heading");
 	});
 
 	test("bare heading links stay on the current page", () => {
-		expect(wikiHref("#Some Heading", "v")).toBe("#some-heading");
+		expect(wikiHref("#Some Heading", "work")).toBe("#some-heading");
 	});
 
 	test("no vault slug renders an inert anchor", () => {
@@ -140,23 +140,23 @@ describe("wikiHref with resolver map", () => {
 	]);
 
 	test("resolved target links straight to the note id", () => {
-		expect(wikiHref("My Note", "v", map)).toBe("/v/n-1");
+		expect(wikiHref("My Note", "work", map)).toBe("/v/work/n-1");
 	});
 
 	test("lookup is case-insensitive and keeps the heading hash", () => {
-		expect(wikiHref("my note#Some Heading", "v", map)).toBe("/v/n-1#some-heading");
+		expect(wikiHref("my note#Some Heading", "work", map)).toBe("/v/work/n-1#some-heading");
 	});
 
 	test("dangling target falls back to the wiki resolver route", () => {
-		expect(wikiHref("Ghost", "v", map)).toBe("/v/wiki/Ghost");
+		expect(wikiHref("Ghost", "work", map)).toBe("/v/work/wiki/Ghost");
 	});
 
 	test("target absent from the map falls back to the wiki resolver route", () => {
-		expect(wikiHref("Brand New", "v", map)).toBe("/v/wiki/Brand%20New");
+		expect(wikiHref("Brand New", "work", map)).toBe("/v/work/wiki/Brand%20New");
 	});
 
 	test("no map behaves exactly as before", () => {
-		expect(wikiHref("My Note", "v")).toBe("/v/wiki/My%20Note");
+		expect(wikiHref("My Note", "work")).toBe("/v/work/wiki/My%20Note");
 	});
 });
 
@@ -179,27 +179,27 @@ describe("wikiHref layered manifest fallback", () => {
 	];
 
 	test("edge-map hit wins over a manifest match", () => {
-		expect(wikiHref("My Note", "v", map, notes)).toBe("/v/edge-id");
+		expect(wikiHref("My Note", "work", map, notes)).toBe("/v/work/edge-id");
 	});
 
 	test("manifest-only target links straight to the note id", () => {
-		expect(wikiHref("Renamed Note", "v", map, notes)).toBe("/v/fresh-id");
+		expect(wikiHref("Renamed Note", "work", map, notes)).toBe("/v/work/fresh-id");
 	});
 
 	test("unknown in both falls back to the wiki resolver route", () => {
-		expect(wikiHref("Brand New", "v", map, notes)).toBe("/v/wiki/Brand%20New");
+		expect(wikiHref("Brand New", "work", map, notes)).toBe("/v/work/wiki/Brand%20New");
 	});
 
 	test("heading hash preserved on edge-map hit", () => {
-		expect(wikiHref("My Note#A Heading", "v", map, notes)).toBe("/v/edge-id#a-heading");
+		expect(wikiHref("My Note#A Heading", "work", map, notes)).toBe("/v/work/edge-id#a-heading");
 	});
 
 	test("heading hash preserved on manifest hit", () => {
-		expect(wikiHref("Renamed Note#A Heading", "v", map, notes)).toBe("/v/fresh-id#a-heading");
+		expect(wikiHref("Renamed Note#A Heading", "work", map, notes)).toBe("/v/work/fresh-id#a-heading");
 	});
 
 	test("heading hash preserved on wiki fallback", () => {
-		expect(wikiHref("Brand New#A Heading", "v", map, notes)).toBe("/v/wiki/Brand%20New#a-heading");
+		expect(wikiHref("Brand New#A Heading", "work", map, notes)).toBe("/v/work/wiki/Brand%20New#a-heading");
 	});
 });
 
@@ -224,19 +224,19 @@ describe("markdownLinkHref", () => {
 	const notes = [{ id: "manifest-id", path: "Other Note.md" }];
 
 	test("resolves a vault-relative href to the note route", () => {
-		expect(markdownLinkHref("My Note.md", "v", map)).toBe("/v/n-1");
+		expect(markdownLinkHref("My Note.md", "work", map)).toBe("/v/work/n-1");
 	});
 
 	test("decodes percent-escapes before lookup — target_text is stored decoded", () => {
-		expect(markdownLinkHref("My%20Note.md", "v", map)).toBe("/v/n-1");
+		expect(markdownLinkHref("My%20Note.md", "work", map)).toBe("/v/work/n-1");
 	});
 
 	test("keeps the anchor as a slugged hash", () => {
-		expect(markdownLinkHref("My%20Note.md#Some%20Heading", "v", map)).toBe("/v/n-1#some-heading");
+		expect(markdownLinkHref("My%20Note.md#Some%20Heading", "work", map)).toBe("/v/work/n-1#some-heading");
 	});
 
 	test("falls back to the sync manifest when no edge is indexed yet", () => {
-		expect(markdownLinkHref("Other Note.md", "v", map, notes)).toBe("/v/manifest-id");
+		expect(markdownLinkHref("Other Note.md", "work", map, notes)).toBe("/v/work/manifest-id");
 	});
 
 	test.each([
@@ -247,14 +247,14 @@ describe("markdownLinkHref", () => {
 		["/v/already-routed", "already an app route"],
 		["", "empty"],
 	])("%s is left alone (%s)", (href) => {
-		expect(markdownLinkHref(href, "v", map, notes)).toBeNull();
+		expect(markdownLinkHref(href, "work", map, notes)).toBeNull();
 	});
 
 	test("an unresolved target stays a plain anchor, NOT the create route", () => {
 		// Deliberately unlike wikilinks: a markdown link can point at an
 		// attachment or a genuinely relative file, so hijacking it into the
 		// note-create affordance would be wrong.
-		expect(markdownLinkHref("Nope.md", "v", map, notes)).toBeNull();
+		expect(markdownLinkHref("Nope.md", "work", map, notes)).toBeNull();
 	});
 
 	test("no vault slug resolves nothing", () => {

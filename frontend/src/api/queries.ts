@@ -12,6 +12,7 @@ import { collideBump } from "@/lib/collide-bump";
 import { noteName } from "@/lib/note-name";
 import { randomUuid } from "@/lib/random-uuid";
 import { uuid7 } from "../crdt/uuid7";
+import { vaultPath } from "../routes";
 import {
 	isSyntheticFolderId,
 	syntheticFolderId,
@@ -963,7 +964,7 @@ export function useCreateNote() {
 			// a context because it must fire exactly once, and router state is
 			// already scoped to a single navigation. Both creation entry points (the
 			// tree's context menu and the sidebar button) route through here.
-			navigate(slug ? `/${slug}/${id}` : `/note/${id}`, { state: { justCreated: true } });
+			navigate(slug ? vaultPath(slug, id) : `/note/${id}`, { state: { justCreated: true } });
 		},
 		onError: (err, _vars, ctx) => {
 			if (ctx) {

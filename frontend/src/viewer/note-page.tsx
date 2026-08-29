@@ -32,6 +32,7 @@ import { useRightToolSlot } from "../layout/right-tools-context";
 import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";
 import { rlog } from "../observability/remote-log";
+import { vaultPath } from "../routes";
 import BacklinksPanel from "./backlinks-panel";
 import { useActiveEditor } from "./editor/active-editor-context";
 import { KeyboardBar } from "./editor/keyboard-bar";
@@ -426,7 +427,7 @@ export default function NotePage() {
 			return;
 		}
 		rlog().warn("note", `note ${validId} 404'd while routed — redirecting to vault root`);
-		navigate(slug ? `/${slug}` : "/", { replace: true });
+		navigate(slug ? vaultPath(slug) : "/", { replace: true });
 	}, [noteGone, validId, navigate, slug]);
 
 	if (validId === null) {
@@ -737,7 +738,7 @@ export default function NotePage() {
 						// useDeleteNote does not navigate — from the tree the deleted note
 						// usually isn't open, but here it is, so staying would strand the
 						// user on a dead route.
-						navigate(slug ? `/${slug}` : "/");
+						navigate(slug ? vaultPath(slug) : "/");
 					}}
 					onCancel={() => setDialog(null)}
 				/>
