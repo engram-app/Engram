@@ -26,9 +26,16 @@ else
   # SCHEMA-IMPACT block for a release that actually changes the schema —
   # defeating the entire feature. Surface gh failures via ::error:: so CI
   # fails fast instead of producing a misleading release page.
+  # --sort updated --order desc: the range filter below is now an
+  # INTERSECTION with git log, so a phase-labeled PR missing from this
+  # result silently drops the whole SCHEMA-IMPACT block (git log has no
+  # way to independently notice a PR that gh search failed to return).
+  # `--limit 500` only stays safe if this call is guaranteed newest-first;
+  # make that explicit rather than relying on gh's default sort.
   if ! prs=$(gh search prs --repo "${GITHUB_REPOSITORY:-engram-app/Engram}" \
           --merged \
           --base main \
+          --sort updated --order desc \
           --json number,labels,title \
           --limit 500 2>&1); then
     echo "::error::generate_schema_impact_notes: gh search prs failed — cannot determine phase-labeled PRs in release range. Output: $prs" >&2

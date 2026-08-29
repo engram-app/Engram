@@ -79,4 +79,30 @@ output_range_empty=$(GH_OUTPUT_OVERRIDE='[
    bash "$SCRIPT" abc123 def456)
 [ -z "$output_range_empty" ] || fail "Test 7: expected empty output when no phase PRs are in range; got: $output_range_empty"
 
-echo "All tests passed (7)."
+
+# --- Test 8: real git-log extraction, NO MERGED_PR_NUMBERS_OVERRIDE. Tests
+# 1-7 all set the override, which bypasses the actual `git log` parse —
+# the one piece of new logic that carries real risk (the grep pattern, the
+# `$`-anchor, squash- vs merge-commit shapes). Without this test, a change
+# that silently disabled the range filter entirely would still pass every
+# other test in this file. Uses a real scratch git repo so the regex runs
+# against real commit subjects, not a hand-fed number list.
+tmp_repo="$(mktemp -d)"
+trap 'rm -rf "$tmp_repo"' EXIT
+gc() { git -C "$tmp_repo" -c user.email=test@example.com -c user.name=test "$@"; }
+git -c init.defaultBranch=main -C "$tmp_repo" init -q
+gc commit -q --allow-empty -m "chore: base"
+base_sha=$(git -C "$tmp_repo" rev-parse HEAD)
+gc commit -q --allow-empty -m "feat: in range (#101)"
+gc commit -q --allow-empty -m "chore: direct push, no PR number"
+head_sha=$(git -C "$tmp_repo" rev-parse HEAD)
+
+output_real=$(cd "$tmp_repo" && GH_OUTPUT_OVERRIDE='[
+  {"number":100,"labels":[{"name":"phase/expand"}],"title":"Shipped in a prior release"},
+  {"number":101,"labels":[{"name":"phase/expand"}],"title":"Shipped in THIS release"}
+]' IRREVERSIBLE_OVERRIDE='false' bash "$SCRIPT" "$base_sha" "$head_sha")
+
+echo "$output_real" | grep -q '#101' || fail "Test 8: real git-log extraction missed in-range #101"
+echo "$output_real" | grep -q '#100' && fail "Test 8: real git-log extraction included out-of-range #100" || true
+
+echo "All tests passed (8)."
