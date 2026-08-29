@@ -7,6 +7,7 @@ defmodule Engram.Billing do
   """
 
   import Ecto.Query
+
   alias Engram.Billing.EntitlementCache
   alias Engram.Billing.LimitKeys
   alias Engram.Billing.PlanCache
@@ -15,6 +16,7 @@ defmodule Engram.Billing do
   alias Engram.Logger.Metadata
   alias Engram.Paddle.Client
   alias Engram.Repo
+  alias Engram.Workers.IndexCapMaintenance
 
   require Logger
 
@@ -718,7 +720,14 @@ defmodule Engram.Billing do
               # Nulls both index hashes; ReconcileEmbeddings rebuilds the notes
               # sparse-only on its next tick and the dense points go with the
               # replace. See IndexCap.revoke_dense_index/1.
-              _ = Engram.Indexing.IndexCap.revoke_dense_index(user.id)
+              #
+              # ENQUEUED, not inline. This is an unbounded UPDATE over the
+              # user's whole vault, and we are inside a Paddle webhook request:
+              # a 60k-note account made the delivery outlive Paddle's timeout,
+              # so a cancellation that COMMITTED was recorded as a failed
+              # delivery and retried. Only fires on a real downgrade — `user`
+              # is nil unless prev_tier was paid.
+              _ = IndexCapMaintenance.enqueue(user.id, :revoke_dense)
             end
 
             {:ok, updated}
