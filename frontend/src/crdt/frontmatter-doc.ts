@@ -11,13 +11,6 @@ const EMPTY_DEFAULT: Record<PropertyType, unknown> = {
 	datetime: "",
 };
 
-// OKF v0.1 standard keys, pinned to the top of the properties widget in
-// spec order. Custom keys follow in their user-defined order.
-const OKF_KEY_ORDER = ["type", "description", "resource", "timestamp", "created", "tags"] as const;
-// Same list, widened: `readonly string[]` so `indexOf(key: string)` type-checks
-// without asserting the tuple away at the call site.
-const OKF_KEYS: readonly string[] = OKF_KEY_ORDER;
-
 /**
  * Is this name already spoken for?
  *
@@ -162,15 +155,6 @@ export function moveKey(doc: Y.Doc, key: string, dir: "up" | "down"): void {
 		order.delete(idx, 1);
 		order.insert(target, [key]);
 	});
-}
-
-export function sortRowsOkfFirst(rows: PropertyRow[]): PropertyRow[] {
-	const rank = (key: string) => {
-		const i = OKF_KEYS.indexOf(key);
-		return i === -1 ? OKF_KEY_ORDER.length : i;
-	};
-	// Array.prototype.sort is stable: equal-rank (custom) keys keep order.
-	return [...rows].sort((a, b) => rank(a.key) - rank(b.key));
 }
 
 export function setType(doc: Y.Doc, key: string, type: PropertyType): void {

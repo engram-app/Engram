@@ -8,7 +8,6 @@ import {
 	frontmatterMaps,
 	moveKey,
 	ORDER_KEY,
-	type PropertyRow,
 	rawMap,
 	readRaws,
 	readRows,
@@ -16,7 +15,6 @@ import {
 	renameKey,
 	setType,
 	setValue,
-	sortRowsOkfFirst,
 	TYPES_KEY,
 } from "./frontmatter-doc";
 
@@ -174,23 +172,20 @@ describe("frontmatter-doc mutations", () => {
 	});
 });
 
-describe("sortRowsOkfFirst", () => {
-	const row = (key: string): PropertyRow => ({ key, value: "x", typeOverride: null });
-
-	test("pins OKF keys in spec order before custom keys", () => {
-		const rows = ["zeta", "tags", "alpha", "type", "created"].map(row);
-		expect(sortRowsOkfFirst(rows).map((r) => r.key)).toEqual([
-			"type",
-			"created",
-			"tags",
-			"zeta",
-			"alpha",
-		]);
-	});
-
-	test("is stable for custom keys and identity when no OKF keys present", () => {
-		const rows = ["b", "a", "c"].map(row);
-		expect(sortRowsOkfFirst(rows).map((r) => r.key)).toEqual(["b", "a", "c"]);
+// The widget used to hoist the six OKF keys (type, description, resource,
+// timestamp, created, tags) above everything else. It was display-only and the
+// sorted list was never written back, so the file kept the author's order --
+// which is exactly why it read as a bug: the same note listed its properties in
+// two different orders depending on which app you looked at. Document order is
+// the one both clients can agree on, and it is the order the user typed.
+describe("readRows follows document order", () => {
+	test("returns keys in frontmatter_order, OKF names included", () => {
+		const doc = new Y.Doc();
+		for (const key of ["zeta", "tags", "alpha", "type", "created"]) {
+			addKey(doc, key, "text");
+			setValue(doc, key, "x");
+		}
+		expect(readRows(doc).map((r) => r.key)).toEqual(["zeta", "tags", "alpha", "type", "created"]);
 	});
 });
 
