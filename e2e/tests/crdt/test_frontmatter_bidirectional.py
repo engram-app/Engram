@@ -31,6 +31,7 @@ Coverage map, deliberately both directions and both bindings:
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 from playwright.async_api import expect
@@ -72,6 +73,50 @@ async def _open_in_obsidian(cdp, path: str) -> None:
         await_promise=True,
     )
     assert opened == path, f"failed to live-bind {path} in Obsidian: {opened!r}"
+
+
+async def _close_all_in_obsidian(cdp) -> None:
+    """Detach every markdown leaf — the user's "close the file".
+
+    This is the transition that releases the live binding. `detach()` is what
+    Obsidian's own close button calls, so it fires the same teardown (and the
+    same final save) the reported repro goes through."""
+    left = await cdp.evaluate(
+        """
+        (async () => {
+          app.workspace.getLeavesOfType("markdown").forEach((l) => l.detach());
+          return app.workspace.getLeavesOfType("markdown").length;
+        })()
+        """,
+        await_promise=True,
+    )
+    assert left == 0, f"markdown leaves still open after detach: {left!r}"
+
+
+async def _type_into_open_editor(cdp, path: str, text: str) -> None:
+    """Set the OPEN editor's buffer, which is what typing produces.
+
+    Deliberately not `write_note`: a disk write goes down `routeModify`, the
+    path that already works. The reported bug needs the edit to originate in
+    the bound CodeMirror buffer. `editor.setValue` drives the same CM6
+    transaction pipeline a keystroke does, so `classifyEditSpan` sees it.
+
+    The frontmatter is part of the editor document even though the properties
+    widget renders it as a decoration, so the fenced block belongs in `text`."""
+    got = await cdp.evaluate(
+        """
+        (async () => {
+          const ed = app.workspace.activeEditor;
+          if (!ed || ed.file?.path !== %r) return "not-active";
+          ed.editor.setValue(%r);
+          await app.workspace.activeEditor.save?.();
+          return ed.editor.getValue();
+        })()
+        """
+        % (path, text),
+        await_promise=True,
+    )
+    assert got == text, f"editor buffer did not take the edit for {path}: {got!r}"
 
 
 @pytest.mark.asyncio
@@ -184,3 +229,58 @@ async def test_unparseable_frontmatter_does_not_delete_existing_keys(
         "unparseable YAML deleted the good frontmatter keys; "
         f"file is now:\n{final!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_typed_frontmatter_survives_close_and_reopen(
+    vault_a, cdp_a, api_sync, web, sync_vault_id
+):
+    """[5] Reported 2026-08-29, still failing on 1.24.4-pr.482.g206c5f8.
+
+    The distinguishing shape of this one: the frontmatter DOES reach the web
+    app and stays there, so the server-side Y.Doc holds it. Only the local file
+    loses it, and only across a close/reopen. That rules out ingest (tests 1-3
+    prove the doc receives the keys) and points at the doc -> disk projection
+    that runs when the live binding is released.
+
+    Every earlier test writes frontmatter with `write_note`. That is the disk
+    path, which was never the broken one. This test originates the edit in the
+    bound editor buffer, which is what the user actually does, and is the only
+    way to put the binding teardown on the critical path.
+    """
+    path = "E2E/Crdt/FmCloseReopen.md"
+    write_note(vault_a, path, "---\nkeep: me\n---\n\nbody v1\n")
+    note_id = _note_id(api_sync, path)
+    await _open_in_obsidian(cdp_a, path)
+
+    await web.open_note(note_id, sync_vault_id)
+    await expect(web.property_value_locator("keep")).to_have_value("me", timeout=MS)
+
+    # Type a second key into the OPEN note.
+    await _type_into_open_editor(
+        cdp_a, path, "---\nkeep: me\nstatus: published\n---\n\nbody v1\n"
+    )
+
+    # It reaches the web app. The user confirms this half works, and asserting
+    # it here is what makes the failure below unambiguous: the doc HAS the key
+    # at the moment the file is closed.
+    await expect(web.property_value_locator("status")).to_have_value("published", timeout=MS)
+
+    await _close_all_in_obsidian(cdp_a)
+    await _open_in_obsidian(cdp_a, path)
+
+    # Poll rather than read once: the loss lands on a flush that follows the
+    # unbind, so a single read right after reopen can pass before the damage.
+    # Fail the moment a key disappears, and require it to still be there at the
+    # end of the settle window.
+    deadline = time.monotonic() + CRDT_TIMEOUT
+    while time.monotonic() < deadline:
+        disk = read_note(vault_a, path) or ""
+        assert "keep:" in disk and "status:" in disk, (
+            "frontmatter vanished from disk after close/reopen while the web app "
+            f"still shows it; file is now:\n{disk!r}"
+        )
+        time.sleep(0.5)
+
+    # And the server still agrees, so this was never a delete the user made.
+    await expect(web.property_value_locator("status")).to_have_value("published", timeout=MS)
