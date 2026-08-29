@@ -2,41 +2,11 @@ defmodule Engram.RepoTenantRoundtripsTest do
   use Engram.DataCase, async: false
 
   alias Engram.Notes.Note
+  alias Engram.TenantQueryCounter
 
   # Counts utility statements (the SELECT set_config / SET / RESET overhead)
-  # emitted by with_tenant, excluding the caller's own queries. Telemetry
-  # handlers run synchronously in the emitting process.
-  defp count_utility_statements(fun) do
-    test_pid = self()
-    handler_id = {__MODULE__, make_ref()}
-
-    :telemetry.attach(
-      handler_id,
-      [:engram, :repo, :query],
-      fn _e, _m, %{query: q}, _c ->
-        if self() == test_pid and (q =~ "set_config" or q =~ ~r/^(SET|RESET)/) do
-          send(test_pid, {:utility, q})
-        end
-      end,
-      nil
-    )
-
-    try do
-      fun.()
-    after
-      :telemetry.detach(handler_id)
-    end
-
-    collect(:utility)
-  end
-
-  defp collect(tag, acc \\ []) do
-    receive do
-      {^tag, q} -> collect(tag, [q | acc])
-    after
-      0 -> Enum.reverse(acc)
-    end
-  end
+  # emitted by with_tenant, excluding the caller's own queries.
+  defp count_utility_statements(fun), do: TenantQueryCounter.count_wire_statements(fun)
 
   describe "with_tenant/2 wire overhead" do
     test "one combined set_config statement in, one reset out" do

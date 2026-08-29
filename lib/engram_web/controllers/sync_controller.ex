@@ -109,28 +109,38 @@ defmodule EngramWeb.SyncController do
     # T3.6 — project `id` and `dek_version` so AAD-bound rows (v ≥ 2) can
     # reconstruct the bind string ("notes:path:<id>" / "attachments:path:<id>")
     # at decrypt time. Legacy rows (v = 1) decrypt with empty AAD.
-    {:ok, note_rows} =
+    #
+    # #1211: one with_tenant block for both fetches — they're adjacent,
+    # DB-only reads with nothing CPU-bound between them, so with_tenant's
+    # re-entrancy (a nested call for the SAME tenant inside an active
+    # transaction runs directly, no new BEGIN/set_config/COMMIT round trips)
+    # collapses what was 2 blocks into 1. Decrypt below stays OUTSIDE this
+    # block on purpose: holding a DB connection across CPU-bound decrypt work
+    # is the shape behind the 2026-07-09 CRDT pool-exhaustion incident.
+    {:ok, {note_rows, attachment_rows}} =
       Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in Note,
-            where:
-              n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                n.kind == "note",
-            select:
-              {n.id, n.dek_version, n.path_ciphertext, n.path_nonce, n.content_hash, n.seq,
-               n.crdt_head}
+        notes =
+          Repo.all(
+            from(n in Note,
+              where:
+                n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
+                  n.kind == "note",
+              select:
+                {n.id, n.dek_version, n.path_ciphertext, n.path_nonce, n.content_hash, n.seq,
+                 n.crdt_head}
+            )
           )
-        )
-      end)
 
-    {:ok, attachment_rows} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(a in Attachment,
-            where: a.user_id == ^user.id and a.vault_id == ^vault.id and is_nil(a.deleted_at),
-            select: {a.id, a.dek_version, a.path_ciphertext, a.path_nonce, a.content_hash, a.seq}
+        attachments =
+          Repo.all(
+            from(a in Attachment,
+              where: a.user_id == ^user.id and a.vault_id == ^vault.id and is_nil(a.deleted_at),
+              select:
+                {a.id, a.dek_version, a.path_ciphertext, a.path_nonce, a.content_hash, a.seq}
+            )
           )
-        )
+
+        {notes, attachments}
       end)
 
     # Path-sized payloads decrypt in ~4µs each — measured 10k sequential at
