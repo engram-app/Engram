@@ -109,7 +109,7 @@ vi.mock("../api/queries", () => ({
 const { navigateMock, locationMock } = vi.hoisted(() => ({
 	navigateMock: vi.fn(),
 	locationMock: vi.fn<() => { pathname: string; state: { justCreated?: boolean } | null }>(() => ({
-		pathname: "/my-vault/note-1",
+		pathname: "/v/my-vault/note-1",
 		state: null,
 	})),
 }));
@@ -161,7 +161,7 @@ describe("NotePage (CRDT)", () => {
 		syncListeners.clear();
 		paramsMock.itemId = "note-1";
 		paramsMock.slug = "my-vault";
-		locationMock.mockReturnValue({ pathname: "/my-vault/note-1", state: null });
+		locationMock.mockReturnValue({ pathname: "/v/my-vault/note-1", state: null });
 		const doc = new Y.Doc();
 		openDoc.mockResolvedValue({
 			ytext: doc.getText("content"),
@@ -189,7 +189,7 @@ describe("NotePage (CRDT)", () => {
 			});
 			renderPage();
 			await waitFor(() =>
-				expect(navigateMock).toHaveBeenCalledWith("/my-vault", { replace: true }),
+				expect(navigateMock).toHaveBeenCalledWith("/v/my-vault", { replace: true }),
 			);
 			expect(screen.queryByText(/Failed to load note/)).not.toBeInTheDocument();
 		});
@@ -378,7 +378,7 @@ describe("NotePage (CRDT)", () => {
 			openDoc.mockImplementation(() => new Promise(() => {}));
 			paramsMock.itemId = "note-2";
 			locationMock.mockReturnValue({
-				pathname: "/my-vault/note-2",
+				pathname: "/v/my-vault/note-2",
 				state: { justCreated: true },
 			});
 			rerender(pageTree());
@@ -1074,7 +1074,7 @@ describe("NotePage (CRDT)", () => {
 			expect(deleteNoteMutate).toHaveBeenCalledWith(
 				expect.objectContaining({ id: "note-1", path: "folder/note.md" }),
 			);
-			expect(navigateMock).toHaveBeenCalledWith("/my-vault");
+			expect(navigateMock).toHaveBeenCalledWith("/v/my-vault");
 		});
 
 		// The reported symptom was "I can set keys but not values". Proves the
@@ -1154,7 +1154,7 @@ describe("NotePage (CRDT)", () => {
 	describe("new-note rename", () => {
 		it("opens the title in rename mode when navigated to as just-created", async () => {
 			locationMock.mockReturnValue({
-				pathname: "/my-vault/note-1",
+				pathname: "/v/my-vault/note-1",
 				state: { justCreated: true },
 			});
 			renderPage();
@@ -1168,19 +1168,19 @@ describe("NotePage (CRDT)", () => {
 
 		it("clears the flag so a back-navigation does not reopen the rename box", async () => {
 			locationMock.mockReturnValue({
-				pathname: "/my-vault/note-1",
+				pathname: "/v/my-vault/note-1",
 				state: { justCreated: true },
 			});
 			renderPage();
 			await screen.findByRole("textbox", { name: "Rename file" });
-			expect(navigateMock).toHaveBeenCalledWith("/my-vault/note-1", {
+			expect(navigateMock).toHaveBeenCalledWith("/v/my-vault/note-1", {
 				replace: true,
 				state: {},
 			});
 		});
 
 		it("does not start renaming on an ordinary navigation", async () => {
-			locationMock.mockReturnValue({ pathname: "/my-vault/note-1", state: null });
+			locationMock.mockReturnValue({ pathname: "/v/my-vault/note-1", state: null });
 			renderPage();
 			await screen.findByTestId("note-editor");
 			expect(screen.queryByRole("textbox", { name: "Rename file" })).not.toBeInTheDocument();

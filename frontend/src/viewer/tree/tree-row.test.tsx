@@ -129,7 +129,7 @@ describe("TreeRow", () => {
 			</MemoryRouter>,
 		);
 		const link = screen.getByRole("link") as HTMLAnchorElement;
-		expect(link.getAttribute("href")).toBe("/work/100");
+		expect(link.getAttribute("href")).toBe("/v/work/100");
 	});
 
 	it("shows uppercase ext badge for non-md notes", () => {
@@ -442,7 +442,7 @@ describe("TreeRow", () => {
 			</MemoryRouter>,
 		);
 		const link = screen.getByRole("link") as HTMLAnchorElement;
-		expect(link.getAttribute("href")).toBe("/work/att-1");
+		expect(link.getAttribute("href")).toBe("/v/work/att-1");
 	});
 
 	it("shows uppercase ext badge for attachment", () => {

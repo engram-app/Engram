@@ -3,7 +3,7 @@ import { createVault, noteUrlRe, registerAndLogin, signInForNote, upsertNote } f
 import { row } from "./support/tree";
 
 /**
- * Wikilink navigation must NEVER route through the lazy /:slug/wiki/* resolver
+ * Wikilink navigation must NEVER route through the lazy /v/:slug/wiki/* resolver
  * for a target that exists — not even as a transient flash. wikiHref resolves
  * in layers: (1) server-indexed link edges, (2) the sync-manifest client cache,
  * (3) only then the /wiki redirect (kept for deep links + the create

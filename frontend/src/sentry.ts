@@ -1,6 +1,6 @@
 import type { Breadcrumb } from "@sentry/react";
 import type { ErrorInfo } from "react";
-import { ROUTES } from "./routes";
+import { ROUTES, VAULT_PREFIX } from "./routes";
 
 /** First path segments that are ours, not the user's.
  *
@@ -19,6 +19,11 @@ const KNOWN_FIRST_SEGMENTS = new Set<string>([
 		const [, segment] = route.split("/");
 		return segment ? [segment] : [];
 	}),
+	// The vault prefix. Keeping it un-redacted is safe AND strictly better for
+	// privacy than the old root-level shape: the slug is now always segment 2,
+	// which is unconditionally ":seg". Previously the slug WAS segment 1, so it
+	// stayed out of Sentry only because it missed this allowlist.
+	VAULT_PREFIX.slice(1),
 	// Router literals with no ROUTES constant.
 	"onboard",
 	"settings",
@@ -149,7 +154,7 @@ export function scrubUrl(url: string): string {
 	// switched on: "/:seg/:seg" cannot tell /api/search from /api/folders, and
 	// dropping the origin hid which service answered.
 	//
-	// But "keep segment 1" is wrong for OUR OWN ORIGIN. `/:slug` (router.tsx) is
+	// But "keep segment 1" is wrong for OUR OWN ORIGIN. `/v/:slug` (router.tsx) is
 	// the VAULT route, and the slug is slugify(vault.name) — a user-typed name.
 	// A vault called "Divorce 2026" put `divorce-2026` into every navigation
 	// breadcrumb and every event's request.url, on the app's most-travelled

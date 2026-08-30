@@ -2933,6 +2933,14 @@ jobs:
         # about. Cheap to run here, expensive to discover later.
         run: bash test/scripts/discord_release_notes_test.sh
 
+      - name: SCHEMA-IMPACT notes self-check
+        # Guards scripts/generate_schema_impact_notes.sh (phase/* filtering +
+        # BASE..HEAD range scoping). Its only callers are release-please.yml
+        # and deploy-prod.yml, so a regression is invisible until a release
+        # page either omits a real migration warning or invents one (this
+        # script previously had zero CI coverage at all).
+        run: bash test/scripts/generate_schema_impact_notes_test.sh
+
       - name: BEAM scheduler clamp self-check
         # Guards rel/env.sh's scheduler sizing. It ran in prod for an unknown
         # period doing NOTHING: written for cgroup quotas, but Fargate enforces

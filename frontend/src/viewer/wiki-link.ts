@@ -1,7 +1,8 @@
 import GithubSlugger from "github-slugger";
+import { vaultPath } from "../routes";
 
 // Obsidian-style wikilink resolution against the vault manifest. Pure module —
-// the /:slug/wiki/* redirect route and both link producers (note-view's
+// the /v/:slug/wiki/* redirect route and both link producers (note-view's
 // remark-wiki-link config, note-page's editor resolveWikiLink) share it.
 
 export const stripMd = (p: string) => p.replace(/\.md$/iu, "");
@@ -73,9 +74,13 @@ export function resolveWikiTarget(page: string, notes: ManifestNote[]): Manifest
 // redundant .md, then splits on the last '/' — bare target creates at the
 // vault root, path-qualified target creates (and implicitly folders) along
 // that path, matching Obsidian's click-to-create behavior.
-export function wikiCreatePath(raw: string): { folder: string; name: string } {
-	const { page } = parseWikiTarget(raw);
-	const segments = stripMd(page).split("/");
+// Takes an already-parsed PAGE, not raw `[[...]]` text. It must not re-split
+// on "#": the only caller is WikiLinkRedirect, whose route splat already has
+// the heading stripped into location.hash, and "#" is a legal character in a
+// note path here (PathSanitizer's @illegal_chars is [\\:*?<>"|]). Re-parsing
+// turned `[[C# Notes]]` into an offer to create "C.md".
+export function wikiCreatePath(page: string): { folder: string; name: string } {
+	const segments = stripMd(page.trim()).split("/");
 	const name = `${segments.pop() ?? ""}.md`;
 	return { folder: segments.join("/"), name };
 }
@@ -85,7 +90,7 @@ export function wikiCreatePath(raw: string): { folder: string; name: string } {
 // (1) a resolved entry in `map` (from buildWikiMap, server-indexed edges)
 // short-circuits straight to the note id; (2) a miss there tries the sync
 // manifest (client cache — covers freshly typed links whose edge isn't
-// indexed yet); (3) only then the lazy /:slug/wiki/* redirect, kept for deep
+// indexed yet); (3) only then the lazy /v/:slug/wiki/* redirect, kept for deep
 // links and the create-affordance on truly nonexistent targets.
 export function wikiHref(
 	raw: string,
@@ -102,14 +107,14 @@ export function wikiHref(
 	}
 	const resolved = map?.get(page.toLowerCase());
 	if (resolved?.target_note_id) {
-		return `/${slug}/${resolved.target_note_id}${hash}`;
+		return `${vaultPath(slug, resolved.target_note_id)}${hash}`;
 	}
 	const fromManifest = manifestNotes ? resolveWikiTarget(page, manifestNotes) : null;
 	if (fromManifest) {
-		return `/${slug}/${fromManifest.id}${hash}`;
+		return `${vaultPath(slug, fromManifest.id)}${hash}`;
 	}
 	const encoded = page.split("/").map(encodeURIComponent).join("/");
-	return `/${slug}/wiki/${encoded}${hash}`;
+	return `${vaultPath(slug)}/wiki/${encoded}${hash}`;
 }
 
 // Markdown-syntax link resolution (#1302). Obsidian writes
@@ -123,7 +128,7 @@ export function wikiHref(
 //   * the href arrives percent-encoded (`My%20Note.md`) while `target_text`
 //     and manifest paths are decoded, so it is decoded before lookup;
 //   * an UNRESOLVED target returns null (caller leaves the plain <a>) rather
-//     than falling through to the /:slug/wiki/* create affordance. A markdown
+//     than falling through to the /v/:slug/wiki/* create affordance. A markdown
 //     link can legitimately point at an attachment or a relative file, and
 //     offering to create a note for those would be wrong.
 //
@@ -158,8 +163,8 @@ export function markdownLinkHref(
 
 	const resolved = map?.get(page.toLowerCase());
 	if (resolved?.target_note_id) {
-		return `/${slug}/${resolved.target_note_id}${hash}`;
+		return `${vaultPath(slug, resolved.target_note_id)}${hash}`;
 	}
 	const fromManifest = manifestNotes ? resolveWikiTarget(page, manifestNotes) : null;
-	return fromManifest ? `/${slug}/${fromManifest.id}${hash}` : null;
+	return fromManifest ? `${vaultPath(slug, fromManifest.id)}${hash}` : null;
 }

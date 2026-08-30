@@ -30,7 +30,7 @@ interface NoteViewProps {
 	tags: string[];
 	// Optional: the markdown reference panel's preview call site renders
 	// outside a note context and has no links to resolve — wikilinks there
-	// fall back to the lazy /:slug/wiki/* route same as before this prop existed.
+	// fall back to the lazy /v/:slug/wiki/* route same as before this prop existed.
 	links?: NoteLinkEdge[];
 	// Optional second resolution layer (see wikiHref): the sync manifest covers
 	// freshly typed links whose server-indexed edge isn't in `links` yet.
@@ -51,7 +51,7 @@ function rewriteEmbeds(raw: string): string {
 }
 
 // Slug-parameterized: wikilinks route through the vault-scoped resolver
-// (`/:slug/wiki/*`, see wiki-link.ts). pageResolver is identity — the default
+// (`/v/:slug/wiki/*`, see wiki-link.ts). pageResolver is identity — the default
 // would mangle names (`My Note` → `my_note`) before the resolver ever saw them.
 const remarkPluginsFor = (
 	slug: string | undefined,

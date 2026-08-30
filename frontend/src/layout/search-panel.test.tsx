@@ -164,7 +164,7 @@ describe("SearchPanel", () => {
 		fireEvent.change(input, { target: { value: "hello" } });
 		const [firstRow] = await screen.findAllByText("note");
 		const link = firstRow?.closest("a") as HTMLAnchorElement;
-		expect(link.getAttribute("href")).toBe("/work/7");
+		expect(link.getAttribute("href")).toBe("/v/work/7");
 	});
 
 	it("[x] returns to Files view", () => {

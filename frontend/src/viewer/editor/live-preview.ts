@@ -71,7 +71,7 @@ export interface LivePreviewOpts {
  * The Rendered-mode decoration layer. Pure CM6 extensions (view-only): they
  * decorate the markdown source but never mutate EditorState.doc, so the yCollab
  * Y.Text binding (see note-editor.tsx) is untouched. Wikilinks resolve through
- * the same `/:slug/wiki/*` route as Reading mode (resolveWikiLink is NotePage's
+ * the same `/v/:slug/wiki/*` route as Reading mode (resolveWikiLink is NotePage's
  * wikiHref closure); click-to-open goes through opts.openWikiLink (NotePage's
  * useNavigate) — a hard `window.location` nav here full-page-reloaded the SPA
  * on every editor-mode link hop. Callouts/KaTeX are sibling view-only
