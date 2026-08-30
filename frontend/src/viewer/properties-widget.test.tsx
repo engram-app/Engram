@@ -493,7 +493,7 @@ describe("collapsed-block and checkbox edge cases", () => {
 // The blue keys and the `?` panel are one feature: the colour says "this one
 // counts", the panel says why. Both read the same table, so they cannot
 // disagree about which keys count or what shape each wants.
-describe("OKF keys are highlighted only when the backend would index them", () => {
+describe("OKF keys are highlighted", () => {
 	const keyInput = (name: string) => screen.getByRole("textbox", { name: `Rename ${name}` });
 
 	const renderWith = async (key: string, type: PropertyType, value: unknown) => {
@@ -504,60 +504,27 @@ describe("OKF keys are highlighted only when the backend would index them", () =
 		await screen.findByDisplayValue(key);
 	};
 
+	// WIRING only. Which key/type/value combinations count is `isOkfMatch`'s
+	// job and is covered exhaustively in crdt/frontmatter-doc.test.ts, where it
+	// costs a function call instead of a full widget mount -- ~30 cases of
+	// mounting this component is real wall-clock on a loaded machine, and slow
+	// suites fail OTHER files by starving them.
+	test("an indexed key renders in the accent colour", async () => {
+		await renderWith("type", "text", "meeting-note");
+		expect(keyInput("type")).toHaveClass("text-primary");
+	});
+
+	test("a key the backend would drop stays muted", async () => {
+		await renderWith("tags", "checkbox", true);
+		expect(keyInput("tags")).toHaveClass("text-muted-foreground");
+	});
+
 	test("a custom key stays muted", async () => {
 		await renderWith("my-own-key", "text", "whatever");
 		expect(keyInput("my-own-key")).toHaveClass("text-muted-foreground");
 	});
 
-	test.each([
-		["type", "text", "meeting-note"],
-		["description", "text", "a summary"],
-		["resource", "text", "https://example.com"],
-		["tags", "list", ["a", "b"]],
-		// helpers.ex regexes the raw `tags:` line, so a bare scalar indexes too.
-		["tags", "text", "work"],
-		["created", "date", "2026-08-29"],
-		["timestamp", "date", "2026-08-29"],
-		// A datetime WITH an offset is what DateTime.from_iso8601 accepts.
-		["created", "datetime", "2026-08-29T14:30:00Z"],
-		["updated", "date", "2026-08-29"],
-		["modified", "date", "2026-08-29"],
-		["date", "date", "2026-08-29"],
-	] as const)("%s as %s = %s is highlighted", async (key, type, value) => {
-		await renderWith(key, type, value);
-		expect(keyInput(key)).toHaveClass("text-primary");
-	});
-
-	// Each of these was highlighted at some point while being silently unindexed,
-	// which is worse than no highlight: the missing highlight is the ONLY signal
-	// the user gets that a field is being dropped.
-	test.each([
-		// Wrong shape entirely.
-		["tags", "checkbox", true],
-		["type", "checkbox", true],
-		["type", "number", 42],
-		["created", "text", "sometime last week"],
-		["timestamp", "list", ["a"]],
-		// string_field/1 refuses "", so a freshly-added key indexes nothing.
-		["type", "text", ""],
-		["description", "text", ""],
-		["tags", "list", []],
-		// The datetime-local picker's own output: no seconds, no offset, and
-		// parse_datetime/1 accepts neither.
-		["created", "datetime", "2026-08-29T14:30"],
-		["timestamp", "datetime", "2026-08-29T14:30:00"],
-	] as const)("%s as %s = %s is NOT highlighted", async (key, type, value) => {
-		await renderWith(key, type, value);
-		expect(keyInput(key)).toHaveClass("text-muted-foreground");
-	});
-
-	// OkfFields.extract/1 reads decoded["type"] literally and nothing downcases
-	// the key, so a capitalised name is a plain custom property.
-	test.each(["Type", "TAGS", "Created"])("%s is NOT highlighted (case matters)", async (key) => {
-		await renderWith(key, "text", "value");
-		expect(keyInput(key)).toHaveClass("text-muted-foreground");
-	});
-
+	// No per-key tooltip: the explanation lives in the `?` once, not on every row.
 	test("carries no hover text of its own", async () => {
 		await renderWith("type", "text", "note");
 		expect(keyInput("type")).not.toHaveAttribute("title");

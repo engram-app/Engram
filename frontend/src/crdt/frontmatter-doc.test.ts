@@ -6,6 +6,7 @@ import {
 	emitFrontmatterText,
 	FRONTMATTER_KEY,
 	frontmatterMaps,
+	isOkfMatch,
 	moveKey,
 	ORDER_KEY,
 	rawMap,
@@ -256,5 +257,56 @@ describe("frontmatter apply-diff", () => {
 		order.push(["weird"]);
 		rawMap(doc).set("weird", "weird: !!binary abc\n");
 		expect(emitFrontmatterText(doc)).toContain("weird: !!binary abc");
+	});
+});
+
+// The highlight means "the backend would actually index this", so these cases
+// mirror OkfFields.extract/1 and helpers.ex rather than the widget's display
+// heuristic. Pure-function tests on purpose: the widget-level equivalents cost
+// a full mount each, and a slow suite fails unrelated files by starving them.
+describe("isOkfMatch", () => {
+	test.each([
+		["type", "text", "meeting-note"],
+		["description", "text", "a summary"],
+		["resource", "text", "https://example.com"],
+		["tags", "list", ["a", "b"]],
+		// helpers.ex regexes the raw `tags:` line, so a bare scalar indexes too.
+		["tags", "text", "work"],
+		["created", "date", "2026-08-29"],
+		["timestamp", "date", "2026-08-29"],
+		// DateTime.from_iso8601 needs the offset.
+		["created", "datetime", "2026-08-29T14:30:00Z"],
+		// Aliases okf_fields.ex accepts.
+		["updated", "date", "2026-08-29"],
+		["modified", "date", "2026-08-29"],
+		["date", "date", "2026-08-29"],
+	] as const)("%s as %s = %o is indexed", (key, type, value) => {
+		expect(isOkfMatch(key, type, value)).toBe(true);
+	});
+
+	// Each of these was highlighted at some point while being silently dropped,
+	// which is the worse direction: the missing highlight is the ONLY signal the
+	// user gets that a field is not being indexed.
+	test.each([
+		["my-own-key", "text", "whatever"],
+		["tags", "checkbox", true],
+		["type", "checkbox", true],
+		["type", "number", 42],
+		["created", "text", "sometime last week"],
+		["timestamp", "list", ["a"]],
+		// string_field/1 refuses "", so a freshly-added key indexes nothing.
+		["type", "text", ""],
+		["description", "text", ""],
+		["tags", "list", []],
+		// The datetime-local picker's own output: no seconds, no offset, and
+		// parse_datetime/1 accepts neither.
+		["created", "datetime", "2026-08-29T14:30"],
+		["timestamp", "datetime", "2026-08-29T14:30:00"],
+		// OkfFields reads decoded["type"] literally; nothing downcases the key.
+		["Type", "text", "article"],
+		["TAGS", "list", ["a"]],
+		["Created", "date", "2026-08-29"],
+	] as const)("%s as %s = %o is NOT indexed", (key, type, value) => {
+		expect(isOkfMatch(key, type, value)).toBe(false);
 	});
 });
