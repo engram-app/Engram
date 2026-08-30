@@ -279,14 +279,25 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Pinned like the verify.yml jobs: `latest` defeats setup-bun's cache and
-      # re-downloads ~35 MB every run. This job only shells out to
-      # npm-check-updates, so the bun version is incidental — but a nightly
-      # that silently tracks `latest` is also how a bun bump lands in CI with
-      # no PR behind it.
+      # Resolve latest ourselves like the verify.yml jobs: a literal `latest`
+      # is unkeyable, so setup-bun re-downloads ~35 MB every run instead of
+      # restoring from cache.
+      - name: Resolve latest bun version
+        id: bun
+        run: |
+          set -euo pipefail
+          v=$(curl -sSfL --max-time 20 \
+                -H "Authorization: Bearer ${{ github.token }}" \
+                https://api.github.com/repos/oven-sh/bun/releases/latest \
+              | jq -r '.tag_name' | sed 's/^bun-v//')
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::could not resolve latest bun version (got '$v')"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Resolved bun latest -> $v"
+
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.11
+          bun-version: ${{ steps.bun.outputs.version }}
 
       - name: Run npm-check-updates and filter to major bumps
         id: scan
