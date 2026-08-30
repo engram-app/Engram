@@ -6,13 +6,14 @@ import { uuid7 } from "../crdt/uuid7";
 import AuthPanel from "../layout/auth-panel";
 import AuthShell from "../layout/auth-shell";
 import NotFoundPage from "../not-found";
+import { vaultPath } from "../routes";
 import LoadingPane from "./loading-pane";
 import { resolveWikiTarget, stripMd, wikiCreatePath } from "./wiki-link";
 
-// `/:slug/wiki/<target>` — the landing route for every wikilink href. Wikilinks
+// `/v/:slug/wiki/<target>` — the landing route for every wikilink href. Wikilinks
 // name a note by path or bare title, but note routes are id-keyed, so this
 // resolves the target against the vault manifest (Obsidian rules: exact path,
-// then vault-wide basename, shortest path wins) and bounces to `/:slug/:id`.
+// then vault-wide basename, shortest path wins) and bounces to `/v/:slug/:id`.
 // The heading hash (already slugged by wikiHref) rides along untouched.
 //
 // Unresolved (dangling) targets get an inline "create this note" affordance
@@ -32,7 +33,7 @@ export default function WikiLinkRedirect() {
 	}
 	const note = resolveWikiTarget(target ?? "", manifest?.notes ?? []);
 	if (note && slug) {
-		return <Navigate to={{ pathname: `/${slug}/${note.id}`, hash: location.hash }} replace />;
+		return <Navigate to={{ pathname: vaultPath(slug, note.id), hash: location.hash }} replace />;
 	}
 	// Route always provides :slug in practice; this guard just keeps the type
 	// narrowed for the mutate() call below, same as the old resolved-branch check.

@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import * as Y from "yjs";
-import { addKey, readRows, setValue } from "../crdt/frontmatter-doc";
+import { addKey, OKF_FIELD_HELP, readRows, setValue } from "../crdt/frontmatter-doc";
 import { PropertiesWidget } from "./properties-widget";
+import type { PropertyType } from "./property-types";
 
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: toastError } }));
@@ -295,5 +296,286 @@ describe("PropertiesWidget", () => {
 			expect(readRows(doc).find((r) => r.key === "title")?.value).toBe("RemoteWins"),
 		);
 		expect(input.value).toBe("Draft"); // local draft preserved while focused
+	});
+});
+
+// The widget used to hoist six "OKF" keys (type, description, resource,
+// timestamp, created, tags) above everything else. It was display-only and
+// never written back, so the same note listed its properties in one order in
+// Obsidian and another here -- which is exactly how it was reported.
+describe("property order", () => {
+	test("renders in document order, including the formerly-hoisted key names", async () => {
+		const doc = new Y.Doc();
+		for (const key of ["zeta", "tags", "alpha", "created"]) {
+			addKey(doc, key, "text");
+			setValue(doc, key, `${key}-value`);
+		}
+		render(<PropertiesWidget doc={doc} />);
+		await screen.findByDisplayValue("zeta-value");
+
+		const rendered = screen
+			.getAllByTestId(/^property-row-/)
+			.map((el) => el.getAttribute("data-testid")?.replace("property-row-", ""));
+		expect(rendered).toEqual(["zeta", "tags", "alpha", "created"]);
+		expect(rendered).toEqual(readRows(doc).map((r) => r.key));
+	});
+});
+
+describe("the collapsible Properties heading", () => {
+	test("labels the block and starts expanded", async () => {
+		const doc = new Y.Doc();
+		addKey(doc, "title", "text");
+		render(<PropertiesWidget doc={doc} />);
+		await screen.findByDisplayValue("title");
+
+		const summary = screen.getByTestId("note-properties-toggle");
+		expect(summary).toHaveTextContent("Properties");
+		expect(summary.closest("details")).toHaveAttribute("open");
+	});
+
+	// Collapsing must HIDE the rows, not unmount them: the widget's `rows` state
+	// is driven by Yjs observers registered by the mounted subtree, so tearing it
+	// down on collapse would stop the block tracking remote edits while closed.
+	test("keeps the rows mounted while collapsed", async () => {
+		const doc = new Y.Doc();
+		addKey(doc, "title", "text");
+		setValue(doc, "title", "Hi");
+		render(<PropertiesWidget doc={doc} />);
+		const details = (await screen.findByTestId("note-properties-toggle")).closest(
+			"details",
+		) as HTMLDetailsElement;
+
+		details.open = false;
+		expect(screen.getByTestId("property-row-title")).toBeInTheDocument();
+
+		// And a remote edit arriving while collapsed still lands.
+		setValue(doc, "title", "Bye");
+		await waitFor(() => expect(screen.getByDisplayValue("Bye")).toBeInTheDocument());
+	});
+});
+
+// The new-property row used to be a hardcoded text input whatever type you
+// picked, so `date`/`datetime` had no picker and no mm/dd/yyyy skeleton and
+// `checkbox` had no box until the row was committed and re-rendered.
+describe("the new-property row follows the chosen type", () => {
+	// Scoped to the adder row: a note that already has properties renders a type
+	// trigger per row, so an unscoped query is ambiguous.
+	const pickType = async (type: string) => {
+		const trigger = within(screen.getByTestId("new-property-row")).getByRole("button", {
+			name: /property type/i,
+		});
+		fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+		fireEvent.click(trigger);
+		fireEvent.click(await screen.findByRole("menuitem", { name: type }));
+	};
+
+	test.each([
+		["date", "date"],
+		["datetime", "datetime-local"],
+		["number", "number"],
+	])("renders a native %s control straight away", async (type, htmlType) => {
+		render(<PropertiesWidget doc={new Y.Doc()} draft onAbandonDraft={() => {}} />);
+		await pickType(type);
+		await waitFor(() =>
+			expect(screen.getByLabelText("New property value")).toHaveAttribute("type", htmlType),
+		);
+	});
+
+	test("renders a real checkbox for the checkbox type", async () => {
+		render(<PropertiesWidget doc={new Y.Doc()} draft onAbandonDraft={() => {}} />);
+		await pickType("checkbox");
+		await waitFor(() =>
+			expect(screen.getByRole("checkbox", { name: "New property value" })).toBeInTheDocument(),
+		);
+	});
+
+	// An unchecked checkbox is `false`, not "no value". commitNewKey skips an
+	// empty value, so without seeding it the property committed with none.
+	test("commits an untouched checkbox as false", async () => {
+		const doc = new Y.Doc();
+		render(<PropertiesWidget doc={doc} draft onAbandonDraft={() => {}} />);
+		await pickType("checkbox");
+		fireEvent.change(screen.getByPlaceholderText("Property name"), { target: { value: "done" } });
+		// A checkbox is a button, so there is no value input to press Enter in.
+		// Clicking away is the commit path for a row filled in this far.
+		fireEvent.pointerDown(document.body);
+
+		await waitFor(() => expect(readRows(doc).find((r) => r.key === "done")?.value).toBe(false));
+	});
+
+	// The picker is per-property, not a mode. Carrying the last choice forward
+	// silently typed the next property as whatever the previous one was.
+	test("a new row starts as text again after the previous one closes", async () => {
+		const doc = new Y.Doc();
+		// Needs an existing property: with none, the widget renders nothing at all
+		// and there is no "Add property" button to click.
+		addKey(doc, "title", "text");
+		render(<PropertiesWidget doc={doc} />);
+		await screen.findByDisplayValue("title");
+		fireEvent.click(screen.getByRole("button", { name: /add property/i }));
+		await pickType("date");
+		await waitFor(() =>
+			expect(screen.getByLabelText("New property value")).toHaveAttribute("type", "date"),
+		);
+
+		fireEvent.keyDown(screen.getByPlaceholderText("Property name"), { key: "Escape" });
+		fireEvent.click(screen.getByRole("button", { name: /add property/i }));
+
+		await waitFor(() =>
+			expect(screen.getByLabelText("New property value")).toHaveAttribute("type", "text"),
+		);
+		expect(
+			within(screen.getByTestId("new-property-row")).getByRole("button", {
+				name: /property type/i,
+			}),
+		).toHaveAccessibleName("Property type: text");
+	});
+});
+
+// Regressions found in review, each one a silent failure rather than a crash.
+describe("collapsed-block and checkbox edge cases", () => {
+	const pickType = async (type: string) => {
+		const trigger = within(screen.getByTestId("new-property-row")).getByRole("button", {
+			name: /property type/i,
+		});
+		fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+		fireEvent.click(trigger);
+		fireEvent.click(await screen.findByRole("menuitem", { name: type }));
+	};
+
+	// The note menu's "Add property" has no row-count guard, so it can open the
+	// adder while the block is collapsed. The row is then inside a closed
+	// `details`: not rendered, focus() a no-op, command apparently ignored --
+	// and the dismiss listener armed, so the next outside click discards it.
+	test("opening the adder expands a collapsed block", async () => {
+		const doc = new Y.Doc();
+		addKey(doc, "title", "text");
+		const { rerender } = render(<PropertiesWidget doc={doc} onAbandonDraft={() => {}} />);
+		const details = (await screen.findByTestId("note-properties-toggle")).closest(
+			"details",
+		) as HTMLDetailsElement;
+		details.open = false;
+
+		rerender(<PropertiesWidget doc={doc} draft onAbandonDraft={() => {}} />);
+
+		await waitFor(() => expect(details.open).toBe(true));
+		expect(screen.getByPlaceholderText("Property name")).toHaveFocus();
+	});
+
+	// Radix's Checkbox is a button with its own keydown handling; the branch
+	// shipped without one, so Escape did nothing and tabbing away committed the
+	// property the user was trying to abandon.
+	test("Escape cancels the adder when the type is checkbox", async () => {
+		const doc = new Y.Doc();
+		render(<PropertiesWidget doc={doc} draft onAbandonDraft={() => {}} />);
+		await pickType("checkbox");
+		fireEvent.change(screen.getByPlaceholderText("Property name"), { target: { value: "done" } });
+
+		const box = screen.getByRole("checkbox", { name: "New property value" });
+		fireEvent.keyDown(box, { key: "Escape" });
+
+		await waitFor(() => expect(screen.queryByTestId("new-property-row")).toBeNull());
+		expect(readRows(doc).map((r) => r.key)).not.toContain("done");
+	});
+
+	// Choosing the type it already is is a no-op, not a reset. It used to clear
+	// whatever had been typed into the value.
+	test("re-picking the current type keeps the typed value", async () => {
+		render(<PropertiesWidget doc={new Y.Doc()} draft onAbandonDraft={() => {}} />);
+		fireEvent.change(screen.getByLabelText("New property value"), { target: { value: "hello" } });
+
+		await pickType("text");
+
+		await waitFor(() => expect(screen.getByLabelText("New property value")).toHaveValue("hello"));
+	});
+});
+
+// The blue keys and the `?` panel are one feature: the colour says "this one
+// counts", the panel says why. Both read the same table, so they cannot
+// disagree about which keys count or what shape each wants.
+describe("OKF keys are highlighted", () => {
+	const keyInput = (name: string) => screen.getByRole("textbox", { name: `Rename ${name}` });
+
+	const renderWith = async (key: string, type: PropertyType, value: unknown) => {
+		const doc = new Y.Doc();
+		addKey(doc, key, type);
+		setValue(doc, key, value);
+		render(<PropertiesWidget doc={doc} />);
+		await screen.findByDisplayValue(key);
+	};
+
+	// WIRING only. Which key/type/value combinations count is `isOkfMatch`'s
+	// job and is covered exhaustively in crdt/frontmatter-doc.test.ts, where it
+	// costs a function call instead of a full widget mount -- ~30 cases of
+	// mounting this component is real wall-clock on a loaded machine, and slow
+	// suites fail OTHER files by starving them.
+	test("an indexed key renders in the accent colour", async () => {
+		await renderWith("type", "text", "meeting-note");
+		expect(keyInput("type")).toHaveClass("text-primary");
+	});
+
+	test("a key the backend would drop stays muted", async () => {
+		await renderWith("tags", "checkbox", true);
+		expect(keyInput("tags")).toHaveClass("text-muted-foreground");
+	});
+
+	test("a custom key stays muted", async () => {
+		await renderWith("my-own-key", "text", "whatever");
+		expect(keyInput("my-own-key")).toHaveClass("text-muted-foreground");
+	});
+
+	// No per-key tooltip: the explanation lives in the `?` once, not on every row.
+	test("carries no hover text of its own", async () => {
+		await renderWith("type", "text", "note");
+		expect(keyInput("type")).not.toHaveAttribute("title");
+	});
+});
+
+describe("the Properties help panel", () => {
+	const openHelp = async () => {
+		const doc = new Y.Doc();
+		addKey(doc, "title", "text");
+		render(<PropertiesWidget doc={doc} />);
+		await screen.findByDisplayValue("title");
+		fireEvent.click(screen.getByRole("button", { name: "About properties" }));
+		return screen.findByRole("dialog", { name: "About properties" });
+	};
+
+	test("explains what frontmatter is and links the standard", async () => {
+		const panel = await openHelp();
+		expect(panel).toHaveTextContent(/frontmatter/i);
+		expect(within(panel).getByRole("link", { name: /Open Knowledge Format/i })).toHaveAttribute(
+			"href",
+			expect.stringContaining("okf"),
+		);
+	});
+
+	// An un-highlighted key has no explanation anywhere else, so the panel has
+	// to say both which keys count and what shape each one wants.
+	test("lists every field with its aliases and the shape it wants", async () => {
+		const panel = await openHelp();
+		for (const { key, aliases, expectsLabel } of OKF_FIELD_HELP) {
+			expect(panel).toHaveTextContent(key);
+			expect(panel).toHaveTextContent(expectsLabel);
+			for (const alias of aliases) {
+				expect(panel).toHaveTextContent(alias);
+			}
+		}
+		expect(panel).toHaveTextContent("updated");
+	});
+
+	// NOT asserted here: that clicking the `?` leaves the block expanded.
+	// happy-dom toggles a <details> for a click on a <button> inside its
+	// <summary>; no real browser does, because the button is the innermost
+	// element with activation behaviour and the summary's never runs (verified
+	// in Chromium; Firefox and Safari 17+ agree). An assertion here would be
+	// pinning the test environment's bug, and the production code that satisfied
+	// it latched a "restore the toggle" flag that then silently reverted the
+	// user's NEXT collapse. Real-browser coverage lives in
+	// e2e/note-properties.spec.ts instead.
+	test("opening it leaves the rows in place", async () => {
+		const panel = await openHelp();
+		expect(panel).toBeInTheDocument();
+		expect(screen.getByTestId("property-row-title")).toBeInTheDocument();
 	});
 });

@@ -82,7 +82,7 @@ describe("handleNoteChanged", () => {
 	});
 
 	// The manifest is the vault-wide path→id inventory behind [[ autocomplete
-	// and /:slug/wiki/* resolution. Any note event can change it (create/
+	// and /v/:slug/wiki/* resolution. Any note event can change it (create/
 	// rename/delete, incl. per-note events from folder ops), so it rides the
 	// same coalesced flush as the other list-level keys — it had ZERO
 	// invalidation sites before, leaving new/renamed notes invisible to

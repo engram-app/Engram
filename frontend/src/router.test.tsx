@@ -1,8 +1,10 @@
 import { render, screen } from "@testing-library/react";
-import { RouterProvider } from "react-router";
+import { matchRoutes, RouterProvider } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import type { EngramConfig } from "./config";
 import { createAppRouter } from "./router";
+import { VAULT_PREFIX } from "./routes";
+import spaRoutes from "./spa-routes.json" with { type: "json" };
 
 // AuthGuard's only dependency. Stub it signed-in so the route tree past it
 // renders instead of redirecting to /sign-in.
@@ -77,5 +79,119 @@ describe("createAppRouter - settings overlay mount point", () => {
 		expect(await screen.findByTestId("dialog", undefined, { timeout: 15_000 })).toHaveTextContent(
 			"section:billing",
 		);
+	});
+});
+
+interface RouteLike {
+	path?: string;
+	children?: RouteLike[];
+}
+
+/** Flattens the router config to full paths, resolving RR's relative children. */
+function fullPaths(routes: RouteLike[], parent = ""): string[] {
+	return routes.flatMap((r) => {
+		const self = r.path?.startsWith("/")
+			? r.path
+			: r.path
+				? `${parent}/${r.path}`.replace(/\/+/gu, "/")
+				: parent;
+		const here = r.path ? [self] : [];
+		return [...here, ...fullPaths(r.children ?? [], self)];
+	});
+}
+
+describe("createAppRouter - vault routes are namespaced under /v", () => {
+	const paths = fullPaths(createAppRouter(config).routes as RouteLike[]);
+
+	it("mounts the vault subtree at /v/:slug", () => {
+		expect(paths).toContain("/v/:slug");
+		expect(paths).toContain("/v/:slug/:itemId");
+	});
+
+	// THE regression guard for this whole refactor. Vault slugs are derived
+	// from user-supplied names, so a dynamic segment at the root makes every
+	// top-level route ambiguous: a vault named "link" is shadowed by /link,
+	// and a typo'd /api/notez matches /:slug/:id. That ambiguity is what the
+	// deleted reserved-slug list existed to paper over, and it silently
+	// widened every time someone added a top-level route.
+	//
+	// Fails loudly if anyone re-introduces a root-level `/:param` route.
+	// The bare catch-all "*" is exempt: it is the 404 handler and RR ranks it
+	// last, so it shadows nothing.
+	it("has no dynamic segment at the root", () => {
+		// Params AND splats. The Elixir twin (spa_route_parity_test.exs) filters
+		// `~r{\A/(:|\*)}`; checking only ":" here left the asymmetry that a root
+		// wildcard in its natural splat form -- `{ path: "/*" }` above the
+		// catch-all -- would pass, react-router would rank the two equal-scored
+		// splats by order, and /api and /assets typos would render the SPA again.
+		// The bare catch-all is exempt by exact identity, not by pattern.
+		const rootDynamic = paths.filter((p) => /^\/(?::|\*)/u.test(p));
+		// Exactly the one catch-all, nothing else. Exempting the "/*" PATTERN
+		// would let a SECOND root splat through, which is the hole this guards.
+		expect(rootDynamic).toEqual(["/*"]);
+	});
+});
+
+describe("createAppRouter - hard-loadable route parity with Phoenix", () => {
+	// The twin of test/engram_web/spa_route_parity_test.exs. Both read
+	// src/spa-routes.json: this side proves the React router serves each
+	// sample, that side proves Phoenix does. A route present on only one side
+	// is exactly how /reset-password broke — it had a React route and no
+	// Phoenix entry, surviving only on a root wildcard that was later
+	// deleted, and every test stayed green because none crossed the boundary.
+	const routes = createAppRouter(config).routes as RouteLike[];
+	const samples: string[] = spaRoutes.hardLoadable;
+
+	it.each(samples)("%s matches a real React route", (url) => {
+		const matched = matchRoutes(routes as never, url);
+		expect(matched, `${url} matched nothing`).not.toBeNull();
+		// Matching ONLY the "*" catch-all is an in-app 404, not a served
+		// route — that is a failure, not a pass.
+		expect(
+			matched?.some((m) => m.route.path !== undefined && m.route.path !== "*"),
+			`${url} fell through to the catch-all`,
+		).toBe(true);
+	});
+
+	it("pins VAULT_PREFIX to the shared manifest", () => {
+		// Changing VAULT_PREFIX without updating the manifest (and so the
+		// Phoenix side) would leave TS green while every hard load 404s.
+		expect(VAULT_PREFIX).toBe(spaRoutes.vaultPrefix);
+	});
+
+	it("every React route with a path is exercised by a sample", () => {
+		// Stronger than the static-only check below, and the half that was
+		// missing: a new top-level DYNAMIC route (say /invite/:token) needed no
+		// manifest entry, so it got no Phoenix route either -- /reset-password
+		// verbatim. Compares raw `route.path` strings, which is what both
+		// matchRoutes and the route tree expose.
+		function rawPaths(routes: RouteLike[]): string[] {
+			return routes.flatMap((r) => [...(r.path ? [r.path] : []), ...rawPaths(r.children ?? [])]);
+		}
+		const covered = new Set(
+			samples.flatMap(
+				(url) =>
+					matchRoutes(routes as never, url)?.flatMap((m) => (m.route.path ? [m.route.path] : [])) ??
+					[],
+			),
+		);
+		const devOnly: string[] = spaRoutes.devOnly;
+		const missing = rawPaths(routes).filter(
+			(p) => p !== "*" && !covered.has(p) && !devOnly.some((d) => d.endsWith(p) || d === p),
+		);
+		expect(missing).toEqual([]);
+	});
+
+	it("every STATIC top-level React route has a sample", () => {
+		// Catches the /reset-password shape directly: add a static route to
+		// router.tsx, forget the manifest, and this names the missing path.
+		// Dynamic paths are excluded (no verbatim comparison possible) — the
+		// it.each above covers those via explicit samples.
+		const staticPaths = fullPaths(routes).filter(
+			(p) => p.startsWith("/") && !p.includes(":") && !p.includes("*"),
+		);
+		const devOnly: string[] = spaRoutes.devOnly;
+		const missing = staticPaths.filter((p) => !(samples.includes(p) || devOnly.includes(p)));
+		expect(missing).toEqual([]);
 	});
 });

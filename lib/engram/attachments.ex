@@ -1159,41 +1159,75 @@ defmodule Engram.Attachments do
     end
   end
 
+  # decrypt_metadata/2 (via maybe_decrypt_attachment_fields/2) and the
+  # extra.() closure below only ever read these columns — everything else on
+  # the schema (ciphertext/nonce/hmac fields besides path, storage_key,
+  # version, seq, dek_version_pending, ...) was dead weight on the wire and
+  # in the decode step. `struct(a, fields)` keeps a real %Attachment{}
+  # struct (decrypt_aad/3 pattern-matches `%_{dek_version: v}`), just with
+  # only these fields populated.
+  @tree_attachment_fields ~w(id dek_version path_ciphertext path_nonce mime_type size_bytes mtime updated_at content_hash)a
+
   # Returns the raw rows alongside the decrypted metas so a caller can tell
   # whether `decrypt_each/3` dropped any of them. Each skip is already logged
   # there; this only makes the drop visible in the return value.
   defp scan_attachments(user, vault) do
     user = fresh_user(user)
 
-    Repo.with_tenant(user.id, fn ->
-      from(a in scoped_live(user, vault), order_by: [asc: a.updated_at])
-      |> Repo.all()
-    end)
+    Repo.with_tenant(user.id, fn -> raw_tree_rows(user, vault) end)
     |> unwrap_tenant()
     |> case do
-      {:ok, atts} ->
-        # Measured like every other bulk path decrypt (:notes,
-        # :vault_tree_notes, :manifest_*). /api/vault/tree delegates its
-        # attachment half here rather than duplicating the query, so without
-        # this span that endpoint reports only its notes decrypt cost. Label
-        # is caller-agnostic because this function is: per-endpoint
-        # attribution comes from the OTel request span, not this tag.
-        {:ok, atts,
-         Crypto.measure_decrypt_batch(:attachments, length(atts), fn ->
-           decrypt_each(atts, user, fn att, meta ->
-             # content_hash rides along so the listing a client sweeps before
-             # deciding what to push can answer "you already have these bytes"
-             # without a per-file round trip. Additive for every other caller.
-             meta
-             |> Map.delete(:deleted_at)
-             |> Map.put(:id, att.id)
-             |> Map.put(:content_hash, att.content_hash)
-           end)
-         end)}
-
-      err ->
-        err
+      {:ok, atts} -> {:ok, atts, decrypt_tree_rows(atts, user)}
+      err -> err
     end
+  end
+
+  @doc """
+  Raw attachment rows for GET /vault/tree, projected to the columns
+  `decrypt_tree_rows/2` (and every current caller of `list_attachments/2`)
+  actually reads. MUST run inside the caller's `Repo.with_tenant/2` — pair
+  with `decrypt_tree_rows/2`, which does the decrypt work OUTSIDE any
+  transaction. See `Notes.raw_tree_note_rows/2` for the notes equivalent,
+  and #1211 for why decrypt must stay outside the transaction.
+  """
+  @spec raw_tree_rows(map(), map()) :: [Attachment.t()]
+  def raw_tree_rows(user, vault) do
+    from(a in scoped_live(user, vault),
+      order_by: [asc: a.updated_at],
+      select: struct(a, @tree_attachment_fields)
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Decrypts `raw_tree_rows/2`'s rows into the same meta shape
+  `list_attachments/2` returns (id/path/mime_type/size_bytes/mtime/
+  updated_at/content_hash). Skips and logs any row that fails to decrypt —
+  same tolerant behavior as `list_attachments/2`. Does no DB access; meant
+  to run OUTSIDE any transaction.
+  """
+  @spec decrypt_tree_rows([Attachment.t()], map()) :: [map()]
+  def decrypt_tree_rows(atts, user) do
+    # Reload if the caller's struct predates an earlier write's DEK
+    # provisioning — same discipline scan_attachments/2 applies before its
+    # own decrypt_each call, now enforced here instead of trusting every
+    # caller (e.g. VaultTreeController) to remember it.
+    user = fresh_user(user)
+
+    # Measured like every other bulk path decrypt (:notes, :vault_tree_notes,
+    # :manifest_*). Label is caller-agnostic — per-endpoint attribution comes
+    # from the OTel request span, not this tag.
+    Crypto.measure_decrypt_batch(:attachments, length(atts), fn ->
+      decrypt_each(atts, user, fn att, meta ->
+        # content_hash rides along so the listing a client sweeps before
+        # deciding what to push can answer "you already have these bytes"
+        # without a per-file round trip. Additive for every other caller.
+        meta
+        |> Map.delete(:deleted_at)
+        |> Map.put(:id, att.id)
+        |> Map.put(:content_hash, att.content_hash)
+      end)
+    end)
   end
 
   @doc """

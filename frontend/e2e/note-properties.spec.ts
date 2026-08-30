@@ -238,4 +238,54 @@ test.describe("PropertiesWidget e2e", () => {
 
 		await ctx.close();
 	});
+
+	// Real-browser coverage for the collapsible heading and its `?`.
+	//
+	// This cannot live in the unit suite. happy-dom toggles a <details> when a
+	// <button> inside its <summary> is clicked; no real browser does, because
+	// the button is the innermost element WITH activation behaviour, so the
+	// summary's never runs. A unit test asserting the collapse behaviour pins
+	// the environment's bug, and the production code written to satisfy it
+	// latched a restore flag that silently reverted the user's next collapse.
+	test("the Properties block collapses, and reading the help does not collapse it", async ({
+		browser,
+		baseURL,
+	}) => {
+		const email = `e2e-props-collapse-${Date.now()}@test.com`;
+		const token = await registerAndLogin(baseURL!, email);
+		const vault = await createVault(baseURL!, token, `props-collapse-${Date.now()}`);
+		const { id: noteId } = await upsertNote(
+			baseURL!,
+			token,
+			vault.id,
+			"props-collapse.md",
+			"---\nstatus: draft\n---\n\nBody text.",
+		);
+
+		const ctx = await browser.newContext();
+		const page = await ctx.newPage();
+		await signInForNote(page, email, vault.id, noteId);
+		await waitForProperty(page, "status");
+
+		const details = page.locator("details:has([data-testid='note-properties-toggle'])");
+		const summary = page.getByTestId("note-properties-toggle");
+		await expect(details).toHaveAttribute("open", "", { timeout: 5000 });
+
+		// Reading the help must leave the block open. If the `?` ever toggles it,
+		// the user loses the rows they were asking about.
+		await page.getByRole("button", { name: "About properties" }).click();
+		await expect(page.getByRole("dialog", { name: "About properties" })).toBeVisible();
+		await expect(details).toHaveAttribute("open", "");
+		await page.keyboard.press("Escape");
+
+		// The summary itself still toggles, both ways. The regression this guards
+		// is a collapse being silently reverted one interaction later, so assert
+		// the SECOND toggle too rather than stopping at the first.
+		await summary.click();
+		await expect(details).not.toHaveAttribute("open", "", { timeout: 5000 });
+		await summary.click();
+		await expect(details).toHaveAttribute("open", "", { timeout: 5000 });
+
+		await ctx.close();
+	});
 });

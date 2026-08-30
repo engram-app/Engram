@@ -1,5 +1,14 @@
 # Vault-Scoped SPA URLs + Settings Hash Overlay Implementation Plan
 
+> **PARTIALLY SUPERSEDED (2026-08-29).** This plan shipped `/:slug` and
+> `/:slug/:id` at the URL root, guarded by a reserved-slug list mirrored in
+> `Vault.@reserved_slugs` and `frontend/src/api/reserved-slugs.ts`. Vault
+> URLs have since moved to `/v/:slug`, and **both reserved lists are
+> deleted** -- the prefix makes the collision they guarded impossible. The
+> settings hash overlay is unchanged. Do not re-create anything this plan
+> says about reserved slugs; see
+> `docs/context/vault-url-prefix-and-collision-surface.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the SPA URL describe what the user is looking at: vault-scoped note paths (`/:slug/:noteId`) with the URL as the source of truth for the active vault, and settings addressed by hash (`#settings/<section>`) so it overlays the current page instead of replacing it.

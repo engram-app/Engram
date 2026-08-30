@@ -28,7 +28,10 @@ function LocationProbe() {
 	return <output data-testid="loc">{`${loc.pathname}${loc.search}${loc.hash}`}</output>;
 }
 
-function renderDialog(section: SettingsSectionKey, initialEntry = "/work/note-1#settings/account") {
+function renderDialog(
+	section: SettingsSectionKey,
+	initialEntry = "/v/work/note-1#settings/account",
+) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	return render(
 		<ConfigProvider config={testConfig}>
@@ -56,7 +59,7 @@ describe("SettingsDialog", () => {
 	it("renders the nav with a link per section", async () => {
 		renderDialog("account");
 		// react-router's <Link> resolves a hash-only `to` against the current
-		// pathname, so the href is "/work/note-1#settings/billing", not a bare
+		// pathname, so the href is "/v/work/note-1#settings/billing", not a bare
 		// hash. Assert the suffix: the real requirement is "this link targets
 		// the billing section," not the page underneath.
 		const link = await screen.findByRole("link", { name: "Billing" });
@@ -93,9 +96,9 @@ describe("SettingsDialog", () => {
 		// listens for `popstate`. That leaves useLocation() stale even though the
 		// URL bar changed, so the dialog would silently fail to switch sections.
 		// This must go through react-router's <Link> (history.push) instead.
-		renderDialog("account", "/work/note-1#settings/account");
+		renderDialog("account", "/v/work/note-1#settings/account");
 		fireEvent.click(await screen.findByRole("link", { name: "Billing" }));
-		expect(await screen.findByText("/work/note-1#settings/billing")).toBeInTheDocument();
+		expect(await screen.findByText("/v/work/note-1#settings/billing")).toBeInTheDocument();
 	});
 
 	it("clicking a nav link preserves the current query string (settingsTo regression)", async () => {
@@ -104,10 +107,10 @@ describe("SettingsDialog", () => {
 		// `?highlight=<id>` (e.g. from the vault-deleted email) the moment the
 		// user switched settings sections. SettingsNavList must thread
 		// location.search through settingsTo.
-		renderDialog("account", "/work/note-1?highlight=abc123#settings/account");
+		renderDialog("account", "/v/work/note-1?highlight=abc123#settings/account");
 		fireEvent.click(await screen.findByRole("link", { name: "Billing" }));
 		expect(
-			await screen.findByText("/work/note-1?highlight=abc123#settings/billing"),
+			await screen.findByText("/v/work/note-1?highlight=abc123#settings/billing"),
 		).toBeInTheDocument();
 	});
 
@@ -119,12 +122,12 @@ describe("SettingsDialog", () => {
 		// findBy*'s 1000ms default. Measured about 17 percent flake rate that way.
 		vi.useFakeTimers();
 		try {
-			renderDialog("account", "/work/note-1#settings/account");
+			renderDialog("account", "/v/work/note-1#settings/account");
 			fireEvent.click(screen.getByRole("button", { name: /close settings/i }));
 			await act(async () => {
 				vi.advanceTimersByTime(CLOSE_ANIMATION_MS);
 			});
-			expect(screen.getByText("/work/note-1")).toBeInTheDocument();
+			expect(screen.getByText("/v/work/note-1")).toBeInTheDocument();
 		} finally {
 			vi.useRealTimers();
 		}

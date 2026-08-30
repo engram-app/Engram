@@ -75,11 +75,13 @@ class WebSpaPeer:
         await page.get_by_label("Password", exact=True).fill(self.password)
         await page.get_by_role("button", name=re.compile("sign in", re.I)).click()
 
-        # The seeded activeVaultId lets LegacyNoteRedirect rewrite /note/<id> to
-        # /<vault-slug>/<id>, so match on the id with a boundary rather than the
-        # old fixed /note/ prefix. Accepts both shapes.
+        # The seeded activeVaultId lets LegacyNoteRedirect rewrite /note/<id>
+        # to /v/<vault-slug>/<id>. The /v/ prefix is pinned deliberately: an
+        # id-only pattern matched /work/n-1, /v/work/n-1 and /zzz/work/n-1
+        # identically, so a half-migrated prefix change kept this suite green
+        # while every hard load 404'd.
         await page.wait_for_url(
-            re.compile(rf"/{re.escape(str(note_id))}(?:[?#]|$)"), timeout=15_000
+            re.compile(rf"/v/[^/]+/{re.escape(str(note_id))}(?:[?#]|$)"), timeout=15_000
         )
         await self._editor().wait_for(state="visible", timeout=15_000)
 
@@ -102,6 +104,46 @@ class WebSpaPeer:
 
     async def read(self) -> str:
         return await self._editor().inner_text()
+
+    # --- Properties widget (frontmatter) -----------------------------------
+    #
+    # The SPA edits frontmatter as TYPED PROPERTIES against the doc's
+    # `frontmatter` / `frontmatter_order` / `frontmatter_types` shared types,
+    # not as YAML text in the CodeMirror editor (which is body-only). So a
+    # frontmatter round-trip test cannot go through `append`/`read` — it has to
+    # drive this widget, the way a user does.
+
+    def properties_locator(self):
+        """The properties section, for auto-retrying `expect(...)` asserts."""
+        return self._page.get_by_test_id("note-properties")
+
+    def property_value_locator(self, key: str):
+        """The VALUE field of property `key`. `aria-label` is `"<key> value"`
+        (property-fields.tsx), which is stable across the type variants."""
+        return self._page.get_by_test_id(f"property-row-{key}").get_by_label(f"{key} value")
+
+    async def add_property(self, key: str, value: str) -> None:
+        """Add a property through the real UI flow: Add property -> name ->
+        Enter moves to the value -> Enter commits.
+
+        Enter on the KEY field deliberately does not commit (it focuses the
+        value), so this mirrors the widget's own keyboard contract rather than
+        assuming a single submit.
+        """
+        await self._page.get_by_label("Add property").click()
+        await self._page.get_by_placeholder("Property name").fill(key)
+        await self._page.keyboard.press("Enter")
+        await self._page.get_by_placeholder("Value").fill(value)
+        await self._page.keyboard.press("Enter")
+
+    async def set_property(self, key: str, value: str) -> None:
+        """Overwrite an EXISTING property's value and commit it (blur)."""
+        field = self.property_value_locator(key)
+        await field.fill(value)
+        await field.blur()
+
+    async def remove_property(self, key: str) -> None:
+        await self._page.get_by_label(f"Remove {key}").click()
 
     async def stop(self) -> None:
         try:
