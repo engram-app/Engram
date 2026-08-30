@@ -1346,6 +1346,10 @@ export interface Capabilities {
 // ETS-cached for 24h server-side, and these move every time the user writes a
 // note. `indexed` is min(total, cap) — the cap is the contract; how far the
 // index queue has drained is an implementation detail we don't surface.
+//
+// Both are 0 for an uncapped tier: the server skips the whole-vault count
+// rather than pay for a number that tier never renders. Read them only as the
+// `indexed < total` question, never as "how many notes exist".
 export interface IndexStatus {
 	indexed: number;
 	total: number;
@@ -1372,13 +1376,13 @@ export function useCapabilities() {
 }
 
 /**
- * Cache-only: reads what useAppBootstrap seeded and never fetches on its own.
+ * Seeded by useAppBootstrap, then kept current on its own — see the staleTime
+ * note below for why it cannot stay frozen at the seed.
  *
- * Unlike useCapabilities, this has no fallback queryFn. The value drives one
- * advisory line ("Searching 2,000 of 4,312 notes"), so a consumer that mounts
- * before the bootstrap seed should render nothing rather than issue a second
- * /bootstrap round-trip — and a component test shouldn't hit the network to
- * render a search box.
+ * Unlike useCapabilities the fallback is not /bootstrap but /index-status,
+ * which returns these two counters alone: a consumer that mounts before the
+ * seed lands should not pay for the whole first-load payload to render one
+ * advisory line ("Searching 2,000 of 4,312 notes").
  */
 export function useIndexStatus() {
 	return useQuery<IndexStatus>({

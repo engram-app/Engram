@@ -54,6 +54,10 @@ defmodule Engram.Indexing.IndexCap do
   is deliberate: the true count lags by the Oban queue depth, so reporting it
   would make the number drift during a bulk import and read as data loss. The
   cap is the contract; the queue is an implementation detail.
+
+  An uncapped user gets `%{indexed: 0, total: 0}` and is never counted — see
+  the comment on the `:unlimited` branch. Callers must read this as the
+  `indexed < total` question only; it is not a vault size.
   """
   @spec counts(map()) :: %{indexed: non_neg_integer(), total: non_neg_integer()}
   def counts(user) do
