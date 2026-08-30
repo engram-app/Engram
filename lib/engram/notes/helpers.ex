@@ -281,7 +281,7 @@ defmodule Engram.Notes.Helpers do
           rest
           |> String.split("\n")
           |> Enum.take_while(&Regex.match?(~r/^\s*-\s+/, &1))
-          |> Enum.map(&(&1 |> String.replace(~r/^\s*-\s+/, "") |> unquote_tag()))
+          |> Enum.map(&(&1 |> String.replace(~r/^\s*-\s+/, "") |> tag_item()))
           |> Enum.reject(&(&1 == ""))
 
         if items == [], do: nil, else: items
@@ -314,7 +314,7 @@ defmodule Engram.Notes.Helpers do
     rest
     |> String.trim_trailing("]")
     |> String.split(",")
-    |> Enum.map(&unquote_tag/1)
+    |> Enum.map(&tag_item/1)
     |> Enum.reject(&(&1 == ""))
   end
 
@@ -322,7 +322,41 @@ defmodule Engram.Notes.Helpers do
     # Comma-separated string: tag1, tag2
     raw
     |> String.split(",")
-    |> Enum.map(&unquote_tag/1)
+    |> Enum.map(&tag_item/1)
     |> Enum.reject(&(&1 == ""))
+  end
+
+  # One tag, or "" for something that is not one.
+  #
+  # `tags:` is read off the raw YAML with a regex rather than from the parsed
+  # value, so a scalar that YAML would NOT give back as a string arrived here as
+  # its source text: `tags: true` became a tag literally named "true", which then
+  # showed up in the vault's tag list. Dropping bad input is one thing; inventing
+  # a tag out of it is another.
+  #
+  # Narrow on purpose. The proper fix is to read tags from `Frontmatter.parse`
+  # like OkfFields does, instead of re-scanning the source; that is a bigger
+  # change than this defect warrants and the regex path has its own pinned
+  # behaviour (block lists, inline lists, comma strings, quoting).
+  #
+  # QUOTED text is always a tag: `tags: "true"` is a user asking for a tag named
+  # true, and silently dropping it would be the same class of bug. So the check
+  # runs on the raw item, before the quotes come off.
+  #
+  # Purely-numeric is rejected for the same reason the inline scanner rejects
+  # `#42` — consistency between the two halves of extract_tags/1.
+  @non_tag_scalars ~w(true false null ~)
+  @numeric_re ~r/^-?\d+(\.\d+)?$/
+
+  defp tag_item(raw) do
+    trimmed = String.trim(raw)
+    value = unquote_tag(trimmed)
+
+    cond do
+      String.starts_with?(trimmed, ~s(")) or String.starts_with?(trimmed, "'") -> value
+      String.downcase(value) in @non_tag_scalars -> ""
+      Regex.match?(@numeric_re, value) -> ""
+      true -> value
+    end
   end
 end

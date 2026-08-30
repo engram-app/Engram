@@ -209,6 +209,34 @@ defmodule Engram.Notes.HelpersTest do
       assert Helpers.extract_tags(content) == ["health", "fitness"]
     end
 
+    # `tags:` is scanned off the raw YAML, so a scalar YAML would not hand back
+    # as a string used to arrive as its source text: `tags: true` became a tag
+    # literally named "true" in the user's vault. Dropping bad input is fine;
+    # inventing a tag from it is not.
+    test "a YAML boolean or null is not a tag" do
+      for literal <- ~w(true false null ~ TRUE False) do
+        content = "---\ntags: #{literal}\n---\nBody"
+        assert Helpers.extract_tags(content) == [], "`tags: #{literal}` produced a tag"
+      end
+    end
+
+    test "a non-tag scalar is dropped from a list without taking the real tags with it" do
+      content = "---\ntags: [work, true, health]\n---\nBody"
+      assert Helpers.extract_tags(content) == ["work", "health"]
+    end
+
+    test "purely-numeric is not a tag, matching the inline scanner's #42 rule" do
+      assert Helpers.extract_tags("---\ntags: 42\n---\nBody") == []
+      assert Helpers.extract_tags("---\ntags: [work, 42, 3.5]\n---\nBody") == ["work"]
+    end
+
+    # QUOTING is the user saying "I mean the string". Dropping it would be the
+    # same silent-data-loss bug in the other direction.
+    test "a quoted literal IS a tag" do
+      assert Helpers.extract_tags(~s(---\ntags: "true"\n---\nBody)) == ["true"]
+      assert Helpers.extract_tags("---\ntags: ['42', work]\n---\nBody") == ["42", "work"]
+    end
+
     test "block-style (multi-line) list tags" do
       content = "---\ntags:\n  - project\n  - work\n---\nBody"
       assert Helpers.extract_tags(content) == ["project", "work"]
