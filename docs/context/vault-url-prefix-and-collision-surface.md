@@ -87,10 +87,28 @@ touches the edge, so this is invisible in dev and in the unit suite; refresh,
 paste, or share that URL on a `*.engram.page` host and Cloudflare answers 403
 instead of the create-note affordance.
 
-Not introduced by the prefix move (old `/work/wiki/server.log` ended the same
-way) and not fixed by it. Left open deliberately: the fix is either an edge
-rule that excludes `/v/*/wiki/*` or dropping the extension from the
-wiki-target segment, and both are their own change.
+Not introduced by the prefix move -- old `/work/wiki/server.log` ended the same
+way.
+
+**FIXED 2026-08-30** in engram-infra#1088 (`2dc0aa48`). The extension clause in
+`main/cloudflare/security.tf` now carves out the wikilink resolver, requiring
+BOTH `/v/` and `/wiki/`:
+
+```
+(ends_with(path, ".sql") or ... or ends_with(path, ".log"))
+and not (starts_with(path, "/v/") and path contains "/wiki/")
+```
+
+`/v/work/other.log` (no `/wiki/`), `/backup.log` and `/vendor/db.sql` all stay
+blocked -- note the trailing slash in `"/v/"` means `/vendor/...` does not match
+the carve-out. Nothing is weakened at the web root, which is what that rule is
+for.
+
+Two alternatives were rejected. Percent-encoding the dot does not work:
+Cloudflare URL normalization decodes `%2E` before rules run. Moving the target
+into a query string (`/v/:slug/wiki?t=server.log`) would work, since the query
+is not part of `http.request.uri.path`, but it is a second URL migration for a
+defect this narrow.
 
 ## The deny-list went too
 
