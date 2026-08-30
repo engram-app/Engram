@@ -3064,9 +3064,17 @@ jobs:
           fi
           exit $failed
 
+      # Pinned, not `latest`: setup-bun cannot match a cached install against
+      # an unresolved `latest`, so it re-downloads bun-linux-x64.zip (~35 MB)
+      # on every run of every job that asks for it — even when the runner
+      # already has that exact revision. Normally 3-8s and invisible; during an
+      # egress dip on 2026-08-30 the same download took 13m53s and turned a 9m
+      # CI run into 34m. Pinning restores the tool-cache hit. 1.3.11 matches
+      # deploy-frontend and frontend-promote, so lint and build now agree on a
+      # bun version instead of drifting apart as `latest` moves.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.11
 
       # Run `bun audit` against frontend/ on every CI trigger. Fail when any
       # critical or high advisory affects a PRODUCTION dependency path. The
@@ -3682,10 +3690,12 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Pinned for the same reason as static-checks above: `latest` defeats
+      # setup-bun's cache and re-downloads ~35 MB per run.
       - uses: oven-sh/setup-bun@v2
         if: steps.guard.outputs.skip != 'true'
         with:
-          bun-version: latest
+          bun-version: 1.3.11
 
       # A lockfile resolved on a machine with a global `registry=` bakes that
       # LAN host into every tarball URL, which works for us and is unusable

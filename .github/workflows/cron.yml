@@ -279,9 +279,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Pinned like the verify.yml jobs: `latest` defeats setup-bun's cache and
+      # re-downloads ~35 MB every run. This job only shells out to
+      # npm-check-updates, so the bun version is incidental — but a nightly
+      # that silently tracks `latest` is also how a bun bump lands in CI with
+      # no PR behind it.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.11
 
       - name: Run npm-check-updates and filter to major bumps
         id: scan
