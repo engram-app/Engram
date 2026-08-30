@@ -601,6 +601,10 @@ function SearchPanel({
 						<Link
 							className="underline underline-offset-2"
 							to={settingsTo("billing", location.search)}
+							// settingsTo changes only the hash, and mobile-layout closes the
+							// drawer on a PATHNAME change, so without this the billing overlay
+							// opens behind a still-open sheet. ResultRow already does this.
+							onClick={onNavigate}
 						>
 							Upgrade to search everything
 						</Link>

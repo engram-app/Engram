@@ -170,6 +170,37 @@ defmodule EngramWeb.SpaControllerTest do
       conn = get(conn, "/v/my-vault/018f2b3c-0000-7000-8000-000000000000")
       assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
     end
+
+    # The parity test reads the ROUTE TABLE via route_info/4, which never runs
+    # `pipeline :spa` and never invokes the controller -- so it cannot see
+    # status, content-type, or a halting plug. These drive the full endpoint
+    # for the routes this change added, which otherwise had no request-level
+    # coverage at all.
+    test "serves the SPA for the bare vault prefix", %{conn: conn} do
+      conn = get(conn, "/v")
+      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "serves the SPA for a wikilink deep link", %{conn: conn} do
+      conn = get(conn, "/v/my-vault/wiki/Some%20Note")
+      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "serves the SPA for a wikilink deep link with a slash in the target", %{conn: conn} do
+      conn = get(conn, "/v/my-vault/wiki/Folder/My%20Note")
+      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "an over-deep vault path 404s rather than serving a soft-404 shell", %{conn: conn} do
+      # A greedy `get "/v/*path"` made this a 200 shell that renders an in-app
+      # 404 -- healthy to an uptime monitor, indexable as a soft-404. The
+      # bounded routes make it a real 404.
+      conn = get(conn, "/v/my-vault/some-id/extra")
+      assert conn.status == 404
+      [ct] = get_resp_header(conn, "content-type")
+      refute ct =~ "text/html", "over-deep vault path served an HTML body"
+      refute conn.resp_body =~ "window.__ENGRAM_CONFIG__="
+    end
   end
 
   describe "non-SPA prefixes 404 rather than serving the SPA (#858)" do
@@ -313,6 +344,19 @@ defmodule EngramWeb.SpaControllerTest do
         assert Plug.Exception.status(err) == 404,
                "expected #{path} to map to a 404, got #{Plug.Exception.status(err)}"
       end
+    end
+
+    test "and the rendered miss is JSON, not HTML", %{conn: conn} do
+      # The raise above proves there is no route; this proves what the
+      # ENDPOINT turns that into. Asserted separately because adding
+      # `html: ErrorHTML` to render_errors would silently reintroduce the
+      # HTML-error-body shape the deny-list was (wrongly) credited with
+      # preventing, and the raise-only check could not see it.
+      conn = conn |> put_req_header("accept", "application/json") |> get("/assets/missing.js")
+      assert conn.status == 404
+      [ct] = get_resp_header(conn, "content-type")
+      assert ct =~ "application/json"
+      refute ct =~ "text/html"
     end
   end
 

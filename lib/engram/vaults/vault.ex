@@ -68,10 +68,13 @@ defmodule Engram.Vaults.Vault do
     # trim/downcase is part of accepting it, not a post-validation tidy.
     # With these the other way round, "  Work  " failed the format check.
     |> update_change(:slug, &(&1 |> String.trim() |> String.downcase()))
+    # Length BEFORE format: `:slug` is an unbounded text column, so running a
+    # regex first means a multi-megabyte value is scanned before it is
+    # rejected for being too long.
+    |> validate_length(:slug, max: 120)
     |> validate_format(:slug, @slug_format,
       message: "must be lowercase alphanumeric with hyphens, starting with a letter or digit"
     )
-    |> validate_length(:slug, max: 120)
     |> validate_encrypted_name()
     |> unique_constraint([:user_id, :slug], name: :vaults_user_id_slug_index)
     |> unique_constraint([:user_id, :client_id], name: :vaults_user_id_client_id_index)

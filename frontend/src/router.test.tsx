@@ -119,8 +119,16 @@ describe("createAppRouter - vault routes are namespaced under /v", () => {
 	// The bare catch-all "*" is exempt: it is the 404 handler and RR ranks it
 	// last, so it shadows nothing.
 	it("has no dynamic segment at the root", () => {
-		const rootDynamic = paths.filter((p) => /^\/:/u.test(p));
-		expect(rootDynamic).toEqual([]);
+		// Params AND splats. The Elixir twin (spa_route_parity_test.exs) filters
+		// `~r{\A/(:|\*)}`; checking only ":" here left the asymmetry that a root
+		// wildcard in its natural splat form -- `{ path: "/*" }` above the
+		// catch-all -- would pass, react-router would rank the two equal-scored
+		// splats by order, and /api and /assets typos would render the SPA again.
+		// The bare catch-all is exempt by exact identity, not by pattern.
+		const rootDynamic = paths.filter((p) => /^\/(?::|\*)/u.test(p));
+		// Exactly the one catch-all, nothing else. Exempting the "/*" PATTERN
+		// would let a SECOND root splat through, which is the hole this guards.
+		expect(rootDynamic).toEqual(["/*"]);
 	});
 });
 
@@ -149,6 +157,29 @@ describe("createAppRouter - hard-loadable route parity with Phoenix", () => {
 		// Changing VAULT_PREFIX without updating the manifest (and so the
 		// Phoenix side) would leave TS green while every hard load 404s.
 		expect(VAULT_PREFIX).toBe(spaRoutes.vaultPrefix);
+	});
+
+	it("every React route with a path is exercised by a sample", () => {
+		// Stronger than the static-only check below, and the half that was
+		// missing: a new top-level DYNAMIC route (say /invite/:token) needed no
+		// manifest entry, so it got no Phoenix route either -- /reset-password
+		// verbatim. Compares raw `route.path` strings, which is what both
+		// matchRoutes and the route tree expose.
+		function rawPaths(routes: RouteLike[]): string[] {
+			return routes.flatMap((r) => [...(r.path ? [r.path] : []), ...rawPaths(r.children ?? [])]);
+		}
+		const covered = new Set(
+			samples.flatMap(
+				(url) =>
+					matchRoutes(routes as never, url)?.flatMap((m) => (m.route.path ? [m.route.path] : [])) ??
+					[],
+			),
+		);
+		const devOnly: string[] = spaRoutes.devOnly;
+		const missing = rawPaths(routes).filter(
+			(p) => p !== "*" && !covered.has(p) && !devOnly.some((d) => d.endsWith(p) || d === p),
+		);
+		expect(missing).toEqual([]);
 	});
 
 	it("every STATIC top-level React route has a sample", () => {

@@ -7,17 +7,35 @@ longer exists.
 
 ## The shape
 
-Vault-scoped SPA URLs are `/v/:slug` and `/v/:slug/:id`. Nothing dynamic sits
-at the URL root. Built in one place:
+Vault-scoped SPA URLs, and nothing dynamic at the URL root:
+
+| URL | serves |
+|---|---|
+| `/v` | vault picker (`VaultRedirect`) |
+| `/v/:slug` | vault dashboard |
+| `/v/:slug/:id` | note or attachment |
+| `/v/:slug/wiki/*` | wikilink resolver (targets contain slashes) |
+
+Built in one place on the frontend:
 
 ```ts
 // frontend/src/routes.ts
 export const VAULT_PREFIX = "/v";
 export function vaultPath(slug: string, itemId?: string): string
+export function noteHref(slug: string | null | undefined, noteId: string): string
+export function vaultRootHref(slug: string | null | undefined): string
 ```
 
-Backend counterpart: `get "/v/:slug"` / `get "/v/:slug/:id"` at the bottom of
-`lib/engram_web/router.ex`.
+Backend counterpart at the bottom of `lib/engram_web/router.ex`: four `get`s
+mirroring exactly those shapes.
+
+**The route list is bounded on purpose, not greedy.** A single
+`get "/v/*path"` is tempting and wrong: it makes `/v/work/n-1/extra` a 200 SPA
+shell that renders an in-app 404, so a broken deep link looks healthy to an
+uptime monitor and is indexable as a soft-404 -- the same
+HTTP-200-masking-a-broken-request class the deleted deny-list existed to
+prevent, one level down. Keep Phoenix's list matching the React subtree; the
+parity test below enforces it in both directions.
 
 ## Why the prefix exists
 

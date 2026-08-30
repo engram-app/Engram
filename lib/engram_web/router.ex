@@ -624,31 +624,22 @@ defmodule EngramWeb.Router do
     get "/note/*path", SpaController, :index
     get "/oauth/consent", SpaController, :index
 
-    # Vault-scoped SPA routes. `/v` alone picks a vault (VaultRedirect);
-    # everything below it is a wildcard because the SPA nests arbitrary
-    # depth under a vault -- `/v/:slug`, `/v/:slug/:id`, and
-    # `/v/:slug/wiki/<target>` where the target may itself contain slashes.
-    # The previous 1- and 2-segment `get`s hard-404'd every wikilink deep
-    # link on refresh or paste.
+    # Vault-scoped SPA routes. These mirror the React subtree under
+    # `/v/:slug` EXACTLY -- index, `:itemId`, and the `wiki/*` splat -- rather
+    # than a single greedy `/v/*path`.
     #
-    # `/v/*path` is safe to make this greedy precisely BECAUSE of the
-    # prefix: nothing else in the app lives under /v, so it shadows no
-    # other route. That is the same property that let the reserved-slug
-    # list (and its hand-maintained TS mirror) be deleted -- vault slugs
-    # are user-derived, and at the URL root a wildcard like this would have
-    # swallowed /api, /assets and every future top-level path.
+    # Greedy was wrong for the reason the deleted deny-list existed: it made
+    # `/v/work/n-1/extra` a 200 SPA shell that renders an in-app 404, so a
+    # broken deep link reports healthy to an uptime monitor and gets indexed
+    # as a soft-404. Matching only the real shapes means an over-deep path has
+    # no route and gets a real 404.
     #
-    # No deny-list is needed here anymore. It existed to stop `/api/notez`
-    # from matching a ROOT `/:slug/:id`; with nothing dynamic at the root,
-    # an unrouted path simply has no route, and Phoenix's configured
-    # `render_errors: [formats: [json: EngramWeb.ErrorJSON]]` answers it
-    # with `404 {"errors":{"detail":"Not Found"}}`. The deny-list actively
-    # made that worse: its entries lived in `pipeline :spa`, whose first
-    # plug is `plug :accepts, ["html"]`, so a JSON client hitting a typo'd
-    # API path got a 406 NotAcceptableError instead of a 404, and a
-    # browser got `text/plain "Not Found"` instead of the JSON envelope.
-    # Measured both ways before removing it.
+    # The `wiki/*` entry is why the bounded list is not just `/v/:slug/:id`:
+    # wiki targets contain slashes ("Folder/My Note"), and without it every
+    # wikilink deep link hard-404'd on refresh or paste.
     get "/v", SpaController, :index
-    get "/v/*path", SpaController, :index
+    get "/v/:slug", SpaController, :index
+    get "/v/:slug/wiki/*path", SpaController, :index
+    get "/v/:slug/:id", SpaController, :index
   end
 end

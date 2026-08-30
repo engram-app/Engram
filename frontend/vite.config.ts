@@ -204,10 +204,11 @@ export default defineConfig({
 				target: apiTarget,
 				changeOrigin: true,
 			},
-			// Anchored for the same reason as /api above: a slug like /socket-2
-			// must reach the SPA, not the WebSocket proxy. The upgrade handler
-			// matches on the raw req.url too, so /socket/websocket?vsn=2.0.0
-			// still proxies.
+			// Anchored for the same reason as /api above. Vault slugs now live
+			// under /v/ so they can no longer be confused with this prefix, but
+			// the anchor still keeps any other top-level path beginning "socket"
+			// off the WebSocket proxy. The upgrade handler matches on the raw
+			// req.url too, so /socket/websocket?vsn=2.0.0 still proxies.
 			"^/socket(?:$|[/?])": {
 				target: apiTarget,
 				changeOrigin: true,

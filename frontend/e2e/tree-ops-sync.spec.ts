@@ -1,8 +1,8 @@
 import { expect, type Page, test } from "@playwright/test";
 import {
+	anyNoteUrlRe,
 	createFolder,
 	createVault,
-	noteUrlRe,
 	registerAndLogin,
 	signInForNote,
 	upsertNote,
@@ -215,10 +215,10 @@ test.describe("web tree ops sync (web to web)", () => {
 		// note-page.tsx's `noteGone` handling. Either way, no dead editor
 		// showing stale content, no crash, no infinite spinner, no stranded
 		// dead-note URL.
-		await expect(pageA).not.toHaveURL(noteUrlRe(doomedId), { timeout: 10_000 });
+		await expect(pageA).not.toHaveURL(anyNoteUrlRe(doomedId), { timeout: 10_000 });
 		await expect(row(pageA, "survivor")).toBeVisible({ timeout: 10_000 });
 
-		await expect(pageB).not.toHaveURL(noteUrlRe(doomedId), { timeout: 10_000 });
+		await expect(pageB).not.toHaveURL(anyNoteUrlRe(doomedId), { timeout: 10_000 });
 		await expect(row(pageB, "survivor")).toBeVisible({ timeout: 10_000 });
 
 		// No crash in either tab: the CRDT doc teardown (closeDoc fires from the

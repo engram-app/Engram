@@ -99,10 +99,14 @@ describe("wikiCreatePath", () => {
 		expect(wikiCreatePath("folder/sub/Name")).toEqual({ folder: "folder/sub", name: "Name.md" });
 	});
 
-	test("strips a #heading segment before deriving the path", () => {
-		expect(wikiCreatePath("folder/Name#Some Heading")).toEqual({
+	test("keeps a # in the name — it is a legal path char, not a heading here", () => {
+		// wikiCreatePath receives an already-parsed page from the route splat
+		// (the heading rode along in location.hash), and "#" is legal in a note
+		// path (PathSanitizer's @illegal_chars is [\\:*?<>"|]). Re-splitting on
+		// "#" turned [[C# Notes]] into an offer to create "C.md".
+		expect(wikiCreatePath("folder/C# Notes")).toEqual({
 			folder: "folder",
-			name: "Name.md",
+			name: "C# Notes.md",
 		});
 	});
 

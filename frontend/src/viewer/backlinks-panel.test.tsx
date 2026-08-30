@@ -22,10 +22,11 @@ function renderPanel(noteId: string | null = "note-1") {
 }
 
 // Module-level mock state is shared across every test in the file (vitest
-// isolates per FILE, not per test), and the last test here sets
-// mockIsLoading = true. Without this reset the next test appended to the
-// file inherits it, renders nothing, and fails pointing at the component
-// rather than at test ordering.
+// isolates per FILE, not per test), and one test here sets mockIsLoading =
+// true. Every current test happens to assign both vars itself, so this reset
+// changes no result today -- it exists so the NEXT test appended to the file
+// does not silently inherit a stale flag, render nothing, and fail pointing
+// at the component rather than at test ordering.
 beforeEach(() => {
 	mockData = undefined;
 	mockIsLoading = false;

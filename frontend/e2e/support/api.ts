@@ -109,6 +109,15 @@ export function noteUrlRe(noteId: number | string): RegExp {
 	return new RegExp(`/v/[^/]+/${noteId}(?:[?#]|$)`, "u");
 }
 
+// For `not.toHaveURL` assertions ("we navigated AWAY from the dead note").
+// noteUrlRe must NOT be used there: tightening it to pin /v/ made every
+// negative assertion EASIER to satisfy, so a regression stranding the browser
+// on the legacy /note/<id> shape -- which noteHref(undefined, id) still
+// emits -- would pass green. This stays loose on purpose.
+export function anyNoteUrlRe(noteId: number | string): RegExp {
+	return new RegExp(`/${noteId}(?:[?#]|$)`, "u");
+}
+
 // Navigates straight to the legacy /note/:id, which the AuthGuard redirects to
 // /sign-in. Seeds localStorage["engram.activeVaultId"] on the sign-in page
 // BEFORE completing sign-in, not after, so the value survives the

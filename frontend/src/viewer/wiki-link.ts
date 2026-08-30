@@ -74,9 +74,13 @@ export function resolveWikiTarget(page: string, notes: ManifestNote[]): Manifest
 // redundant .md, then splits on the last '/' — bare target creates at the
 // vault root, path-qualified target creates (and implicitly folders) along
 // that path, matching Obsidian's click-to-create behavior.
-export function wikiCreatePath(raw: string): { folder: string; name: string } {
-	const { page } = parseWikiTarget(raw);
-	const segments = stripMd(page).split("/");
+// Takes an already-parsed PAGE, not raw `[[...]]` text. It must not re-split
+// on "#": the only caller is WikiLinkRedirect, whose route splat already has
+// the heading stripped into location.hash, and "#" is a legal character in a
+// note path here (PathSanitizer's @illegal_chars is [\\:*?<>"|]). Re-parsing
+// turned `[[C# Notes]]` into an offer to create "C.md".
+export function wikiCreatePath(page: string): { folder: string; name: string } {
+	const segments = stripMd(page.trim()).split("/");
 	const name = `${segments.pop() ?? ""}.md`;
 	return { folder: segments.join("/"), name };
 }

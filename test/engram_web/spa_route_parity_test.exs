@@ -14,8 +14,9 @@ defmodule EngramWeb.SpaRouteParityTest do
   """
   use ExUnit.Case, async: true
 
+  # No @external_resource: it only triggers recompilation for .ex files, and
+  # this is a .exs test that ExUnit reads fresh on every run anyway.
   @manifest_path Path.join([__DIR__, "..", "..", "frontend", "src", "spa-routes.json"])
-  @external_resource @manifest_path
 
   setup_all do
     manifest = @manifest_path |> File.read!() |> Jason.decode!()
@@ -80,6 +81,68 @@ defmodule EngramWeb.SpaRouteParityTest do
                )
              ),
              "#{prefix}/:slug/:id does not resolve"
+    end
+  end
+
+  describe "retired and over-deep paths must NOT resolve" do
+    test "each mustNotResolve sample has no route", %{manifest: manifest} do
+      # The manifest's other direction. A list of routes that EXIST is
+      # structurally unable to catch a wildcard that grew too greedy: a
+      # `get "/v/*path"` made `/v/work/n-1/extra` a 200 SPA shell rendering an
+      # in-app 404, which reports healthy to an uptime monitor and gets
+      # indexed as a soft-404 -- the exact class the deleted deny-list existed
+      # to prevent, reintroduced one level down.
+      resolving =
+        manifest
+        |> Map.fetch!("mustNotResolve")
+        |> Enum.filter(fn path ->
+          match?(%{}, Phoenix.Router.route_info(EngramWeb.Router, "GET", path, "app.engram.page"))
+        end)
+
+      assert resolving == [],
+             """
+             These paths resolve but must not -- either a retired URL shape came
+             back, or a wildcard is greedier than the React routes it mirrors:
+
+               #{Enum.join(resolving, "\n  ")}
+             """
+    end
+  end
+
+  describe "every SPA route in Phoenix has a React counterpart" do
+    test "no SpaController route is missing from the manifest", %{manifest: manifest} do
+      # The reverse direction, which the first version of this test lacked.
+      # `get "/search"` and `get "/billing"` were Phoenix SPA routes with no
+      # React route -- dead for months, every test green, found by hand. A
+      # manifest sample must exercise each one.
+      samples = Map.fetch!(manifest, "hardLoadable")
+
+      spa_routes =
+        EngramWeb.Router.__routes__()
+        |> Enum.filter(&(&1.plug == EngramWeb.SpaController and &1.verb == :get))
+        |> Enum.map(& &1.path)
+        |> Enum.uniq()
+
+      unexercised =
+        Enum.reject(spa_routes, fn route ->
+          Enum.any?(samples, fn sample ->
+            case Phoenix.Router.route_info(EngramWeb.Router, "GET", sample, "app.engram.page") do
+              %{route: ^route} -> true
+              _ -> false
+            end
+          end)
+        end)
+
+      assert unexercised == [],
+             """
+             These Phoenix SPA routes are not exercised by any manifest sample,
+             so nothing proves the React router serves them:
+
+               #{Enum.join(unexercised, "\n  ")}
+
+             Either add a sample to frontend/src/spa-routes.json, or delete the
+             route if (like /search and /billing) it has no React counterpart.
+             """
     end
   end
 
