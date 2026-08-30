@@ -35,6 +35,14 @@ function isTaken(doc: Y.Doc, key: string): boolean {
 // The aliases are not cosmetic: okf_fields.ex accepts `modified`/`updated` for
 // timestamp and `date` for created, so a note using `updated:` IS indexed.
 // Listing only the canonical names would tell the user the opposite.
+// What the backend can actually read out of a date field. `parse_datetime/1`
+// tries DateTime.from_iso8601 then Date.from_iso8601 and nothing else, so a
+// plain date works and a datetime works ONLY with an offset. Notably the
+// `datetime-local` picker emits `2026-08-29T14:30` -- no seconds, no offset --
+// which neither accepts.
+const OKF_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const OKF_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
 export const OKF_FIELD_HELP: ReadonlyArray<{
 	key: string;
 	aliases: readonly string[];
@@ -52,8 +60,10 @@ export const OKF_FIELD_HELP: ReadonlyArray<{
 	{
 		key: "tags",
 		aliases: [],
-		expects: ["list"],
-		expectsLabel: "a list",
+		// A bare `tags: work` is indexed too -- the scanner is a regex over the
+		// raw line, not a list parser -- so "text" belongs here.
+		expects: ["list", "text"],
+		expectsLabel: "a list, or one name",
 		what: "Topics. Browsable and searchable across the vault.",
 	},
 	{
@@ -74,33 +84,17 @@ export const OKF_FIELD_HELP: ReadonlyArray<{
 		key: "created",
 		aliases: ["date"],
 		expects: ["date", "datetime"],
-		expectsLabel: "a date",
+		expectsLabel: "a date (YYYY-MM-DD)",
 		what: "When the note came into being.",
 	},
 	{
 		key: "timestamp",
 		aliases: ["modified", "updated"],
 		expects: ["date", "datetime"],
-		expectsLabel: "a date",
+		expectsLabel: "a date (YYYY-MM-DD)",
 		what: "When it last changed.",
 	},
 ];
-
-/** Is this key one Engram reads, AND is its value the shape that field needs?
- *
- *  The type half is the point. A mismatch is not rejected anywhere: the server's
- *  `string_field/1` and `parse_datetime/1` return nil for the wrong shape and
- *  `OkfFields` "never errors, so a malformed note still syncs (all fields
- *  degrade to nil)" — the column is simply empty and the note quietly stops
- *  matching search. `tags` is worse: it is regex-parsed straight out of the
- *  YAML, so `tags: true` becomes a tag literally named "true".
- *
- *  Nothing else tells the user. Withholding the highlight is the signal. */
-export function isOkfMatch(key: string, type: PropertyType): boolean {
-	const k = key.trim().toLowerCase();
-	const field = OKF_FIELD_HELP.find((f) => f.key === k || f.aliases.includes(k));
-	return field?.expects.includes(type) ?? false;
-}
 
 export const CONTENT_KEY = "content";
 export const FRONTMATTER_KEY = "frontmatter";
@@ -305,4 +299,42 @@ export function applyParsedFrontmatter(
 			}
 		}
 	});
+}
+
+/** Would the backend actually index this property as the field it is named for?
+ *
+ *  Not "is the key spelled right" and not "does the widget render it as the
+ *  right type". Both of those were tried and both lied:
+ *
+ *    - matching the key case-INSENSITIVELY highlighted `Type:`, which
+ *      `OkfFields.extract/1` never sees -- it reads `decoded["type"]` literally
+ *      and nothing downcases the key on the way in.
+ *    - trusting the rendered type highlighted `created` holding the
+ *      datetime-local picker's own output, which `parse_datetime/1` rejects,
+ *      and left `tags: work` muted even though the tag scanner does index an
+ *      inline scalar.
+ *    - and an EMPTY value highlighted from the moment a key was added, though
+ *      `string_field/1` refuses "" outright.
+ *
+ *  So this asks the same questions the backend asks, on the value. Getting it
+ *  wrong in the generous direction is the worse failure: the whole point is
+ *  that a mismatch is silently unindexed, and a highlight that over-promises
+ *  removes the only signal the user gets. */
+export function isOkfMatch(key: string, type: PropertyType, value: unknown): boolean {
+	const field = OKF_FIELD_HELP.find((f) => f.key === key || f.aliases.includes(key));
+	if (field === undefined || !field.expects.includes(type)) {
+		return false;
+	}
+	if (field.key === "tags") {
+		// `helpers.ex` accepts a YAML list AND a bare inline scalar, so both index.
+		if (Array.isArray(value)) {
+			return value.some((v) => String(v).trim() !== "");
+		}
+		return typeof value === "string" && value.trim() !== "";
+	}
+	if (field.expects.includes("date")) {
+		return typeof value === "string" && (OKF_DATE_RE.test(value) || OKF_DATETIME_RE.test(value));
+	}
+	// type / description / resource: `string_field/1` takes a non-empty binary.
+	return typeof value === "string" && value !== "";
 }

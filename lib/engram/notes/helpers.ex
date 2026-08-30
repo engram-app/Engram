@@ -329,34 +329,59 @@ defmodule Engram.Notes.Helpers do
   # One tag, or "" for something that is not one.
   #
   # `tags:` is read off the raw YAML with a regex rather than from the parsed
-  # value, so a scalar that YAML would NOT give back as a string arrived here as
-  # its source text: `tags: true` became a tag literally named "true", which then
-  # showed up in the vault's tag list. Dropping bad input is one thing; inventing
-  # a tag out of it is another.
+  # value, so a scalar YAML would NOT give back as a string arrived here as its
+  # source text: `tags: true` became a tag literally named "true", which then
+  # showed up in the vault's tag list. Dropping bad input is one thing;
+  # inventing a tag out of it is another.
   #
-  # Narrow on purpose. The proper fix is to read tags from `Frontmatter.parse`
-  # like OkfFields does, instead of re-scanning the source; that is a bigger
-  # change than this defect warrants and the regex path has its own pinned
-  # behaviour (block lists, inline lists, comma strings, quoting).
+  # The test is ASKED OF THE YAML PARSER, not pattern-matched. Two rounds of
+  # hand-written rules got it wrong in both directions: `~w(true false null ~)`
+  # plus a downcase rejected `tRue` and `nUll`, which YAML 1.2 hands back as
+  # ordinary strings, while a plain-decimal regex let `0x10`, `1e5`, `+1`, `.5`,
+  # `0o17` and `.inf` through as tags — the very bug being fixed. The grammar is
+  # the parser's to know.
+  #
+  # Fails OPEN. A scalar the parser cannot read (`a: b`, a stray bracket) is
+  # kept, because refusing to guess must never cost the user a tag.
   #
   # QUOTED text is always a tag: `tags: "true"` is a user asking for a tag named
   # true, and silently dropping it would be the same class of bug. So the check
   # runs on the raw item, before the quotes come off.
   #
-  # Purely-numeric is rejected for the same reason the inline scanner rejects
-  # `#42` — consistency between the two halves of extract_tags/1.
-  @non_tag_scalars ~w(true false null ~)
-  @numeric_re ~r/^-?\d+(\.\d+)?$/
-
+  # NOTE: deliberately NOT aligned with `numeric_tag?/1`, which the inline
+  # scanner uses. That rule rejects `1/2`, `1_000`, `3-5` and `2024-01-02`, all
+  # of which YAML returns as strings — it is the stricter and less correct of
+  # the two, and matching it here would delete real tags.
   defp tag_item(raw) do
     trimmed = String.trim(raw)
     value = unquote_tag(trimmed)
 
     cond do
       String.starts_with?(trimmed, ~s(")) or String.starts_with?(trimmed, "'") -> value
-      String.downcase(value) in @non_tag_scalars -> ""
-      Regex.match?(@numeric_re, value) -> ""
+      non_string_scalar?(trimmed) -> ""
       true -> value
     end
+  end
+
+  # Would YAML read this scalar as something other than a string?
+  #
+  # The leading-character gate is not an optimisation detail: it keeps the
+  # parser off the hot path for ordinary tags (`work`, `health`), and every
+  # character it skips is one that cannot begin a YAML boolean, null or number.
+  @maybe_scalar_re ~r/^[-+.~0-9tTfFnN]/
+
+  defp non_string_scalar?(item) do
+    if String.contains?(item, "\n") or not Regex.match?(@maybe_scalar_re, item) do
+      false
+    else
+      case YamlElixir.read_from_string("v: " <> item) do
+        {:ok, %{"v" => value}} -> not is_binary(value)
+        _ -> false
+      end
+    end
+  rescue
+    _ -> false
+  catch
+    _, _ -> false
   end
 end

@@ -184,14 +184,6 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 	const newValueRef = useRef<HTMLElement | null>(null);
 	const rootRef = useRef<HTMLElement>(null);
 	const detailsRef = useRef<HTMLDetailsElement>(null);
-	// Clicking the `?` inside the <summary> also fires the summary's default
-	// action, collapsing the very thing you asked about. It cannot be cancelled
-	// with preventDefault: Radix ignores a default-prevented click, so that
-	// closes the popover too. So let the toggle happen and put it straight back.
-	const helpToggle = useRef<{ pending: boolean; wasOpen: boolean }>({
-		pending: false,
-		wasOpen: true,
-	});
 	// Key inputs by property name, so choosing a type can put the caret on the
 	// name it belongs to. Keyed by name rather than index: a rename swaps the
 	// key and an index would then point at a different row.
@@ -359,23 +351,34 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 
 			    Marker hidden both ways: `list-none` covers Firefox, the
 			    ::-webkit-details-marker rule covers Safari. */}
-			<details
-				ref={detailsRef}
-				open
-				className="group/props"
-				onToggle={(e) => {
-					if (!helpToggle.current.pending) {
-						return;
-					}
-					// Restoring fires onToggle a second time; `pending` is already
-					// false by then, so it falls through the guard above.
-					const { wasOpen } = helpToggle.current;
-					helpToggle.current.pending = false;
-					e.currentTarget.open = wasOpen;
-				}}
-			>
+			<details ref={detailsRef} open className="group/props">
+				{/* biome-ignore lint/a11y/noStaticElementInteractions: <summary> is NOT a
+				    static element -- it is natively focusable and has activation
+				    behaviour, which is exactly why this handler has to exist. The rule's
+				    element list simply does not know about it; the keyboard path it
+				    would ask for is already native. */}
 				<summary
 					data-testid="note-properties-toggle"
+					// The `?` lives in here so it sits with the label. Cancel the toggle
+					// for clicks that came from it, or reading the help collapses the
+					// thing you asked about.
+					//
+					// preventDefault is safe HERE and nowhere earlier. Radix opens the
+					// popover from the button's own handler, which has already run by the
+					// time this bubbles to the summary; doing it in a capture-phase
+					// listener instead hands Radix a default-prevented click, which it
+					// ignores, and the popover never opens at all.
+					//
+					// Mostly belt and braces: a <button> inside a <summary> is the
+					// innermost element WITH activation behaviour, so the summary's never
+					// runs -- verified in Chromium, with Firefox and Safari 17+ agreeing.
+					// It still matters for Safari 16, and for happy-dom, which toggles
+					// regardless and is what the unit test observes.
+					onClick={(e) => {
+						if (e.target instanceof Element && e.target.closest("[data-properties-help]")) {
+							e.preventDefault();
+						}
+					}}
 					className="group/summary flex cursor-pointer list-none items-center gap-1 pb-1 font-semibold text-base text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
 				>
 					{/* The chevron hangs in the section's own left padding (14px icon +
@@ -398,18 +401,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 
 					    Undone rather than prevented -- see the ref above for why
 					    preventDefault is not available here. */}
-					<span
-						className="ml-1 inline-flex align-middle"
-						// Click, not pointerdown: capture still runs before the summary's
-						// default action, and it is the one event every path produces --
-						// mouse, touch, keyboard activation and fireEvent alike.
-						onClickCapture={() => {
-							helpToggle.current = {
-								pending: true,
-								wasOpen: detailsRef.current?.open ?? true,
-							};
-						}}
-					>
+					<span className="ml-1 inline-flex align-middle">
 						<HelpTip label="About properties" align="start">
 							<PropertiesHelp />
 						</HelpTip>
@@ -429,7 +421,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 									<PropertyKeyInput
 										doc={doc}
 										name={row.key}
-										okf={isOkfMatch(row.key, type)}
+										okf={isOkfMatch(row.key, type, row.value)}
 										elRef={(el) => {
 											if (el) {
 												keyEls.current.set(row.key, el);

@@ -46,6 +46,12 @@ pytestmark = pytest.mark.skipif(
 
 CRDT_TIMEOUT = DELIVERY_TIMEOUT
 MS = CRDT_TIMEOUT * 1_000
+# Long enough for a post-unbind flush to land, short enough that several of
+# these nest inside pytest.ini's 180s cap. A full CRDT_TIMEOUT here would blow
+# the per-test budget on its own and report as a SIGALRM traceback rather than
+# the assertion, which is the wrong-diagnosis outcome helpers/latency.py exists
+# to prevent.
+SETTLE_SECONDS = 15
 
 
 def _note_id(api_sync, path: str) -> str:
@@ -131,11 +137,15 @@ async def test_obsidian_frontmatter_reaches_web_when_note_is_closed(
     note_id = _note_id(api_sync, path)
 
     await web.open_note(note_id, sync_vault_id)
-    await expect(web.property_value_locator("status")).to_have_value("draft", timeout=MS)
+    await expect(web.property_value_locator("status")).to_have_value(
+        "draft", timeout=MS
+    )
 
     # Change the value from Obsidian while the note is not open there.
     write_note(vault_a, path, "---\nstatus: published\n---\n\nbody v1\n")
-    await expect(web.property_value_locator("status")).to_have_value("published", timeout=MS)
+    await expect(web.property_value_locator("status")).to_have_value(
+        "published", timeout=MS
+    )
 
 
 @pytest.mark.asyncio
@@ -155,10 +165,14 @@ async def test_obsidian_frontmatter_reaches_web_when_note_is_open(
     await _open_in_obsidian(cdp_a, path)
 
     await web.open_note(note_id, sync_vault_id)
-    await expect(web.property_value_locator("status")).to_have_value("draft", timeout=MS)
+    await expect(web.property_value_locator("status")).to_have_value(
+        "draft", timeout=MS
+    )
 
     write_note(vault_a, path, "---\nstatus: published\n---\n\nbody v1\n")
-    await expect(web.property_value_locator("status")).to_have_value("published", timeout=MS)
+    await expect(web.property_value_locator("status")).to_have_value(
+        "published", timeout=MS
+    )
 
 
 @pytest.mark.asyncio
@@ -219,15 +233,34 @@ async def test_unparseable_frontmatter_does_not_delete_existing_keys(
 
     # A transiently-unparseable block: an unclosed flow sequence. This is what
     # sits on disk for as long as it takes to type the closing bracket.
-    write_note(vault_a, path, "---\nkeep: me\nalso: here\nbad: [unclosed\n---\n\nbody v1\n")
+    #
+    # The BODY changes in the same write, and is what we synchronise on. An
+    # earlier version of this test waited for a body string it had just written
+    # itself -- `wait_for_content` returns on its first poll if the substring is
+    # already there, so it read the file back microseconds later, before any
+    # ingest could have started, and passed with the defect fully present.
+    # Waiting for a body marker to come back FROM THE SERVER is what proves the
+    # write was actually processed before the keys are judged.
+    write_note(
+        vault_a,
+        path,
+        "---\nkeep: me\nalso: here\nbad: [unclosed\n---\n\nbody v2 unparseable\n",
+    )
+    await expect(web.editor_locator()).to_contain_text(
+        "body v2 unparseable", timeout=MS
+    )
 
-    # The good keys must survive. Asserting on DISK: the projection is what
-    # overwrites the file, so this is where the loss becomes permanent.
-    wait_for_content(vault_a, path, "body v1", timeout=CRDT_TIMEOUT)
-    final = read_note(vault_a, path) or ""
+    # The server has the new content, so the frontmatter it holds is the
+    # frontmatter this write produced. The good keys must have survived it --
+    # asserted on the WEB APP, because a client-side wipe propagates and takes
+    # the rows away here too.
+    await expect(web.property_value_locator("keep")).to_have_value("me", timeout=MS)
+    await expect(web.property_value_locator("also")).to_have_value("here", timeout=MS)
+
+    # And on disk, where the loss becomes permanent.
+    final = read_note(vault_a, path)
     assert "keep:" in final and "also:" in final, (
-        "unparseable YAML deleted the good frontmatter keys; "
-        f"file is now:\n{final!r}"
+        f"unparseable YAML deleted the good frontmatter keys; file is now:\n{final!r}"
     )
 
 
@@ -264,23 +297,33 @@ async def test_typed_frontmatter_survives_close_and_reopen(
     # It reaches the web app. The user confirms this half works, and asserting
     # it here is what makes the failure below unambiguous: the doc HAS the key
     # at the moment the file is closed.
-    await expect(web.property_value_locator("status")).to_have_value("published", timeout=MS)
+    await expect(web.property_value_locator("status")).to_have_value(
+        "published", timeout=MS
+    )
 
-    await _close_all_in_obsidian(cdp_a)
-    await _open_in_obsidian(cdp_a, path)
-
+    # Assert while CLOSED. This is the reported state, and it is the strict one:
+    # reopening first runs attach() -> enroll -> room rejoin, and any update
+    # delivered on that rejoin flushes the FULL projection back to disk, which
+    # would repair the file inside the window meant to catch the damage.
+    #
     # Poll rather than read once: the loss lands on a flush that follows the
-    # unbind, so a single read right after reopen can pass before the damage.
-    # Fail the moment a key disappears, and require it to still be there at the
-    # end of the settle window.
-    deadline = time.monotonic() + CRDT_TIMEOUT
+    # unbind, so a single read can pass before the damage.
+    deadline = time.monotonic() + SETTLE_SECONDS
     while time.monotonic() < deadline:
-        disk = read_note(vault_a, path) or ""
+        disk = read_note(vault_a, path)
         assert "keep:" in disk and "status:" in disk, (
-            "frontmatter vanished from disk after close/reopen while the web app "
-            f"still shows it; file is now:\n{disk!r}"
+            "frontmatter vanished from disk after the note was closed; "
+            f"file is now:\n{disk!r}"
         )
         time.sleep(0.5)
 
-    # And the server still agrees, so this was never a delete the user made.
-    await expect(web.property_value_locator("status")).to_have_value("published", timeout=MS)
+    # Reopening must not resurrect the problem either, and the server should
+    # still agree -- so this was never a delete the user made.
+    await _open_in_obsidian(cdp_a, path)
+    final = read_note(vault_a, path)
+    assert "keep:" in final and "status:" in final, (
+        f"frontmatter vanished on reopen; file is now:\n{final!r}"
+    )
+    await expect(web.property_value_locator("status")).to_have_value(
+        "published", timeout=MS
+    )
