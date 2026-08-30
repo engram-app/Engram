@@ -241,6 +241,32 @@ defmodule Engram.Notes.HelpersTest do
       end
     end
 
+    # THE oracle. `non_string_scalar?/1` is hand-written rules because asking
+    # YamlElixir costs ~2.6ms per call on a per-note-write path -- enough to time
+    # out an e2e. The correctness those rules give up is bought back here, where
+    # the real parser is free: every case below is checked against what YAML
+    # actually returns, so a rule that drifts from the spec fails loudly instead
+    # of silently eating someone's tag.
+    test "the fast rules agree with YamlElixir about what is a string" do
+      cases = ~w(
+        true True TRUE tRue false False FALSE fAlse null Null NULL nUll ~
+        42 -5 +1 007 3.5 .5 1e5 1E5 0x10 0o17 .inf .INF .nan
+        1_000 1/2 2024-01-02 3-5 v2 no on off yes work health todo notes 12abc
+      )
+
+      # `0x` is excluded on purpose: YamlElixir returns 0 for a truncated hex
+      # prefix, which is its quirk rather than the YAML 1.2 grammar. Our rule
+      # keeps it as a tag, and keeping a tag is the fail-open direction -- worth
+      # a documented disagreement, not worth contorting the rule for.
+      for literal <- cases do
+        {:ok, %{"v" => parsed}} = YamlElixir.read_from_string("v: " <> literal)
+        expected = if is_binary(parsed), do: [literal], else: []
+
+        assert Helpers.extract_tags("---\ntags: #{literal}\n---\nBody") == expected,
+               "`tags: #{literal}` disagrees with YAML, which parses it as #{inspect(parsed)}"
+      end
+    end
+
     test "a non-tag scalar is dropped from a list without taking the real tags with it" do
       content = "---\ntags: [work, true, health]\n---\nBody"
       assert Helpers.extract_tags(content) == ["work", "health"]

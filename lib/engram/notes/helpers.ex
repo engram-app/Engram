@@ -365,23 +365,23 @@ defmodule Engram.Notes.Helpers do
 
   # Would YAML read this scalar as something other than a string?
   #
-  # The leading-character gate is not an optimisation detail: it keeps the
-  # parser off the hot path for ordinary tags (`work`, `health`), and every
-  # character it skips is one that cannot begin a YAML boolean, null or number.
-  @maybe_scalar_re ~r/^[-+.~0-9tTfFnN]/
+  # Rules, not a parser. Asking YamlElixir is the obviously-correct thing and it
+  # was the first fix here, but it costs ~2.6ms per call and this runs per tag
+  # per note write: a note tagged `todo` (t is a plausible boolean prefix, so the
+  # cheap gate could not exclude it) paid that on every save, and it was enough
+  # to time out an e2e that waits on content propagation.
+  #
+  # The rules below are pinned AGAINST YamlElixir in helpers_test.exs, over the
+  # cases that made the two earlier hand-written attempts wrong in both
+  # directions -- `tRue`/`nUll`/`1_000`/`1/2` are strings, `0x10`/`1e5`/`+1`/
+  # `.5`/`0o17`/`.inf` are not. The oracle lives in the test, where 2.6ms is free.
+  @yaml_bool_null ~w(true True TRUE false False FALSE null Null NULL ~)
+
+  # YAML 1.2 core numerics. Deliberately NOT 1.1: no `1_000` (underscores), and
+  # no yes/no/on/off, both of which YamlElixir returns as strings.
+  @yaml_number_re ~r/^(?:[-+]?\d+|0o[0-7]+|0x[0-9a-fA-F]+|[-+]?(?:\.\d+|\d+(?:\.\d*)?)(?:[eE][-+]?\d+)?|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$/
 
   defp non_string_scalar?(item) do
-    if String.contains?(item, "\n") or not Regex.match?(@maybe_scalar_re, item) do
-      false
-    else
-      case YamlElixir.read_from_string("v: " <> item) do
-        {:ok, %{"v" => value}} -> not is_binary(value)
-        _ -> false
-      end
-    end
-  rescue
-    _ -> false
-  catch
-    _, _ -> false
+    item in @yaml_bool_null or Regex.match?(@yaml_number_re, item)
   end
 end
