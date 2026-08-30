@@ -2,10 +2,14 @@ import { ChevronRight, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type * as Y from "yjs";
+import { HelpTip } from "@/components/help-tip";
 import { Checkbox } from "@/components/ui/checkbox";
+import { cn } from "@/lib/utils";
 import {
 	addKey,
 	frontmatterMaps,
+	isOkfMatch,
+	OKF_FIELD_HELP,
 	type PropertyRow,
 	readRows,
 	removeKey,
@@ -44,10 +48,13 @@ const PORTALLED_SURFACES =
 function PropertyKeyInput({
 	doc,
 	name,
+	okf,
 	elRef,
 }: {
 	doc: Y.Doc;
 	name: string;
+	/** Key Engram reads AND whose value is the shape that field needs. */
+	okf: boolean;
 	/** Hands the live input up to the row, which is where the type menu lives. */
 	elRef?: (el: HTMLInputElement | null) => void;
 }) {
@@ -83,7 +90,13 @@ function PropertyKeyInput({
 				elRef?.(el);
 			}}
 			aria-label={`Rename ${name}`}
-			className="w-full min-w-0 truncate border-0 bg-transparent px-2 py-1 text-muted-foreground text-sm outline-none"
+			// Highlighted when Engram READS the key rather than merely storing it.
+			// No tooltip: the `?` beside the heading is where the explanation
+			// lives, and a per-key hover repeating it is noise on every row.
+			className={cn(
+				"w-full min-w-0 truncate border-0 bg-transparent px-2 py-1 text-sm outline-none",
+				okf ? "text-primary" : "text-muted-foreground",
+			)}
 			value={draft}
 			onChange={(e) => setDraft(e.target.value)}
 			onBlur={commit}
@@ -112,6 +125,57 @@ interface Props {
 	onAbandonDraft?: () => void;
 }
 
+/** What the `?` beside the Properties heading says.
+ *
+ *  Two questions, in the order someone actually asks them: what IS this block,
+ *  and does what I put in it matter. The second is the reason this exists --
+ *  most keys are stored and handed back unchanged, but a handful are read,
+ *  indexed and used by search, and nothing on screen said which. */
+function PropertiesHelp() {
+	return (
+		<>
+			<p>
+				Properties are the note's <strong>frontmatter</strong>: a block at the very top of the file,
+				fenced by <code>---</code>. Obsidian shows the same block as Properties, so a note edited in
+				either place reads the same in both.
+			</p>
+			<p className="mt-2">
+				Any property you add is stored and synced. These are the ones Engram also{" "}
+				<strong>reads</strong> — it indexes them into their own columns and search uses them, so
+				filling them in does more than record a note about the note:
+			</p>
+			<dl className="mt-2 space-y-1">
+				{OKF_FIELD_HELP.map(({ key, aliases, expectsLabel, what }) => (
+					<div key={key} className="flex gap-2">
+						<dt className="w-24 shrink-0 font-mono text-foreground">{key}</dt>
+						<dd className="flex-1 text-muted-foreground">
+							{what} Wants {expectsLabel}.
+							{aliases.length > 0 ? (
+								<span className="block opacity-80">
+									also accepts {aliases.map((a) => `\`${a}\``).join(" or ")}
+								</span>
+							) : null}
+						</dd>
+					</div>
+				))}
+			</dl>
+			<p className="mt-2">
+				These field names come from the{" "}
+				<a
+					href="https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf"
+					target="_blank"
+					rel="noreferrer noopener"
+					className="text-primary underline underline-offset-2"
+				>
+					Open Knowledge Format
+				</a>
+				, the open standard Engram follows — so using them keeps your notes portable to anything
+				else that reads OKF. Any other name is yours to invent; it syncs like everything else.
+			</p>
+		</>
+	);
+}
+
 export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) {
 	const [rows, setRows] = useState<PropertyRow[]>(() => readRows(doc));
 	const newKeyRef = useRef<HTMLInputElement>(null);
@@ -120,6 +184,14 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 	const newValueRef = useRef<HTMLElement | null>(null);
 	const rootRef = useRef<HTMLElement>(null);
 	const detailsRef = useRef<HTMLDetailsElement>(null);
+	// Clicking the `?` inside the <summary> also fires the summary's default
+	// action, collapsing the very thing you asked about. It cannot be cancelled
+	// with preventDefault: Radix ignores a default-prevented click, so that
+	// closes the popover too. So let the toggle happen and put it straight back.
+	const helpToggle = useRef<{ pending: boolean; wasOpen: boolean }>({
+		pending: false,
+		wasOpen: true,
+	});
 	// Key inputs by property name, so choosing a type can put the caret on the
 	// name it belongs to. Keyed by name rather than index: a rename swaps the
 	// key and an index would then point at a different row.
@@ -287,7 +359,21 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 
 			    Marker hidden both ways: `list-none` covers Firefox, the
 			    ::-webkit-details-marker rule covers Safari. */}
-			<details ref={detailsRef} open className="group/props">
+			<details
+				ref={detailsRef}
+				open
+				className="group/props"
+				onToggle={(e) => {
+					if (!helpToggle.current.pending) {
+						return;
+					}
+					// Restoring fires onToggle a second time; `pending` is already
+					// false by then, so it falls through the guard above.
+					const { wasOpen } = helpToggle.current;
+					helpToggle.current.pending = false;
+					e.currentTarget.open = wasOpen;
+				}}
+			>
 				<summary
 					data-testid="note-properties-toggle"
 					className="group/summary flex cursor-pointer list-none items-center gap-1 pb-1 font-semibold text-base text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
@@ -306,6 +392,28 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 						className="-ml-[18px] size-3.5 opacity-100 transition-[opacity,rotate] group-open/props:rotate-90 group-open/props:opacity-0 group-open/props:group-hover/summary:opacity-100 group-open/props:group-focus-visible/summary:opacity-100"
 					/>
 					Properties
+					{/* Inside the summary so it sits with the label — which means a
+					    click on it would also fire the summary's default action and
+					    COLLAPSE the thing you just asked about.
+
+					    Undone rather than prevented -- see the ref above for why
+					    preventDefault is not available here. */}
+					<span
+						className="ml-1 inline-flex align-middle"
+						// Click, not pointerdown: capture still runs before the summary's
+						// default action, and it is the one event every path produces --
+						// mouse, touch, keyboard activation and fireEvent alike.
+						onClickCapture={() => {
+							helpToggle.current = {
+								pending: true,
+								wasOpen: detailsRef.current?.open ?? true,
+							};
+						}}
+					>
+						<HelpTip label="About properties" align="start">
+							<PropertiesHelp />
+						</HelpTip>
+					</span>
 				</summary>
 				<dl className="flex flex-col gap-[3px]">
 					{rows.map((row) => {
@@ -321,6 +429,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 									<PropertyKeyInput
 										doc={doc}
 										name={row.key}
+										okf={isOkfMatch(row.key, type)}
 										elRef={(el) => {
 											if (el) {
 												keyEls.current.set(row.key, el);

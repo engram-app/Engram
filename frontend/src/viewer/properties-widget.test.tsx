@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import * as Y from "yjs";
-import { addKey, readRows, setValue } from "../crdt/frontmatter-doc";
+import { addKey, OKF_FIELD_HELP, readRows, setValue } from "../crdt/frontmatter-doc";
 import { PropertiesWidget } from "./properties-widget";
+import type { PropertyType } from "./property-types";
 
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: toastError } }));
@@ -486,5 +487,102 @@ describe("collapsed-block and checkbox edge cases", () => {
 		await pickType("text");
 
 		await waitFor(() => expect(screen.getByLabelText("New property value")).toHaveValue("hello"));
+	});
+});
+
+// The blue keys and the `?` panel are one feature: the colour says "this one
+// counts", the panel says why. Both read the same table, so they cannot
+// disagree about which keys count or what shape each wants.
+describe("OKF keys are highlighted only when the value fits", () => {
+	const keyInput = (name: string) => screen.getByRole("textbox", { name: `Rename ${name}` });
+
+	const renderWith = async (key: string, type: PropertyType) => {
+		const doc = new Y.Doc();
+		addKey(doc, key, type);
+		render(<PropertiesWidget doc={doc} />);
+		await screen.findByDisplayValue(key);
+	};
+
+	test("a custom key stays muted whatever its type", async () => {
+		await renderWith("my-own-key", "text");
+		expect(keyInput("my-own-key")).toHaveClass("text-muted-foreground");
+	});
+
+	test.each([
+		["type", "text"],
+		["description", "text"],
+		["resource", "text"],
+		["tags", "list"],
+		["created", "date"],
+		["timestamp", "datetime"],
+		// Aliases: okf_fields.ex accepts these, so they are indexed too.
+		["updated", "date"],
+		["modified", "datetime"],
+		["date", "date"],
+	] as const)("%s as %s is highlighted", async (key, type) => {
+		await renderWith(key, type);
+		expect(keyInput(key)).toHaveClass("text-primary");
+	});
+
+	// The whole point of the type half. Nothing rejects these: the server's
+	// string_field/parse_datetime return nil and the note quietly stops matching
+	// search, so the missing highlight is the only warning the user gets.
+	test.each([
+		["tags", "checkbox"],
+		["tags", "text"],
+		["type", "checkbox"],
+		["type", "number"],
+		["created", "text"],
+		["timestamp", "list"],
+	] as const)("%s as %s is NOT highlighted", async (key, type) => {
+		await renderWith(key, type);
+		expect(keyInput(key)).toHaveClass("text-muted-foreground");
+	});
+
+	test("carries no hover text of its own", async () => {
+		await renderWith("type", "text");
+		expect(keyInput("type")).not.toHaveAttribute("title");
+	});
+});
+
+describe("the Properties help panel", () => {
+	const openHelp = async () => {
+		const doc = new Y.Doc();
+		addKey(doc, "title", "text");
+		render(<PropertiesWidget doc={doc} />);
+		await screen.findByDisplayValue("title");
+		fireEvent.click(screen.getByRole("button", { name: "About properties" }));
+		return screen.findByRole("dialog", { name: "About properties" });
+	};
+
+	test("explains what frontmatter is and links the standard", async () => {
+		const panel = await openHelp();
+		expect(panel).toHaveTextContent(/frontmatter/i);
+		expect(within(panel).getByRole("link", { name: /Open Knowledge Format/i })).toHaveAttribute(
+			"href",
+			expect.stringContaining("okf"),
+		);
+	});
+
+	// An un-highlighted key has no explanation anywhere else, so the panel has
+	// to say both which keys count and what shape each one wants.
+	test("lists every field with its aliases and the shape it wants", async () => {
+		const panel = await openHelp();
+		for (const { key, aliases, expectsLabel } of OKF_FIELD_HELP) {
+			expect(panel).toHaveTextContent(key);
+			expect(panel).toHaveTextContent(expectsLabel);
+			for (const alias of aliases) {
+				expect(panel).toHaveTextContent(alias);
+			}
+		}
+		expect(panel).toHaveTextContent("updated");
+	});
+
+	// The `?` lives inside the <summary>, whose default click action is to
+	// toggle. Opening the explanation must not collapse the thing it explains.
+	test("opening it does not collapse the block", async () => {
+		const panel = await openHelp();
+		expect(panel).toBeInTheDocument();
+		expect(screen.getByTestId("note-properties-toggle").closest("details")).toHaveAttribute("open");
 	});
 });

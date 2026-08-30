@@ -25,6 +25,83 @@ function isTaken(doc: Y.Doc, key: string): boolean {
 	return frontmatterMaps(doc).values.has(key) || rawMap(doc).has(key);
 }
 
+// The Open Knowledge Format fields, and what each one buys you -- the source
+// for the `?` panel beside the Properties heading. These are the keys Engram
+// READS rather than merely stores: `Engram.Notes.OkfFields.extract/1` lifts
+// type/description/resource/timestamp/created into their own indexed columns,
+// and `type` feeds the search filter's suggestions via GET /types. `tags` is
+// OKF too, indexed by its own path (list_tags).
+//
+// The aliases are not cosmetic: okf_fields.ex accepts `modified`/`updated` for
+// timestamp and `date` for created, so a note using `updated:` IS indexed.
+// Listing only the canonical names would tell the user the opposite.
+export const OKF_FIELD_HELP: ReadonlyArray<{
+	key: string;
+	aliases: readonly string[];
+	expects: readonly PropertyType[];
+	expectsLabel: string;
+	what: string;
+}> = [
+	{
+		key: "type",
+		aliases: [],
+		expects: ["text"],
+		expectsLabel: "text",
+		what: "What kind of note this is. Search can filter on it.",
+	},
+	{
+		key: "tags",
+		aliases: [],
+		expects: ["list"],
+		expectsLabel: "a list",
+		what: "Topics. Browsable and searchable across the vault.",
+	},
+	{
+		key: "description",
+		aliases: [],
+		expects: ["text"],
+		expectsLabel: "text",
+		what: "A one-line summary of the note.",
+	},
+	{
+		key: "resource",
+		aliases: [],
+		expects: ["text"],
+		expectsLabel: "text",
+		what: "The thing the note is about \u2014 usually a URL.",
+	},
+	{
+		key: "created",
+		aliases: ["date"],
+		expects: ["date", "datetime"],
+		expectsLabel: "a date",
+		what: "When the note came into being.",
+	},
+	{
+		key: "timestamp",
+		aliases: ["modified", "updated"],
+		expects: ["date", "datetime"],
+		expectsLabel: "a date",
+		what: "When it last changed.",
+	},
+];
+
+/** Is this key one Engram reads, AND is its value the shape that field needs?
+ *
+ *  The type half is the point. A mismatch is not rejected anywhere: the server's
+ *  `string_field/1` and `parse_datetime/1` return nil for the wrong shape and
+ *  `OkfFields` "never errors, so a malformed note still syncs (all fields
+ *  degrade to nil)" — the column is simply empty and the note quietly stops
+ *  matching search. `tags` is worse: it is regex-parsed straight out of the
+ *  YAML, so `tags: true` becomes a tag literally named "true".
+ *
+ *  Nothing else tells the user. Withholding the highlight is the signal. */
+export function isOkfMatch(key: string, type: PropertyType): boolean {
+	const k = key.trim().toLowerCase();
+	const field = OKF_FIELD_HELP.find((f) => f.key === k || f.aliases.includes(k));
+	return field?.expects.includes(type) ?? false;
+}
+
 export const CONTENT_KEY = "content";
 export const FRONTMATTER_KEY = "frontmatter";
 export const ORDER_KEY = "frontmatter_order";
