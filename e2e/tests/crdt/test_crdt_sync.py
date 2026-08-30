@@ -176,11 +176,20 @@ async def _confirm_room_free(cdp, path):
     release rather than sampling the enrolled set the instant the sync returns —
     a single immediate snapshot races the async release (the source of this
     test's flakiness). A genuinely stuck room still fails via timeout.
+
+    BOTH reads below poll for the same reason. trigger_full_sync() returning
+    means the sync call finished, not that the mapping it discovered has landed
+    in noteIdMap, so the note_id read raced it exactly as the enrolled-set read
+    did — reporting `assert None` ("device never mapped a note_id") for a note
+    that maps fine moments later, and taking 6-7 downstream tests with it
+    (engram-app/Engram#1489).
     """
     await cdp.wait_for_stream_connected()
     await cdp.trigger_full_sync()
-    note_id = await cdp.get_note_id_for_path(path)
-    assert note_id, f"device never mapped a note_id for {path} — cannot prove fan-out"
+    try:
+        note_id = await cdp.wait_for_note_id_for_path(path, timeout=CRDT_TIMEOUT)
+    except TimeoutError as e:
+        pytest.fail(f"device never mapped a note_id for {path} — cannot prove fan-out — {e}")
     try:
         await cdp.wait_for_room_free(note_id, timeout=CRDT_TIMEOUT)
     except TimeoutError as e:

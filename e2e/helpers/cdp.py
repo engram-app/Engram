@@ -1037,6 +1037,31 @@ class CdpClient:
             f"? ({ENGINE_PATH}.noteIdMap.get({json.dumps(path)}) ?? null) : null"
         )
 
+    async def wait_for_note_id_for_path(self, path: str, timeout: float = 30) -> str:
+        """Poll until the plugin has mapped `path` to a note_id, and return it.
+
+        Same race as `wait_for_room_free` one method down, one step earlier in
+        the same sequence: `trigger_full_sync()` returning means the sync CALL
+        finished, not that every mapping it discovered has been committed to
+        `noteIdMap`. A single immediate `get_note_id_for_path()` therefore
+        samples a map that may still be a beat behind, and reads `None` for a
+        note that maps fine a few hundred ms later (engram-app/Engram#1489).
+
+        Poll instead. A note the device genuinely never maps still fails, via
+        timeout — so this weakens nothing, it only stops reporting a slow
+        mapping as a missing one.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            note_id = await self.get_note_id_for_path(path)
+            if note_id:
+                return note_id
+            await asyncio.sleep(0.2)
+        raise TimeoutError(
+            f"device never mapped a note_id for {path} within {timeout}s "
+            f"on CDP port {self.port}"
+        )
+
     async def get_enrolled_note_ids(self) -> list[str]:
         """Snapshot CrdtEnrollment.enrolled — the note_ids this device has
         STEP1-enrolled (opened a CRDT room for) this session."""
