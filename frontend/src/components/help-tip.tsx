@@ -39,7 +39,11 @@ export function HelpTip({
 				// screen reader that reads both says it twice. Sighted users get the
 				// affordance from the icon.
 				aria-label={label}
-				className={`inline-flex shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground ${className}`}
+				// cursor-pointer explicitly: a <button> defaults to the arrow, so the
+				// one affordance this icon has -- that it is clickable -- was missing.
+				// Worse inside a container that sets its own cursor-pointer, where the
+				// arrow reappearing over the icon reads as "not this bit".
+				className={`inline-flex shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground ${className}`}
 			>
 				<CircleHelp className="size-4" />
 			</PopoverTrigger>

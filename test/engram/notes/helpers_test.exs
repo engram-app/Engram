@@ -209,6 +209,98 @@ defmodule Engram.Notes.HelpersTest do
       assert Helpers.extract_tags(content) == ["health", "fitness"]
     end
 
+    # `tags:` is scanned off the raw YAML, so a scalar YAML would not hand back
+    # as a string used to arrive as its source text: `tags: true` became a tag
+    # literally named "true" in the user's vault. Dropping bad input is fine;
+    # inventing a tag from it is not.
+    test "a YAML boolean or null is not a tag" do
+      for literal <- ~w(true True TRUE false False FALSE null Null NULL ~) do
+        content = "---\ntags: #{literal}\n---\nBody"
+        assert Helpers.extract_tags(content) == [], "`tags: #{literal}` produced a tag"
+      end
+    end
+
+    # Every non-decimal numeric form YAML understands. A hand-written regex
+    # covered plain decimal only and let all of these through as tags, which is
+    # the same defect as `tags: true` wearing a different hat.
+    test "no numeric form survives as a tag" do
+      for literal <- ~w(42 -5 007 3.5 +1 .5 1e5 0x10 0o17 .inf .nan) do
+        content = "---\ntags: #{literal}\n---\nBody"
+        assert Helpers.extract_tags(content) == [], "`tags: #{literal}` produced a tag"
+      end
+    end
+
+    # The mirror image, and the reason this asks the parser instead of matching
+    # patterns: YAML hands ALL of these back as strings, so they are real tags.
+    # An earlier downcase dropped `tRue`/`nUll`; an earlier numeric regex would
+    # have dropped `1_000` and `1/2` had it been "aligned" with numeric_tag?/1.
+    test "scalars YAML reads as strings are kept" do
+      for literal <- ~w(tRue nUll fAlse no on off yes v2 1_000 1/2 2024-01-02 3-5) do
+        content = "---\ntags: #{literal}\n---\nBody"
+        assert Helpers.extract_tags(content) == [literal], "`tags: #{literal}` lost the tag"
+      end
+    end
+
+    # THE oracle. `non_string_scalar?/1` is hand-written rules because asking
+    # YamlElixir costs ~2.6ms per call on a per-note-write path -- enough to time
+    # out an e2e. The correctness those rules give up is bought back here, where
+    # the real parser is free: every case below is checked against what YAML
+    # actually returns, so a rule that drifts from the spec fails loudly instead
+    # of silently eating someone's tag.
+    test "the fast rules agree with YamlElixir about what is a string" do
+      cases = ~w(
+        true True TRUE tRue false False FALSE fAlse null Null NULL nUll ~
+        42 -5 +1 007 3.5 .5 1e5 1E5 0x10 0o17 .inf .INF .nan
+        1_000 1/2 2024-01-02 3-5 v2 no on off yes work health todo notes 12abc
+      )
+
+      # `0x` is excluded on purpose: YamlElixir returns 0 for a truncated hex
+      # prefix, which is its quirk rather than the YAML 1.2 grammar. Our rule
+      # keeps it as a tag, and keeping a tag is the fail-open direction -- worth
+      # a documented disagreement, not worth contorting the rule for.
+      for literal <- cases do
+        {:ok, %{"v" => parsed}} = YamlElixir.read_from_string("v: " <> literal)
+        expected = if is_binary(parsed), do: [literal], else: []
+
+        assert Helpers.extract_tags("---\ntags: #{literal}\n---\nBody") == expected,
+               "`tags: #{literal}` disagrees with YAML, which parses it as #{inspect(parsed)}"
+      end
+    end
+
+    test "a non-tag scalar is dropped from a list without taking the real tags with it" do
+      content = "---\ntags: [work, true, health]\n---\nBody"
+      assert Helpers.extract_tags(content) == ["work", "health"]
+      assert Helpers.extract_tags("---\ntags: [work, 42, 3.5]\n---\nBody") == ["work"]
+    end
+
+    # The block path reaches tag_item/1 through a different call site than the
+    # inline one, and the "every item rejected" case falls back to the inline
+    # regex -- the subtlest interaction here, so pin it.
+    test "block-style lists filter the same way" do
+      assert Helpers.extract_tags("---\ntags:\n  - true\n  - work\n---\nBody") == ["work"]
+      assert Helpers.extract_tags("---\ntags:\n  - true\n  - false\n---\nBody") == []
+      assert Helpers.extract_tags("---\ntags:\n  - true\nauthor: me\n---\nBody") == []
+
+      assert Helpers.extract_tags(~s(---\ntags:\n  - "true"\n  - work\n---\nBody)) == [
+               "true",
+               "work"
+             ]
+    end
+
+    # QUOTING is the user saying "I mean the string". Dropping it would be the
+    # same silent-data-loss bug in the other direction.
+    test "a quoted literal IS a tag" do
+      assert Helpers.extract_tags(~s(---\ntags: "true"\n---\nBody)) == ["true"]
+      assert Helpers.extract_tags("---\ntags: ['42', work]\n---\nBody") == ["42", "work"]
+      assert Helpers.extract_tags(~s(---\ntags: [ "true" ]\n---\nBody)) == ["true"]
+    end
+
+    # Fails OPEN: a scalar the parser cannot read keeps its tag rather than
+    # costing the user data on a guess.
+    test "an unparseable item is kept, not dropped" do
+      assert Helpers.extract_tags("---\ntags: [work, -{[}]\n---\nBody") != []
+    end
+
     test "block-style (multi-line) list tags" do
       content = "---\ntags:\n  - project\n  - work\n---\nBody"
       assert Helpers.extract_tags(content) == ["project", "work"]

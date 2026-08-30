@@ -281,7 +281,7 @@ defmodule Engram.Notes.Helpers do
           rest
           |> String.split("\n")
           |> Enum.take_while(&Regex.match?(~r/^\s*-\s+/, &1))
-          |> Enum.map(&(&1 |> String.replace(~r/^\s*-\s+/, "") |> unquote_tag()))
+          |> Enum.map(&(&1 |> String.replace(~r/^\s*-\s+/, "") |> tag_item()))
           |> Enum.reject(&(&1 == ""))
 
         if items == [], do: nil, else: items
@@ -314,7 +314,7 @@ defmodule Engram.Notes.Helpers do
     rest
     |> String.trim_trailing("]")
     |> String.split(",")
-    |> Enum.map(&unquote_tag/1)
+    |> Enum.map(&tag_item/1)
     |> Enum.reject(&(&1 == ""))
   end
 
@@ -322,7 +322,66 @@ defmodule Engram.Notes.Helpers do
     # Comma-separated string: tag1, tag2
     raw
     |> String.split(",")
-    |> Enum.map(&unquote_tag/1)
+    |> Enum.map(&tag_item/1)
     |> Enum.reject(&(&1 == ""))
+  end
+
+  # One tag, or "" for something that is not one.
+  #
+  # `tags:` is read off the raw YAML with a regex rather than from the parsed
+  # value, so a scalar YAML would NOT give back as a string arrived here as its
+  # source text: `tags: true` became a tag literally named "true", which then
+  # showed up in the vault's tag list. Dropping bad input is one thing;
+  # inventing a tag out of it is another.
+  #
+  # The test is ASKED OF THE YAML PARSER, not pattern-matched. Two rounds of
+  # hand-written rules got it wrong in both directions: `~w(true false null ~)`
+  # plus a downcase rejected `tRue` and `nUll`, which YAML 1.2 hands back as
+  # ordinary strings, while a plain-decimal regex let `0x10`, `1e5`, `+1`, `.5`,
+  # `0o17` and `.inf` through as tags — the very bug being fixed. The grammar is
+  # the parser's to know.
+  #
+  # Fails OPEN. A scalar the parser cannot read (`a: b`, a stray bracket) is
+  # kept, because refusing to guess must never cost the user a tag.
+  #
+  # QUOTED text is always a tag: `tags: "true"` is a user asking for a tag named
+  # true, and silently dropping it would be the same class of bug. So the check
+  # runs on the raw item, before the quotes come off.
+  #
+  # NOTE: deliberately NOT aligned with `numeric_tag?/1`, which the inline
+  # scanner uses. That rule rejects `1/2`, `1_000`, `3-5` and `2024-01-02`, all
+  # of which YAML returns as strings — it is the stricter and less correct of
+  # the two, and matching it here would delete real tags.
+  defp tag_item(raw) do
+    trimmed = String.trim(raw)
+    value = unquote_tag(trimmed)
+
+    cond do
+      String.starts_with?(trimmed, ~s(")) or String.starts_with?(trimmed, "'") -> value
+      non_string_scalar?(trimmed) -> ""
+      true -> value
+    end
+  end
+
+  # Would YAML read this scalar as something other than a string?
+  #
+  # Rules, not a parser. Asking YamlElixir is the obviously-correct thing and it
+  # was the first fix here, but it costs ~2.6ms per call and this runs per tag
+  # per note write: a note tagged `todo` (t is a plausible boolean prefix, so the
+  # cheap gate could not exclude it) paid that on every save, and it was enough
+  # to time out an e2e that waits on content propagation.
+  #
+  # The rules below are pinned AGAINST YamlElixir in helpers_test.exs, over the
+  # cases that made the two earlier hand-written attempts wrong in both
+  # directions -- `tRue`/`nUll`/`1_000`/`1/2` are strings, `0x10`/`1e5`/`+1`/
+  # `.5`/`0o17`/`.inf` are not. The oracle lives in the test, where 2.6ms is free.
+  @yaml_bool_null ~w(true True TRUE false False FALSE null Null NULL ~)
+
+  # YAML 1.2 core numerics. Deliberately NOT 1.1: no `1_000` (underscores), and
+  # no yes/no/on/off, both of which YamlElixir returns as strings.
+  @yaml_number_re ~r/^(?:[-+]?\d+|0o[0-7]+|0x[0-9a-fA-F]+|[-+]?(?:\.\d+|\d+(?:\.\d*)?)(?:[eE][-+]?\d+)?|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$/
+
+  defp non_string_scalar?(item) do
+    item in @yaml_bool_null or Regex.match?(@yaml_number_re, item)
   end
 end

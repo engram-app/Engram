@@ -14,8 +14,12 @@ interface FieldProps {
 
 // Obsidian's value inputs carry no border and no fill, in any state — the
 // caret is the only affordance. See docs/context/obsidian-properties-parity.md.
+// No LEFT inset here on purpose. Every value renderer must start on the same x,
+// and only the inputs can carry their own padding — chips and the checkbox are
+// not inputs, so they sat flush against the divider. The `dd` owns the inset now
+// (properties-widget), which makes the next field type correct by default.
 const inputCls =
-	"w-full rounded-md border-0 bg-transparent px-2 py-1 text-foreground text-sm outline-none";
+	"w-full rounded-md border-0 bg-transparent py-1 pr-2 text-foreground text-sm outline-none";
 
 function ScalarField({ type, value, onCommit, onFocusChange, label }: FieldProps) {
 	const initial = value === null || value === undefined ? "" : String(value);
@@ -27,14 +31,7 @@ function ScalarField({ type, value, onCommit, onFocusChange, label }: FieldProps
 		}
 	}, [initial]);
 
-	const htmlType =
-		type === "number"
-			? "number"
-			: type === "date"
-				? "date"
-				: type === "datetime"
-					? "datetime-local"
-					: "text";
+	const htmlType = htmlInputType(type);
 
 	const commit = () => {
 		if (type === "number") {
@@ -174,4 +171,23 @@ export function PropertyField({ type, value, onCommit, onFocusChange, label }: F
 			label={label}
 		/>
 	);
+}
+
+/** The native input type a property type is edited with.
+ *
+ *  Exported because the new-property row needs the SAME control a committed row
+ *  gets. It used to hardcode a plain text box, so choosing `date` or `datetime`
+ *  gave you a text field with no picker and no mm/dd/yyyy skeleton until the
+ *  row was committed and re-rendered as a real field. One mapping, both rows. */
+export function htmlInputType(type: PropertyType): string {
+	switch (type) {
+		case "number":
+			return "number";
+		case "date":
+			return "date";
+		case "datetime":
+			return "datetime-local";
+		default:
+			return "text";
+	}
 }
