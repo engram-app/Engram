@@ -620,10 +620,10 @@ describe("FolderTree (HT)", () => {
 		// the arriving note.
 		const treeFor = () => (
 			<QueryClientProvider client={qc}>
-				<MemoryRouter initialEntries={["/my-vault/99"]}>
+				<MemoryRouter initialEntries={["/v/my-vault/99"]}>
 					<Routes>
 						<Route
-							path="/:slug/:itemId"
+							path="/v/:slug/:itemId"
 							element={
 								<FolderTreeProvider>
 									<FolderTree />

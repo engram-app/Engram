@@ -22,15 +22,13 @@ defmodule EngramWeb.SpaControllerTest do
     assert response(conn, 200) =~ "<!DOCTYPE html>"
   end
 
-  test "GET /share/abc123 now serves the SPA as a vault-scoped route", %{conn: conn} do
-    # Was a dedicated 404 test pre-Task-7: the whitelist had no /share entry
-    # and there was no catch-all, so it 404'd. Task 7 adds /:slug/:id as a
-    # generic 2-segment dynamic route for ANY slug, so /share/abc123 is now
-    # indistinguishable from /my-vault/<id> at the router level ("share" is
-    # just a slug value). No share feature was revived; the frontend/vault
-    # lookup decides what "share" resolves to. Deeper (3+ segment) paths
-    # still have no matching route and 404, asserted below.
-    assert conn |> get("/share/abc123") |> response(200)
+  test "GET /share/abc123 404s now that vault routes are prefixed", %{conn: conn} do
+    # History: pre-Task-7 this 404'd (no /share entry, no catch-all); Task 7's
+    # generic `/:slug/:id` made it a 200 because "share" was indistinguishable
+    # from a vault slug at the router level. Moving vault routes under `/v/`
+    # removes the root wildcard entirely, so it 404s again -- and this time
+    # nothing at the root can ever be mistaken for a vault.
+    assert conn |> get("/share/abc123") |> response(404)
   end
 
   test "GET /share/abc123/folder/note still 404s (no 3-segment SPA route)", %{conn: conn} do
@@ -164,19 +162,52 @@ defmodule EngramWeb.SpaControllerTest do
 
   describe "vault-scoped SPA routes" do
     test "serves the SPA for a bare vault slug", %{conn: conn} do
-      conn = get(conn, "/my-vault")
+      conn = get(conn, "/v/my-vault")
       assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
     end
 
     test "serves the SPA for a vault-scoped note", %{conn: conn} do
-      conn = get(conn, "/my-vault/018f2b3c-0000-7000-8000-000000000000")
+      conn = get(conn, "/v/my-vault/018f2b3c-0000-7000-8000-000000000000")
       assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    # The parity test reads the ROUTE TABLE via route_info/4, which never runs
+    # `pipeline :spa` and never invokes the controller -- so it cannot see
+    # status, content-type, or a halting plug. These drive the full endpoint
+    # for the routes this change added, which otherwise had no request-level
+    # coverage at all.
+    test "serves the SPA for the bare vault prefix", %{conn: conn} do
+      conn = get(conn, "/v")
+      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "serves the SPA for a wikilink deep link", %{conn: conn} do
+      conn = get(conn, "/v/my-vault/wiki/Some%20Note")
+      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "serves the SPA for a wikilink deep link with a slash in the target", %{conn: conn} do
+      conn = get(conn, "/v/my-vault/wiki/Folder/My%20Note")
+      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    end
+
+    test "an over-deep vault path 404s rather than serving a soft-404 shell", %{conn: conn} do
+      # A greedy `get "/v/*path"` made this a 200 shell that renders an in-app
+      # 404 -- healthy to an uptime monitor, indexable as a soft-404. The
+      # bounded routes make it a real 404.
+      conn = get(conn, "/v/my-vault/some-id/extra")
+      assert conn.status == 404
+      [ct] = get_resp_header(conn, "content-type")
+      refute ct =~ "text/html", "over-deep vault path served an HTML body"
+      refute conn.resp_body =~ "window.__ENGRAM_CONFIG__="
     end
   end
 
-  describe "non-SPA prefixes must not fall through to /:slug (#858)" do
-    # Regression guard: without the deny-list these two-segment typos match
-    # `get "/:slug/:id"` and return an HTML 200, masking a broken API call.
+  describe "non-SPA prefixes 404 rather than serving the SPA (#858)" do
+    # Regression guard. Historically these two-segment typos matched the root
+    # `get "/:slug/:id"` and returned an HTML 200, masking a broken API call;
+    # a hand-maintained deny-list suppressed that. Vault routes now live under
+    # /v/, so there is no root wildcard to fall into and no deny-list.
     # Every case asserts BOTH status and content-type: a status-only check
     # would not catch a regression where not_found/2 started returning
     # text/html with a 404 status, which is exactly the "masked as success"
@@ -249,8 +280,8 @@ defmodule EngramWeb.SpaControllerTest do
     # need an exact match rather than the /prefix/*path shape used elsewhere in
     # the deny-list. All four real files exist on disk in this test env
     # (priv/static/), so Plug.Static (mounted ahead of the router in the
-    # endpoint) always wins for these requests. The tests below prove that's
-    # still true after adding the router-level entries.
+    # endpoint) always wins for these requests. The tests below prove that is
+    # still true, and that a MISS is a clean 404 rather than an HTML 200.
     test "GET /favicon.ico still serves the real file, not the SPA", %{conn: conn} do
       conn = get(conn, "/favicon.ico")
       assert conn.status == 200
@@ -283,32 +314,72 @@ defmodule EngramWeb.SpaControllerTest do
       refute response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
     end
 
-    test "a bogus sibling single-segment path still reaches the SPA", %{conn: conn} do
-      # /nonexistent.txt isn't a real static file and isn't in the deny-list,
-      # so it must still fall through to the vault-scoped /:slug route like
-      # any other unrecognized single segment. Proves the new exact entries
-      # above are scoped to their four literal paths, not a blanket sweep.
-      conn = get(conn, "/nonexistent.txt")
-      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    test "a bogus sibling single-segment path 404s (root is no longer a wildcard)", %{conn: conn} do
+      # Before the `/v/` prefix this fell through to `get "/:slug"` and served
+      # an HTML 200, because any unrecognized single segment was a candidate
+      # vault slug. With vault routes under `/v/`, the root has no wildcard
+      # left, so an unknown single segment is simply not a route.
+      assert conn |> get("/nonexistent.txt") |> response(404)
     end
 
-    test "on a Plug.Static miss (deploy skew), the router-level entries 404 instead of an HTML 200" do
+    test "on a Plug.Static miss (deploy skew), the router has no route at all" do
       # Plug.Static always wins while the real file exists (proven above), so
-      # the only way to exercise the router-level deny entries themselves is
-      # to bypass the endpoint's Plug.Static plug and hit the router
-      # directly, simulating the deploy-skew scenario (file missing from
-      # priv/static) without deleting a real file on disk.
+      # the only way to see what happens on a deploy-skew miss is to bypass
+      # the endpoint's Plug.Static plug and hit the router directly.
+      #
+      # This used to be covered by explicit `match :*` deny entries, which
+      # existed to stop these paths matching the root `get "/:slug"` wildcard
+      # and serving an HTML 200. With no root wildcard there is nothing to
+      # deny: the router simply has no route, which Plug.Exception maps to
+      # 404 and the endpoint renders as JSON (render_errors is json-only).
+      # That is a better answer than the deny-list gave -- see
+      # docs/context/vault-url-prefix-and-collision-surface.md.
       for path <- ~w(/favicon.ico /favicon.svg /engram-mark.svg /robots.txt) do
-        conn =
-          Phoenix.ConnTest.build_conn(:get, path)
-          |> EngramWeb.Router.call(EngramWeb.Router.init([]))
+        err =
+          assert_raise Phoenix.Router.NoRouteError, fn ->
+            Phoenix.ConnTest.build_conn(:get, path)
+            |> EngramWeb.Router.call(EngramWeb.Router.init([]))
+          end
 
-        assert conn.status == 404, "expected #{path} to 404 at the router level"
-        [content_type] = get_resp_header(conn, "content-type")
-
-        refute content_type =~ "text/html",
-               "expected #{path} not to serve HTML at the router level"
+        assert Plug.Exception.status(err) == 404,
+               "expected #{path} to map to a 404, got #{Plug.Exception.status(err)}"
       end
+    end
+
+    test "and the rendered miss is JSON, not HTML", %{conn: conn} do
+      # The raise above proves there is no route; this proves what the
+      # ENDPOINT turns that into. Asserted separately because adding
+      # `html: ErrorHTML` to render_errors would silently reintroduce the
+      # HTML-error-body shape the deny-list was (wrongly) credited with
+      # preventing, and the raise-only check could not see it.
+      conn = conn |> put_req_header("accept", "application/json") |> get("/assets/missing.js")
+      assert conn.status == 404
+      [ct] = get_resp_header(conn, "content-type")
+      assert ct =~ "application/json"
+      refute ct =~ "text/html"
+    end
+  end
+
+  describe "unrouted paths answer with JSON, not HTML" do
+    # The property the deleted deny-list was there to protect, asserted
+    # directly instead of via 11 hand-maintained `match :*` entries. An
+    # HTML 200 here would mask a broken API call; an HTML *404* would still
+    # break a JSON client's parser.
+    test "a typo'd API path returns a JSON 404 through the full endpoint", %{conn: conn} do
+      conn = conn |> put_req_header("accept", "application/json") |> get("/api/notez")
+      assert conn.status == 404
+      [ct] = get_resp_header(conn, "content-type")
+      assert ct =~ "application/json"
+      assert conn.resp_body =~ "Not Found"
+    end
+
+    test "a JSON client is not answered with 406", %{conn: conn} do
+      # Regression guard for the shape the deny-list actually produced: its
+      # routes lived in `pipeline :spa`, whose first plug is
+      # `plug :accepts, ["html"]`, so an Accept: application/json request
+      # raised Phoenix.NotAcceptableError (406) rather than 404.
+      conn = conn |> put_req_header("accept", "application/json") |> get("/api/notez")
+      refute conn.status == 406
     end
   end
 

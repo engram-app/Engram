@@ -20,7 +20,7 @@ function renderHost(entry: string) {
 		<MemoryRouter initialEntries={[entry]}>
 			<Routes>
 				<Route element={<SettingsOverlayHost />}>
-					<Route path="/work/:id" element={<p>note body</p>} />
+					<Route path="/v/work/:id" element={<p>note body</p>} />
 				</Route>
 			</Routes>
 		</MemoryRouter>,
@@ -29,13 +29,13 @@ function renderHost(entry: string) {
 
 describe("SettingsOverlayHost", () => {
 	it("renders the page alone when there is no settings hash", () => {
-		renderHost("/work/note-1");
+		renderHost("/v/work/note-1");
 		expect(screen.getByText("note body")).toBeInTheDocument();
 		expect(screen.queryByTestId("dialog")).toBeNull();
 	});
 
 	it("keeps the page mounted underneath when settings is open", async () => {
-		renderHost("/work/note-1#settings/billing");
+		renderHost("/v/work/note-1#settings/billing");
 		// The page underneath is synchronous (plain Outlet), but the dialog is
 		// lazy(), so it sits behind a Suspense boundary that resolves on a
 		// microtask. `vi.mock` does not make the dynamic import synchronous.
@@ -45,7 +45,7 @@ describe("SettingsOverlayHost", () => {
 	});
 
 	it("ignores unrelated hashes", () => {
-		renderHost("/work/note-1#tour");
+		renderHost("/v/work/note-1#tour");
 		expect(screen.queryByTestId("dialog")).toBeNull();
 	});
 });

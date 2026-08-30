@@ -96,12 +96,26 @@ export async function createFolder(
 	}
 }
 
-// Matches "the browser is on this note's page" without hardcoding the URL
-// shape. Notes are served at /:vaultSlug/:noteId, and specs do not know the
-// slug; anchoring on the trailing id keeps these assertions working the next
-// time the shape moves (it already moved once, from the old /note/:id).
+// Matches "the browser is on this note's page". Notes are served at
+// /v/:vaultSlug/:noteId and specs do not know the slug, so the slug segment
+// stays a wildcard -- but the /v/ prefix is pinned deliberately.
+//
+// This used to anchor only on the trailing id, which made the whole Playwright
+// suite blind to the URL shape: it matched /work/7 and /v/work/7 identically,
+// so a half-migrated frontend would have shipped green. Pinning the prefix is
+// the only assertion at ANY layer that runs against real Phoenix and proves
+// the deployed URL shape.
 export function noteUrlRe(noteId: number | string): RegExp {
-	return new RegExp(`/${noteId}(?:[?#]|$)`);
+	return new RegExp(`/v/[^/]+/${noteId}(?:[?#]|$)`, "u");
+}
+
+// For `not.toHaveURL` assertions ("we navigated AWAY from the dead note").
+// noteUrlRe must NOT be used there: tightening it to pin /v/ made every
+// negative assertion EASIER to satisfy, so a regression stranding the browser
+// on the legacy /note/<id> shape -- which noteHref(undefined, id) still
+// emits -- would pass green. This stays loose on purpose.
+export function anyNoteUrlRe(noteId: number | string): RegExp {
+	return new RegExp(`/${noteId}(?:[?#]|$)`, "u");
 }
 
 // Navigates straight to the legacy /note/:id, which the AuthGuard redirects to

@@ -1,6 +1,6 @@
 import { Search, SlidersHorizontal, X } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +25,8 @@ import {
 	useTypes,
 } from "../api/queries";
 import { useActiveVaultSlug } from "../api/vault-slug";
+import { noteHref } from "../routes";
+import { settingsTo } from "../settings/settings-hash";
 import { useRailView } from "./rail-view-context";
 import { pushRecent, readRecent } from "./recent-searches";
 
@@ -178,6 +180,7 @@ function SearchPanel({
 	onNavigate?: () => void;
 }) {
 	const { setView } = useRailView();
+	const location = useLocation();
 	const { data: folders } = useFolders();
 	const { data: allTags } = useTags();
 	const { data: allTypes } = useTypes();
@@ -595,7 +598,14 @@ function SearchPanel({
 				{capped && deferred && !isLoading && indexStatus ? (
 					<p className="px-3 pb-2 text-muted-foreground text-xs">
 						{`Searching ${indexStatus.indexed.toLocaleString()} of ${indexStatus.total.toLocaleString()} notes. `}
-						<Link className="underline underline-offset-2" to="/billing">
+						<Link
+							className="underline underline-offset-2"
+							to={settingsTo("billing", location.search)}
+							// settingsTo changes only the hash, and mobile-layout closes the
+							// drawer on a PATHNAME change, so without this the billing overlay
+							// opens behind a still-open sheet. ResultRow already does this.
+							onClick={onNavigate}
+						>
 							Upgrade to search everything
 						</Link>
 					</p>
@@ -676,7 +686,7 @@ function ResultRow({
 	if (result.id === null) {
 		return null;
 	}
-	const href = slug ? `/${slug}/${result.id}` : `/note/${result.id}`;
+	const href = noteHref(slug, result.id);
 	return (
 		<Link
 			ref={ref}

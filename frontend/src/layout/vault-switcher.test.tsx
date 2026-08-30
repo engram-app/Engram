@@ -41,7 +41,7 @@ function renderSwitcher() {
 		<QueryClientProvider client={qc}>
 			{/* Current URL carries a note id from the vault being left, and the
 			 * switch must not carry it into the new vault's URL. */}
-			<MemoryRouter initialEntries={["/work/old-note-id"]}>
+			<MemoryRouter initialEntries={["/v/work/old-note-id"]}>
 				<VaultSwitcher />
 			</MemoryRouter>
 		</QueryClientProvider>,
@@ -69,7 +69,7 @@ describe("VaultSwitcher", () => {
 		const item = await screen.findByRole("menuitemradio", { name: "Personal" });
 		fireEvent.click(item);
 
-		expect(navigate).toHaveBeenCalledWith("/personal");
+		expect(navigate).toHaveBeenCalledWith("/v/personal");
 		expect(setActiveVaultId).not.toHaveBeenCalled();
 	});
 
@@ -122,6 +122,6 @@ describe("VaultSwitcher", () => {
 		// Land in the vault that was just created, by slug. /vaults/register
 		// answers with the vault flat, NOT wrapped in { vault }.
 		createMutate.mock.calls[0]![1].onSuccess({ id: "id-c", slug: "archive", name: "Archive" });
-		expect(navigate).toHaveBeenCalledWith("/archive");
+		expect(navigate).toHaveBeenCalledWith("/v/archive");
 	});
 });

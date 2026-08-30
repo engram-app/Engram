@@ -9,7 +9,7 @@ import { UpgradeDialogProvider } from "./billing/upgrade-dialog-provider";
 import type { EngramConfig } from "./config";
 import LoadingScreen from "./layout/loading-screen";
 import RouteErrorBoundary from "./route-error-boundary";
-import { ROUTES } from "./routes";
+import { ROUTES, VAULT_PREFIX } from "./routes";
 import LoadingPane from "./viewer/loading-pane";
 import { VaultItemPage } from "./viewer/note-chunks";
 
@@ -41,7 +41,7 @@ const Dashboard = lazy(() => import("./viewer/dashboard"));
 const VaultRoute = lazy(() => import("./viewer/vault-route"));
 const VaultRedirect = lazy(() => import("./viewer/vault-redirect"));
 const LegacyNoteRedirect = lazy(() => import("./viewer/legacy-note-redirect"));
-// Wikilink hrefs name notes by path/title; this resolves them to /:slug/:id.
+// Wikilink hrefs name notes by path/title; this resolves them to /v/:slug/:id.
 const WikiLinkRedirect = lazy(() => import("./viewer/wiki-link-redirect"));
 const ResetPasswordPage = lazy(() => import("./features/auth/ResetPasswordPage"));
 const DeviceLinkPage = lazy(() => import("./device/device-link-page"));
@@ -199,14 +199,18 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 													children: [
 														// Bare `/` picks a vault; `/note/:id` is the pre-vault-scoping URL shape.
 														{ path: ROUTES.HOME, element: suspended(<VaultRedirect />) },
+														// Bare `/v` — truncating a vault URL to its own prefix is a
+														// natural move once the scheme is `/v/<something>`. Reuses
+														// the same picker `/` uses rather than 404ing.
+														{ path: VAULT_PREFIX, element: suspended(<VaultRedirect />) },
 														{ path: "/note/:id", element: suspended(<LegacyNoteRedirect />) },
-														// Vault-scoped. Listed last for readability only. React Router's
-														// route ranking already scores static segments above dynamic ones
-														// as part of matching, independent of declaration order, so
-														// position does not decide this. Verified against react-router
-														// 8.3.0's computeScore.
+														// Vault-scoped, under the `/v` prefix. The prefix is what keeps a
+														// user-named vault from ever shadowing (or being shadowed by) a
+														// top-level route — no reserved-slug list required. Listed last
+														// for readability only; RR ranks static segments above dynamic
+														// ones during matching regardless of declaration order.
 														{
-															path: "/:slug",
+															path: `${VAULT_PREFIX}/:slug`,
 															element: suspended(<VaultRoute />),
 															children: [
 																{ index: true, element: suspended(<Dashboard />) },

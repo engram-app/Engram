@@ -75,11 +75,13 @@ class WebSpaPeer:
         await page.get_by_label("Password", exact=True).fill(self.password)
         await page.get_by_role("button", name=re.compile("sign in", re.I)).click()
 
-        # The seeded activeVaultId lets LegacyNoteRedirect rewrite /note/<id> to
-        # /<vault-slug>/<id>, so match on the id with a boundary rather than the
-        # old fixed /note/ prefix. Accepts both shapes.
+        # The seeded activeVaultId lets LegacyNoteRedirect rewrite /note/<id>
+        # to /v/<vault-slug>/<id>. The /v/ prefix is pinned deliberately: an
+        # id-only pattern matched /work/n-1, /v/work/n-1 and /zzz/work/n-1
+        # identically, so a half-migrated prefix change kept this suite green
+        # while every hard load 404'd.
         await page.wait_for_url(
-            re.compile(rf"/{re.escape(str(note_id))}(?:[?#]|$)"), timeout=15_000
+            re.compile(rf"/v/[^/]+/{re.escape(str(note_id))}(?:[?#]|$)"), timeout=15_000
         )
         await self._editor().wait_for(state="visible", timeout=15_000)
 

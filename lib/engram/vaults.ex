@@ -807,18 +807,97 @@ defmodule Engram.Vaults do
     end
   end
 
-  @doc false
+  # slugify/1 truncates here, well under Vault's `validate_length(:slug, max: 120)`.
+  # The gap is deliberate: `unique_slug/3` appends a dedup suffix (up to "-1000"),
+  # and without headroom a maximal base slug would produce a slug the changeset
+  # then rejects -- a 422 on a field the client never sent.
+  @slug_max_base 100
+
+  # Latin letters NFKD does not decompose, because the diacritic is a stroke or
+  # the letter is a ligature rather than base + combining mark. Without these
+  # they fall through the ASCII filter and are silently AMPUTATED:
+  # "Ørsted" -> "rsted", "Łódź" -> "odz", "Þor" -> "or" -- i.e. a Norwegian,
+  # Polish or Icelandic user loses the first letter of their vault name.
+  @transliterations %{
+    "ø" => "o",
+    "ł" => "l",
+    "đ" => "d",
+    "æ" => "ae",
+    "œ" => "oe",
+    "þ" => "th",
+    "ð" => "d",
+    "ß" => "ss",
+    "ħ" => "h",
+    "ŧ" => "t",
+    "ı" => "i",
+    "ĸ" => "k"
+  }
+
+  @doc """
+  Turns a user-supplied vault name into a URL-safe ASCII slug.
+
+  Guarantees the output matches `Vault`'s `@slug_format`
+  (`~r/\\A[a-z0-9]+(-[a-z0-9]+)*\\z/`) and is at most #{@slug_max_base}
+  characters. That guarantee is load-bearing: it is why the changeset needs no
+  reserved-word list (vault URLs live under `/v/:slug`, so a slug cannot shadow
+  a route) and why a slug is safe to interpolate into a path.
+
+  Every regex carries `/u`. Without it PCRE matches BYTE-wise, so
+  `~r/[^\\w\\s-]/` sliced multi-byte codepoints in half and emitted invalid
+  UTF-8: `slugify("Café Notes")` returned `<<99, 97, 102, 195, 45, ...>>`, which
+  `String.valid?/1` rejects and Postgres refuses with
+  `:character_not_in_repertoire`. Creating a vault named "Café" was a 500.
+
+  Order is load-bearing too. `[\\s_]+ -> "-"` runs BEFORE the ASCII filter,
+  otherwise the filter deletes `_` first and `my_vault` becomes `myvault`
+  rather than `my-vault` -- silently moving an existing vault's URL the next
+  time its name is edited, since `maybe_regenerate_slug/3` recomputes on every
+  rename.
+
+  Accent handling is NFKD (not NFD, which misses ligatures and fullwidth
+  forms) plus `@transliterations` for stroke letters NFKD leaves intact.
+  "Zürich Notes" is `zurich-notes`, "Ørsted" is `orsted`, "ﬁle" is `file`.
+  Scripts with no ASCII fallback (CJK, Cyrillic) reduce to the empty string and
+  take the `"vault"` default, where `unique_slug/3` gives them `vault-2`,
+  `vault-3` and so on. The display name is unaffected -- it is stored
+  separately and encrypted.
+  """
   def slugify(name) do
     name
+    |> to_nfkd()
     |> String.downcase()
-    |> String.replace(~r/[^\w\s-]/, "")
-    |> String.replace(~r/[\s_]+/, "-")
-    |> String.replace(~r/-+/, "-")
+    |> transliterate()
+    # Combining marks left behind by the NFKD decomposition above.
+    |> String.replace(~r/\p{Mn}/u, "")
+    |> String.replace(~r/[\s_]+/u, "-")
+    |> String.replace(~r/[^a-z0-9-]/u, "")
+    |> String.replace(~r/-+/u, "-")
+    |> String.trim("-")
+    |> String.slice(0, @slug_max_base)
+    # Truncation can land mid-group and leave a trailing hyphen, which
+    # @slug_format rejects.
     |> String.trim("-")
     |> case do
       "" -> "vault"
       slug -> slug
     end
+  end
+
+  # `:unicode.characters_to_nfkd_binary/1` returns an {:error, _, _} tuple on
+  # invalid UTF-8 rather than raising. Plug and Jason both reject invalid UTF-8
+  # upstream so this is currently unreachable over HTTP, but a FunctionClauseError
+  # deep in a normalization pipeline is a bad way to find that out.
+  defp to_nfkd(name) do
+    case :unicode.characters_to_nfkd_binary(name) do
+      binary when is_binary(binary) -> binary
+      _ -> ""
+    end
+  end
+
+  defp transliterate(binary) do
+    Enum.reduce(@transliterations, binary, fn {from, to}, acc ->
+      String.replace(acc, from, to)
+    end)
   end
 
   # Finds a slug that doesn't collide with any existing non-deleted vault for this user.
@@ -833,10 +912,7 @@ defmodule Engram.Vaults do
         query
       end
 
-    # A reserved slug (see Vault.reserved_slugs/0) isn't in the DB, but it's
-    # unreachable/broken the same way a taken one is, so it's folded into the
-    # same collision set and gets the same -2, -3... dedup treatment.
-    existing = Repo.all(query) ++ Vault.reserved_slugs()
+    existing = Repo.all(query)
 
     if base_slug in existing do
       Enum.find_value(2..1000, fn n ->

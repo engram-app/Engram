@@ -119,16 +119,13 @@ defmodule Engram.VaultsTest do
       assert v3.slug == "notes-3"
     end
 
-    test "slug that would collide with a reserved word gets a numeric suffix instead of being rejected",
-         %{
-           user: user
-         } do
-      # Users never type a slug directly (see vault-create-form.tsx) so a plain
-      # rejection here would be a dead end: "Settings" always slugifies to
-      # "settings" and the user has no field to fix. Route reserved words
-      # through the same dedup path as a taken slug.
+    test "a former reserved word is now just an ordinary slug", %{user: user} do
+      # Vault URLs are `/v/:slug`, so "Settings" no longer collides with the
+      # /settings route (nor with any Plug.Static mount, Phoenix scope, or
+      # Cloudflare rule). It takes the bare slug: no rejection, no -2 suffix.
+      # See docs/context/vault-url-prefix-and-collision-surface.md.
       assert {:ok, vault, _} = Vaults.register_vault(user, "Settings", Ecto.UUID.generate())
-      assert vault.slug == "settings-2"
+      assert vault.slug == "settings"
     end
 
     test "slug strips special characters", %{user: user} do
@@ -557,13 +554,13 @@ defmodule Engram.VaultsTest do
       assert updated.slug == "renamed-vault"
     end
 
-    test "renaming into a reserved word gets a numeric suffix instead of being rejected", %{
+    test "renaming into a former reserved word takes the bare slug", %{
       user: user
     } do
       {:ok, vault, _} = Vaults.register_vault(user, "Original", Ecto.UUID.generate())
 
       assert {:ok, updated} = Vaults.update_vault(user, vault.id, %{name: "Search"})
-      assert updated.slug == "search-2"
+      assert updated.slug == "search"
     end
 
     test "setting is_default clears other defaults", %{user: user} do

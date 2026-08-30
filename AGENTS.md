@@ -380,6 +380,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - All env vars by category → `docs/context/environment-variables.md`
 - Rate limiter & cap architecture — Postgres + BEAM only, zero Redis → `docs/context/rate-limiter-architecture.md`
 - Cross-workspace SaaS pricing model → `../engram-workspace/docs/context/pricing-strategy.md`
+- Adding a top-level route / Plug.Static mount / Phoenix scope / Cloudflare rule, and wondering if it can collide with a vault name (it cannot — vault URLs are `/v/:slug`; the old `@reserved_slugs` list is deleted) → `docs/context/vault-url-prefix-and-collision-surface.md`
 
 **Sync & CRDT**
 - Server-side sync protocol — seq change-log, cursor-pull, manifest, realtime channel (start here for sync work) → `docs/context/sync-protocol.md`

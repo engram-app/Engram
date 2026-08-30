@@ -52,11 +52,11 @@ function LocationProbe() {
 // NoteView reads the vault slug from the route to build wikilink hrefs.
 function renderNote(content: string, links?: NoteLinkEdge[], manifestNotes?: ManifestNote[]) {
 	return render(
-		<MemoryRouter initialEntries={["/work/n-1"]}>
+		<MemoryRouter initialEntries={["/v/work/n-1"]}>
 			<LocationProbe />
 			<Routes>
 				<Route
-					path="/:slug/:itemId"
+					path="/v/:slug/:itemId"
 					element={
 						<NoteView content={content} tags={[]} links={links} manifestNotes={manifestNotes} />
 					}
@@ -70,25 +70,25 @@ describe("NoteView wikilinks", () => {
 	it("links [[Page]] into the vault wiki resolver, name unmangled", () => {
 		renderNote("See [[Folder/My Note]].");
 		const link = screen.getByRole("link", { name: "Folder/My Note" });
-		expect(link).toHaveAttribute("href", "/work/wiki/Folder/My%20Note");
+		expect(link).toHaveAttribute("href", "/v/work/wiki/Folder/My%20Note");
 	});
 
 	it("renders the alias as the link text", () => {
 		renderNote("See [[My Note|the note]].");
 		const link = screen.getByRole("link", { name: "the note" });
-		expect(link).toHaveAttribute("href", "/work/wiki/My%20Note");
+		expect(link).toHaveAttribute("href", "/v/work/wiki/My%20Note");
 	});
 
 	it("carries a heading as a slugged hash", () => {
 		renderNote("See [[My Note#Some Section]].");
 		const link = screen.getByRole("link", { name: "My Note#Some Section" });
-		expect(link).toHaveAttribute("href", "/work/wiki/My%20Note#some-section");
+		expect(link).toHaveAttribute("href", "/v/work/wiki/My%20Note#some-section");
 	});
 
 	it("navigates in-app instead of a full page load", () => {
 		renderNote("See [[My Note]].");
 		fireEvent.click(screen.getByRole("link", { name: "My Note" }));
-		expect(screen.getByTestId("loc")).toHaveTextContent("/work/wiki/My%20Note");
+		expect(screen.getByTestId("loc").textContent).toBe("/v/work/wiki/My%20Note");
 	});
 
 	it("links straight to the note id when the links prop resolves the target", () => {
@@ -105,13 +105,13 @@ describe("NoteView wikilinks", () => {
 			},
 		]);
 		const link = screen.getByRole("link", { name: "My Note" });
-		expect(link).toHaveAttribute("href", "/work/n-1");
+		expect(link).toHaveAttribute("href", "/v/work/n-1");
 	});
 
 	it("resolves a manifest-only target to the direct id href", () => {
 		renderNote("See [[Fresh Note]].", [], [{ id: "m-9", path: "Sub/Fresh Note.md" }]);
 		const link = screen.getByRole("link", { name: "Fresh Note" });
-		expect(link).toHaveAttribute("href", "/work/m-9");
+		expect(link).toHaveAttribute("href", "/v/work/m-9");
 	});
 });
 
@@ -132,18 +132,18 @@ describe("NoteView markdown-syntax links", () => {
 
 	it("routes a resolved markdown link to the note id", () => {
 		renderNote("See [label](My%20Note.md).", [edge]);
-		expect(screen.getByRole("link", { name: "label" })).toHaveAttribute("href", "/work/n-1");
+		expect(screen.getByRole("link", { name: "label" })).toHaveAttribute("href", "/v/work/n-1");
 	});
 
 	it("navigates in-app rather than reloading", () => {
 		renderNote("See [label](My%20Note.md).", [edge]);
 		fireEvent.click(screen.getByRole("link", { name: "label" }));
-		expect(screen.getByTestId("loc")).toHaveTextContent("/work/n-1");
+		expect(screen.getByTestId("loc").textContent).toBe("/v/work/n-1");
 	});
 
 	it("resolves through the manifest when no edge is indexed yet", () => {
 		renderNote("See [x](Sub/Fresh%20Note.md).", [], [{ id: "m-9", path: "Sub/Fresh Note.md" }]);
-		expect(screen.getByRole("link", { name: "x" })).toHaveAttribute("href", "/work/m-9");
+		expect(screen.getByRole("link", { name: "x" })).toHaveAttribute("href", "/v/work/m-9");
 	});
 
 	it("leaves an external link untouched", () => {

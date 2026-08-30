@@ -46,7 +46,7 @@ describe("VaultRoute", () => {
 		return render(
 			<MemoryRouter initialEntries={[entry]}>
 				<Routes>
-					<Route path="/:slug" element={<VaultRoute />}>
+					<Route path="/v/:slug" element={<VaultRoute />}>
 						<Route index element={<VaultProbe />} />
 					</Route>
 				</Routes>
@@ -55,13 +55,13 @@ describe("VaultRoute", () => {
 	}
 
 	it("resolves the slug and renders children under that vault", async () => {
-		renderRoute("/work");
+		renderRoute("/v/work");
 		expect(await screen.findByTestId("child")).toHaveTextContent("id-a");
 	});
 
 	it("never renders children under the previous vault", async () => {
 		setActiveVaultId("id-b");
-		renderRoute("/work");
+		renderRoute("/v/work");
 		const child = await screen.findByTestId("child");
 		// If VaultRoute rendered its Outlet before the store caught up, this
 		// would have been "id-b" for one pass and ~25 queries would have fired
@@ -70,7 +70,7 @@ describe("VaultRoute", () => {
 	});
 
 	it("404s on an unknown slug", () => {
-		renderRoute("/nope");
+		renderRoute("/v/nope");
 		expect(screen.queryByTestId("child")).toBeNull();
 		expect(screen.getByText(/not found/i)).toBeInTheDocument();
 	});
@@ -78,7 +78,7 @@ describe("VaultRoute", () => {
 	it("waits rather than 404ing while the vault list is loading", () => {
 		mockVaults = undefined;
 		mockPending = true;
-		renderRoute("/work");
+		renderRoute("/v/work");
 		expect(screen.queryByText(/not found/i)).toBeNull();
 		expect(screen.queryByTestId("child")).toBeNull();
 	});
@@ -91,7 +91,7 @@ describe("VaultRedirect", () => {
 				<LocationProbe />
 				<Routes>
 					<Route path="/" element={<VaultRedirect />} />
-					<Route path="/:slug" element={<p>vault page</p>} />
+					<Route path="/v/:slug" element={<p>vault page</p>} />
 				</Routes>
 			</MemoryRouter>,
 		);
@@ -100,18 +100,18 @@ describe("VaultRedirect", () => {
 	it("redirects to the hinted vault", async () => {
 		setActiveVaultId("id-a");
 		renderRedirect("/");
-		expect(await screen.findByTestId("loc")).toHaveTextContent("/work");
+		expect((await screen.findByTestId("loc")).textContent).toBe("/v/work");
 	});
 
 	it("redirects to the default vault with no hint", async () => {
 		renderRedirect("/");
-		expect(await screen.findByTestId("loc")).toHaveTextContent("/personal");
+		expect((await screen.findByTestId("loc")).textContent).toBe("/v/personal");
 	});
 
 	it("preserves search and hash across the bounce", async () => {
 		renderRedirect("/?highlight=abc#settings/vaults");
-		expect(await screen.findByTestId("loc")).toHaveTextContent(
-			"/personal?highlight=abc#settings/vaults",
+		expect((await screen.findByTestId("loc")).textContent).toBe(
+			"/v/personal?highlight=abc#settings/vaults",
 		);
 	});
 
@@ -123,17 +123,17 @@ describe("VaultRedirect", () => {
 });
 
 describe("LegacyNoteRedirect", () => {
-	it("rewrites /note/:id to /:slug/:id using the hinted vault", async () => {
+	it("rewrites /note/:id to /v/:slug/:id using the hinted vault", async () => {
 		setActiveVaultId("id-a");
 		render(
 			<MemoryRouter initialEntries={["/note/n-1"]}>
 				<LocationProbe />
 				<Routes>
 					<Route path="/note/:id" element={<LegacyNoteRedirect />} />
-					<Route path="/:slug/:itemId" element={<p>note page</p>} />
+					<Route path="/v/:slug/:itemId" element={<p>note page</p>} />
 				</Routes>
 			</MemoryRouter>,
 		);
-		expect(await screen.findByTestId("loc")).toHaveTextContent("/work/n-1");
+		expect((await screen.findByTestId("loc")).textContent).toBe("/v/work/n-1");
 	});
 });
