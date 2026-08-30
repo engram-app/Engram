@@ -3064,9 +3064,39 @@ jobs:
           fi
           exit $failed
 
+      # Resolve `latest` to a concrete version OURSELVES, then hand setup-bun
+      # that number. Still tracks latest — it just stops paying for it twice.
+      #
+      # setup-bun keys its cache on the version string, so a literal `latest`
+      # is unkeyable: every run missed the cache and re-downloaded
+      # bun-linux-x64.zip (~35 MB) from github.com, even when the runner
+      # already had that exact revision. Normally 3-8s and invisible; when
+      # GitHub's release CDN served this network at ~42 KB/s on 2026-08-30 the
+      # same download took 13m53s, in two jobs at once, and turned a 9m CI run
+      # into 34m. A concrete version restores the cache hit, which comes off
+      # the LAN cache backend at ~9 MB/s instead of crossing the WAN at all.
+      #
+      # A genuinely new bun release still downloads once, then caches. That
+      # cost is irreducible — it is what tracking latest means.
+      - name: Resolve latest bun version
+        id: bun
+        run: |
+          set -euo pipefail
+          v=$(curl -sSfL --max-time 20 \
+                -H "Authorization: Bearer ${{ github.token }}" \
+                https://api.github.com/repos/oven-sh/bun/releases/latest \
+              | jq -r '.tag_name' | sed 's/^bun-v//')
+          # Fail loud rather than silently falling back to `latest` — a
+          # sloppy fallback would restore the every-run download and nobody
+          # would notice until CI got slow again.
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::could not resolve latest bun version (got '$v')"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Resolved bun latest -> $v"
+
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: ${{ steps.bun.outputs.version }}
 
       # Run `bun audit` against frontend/ on every CI trigger. Fail when any
       # critical or high advisory affects a PRODUCTION dependency path. The
@@ -3682,10 +3712,27 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Resolve latest ourselves for the same reason as static-checks above: a
+      # literal `latest` is unkeyable, so setup-bun re-downloads ~35 MB per run
+      # instead of restoring from the LAN cache.
+      - name: Resolve latest bun version
+        id: bun
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          v=$(curl -sSfL --max-time 20 \
+                -H "Authorization: Bearer ${{ github.token }}" \
+                https://api.github.com/repos/oven-sh/bun/releases/latest \
+              | jq -r '.tag_name' | sed 's/^bun-v//')
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::could not resolve latest bun version (got '$v')"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Resolved bun latest -> $v"
+
       - uses: oven-sh/setup-bun@v2
         if: steps.guard.outputs.skip != 'true'
         with:
-          bun-version: latest
+          bun-version: ${{ steps.bun.outputs.version }}
 
       # A lockfile resolved on a machine with a global `registry=` bakes that
       # LAN host into every tarball URL, which works for us and is unusable
@@ -5240,8 +5287,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Pinned, unlike the lint jobs which resolve latest: this builds the
+      # artifact that ships, so the bun version moves when we decide it does,
+      # not when oven-sh publishes. 1.4.0 matches what `latest` resolves to
+      # today, so lint and this build agree again — verified locally on 1.4.0
+      # (`bun install --frozen-lockfile` clean, lockfile untouched,
+      # `build:saas` green) because this job only runs on main, so no PR can
+      # exercise the bump before it deploys.
       - uses: oven-sh/setup-bun@v2
-        with: { bun-version: 1.3.11 }
+        with: { bun-version: 1.4.0 }
 
       - name: Install
         working-directory: frontend
