@@ -1,16 +1,13 @@
 import { Link, useParams } from "react-router";
 import { useBacklinks } from "../api/queries";
 import { noteName } from "../lib/note-name";
-import { vaultPath } from "../routes";
+import { noteHref } from "../routes";
 
 export default function BacklinksPanel({ noteId }: { noteId: string | null }) {
 	const { slug } = useParams();
 	const { data, isLoading } = useBacklinks(noteId);
 
-	// `slug` is always present in practice (this panel only mounts inside the
-	// vault route), but useParams types it optional. Bail rather than build a
-	// `/v/undefined/...` href, which is what the old template literal did.
-	if (isLoading || !slug) {
+	if (isLoading) {
 		return null;
 	}
 
@@ -30,7 +27,7 @@ export default function BacklinksPanel({ noteId }: { noteId: string | null }) {
 					{backlinks.map((b) => (
 						<li key={b.source_note_id}>
 							<Link
-								to={vaultPath(slug, b.source_note_id)}
+								to={noteHref(slug, b.source_note_id)}
 								className="flex items-center gap-1 truncate rounded px-3 py-0.5 text-foreground/80 hover:bg-muted hover:text-foreground"
 							>
 								{b.source_title ?? noteName(b.source_path)}

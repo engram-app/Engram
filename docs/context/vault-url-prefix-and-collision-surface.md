@@ -55,17 +55,77 @@ a renamed slug — a failure mode neither list nor deny-list could see, because
 it happened one hop before Phoenix. Fixed for free by the prefix: `/v/vendor`
 matches no `starts_with` rule.
 
-The `ends_with` rules (`.sql`, `.bak`, `.backup`, `.old`, `.log`) were never
-reachable — `slugify` strips the dot.
+The `ends_with` rules (`.sql`, `.bak`, `.backup`, `.old`, `.log`) are not
+reachable **through the slug** -- `slugify` strips the dot. They ARE reachable
+through the **wiki-target** segment, which is a different thing and was wrong
+in the first version of this doc:
 
-## What did NOT get deleted
+`frontend/src/viewer/wiki-link.ts` builds `${vaultPath(slug)}/wiki/${encoded}`
+where `encoded` is `encodeURIComponent` applied per path segment, and
+`encodeURIComponent` leaves `.` alone. So an unresolved `[[server.log]]`
+produces `/v/work/wiki/server.log`, and `[[dump.sql]]`, `[[notes.bak]]`,
+`[[db.backup]]`, `[[archive.old]]` likewise. Client-side navigation never
+touches the edge, so this is invisible in dev and in the unit suite; refresh,
+paste, or share that URL on a `*.engram.page` host and Cloudflare answers 403
+instead of the create-note affordance.
 
-The router **deny-list** (`match :*, "/api/*path", SpaController, :not_found`
-and siblings) stays. Its original job — stopping fall-through to the root
-wildcard — is gone, but its second job outlives it: it returns a clean
-non-HTML 404 for API-shaped paths instead of Phoenix's default HTML error
-page. Deleting it would turn `/api/notez` into an HTML error body, which is
-the exact "masked as success" shape the tests guard against.
+Not introduced by the prefix move (old `/work/wiki/server.log` ended the same
+way) and not fixed by it. Left open deliberately: the fix is either an edge
+rule that excludes `/v/*/wiki/*` or dropping the extension from the
+wiki-target segment, and both are their own change.
+
+## The deny-list went too
+
+The first version of this doc argued the router deny-list
+(`match :*, "/api/*path", SpaController, :not_found` and 10 siblings) should
+stay, because it returned "a clean non-HTML 404 instead of Phoenix's default
+HTML error page". **That rationale was false and the deny-list is now
+deleted.** Measured, not reasoned:
+
+| request | with deny-list | without |
+|---|---|---|
+| `/api/notez`, `Accept: application/json` | **406** `Phoenix.NotAcceptableError` | `404` `{"errors":{"detail":"Not Found"}}` |
+| `/api/notez`, no `Accept` | `404` `text/plain "Not Found"` | `404` `{"errors":{"detail":"Not Found"}}` |
+| `/assets/missing.js` | `404` `text/plain` | `404` `application/json` |
+
+Two things were wrong with the original reasoning. There is no HTML error
+renderer in this app: `config/config.exs` registers only
+`render_errors: [formats: [json: EngramWeb.ErrorJSON]]` and no `error_html`
+module exists, so Phoenix's default here was *already* a JSON 404. And the
+deny-list routes lived in `pipeline :spa`, whose first plug is
+`plug :accepts, ["html"]`, so a JSON client hitting a typo'd API path got a
+**406** -- strictly worse than the 404 it now gets.
+
+Deleting it also retires the "EVERY new non-SPA top-level prefix must be added
+here" rule: 11 hand-maintained entries of exactly the kind this change set out
+to remove.
+
+## The bug this shipped with, and what now prevents it
+
+Deleting the root `get "/:slug"` also deleted the only route that served
+`/reset-password`. It was never on the static whitelist -- it had survived
+purely by falling through the wildcard -- so self-host password recovery
+became a hard 404. The link is minted server-side
+(`admin/user_controller.ex`) and mailed to a user who is locked out, so it is
+*always* a cold load. SaaS was spared only because `frontend/wrangler.jsonc`
+sets `not_found_handling: "single-page-application"`.
+
+Nothing caught it, and the reason generalises: **the invariant that decides
+HTTP 200 vs 404 lives in Elixir, and every guard added with the refactor lived
+in TypeScript.** `router.test.tsx` proved the React route existed;
+`spa_controller_test.exs` never requested the path.
+
+The fix is a shared manifest, `frontend/src/spa-routes.json`, listing URLs
+that must survive a hard load. Two tests read it and both must pass:
+
+- `frontend/src/router.test.tsx` -- each sample matches a React route, and no
+  static top-level React route lacks a sample
+- `test/engram_web/spa_route_parity_test.exs` -- each sample resolves in
+  `EngramWeb.Router`, and `vaultPrefix` is what Phoenix actually serves
+
+Neither list can drift without the other going red. Verified by mutation:
+deleting the `/reset-password` route turns the Elixir test red and names the
+path in the failure message.
 
 ## The guard that replaced the list
 

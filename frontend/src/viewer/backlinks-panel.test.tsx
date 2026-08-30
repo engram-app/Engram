@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Backlink } from "../api/queries";
 import BacklinksPanel from "./backlinks-panel";
 
@@ -20,6 +20,16 @@ function renderPanel(noteId: string | null = "note-1") {
 		</MemoryRouter>,
 	);
 }
+
+// Module-level mock state is shared across every test in the file (vitest
+// isolates per FILE, not per test), and the last test here sets
+// mockIsLoading = true. Without this reset the next test appended to the
+// file inherits it, renders nothing, and fails pointing at the component
+// rather than at test ordering.
+beforeEach(() => {
+	mockData = undefined;
+	mockIsLoading = false;
+});
 
 describe("BacklinksPanel", () => {
 	it("renders one row per backlink, linking to the source note under the current vault slug", () => {

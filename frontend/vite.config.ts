@@ -180,10 +180,10 @@ export default defineConfig({
 			// harmless against localhost.
 			//
 			// Anchored as a RegExp (a leading ^ makes Vite treat the key as one)
-			// because a bare "/api" is a PREFIX match, which also swallows vault
-			// slugs like /api-2. Reserved slugs stop a vault from being exactly
-			// "api", but `unique_slug` hands out api-2 for a vault named "api",
-			// and that must render the SPA, not proxy to Phoenix. Proxying it
+			// because a bare "/api" is a PREFIX match. Vault URLs now live under
+			// /v/ so a slug can no longer be mistaken for an API path at all,
+			// but the anchor still matters for any other top-level route whose
+			// name starts with "api" (and it documents the trap). Proxying it
 			// serves Phoenix's prebuilt index.html into the dev server, whose
 			// hashed asset URLs 404 — the app then hangs on "Loading…".
 			//

@@ -156,7 +156,7 @@ function flushBatch(batch: PendingBatch): void {
 	invalidateVaultTree(queryClient, vaultId);
 	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 	queryClient.invalidateQueries({ queryKey: ["search", vaultId] });
-	// The vault-wide path→id inventory behind [[ autocomplete + /:slug/wiki/*
+	// The vault-wide path→id inventory behind [[ autocomplete + /v/:slug/wiki/*
 	// resolution (useSyncManifest). Every note event that reaches this flush can
 	// change it (create/rename/delete — folder ops emit per-note note_changed
 	// too), and it previously had ZERO invalidation sites, so a new/renamed note

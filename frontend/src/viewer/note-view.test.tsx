@@ -88,7 +88,7 @@ describe("NoteView wikilinks", () => {
 	it("navigates in-app instead of a full page load", () => {
 		renderNote("See [[My Note]].");
 		fireEvent.click(screen.getByRole("link", { name: "My Note" }));
-		expect(screen.getByTestId("loc")).toHaveTextContent("/v/work/wiki/My%20Note");
+		expect(screen.getByTestId("loc").textContent).toBe("/v/work/wiki/My%20Note");
 	});
 
 	it("links straight to the note id when the links prop resolves the target", () => {
@@ -138,7 +138,7 @@ describe("NoteView markdown-syntax links", () => {
 	it("navigates in-app rather than reloading", () => {
 		renderNote("See [label](My%20Note.md).", [edge]);
 		fireEvent.click(screen.getByRole("link", { name: "label" }));
-		expect(screen.getByTestId("loc")).toHaveTextContent("/v/work/n-1");
+		expect(screen.getByTestId("loc").textContent).toBe("/v/work/n-1");
 	});
 
 	it("resolves through the manifest when no edge is indexed yet", () => {

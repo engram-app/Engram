@@ -172,9 +172,11 @@ defmodule EngramWeb.SpaControllerTest do
     end
   end
 
-  describe "non-SPA prefixes must not fall through to /:slug (#858)" do
-    # Regression guard: without the deny-list these two-segment typos match
-    # `get "/:slug/:id"` and return an HTML 200, masking a broken API call.
+  describe "non-SPA prefixes 404 rather than serving the SPA (#858)" do
+    # Regression guard. Historically these two-segment typos matched the root
+    # `get "/:slug/:id"` and returned an HTML 200, masking a broken API call;
+    # a hand-maintained deny-list suppressed that. Vault routes now live under
+    # /v/, so there is no root wildcard to fall into and no deny-list.
     # Every case asserts BOTH status and content-type: a status-only check
     # would not catch a regression where not_found/2 started returning
     # text/html with a 404 status, which is exactly the "masked as success"
@@ -247,8 +249,8 @@ defmodule EngramWeb.SpaControllerTest do
     # need an exact match rather than the /prefix/*path shape used elsewhere in
     # the deny-list. All four real files exist on disk in this test env
     # (priv/static/), so Plug.Static (mounted ahead of the router in the
-    # endpoint) always wins for these requests. The tests below prove that's
-    # still true after adding the router-level entries.
+    # endpoint) always wins for these requests. The tests below prove that is
+    # still true, and that a MISS is a clean 404 rather than an HTML 200.
     test "GET /favicon.ico still serves the real file, not the SPA", %{conn: conn} do
       conn = get(conn, "/favicon.ico")
       assert conn.status == 200
@@ -289,23 +291,51 @@ defmodule EngramWeb.SpaControllerTest do
       assert conn |> get("/nonexistent.txt") |> response(404)
     end
 
-    test "on a Plug.Static miss (deploy skew), the router-level entries 404 instead of an HTML 200" do
+    test "on a Plug.Static miss (deploy skew), the router has no route at all" do
       # Plug.Static always wins while the real file exists (proven above), so
-      # the only way to exercise the router-level deny entries themselves is
-      # to bypass the endpoint's Plug.Static plug and hit the router
-      # directly, simulating the deploy-skew scenario (file missing from
-      # priv/static) without deleting a real file on disk.
+      # the only way to see what happens on a deploy-skew miss is to bypass
+      # the endpoint's Plug.Static plug and hit the router directly.
+      #
+      # This used to be covered by explicit `match :*` deny entries, which
+      # existed to stop these paths matching the root `get "/:slug"` wildcard
+      # and serving an HTML 200. With no root wildcard there is nothing to
+      # deny: the router simply has no route, which Plug.Exception maps to
+      # 404 and the endpoint renders as JSON (render_errors is json-only).
+      # That is a better answer than the deny-list gave -- see
+      # docs/context/vault-url-prefix-and-collision-surface.md.
       for path <- ~w(/favicon.ico /favicon.svg /engram-mark.svg /robots.txt) do
-        conn =
-          Phoenix.ConnTest.build_conn(:get, path)
-          |> EngramWeb.Router.call(EngramWeb.Router.init([]))
+        err =
+          assert_raise Phoenix.Router.NoRouteError, fn ->
+            Phoenix.ConnTest.build_conn(:get, path)
+            |> EngramWeb.Router.call(EngramWeb.Router.init([]))
+          end
 
-        assert conn.status == 404, "expected #{path} to 404 at the router level"
-        [content_type] = get_resp_header(conn, "content-type")
-
-        refute content_type =~ "text/html",
-               "expected #{path} not to serve HTML at the router level"
+        assert Plug.Exception.status(err) == 404,
+               "expected #{path} to map to a 404, got #{Plug.Exception.status(err)}"
       end
+    end
+  end
+
+  describe "unrouted paths answer with JSON, not HTML" do
+    # The property the deleted deny-list was there to protect, asserted
+    # directly instead of via 11 hand-maintained `match :*` entries. An
+    # HTML 200 here would mask a broken API call; an HTML *404* would still
+    # break a JSON client's parser.
+    test "a typo'd API path returns a JSON 404 through the full endpoint", %{conn: conn} do
+      conn = conn |> put_req_header("accept", "application/json") |> get("/api/notez")
+      assert conn.status == 404
+      [ct] = get_resp_header(conn, "content-type")
+      assert ct =~ "application/json"
+      assert conn.resp_body =~ "Not Found"
+    end
+
+    test "a JSON client is not answered with 406", %{conn: conn} do
+      # Regression guard for the shape the deny-list actually produced: its
+      # routes lived in `pipeline :spa`, whose first plug is
+      # `plug :accepts, ["html"]`, so an Accept: application/json request
+      # raised Phoenix.NotAcceptableError (406) rather than 404.
+      conn = conn |> put_req_header("accept", "application/json") |> get("/api/notez")
+      refute conn.status == 406
     end
   end
 

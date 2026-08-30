@@ -592,11 +592,14 @@ defmodule EngramWeb.Router do
   # over a typo'd API/OAuth/asset request. Every new top-level static SPA
   # route must be added here.
   #
-  # Below the whitelist, `/:slug` and `/:slug/:id` are dynamic vault-scoped
-  # routes (vault, and vault+note-or-attachment). Those are wildcards, so a
-  # deny-list for every non-SPA top-level prefix sits between the whitelist
-  # and the wildcards; see its comment for why order matters (it must stay
-  # BELOW the static whitelist above and ABOVE the wildcards below).
+  # Static SPA paths, then the vault namespace. Nothing dynamic lives at the
+  # root: every path here is either a literal or sits under `/v`. That is
+  # what retired both the reserved-slug list and the non-SPA deny-list --
+  # see the comment on the `/v` routes below.
+  #
+  # Adding a route here that the React router does not have (or vice versa)
+  # is caught by test/engram_web/spa_route_parity_test.exs, which reads the
+  # same frontend/src/spa-routes.json the TS side does.
   scope "/", EngramWeb do
     pipe_through :spa
 
@@ -604,80 +607,48 @@ defmodule EngramWeb.Router do
     get "/sign-in", SpaController, :index
     get "/sign-up", SpaController, :index
     get "/waitlist", SpaController, :index
+    # /reset-password is a HARD load by construction: the link is minted
+    # server-side (admin/user_controller.ex) and mailed to a user who is
+    # locked out, so the SPA must boot from this URL with no prior session.
+    # It survived for months only by falling through the old root
+    # `get "/:slug"` wildcard; when that was deleted this became a 404 and
+    # self-host password recovery broke outright. The route-parity test in
+    # test/engram_web/spa_route_parity_test.exs now fails if any top-level
+    # React route lacks an entry here.
+    get "/reset-password", SpaController, :index
     get "/link", SpaController, :index
-    get "/search", SpaController, :index
-    get "/billing", SpaController, :index
     get "/onboard", SpaController, :index
     get "/onboard/*path", SpaController, :index
     get "/settings", SpaController, :index
     get "/settings/*path", SpaController, :index
     get "/note/*path", SpaController, :index
     get "/oauth/consent", SpaController, :index
-    # NOTE: no /share/* route: sharing doesn't exist yet (no /api/share*,
-    # no schema, no SPA page). Removed 2026-07-02 (#858) after shipping as a
-    # vestigial whitelist entry; re-add alongside the actual feature. (A
-    # bare 2-segment /share/:x now falls through to the vault-scoped
-    # /:slug/:id route below like any other slug; that's expected, not a
-    # revival of this feature.)
 
-    # Deny-list. MUST stay BELOW the static whitelist above (so a real
-    # static route like /oauth/consent still wins over its own prefix's
-    # deny entry) and ABOVE the dynamic /:slug routes below (those are
-    # 1- and 2-segment wildcards, so without this a typo'd /api/notez would
-    # match /:slug/:id and serve an HTML 200, the exact regression #858
-    # removed). EVERY new non-SPA top-level prefix must be added here.
-    match :*, "/api/*path", SpaController, :not_found
-    match :*, "/oauth/*path", SpaController, :not_found
-    match :*, "/webhooks/*path", SpaController, :not_found
-    match :*, "/.well-known/*path", SpaController, :not_found
-    # /socket is registered by the `socket "/socket", EngramWeb.UserSocket`
-    # macro in endpoint.ex, not a router scope, so it doesn't show up when
-    # enumerating scope declarations either. Endpoint-level socket dispatch
-    # only claims the exact transport subpath (/socket/websocket); every
-    # other /socket/* request (bare /socket, typos, /socket/origin-probe
-    # without its own /websocket suffix) falls through to the router same as
-    # /assets and /email. HostRewrite already treats /socket as a first-class
-    # top-level prefix (@api_allowed_prefixes in host_rewrite.ex); the SPA
-    # deny-list needs the same entry for the same reason.
-    match :*, "/socket/*path", SpaController, :not_found
-    # /assets isn't a router scope (it's Plug.Static mounted in
-    # endpoint.ex), so it's easy to miss here. Plug.Static only intercepts
-    # requests for files that exist; a mistyped/missing asset path falls
-    # through to the router and, without this entry, would match
-    # /:slug/:id and serve an HTML 200 for a broken <script src>.
-    match :*, "/assets/*path", SpaController, :not_found
-    # /email is also Plug.Static-served (see static_paths() in
-    # lib/engram_web.ex), same pass-through-on-miss shape as /assets. These
-    # paths are embedded in outbound email HTML and fetched by third-party
-    # mail proxies (Gmail image proxy, etc.), which may cache a 200 response.
-    # A masked HTML 200 there is worse than the usual case: the bad result
-    # can get cached remotely, not just seen once by a browser.
-    match :*, "/email/*path", SpaController, :not_found
-
-    # The remaining EngramWeb.static_paths/0 entries are single-segment, so they
-    # need exact matches rather than the /prefix/*path shape above. Plug.Static
-    # only serves files that exist; on a miss (broken build, deploy skew) these
-    # would otherwise fall through to get "/:slug" and return an HTML 200.
-    match :*, "/favicon.ico", SpaController, :not_found
-    match :*, "/favicon.svg", SpaController, :not_found
-    match :*, "/engram-mark.svg", SpaController, :not_found
-    match :*, "/robots.txt", SpaController, :not_found
-
-    # Vault-scoped SPA routes, all under the `/v` prefix. `/v/:slug` is a
-    # vault, `/v/:slug/:id` a note or attachment.
+    # Vault-scoped SPA routes. `/v` alone picks a vault (VaultRedirect);
+    # everything below it is a wildcard because the SPA nests arbitrary
+    # depth under a vault -- `/v/:slug`, `/v/:slug/:id`, and
+    # `/v/:slug/wiki/<target>` where the target may itself contain slashes.
+    # The previous 1- and 2-segment `get`s hard-404'd every wikilink deep
+    # link on refresh or paste.
     #
-    # The prefix is load-bearing. While these were `/:slug` and `/:slug/:id`
-    # at the root, every top-level segment was ambiguous: a vault named
-    # "link" or "settings" was shadowed by a static SPA route, and a typo'd
-    # `/api/notez` matched `/:slug/:id` and served an HTML 200. That needed a
-    # hand-maintained reserved-slug list (mirrored in Elixir AND TS) plus the
-    # deny-list below, and every new top-level route silently widened the
-    # hazard. Nothing dynamic sits at the root now, so the whole class is
-    # gone and the reserved list with it.
+    # `/v/*path` is safe to make this greedy precisely BECAUSE of the
+    # prefix: nothing else in the app lives under /v, so it shadows no
+    # other route. That is the same property that let the reserved-slug
+    # list (and its hand-maintained TS mirror) be deleted -- vault slugs
+    # are user-derived, and at the URL root a wildcard like this would have
+    # swallowed /api, /assets and every future top-level path.
     #
-    # The deny-list above still earns its keep: it returns a clean non-HTML
-    # 404 for API-shaped paths instead of Phoenix's default HTML error page.
-    get "/v/:slug", SpaController, :index
-    get "/v/:slug/:id", SpaController, :index
+    # No deny-list is needed here anymore. It existed to stop `/api/notez`
+    # from matching a ROOT `/:slug/:id`; with nothing dynamic at the root,
+    # an unrouted path simply has no route, and Phoenix's configured
+    # `render_errors: [formats: [json: EngramWeb.ErrorJSON]]` answers it
+    # with `404 {"errors":{"detail":"Not Found"}}`. The deny-list actively
+    # made that worse: its entries lived in `pipeline :spa`, whose first
+    # plug is `plug :accepts, ["html"]`, so a JSON client hitting a typo'd
+    # API path got a 406 NotAcceptableError instead of a 404, and a
+    # browser got `text/plain "Not Found"` instead of the JSON envelope.
+    # Measured both ways before removing it.
+    get "/v", SpaController, :index
+    get "/v/*path", SpaController, :index
   end
 end

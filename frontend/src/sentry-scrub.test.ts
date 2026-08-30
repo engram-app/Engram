@@ -49,7 +49,7 @@ describe("scrubUrl", () => {
 		expect(scrubUrl("/vault-slug/wiki/Divorce%20settlement%20draft")).not.toContain("Divorce");
 	});
 
-	// The bug this allowlist exists for. `/:slug` is the vault route and the
+	// The bug this allowlist exists for. `/v/:slug` is the vault route and the
 	// slug is slugify(vault.name), so segment 1 on the app's most-travelled
 	// route IS user data. The wikilink test above passed throughout, because
 	// it only asserted on the note title and never looked at "vault-slug".
@@ -60,6 +60,12 @@ describe("scrubUrl", () => {
 		// Relative is the same surface — that is what fetch breadcrumbs carry
 		// on self-host.
 		expect(scrubUrl("/divorce-2026/note-abc")).toBe("/:seg/:seg");
+		// The shape the app ACTUALLY emits since vault URLs moved under /v.
+		// `v` is allowlisted as segment 1, so the vault slug (segment 2) and
+		// the note id are both redacted. Without this the suite passes while
+		// VAULT_PREFIX is anything at all -- verified by mutation.
+		expect(scrubUrl("/v/divorce-2026/note-abc")).toBe("/v/:seg/:seg");
+		expect(scrubUrl("/v/divorce-2026")).toBe("/v/:seg");
 	});
 
 	// On SaaS the API lives on its own host AND joinApiUrl strips the `/api`

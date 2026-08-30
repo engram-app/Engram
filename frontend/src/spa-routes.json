@@ -1,0 +1,27 @@
+{
+	"$comment": "Shared source of truth for SPA URLs that must survive a HARD load (typed, pasted, bookmarked, or arrived at from an email link) -- i.e. the browser asks the server for them before any JS runs. Two tests read this file and they must BOTH pass: src/router.test.tsx proves each sample matches a React route (and that no top-level React route lacks a sample), and test/engram_web/spa_route_parity_test.exs proves each sample resolves in the Phoenix router. Neither list can drift without the other going red. This exists because /reset-password had a React route and no Phoenix route: it survived only by falling through a root wildcard, and deleting that wildcard silently broke self-host password recovery with every test green. `devOnly` lists routes that exist ONLY under import.meta.env.DEV and are served by the Vite dev server, never by Phoenix; they are exempt from parity on purpose, not by omission.",
+	"vaultPrefix": "/v",
+	"devOnly": ["/__qc/connectors"],
+	"hardLoadable": [
+		"/",
+		"/sign-in",
+		"/sign-up",
+		"/waitlist",
+		"/reset-password",
+		"/link",
+		"/oauth/consent",
+		"/onboard",
+		"/onboard/agreement",
+		"/onboard/billing",
+		"/onboard/tools",
+		"/onboard/vault",
+		"/settings",
+		"/settings/account",
+		"/note/018f2b3c-0000-7000-8000-000000000000",
+		"/v",
+		"/v/my-vault",
+		"/v/my-vault/018f2b3c-0000-7000-8000-000000000000",
+		"/v/my-vault/wiki/Some%20Note",
+		"/v/my-vault/wiki/Folder/Some%20Note"
+	]
+}

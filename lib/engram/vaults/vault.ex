@@ -32,9 +32,22 @@ defmodule Engram.Vaults.Vault do
 
   # No reserved-slug list. Vault routes live under `/v/:slug` (see
   # router.ex), so a slug cannot collide with a top-level app route,
-  # a Plug.Static mount, or a Phoenix scope. The former list -- and its
-  # mirror in frontend/src/api/reserved-slugs.ts -- were both deleted
-  # along with the root-level `/:slug` route that made them necessary.
+  # a Plug.Static mount, a Phoenix scope, or a Cloudflare rule. The former
+  # list -- and its mirror in frontend/src/api/reserved-slugs.ts -- were
+  # both deleted along with the root-level `/:slug` route that made them
+  # necessary.
+  #
+  # What replaces it is a SHAPE check, not a name list. Deleting the
+  # exclusion left `:slug` with no value-level validation at all, resting
+  # the whole "a slug is safe in a URL" claim on `Vaults.slugify/1` being
+  # well-behaved -- and at the time it was not: it emitted invalid UTF-8
+  # for any non-ASCII name. `slugify/1` is fixed, and this makes its
+  # contract enforceable at the boundary rather than merely intended.
+  # Exactly the codomain of `Vaults.slugify/1`: alphanumeric groups joined by
+  # single hyphens. Deliberately tighter than "starts alphanumeric" -- that
+  # looser form admitted "trailing-" and "double--hyphen", which slugify
+  # cannot produce, so it would have validated a shape no caller should send.
+  @slug_format ~r/\A[a-z0-9]+(-[a-z0-9]+)*\z/
 
   def changeset(vault, attrs) do
     vault
@@ -51,8 +64,15 @@ defmodule Engram.Vaults.Vault do
       :dek_version
     ])
     |> validate_required([:slug, :user_id])
-    |> validate_encrypted_name()
+    # Normalize BEFORE validating: callers pass a raw-ish slug and the
+    # trim/downcase is part of accepting it, not a post-validation tidy.
+    # With these the other way round, "  Work  " failed the format check.
     |> update_change(:slug, &(&1 |> String.trim() |> String.downcase()))
+    |> validate_format(:slug, @slug_format,
+      message: "must be lowercase alphanumeric with hyphens, starting with a letter or digit"
+    )
+    |> validate_length(:slug, max: 120)
+    |> validate_encrypted_name()
     |> unique_constraint([:user_id, :slug], name: :vaults_user_id_slug_index)
     |> unique_constraint([:user_id, :client_id], name: :vaults_user_id_client_id_index)
   end

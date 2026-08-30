@@ -2,7 +2,7 @@ import GithubSlugger from "github-slugger";
 import { vaultPath } from "../routes";
 
 // Obsidian-style wikilink resolution against the vault manifest. Pure module —
-// the /:slug/wiki/* redirect route and both link producers (note-view's
+// the /v/:slug/wiki/* redirect route and both link producers (note-view's
 // remark-wiki-link config, note-page's editor resolveWikiLink) share it.
 
 export const stripMd = (p: string) => p.replace(/\.md$/iu, "");
@@ -86,7 +86,7 @@ export function wikiCreatePath(raw: string): { folder: string; name: string } {
 // (1) a resolved entry in `map` (from buildWikiMap, server-indexed edges)
 // short-circuits straight to the note id; (2) a miss there tries the sync
 // manifest (client cache — covers freshly typed links whose edge isn't
-// indexed yet); (3) only then the lazy /:slug/wiki/* redirect, kept for deep
+// indexed yet); (3) only then the lazy /v/:slug/wiki/* redirect, kept for deep
 // links and the create-affordance on truly nonexistent targets.
 export function wikiHref(
 	raw: string,
@@ -124,7 +124,7 @@ export function wikiHref(
 //   * the href arrives percent-encoded (`My%20Note.md`) while `target_text`
 //     and manifest paths are decoded, so it is decoded before lookup;
 //   * an UNRESOLVED target returns null (caller leaves the plain <a>) rather
-//     than falling through to the /:slug/wiki/* create affordance. A markdown
+//     than falling through to the /v/:slug/wiki/* create affordance. A markdown
 //     link can legitimately point at an attachment or a relative file, and
 //     offering to create a note for those would be wrong.
 //

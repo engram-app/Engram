@@ -10,10 +10,10 @@ import { vaultPath } from "../routes";
 import LoadingPane from "./loading-pane";
 import { resolveWikiTarget, stripMd, wikiCreatePath } from "./wiki-link";
 
-// `/:slug/wiki/<target>` — the landing route for every wikilink href. Wikilinks
+// `/v/:slug/wiki/<target>` — the landing route for every wikilink href. Wikilinks
 // name a note by path or bare title, but note routes are id-keyed, so this
 // resolves the target against the vault manifest (Obsidian rules: exact path,
-// then vault-wide basename, shortest path wins) and bounces to `/:slug/:id`.
+// then vault-wide basename, shortest path wins) and bounces to `/v/:slug/:id`.
 // The heading hash (already slugged by wikiHref) rides along untouched.
 //
 // Unresolved (dangling) targets get an inline "create this note" affordance

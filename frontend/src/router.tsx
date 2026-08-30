@@ -41,7 +41,7 @@ const Dashboard = lazy(() => import("./viewer/dashboard"));
 const VaultRoute = lazy(() => import("./viewer/vault-route"));
 const VaultRedirect = lazy(() => import("./viewer/vault-redirect"));
 const LegacyNoteRedirect = lazy(() => import("./viewer/legacy-note-redirect"));
-// Wikilink hrefs name notes by path/title; this resolves them to /:slug/:id.
+// Wikilink hrefs name notes by path/title; this resolves them to /v/:slug/:id.
 const WikiLinkRedirect = lazy(() => import("./viewer/wiki-link-redirect"));
 const ResetPasswordPage = lazy(() => import("./features/auth/ResetPasswordPage"));
 const DeviceLinkPage = lazy(() => import("./device/device-link-page"));
@@ -199,6 +199,10 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 													children: [
 														// Bare `/` picks a vault; `/note/:id` is the pre-vault-scoping URL shape.
 														{ path: ROUTES.HOME, element: suspended(<VaultRedirect />) },
+														// Bare `/v` — truncating a vault URL to its own prefix is a
+														// natural move once the scheme is `/v/<something>`. Reuses
+														// the same picker `/` uses rather than 404ing.
+														{ path: VAULT_PREFIX, element: suspended(<VaultRedirect />) },
 														{ path: "/note/:id", element: suspended(<LegacyNoteRedirect />) },
 														// Vault-scoped, under the `/v` prefix. The prefix is what keeps a
 														// user-named vault from ever shadowing (or being shadowed by) a

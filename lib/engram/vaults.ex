@@ -807,13 +807,38 @@ defmodule Engram.Vaults do
     end
   end
 
-  @doc false
+  @doc """
+  Turns a user-supplied vault name into a URL-safe ASCII slug.
+
+  Guarantees the output matches `~r/\\A[a-z0-9][a-z0-9-]*\\z/` -- the same
+  shape `Vault.changeset/2` validates. That guarantee is load-bearing: it is
+  the reason the changeset needs no reserved-word list (vault URLs live under
+  `/v/:slug`, so a slug cannot shadow a route) and the reason a slug is safe
+  to interpolate into a path.
+
+  Every regex carries `/u`. Without it PCRE matches BYTE-wise, so
+  `~r/[^\\w\\s-]/` sliced multi-byte codepoints in half and emitted invalid
+  UTF-8: `slugify("Café Notes")` returned `<<99, 97, 102, 195, 45, ...>>`,
+  which `String.valid?/1` rejects, `Jason.encode!/1` raises on, and Postgres
+  refuses with `:character_not_in_repertoire`. Creating a vault named "Café",
+  "Zürich", "Работа" or "日本語" was a 500.
+
+  Accented Latin is preserved rather than dropped by decomposing to NFD and
+  removing the combining marks, so "Zürich Notes" is `zurich-notes`, not
+  `zrich-notes`. Scripts with no ASCII fallback (CJK, Cyrillic) reduce to the
+  empty string and take the `"vault"` default, where `unique_slug/3` gives
+  them `vault-2`, `vault-3` and so on. The display name is unaffected -- it
+  is stored separately and encrypted.
+  """
   def slugify(name) do
     name
+    |> :unicode.characters_to_nfd_binary()
     |> String.downcase()
-    |> String.replace(~r/[^\w\s-]/, "")
-    |> String.replace(~r/[\s_]+/, "-")
-    |> String.replace(~r/-+/, "-")
+    # Combining marks left behind by the NFD decomposition above.
+    |> String.replace(~r/\p{Mn}/u, "")
+    |> String.replace(~r/[^a-z0-9\s-]/u, "")
+    |> String.replace(~r/[\s_]+/u, "-")
+    |> String.replace(~r/-+/u, "-")
     |> String.trim("-")
     |> case do
       "" -> "vault"

@@ -28,8 +28,8 @@ function renderAt(entry: string) {
 		<MemoryRouter initialEntries={[entry]}>
 			<LocationProbe />
 			<Routes>
-				<Route path="/:slug/wiki/*" element={<WikiLinkRedirect />} />
-				<Route path="/:slug/:itemId" element={<p>note page</p>} />
+				<Route path="/v/:slug/wiki/*" element={<WikiLinkRedirect />} />
+				<Route path="/v/:slug/:itemId" element={<p>note page</p>} />
 			</Routes>
 		</MemoryRouter>,
 	);
@@ -48,37 +48,37 @@ beforeEach(() => {
 
 describe("WikiLinkRedirect", () => {
 	it("redirects an exact path target to the note id route", async () => {
-		renderAt("/work/wiki/Folder/My%20Note");
-		expect(await screen.findByTestId("loc")).toHaveTextContent("/work/n-1");
+		renderAt("/v/work/wiki/Folder/My%20Note");
+		expect((await screen.findByTestId("loc")).textContent).toBe("/v/work/n-1");
 	});
 
 	it("resolves a basename-only target vault-wide", async () => {
-		renderAt("/work/wiki/Unique");
-		expect(await screen.findByTestId("loc")).toHaveTextContent("/work/n-2");
+		renderAt("/v/work/wiki/Unique");
+		expect((await screen.findByTestId("loc")).textContent).toBe("/v/work/n-2");
 	});
 
 	it("preserves the heading hash across the redirect", async () => {
-		renderAt("/work/wiki/Unique#some-heading");
-		expect(await screen.findByTestId("loc")).toHaveTextContent("/work/n-2#some-heading");
+		renderAt("/v/work/wiki/Unique#some-heading");
+		expect((await screen.findByTestId("loc")).textContent).toBe("/v/work/n-2#some-heading");
 	});
 
 	it("waits rather than 404ing while the manifest loads", () => {
 		mockManifest = undefined;
 		mockPending = true;
-		renderAt("/work/wiki/Unique");
+		renderAt("/v/work/wiki/Unique");
 		expect(screen.queryByText(/not found/i)).toBeNull();
 	});
 
 	describe("unresolved target — create affordance", () => {
 		it("shows the create-note offer instead of a dead-end 404", () => {
-			renderAt("/work/wiki/Ghost");
+			renderAt("/v/work/wiki/Ghost");
 			expect(screen.getByText(/"Ghost" doesn't exist yet/i)).toBeInTheDocument();
 			expect(screen.getByRole("button", { name: 'Create "Ghost"' })).toBeInTheDocument();
 			expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
 		});
 
 		it("creates a bare target at the vault root", () => {
-			renderAt("/work/wiki/songebobsss");
+			renderAt("/v/work/wiki/songebobsss");
 
 			fireEvent.click(screen.getByRole("button", { name: 'Create "songebobsss"' }));
 
@@ -88,7 +88,7 @@ describe("WikiLinkRedirect", () => {
 		});
 
 		it("creates a path-qualified target at that path", () => {
-			renderAt("/work/wiki/folder/sub/Name");
+			renderAt("/v/work/wiki/folder/sub/Name");
 
 			fireEvent.click(screen.getByRole("button", { name: 'Create "Name"' }));
 
@@ -98,7 +98,7 @@ describe("WikiLinkRedirect", () => {
 		});
 
 		it("strips a #heading segment before deriving the create path", () => {
-			renderAt("/work/wiki/Ghost#Some%20Heading");
+			renderAt("/v/work/wiki/Ghost#Some%20Heading");
 
 			fireEvent.click(screen.getByRole("button", { name: 'Create "Ghost"' }));
 

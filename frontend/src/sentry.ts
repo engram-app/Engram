@@ -154,7 +154,7 @@ export function scrubUrl(url: string): string {
 	// switched on: "/:seg/:seg" cannot tell /api/search from /api/folders, and
 	// dropping the origin hid which service answered.
 	//
-	// But "keep segment 1" is wrong for OUR OWN ORIGIN. `/:slug` (router.tsx) is
+	// But "keep segment 1" is wrong for OUR OWN ORIGIN. `/v/:slug` (router.tsx) is
 	// the VAULT route, and the slug is slugify(vault.name) — a user-typed name.
 	// A vault called "Divorce 2026" put `divorce-2026` into every navigation
 	// breadcrumb and every event's request.url, on the app's most-travelled
