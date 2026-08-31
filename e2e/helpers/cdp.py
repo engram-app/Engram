@@ -947,21 +947,22 @@ class CdpClient:
         broken fan-out — every existing crdt test still passes at checkpoint
         latency even if the fan-out is dead:
 
-          * ``flushFromCrdt()`` — the disk writer every backstop funnels
-            through: the seq-replay row-apply (``catchupViaSeqReplay`` ->
-            ``applyChange``, sync.ts:8329), the cold-note leg
-            (``convergeColdNoteRoomFree``, 8646/8702), the rename leg (7689) and
-            the pull merge (3122). Stubbing THIS rather than the replay itself
-            is deliberate: it removes every backstop's ability to write B's
-            disk, while leaving the replay, the gap-heal re-handshake and the
-            ``noteIdMap`` repair alive. Stubbing ``catchupViaSeqReplay`` whole
-            (the first attempt, #1525) also killed those, which starved the map
-            and made a transiently unmapped path unrecoverable.
+          * ``catchupViaSeqReplay()`` — the seq-replay cold-apply backstop, and
+            as of plugin main the ONLY one. Reached from ``scheduleSeqHeal``
+            (sync.ts:2589), from the topic-join replay, and from
+            ``applyStreamEvent``'s tail. Its row-apply (``applyChange``) writes
+            bodies to files that ALREADY exist — the cold-note leg at
+            sync.ts:8609 → ``convergeColdNoteRoomFree`` → ``flushFromCrdt`` — so
+            no file-exists precondition contains it, and it also owns the
+            discovery enroll at sync.ts:8244. It must be stubbed.
 
-            The fan-out apply does NOT go through it: ``applyPushedNoteUpdate``
-            (sync.ts:6086-6215) calls ``crdt.applyRemoteUpdate`` and lets the
-            Yjs observer paint disk. So a disk-convergence assert can still ONLY
-            be satisfied by the fan-out, which is the whole point.
+        ``pull``, ``coldReceive`` and ``catchupViaSocket`` are RETIRED
+        predecessors, kept in the list only so a backend branch paired against an
+        older plugin build still isolates. NONE of the three exist on plugin main
+        (sync.ts:7705 "the retired ``catchupViaSocket`` loop"); ``pull()``'s
+        cursor-feed backfill folded into the seq-replay above. ``pullAll()`` is
+        NOT its successor for this purpose — that is the user-triggered
+        replay-from-0 behind the pull-all command, never fired spontaneously.
 
         The fan-out is a SEPARATE channel dispatch: ``channel.ts`` routes
         ``note_yjs_update`` straight to ``onNoteYjsUpdate`` →
@@ -1034,13 +1035,10 @@ class CdpClient:
             // asserts on it, because a silent zero-stub run is a false green.
             // handleStreamEvent stays LIVE — see the docstring (#1503).
             const stubbed = [];
-            for (const m of ['flushFromCrdt', 'pull', 'coldReceive', 'catchupViaSocket']) {{
+            for (const m of ['pull', 'catchupViaSeqReplay', 'coldReceive', 'catchupViaSocket']) {{
                 if (typeof se[m] === 'function') {{
                     se['__orig_' + m] = se[m].bind(se);
-                    // flushFromCrdt returns Promise<boolean>; false = "did not
-                    // write", which makes its callers bail without advancing any
-                    // convergence state. Returning true would fake a write.
-                    se[m] = m === 'flushFromCrdt' ? async () => false : async () => 0;
+                    se[m] = async () => 0;
                     stubbed.push(m);
                 }}
             }}
@@ -1061,7 +1059,7 @@ class CdpClient:
         # `pullAll()` is not a substitute — it is the user-triggered replay-from-0
         # behind the pull-all command, never fired spontaneously, so it cannot
         # converge a note behind an assertion.
-        cold_apply = {"flushFromCrdt", "coldReceive", "catchupViaSocket"}
+        cold_apply = {"catchupViaSeqReplay", "coldReceive", "catchupViaSocket"}
         if not (stubbed & cold_apply):
             raise AssertionError(
                 f"suppress_fanout_backstops stubbed {sorted(stubbed) or 'NOTHING'} on CDP port "
@@ -1077,7 +1075,7 @@ class CdpClient:
         (function() {{
             const se = {ENGINE_PATH};
             if (!se.__fanoutIsolated) return 'not-isolated';
-            for (const m of ['flushFromCrdt', 'pull', 'coldReceive', 'catchupViaSocket']) {{
+            for (const m of ['pull', 'catchupViaSeqReplay', 'coldReceive', 'catchupViaSocket']) {{
                 const orig = se['__orig_' + m];
                 if (orig) {{ se[m] = orig; delete se['__orig_' + m]; }}
             }}
