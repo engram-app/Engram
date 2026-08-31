@@ -1623,17 +1623,7 @@ jobs:
     # !cancelled(): same repository_dispatch rationale as e2e-clerk —
     # prebuild-mix skips there and must not auto-skip this suite.
     # bot-pr guard: see the fingerprint job's `bot-pr` output.
-    #
-    # NEVER skip on main (#1503). The fingerprint is content-correct — it skipped
-    # release/docs pushes where nothing relevant changed, which is right — but it
-    # trusts a recorded pass forever, and a pass can be meaningless: the four
-    # fan-out isolation tests in this suite spent an unknown number of runs
-    # stubbing NOTHING (every method name in the helper had been renamed away),
-    # so they would have gone green with the feature completely dead. Every green
-    # they recorded is still in the marker store being trusted. A regression then
-    # rode onto main and sat there while `e2e-crdt: skipped` read as success.
-    # PRs keep the shortcut; merges to main pay ~2 min to actually look.
-    if: ${{ !cancelled() && needs.fingerprint.outputs.bot-pr != 'true' && (needs.fingerprint.outputs.skip-e2e-crdt != 'true' || github.ref == 'refs/heads/main') && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
+    if: ${{ !cancelled() && needs.fingerprint.outputs.bot-pr != 'true' && needs.fingerprint.outputs.skip-e2e-crdt != 'true' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
     runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     env:
