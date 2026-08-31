@@ -1250,6 +1250,36 @@ defmodule EngramWeb.McpControllerTest do
       assert resp["error"]["message"] =~ "external_ai_searches_per_day"
     end
 
+    test "the conversation meter gates the route, not just the module", %{conn: conn, user: user} do
+      # Regression guard for a wiring bug, not for the meter's arithmetic
+      # (`Engram.ConversationMeterTest` owns that). Deleting
+      # `ConversationMeter.tick/1` from `dispatch/3` used to leave the entire
+      # suite green: the meter was unit-tested in isolation and nothing
+      # asserted it was reachable from `POST /api/mcp`, which is the only
+      # transport it exists to cap.
+      insert(:user_limit_override,
+        user: user,
+        key: "ai_conversations_per_day",
+        value: %{"v" => 1}
+      )
+
+      # Cap of 1: the first call opens conversation #1, the second rotates
+      # (the 30-min window is fresh, so rotation comes from the per-conversation
+      # cap) — drive enough calls to force a second conversation and trip it.
+      insert(:user_limit_override,
+        user: user,
+        key: "ai_queries_per_conversation",
+        value: %{"v" => 1}
+      )
+
+      assert tool_text(call_tool(conn, "list_folders"))
+
+      resp = json_response(call_tool(conn, "list_folders"), 200)
+
+      assert resp["error"]["code"] == -32_005
+      assert resp["error"]["message"] =~ "conversations_per_day"
+    end
+
     test "a non-search tool is not counted against the search bucket", %{conn: conn} do
       # Over-capping is the opposite failure: list_folders must stay free even
       # after the search bucket is empty.
