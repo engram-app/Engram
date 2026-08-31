@@ -8,6 +8,7 @@ defmodule EngramWeb.McpController do
   alias Engram.Abuse.OriginStats
   alias Engram.ConversationMeter
   alias Engram.MCP.Tools
+  alias Engram.Usage.SearchCap
 
   @server_info %{"name" => "engram", "version" => "0.1.0"}
   @capabilities %{"tools" => %{"listChanged" => false}}
@@ -101,6 +102,7 @@ defmodule EngramWeb.McpController do
          # §E — record origin fingerprint for daily-rollup aggregation.
          _ = OriginStats.record(user.id, get_req_header_first(conn, "user-agent")),
          :ok <- ConversationMeter.tick(user.id),
+         :ok <- spend_search_cap(conn, tool, user),
          :ok <- validate_tool_args(tool, args) do
       dispatch_tool(tool, user, normalize_args(tool, args), conn)
     else
@@ -126,6 +128,27 @@ defmodule EngramWeb.McpController do
   defp dispatch(_conn, _method, _params) do
     {:error, -32_601, "Method not found"}
   end
+
+  # Tools whose PURPOSE is retrieval, and which therefore spend the same daily
+  # search bucket as `POST /api/search`. `EngramWeb.Plugs.EnforceSearchCap`
+  # cannot reach them: it is guarded on `request_path: "/api/search"` and these
+  # arrive as a JSON-RPC body at `/api/mcp`, so the Free tier's
+  # `external_ai_searches_per_day` was unenforced on the whole MCP transport.
+  #
+  # `create_note` / `write_note` also run a search internally (auto-placement,
+  # `Handlers.auto_place_folder/4`) and are deliberately NOT listed. That search
+  # is incidental to a write, is not the abuse vector, and charging it here
+  # would fail note creation with a search-cap error.
+  @search_tools ~w(search_notes suggest_folder)
+
+  defp spend_search_cap(conn, %{name: name}, user) when name in @search_tools do
+    case SearchCap.spend(conn.assigns, user) do
+      :ok -> :ok
+      {:denied, key, _limit} -> {:rate_limited, key}
+    end
+  end
+
+  defp spend_search_cap(_conn, _tool, _user), do: :ok
 
   # A non-binary `name` (client sent an object/array/number) can't match any
   # tool, but MUST NOT crash the "Unknown tool" message itself — `name` may

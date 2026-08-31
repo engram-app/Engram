@@ -1209,4 +1209,53 @@ defmodule EngramWeb.McpControllerTest do
       assert log =~ "search_notes"
     end
   end
+
+  # =========================================================================
+  # Free-tier search cap (external bucket) over the MCP transport
+  # =========================================================================
+
+  describe "external_ai_searches_per_day over MCP" do
+    # `EnforceSearchCap` is a plug guarded on `request_path: "/api/search"`, so
+    # it can never fire for a JSON-RPC `tools/call` arriving at `/api/mcp` —
+    # which is the exact client class its own moduledoc says the external
+    # bucket covers. These tests drive the real route, not a synthesized conn,
+    # so a path-shaped regression cannot pass them again.
+
+    setup %{user: user} do
+      insert(:user_limit_override,
+        user: user,
+        key: "external_ai_searches_per_day",
+        value: %{"v" => 1}
+      )
+
+      :ok
+    end
+
+    test "search_notes is refused once the daily cap is spent", %{conn: conn} do
+      assert tool_text(call_tool(conn, "search_notes", %{"query" => "supplements"}))
+
+      resp = json_response(call_tool(conn, "search_notes", %{"query" => "supplements"}), 200)
+
+      assert resp["error"]["code"] == -32_005
+      assert resp["error"]["message"] =~ "external_ai_searches_per_day"
+    end
+
+    test "suggest_folder spends the same bucket", %{conn: conn} do
+      assert tool_text(call_tool(conn, "search_notes", %{"query" => "supplements"}))
+
+      resp =
+        json_response(call_tool(conn, "suggest_folder", %{"description" => "vitamin d"}), 200)
+
+      assert resp["error"]["code"] == -32_005
+      assert resp["error"]["message"] =~ "external_ai_searches_per_day"
+    end
+
+    test "a non-search tool is not counted against the search bucket", %{conn: conn} do
+      # Over-capping is the opposite failure: list_folders must stay free even
+      # after the search bucket is empty.
+      assert tool_text(call_tool(conn, "search_notes", %{"query" => "supplements"}))
+
+      assert json_response(call_tool(conn, "list_folders"), 200)["result"]
+    end
+  end
 end
