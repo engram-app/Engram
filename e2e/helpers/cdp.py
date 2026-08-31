@@ -948,25 +948,39 @@ class CdpClient:
         latency even if the fan-out is dead:
 
           * ``pull()`` — its cursor-feed backfill (``flushFromCrdt`` on a
-            content_hash divergence) AND ``coldReceive()``, which ``pull()`` is
-            the sole caller of (invoked at its tail, sync.ts:2707).
+            content_hash divergence).
+          * ``catchupViaSeqReplay()`` — the seq-replay cold-apply backstop.
+            Reached from ``scheduleSeqHeal`` (sync.ts:2589), from the topic-join
+            replay, and from ``applyStreamEvent``'s tail. Its row-apply writes
+            bodies to files that ALREADY exist (the cold-note leg at
+            sync.ts:8609 → ``convergeColdNoteRoomFree`` → ``flushFromCrdt``), so
+            no file-exists precondition contains it — it must be stubbed.
 
-        This stubs ``pull()`` and the cold-apply backstop (``coldReceive()``
-        pre-rewire / ``catchupViaSocket()`` post-authoritative-rewire — stubs
-        whichever the paired plugin build exposes) to no-ops (saving originals).
-        The fan-out is a SEPARATE channel dispatch: ``channel.ts`` routes
-        ``note_yjs_update`` straight to ``onNoteYjsUpdate`` →
-        ``applyPushedNoteUpdate`` and never touches any stubbed method, so it
+        This stubs both to no-ops (saving originals). ``coldReceive`` and
+        ``catchupViaSocket`` are its RETIRED predecessors, kept in the list only
+        so a backend branch paired against an older plugin build still isolates;
+        neither exists on plugin main (sync.ts:7705 "the retired
+        ``catchupViaSocket`` loop"). The fan-out is a SEPARATE channel dispatch:
+        ``channel.ts`` routes ``note_yjs_update`` straight to ``onNoteYjsUpdate``
+        → ``applyPushedNoteUpdate`` and never touches any stubbed method, so it
         stays fully live. Idempotent.
+
+        Raises if it stubs nothing recognisable. The ``typeof`` guard makes a
+        rename SILENT — the loop skips every missing method and still reports
+        success. That is exactly what happened: ``coldReceive`` and
+        ``catchupViaSocket`` were both retired, so for an unknown number of runs
+        this helper stubbed ``pull()`` alone and the four "TRUE fan-out proof"
+        tests carried a live seq-replay backstop. A dead fan-out would have
+        passed them at checkpoint latency. The assertion below is what stops the
+        next rename doing the same thing.
 
         PRECONDITION — the receiving device MUST already hold the file on disk
         (what ``_establish_on_both`` guarantees). ``handleStreamEvent`` is left
-        live (below), and two of its legs write note bodies off the ~5s
-        checkpoint: ``applyStreamEvent``'s first-delivery
-        ``applyOp(eventToOp(...))`` and ``catchupViaSeqReplay``. Both gate
-        themselves out when the file is already present
-        (``priorState === undefined`` / ``!getAbstractFileByPath``). Suppress
-        before the receiver has the file and those legs converge the note for
+        live (below), and its first-delivery leg
+        (``applyOp(eventToOp(...))``) writes a note body; it gates itself out
+        when the file is already present (``priorState === undefined`` /
+        ``!getAbstractFileByPath`` at the sync.ts:7302 call site). Suppress
+        before the receiver has the file and that leg converges the note for
         you — the assert goes green with the fan-out completely dead, which is
         the one outcome this helper exists to make impossible.
 
@@ -1000,23 +1014,45 @@ class CdpClient:
             const se = {ENGINE_PATH};
             if (se.__fanoutIsolated) return 'already-isolated';
             se.__fanoutIsolated = true;
-            // The cold-note apply backstop was renamed coldReceive ->
-            // catchupViaSocket in the authoritative-sync rewire. backend-main
-            // e2e pairs against EITHER plugin branch, so stub whichever method
-            // exists and never .bind() an absent one (guards future renames).
+            // The cold-apply backstop has been renamed twice: coldReceive ->
+            // catchupViaSocket -> catchupViaSeqReplay. backend-main e2e pairs
+            // against EITHER plugin branch, so stub whichever exists and never
+            // .bind() an absent one. Report WHICH were stubbed — the caller
+            // asserts on it, because a silent zero-stub run is a false green.
             // handleStreamEvent stays LIVE — see the docstring (#1503).
-            for (const m of ['pull', 'coldReceive', 'catchupViaSocket']) {{
+            const stubbed = [];
+            for (const m of ['pull', 'catchupViaSeqReplay', 'coldReceive', 'catchupViaSocket']) {{
                 if (typeof se[m] === 'function') {{
                     se['__orig_' + m] = se[m].bind(se);
                     se[m] = async () => 0;
+                    stubbed.push(m);
                 }}
             }}
-            return 'isolated';
+            return stubbed.join(',');
         }})()
         """
         result = await self.evaluate(js)
         logger.info("Fan-out backstops suppressed on CDP port %d: %s", self.port, result)
-        return result if isinstance(result, str) else "isolated"
+        if result == "already-isolated":
+            return result
+        stubbed = set(str(result).split(",")) - {""}
+        # A rename silently empties this loop (the typeof guard skips what is
+        # gone), and the tests then prove nothing. Fail loudly instead: pull is
+        # the cursor-feed backfill, and at least one cold-apply backstop must be
+        # dead or a broken fan-out still converges at checkpoint latency.
+        cold_apply = {"catchupViaSeqReplay", "coldReceive", "catchupViaSocket"}
+        missing = []
+        if "pull" not in stubbed:
+            missing.append("pull")
+        if not (stubbed & cold_apply):
+            missing.append(f"one of {sorted(cold_apply)}")
+        if missing:
+            raise AssertionError(
+                f"suppress_fanout_backstops stubbed {sorted(stubbed) or 'NOTHING'} on CDP port "
+                f"{self.port} — missing {missing}. The plugin renamed a method out from under "
+                f"this helper; the fan-out tests would pass with a dead fan-out. Update the list."
+            )
+        return str(result)
 
     async def restore_fanout_backstops(self) -> None:
         """Restore the methods stubbed by suppress_fanout_backstops()."""
@@ -1024,7 +1060,7 @@ class CdpClient:
         (function() {{
             const se = {ENGINE_PATH};
             if (!se.__fanoutIsolated) return 'not-isolated';
-            for (const m of ['pull', 'coldReceive', 'catchupViaSocket']) {{
+            for (const m of ['pull', 'catchupViaSeqReplay', 'coldReceive', 'catchupViaSocket']) {{
                 const orig = se['__orig_' + m];
                 if (orig) {{ se[m] = orig; delete se['__orig_' + m]; }}
             }}

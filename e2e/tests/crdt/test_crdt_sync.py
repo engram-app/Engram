@@ -277,11 +277,16 @@ async def test_cold_send_over_fanout_opens_no_room(vault_a, vault_b, cdp_a, cdp_
     An idle SEND ships its edit channel-up / as a durable /updates entry and is
     never required to enroll (sync.ts isCrdtManagedOffline: "Enrollment (STEP1)
     is only the down-sync pull, never required to SEND"). We suppress backstops
-    on BOTH devices: on A so its receipt can ONLY be the fan-out, and on B so
-    pull()'s own discovery/heal enroll (sync.ts:8244, and the un-gated cold-note
-    re-handshake `_confirm_room_free` documents) can't open a room on B and break
-    the negative assertion. That assertion is a direct read of B's
-    CrdtEnrollment.enrolled set (deterministic, no log-flush timing dependency).
+    on BOTH devices: on A so its receipt can ONLY be the fan-out, and on B to
+    keep anything from opening a room there and breaking the negative assertion.
+    TWO paths would: pull()'s discovery/heal enroll (sync.ts:8244, and the
+    un-gated cold-note re-handshake `_confirm_room_free` documents), and
+    catchupViaSeqReplay → convergeColdNoteRoomFree, which falls back to
+    socketConverge → fireCrdtReHandshake (sync.ts:6288) when the room-free
+    converge fails — deliberately NOT gated on isLiveBound, so stubbing pull()
+    alone does not close it. Both are in the suppression list. That assertion is
+    a direct read of B's CrdtEnrollment.enrolled set (deterministic, no
+    log-flush timing dependency).
 
     #1503: suppression used to stub handleStreamEvent as well. With it dead B's
     `pushFile` read a null id from noteIdMap, shouldDeferMint refused the push,
@@ -299,6 +304,9 @@ async def test_cold_send_over_fanout_opens_no_room(vault_a, vault_b, cdp_a, cdp_
     reconcile at sync.ts:1066), and this test keeps it stubbed on B for the
     enroll reason above. So B deliberately runs with one repair path dead.
     """
+    # ponytail: B keeps pull() stubbed on purpose. If #1526 lands and the map
+    # loss turns out to need that repair, this test needs the enrolled-set
+    # assertion rebuilt on something other than "no room may exist on B".
     path = "E2E/Crdt/FanoutColdSend.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "origin\n", "origin")
     note_id_b = await _confirm_room_free(cdp_b, path)
