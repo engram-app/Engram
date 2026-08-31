@@ -327,6 +327,20 @@ class ApiClient:
         )
         return resp.json(), resp.status_code
 
+    def search_response(self, query: str, **body_extra) -> requests.Response:
+        """POST /search, returning the raw response instead of raising.
+
+        `search` raises on non-2xx, which makes it useless for asserting a
+        refusal (402 plan-limit, 429). Those assertions used to hand-roll their
+        own `session.post`, which silently opts out of SEARCH_TIMEOUT — the
+        exact hole `e2e/unit/test_search_timeout.py` guards. Same one budget,
+        caller inspects the status.
+        """
+        body: dict = {"query": query, **body_extra}
+        return self.session.post(
+            f"{self.base_url}/search", json=body, timeout=SEARCH_TIMEOUT
+        )
+
     def get_manifest(self) -> dict:
         """GET /sync/manifest. Returns manifest dict."""
         resp = self.session.get(f"{self.base_url}/sync/manifest", timeout=10)

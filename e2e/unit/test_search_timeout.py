@@ -36,7 +36,7 @@ from helpers.api import ApiClient
 from helpers.latency import SEARCH_TIMEOUT
 
 # Both pay the same query-embed cost: MCP `tools/call` and REST `POST /search`.
-SEARCH_BEARING = [ApiClient.mcp_call, ApiClient.search]
+SEARCH_BEARING = [ApiClient.mcp_call, ApiClient.search, ApiClient.search_response]
 
 E2E_DIR = Path(__file__).resolve().parent.parent
 TESTS_DIR = E2E_DIR / "tests"
