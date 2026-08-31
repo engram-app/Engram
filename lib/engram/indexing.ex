@@ -291,22 +291,19 @@ defmodule Engram.Indexing do
     end
   end
 
-  @doc """
-  Delete a note's Qdrant points by the ids recorded on its chunk rows.
-
-  Runs BEFORE the chunk rows are dropped — once they are gone, nothing names
-  those points and no filter can find them again if the note's `path_hmac` has
-  drifted (rename → debounced repath → delete inside the window). This is the
-  delete that closes that hole; `delete_by_note/4` stays as the belt for points
-  whose rows were already lost.
-  """
-  def delete_points_for_note(note_id) do
+  # Delete a note's Qdrant points by the ids recorded on its chunk rows.
+  #
+  # Runs BEFORE the chunk rows are dropped — once they are gone, nothing names
+  # those points and no filter can find them again if the note's `path_hmac`
+  # has drifted (rename → debounced repath → delete inside the window). This is
+  # the delete that closes that hole; `delete_by_note/4` stays as the belt for
+  # points whose rows were already lost.
+  defp delete_points_for_note(note_id) do
     Chunk
     |> where([c], c.note_id == ^note_id)
     |> select([c], c.qdrant_point_id)
     |> Repo.all(skip_tenant_check: true)
     |> Enum.reject(&is_nil/1)
-    |> Enum.map(&to_string/1)
     |> then(&Qdrant.delete_points(collection(), &1))
   end
 

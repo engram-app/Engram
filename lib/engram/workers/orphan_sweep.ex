@@ -42,7 +42,25 @@ defmodule Engram.Workers.OrphanSweep do
   require Logger
 
   @qdrant_scroll_limit 500
+  # The point pass fetches ids only — no payload, no vectors — so a page is
+  # ~36 bytes an id and can be far larger than the payload-carrying scroll
+  # above. Round trips, not bytes, are what bound a full-collection walk:
+  # at 500/page a 10M-point collection is 20k sequential requests and blows
+  # the 15-minute timeout; at 4096 it is ~2.4k.
+  @point_scroll_limit 4096
   @point_delete_batch 256
+  # Ceiling on candidates carried in memory for the confirm pass.
+  @max_candidates 50_000
+  # Above this share of the scanned collection, the diff is telling us the
+  # authority is wrong, not that the points are strays. See `runaway?/2`.
+  @max_candidate_ratio 0.10
+  # ...but only once enough points are in play for a share to mean anything. A
+  # near-empty collection legitimately sits far above the ratio (one stray out
+  # of five points is 20%), and refusing to clean small vaults would make the
+  # guard the bug.
+  @runaway_floor 100
+  # Bind parameters per confirm/probe query, against Postgres' 65,535 cap.
+  @id_query_batch 5_000
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)
@@ -91,16 +109,30 @@ defmodule Engram.Workers.OrphanSweep do
   # Authority is `chunks.qdrant_point_id`: a point no row names is unreachable
   # by every other cleanup path and can never be returned to a user.
   #
-  # ponytail: whole-collection scroll + one id set in memory. Fine to ~1M
-  # points; shard by user_id if the collection outgrows that.
+  # Diffed a page at a time, never corpus-against-corpus. Holding both id sets
+  # measured 106 bytes per uuid — at 1M points that is ~212 MB of MapSet on a
+  # 1 GB task, and it grows with the collection. Per page, memory is flat in
+  # the collection size and only the (near-empty) candidate set accumulates.
   defp sweep_point_orphans do
-    # Scroll BEFORE reading the DB, never after. Indexing inserts chunk rows
-    # and THEN upserts points, so anything this scroll sees already has its row
-    # committed by the time the read below runs. The other order would race.
-    case scroll_qdrant_point_ids(nil, MapSet.new()) do
-      {:ok, point_ids} ->
-        candidates = MapSet.difference(point_ids, chunk_point_ids())
-        confirm_and_delete(candidates)
+    # Scroll BEFORE probing the DB, never after. Indexing inserts chunk rows
+    # and THEN upserts points, so probing after the scroll gives the rows the
+    # longer window to appear. The other order races outright.
+    #
+    # This narrows the race, it does not close it: when `commit_index/1` runs
+    # inside a `Repo.with_tenant/2` transaction the rows stay invisible to this
+    # connection while the points are already public. The grace re-check in
+    # `confirm_and_delete/2` is what actually makes that safe.
+    case scan_pages(nil, MapSet.new(), 0) do
+      {:ok, candidates, scanned} ->
+        Logger.info(
+          "orphan_sweep scanned Qdrant points",
+          Metadata.with_category(:info, :oban,
+            total_count: scanned,
+            result: %{candidates: MapSet.size(candidates)}
+          )
+        )
+
+        confirm_and_delete(candidates, scanned)
 
       {:error, reason} ->
         Logger.error(
@@ -112,20 +144,93 @@ defmodule Engram.Workers.OrphanSweep do
     end
   end
 
-  defp confirm_and_delete(candidates) do
-    if MapSet.size(candidates) == 0 do
-      0
-    else
-      # Second look after a grace window. A sweep can straddle an in-flight
-      # re-index (chunk rows are deleted and re-inserted, not updated in
-      # place), and deleting a live point would silently drop a note out of
-      # search until something re-embedded it. Re-checking only the candidates
-      # is a single small query.
-      grace()
+  # Walks the collection one scroll page at a time, probing each page against
+  # `chunks` and keeping only the ids no row named.
+  defp scan_pages(offset, candidates, scanned) do
+    if MapSet.size(candidates) >= @max_candidates do
+      # Not silent: a sweep that stops early must say so, or a truncated run
+      # reads as a clean one. The next tick resumes from the top and the
+      # remainder gets collected then.
+      Logger.warning(
+        "orphan_sweep candidate cap reached; deferring the rest to the next tick",
+        Metadata.with_category(:warning, :oban, total_count: @max_candidates)
+      )
 
-      confirmed = MapSet.difference(candidates, chunk_point_ids(MapSet.to_list(candidates)))
-      delete_points(MapSet.to_list(confirmed))
+      {:ok, candidates, scanned}
+    else
+      do_scan_page(offset, candidates, scanned)
     end
+  end
+
+  defp do_scan_page(offset, candidates, scanned) do
+    opts = [filter: %{}, limit: @point_scroll_limit, with_payload: false, with_vector: false]
+    opts = if offset, do: Keyword.put(opts, :offset, offset), else: opts
+
+    case Qdrant.scroll(opts) do
+      {:ok, %{points: points, next_page_offset: next}} ->
+        page = points |> Enum.map(& &1["id"]) |> Enum.filter(&is_binary/1) |> MapSet.new()
+
+        candidates =
+          page
+          |> MapSet.difference(chunk_point_ids(MapSet.to_list(page)))
+          |> MapSet.union(candidates)
+
+        scanned = scanned + MapSet.size(page)
+
+        if next,
+          do: scan_pages(next, candidates, scanned),
+          else: {:ok, candidates, scanned}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp confirm_and_delete(candidates, scanned) do
+    cond do
+      MapSet.size(candidates) == 0 ->
+        0
+
+      runaway?(candidates, scanned) ->
+        # Every delete here is irreversible without a paid re-embed, and the
+        # authority we diff against is a database that can be restored, moved,
+        # or repointed. A restore from a backup older than the last embed wave
+        # makes EVERY recent point look orphaned; without this guard the next
+        # tick quietly deletes them all. A real stray population is a handful
+        # of points, never a large fraction of the collection, so a ratio this
+        # high means the premise is broken rather than the data.
+        Logger.error(
+          "orphan_sweep aborting: candidate ratio implies a bad authority, not strays",
+          Metadata.with_category(:error, :oban,
+            total_count: MapSet.size(candidates),
+            result: %{scanned: scanned, max_ratio: @max_candidate_ratio}
+          )
+        )
+
+        0
+
+      true ->
+        # Second look after a grace window. The window exists for ONE reason:
+        # `Indexing.commit_index/1` inserts chunk rows and upserts points in the
+        # same breath, and a tenant-scoped caller wraps that in
+        # `Repo.with_tenant/2`, which opens a transaction. Inside it the rows
+        # are invisible to this worker's connection while the points are
+        # already globally visible — so a page scrolled mid-write yields
+        # candidates whose rows land moments later.
+        #
+        # It is NOT protection against a re-index reusing point ids: re-index
+        # mints a fresh uuid per chunk, so a candidate id can never come back
+        # that way. Do not delete this as ceremony.
+        grace()
+
+        confirmed = MapSet.difference(candidates, chunk_point_ids(MapSet.to_list(candidates)))
+        delete_points(MapSet.to_list(confirmed))
+    end
+  end
+
+  defp runaway?(candidates, scanned) do
+    n = MapSet.size(candidates)
+    n >= @runaway_floor and scanned > 0 and n / scanned > @max_candidate_ratio
   end
 
   defp delete_points([]), do: 0
@@ -156,24 +261,38 @@ defmodule Engram.Workers.OrphanSweep do
 
   # skip_tenant_check: cross-tenant by design — this is a whole-collection
   # reconciliation, and RLS would hide exactly the rows that prove a point is
-  # still live.
-  defp chunk_point_ids do
-    Chunk
-    |> select([c], c.qdrant_point_id)
-    |> Repo.all(skip_tenant_check: true)
-    |> to_id_set()
-  end
-
+  # still live. Indexed lookup on `chunks.qdrant_point_id`, bounded by the
+  # caller's page/candidate list — never a whole-table read.
+  #
+  # Chunked: one bind parameter per id against Postgres' 65,535 statement cap.
+  # A page is 4,096 and the candidate list can reach the cap plus a page, so
+  # neither caller is close today — but both are constants someone will raise,
+  # and the failure mode is the confirm query raising mid-sweep.
   defp chunk_point_ids(ids) do
-    Chunk
-    |> where([c], c.qdrant_point_id in ^ids)
-    |> select([c], c.qdrant_point_id)
-    |> Repo.all(skip_tenant_check: true)
-    |> to_id_set()
+    ids
+    |> cast_uuids()
+    |> Enum.chunk_every(@id_query_batch)
+    |> Enum.reduce(MapSet.new(), fn batch, acc ->
+      Chunk
+      |> where([c], c.qdrant_point_id in ^batch)
+      |> select([c], c.qdrant_point_id)
+      |> Repo.all(skip_tenant_check: true)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.into(acc)
+    end)
   end
 
-  defp to_id_set(ids) do
-    ids |> Enum.reject(&is_nil/1) |> Enum.map(&to_string/1) |> MapSet.new()
+  # Qdrant ids are whatever the collection holds; ours are uuids, but one
+  # malformed value would raise `Ecto.Query.CastError` out of a `max_attempts: 1`
+  # worker and kill the pass mid-walk. Same guard as
+  # `Notes.display_fields_by_qdrant_points/2` on the identical query.
+  defp cast_uuids(ids) do
+    Enum.flat_map(ids, fn id ->
+      case Ecto.UUID.cast(id) do
+        {:ok, uuid} -> [uuid]
+        :error -> []
+      end
+    end)
   end
 
   defp grace do
@@ -185,27 +304,6 @@ defmodule Engram.Workers.OrphanSweep do
 
   defp grace_seconds,
     do: Application.get_env(:engram, :orphan_sweep_point_grace_seconds, 60)
-
-  defp scroll_qdrant_point_ids(offset, acc) do
-    opts = [filter: %{}, limit: @qdrant_scroll_limit, with_payload: false, with_vector: false]
-    opts = if offset, do: Keyword.put(opts, :offset, offset), else: opts
-
-    case Qdrant.scroll(opts) do
-      {:ok, %{points: points, next_page_offset: next}} ->
-        acc =
-          Enum.reduce(points, acc, fn point, set ->
-            case point["id"] do
-              id when is_binary(id) -> MapSet.put(set, id)
-              _ -> set
-            end
-          end)
-
-        if next, do: scroll_qdrant_point_ids(next, acc), else: {:ok, acc}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
 
   defp live_user_ids do
     # Includes soft-deleted users (deleted_at IS NOT NULL but row exists) —
