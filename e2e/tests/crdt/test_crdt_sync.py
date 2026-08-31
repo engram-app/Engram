@@ -148,17 +148,23 @@ async def test_edit_after_discovery_round_trips(vault_a, vault_b, cdp_a, cdp_b, 
 # ---------------------------------------------------------------------------
 #
 # The tests above prove eventual convergence but NOT that it rides the vault-
-# channel fan-out (`note_yjs_update` → applyPushedNoteUpdate). Two checkpoint-
-# driven backstops on the receiving device also converge a cold note: pull()'s
-# cursor-feed backfill (flushFromCrdt) and coldReceive() (invoked at pull()'s
-# tail). So if applyPushedNoteUpdate were completely broken, every test above
-# would STILL pass at ~5s checkpoint latency, masking a dead fan-out.
+# channel fan-out (`note_yjs_update` → applyPushedNoteUpdate). A checkpoint-
+# driven backstop on the receiving device also converges a cold note:
+# catchupViaSeqReplay's row-apply (applyChange → flushFromCrdt). So if
+# applyPushedNoteUpdate were completely broken, every test above would STILL
+# pass at ~5s checkpoint latency, masking a dead fan-out.
 #
-# The tests below suppress those backstops on the RECEIVING device via
-# cdp.suppress_fanout_backstops() (stubs pull and coldReceive, while leaving
-# applyPushedNoteUpdate untouched, since the fan-out is a separate channel
-# dispatch). With the backstops dead, a disk-convergence assert can ONLY be
-# satisfied by the fan-out, so a broken fan-out actually FAILS.
+# The tests below suppress that backstop on the RECEIVING device via
+# cdp.suppress_fanout_backstops(), leaving applyPushedNoteUpdate untouched since
+# the fan-out is a separate channel dispatch. With it dead, a disk-convergence
+# assert can ONLY be satisfied by the fan-out, so a broken fan-out actually
+# FAILS.
+#
+# It did not, for an unknown number of runs. All three names the helper stubbed
+# (pull, coldReceive, catchupViaSocket) had been retired from the plugin, and
+# the helper skips a method that no longer exists — so it stubbed NOTHING and
+# these tests ran with every backstop live. The helper now raises if it cannot
+# stub a cold-apply backstop, and conftest asserts the surface at session start.
 #
 # handleStreamEvent used to be stubbed too, for the note_changed room-enroll
 # path. It no longer is (#1503): that enroll is already gated on
@@ -279,7 +285,7 @@ async def test_cold_send_over_fanout_opens_no_room(vault_a, vault_b, cdp_a, cdp_
     is only the down-sync pull, never required to SEND"). We suppress backstops
     on BOTH devices: on A so its receipt can ONLY be the fan-out, and on B to
     keep anything from opening a room there and breaking the negative assertion.
-    TWO paths would: pull()'s discovery/heal enroll (sync.ts:8244, and the
+    TWO paths would: catchupViaSeqReplay's discovery enroll (applyChange, sync.ts:8244, and the
     un-gated cold-note re-handshake `_confirm_room_free` documents), and
     catchupViaSeqReplay → convergeColdNoteRoomFree, which falls back to
     socketConverge → fireCrdtReHandshake (sync.ts:6288) when the room-free
