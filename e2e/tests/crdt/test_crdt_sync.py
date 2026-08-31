@@ -211,11 +211,15 @@ async def test_idle_note_converges_via_fanout_only(vault_a, vault_b, cdp_a, cdp_
     """[P0] A pre-existing IDLE note on B converges to A's edit via the vault-
     channel fan-out ALONE.
 
-    B never opens or edits the note. Before A's edit we suppress every
-    checkpoint-driven backstop on B (pull() cursor-backfill + coldReceive, and
-    the note_changed room-enroll path). The ONLY path that can then converge B's
-    disk is the server's `note_yjs_update` broadcast → applyPushedNoteUpdate. So
-    a broken fan-out FAILS here instead of silently passing at checkpoint latency.
+    B never opens or edits the note. Before A's edit we suppress the
+    checkpoint-driven backstops on B (pull() cursor-backfill + coldReceive). The
+    ONLY path that can then converge B's disk is the server's `note_yjs_update`
+    broadcast → applyPushedNoteUpdate. So a broken fan-out FAILS here instead of
+    silently passing at checkpoint latency.
+
+    B already holds the file (`_establish_on_both`), which is what keeps
+    handleStreamEvent's own content-writing legs out of the picture — see the
+    precondition in suppress_fanout_backstops().
     """
     path = "E2E/Crdt/FanoutPassive.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "shared base\n", "shared base")
@@ -273,16 +277,27 @@ async def test_cold_send_over_fanout_opens_no_room(vault_a, vault_b, cdp_a, cdp_
     An idle SEND ships its edit channel-up / as a durable /updates entry and is
     never required to enroll (sync.ts isCrdtManagedOffline: "Enrollment (STEP1)
     is only the down-sync pull, never required to SEND"). We suppress backstops
-    on BOTH devices: on A so its receipt can ONLY be the fan-out, and on B so a
-    checkpoint-driven pull can't converge the note behind the assertion. The
-    negative signal is a direct read of B's CrdtEnrollment.enrolled set
-    (deterministic, no log-flush timing dependency).
+    on BOTH devices: on A so its receipt can ONLY be the fan-out, and on B so
+    pull()'s own discovery/heal enroll (sync.ts:8244, and the un-gated cold-note
+    re-handshake `_confirm_room_free` documents) can't open a room on B and break
+    the negative assertion. That assertion is a direct read of B's
+    CrdtEnrollment.enrolled set (deterministic, no log-flush timing dependency).
 
-    #1503: suppression used to stub handleStreamEvent as well, which killed B's
-    noteIdMap upkeep — B's push was refused by shouldDeferMint and the edit never
-    left the device, so this timed out at 120s looking like a receive-side bug.
-    The handler now stays live on both devices; the room-enroll it was stubbed to
-    prevent is already gated on isCanvasPath || isLiveBound.
+    #1503: suppression used to stub handleStreamEvent as well. With it dead B's
+    `pushFile` read a null id from noteIdMap, shouldDeferMint refused the push,
+    and the edit never left the device — a 120s timeout that read as a
+    receive-side fan-out bug. Restoring the handler fixes it, and the room-enroll
+    it was stubbed to prevent is already gated on isCanvasPath || isLiveBound.
+
+    NOT established: what emptied B's map in the first place. applyStreamEvent
+    both sets (sync.ts:7213) and deletes/relocates (7088, moveIfIdRelocated at
+    6953), so stubbing it removed a REPAIR — it cannot itself be the remover.
+    Whatever dropped the entry is still there and still unstubbed. If this test
+    times out at 120s again, that is the thread to pull, not the fan-out.
+
+    Tension worth knowing: pull() is the other noteIdMap repair (the manifest
+    reconcile at sync.ts:1066), and this test keeps it stubbed on B for the
+    enroll reason above. So B deliberately runs with one repair path dead.
     """
     path = "E2E/Crdt/FanoutColdSend.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "origin\n", "origin")

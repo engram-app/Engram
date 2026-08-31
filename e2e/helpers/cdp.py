@@ -959,6 +959,17 @@ class CdpClient:
         ``applyPushedNoteUpdate`` and never touches any stubbed method, so it
         stays fully live. Idempotent.
 
+        PRECONDITION — the receiving device MUST already hold the file on disk
+        (what ``_establish_on_both`` guarantees). ``handleStreamEvent`` is left
+        live (below), and two of its legs write note bodies off the ~5s
+        checkpoint: ``applyStreamEvent``'s first-delivery
+        ``applyOp(eventToOp(...))`` and ``catchupViaSeqReplay``. Both gate
+        themselves out when the file is already present
+        (``priorState === undefined`` / ``!getAbstractFileByPath``). Suppress
+        before the receiver has the file and those legs converge the note for
+        you — the assert goes green with the fan-out completely dead, which is
+        the one outcome this helper exists to make impossible.
+
         ``handleStreamEvent`` is deliberately NOT stubbed (#1503). It was on the
         list to stop the ``note_changed`` handler STEP1-enrolling the note's CRDT
         room, whose ``crdt_msg`` stream would then deliver the body independently
@@ -967,14 +978,19 @@ class CdpClient:
         it cannot fire for the idle markdown note these tests use. A stray room
         would fail the enrolled-set assertion rather than pass silently.
 
-        Stubbing it was NOT free: ``applyStreamEvent`` is what commits
-        ``noteIdMap.set(event.path, noteId)``. With it dead the map goes stale,
-        ``pushFile`` reads a null id, and ``shouldDeferMint`` refuses the push —
-        so the suppressed device silently loses the ability to SEND. That is the
-        #1503 failure: ``test_cold_send_over_fanout_opens_no_room`` suppressed
-        the sender and then waited 120s for an edit that never left the device.
-        Suppression is only safe on a pure receiver; leaving this handler live
-        makes it safe on both.
+        Stubbing it was NOT free: ``applyStreamEvent`` commits
+        ``noteIdMap.set(event.path, noteId)`` (sync.ts:7213). With it dead a
+        device that loses its path→id entry never repairs it, ``pushFile`` reads
+        a null id, and ``shouldDeferMint`` refuses the push — so the suppressed
+        device silently loses the ability to SEND. That is the #1503 failure:
+        ``test_cold_send_over_fanout_opens_no_room`` suppressed the sender and
+        then waited 120s for an edit that never left the device.
+
+        What DROPPED the entry is not established. ``applyStreamEvent`` also
+        deletes (7088) and relocates (``moveIfIdRelocated``, 6953), so it cannot
+        be the remover while stubbed — restoring it restores the repair, not the
+        absence of the cause. Treat a repeat 120s timeout as that unfound
+        remover, not as a fan-out regression.
 
         Instances are SESSION-scoped and shared across tests, so every caller
         MUST pair this with ``restore_fanout_backstops`` in a ``finally``.
