@@ -39,15 +39,18 @@ defmodule Engram.Billing.LimitEnforcementTest do
   # which is a legitimate half of a gate (it reorders the expensive count).
   @gate_funs ~w(effective_limit check_limit check_feature limit_enforced?)a
 
-  # Deliberately not enforced server-side.
+  # Deliberately not enforced server-side. EMPTY, and worth keeping that way.
   #
-  # `cross_vault_search` used to live here as "legacy UX flag; no per-request
-  # gate point yet". That went stale: `Engram.Search.cross_vault_allowed/2`
-  # gates it on every REST search. An @unenforced entry that outlives its
-  # reason is worse than no entry — it tells the next reader not to look.
-  @unenforced %{
-    vault_scoped_keys: "legacy; superseded by the api_key_vaults table"
-  }
+  # Both former entries were stale rather than deliberate. `cross_vault_search`
+  # sat here as "legacy UX flag; no per-request gate point yet" long after
+  # `Engram.Search.cross_vault_allowed/2` started gating it.
+  # `vault_scoped_keys` was a dead catalog entry superseded by the
+  # `api_key_vaults` table, carrying no gate and no client — deleted outright in
+  # the pricing-v2 contract step rather than left exempt.
+  #
+  # An @unenforced entry that outlives its reason is worse than no entry: it
+  # tells the next reader not to look. The second test below now guards that.
+  @unenforced %{}
 
   test "every Free-restrictive limit key has a real Billing gate call in lib/" do
     gated = gated_keys()

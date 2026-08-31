@@ -85,7 +85,6 @@ defmodule Engram.Billing.LimitsTest do
       assert Billing.effective_limit(user, :vaults_cap) == 1
       assert Billing.effective_limit(user, :attachment_bytes_cap) == 1_073_741_824
       assert Billing.effective_limit(user, :cross_vault_search) == false
-      assert Billing.effective_limit(user, :vault_scoped_keys) == false
     end
 
     test "returns false (not nil) for boolean features disabled in plan" do
@@ -168,7 +167,6 @@ defmodule Engram.Billing.LimitsTest do
       user = user_without_plan()
 
       assert Billing.check_feature(user, :cross_vault_search) == {:error, :feature_not_available}
-      assert Billing.check_feature(user, :vault_scoped_keys) == {:error, :feature_not_available}
     end
 
     test "returns :ok when override enables a feature the plan disables" do

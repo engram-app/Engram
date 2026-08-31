@@ -49,9 +49,9 @@ defmodule Engram.Billing.PlanCacheTest do
   end
 
   test "missing plan key falls through to the default", %{user: user} do
-    # vault_scoped_keys is not set on this plan → default for tier.
-    assert Billing.effective_limit(user, :vault_scoped_keys) ==
-             LimitKeys.default_for(:vault_scoped_keys, :free)
+    # reranker_enabled is not set on this plan → default for tier.
+    assert Billing.effective_limit(user, :reranker_enabled) ==
+             LimitKeys.default_for(:reranker_enabled, :free)
   end
 
   test "invalidate/1 forces a re-read", %{plan: plan, user: user} do

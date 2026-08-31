@@ -183,14 +183,14 @@ defmodule Engram.Workers.InactivityCleanupTest do
   end
 
   describe "per-user limit overrides" do
-    test "inactivity_warn_60_days=false override suppresses 60-day warning" do
+    test "inactivity_warnings_exempt=true override suppresses 60-day warning" do
       user = insert(:user)
       set_last_active(user.id, 65)
 
       insert(:user_limit_override,
         user: user,
-        key: "inactivity_warn_60_days",
-        value: %{"v" => false}
+        key: "inactivity_warnings_exempt",
+        value: %{"v" => true}
       )
 
       # No Mox expect — send/4 must not be called.
@@ -200,14 +200,14 @@ defmodule Engram.Workers.InactivityCleanupTest do
       assert is_nil(reloaded.inactivity_warning_60_at)
     end
 
-    test "inactivity_warn_60_days=false override suppresses 80-day warning" do
+    test "inactivity_warnings_exempt=true override suppresses 80-day warning" do
       user = insert(:user)
       set_last_active(user.id, 85)
 
       insert(:user_limit_override,
         user: user,
-        key: "inactivity_warn_60_days",
-        value: %{"v" => false}
+        key: "inactivity_warnings_exempt",
+        value: %{"v" => true}
       )
 
       InactivityCleanup.__sweep_80__()
