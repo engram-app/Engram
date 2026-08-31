@@ -79,3 +79,54 @@ are:
 
 Cap-reached events are returned to the caller (402 / `-32_005`), not logged, so
 Loki will not show them either.
+
+## The backstops that did not catch it, and why
+
+Two static checks were supposed to cover this class. Both had the same blind
+spot in different forms; both are fixed alongside the bug.
+
+**`Engram.Billing.LimitEnforcementTest`** asserted only
+`String.contains?(blob, ":#{key}")` over `lib/`. The key merely had to APPEAR
+somewhere, in any context — a moduledoc mention, an `@unenforced` reason
+string, or a call site no request can reach all passed equally.
+`:external_ai_searches_per_day` appeared in the dead plug branch, so the guard
+was green the entire time the cap was unenforced. It now walks the AST and
+requires a real `Billing.{effective_limit, check_limit, check_feature,
+limit_enforced?}` call with the key as an atom literal.
+
+That raises the floor from "the string exists" to "a gate exists". It still
+cannot prove the gate is REACHABLE — only a test that drives the actual route
+or worker does that.
+
+**A stale `@unenforced` entry is worse than none.** `cross_vault_search` sat in
+that exemption list as "legacy UX flag; no per-request gate point yet" long
+after `Engram.Search.cross_vault_allowed/2` started gating it, and nothing
+failed when the comment went stale. A second test now asserts the exemption
+list contains no key that is in fact gated, and
+`Engram.Search.CrossVaultGateTest` pins both the gate and its one deliberate
+MCP bypass.
+
+**`mix engram.lint.limit_keys`** skipped piped call sites. `Code.string_to_quoted!/2`
+does not expand `|>`, so `user |> Billing.effective_limit(:notes_cap)` parses as a
+call with a single argument, fell through the `[_user, key | _rest]` clause, and hit
+a catch-all commented "arity mismatch — ignore". A typo'd key in that shape was
+silently unlinted: exactly the thing the lint exists to catch. Now handled.
+
+## How to actually prove a limit
+
+Mutation is the cheap check. Delete the gate line and run the suite:
+
+```
+# before adding a test, confirm the current suite does NOT catch this
+$ <remove the `:ok <- SomeGate.check(...)` line>
+$ mix test test/path/to/relevant_test.exs
+```
+
+If it stays green, the limit is unproven no matter how many unit tests the
+gate's module has. `ConversationMeter.tick/1` had 8 unit tests and could be
+deleted from `McpController.dispatch/3` with 91 tests still passing.
+
+Match the test to where enforcement lives — a route test for a plug or
+controller gate, a worker test for `EmbedNote` / `InactivityCleanup`, a context
+test for `Accounts.Export` or `Search`. A conn-driving test is the wrong lens
+for a worker-enforced key and will report a false gap.

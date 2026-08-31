@@ -84,7 +84,15 @@ defmodule Mix.Tasks.Engram.Lint.LimitKeys do
     end
   end
 
-  # Arity mismatch (e.g. a Billing.* call with only one arg) — ignore.
+  # Piped call: `user |> Billing.effective_limit(:notes_cap)`.
+  # `Code.string_to_quoted!/2` does not expand `|>`, so the key lands in
+  # position 1 and the clause above never matches. This used to fall through
+  # to the ignore-everything clause below, which meant a TYPO in a piped gate
+  # call was silently unlinted — the one shape the lint exists to catch.
+  defp check_args(file, meta, fun, [key], lines),
+    do: check_args(file, meta, fun, [nil, key], lines)
+
+  # Genuine arity mismatch (no arguments at all) — ignore.
   defp check_args(_file, _meta, _fun, _args, _lines), do: []
 
   defp allow_dynamic?(lines, line),
