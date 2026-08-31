@@ -102,8 +102,8 @@ defmodule EngramWeb.McpController do
          # §E — record origin fingerprint for daily-rollup aggregation.
          _ = OriginStats.record(user.id, get_req_header_first(conn, "user-agent")),
          :ok <- ConversationMeter.tick(user.id),
-         :ok <- spend_search_cap(conn, tool, user),
-         :ok <- validate_tool_args(tool, args) do
+         :ok <- validate_tool_args(tool, args),
+         :ok <- spend_search_cap(conn, tool, user) do
       dispatch_tool(tool, user, normalize_args(tool, args), conn)
     else
       :error ->
@@ -129,26 +129,28 @@ defmodule EngramWeb.McpController do
     {:error, -32_601, "Method not found"}
   end
 
-  # Tools whose PURPOSE is retrieval, and which therefore spend the same daily
-  # search bucket as `POST /api/search`. `EngramWeb.Plugs.EnforceSearchCap`
-  # cannot reach them: it is guarded on `request_path: "/api/search"` and these
-  # arrive as a JSON-RPC body at `/api/mcp`, so the Free tier's
-  # `external_ai_searches_per_day` was unenforced on the whole MCP transport.
+  # Spends a daily search token for retrieval tools. `Engram.MCP.Tools.search_tools/0`
+  # owns the list; `Engram.MCP.SearchToolCoverageTest` asserts it covers every
+  # `Handlers.handle/4` clause that runs a search.
   #
-  # `create_note` / `write_note` also run a search internally (auto-placement,
-  # `Handlers.auto_place_folder/4`) and are deliberately NOT listed. That search
-  # is incidental to a write, is not the abuse vector, and charging it here
-  # would fail note creation with a search-cap error.
-  @search_tools ~w(search_notes suggest_folder)
-
-  defp spend_search_cap(conn, %{name: name}, user) when name in @search_tools do
-    case SearchCap.spend(conn.assigns, user) do
-      :ok -> :ok
-      {:denied, key, _limit} -> {:rate_limited, key}
+  # Deliberately BELOW `validate_tool_args/2`: a malformed `search_notes` call
+  # already answers -32602 without running a search, and charging it would let
+  # a misconfigured client drain a Free user's 15/day allowance and then report
+  # `rate_limited` — an upgrade prompt for searches that never happened. This is
+  # the opposite ordering from `OriginStats`/`ConversationMeter` above, which
+  # must count malformed calls precisely because abuse fingerprinting cares
+  # about clients that only ever send garbage. A billing allowance is a
+  # different contract from an abuse counter.
+  defp spend_search_cap(conn, %{name: name}, user) do
+    if name in Tools.search_tools() do
+      case SearchCap.spend(conn.assigns, user) do
+        :ok -> :ok
+        {:denied, key, _limit} -> {:rate_limited, key}
+      end
+    else
+      :ok
     end
   end
-
-  defp spend_search_cap(_conn, _tool, _user), do: :ok
 
   # A non-binary `name` (client sent an object/array/number) can't match any
   # tool, but MUST NOT crash the "Unknown tool" message itself — `name` may

@@ -24,7 +24,7 @@ Result: `external_ai_searches_per_day` (15/day on Free) was unenforced on MCP â€
 the exact client class the plug's own moduledoc named. The only remaining bound
 was `ConversationMeter` (5 conversations x 50 queries = ~250 tool calls/day, and
 every tool counts, not just searches), so Free got roughly 16x its intended
-search allowance. Fixed by engram#1506.
+search allowance. Fixed by engram#1527.
 
 **Being on the shared pipeline is not the same as running.** The pipeline
 guarantees the plug is *invoked*; a path guard inside it decides whether it
@@ -55,6 +55,20 @@ plug is at most half the gate. Grep the MCP handlers for the underlying context
 call (e.g. `grep -rn "Search.search(" lib/`) and confirm every call site is
 covered â€” MCP handlers call `Engram.*` contexts directly and never re-enter the
 HTTP stack.
+
+## Residual hole: uncharged searches via the write path
+
+`auto_place_folder/4` is exempt on purpose (see below), and that leaves the cap
+partially evadable. Repeated `write_note` against an EXISTING path grows no note
+count, so `notes_cap` never binds, and each call runs one uncharged search. The
+ceiling is `ConversationMeter` (~250 tool calls/day), so a determined Free client
+can reach roughly 250 searches/day against an intended 15.
+
+Accepted, not overlooked. Charging it would fail note creation with a search-cap
+error, which is a worse product than a bounded bypass that still costs the
+attacker a write per search. If this ever needs closing, the lever is a separate
+cheap bucket for write-path auto-placement, not folding it into
+`external_ai_searches_per_day`.
 
 ## Deliberate exemptions (do not "fix" these)
 

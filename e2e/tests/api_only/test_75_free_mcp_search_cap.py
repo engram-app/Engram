@@ -30,8 +30,8 @@ import os
 import subprocess
 
 import pytest
-import requests
 
+from helpers.api import ApiClient
 from helpers.clerk import ClerkClient
 from helpers.oauth import provision_oauth_tokens
 
@@ -81,25 +81,6 @@ def _set_search_cap(clerk_user_id: str, value: int) -> None:
     )
 
 
-def _mcp_call(token: str, name: str, arguments: dict) -> dict:
-    resp = requests.post(
-        f"{API_URL}/mcp",
-        json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": name, "arguments": arguments},
-        },
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=15,
-    )
-    assert resp.status_code == 200, (
-        f"MCP transport should answer 200 even for JSON-RPC errors; "
-        f"got {resp.status_code}: {resp.text[:300]}"
-    )
-    return resp.json()
-
-
 def test_free_mcp_search_cap_binds_and_is_shared_with_rest():
     clerk = ClerkClient(CLERK_SECRET)
     clerk_user_id, tokens = asyncio.run(
@@ -107,6 +88,8 @@ def test_free_mcp_search_cap_binds_and_is_shared_with_rest():
     )
     token = tokens["access_token"]
     vault_id = tokens["vault_id"]
+    api = ApiClient(API_URL, token)
+    api.session.headers["X-Vault-ID"] = vault_id
 
     # Stays Free on purpose — provision_oauth_tokens does not call
     # grant_test_plan, so §G defaults hold and the cap under test is real.
@@ -114,28 +97,17 @@ def test_free_mcp_search_cap_binds_and_is_shared_with_rest():
 
     # Seed one note so a successful search has something to match and an empty
     # result cannot be mistaken for a refusal.
-    seed = requests.post(
-        f"{API_URL}/notes",
-        json={
-            "path": "Health/Supplements.md",
-            "content": "# Supplements\n\nOmega 3 and vitamin D.",
-            "mtime": 1000.0,
-        },
-        headers={"Authorization": f"Bearer {token}", "X-Vault-ID": vault_id},
-        timeout=15,
-    )
-    assert seed.status_code in (200, 201), (
-        f"seed note failed: {seed.status_code} {seed.text[:300]}"
-    )
+    api.create_note("Health/Supplements.md", "# Supplements\n\nOmega 3 and vitamin D.")
 
     # 1. Budget remains → the tool answers normally.
-    first = _mcp_call(token, "search_notes", {"query": "supplements"})
+    first, status = api.mcp_call("search_notes", {"query": "supplements"})
+    assert status == 200, f"MCP transport should answer 200; got {status}"
     assert "result" in first, f"first MCP search should succeed; got {first}"
     assert "error" not in first, f"first MCP search should not error; got {first}"
 
     # 2. Budget spent → JSON-RPC error naming the limit key. Before the fix this
     #    returned a normal result forever: the plug never saw /api/mcp.
-    second = _mcp_call(token, "search_notes", {"query": "supplements"})
+    second, _ = api.mcp_call("search_notes", {"query": "supplements"})
     assert "error" in second, (
         f"second MCP search must be refused — the Free search cap does not bind "
         f"the MCP transport; got {second}"
@@ -149,12 +121,7 @@ def test_free_mcp_search_cap_binds_and_is_shared_with_rest():
     )
 
     # 3. Same bucket over REST. Switching transport must not buy more searches.
-    rest = requests.post(
-        f"{API_URL}/search",
-        json={"query": "supplements"},
-        headers={"Authorization": f"Bearer {token}", "X-Vault-ID": vault_id},
-        timeout=15,
-    )
+    rest = api.search_response("supplements")
     assert rest.status_code == 402, (
         f"POST /api/search must share the MCP bucket; got {rest.status_code}: "
         f"{rest.text[:300]}"
@@ -164,7 +131,7 @@ def test_free_mcp_search_cap_binds_and_is_shared_with_rest():
     assert body["limit_key"] == "external_ai_searches_per_day", body
 
     # 4. We capped searches, not the server. A non-search tool still answers.
-    folders = _mcp_call(token, "list_folders", {"vault_id": vault_id})
+    folders, _ = api.mcp_call("list_folders", {"vault_id": vault_id})
     assert "result" in folders, (
         f"list_folders must not be charged to the search bucket; got {folders}"
     )
