@@ -816,6 +816,19 @@ async def _assert_plugin_surfaces(cdp_a):
             if (typeof p.syncEngine?.isRecentlyPushed !== 'function') missing.push('isRecentlyPushed');
             if (typeof p.syncEngine?.handleStreamEvent !== 'function') missing.push('handleStreamEvent');
             if (!(p.syncEngine?.syncState instanceof Map)) missing.push('syncState:Map');
+            // The fan-out isolation tests are only meaningful if these two can
+            // be stubbed. The backstop has been renamed twice (coldReceive ->
+            // catchupViaSocket -> catchupViaSeqReplay) and BOTH earlier names
+            // went dead without anything noticing: suppress_fanout_backstops()
+            // skips a missing method, so the four "TRUE fan-out proof" tests ran
+            // with a live backstop and would have passed with a dead fan-out.
+            // Assert the surface here so the next rename fails the session at
+            // start, not silently mid-suite.
+            if (typeof p.syncEngine?.pull !== 'function') missing.push('pull');
+            const coldApply = ['catchupViaSeqReplay', 'coldReceive', 'catchupViaSocket'];
+            if (!coldApply.some(m => typeof p.syncEngine?.[m] === 'function')) {
+                missing.push('cold-apply backstop (one of ' + coldApply.join('/') + ')');
+            }
             for (const id of cmds) {
                 if (!app.commands.findCommand(`engram-vault-sync:${id}`)) {
                     missing.push(`command:${id}`);
