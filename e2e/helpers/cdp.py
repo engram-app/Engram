@@ -924,38 +924,12 @@ class CdpClient:
             await_promise=True,
         )
 
-    async def pause_incoming_sync(self) -> None:
-        """Silence incoming WebSocket events by replacing handleStreamEvent.
-
-        Lets a test guarantee that ``pull()`` is the ONLY path that can apply
-        remote content — without this, a full_sync push broadcasts an upsert
-        event that races against pull().
-        """
-        js = f"""
-        (function() {{
-            const se = {ENGINE_PATH};
-            if (se._origHandleStreamEvent) return 'already-paused';
-            se._origHandleStreamEvent = se.handleStreamEvent.bind(se);
-            se.handleStreamEvent = async () => {{}};
-            return 'paused';
-        }})()
-        """
-        result = await self.evaluate(js)
-        logger.info("Incoming sync paused on CDP port %d: %s", self.port, result)
-
-    async def resume_incoming_sync(self) -> None:
-        """Restore the WebSocket event handler saved by pause_incoming_sync()."""
-        js = f"""
-        (function() {{
-            const se = {ENGINE_PATH};
-            if (!se._origHandleStreamEvent) return 'not-paused';
-            se.handleStreamEvent = se._origHandleStreamEvent;
-            delete se._origHandleStreamEvent;
-            return 'resumed';
-        }})()
-        """
-        result = await self.evaluate(js)
-        logger.info("Incoming sync resumed on CDP port %d: %s", self.port, result)
+    # pause_incoming_sync/resume_incoming_sync lived here. Deleted with #1503:
+    # zero callers repo-wide, and they stubbed handleStreamEvent — the same trap
+    # that broke test_cold_send_over_fanout_opens_no_room. A device with that
+    # handler dead stops committing noteIdMap and can no longer PUSH, so the
+    # helper was only ever safe on a pure receiver. Don't reintroduce it without
+    # that caveat in the docstring.
 
     # ------------------------------------------------------------------
     # Vault-channel fan-out isolation (crdt/test_crdt_sync.py)
@@ -968,25 +942,39 @@ class CdpClient:
 
         Under the vault-channel model an IDLE note (not open in the editor)
         converges via the server's ``note_yjs_update`` broadcast → the plugin's
-        ``applyPushedNoteUpdate`` (sync.ts). TWO other paths also converge a cold
-        note off the ~5s checkpoint ``note_changed`` and would mask a broken
-        fan-out — every existing crdt test still passes at checkpoint latency
-        even if the fan-out is dead:
+        ``applyPushedNoteUpdate`` (sync.ts). The checkpoint-driven backfill also
+        converges a cold note off the ~5s ``note_changed`` and would mask a
+        broken fan-out — every existing crdt test still passes at checkpoint
+        latency even if the fan-out is dead:
 
           * ``pull()`` — its cursor-feed backfill (``flushFromCrdt`` on a
             content_hash divergence) AND ``coldReceive()``, which ``pull()`` is
             the sole caller of (invoked at its tail, sync.ts:2707).
-          * ``handleStreamEvent`` — the ``note_changed``/upsert handler, which
-            can STEP1-enroll the note's CRDT room (sync.ts:3246); an open room's
-            ``crdt_msg`` stream would then deliver the body independently.
 
-        This stubs ``pull()``, the cold-apply backstop (``coldReceive()``
+        This stubs ``pull()`` and the cold-apply backstop (``coldReceive()``
         pre-rewire / ``catchupViaSocket()`` post-authoritative-rewire — stubs
-        whichever the paired plugin build exposes) and ``handleStreamEvent`` to
-        no-ops (saving originals). The fan-out is a SEPARATE channel dispatch:
-        ``channel.ts`` routes ``note_yjs_update`` straight to ``onNoteYjsUpdate``
-        → ``applyPushedNoteUpdate`` and never touches any stubbed method, so it
+        whichever the paired plugin build exposes) to no-ops (saving originals).
+        The fan-out is a SEPARATE channel dispatch: ``channel.ts`` routes
+        ``note_yjs_update`` straight to ``onNoteYjsUpdate`` →
+        ``applyPushedNoteUpdate`` and never touches any stubbed method, so it
         stays fully live. Idempotent.
+
+        ``handleStreamEvent`` is deliberately NOT stubbed (#1503). It was on the
+        list to stop the ``note_changed`` handler STEP1-enrolling the note's CRDT
+        room, whose ``crdt_msg`` stream would then deliver the body independently
+        — but that enroll (``sync.ts`` ~7222, formerly the stale 3246 this
+        docstring cited) is already gated on ``isCanvasPath || isLiveBound``, so
+        it cannot fire for the idle markdown note these tests use. A stray room
+        would fail the enrolled-set assertion rather than pass silently.
+
+        Stubbing it was NOT free: ``applyStreamEvent`` is what commits
+        ``noteIdMap.set(event.path, noteId)``. With it dead the map goes stale,
+        ``pushFile`` reads a null id, and ``shouldDeferMint`` refuses the push —
+        so the suppressed device silently loses the ability to SEND. That is the
+        #1503 failure: ``test_cold_send_over_fanout_opens_no_room`` suppressed
+        the sender and then waited 120s for an edit that never left the device.
+        Suppression is only safe on a pure receiver; leaving this handler live
+        makes it safe on both.
 
         Instances are SESSION-scoped and shared across tests, so every caller
         MUST pair this with ``restore_fanout_backstops`` in a ``finally``.
@@ -1000,10 +988,11 @@ class CdpClient:
             // catchupViaSocket in the authoritative-sync rewire. backend-main
             // e2e pairs against EITHER plugin branch, so stub whichever method
             // exists and never .bind() an absent one (guards future renames).
-            for (const m of ['pull', 'coldReceive', 'catchupViaSocket', 'handleStreamEvent']) {{
+            // handleStreamEvent stays LIVE — see the docstring (#1503).
+            for (const m of ['pull', 'coldReceive', 'catchupViaSocket']) {{
                 if (typeof se[m] === 'function') {{
                     se['__orig_' + m] = se[m].bind(se);
-                    se[m] = m === 'handleStreamEvent' ? async () => {{}} : async () => 0;
+                    se[m] = async () => 0;
                 }}
             }}
             return 'isolated';
@@ -1019,7 +1008,7 @@ class CdpClient:
         (function() {{
             const se = {ENGINE_PATH};
             if (!se.__fanoutIsolated) return 'not-isolated';
-            for (const m of ['pull', 'coldReceive', 'catchupViaSocket', 'handleStreamEvent']) {{
+            for (const m of ['pull', 'coldReceive', 'catchupViaSocket']) {{
                 const orig = se['__orig_' + m];
                 if (orig) {{ se[m] = orig; delete se['__orig_' + m]; }}
             }}

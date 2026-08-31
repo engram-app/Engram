@@ -155,11 +155,17 @@ async def test_edit_after_discovery_round_trips(vault_a, vault_b, cdp_a, cdp_b, 
 # would STILL pass at ~5s checkpoint latency, masking a dead fan-out.
 #
 # The tests below suppress those backstops on the RECEIVING device via
-# cdp.suppress_fanout_backstops() (stubs pull, coldReceive AND handleStreamEvent
-# — the note_changed room-enroll path — while leaving applyPushedNoteUpdate
-# untouched, since the fan-out is a separate channel dispatch). With the
-# backstops dead, a disk-convergence assert can ONLY be satisfied by the
-# fan-out, so a broken fan-out actually FAILS. See helpers/cdp.py.
+# cdp.suppress_fanout_backstops() (stubs pull and coldReceive, while leaving
+# applyPushedNoteUpdate untouched, since the fan-out is a separate channel
+# dispatch). With the backstops dead, a disk-convergence assert can ONLY be
+# satisfied by the fan-out, so a broken fan-out actually FAILS.
+#
+# handleStreamEvent used to be stubbed too, for the note_changed room-enroll
+# path. It no longer is (#1503): that enroll is already gated on
+# isCanvasPath || isLiveBound so it cannot fire for an idle markdown note, and
+# stubbing it broke the SENDING device — applyStreamEvent is what commits
+# noteIdMap, so a suppressed sender read a null id and shouldDeferMint refused
+# its push. See helpers/cdp.py.
 
 
 async def _confirm_room_free(cdp, path):
@@ -267,11 +273,16 @@ async def test_cold_send_over_fanout_opens_no_room(vault_a, vault_b, cdp_a, cdp_
     An idle SEND ships its edit channel-up / as a durable /updates entry and is
     never required to enroll (sync.ts isCrdtManagedOffline: "Enrollment (STEP1)
     is only the down-sync pull, never required to SEND"). We suppress backstops
-    on BOTH devices: on A so its receipt can ONLY be the fan-out, and on B so its
-    own checkpoint `note_changed` echo can't drive a RECEIVE-side enroll — the
-    enrolled-set assertion then isolates the SEND path. The negative signal is a
-    direct read of B's CrdtEnrollment.enrolled set (deterministic, no log-flush
-    timing dependency).
+    on BOTH devices: on A so its receipt can ONLY be the fan-out, and on B so a
+    checkpoint-driven pull can't converge the note behind the assertion. The
+    negative signal is a direct read of B's CrdtEnrollment.enrolled set
+    (deterministic, no log-flush timing dependency).
+
+    #1503: suppression used to stub handleStreamEvent as well, which killed B's
+    noteIdMap upkeep — B's push was refused by shouldDeferMint and the edit never
+    left the device, so this timed out at 120s looking like a receive-side bug.
+    The handler now stays live on both devices; the room-enroll it was stubbed to
+    prevent is already gated on isCanvasPath || isLiveBound.
     """
     path = "E2E/Crdt/FanoutColdSend.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "origin\n", "origin")
