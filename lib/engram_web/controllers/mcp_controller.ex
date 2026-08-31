@@ -8,6 +8,7 @@ defmodule EngramWeb.McpController do
   alias Engram.Abuse.OriginStats
   alias Engram.ConversationMeter
   alias Engram.MCP.Tools
+  alias Engram.Usage.SearchCap
 
   @server_info %{"name" => "engram", "version" => "0.1.0"}
   @capabilities %{"tools" => %{"listChanged" => false}}
@@ -101,7 +102,8 @@ defmodule EngramWeb.McpController do
          # §E — record origin fingerprint for daily-rollup aggregation.
          _ = OriginStats.record(user.id, get_req_header_first(conn, "user-agent")),
          :ok <- ConversationMeter.tick(user.id),
-         :ok <- validate_tool_args(tool, args) do
+         :ok <- validate_tool_args(tool, args),
+         :ok <- spend_search_cap(conn, tool, user) do
       dispatch_tool(tool, user, normalize_args(tool, args), conn)
     else
       :error ->
@@ -125,6 +127,29 @@ defmodule EngramWeb.McpController do
 
   defp dispatch(_conn, _method, _params) do
     {:error, -32_601, "Method not found"}
+  end
+
+  # Spends a daily search token for retrieval tools. `Engram.MCP.Tools.search_tools/0`
+  # owns the list; `Engram.MCP.SearchToolCoverageTest` asserts it covers every
+  # `Handlers.handle/4` clause that runs a search.
+  #
+  # Deliberately BELOW `validate_tool_args/2`: a malformed `search_notes` call
+  # already answers -32602 without running a search, and charging it would let
+  # a misconfigured client drain a Free user's 15/day allowance and then report
+  # `rate_limited` — an upgrade prompt for searches that never happened. This is
+  # the opposite ordering from `OriginStats`/`ConversationMeter` above, which
+  # must count malformed calls precisely because abuse fingerprinting cares
+  # about clients that only ever send garbage. A billing allowance is a
+  # different contract from an abuse counter.
+  defp spend_search_cap(conn, %{name: name}, user) do
+    if name in Tools.search_tools() do
+      case SearchCap.spend(conn.assigns, user) do
+        :ok -> :ok
+        {:denied, key, _limit} -> {:rate_limited, key}
+      end
+    else
+      :ok
+    end
   end
 
   # A non-binary `name` (client sent an object/array/number) can't match any
