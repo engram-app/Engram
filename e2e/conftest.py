@@ -816,18 +816,12 @@ async def _assert_plugin_surfaces(cdp_a):
             if (typeof p.syncEngine?.isRecentlyPushed !== 'function') missing.push('isRecentlyPushed');
             if (typeof p.syncEngine?.handleStreamEvent !== 'function') missing.push('handleStreamEvent');
             if (!(p.syncEngine?.syncState instanceof Map)) missing.push('syncState:Map');
-            // The fan-out isolation tests are only meaningful if the cold-apply
-            // backstop can be stubbed. It has been renamed twice (coldReceive ->
-            // catchupViaSocket -> catchupViaSeqReplay) and `pull` was retired
-            // alongside them — all three names in suppress_fanout_backstops()
-            // had gone dead without anything noticing, because the helper skips
-            // a missing method. The four "TRUE fan-out proof" tests were running
-            // with every backstop live. Assert the surface here so the next
-            // rename fails the session at start, not silently mid-suite.
-            const coldApply = ['catchupViaSeqReplay', 'coldReceive', 'catchupViaSocket'];
-            if (!coldApply.some(m => typeof p.syncEngine?.[m] === 'function')) {
-                missing.push('cold-apply backstop (one of ' + coldApply.join('/') + ')');
-            }
+            // NOT checked here: the cold-apply backstop that
+            // suppress_fanout_backstops() stubs. It belongs to 4 crdt tests, and
+            // this fixture is session-scoped autouse across every suite — a
+            // rename would fail the ~110-test clerk session for a reason with no
+            // bearing on it. The helper raises on its own instead (#1503), which
+            // is the same protection scoped to the tests that need it.
             for (const id of cmds) {
                 if (!app.commands.findCommand(`engram-vault-sync:${id}`)) {
                     missing.push(`command:${id}`);

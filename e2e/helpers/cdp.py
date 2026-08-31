@@ -1015,8 +1015,19 @@ class CdpClient:
         js = f"""
         (function() {{
             const se = {ENGINE_PATH};
-            if (se.__fanoutIsolated) return 'already-isolated';
-            se.__fanoutIsolated = true;
+            // Idempotent re-entry reports what is ACTUALLY stubbed right now,
+            // not a bare 'already-isolated' — the caller's zero-stub assertion
+            // has to run on this path too. A restore_fanout_backstops() that
+            // throws (CDP reconnect, renderer reload) leaves __fanoutIsolated
+            // set with nothing stubbed, and every later suppress in this
+            // session would otherwise short-circuit past the guard and hand
+            // the fan-out tests the exact false-green this guard exists for.
+            if (se.__fanoutIsolated) {{
+                return Object.keys(se)
+                    .filter(k => k.startsWith('__orig_'))
+                    .map(k => k.slice('__orig_'.length))
+                    .join(',');
+            }}
             // The cold-apply backstop has been renamed twice: coldReceive ->
             // catchupViaSocket -> catchupViaSeqReplay. backend-main e2e pairs
             // against EITHER plugin branch, so stub whichever exists and never
@@ -1031,13 +1042,14 @@ class CdpClient:
                     stubbed.push(m);
                 }}
             }}
+            // Set AFTER the loop: the flag means "isolation is in place", and
+            // setting it first made a zero-stub run claim isolation it never had.
+            se.__fanoutIsolated = true;
             return stubbed.join(',');
         }})()
         """
         result = await self.evaluate(js)
         logger.info("Fan-out backstops suppressed on CDP port %d: %s", self.port, result)
-        if result == "already-isolated":
-            return result
         stubbed = set(str(result).split(",")) - {""}
         # A rename silently empties this loop (the typeof guard skips what is
         # gone) and the tests then prove nothing, so require the cold-apply

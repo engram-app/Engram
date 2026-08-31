@@ -218,8 +218,8 @@ async def test_idle_note_converges_via_fanout_only(vault_a, vault_b, cdp_a, cdp_
     channel fan-out ALONE.
 
     B never opens or edits the note. Before A's edit we suppress the
-    checkpoint-driven backstops on B (pull() cursor-backfill + coldReceive). The
-    ONLY path that can then converge B's disk is the server's `note_yjs_update`
+    checkpoint-driven backstop on B (catchupViaSeqReplay's row-apply). The ONLY
+    path that can then converge B's disk is the server's `note_yjs_update`
     broadcast → applyPushedNoteUpdate. So a broken fan-out FAILS here instead of
     silently passing at checkpoint latency.
 
@@ -306,13 +306,13 @@ async def test_cold_send_over_fanout_opens_no_room(vault_a, vault_b, cdp_a, cdp_
     Whatever dropped the entry is still there and still unstubbed. If this test
     times out at 120s again, that is the thread to pull, not the fan-out.
 
-    Tension worth knowing: pull() is the other noteIdMap repair (the manifest
-    reconcile at sync.ts:1066), and this test keeps it stubbed on B for the
-    enroll reason above. So B deliberately runs with one repair path dead.
+    Tension worth knowing: catchupViaSeqReplay reaches applyChange, which is a
+    noteIdMap writer, and B runs with it stubbed for the enroll reason above. So
+    B deliberately runs with one map-repair path dead while the assertion holds.
     """
-    # ponytail: B keeps pull() stubbed on purpose. If #1526 lands and the map
-    # loss turns out to need that repair, this test needs the enrolled-set
-    # assertion rebuilt on something other than "no room may exist on B".
+    # ponytail: B keeps catchupViaSeqReplay stubbed on purpose. If #1526 lands
+    # and the map loss turns out to need that repair, this test needs the
+    # enrolled-set assertion rebuilt on something other than "no room on B".
     path = "E2E/Crdt/FanoutColdSend.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "origin\n", "origin")
     note_id_b = await _confirm_room_free(cdp_b, path)
