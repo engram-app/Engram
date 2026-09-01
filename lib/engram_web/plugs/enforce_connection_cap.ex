@@ -44,16 +44,10 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
   def call(%Plug.Conn{assigns: %{current_user: user}, params: params} = conn, _opts) do
     case lookup_client(params) do
       {:ok, %Client{kind: kind_str}} ->
+        # `Billing.cap/2` collapses :unlimited / nil / -1 to nil — the three
+        # spellings this clause used to enumerate by hand.
         case cap_for_user(user, kind_str) do
-          :unlimited ->
-            conn
-
           nil ->
-            conn
-
-          # -1 is the canonical "unlimited" sentinel — same convention as
-          # Engram.Billing.check_limit/3 and BillingController.cap_json/1.
-          -1 ->
             conn
 
           limit when is_integer(limit) ->
@@ -99,11 +93,10 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
 
   # Resolve the billing cap for a user using literal LimitKey atoms so the
   # static lint can verify catalog membership at compile time. Unknown kinds
-  # return :unlimited (falls open) and log a warning for observability.
-  defp cap_for_user(user, "obsidian"),
-    do: Billing.effective_limit(user, :obsidian_connections_cap)
+  # return nil (falls open) and log a warning for observability.
+  defp cap_for_user(user, "obsidian"), do: Billing.cap(user, :obsidian_connections_cap)
 
-  defp cap_for_user(user, "mcp"), do: Billing.effective_limit(user, :mcp_connections_cap)
+  defp cap_for_user(user, "mcp"), do: Billing.cap(user, :mcp_connections_cap)
 
   defp cap_for_user(_user, other) do
     require Logger
@@ -113,7 +106,7 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
       Engram.Logger.Metadata.with_category(:warning, :auth, kind: inspect(other))
     )
 
-    :unlimited
+    nil
   end
 
   # Delegates rather than querying directly: `client_id` on the wire is either a

@@ -34,13 +34,12 @@ defmodule EngramWeb.Plugs.EnforceDeviceCap do
   def init(opts), do: opts
 
   def call(%Plug.Conn{assigns: %{current_user: user}} = conn, _opts) do
-    limit = Billing.effective_limit(user, :concurrent_devices)
+    # `Billing.cap/2` collapses :unlimited / nil / -1 to nil.
+    limit = Billing.cap(user, :concurrent_devices)
     current = Connections.count_active(user.id, :obsidian)
 
     cond do
-      # -1 is the canonical "unlimited" sentinel — same convention as
-      # Engram.Billing.check_limit/3 and BillingController.cap_json/1.
-      limit in [:unlimited, nil, -1] ->
+      is_nil(limit) ->
         conn
 
       is_integer(limit) and current < limit ->
@@ -61,7 +60,7 @@ defmodule EngramWeb.Plugs.EnforceDeviceCap do
   # with `current` = hours remaining; otherwise emit the plain at-cap
   # reason.
   defp emit_402(conn, user, limit, current) do
-    cooldown_hours = Billing.effective_limit(user, :device_swap_cooldown_hours)
+    cooldown_hours = Billing.cap(user, :device_swap_cooldown_hours)
 
     case remaining_cooldown_hours(user.id, cooldown_hours) do
       nil ->
@@ -97,9 +96,7 @@ defmodule EngramWeb.Plugs.EnforceDeviceCap do
   # cooldown is in effect (no recent revoke, cooldown disabled, or
   # window already passed). Rounded UP so a sub-hour remainder still
   # surfaces a positive integer.
-  defp remaining_cooldown_hours(_user_id, hours)
-       when hours in [nil, :unlimited, -1] or hours == 0,
-       do: nil
+  defp remaining_cooldown_hours(_user_id, hours) when is_nil(hours) or hours == 0, do: nil
 
   defp remaining_cooldown_hours(user_id, hours) when is_integer(hours) and hours > 0 do
     case Connections.most_recent_device_revoke(user_id) do

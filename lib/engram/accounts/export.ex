@@ -136,12 +136,12 @@ defmodule Engram.Accounts.Export do
 
   defp rate_limit_check(%User{} = user) do
     cond do
-      lifetime_cap = cap_for(user, :account_exports_lifetime) ->
+      lifetime_cap = Billing.cap(user, :account_exports_lifetime) ->
         if Repo.aggregate(used_lifetime_q(user), :count) >= lifetime_cap,
           do: {:error, :lifetime_exceeded},
           else: :ok
 
-      per_24h_cap = cap_for(user, :account_export_rate_per_24h) ->
+      per_24h_cap = Billing.cap(user, :account_export_rate_per_24h) ->
         if Repo.aggregate(recent_24h_q(user), :count) >= per_24h_cap,
           do: {:error, :rate_exceeded},
           else: :ok
@@ -171,7 +171,7 @@ defmodule Engram.Accounts.Export do
   # ── Size estimation ──────────────────────────────────────────────
 
   defp size_estimate_check(%User{} = user) do
-    case cap_for(user, :account_export_max_bytes) do
+    case Billing.cap(user, :account_export_max_bytes) do
       nil ->
         :ok
 
@@ -213,23 +213,4 @@ defmodule Engram.Accounts.Export do
 
     count * @note_overhead_bytes
   end
-
-  # `effective_limit/2` returns `:unlimited` when limits enforcement is
-  # disabled (selfhost) and the catalog default itself can be `nil` for
-  # "no cap on this tier"; normalize both to `nil` so the cond/case
-  # arms above can treat "no cap" uniformly.
-  #
-  # Inlined per-key (not a dynamic-key helper) so the limit-keys lint can
-  # statically prove every catalog access uses a hardcoded atom.
-  defp cap_for(user, :account_exports_lifetime),
-    do: normalize_cap(Billing.effective_limit(user, :account_exports_lifetime))
-
-  defp cap_for(user, :account_export_rate_per_24h),
-    do: normalize_cap(Billing.effective_limit(user, :account_export_rate_per_24h))
-
-  defp cap_for(user, :account_export_max_bytes),
-    do: normalize_cap(Billing.effective_limit(user, :account_export_max_bytes))
-
-  defp normalize_cap(:unlimited), do: nil
-  defp normalize_cap(v), do: v
 end

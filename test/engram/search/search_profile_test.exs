@@ -48,4 +48,18 @@ defmodule Engram.Search.SearchProfileTest do
     assert p.query_model == "voyage-4-large"
     assert p.diversity == 0.3
   end
+
+  test "a -1 override falls back to the default dial, not a negative one" do
+    # `as_int/2` passed any integer through, so the unlimited sentinel became
+    # `candidate_pool: -1` and `diversity: -0.01`. Decoding now happens in
+    # `Billing.cap/2`, which maps every "no cap" spelling to nil.
+    user = insert_user()
+    insert_override(user, :search_candidate_pool, -1)
+    insert_override(user, :search_diversity, -1)
+
+    profile = SearchProfile.resolve(user)
+
+    assert profile.candidate_pool > 0
+    assert profile.diversity == 0.3
+  end
 end

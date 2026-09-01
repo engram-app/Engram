@@ -30,6 +30,10 @@ defmodule Engram.Billing do
 
   # ── Limits ────────────────────────────────────────────────────────
 
+  # The four dialects of "no ceiling" that `effective_limit/2` can return.
+  # Named once so `cap/2`, `check_limit/3` and `limit_enforced?/2` cannot drift.
+  @no_cap [:unlimited, nil, -1]
+
   @doc """
   Returns the effective limit for a given key for a user.
 
@@ -122,12 +126,55 @@ defmodule Engram.Billing do
   end
 
   @doc """
+  The resolved integer ceiling for `key`, or `nil` when there is no ceiling.
+
+  `effective_limit/2` speaks four dialects of "no cap" — `:unlimited`
+  (enforcement off, i.e. self-host), `nil` (the catalog's unmetered default),
+  `-1` (the documented operator-override sentinel) and a real integer. Every
+  caller that wants a number had to decode all four, and before this function
+  existed eight modules did it independently under seven different private
+  names (`normalize_cap`, `normalize_int`, `as_int`, `cap_json`, ...).
+
+  They did not agree. `Engram.Accounts.Export`'s copy passed `-1` through
+  intact, so an operator override meaning "unlimited exports" resolved to a
+  ceiling of -1 and `count >= -1` refused EVERY export — the same
+  enforcement-off-inverts-the-rule shape that `LimitKeys`' polarity note
+  describes for `attachments_text_only`. Decode in one place and that class
+  cannot come back per-caller.
+
+  Shares its rule with `limit_enforced?/2`, which is now defined in terms of
+  it, so "is there a ceiling" and "what is the ceiling" cannot disagree.
+  """
+  @spec cap(term(), atom()) :: integer() | nil
+  def cap(user, key) when is_atom(key) do
+    case effective_limit(user, key) do
+      v when v in @no_cap -> nil
+      v -> v
+    end
+  end
+
+  @doc """
+  Whether the boolean grant `key` is given to this user.
+
+  The predicate half of `check_feature/2` — same rule (`:unlimited` from
+  enforcement-off grants, an explicit `true` grants, everything else refuses),
+  in the shape a struct field or a JSON body wants. Replaces per-module
+  `as_bool/1` and `bool_json/1` copies.
+
+  Every boolean in `LimitKeys` is grant-shaped (`true` == the user gets the
+  thing), which is what makes one shared decoder safe here; see the polarity
+  note on `attachments_all_types`.
+  """
+  @spec granted?(term(), atom()) :: boolean()
+  def granted?(user, key) when is_atom(key), do: check_feature(user, key) == :ok
+
+  @doc """
   Returns :ok if current_count is below the limit, or the limit is -1 (unlimited).
   Returns {:error, :limit_reached} when at or over the limit.
   """
   def check_limit(user, key, current_count) do
     case effective_limit(user, key) do
-      limit when limit in [:unlimited, nil, -1] -> :ok
+      limit when limit in @no_cap -> :ok
       limit when is_integer(limit) and current_count < limit -> :ok
       _ -> {:error, :limit_reached}
     end
@@ -153,9 +200,7 @@ defmodule Engram.Billing do
   to re-encode the rule. `BillingLimitPredicateTest` pins that agreement.
   """
   @spec limit_enforced?(term(), atom()) :: boolean()
-  def limit_enforced?(user, key) when is_atom(key) do
-    effective_limit(user, key) not in [:unlimited, nil, -1]
-  end
+  def limit_enforced?(user, key) when is_atom(key), do: cap(user, key) != nil
 
   @doc """
   Returns :ok if the boolean feature is enabled for the user.

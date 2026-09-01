@@ -1,8 +1,8 @@
 defmodule Mix.Tasks.Engram.Lint.LimitKeys do
-  @shortdoc "Lints Billing.effective_limit/check_limit/check_feature key args"
+  @shortdoc "Lints Billing.effective_limit/cap/granted?/check_limit/check_feature key args"
 
   @moduledoc """
-  Lints `Engram.Billing.{effective_limit, check_limit, check_feature}` call sites:
+  Lints `Engram.Billing.{effective_limit, cap, granted?, check_limit, check_feature}` call sites:
   the key arg must be an atom literal from `Engram.Billing.LimitKeys.all/0`.
 
   Fails the build on:
@@ -22,7 +22,7 @@ defmodule Mix.Tasks.Engram.Lint.LimitKeys do
 
   alias Engram.Billing.LimitKeys
 
-  @target_funs ~w(effective_limit check_limit check_feature)a
+  @target_funs ~w(effective_limit cap granted? check_limit check_feature)a
 
   @impl Mix.Task
   def run(_argv) do

@@ -37,7 +37,9 @@ defmodule Engram.Billing.LimitEnforcementTest do
   # Functions whose second argument is the limit key. Mirrors
   # `Mix.Tasks.Engram.Lint.LimitKeys`'s target list plus `limit_enforced?/2`,
   # which is a legitimate half of a gate (it reorders the expensive count).
-  @gate_funs ~w(effective_limit check_limit check_feature limit_enforced?)a
+  # `cap/2` and `granted?/2` are the decoded forms of `effective_limit/2` and
+  # `check_feature/2`; a key reached only through them is still gated.
+  @gate_funs ~w(effective_limit cap granted? check_limit check_feature limit_enforced?)a
 
   # Deliberately not enforced server-side. EMPTY, and worth keeping that way.
   #

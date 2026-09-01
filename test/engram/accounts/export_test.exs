@@ -52,6 +52,30 @@ defmodule Engram.Accounts.ExportTest do
       assert {:error, :lifetime_exceeded} = Export.request(user)
     end
 
+    test "an operator -1 override means unlimited, not a ceiling of -1" do
+      # `-1` is the documented unlimited sentinel (`Billing.check_limit/3`).
+      # Export decoded the resolved value with its own `normalize_cap/1`, which
+      # only knew `:unlimited`, so `-1` arrived as a real cap and
+      # `count >= -1` refused every export — enforcement-off inverted into
+      # enforcement-always.
+      user = insert(:user)
+      _spent = insert_export!(user, :ready)
+
+      Repo.insert!(
+        %Engram.Billing.UserLimitOverride{
+          id: Ecto.UUID.generate(),
+          user_id: user.id,
+          key: "account_exports_lifetime",
+          value: %{"v" => -1},
+          reason: "test",
+          set_by: "test"
+        },
+        skip_tenant_check: true
+      )
+
+      assert {:ok, _export} = Export.request(user)
+    end
+
     test "pro user inside 24h window -> :rate_exceeded" do
       user = insert(:user) |> as_pro()
       recent = DateTime.utc_now() |> DateTime.add(-1800, :second)

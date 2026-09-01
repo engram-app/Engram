@@ -131,9 +131,9 @@ defmodule Engram.ConversationMeter do
 
   defp maybe_rotate_conversation(user, %Meter{} = meter, now) do
     window_minutes =
-      Billing.effective_limit(user, :conversation_window_minutes) |> normalize_int(30)
+      Billing.cap(user, :conversation_window_minutes) || 30
 
-    per_conv_cap = Billing.effective_limit(user, :ai_queries_per_conversation)
+    per_conv_cap = Billing.cap(user, :ai_queries_per_conversation)
 
     expired_window? =
       case meter.active_conversation_started_at do
@@ -143,9 +143,10 @@ defmodule Engram.ConversationMeter do
 
     over_per_conv_cap? =
       case per_conv_cap do
-        :unlimited -> false
-        nil -> false
         cap when is_integer(cap) -> meter.active_conversation_query_count >= cap
+        # nil from `Billing.cap/2` (no ceiling) or a malformed override: this
+        # meter fails OPEN, deliberately — a corrupt limit row must not lock a
+        # user out of every AI call.
         _ -> false
       end
 
@@ -175,25 +176,16 @@ defmodule Engram.ConversationMeter do
   defp rotate_reason(_, true), do: :per_conv_cap
 
   defp day_cap_exceeded?(user, %Meter{conversations_today: today}) do
-    case Billing.effective_limit(user, :ai_conversations_per_day) do
-      :unlimited -> false
-      nil -> false
+    case Billing.cap(user, :ai_conversations_per_day) do
       cap when is_integer(cap) -> today > cap
       _ -> false
     end
   end
 
   defp query_day_cap_exceeded?(user, %Meter{queries_today: today}) do
-    case Billing.effective_limit(user, :ai_queries_per_day) do
-      :unlimited -> false
-      nil -> false
+    case Billing.cap(user, :ai_queries_per_day) do
       cap when is_integer(cap) -> today >= cap
       _ -> false
     end
   end
-
-  defp normalize_int(:unlimited, default), do: default
-  defp normalize_int(nil, default), do: default
-  defp normalize_int(n, _) when is_integer(n), do: n
-  defp normalize_int(_, default), do: default
 end
