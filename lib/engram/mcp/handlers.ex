@@ -163,6 +163,12 @@ defmodule Engram.MCP.Handlers do
     limit = max(1, min(args["limit"] || 5, 10))
 
     case Search.search(user, vault, description, limit: 10, diversity: 0) do
+      # A spent budget is a plan limit, not an empty vault. Without this the
+      # refusal fell into the catch-all and reported "No folders found", which
+      # tells the caller to give up rather than to upgrade.
+      {:error, :search_cap_exceeded, cap} ->
+        {:error, "ai_searches_per_day: daily limit of #{cap} reached"}
+
       {:ok, results} when results != [] ->
         folder_counts =
           results
@@ -671,6 +677,13 @@ defmodule Engram.MCP.Handlers do
   end
 
   def render_search({:ok, _empty}, _names), do: {:ok, "No results found."}
+
+  # A spent budget is a PLAN limit, not an outage. Naming the key lets a client
+  # tell "upgrade" from "try again later", and matches the `limit_key` the REST
+  # 402 carries for the same refusal.
+  def render_search({:error, :search_cap_exceeded, limit}, _names),
+    do: {:error, "ai_searches_per_day: daily limit of #{limit} reached"}
+
   def render_search({:error, _reason}, _names), do: {:ok, "Search unavailable."}
 
   defp format_search_result(r, i, names) do
@@ -720,6 +733,11 @@ defmodule Engram.MCP.Handlers do
     if query == "" do
       ""
     else
+      # Degrades on an empty budget instead of failing the write. This search
+      # IS charged — it costs a Voyage embed and a Qdrant query like any other,
+      # and leaving it free made the write path an unmetered search channel.
+      # But auto-placement is incidental to creating a note, so a spent budget
+      # drops the note in the default folder rather than refusing the create.
       case Search.search(user, vault, query, limit: 10, diversity: 0) do
         {:ok, results} when results != [] ->
           folder_counts =
@@ -741,6 +759,12 @@ defmodule Engram.MCP.Handlers do
             _ -> ""
           end
 
+        # Also the `{:error, :search_cap_exceeded, _}` path, deliberately.
+        # `""` means "no suggestion", so a spent budget drops the note in the
+        # default folder instead of failing the create — auto-placement is
+        # incidental to a write. The search IS charged either way: it costs a
+        # Voyage embed and a Qdrant query like any other, and leaving it
+        # uncharged made the write path an unmetered search channel.
         _ ->
           ""
       end

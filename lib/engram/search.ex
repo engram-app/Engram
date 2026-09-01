@@ -8,12 +8,14 @@ defmodule Engram.Search do
   - `:reranker`  — Engram.Rerankers.Jina | .None | any Engram.Reranker impl
   """
 
+  alias Engram.Billing
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Helpers
   alias Engram.Search.MMR
   alias Engram.Search.SearchProfile
   alias Engram.Vector.Qdrant
+  alias EngramWeb.RateLimiter
 
   require Logger
 
@@ -55,6 +57,15 @@ defmodule Engram.Search do
   - `:cross_vault` — when true, search across all vaults (billing-gated)
   """
   def search(user, vault, query, opts \\ []) do
+    # Budget FIRST, ahead of the telemetry span: a refused search never ran, so
+    # counting it in the duration / result-count histograms would skew both.
+    case spend_search_budget(user, opts) do
+      {:error, _, _} = denied -> denied
+      :ok -> do_search_instrumented(user, vault, query, opts)
+    end
+  end
+
+  defp do_search_instrumented(user, vault, query, opts) do
     cross_vault = Keyword.get(opts, :cross_vault, false)
     started_at = System.monotonic_time(:millisecond)
 
@@ -532,5 +543,64 @@ defmodule Engram.Search do
         match_count: length(group)
       }
     end)
+  end
+
+  # THE metering point for `ai_searches_per_day`: at the cost site, not at each
+  # transport. `search/4` is the single funnel every retrieval passes through
+  # and the Voyage embed happens inside it, so a new caller inherits metering
+  # instead of needing to be added to a list. Charging per-transport against a
+  # hand-maintained list is exactly how the old cap went unenforced on all of
+  # MCP (#1527).
+  #
+  # `charge: false` is the ONE exemption, for a retrieval incidental to a write
+  # (`MCP.Handlers.auto_place_folder/4`): do not refuse my create.
+  #
+  # One day, in milliseconds — the Hammer scale for the search budget.
+  @budget_scale_ms 86_400_000
+
+  # Spends one unit of the user's `ai_searches_per_day` budget.
+  #
+  # Counted in `EngramWeb.RateLimiter`, the SAME cluster-synced ETS counter the
+  # rate limiter uses — a daily budget is a rate limit with a 24-hour scale, so
+  # it needs no storage layer of its own. In SaaS prod that routes to the
+  # `:distributed_ets` backend (per-node ETS + `Phoenix.PubSub` broadcast);
+  # self-host falls back to plain per-node ETS. Either way the request path
+  # touches no database: this runs on every search, in front of a Voyage embed,
+  # and microseconds is the right budget for it.
+  #
+  # The previous design spent a Postgres token bucket (`Engram.Usage.DailyCap`
+  # + the `usage_buckets` table), which was exact across nodes and durable
+  # across deploys but cost a round trip on every allowed search. Traded away
+  # deliberately: the counter now resets when a node restarts, and a rolling
+  # deploy hands users a fresh budget because `DistributedETS` has no state
+  # handoff ("new nodes start empty" — see its moduledoc). At ~14 deploys a
+  # month that is the accepted charity case, and it matches the limiter's
+  # standing principle that every failure biases permissive.
+  #
+  # Fixed window, not a rolling bucket: Hammer keys buckets by
+  # `div(now, scale)`, so the 24-hour window is epoch-aligned and a user can
+  # spend the budget either side of a boundary. Same permissive bias.
+  defp spend_search_budget(user, opts) do
+    charge? = Keyword.get(opts, :charge, true)
+
+    case Billing.cap(user, :ai_searches_per_day) do
+      nil ->
+        :ok
+
+      _limit when not charge? ->
+        :ok
+
+      limit when is_integer(limit) and limit > 0 ->
+        case RateLimiter.hit("ai_search:#{user.id}", @budget_scale_ms, limit, :ai_search) do
+          {:allow, _count} -> :ok
+          {:deny, _retry} -> {:error, :search_cap_exceeded, limit}
+        end
+
+      # 0 or a malformed override. `Billing.cap/2` hands a corrupt value back
+      # unchanged (it is the dial decoder, not the gate — see its docs), and a
+      # budget of 0 means the tier cannot search at all.
+      limit ->
+        {:error, :search_cap_exceeded, limit}
+    end
   end
 end

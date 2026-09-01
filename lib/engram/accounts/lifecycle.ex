@@ -173,15 +173,11 @@ defmodule Engram.Accounts.Lifecycle do
                skip_tenant_check: true
              )
 
-             # `usage_buckets` is a system table (no FK to users, so the cascade
-             # above does not reach it) — purge the user's rate-limit rows
-             # explicitly so they don't orphan on account deletion. Raw DELETE:
-             # the table has no Ecto schema and is written outside tenant scope.
-             _ =
-               Repo.query!("DELETE FROM usage_buckets WHERE user_id = $1::uuid", [
-                 Ecto.UUID.dump!(user.id)
-               ])
-
+             # No `usage_buckets` purge any more: the AI search budget moved out
+             # of Postgres into the cluster-synced ETS counter
+             # (`EngramWeb.RateLimiter`), and the table is dropped. An ETS
+             # bucket keyed on a deleted user id ages out with its window and
+             # orphans nothing.
              Repo.delete!(user, skip_tenant_check: true)
            end,
            skip_tenant_check: true

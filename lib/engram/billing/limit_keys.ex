@@ -62,23 +62,6 @@ defmodule Engram.Billing.LimitKeys do
     # Kept at 24h alongside the 2-device cap: it closes the revoke-and-re-add
     # rotation hole that would otherwise make the device cap advisory.
     device_swap_cooldown_hours: %{type: :integer, defaults: %{free: 24, starter: 0, pro: 0}},
-    ai_conversations_per_day: %{type: :integer, defaults: %{free: 5, starter: nil, pro: nil}},
-    ai_queries_per_conversation: %{
-      type: :integer,
-      defaults: %{free: 50, starter: nil, pro: nil}
-    },
-    # NOT "AI questions per day" — ConversationMeter.tick/1 fires on EVERY MCP
-    # tools/call (mcp_controller.ex:93): get_note, list_folder, create_note,
-    # search_notes all count. One user question through Claude costs 5-20 ticks,
-    # so 500 here is roughly 25-100 real questions, not 500.
-    #
-    # Do not lower this without re-deriving the floor. Free resolves `nil`
-    # (uncapped) and is bounded only by ai_conversations_per_day (5) x
-    # ai_queries_per_conversation (50) ~= 250 ticks/day. Any Starter value under
-    # ~250 makes the paid tier strictly WORSE than Free on the axis it is sold
-    # on. 150 was proposed and rejected for exactly that reason (#1479).
-    ai_queries_per_day: %{type: :integer, defaults: %{free: nil, starter: 500, pro: 10_000}},
-    conversation_window_minutes: %{type: :integer, defaults: %{free: 30, starter: 30, pro: 30}},
     reranker_enabled: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
     # Grant-shaped, like every boolean here: `true` == this user gets semantic
     # (dense-vector) retrieval. Free is keyword-only (BM25 over Qdrant sparse
@@ -109,17 +92,35 @@ defmodule Engram.Billing.LimitKeys do
     # tier where `api_write_enabled` is false, or a key gets read access to
     # the whole vault through the sync socket while REST writes are refused.
     api_rps_cap: %{type: :integer, defaults: %{free: 0, starter: 0, pro: 30}},
-    # Rolling-24h search caps on the Free tier. Split by where the request
-    # came from so a noisy MCP / PAT bot can't burn the user's in-app
-    # budget and vice-versa. Both fire on POST /api/search only — note
-    # reads, manifest pulls, attachment fetches are NOT counted.
+    # THE AI usage meter. One key, one number, every transport.
     #
-    # `external_ai_searches_per_day`: API-key + OAuth + device-flow + MCP
-    # access. Tight number on Free because the abuse vector is automated.
-    # `inapp_searches_per_day`: Web SPA (Clerk JWT). Generous because the
-    # cap exists for spam defense, not to throttle the user in the app.
-    external_ai_searches_per_day: %{type: :integer, defaults: %{free: 15, starter: nil, pro: nil}},
-    inapp_searches_per_day: %{type: :integer, defaults: %{free: 60, starter: nil, pro: nil}},
+    # Charged in `Engram.Search.search/4` — the single funnel every retrieval
+    # passes through (five call sites: four in `Engram.MCP.Handlers`, one in
+    # `EngramWeb.SearchController`) and where the Voyage embed actually happens.
+    # Charging at the COST SITE rather than at each transport means a new
+    # caller is metered automatically. The previous design charged at the
+    # transports against a hand-maintained list of "which MCP tools are
+    # retrieval", which is how `external_ai_searches_per_day` went unenforced
+    # on the entire MCP transport for months (#1527).
+    #
+    # Rolling, not calendar-daily: `Engram.Usage.DailyCap` is a token bucket
+    # with continuous refill (capacity = allowance, refill = allowance/86_400
+    # per second), so there is no midnight cliff and no cron.
+    #
+    # Replaces SIX keys that metered one user-visible concept through two
+    # mechanisms: `external_ai_searches_per_day` (15) and
+    # `inapp_searches_per_day` (60) — split by auth marker, which put the
+    # Obsidian plugin in the "automated" bucket — plus
+    # `ai_conversations_per_day` (5), `ai_queries_per_conversation` (50),
+    # `ai_queries_per_day` and `conversation_window_minutes`, which metered
+    # every MCP tool call in a 30-minute-window unit that corresponded to
+    # nothing a user does. Their compound effect was a ~75 search and ~250
+    # tool-call ceiling, neither of which appeared in any key.
+    #
+    # Burst and DoS defence is `EngramWeb.Plugs.PreAuthRateLimit` (600/min on
+    # the shared pipeline), which is what the conversation meter was
+    # approximating badly on a daily axis.
+    ai_searches_per_day: %{type: :integer, defaults: %{free: 20, starter: nil, pro: nil}},
     # Grant-shaped, like every other boolean here: `true` == this user is
     # EXEMPT from the free-tier inactivity dunning. Was `inactivity_warn_60_days`
     # (free: true), which is the same inverted shape that broke attachments —
