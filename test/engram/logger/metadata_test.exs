@@ -20,6 +20,30 @@ defmodule Engram.Logger.MetadataTest do
     assert meta[:loki_ship] == true
   end
 
+  # Fluent Bit routes to Loki on plain STRING compares over the parsed record
+  # (envs/prod/fluent-bit/firelens.conf); it never reads the `loki_ship`
+  # BOOLEAN. Until this field existed, every per-entry `loki_ship: true`
+  # override at :info level was silently dropped on the floor — the verbose
+  # client-diagnostics dial and `expected_client_status` both shipped nothing
+  # for months (engram-app/engram-infra#1095). The string is what actually
+  # routes; the boolean is the Elixir-side concept. They are written together
+  # by `ship/2` so they cannot drift again.
+  test "the routing STRING accompanies every loki_ship decision" do
+    shipped = Metadata.with_category(:info, :billing, [])
+    assert shipped[:loki_ship] == true
+    assert shipped[:ship] == "loki"
+
+    dropped = Metadata.with_category(:info, :http, status: 200)
+    assert dropped[:loki_ship] == false
+    assert dropped[:ship] == "drop"
+  end
+
+  test "ship/2 sets both halves, so an override cannot ship the boolean alone" do
+    forced = Metadata.ship([category: :client, loki_ship: false, ship: "drop"], true)
+    assert forced[:loki_ship] == true
+    assert forced[:ship] == "loki"
+  end
+
   test "raises on unknown category to catch typos at the call site" do
     assert_raise ArgumentError, fn -> Metadata.with_category(:info, :nonsense, []) end
   end

@@ -1,7 +1,7 @@
 defmodule Engram.Logger.Metadata do
   @moduledoc """
   Builds Logger metadata with a validated `category` and the computed
-  `loki_ship` routing flag. Use at log call sites:
+  Loki routing decision. Use at log call sites:
 
       Logger.info("subscription created",
         Engram.Logger.Metadata.with_category(:info, :billing,
@@ -208,9 +208,35 @@ defmodule Engram.Logger.Metadata do
 
     metadata
     |> Keyword.put(:category, category)
-    |> Keyword.put(:loki_ship, Category.loki_ship?(level, category))
+    |> ship(Category.loki_ship?(level, category))
     |> put_trace_context()
   end
+
+  @doc """
+  Record the Loki routing decision, as BOTH a boolean and a string.
+
+  Fluent Bit decides what reaches Loki with plain string compares over the
+  parsed record (`envs/prod/fluent-bit/firelens.conf`) and deliberately does
+  not read a boolean, whose rendering it does not guarantee. `:ship` is the
+  field that actually routes; `:loki_ship` is the Elixir-side concept every
+  test and reader already knows.
+
+  They are written together here so they cannot drift. That drift is not
+  hypothetical: while only the boolean existed, every per-entry override at
+  `:info` level — the plugin's verbose-diagnostics dial
+  (`Engram.Logs.insert_logs/2`) and `expected_client_status`
+  (`EngramWeb.RequestLogger`) — set a flag nothing downstream read, and
+  shipped nothing for months with no error anywhere
+  (engram-app/engram-infra#1095).
+
+  Never `Keyword.put(meta, :loki_ship, ...)` by hand; call this.
+  """
+  @spec ship(keyword(), boolean()) :: keyword()
+  def ship(metadata, true),
+    do: metadata |> Keyword.put(:loki_ship, true) |> Keyword.put(:ship, "loki")
+
+  def ship(metadata, false),
+    do: metadata |> Keyword.put(:loki_ship, false) |> Keyword.put(:ship, "drop")
 
   defp put_trace_context(metadata) do
     case Engram.Observability.Otel.span_context() do

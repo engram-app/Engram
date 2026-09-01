@@ -192,12 +192,10 @@ defmodule Engram.Logs do
           )
 
         # Verbose diagnostic-mode entries opt into Loki per-entry even at :info.
-        meta =
-          if entry.diagnostic do
-            Keyword.put(meta, :loki_ship, true)
-          else
-            meta
-          end
+        # Via Metadata.ship/2, never a bare Keyword.put: the routing field
+        # Fluent Bit reads is the STRING, and setting the boolean alone made
+        # this override a silent no-op (engram-app/engram-infra#1095).
+        meta = if entry.diagnostic, do: Metadata.ship(meta, true), else: meta
 
         Logger.log(level, msg, meta)
       rescue
