@@ -39,19 +39,33 @@ defmodule Engram.Billing.LimitEnforcementTest do
   # which is a legitimate half of a gate (it reorders the expensive count).
   @gate_funs ~w(effective_limit check_limit check_feature limit_enforced?)a
 
-  # Deliberately not enforced server-side.
+  # Deliberately not enforced server-side. EMPTY, and worth keeping that way.
   #
-  # `cross_vault_search` used to live here as "legacy UX flag; no per-request
-  # gate point yet". That went stale: `Engram.Search.cross_vault_allowed/2`
-  # gates it on every REST search. An @unenforced entry that outlives its
-  # reason is worse than no entry — it tells the next reader not to look.
-  @unenforced %{
-    vault_scoped_keys: "legacy; superseded by the api_key_vaults table"
-  }
+  # Both former entries were stale rather than deliberate. `cross_vault_search`
+  # sat here as "legacy UX flag; no per-request gate point yet" long after
+  # `Engram.Search.cross_vault_allowed/2` started gating it.
+  # `vault_scoped_keys` was a dead catalog entry superseded by the
+  # `api_key_vaults` table, carrying no gate and no client — deleted outright in
+  # the pricing-v2 contract step rather than left exempt.
+  #
+  # An @unenforced entry that outlives its reason is worse than no entry: it
+  # tells the next reader not to look.
+  #
+  # The second test below catches ONE direction of that: an entry that is also
+  # gated. It cannot catch the other — adding an UNGATED key here to silence a
+  # real gap is indistinguishable from a legitimate exemption, which is what
+  # this list is for. That is a review question, not a test one. While the map
+  # is empty the second test is vacuous by construction; it earns its keep the
+  # moment anything is added.
+  @unenforced %{}
 
-  test "every Free-restrictive limit key has a real Billing gate call in lib/" do
-    gated = gated_keys()
+  setup_all do
+    # One `Path.wildcard` + `Code.string_to_quoted!` + `Macro.prewalk` over all
+    # of `lib/`, shared by both tests rather than paid twice.
+    %{gated: gated_keys()}
+  end
 
+  test "every Free-restrictive limit key has a real Billing gate call in lib/", %{gated: gated} do
     missing =
       Enum.reject(LimitKeys.all(), fn key ->
         LimitKeys.default_for(key, :free) in [nil, true] or
@@ -71,9 +85,7 @@ defmodule Engram.Billing.LimitEnforcementTest do
            """
   end
 
-  test "@unenforced does not list a key that is in fact gated" do
-    gated = gated_keys()
-
+  test "@unenforced does not list a key that is in fact gated", %{gated: gated} do
     stale =
       @unenforced
       |> Map.keys()

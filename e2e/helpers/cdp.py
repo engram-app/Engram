@@ -1833,6 +1833,118 @@ class CdpClient:
             f"app.commands.executeCommandById({json.dumps(full)})"
         )
 
+    # ------------------------------------------------------------------
+    # Live Preview table-cell editor (Engram-obsidian#487)
+    # ------------------------------------------------------------------
+
+    async def open_note_in_live_preview(self, path: str) -> str:
+        """Open `path` in the active leaf and force Live Preview.
+
+        Live Preview (mode=source, source=False) is what renders a table as the
+        `.cm-table-widget` whose cells are NESTED EditorViews. Source mode shows
+        raw pipe markdown and creates no cell editor at all, so a test that does
+        not force this is not exercising the widget.
+        """
+        return await self.evaluate(
+            """
+            (async () => {
+              const f = app.vault.getAbstractFileByPath(%s);
+              if (!f) return "no-file";
+              const leaf = app.workspace.getLeaf(false);
+              await leaf.openFile(f);
+              const view = leaf.view;
+              await view.setState(
+                { ...view.getState(), mode: "source", source: false },
+                { history: false },
+              );
+              return app.workspace.activeEditor?.file?.path ?? "no-active";
+            })()
+            """
+            % json.dumps(path),
+            await_promise=True,
+        )
+
+    async def enter_table_cell(self, cell_text: str, timeout: float = 10) -> dict:
+        """Put the cursor in the table cell containing `cell_text`, as a click does.
+
+        Returns `{"cellEditor": bool, "cellText": str, ...}`. Callers MUST assert
+        `cellEditor` — if Obsidian never built the nested editor then nothing was
+        staged and every downstream assertion would pass vacuously.
+
+        Drives a CM6 selection into the cell's source range rather than
+        dispatching synthetic pointer events. That IS the click path: CodeMirror
+        turns a click into a selection, and Obsidian's table widget builds the
+        cell editor from `getSelectedCell(selection)`. Synthetic PointerEvents
+        with correct coordinates do NOT produce a cell editor under Xvfb, so a
+        pointer-based helper would fail the staging gate and prove nothing.
+
+        `editorComponent` is the internal editor that owns `tableCell`;
+        `activeEditor.editor` is the public Editor wrapper and has no such field.
+        """
+        return await self.evaluate(
+            """
+            (async () => {
+              const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+              const deadline = Date.now() + %d;
+              const ec = app.workspace.activeEditor?.editor?.editorComponent;
+              if (!ec?.cm) return { error: "no-editor-component" };
+              if (!document.querySelector(".cm-table-widget")) {
+                return { error: "table-not-rendered-as-widget" };
+              }
+              const cm = ec.cm;
+              const needle = %s;
+              const at = cm.state.doc.toString().indexOf(needle);
+              if (at < 0) return { error: "cell-text-not-in-document" };
+              const pos = at + Math.floor(needle.length / 2);
+
+              cm.focus();
+              cm.dispatch({ selection: { anchor: pos, head: pos }, scrollIntoView: true });
+
+              while (Date.now() < deadline) {
+                const cell = ec.tableCell?.cm;
+                if (cell) {
+                  return {
+                    cellEditor: true,
+                    cellText: cell.state.doc.toString(),
+                    cellLen: cell.state.doc.length,
+                  };
+                }
+                await sleep(100);
+              }
+              return { cellEditor: false, tableCell: String(ec.tableCell) };
+            })()
+            """
+            % (int(timeout * 1000), json.dumps(cell_text)),
+            await_promise=True,
+        )
+
+    async def table_cell_text(self) -> str:
+        """Text currently inside the active table-cell editor ("" when none)."""
+        return await self.evaluate(
+            "app.workspace.activeEditor?.editor?.editorComponent"
+            "?.tableCell?.cm?.state.doc.toString() ?? ''"
+        )
+
+    async def live_viewer_count(self, path: str) -> int:
+        """How many EditorViews the CRDT layer has bound to `path`.
+
+        One open note is exactly one viewer. Obsidian's nested table-cell editor
+        inherits the parent's `editorInfoField` (same MarkdownView, same file),
+        so before the fix it bound as a SECOND viewer of the same path — and its
+        reconcile then adopted the whole note body into the cell.
+        """
+        return await self.evaluate(
+            """
+            (() => {
+              const p = app.plugins.plugins["engram-vault-sync"];
+              const viewers = p?.crdtLiveViews?.refcount?.viewers;
+              if (!viewers) return -1;
+              return viewers.get(%s)?.size ?? 0;
+            })()
+            """
+            % json.dumps(path)
+        )
+
     async def click_status_bar(self) -> None:
         """Click the Engram status bar item."""
         await self.evaluate(

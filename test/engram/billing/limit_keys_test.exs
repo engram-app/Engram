@@ -4,14 +4,13 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 33 catalog keys" do
+    test "returns the 32 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 33
+      assert length(keys) == 32
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
       assert :cross_vault_search in keys
-      assert :vault_scoped_keys in keys
     end
   end
 
@@ -110,9 +109,12 @@ defmodule Engram.Billing.LimitKeysTest do
   end
 
   describe "env_var_names/0" do
-    test "emits 99 tuples (33 keys × 3 tiers)" do
+    test "emits one tuple per key per tier" do
       tuples = LimitKeys.env_var_names()
-      assert length(tuples) == 99
+      # Derived, not a second hand-maintained literal: this count is a pure
+      # function of the other two and two literals drift apart (the moduledoc
+      # said 27 keys while the catalog held 33).
+      assert length(tuples) == length(LimitKeys.all()) * length(LimitKeys.tiers())
     end
 
     test "includes ENGRAM_FREE_NOTES_CAP" do
@@ -180,6 +182,15 @@ defmodule Engram.Billing.LimitKeysTest do
     # one key inverted the meaning of disabling enforcement and cost every
     # self-hoster their images and PDFs.
     refute LimitKeys.defined?(:attachments_text_only)
+  end
+
+  test "the retired vault_scoped_keys entry is gone" do
+    # Dead catalog entry: no gate, no client, superseded by the
+    # `api_key_vaults` table. It reads like an obvious API-key feature, so
+    # without this the only objection to re-adding it is an integer literal
+    # that a re-adder bumps as a matter of course. If vault-scoping ever
+    # returns as a plan limit, it needs a gate first — not a catalog row.
+    refute LimitKeys.defined?(:vault_scoped_keys)
   end
 
   test "every boolean limit is grant-shaped: enforcement-off must never restrict" do
