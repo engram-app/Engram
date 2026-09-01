@@ -1142,6 +1142,14 @@ class CdpClient:
                 try {{ return c && typeof c.has === 'function' ? c.has(p) : null; }}
                 catch (e) {{ return 'err'; }}
             }};
+            const size = (c) => {{
+                try {{
+                    if (!c) return null;
+                    if (typeof c.size === 'number') return c.size;
+                    if (typeof c.length === 'number') return c.length;
+                    return null;
+                }} catch (e) {{ return 'err'; }}
+            }};
             return JSON.stringify({{
                 renames: has(st.renames),
                 deleteSet: has(st.deleteSet),
@@ -1150,6 +1158,18 @@ class CdpClient:
                 overlay: has(st.overlay),
                 committed: has(st.map),
                 cache: has(st.cache),
+                // Totals separate "this ONE path is missing" from "the whole
+                // identity store is empty". All-zero means the store was
+                // replaced with a fresh Y.Doc (see SyncStore.clear's note that
+                // identity is dropped by REPLACING the room) and has not
+                // re-synced -- which reads exactly like a per-path loss.
+                committedTotal: size(st.map),
+                overlayTotal: size(st.overlay),
+                cacheTotal: size(st.cache),
+                entriesTotal: (() => {{
+                    try {{ return se.noteIdMap.entries ? se.noteIdMap.entries().length : null; }}
+                    catch (e) {{ return 'err'; }}
+                }})(),
             }});
         }})()
         """
