@@ -56,7 +56,6 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RequireActiveSubscription
     plug EngramWeb.Plugs.BumpActivity
     plug EngramWeb.Plugs.RequireApiRpsBudget
-    plug EngramWeb.Plugs.EnforceSearchCap
     plug EngramWeb.Plugs.RequireApiWriteEnabled
   end
 

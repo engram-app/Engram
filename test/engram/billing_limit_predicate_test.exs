@@ -107,12 +107,13 @@ defmodule Engram.BillingLimitPredicateTest do
     # `nil` — the catalog's unmetered default. Not reachable as an override
     # value (`effective_limit/2` treats a nil override as a miss and falls
     # through), so use a key that is nil on this user's own tier:
-    # `ai_queries_per_day` is unmetered on Free.
+    # `lifetime_embed_token_cap` is unmetered on paid tiers; use an override of
+    # nil-equivalent instead. `account_export_rate_per_24h` is nil on Free.
     unmetered = insert(:user)
 
-    assert Billing.cap(unmetered, :ai_queries_per_day) == nil
-    refute Billing.limit_enforced?(unmetered, :ai_queries_per_day)
-    assert Billing.check_limit(unmetered, :ai_queries_per_day, @huge) == :ok
+    assert Billing.cap(unmetered, :account_export_rate_per_24h) == nil
+    refute Billing.limit_enforced?(unmetered, :account_export_rate_per_24h)
+    assert Billing.check_limit(unmetered, :account_export_rate_per_24h, @huge) == :ok
   end
 
   test "cap/2 reports enforcement-off as no cap" do

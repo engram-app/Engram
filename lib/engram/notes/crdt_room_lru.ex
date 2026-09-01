@@ -135,6 +135,18 @@ defmodule Engram.Notes.CrdtRoomLru do
     end
   end
 
+  @doc """
+  The resident-room ceiling this node is enforcing right now.
+
+  Public because `resident_count/0` is meaningless on its own: the number that
+  matters is the OVERSHOOT, and a dashboard or alert that hardcodes 64 starts
+  lying the day `config :engram, #{inspect(__MODULE__)}, max_resident:` moves.
+  Exported next to the count so both travel together — see
+  `Engram.PromEx.Crdt.execute_room_metrics/0`.
+  """
+  @spec max_resident() :: pos_integer()
+  def max_resident, do: Keyword.get(cfg(), :max_resident) || @default_max_resident
+
   # This module's GenServer owns the table, so between its death and its
   # restart the table does not exist. A bare :ets call would raise
   # ArgumentError in the CALLER — and the caller is CrdtCheckpointTimer, which
@@ -303,6 +315,5 @@ defmodule Engram.Notes.CrdtRoomLru do
   defp schedule_sweep, do: Process.send_after(self(), :sweep, sweep_interval_ms())
 
   defp cfg, do: Application.get_env(:engram, __MODULE__, [])
-  defp max_resident, do: Keyword.get(cfg(), :max_resident) || @default_max_resident
   defp sweep_interval_ms, do: Keyword.get(cfg(), :sweep_interval_ms) || @default_sweep_interval_ms
 end
