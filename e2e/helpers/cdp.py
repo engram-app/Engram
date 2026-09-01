@@ -1170,6 +1170,19 @@ class CdpClient:
                     try {{ return se.noteIdMap.entries ? se.noteIdMap.entries().length : null; }}
                     catch (e) {{ return 'err'; }}
                 }})(),
+                // The committed keys, so a near-miss (leading slash, different
+                // normalisation, stale rename target) is visible directly
+                // instead of inferred. `committedTotal` proved the store is
+                // healthy and holds OTHER notes, so what matters now is whether
+                // THIS note is present under a key the read does not derive.
+                committedKeys: (() => {{
+                    try {{
+                        const out = [];
+                        st.map.forEach((_v, k) => out.push(k));
+                        return out.sort();
+                    }} catch (e) {{ return 'err'; }}
+                }})(),
+                lookingFor: p,
             }});
         }})()
         """
