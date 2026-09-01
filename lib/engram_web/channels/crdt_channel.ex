@@ -796,8 +796,18 @@ defmodule EngramWeb.CrdtChannel do
         # it would then depend on the idle drain alone to reap. Let it finish
         # and disown it; the write is idempotent, so the client's fallback
         # handshake converges on the same state either way.
-        _ = Task.ignore(task)
-        {:error, :apply_timeout}
+        #
+        # Take `ignore`'s RESULT rather than discarding it. `Task.yield`'s
+        # timeout branch does not demonitor, so the alias is still live when it
+        # returns nil, and `Task.ignore` does a `receive` FIRST — it hands back
+        # `{:ok, result}` whenever the reply landed in that gap. Discarding it
+        # answers `doc_update_failed` for a write that demonstrably SUCCEEDED,
+        # and the gap is a scheduler slice plus a mailbox scan wide, not a
+        # narrow race.
+        case Task.ignore(task) do
+          {:ok, result} -> result
+          _ -> {:error, :apply_timeout}
+        end
     end
   end
 
@@ -1574,6 +1584,52 @@ defmodule EngramWeb.CrdtChannel do
         {:noreply, socket}
     end
   end
+
+  # Trailing catch-all. Phoenix injects no fallback `handle_info/2`
+  # (`__before_compile__` defines only `__intercepts__`, and `Channel.Server`
+  # calls the module's callback directly), so ONE unmatched message raises
+  # `FunctionClauseError` and kills the channel — losing every room this socket
+  # owns and forcing a rejoin plus a full re-handshake. That is the blast radius
+  # `async_nolink` was chosen to prevent, arriving by a different door, and a
+  # named clause per known shape only defends the shapes someone thought of.
+  #
+  # NOT the applier task: its ref is a process ALIAS (`async_nolink` monitors
+  # with `alias: :demonitor`), and `Task.ignore/1` demonitors, which deactivates
+  # the alias — the VM then drops the late reply. It never reaches here.
+  #
+  # What DOES reach here is any `SharedDoc.update_doc` caller that replies to a
+  # raw pid with a plain `make_ref()` and reads it back with `receive ... after
+  # 0`, because a timed-out call leaves the room to run the fun and send the
+  # reply afterwards. Both live senders run inline ON this channel process:
+  # `Identity.via_room/2` (reached from `handle_in("crdt_create")` via
+  # `genesis_crdt_note` -> `claim_crdt_relocate` -> `Identity.claim`), and
+  # `CrdtDeliver`, whose own comment already names "this (possibly long-lived
+  # channel) process's mailbox".
+  #
+  # Counted, not silent. `CrdtDeliver`'s message is a room-quarantine trigger
+  # and `via_room`'s late reply is the only trace of the divergence
+  # `Identity` documents as a known gap, so a drop here is a real signal being
+  # discarded — the counter is what makes that visible and this clause
+  # falsifiable.
+  @impl true
+  def handle_info(msg, socket) do
+    :telemetry.execute([:engram, :crdt, :channel_msg_dropped], %{count: 1}, %{
+      kind: dropped_kind(msg)
+    })
+
+    Logger.debug(
+      "crdt channel dropped an unmatched message",
+      Metadata.with_category(:debug, :sync, kind: dropped_kind(msg))
+    )
+
+    {:noreply, socket}
+  end
+
+  # Shape only — never the payload. A late `update_doc` reply carries doc state,
+  # and the crypto/KMS class can embed a wrapped DEK.
+  defp dropped_kind({ref, _}) when is_reference(ref), do: :room_call_reply
+  defp dropped_kind(msg) when is_tuple(msg) and tuple_size(msg) > 0, do: safe_kind(elem(msg, 0))
+  defp dropped_kind(msg), do: safe_kind(msg)
 
   @doc """
   Let go of `room` in response to a drain (#1152).

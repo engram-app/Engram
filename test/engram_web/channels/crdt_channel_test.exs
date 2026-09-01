@@ -1396,6 +1396,52 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_reply ref2, :ok, %{doc_id: ^doc_id}, 3000
     end
 
+    test "an unmatched message does not kill the channel, and is counted", %{
+      socket: socket,
+      doc_id: doc_id
+    } do
+      # Phoenix injects no fallback `handle_info/2`, so ONE unmatched message
+      # raises FunctionClauseError and kills the channel, taking every room this
+      # socket owns — the blast radius `async_nolink` was chosen to prevent.
+      #
+      # The live senders are `Identity.via_room/2` and `CrdtDeliver`, both of
+      # which reply to a raw pid with a plain ref and read it back with `after
+      # 0`, so a timed-out `update_doc` leaves the reply to arrive later. NOT
+      # the applier task: its ref is a process alias and `Task.ignore/1`
+      # deactivates it, so the VM drops that one.
+      #
+      # OWN a room first. Without one this asserts only that the process
+      # survived, which is the weaker half of the claim.
+      _client = handshake_room(socket, doc_id)
+      rooms_before = :sys.get_state(socket.channel_pid).assigns.rooms
+      assert map_size(rooms_before) > 0
+
+      handler = "drop-count-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler,
+        [:engram, :crdt, :channel_msg_dropped],
+        fn _e, m, meta, _ -> send(test_pid, {:dropped, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      # The `via_room` shape, and a foreign shape the named clauses never
+      # anticipated — the catch-all has to hold for both.
+      send(socket.channel_pid, {make_ref(), {:ok, %{head: "late"}}})
+      assert_receive {:dropped, %{count: 1}, %{kind: :room_call_reply}}, 1000
+
+      send(socket.channel_pid, {:some_future_shape, :from_a_later_pr})
+      assert_receive {:dropped, %{count: 1}, %{kind: :some_future_shape}}, 1000
+
+      # The channel still answers AND still owns its rooms.
+      ref = push(socket, "crdt_doc_state", %{"doc_id" => doc_id})
+      assert_reply ref, :ok, %{doc_id: ^doc_id}, 3000
+      assert :sys.get_state(socket.channel_pid).assigns.rooms == rooms_before
+    end
+
     test "bills the handshake budget — it is the frame that REPLACES a handshake", %{
       socket: socket,
       user: user,
