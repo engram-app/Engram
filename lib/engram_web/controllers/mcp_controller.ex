@@ -6,9 +6,7 @@ defmodule EngramWeb.McpController do
   use EngramWeb, :controller
 
   alias Engram.Abuse.OriginStats
-  alias Engram.ConversationMeter
   alias Engram.MCP.Tools
-  alias Engram.Usage.SearchCap
 
   @server_info %{"name" => "engram", "version" => "0.1.0"}
   @capabilities %{"tools" => %{"listChanged" => false}}
@@ -91,26 +89,23 @@ defmodule EngramWeb.McpController do
   defp dispatch(conn, "tools/call", %{"name" => name, "arguments" => args}) do
     start_mono = System.monotonic_time()
 
-    # Order matters: OriginStats/ConversationMeter must run for every call
-    # against a KNOWN tool regardless of whether its arguments turn out to
-    # be valid — otherwise a client that always sends malformed args is
-    # invisible to abuse fingerprinting and never counts against its daily
-    # quota (found in adversarial review of #1491/#1492's fix). Argument
-    # validation therefore runs LAST, right where the handler used to run.
+    # OriginStats runs for every call against a KNOWN tool regardless of whether
+    # its arguments turn out to be valid — a client that always sends malformed
+    # args must not be invisible to abuse fingerprinting (#1491/#1492).
+    #
+    # There is no usage metering here any more. `ai_searches_per_day` is charged
+    # inside `Engram.Search.search/4`, the funnel every retrieval passes through,
+    # so this controller cannot forget to charge a new retrieval tool. Volume is
+    # bounded by `EngramWeb.Plugs.PreAuthRateLimit` on the shared pipeline.
     with {:ok, tool} <- Tools.get(name),
          user = conn.assigns.current_user,
          # §E — record origin fingerprint for daily-rollup aggregation.
          _ = OriginStats.record(user.id, get_req_header_first(conn, "user-agent")),
-         :ok <- ConversationMeter.tick(user.id),
-         :ok <- validate_tool_args(tool, args),
-         :ok <- spend_search_cap(conn, tool, user) do
+         :ok <- validate_tool_args(tool, args) do
       dispatch_tool(tool, user, normalize_args(tool, args), conn)
     else
       :error ->
         {:error, -32_602, "Unknown tool: #{tool_name_label(name)}"}
-
-      {:rate_limited, reason} ->
-        {:error, -32_005, "rate_limited: #{reason}"}
 
       {:error, tool_name, msg} ->
         # `with`/`else` doesn't carry earlier clauses' bindings into `else` —
@@ -129,35 +124,6 @@ defmodule EngramWeb.McpController do
     {:error, -32_601, "Method not found"}
   end
 
-  # Spends a daily search token for retrieval tools. `Engram.MCP.Tools.search_tools/0`
-  # owns the list; `Engram.MCP.SearchToolCoverageTest` asserts it covers every
-  # `Handlers.handle/4` clause that runs a search.
-  #
-  # Deliberately BELOW `validate_tool_args/2`: a malformed `search_notes` call
-  # already answers -32602 without running a search, and charging it would let
-  # a misconfigured client drain a Free user's 15/day allowance and then report
-  # `rate_limited` — an upgrade prompt for searches that never happened. This is
-  # the opposite ordering from `OriginStats`/`ConversationMeter` above, which
-  # must count malformed calls precisely because abuse fingerprinting cares
-  # about clients that only ever send garbage. A billing allowance is a
-  # different contract from an abuse counter.
-  defp spend_search_cap(conn, %{name: name}, user) do
-    if name in Tools.search_tools() do
-      case SearchCap.spend(conn.assigns, user) do
-        :ok -> :ok
-        {:denied, key, _limit} -> {:rate_limited, key}
-      end
-    else
-      :ok
-    end
-  end
-
-  # A non-binary `name` (client sent an object/array/number) can't match any
-  # tool, but MUST NOT crash the "Unknown tool" message itself — `name` may
-  # not implement String.Chars (e.g. a bare map). Describes the JSON shape,
-  # not its contents — `inspect/1` is banned in controllers (T3.0.6) even
-  # for client-echoed data, so this stays a controller-side type label, not
-  # a dump of the value.
   defp tool_name_label(name) when is_binary(name), do: name
   defp tool_name_label(name) when is_map(name), do: "<object>"
   defp tool_name_label(name) when is_list(name), do: "<array>"

@@ -43,7 +43,6 @@ defmodule Engram.Application do
         EngramWeb.Presence,
         Engram.Crypto.DekCache,
         Engram.UsageMeters.ActivityCache,
-        Engram.Usage.DailyCap.Cache,
         Engram.KeywordIndex.Stats.Cache,
         Engram.KeywordIndex.StemCache,
         Engram.Onboarding.TermsCache,

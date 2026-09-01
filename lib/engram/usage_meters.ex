@@ -27,12 +27,6 @@ defmodule Engram.UsageMeters do
       field :lifetime_embed_tokens, :integer, default: 0
       field :notes_count, :integer, default: 0
       field :last_active_at, :utc_datetime_usec
-      field :active_conversation_started_at, :utc_datetime_usec
-      field :active_conversation_query_count, :integer, default: 0
-      field :conversations_today, :integer, default: 0
-      field :conversations_day_key, :date
-      field :queries_today, :integer, default: 0
-      field :queries_day_key, :date
       field :updated_at, :utc_datetime_usec
     end
   end
@@ -40,39 +34,20 @@ defmodule Engram.UsageMeters do
   @doc """
   One read of every counter this user is metered on, for the usage endpoint.
 
-  Applies the SAME day-rollover rule `ConversationMeter.rollover_day/2` applies
-  on write: a `*_day_key` from a previous UTC day means those counters are
-  already spent-and-reset as far as the next tick is concerned, so reporting
-  the stored integer would tell a user they had used 5 conversations when the
-  next call will start them at 0. Read-only — this never writes the reset back.
-
+  The conversation counters are gone: `ai_searches_per_day` replaced them and
+  lives in the cluster-synced ETS limiter, which has no read-without-spend API.
   Returns zeroes for a user with no row yet (rows are lazy-initialized).
   """
   @spec snapshot(Ecto.UUID.t()) :: %{
           notes: non_neg_integer(),
-          lifetime_embed_tokens: non_neg_integer(),
-          ai_conversations_today: non_neg_integer(),
-          ai_queries_today: non_neg_integer()
+          lifetime_embed_tokens: non_neg_integer()
         }
   def snapshot(user_id) when is_binary(user_id) do
-    today = Date.utc_today()
-
     case Repo.one(from(m in Meter, where: m.user_id == ^user_id), skip_tenant_check: true) do
-      nil ->
-        %{notes: 0, lifetime_embed_tokens: 0, ai_conversations_today: 0, ai_queries_today: 0}
-
-      %Meter{} = m ->
-        %{
-          notes: m.notes_count,
-          lifetime_embed_tokens: m.lifetime_embed_tokens,
-          ai_conversations_today:
-            today_or_zero(m.conversations_today, m.conversations_day_key, today),
-          ai_queries_today: today_or_zero(m.queries_today, m.queries_day_key, today)
-        }
+      nil -> %{notes: 0, lifetime_embed_tokens: 0}
+      %Meter{} = m -> %{notes: m.notes_count, lifetime_embed_tokens: m.lifetime_embed_tokens}
     end
   end
-
-  defp today_or_zero(count, day_key, today), do: if(day_key == today, do: count, else: 0)
 
   @spec lifetime_embed_tokens(Ecto.UUID.t()) :: non_neg_integer()
   def lifetime_embed_tokens(user_id) when is_binary(user_id) do

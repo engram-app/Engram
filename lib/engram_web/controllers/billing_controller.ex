@@ -5,7 +5,6 @@ defmodule EngramWeb.BillingController do
   alias Engram.Billing
   alias Engram.Billing.Subscriptions
   alias Engram.Connections
-  alias Engram.Usage.DailyCap
   alias Engram.UsageMeters
   alias Engram.Vaults
 
@@ -64,47 +63,25 @@ defmodule EngramWeb.BillingController do
             meters.lifetime_embed_tokens,
             Billing.cap(user, :lifetime_embed_token_cap)
           ),
-        ai_conversations_today:
-          capped_used_limit(
-            meters.ai_conversations_today,
-            Billing.cap(user, :ai_conversations_per_day)
-          ),
-        ai_queries_today:
-          used_limit(meters.ai_queries_today, Billing.cap(user, :ai_queries_per_day)),
         indexed_notes:
           used_limit(
             min(meters.notes, indexed_cap(user)),
             Billing.cap(user, :indexed_notes_cap)
           ),
-        external_ai_searches:
-          bucket_remaining(
-            user,
-            "ext_search",
-            Billing.cap(user, :external_ai_searches_per_day)
-          ),
-        inapp_searches:
-          bucket_remaining(
-            user,
-            "inapp_search",
-            Billing.cap(user, :inapp_searches_per_day)
-          )
+        # `used` is nil on purpose. The budget lives in the cluster-synced ETS
+        # counter (`EngramWeb.RateLimiter`), which is a Hammer bucket with no
+        # read-without-spend API — asking how much is left must not consume any.
+        # The cap itself is still worth publishing so the UI can name the limit
+        # in an upgrade prompt; the refusal carries the same key.
+        ai_searches: %{
+          used: nil,
+          limit: cap_json(Billing.cap(user, :ai_searches_per_day))
+        }
       }
     })
   end
 
   defp used_limit(used, limit), do: %{used: used, limit: cap_json(limit)}
-
-  # `ConversationMeter.maybe_rotate_conversation/3` commits
-  # `conversations_today + 1` BEFORE `day_cap_exceeded?/2` tests it, and the
-  # rate-limited branch returns a plain tuple rather than `Repo.rollback`, so a
-  # capped Free user persists 6 against a limit of 5. That is correct for the
-  # meter (the check is `today > cap`) and wrong for a progress bar, which
-  # would render 120%. Clamp for display only — the stored counter is
-  # untouched and the gate remains the authority.
-  defp capped_used_limit(used, limit) when is_integer(limit) and limit >= 0,
-    do: %{used: min(used, limit), limit: limit}
-
-  defp capped_used_limit(used, limit), do: used_limit(used, limit)
 
   # `indexed_notes_cap` binds FIRST on Free (2,000 against a 10,000
   # `notes_cap`), and it fails silently: the notes sync fine, they just stop
@@ -118,23 +95,6 @@ defmodule EngramWeb.BillingController do
       _ -> :infinity
     end
   end
-
-  # The search caps are token buckets, which track what is LEFT rather than
-  # what was spent, and they refill continuously. Derive `used` so every entry
-  # in the payload has the same shape; it is a floor because tokens are
-  # fractional mid-refill and a user seeing "15 of 15 used" while one more
-  # search still succeeds is worse than the reverse.
-  # Floor rather than round: tokens are fractional mid-refill, and telling a
-  # user they have 1 search left when the next call refuses them is worse than
-  # the reverse.
-  defp bucket_remaining(user, kind, limit) when is_integer(limit) and limit > 0 do
-    %{remaining: trunc(DailyCap.remaining(user.id, kind, limit, limit / 86_400)), limit: limit}
-  end
-
-  # Cap of 0 means no budget at all; anything else (`nil`, `:unlimited`) means
-  # no ceiling, so there is nothing to run out of.
-  defp bucket_remaining(_user, _kind, 0), do: %{remaining: 0, limit: 0}
-  defp bucket_remaining(_user, _kind, limit), do: %{remaining: nil, limit: cap_json(limit)}
 
   # Strict match, deliberately. `storage_usage/1` only fails on a DB error, and
   # reporting `used: 0` there would tell the user they have their whole quota

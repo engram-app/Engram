@@ -25,20 +25,16 @@ defmodule EngramWeb.BillingUsageTest do
 
     assert body["tier"] == "free"
 
-    for key <- ~w(notes vaults attachment_bytes lifetime_embed_tokens indexed_notes
-                  ai_conversations_today ai_queries_today) do
+    for key <- ~w(notes vaults attachment_bytes lifetime_embed_tokens indexed_notes) do
       entry = body["usage"][key]
       assert is_map(entry), "missing usage entry: #{key}"
       assert is_integer(entry["used"]), "#{key}.used must always be a number"
     end
 
-    # Token buckets report what is LEFT — a derived "used" decays as the bucket
-    # refills, which would make a daily count read 0 by afternoon.
-    for key <- ~w(external_ai_searches inapp_searches) do
-      entry = body["usage"][key]
-      assert is_integer(entry["remaining"]), "#{key}.remaining must be a number"
-      refute Map.has_key?(entry, "used"), "#{key} must not claim a daily used count"
-    end
+    # `ai_searches` is the one entry with no current value: the budget lives in
+    # the cluster-synced ETS counter, which has no read-without-spend API.
+    assert body["usage"]["ai_searches"]["used"] == nil
+    assert is_integer(body["usage"]["ai_searches"]["limit"])
   end
 
   test "reports the Free caps and a real vault count", %{conn: conn} do
@@ -48,8 +44,6 @@ defmodule EngramWeb.BillingUsageTest do
     assert body["usage"]["vaults"]["limit"] == 1
     # register_vault/3 in setup created exactly one.
     assert body["usage"]["vaults"]["used"] == 1
-    assert body["usage"]["external_ai_searches"]["limit"] == 15
-    assert body["usage"]["external_ai_searches"]["remaining"] == 15
     assert body["usage"]["indexed_notes"]["limit"] == 2_000
   end
 
@@ -65,63 +59,11 @@ defmodule EngramWeb.BillingUsageTest do
     assert usage(conn)["usage"]["notes"]["used"] == 3
   end
 
-  test "conversation counters reset across a UTC day boundary", %{conn: conn, user: user} do
-    # Stored counters from a PREVIOUS day are already spent-and-reset as far as
-    # the next tick is concerned. Reporting the raw integer would tell a user
-    # they had used 5 of 5 conversations when the next call starts them at 0.
-    Engram.Repo.insert!(
-      %Engram.UsageMeters.Meter{
-        user_id: user.id,
-        conversations_today: 5,
-        conversations_day_key: Date.add(Date.utc_today(), -1),
-        queries_today: 40,
-        queries_day_key: Date.add(Date.utc_today(), -1),
-        updated_at: DateTime.utc_now()
-      },
-      skip_tenant_check: true,
-      on_conflict: :replace_all,
-      conflict_target: :user_id
-    )
-
-    body = usage(conn)
-
-    assert body["usage"]["ai_conversations_today"]["used"] == 0
-    assert body["usage"]["ai_queries_today"]["used"] == 0
-  end
-
-  test "search bucket reports what is left, and reading does not spend", %{
-    conn: conn,
-    user: user
-  } do
-    assert usage(conn)["usage"]["external_ai_searches"]["remaining"] == 15
-
-    for _ <- 1..2, do: Engram.Usage.DailyCap.spend(user.id, "ext_search", 15, 15 / 86_400)
-
-    assert usage(conn)["usage"]["external_ai_searches"]["remaining"] == 13
-
-    # Asking how much budget you have must not cost budget.
-    assert usage(conn)["usage"]["external_ai_searches"]["remaining"] == 13
-  end
-
-  test "ai_conversations_today is clamped to the limit for display", %{conn: conn, user: user} do
-    # The meter commits `conversations_today + 1` before testing `today > cap`,
-    # so a capped Free user really does persist 6 against a limit of 5. Correct
-    # for the gate, 120% on a progress bar.
-    Engram.Repo.insert!(
-      %Engram.UsageMeters.Meter{
-        user_id: user.id,
-        conversations_today: 6,
-        conversations_day_key: Date.utc_today(),
-        updated_at: DateTime.utc_now()
-      },
-      skip_tenant_check: true,
-      on_conflict: :replace_all,
-      conflict_target: :user_id
-    )
-
-    entry = usage(conn)["usage"]["ai_conversations_today"]
-    assert entry["limit"] == 5
-    assert entry["used"] == 5
+  test "the AI meter publishes its cap; used is nil by design", %{conn: conn} do
+    # The budget lives in the cluster-synced ETS counter, which has no
+    # read-without-spend API — asking how much is left must not cost any. The
+    # cap is still published so the UI can name the limit in an upgrade prompt.
+    assert usage(conn)["usage"]["ai_searches"] == %{"used" => nil, "limit" => 20}
   end
 
   test "indexed_notes never exceeds the indexed cap", %{conn: conn, user: user} do

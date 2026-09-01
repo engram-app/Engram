@@ -23,7 +23,7 @@ defmodule EngramWeb.RateLimiter do
   `engram_prom_ex_rate_limiter_hit_total` series can never carry the
   user_id / ip / request_path embedded in a bucket key.
   """
-  @type purpose :: :preauth | :http | :api_rps | :voyage_embed | :cimd_fetch | :other
+  @type purpose :: :preauth | :http | :api_rps | :voyage_embed | :cimd_fetch | :ai_search | :other
 
   @doc """
   Count a hit against `key` and emit `[:engram, :rate_limiter, :hit]` with the
