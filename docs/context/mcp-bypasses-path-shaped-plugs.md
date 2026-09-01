@@ -42,6 +42,31 @@ revoked plan cannot be probed for which attachment paths exist). Both callers
 inherit it and differ only in rendering: 402 via `LimitResponse` on REST,
 `isError: true` with `attachments_enabled: not on your plan` on MCP.
 
+### The carve-out, and why it is not a hole
+
+The gate sits on `move_attachment/4`, NOT on the private `do_move_attachment/4`
+underneath it. That inner function is also the per-item step of
+`Attachments.rename_folder/4`, which `Folders.rename/4` runs after
+`Notes.rename_folder/4` on **every** folder rename, REST and MCP alike.
+
+Gating the shared mover (the first version of this fix did) refused the
+attachment leg, `move_pairs/4` rolled the batch back, and `Folders.rename/4`'s
+surrounding transaction took the note rename with it — so a revoked attachments
+grant read as "you cannot rename a folder", with `:feature_not_available`
+surfacing through an error path neither controller handles.
+
+So: gate the **user-initiated entry points** (`move_attachment/4`,
+`batch_move/4`), leave the internal cascade ungated. Relocating an attachment
+the user already owns, as bookkeeping for a note-folder rename, is not "using
+the attachments feature". `Engram.AttachmentsTest`, describe
+`"attachments_enabled gates user moves, not the internal cascade"`, pins all
+three directions.
+
+Generalise: "push the gate down to where every caller routes through" is the
+right instinct, but *every caller* includes the internal ones. Check what else
+calls the function before you move a check into it — a server-side cascade
+inherits the gate silently and fails somewhere with no vocabulary for it.
+
 `upload/2`'s `attachments_enabled` and `attachments_all_types` checks stay in
 the controller: HTTP upload is the only way to create an attachment (MCP's
 `get_attachment_upload_target` just returns instructions pointing back at

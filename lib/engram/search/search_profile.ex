@@ -36,6 +36,9 @@ defmodule Engram.Search.SearchProfile do
       full_precision: Billing.granted?(user, :search_full_precision),
       reranker: Billing.granted?(user, :reranker_enabled),
       # fallback 30 = 0.3 default; self-host (no cap) gets MMR like every tier
+      # `||` is safe because `Billing.cap/2` answers nil for a malformed override
+      # as well as for every "no cap" spelling — these are dials, and `"30" /
+      # 100.0` would raise on every search for that user.
       diversity: (Billing.cap(user, :search_diversity) || 30) / 100.0,
       candidate_pool: Billing.cap(user, :search_candidate_pool) || @default_pool
     }

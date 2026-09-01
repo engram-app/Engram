@@ -823,6 +823,11 @@ defmodule Engram.MCP.Handlers do
   # advertise a negative byte cap, which a model reads as "uploads are
   # disabled". Anything else, including a corrupt negative, stays visible
   # rather than being silently laundered into "unlimited".
-  defp render_limit(nil), do: "unlimited"
-  defp render_limit(n), do: to_string(n)
+  defp render_limit(n) when is_integer(n), do: to_string(n)
+  # nil (no cap) or a malformed override — `to_string/1` on a map raises
+  # Protocol.UndefinedError, which would take out the whole tool call. This
+  # string is advisory: the enforcing gate is
+  # `Engram.Attachments.validate_max_file_bytes/2`, which fails CLOSED, so an
+  # over-permissive number here cannot let an oversized upload through.
+  defp render_limit(_), do: "unlimited"
 end

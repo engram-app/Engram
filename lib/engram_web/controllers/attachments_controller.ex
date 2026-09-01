@@ -44,13 +44,7 @@ defmodule EngramWeb.AttachmentsController do
         do_upload_gated(conn, user, params)
 
       {:error, :feature_not_available} ->
-        EngramWeb.LimitResponse.halt(
-          conn,
-          "attachments_disabled",
-          :attachments_enabled,
-          false,
-          nil
-        )
+        attachments_disabled(conn)
     end
   end
 
@@ -190,13 +184,7 @@ defmodule EngramWeb.AttachmentsController do
         })
 
       {:error, :feature_not_available} ->
-        EngramWeb.LimitResponse.halt(
-          conn,
-          "attachments_disabled",
-          :attachments_enabled,
-          false,
-          nil
-        )
+        attachments_disabled(conn)
 
       {:error, reason} = error when reason in [:conflict, :not_found] ->
         error
@@ -230,41 +218,34 @@ defmodule EngramWeb.AttachmentsController do
 
     # Gated like rename/upload: moving attachments is "using" the feature, so a
     # plan without :attachments_enabled gets a 402 (delete stays ungated below).
-    case Billing.check_feature(user, :attachments_enabled) do
-      {:error, :feature_not_available} ->
-        EngramWeb.LimitResponse.halt(
-          conn,
-          "attachments_disabled",
-          :attachments_enabled,
-          false,
-          nil
+    # The check itself lives in `Attachments.batch_move/4` so every transport
+    # inherits it; this action only renders the refusal.
+    case Attachments.batch_move(user, vault, paths, target) do
+      {:ok, %{moved: n}} ->
+        body = %{moved: n}
+
+        Engram.Idempotency.remember(
+          conn.assigns.current_user,
+          conn.assigns.idempotency_key,
+          %{status: 200, body: body}
         )
 
-      :ok ->
-        case Attachments.batch_move(user, vault, paths, target) do
-          {:ok, %{moved: n}} ->
-            body = %{moved: n}
+        json(conn, body)
 
-            Engram.Idempotency.remember(
-              conn.assigns.current_user,
-              conn.assigns.idempotency_key,
-              %{status: 200, body: body}
-            )
+      {:error, :feature_not_available} ->
+        attachments_disabled(conn)
 
-            json(conn, body)
+      # item_path shapes stay inline: the fallback's {:conflict, id}/
+      # {:not_found, id} clauses render item_id, and these carry file
+      # PATHS. Only the terminal 500 falls through.
+      {:error, {:conflict, p}} ->
+        conn |> put_status(409) |> json(%{error: "conflict", item_path: p})
 
-          # item_path shapes stay inline: the fallback's {:conflict, id}/
-          # {:not_found, id} clauses render item_id, and these carry file
-          # PATHS. Only the terminal 500 falls through.
-          {:error, {:conflict, p}} ->
-            conn |> put_status(409) |> json(%{error: "conflict", item_path: p})
+      {:error, {:not_found, p}} ->
+        conn |> put_status(404) |> json(%{error: "not_found", item_path: p})
 
-          {:error, {:not_found, p}} ->
-            conn |> put_status(404) |> json(%{error: "not_found", item_path: p})
-
-          {:error, _} = error ->
-            error
-        end
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -606,6 +587,13 @@ defmodule EngramWeb.AttachmentsController do
   # one thing: whether the bytes they hold are the bytes we hold. Exposing it
   # is what lets a client stop re-sending attachments the server already has
   # (see Engram.Attachments.identical_or_changed/4).
+  # One 402 body for `attachments_enabled`, shared by upload/rename/batch_move.
+  # Written out three times before, which is three chances for the reason string
+  # or the limit key to drift between endpoints that mean the same thing.
+  defp attachments_disabled(conn) do
+    EngramWeb.LimitResponse.halt(conn, "attachments_disabled", :attachments_enabled, false, nil)
+  end
+
   defp serialize_metadata(att) do
     %{
       id: att.id,

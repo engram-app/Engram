@@ -134,14 +134,19 @@ defmodule Engram.Accounts.Export do
   # separately so an in-flight retry surfaces as :already_running rather
   # than :rate_exceeded.
 
+  # `Billing.cap/2` returns nil for every "no cap" spelling but hands a MALFORMED
+  # override back unchanged (it must, to agree with `check_limit/3` — see its
+  # docs). Guarding on `is_integer/1` rather than truthiness keeps a corrupt row
+  # from acting as a ceiling: `count >= "5"` is a valid Elixir comparison that
+  # silently answers false, which looked fine only by accident of term ordering.
   defp rate_limit_check(%User{} = user) do
     cond do
-      lifetime_cap = Billing.cap(user, :account_exports_lifetime) ->
+      is_integer(lifetime_cap = Billing.cap(user, :account_exports_lifetime)) ->
         if Repo.aggregate(used_lifetime_q(user), :count) >= lifetime_cap,
           do: {:error, :lifetime_exceeded},
           else: :ok
 
-      per_24h_cap = Billing.cap(user, :account_export_rate_per_24h) ->
+      is_integer(per_24h_cap = Billing.cap(user, :account_export_rate_per_24h)) ->
         if Repo.aggregate(recent_24h_q(user), :count) >= per_24h_cap,
           do: {:error, :rate_exceeded},
           else: :ok
@@ -172,13 +177,17 @@ defmodule Engram.Accounts.Export do
 
   defp size_estimate_check(%User{} = user) do
     case Billing.cap(user, :account_export_max_bytes) do
-      nil ->
-        :ok
-
       cap when is_integer(cap) ->
         if estimate_bytes(user) <= cap,
           do: :ok,
           else: {:error, :too_large}
+
+      # nil (no cap) or a malformed override. Fails OPEN on purpose: this is a
+      # user pulling their own data out, and a corrupt limit row must not be the
+      # thing that traps it. Without this clause the case raised, which is a 500
+      # rather than an export.
+      _ ->
+        :ok
     end
   end
 

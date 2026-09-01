@@ -126,7 +126,8 @@ defmodule Engram.Billing do
   end
 
   @doc """
-  The resolved integer ceiling for `key`, or `nil` when there is no ceiling.
+  The resolved integer ceiling for `key` as a NUMBER, or `nil` when there is not
+  a usable one.
 
   `effective_limit/2` speaks four dialects of "no cap" — `:unlimited`
   (enforcement off, i.e. self-host), `nil` (the catalog's unmetered default),
@@ -142,31 +143,37 @@ defmodule Engram.Billing do
   describes for `attachments_text_only`. Decode in one place and that class
   cannot come back per-caller.
 
-  Shares its rule with `limit_enforced?/2`, which is now defined in terms of
-  it, so "is there a ceiling" and "what is the ceiling" cannot disagree.
+  ## This is the DISPLAY/DIAL decoder, not the gate
+
+  A malformed override also answers `nil` here. `UserLimitOverride`'s changeset
+  validates the KEY against the catalog and never the value's type, so
+  `%{"v" => "2000"}` is storable, and this function honours its `@spec` rather
+  than handing a string to arithmetic. That makes `cap(user, key) || default`
+  safe, which is the whole point — a dial or a progress bar must not raise on a
+  corrupt row.
+
+  It also means `cap/2` fails OPEN and therefore **cannot be the gate**. The
+  gate pair is `limit_enforced?/2` + `check_limit/3`, which read
+  `effective_limit/2` directly and both treat an unreadable value as a real
+  ceiling (fail CLOSED). For a corrupt row the two deliberately disagree:
+  `limit_enforced?/2` says yes, `cap/2` says nil, and a caller that uses both —
+  `Engram.Notes.check_notes_cap/2` is the pattern — refuses the write and
+  reports a null limit in the 402. Refusing is the safe half; showing a
+  fabricated number is not.
+
+  Do not "fix" that disagreement by defining one in terms of the other.
   """
   @spec cap(term(), atom()) :: integer() | nil
-  def cap(user, key) when is_atom(key) do
+  def cap(user, key) do
     case effective_limit(user, key) do
-      v when v in @no_cap -> nil
-      v -> v
+      -1 -> nil
+      n when is_integer(n) -> n
+      _ -> nil
     end
   end
 
-  @doc """
-  Whether the boolean grant `key` is given to this user.
-
-  The predicate half of `check_feature/2` — same rule (`:unlimited` from
-  enforcement-off grants, an explicit `true` grants, everything else refuses),
-  in the shape a struct field or a JSON body wants. Replaces per-module
-  `as_bool/1` and `bool_json/1` copies.
-
-  Every boolean in `LimitKeys` is grant-shaped (`true` == the user gets the
-  thing), which is what makes one shared decoder safe here; see the polarity
-  note on `attachments_all_types`.
-  """
   @spec granted?(term(), atom()) :: boolean()
-  def granted?(user, key) when is_atom(key), do: check_feature(user, key) == :ok
+  def granted?(user, key), do: check_feature(user, key) == :ok
 
   @doc """
   Returns :ok if current_count is below the limit, or the limit is -1 (unlimited).
@@ -200,7 +207,9 @@ defmodule Engram.Billing do
   to re-encode the rule. `BillingLimitPredicateTest` pins that agreement.
   """
   @spec limit_enforced?(term(), atom()) :: boolean()
-  def limit_enforced?(user, key) when is_atom(key), do: cap(user, key) != nil
+  def limit_enforced?(user, key) when is_atom(key) do
+    effective_limit(user, key) not in @no_cap
+  end
 
   @doc """
   Returns :ok if the boolean feature is enabled for the user.

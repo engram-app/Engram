@@ -96,7 +96,11 @@ defmodule EngramWeb.Plugs.EnforceDeviceCap do
   # cooldown is in effect (no recent revoke, cooldown disabled, or
   # window already passed). Rounded UP so a sub-hour remainder still
   # surfaces a positive integer.
-  defp remaining_cooldown_hours(_user_id, hours) when is_nil(hours) or hours == 0, do: nil
+  # Anything that is not a positive integer means "no cooldown": nil (no cap),
+  # 0 (paid tiers), or a malformed override. The second clause below used to be
+  # the only other one, so a corrupt row raised FunctionClauseError here.
+  defp remaining_cooldown_hours(_user_id, hours) when not (is_integer(hours) and hours > 0),
+    do: nil
 
   defp remaining_cooldown_hours(user_id, hours) when is_integer(hours) and hours > 0 do
     case Connections.most_recent_device_revoke(user_id) do

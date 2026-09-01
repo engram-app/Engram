@@ -48,19 +48,39 @@ restricted than the default. That is the same enforcement-off-inverts-the-rule
 shape as the `attachments_text_only` polarity bug in `LimitKeys` — a sentinel
 decoded per-caller will eventually be decoded backwards by one of them.
 
-## Two failure directions, on purpose
+## `cap/2` is the dial decoder; `limit_enforced?/2` + `check_limit/3` are the gate
 
-Garbage (a malformed override value that is not an integer) is handled
-differently on the two sides, and this is deliberate:
+`user_limit_overrides.value` is a bare `:map`. The changeset validates the KEY
+against the catalog and **never the value's type**, so `%{"v" => "2000"}` is
+storable. The two sides handle that differently, on purpose:
 
-- **Gate side** — `cap/2` hands the value through as a ceiling, so
-  `check_limit/3` refuses. Fails CLOSED. `cap/2` must agree with
-  `limit_enforced?/2` here or a caller that reorders
-  (`if limit_enforced?, do: check_limit`) silently skips a real cap.
-  `Engram.BillingLimitPredicateTest` pins that agreement.
-- **Wire side** — `BillingController.cap_json/1` and
-  `Billing.normalize_capability/2` render it as `null` / no cap. Fails OPEN,
-  because a corrupt row must not 500 the billing endpoint.
+- **`cap/2` — fails OPEN.** A malformed value answers `nil`, same as every "no
+  cap" spelling. That is what makes `cap(user, key) || default` safe, which is
+  the entire reason the function exists: a dial or a progress bar must not raise
+  on a corrupt row. `"30" / 100.0` is an `ArithmeticError`, and
+  `SearchProfile.resolve/1` runs on every search.
+- **`limit_enforced?/2` + `check_limit/3` — fail CLOSED.** Both read
+  `effective_limit/2` directly and treat an unreadable value as a real ceiling,
+  so the write is refused.
+
+For a corrupt row they therefore **disagree on purpose**:
+`limit_enforced?/2` says "there is a ceiling", `cap/2` says `nil`. A caller that
+uses both — `Engram.Notes.check_notes_cap/2` is the pattern — refuses the write
+and reports a null limit in the 402 body. Refusing is the safe half; showing a
+fabricated number is not.
+
+**Do not define one in terms of the other.** An earlier draft of this work had
+`limit_enforced?/2` as `cap(user, key) != nil`, which quietly made the gate
+inherit `cap/2`'s fail-open policy: a caller doing
+`if limit_enforced?, do: check_limit` would skip the check entirely on a corrupt
+row and GRANT. `Engram.BillingLimitPredicateTest` pins the safety property that
+forbids it.
+
+Dialyzer is the tripwire here. An intermediate version kept `cap/2`'s
+`integer() | nil` spec while actually passing malformed values through, and a
+defensive `not is_integer(limit)` clause downstream was flagged `neg_guard_fail`
+— the spec was lying and the compiler said so. If you widen what `cap/2` can
+return, that warning comes back.
 
 Two modules keep their own resolution on purpose:
 `Engram.Indexing.IndexCap.resolve_cap/1` returns `{:cap, n} | :unlimited` and

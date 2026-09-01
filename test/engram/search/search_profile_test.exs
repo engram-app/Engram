@@ -62,4 +62,21 @@ defmodule Engram.Search.SearchProfileTest do
     assert profile.candidate_pool > 0
     assert profile.diversity == 0.3
   end
+
+  test "a malformed override falls back to the default dial instead of raising" do
+    # `user_limit_overrides.value` is a bare `:map` — the changeset validates
+    # the KEY against the catalog and never the value's type, so a string is
+    # storable. These two are DIALS, not gates: `Billing.cap/2` hands a
+    # non-integer back unchanged (it must, to agree with `check_limit/3`, which
+    # fails closed), so the type fallback has to live here. Without it
+    # `"30" / 100.0` raises and every search for that user 500s.
+    user = insert_user()
+    insert_override(user, :search_diversity, "30")
+    insert_override(user, :search_candidate_pool, "20")
+
+    profile = SearchProfile.resolve(user)
+
+    assert profile.diversity == 0.3
+    assert is_integer(profile.candidate_pool)
+  end
 end

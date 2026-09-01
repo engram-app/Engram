@@ -533,19 +533,32 @@ defmodule Engram.Attachments do
           {:ok, Attachment.t()}
           | {:error, :conflict | :not_found | :feature_not_available | term()}
   def move_attachment(user, vault, old_path, new_path) do
+    # `attachments_enabled` is gated HERE, not in the caller. REST
+    # (`AttachmentsController.rename/2`) and MCP (the `move_attachment` tool)
+    # both land on this function; while the check lived in the controller, only
+    # REST was refused. Same class as the MCP search-cap bypass — see
+    # `docs/context/mcp-bypasses-path-shaped-plugs.md`. It runs ahead of the
+    # lookup so a revoked plan cannot be probed for which paths exist.
+    #
+    # The gate is on THIS function and not on `do_move_attachment/4`, which is
+    # also the per-item step of `rename_folder/4`. That cascade is server
+    # -internal: `Folders.rename/4` runs it after `Notes.rename_folder/4` on
+    # every folder rename. Gating the shared mover refused the attachment leg
+    # and rolled the whole folder rename back, so a revoked attachments grant
+    # read as "you cannot rename a folder". Gate the user-initiated entry
+    # points (`move_attachment/4`, `batch_move/4`); leave the cascade alone.
+    with :ok <- Billing.check_feature(user, :attachments_enabled) do
+      do_move_attachment(user, vault, old_path, new_path)
+    end
+  end
+
+  defp do_move_attachment(user, vault, old_path, new_path) do
     old_path = PathSanitizer.sanitize(old_path)
     new_path = PathSanitizer.sanitize(new_path)
     user = fresh_user(user)
     now = DateTime.utc_now(:second)
 
-    # `attachments_enabled` is gated HERE, not in the caller. REST
-    # (`AttachmentsController.rename/2`) and MCP (`move_attachment`) both land on
-    # this function; while the check lived in the controller, only REST was
-    # refused. Same class as the MCP search-cap bypass — see
-    # `docs/context/mcp-bypasses-path-shaped-plugs.md`. It runs ahead of the
-    # lookup so a revoked plan cannot be probed for which paths exist.
-    with :ok <- Billing.check_feature(user, :attachments_enabled),
-         {:ok, user} <- Crypto.ensure_user_dek(user),
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       old_hmac = Crypto.hmac_field(filter_key, old_path)
@@ -747,11 +760,15 @@ defmodule Engram.Attachments do
         {old_path, new_path}
       end)
 
-    # This surface tags conflict/not_found with the offending path so the REST
-    # controller can name it in the 409/404 body (`{:conflict, path}`).
-    case move_pairs(user, vault, pairs, &tag_move_error/2) do
-      {:ok, count} -> {:ok, %{moved: count}}
-      {:error, _} = err -> err
+    # User-initiated, so it carries its own gate — `move_pairs/4` runs the
+    # UNGATED mover (see `move_attachment/4`) because `rename_folder/4` shares it.
+    with :ok <- Billing.check_feature(user, :attachments_enabled) do
+      # This surface tags conflict/not_found with the offending path so the REST
+      # controller can name it in the 409/404 body (`{:conflict, path}`).
+      case move_pairs(user, vault, pairs, &tag_move_error/2) do
+        {:ok, count} -> {:ok, %{moved: count}}
+        {:error, _} = err -> err
+      end
     end
   end
 
@@ -767,7 +784,7 @@ defmodule Engram.Attachments do
   defp move_pairs(user, vault, pairs, on_error) do
     Repo.transaction(fn ->
       Enum.reduce_while(pairs, 0, fn {old_path, new_path}, count ->
-        case move_attachment(user, vault, old_path, new_path) do
+        case do_move_attachment(user, vault, old_path, new_path) do
           {:ok, _} -> {:cont, count + 1}
           {:error, reason} -> {:halt, {:rollback, on_error.(reason, old_path)}}
         end
