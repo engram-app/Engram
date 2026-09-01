@@ -1,8 +1,16 @@
-defmodule Engram.Repo.Migrations.DropConversationMeterContract do
+defmodule Engram.Repo.Migrations.DropConversationMeterSingleShot do
   use Ecto.Migration
 
   @moduledoc """
-  Contract step for the AI-metering collapse.
+  Single-shot for the AI-metering collapse: the code that stopped reading these
+  and the DROP ship in the SAME image.
+
+  A true `phase/contract` would land a release after the reads were removed, so
+  no running task can hit a dropped column. Here they ship together, so a
+  rolling deploy has a window where draining old tasks still
+  `SELECT ... conversations_today` and error. Accepted deliberately: pre-launch,
+  and any DB is wipeable. If this pattern is ever repeated post-launch, split it
+  into two releases instead.
 
   Six `usage_meters` columns backed `Engram.ConversationMeter`, which metered
   every MCP tool call in a 30-minute-window unit that corresponded to nothing a

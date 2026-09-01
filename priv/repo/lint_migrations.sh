@@ -89,4 +89,28 @@ echo "── rendered DDL ──"
 cat "$tmp_sql"
 echo "──────────────────"
 
-"$SQUAWK" "$tmp_sql"
+# `ban-drop-column` / `ban-drop-table` are ON globally (see .squawk.toml) and
+# should stay on: an unintended DROP in an expand or migrate-data migration is
+# exactly what they exist to catch.
+#
+# But a `*_contract.exs` / `*_single_shot.exs` migration's WHOLE PURPOSE is to drop, and the repo
+# already gates that separately and more precisely: the phase/contract label is
+# mandatory (verify.yml "migration gates"), and its contract-phase-references
+# step greps lib/ to prove nothing still reads the dropped columns/tables. A
+# blanket ban would make the contract phase unshippable — which nobody noticed,
+# because every earlier `remove :` in this tree lives in a `down` block and
+# squawk only ever renders `up`. This is the first real contract migration.
+#
+# Scoped to the filename convention, NOT to a global config exclusion, so the
+# rules keep gating every other phase.
+drop_rules_excluded=""
+for v in "${new_versions[@]}"; do
+  if ls "$MIG_DIR"/${v}_*_contract.exs "$MIG_DIR"/${v}_*_single_shot.exs >/dev/null 2>&1; then
+    drop_rules_excluded="--exclude=ban-drop-column,ban-drop-table"
+    echo "squawk: ${v} is a contract / single-shot migration — drop rules" \
+         "deferred to the phase gate's reference check"
+  fi
+done
+
+# shellcheck disable=SC2086 # intentional word-splitting: empty or one --exclude
+"$SQUAWK" $drop_rules_excluded "$tmp_sql"
