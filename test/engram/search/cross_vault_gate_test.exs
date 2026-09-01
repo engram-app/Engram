@@ -56,4 +56,20 @@ defmodule Engram.Search.CrossVaultGateTest do
              ) == {:error, :feature_not_available}
     end
   end
+
+  test "an unentitled cross-vault search does not spend a search token" do
+    # Ordering regression. The budget used to be spent before the cross-vault
+    # entitlement check, so a user refused for lacking `cross_vault_search`
+    # still paid a token for a search they never got. Unreachable on stock
+    # tiers (Free has one vault; Starter has no search cap), which is exactly
+    # why it needs a test — an override on either key makes it live.
+    user = insert(:user)
+    insert(:user_limit_override, user: user, key: "ai_searches_per_day", value: %{"v" => 1})
+    EngramWeb.RateLimiter.reset_buckets!()
+
+    assert {:error, _} = Search.search(user, nil, "anything", cross_vault: true)
+
+    # The token survived: a normal search still works.
+    refute match?({:error, :search_cap_exceeded, _}, Search.search(user, nil, "anything", []))
+  end
 end

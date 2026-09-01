@@ -57,11 +57,27 @@ defmodule Engram.Search do
   - `:cross_vault` — when true, search across all vaults (billing-gated)
   """
   def search(user, vault, query, opts \\ []) do
-    # Budget FIRST, ahead of the telemetry span: a refused search never ran, so
-    # counting it in the duration / result-count histograms would skew both.
-    case spend_search_budget(user, opts) do
-      {:error, _, _} = denied -> denied
-      :ok -> do_search_instrumented(user, vault, query, opts)
+    # Entitlement BEFORE budget, and both ahead of the telemetry span.
+    #
+    # Order is load-bearing: a cross-vault search the user is not entitled to is
+    # refused for a DIFFERENT reason, so charging a token for it bills them for
+    # a search they never got. Unreachable on stock tiers today (Free caps
+    # `vaults_cap` at 1, and Starter — the tier with vaults but no cross-vault —
+    # has no search cap), but a per-user override on either key makes it live.
+    #
+    # Ahead of the span because a refused search never ran: counting it in the
+    # duration / result-count histograms would skew both.
+    with :ok <- cross_vault_entitlement(user, opts),
+         :ok <- spend_search_budget(user) do
+      do_search_instrumented(user, vault, query, opts)
+    end
+  end
+
+  defp cross_vault_entitlement(user, opts) do
+    if Keyword.get(opts, :cross_vault, false) do
+      cross_vault_allowed(user, opts)
+    else
+      :ok
     end
   end
 
@@ -84,12 +100,11 @@ defmodule Engram.Search do
       start_meta
     )
 
+    # Entitlement is already checked in `search/4`, ahead of the budget spend —
+    # `cross_vault` here only selects the nil vault filter.
     result =
       if cross_vault do
-        case cross_vault_allowed(user, opts) do
-          :ok -> do_search(user, nil, query, opts)
-          {:error, _} = err -> err
-        end
+        do_search(user, nil, query, opts)
       else
         do_search(user, vault, query, opts)
       end
@@ -552,8 +567,11 @@ defmodule Engram.Search do
   # hand-maintained list is exactly how the old cap went unenforced on all of
   # MCP (#1527).
   #
-  # `charge: false` is the ONE exemption, for a retrieval incidental to a write
-  # (`MCP.Handlers.auto_place_folder/4`): do not refuse my create.
+  # There is NO exemption. `MCP.Handlers.auto_place_folder/4` runs a retrieval
+  # incidental to a write and is charged like any other — same Voyage embed,
+  # same Qdrant query — but it DEGRADES on a refusal (drops the note in the
+  # default folder) rather than failing the create. Degrading is the caller's
+  # job; not charging would make the write path an unmetered search channel.
   #
   # One day, in milliseconds — the Hammer scale for the search budget.
   @budget_scale_ms 86_400_000
@@ -580,14 +598,9 @@ defmodule Engram.Search do
   # Fixed window, not a rolling bucket: Hammer keys buckets by
   # `div(now, scale)`, so the 24-hour window is epoch-aligned and a user can
   # spend the budget either side of a boundary. Same permissive bias.
-  defp spend_search_budget(user, opts) do
-    charge? = Keyword.get(opts, :charge, true)
-
+  defp spend_search_budget(user) do
     case Billing.cap(user, :ai_searches_per_day) do
       nil ->
-        :ok
-
-      _limit when not charge? ->
         :ok
 
       limit when is_integer(limit) and limit > 0 ->
@@ -596,9 +609,9 @@ defmodule Engram.Search do
           {:deny, _retry} -> {:error, :search_cap_exceeded, limit}
         end
 
-      # 0 or a malformed override. `Billing.cap/2` hands a corrupt value back
-      # unchanged (it is the dial decoder, not the gate — see its docs), and a
-      # budget of 0 means the tier cannot search at all.
+      # `Billing.cap/2` answers `integer | nil` and maps every "no cap" spelling
+      # (including a malformed override) to nil, so what reaches here is an
+      # integer <= 0: a tier configured not to search at all.
       limit ->
         {:error, :search_cap_exceeded, limit}
     end
