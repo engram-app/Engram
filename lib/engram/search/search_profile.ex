@@ -32,25 +32,20 @@ defmodule Engram.Search.SearchProfile do
   def resolve(user) do
     %__MODULE__{
       query_model: as_model(Billing.effective_limit(user, :search_query_model)),
-      semantic: as_bool(Billing.effective_limit(user, :search_semantic_enabled)),
-      full_precision: as_bool(Billing.effective_limit(user, :search_full_precision)),
-      reranker: as_bool(Billing.effective_limit(user, :reranker_enabled)),
-      # fallback 30 = 0.3 default; self-host (:unlimited) gets MMR like every tier
-      diversity: as_int(Billing.effective_limit(user, :search_diversity), 30) / 100.0,
-      candidate_pool: as_int(Billing.effective_limit(user, :search_candidate_pool), @default_pool)
+      semantic: Billing.granted?(user, :search_semantic_enabled),
+      full_precision: Billing.granted?(user, :search_full_precision),
+      reranker: Billing.granted?(user, :reranker_enabled),
+      # fallback 30 = 0.3 default; self-host (no cap) gets MMR like every tier
+      # `||` is safe because `Billing.cap/2` answers nil for a malformed override
+      # as well as for every "no cap" spelling — these are dials, and `"30" /
+      # 100.0` would raise on every search for that user.
+      diversity: (Billing.cap(user, :search_diversity) || 30) / 100.0,
+      candidate_pool: Billing.cap(user, :search_candidate_pool) || @default_pool
     }
   end
 
-  # value coercers (operate on the already-resolved value, NOT the key)
-
-  # `:unlimited` means limits are disabled (self-host) — grant quality features.
-  defp as_bool(true), do: true
-  defp as_bool(:unlimited), do: true
-  defp as_bool(_), do: false
-
-  defp as_int(n, _fallback) when is_integer(n), do: n
-  defp as_int(_, fallback), do: fallback
-
+  # `search_query_model` is the one :string key in the catalog, so it has no
+  # `Billing` decoder — every "no model" spelling collapses to nil here.
   defp as_model(m) when is_binary(m), do: m
   defp as_model(_), do: nil
 end

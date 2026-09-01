@@ -30,6 +30,10 @@ defmodule Engram.Billing do
 
   # ── Limits ────────────────────────────────────────────────────────
 
+  # The four dialects of "no ceiling" that `effective_limit/2` can return.
+  # Named once so `cap/2`, `check_limit/3` and `limit_enforced?/2` cannot drift.
+  @no_cap [:unlimited, nil, -1]
+
   @doc """
   Returns the effective limit for a given key for a user.
 
@@ -122,12 +126,62 @@ defmodule Engram.Billing do
   end
 
   @doc """
+  The resolved integer ceiling for `key` as a NUMBER, or `nil` when there is not
+  a usable one.
+
+  `effective_limit/2` speaks four dialects of "no cap" — `:unlimited`
+  (enforcement off, i.e. self-host), `nil` (the catalog's unmetered default),
+  `-1` (the documented operator-override sentinel) and a real integer. Every
+  caller that wants a number had to decode all four, and before this function
+  existed eight modules did it independently under seven different private
+  names (`normalize_cap`, `normalize_int`, `as_int`, `cap_json`, ...).
+
+  They did not agree. `Engram.Accounts.Export`'s copy passed `-1` through
+  intact, so an operator override meaning "unlimited exports" resolved to a
+  ceiling of -1 and `count >= -1` refused EVERY export — the same
+  enforcement-off-inverts-the-rule shape that `LimitKeys`' polarity note
+  describes for `attachments_text_only`. Decode in one place and that class
+  cannot come back per-caller.
+
+  ## This is the DISPLAY/DIAL decoder, not the gate
+
+  A malformed override also answers `nil` here. `UserLimitOverride`'s changeset
+  validates the KEY against the catalog and never the value's type, so
+  `%{"v" => "2000"}` is storable, and this function honours its `@spec` rather
+  than handing a string to arithmetic. That makes `cap(user, key) || default`
+  safe, which is the whole point — a dial or a progress bar must not raise on a
+  corrupt row.
+
+  It also means `cap/2` fails OPEN and therefore **cannot be the gate**. The
+  gate pair is `limit_enforced?/2` + `check_limit/3`, which read
+  `effective_limit/2` directly and both treat an unreadable value as a real
+  ceiling (fail CLOSED). For a corrupt row the two deliberately disagree:
+  `limit_enforced?/2` says yes, `cap/2` says nil, and a caller that uses both —
+  `Engram.Notes.check_notes_cap/2` is the pattern — refuses the write and
+  reports a null limit in the 402. Refusing is the safe half; showing a
+  fabricated number is not.
+
+  Do not "fix" that disagreement by defining one in terms of the other.
+  """
+  @spec cap(term(), atom()) :: integer() | nil
+  def cap(user, key) do
+    case effective_limit(user, key) do
+      -1 -> nil
+      n when is_integer(n) -> n
+      _ -> nil
+    end
+  end
+
+  @spec granted?(term(), atom()) :: boolean()
+  def granted?(user, key), do: check_feature(user, key) == :ok
+
+  @doc """
   Returns :ok if current_count is below the limit, or the limit is -1 (unlimited).
   Returns {:error, :limit_reached} when at or over the limit.
   """
   def check_limit(user, key, current_count) do
     case effective_limit(user, key) do
-      limit when limit in [:unlimited, nil, -1] -> :ok
+      limit when limit in @no_cap -> :ok
       limit when is_integer(limit) and current_count < limit -> :ok
       _ -> {:error, :limit_reached}
     end
@@ -154,7 +208,7 @@ defmodule Engram.Billing do
   """
   @spec limit_enforced?(term(), atom()) :: boolean()
   def limit_enforced?(user, key) when is_atom(key) do
-    effective_limit(user, key) not in [:unlimited, nil, -1]
+    effective_limit(user, key) not in @no_cap
   end
 
   @doc """

@@ -37,7 +37,9 @@ defmodule Engram.Billing.LimitEnforcementTest do
   # Functions whose second argument is the limit key. Mirrors
   # `Mix.Tasks.Engram.Lint.LimitKeys`'s target list plus `limit_enforced?/2`,
   # which is a legitimate half of a gate (it reorders the expensive count).
-  @gate_funs ~w(effective_limit check_limit check_feature limit_enforced?)a
+  # `cap/2` and `granted?/2` are the decoded forms of `effective_limit/2` and
+  # `check_feature/2`; a key reached only through them is still gated.
+  @gate_funs ~w(effective_limit cap granted? check_limit check_feature limit_enforced?)a
 
   # Deliberately not enforced server-side. EMPTY, and worth keeping that way.
   #
@@ -59,10 +61,30 @@ defmodule Engram.Billing.LimitEnforcementTest do
   # moment anything is added.
   @unenforced %{}
 
+  # Keys whose enforcement point IS a transport, so a web-layer-only gate is
+  # correct rather than a gap. Everything else must be gated under a context or
+  # worker, where every transport routes through it.
+  #
+  # `api_write_enabled` / `api_rps_cap` describe API-KEY traffic specifically:
+  # both gates exempt any request without `:current_api_key` by design (pricing
+  # decision 2026-08-24), so there is no context-level operation to hang them
+  # on. The four connection/device keys gate the single endpoint that mints a
+  # connection — OAuth consent and device-flow authorize — which no other
+  # transport can reach.
+  @transport_scoped ~w(
+    api_write_enabled
+    api_rps_cap
+    concurrent_devices
+    device_swap_cooldown_hours
+    obsidian_connections_cap
+    mcp_connections_cap
+  )a
+
   setup_all do
     # One `Path.wildcard` + `Code.string_to_quoted!` + `Macro.prewalk` over all
-    # of `lib/`, shared by both tests rather than paid twice.
-    %{gated: gated_keys()}
+    # of `lib/`, shared by every test rather than paid once each.
+    sites = gate_sites()
+    %{gated: sites |> Map.keys() |> MapSet.new(), sites: sites}
   end
 
   test "every Free-restrictive limit key has a real Billing gate call in lib/", %{gated: gated} do
@@ -103,18 +125,58 @@ defmodule Engram.Billing.LimitEnforcementTest do
            """
   end
 
+  test "a cross-transport limit is gated under a context, not only in the web layer", %{
+    sites: sites
+  } do
+    # The recurring bug class in this codebase: the gate lives in the entry
+    # point one transport happens to use, so every other transport reaching the
+    # SAME operation is ungated. `external_ai_searches_per_day` lived in a plug
+    # guarded on `request_path: "/api/search"` and missed all of MCP (#1527).
+    # `attachments_enabled` lived in `AttachmentsController.rename/2` while the
+    # MCP `move_attachment` tool called the same
+    # `Engram.Attachments.move_attachment/4` ungated.
+    #
+    # `lib/engram_web/` is plugs, controllers and channels — all transport. A
+    # key gated ONLY there is gated for whoever knocks on that door and nobody
+    # else. See `docs/context/mcp-bypasses-path-shaped-plugs.md`.
+    web_only =
+      sites
+      |> Enum.reject(fn {key, _} -> key in @transport_scoped end)
+      |> Enum.filter(fn {_, files} ->
+        Enum.all?(files, &String.starts_with?(&1, "lib/engram_web/"))
+      end)
+      |> Enum.map(&elem(&1, 0))
+      |> Enum.sort()
+
+    assert web_only == [],
+           """
+           These limit keys are gated ONLY inside lib/engram_web/:
+
+             #{Enum.map_join(web_only, "\n  ", &":#{&1}")}
+
+           A plug or controller gate covers one transport. MCP calls
+           `Engram.*` contexts directly and never re-enters the HTTP stack, so
+           the same operation over `POST /api/mcp` is unlimited.
+
+           Move the check into the context function every caller routes
+           through, or add the key to @transport_scoped with a reason if the
+           endpoint really is the only way to reach the operation.
+           """
+  end
+
   # Collects every limit key passed as an atom literal to a Billing gate
   # function anywhere in `lib/`. Excludes the catalog itself, whose moduledoc
   # carries `:notes_cap` in usage examples, and `lib/mix/tasks/`, whose lint
   # tasks quote catalog keys in their docs.
-  defp gated_keys do
+  defp gate_sites do
     "lib/**/*.ex"
     |> Path.wildcard()
     |> Enum.reject(fn f ->
       String.contains?(f, "lib/mix/tasks/") or String.contains?(f, "billing/limit_keys.ex")
     end)
-    |> Enum.flat_map(&keys_in_file/1)
-    |> MapSet.new()
+    |> Enum.flat_map(fn path -> Enum.map(keys_in_file(path), &{&1, path}) end)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Map.new(fn {key, files} -> {key, Enum.uniq(files)} end)
   end
 
   defp keys_in_file(path) do

@@ -601,11 +601,9 @@ defmodule Engram.Notes do
     # matches the COUNT(*) approach it replaced (same TOCTOU window) and is fine
     # for a soft abuse-deterrent cap. A hard cap would need a conditional
     # UPDATE ... WHERE notes_count < limit gating the insert.
-    # `nil` when the plan is unmetered: `check_limit/3` ignores the count there,
-    # so the COUNT is pure waste on every create. The cap branch below guards on
-    # the nil rather than calling check_limit with it. See #1502.
-    current_count =
-      if Billing.limit_enforced?(user, :notes_cap), do: UsageMeters.notes_count(user.id)
+    # Resolved BEFORE the cond, exactly as the inlined version was: the COUNT
+    # must not move behind `recently_deleted_twin?/4`.
+    cap_check = check_notes_cap(user)
 
     cond do
       recently_deleted_twin?(user, base_attrs.vault_id, sanitized_path, base_attrs.content_hash) ->
@@ -617,15 +615,8 @@ defmodule Engram.Notes do
         # reaches here — it takes move_note's branch on a client-id match.
         {:error, :recently_deleted}
 
-      current_count &&
-          match?({:error, :limit_reached}, Billing.check_limit(user, :notes_cap, current_count)) ->
-        # Free-tier launch §4.5 — carry the resolved limit + current count
-        # back to the controller so the 402 body can populate them. The
-        # resolver call here is the same one check_limit already made
-        # internally; a second call is cheaper than threading the value out
-        # of check_limit (no hot path).
-        limit = Billing.effective_limit(user, :notes_cap)
-        {:error, {:notes_cap_reached, limit, current_count}}
+      match?({:error, _}, cap_check) ->
+        cap_check
 
       true ->
         # T3.6 — pre-allocate the row id so the AAD bind string
@@ -1509,16 +1500,7 @@ defmodule Engram.Notes do
       updated_at: now
     }
 
-    # `nil` when the plan is unmetered — `check_limit/3` would ignore the count,
-    # so skip the COUNT rather than compute and discard it. See #1502.
-    current_count =
-      if Billing.limit_enforced?(user, :notes_cap), do: UsageMeters.notes_count(user.id)
-
-    if current_count &&
-         match?({:error, :limit_reached}, Billing.check_limit(user, :notes_cap, current_count)) do
-      limit = Billing.effective_limit(user, :notes_cap)
-      {:error, {:notes_cap_reached, limit, current_count}}
-    else
+    with :ok <- check_notes_cap(user) do
       # Shared create leg with insert_new_note/7 (do_bare_insert/6) — genesis
       # decrypts inline and tags :announce (a real create), a version_conflict
       # on a concurrent-create race.
@@ -3671,26 +3653,43 @@ defmodule Engram.Notes do
   defp check_batch_notes_cap!(_user, 0), do: :ok
 
   defp check_batch_notes_cap!(user, to_insert) do
-    # Resolve the cap before counting. `check_limit/3` ignores `current_count`
-    # entirely when the plan is unmetered, so on Starter/Pro this COUNT was
-    # computed and discarded on every batch insert. See #1502.
-    if Billing.limit_enforced?(user, :notes_cap) do
-      enforce_batch_notes_cap!(user, to_insert)
-    else
-      :ok
+    case check_notes_cap(user, to_insert - 1) do
+      :ok -> :ok
+      {:error, reason} -> Repo.rollback(reason)
     end
   end
 
-  defp enforce_batch_notes_cap!(user, to_insert) do
-    current_count = UsageMeters.notes_count(user.id)
+  @doc false
+  # The resolve-then-count-then-check shape all three create paths share. Was
+  # copy-pasted at each of them, which is three places for the ordering below to
+  # be got wrong independently.
+  #
+  # `extra` is how many ADDITIONAL rows the operation inserts beyond the first:
+  # batch upsert passes `to_insert - 1`, the single-note paths pass 0.
+  #
+  # THE ORDER IS LOAD-BEARING. `check_limit/3` answers `:ok` for an unmetered
+  # plan without ever reading the count, so `limit_enforced?/2` gates the COUNT
+  # rather than the reverse — otherwise every Starter/Pro create pays a
+  # `usage_meters` aggregate and discards it (#1502).
+  #
+  # Best-effort, not a hard guarantee: read-then-insert is non-atomic, so
+  # concurrent creates can land slightly over. A hard cap needs a conditional
+  # `UPDATE ... WHERE notes_count < limit` gating the insert.
+  defp check_notes_cap(user, extra \\ 0) do
+    if Billing.limit_enforced?(user, :notes_cap) do
+      current = UsageMeters.notes_count(user.id)
 
-    case Billing.check_limit(user, :notes_cap, current_count + to_insert - 1) do
-      :ok ->
-        :ok
+      case Billing.check_limit(user, :notes_cap, current + extra) do
+        :ok ->
+          :ok
 
-      {:error, :limit_reached} ->
-        limit = Billing.effective_limit(user, :notes_cap)
-        Repo.rollback({:notes_cap_reached, limit, current_count})
+        # Free-tier launch §4.5 — carry the resolved limit + current count back
+        # to the controller so the 402 body can populate them.
+        {:error, :limit_reached} ->
+          {:error, {:notes_cap_reached, Billing.cap(user, :notes_cap), current}}
+      end
+    else
+      :ok
     end
   end
 

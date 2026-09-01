@@ -48,4 +48,35 @@ defmodule Engram.Search.SearchProfileTest do
     assert p.query_model == "voyage-4-large"
     assert p.diversity == 0.3
   end
+
+  test "a -1 override falls back to the default dial, not a negative one" do
+    # `as_int/2` passed any integer through, so the unlimited sentinel became
+    # `candidate_pool: -1` and `diversity: -0.01`. Decoding now happens in
+    # `Billing.cap/2`, which maps every "no cap" spelling to nil.
+    user = insert_user()
+    insert_override(user, :search_candidate_pool, -1)
+    insert_override(user, :search_diversity, -1)
+
+    profile = SearchProfile.resolve(user)
+
+    assert profile.candidate_pool > 0
+    assert profile.diversity == 0.3
+  end
+
+  test "a malformed override falls back to the default dial instead of raising" do
+    # `user_limit_overrides.value` is a bare `:map` — the changeset validates
+    # the KEY against the catalog and never the value's type, so a string is
+    # storable. These two are DIALS, not gates: `Billing.cap/2` hands a
+    # non-integer back unchanged (it must, to agree with `check_limit/3`, which
+    # fails closed), so the type fallback has to live here. Without it
+    # `"30" / 100.0` raises and every search for that user 500s.
+    user = insert_user()
+    insert_override(user, :search_diversity, "30")
+    insert_override(user, :search_candidate_pool, "20")
+
+    profile = SearchProfile.resolve(user)
+
+    assert profile.diversity == 0.3
+    assert is_integer(profile.candidate_pool)
+  end
 end

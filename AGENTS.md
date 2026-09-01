@@ -381,6 +381,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Rate limiter & cap architecture — Postgres + BEAM only, zero Redis → `docs/context/rate-limiter-architecture.md`
 - Adding a plan-limit / abuse gate as a plug, or a Free cap is not firing for a user clearly over it (a `request_path` guard cannot see MCP — every tool is one route, named in the JSON-RPC body) → `docs/context/mcp-bypasses-path-shaped-plugs.md`
 - Proving a limit is actually WIRED (delete the gate line and re-run; a green suite means unproven) → `docs/context/mcp-bypasses-path-shaped-plugs.md`
+- Reading a plan limit as a NUMBER, or a `-1` operator override made a user MORE restricted (`effective_limit/2` returns four spellings of "no limit" — use `Billing.cap/2` / `granted?/2`) → `docs/context/limit-sentinel-decoding.md`
 - Cross-workspace SaaS pricing model → `../engram-workspace/docs/context/pricing-strategy.md`
 - Adding a top-level route / Plug.Static mount / Phoenix scope / Cloudflare rule, and wondering if it can collide with a vault name (it cannot — vault URLs are `/v/:slug`; the old `@reserved_slugs` list is deleted) → `docs/context/vault-url-prefix-and-collision-surface.md`
 

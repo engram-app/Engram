@@ -52,41 +52,41 @@ defmodule EngramWeb.BillingController do
     json(conn, %{
       tier: to_string(Billing.tier(user)),
       usage: %{
-        notes: used_limit(meters.notes, Billing.effective_limit(user, :notes_cap)),
-        vaults: used_limit(Vaults.count_for(user), Billing.effective_limit(user, :vaults_cap)),
+        notes: used_limit(meters.notes, Billing.cap(user, :notes_cap)),
+        vaults: used_limit(Vaults.count_for(user), Billing.cap(user, :vaults_cap)),
         attachment_bytes:
           used_limit(
             storage_used_bytes(user),
-            Billing.effective_limit(user, :attachment_bytes_cap)
+            Billing.cap(user, :attachment_bytes_cap)
           ),
         lifetime_embed_tokens:
           used_limit(
             meters.lifetime_embed_tokens,
-            Billing.effective_limit(user, :lifetime_embed_token_cap)
+            Billing.cap(user, :lifetime_embed_token_cap)
           ),
         ai_conversations_today:
           capped_used_limit(
             meters.ai_conversations_today,
-            Billing.effective_limit(user, :ai_conversations_per_day)
+            Billing.cap(user, :ai_conversations_per_day)
           ),
         ai_queries_today:
-          used_limit(meters.ai_queries_today, Billing.effective_limit(user, :ai_queries_per_day)),
+          used_limit(meters.ai_queries_today, Billing.cap(user, :ai_queries_per_day)),
         indexed_notes:
           used_limit(
             min(meters.notes, indexed_cap(user)),
-            Billing.effective_limit(user, :indexed_notes_cap)
+            Billing.cap(user, :indexed_notes_cap)
           ),
         external_ai_searches:
           bucket_remaining(
             user,
             "ext_search",
-            Billing.effective_limit(user, :external_ai_searches_per_day)
+            Billing.cap(user, :external_ai_searches_per_day)
           ),
         inapp_searches:
           bucket_remaining(
             user,
             "inapp_search",
-            Billing.effective_limit(user, :inapp_searches_per_day)
+            Billing.cap(user, :inapp_searches_per_day)
           )
       }
     })
@@ -113,7 +113,7 @@ defmodule EngramWeb.BillingController do
   # search — exactly the "you only learn the number when something refuses
   # you" gap this endpoint exists to close.
   defp indexed_cap(user) do
-    case Billing.effective_limit(user, :indexed_notes_cap) do
+    case Billing.cap(user, :indexed_notes_cap) do
       n when is_integer(n) and n >= 0 -> n
       _ -> :infinity
     end
@@ -169,10 +169,10 @@ defmodule EngramWeb.BillingController do
           }
         end,
       caps: %{
-        obsidian_connections: cap_json(Billing.effective_limit(user, :obsidian_connections_cap)),
-        mcp_connections: cap_json(Billing.effective_limit(user, :mcp_connections_cap)),
-        api_write_enabled: bool_json(Billing.effective_limit(user, :api_write_enabled)),
-        vaults: cap_json(Billing.effective_limit(user, :vaults_cap))
+        obsidian_connections: cap_json(Billing.cap(user, :obsidian_connections_cap)),
+        mcp_connections: cap_json(Billing.cap(user, :mcp_connections_cap)),
+        api_write_enabled: Billing.granted?(user, :api_write_enabled),
+        vaults: cap_json(Billing.cap(user, :vaults_cap))
       },
       # Bundled into /billing/status so the proactive cap UI on /link and
       # /oauth/consent only needs ONE fetch to decide whether to render the
@@ -195,7 +195,7 @@ defmodule EngramWeb.BillingController do
   # `device_swap_cooldown_hours`. Returns the hour count (rounded UP) when
   # the user is still inside the window, else `nil`.
   defp swap_cooldown_remaining(user) do
-    cooldown_hours = Billing.effective_limit(user, :device_swap_cooldown_hours)
+    cooldown_hours = Billing.cap(user, :device_swap_cooldown_hours)
 
     case Connections.most_recent_device_revoke(user.id) do
       %DateTime{} = revoked_at when is_integer(cooldown_hours) and cooldown_hours > 0 ->
@@ -235,27 +235,18 @@ defmodule EngramWeb.BillingController do
       },
       customer_email: user.email,
       custom_data: %{user_id: user.id},
-      vaults_cap: cap_json(Billing.effective_limit(user, :vaults_cap))
+      vaults_cap: cap_json(Billing.cap(user, :vaults_cap))
     })
   end
 
-  # Normalizes an effective limit to a JSON-friendly value: a positive integer
-  # cap, or `null` for "unlimited" (`:unlimited` / `nil` / `-1`). The frontend
-  # treats `null` as no cap.
-  defp cap_json(:unlimited), do: nil
-  defp cap_json(nil), do: nil
-  defp cap_json(-1), do: nil
+  # `Billing.cap/2` has already collapsed every "no cap" spelling to nil; the
+  # frontend reads null as no cap, so nil passes straight through. The only
+  # thing left here is the WIRE's failure direction: a malformed override (a
+  # non-integer value) renders as no cap rather than 500ing the endpoint.
+  # `Billing.cap/2` deliberately does the opposite and hands garbage to the
+  # caller as a ceiling, because on the gate side failing closed is correct.
   defp cap_json(limit) when is_integer(limit), do: limit
-  # Unknown/malformed override (e.g. a non-integer value) → treat as no cap
-  # rather than 500 the endpoint.
   defp cap_json(_), do: nil
-
-  # Boolean LimitKey: :unlimited (limits disabled) opens the gate; explicit
-  # true/false flows through; anything else collapses to false to fail-closed.
-  defp bool_json(:unlimited), do: true
-  defp bool_json(true), do: true
-  defp bool_json(false), do: false
-  defp bool_json(_), do: false
 
   @doc """
   Customer-portal redirect. Without an `action` param this returns the generic

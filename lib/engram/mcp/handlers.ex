@@ -517,6 +517,9 @@ defmodule Engram.MCP.Handlers do
       {:ok, _att} -> {:ok, "Attachment moved: #{old_path} -> #{new_path}"}
       {:error, :not_found} -> {:ok, "Attachment not found: #{old_path}"}
       {:error, :conflict} -> {:ok, "Attachment already exists at: #{new_path}"}
+      # Plan gate, not a domain outcome: surface it as an MCP error so a client
+      # can tell "your plan does not include this" from "that path is free".
+      {:error, :feature_not_available} -> {:error, "attachments_enabled: not on your plan"}
       # Catch-all (Bug 2): move_attachment's crypto `with` head can return an
       # arbitrary {:error, reason}; without this clause it CaseClauseError'd → 500.
       {:error, reason} -> {:ok, "Could not move attachment: #{inspect(reason)}"}
@@ -525,7 +528,7 @@ defmodule Engram.MCP.Handlers do
 
   def handle("get_attachment_upload_target", user, vault, _args) do
     base = attachment_api_base_url()
-    max_bytes = render_limit(Engram.Billing.effective_limit(user, :max_file_bytes))
+    max_bytes = render_limit(Engram.Billing.cap(user, :max_file_bytes))
 
     types =
       if Engram.Billing.attachments_all_types?(user),
@@ -815,21 +818,16 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
-  # Three spellings of "no cap" reach here and all must render the same way.
-  # `nil` is "no enforcement" from the catalog (`Engram.Billing.LimitKeys`),
-  # `:unlimited` comes back when limits are disabled entirely (self-host with
-  # ENGRAM_LIMITS_ENFORCED=false), and `-1` is the documented unlimited
-  # sentinel (`Engram.Billing`, `check_limit/3`, `BillingController.cap_json/1`).
-  #
-  # `-1` is the one that bites: `effective_limit/2` returns per-user override
-  # values RAW, without passing them through `normalize_capability/2`, so an
-  # operator-set `-1` arrives here intact. Rendering it literally advertises a
-  # negative byte cap, which a model reads as "uploads are disabled".
-  #
-  # Only `-1` is special-cased on purpose. Any other negative is corrupt data
-  # and should stay visible rather than be silently laundered into "unlimited".
-  defp render_limit(nil), do: "unlimited"
-  defp render_limit(:unlimited), do: "unlimited"
-  defp render_limit(-1), do: "unlimited"
-  defp render_limit(n), do: to_string(n)
+  # `Billing.cap/2` collapses all three "no cap" spellings (`nil`, `:unlimited`,
+  # `-1`) to nil before this sees them — rendering `-1` literally used to
+  # advertise a negative byte cap, which a model reads as "uploads are
+  # disabled". Anything else, including a corrupt negative, stays visible
+  # rather than being silently laundered into "unlimited".
+  defp render_limit(n) when is_integer(n), do: to_string(n)
+  # nil (no cap) or a malformed override — `to_string/1` on a map raises
+  # Protocol.UndefinedError, which would take out the whole tool call. This
+  # string is advisory: the enforcing gate is
+  # `Engram.Attachments.validate_max_file_bytes/2`, which fails CLOSED, so an
+  # over-permissive number here cannot let an oversized upload through.
+  defp render_limit(_), do: "unlimited"
 end

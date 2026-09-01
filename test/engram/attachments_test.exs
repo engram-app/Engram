@@ -1038,6 +1038,52 @@ defmodule Engram.AttachmentsTest do
     end
   end
 
+  describe "attachments_enabled gates user moves, not the internal cascade" do
+    # `move_attachment/4` is reached three ways: directly (REST rename + the MCP
+    # `move_attachment` tool), via `batch_move/4`, and via `rename_folder/4` —
+    # which `Folders.rename/4` calls after `Notes.rename_folder/4` on every
+    # folder rename, REST and MCP alike. Gating the shared mover refused the
+    # attachment leg, rolled the whole `Folders.rename` transaction back, and
+    # turned a revoked attachments grant into "you cannot rename a folder".
+    setup do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "V", Ecto.UUID.generate())
+      put_attachment(user, vault, "Docs/a.png")
+
+      Repo.insert!(
+        %Engram.Billing.UserLimitOverride{
+          id: Ecto.UUID.generate(),
+          user_id: user.id,
+          key: "attachments_enabled",
+          value: %{"v" => false},
+          reason: "test",
+          set_by: "test"
+        },
+        skip_tenant_check: true
+      )
+
+      %{user: user, vault: vault}
+    end
+
+    test "a folder rename still cascades its attachments", %{user: user, vault: vault} do
+      assert {:ok, 1} = Attachments.rename_folder(user, vault, "Docs", "Archive")
+    end
+
+    test "a direct move is still refused", %{user: user, vault: vault} do
+      assert {:error, :feature_not_available} =
+               Attachments.move_attachment(user, vault, "Docs/a.png", "Docs/b.png")
+    end
+
+    test "a batch move is refused at the context, not only the controller", %{
+      user: user,
+      vault: vault
+    } do
+      assert {:error, :feature_not_available} =
+               Attachments.batch_move(user, vault, ["Docs/a.png"], "Archive")
+    end
+  end
+
   describe "rename_folder/4 (attachment cascade)" do
     test "moves nested attachments under the folder, preserving structure", %{
       user: user,

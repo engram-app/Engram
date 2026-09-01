@@ -162,4 +162,51 @@ defmodule Engram.ConversationMeterTest do
       assert m.conversations_day_key == Date.utc_today()
     end
   end
+
+  describe "unlimited sentinel" do
+    test "a -1 conversation_window_minutes override does not expire every window" do
+      # `normalize_int/2` returned any integer as-is, so the unlimited sentinel
+      # became a -1 minute window: every tick looked expired, rotated a new
+      # conversation, and burned ai_conversations_per_day in a handful of calls.
+      user = insert(:user)
+
+      Repo.insert!(
+        %Engram.Billing.UserLimitOverride{
+          id: Ecto.UUID.generate(),
+          user_id: user.id,
+          key: "conversation_window_minutes",
+          value: %{"v" => -1},
+          reason: "test",
+          set_by: "test"
+        },
+        skip_tenant_check: true
+      )
+
+      assert :ok = ConversationMeter.tick(user.id)
+      assert :ok = ConversationMeter.tick(user.id)
+
+      assert meter(user.id).conversations_today == 1
+    end
+
+    test "a -1 ai_conversations_per_day override does not rate-limit everything" do
+      # `day_cap_exceeded?/2` enumerated :unlimited and nil but not -1, so the
+      # unlimited sentinel resolved to a cap of -1 and `today > -1` refused the
+      # very first call.
+      user = insert(:user)
+
+      Repo.insert!(
+        %Engram.Billing.UserLimitOverride{
+          id: Ecto.UUID.generate(),
+          user_id: user.id,
+          key: "ai_conversations_per_day",
+          value: %{"v" => -1},
+          reason: "test",
+          set_by: "test"
+        },
+        skip_tenant_check: true
+      )
+
+      assert :ok = ConversationMeter.tick(user.id)
+    end
+  end
 end

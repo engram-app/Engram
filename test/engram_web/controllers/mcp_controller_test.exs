@@ -1214,6 +1214,55 @@ defmodule EngramWeb.McpControllerTest do
   # Free-tier search cap (external bucket) over the MCP transport
   # =========================================================================
 
+  describe "attachments_enabled over MCP" do
+    # `AttachmentsController.rename/2` and the MCP `move_attachment` tool call
+    # the SAME `Engram.Attachments.move_attachment/4`, but the gate lived in the
+    # controller — so REST was refused and MCP was not. Identical shape to the
+    # search-cap bypass below: a limit that must hold across transports cannot
+    # live in one transport's entry point.
+    setup %{user: user} do
+      insert(:user_limit_override,
+        user: user,
+        key: "attachments_enabled",
+        value: %{"v" => false},
+        reason: "revoke for test",
+        set_by: "test"
+      )
+
+      :ok
+    end
+
+    test "move_attachment is refused when the plan does not grant attachments", %{conn: conn} do
+      resp =
+        json_response(
+          call_tool(conn, "move_attachment", %{
+            "old_path" => "_attachments/a.png",
+            "new_path" => "_attachments/b.png"
+          }),
+          200
+        )
+
+      assert resp["result"]["isError"]
+      assert resp["result"]["content"] |> hd() |> Map.get("text") =~ "attachments_enabled"
+    end
+
+    test "the gate fires ahead of not_found, so it cannot be probed away", %{conn: conn} do
+      text =
+        json_response(
+          call_tool(conn, "move_attachment", %{
+            "old_path" => "_attachments/missing.png",
+            "new_path" => "_attachments/b.png"
+          }),
+          200
+        )
+        |> get_in(["result", "content"])
+        |> hd()
+        |> Map.get("text")
+
+      refute text =~ "not found"
+    end
+  end
+
   describe "external_ai_searches_per_day over MCP" do
     # `EnforceSearchCap` is a plug guarded on `request_path: "/api/search"`, so
     # it can never fire for a JSON-RPC `tools/call` arriving at `/api/mcp` —
