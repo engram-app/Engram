@@ -130,8 +130,7 @@ defmodule Engram.Factory do
       name: sequence(:plan_name, &"plan_#{&1}"),
       limits: %{
         "vaults_cap" => 1,
-        "cross_vault_search" => false,
-        "vault_scoped_keys" => false
+        "cross_vault_search" => false
       }
     }
   end

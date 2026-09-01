@@ -156,31 +156,29 @@ defmodule Engram.BillingTest do
       state = Billing.plan_state(user)
       assert state.tier == :free
       assert state.attachments_all_types == true
-      assert state.attachments_text_only == false
       assert is_integer(state.max_file_bytes)
       assert is_integer(state.attachment_bytes_cap) or is_nil(state.attachment_bytes_cap)
     end
 
-    test "pro user: text-only false" do
+    test "pro user: all attachment types" do
       user = build(:user) |> with_subscription(tier: "pro", status: "active")
       state = Billing.plan_state(user)
       assert state.tier == :pro
       assert state.attachments_all_types == true
-      assert state.attachments_text_only == false
     end
 
-    test "the legacy field is always the exact inverse of the new one" do
-      # EXPAND step: both fields ship until the released plugin reads the new
-      # one. They are derived from a single call, so a future edit cannot let
-      # them drift into disagreeing about the same user.
-      for user <- [
-            build(:user, free_tier_accepted_at: nil),
-            build(:user) |> with_subscription(tier: "starter", status: "active"),
-            build(:user) |> with_subscription(tier: "pro", status: "active")
-          ] do
-        state = Billing.plan_state(user)
-        assert state.attachments_text_only == not state.attachments_all_types
-      end
+    test "the retired legacy field is not published" do
+      # CONTRACT step: `attachments_text_only` was the restriction-shaped
+      # spelling, shipped alongside the grant-shaped one so plugin builds
+      # predating the rename kept working. The released plugin reads
+      # `attachments_all_types` and only falls back when it is absent, so the
+      # old field is gone. Asserted rather than merely deleted: silently
+      # re-adding it would resurrect the inverted-boolean class that cost
+      # self-hosters every image and PDF.
+      # `plan_state/1` builds a fixed map literal with no tier branch, so the
+      # published key set cannot vary by tier — one user proves it.
+      state = Billing.plan_state(build(:user, free_tier_accepted_at: nil))
+      refute Map.has_key?(state, :attachments_text_only)
     end
   end
 
@@ -317,7 +315,6 @@ defmodule Engram.BillingTest do
 
       assert state.attachments_all_types == true
       assert caps.limits["attachments_all_types"] == true
-      assert state.attachments_text_only == false
     end
 
     test "no boolean capability resolves to a restriction" do
@@ -869,10 +866,15 @@ defmodule Engram.BillingTest do
       # mirror Billing.plan_state/1 (sans tier, which stays the string form).
       reloaded = Engram.Accounts.get_user(user.id)
       plan = Engram.Billing.plan_state(reloaded)
-      assert payload.attachments_text_only == plan.attachments_text_only
-      assert payload.max_file_bytes == plan.max_file_bytes
-      assert payload.attachment_bytes_cap == plan.attachment_bytes_cap
-      assert is_boolean(payload.attachments_text_only)
+      # Whole-map comparison, not field-by-field. `indexed_notes_cap` was
+      # omitted from the broadcast allowlist once and the effect was a Free
+      # user being told their whole vault was searchable while only the oldest
+      # 2,000 notes were indexed — a field-by-field test cannot see the field
+      # nobody remembered to add.
+      assert Map.drop(payload, [:tier, :status, :subscription_id]) ==
+               Map.drop(plan, [:tier])
+
+      assert is_boolean(payload.attachments_all_types)
     end
 
     test "subscription.updated broadcasts subscription_activated on user:{id} topic" do

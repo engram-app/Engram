@@ -8,7 +8,7 @@ defmodule Engram.Billing.LimitKeys do
     LimitKeys.defined?(:notes_cap)            #=> true
     LimitKeys.type(:notes_cap)                #=> :integer
     LimitKeys.default_for(:notes_cap, :free)  #=> 10_000
-    LimitKeys.env_var_names()                 #=> 81 tuples (27 keys × 3 tiers)
+    LimitKeys.env_var_names()                 #=> 96 tuples (32 keys × 3 tiers)
   """
 
   @catalog %{
@@ -130,9 +130,9 @@ defmodule Engram.Billing.LimitKeys do
       defaults: %{free: false, starter: true, pro: true}
     },
     inactivity_delete_days: %{type: :integer, defaults: %{free: 90, starter: nil, pro: nil}},
-    # Legacy keys preserved for back-compat with existing call sites
+    # Gated in `Engram.Search.cross_vault_allowed/2`; the MCP transport bypasses
+    # it deliberately (product decision 2026-07-10).
     cross_vault_search: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
-    vault_scoped_keys: %{type: :boolean, defaults: %{free: false, starter: true, pro: true}},
     # Connections caps — paid tiers unlimited. `obsidian_connections_cap` MUST
     # track `concurrent_devices` (see the note there): same underlying count,
     # two enforcement points.
