@@ -86,6 +86,39 @@ defmodule Engram.PromEx.Crdt do
   Together with the BEAM memory gauges this is how #1152's "resident room count
   bounded under a soak" gets answered in production rather than in a test.
 
+  ## Residency is polled, not evented (#1493)
+
+  Every metric above is a COUNTER. Counters answer "how many arrived" and can
+  never answer "how many are here NOW" — the only question a memory backstop is
+  tuned against. The 2026-08-28 prod sync peaked at **314 resident rooms against
+  a cap of 64** and the sole record of it is a `Logger.warning` line emitted by
+  the LRU sweep, so nothing could alert and nothing could be graphed.
+
+  `..._crdt_rooms_resident` / `..._crdt_rooms_cap` close that. Read them as a
+  RATIO: the cap ships alongside the count precisely so a dashboard never
+  hardcodes 64 and starts lying when the config moves.
+
+  Two limits to know before trusting the number:
+
+    * It counts **rooms, not bytes**. Each room holds its Yjs doc inside the
+      `y_ex` NIF, which is off-heap and invisible to `:erlang.memory/0`, so no
+      BEAM gauge — `beam_memory_allocated` included — counts the dominant cost
+      of a room. This gauge is the closest available proxy, and the reason the
+      cap is count-based in the first place. It is also why note rooms and index
+      rooms (~50x heavier, per `CrdtRoomLru`'s moduledoc) weigh the same here.
+    * It can **overcount**, never undercount. `resident_count/0` reads the raw
+      ETS size. An exiting room normally removes its own entry promptly — its
+      `CrdtCheckpointTimer` traps the room's `{:EXIT, …}` and calls
+      `CrdtRoomLru.forget/1` — so this is close to live. What it misses is the
+      case where that timer itself died abnormally, which the sweep's
+      `prune_dead` reclaims within one interval (30s). Left as-is deliberately:
+      for a memory alarm stale-high is the safe direction, and pruning on a 15s
+      scrape would make a metrics read mutate the table the LRU is mid-decision
+      on.
+
+  Per-node by construction — memory is per-node and each node bounds its own
+  residency — so aggregate with `max by (instance)`, never `sum`.
+
   Cardinality contract: the phase atoms listed above and nothing else. NEVER add
   note_id, vault_id, or user_id — there is one series per phase, and a room
   drains repeatedly.
@@ -93,7 +126,10 @@ defmodule Engram.PromEx.Crdt do
 
   use PromEx.Plugin
 
+  alias Engram.Notes.CrdtRoomLru
+
   @claim_event [:engram, :crdt, :index_claim]
+  @rooms_event [:engram, :crdt, :rooms]
   @recheck_event [:engram, :crdt, :index_recheck]
   @in_transaction_event [:engram, :crdt, :index_in_transaction]
   @tail_event [:engram, :crdt, :index_tail]
@@ -249,6 +285,57 @@ defmodule Engram.PromEx.Crdt do
           tags: [:phase]
         )
       ]
+    )
+  end
+
+  @impl true
+  def polling_metrics(opts) do
+    otp_app = Keyword.fetch!(opts, :otp_app)
+    metric_prefix = PromEx.metric_prefix(otp_app, :crdt)
+    poll_rate = Keyword.get(opts, :crdt_poll_rate, 15_000)
+
+    Polling.build(
+      :engram_crdt_polling_metrics,
+      poll_rate,
+      {__MODULE__, :execute_room_metrics, []},
+      [
+        last_value(
+          metric_prefix ++ [:rooms, :resident],
+          event_name: @rooms_event,
+          measurement: :resident,
+          description:
+            "CRDT rooms resident on THIS node. Compare against rooms_cap — sustained overshoot " <>
+              "means the LRU is not keeping up. Aggregate with max by (instance), never sum. " <>
+              "Overcounts, never undercounts: a room whose checkpoint timer died abnormally " <>
+              "lingers until the next sweep prunes it."
+        ),
+        last_value(
+          metric_prefix ++ [:rooms, :cap],
+          event_name: @rooms_event,
+          measurement: :cap,
+          description:
+            "The max_resident ceiling this node is enforcing. Shipped with the count so " <>
+              "dashboards and alerts read a ratio instead of hardcoding the default."
+        )
+      ]
+    )
+  end
+
+  @doc """
+  Polled emitter for room residency. Reports the count and the ceiling it is
+  judged against in ONE event, so the two can never be scraped from different
+  moments and compared as if they were simultaneous.
+
+  Cheap by design: an `:ets.info(_, :size)` and a config read. It deliberately
+  does NOT prune dead entries first — see the moduledoc on why a scrape must not
+  mutate the LRU's table.
+  """
+  @spec execute_room_metrics() :: :ok
+  def execute_room_metrics do
+    :telemetry.execute(
+      @rooms_event,
+      %{resident: CrdtRoomLru.resident_count(), cap: CrdtRoomLru.max_resident()},
+      %{}
     )
   end
 end
