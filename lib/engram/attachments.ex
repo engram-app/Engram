@@ -530,14 +530,22 @@ defmodule Engram.Attachments do
   `Engram.Notes.rename_folder/4`'s tombstone discipline (#614).
   """
   @spec move_attachment(map(), map(), String.t(), String.t()) ::
-          {:ok, Attachment.t()} | {:error, :conflict | :not_found | term()}
+          {:ok, Attachment.t()}
+          | {:error, :conflict | :not_found | :feature_not_available | term()}
   def move_attachment(user, vault, old_path, new_path) do
     old_path = PathSanitizer.sanitize(old_path)
     new_path = PathSanitizer.sanitize(new_path)
     user = fresh_user(user)
     now = DateTime.utc_now(:second)
 
-    with {:ok, user} <- Crypto.ensure_user_dek(user),
+    # `attachments_enabled` is gated HERE, not in the caller. REST
+    # (`AttachmentsController.rename/2`) and MCP (`move_attachment`) both land on
+    # this function; while the check lived in the controller, only REST was
+    # refused. Same class as the MCP search-cap bypass — see
+    # `docs/context/mcp-bypasses-path-shaped-plugs.md`. It runs ahead of the
+    # lookup so a revoked plan cannot be probed for which paths exist.
+    with :ok <- Billing.check_feature(user, :attachments_enabled),
+         {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       old_hmac = Crypto.hmac_field(filter_key, old_path)

@@ -30,6 +30,38 @@ search allowance. Fixed by engram#1527.
 guarantees the plug is *invoked*; a path guard inside it decides whether it
 *does anything*.
 
+## Second instance: `attachments_enabled` (engram#TBD)
+
+Same class, no plug involved — the gate was in a **controller action**.
+`AttachmentsController.rename/2` checked `attachments_enabled` and then called
+`Engram.Attachments.move_attachment/4`. The MCP `move_attachment` tool calls
+that same function directly, so REST was refused and MCP was not.
+
+The gate now lives in `move_attachment/4` itself, ahead of the row lookup (so a
+revoked plan cannot be probed for which attachment paths exist). Both callers
+inherit it and differ only in rendering: 402 via `LimitResponse` on REST,
+`isError: true` with `attachments_enabled: not on your plan` on MCP.
+
+`upload/2`'s `attachments_enabled` and `attachments_all_types` checks stay in
+the controller: HTTP upload is the only way to create an attachment (MCP's
+`get_attachment_upload_target` just returns instructions pointing back at
+`POST /api/attachments`), so there is no second caller to miss.
+
+## The backstop that now covers this
+
+`Engram.Billing.LimitEnforcementTest` has a third test: **a gated key whose
+every `Billing.*` call site is under `lib/engram_web/` fails.** That directory
+is plugs, controllers and channels — all transport. A key gated only there is
+gated for whoever knocks on that door and nobody else.
+
+`@transport_scoped` exempts the six keys where the endpoint genuinely IS the
+operation: `api_write_enabled` / `api_rps_cap` (defined in terms of API-key
+auth, which no context can see) and the four device/connection caps (OAuth
+consent and device-flow authorize are the only paths that mint a connection).
+
+Verified by mutation: deleting the `check_feature` line from
+`move_attachment/4` fails the test naming `:attachments_enabled`.
+
 ## Why the tests did not catch it
 
 `test/engram_web/plugs/enforce_search_cap_test.exs` calls `EnforceSearchCap.call/2`

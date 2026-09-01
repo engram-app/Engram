@@ -177,15 +177,18 @@ defmodule EngramWeb.AttachmentsController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    with :ok <- Billing.check_feature(user, :attachments_enabled),
-         {:ok, att} <- Attachments.move_attachment(user, vault, old_path, new_path) do
-      json(conn, %{
-        renamed: true,
-        old_path: old_path,
-        new_path: new_path,
-        attachment: serialize_metadata(att)
-      })
-    else
+    # `attachments_enabled` is checked inside `move_attachment/4`, not here —
+    # MCP's `move_attachment` tool calls that same function and was ungated
+    # while the check lived in this action. The 402 rendering stays.
+    case Attachments.move_attachment(user, vault, old_path, new_path) do
+      {:ok, att} ->
+        json(conn, %{
+          renamed: true,
+          old_path: old_path,
+          new_path: new_path,
+          attachment: serialize_metadata(att)
+        })
+
       {:error, :feature_not_available} ->
         EngramWeb.LimitResponse.halt(
           conn,

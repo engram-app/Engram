@@ -517,6 +517,9 @@ defmodule Engram.MCP.Handlers do
       {:ok, _att} -> {:ok, "Attachment moved: #{old_path} -> #{new_path}"}
       {:error, :not_found} -> {:ok, "Attachment not found: #{old_path}"}
       {:error, :conflict} -> {:ok, "Attachment already exists at: #{new_path}"}
+      # Plan gate, not a domain outcome: surface it as an MCP error so a client
+      # can tell "your plan does not include this" from "that path is free".
+      {:error, :feature_not_available} -> {:error, "attachments_enabled: not on your plan"}
       # Catch-all (Bug 2): move_attachment's crypto `with` head can return an
       # arbitrary {:error, reason}; without this clause it CaseClauseError'd → 500.
       {:error, reason} -> {:ok, "Could not move attachment: #{inspect(reason)}"}
