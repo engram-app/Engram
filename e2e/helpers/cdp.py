@@ -1115,8 +1115,48 @@ class CdpClient:
             await asyncio.sleep(0.2)
         raise TimeoutError(
             f"device never mapped a note_id for {path} within {timeout}s "
-            f"on CDP port {self.port}"
+            f"on CDP port {self.port}. {await self._why_unmapped(path)}"
         )
+
+    async def _why_unmapped(self, path: str) -> str:
+        """Report WHICH layer is hiding `path`, for a mapping-poll timeout.
+
+        `SyncStore.getMeta` (sync-store.ts:193-197) returns null for three
+        reasons that are NOT "the entry is absent" — a staged rename, a staged
+        delete, or a `forget()` bridge. Instrumenting the plugin's six unmap
+        sites proved nothing removes the entry (engram-app/Engram#1526), so the
+        interesting question is which of these gates is closed, or whether the
+        entry simply never arrived.
+
+        Reads the store's fields directly. They are `private` in TypeScript,
+        which is compile-time only — at runtime they are ordinary properties, so
+        this needs no plugin change and ships nothing to production.
+        """
+        js = f"""
+        (function() {{
+            const se = {ENGINE_PATH};
+            const st = se.noteIdMap && se.noteIdMap.store;
+            if (!st) return 'no store';
+            const p = {json.dumps(path)};
+            const has = (c) => {{
+                try {{ return c && typeof c.has === 'function' ? c.has(p) : null; }}
+                catch (e) {{ return 'err'; }}
+            }};
+            return JSON.stringify({{
+                renames: has(st.renames),
+                deleteSet: has(st.deleteSet),
+                forgotten: has(st.forgotten),
+                renamedAway: has(st.renamedAway),
+                overlay: has(st.overlay),
+                committed: has(st.map),
+                cache: has(st.cache),
+            }});
+        }})()
+        """
+        try:
+            return f"store state for the path: {await self.evaluate(js)}"
+        except Exception as e:  # diagnostics must never mask the real failure
+            return f"(store probe failed: {e})"
 
     async def get_enrolled_note_ids(self) -> list[str]:
         """Snapshot CrdtEnrollment.enrolled — the note_ids this device has
