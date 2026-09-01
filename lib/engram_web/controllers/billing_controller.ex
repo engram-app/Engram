@@ -1,14 +1,150 @@
 defmodule EngramWeb.BillingController do
   use EngramWeb, :controller
 
+  alias Engram.Attachments
   alias Engram.Billing
   alias Engram.Billing.Subscriptions
   alias Engram.Connections
+  alias Engram.Usage.DailyCap
+  alias Engram.UsageMeters
+  alias Engram.Vaults
 
   require Logger
 
   def status(conn, _params) do
     json(conn, status_payload(conn.assigns.current_user))
+  end
+
+  @doc """
+  `GET /api/billing/usage` — the accumulating usage limits paired with their
+  CURRENT values.
+
+  The caps were always fetchable (`/billing/status`, `Billing.capabilities/1`)
+  but nothing published the other half, so "how close am I?" was unanswerable
+  from any client: the first time a user learned their number was the 402 that
+  refused them. There is no per-user usage counter in Prometheus or Loki
+  either — this endpoint is the answer to that gap, not a convenience.
+
+  Scope is deliberately the limits that ACCUMULATE. Per-request ceilings
+  (`max_file_bytes`) and connection caps (`obsidian_connections_cap`,
+  `mcp_connections_cap` — already served by `/billing/status`) have no "used"
+  to report and are not here.
+
+  Most entries are `{used, limit}` with `limit: null` meaning uncapped,
+  matching the `cap_json/1` convention the rest of this controller uses.
+
+  The two daily search caps are `{remaining, limit}` instead, because a token
+  bucket genuinely cannot answer "how many did you run today": it refills
+  continuously, so a derived `used` DECAYS over the day (10 searches at 09:00
+  reads as 0 by 13:00) and misreports outright after a cap change (raise the
+  cap to 100 while the row still holds 15 tokens and `limit - remaining` claims
+  85 used). `remaining` is the number the bucket actually holds and the number
+  the user needs.
+
+  Advisory only. `Billing.check_limit/3` and the plugs remain the authority —
+  a client must not gate on this, and a stale read here can never grant
+  anything.
+  """
+  def usage(conn, _params) do
+    user = conn.assigns.current_user
+    meters = UsageMeters.snapshot(user.id)
+
+    json(conn, %{
+      tier: to_string(Billing.tier(user)),
+      usage: %{
+        notes: used_limit(meters.notes, Billing.effective_limit(user, :notes_cap)),
+        vaults: used_limit(Vaults.count_for(user), Billing.effective_limit(user, :vaults_cap)),
+        attachment_bytes:
+          used_limit(
+            storage_used_bytes(user),
+            Billing.effective_limit(user, :attachment_bytes_cap)
+          ),
+        lifetime_embed_tokens:
+          used_limit(
+            meters.lifetime_embed_tokens,
+            Billing.effective_limit(user, :lifetime_embed_token_cap)
+          ),
+        ai_conversations_today:
+          capped_used_limit(
+            meters.ai_conversations_today,
+            Billing.effective_limit(user, :ai_conversations_per_day)
+          ),
+        ai_queries_today:
+          used_limit(meters.ai_queries_today, Billing.effective_limit(user, :ai_queries_per_day)),
+        indexed_notes:
+          used_limit(
+            min(meters.notes, indexed_cap(user)),
+            Billing.effective_limit(user, :indexed_notes_cap)
+          ),
+        external_ai_searches:
+          bucket_remaining(
+            user,
+            "ext_search",
+            Billing.effective_limit(user, :external_ai_searches_per_day)
+          ),
+        inapp_searches:
+          bucket_remaining(
+            user,
+            "inapp_search",
+            Billing.effective_limit(user, :inapp_searches_per_day)
+          )
+      }
+    })
+  end
+
+  defp used_limit(used, limit), do: %{used: used, limit: cap_json(limit)}
+
+  # `ConversationMeter.maybe_rotate_conversation/3` commits
+  # `conversations_today + 1` BEFORE `day_cap_exceeded?/2` tests it, and the
+  # rate-limited branch returns a plain tuple rather than `Repo.rollback`, so a
+  # capped Free user persists 6 against a limit of 5. That is correct for the
+  # meter (the check is `today > cap`) and wrong for a progress bar, which
+  # would render 120%. Clamp for display only — the stored counter is
+  # untouched and the gate remains the authority.
+  defp capped_used_limit(used, limit) when is_integer(limit) and limit >= 0,
+    do: %{used: min(used, limit), limit: limit}
+
+  defp capped_used_limit(used, limit), do: used_limit(used, limit)
+
+  # `indexed_notes_cap` binds FIRST on Free (2,000 against a 10,000
+  # `notes_cap`), and it fails silently: the notes sync fine, they just stop
+  # being searchable. A user reading only `notes: {used: 3000, limit: 10000}`
+  # concludes they are fine while a third of their vault is invisible to
+  # search — exactly the "you only learn the number when something refuses
+  # you" gap this endpoint exists to close.
+  defp indexed_cap(user) do
+    case Billing.effective_limit(user, :indexed_notes_cap) do
+      n when is_integer(n) and n >= 0 -> n
+      _ -> :infinity
+    end
+  end
+
+  # The search caps are token buckets, which track what is LEFT rather than
+  # what was spent, and they refill continuously. Derive `used` so every entry
+  # in the payload has the same shape; it is a floor because tokens are
+  # fractional mid-refill and a user seeing "15 of 15 used" while one more
+  # search still succeeds is worse than the reverse.
+  # Floor rather than round: tokens are fractional mid-refill, and telling a
+  # user they have 1 search left when the next call refuses them is worse than
+  # the reverse.
+  defp bucket_remaining(user, kind, limit) when is_integer(limit) and limit > 0 do
+    %{remaining: trunc(DailyCap.remaining(user.id, kind, limit, limit / 86_400)), limit: limit}
+  end
+
+  # Cap of 0 means no budget at all; anything else (`nil`, `:unlimited`) means
+  # no ceiling, so there is nothing to run out of.
+  defp bucket_remaining(_user, _kind, 0), do: %{remaining: 0, limit: 0}
+  defp bucket_remaining(_user, _kind, limit), do: %{remaining: nil, limit: cap_json(limit)}
+
+  # Strict match, deliberately. `storage_usage/1` only fails on a DB error, and
+  # reporting `used: 0` there would tell the user they have their whole quota
+  # free — an over-optimistic fabrication on the one axis where being wrong
+  # costs them an upload. A 500 is honest. Same shape as
+  # `Attachments.validate_storage_cap/3`, which matches strictly for the same
+  # reason.
+  defp storage_used_bytes(user) do
+    {:ok, %{used_bytes: n}} = Attachments.storage_usage(user)
+    n
   end
 
   @doc """

@@ -31,6 +31,74 @@ defmodule Engram.Usage.DailyCap do
     end
   end
 
+  @doc """
+  Tokens left in a bucket, WITHOUT spending one.
+
+  Read-only mirror of `spend/4`'s refill arithmetic, for surfacing "you have N
+  searches left today" in the UI. Deliberately not routed through `spend/4`:
+  asking how much budget you have must not consume budget.
+
+  A user who has never spent has no row, which is not the same as an empty
+  bucket — it means full capacity. Fails OPEN on a DB error, same as `spend/4`:
+  an advisory number is never worth a 500.
+  """
+  # Module attribute, not a local binding, for the same reason `@sql` below is
+  # one: sobelow's SQL.Query check cannot prove a variable passed to
+  # `Repo.query/2` is constant and flags it as injection. Both are fully
+  # parameterized; keeping the shape identical to its sibling keeps the finding
+  # from existing rather than suppressing it in `.sobelow-skips`.
+  @remaining_sql """
+  SELECT LEAST($3::float,
+           tokens + GREATEST(0, EXTRACT(EPOCH FROM (now() - last_refill_at))) * $4::float)
+    FROM usage_buckets
+   WHERE user_id = $1::uuid AND kind = $2
+  """
+
+  @spec remaining(binary(), String.t(), pos_integer(), float()) :: float()
+  def remaining(user_id, kind, capacity, refill_per_sec) do
+    case Cache.empty_until(user_id, kind) do
+      # `spend/4` consults this cache FIRST and short-circuits a deny without
+      # touching the DB, and `mark_empty/3` caches for a fixed
+      # `ceil(1/refill_per_sec)` regardless of the actual fractional deficit.
+      # Reading Postgres directly would therefore report "1 search left" for
+      # most of a window in which `spend/4` still refuses — an advisory number
+      # that contradicts the authority is worse than no number.
+      {:empty, _retry} -> 0.0
+      :unknown -> do_remaining(user_id, kind, capacity, refill_per_sec)
+    end
+  end
+
+  defp do_remaining(user_id, kind, capacity, refill_per_sec) do
+    case Repo.query(@remaining_sql, [
+           Ecto.UUID.dump!(user_id),
+           kind,
+           capacity * 1.0,
+           refill_per_sec
+         ]) do
+      {:ok, %{rows: [[tokens]]}} ->
+        max(0.0, tokens)
+
+      # No row is not an empty bucket — it means nothing has been spent yet.
+      {:ok, %{rows: []}} ->
+        capacity * 1.0
+
+      {:error, reason} ->
+        # Same fail-open as `do_spend/4`, and logged + emitted for the same
+        # reason: a fabricated number with no signal is indistinguishable from
+        # a real one. `emit/2` feeds `Engram.PromEx.Usage`.
+        Logger.warning(
+          "daily_cap remaining fail-open",
+          Engram.Logger.Metadata.with_category(:warning, :billing,
+            kind: kind,
+            reason: inspect(reason)
+          )
+        )
+
+        emit(kind, :fail_open)
+        capacity * 1.0
+    end
+  end
+
   # GREATEST(0, …) guards a clock that moved backward. now() is the single DB
   # clock, so cross-node skew is irrelevant. RETURNING tokens lets us decide.
   @sql """
