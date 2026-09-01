@@ -31,6 +31,43 @@ defmodule Engram.Usage.DailyCap do
     end
   end
 
+  @doc """
+  Tokens left in a bucket, WITHOUT spending one.
+
+  Read-only mirror of `spend/4`'s refill arithmetic, for surfacing "you have N
+  searches left today" in the UI. Deliberately not routed through `spend/4`:
+  asking how much budget you have must not consume budget.
+
+  A user who has never spent has no row, which is not the same as an empty
+  bucket — it means full capacity. Fails OPEN on a DB error, same as `spend/4`:
+  an advisory number is never worth a 500.
+  """
+  # Module attribute, not a local binding, for the same reason `@sql` below is
+  # one: sobelow's SQL.Query check cannot prove a variable passed to
+  # `Repo.query/2` is constant and flags it as injection. Both are fully
+  # parameterized; keeping the shape identical to its sibling keeps the finding
+  # from existing rather than suppressing it in `.sobelow-skips`.
+  @remaining_sql """
+  SELECT LEAST($3::float,
+           tokens + GREATEST(0, EXTRACT(EPOCH FROM (now() - last_refill_at))) * $4::float)
+    FROM usage_buckets
+   WHERE user_id = $1::uuid AND kind = $2
+  """
+
+  @spec remaining(binary(), String.t(), pos_integer(), float()) :: float()
+  def remaining(user_id, kind, capacity, refill_per_sec) do
+    case Repo.query(@remaining_sql, [
+           Ecto.UUID.dump!(user_id),
+           kind,
+           capacity * 1.0,
+           refill_per_sec
+         ]) do
+      {:ok, %{rows: [[tokens]]}} -> max(0.0, tokens)
+      {:ok, %{rows: []}} -> capacity * 1.0
+      {:error, _reason} -> capacity * 1.0
+    end
+  end
+
   # GREATEST(0, …) guards a clock that moved backward. now() is the single DB
   # clock, so cross-node skew is irrelevant. RETURNING tokens lets us decide.
   @sql """

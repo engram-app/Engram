@@ -368,6 +368,7 @@ defmodule EngramWeb.Router do
     # backend only exposes status, the public client config, and a portal
     # redirect.
     get "/billing/status", BillingController, :status
+    get "/billing/usage", BillingController, :usage
     get "/billing/config", BillingController, :config
     get "/billing/portal", BillingController, :customer_portal
     get "/billing/subscription", BillingController, :subscription_detail
