@@ -26,6 +26,22 @@ defmodule Engram.Logs do
   # log pipeline and billed again downstream.
   @max_batch_entries 1000
 
+  # How many `diagnostic: true` entries in ONE batch may force themselves into
+  # Loki. `diagnostic` is a client-controlled boolean straight off the request
+  # body (`bound_entry/2`), so before the paired routing rule existed it was a
+  # flag nothing read and the flood was absorbed silently. It is live now:
+  # uncapped, one authenticated plugin with the dial pinned on could push
+  # @max_batch_entries lines per request into a billed-on-ingest sink at the
+  # PreAuthRateLimit ceiling.
+  #
+  # The cap is per REQUEST, which bounds the per-minute worst case to this
+  # times that ceiling rather than eliminating it — a token bucket would be the
+  # complete answer and is not worth a new limiter bucket for a diagnostics
+  # pipe. 100 is well above a real debugging burst (the plugin flushes at 20)
+  # and 10x below the batch cap. Entries past it still reach CloudWatch and the
+  # DB; only the Loki copy is dropped.
+  @max_diagnostic_ships 100
+
   # Generous for a diagnostics pipe: a real client line is a few hundred chars,
   # and a stack is the one field with a legitimate reason to be long.
   @max_message_chars 8_000
@@ -177,8 +193,22 @@ defmodule Engram.Logs do
   # so an oversized message is not shipped downstream at full size.
   defp reemit_to_logger(user, entries) do
     hashed_user = HMAC.hash_user_id(to_string(user.id))
+    {ship_ok, over} = diagnostic_budget(entries)
 
-    Enum.each(entries, fn entry ->
+    if over > 0 do
+      Logger.warning(
+        "client diagnostic ships capped: kept #{@max_diagnostic_ships}, dropped #{over}",
+        Metadata.with_category(:warning, :client, [])
+      )
+    end
+
+    entries
+    |> Enum.map_reduce(ship_ok, fn entry, budget ->
+      {{entry, entry.diagnostic and budget > 0},
+       if(entry.diagnostic, do: max(budget - 1, 0), else: budget)}
+    end)
+    |> elem(0)
+    |> Enum.each(fn {entry, ship?} ->
       try do
         level = normalize_level(entry.level)
         msg = "[client:#{entry.category}] #{entry.message}"
@@ -191,11 +221,12 @@ defmodule Engram.Logs do
             client_severity: entry.level
           )
 
-        # Verbose diagnostic-mode entries opt into Loki per-entry even at :info.
-        # Via Metadata.ship/2, never a bare Keyword.put: the routing field
-        # Fluent Bit reads is the STRING, and setting the boolean alone made
-        # this override a silent no-op (engram-app/engram-infra#1095).
-        meta = if entry.diagnostic, do: Metadata.ship(meta, true), else: meta
+        # Verbose diagnostic-mode entries opt into Loki per-entry even at :info,
+        # up to @max_diagnostic_ships per batch. Via Metadata.ship_to_loki/1,
+        # never a bare Keyword.put: the routing field Fluent Bit reads is the
+        # STRING, and setting the boolean alone made this override a silent
+        # no-op (engram-app/engram-infra#1095).
+        meta = if ship?, do: Metadata.ship_to_loki(meta), else: meta
 
         Logger.log(level, msg, meta)
       rescue
@@ -206,6 +237,12 @@ defmodule Engram.Logs do
           )
       end
     end)
+  end
+
+  # How many diagnostic entries this batch may ship, and how many it loses.
+  defp diagnostic_budget(entries) do
+    wanted = Enum.count(entries, & &1.diagnostic)
+    {min(wanted, @max_diagnostic_ships), max(wanted - @max_diagnostic_ships, 0)}
   end
 
   # Client severity is capped at :warning on re-emit — never :error — so a

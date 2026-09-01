@@ -109,10 +109,10 @@ defmodule EngramWeb.RequestLogger do
   # client entries. Volume is not a concern: these lines are a handful per
   # login, unlike the successful-2xx firehose that keeps :http off the
   # info-ships list in the first place.
-  # Metadata.ship/2, never a bare Keyword.put: Fluent Bit routes on the STRING
-  # field, so setting the boolean alone shipped nothing (engram-infra#1095).
+  # Metadata.ship_to_loki/1, never a bare Keyword.put: Fluent Bit routes on the
+  # STRING field, so setting the boolean alone shipped nothing (engram-infra#1095).
   defp maybe_force_loki_ship(meta, %Plug.Conn{assigns: %{expected_client_status: true}}),
-    do: Metadata.ship(meta, true)
+    do: Metadata.ship_to_loki(meta)
 
   defp maybe_force_loki_ship(meta, _conn), do: meta
 

@@ -208,35 +208,39 @@ defmodule Engram.Logger.Metadata do
 
     metadata
     |> Keyword.put(:category, category)
-    |> ship(Category.loki_ship?(level, category))
+    |> Keyword.put(:loki_ship, Category.loki_ship?(level, category))
     |> put_trace_context()
   end
 
   @doc """
-  Record the Loki routing decision, as BOTH a boolean and a string.
+  Force a single entry to Loki, overriding its category's default.
 
-  Fluent Bit decides what reaches Loki with plain string compares over the
-  parsed record (`envs/prod/fluent-bit/firelens.conf`) and deliberately does
-  not read a boolean, whose rendering it does not guarantee. `:ship` is the
-  field that actually routes; `:loki_ship` is the Elixir-side concept every
-  test and reader already knows.
+  Sets `:loki_ship` (the Elixir-side concept every test and reader knows) AND
+  `:ship`, the plain string Fluent Bit actually routes on. Fluent Bit decides
+  what reaches Loki with string compares over the parsed record
+  (`envs/prod/fluent-bit/firelens.conf`) and deliberately does not read a
+  boolean, whose rendering it does not guarantee.
 
-  They are written together here so they cannot drift. That drift is not
-  hypothetical: while only the boolean existed, every per-entry override at
-  `:info` level — the plugin's verbose-diagnostics dial
-  (`Engram.Logs.insert_logs/2`) and `expected_client_status`
-  (`EngramWeb.RequestLogger`) — set a flag nothing downstream read, and
-  shipped nothing for months with no error anywhere
+  Setting the boolean alone is the bug this exists to prevent: for months both
+  overrides — the plugin's verbose-diagnostics dial (`Engram.Logs`) and
+  `expected_client_status` (`EngramWeb.RequestLogger`) — set a flag nothing
+  downstream read and shipped nothing, with no error anywhere
   (engram-app/engram-infra#1095).
 
-  Never `Keyword.put(meta, :loki_ship, ...)` by hand; call this.
-  """
-  @spec ship(keyword(), boolean()) :: keyword()
-  def ship(metadata, true),
-    do: metadata |> Keyword.put(:loki_ship, true) |> Keyword.put(:ship, "loki")
+  Deliberately NOT called from `with_category/3`. The category defaults are
+  already matched by the config's `$severity` and `$metadata['category']`
+  rules, and stamping `:ship` on them too would widen those rules by side
+  effect — `:info` + `:websocket` ships per `Category`'s list but is absent
+  from the config's, so it would start flowing to a billed-on-ingest Loki
+  without anyone deciding to. That divergence is real and worth resolving; it
+  is not this function's to resolve silently.
 
-  def ship(metadata, false),
-    do: metadata |> Keyword.put(:loki_ship, false) |> Keyword.put(:ship, "drop")
+  So: `:ship` marks an OVERRIDE and nothing else, which is exactly what the
+  paired config rule says it matches.
+  """
+  @spec ship_to_loki(keyword()) :: keyword()
+  def ship_to_loki(metadata),
+    do: metadata |> Keyword.put(:loki_ship, true) |> Keyword.put(:ship, "loki")
 
   defp put_trace_context(metadata) do
     case Engram.Observability.Otel.span_context() do
