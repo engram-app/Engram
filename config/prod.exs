@@ -8,8 +8,14 @@ config :logger, level: :info
 # format from config/config.exs). The logger_json Basic formatter emits one
 # JSON object per line with `message`/`severity`/`time` at the top level and
 # ALL :logger metadata nested under a "metadata" object — so `category`,
-# `loki_ship`, `request_id`, etc. appear as `metadata.*` fields. Fluent Bit
-# reads the `loki_ship` boolean and Loki parses fields via `| json`.
+# `loki_ship`, `request_id`, etc. appear as `metadata.*` fields, and Loki
+# parses them via `| json`.
+#
+# Fluent Bit does NOT read the `loki_ship` boolean — it never did, and
+# believing it does is what made both per-entry overrides silent no-ops for
+# months (engram-app/engram-infra#1095). Routing is plain string compares on
+# `severity`, `metadata.category` and `metadata.ship`; the last is written
+# only by `Engram.Logger.Metadata.ship_to_loki/1`.
 #
 # `new/1` is not callable in config files, so the {module, opts} tuple form is
 # used. This sets the formatter on the standard :logger :default_handler,

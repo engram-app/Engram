@@ -1,7 +1,7 @@
 defmodule Engram.Logger.Metadata do
   @moduledoc """
   Builds Logger metadata with a validated `category` and the computed
-  `loki_ship` routing flag. Use at log call sites:
+  Loki routing decision. Use at log call sites:
 
       Logger.info("subscription created",
         Engram.Logger.Metadata.with_category(:info, :billing,
@@ -211,6 +211,36 @@ defmodule Engram.Logger.Metadata do
     |> Keyword.put(:loki_ship, Category.loki_ship?(level, category))
     |> put_trace_context()
   end
+
+  @doc """
+  Force a single entry to Loki, overriding its category's default.
+
+  Sets `:loki_ship` (the Elixir-side concept every test and reader knows) AND
+  `:ship`, the plain string Fluent Bit actually routes on. Fluent Bit decides
+  what reaches Loki with string compares over the parsed record
+  (`envs/prod/fluent-bit/firelens.conf`) and deliberately does not read a
+  boolean, whose rendering it does not guarantee.
+
+  Setting the boolean alone is the bug this exists to prevent: for months both
+  overrides — the plugin's verbose-diagnostics dial (`Engram.Logs`) and
+  `expected_client_status` (`EngramWeb.RequestLogger`) — set a flag nothing
+  downstream read and shipped nothing, with no error anywhere
+  (engram-app/engram-infra#1095).
+
+  Deliberately NOT called from `with_category/3`. The category defaults are
+  already matched by the config's `$severity` and `$metadata['category']`
+  rules, and stamping `:ship` on them too would widen those rules by side
+  effect — `:info` + `:websocket` ships per `Category`'s list but is absent
+  from the config's, so it would start flowing to a billed-on-ingest Loki
+  without anyone deciding to. That divergence is real and worth resolving; it
+  is not this function's to resolve silently.
+
+  So: `:ship` marks an OVERRIDE and nothing else, which is exactly what the
+  paired config rule says it matches.
+  """
+  @spec ship_to_loki(keyword()) :: keyword()
+  def ship_to_loki(metadata),
+    do: metadata |> Keyword.put(:loki_ship, true) |> Keyword.put(:ship, "loki")
 
   defp put_trace_context(metadata) do
     case Engram.Observability.Otel.span_context() do
