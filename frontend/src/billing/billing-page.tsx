@@ -297,6 +297,19 @@ export default function BillingPage({
 		}
 	}, []);
 
+	// Frozen while a checkout is mounted: the effect below tears down and
+	// rebuilds the Paddle instance whenever this changes, which would kill an
+	// open inline iframe mid-fill and leave it stranded on its old theme while
+	// the page around it (background, .dark class) has already flipped —
+	// invisible text. Only resync once checkingOut/slow/finalizing clears, so
+	// the next checkout opens with the current theme instead.
+	const [appliedTheme, setAppliedTheme] = useState(resolved);
+	useEffect(() => {
+		if (!(checkingOut || slow || finalizing)) {
+			setAppliedTheme(resolved);
+		}
+	}, [resolved, checkingOut, slow, finalizing]);
+
 	useEffect(() => {
 		if (!config) {
 			return;
@@ -377,12 +390,12 @@ export default function BillingPage({
 							// box. frameInitialHeight covers the initial paint before Paddle
 							// reports the real height. (min-width matches Paddle's own sample.)
 							frameStyle: "width:100%; min-width:312px; background:transparent; border:none;",
-							theme: resolved === "dark" ? "dark" : "light",
+							theme: appliedTheme === "dark" ? "dark" : "light",
 							locale: "en",
 						}
 					: {
 							displayMode: "overlay",
-							theme: resolved === "dark" ? "dark" : "light",
+							theme: appliedTheme === "dark" ? "dark" : "light",
 							locale: "en",
 						},
 			},
@@ -400,7 +413,7 @@ export default function BillingPage({
 			paddleRef.current = undefined;
 			setPaddle(undefined);
 		};
-	}, [config, resolved, qc, isInline]);
+	}, [config, appliedTheme, qc, isInline]);
 
 	// Open checkout. In inline mode we set checkingOut first so the mount
 	// div is in the DOM before Paddle tries to find it.
