@@ -56,15 +56,46 @@ defmodule Engram.Usage.DailyCap do
 
   @spec remaining(binary(), String.t(), pos_integer(), float()) :: float()
   def remaining(user_id, kind, capacity, refill_per_sec) do
+    case Cache.empty_until(user_id, kind) do
+      # `spend/4` consults this cache FIRST and short-circuits a deny without
+      # touching the DB, and `mark_empty/3` caches for a fixed
+      # `ceil(1/refill_per_sec)` regardless of the actual fractional deficit.
+      # Reading Postgres directly would therefore report "1 search left" for
+      # most of a window in which `spend/4` still refuses — an advisory number
+      # that contradicts the authority is worse than no number.
+      {:empty, _retry} -> 0.0
+      :unknown -> do_remaining(user_id, kind, capacity, refill_per_sec)
+    end
+  end
+
+  defp do_remaining(user_id, kind, capacity, refill_per_sec) do
     case Repo.query(@remaining_sql, [
            Ecto.UUID.dump!(user_id),
            kind,
            capacity * 1.0,
            refill_per_sec
          ]) do
-      {:ok, %{rows: [[tokens]]}} -> max(0.0, tokens)
-      {:ok, %{rows: []}} -> capacity * 1.0
-      {:error, _reason} -> capacity * 1.0
+      {:ok, %{rows: [[tokens]]}} ->
+        max(0.0, tokens)
+
+      # No row is not an empty bucket — it means nothing has been spent yet.
+      {:ok, %{rows: []}} ->
+        capacity * 1.0
+
+      {:error, reason} ->
+        # Same fail-open as `do_spend/4`, and logged + emitted for the same
+        # reason: a fabricated number with no signal is indistinguishable from
+        # a real one. `emit/2` feeds `Engram.PromEx.Usage`.
+        Logger.warning(
+          "daily_cap remaining fail-open",
+          Engram.Logger.Metadata.with_category(:warning, :billing,
+            kind: kind,
+            reason: inspect(reason)
+          )
+        )
+
+        emit(kind, :fail_open)
+        capacity * 1.0
     end
   end
 

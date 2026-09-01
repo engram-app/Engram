@@ -25,12 +25,19 @@ defmodule EngramWeb.BillingUsageTest do
 
     assert body["tier"] == "free"
 
-    for key <- ~w(notes vaults attachment_bytes lifetime_embed_tokens
-                  ai_conversations_today ai_queries_today
-                  external_ai_searches_today inapp_searches_today) do
+    for key <- ~w(notes vaults attachment_bytes lifetime_embed_tokens indexed_notes
+                  ai_conversations_today ai_queries_today) do
       entry = body["usage"][key]
       assert is_map(entry), "missing usage entry: #{key}"
       assert is_integer(entry["used"]), "#{key}.used must always be a number"
+    end
+
+    # Token buckets report what is LEFT — a derived "used" decays as the bucket
+    # refills, which would make a daily count read 0 by afternoon.
+    for key <- ~w(external_ai_searches inapp_searches) do
+      entry = body["usage"][key]
+      assert is_integer(entry["remaining"]), "#{key}.remaining must be a number"
+      refute Map.has_key?(entry, "used"), "#{key} must not claim a daily used count"
     end
   end
 
@@ -41,7 +48,9 @@ defmodule EngramWeb.BillingUsageTest do
     assert body["usage"]["vaults"]["limit"] == 1
     # register_vault/3 in setup created exactly one.
     assert body["usage"]["vaults"]["used"] == 1
-    assert body["usage"]["external_ai_searches_today"]["limit"] == 15
+    assert body["usage"]["external_ai_searches"]["limit"] == 15
+    assert body["usage"]["external_ai_searches"]["remaining"] == 15
+    assert body["usage"]["indexed_notes"]["limit"] == 2_000
   end
 
   test "an uncapped limit reports null, not -1 or a sentinel", %{conn: conn, user: user} do
@@ -80,17 +89,49 @@ defmodule EngramWeb.BillingUsageTest do
     assert body["usage"]["ai_queries_today"]["used"] == 0
   end
 
-  test "search bucket usage tracks what was actually spent", %{conn: conn, user: user} do
-    assert usage(conn)["usage"]["external_ai_searches_today"]["used"] == 0
+  test "search bucket reports what is left, and reading does not spend", %{
+    conn: conn,
+    user: user
+  } do
+    assert usage(conn)["usage"]["external_ai_searches"]["remaining"] == 15
 
-    # Spend two tokens directly — the endpoint must observe them without
-    # itself consuming budget.
     for _ <- 1..2, do: Engram.Usage.DailyCap.spend(user.id, "ext_search", 15, 15 / 86_400)
 
-    assert usage(conn)["usage"]["external_ai_searches_today"]["used"] == 2
+    assert usage(conn)["usage"]["external_ai_searches"]["remaining"] == 13
 
-    # Reading twice must not move the number — asking how much budget you have
-    # cannot cost budget.
-    assert usage(conn)["usage"]["external_ai_searches_today"]["used"] == 2
+    # Asking how much budget you have must not cost budget.
+    assert usage(conn)["usage"]["external_ai_searches"]["remaining"] == 13
+  end
+
+  test "ai_conversations_today is clamped to the limit for display", %{conn: conn, user: user} do
+    # The meter commits `conversations_today + 1` before testing `today > cap`,
+    # so a capped Free user really does persist 6 against a limit of 5. Correct
+    # for the gate, 120% on a progress bar.
+    Engram.Repo.insert!(
+      %Engram.UsageMeters.Meter{
+        user_id: user.id,
+        conversations_today: 6,
+        conversations_day_key: Date.utc_today(),
+        updated_at: DateTime.utc_now()
+      },
+      skip_tenant_check: true,
+      on_conflict: :replace_all,
+      conflict_target: :user_id
+    )
+
+    entry = usage(conn)["usage"]["ai_conversations_today"]
+    assert entry["limit"] == 5
+    assert entry["used"] == 5
+  end
+
+  test "indexed_notes never exceeds the indexed cap", %{conn: conn, user: user} do
+    UsageMeters.inc_notes_count(user.id, 3_000)
+
+    body = usage(conn)
+
+    # notes_cap (10k) is NOT the binding limit on Free — indexed_notes_cap is.
+    assert body["usage"]["notes"]["used"] == 3_000
+    assert body["usage"]["indexed_notes"]["used"] == 2_000
+    assert body["usage"]["indexed_notes"]["limit"] == 2_000
   end
 end
