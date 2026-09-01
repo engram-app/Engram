@@ -33,10 +33,17 @@ defmodule Engram.Billing do
   @doc """
   Returns the effective limit for a given key for a user.
 
-  Resolution order:
-    1. user_overrides[key]
-    2. plans[user.plan_id].limits[key]
-    3. LimitKeys.default_for(key, tier)
+  Resolution order, first hit wins:
+    1. user_limit_overrides[key]           (per-user, live via OverrideCache)
+    2. ENGRAM_<TIER>_<KEY> env             (:plan_overrides, parsed at boot)
+    3. plans[user.plan_id].limits[key]
+    4. LimitKeys.default_for(key, tier)
+
+  Step 3 is effectively dead: `users.plan_id` is written only in tests, so
+  every production user resolves through 1, 2 or 4. Step 2 is the one an
+  operator actually reaches, and it is a PULL model keyed off
+  `LimitKeys.env_var_names/0` — an env var whose key is not in the catalog is
+  never read and never warns.
 
   Uses explicit nil-checking (not ||) so that `false` values are honoured.
   Raises `Engram.Billing.UnknownLimitKey` for string keys or atoms not in

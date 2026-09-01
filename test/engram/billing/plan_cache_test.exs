@@ -49,9 +49,15 @@ defmodule Engram.Billing.PlanCacheTest do
   end
 
   test "missing plan key falls through to the default", %{user: user} do
-    # reranker_enabled is not set on this plan → default for tier.
-    assert Billing.effective_limit(user, :reranker_enabled) ==
-             LimitKeys.default_for(:reranker_enabled, :free)
+    # mcp_connections_cap is not set on this plan → default for tier. Chosen
+    # because its Free default (1) differs from every value stored on the
+    # fixture plan: a key defaulting to `false` would assert `false == false`
+    # and still pass if `wrap_lookup(nil)` started returning `{:hit, false}`,
+    # which is exactly the miss-vs-stored-false distinction the test above pins.
+    assert Billing.effective_limit(user, :mcp_connections_cap) ==
+             LimitKeys.default_for(:mcp_connections_cap, :free)
+
+    assert Billing.effective_limit(user, :mcp_connections_cap) == 1
   end
 
   test "invalidate/1 forces a re-read", %{plan: plan, user: user} do

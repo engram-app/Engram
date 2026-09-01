@@ -109,9 +109,12 @@ defmodule Engram.Billing.LimitKeysTest do
   end
 
   describe "env_var_names/0" do
-    test "emits 96 tuples (32 keys × 3 tiers)" do
+    test "emits one tuple per key per tier" do
       tuples = LimitKeys.env_var_names()
-      assert length(tuples) == 96
+      # Derived, not a second hand-maintained literal: this count is a pure
+      # function of the other two and two literals drift apart (the moduledoc
+      # said 27 keys while the catalog held 33).
+      assert length(tuples) == length(LimitKeys.all()) * length(LimitKeys.tiers())
     end
 
     test "includes ENGRAM_FREE_NOTES_CAP" do
@@ -179,6 +182,15 @@ defmodule Engram.Billing.LimitKeysTest do
     # one key inverted the meaning of disabling enforcement and cost every
     # self-hoster their images and PDFs.
     refute LimitKeys.defined?(:attachments_text_only)
+  end
+
+  test "the retired vault_scoped_keys entry is gone" do
+    # Dead catalog entry: no gate, no client, superseded by the
+    # `api_key_vaults` table. It reads like an obvious API-key feature, so
+    # without this the only objection to re-adding it is an integer literal
+    # that a re-adder bumps as a matter of course. If vault-scoping ever
+    # returns as a plan limit, it needs a gate first — not a catalog row.
+    refute LimitKeys.defined?(:vault_scoped_keys)
   end
 
   test "every boolean limit is grant-shaped: enforcement-off must never restrict" do

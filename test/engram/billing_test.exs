@@ -167,7 +167,7 @@ defmodule Engram.BillingTest do
       assert state.attachments_all_types == true
     end
 
-    test "the retired legacy field is not published on any tier" do
+    test "the retired legacy field is not published" do
       # CONTRACT step: `attachments_text_only` was the restriction-shaped
       # spelling, shipped alongside the grant-shaped one so plugin builds
       # predating the rename kept working. The released plugin reads
@@ -175,15 +175,10 @@ defmodule Engram.BillingTest do
       # old field is gone. Asserted rather than merely deleted: silently
       # re-adding it would resurrect the inverted-boolean class that cost
       # self-hosters every image and PDF.
-      for user <- [
-            build(:user, free_tier_accepted_at: nil),
-            build(:user) |> with_subscription(tier: "starter", status: "active"),
-            build(:user) |> with_subscription(tier: "pro", status: "active")
-          ] do
-        state = Billing.plan_state(user)
-        assert state.attachments_all_types == true
-        refute Map.has_key?(state, :attachments_text_only)
-      end
+      # `plan_state/1` builds a fixed map literal with no tier branch, so the
+      # published key set cannot vary by tier — one user proves it.
+      state = Billing.plan_state(build(:user, free_tier_accepted_at: nil))
+      refute Map.has_key?(state, :attachments_text_only)
     end
   end
 
@@ -871,9 +866,14 @@ defmodule Engram.BillingTest do
       # mirror Billing.plan_state/1 (sans tier, which stays the string form).
       reloaded = Engram.Accounts.get_user(user.id)
       plan = Engram.Billing.plan_state(reloaded)
-      assert payload.attachments_all_types == plan.attachments_all_types
-      assert payload.max_file_bytes == plan.max_file_bytes
-      assert payload.attachment_bytes_cap == plan.attachment_bytes_cap
+      # Whole-map comparison, not field-by-field. `indexed_notes_cap` was
+      # omitted from the broadcast allowlist once and the effect was a Free
+      # user being told their whole vault was searchable while only the oldest
+      # 2,000 notes were indexed — a field-by-field test cannot see the field
+      # nobody remembered to add.
+      assert Map.drop(payload, [:tier, :status, :subscription_id]) ==
+               Map.drop(plan, [:tier])
+
       assert is_boolean(payload.attachments_all_types)
     end
 
