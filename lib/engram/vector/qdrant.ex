@@ -409,6 +409,30 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
+  Delete the listed point ids outright. Empty list is a no-op.
+
+  The identity-safe delete: point ids come from `chunks.qdrant_point_id`, so
+  this reaches a note's points no matter what its `path_hmac` has since become.
+  `delete_by_note/4` cannot — a rename retags the note row while the points keep
+  the old hmac, and the filter then matches nothing. Callers use both.
+  """
+  def delete_points(col \\ nil, point_ids)
+  def delete_points(_col, []), do: :ok
+
+  def delete_points(col, point_ids) when is_list(point_ids) do
+    col = col || collection()
+    opts = [json: %{points: point_ids}] ++ req_opts()
+
+    instrument(:delete, fn ->
+      case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
+        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  @doc """
   Delete all points for a given user+vault+path-hmac combination.
 
   T3.2 — `path_hmac` is the base64-encoded HMAC of the note path under the

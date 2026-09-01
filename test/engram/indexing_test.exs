@@ -597,14 +597,23 @@ defmodule Engram.IndexingTest do
 
       {:ok, _} = Indexing.index_note(note, vault)
 
-      # Now delete — Qdrant should get a delete request
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/delete", fn conn ->
+      # Now delete — Qdrant gets TWO deletes: the note's point ids (survives a
+      # drifted path_hmac) and the path_hmac filter (survives lost chunk rows).
+      test_pid = self()
+
+      Bypass.expect(bypass, "POST", "/collections/engram_notes/points/delete", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:qdrant_delete, Jason.decode!(body)})
+
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.send_resp(200, ~s({"result": {"status": "ok"}}))
       end)
 
       assert :ok = Indexing.delete_note_index(note)
+
+      assert_received {:qdrant_delete, %{"points" => ids}} when ids != []
+      assert_received {:qdrant_delete, %{"filter" => _}}
 
       # Postgres chunks should be gone
       import Ecto.Query
