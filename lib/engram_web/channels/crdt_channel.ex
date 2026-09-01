@@ -787,7 +787,7 @@ defmodule EngramWeb.CrdtChannel do
         result
 
       {:exit, reason} ->
-        {:error, {:applier_crashed, Engram.Telemetry.error_kind(reason)}}
+        {:error, {:applier_crashed, exit_kind(reason)}}
 
       nil ->
         # Deliberately NOT `Task.shutdown`. Killing the applier between
@@ -814,6 +814,17 @@ defmodule EngramWeb.CrdtChannel do
 
   # The reason term is never echoed or logged raw — the crypto/KMS class can
   # embed a wrapped DEK, same rule `log_create_failed` follows.
+  # A raising task exits with `{exception, stacktrace}`, and `error_kind/1`
+  # matches a tuple only when elem 0 is an ATOM — an exception STRUCT there
+  # falls through to `:other`. So every applier crash was tagged `:other`,
+  # which is precisely the arm whose comment promises "the diagnostic detail
+  # rides the log line". Unwrap first, then classify.
+  defp exit_kind({%{__exception__: true} = e, stack}) when is_list(stack) do
+    Engram.Telemetry.error_kind(e)
+  end
+
+  defp exit_kind(reason), do: Engram.Telemetry.error_kind(reason)
+
   defp safe_kind({:applier_crashed, kind}), do: kind
   defp safe_kind(reason) when is_atom(reason), do: reason
   defp safe_kind(reason), do: Engram.Telemetry.error_kind(reason)
@@ -1573,6 +1584,30 @@ defmodule EngramWeb.CrdtChannel do
 
         {:noreply, socket}
     end
+  end
+
+  # The reply from a `crdt_doc_update` applier this channel stopped waiting on.
+  #
+  # `Task.ignore/1` does NOT flush the task's reply. Its `ignore_receive/3` runs
+  # `after 0`: if the `{ref, result}` message has not arrived in that instant it
+  # unlinks, demonitors (which flushes only the `:DOWN`) and returns nil — while
+  # the applier keeps running and later sends its reply here anyway. So every
+  # `apply_timeout` arms a delayed 2-tuple with no clause to match it.
+  #
+  # Phoenix injects no fallback `handle_info/2` (`__before_compile__` defines
+  # only `__intercepts__`, and `Channel.Server` calls the module's callback
+  # directly), so an unmatched message raises `FunctionClauseError` and kills
+  # the channel — losing every room this socket owns and forcing a rejoin plus a
+  # full re-handshake. That is precisely the blast radius `async_nolink` was
+  # chosen to prevent, arriving by a different door.
+  #
+  # The result is genuinely uninteresting by now: the client was already told
+  # `doc_update_failed` and has fallen back to the room handshake, which
+  # converges on the same state because the apply is idempotent. Dropping it is
+  # correct; crashing on it is not.
+  @impl true
+  def handle_info({ref, _reply}, socket) when is_reference(ref) do
+    {:noreply, socket}
   end
 
   @doc """

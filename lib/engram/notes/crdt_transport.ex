@@ -21,6 +21,12 @@ defmodule Engram.Notes.CrdtTransport do
 
   require Logger
 
+  # Ceiling on the in-room apply call. MUST stay strictly below
+  # `EngramWeb.CrdtChannel.@room_free_apply_ms`, which waits on this from the
+  # channel process — see the comment at the `update_doc` call site for why the
+  # inner bound outliving the outer one is the worst available shape.
+  @apply_call_timeout_ms 2_000
+
   @doc "sha256(state vector), url-safe base64 no padding. THE head marker."
   @spec head_marker(Yex.Doc.t()) :: String.t()
   def head_marker(doc) do
@@ -195,16 +201,30 @@ defmodule Engram.Notes.CrdtTransport do
     # SharedDoc.update_doc is a synchronous GenServer.call: the fun runs to
     # completion inside the room before this returns, so the {ref, result}
     # message is already in our mailbox when we receive it.
-    SharedDoc.update_doc(room, fn doc ->
-      result =
-        case Yex.apply_update(doc, update) do
-          :ok -> {:ok, head_marker(doc)}
-          {:error, _} -> {:error, :invalid_update}
-        end
+    #
+    # EXPLICIT TIMEOUT, below y_ex's 5_000 default. `crdt_doc_update` waits on
+    # this apply from the channel process with its own budget
+    # (`CrdtChannel.@room_free_apply_ms`), and an inner call allowed to outlive
+    # that budget is the worst shape available: the channel gives up, answers
+    # `doc_update_failed` and disowns the applier — and then the apply SUCCEEDS,
+    # so a client is told its write failed while the write lands. The inner
+    # bound must stay strictly under the outer one; a GenServer.call timeout
+    # exits, which the `catch :exit` clauses below turn into
+    # `{:error, :room_unavailable}` — a clean, retryable answer.
+    SharedDoc.update_doc(
+      room,
+      fn doc ->
+        result =
+          case Yex.apply_update(doc, update) do
+            :ok -> {:ok, head_marker(doc)}
+            {:error, _} -> {:error, :invalid_update}
+          end
 
-      send(parent, {ref, result})
-      :ok
-    end)
+        send(parent, {ref, result})
+        :ok
+      end,
+      @apply_call_timeout_ms
+    )
 
     receive do
       {^ref, result} -> result

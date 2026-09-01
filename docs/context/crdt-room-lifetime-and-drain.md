@@ -214,9 +214,11 @@ between `ensure_started` and `observe` lands in exactly that state. It disowns t
 
 **2. A room-free frame must still bill the handshake lane.** `crdt_doc_state` and `crdt_doc_update`
 both stand in for a handshake, so putting them on the edit lane would let a bulk vault sync starve
-the user's real typing — the 2026-07-07 cross-file-overwrite incident shape. Both use
-`state_frame_class/1` (a size gate: small rides `:handshake`, oversized pays `:edit`), which
-`crdt_create`'s genesis seed introduced.
+the user's real typing — the 2026-07-07 cross-file-overwrite incident shape. They get there by
+different routes, which is worth knowing before you go looking for a shared helper: `crdt_doc_state`
+carries no `b64` at all and hardcodes `check_rate(socket, :handshake)`, while `crdt_doc_update` —
+which does carry state — goes through `state_frame_class/1`, the size gate `crdt_create`'s genesis
+seed introduced (small rides `:handshake`, oversized pays `:edit`). Only the latter two share it.
 
 **What this does NOT do:** it does not make `@max_evictions_per_sweep` right. That cap is still a
 fixed batch with no feedback term, deliberately, because each eviction costs the owning channel a

@@ -1396,6 +1396,24 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_reply ref2, :ok, %{doc_id: ^doc_id}, 3000
     end
 
+    test "a LATE applier reply does not kill the channel", %{socket: socket, doc_id: doc_id} do
+      # `Task.ignore/1` does NOT flush the task's reply — `ignore_receive/3`
+      # runs `after 0`, so a reply that has not landed in that instant arrives
+      # here later with the task already disowned. Phoenix injects no fallback
+      # `handle_info/2`, so without a clause for it the 2-tuple raises
+      # FunctionClauseError and the channel dies, taking every room this socket
+      # owns. That is the blast radius `async_nolink` was chosen to prevent.
+      #
+      # Sending the shape directly is the point: reproducing it through a real
+      # timeout would need a >3s stalled apply, which makes the test slow and
+      # load-dependent while proving the same one thing.
+      send(socket.channel_pid, {make_ref(), {:ok, %{head: "late"}}})
+
+      # THE assertion: the channel is still answering afterwards.
+      ref = push(socket, "crdt_doc_state", %{"doc_id" => doc_id})
+      assert_reply ref, :ok, %{doc_id: ^doc_id}, 3000
+    end
+
     test "bills the handshake budget — it is the frame that REPLACES a handshake", %{
       socket: socket,
       user: user,
