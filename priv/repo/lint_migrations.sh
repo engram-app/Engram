@@ -89,4 +89,41 @@ echo "── rendered DDL ──"
 cat "$tmp_sql"
 echo "──────────────────"
 
-"$SQUAWK" "$tmp_sql"
+# `ban-drop-column` / `ban-drop-table` are ON globally (see .squawk.toml) and
+# should stay on: an unintended DROP in an expand or migrate-data migration is
+# exactly what they exist to catch.
+#
+# But a `*_contract.exs` / `*_single_shot.exs` migration's WHOLE PURPOSE is to drop, and the repo
+# already gates that separately and more precisely: the phase/contract label is
+# mandatory (verify.yml "migration gates"), and its contract-phase-references
+# step greps lib/ to prove nothing still reads the dropped columns/tables. A
+# blanket ban would make the contract phase unshippable — which nobody noticed,
+# because every earlier `remove :` in this tree lives in a `down` block and
+# squawk only ever renders `up`. This is the first real contract migration.
+#
+# Scoped to the filename convention, NOT to a global config exclusion, so the
+# rules keep gating every other phase.
+# squawk's `--exclude` REPLACES `.squawk.toml`'s `excluded_rules` rather than
+# merging with it (verified: passing the drop rules alone brought
+# require-timeout-settings and prefer-robust-stmts back, even with an explicit
+# `-c`). So when we add the drop rules we must re-state the config's own list.
+# Derived from the file rather than duplicated, so the two cannot drift; if the
+# config's format ever changes this yields an empty base and CI goes red on the
+# re-appearing rules, which is the loud failure we want.
+base_excluded=$(sed -n 's/^excluded_rules *= *\[\(.*\)\]/\1/p' ".squawk.toml" |
+  tr -d '" ' | tr -d "'")
+
+drop_rules_excluded=""
+for v in "${new_versions[@]}"; do
+  # `compgen -G`, not `ls`: `ls a b` exits non-zero when EITHER operand is an
+  # unmatched glob, so testing both suffixes at once silently never fired.
+  if compgen -G "$MIG_DIR/${v}_*_contract.exs" >/dev/null ||
+       compgen -G "$MIG_DIR/${v}_*_single_shot.exs" >/dev/null; then
+    drop_rules_excluded="--exclude=${base_excluded:+$base_excluded,}ban-drop-column,ban-drop-table"
+    echo "squawk: ${v} is a contract / single-shot migration — drop rules" \
+         "deferred to the phase gate's reference check"
+  fi
+done
+
+# shellcheck disable=SC2086 # intentional word-splitting: empty or one --exclude
+"$SQUAWK" $drop_rules_excluded "$tmp_sql"

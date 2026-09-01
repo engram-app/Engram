@@ -22,7 +22,7 @@ defmodule Engram.Billing.CapabilitiesTest do
     assert caps.limits["vaults_cap"] == 1
     # Boolean feature stays a boolean; integer "unlimited" caps serialize to nil.
     assert caps.limits["api_write_enabled"] == false
-    assert caps.limits["ai_queries_per_day"] == nil
+    assert caps.limits["ai_searches_per_day"] == 20
   end
 
   test "resolves paid-tier limits when the user has an entitling subscription" do

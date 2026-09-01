@@ -99,6 +99,27 @@ The regression tests added with the fix drive `POST /api/mcp` through the real
 router (`test/engram_web/controllers/mcp_controller_test.exs`, describe
 `"external_ai_searches_per_day over MCP"`).
 
+## Superseded for search (2026-09-01): charge at the cost site
+
+`EnforceSearchCap` and `Engram.Usage.SearchCap` are **deleted**. The search
+budget is now charged inside `Engram.Search.search/4` — the single funnel every
+retrieval passes through, and where the Voyage embed happens.
+
+That inverts the default. The old shape was "explicitly charge these two tools,"
+against a hand-maintained `MCP.Tools.search_tools/0` list plus a test watching
+the list. The new shape is "every retrieval is charged unless it passes
+`charge: false`," so a new transport or tool inherits metering instead of needing
+to be added to anything. `SearchToolCoverageTest` is deleted with the list.
+
+`ConversationMeter` is gone too: six catalog keys collapsed into one
+(`ai_searches_per_day`, Free 20). See `limit-sentinel-decoding.md`'s sibling
+note and `Engram.Billing.LimitKeys`.
+
+The rest of this doc still stands as the record of the bug class and as the rule
+for any limit that is NOT a retrieval — an attachment cap, a device cap, a
+connection cap all still live behind plugs or context functions and can still be
+missed on a transport.
+
 ## The rule
 
 A limit that must hold across transports lives in a **plain module**, not in a
