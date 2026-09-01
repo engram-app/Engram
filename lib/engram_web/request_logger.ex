@@ -16,6 +16,7 @@ defmodule EngramWeb.RequestLogger do
   triage; it is not in the redact filter's sensitive-key set.
   """
 
+  alias Engram.Logger.Metadata
   alias EngramWeb.RequestMeta
 
   require Logger
@@ -57,7 +58,7 @@ defmodule EngramWeb.RequestLogger do
   def handle_event(@exception_event, _measurements, %{conn: conn} = metadata, _config) do
     Logger.error(
       "request exception",
-      Engram.Logger.Metadata.with_category(:error, :http,
+      Metadata.with_category(:error, :http,
         method: conn.method,
         status: conn.status,
         route: route(conn),
@@ -94,7 +95,7 @@ defmodule EngramWeb.RequestLogger do
       level,
       "#{conn.method} #{conn.status} in #{duration_ms}ms",
       level
-      |> Engram.Logger.Metadata.with_category(:http, meta)
+      |> Metadata.with_category(:http, meta)
       |> maybe_force_loki_ship(conn)
     )
   end
@@ -108,8 +109,10 @@ defmodule EngramWeb.RequestLogger do
   # client entries. Volume is not a concern: these lines are a handful per
   # login, unlike the successful-2xx firehose that keeps :http off the
   # info-ships list in the first place.
+  # Metadata.ship_to_loki/1, never a bare Keyword.put: Fluent Bit routes on the
+  # STRING field, so setting the boolean alone shipped nothing (engram-infra#1095).
   defp maybe_force_loki_ship(meta, %Plug.Conn{assigns: %{expected_client_status: true}}),
-    do: Keyword.put(meta, :loki_ship, true)
+    do: Metadata.ship_to_loki(meta)
 
   defp maybe_force_loki_ship(meta, _conn), do: meta
 

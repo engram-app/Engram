@@ -40,7 +40,13 @@ defmodule Engram.Logger.Category do
   # info lines from these categories are state changes worth keeping in Loki.
   # :websocket (connection lifecycle) is low-volume + high-value. :client is
   # NOT here: re-emitted plugin info would flood Loki; verbose client entries
-  # opt in per-entry via a loki_ship override (see Logs.insert_logs).
+  # opt in per-entry via Metadata.ship_to_loki/1 (see Logs.insert_logs) — NOT
+  # by setting loki_ship alone, which nothing downstream reads.
+  #
+  # NOTE: this list and the config's category regex are not the same set —
+  # :websocket ships here and is absent there, so :info + :websocket does not
+  # actually reach Loki today. Tracked separately; do not "fix" it by widening
+  # a routing rule without deciding the volume.
   @info_to_loki [:billing, :crypto, :lifecycle, :oban, :boot, :websocket]
 
   @spec all() :: [t(), ...]
