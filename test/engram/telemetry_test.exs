@@ -68,7 +68,7 @@ defmodule Engram.TelemetryTest do
     end
 
     test "unwraps a case_clause" do
-      reason = exit_reason(fn -> case :x, do: (:y -> :ok) end)
+      reason = exit_reason(fn -> case opaque(:x), do: (:y -> :ok) end)
       assert Telemetry.error_kind(reason) == :case_clause
     end
 
