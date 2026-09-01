@@ -84,6 +84,24 @@ defmodule Engram.MCP.Tools do
     end)
   end
 
+  # Tools whose PURPOSE is retrieval: they run `Engram.Search.search/4` and so
+  # spend the same daily bucket as `POST /api/search`. Lives here rather than in
+  # the controller because the registry is what a new tool gets added to, and a
+  # retrieval tool missing from this list is silently uncapped — the same
+  # "the gate exists but does not cover this path" class as the plug bypass it
+  # was written for. `Engram.MCP.SearchToolCoverageTest` pins it against the
+  # actual `Handlers.handle/4` clauses.
+  #
+  # `create_note` / `write_note` also search internally (folder auto-placement,
+  # `Handlers.auto_place_folder/4`) and are deliberately absent — that search is
+  # incidental to a write, and charging it would fail note creation with a
+  # search-cap error. See docs/context/mcp-bypasses-path-shaped-plugs.md for the
+  # residual hole that leaves.
+  @search_tools ~w(search_notes suggest_folder)
+
+  @spec search_tools() :: [String.t(), ...]
+  def search_tools, do: @search_tools
+
   @spec get(String.t()) :: {:ok, tool_def()} | :error
   def get(name) do
     case Enum.find(list(), &(&1.name == name)) do

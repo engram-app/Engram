@@ -71,21 +71,49 @@ defmodule Mix.Tasks.Engram.Lint.LimitKeys do
     acc
   end
 
-  defp check_args(file, meta, fun, [_user, key | _rest], lines) do
+  # `Code.string_to_quoted!/2` does not expand `|>`, so the key's position
+  # depends on the spelling: `Billing.check_limit(user, :notes_cap, n)` puts it
+  # second, `user |> Billing.check_limit(:notes_cap, n)` puts it first. Rather
+  # than re-implement pipe expansion, treat a call as clean when EITHER of the
+  # first two arguments is a catalog key — no gate takes a catalog key in
+  # either position for any other purpose, so this cannot pass a real typo.
+  #
+  # This used to be a `[_user, key | _rest]` head plus a catch-all commented
+  # "arity mismatch — ignore", which silently skipped every piped call site:
+  # a typo'd key in that shape was unlinted, the one thing this task exists to
+  # catch.
+  defp check_args(file, meta, fun, args, lines) when is_list(args) and args != [] do
     line = meta[:line]
+    candidates = Enum.take(args, 2)
 
     cond do
-      ignore?(lines, line) -> []
-      is_atom(key) and LimitKeys.defined?(key) -> []
+      ignore?(lines, line) ->
+        []
+
+      Enum.any?(candidates, &(is_atom(&1) and LimitKeys.defined?(&1))) ->
+        []
+
+      true ->
+        classify(file, line, fun, key_arg(args), lines)
+    end
+  end
+
+  defp check_args(_file, _meta, _fun, _args, _lines), do: []
+
+  # No candidate was a valid key, so one of them is the offender. Prefer the
+  # unpiped position; a piped 3-arity call with a bad key reports against the
+  # wrong argument, but it still FAILS, which is the safe direction.
+  defp key_arg([_user, key | _rest]), do: key
+  defp key_arg([key]), do: key
+
+  defp classify(file, line, fun, key, lines) do
+    cond do
       is_atom(key) -> [{file, line, fun, :unknown_atom, key}]
       is_binary(key) -> [{file, line, fun, :string_key, key}]
       allow_dynamic?(lines, line) -> []
       true -> [{file, line, fun, :dynamic_key, Macro.to_string(key)}]
     end
   end
-
-  # Arity mismatch (e.g. a Billing.* call with only one arg) — ignore.
-  defp check_args(_file, _meta, _fun, _args, _lines), do: []
 
   defp allow_dynamic?(lines, line),
     do: prev_line_matches?(lines, line, ~r/#\s*lint:limit_keys\s+allow_dynamic/)
