@@ -1,18 +1,18 @@
-"""E2E test 75: the Free search cap binds the MCP transport, not just /api/search.
+"""E2E test 75: the Free AI search budget binds every transport.
 
-`EnforceSearchCap` is a plug guarded on `request_path: "/api/search"`. MCP tool
-calls arrive as a JSON-RPC body at `POST /api/mcp` and reach
-`Engram.Search.search/4` directly, so for the whole life of that plug the Free
-tier's `external_ai_searches_per_day` was unenforced on the exact client class
-its own moduledoc named. See docs/context/mcp-bypasses-path-shaped-plugs.md.
+`ai_searches_per_day` is charged inside `Engram.Search.search/4` — the single
+funnel every retrieval passes through — rather than at each transport. The
+predecessor design charged in a plug guarded on `request_path: "/api/search"`,
+so MCP tool calls, which arrive as a JSON-RPC body at `POST /api/mcp`, went
+unmetered for the whole life of that plug. See
+docs/context/mcp-bypasses-path-shaped-plugs.md.
 
-The unit tests for that plug synthesize a conn whose `request_path` is already
-`/api/search`, which proves the rule and never the routing. This test proves the
-routing against a real server:
+Unit tests for a charge site can prove the rule and never the routing. This
+proves the routing against a real server:
 
   - a Free user's `search_notes` MCP call succeeds while budget remains,
-  - the next one comes back as JSON-RPC error -32_005 naming the limit key,
-  - `POST /api/search` for the SAME user is refused too — one bucket, two
+  - the next one comes back as an MCP tool error naming the limit key,
+  - `POST /api/search` for the SAME user is refused too — one budget, two
     transports, so a client cannot launder searches by switching protocol,
   - a non-search MCP tool still works, i.e. we capped searches and not the
     whole server.
@@ -22,6 +22,7 @@ Auth is the OAuth device flow (internal JWT), not an API key: Free defaults
 call is rejected by RequireApiRpsBudget long before reaching the search cap.
 Device-flow tokens are the real Free MCP path anyway.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -53,7 +54,7 @@ SEARCH_BUDGET = 1
 
 
 def _set_search_cap(clerk_user_id: str, value: int) -> None:
-    """Pin external_ai_searches_per_day for one user via an operator override.
+    """Pin ai_searches_per_day for one user via an operator override.
 
     Keyed on `users.external_id` (the Clerk user id) rather than email:
     provision_oauth_tokens mints the email internally and does not return it.
@@ -63,16 +64,27 @@ def _set_search_cap(clerk_user_id: str, value: int) -> None:
     sql = (
         "INSERT INTO user_limit_overrides (user_id, key, value, reason, set_by) "
         f"VALUES ((SELECT id FROM users WHERE external_id = '{clerk_user_id}'), "
-        f"'external_ai_searches_per_day', '{{\"v\": {value}}}'::jsonb, 'e2e-test', 'e2e') "
+        f"'ai_searches_per_day', '{{\"v\": {value}}}'::jsonb, 'e2e-test', 'e2e') "
         "ON CONFLICT (user_id, key) DO UPDATE "
         "SET value = EXCLUDED.value, set_at = NOW()"
     )
     result = subprocess.run(
         [
-            "docker", "exec", "-i", CI_POSTGRES_CONTAINER,
-            "psql", "-U", "engram", "-d", "engram", "-c", sql,
+            "docker",
+            "exec",
+            "-i",
+            CI_POSTGRES_CONTAINER,
+            "psql",
+            "-U",
+            "engram",
+            "-d",
+            "engram",
+            "-c",
+            sql,
         ],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     if result.returncode != 0:
         raise RuntimeError(f"_set_search_cap failed: {result.stderr.strip()}")
@@ -108,16 +120,14 @@ def test_free_mcp_search_cap_binds_and_is_shared_with_rest():
     # 2. Budget spent → JSON-RPC error naming the limit key. Before the fix this
     #    returned a normal result forever: the plug never saw /api/mcp.
     second, _ = api.mcp_call("search_notes", {"query": "supplements"})
-    assert "error" in second, (
-        f"second MCP search must be refused — the Free search cap does not bind "
+    text = second.get("result", {}).get("content", [{}])[0].get("text", "")
+    assert second.get("result", {}).get("isError"), (
+        f"second MCP search must be refused — the Free budget does not bind "
         f"the MCP transport; got {second}"
     )
-    assert second["error"]["code"] == -32_005, (
-        f"expected JSON-RPC -32005 rate_limited; got {second['error']}"
-    )
-    assert "external_ai_searches_per_day" in second["error"]["message"], (
+    assert "ai_searches_per_day" in text, (
         f"the refusal must name the limit key so clients can route the upgrade "
-        f"prompt; got {second['error']['message']}"
+        f"prompt, and must be distinguishable from an outage; got {text}"
     )
 
     # 3. Same bucket over REST. Switching transport must not buy more searches.
@@ -127,8 +137,8 @@ def test_free_mcp_search_cap_binds_and_is_shared_with_rest():
         f"{rest.text[:300]}"
     )
     body = rest.json()
-    assert body["reason"] == "external_ai_searches_per_day_exceeded", body
-    assert body["limit_key"] == "external_ai_searches_per_day", body
+    assert body["reason"] == "ai_searches_per_day_exceeded", body
+    assert body["limit_key"] == "ai_searches_per_day", body
 
     # 4. We capped searches, not the server. A non-search tool still answers.
     folders, _ = api.mcp_call("list_folders", {"vault_id": vault_id})
