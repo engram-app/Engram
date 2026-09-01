@@ -147,11 +147,15 @@ defmodule Engram.Notes.CrdtTransport do
   fastlanes it to live observers), and returns the new head marker.
 
   A malformed update yields `{:error, :invalid_update}` and mutates nothing.
+
+  `source` is attached to the room_start telemetry so a room allocated by this
+  path is attributable in `engram_prom_ex_crdt_room_start_total` rather than
+  landing in `:unknown` — the question #1493 is actually about.
   """
-  @spec apply_update(map(), map(), String.t(), binary()) ::
+  @spec apply_update(map(), map(), String.t(), binary(), atom()) ::
           {:ok, %{head: String.t()}}
           | {:error, :not_found | :invalid_update | :room_unavailable}
-  def apply_update(user, vault, note_id, update) do
+  def apply_update(user, vault, note_id, update, source \\ :unknown) do
     if Notes.note_in_vault?(user, vault.id, note_id) do
       # ensure_observed (not ensure_started): registers THIS process (the
       # per-request caller) as a SharedDoc observer so the room's lifetime is
@@ -161,7 +165,7 @@ defmodule Engram.Notes.CrdtTransport do
       # here. With an observer, when this process exits (end of request, or
       # here in tests, the spawned caller), the room checkpoints and exits
       # unless a live channel is also observing it.
-      with {:ok, room} <- CrdtRegistry.ensure_observed(user.id, vault.id, note_id),
+      with {:ok, room} <- CrdtRegistry.ensure_observed(user.id, vault.id, note_id, source),
            {:ok, head} <- apply_in_room(room, note_id, update) do
         {:ok, %{head: head}}
       else
