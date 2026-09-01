@@ -309,34 +309,31 @@ async def test_cold_send_over_fanout_opens_no_room(vault_a, vault_b, cdp_a, cdp_
 
     Tension worth knowing: catchupViaSeqReplay reaches applyChange, which is a
     noteIdMap writer, and B runs with it stubbed for the enroll reason above. So
-    B deliberately runs with one map-repair path dead while the assertion holds.
+    from suppression until restore, B has NO map repair. Everything that needs a
+    settled map must therefore happen before suppression — which is why the poll
+    is ordered above the try block and not inside it.
     """
-    # ponytail: B keeps catchupViaSeqReplay stubbed on purpose. The re-poll
-    # before the write is what makes that safe — B's map is proven present at
-    # the only moment it has to be, so no repair path needs to be live.
+    # ponytail: B holds no map repair while suppressed. Keep the window between
+    # suppression and the write empty — anything added in there that can drop or
+    # await a mapping has no way to recover, and burns the full timeout.
     path = "E2E/Crdt/FanoutColdSend.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "origin\n", "origin")
     note_id_b = await _confirm_room_free(cdp_b, path)
     await _confirm_room_free(cdp_a, path)
+    # B's map must hold the path at WRITE time, and this poll must happen
+    # BEFORE suppression, not after (#1526). `shouldDeferMint` refuses a push on
+    # `unmapped + engine-flushed` (sync.ts:5292), and the path can be
+    # transiently unmapped after the full sync `_confirm_room_free` triggers.
+    # The repair is `catchupViaSeqReplay` -> `applyChange`, a noteIdMap writer —
+    # which suppress_fanout_backstops() stubs. Polling after suppression waits
+    # for a repair that suppression has just disabled, so a transiently unmapped
+    # path never recovers and the poll burns its full timeout. Ordered this way
+    # the map is proven present while the repair is still live, and the window
+    # between here and the write holds nothing that can drop it.
+    await cdp_b.wait_for_note_id_for_path(path, timeout=CRDT_TIMEOUT)
     try:
         await cdp_a.suppress_fanout_backstops()
         await cdp_b.suppress_fanout_backstops()
-
-        # B's map must hold the path AT WRITE TIME, not merely when
-        # _confirm_room_free checked it (#1526). `shouldDeferMint` refuses a
-        # push on `unmapped + engine-flushed` (sync.ts:5292), and a full sync
-        # rebuilding noteIdMap leaves the path transiently unmapped — this test
-        # runs one on B via _confirm_room_free and then writes on B, so the edit
-        # can land inside B's own rebuild window. The push is then deferred to
-        # the flush queue, whose recovery the plugin measures at ~107s in CI
-        # (sync.ts:4419 comment) — under the 120s deadline below only by a hair,
-        # which is what made this test flake as a 120s content timeout that
-        # looked like a dead fan-out.
-        #
-        # Re-poll immediately before the write. This removes the race rather
-        # than running it, and a genuinely lost mapping now fails here with the
-        # cause named instead of two minutes later with a symptom.
-        await cdp_b.wait_for_note_id_for_path(path, timeout=CRDT_TIMEOUT)
 
         # B edits the CLOSED note (never opened in the editor).
         write_note(vault_b, path, "origin\nCOLD_SEND_FROM_B\n")

@@ -48,6 +48,24 @@ defmodule Engram.Workers.EmbedNoteTest do
     end)
   end
 
+  # Same stub, minus the exit-time "was it called?" assertion.
+  #
+  # `Bypass.expect/2` VERIFIES on exit: if no request arrives, the test fails in
+  # teardown with "No HTTP request arrived at Bypass" even though its body
+  # passed. Every test in the poison-loop block makes `embed_texts` fail, so
+  # whether Qdrant is reached at all depends on state an earlier test in the
+  # same process may already have warmed — the call is incidental to what these
+  # tests assert. That made the block fail intermittently on a teardown
+  # assertion nobody wrote on purpose (CI run 33370717102, 1 failure in 4938).
+  #
+  # `Bypass.pass/1` is the documented escape hatch: it marks retained plugs OK
+  # and sets `pass: true` on the instance, which nothing later resets, so
+  # ordering against the request does not matter.
+  defp stub_qdrant_optional(bypass) do
+    stub_qdrant(bypass)
+    Bypass.pass(bypass)
+  end
+
   describe "perform/1" do
     test "indexes note and returns :ok", %{bypass: bypass, note: note} do
       Engram.MockEmbedder
@@ -422,7 +440,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
   describe "perform/1 — poison-loop guard" do
     test "stamps embed_retry_after on the final failed attempt", %{bypass: bypass, note: note} do
-      stub_qdrant(bypass)
+      stub_qdrant_optional(bypass)
 
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _texts -> {:error, {500, %{"detail" => "boom"}}} end)
@@ -440,7 +458,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       # "Qdrant/Ollama not reachable" recovers on its own — a 6h park stranded
       # notes through the 2026-07-19 Qdrant outage. Transport errors get a short
       # cooldown so the note re-embeds on the next reconcile.
-      stub_qdrant(bypass)
+      stub_qdrant_optional(bypass)
 
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _texts ->
@@ -461,7 +479,7 @@ defmodule Engram.Workers.EmbedNoteTest do
          %{bypass: bypass, note: note} do
       # A 4xx (bad request / unembeddable content) won't fix itself on retry —
       # keep the long cooldown so ReconcileEmbeddings stops re-enqueuing it.
-      stub_qdrant(bypass)
+      stub_qdrant_optional(bypass)
 
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _texts -> {:error, {400, %{"detail" => "unembeddable"}}} end)
@@ -481,7 +499,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       from(n in Note, where: n.id == ^note.id)
       |> Repo.update_all([set: [content_hash: nil]], skip_tenant_check: true)
 
-      stub_qdrant(bypass)
+      stub_qdrant_optional(bypass)
 
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _texts -> {:error, {500, %{"detail" => "boom"}}} end)
@@ -494,7 +512,7 @@ defmodule Engram.Workers.EmbedNoteTest do
     end
 
     test "does NOT stamp embed_retry_after on a non-final attempt", %{bypass: bypass, note: note} do
-      stub_qdrant(bypass)
+      stub_qdrant_optional(bypass)
 
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _texts -> {:error, {500, %{"detail" => "boom"}}} end)
@@ -508,7 +526,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
     test "emits [:engram, :embed, :poison] telemetry on the final failed attempt",
          %{bypass: bypass, note: note} do
-      stub_qdrant(bypass)
+      stub_qdrant_optional(bypass)
 
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _texts -> {:error, {503, %{"detail" => "boom"}}} end)
@@ -549,7 +567,7 @@ defmodule Engram.Workers.EmbedNoteTest do
         {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
       end)
 
-      stub_qdrant(bypass)
+      stub_qdrant_optional(bypass)
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
