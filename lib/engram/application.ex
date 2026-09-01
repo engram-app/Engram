@@ -76,6 +76,14 @@ defmodule Engram.Application do
         # cluster-wide singletons via :global; this supervisor is the local
         # owner when a room is started on this node (see CrdtRegistry).
         {DynamicSupervisor, name: Engram.Notes.CrdtDocSupervisor, strategy: :one_for_one},
+        # Short-lived tasks that must NOT be owned by the process that asked for
+        # them. `crdt_doc_update` (#1493) is the reason it exists: a room is
+        # bound to whichever process observes it, so applying a room-free write
+        # from the channel would pin that room to the socket — exactly the
+        # residency this frame removes. Running it here gives the room an
+        # observer that dies immediately, and `async_nolink` keeps a crashing
+        # apply from taking the channel (and its other rooms) with it.
+        {Task.Supervisor, name: Engram.TaskSupervisor},
         # Pyroscope continuous CPU profiler. Returns nil when GRAFANA_PYROSCOPE_URL
         # is unset (dev, test, self-host), and Enum.reject below filters it out.
         pyroscope_child(),
