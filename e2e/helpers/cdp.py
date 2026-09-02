@@ -935,156 +935,86 @@ class CdpClient:
     # Vault-channel fan-out isolation (crdt/test_crdt_sync.py)
     # ------------------------------------------------------------------
 
-    async def suppress_fanout_backstops(self) -> str:
-        """Neutralize every idle-note convergence path EXCEPT the vault-channel
-        fan-out, so a disk-convergence assert on this instance becomes a TRUE
-        fan-out proof.
+    async def arm_fanout_counter(self) -> str:
+        """Count vault-channel fan-out applies on this device, disabling NOTHING.
 
-        Under the vault-channel model an IDLE note (not open in the editor)
-        converges via the server's ``note_yjs_update`` broadcast → the plugin's
-        ``applyPushedNoteUpdate`` (sync.ts). The checkpoint-driven backfill also
-        converges a cold note off the ~5s ``note_changed`` and would mask a
-        broken fan-out — every existing crdt test still passes at checkpoint
-        latency even if the fan-out is dead:
+        Proving a cold note converged over the fan-out (``note_yjs_update`` ->
+        ``applyPushedNoteUpdate``) rather than over a checkpoint backstop used to
+        be done by stubbing every backstop to a no-op. That approach failed three
+        ways and never once produced a true answer:
 
-          * ``catchupViaSeqReplay()`` — the seq-replay cold-apply backstop, and
-            as of plugin main the ONLY one. Reached from ``scheduleSeqHeal``
-            (sync.ts:2589), from the topic-join replay, and from
-            ``applyStreamEvent``'s tail. Its row-apply (``applyChange``) writes
-            bodies to files that ALREADY exist — the cold-note leg at
-            sync.ts:8609 → ``convergeColdNoteRoomFree`` → ``flushFromCrdt`` — so
-            no file-exists precondition contains it, and it also owns the
-            discovery enroll at sync.ts:8244. It must be stubbed.
+          * Every name it stubbed (``pull``, ``coldReceive``,
+            ``catchupViaSocket``) had been retired from the plugin, and its
+            ``typeof`` guard skips what is gone — so it stubbed NOTHING and the
+            four "TRUE fan-out proof" tests passed with the fan-out dead.
+          * Adding ``handleStreamEvent`` to the list broke the SENDER: that
+            handler commits ``noteIdMap``, so a suppressed device read a null id,
+            ``shouldDeferMint`` refused its push, and the edit never left the
+            device — a 120s timeout that read as a receive-side bug (#1503).
+          * Stubbing ``catchupViaSeqReplay`` removes the device's only noteIdMap
+            repair, so a transient unmapping inside the test window can never
+            heal and burns the full timeout (#1526).
 
-        ``pull``, ``coldReceive`` and ``catchupViaSocket`` are RETIRED
-        predecessors, kept in the list only so a backend branch paired against an
-        older plugin build still isolates. NONE of the three exist on plugin main
-        (sync.ts:7705 "the retired ``catchupViaSocket`` loop"); ``pull()``'s
-        cursor-feed backfill folded into the seq-replay above. ``pullAll()`` is
-        NOT its successor for this purpose — that is the user-triggered
-        replay-from-0 behind the pull-all command, never fired spontaneously.
+        Counting is strictly stronger and costs nothing. The wrapper calls
+        through, so no delivery path is disabled and no map upkeep is lost. A
+        dead fan-out leaves the counter at zero and the assertion fails — which
+        is the entire point of the old helper — and a RENAME fails loudly right
+        here instead of silently making four tests prove nothing.
 
-        The fan-out is a SEPARATE channel dispatch: ``channel.ts`` routes
-        ``note_yjs_update`` straight to ``onNoteYjsUpdate`` →
-        ``applyPushedNoteUpdate`` and never touches any stubbed method, so it
-        stays fully live. Idempotent.
+        What this does NOT claim: that the fan-out produced the final bytes on
+        disk. It proves the fan-out ran for this note. That is the regression
+        worth catching; a backstop healing the content afterwards does not make
+        a dead fan-out look alive.
 
-        Raises if no cold-apply backstop was stubbed. The ``typeof`` guard makes
-        a rename SILENT — the loop skips every missing method and still reports
-        success. All three original names had been retired, so this helper was
-        stubbing NOTHING: for an unknown number of runs the four "TRUE fan-out
-        proof" tests ran with every backstop live and would have passed with a
-        completely dead fan-out. The assertion below is what stops the next
-        rename doing the same thing.
-
-        PRECONDITION — the receiving device MUST already hold the file on disk
-        (what ``_establish_on_both`` guarantees). ``handleStreamEvent`` is left
-        live (below), and its first-delivery leg
-        (``applyOp(eventToOp(...))``) writes a note body; it gates itself out
-        when the file is already present (``priorState === undefined`` /
-        ``!getAbstractFileByPath`` at the sync.ts:7302 call site). Suppress
-        before the receiver has the file and that leg converges the note for
-        you — the assert goes green with the fan-out completely dead, which is
-        the one outcome this helper exists to make impossible.
-
-        ``handleStreamEvent`` is deliberately NOT stubbed (#1503). It was on the
-        list to stop the ``note_changed`` handler STEP1-enrolling the note's CRDT
-        room, whose ``crdt_msg`` stream would then deliver the body independently
-        — but that enroll (``sync.ts`` ~7222, formerly the stale 3246 this
-        docstring cited) is already gated on ``isCanvasPath || isLiveBound``, so
-        it cannot fire for the idle markdown note these tests use. A stray room
-        would fail the enrolled-set assertion rather than pass silently.
-
-        Stubbing it was NOT free: ``applyStreamEvent`` commits
-        ``noteIdMap.set(event.path, noteId)`` (sync.ts:7213). With it dead a
-        device that loses its path→id entry never repairs it, ``pushFile`` reads
-        a null id, and ``shouldDeferMint`` refuses the push — so the suppressed
-        device silently loses the ability to SEND. That is the #1503 failure:
-        ``test_cold_send_over_fanout_opens_no_room`` suppressed the sender and
-        then waited 120s for an edit that never left the device.
-
-        What DROPPED the entry is not established. ``applyStreamEvent`` also
-        deletes (7088) and relocates (``moveIfIdRelocated``, 6953), so it cannot
-        be the remover while stubbed — restoring it restores the repair, not the
-        absence of the cause. Treat a repeat 120s timeout as that unfound
-        remover, not as a fan-out regression.
-
-        Instances are SESSION-scoped and shared across tests, so every caller
-        MUST pair this with ``restore_fanout_backstops`` in a ``finally``.
+        Idempotent. Instances are session-scoped, so pair with
+        ``disarm_fanout_counter`` in a ``finally``.
         """
         js = f"""
         (function() {{
             const se = {ENGINE_PATH};
-            // Idempotent re-entry reports what is ACTUALLY stubbed right now,
-            // not a bare 'already-isolated' — the caller's zero-stub assertion
-            // has to run on this path too. A restore_fanout_backstops() that
-            // throws (CDP reconnect, renderer reload) leaves __fanoutIsolated
-            // set with nothing stubbed, and every later suppress in this
-            // session would otherwise short-circuit past the guard and hand
-            // the fan-out tests the exact false-green this guard exists for.
-            if (se.__fanoutIsolated) {{
-                return Object.keys(se)
-                    .filter(k => k.startsWith('__orig_'))
-                    .map(k => k.slice('__orig_'.length))
-                    .join(',');
-            }}
-            // The cold-apply backstop has been renamed twice: coldReceive ->
-            // catchupViaSocket -> catchupViaSeqReplay. backend-main e2e pairs
-            // against EITHER plugin branch, so stub whichever exists and never
-            // .bind() an absent one. Report WHICH were stubbed — the caller
-            // asserts on it, because a silent zero-stub run is a false green.
-            // handleStreamEvent stays LIVE — see the docstring (#1503).
-            const stubbed = [];
-            for (const m of ['pull', 'catchupViaSeqReplay', 'coldReceive', 'catchupViaSocket']) {{
-                if (typeof se[m] === 'function') {{
-                    se['__orig_' + m] = se[m].bind(se);
-                    se[m] = async () => 0;
-                    stubbed.push(m);
-                }}
-            }}
-            // Set AFTER the loop: the flag means "isolation is in place", and
-            // setting it first made a zero-stub run claim isolation it never had.
-            se.__fanoutIsolated = true;
-            return stubbed.join(',');
+            if (typeof se.applyPushedNoteUpdate !== 'function') return 'MISSING';
+            if (se.__fanoutCounts) return 'already-armed';
+            se.__fanoutCounts = {{}};
+            const orig = se.applyPushedNoteUpdate.bind(se);
+            se.__origFanoutApply = orig;
+            se.applyPushedNoteUpdate = function(noteId) {{
+                se.__fanoutCounts[noteId] = (se.__fanoutCounts[noteId] || 0) + 1;
+                return orig.apply(se, arguments);
+            }};
+            return 'armed';
         }})()
         """
-        result = await self.evaluate(js)
-        logger.info("Fan-out backstops suppressed on CDP port %d: %s", self.port, result)
-        stubbed = set(str(result).split(",")) - {""}
-        # A rename silently empties this loop (the typeof guard skips what is
-        # gone) and the tests then prove nothing, so require the cold-apply
-        # backstop by name. It is the WHOLE isolation now: `pull()` was retired
-        # along with coldReceive/catchupViaSocket, and its cursor-feed backfill
-        # folded into catchupViaSeqReplay -> applyChange -> flushFromCrdt.
-        # `pullAll()` is not a substitute — it is the user-triggered replay-from-0
-        # behind the pull-all command, never fired spontaneously, so it cannot
-        # converge a note behind an assertion.
-        cold_apply = {"catchupViaSeqReplay", "coldReceive", "catchupViaSocket"}
-        if not (stubbed & cold_apply):
+        result = str(await self.evaluate(js))
+        if result == "MISSING":
             raise AssertionError(
-                f"suppress_fanout_backstops stubbed {sorted(stubbed) or 'NOTHING'} on CDP port "
-                f"{self.port} — none of {sorted(cold_apply)} exist on this plugin build. The "
-                f"cold-apply backstop was renamed out from under this helper; the fan-out tests "
-                f"would pass with a dead fan-out. Add the new name to the list."
+                f"applyPushedNoteUpdate does not exist on the syncEngine at CDP port "
+                f"{self.port}. The vault-channel fan-out apply was renamed; these tests "
+                f"cannot prove the fan-out until this helper names the new method."
             )
-        return str(result)
+        logger.info("Fan-out counter armed on CDP port %d: %s", self.port, result)
+        return result
 
-    async def restore_fanout_backstops(self) -> None:
-        """Restore the methods stubbed by suppress_fanout_backstops()."""
+    async def fanout_apply_count(self, note_id: str) -> int:
+        """How many fan-out applies this device has seen for `note_id` since arming."""
+        return await self.evaluate(
+            f"(function() {{ const se = {ENGINE_PATH}; "
+            f"return (se.__fanoutCounts && se.__fanoutCounts[{json.dumps(note_id)}]) || 0; }})()"
+        )
+
+    async def disarm_fanout_counter(self) -> None:
+        """Unwrap applyPushedNoteUpdate and drop the counts."""
         js = f"""
         (function() {{
             const se = {ENGINE_PATH};
-            if (!se.__fanoutIsolated) return 'not-isolated';
-            for (const m of ['pull', 'catchupViaSeqReplay', 'coldReceive', 'catchupViaSocket']) {{
-                const orig = se['__orig_' + m];
-                if (orig) {{ se[m] = orig; delete se['__orig_' + m]; }}
-            }}
-            delete se.__fanoutIsolated;
-            return 'restored';
+            if (!se.__origFanoutApply) return 'not-armed';
+            se.applyPushedNoteUpdate = se.__origFanoutApply;
+            delete se.__origFanoutApply;
+            delete se.__fanoutCounts;
+            return 'disarmed';
         }})()
         """
         result = await self.evaluate(js)
-        logger.info("Fan-out backstops restored on CDP port %d: %s", self.port, result)
+        logger.info("Fan-out counter disarmed on CDP port %d: %s", self.port, result)
 
     async def get_note_id_for_path(self, path: str) -> str | None:
         """Resolve the CRDT note_id the plugin has mapped for a vault path."""

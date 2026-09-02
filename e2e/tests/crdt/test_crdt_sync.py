@@ -154,30 +154,25 @@ async def test_edit_after_discovery_round_trips(vault_a, vault_b, cdp_a, cdp_b, 
 # applyPushedNoteUpdate were completely broken, every test above would STILL
 # pass at ~5s checkpoint latency, masking a dead fan-out.
 #
-# The tests below suppress that backstop on the RECEIVING device via
-# cdp.suppress_fanout_backstops(), leaving applyPushedNoteUpdate untouched since
-# the fan-out is a separate channel dispatch. With it dead, a disk-convergence
-# assert can ONLY be satisfied by the fan-out, so a broken fan-out actually
-# FAILS.
+# The tests below pin the fan-out POSITIVELY: cdp.arm_fanout_counter() wraps
+# applyPushedNoteUpdate in a pass-through counter, and each test asserts the
+# counter moved for its note. A dead fan-out leaves it at zero and fails.
 #
-# It did not, for an unknown number of runs. All three names the helper stubbed
-# (pull, coldReceive, catchupViaSocket) had been retired from the plugin, and
-# the helper skips a method that no longer exists — so it stubbed NOTHING and
-# these tests ran with every backstop live. The helper now raises if it cannot
-# stub a cold-apply backstop, and conftest asserts the surface at session start.
-#
-# handleStreamEvent used to be stubbed too, for the note_changed room-enroll
-# path. It no longer is (#1503): that enroll is already gated on
-# isCanvasPath || isLiveBound so it cannot fire for an idle markdown note, and
-# stubbing it broke the SENDING device — applyStreamEvent is what commits
-# noteIdMap, so a suppressed sender read a null id and shouldDeferMint refused
-# its push. See helpers/cdp.py.
+# They used to do this by SUPPRESSION — stubbing every backstop to a no-op so
+# only the fan-out could satisfy the assert. That never once gave a true answer.
+# It stubbed nothing for an unknown span (every name had been retired, and the
+# typeof guard skips what is gone), so these four "proofs" ran green with the
+# fan-out dead. Fixing that broke the SENDER, because the handler it stubbed is
+# what commits noteIdMap (#1503). Fixing THAT left the device with no map repair
+# inside the test window (#1526). Counting disables nothing, so none of those
+# failure modes exist, and a rename now fails loudly in the helper instead of
+# silently making these tests prove nothing. See helpers/cdp.py.
 
 
 async def _confirm_room_free(cdp, path):
-    """Precondition for a fan-out isolation test: the device has mapped +
-    confirmed `path` and holds NO CRDT room for it (so convergence can't ride a
-    crdt_msg room stream). Returns the note_id.
+    """Precondition for a fan-out test: the device has mapped + confirmed `path`
+    and holds NO CRDT room for it (so convergence can't ride a crdt_msg room
+    stream). Returns the note_id.
 
     trigger_full_sync() drives the idle pull-discovery path, which maps +
     confirms the note but does NOT STEP1-enroll a not-live-bound note via the
@@ -193,8 +188,7 @@ async def _confirm_room_free(cdp, path):
     means the sync call finished, not that the mapping it discovered has landed
     in noteIdMap, so the note_id read raced it exactly as the enrolled-set read
     did — reporting `assert None` ("device never mapped a note_id") for a note
-    that maps fine moments later, and taking 6-7 downstream tests with it
-    (engram-app/Engram#1489).
+    that maps fine moments later (engram-app/Engram#1489).
     """
     await cdp.wait_for_stream_connected()
     await cdp.trigger_full_sync()
@@ -212,57 +206,55 @@ async def _confirm_room_free(cdp, path):
     return note_id
 
 
+async def _assert_fanout_ran(cdp, note_id, path, minimum=1):
+    count = await cdp.fanout_apply_count(note_id)
+    assert count >= minimum, (
+        f"content converged on {path} but applyPushedNoteUpdate ran {count} time(s) "
+        f"for note_id={note_id} (expected >= {minimum}) — the vault-channel fan-out "
+        f"did not deliver it; a checkpoint backstop did."
+    )
+
+
 @pytest.mark.asyncio
 async def test_idle_note_converges_via_fanout_only(vault_a, vault_b, cdp_a, cdp_b, api_sync):
-    """[P0] A pre-existing IDLE note on B converges to A's edit via the vault-
-    channel fan-out ALONE.
+    """[P0] A pre-existing IDLE note on B converges to A's edit over the vault-
+    channel fan-out, and we prove the fan-out is what ran.
 
-    B never opens or edits the note. Before A's edit we suppress the
-    checkpoint-driven backstop on B (catchupViaSeqReplay's row-apply). The ONLY
-    path that can then converge B's disk is the server's `note_yjs_update`
-    broadcast → applyPushedNoteUpdate. So a broken fan-out FAILS here instead of
-    silently passing at checkpoint latency.
-
-    B already holds the file (`_establish_on_both`), which is what keeps
-    handleStreamEvent's own content-writing legs out of the picture — see the
-    precondition in suppress_fanout_backstops().
+    B never opens or edits the note. The counter on B pins that the server's
+    `note_yjs_update` broadcast → applyPushedNoteUpdate actually fired, so a
+    dead fan-out fails here instead of passing at checkpoint latency.
     """
     path = "E2E/Crdt/FanoutPassive.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "shared base\n", "shared base")
-    await _confirm_room_free(cdp_b, path)
+    note_id_b = await _confirm_room_free(cdp_b, path)
     try:
-        await cdp_b.suppress_fanout_backstops()
+        await cdp_b.arm_fanout_counter()
 
-        # A edits. With B's backstops dead, delivery can ONLY be the fan-out.
         write_note(vault_a, path, "shared base\nFANOUT_ONLY\n")
         b_final = wait_for_content(vault_b, path, "FANOUT_ONLY", timeout=CRDT_TIMEOUT)
         assert "shared base" in b_final, f"base content lost on B: {b_final!r}"
+        await _assert_fanout_ran(cdp_b, note_id_b, path)
     finally:
-        await cdp_b.restore_fanout_backstops()
+        await cdp_b.disarm_fanout_counter()
 
 
 @pytest.mark.asyncio
 async def test_concurrent_cold_edits_survive_over_fanout(vault_a, vault_b, cdp_a, cdp_b, api_sync):
-    """[P0] A and B concurrently edit the SAME note while NEITHER opens it, with
-    the checkpoint backstops suppressed on BOTH devices. Both edits survive on
-    both disks — proving the CRDT merge rides the vault-channel fan-out, not the
-    pull/coldReceive backstop.
+    """[P0] A and B concurrently edit the SAME note while NEITHER opens it. Both
+    edits survive on both disks, and both devices took delivery over the fan-out.
 
-    New test — does NOT weaken test_concurrent_edits_both_survive (which permits
-    a backstop to converge); this is the strictly-fan-out variant.
+    Does NOT weaken test_concurrent_edits_both_survive (which permits a backstop
+    to converge); this is the strictly-fan-out variant.
     """
     path = "E2E/Crdt/FanoutMerge.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "shared base\n", "shared base")
-    await _confirm_room_free(cdp_a, path)
-    await _confirm_room_free(cdp_b, path)
+    note_id_a = await _confirm_room_free(cdp_a, path)
+    note_id_b = await _confirm_room_free(cdp_b, path)
     try:
-        await cdp_a.suppress_fanout_backstops()
-        await cdp_b.suppress_fanout_backstops()
+        await cdp_a.arm_fanout_counter()
+        await cdp_b.arm_fanout_counter()
 
         # Independent edits, close together so neither has seen the other's yet.
-        # Each side SENDS via handleModify/pushFile (untouched by suppression) and
-        # RECEIVES the other's over the fan-out (applyPushedNoteUpdate merges the
-        # remote delta after capturing local disk drift — both edits survive).
         write_note(vault_a, path, "shared base\nFROM_A\n")
         write_note(vault_b, path, "shared base\nFROM_B\n")
 
@@ -270,76 +262,45 @@ async def test_concurrent_cold_edits_survive_over_fanout(vault_a, vault_b, cdp_a
         b_final = wait_for_content(vault_b, path, "FROM_A", timeout=CRDT_TIMEOUT)
         assert "FROM_A" in a_final and "FROM_B" in a_final, f"A lost an edit: {a_final!r}"
         assert "FROM_A" in b_final and "FROM_B" in b_final, f"B lost an edit: {b_final!r}"
+        await _assert_fanout_ran(cdp_a, note_id_a, path)
+        await _assert_fanout_ran(cdp_b, note_id_b, path)
     finally:
-        await cdp_a.restore_fanout_backstops()
-        await cdp_b.restore_fanout_backstops()
+        await cdp_a.disarm_fanout_counter()
+        await cdp_b.disarm_fanout_counter()
 
 
 @pytest.mark.asyncio
 async def test_cold_send_over_fanout_opens_no_room(vault_a, vault_b, cdp_a, cdp_b, api_sync):
-    """[P1] B edits a CLOSED note → A receives it via the fan-out, and B does NOT
-    STEP1-enroll a CRDT room for the note it cold-sent.
+    """[P1] B edits a CLOSED note → A receives it over the fan-out, and B does
+    NOT STEP1-enroll a CRDT room for the note it cold-sent.
 
     An idle SEND ships its edit channel-up / as a durable /updates entry and is
     never required to enroll (sync.ts isCrdtManagedOffline: "Enrollment (STEP1)
-    is only the down-sync pull, never required to SEND"). We suppress backstops
-    on BOTH devices: on A so its receipt can ONLY be the fan-out, and on B to
-    keep anything from opening a room there and breaking the negative assertion.
-    TWO paths would: catchupViaSeqReplay's discovery enroll (applyChange, sync.ts:8244, and the
-    un-gated cold-note re-handshake `_confirm_room_free` documents), and
-    catchupViaSeqReplay → convergeColdNoteRoomFree, which falls back to
-    socketConverge → fireCrdtReHandshake (sync.ts:6288) when the room-free
-    converge fails — deliberately NOT gated on isLiveBound, so stubbing pull()
-    alone does not close it. Both are in the suppression list. That assertion is
-    a direct read of B's CrdtEnrollment.enrolled set (deterministic, no
-    log-flush timing dependency).
+    is only the down-sync pull, never required to SEND"). The negative half is a
+    direct read of B's CrdtEnrollment.enrolled set; the positive half is A's
+    fan-out counter.
 
-    #1503: suppression used to stub handleStreamEvent as well. With it dead B's
-    `pushFile` read a null id from noteIdMap, shouldDeferMint refused the push,
-    and the edit never left the device — a 120s timeout that read as a
-    receive-side fan-out bug. Restoring the handler fixes it, and the room-enroll
-    it was stubbed to prevent is already gated on isCanvasPath || isLiveBound.
-
-    Nothing deletes B's map entry (#1526): a full sync REBUILDS noteIdMap and
-    leaves the path transiently unmapped, and this test triggers one on B via
-    _confirm_room_free immediately before writing on B. The write lands in that
-    window, shouldDeferMint refuses the push, and the edit falls to the flush
-    queue's ~107s recovery. Measured twice at 109s and 108s, against a 120s
-    deadline — a coin-flip, not a fan-out failure. The re-poll below closes it.
-
-    Tension worth knowing: catchupViaSeqReplay reaches applyChange, which is a
-    noteIdMap writer, and B runs with it stubbed for the enroll reason above. So
-    from suppression until restore, B has NO map repair. Everything that needs a
-    settled map must therefore happen before suppression — which is why the poll
-    is ordered above the try block and not inside it.
+    This test was the #1 source of e2e-crdt red for weeks, across three distinct
+    failure regimes, none of them a real fan-out bug: suppression stubbed nothing
+    (false green), then broke B's push via noteIdMap (#1503), then removed B's
+    map repair so a transient unmapping burned the full timeout (#1526). All
+    three were artifacts of DISABLING paths on a live client. Counting disables
+    nothing, so the pre-write mapping re-poll #1526 needed is gone too — nothing
+    in the window can drop a mapping that cannot then heal.
     """
-    # ponytail: B holds no map repair while suppressed. Keep the window between
-    # suppression and the write empty — anything added in there that can drop or
-    # await a mapping has no way to recover, and burns the full timeout.
     path = "E2E/Crdt/FanoutColdSend.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "origin\n", "origin")
     note_id_b = await _confirm_room_free(cdp_b, path)
-    await _confirm_room_free(cdp_a, path)
-    # B's map must hold the path at WRITE time, and this poll must happen
-    # BEFORE suppression, not after (#1526). `shouldDeferMint` refuses a push on
-    # `unmapped + engine-flushed` (sync.ts:5292), and the path can be
-    # transiently unmapped after the full sync `_confirm_room_free` triggers.
-    # The repair is `catchupViaSeqReplay` -> `applyChange`, a noteIdMap writer —
-    # which suppress_fanout_backstops() stubs. Polling after suppression waits
-    # for a repair that suppression has just disabled, so a transiently unmapped
-    # path never recovers and the poll burns its full timeout. Ordered this way
-    # the map is proven present while the repair is still live, and the window
-    # between here and the write holds nothing that can drop it.
-    await cdp_b.wait_for_note_id_for_path(path, timeout=CRDT_TIMEOUT)
+    note_id_a = await _confirm_room_free(cdp_a, path)
     try:
-        await cdp_a.suppress_fanout_backstops()
-        await cdp_b.suppress_fanout_backstops()
+        await cdp_a.arm_fanout_counter()
 
         # B edits the CLOSED note (never opened in the editor).
         write_note(vault_b, path, "origin\nCOLD_SEND_FROM_B\n")
 
         a_final = wait_for_content(vault_a, path, "COLD_SEND_FROM_B", timeout=CRDT_TIMEOUT)
         assert "origin" in a_final, f"base lost on A: {a_final!r}"
+        await _assert_fanout_ran(cdp_a, note_id_a, path)
 
         enrolled = await cdp_b.get_enrolled_note_ids()
         assert note_id_b not in enrolled, (
@@ -347,8 +308,7 @@ async def test_cold_send_over_fanout_opens_no_room(vault_a, vault_b, cdp_a, cdp_
             f"an idle send must stay room-free. enrolled={enrolled}"
         )
     finally:
-        await cdp_a.restore_fanout_backstops()
-        await cdp_b.restore_fanout_backstops()
+        await cdp_a.disarm_fanout_counter()
 
 
 @pytest.mark.asyncio
@@ -356,19 +316,22 @@ async def test_fanout_sequential_edits_converge_preserving_prior_state(
     vault_a, vault_b, cdp_a, cdp_b, api_sync
 ):
     """[P1] Two SEQUENTIAL remote edits to an idle note both converge on B over
-    the fan-out alone, the second preserving the first.
+    the fan-out, the second preserving the first.
 
     (Was ``test_fanout_receive_after_hibernate_rehydrates``: the Relay-model
     persistent-doc engine NEVER frees an idle Y.Doc — ``closeDoc`` /
     ``hibernateIfIdle`` are no-ops now, so there is no free-then-rehydrate step to
     assert. The residual guarantee — a second fan-out apply merges onto the doc
     the first left behind, no state lost — still matters and is what this pins.)
+
+    The counter asserts >= 2: EDIT_ONE is confirmed on B's disk before EDIT_TWO
+    is written, so the two applies cannot coalesce into one.
     """
     path = "E2E/Crdt/FanoutSequential.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "base\n", "base")
-    await _confirm_room_free(cdp_b, path)
+    note_id_b = await _confirm_room_free(cdp_b, path)
     try:
-        await cdp_b.suppress_fanout_backstops()
+        await cdp_b.arm_fanout_counter()
 
         # First remote edit converges via the fan-out.
         write_note(vault_a, path, "base\nEDIT_ONE\n")
@@ -380,5 +343,6 @@ async def test_fanout_sequential_edits_converge_preserving_prior_state(
         assert "EDIT_ONE" in b_final and "base" in b_final, (
             f"second fan-out apply lost prior state: {b_final!r}"
         )
+        await _assert_fanout_ran(cdp_b, note_id_b, path, minimum=2)
     finally:
-        await cdp_b.restore_fanout_backstops()
+        await cdp_b.disarm_fanout_counter()

@@ -4045,6 +4045,49 @@ jobs:
             echo "::warning::e2e-browser failed: $EB (report-only — not gating)"
           fi
 
+          # A SKIPPED job is not a pass — it is "an earlier tree passed, and the
+          # content fingerprint says nothing this job covers has changed since".
+          # That inference is sound, but it renders identically to a verified
+          # green, and the two are not the same claim.
+          #
+          # #1531: e2e-crdt fingerprint-skipped on every routine main run, so a
+          # real fan-out regression sat on main for three days behind a green
+          # tick, and reproducing it at all needed a manual force_full dispatch.
+          # Worse, a recorded pass is trusted forever — and #1525 proved a pass
+          # can be worthless (the fan-out suppression helper stubbed nothing, so
+          # four "proof" tests measured nothing and went green with the feature
+          # dead). Those greens were still in the marker store being trusted.
+          #
+          # Never-skip-on-main (#1531 option B) was tried and reverted: is-full
+          # is deliberately false on main, so prebuild-ci-image skips on a
+          # cache-hit merge and e2e-crdt then dies on `docker pull ""`. Doing it
+          # properly means a full image prebuild on every main push (~61/week).
+          # So gate the same, but stop the SIGNAL from lying (option C).
+          SKIPPED=()
+          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "e2e-lint=$EL" \
+                      "storage-database=$SD" "static-checks=$SC" "migration-gates=$MG" \
+                      "e2e-clerk=$EC" "e2e-crdt=$ED" "e2e-browser=$EB"; do
+            [ "${pair#*=}" = "skipped" ] && SKIPPED+=("${pair%=*}")
+          done
+          if [ ${#SKIPPED[@]} -gt 0 ]; then
+            LIST=$(IFS=', '; echo "${SKIPPED[*]}")
+            echo "::warning title=${#SKIPPED[@]} gate(s) did not run on this commit::Inherited from an earlier tree via the content fingerprint, NOT verified on this SHA: $LIST"
+            {
+              echo "### :warning: ${#SKIPPED[@]} gate(s) did NOT run on this commit"
+              echo
+              echo "Result inherited from an earlier tree via the content fingerprint —"
+              echo "**not verified on \`${{ github.sha }}\`**:"
+              echo
+              for n in "${SKIPPED[@]}"; do echo "- \`$n\`"; done
+              echo
+              echo "A green \`ci\` here means *nothing changed that these gates cover*,"
+              echo "not *these gates passed*. Force a real run with a \`workflow_dispatch\`"
+              echo "and \`force_full=true\`, or push a change that touches their inputs."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "All gates executed on this commit (no fingerprint inheritance)."
+          fi
+
           # On cross-repo plugin dispatch (plugin-e2e-trigger), unit-tests / lint
           # are intentionally skipped — plugin cannot regress backend internals.
           # Only assert success when those jobs actually ran. (e2e-* moved to the
