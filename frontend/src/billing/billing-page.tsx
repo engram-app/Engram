@@ -18,7 +18,6 @@ import {
 	useBillingSubscriptionDetail,
 	useMe,
 } from "../api/queries";
-import { useTheme } from "../theme/theme-provider";
 import BillingHistoryTable from "./billing-history-table";
 import CancelPanel from "./cancel-panel";
 import CurrentPlanCard from "./current-plan-card";
@@ -72,6 +71,12 @@ interface BillingPageProps {
 	// Onboarding-only: fired when the inline Paddle checkout view opens/closes so
 	// the wrapper can hide its own chrome (header, free link) during payment.
 	onCheckoutActiveChange?: (active: boolean) => void;
+	// Onboarding-only: fired specifically while the Paddle frame itself (or its
+	// dev stand-in) is showing — narrower than onCheckoutActiveChange, which
+	// also covers the slow/finalizing states. Those render our own
+	// theme-aware SlowActivationBanner/spinner, so the wrapper must NOT force
+	// its card light for them the way it does for the Paddle-branded frame.
+	onCheckoutFrameActiveChange?: (active: boolean) => void;
 }
 
 function SlowActivationBanner({
@@ -155,6 +160,7 @@ export default function BillingPage({
 	onActivated,
 	freeOption,
 	onCheckoutActiveChange,
+	onCheckoutFrameActiveChange,
 }: BillingPageProps) {
 	// Onboarding mounts BillingPage with onActivated; settings does not. The
 	// prop's presence is what flips Paddle from overlay → inline. Inline gives
@@ -169,7 +175,6 @@ export default function BillingPage({
 	const hasSubscription = Boolean(billing?.subscription);
 	const { data: detail } = useBillingSubscriptionDetail(hasSubscription);
 	const { data: history } = useBillingHistory(hasSubscription);
-	const { resolved } = useTheme();
 	const qc = useQueryClient();
 	const [paddle, setPaddle] = useState<Paddle>();
 	// Ref mirror of `paddle` so the eventCallback (captured pre-instance) can
@@ -244,7 +249,6 @@ export default function BillingPage({
 		}
 		paddleRef.current?.Checkout.close();
 		setCheckingOut(false);
-		setCheckoutOpen(false);
 		setCompletedAt(null);
 		setSlow(false);
 		await invalidateBillingState(qc);
@@ -296,26 +300,6 @@ export default function BillingPage({
 		}
 	}, []);
 
-	// Mirrors Paddle's own checkout.loaded/checkout.closed events — covers ALL
-	// checkout entry points (inline, overlay plan purchase, overlay payment-method
-	// update), not just the inline/onboarding `checkingOut` flag.
-	const [checkoutOpen, setCheckoutOpen] = useState(false);
-
-	// Frozen while a checkout is mounted: the Paddle-init effect below tears
-	// down and rebuilds the SDK instance whenever this changes, which would
-	// kill an open checkout mid-fill and leave it stranded on its old theme
-	// while the page around it (background, .dark class) has already flipped —
-	// invisible text. `checkingOut` covers the inline gap between click and
-	// Paddle's own `checkout.loaded` (the div is mounted but Paddle hasn't
-	// reported open yet); `checkoutOpen`/`slow`/`finalizing` cover the rest.
-	// Only resync once all of these clear, so the next checkout opens with the
-	// current theme.
-	const appliedThemeRef = useRef(resolved);
-	if (!(checkingOut || checkoutOpen || slow || finalizing)) {
-		appliedThemeRef.current = resolved;
-	}
-	const appliedTheme = appliedThemeRef.current;
-
 	useEffect(() => {
 		if (!config) {
 			return;
@@ -329,14 +313,6 @@ export default function BillingPage({
 					return;
 				}
 				switch (event.name) {
-					case CheckoutEventNames.CHECKOUT_LOADED: {
-						setCheckoutOpen(true);
-						break;
-					}
-					case CheckoutEventNames.CHECKOUT_CLOSED: {
-						setCheckoutOpen(false);
-						break;
-					}
 					case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
 						// Belt-and-suspenders: either PAYMENT_INITIATED or COMPLETED may
 						// drop on trial-signup redirects. Arm the cooldown timer on
@@ -382,11 +358,7 @@ export default function BillingPage({
 					case CheckoutEventNames.CHECKOUT_ERROR: {
 						// Genuine checkout-level error (not a routine decline) — the frame
 						// may be in a broken state, so close it and surface a message.
-						// Also drop checkoutOpen defensively in case Paddle doesn't follow
-						// this with its own checkout.closed — otherwise the theme freeze
-						// above would stay stuck forever.
 						setCheckingOut(false);
-						setCheckoutOpen(false);
 						setCompletedAt(null);
 						setSlow(false);
 						toast.error("Something went wrong with checkout. Please try again.");
@@ -396,6 +368,13 @@ export default function BillingPage({
 						break;
 				}
 			},
+			// Paddle's branded-inline-checkout dashboard config (Paddle > Checkout
+			// > Branded inline checkout) is a single static color set with no
+			// light/dark variant, tuned for light. `theme: "light"` matches it so
+			// the unbranded chrome (page background behind fields, default text)
+			// doesn't clash with the branded fields. Fixed, not tied to the app's
+			// live theme — a dynamic value here tore down/rebuilt the Paddle
+			// instance on every app theme toggle, stranding an open checkout.
 			checkout: {
 				settings: isInline
 					? {
@@ -408,12 +387,14 @@ export default function BillingPage({
 							// box. frameInitialHeight covers the initial paint before Paddle
 							// reports the real height. (min-width matches Paddle's own sample.)
 							frameStyle: "width:100%; min-width:312px; background:transparent; border:none;",
-							theme: appliedTheme === "dark" ? "dark" : "light",
+							theme: "light",
+							variant: "one-page",
 							locale: "en",
 						}
 					: {
 							displayMode: "overlay",
-							theme: appliedTheme === "dark" ? "dark" : "light",
+							theme: "light",
+							variant: "one-page",
 							locale: "en",
 						},
 			},
@@ -431,7 +412,7 @@ export default function BillingPage({
 			paddleRef.current = undefined;
 			setPaddle(undefined);
 		};
-	}, [config, appliedTheme, qc, isInline]);
+	}, [config, qc, isInline]);
 
 	// Open checkout. In inline mode we set checkingOut first so the mount
 	// div is in the DOM before Paddle tries to find it.
@@ -448,11 +429,6 @@ export default function BillingPage({
 			if (isInline) {
 				setCheckingOut(true);
 			}
-			// Set synchronously at the open() call, not left to wait for Paddle's
-			// async checkout.loaded — otherwise a theme toggle landing in that gap
-			// (network/render latency) sees checkoutOpen still false and tears down
-			// the Paddle instance while the overlay is actively opening.
-			setCheckoutOpen(true);
 			// Paddle finds the .paddle-checkout div by class — the div is rendered
 			// synchronously by the same render cycle as the setCheckingOut update.
 			// React 18 batches state into the same commit, so the DOM is ready by
@@ -509,6 +485,18 @@ export default function BillingPage({
 		onCheckoutActiveChangeRef.current?.(checkoutActive);
 	}, [checkoutActive]);
 
+	// Narrower than checkoutActive: true only for the branch that actually
+	// renders the Paddle frame (or its dev stand-in) — matches the ternary
+	// condition below exactly. slow/finalizing render our own components and
+	// must not be included, or the wrapper's forced-light card (see
+	// onboard-billing-page.tsx) makes their theme-aware text illegible.
+	const showingPaddleFrame = isInline && checkingOut && !slow && !finalizing;
+	const onCheckoutFrameActiveChangeRef = useRef(onCheckoutFrameActiveChange);
+	onCheckoutFrameActiveChangeRef.current = onCheckoutFrameActiveChange;
+	useEffect(() => {
+		onCheckoutFrameActiveChangeRef.current?.(showingPaddleFrame);
+	}, [showingPaddleFrame]);
+
 	if (isLoading || !billing) {
 		return <BillingPageSkeleton hideHeading={hideHeading} />;
 	}
@@ -542,9 +530,6 @@ export default function BillingPage({
 			const { transaction_id } = await api.get<{ transaction_id: string }>(
 				"/billing/payment-update-transaction",
 			);
-			// Same reasoning as handleStartCheckout: set before open(), not left to
-			// wait for Paddle's async checkout.loaded.
-			setCheckoutOpen(true);
 			paddle.Checkout.open({ transactionId: transaction_id });
 		} catch {
 			toast.error("Could not start the payment update. Please try again.");
@@ -631,17 +616,23 @@ export default function BillingPage({
 								onClick={() => {
 									paddleRef.current?.Checkout.close();
 									setCheckingOut(false);
-									setCheckoutOpen(false);
 									setCompletedAt(null);
 								}}
-								className="text-muted-foreground text-sm underline-offset-4 hover:text-foreground hover:underline"
+								// Fixed light-gray, not theme tokens: this button sits on the
+								// checkout card, which is forced light (see
+								// onboard-billing-page.tsx) regardless of app theme.
+								className="text-gray-700 text-sm underline-offset-4 hover:text-gray-900 hover:underline"
 							>
 								← Choose a different plan
 							</button>
 							{DEV_FAKE_CHECKOUT ? (
-								<div className="rounded-lg border border-primary/50 border-dashed bg-muted/30 p-6 text-center">
-									<p className="font-medium text-foreground text-sm">Test checkout (dev only)</p>
-									<p className="mx-auto mt-1 max-w-sm text-muted-foreground text-xs">
+								// Fixed light colors throughout, not theme tokens: this stub
+								// only ever renders inside the forced-light checkout card (see
+								// onboard-billing-page.tsx), so text-foreground/text-muted-foreground
+								// would resolve to their dark-mode (light-on-light) values here.
+								<div className="rounded-lg border border-primary/50 border-dashed bg-gray-50 p-6 text-center">
+									<p className="font-medium text-gray-900 text-sm">Test checkout (dev only)</p>
+									<p className="mx-auto mt-1 max-w-sm text-gray-500 text-xs">
 										Paddle's checkout can't embed on localhost, so this stand-in lets you walk the
 										flow. Not shown in production.
 									</p>
@@ -665,6 +656,7 @@ export default function BillingPage({
 											className={cn(
 												"rounded-lg px-4 py-2 font-medium text-sm transition",
 												ctaOutline,
+												"border-gray-300 text-gray-900 hover:bg-gray-100",
 											)}
 										>
 											Simulate failure
