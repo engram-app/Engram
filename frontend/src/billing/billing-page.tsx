@@ -302,20 +302,22 @@ export default function BillingPage({
 	// update), not just the inline/onboarding `checkingOut` flag.
 	const [checkoutOpen, setCheckoutOpen] = useState(false);
 
-	// Frozen while a checkout is mounted: the effect below tears down and
-	// rebuilds the Paddle instance whenever this changes, which would kill an
-	// open checkout mid-fill and leave it stranded on its old theme while the
-	// page around it (background, .dark class) has already flipped — invisible
-	// text. `checkingOut` covers the inline gap between click and Paddle's own
-	// `checkout.loaded` (the div is mounted but Paddle hasn't reported open
-	// yet); `checkoutOpen`/`slow`/`finalizing` cover the rest. Only resync once
-	// all of these clear, so the next checkout opens with the current theme.
-	const [appliedTheme, setAppliedTheme] = useState(resolved);
-	useEffect(() => {
-		if (!(checkingOut || checkoutOpen || slow || finalizing)) {
-			setAppliedTheme(resolved);
-		}
-	}, [resolved, checkingOut, checkoutOpen, slow, finalizing]);
+	// Frozen while a checkout is mounted: the Paddle-init effect below tears
+	// down and rebuilds the SDK instance whenever this changes, which would
+	// kill an open checkout mid-fill and leave it stranded on its old theme
+	// while the page around it (background, .dark class) has already flipped —
+	// invisible text. `checkingOut` covers the inline gap between click and
+	// Paddle's own `checkout.loaded` (the div is mounted but Paddle hasn't
+	// reported open yet); `checkoutOpen`/`slow`/`finalizing` cover the rest.
+	// Only resync once all of these clear, so the next checkout opens with the
+	// current theme.
+	const appliedThemeRef = useRef(resolved);
+	if (!(checkingOut || checkoutOpen || slow || finalizing)) {
+		// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render (not an effect) is the point: the frozen value must be readable synchronously by the Paddle-init effect's dependency check in the same render, with no extra render cycle for the freeze/resync to take effect. See the comment above.
+		appliedThemeRef.current = resolved;
+	}
+	// biome-ignore lint/nursery/useReactCompiler: same latest-ref pattern as the write above — read during render is the point, so appliedTheme reflects the frozen ref synchronously in this render's Paddle-init effect deps.
+	const appliedTheme = appliedThemeRef.current;
 
 	useEffect(() => {
 		if (!config) {
