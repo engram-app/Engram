@@ -341,12 +341,12 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(queryAllByText("Starter").length).toBeGreaterThan(0);
 	});
 
-	it("settings (overlay): does not pass a theme to Paddle, and does not rebuild on an app theme flip", async () => {
+	it("settings (overlay): Paddle theme is fixed to light and does not follow the app's live theme", async () => {
 		// Paddle's branded-inline-checkout dashboard config is a single static
-		// color set with no light/dark variant — feeding it a live theme just
-		// produces mismatched contrast against whatever palette is configured
-		// there, so `theme` is intentionally omitted. An app theme flip must
-		// neither add a theme value nor rebuild the Paddle instance.
+		// color set with no light/dark variant, tuned for light — feeding it a
+		// live theme just produces mismatched contrast, so `theme: "light"` is
+		// a fixed constant. An app theme flip must neither change it nor
+		// rebuild the Paddle instance.
 		mockBillingApi();
 		initializePaddleMock.mockImplementation(async () => ({
 			Checkout: { open: vi.fn(), close: vi.fn() },
@@ -383,7 +383,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		);
 
 		await waitFor(() => expect(initializePaddleMock).toHaveBeenCalledTimes(1));
-		expect(initializePaddleMock.mock.calls[0]![0].checkout.settings.theme).toBeUndefined();
+		expect(initializePaddleMock.mock.calls[0]![0].checkout.settings.theme).toBe("light");
 
 		await act(async () => {
 			screen.getByRole("button", { name: "go-light" }).click();

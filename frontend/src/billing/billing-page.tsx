@@ -361,11 +361,13 @@ export default function BillingPage({
 						break;
 				}
 			},
-			// No `theme` here: Paddle's branded-inline-checkout dashboard config
-			// (Paddle > Checkout > Branded inline checkout) is a single static
-			// color set with no light/dark variant — once configured it fully
-			// overrides Paddle's theme-adaptive styling, so `theme` has no effect.
-			// Colors are 100% dashboard-driven.
+			// Paddle's branded-inline-checkout dashboard config (Paddle > Checkout
+			// > Branded inline checkout) is a single static color set with no
+			// light/dark variant, tuned for light. `theme: "light"` matches it so
+			// the unbranded chrome (page background behind fields, default text)
+			// doesn't clash with the branded fields. Fixed, not tied to the app's
+			// live theme — a dynamic value here tore down/rebuilt the Paddle
+			// instance on every app theme toggle, stranding an open checkout.
 			checkout: {
 				settings: isInline
 					? {
@@ -378,10 +380,14 @@ export default function BillingPage({
 							// box. frameInitialHeight covers the initial paint before Paddle
 							// reports the real height. (min-width matches Paddle's own sample.)
 							frameStyle: "width:100%; min-width:312px; background:transparent; border:none;",
+							theme: "light",
+							variant: "one-page",
 							locale: "en",
 						}
 					: {
 							displayMode: "overlay",
+							theme: "light",
+							variant: "one-page",
 							locale: "en",
 						},
 			},
