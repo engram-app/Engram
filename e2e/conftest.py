@@ -77,6 +77,14 @@ _CONN_REFUSED_MARKERS = ("Connection refused", "ConnectionRefusedError", "NewCon
 _OBSIDIAN_DEAD_THRESHOLD = 3
 _consecutive_conn_failures = 0
 
+# Set when the circuit breaker below trips. A run that ends this way proved
+# nothing about the product: the stack died under it. Reported distinctly so it
+# reads as infra rather than as N broken features — measured 2026-09-01/02, two
+# such runs contributed 20 of the ~38 e2e-crdt failure lines in the window, and
+# every frontmatter and index-crdt "failure" in it was this and nothing else.
+_infra_dead_reason: str | None = None
+INFRA_DEAD_EXIT_CODE = 42
+
 
 def _backend_alive() -> bool:
     import requests
@@ -100,7 +108,7 @@ def _backend_alive() -> bool:
 def pytest_runtest_makereport(item, call):
     outcome = yield
     rep = outcome.get_result()
-    global _consecutive_conn_failures
+    global _consecutive_conn_failures, _infra_dead_reason
     if rep.when == "call" and rep.passed:
         _consecutive_conn_failures = 0
         return
@@ -116,6 +124,7 @@ def pytest_runtest_makereport(item, call):
             f"(first seen in {item.nodeid}) — aborting the suite; every "
             "remaining test would fail the same way. Check stack/compose logs."
         )
+        _infra_dead_reason = item.session.shouldstop
         logging.getLogger("conftest").error(item.session.shouldstop)
         return
     if rep.when == "teardown":
@@ -130,7 +139,34 @@ def pytest_runtest_makereport(item, call):
             f"connection-refused failures while the backend is healthy — an "
             f"Obsidian/CDP instance is gone (last: {item.nodeid}). Aborting."
         )
+        _infra_dead_reason = item.session.shouldstop
         logging.getLogger("conftest").error(item.session.shouldstop)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Report an infra death as infra, not as a pile of test failures.
+
+    When the breaker above trips, the tests that already failed are recorded as
+    ordinary failures and the run exits 1 — indistinguishable in CI from real
+    product breakage. Two such runs on 2026-09-01/02 produced 20 red entries
+    across the frontmatter, index-crdt and live-bound suites, none of which had
+    anything wrong with them.
+
+    So: emit a workflow annotation naming the cause, and exit with a dedicated
+    code. The job still fails (a dead stack proved nothing and must not read as
+    green), but it now says WHY, and a caller that wants to retry-on-infra has a
+    signal to branch on instead of grepping logs.
+    """
+    if _infra_dead_reason is None:
+        return
+    # GitHub renders ::error at the top of the run; harmless noise locally.
+    print(f"\n::error title=E2E infra died::{_infra_dead_reason}", flush=True)
+    print(
+        "\nThis run proved nothing about the product. Every failure above is "
+        "downstream of the dead instance, not a broken feature.",
+        flush=True,
+    )
+    session.exitstatus = INFRA_DEAD_EXIT_CODE
 
 
 def _worker_index() -> int:
