@@ -5,7 +5,7 @@ defmodule Engram.MixProject do
     [
       app: :engram,
       # x-release-please-start-version
-      version: "0.21.2",
+      version: "0.22.0",
       # x-release-please-end-version
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -206,7 +206,7 @@ defmodule Engram.MixProject do
       # Tidewave MCP — runtime introspection of the running dev app
       # (project_eval, DB queries, logs). Dev-only: it is RCE by design
       # and is mounted in the endpoint behind a code_reloading? guard.
-      {:tidewave, "~> 0.8.1", only: :dev}
+      {:tidewave, "~> 0.9.0", only: :dev}
     ]
   end
 

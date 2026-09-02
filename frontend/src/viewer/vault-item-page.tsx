@@ -8,7 +8,7 @@ import { NotePage } from "./note-chunks";
 // pdf.js on demand) — load whichever the route resolves to.
 const AttachmentPage = lazy(() => import("./attachment-page"));
 
-// Resolver behind the unified /:slug/:itemId route. Notes and attachments share one
+// Resolver behind the unified /v/:slug/:itemId route. Notes and attachments share one
 // URL shape (like Obsidian, where everything is a vault item) — decide which
 // viewer to mount by checking the loaded attachments list. The tree sidebar
 // keeps that list warm, so in-app navigation resolves instantly; a cold

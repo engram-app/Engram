@@ -21,6 +21,7 @@ import {
 import { VaultCreateForm } from "@/components/vault-create-form";
 import { useActiveVaultId } from "../api/active-vault";
 import { useVaults } from "../api/queries";
+import { vaultPath } from "../routes";
 
 function VaultSwitcher() {
 	const { data: vaults, isLoading } = useVaults();
@@ -41,7 +42,7 @@ function VaultSwitcher() {
 	// Navigate; VaultRoute writes the active-vault store. Land on the vault
 	// root, not the current note, whose id does not exist in the new vault.
 	function openVault(slug: string) {
-		navigate(`/${slug}`);
+		navigate(vaultPath(slug));
 		qc.invalidateQueries();
 	}
 

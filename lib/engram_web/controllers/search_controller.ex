@@ -151,6 +151,15 @@ defmodule EngramWeb.SearchController do
 
   defp do_search(conn, user, vault, query, note_limit, cross_vault, opts) do
     case Search.search(user, vault, query, opts) do
+      {:error, :search_cap_exceeded, limit} ->
+        EngramWeb.LimitResponse.halt(
+          conn,
+          "ai_searches_per_day_exceeded",
+          :ai_searches_per_day,
+          limit,
+          limit
+        )
+
       {:ok, results} ->
         # `cross_vault` mode passes nil as the vault filter so id lookup
         # spans all of the user's vaults (matches how the search hits

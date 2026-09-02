@@ -816,6 +816,12 @@ async def _assert_plugin_surfaces(cdp_a):
             if (typeof p.syncEngine?.isRecentlyPushed !== 'function') missing.push('isRecentlyPushed');
             if (typeof p.syncEngine?.handleStreamEvent !== 'function') missing.push('handleStreamEvent');
             if (!(p.syncEngine?.syncState instanceof Map)) missing.push('syncState:Map');
+            // NOT checked here: the cold-apply backstop that
+            // suppress_fanout_backstops() stubs. It belongs to 4 crdt tests, and
+            // this fixture is session-scoped autouse across every suite — a
+            // rename would fail the ~110-test clerk session for a reason with no
+            // bearing on it. The helper raises on its own instead (#1503), which
+            // is the same protection scoped to the tests that need it.
             for (const id of cmds) {
                 if (!app.commands.findCommand(`engram-vault-sync:${id}`)) {
                     missing.push(`command:${id}`);

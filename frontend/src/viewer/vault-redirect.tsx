@@ -3,6 +3,7 @@ import { getActiveVaultId } from "../api/active-vault";
 import { useVaults } from "../api/queries";
 import { preferredVault } from "../api/vault-slug";
 import { EmptyVaultState } from "../layout/empty-vault-state";
+import { vaultPath } from "../routes";
 import LoadingPane from "./loading-pane";
 
 // Bare `/` does not name a vault, so pick one: last-used, else default, else
@@ -21,7 +22,7 @@ export default function VaultRedirect() {
 	}
 	return (
 		<Navigate
-			to={{ pathname: `/${vault.slug}`, search: location.search, hash: location.hash }}
+			to={{ pathname: vaultPath(vault.slug), search: location.search, hash: location.hash }}
 			replace
 		/>
 	);

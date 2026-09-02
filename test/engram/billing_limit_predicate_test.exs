@@ -73,4 +73,54 @@ defmodule Engram.BillingLimitPredicateTest do
       Billing.limit_enforced?(user, :not_a_real_limit_key)
     end
   end
+
+  # `cap/2` is the third encoding of "what counts as unlimited" — the one every
+  # caller that wants a NUMBER goes through. Before it existed, eight modules
+  # decoded the sentinels privately and disagreed: `Engram.Accounts.Export`'s
+  # copy passed `-1` through as a real ceiling, so an override meaning
+  # "unlimited exports" refused every export. Pin the same safety property here
+  # so a future edit cannot re-open that gap by touching one of the three.
+  test "cap/2, limit_enforced?/2 and check_limit/3 agree on every unlimited spelling" do
+    Application.put_env(:engram, :limits_enforced, true)
+
+    # `-1` — the operator-override sentinel. This is the spelling that bit:
+    # `Engram.Accounts.Export`'s private decoder passed it through as a real
+    # ceiling, so an override meaning "unlimited exports" refused every export.
+    overridden = insert(:user)
+
+    Repo.insert!(
+      %Engram.Billing.UserLimitOverride{
+        id: Ecto.UUID.generate(),
+        user_id: overridden.id,
+        key: "lifetime_embed_token_cap",
+        value: %{"v" => -1},
+        reason: "test",
+        set_by: "test"
+      },
+      skip_tenant_check: true
+    )
+
+    assert Billing.cap(overridden, :lifetime_embed_token_cap) == nil
+    refute Billing.limit_enforced?(overridden, :lifetime_embed_token_cap)
+    assert Billing.check_limit(overridden, :lifetime_embed_token_cap, @huge) == :ok
+
+    # `nil` — the catalog's unmetered default. Not reachable as an override
+    # value (`effective_limit/2` treats a nil override as a miss and falls
+    # through), so use a key that is nil on this user's own tier:
+    # `lifetime_embed_token_cap` is unmetered on paid tiers; use an override of
+    # nil-equivalent instead. `account_export_rate_per_24h` is nil on Free.
+    unmetered = insert(:user)
+
+    assert Billing.cap(unmetered, :account_export_rate_per_24h) == nil
+    refute Billing.limit_enforced?(unmetered, :account_export_rate_per_24h)
+    assert Billing.check_limit(unmetered, :account_export_rate_per_24h, @huge) == :ok
+  end
+
+  test "cap/2 reports enforcement-off as no cap" do
+    Application.put_env(:engram, :limits_enforced, false)
+    user = insert(:user)
+
+    assert Billing.cap(user, :lifetime_embed_token_cap) == nil
+    assert Billing.granted?(user, :reranker_enabled), "enforcement off grants every boolean"
+  end
 end

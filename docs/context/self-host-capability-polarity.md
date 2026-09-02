@@ -1,6 +1,6 @@
 # Self-host must grant everything: boolean limit-key polarity
 
-_Last verified: 2026-08-20_
+_Last verified: 2026-08-31_
 
 ## Status
 
@@ -66,13 +66,29 @@ Not just call sites. A key is an identifier in four places:
 2. **Env** — `env_var_names/0` DERIVES `ENGRAM_<TIER>_<KEY>` from the catalog,
    so dropping a key silently stops parsing its env var. No boot error.
 3. **Plan rows** — `plans.limits` JSONB keyed by the old string.
-4. **The `@unenforced` list** in `test/engram/billing/limit_enforcement_test.exs`,
-   which fails on an unknown key.
+4. **The `@unenforced` list** in `test/engram/billing/limit_enforcement_test.exs`.
 
-`@legacy_inverted_keys` in `billing.ex` resolves the old spellings across
-(1)–(3) and **flips the sense**. Without it an operator who deliberately
-restricted a tier silently has that restriction lifted — the failure runs in
-the permissive direction, so nothing alerts.
+**There is no longer a safety net for (1).** `@legacy_inverted_keys` in
+`billing.ex` used to resolve the old spellings across (1)-(3) and flip the
+sense; it was deleted in the pricing-v2 contract step (engram#1535) once the
+shims it protected had no one left to protect. A rename now goes straight to
+the failure it guarded: a surviving `user_limit_overrides` row is never
+SELECTed, the user falls to the catalog default, and because the default is
+the permissive value the restriction is silently LIFTED. Nothing alerts.
+
+**So a rename needs a data migration in the same PR.** See
+`priv/repo/migrations/20260831120000_translate_legacy_limit_overrides_migrate_data.exs`
+for the shape: INSERT the translated row (negating `value->>'v'` when the
+polarity inverts), `ON CONFLICT DO NOTHING` so an existing row under the new
+spelling wins, then DELETE the old. Reads never re-validate an override row and
+`UserLimitOverride.changeset/2` rejects retired keys, so the migration is the
+only place the repair can happen.
+
+Point (2) has no safety net either and never did: `plan_overrides` is a PULL
+model iterating `env_var_names/0`, so an env var whose key left the catalog is
+simply never read. `EnvLimits.parse!/3` validates the VALUE, never the NAME —
+its "fail-fast boot crash" promise holds only for a malformed value on a key
+that still exists.
 
 ## Fail direction is per-key, and it is a decision
 
@@ -152,7 +168,7 @@ pre-gate and re-uploads whatever is parked.
 
 - `lib/engram/billing/limit_keys.ex` — the catalog and the polarity comment
 - `lib/engram/billing.ex` — `attachments_all_types?/1`,
-  `inactivity_warnings_exempt?/1`, `@legacy_inverted_keys`
+  `inactivity_warnings_exempt?/1` (`@legacy_inverted_keys` removed in #1535)
 - `test/engram/billing/limit_keys_test.exs` — the no-inverted-boolean invariant
 - Plugin `src/plan-state.ts`, `src/auth-state.ts` (`CLEARED_AUTH_VALUES`) —
   the plan is a per-backend verdict and is dropped when the server changes

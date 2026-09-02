@@ -186,6 +186,47 @@ its unbind checkpoint. A memory backstop must never cost a room its checkpoint.
 `max_resident` defaults to 64 and wants tuning against real index-doc sizes once #1150 exists;
 #1146's arithmetic says ~128 resident rooms would consume an entire task.
 
+## Residency is a property of the TRANSPORT, not of handshakes (#1493)
+
+The natural reading of a room-count problem is "too many handshakes." That is the wrong shape and
+it costs a day if you chase it.
+
+`crdt_msg` routes **every** frame through `ensure_room` (`crdt_channel.ex:234`) — a syncStep1, a
+STEP2, and a plain `sync_update` for a note nobody has open, all of them. So a room is not what you
+get for *asking to handshake*; it is what you get for *sending anything at all* about a note. On
+2026-08-28 a 1.4k-note sync put residency at **314 against a cap of 64**, and the top contributor
+was the plugin's durable op-queue drain (`sync.ts fireCrdtReHandshake`) — which cannot be gated,
+because it is the delivery path for idle notes' queued edits and skipping it loses them.
+
+Two things follow, and both are non-obvious enough to be worth writing down:
+
+**1. The lifetime knob is WHO OBSERVES, not whether a room starts.** `CrdtRegistry.ensure_observed`
+binds a room's lifetime to the calling process (`auto_exit` fires on last-unobserve). Call it from
+the channel and the room lives as long as the socket. Call it from a short-lived task and the room
+checkpoints and exits the moment the task does — or stays untouched if a live editor is also
+observing it. Same room, same apply, same fan-out; residency goes from O(notes pushed) to
+O(applies in flight). That is the whole of `crdt_doc_update`'s mechanism.
+
+Do **not** "fix" this by calling `ensure_started` without an observer. A room with no observer
+never trips `auto_exit` and falls back on the idle drain alone — worse than what you started with.
+For the same reason `crdt_doc_update` does not `Task.shutdown` its applier on timeout: killing it
+between `ensure_started` and `observe` lands in exactly that state. It disowns the task instead.
+
+**2. A room-free frame must still bill the handshake lane.** `crdt_doc_state` and `crdt_doc_update`
+both stand in for a handshake, so putting them on the edit lane would let a bulk vault sync starve
+the user's real typing — the 2026-07-07 cross-file-overwrite incident shape. They get there by
+different routes, which is worth knowing before you go looking for a shared helper: `crdt_doc_state`
+carries no `b64` at all and hardcodes `check_rate(socket, :handshake)`, while `crdt_doc_update` —
+which does carry state — goes through `state_frame_class/1`, the size gate `crdt_create`'s genesis
+seed introduced (small rides `:handshake`, oversized pays `:edit`). Only the latter two share it.
+
+**What this does NOT do:** it does not make `@max_evictions_per_sweep` right. That cap is still a
+fixed batch with no feedback term, deliberately, because each eviction costs the owning channel a
+serial ~1s probe. Its comment scopes the trade to "stops mattering once a bulk upload no longer
+creates a room per note (#1409)" — a precondition that was assumed met from 2026-08-26 and was
+still false in the field on 2026-08-28. Re-read it only once #1493's two PRs are **in a release**,
+not when they merge.
+
 ## Observability
 
 `[:engram, :crdt, :room_drain]`, `%{count: 1}`, `%{phase: :requested | :reasked |

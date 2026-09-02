@@ -154,7 +154,6 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/billing.ex",
     "lib/engram/billing/",
     "lib/engram/billing/workers/",
-    "lib/engram/conversation_meter.ex",
     "lib/engram/legal.ex",
     "lib/engram/legal/",
     "lib/engram/legal/version_cache/",
@@ -162,8 +161,6 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/onboarding/",
     "lib/engram/paddle/",
     "lib/engram/paddle/client/",
-    "lib/engram/usage/",
-    "lib/engram/usage/daily_cap/",
     "lib/engram/usage_meters.ex",
     "lib/engram/usage_meters/",
 

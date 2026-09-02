@@ -147,11 +147,15 @@ defmodule Engram.Notes.CrdtTransport do
   fastlanes it to live observers), and returns the new head marker.
 
   A malformed update yields `{:error, :invalid_update}` and mutates nothing.
+
+  `source` is attached to the room_start telemetry so a room allocated by this
+  path is attributable in `engram_prom_ex_crdt_room_start_total` rather than
+  landing in `:unknown` — the question #1493 is actually about.
   """
-  @spec apply_update(map(), map(), String.t(), binary()) ::
+  @spec apply_update(map(), map(), String.t(), binary(), atom()) ::
           {:ok, %{head: String.t()}}
           | {:error, :not_found | :invalid_update | :room_unavailable}
-  def apply_update(user, vault, note_id, update) do
+  def apply_update(user, vault, note_id, update, source \\ :unknown) do
     if Notes.note_in_vault?(user, vault.id, note_id) do
       # ensure_observed (not ensure_started): registers THIS process (the
       # per-request caller) as a SharedDoc observer so the room's lifetime is
@@ -161,7 +165,7 @@ defmodule Engram.Notes.CrdtTransport do
       # here. With an observer, when this process exits (end of request, or
       # here in tests, the spawned caller), the room checkpoints and exits
       # unless a live channel is also observing it.
-      with {:ok, room} <- CrdtRegistry.ensure_observed(user.id, vault.id, note_id),
+      with {:ok, room} <- CrdtRegistry.ensure_observed(user.id, vault.id, note_id, source),
            {:ok, head} <- apply_in_room(room, note_id, update) do
         {:ok, %{head: head}}
       else
@@ -188,9 +192,69 @@ defmodule Engram.Notes.CrdtTransport do
     parent = self()
     ref = make_ref()
 
+    # An explicit `try` rather than the function-level form: `ref` has to be in
+    # scope in the catch clauses so they can drain a reply the room already
+    # sent. The function-level `catch` cannot see body bindings at all, which is
+    # what silently made that drain impossible to write.
+    try do
+      apply_in_room_call(room, parent, ref, update)
+      drain_reply(ref)
+    catch
+      :exit, {:noproc, _} ->
+        drain_reply(ref)
+
+      :exit, {:normal, _} ->
+        drain_reply(ref)
+
+      :exit, {:shutdown, _} ->
+        drain_reply(ref)
+
+      :exit, reason ->
+        Logger.error(
+          "crdt transport room apply exited",
+          Metadata.with_category(:error, :sync,
+            note_id: note_id,
+            reason: Metadata.safe_exit_reason(reason)
+          )
+        )
+
+        drain_reply(ref)
+    end
+  end
+
+  defp apply_in_room_call(room, parent, ref, update) do
     # SharedDoc.update_doc is a synchronous GenServer.call: the fun runs to
     # completion inside the room before this returns, so the {ref, result}
     # message is already in our mailbox when we receive it.
+    #
+    # NO explicit timeout here, deliberately, even though the channel waits on
+    # this with a budget of its own (`CrdtChannel.@room_free_apply_ms`). A
+    # `GenServer.call` timeout is a CALLER-side give-up, not a cancellation: the
+    # room still holds the message and still runs the fun. So a short inner
+    # bound cannot deliver the thing it looks like it delivers, and it costs two
+    # live defects.
+    #
+    # First, it manufactures the failure it claims to prevent. An apply that
+    # completes at 2.5s inside a 3s outer budget is a correct SUCCESS today; cap
+    # the inner call at 2s and the same apply answers `doc_update_failed` while
+    # the write lands anyway — and the client's fallback is a full room
+    # handshake, allocating the room this frame exists to avoid, precisely when
+    # the node is already slow.
+    #
+    # Second, it can LOSE the write. `update_doc` is a call, and y_ex drains the
+    # doc monitor's `{:update_v1, ...}` self-send only from its two
+    # `handle_cast` clauses ("Process update messages immediately"), never from
+    # `handle_call`. So `update_v1` sits at the room's mailbox TAIL. If the
+    # applier task has already exited on the inner timeout, its `:DOWN` is
+    # queued AHEAD of that self-send: the room removes its last observer, hits
+    # `auto_exit`, and stops with the tail-WAL append unprocessed. Nothing
+    # reaches `crdt_update_log`, and `CheckpointNote` — which rebuilds from
+    # snapshot + tail-log and cannot see the in-memory doc — has no row to
+    # replay. `CheckpointGate`'s loss-free claim assumes every applied update
+    # has a WAL row; this is the path where it does not.
+    #
+    # The outer `Task.yield` already bounds the channel, which is the process
+    # that actually needs bounding.
     SharedDoc.update_doc(room, fn doc ->
       result =
         case Yex.apply_update(doc, update) do
@@ -201,32 +265,22 @@ defmodule Engram.Notes.CrdtTransport do
       send(parent, {ref, result})
       :ok
     end)
+  end
 
+  # The in-room fun sends `{ref, result}` BEFORE returning, and gen_server sends
+  # its own call reply only after `handle_call` returns — so on a room that dies
+  # in that gap the apply may have SUCCEEDED with its head already in our
+  # mailbox. That message is a plain send to a raw pid with a plain `make_ref()`,
+  # not a call alias, so nothing discards it. The `catch` is function-level and
+  # unwinds past the receive, so every exit clause has to drain before it can
+  # honestly answer `:room_unavailable` — otherwise proof of a completed write
+  # sits unread while we report failure.
+  defp drain_reply(ref) do
     receive do
       {^ref, result} -> result
     after
       0 -> {:error, :room_unavailable}
     end
-  catch
-    :exit, {:noproc, _} ->
-      {:error, :room_unavailable}
-
-    :exit, {:normal, _} ->
-      {:error, :room_unavailable}
-
-    :exit, {:shutdown, _} ->
-      {:error, :room_unavailable}
-
-    :exit, reason ->
-      Logger.error(
-        "crdt transport room apply exited",
-        Metadata.with_category(:error, :sync,
-          note_id: note_id,
-          reason: Metadata.safe_exit_reason(reason)
-        )
-      )
-
-      {:error, :room_unavailable}
   end
 
   @doc """

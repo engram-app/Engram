@@ -1,6 +1,7 @@
 import { Link, useParams } from "react-router";
 import { useBacklinks } from "../api/queries";
 import { noteName } from "../lib/note-name";
+import { noteHref } from "../routes";
 
 export default function BacklinksPanel({ noteId }: { noteId: string | null }) {
 	const { slug } = useParams();
@@ -26,7 +27,7 @@ export default function BacklinksPanel({ noteId }: { noteId: string | null }) {
 					{backlinks.map((b) => (
 						<li key={b.source_note_id}>
 							<Link
-								to={`/${slug}/${b.source_note_id}`}
+								to={noteHref(slug, b.source_note_id)}
 								className="flex items-center gap-1 truncate rounded px-3 py-0.5 text-foreground/80 hover:bg-muted hover:text-foreground"
 							>
 								{b.source_title ?? noteName(b.source_path)}

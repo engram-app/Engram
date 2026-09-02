@@ -226,3 +226,8 @@ config :opentelemetry,
   traces_exporter: :none,
   span_processor: :simple,
   sampler: :always_on
+
+# OrphanSweep re-checks its point-orphan candidates after a grace window before
+# deleting. Zero in tests: no suite should pay a real minute of sleep, and the
+# race it guards is exercised directly via `:orphan_sweep_point_grace_fun`.
+config :engram, :orphan_sweep_point_grace_seconds, 0

@@ -530,8 +530,29 @@ defmodule Engram.Attachments do
   `Engram.Notes.rename_folder/4`'s tombstone discipline (#614).
   """
   @spec move_attachment(map(), map(), String.t(), String.t()) ::
-          {:ok, Attachment.t()} | {:error, :conflict | :not_found | term()}
+          {:ok, Attachment.t()}
+          | {:error, :conflict | :not_found | :feature_not_available | term()}
   def move_attachment(user, vault, old_path, new_path) do
+    # `attachments_enabled` is gated HERE, not in the caller. REST
+    # (`AttachmentsController.rename/2`) and MCP (the `move_attachment` tool)
+    # both land on this function; while the check lived in the controller, only
+    # REST was refused. Same class as the MCP search-cap bypass — see
+    # `docs/context/mcp-bypasses-path-shaped-plugs.md`. It runs ahead of the
+    # lookup so a revoked plan cannot be probed for which paths exist.
+    #
+    # The gate is on THIS function and not on `do_move_attachment/4`, which is
+    # also the per-item step of `rename_folder/4`. That cascade is server
+    # -internal: `Folders.rename/4` runs it after `Notes.rename_folder/4` on
+    # every folder rename. Gating the shared mover refused the attachment leg
+    # and rolled the whole folder rename back, so a revoked attachments grant
+    # read as "you cannot rename a folder". Gate the user-initiated entry
+    # points (`move_attachment/4`, `batch_move/4`); leave the cascade alone.
+    with :ok <- Billing.check_feature(user, :attachments_enabled) do
+      do_move_attachment(user, vault, old_path, new_path)
+    end
+  end
+
+  defp do_move_attachment(user, vault, old_path, new_path) do
     old_path = PathSanitizer.sanitize(old_path)
     new_path = PathSanitizer.sanitize(new_path)
     user = fresh_user(user)
@@ -739,11 +760,15 @@ defmodule Engram.Attachments do
         {old_path, new_path}
       end)
 
-    # This surface tags conflict/not_found with the offending path so the REST
-    # controller can name it in the 409/404 body (`{:conflict, path}`).
-    case move_pairs(user, vault, pairs, &tag_move_error/2) do
-      {:ok, count} -> {:ok, %{moved: count}}
-      {:error, _} = err -> err
+    # User-initiated, so it carries its own gate — `move_pairs/4` runs the
+    # UNGATED mover (see `move_attachment/4`) because `rename_folder/4` shares it.
+    with :ok <- Billing.check_feature(user, :attachments_enabled) do
+      # This surface tags conflict/not_found with the offending path so the REST
+      # controller can name it in the 409/404 body (`{:conflict, path}`).
+      case move_pairs(user, vault, pairs, &tag_move_error/2) do
+        {:ok, count} -> {:ok, %{moved: count}}
+        {:error, _} = err -> err
+      end
     end
   end
 
@@ -759,7 +784,7 @@ defmodule Engram.Attachments do
   defp move_pairs(user, vault, pairs, on_error) do
     Repo.transaction(fn ->
       Enum.reduce_while(pairs, 0, fn {old_path, new_path}, count ->
-        case move_attachment(user, vault, old_path, new_path) do
+        case do_move_attachment(user, vault, old_path, new_path) do
           {:ok, _} -> {:cont, count + 1}
           {:error, reason} -> {:halt, {:rollback, on_error.(reason, old_path)}}
         end
@@ -1159,41 +1184,75 @@ defmodule Engram.Attachments do
     end
   end
 
+  # decrypt_metadata/2 (via maybe_decrypt_attachment_fields/2) and the
+  # extra.() closure below only ever read these columns — everything else on
+  # the schema (ciphertext/nonce/hmac fields besides path, storage_key,
+  # version, seq, dek_version_pending, ...) was dead weight on the wire and
+  # in the decode step. `struct(a, fields)` keeps a real %Attachment{}
+  # struct (decrypt_aad/3 pattern-matches `%_{dek_version: v}`), just with
+  # only these fields populated.
+  @tree_attachment_fields ~w(id dek_version path_ciphertext path_nonce mime_type size_bytes mtime updated_at content_hash)a
+
   # Returns the raw rows alongside the decrypted metas so a caller can tell
   # whether `decrypt_each/3` dropped any of them. Each skip is already logged
   # there; this only makes the drop visible in the return value.
   defp scan_attachments(user, vault) do
     user = fresh_user(user)
 
-    Repo.with_tenant(user.id, fn ->
-      from(a in scoped_live(user, vault), order_by: [asc: a.updated_at])
-      |> Repo.all()
-    end)
+    Repo.with_tenant(user.id, fn -> raw_tree_rows(user, vault) end)
     |> unwrap_tenant()
     |> case do
-      {:ok, atts} ->
-        # Measured like every other bulk path decrypt (:notes,
-        # :vault_tree_notes, :manifest_*). /api/vault/tree delegates its
-        # attachment half here rather than duplicating the query, so without
-        # this span that endpoint reports only its notes decrypt cost. Label
-        # is caller-agnostic because this function is: per-endpoint
-        # attribution comes from the OTel request span, not this tag.
-        {:ok, atts,
-         Crypto.measure_decrypt_batch(:attachments, length(atts), fn ->
-           decrypt_each(atts, user, fn att, meta ->
-             # content_hash rides along so the listing a client sweeps before
-             # deciding what to push can answer "you already have these bytes"
-             # without a per-file round trip. Additive for every other caller.
-             meta
-             |> Map.delete(:deleted_at)
-             |> Map.put(:id, att.id)
-             |> Map.put(:content_hash, att.content_hash)
-           end)
-         end)}
-
-      err ->
-        err
+      {:ok, atts} -> {:ok, atts, decrypt_tree_rows(atts, user)}
+      err -> err
     end
+  end
+
+  @doc """
+  Raw attachment rows for GET /vault/tree, projected to the columns
+  `decrypt_tree_rows/2` (and every current caller of `list_attachments/2`)
+  actually reads. MUST run inside the caller's `Repo.with_tenant/2` — pair
+  with `decrypt_tree_rows/2`, which does the decrypt work OUTSIDE any
+  transaction. See `Notes.raw_tree_note_rows/2` for the notes equivalent,
+  and #1211 for why decrypt must stay outside the transaction.
+  """
+  @spec raw_tree_rows(map(), map()) :: [Attachment.t()]
+  def raw_tree_rows(user, vault) do
+    from(a in scoped_live(user, vault),
+      order_by: [asc: a.updated_at],
+      select: struct(a, @tree_attachment_fields)
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Decrypts `raw_tree_rows/2`'s rows into the same meta shape
+  `list_attachments/2` returns (id/path/mime_type/size_bytes/mtime/
+  updated_at/content_hash). Skips and logs any row that fails to decrypt —
+  same tolerant behavior as `list_attachments/2`. Does no DB access; meant
+  to run OUTSIDE any transaction.
+  """
+  @spec decrypt_tree_rows([Attachment.t()], map()) :: [map()]
+  def decrypt_tree_rows(atts, user) do
+    # Reload if the caller's struct predates an earlier write's DEK
+    # provisioning — same discipline scan_attachments/2 applies before its
+    # own decrypt_each call, now enforced here instead of trusting every
+    # caller (e.g. VaultTreeController) to remember it.
+    user = fresh_user(user)
+
+    # Measured like every other bulk path decrypt (:notes, :vault_tree_notes,
+    # :manifest_*). Label is caller-agnostic — per-endpoint attribution comes
+    # from the OTel request span, not this tag.
+    Crypto.measure_decrypt_batch(:attachments, length(atts), fn ->
+      decrypt_each(atts, user, fn att, meta ->
+        # content_hash rides along so the listing a client sweeps before
+        # deciding what to push can answer "you already have these bytes"
+        # without a per-file round trip. Additive for every other caller.
+        meta
+        |> Map.delete(:deleted_at)
+        |> Map.put(:id, att.id)
+        |> Map.put(:content_hash, att.content_hash)
+      end)
+    end)
   end
 
   @doc """

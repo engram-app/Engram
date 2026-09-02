@@ -27,13 +27,25 @@ defmodule Engram.UsageMeters do
       field :lifetime_embed_tokens, :integer, default: 0
       field :notes_count, :integer, default: 0
       field :last_active_at, :utc_datetime_usec
-      field :active_conversation_started_at, :utc_datetime_usec
-      field :active_conversation_query_count, :integer, default: 0
-      field :conversations_today, :integer, default: 0
-      field :conversations_day_key, :date
-      field :queries_today, :integer, default: 0
-      field :queries_day_key, :date
       field :updated_at, :utc_datetime_usec
+    end
+  end
+
+  @doc """
+  One read of every counter this user is metered on, for the usage endpoint.
+
+  The conversation counters are gone: `ai_searches_per_day` replaced them and
+  lives in the cluster-synced ETS limiter, which has no read-without-spend API.
+  Returns zeroes for a user with no row yet (rows are lazy-initialized).
+  """
+  @spec snapshot(Ecto.UUID.t()) :: %{
+          notes: non_neg_integer(),
+          lifetime_embed_tokens: non_neg_integer()
+        }
+  def snapshot(user_id) when is_binary(user_id) do
+    case Repo.one(from(m in Meter, where: m.user_id == ^user_id), skip_tenant_check: true) do
+      nil -> %{notes: 0, lifetime_embed_tokens: 0}
+      %Meter{} = m -> %{notes: m.notes_count, lifetime_embed_tokens: m.lifetime_embed_tokens}
     end
   end
 

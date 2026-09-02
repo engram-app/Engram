@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.22.0](https://github.com/engram-app/Engram/compare/0.21.2...0.22.0) (2026-08-31)
+
+
+### Features
+
+* **billing:** publish indexed_notes_cap; normalize the -1 sentinel once ([#1506](https://github.com/engram-app/Engram/issues/1506)) ([820c0e6](https://github.com/engram-app/Engram/commit/820c0e64ed79173f9624d96374c7459abc2e5423))
+* **pricing:** Free tier is keyword-only over a 2,000-note index cap ([#1486](https://github.com/engram-app/Engram/issues/1486)) ([438d6d7](https://github.com/engram-app/Engram/commit/438d6d7ec2895bb1cc821a94b793b0ff817a08cd))
+* **properties:** frontmatter parity — order, help, type-aware keys, and a tags fix ([#1520](https://github.com/engram-app/Engram/issues/1520)) ([cba172f](https://github.com/engram-app/Engram/commit/cba172f13e1aaaa800cc44c62a0fec858cba2135))
+
+
+### Bug Fixes
+
+* **e2e:** poll for the note_id mapping in _confirm_room_free ([#1524](https://github.com/engram-app/Engram/issues/1524)) ([b314268](https://github.com/engram-app/Engram/commit/b314268af8d0d9a6a19cf7077e67c7b9eb5f50c8)), closes [#1489](https://github.com/engram-app/Engram/issues/1489)
+* **indexing:** move the index-cap sweeps off the request path ([#1515](https://github.com/engram-app/Engram/issues/1515)) ([b844fed](https://github.com/engram-app/Engram/commit/b844fedfd7652171d0da074feb19efb24805e535))
+* **indexing:** remediate the [#1486](https://github.com/engram-app/Engram/issues/1486) index-cap review findings ([#1512](https://github.com/engram-app/Engram/issues/1512)) ([8a3ed88](https://github.com/engram-app/Engram/commit/8a3ed88191ee444449440a32ccc87be5a7cbcaf9))
+* **indexing:** stop counting notes for uncapped users; unfreeze the cap banner ([#1516](https://github.com/engram-app/Engram/issues/1516)) ([fe074a7](https://github.com/engram-app/Engram/commit/fe074a78e1f46b19068c171b17b89052867b29e7))
+* **mcp:** validate required tool args before dispatch ([#1500](https://github.com/engram-app/Engram/issues/1500)) ([c5ea795](https://github.com/engram-app/Engram/commit/c5ea795a31ed824b20188fdaeadb8635c81b73ec))
+* **release-notes:** scope SCHEMA-IMPACT PRs to the actual release range ([#1518](https://github.com/engram-app/Engram/issues/1518)) ([8ccec65](https://github.com/engram-app/Engram/commit/8ccec655fd72921875e998a6e9d92611af01e3fa))
+
+
+### Performance Improvements
+
+* collapse per-request with_tenant blocks on sync/manifest + vault/tree ([#1513](https://github.com/engram-app/Engram/issues/1513)) ([8bf16c8](https://github.com/engram-app/Engram/commit/8bf16c8aa7690e9a5224c31c672e667192e5de34))
+* **indexing:** cut the per-job query cost, and give every Oban worker a timeout ([#1504](https://github.com/engram-app/Engram/issues/1504)) ([7f8ba1f](https://github.com/engram-app/Engram/commit/7f8ba1fd692debe5195638b6be9d618124d62537))
+
 ## [0.21.2](https://github.com/engram-app/Engram/compare/0.21.1...0.21.2) (2026-08-28)
 
 

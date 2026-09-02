@@ -55,6 +55,29 @@ defmodule Engram.Indexing.IndexCapTest do
     :ok
   end
 
+  describe "counts/1 cap short-circuit" do
+    test "a capped user gets real counts", %{user: u, vault: v} do
+      :ok = cap!(u, 2)
+      _ = note_at(u, v, 0)
+      _ = note_at(u, v, 10)
+      _ = note_at(u, v, 20)
+
+      assert IndexCap.counts(Engram.Accounts.get_user!(u.id)) == %{indexed: 2, total: 3}
+    end
+
+    test "an uncapped user is not counted at all", %{user: u, vault: v} do
+      # /bootstrap calls this on every page load and every tab, and the count is
+      # a whole-vault aggregate. An uncapped tier never renders the banner, so
+      # the work is pure waste. Equal values are the complete answer: the only
+      # consumer asks `indexed < total`.
+      insert(:subscription, user: u, tier: "pro", status: "active")
+      _ = note_at(u, v, 0)
+      _ = note_at(u, v, 10)
+
+      assert IndexCap.counts(Engram.Accounts.get_user!(u.id)) == %{indexed: 0, total: 0}
+    end
+  end
+
   describe "cap resolution" do
     test "a negative cap is the unlimited sentinel", %{user: u, vault: v} do
       :ok = raw_cap!(u, -1)

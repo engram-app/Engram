@@ -4,6 +4,7 @@ import type React from "react";
 import { Link } from "react-router";
 import { useActiveVaultSlug } from "../../api/vault-slug";
 import { noteName } from "../../lib/note-name";
+import { noteHref } from "../../routes";
 import { RenameInput } from "../tree-actions/rename-input";
 import { useLongPress } from "../tree-actions/use-long-press";
 import type { LoaderItem } from "./loader";
@@ -231,7 +232,7 @@ export function TreeRow({
 		// machinery).
 		return (
 			<Link
-				to={slug ? `/${slug}/${item.id}` : `/note/${item.id}`}
+				to={noteHref(slug, item.id)}
 				{...instance.getProps()}
 				{...longPressProps}
 				onContextMenu={contextMenuHandler}
@@ -275,7 +276,7 @@ export function TreeRow({
 
 	return (
 		<Link
-			to={slug ? `/${slug}/${item.id}` : `/note/${item.id}`}
+			to={noteHref(slug, item.id)}
 			{...htProps}
 			{...longPressProps}
 			onContextMenu={contextMenuHandler}

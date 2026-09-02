@@ -379,7 +379,11 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Widening a column type without rewriting the table (`varchar[]` → `text[]` DOES rewrite; how to measure with relfilenode; when `# squawk-ignore-file` is justified) → `docs/context/migration-column-type-rewrites.md`
 - All env vars by category → `docs/context/environment-variables.md`
 - Rate limiter & cap architecture — Postgres + BEAM only, zero Redis → `docs/context/rate-limiter-architecture.md`
+- Adding a plan-limit / abuse gate as a plug, or a Free cap is not firing for a user clearly over it (a `request_path` guard cannot see MCP — every tool is one route, named in the JSON-RPC body) → `docs/context/mcp-bypasses-path-shaped-plugs.md`
+- Proving a limit is actually WIRED (delete the gate line and re-run; a green suite means unproven) → `docs/context/mcp-bypasses-path-shaped-plugs.md`
+- Reading a plan limit as a NUMBER, or a `-1` operator override made a user MORE restricted (`effective_limit/2` returns four spellings of "no limit" — use `Billing.cap/2` / `granted?/2`) → `docs/context/limit-sentinel-decoding.md`
 - Cross-workspace SaaS pricing model → `../engram-workspace/docs/context/pricing-strategy.md`
+- Adding a top-level route / Plug.Static mount / Phoenix scope / Cloudflare rule, and wondering if it can collide with a vault name (it cannot — vault URLs are `/v/:slug`; the old `@reserved_slugs` list is deleted) → `docs/context/vault-url-prefix-and-collision-surface.md`
 
 **Sync & CRDT**
 - Server-side sync protocol — seq change-log, cursor-pull, manifest, realtime channel (start here for sync work) → `docs/context/sync-protocol.md`

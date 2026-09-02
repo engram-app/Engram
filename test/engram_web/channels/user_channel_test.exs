@@ -30,7 +30,6 @@ defmodule EngramWeb.UserChannelTest do
 
       assert reply.plan.tier == :free
       # Free now gets every attachment MIME type; storage quota is the lever.
-      assert reply.plan.attachments_text_only == false
       assert reply.plan.attachments_all_types == true
     end
 

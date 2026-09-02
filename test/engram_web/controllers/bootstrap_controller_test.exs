@@ -106,4 +106,34 @@ defmodule EngramWeb.BootstrapControllerTest do
       assert body["onboarding"]["enabled"] == true
     end
   end
+
+  describe "GET /api/index-status" do
+    test "returns the counters on their own", %{conn: conn} do
+      {conn, user} = authed_conn(conn)
+      vault = insert(:vault, user: user)
+
+      insert(:note, user: user, vault: vault)
+      insert(:note, user: user, vault: vault)
+
+      Engram.Repo.insert!(%Engram.Billing.UserLimitOverride{
+        user_id: user.id,
+        key: "indexed_notes_cap",
+        value: %{"v" => 1},
+        reason: "test",
+        set_by: "test"
+      })
+
+      Engram.Billing.OverrideCache.evict(user.id)
+
+      # The banner this drives is the only thing that keeps a note past the cap
+      # returning nothing from reading as broken search. Seeded by /bootstrap,
+      # but refetchable so it does not stay frozen at page load.
+      assert %{"indexed" => 1, "total" => 2} =
+               conn |> get(~p"/api/index-status") |> json_response(200)
+    end
+
+    test "requires auth", %{conn: conn} do
+      assert conn |> get(~p"/api/index-status") |> json_response(401)
+    end
+  end
 end

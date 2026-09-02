@@ -187,7 +187,11 @@ defmodule Engram.Indexing do
         qdrant_points: qdrant_points,
         links: link_rows
       }) do
-    with :ok <-
+    # Points first, by id, while the chunk rows still name them — a rename can
+    # have retagged the note row, leaving the hmac filter below matching
+    # nothing and the old points stranded. See `delete_points_for_note/1`.
+    with :ok <- delete_points_for_note(note.id),
+         :ok <-
            Qdrant.delete_by_note(
              collection(),
              to_string(note.user_id),
@@ -274,7 +278,8 @@ defmodule Engram.Indexing do
   `source_path`. The note row's `path_hmac` is the source of truth.
   """
   def delete_note_index(note) do
-    with :ok <-
+    with :ok <- delete_points_for_note(note.id),
+         :ok <-
            Qdrant.delete_by_note(
              collection(),
              to_string(note.user_id),
@@ -284,6 +289,22 @@ defmodule Engram.Indexing do
       Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
       :ok
     end
+  end
+
+  # Delete a note's Qdrant points by the ids recorded on its chunk rows.
+  #
+  # Runs BEFORE the chunk rows are dropped — once they are gone, nothing names
+  # those points and no filter can find them again if the note's `path_hmac`
+  # has drifted (rename → debounced repath → delete inside the window). This is
+  # the delete that closes that hole; `delete_by_note/4` stays as the belt for
+  # points whose rows were already lost.
+  defp delete_points_for_note(note_id) do
+    Chunk
+    |> where([c], c.note_id == ^note_id)
+    |> select([c], c.qdrant_point_id)
+    |> Repo.all(skip_tenant_check: true)
+    |> Enum.reject(&is_nil/1)
+    |> then(&Qdrant.delete_points(collection(), &1))
   end
 
   # ---------------------------------------------------------------------------

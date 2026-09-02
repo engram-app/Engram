@@ -32,6 +32,7 @@ import { useRightToolSlot } from "../layout/right-tools-context";
 import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";
 import { rlog } from "../observability/remote-log";
+import { vaultRootHref } from "../routes";
 import BacklinksPanel from "./backlinks-panel";
 import { useActiveEditor } from "./editor/active-editor-context";
 import { KeyboardBar } from "./editor/keyboard-bar";
@@ -162,7 +163,7 @@ export default function NotePage() {
 	const editorViewRef = useRef<EditorView | null>(null);
 	// Same lookup NoteView builds for its remark-wiki-link hrefTemplate — a
 	// resolved link routes straight to the note id instead of through the
-	// lazy /:slug/wiki/* resolver.
+	// lazy /v/:slug/wiki/* resolver.
 	const wikiMap = useMemo(() => buildWikiMap(shown?.note.links), [shown?.note.links]);
 	// Manifest layer for wikiHref, read through a ref (same identity-stability
 	// reasoning as manifestPathsRef below): edges lag behind fresh links, the
@@ -426,7 +427,7 @@ export default function NotePage() {
 			return;
 		}
 		rlog().warn("note", `note ${validId} 404'd while routed — redirecting to vault root`);
-		navigate(slug ? `/${slug}` : "/", { replace: true });
+		navigate(vaultRootHref(slug), { replace: true });
 	}, [noteGone, validId, navigate, slug]);
 
 	if (validId === null) {
@@ -737,7 +738,7 @@ export default function NotePage() {
 						// useDeleteNote does not navigate — from the tree the deleted note
 						// usually isn't open, but here it is, so staying would strand the
 						// user on a dead route.
-						navigate(slug ? `/${slug}` : "/");
+						navigate(vaultRootHref(slug));
 					}}
 					onCancel={() => setDialog(null)}
 				/>

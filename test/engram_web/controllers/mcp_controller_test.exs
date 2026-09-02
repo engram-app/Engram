@@ -1209,4 +1209,86 @@ defmodule EngramWeb.McpControllerTest do
       assert log =~ "search_notes"
     end
   end
+
+  # =========================================================================
+  # Free-tier search cap (external bucket) over the MCP transport
+  # =========================================================================
+
+  describe "attachments_enabled over MCP" do
+    # `AttachmentsController.rename/2` and the MCP `move_attachment` tool call
+    # the SAME `Engram.Attachments.move_attachment/4`, but the gate lived in the
+    # controller — so REST was refused and MCP was not. Identical shape to the
+    # search-cap bypass below: a limit that must hold across transports cannot
+    # live in one transport's entry point.
+    setup %{user: user} do
+      insert(:user_limit_override,
+        user: user,
+        key: "attachments_enabled",
+        value: %{"v" => false},
+        reason: "revoke for test",
+        set_by: "test"
+      )
+
+      :ok
+    end
+
+    test "move_attachment is refused when the plan does not grant attachments", %{conn: conn} do
+      resp =
+        json_response(
+          call_tool(conn, "move_attachment", %{
+            "old_path" => "_attachments/a.png",
+            "new_path" => "_attachments/b.png"
+          }),
+          200
+        )
+
+      assert resp["result"]["isError"]
+      assert resp["result"]["content"] |> hd() |> Map.get("text") =~ "attachments_enabled"
+    end
+
+    test "the gate fires ahead of not_found, so it cannot be probed away", %{conn: conn} do
+      text =
+        json_response(
+          call_tool(conn, "move_attachment", %{
+            "old_path" => "_attachments/missing.png",
+            "new_path" => "_attachments/b.png"
+          }),
+          200
+        )
+        |> get_in(["result", "content"])
+        |> hd()
+        |> Map.get("text")
+
+      refute text =~ "not found"
+    end
+  end
+
+  describe "ai_searches_per_day over MCP" do
+    # The refusal itself is proven end-to-end in
+    # `EngramWeb.FreeTierSearchCapRouteTest` (REST, MCP, one-budget-spans-both,
+    # and the create_note degrade). What is pinned HERE is that
+    # `suggest_folder` — a retrieval tool that is not named "search" — is
+    # charged too. It used to need an entry in `MCP.Tools.search_tools/0`; now
+    # it is charged because it calls `Engram.Search.search/4` like anything
+    # else, which is the property worth a regression test.
+    setup %{user: user} do
+      insert(:user_limit_override, user: user, key: "ai_searches_per_day", value: %{"v" => 1})
+      EngramWeb.RateLimiter.reset_buckets!()
+      :ok
+    end
+
+    test "suggest_folder spends the same budget as search_notes", %{conn: conn} do
+      assert tool_text(call_tool(conn, "search_notes", %{"query" => "supplements"}))
+
+      text =
+        conn
+        |> call_tool("suggest_folder", %{"description" => "vitamin d"})
+        |> json_response(200)
+        |> get_in(["result", "content"])
+        |> hd()
+        |> Map.get("text")
+
+      assert text =~ "ai_searches_per_day"
+    end
+  end
 end

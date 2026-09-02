@@ -53,6 +53,18 @@ defmodule EngramWeb.CrdtChannel do
   @msg_limit 240
   @msg_scale_ms 10_000
 
+  # How long `crdt_doc_update` waits on its applier task before answering an
+  # error and letting the client fall back to the room handshake.
+  #
+  # This runs ON the channel process, so the budget is also the worst case that
+  # one note's write can hold up every other frame on the socket. It has to
+  # cover a cold room start plus an apply plus a `SharedDoc.update_doc` call, on
+  # a node whose pool may be busy — the genesis path measured 7.5-101 ms for
+  # comparable work — so 3 s is a wide margin over the expected case rather than
+  # a tuned figure. It is a CEILING, not a target: exceeding it is already a
+  # capacity problem, and the fallback converges anyway.
+  @room_free_apply_ms 3_000
+
   # Liveness-probe timeout before unobserving a drained room (see release_room/1).
   # Generous enough that a room merely busy in a NIF still answers, short enough
   # that a genuinely wedged one cannot hold this channel for y_ex's 5 s default.
@@ -343,7 +355,7 @@ defmodule EngramWeb.CrdtChannel do
   # frame_class_b64 doesn't apply to them — they ride the :handshake lane
   # unconditionally (see check_rate/2). `crdt_create` is different since
   # #1409: it MAY carry a genesis-seed `b64`, sized-gated by
-  # `genesis_create_class/1` exactly like frame_class_b64/1 gates a large
+  # `state_frame_class/1` exactly like frame_class_b64/1 gates a large
   # STEP2 — small (or absent) rides :handshake, oversized pays :edit. All are
   # still bounded either way (not exempt): the 2400/10s ceiling applies same
   # as real STEP1s.
@@ -351,7 +363,7 @@ defmodule EngramWeb.CrdtChannel do
   def handle_in("crdt_create", %{"doc_id" => doc_id, "path" => path} = payload, socket) do
     b64 = Map.get(payload, "b64")
 
-    with :ok <- check_rate(socket, genesis_create_class(b64)),
+    with :ok <- check_rate(socket, state_frame_class(b64)),
          {:ok, note_id} <- cast_doc_id(doc_id),
          :ok <- validate_create_path(path) do
       user = socket.assigns.current_user
@@ -500,6 +512,106 @@ defmodule EngramWeb.CrdtChannel do
     e ->
       log_doc_state_failed(note_id_or_nil(doc_id), Engram.Telemetry.error_kind(e))
       {:reply, {:error, %{reason: "doc_state_failed"}}, socket}
+  end
+
+  # Room-FREE write for an idle note (#1493) — the SEND half of the pair
+  # `crdt_doc_state` opened on the read side.
+  #
+  # `crdt_msg` routes EVERY frame through `ensure_room`, including a plain
+  # `sync_update` for a note nobody has open. That is fine for live editing,
+  # where the room is the point, and wrong for the durable op-queue drain: the
+  # plugin's `fireCrdtReHandshake` hands one queued edit per note to a full
+  # re-handshake, so a 1.4k-note flush asked for 1.4k rooms and prod measured
+  # residency at 314 against a cap of 64. Gating that client call site is not
+  # available — it is the DELIVERY path for idle notes' queued edits, and
+  # skipping it is data loss — so the fix has to be a delivery route that does
+  # not leave a room behind.
+  #
+  # ## Why this is not just `crdt_msg` without `ensure_room`
+  #
+  # The apply still needs a room: a Yjs merge happens inside the doc, and the
+  # room's persistence callback is what appends to the tail log AND fastlanes to
+  # live observers. Skipping it would fork the lineage of any note someone has
+  # open. What changes is WHO OWNS the room. `CrdtRegistry.ensure_observed`
+  # binds a room's lifetime to the observing process, and today that is the
+  # channel — so the room lives as long as the socket. Running the apply on a
+  # `Task.Supervisor` task instead gives it an observer that exits immediately:
+  # the room checkpoints and goes away, or, if a live editor is also observing,
+  # stays exactly as it was. Peak residency drops from O(notes pushed) to
+  # O(applies in flight).
+  #
+  # ## What it costs
+  #
+  # A room that would have batched several updates before one checkpoint now
+  # checkpoints per apply. For the queue drain that is parity — one delivery per
+  # note either way — but it means this frame is the wrong tool for a stream of
+  # edits to one note. Live editing keeps its room and keeps using `crdt_msg`.
+  #
+  # `sync_update` ONLY. A syncStep1 would decode perfectly well here and
+  # answering it means materialising the doc to build a STEP2 — the room
+  # allocation this frame exists to avoid, reachable by sending the wrong
+  # message type. Handshakes belong on `crdt_msg`.
+  #
+  # `is_binary(b64)` is a GUARD, not a validation step: `decode_frame/1` reaches
+  # `Base.decode64/1`, which raises FunctionClauseError on a non-binary, and a
+  # raise in `handle_in` costs the whole channel — every room it owns, every
+  # monitor — for one malformed frame. A non-binary falls to the catch-all
+  # `handle_in/3` and gets a `bad_frame` reply instead.
+  @impl true
+  def handle_in("crdt_doc_update", %{"doc_id" => doc_id, "b64" => b64}, socket)
+      when is_binary(b64) do
+    with :ok <- check_rate(socket, state_frame_class(b64)),
+         {:ok, note_id} <- cast_doc_id(doc_id),
+         {:ok, frame} <- decode_frame(b64),
+         :ok <- guard_frame(frame),
+         {:ok, update} <- take_sync_update(frame),
+         {:ok, %{head: head}} <- apply_room_free(socket, note_id, update) do
+      {:reply, {:ok, %{doc_id: note_id, head: head}}, socket}
+    else
+      {:error, :rate_limited} ->
+        {:reply, {:error, %{reason: "rate_limited"}}, socket}
+
+      {:error, :bad_doc_id} ->
+        {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
+
+      {:error, :frame_too_large} ->
+        log_dropped(socket, doc_id, :frame_too_large)
+        {:reply, {:error, %{reason: "frame_too_large"}}, socket}
+
+      {:error, :implausible_state_vector} ->
+        log_dropped(socket, doc_id, :implausible_state_vector)
+        {:reply, {:error, %{reason: "implausible_state_vector"}}, socket}
+
+      # Includes a syncStep1 sent to the wrong frame. Named distinctly so the
+      # client can fall back to `crdt_msg` rather than retry into the same wall.
+      {:error, :not_sync_update} ->
+        {:reply, {:error, %{reason: "not_sync_update"}}, socket}
+
+      # Same signal `crdt_msg` sends for an unknown id, so the client's existing
+      # id-map reconcile (backend #955) fires on it unchanged. `doc_id` echoes
+      # safely: `cast_doc_id` already proved it is a UUID, never a cleartext
+      # path.
+      {:error, :not_found} ->
+        {:reply, {:error, %{reason: "note_not_found", doc_id: doc_id}}, socket}
+
+      # Every remaining shape is "the write did not land" — a malformed update,
+      # a room that died mid-apply, an applier that crashed or outran its
+      # budget. One reason for all of them ON PURPOSE: the client's response to
+      # each is identical (fall back to the room handshake, which is always
+      # correct and merely more expensive), and the diagnostic detail rides the
+      # log line where it cannot be echoed to a caller.
+      {:error, reason} ->
+        log_doc_update_failed(note_id_or_nil(doc_id), reason)
+        {:reply, {:error, %{reason: "doc_update_failed"}}, socket}
+    end
+  rescue
+    # Defense in depth, same discipline as `crdt_doc_state`: `message_decode`
+    # and the y_ex NIF below it run on THIS process, so an unmatched raise costs
+    # the socket its rooms rather than costing one note its write. The reason
+    # term is never echoed (it can embed a wrapped DEK).
+    e ->
+      log_doc_update_failed(note_id_or_nil(doc_id), Engram.Telemetry.error_kind(e))
+      {:reply, {:error, %{reason: "doc_update_failed"}}, socket}
   end
 
   @impl true
@@ -654,6 +766,67 @@ defmodule EngramWeb.CrdtChannel do
 
     :telemetry.execute([:engram, :crdt, :doc_state_failed], %{count: 1}, %{reason: kind})
   end
+
+  # Run the apply on a task so the ROOM'S OBSERVER is that task, not this
+  # channel — the whole mechanism behind `crdt_doc_update`. `async_nolink` for
+  # isolation: an apply that raises must cost one note, never the socket's other
+  # rooms. The supervisor also propagates `$callers`, which is what lets the
+  # task reach the Repo (and, in tests, the sandbox connection this channel is
+  # allowed on).
+  defp apply_room_free(socket, note_id, update) do
+    user = socket.assigns.current_user
+    vault = socket.assigns.vault
+
+    task =
+      Task.Supervisor.async_nolink(Engram.TaskSupervisor, fn ->
+        CrdtTransport.apply_update(user, vault, note_id, update, :room_free_update)
+      end)
+
+    case Task.yield(task, @room_free_apply_ms) do
+      {:ok, result} ->
+        result
+
+      {:exit, reason} ->
+        {:error, {:applier_crashed, Engram.Telemetry.error_kind(reason)}}
+
+      nil ->
+        # Deliberately NOT `Task.shutdown`. Killing the applier between
+        # `ensure_started` and `observe` would leave a room with no observer at
+        # all, which is strictly worse than the residency this frame removes —
+        # it would then depend on the idle drain alone to reap. Let it finish
+        # and disown it; the write is idempotent, so the client's fallback
+        # handshake converges on the same state either way.
+        #
+        # Take `ignore`'s RESULT rather than discarding it. `Task.yield`'s
+        # timeout branch does not demonitor, so the alias is still live when it
+        # returns nil, and `Task.ignore` does a `receive` FIRST — it hands back
+        # `{:ok, result}` whenever the reply landed in that gap. Discarding it
+        # answers `doc_update_failed` for a write that demonstrably SUCCEEDED,
+        # and the gap is a scheduler slice plus a mailbox scan wide, not a
+        # narrow race.
+        case Task.ignore(task) do
+          {:ok, result} -> result
+          _ -> {:error, :apply_timeout}
+        end
+    end
+  end
+
+  defp log_doc_update_failed(note_id, reason) do
+    Logger.warning(
+      "crdt room-free doc_update failed",
+      Metadata.with_category(:warning, :sync, doc_id: note_id, error_kind: safe_kind(reason))
+    )
+
+    :telemetry.execute([:engram, :crdt, :doc_update_failed], %{count: 1}, %{
+      reason: safe_kind(reason)
+    })
+  end
+
+  # The reason term is never echoed or logged raw — the crypto/KMS class can
+  # embed a wrapped DEK, same rule `log_create_failed` follows.
+  defp safe_kind({:applier_crashed, kind}), do: kind
+  defp safe_kind(reason) when is_atom(reason), do: reason
+  defp safe_kind(reason), do: Engram.Telemetry.error_kind(reason)
 
   defp note_id_or_nil(doc_id) when is_binary(doc_id) do
     case Ecto.UUID.cast(doc_id) do
@@ -1412,6 +1585,52 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  # Trailing catch-all. Phoenix injects no fallback `handle_info/2`
+  # (`__before_compile__` defines only `__intercepts__`, and `Channel.Server`
+  # calls the module's callback directly), so ONE unmatched message raises
+  # `FunctionClauseError` and kills the channel — losing every room this socket
+  # owns and forcing a rejoin plus a full re-handshake. That is the blast radius
+  # `async_nolink` was chosen to prevent, arriving by a different door, and a
+  # named clause per known shape only defends the shapes someone thought of.
+  #
+  # NOT the applier task: its ref is a process ALIAS (`async_nolink` monitors
+  # with `alias: :demonitor`), and `Task.ignore/1` demonitors, which deactivates
+  # the alias — the VM then drops the late reply. It never reaches here.
+  #
+  # What DOES reach here is any `SharedDoc.update_doc` caller that replies to a
+  # raw pid with a plain `make_ref()` and reads it back with `receive ... after
+  # 0`, because a timed-out call leaves the room to run the fun and send the
+  # reply afterwards. Both live senders run inline ON this channel process:
+  # `Identity.via_room/2` (reached from `handle_in("crdt_create")` via
+  # `genesis_crdt_note` -> `claim_crdt_relocate` -> `Identity.claim`), and
+  # `CrdtDeliver`, whose own comment already names "this (possibly long-lived
+  # channel) process's mailbox".
+  #
+  # Counted, not silent. `CrdtDeliver`'s message is a room-quarantine trigger
+  # and `via_room`'s late reply is the only trace of the divergence
+  # `Identity` documents as a known gap, so a drop here is a real signal being
+  # discarded — the counter is what makes that visible and this clause
+  # falsifiable.
+  @impl true
+  def handle_info(msg, socket) do
+    :telemetry.execute([:engram, :crdt, :channel_msg_dropped], %{count: 1}, %{
+      kind: dropped_kind(msg)
+    })
+
+    Logger.debug(
+      "crdt channel dropped an unmatched message",
+      Metadata.with_category(:debug, :sync, kind: dropped_kind(msg))
+    )
+
+    {:noreply, socket}
+  end
+
+  # Shape only — never the payload. A late `update_doc` reply carries doc state,
+  # and the crypto/KMS class can embed a wrapped DEK.
+  defp dropped_kind({ref, _}) when is_reference(ref), do: :room_call_reply
+  defp dropped_kind(msg) when is_tuple(msg) and tuple_size(msg) > 0, do: safe_kind(elem(msg, 0))
+  defp dropped_kind(msg), do: safe_kind(msg)
+
   @doc """
   Let go of `room` in response to a drain (#1152).
 
@@ -1699,27 +1918,31 @@ defmodule EngramWeb.CrdtChannel do
   # lane is the conservative default.
   defp frame_class_b64(_), do: :edit
 
-  # `crdt_create`'s own version of the frame_class_b64/1 size gate (#1409).
-  # A genesis seed is NOT a cheap echo like a small STEP2: it does a full
-  # decode, a NIF apply, an encrypt, AND a row write (`maybe_seed_detached/4`)
-  # — strictly more expensive per frame than the handshake lane's other
-  # occupants. 32 KB of base64 is ~24 KB of note text (base64 expands ~4/3),
-  # which covers the overwhelming majority of real markdown notes, so a real
-  # vault import still rides the handshake lane at its intended 2400/10s
-  # shape. An oversized note still syncs — `maybe_seed_detached/4` doesn't
-  # change — it just pays the edit budget like any other state-bearing frame.
+  # The frame_class_b64/1 size gate for STATE-BEARING frames that replace a
+  # handshake — `crdt_create`'s genesis seed (#1409) and `crdt_doc_update`
+  # (#1493). Neither is a cheap echo like a small STEP2: both do a full decode,
+  # a NIF apply and a write — strictly more expensive per frame than the
+  # handshake lane's other occupants. But both stand in for a handshake the
+  # client would otherwise send, so billing them on the edit lane would let a
+  # bulk vault sync starve the user's real typing (the 2026-07-07
+  # cross-file-overwrite incident shape).
+  #
+  # 32 KB of base64 is ~24 KB of note text (base64 expands ~4/3), covering the
+  # overwhelming majority of real markdown notes, so a real vault import still
+  # rides the handshake lane at its intended 2400/10s shape. An oversized note
+  # still syncs — neither caller's behaviour changes — it just pays the edit
+  # budget like any other state-bearing frame.
   @hs_genesis_max_b64 32_768
 
-  defp genesis_create_class(nil), do: :handshake
+  defp state_frame_class(nil), do: :handshake
 
-  defp genesis_create_class(b64) when is_binary(b64) and byte_size(b64) <= @hs_genesis_max_b64,
+  defp state_frame_class(b64) when is_binary(b64) and byte_size(b64) <= @hs_genesis_max_b64,
     do: :handshake
 
   # Non-binary (malformed client payload) and oversized both pay the edit
-  # budget — `maybe_seed_detached/4` independently rejects a non-binary b64,
-  # so this is only about which rate lane an ill-formed payload bills, never
-  # about accepting it.
-  defp genesis_create_class(_b64), do: :edit
+  # budget — the callers independently reject a non-binary b64, so this is only
+  # about which rate lane an ill-formed payload bills, never about accepting it.
+  defp state_frame_class(_b64), do: :edit
 
   defp check_rate(socket, class) do
     {key_prefix, limit} =

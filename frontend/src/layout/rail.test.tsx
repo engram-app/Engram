@@ -218,13 +218,13 @@ describe("Rail", () => {
 
 	it("closes settings without leaving the current note", () => {
 		render(
-			<Wrap initialEntries={["/work/note-1#settings/account"]}>
+			<Wrap initialEntries={["/v/work/note-1#settings/account"]}>
 				<LocationProbe />
 				<Rail />
 			</Wrap>,
 		);
 		fireEvent.click(screen.getByRole("button", { name: /files/i }));
-		expect(screen.getByTestId("loc")).toHaveTextContent("/work/note-1");
+		expect(screen.getByTestId("loc")).toHaveTextContent("/v/work/note-1");
 		expect(screen.getByTestId("loc")).not.toHaveTextContent("#settings");
 	});
 

@@ -1241,6 +1241,238 @@ defmodule EngramWeb.CrdtChannelTest do
     end
   end
 
+  # The WRITE half of the room-free pair (#1493). `crdt_doc_state` gave cold
+  # notes a way to READ without a room; everything a client wanted to SEND still
+  # had to go through `crdt_msg` -> `ensure_room`, which is why a durable-queue
+  # drain over a 1.4k-note vault put 314 rooms resident against a cap of 64.
+  describe "crdt_doc_update (room-free write for an idle note)" do
+    test "applies the client's update and leaves NO resident room", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/idle.md", "content" => "base"})
+
+      refute CrdtRegistry.lookup(note.id), "precondition: no room before the write"
+
+      frame = client_sync_update(socket, note.id, "QUEUED-")
+
+      ref = push(socket, "crdt_doc_update", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
+      assert_reply ref, :ok, %{doc_id: doc_id, head: head}, 3000
+      assert doc_id == note.id
+      assert is_binary(head)
+
+      # The edit is really on the server, not merely acked.
+      assert_note_content_eventually(user, vault, note.id, "QUEUED-base")
+
+      # And it is visible to a PEER, which is the only thing delivery means.
+      # The room exits right after the apply, so the update has to survive that
+      # exit — it does because `terminate/2` checkpoints, the same path the
+      # room-based handshake delivery has always relied on. Asserting the row
+      # alone would pass even if the write never reached the feed peers replay.
+      ref2 = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
+      assert_reply ref2, :ok, %{changes: changes}, 3000
+      replayed = Enum.find(changes, &(&1.id == note.id))
+      assert replayed && replayed.content == "QUEUED-base"
+
+      # THE assertion this frame exists for. The room is bound to the SPAWNED
+      # applier, not to this channel, so it exits once the apply returns —
+      # asynchronously, since `terminate/2` checkpoints on the way out.
+      assert eventually_no_room?(note.id),
+             "crdt_doc_update must not leave a room resident on the socket (#1493)"
+    end
+
+    test "an ALREADY-resident room takes the update, and survives the write", %{
+      socket: socket,
+      user: user,
+      vault: vault,
+      doc_id: doc_id
+    } do
+      # A note someone is actively editing already has a room. The room-free
+      # frame must route INTO it rather than around it: applying beside a live
+      # room would fork the lineage, and the room's own persistence callback is
+      # what fastlanes the update to the other observers.
+      client = handshake_room(socket, doc_id)
+      room = CrdtRegistry.lookup(doc_id)
+      assert room, "precondition: the handshake left a room resident"
+
+      frame = edit_frame(client, "LIVE-")
+
+      ref = push(socket, "crdt_doc_update", %{"doc_id" => doc_id, "b64" => Base.encode64(frame)})
+      assert_reply ref, :ok, %{doc_id: ^doc_id}, 3000
+
+      # The applier unobserves on exit, but this socket is still an observer, so
+      # the room must NOT have been torn down under the live editor.
+      assert CrdtRegistry.lookup(doc_id) == room,
+             "the room-free write evicted a room a live client was still using"
+
+      assert_note_content_eventually(user, vault, doc_id, "LIVE-base")
+    end
+
+    test "rejects an unknown note_id with the same signal crdt_msg sends", %{socket: socket} do
+      frame = bare_sync_update()
+
+      ref =
+        push(socket, "crdt_doc_update", %{
+          "doc_id" => Ecto.UUID.generate(),
+          "b64" => Base.encode64(frame)
+        })
+
+      assert_reply ref, :error, %{reason: "note_not_found"}, 3000
+    end
+
+    test "rejects a non-UUID doc_id without echoing it back", %{socket: socket} do
+      ref =
+        push(socket, "crdt_doc_update", %{
+          "doc_id" => "Notes/cleartext-path.md",
+          "b64" => Base.encode64(bare_sync_update())
+        })
+
+      assert_reply ref, :error, reply
+      assert reply.reason == "bad_doc_id"
+      refute Map.has_key?(reply, :doc_id)
+    end
+
+    test "refuses to write into ANOTHER user's vault", %{socket: socket} do
+      {:ok, other} = Fixtures.user_with_dek_fixture()
+      other_vault = Fixtures.insert_vault!(other, "Other")
+
+      {:ok, note} =
+        Notes.upsert_note(other, other_vault, %{
+          "path" => "Notes/theirs.md",
+          "content" => "theirs"
+        })
+
+      ref =
+        push(socket, "crdt_doc_update", %{
+          "doc_id" => note.id,
+          "b64" => Base.encode64(bare_sync_update())
+        })
+
+      assert_reply ref, :error, %{reason: "note_not_found"}, 3000
+
+      {:ok, untouched} = Notes.get_note_by_id(other, other_vault, note.id)
+      assert untouched.content == "theirs"
+    end
+
+    test "a frame that is not a sync_update is refused, not guessed at", %{
+      socket: socket,
+      doc_id: doc_id
+    } do
+      # A syncStep1 is a well-formed Yjs message and would decode fine. Answering
+      # it here would mean materialising the doc to build a STEP2 — precisely the
+      # room allocation this frame exists to avoid, reachable by sending the
+      # wrong message type. `crdt_msg` is where a handshake belongs.
+      client = CrdtBridge.new_doc()
+      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+      {:ok, step1} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+
+      ref =
+        push(socket, "crdt_doc_update", %{"doc_id" => doc_id, "b64" => Base.encode64(step1)})
+
+      assert_reply ref, :error, %{reason: "not_sync_update"}
+      refute CrdtRegistry.lookup(doc_id), "a refused frame must not have started a room"
+    end
+
+    test "a non-binary b64 is refused and leaves the CHANNEL ALIVE", %{
+      socket: socket,
+      doc_id: doc_id
+    } do
+      # `decode_frame/1` bottoms out in `Base.decode64/1`, which raises
+      # FunctionClauseError on a non-binary. A raise in `handle_in` costs the
+      # whole channel — every room it owns — for one malformed frame, after
+      # which the client rejoins and re-handshakes EVERY note. So the assertion
+      # that matters is not the error shape, it is that the NEXT frame works.
+      ref = push(socket, "crdt_doc_update", %{"doc_id" => doc_id, "b64" => 42})
+      assert_reply ref, :error, %{reason: "bad_frame"}
+
+      ref2 =
+        push(socket, "crdt_doc_update", %{
+          "doc_id" => doc_id,
+          "b64" => Base.encode64(bare_sync_update())
+        })
+
+      assert_reply ref2, :ok, %{doc_id: ^doc_id}, 3000
+    end
+
+    test "an unmatched message does not kill the channel, and is counted", %{
+      socket: socket,
+      doc_id: doc_id
+    } do
+      # Phoenix injects no fallback `handle_info/2`, so ONE unmatched message
+      # raises FunctionClauseError and kills the channel, taking every room this
+      # socket owns — the blast radius `async_nolink` was chosen to prevent.
+      #
+      # The live senders are `Identity.via_room/2` and `CrdtDeliver`, both of
+      # which reply to a raw pid with a plain ref and read it back with `after
+      # 0`, so a timed-out `update_doc` leaves the reply to arrive later. NOT
+      # the applier task: its ref is a process alias and `Task.ignore/1`
+      # deactivates it, so the VM drops that one.
+      #
+      # OWN a room first. Without one this asserts only that the process
+      # survived, which is the weaker half of the claim.
+      _client = handshake_room(socket, doc_id)
+      rooms_before = :sys.get_state(socket.channel_pid).assigns.rooms
+      assert map_size(rooms_before) > 0
+
+      handler = "drop-count-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler,
+        [:engram, :crdt, :channel_msg_dropped],
+        fn _e, m, meta, _ -> send(test_pid, {:dropped, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      # The `via_room` shape, and a foreign shape the named clauses never
+      # anticipated — the catch-all has to hold for both.
+      send(socket.channel_pid, {make_ref(), {:ok, %{head: "late"}}})
+      assert_receive {:dropped, %{count: 1}, %{kind: :room_call_reply}}, 1000
+
+      send(socket.channel_pid, {:some_future_shape, :from_a_later_pr})
+      assert_receive {:dropped, %{count: 1}, %{kind: :some_future_shape}}, 1000
+
+      # The channel still answers AND still owns its rooms.
+      ref = push(socket, "crdt_doc_state", %{"doc_id" => doc_id})
+      assert_reply ref, :ok, %{doc_id: ^doc_id}, 3000
+      assert :sys.get_state(socket.channel_pid).assigns.rooms == rooms_before
+    end
+
+    test "bills the handshake budget — it is the frame that REPLACES a handshake", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # Same contract `crdt_doc_state` carries, and it matters MORE here: this
+      # path is what a bulk queue drain uses, so putting it on the edit lane
+      # would let a 1.4k-note flush starve the user's real typing — the
+      # 2026-07-07 cross-file-overwrite incident shape.
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/billed-write.md", "content" => "b"})
+
+      Application.put_env(:engram, :crdt_hs_rate_limit_override, 1)
+
+      on_exit(fn ->
+        Application.delete_env(:engram, :crdt_hs_rate_limit_override)
+        EngramWeb.RateLimiter.reset_buckets!()
+      end)
+
+      EngramWeb.RateLimiter.reset_buckets!()
+
+      b64 = Base.encode64(bare_sync_update())
+
+      ref1 = push(socket, "crdt_doc_update", %{"doc_id" => note.id, "b64" => b64})
+      assert_reply ref1, :ok, %{doc_id: _}, 3000
+
+      ref2 = push(socket, "crdt_doc_update", %{"doc_id" => note.id, "b64" => b64})
+      assert_reply ref2, :error, %{reason: "rate_limited"}
+    end
+  end
+
   # Single-path catch-up (Phase B): replay the seq-ordered op-log over the
   # socket. Each op carries FULL content (not an SV-diff), so it is causally
   # complete and can never pend — the e2e test_85 deaf-note fix.
@@ -2444,6 +2676,58 @@ defmodule EngramWeb.CrdtChannelTest do
       end,
       deadline
     )
+  end
+
+  # --- room-free write helpers (#1493) ---------------------------------------
+
+  # Seed a client doc from the ROOM-FREE read, edit it, and encode the
+  # `sync_update` a real client would send. Deliberately not via a handshake:
+  # these tests assert no room appears, and a handshake would create one.
+  defp client_sync_update(socket, doc_id, prefix) do
+    ref = push(socket, "crdt_doc_state", %{"doc_id" => doc_id})
+    assert_reply ref, :ok, %{b64: b64}
+    {:ok, doc} = CrdtBridge.doc_from_state(Base.decode64!(b64))
+    edit_frame(doc, prefix)
+  end
+
+  # Handshake a client doc over `crdt_msg`, which leaves a room resident and
+  # puts the client on the server's lineage. Returns the seeded client doc.
+  defp handshake_room(socket, doc_id) do
+    client = CrdtBridge.new_doc()
+    {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+    {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+    push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(frame)})
+    assert_push "crdt_msg", %{"doc_id" => ^doc_id, "b64" => b64}, 3000
+    {:ok, {:sync, {:sync_step2, update}}} = Yex.Sync.message_decode(Base.decode64!(b64))
+    :ok = Yex.apply_update(client, update)
+    client
+  end
+
+  defp edit_frame(doc, prefix) do
+    Yex.Text.insert(Yex.Doc.get_text(doc, "content"), 0, prefix)
+    {:ok, update} = Yex.encode_state_as_update(doc)
+    {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_update, update}})
+    frame
+  end
+
+  # A well-formed `sync_update` on its OWN lineage, for the tests that only care
+  # which route a frame takes (unknown id, wrong vault, rate lane) and never
+  # assert on the resulting content.
+  defp bare_sync_update, do: edit_frame(CrdtBridge.new_doc(), "x")
+
+  # The room exits ASYNCHRONOUSLY after the applier process does: the last
+  # unobserve trips auto_exit, and `terminate/2` checkpoints on the way out. So
+  # "no room" is a settling condition, not an instant one.
+  defp eventually_no_room?(note_id, attempts \\ 300)
+  defp eventually_no_room?(_note_id, 0), do: false
+
+  defp eventually_no_room?(note_id, attempts) do
+    if CrdtRegistry.lookup(note_id) == nil do
+      true
+    else
+      Process.sleep(10)
+      eventually_no_room?(note_id, attempts - 1)
+    end
   end
 
   defp wait_until(condition, deadline \\ nil) do

@@ -148,18 +148,30 @@ async def test_edit_after_discovery_round_trips(vault_a, vault_b, cdp_a, cdp_b, 
 # ---------------------------------------------------------------------------
 #
 # The tests above prove eventual convergence but NOT that it rides the vault-
-# channel fan-out (`note_yjs_update` → applyPushedNoteUpdate). Two checkpoint-
-# driven backstops on the receiving device also converge a cold note: pull()'s
-# cursor-feed backfill (flushFromCrdt) and coldReceive() (invoked at pull()'s
-# tail). So if applyPushedNoteUpdate were completely broken, every test above
-# would STILL pass at ~5s checkpoint latency, masking a dead fan-out.
+# channel fan-out (`note_yjs_update` → applyPushedNoteUpdate). A checkpoint-
+# driven backstop on the receiving device also converges a cold note:
+# catchupViaSeqReplay's row-apply (applyChange → flushFromCrdt). So if
+# applyPushedNoteUpdate were completely broken, every test above would STILL
+# pass at ~5s checkpoint latency, masking a dead fan-out.
 #
-# The tests below suppress those backstops on the RECEIVING device via
-# cdp.suppress_fanout_backstops() (stubs pull, coldReceive AND handleStreamEvent
-# — the note_changed room-enroll path — while leaving applyPushedNoteUpdate
-# untouched, since the fan-out is a separate channel dispatch). With the
-# backstops dead, a disk-convergence assert can ONLY be satisfied by the
-# fan-out, so a broken fan-out actually FAILS. See helpers/cdp.py.
+# The tests below suppress that backstop on the RECEIVING device via
+# cdp.suppress_fanout_backstops(), leaving applyPushedNoteUpdate untouched since
+# the fan-out is a separate channel dispatch. With it dead, a disk-convergence
+# assert can ONLY be satisfied by the fan-out, so a broken fan-out actually
+# FAILS.
+#
+# It did not, for an unknown number of runs. All three names the helper stubbed
+# (pull, coldReceive, catchupViaSocket) had been retired from the plugin, and
+# the helper skips a method that no longer exists — so it stubbed NOTHING and
+# these tests ran with every backstop live. The helper now raises if it cannot
+# stub a cold-apply backstop, and conftest asserts the surface at session start.
+#
+# handleStreamEvent used to be stubbed too, for the note_changed room-enroll
+# path. It no longer is (#1503): that enroll is already gated on
+# isCanvasPath || isLiveBound so it cannot fire for an idle markdown note, and
+# stubbing it broke the SENDING device — applyStreamEvent is what commits
+# noteIdMap, so a suppressed sender read a null id and shouldDeferMint refused
+# its push. See helpers/cdp.py.
 
 
 async def _confirm_room_free(cdp, path):
@@ -176,11 +188,20 @@ async def _confirm_room_free(cdp, path):
     release rather than sampling the enrolled set the instant the sync returns —
     a single immediate snapshot races the async release (the source of this
     test's flakiness). A genuinely stuck room still fails via timeout.
+
+    BOTH reads below poll for the same reason. trigger_full_sync() returning
+    means the sync call finished, not that the mapping it discovered has landed
+    in noteIdMap, so the note_id read raced it exactly as the enrolled-set read
+    did — reporting `assert None` ("device never mapped a note_id") for a note
+    that maps fine moments later, and taking 6-7 downstream tests with it
+    (engram-app/Engram#1489).
     """
     await cdp.wait_for_stream_connected()
     await cdp.trigger_full_sync()
-    note_id = await cdp.get_note_id_for_path(path)
-    assert note_id, f"device never mapped a note_id for {path} — cannot prove fan-out"
+    try:
+        note_id = await cdp.wait_for_note_id_for_path(path, timeout=CRDT_TIMEOUT)
+    except TimeoutError as e:
+        pytest.fail(f"device never mapped a note_id for {path} — cannot prove fan-out — {e}")
     try:
         await cdp.wait_for_room_free(note_id, timeout=CRDT_TIMEOUT)
     except TimeoutError as e:
@@ -196,11 +217,15 @@ async def test_idle_note_converges_via_fanout_only(vault_a, vault_b, cdp_a, cdp_
     """[P0] A pre-existing IDLE note on B converges to A's edit via the vault-
     channel fan-out ALONE.
 
-    B never opens or edits the note. Before A's edit we suppress every
-    checkpoint-driven backstop on B (pull() cursor-backfill + coldReceive, and
-    the note_changed room-enroll path). The ONLY path that can then converge B's
-    disk is the server's `note_yjs_update` broadcast → applyPushedNoteUpdate. So
-    a broken fan-out FAILS here instead of silently passing at checkpoint latency.
+    B never opens or edits the note. Before A's edit we suppress the
+    checkpoint-driven backstop on B (catchupViaSeqReplay's row-apply). The ONLY
+    path that can then converge B's disk is the server's `note_yjs_update`
+    broadcast → applyPushedNoteUpdate. So a broken fan-out FAILS here instead of
+    silently passing at checkpoint latency.
+
+    B already holds the file (`_establish_on_both`), which is what keeps
+    handleStreamEvent's own content-writing legs out of the picture — see the
+    precondition in suppress_fanout_backstops().
     """
     path = "E2E/Crdt/FanoutPassive.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "shared base\n", "shared base")
@@ -258,16 +283,54 @@ async def test_cold_send_over_fanout_opens_no_room(vault_a, vault_b, cdp_a, cdp_
     An idle SEND ships its edit channel-up / as a durable /updates entry and is
     never required to enroll (sync.ts isCrdtManagedOffline: "Enrollment (STEP1)
     is only the down-sync pull, never required to SEND"). We suppress backstops
-    on BOTH devices: on A so its receipt can ONLY be the fan-out, and on B so its
-    own checkpoint `note_changed` echo can't drive a RECEIVE-side enroll — the
-    enrolled-set assertion then isolates the SEND path. The negative signal is a
-    direct read of B's CrdtEnrollment.enrolled set (deterministic, no log-flush
-    timing dependency).
+    on BOTH devices: on A so its receipt can ONLY be the fan-out, and on B to
+    keep anything from opening a room there and breaking the negative assertion.
+    TWO paths would: catchupViaSeqReplay's discovery enroll (applyChange, sync.ts:8244, and the
+    un-gated cold-note re-handshake `_confirm_room_free` documents), and
+    catchupViaSeqReplay → convergeColdNoteRoomFree, which falls back to
+    socketConverge → fireCrdtReHandshake (sync.ts:6288) when the room-free
+    converge fails — deliberately NOT gated on isLiveBound, so stubbing pull()
+    alone does not close it. Both are in the suppression list. That assertion is
+    a direct read of B's CrdtEnrollment.enrolled set (deterministic, no
+    log-flush timing dependency).
+
+    #1503: suppression used to stub handleStreamEvent as well. With it dead B's
+    `pushFile` read a null id from noteIdMap, shouldDeferMint refused the push,
+    and the edit never left the device — a 120s timeout that read as a
+    receive-side fan-out bug. Restoring the handler fixes it, and the room-enroll
+    it was stubbed to prevent is already gated on isCanvasPath || isLiveBound.
+
+    Nothing deletes B's map entry (#1526): a full sync REBUILDS noteIdMap and
+    leaves the path transiently unmapped, and this test triggers one on B via
+    _confirm_room_free immediately before writing on B. The write lands in that
+    window, shouldDeferMint refuses the push, and the edit falls to the flush
+    queue's ~107s recovery. Measured twice at 109s and 108s, against a 120s
+    deadline — a coin-flip, not a fan-out failure. The re-poll below closes it.
+
+    Tension worth knowing: catchupViaSeqReplay reaches applyChange, which is a
+    noteIdMap writer, and B runs with it stubbed for the enroll reason above. So
+    from suppression until restore, B has NO map repair. Everything that needs a
+    settled map must therefore happen before suppression — which is why the poll
+    is ordered above the try block and not inside it.
     """
+    # ponytail: B holds no map repair while suppressed. Keep the window between
+    # suppression and the write empty — anything added in there that can drop or
+    # await a mapping has no way to recover, and burns the full timeout.
     path = "E2E/Crdt/FanoutColdSend.md"
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "origin\n", "origin")
     note_id_b = await _confirm_room_free(cdp_b, path)
     await _confirm_room_free(cdp_a, path)
+    # B's map must hold the path at WRITE time, and this poll must happen
+    # BEFORE suppression, not after (#1526). `shouldDeferMint` refuses a push on
+    # `unmapped + engine-flushed` (sync.ts:5292), and the path can be
+    # transiently unmapped after the full sync `_confirm_room_free` triggers.
+    # The repair is `catchupViaSeqReplay` -> `applyChange`, a noteIdMap writer —
+    # which suppress_fanout_backstops() stubs. Polling after suppression waits
+    # for a repair that suppression has just disabled, so a transiently unmapped
+    # path never recovers and the poll burns its full timeout. Ordered this way
+    # the map is proven present while the repair is still live, and the window
+    # between here and the write holds nothing that can drop it.
+    await cdp_b.wait_for_note_id_for_path(path, timeout=CRDT_TIMEOUT)
     try:
         await cdp_a.suppress_fanout_backstops()
         await cdp_b.suppress_fanout_backstops()

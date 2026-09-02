@@ -601,11 +601,9 @@ defmodule Engram.Notes do
     # matches the COUNT(*) approach it replaced (same TOCTOU window) and is fine
     # for a soft abuse-deterrent cap. A hard cap would need a conditional
     # UPDATE ... WHERE notes_count < limit gating the insert.
-    # `nil` when the plan is unmetered: `check_limit/3` ignores the count there,
-    # so the COUNT is pure waste on every create. The cap branch below guards on
-    # the nil rather than calling check_limit with it. See #1502.
-    current_count =
-      if Billing.limit_enforced?(user, :notes_cap), do: UsageMeters.notes_count(user.id)
+    # Resolved BEFORE the cond, exactly as the inlined version was: the COUNT
+    # must not move behind `recently_deleted_twin?/4`.
+    cap_check = check_notes_cap(user)
 
     cond do
       recently_deleted_twin?(user, base_attrs.vault_id, sanitized_path, base_attrs.content_hash) ->
@@ -617,15 +615,8 @@ defmodule Engram.Notes do
         # reaches here — it takes move_note's branch on a client-id match.
         {:error, :recently_deleted}
 
-      current_count &&
-          match?({:error, :limit_reached}, Billing.check_limit(user, :notes_cap, current_count)) ->
-        # Free-tier launch §4.5 — carry the resolved limit + current count
-        # back to the controller so the 402 body can populate them. The
-        # resolver call here is the same one check_limit already made
-        # internally; a second call is cheaper than threading the value out
-        # of check_limit (no hot path).
-        limit = Billing.effective_limit(user, :notes_cap)
-        {:error, {:notes_cap_reached, limit, current_count}}
+      match?({:error, _}, cap_check) ->
+        cap_check
 
       true ->
         # T3.6 — pre-allocate the row id so the AAD bind string
@@ -1509,16 +1500,7 @@ defmodule Engram.Notes do
       updated_at: now
     }
 
-    # `nil` when the plan is unmetered — `check_limit/3` would ignore the count,
-    # so skip the COUNT rather than compute and discard it. See #1502.
-    current_count =
-      if Billing.limit_enforced?(user, :notes_cap), do: UsageMeters.notes_count(user.id)
-
-    if current_count &&
-         match?({:error, :limit_reached}, Billing.check_limit(user, :notes_cap, current_count)) do
-      limit = Billing.effective_limit(user, :notes_cap)
-      {:error, {:notes_cap_reached, limit, current_count}}
-    else
+    with :ok <- check_notes_cap(user) do
       # Shared create leg with insert_new_note/7 (do_bare_insert/6) — genesis
       # decrypts inline and tags :announce (a real create), a version_conflict
       # on a concurrent-create race.
@@ -3671,26 +3653,43 @@ defmodule Engram.Notes do
   defp check_batch_notes_cap!(_user, 0), do: :ok
 
   defp check_batch_notes_cap!(user, to_insert) do
-    # Resolve the cap before counting. `check_limit/3` ignores `current_count`
-    # entirely when the plan is unmetered, so on Starter/Pro this COUNT was
-    # computed and discarded on every batch insert. See #1502.
-    if Billing.limit_enforced?(user, :notes_cap) do
-      enforce_batch_notes_cap!(user, to_insert)
-    else
-      :ok
+    case check_notes_cap(user, to_insert - 1) do
+      :ok -> :ok
+      {:error, reason} -> Repo.rollback(reason)
     end
   end
 
-  defp enforce_batch_notes_cap!(user, to_insert) do
-    current_count = UsageMeters.notes_count(user.id)
+  @doc false
+  # The resolve-then-count-then-check shape all three create paths share. Was
+  # copy-pasted at each of them, which is three places for the ordering below to
+  # be got wrong independently.
+  #
+  # `extra` is how many ADDITIONAL rows the operation inserts beyond the first:
+  # batch upsert passes `to_insert - 1`, the single-note paths pass 0.
+  #
+  # THE ORDER IS LOAD-BEARING. `check_limit/3` answers `:ok` for an unmetered
+  # plan without ever reading the count, so `limit_enforced?/2` gates the COUNT
+  # rather than the reverse — otherwise every Starter/Pro create pays a
+  # `usage_meters` aggregate and discards it (#1502).
+  #
+  # Best-effort, not a hard guarantee: read-then-insert is non-atomic, so
+  # concurrent creates can land slightly over. A hard cap needs a conditional
+  # `UPDATE ... WHERE notes_count < limit` gating the insert.
+  defp check_notes_cap(user, extra \\ 0) do
+    if Billing.limit_enforced?(user, :notes_cap) do
+      current = UsageMeters.notes_count(user.id)
 
-    case Billing.check_limit(user, :notes_cap, current_count + to_insert - 1) do
-      :ok ->
-        :ok
+      case Billing.check_limit(user, :notes_cap, current + extra) do
+        :ok ->
+          :ok
 
-      {:error, :limit_reached} ->
-        limit = Billing.effective_limit(user, :notes_cap)
-        Repo.rollback({:notes_cap_reached, limit, current_count})
+        # Free-tier launch §4.5 — carry the resolved limit + current count back
+        # to the controller so the 402 body can populate them.
+        {:error, :limit_reached} ->
+          {:error, {:notes_cap_reached, Billing.cap(user, :notes_cap), current}}
+      end
+    else
+      :ok
     end
   end
 
@@ -4838,29 +4837,43 @@ defmodule Engram.Notes do
   def list_folder_markers(user, vault) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user) do
-      # Callers only consume `.id` + `.folder` (hydrated below) — project
-      # just the decrypt inputs instead of full rows so a marker-heavy
-      # vault doesn't pay for ~20 unused columns per row.
-      {:ok, markers} =
-        Repo.with_tenant(user.id, fn ->
-          Repo.all(
-            from(n in scoped_live(user, vault),
-              where: n.kind == "folder",
-              select: %Note{
-                id: n.id,
-                dek_version: n.dek_version,
-                folder_ciphertext: n.folder_ciphertext,
-                folder_nonce: n.folder_nonce,
-                folder_hmac: n.folder_hmac
-              }
-            )
-          )
-        end)
-
-      Enum.map(markers, &hydrate_folder_marker(&1, dek))
+      {:ok, markers} = Repo.with_tenant(user.id, fn -> raw_folder_marker_rows(user, vault) end)
+      decrypt_folder_marker_rows(markers, dek)
     else
       {:error, :no_dek} -> []
     end
+  end
+
+  @doc """
+  Raw rows for `list_folder_markers/2`. MUST run inside the caller's
+  `Repo.with_tenant/2` — pair with `decrypt_folder_marker_rows/2`, which
+  does the decrypt work OUTSIDE any transaction. Extracted so
+  `VaultTreeController` can fetch this alongside the note/folder-count/
+  attachment queries in one transaction instead of separate ones (#1211).
+  """
+  @spec raw_folder_marker_rows(map(), map()) :: [Note.t()]
+  def raw_folder_marker_rows(user, vault) do
+    # Callers only consume `.id` + `.folder` (hydrated below) — project
+    # just the decrypt inputs instead of full rows so a marker-heavy
+    # vault doesn't pay for ~20 unused columns per row.
+    Repo.all(
+      from(n in scoped_live(user, vault),
+        where: n.kind == "folder",
+        select: %Note{
+          id: n.id,
+          dek_version: n.dek_version,
+          folder_ciphertext: n.folder_ciphertext,
+          folder_nonce: n.folder_nonce,
+          folder_hmac: n.folder_hmac
+        }
+      )
+    )
+  end
+
+  @doc "Decrypts `raw_folder_marker_rows/2`'s rows. Pure — no DB access."
+  @spec decrypt_folder_marker_rows([Note.t()], binary()) :: [Note.t()]
+  def decrypt_folder_marker_rows(markers, dek) do
+    Enum.map(markers, &hydrate_folder_marker(&1, dek))
   end
 
   @doc """
@@ -4871,10 +4884,26 @@ defmodule Engram.Notes do
   would make the root its own parent if a root marker ever exists, handing
   a cycle to the tree renderer.
   """
-  @spec folders_payload(map(), map()) :: [map()]
+  @spec folders_payload(Engram.Accounts.User.t(), map()) :: [map()]
   def folders_payload(user, vault) do
     {:ok, folders} = list_folders_with_counts(user, vault)
     markers = list_folder_markers(user, vault)
+    combine_folders_payload(folders, markers)
+  end
+
+  @doc """
+  Combines `list_folders_with_counts/2`'s `[%{folder:, count:}]` and
+  `list_folder_markers/2`'s hydrated marker rows into the id/name/count/
+  parent_id shape `folders_payload/2` returns. Pure — no DB access. Split
+  out so `VaultTreeController` can call it directly after fetching both
+  row sets inside one transaction instead of the two separate transactions
+  `folders_payload/2` would open (#1211) — this is the SAME business rule
+  as `folders_payload/2`, not a second implementation of it.
+  """
+  @spec combine_folders_payload([%{folder: String.t(), count: integer()}], [Note.t()]) :: [
+          map()
+        ]
+  def combine_folders_payload(folders, markers) do
     id_by_path = Map.new(markers, fn m -> {m.folder, m.id} end)
 
     Enum.map(folders, fn f ->
@@ -4904,37 +4933,47 @@ defmodule Engram.Notes do
   """
   @spec list_tree_notes(map(), map()) :: {:ok, [map()]}
   def list_tree_notes(user, vault) do
-    {:ok, rows} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in scoped_live(user, vault),
-            where: n.kind == "note",
-            select:
-              {n.id, n.dek_version, n.path_ciphertext, n.path_nonce, n.created_at, n.updated_at}
-          )
-        )
-      end)
-
+    {:ok, rows} = Repo.with_tenant(user.id, fn -> raw_tree_note_rows(user, vault) end)
     {:ok, dek} = Crypto.get_dek(user)
+    {:ok, decrypt_tree_note_rows(rows, dek)}
+  end
 
+  @doc """
+  Raw rows for `list_tree_notes/2`. MUST run inside the caller's
+  `Repo.with_tenant/2` — pair with `decrypt_tree_note_rows/2`, which does
+  the decrypt work OUTSIDE any transaction (holding a DB connection across
+  CPU-bound decrypt is the 2026-07-09 CRDT pool-exhaustion shape — see
+  #1211). Extracted so `VaultTreeController` can fetch this alongside the
+  folder-count/folder-marker/attachment queries in one transaction.
+  """
+  @spec raw_tree_note_rows(map(), map()) :: [tuple()]
+  def raw_tree_note_rows(user, vault) do
+    Repo.all(
+      from(n in scoped_live(user, vault),
+        where: n.kind == "note",
+        select: {n.id, n.dek_version, n.path_ciphertext, n.path_nonce, n.created_at, n.updated_at}
+      )
+    )
+  end
+
+  @doc "Decrypts `raw_tree_note_rows/2`'s rows. Pure — no DB access."
+  @spec decrypt_tree_note_rows([tuple()], binary()) :: [map()]
+  def decrypt_tree_note_rows(rows, dek) do
     # Sequential on purpose — SyncController measured path-sized decrypts at
     # ~4µs each (10k in ~43ms) and found chunked parallel SLOWER, because
     # copying results back to the caller's heap rivals the AES-GCM work.
-    notes =
-      Crypto.measure_decrypt_batch(:vault_tree_notes, length(rows), fn ->
-        Enum.map(rows, fn {id, dek_version, path_ct, path_nonce, created, updated} ->
-          aad = PathCrypto.aad(:notes, id, dek_version)
+    Crypto.measure_decrypt_batch(:vault_tree_notes, length(rows), fn ->
+      Enum.map(rows, fn {id, dek_version, path_ct, path_nonce, created, updated} ->
+        aad = PathCrypto.aad(:notes, id, dek_version)
 
-          %{
-            id: id,
-            path: PathCrypto.decrypt!(path_ct, path_nonce, dek, aad),
-            created_at: created,
-            updated_at: updated
-          }
-        end)
+        %{
+          id: id,
+          path: PathCrypto.decrypt!(path_ct, path_nonce, dek, aad),
+          created_at: created,
+          updated_at: updated
+        }
       end)
-
-    {:ok, notes}
+    end)
   end
 
   # nil for top-level ("Projects") and root (""). Joined parent path for
@@ -5039,52 +5078,68 @@ defmodule Engram.Notes do
     case Crypto.dek_filter_key(user) do
       {:ok, _filter_key} ->
         {:ok, dek} = Crypto.get_dek(user)
-
-        # Per folder_hmac, pick any one row (for envelope decryption) and
-        # count only kind='note' rows. Marker-only folders yield count 0;
-        # mixed folders yield the note count (markers excluded).
-        #
-        # The count MUST equal what `list_notes_in_folder/3` returns for the
-        # same folder (both read kind='note' rows grouped by folder_hmac) — the
-        # MCP `list_folders` vs `list_folder` contract (#728). Guarded by the
-        # "invariant vs list_notes_in_folder/3 (#728)" tests in notes_test.exs.
-        {:ok, rows} =
-          Repo.with_tenant(user.id, fn ->
-            Repo.all(
-              from(n in scoped_live(user, vault),
-                where: not is_nil(n.folder_hmac),
-                distinct: n.folder_hmac,
-                select: %{
-                  id: n.id,
-                  dv: n.dek_version,
-                  ct: n.folder_ciphertext,
-                  nonce: n.folder_nonce,
-                  count:
-                    fragment(
-                      "COUNT(*) FILTER (WHERE ? = 'note') OVER (PARTITION BY ?)",
-                      n.kind,
-                      n.folder_hmac
-                    )
-                }
-              )
-            )
-          end)
-
-        folders =
-          rows
-          |> Enum.map(fn %{id: id, dv: dv, ct: ct, nonce: nonce, count: count} ->
-            %{
-              folder: decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv)),
-              count: count
-            }
-          end)
-          |> Enum.sort_by(& &1.folder)
-
-        {:ok, folders}
+        {:ok, rows} = Repo.with_tenant(user.id, fn -> raw_folder_count_rows(user, vault) end)
+        {:ok, decrypt_folder_count_rows(rows, dek)}
 
       {:error, :no_dek} ->
         {:ok, []}
     end
+  end
+
+  @doc """
+  Raw rows for `list_folders_with_counts/2` — per folder_hmac, one
+  representative row (for envelope decryption) plus a SQL-side
+  window-function count of `kind='note'` rows in that folder. MUST run
+  inside the caller's `Repo.with_tenant/2` — pair with
+  `decrypt_folder_count_rows/2`. Extracted so `VaultTreeController` can
+  fetch this alongside the note/folder-marker/attachment queries in one
+  transaction (#1211) WITHOUT losing the SQL-side aggregation — pulling
+  every live row and grouping in Elixir instead would regress on large
+  vaults; this keeps Postgres doing the aggregate work it already does
+  well, at the cost of one more query in the same transaction rather than
+  zero.
+
+  The count MUST equal what `list_notes_in_folder/3` returns for the same
+  folder (both read kind='note' rows grouped by folder_hmac) — the MCP
+  `list_folders` vs `list_folder` contract (#728). Guarded by the
+  "invariant vs list_notes_in_folder/3 (#728)" tests in notes_test.exs.
+  """
+  @spec raw_folder_count_rows(map(), map()) :: [map()]
+  def raw_folder_count_rows(user, vault) do
+    # Per folder_hmac, pick any one row (for envelope decryption) and
+    # count only kind='note' rows. Marker-only folders yield count 0;
+    # mixed folders yield the note count (markers excluded).
+    Repo.all(
+      from(n in scoped_live(user, vault),
+        where: not is_nil(n.folder_hmac),
+        distinct: n.folder_hmac,
+        select: %{
+          id: n.id,
+          dv: n.dek_version,
+          ct: n.folder_ciphertext,
+          nonce: n.folder_nonce,
+          count:
+            fragment(
+              "COUNT(*) FILTER (WHERE ? = 'note') OVER (PARTITION BY ?)",
+              n.kind,
+              n.folder_hmac
+            )
+        }
+      )
+    )
+  end
+
+  @doc "Decrypts `raw_folder_count_rows/2`'s rows. Pure — no DB access."
+  @spec decrypt_folder_count_rows([map()], binary()) :: [%{folder: String.t(), count: integer()}]
+  def decrypt_folder_count_rows(rows, dek) do
+    rows
+    |> Enum.map(fn %{id: id, dv: dv, ct: ct, nonce: nonce, count: count} ->
+      %{
+        folder: decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv)),
+        count: count
+      }
+    end)
+    |> Enum.sort_by(& &1.folder)
   end
 
   @doc """

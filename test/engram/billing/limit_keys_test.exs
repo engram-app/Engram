@@ -4,14 +4,13 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 33 catalog keys" do
+    test "returns the 27 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 33
+      assert length(keys) == 27
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
       assert :cross_vault_search in keys
-      assert :vault_scoped_keys in keys
     end
   end
 
@@ -57,12 +56,10 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:lifetime_embed_token_cap, :free) == 20_000_000
       assert LimitKeys.default_for(:concurrent_devices, :free) == 2
       assert LimitKeys.default_for(:device_swap_cooldown_hours, :free) == 24
-      assert LimitKeys.default_for(:external_ai_searches_per_day, :free) == 15
-      assert LimitKeys.default_for(:inapp_searches_per_day, :free) == 60
-      assert LimitKeys.default_for(:ai_conversations_per_day, :free) == 5
-      assert LimitKeys.default_for(:ai_queries_per_conversation, :free) == 50
-      assert LimitKeys.default_for(:ai_queries_per_day, :free) == nil
-      assert LimitKeys.default_for(:conversation_window_minutes, :free) == 30
+      # One AI meter, replacing six. See the note on the key in `LimitKeys`.
+      assert LimitKeys.default_for(:ai_searches_per_day, :free) == 20
+      assert LimitKeys.default_for(:ai_searches_per_day, :starter) == nil
+      assert LimitKeys.default_for(:ai_searches_per_day, :pro) == nil
       assert LimitKeys.default_for(:reranker_enabled, :free) == false
       assert LimitKeys.default_for(:search_semantic_enabled, :free) == false
       assert LimitKeys.default_for(:indexed_notes_cap, :free) == 2_000
@@ -78,7 +75,6 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:attachment_bytes_cap, :starter) == 3_221_225_472
       assert LimitKeys.default_for(:max_file_bytes, :starter) == 209_715_200
       assert LimitKeys.default_for(:lifetime_embed_token_cap, :starter) == nil
-      assert LimitKeys.default_for(:ai_queries_per_day, :starter) == 500
       assert LimitKeys.default_for(:search_semantic_enabled, :starter) == true
       assert LimitKeys.default_for(:indexed_notes_cap, :starter) == nil
       # API keys are Pro-only. Starter keeps MCP + vault sync + web app,
@@ -93,7 +89,6 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:attachment_bytes_cap, :pro) == 16_106_127_360
       assert LimitKeys.default_for(:max_file_bytes, :pro) == 524_288_000
       assert LimitKeys.default_for(:reranker_enabled, :pro) == true
-      assert LimitKeys.default_for(:ai_queries_per_day, :pro) == 10_000
       assert LimitKeys.default_for(:search_semantic_enabled, :pro) == true
       assert LimitKeys.default_for(:indexed_notes_cap, :pro) == nil
       assert LimitKeys.default_for(:api_write_enabled, :pro) == true
@@ -110,9 +105,12 @@ defmodule Engram.Billing.LimitKeysTest do
   end
 
   describe "env_var_names/0" do
-    test "emits 99 tuples (33 keys × 3 tiers)" do
+    test "emits one tuple per key per tier" do
       tuples = LimitKeys.env_var_names()
-      assert length(tuples) == 99
+      # Derived, not a second hand-maintained literal: this count is a pure
+      # function of the other two and two literals drift apart (the moduledoc
+      # said 27 keys while the catalog held 33).
+      assert length(tuples) == length(LimitKeys.all()) * length(LimitKeys.tiers())
     end
 
     test "includes ENGRAM_FREE_NOTES_CAP" do
@@ -180,6 +178,15 @@ defmodule Engram.Billing.LimitKeysTest do
     # one key inverted the meaning of disabling enforcement and cost every
     # self-hoster their images and PDFs.
     refute LimitKeys.defined?(:attachments_text_only)
+  end
+
+  test "the retired vault_scoped_keys entry is gone" do
+    # Dead catalog entry: no gate, no client, superseded by the
+    # `api_key_vaults` table. It reads like an obvious API-key feature, so
+    # without this the only objection to re-adding it is an integer literal
+    # that a re-adder bumps as a matter of course. If vault-scoping ever
+    # returns as a plan limit, it needs a gate first — not a catalog row.
+    refute LimitKeys.defined?(:vault_scoped_keys)
   end
 
   test "every boolean limit is grant-shaped: enforcement-off must never restrict" do

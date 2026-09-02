@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Backlink } from "../api/queries";
 import BacklinksPanel from "./backlinks-panel";
 
@@ -13,13 +13,24 @@ vi.mock("../api/queries", () => ({
 
 function renderPanel(noteId: string | null = "note-1") {
 	return render(
-		<MemoryRouter initialEntries={["/work/note-1"]}>
+		<MemoryRouter initialEntries={["/v/work/note-1"]}>
 			<Routes>
-				<Route path="/:slug/:itemId" element={<BacklinksPanel noteId={noteId} />} />
+				<Route path="/v/:slug/:itemId" element={<BacklinksPanel noteId={noteId} />} />
 			</Routes>
 		</MemoryRouter>,
 	);
 }
+
+// Module-level mock state is shared across every test in the file (vitest
+// isolates per FILE, not per test), and one test here sets mockIsLoading =
+// true. Every current test happens to assign both vars itself, so this reset
+// changes no result today -- it exists so the NEXT test appended to the file
+// does not silently inherit a stale flag, render nothing, and fail pointing
+// at the component rather than at test ordering.
+beforeEach(() => {
+	mockData = undefined;
+	mockIsLoading = false;
+});
 
 describe("BacklinksPanel", () => {
 	it("renders one row per backlink, linking to the source note under the current vault slug", () => {
@@ -43,9 +54,9 @@ describe("BacklinksPanel", () => {
 		renderPanel();
 
 		const alpha = screen.getByRole("link", { name: "Alpha" });
-		expect(alpha).toHaveAttribute("href", "/work/src-1");
+		expect(alpha).toHaveAttribute("href", "/v/work/src-1");
 		const beta = screen.getByRole("link", { name: "Beta" });
-		expect(beta).toHaveAttribute("href", "/work/src-2");
+		expect(beta).toHaveAttribute("href", "/v/work/src-2");
 	});
 
 	it("falls back to the path basename when the source title is null", () => {
@@ -61,7 +72,7 @@ describe("BacklinksPanel", () => {
 		mockIsLoading = false;
 		renderPanel();
 
-		expect(screen.getByRole("link", { name: "Gamma" })).toHaveAttribute("href", "/work/src-3");
+		expect(screen.getByRole("link", { name: "Gamma" })).toHaveAttribute("href", "/v/work/src-3");
 	});
 
 	it("shows an empty state when there are no backlinks", () => {

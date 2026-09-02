@@ -43,9 +43,9 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudget do
       do: conn
 
   def call(%Plug.Conn{assigns: %{current_user: user}} = conn, _opts) do
-    case Billing.effective_limit(user, :api_rps_cap) do
-      :unlimited -> conn
-      nil -> conn
+    # `Billing.cap/2` collapses :unlimited / nil / -1 to nil — no budget to
+    # enforce. A malformed override falls open for the same reason.
+    case Billing.cap(user, :api_rps_cap) do
       0 -> deny(conn, 0)
       limit when is_integer(limit) and limit > 0 -> check_rate_limit(conn, user, limit)
       _ -> conn

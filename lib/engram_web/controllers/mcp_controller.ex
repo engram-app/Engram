@@ -6,7 +6,6 @@ defmodule EngramWeb.McpController do
   use EngramWeb, :controller
 
   alias Engram.Abuse.OriginStats
-  alias Engram.ConversationMeter
   alias Engram.MCP.Tools
 
   @server_info %{"name" => "engram", "version" => "0.1.0"}
@@ -90,25 +89,23 @@ defmodule EngramWeb.McpController do
   defp dispatch(conn, "tools/call", %{"name" => name, "arguments" => args}) do
     start_mono = System.monotonic_time()
 
-    # Order matters: OriginStats/ConversationMeter must run for every call
-    # against a KNOWN tool regardless of whether its arguments turn out to
-    # be valid — otherwise a client that always sends malformed args is
-    # invisible to abuse fingerprinting and never counts against its daily
-    # quota (found in adversarial review of #1491/#1492's fix). Argument
-    # validation therefore runs LAST, right where the handler used to run.
+    # OriginStats runs for every call against a KNOWN tool regardless of whether
+    # its arguments turn out to be valid — a client that always sends malformed
+    # args must not be invisible to abuse fingerprinting (#1491/#1492).
+    #
+    # There is no usage metering here any more. `ai_searches_per_day` is charged
+    # inside `Engram.Search.search/4`, the funnel every retrieval passes through,
+    # so this controller cannot forget to charge a new retrieval tool. Volume is
+    # bounded by `EngramWeb.Plugs.PreAuthRateLimit` on the shared pipeline.
     with {:ok, tool} <- Tools.get(name),
          user = conn.assigns.current_user,
          # §E — record origin fingerprint for daily-rollup aggregation.
          _ = OriginStats.record(user.id, get_req_header_first(conn, "user-agent")),
-         :ok <- ConversationMeter.tick(user.id),
          :ok <- validate_tool_args(tool, args) do
       dispatch_tool(tool, user, normalize_args(tool, args), conn)
     else
       :error ->
         {:error, -32_602, "Unknown tool: #{tool_name_label(name)}"}
-
-      {:rate_limited, reason} ->
-        {:error, -32_005, "rate_limited: #{reason}"}
 
       {:error, tool_name, msg} ->
         # `with`/`else` doesn't carry earlier clauses' bindings into `else` —
@@ -127,12 +124,6 @@ defmodule EngramWeb.McpController do
     {:error, -32_601, "Method not found"}
   end
 
-  # A non-binary `name` (client sent an object/array/number) can't match any
-  # tool, but MUST NOT crash the "Unknown tool" message itself — `name` may
-  # not implement String.Chars (e.g. a bare map). Describes the JSON shape,
-  # not its contents — `inspect/1` is banned in controllers (T3.0.6) even
-  # for client-echoed data, so this stays a controller-side type label, not
-  # a dump of the value.
   defp tool_name_label(name) when is_binary(name), do: name
   defp tool_name_label(name) when is_map(name), do: "<object>"
   defp tool_name_label(name) when is_list(name), do: "<array>"

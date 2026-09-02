@@ -924,38 +924,12 @@ class CdpClient:
             await_promise=True,
         )
 
-    async def pause_incoming_sync(self) -> None:
-        """Silence incoming WebSocket events by replacing handleStreamEvent.
-
-        Lets a test guarantee that ``pull()`` is the ONLY path that can apply
-        remote content — without this, a full_sync push broadcasts an upsert
-        event that races against pull().
-        """
-        js = f"""
-        (function() {{
-            const se = {ENGINE_PATH};
-            if (se._origHandleStreamEvent) return 'already-paused';
-            se._origHandleStreamEvent = se.handleStreamEvent.bind(se);
-            se.handleStreamEvent = async () => {{}};
-            return 'paused';
-        }})()
-        """
-        result = await self.evaluate(js)
-        logger.info("Incoming sync paused on CDP port %d: %s", self.port, result)
-
-    async def resume_incoming_sync(self) -> None:
-        """Restore the WebSocket event handler saved by pause_incoming_sync()."""
-        js = f"""
-        (function() {{
-            const se = {ENGINE_PATH};
-            if (!se._origHandleStreamEvent) return 'not-paused';
-            se.handleStreamEvent = se._origHandleStreamEvent;
-            delete se._origHandleStreamEvent;
-            return 'resumed';
-        }})()
-        """
-        result = await self.evaluate(js)
-        logger.info("Incoming sync resumed on CDP port %d: %s", self.port, result)
+    # pause_incoming_sync/resume_incoming_sync lived here. Deleted with #1503:
+    # zero callers repo-wide, and they stubbed handleStreamEvent — the same trap
+    # that broke test_cold_send_over_fanout_opens_no_room. A device with that
+    # handler dead stops committing noteIdMap and can no longer PUSH, so the
+    # helper was only ever safe on a pure receiver. Don't reintroduce it without
+    # that caveat in the docstring.
 
     # ------------------------------------------------------------------
     # Vault-channel fan-out isolation (crdt/test_crdt_sync.py)
@@ -968,25 +942,72 @@ class CdpClient:
 
         Under the vault-channel model an IDLE note (not open in the editor)
         converges via the server's ``note_yjs_update`` broadcast → the plugin's
-        ``applyPushedNoteUpdate`` (sync.ts). TWO other paths also converge a cold
-        note off the ~5s checkpoint ``note_changed`` and would mask a broken
-        fan-out — every existing crdt test still passes at checkpoint latency
-        even if the fan-out is dead:
+        ``applyPushedNoteUpdate`` (sync.ts). The checkpoint-driven backfill also
+        converges a cold note off the ~5s ``note_changed`` and would mask a
+        broken fan-out — every existing crdt test still passes at checkpoint
+        latency even if the fan-out is dead:
 
-          * ``pull()`` — its cursor-feed backfill (``flushFromCrdt`` on a
-            content_hash divergence) AND ``coldReceive()``, which ``pull()`` is
-            the sole caller of (invoked at its tail, sync.ts:2707).
-          * ``handleStreamEvent`` — the ``note_changed``/upsert handler, which
-            can STEP1-enroll the note's CRDT room (sync.ts:3246); an open room's
-            ``crdt_msg`` stream would then deliver the body independently.
+          * ``catchupViaSeqReplay()`` — the seq-replay cold-apply backstop, and
+            as of plugin main the ONLY one. Reached from ``scheduleSeqHeal``
+            (sync.ts:2589), from the topic-join replay, and from
+            ``applyStreamEvent``'s tail. Its row-apply (``applyChange``) writes
+            bodies to files that ALREADY exist — the cold-note leg at
+            sync.ts:8609 → ``convergeColdNoteRoomFree`` → ``flushFromCrdt`` — so
+            no file-exists precondition contains it, and it also owns the
+            discovery enroll at sync.ts:8244. It must be stubbed.
 
-        This stubs ``pull()``, the cold-apply backstop (``coldReceive()``
-        pre-rewire / ``catchupViaSocket()`` post-authoritative-rewire — stubs
-        whichever the paired plugin build exposes) and ``handleStreamEvent`` to
-        no-ops (saving originals). The fan-out is a SEPARATE channel dispatch:
-        ``channel.ts`` routes ``note_yjs_update`` straight to ``onNoteYjsUpdate``
-        → ``applyPushedNoteUpdate`` and never touches any stubbed method, so it
+        ``pull``, ``coldReceive`` and ``catchupViaSocket`` are RETIRED
+        predecessors, kept in the list only so a backend branch paired against an
+        older plugin build still isolates. NONE of the three exist on plugin main
+        (sync.ts:7705 "the retired ``catchupViaSocket`` loop"); ``pull()``'s
+        cursor-feed backfill folded into the seq-replay above. ``pullAll()`` is
+        NOT its successor for this purpose — that is the user-triggered
+        replay-from-0 behind the pull-all command, never fired spontaneously.
+
+        The fan-out is a SEPARATE channel dispatch: ``channel.ts`` routes
+        ``note_yjs_update`` straight to ``onNoteYjsUpdate`` →
+        ``applyPushedNoteUpdate`` and never touches any stubbed method, so it
         stays fully live. Idempotent.
+
+        Raises if no cold-apply backstop was stubbed. The ``typeof`` guard makes
+        a rename SILENT — the loop skips every missing method and still reports
+        success. All three original names had been retired, so this helper was
+        stubbing NOTHING: for an unknown number of runs the four "TRUE fan-out
+        proof" tests ran with every backstop live and would have passed with a
+        completely dead fan-out. The assertion below is what stops the next
+        rename doing the same thing.
+
+        PRECONDITION — the receiving device MUST already hold the file on disk
+        (what ``_establish_on_both`` guarantees). ``handleStreamEvent`` is left
+        live (below), and its first-delivery leg
+        (``applyOp(eventToOp(...))``) writes a note body; it gates itself out
+        when the file is already present (``priorState === undefined`` /
+        ``!getAbstractFileByPath`` at the sync.ts:7302 call site). Suppress
+        before the receiver has the file and that leg converges the note for
+        you — the assert goes green with the fan-out completely dead, which is
+        the one outcome this helper exists to make impossible.
+
+        ``handleStreamEvent`` is deliberately NOT stubbed (#1503). It was on the
+        list to stop the ``note_changed`` handler STEP1-enrolling the note's CRDT
+        room, whose ``crdt_msg`` stream would then deliver the body independently
+        — but that enroll (``sync.ts`` ~7222, formerly the stale 3246 this
+        docstring cited) is already gated on ``isCanvasPath || isLiveBound``, so
+        it cannot fire for the idle markdown note these tests use. A stray room
+        would fail the enrolled-set assertion rather than pass silently.
+
+        Stubbing it was NOT free: ``applyStreamEvent`` commits
+        ``noteIdMap.set(event.path, noteId)`` (sync.ts:7213). With it dead a
+        device that loses its path→id entry never repairs it, ``pushFile`` reads
+        a null id, and ``shouldDeferMint`` refuses the push — so the suppressed
+        device silently loses the ability to SEND. That is the #1503 failure:
+        ``test_cold_send_over_fanout_opens_no_room`` suppressed the sender and
+        then waited 120s for an edit that never left the device.
+
+        What DROPPED the entry is not established. ``applyStreamEvent`` also
+        deletes (7088) and relocates (``moveIfIdRelocated``, 6953), so it cannot
+        be the remover while stubbed — restoring it restores the repair, not the
+        absence of the cause. Treat a repeat 120s timeout as that unfound
+        remover, not as a fan-out regression.
 
         Instances are SESSION-scoped and shared across tests, so every caller
         MUST pair this with ``restore_fanout_backstops`` in a ``finally``.
@@ -994,24 +1015,59 @@ class CdpClient:
         js = f"""
         (function() {{
             const se = {ENGINE_PATH};
-            if (se.__fanoutIsolated) return 'already-isolated';
-            se.__fanoutIsolated = true;
-            // The cold-note apply backstop was renamed coldReceive ->
-            // catchupViaSocket in the authoritative-sync rewire. backend-main
-            // e2e pairs against EITHER plugin branch, so stub whichever method
-            // exists and never .bind() an absent one (guards future renames).
-            for (const m of ['pull', 'coldReceive', 'catchupViaSocket', 'handleStreamEvent']) {{
+            // Idempotent re-entry reports what is ACTUALLY stubbed right now,
+            // not a bare 'already-isolated' — the caller's zero-stub assertion
+            // has to run on this path too. A restore_fanout_backstops() that
+            // throws (CDP reconnect, renderer reload) leaves __fanoutIsolated
+            // set with nothing stubbed, and every later suppress in this
+            // session would otherwise short-circuit past the guard and hand
+            // the fan-out tests the exact false-green this guard exists for.
+            if (se.__fanoutIsolated) {{
+                return Object.keys(se)
+                    .filter(k => k.startsWith('__orig_'))
+                    .map(k => k.slice('__orig_'.length))
+                    .join(',');
+            }}
+            // The cold-apply backstop has been renamed twice: coldReceive ->
+            // catchupViaSocket -> catchupViaSeqReplay. backend-main e2e pairs
+            // against EITHER plugin branch, so stub whichever exists and never
+            // .bind() an absent one. Report WHICH were stubbed — the caller
+            // asserts on it, because a silent zero-stub run is a false green.
+            // handleStreamEvent stays LIVE — see the docstring (#1503).
+            const stubbed = [];
+            for (const m of ['pull', 'catchupViaSeqReplay', 'coldReceive', 'catchupViaSocket']) {{
                 if (typeof se[m] === 'function') {{
                     se['__orig_' + m] = se[m].bind(se);
-                    se[m] = m === 'handleStreamEvent' ? async () => {{}} : async () => 0;
+                    se[m] = async () => 0;
+                    stubbed.push(m);
                 }}
             }}
-            return 'isolated';
+            // Set AFTER the loop: the flag means "isolation is in place", and
+            // setting it first made a zero-stub run claim isolation it never had.
+            se.__fanoutIsolated = true;
+            return stubbed.join(',');
         }})()
         """
         result = await self.evaluate(js)
         logger.info("Fan-out backstops suppressed on CDP port %d: %s", self.port, result)
-        return result if isinstance(result, str) else "isolated"
+        stubbed = set(str(result).split(",")) - {""}
+        # A rename silently empties this loop (the typeof guard skips what is
+        # gone) and the tests then prove nothing, so require the cold-apply
+        # backstop by name. It is the WHOLE isolation now: `pull()` was retired
+        # along with coldReceive/catchupViaSocket, and its cursor-feed backfill
+        # folded into catchupViaSeqReplay -> applyChange -> flushFromCrdt.
+        # `pullAll()` is not a substitute — it is the user-triggered replay-from-0
+        # behind the pull-all command, never fired spontaneously, so it cannot
+        # converge a note behind an assertion.
+        cold_apply = {"catchupViaSeqReplay", "coldReceive", "catchupViaSocket"}
+        if not (stubbed & cold_apply):
+            raise AssertionError(
+                f"suppress_fanout_backstops stubbed {sorted(stubbed) or 'NOTHING'} on CDP port "
+                f"{self.port} — none of {sorted(cold_apply)} exist on this plugin build. The "
+                f"cold-apply backstop was renamed out from under this helper; the fan-out tests "
+                f"would pass with a dead fan-out. Add the new name to the list."
+            )
+        return str(result)
 
     async def restore_fanout_backstops(self) -> None:
         """Restore the methods stubbed by suppress_fanout_backstops()."""
@@ -1019,7 +1075,7 @@ class CdpClient:
         (function() {{
             const se = {ENGINE_PATH};
             if (!se.__fanoutIsolated) return 'not-isolated';
-            for (const m of ['pull', 'coldReceive', 'catchupViaSocket', 'handleStreamEvent']) {{
+            for (const m of ['pull', 'catchupViaSeqReplay', 'coldReceive', 'catchupViaSocket']) {{
                 const orig = se['__orig_' + m];
                 if (orig) {{ se[m] = orig; delete se['__orig_' + m]; }}
             }}
@@ -1036,6 +1092,104 @@ class CdpClient:
             f"{ENGINE_PATH}.noteIdMap "
             f"? ({ENGINE_PATH}.noteIdMap.get({json.dumps(path)}) ?? null) : null"
         )
+
+    async def wait_for_note_id_for_path(self, path: str, timeout: float = 30) -> str:
+        """Poll until the plugin has mapped `path` to a note_id, and return it.
+
+        Same race as `wait_for_room_free` one method down, one step earlier in
+        the same sequence: `trigger_full_sync()` returning means the sync CALL
+        finished, not that every mapping it discovered has been committed to
+        `noteIdMap`. A single immediate `get_note_id_for_path()` therefore
+        samples a map that may still be a beat behind, and reads `None` for a
+        note that maps fine a few hundred ms later (engram-app/Engram#1489).
+
+        Poll instead. A note the device genuinely never maps still fails, via
+        timeout — so this weakens nothing, it only stops reporting a slow
+        mapping as a missing one.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            note_id = await self.get_note_id_for_path(path)
+            if note_id:
+                return note_id
+            await asyncio.sleep(0.2)
+        raise TimeoutError(
+            f"device never mapped a note_id for {path} within {timeout}s "
+            f"on CDP port {self.port}. {await self._why_unmapped(path)}"
+        )
+
+    async def _why_unmapped(self, path: str) -> str:
+        """Report WHICH layer is hiding `path`, for a mapping-poll timeout.
+
+        `SyncStore.getMeta` (sync-store.ts:193-197) returns null for three
+        reasons that are NOT "the entry is absent" — a staged rename, a staged
+        delete, or a `forget()` bridge. Instrumenting the plugin's six unmap
+        sites proved nothing removes the entry (engram-app/Engram#1526), so the
+        interesting question is which of these gates is closed, or whether the
+        entry simply never arrived.
+
+        Reads the store's fields directly. They are `private` in TypeScript,
+        which is compile-time only — at runtime they are ordinary properties, so
+        this needs no plugin change and ships nothing to production.
+        """
+        js = f"""
+        (function() {{
+            const se = {ENGINE_PATH};
+            const st = se.noteIdMap && se.noteIdMap.store;
+            if (!st) return 'no store';
+            const p = {json.dumps(path)};
+            const has = (c) => {{
+                try {{ return c && typeof c.has === 'function' ? c.has(p) : null; }}
+                catch (e) {{ return 'err'; }}
+            }};
+            const size = (c) => {{
+                try {{
+                    if (!c) return null;
+                    if (typeof c.size === 'number') return c.size;
+                    if (typeof c.length === 'number') return c.length;
+                    return null;
+                }} catch (e) {{ return 'err'; }}
+            }};
+            return JSON.stringify({{
+                renames: has(st.renames),
+                deleteSet: has(st.deleteSet),
+                forgotten: has(st.forgotten),
+                renamedAway: has(st.renamedAway),
+                overlay: has(st.overlay),
+                committed: has(st.map),
+                cache: has(st.cache),
+                // Totals separate "this ONE path is missing" from "the whole
+                // identity store is empty". All-zero means the store was
+                // replaced with a fresh Y.Doc (see SyncStore.clear's note that
+                // identity is dropped by REPLACING the room) and has not
+                // re-synced -- which reads exactly like a per-path loss.
+                committedTotal: size(st.map),
+                overlayTotal: size(st.overlay),
+                cacheTotal: size(st.cache),
+                entriesTotal: (() => {{
+                    try {{ return se.noteIdMap.entries ? se.noteIdMap.entries().length : null; }}
+                    catch (e) {{ return 'err'; }}
+                }})(),
+                // The committed keys, so a near-miss (leading slash, different
+                // normalisation, stale rename target) is visible directly
+                // instead of inferred. `committedTotal` proved the store is
+                // healthy and holds OTHER notes, so what matters now is whether
+                // THIS note is present under a key the read does not derive.
+                committedKeys: (() => {{
+                    try {{
+                        const out = [];
+                        st.map.forEach((_v, k) => out.push(k));
+                        return out.sort();
+                    }} catch (e) {{ return 'err'; }}
+                }})(),
+                lookingFor: p,
+            }});
+        }})()
+        """
+        try:
+            return f"store state for the path: {await self.evaluate(js)}"
+        except Exception as e:  # diagnostics must never mask the real failure
+            return f"(store probe failed: {e})"
 
     async def get_enrolled_note_ids(self) -> list[str]:
         """Snapshot CrdtEnrollment.enrolled — the note_ids this device has
@@ -1677,6 +1831,118 @@ class CdpClient:
         )
         await self.evaluate(
             f"app.commands.executeCommandById({json.dumps(full)})"
+        )
+
+    # ------------------------------------------------------------------
+    # Live Preview table-cell editor (Engram-obsidian#487)
+    # ------------------------------------------------------------------
+
+    async def open_note_in_live_preview(self, path: str) -> str:
+        """Open `path` in the active leaf and force Live Preview.
+
+        Live Preview (mode=source, source=False) is what renders a table as the
+        `.cm-table-widget` whose cells are NESTED EditorViews. Source mode shows
+        raw pipe markdown and creates no cell editor at all, so a test that does
+        not force this is not exercising the widget.
+        """
+        return await self.evaluate(
+            """
+            (async () => {
+              const f = app.vault.getAbstractFileByPath(%s);
+              if (!f) return "no-file";
+              const leaf = app.workspace.getLeaf(false);
+              await leaf.openFile(f);
+              const view = leaf.view;
+              await view.setState(
+                { ...view.getState(), mode: "source", source: false },
+                { history: false },
+              );
+              return app.workspace.activeEditor?.file?.path ?? "no-active";
+            })()
+            """
+            % json.dumps(path),
+            await_promise=True,
+        )
+
+    async def enter_table_cell(self, cell_text: str, timeout: float = 10) -> dict:
+        """Put the cursor in the table cell containing `cell_text`, as a click does.
+
+        Returns `{"cellEditor": bool, "cellText": str, ...}`. Callers MUST assert
+        `cellEditor` — if Obsidian never built the nested editor then nothing was
+        staged and every downstream assertion would pass vacuously.
+
+        Drives a CM6 selection into the cell's source range rather than
+        dispatching synthetic pointer events. That IS the click path: CodeMirror
+        turns a click into a selection, and Obsidian's table widget builds the
+        cell editor from `getSelectedCell(selection)`. Synthetic PointerEvents
+        with correct coordinates do NOT produce a cell editor under Xvfb, so a
+        pointer-based helper would fail the staging gate and prove nothing.
+
+        `editorComponent` is the internal editor that owns `tableCell`;
+        `activeEditor.editor` is the public Editor wrapper and has no such field.
+        """
+        return await self.evaluate(
+            """
+            (async () => {
+              const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+              const deadline = Date.now() + %d;
+              const ec = app.workspace.activeEditor?.editor?.editorComponent;
+              if (!ec?.cm) return { error: "no-editor-component" };
+              if (!document.querySelector(".cm-table-widget")) {
+                return { error: "table-not-rendered-as-widget" };
+              }
+              const cm = ec.cm;
+              const needle = %s;
+              const at = cm.state.doc.toString().indexOf(needle);
+              if (at < 0) return { error: "cell-text-not-in-document" };
+              const pos = at + Math.floor(needle.length / 2);
+
+              cm.focus();
+              cm.dispatch({ selection: { anchor: pos, head: pos }, scrollIntoView: true });
+
+              while (Date.now() < deadline) {
+                const cell = ec.tableCell?.cm;
+                if (cell) {
+                  return {
+                    cellEditor: true,
+                    cellText: cell.state.doc.toString(),
+                    cellLen: cell.state.doc.length,
+                  };
+                }
+                await sleep(100);
+              }
+              return { cellEditor: false, tableCell: String(ec.tableCell) };
+            })()
+            """
+            % (int(timeout * 1000), json.dumps(cell_text)),
+            await_promise=True,
+        )
+
+    async def table_cell_text(self) -> str:
+        """Text currently inside the active table-cell editor ("" when none)."""
+        return await self.evaluate(
+            "app.workspace.activeEditor?.editor?.editorComponent"
+            "?.tableCell?.cm?.state.doc.toString() ?? ''"
+        )
+
+    async def live_viewer_count(self, path: str) -> int:
+        """How many EditorViews the CRDT layer has bound to `path`.
+
+        One open note is exactly one viewer. Obsidian's nested table-cell editor
+        inherits the parent's `editorInfoField` (same MarkdownView, same file),
+        so before the fix it bound as a SECOND viewer of the same path — and its
+        reconcile then adopted the whole note body into the cell.
+        """
+        return await self.evaluate(
+            """
+            (() => {
+              const p = app.plugins.plugins["engram-vault-sync"];
+              const viewers = p?.crdtLiveViews?.refcount?.viewers;
+              if (!viewers) return -1;
+              return viewers.get(%s)?.size ?? 0;
+            })()
+            """
+            % json.dumps(path)
         )
 
     async def click_status_bar(self) -> None:

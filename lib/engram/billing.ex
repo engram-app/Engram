@@ -7,6 +7,7 @@ defmodule Engram.Billing do
   """
 
   import Ecto.Query
+
   alias Engram.Billing.EntitlementCache
   alias Engram.Billing.LimitKeys
   alias Engram.Billing.PlanCache
@@ -15,6 +16,7 @@ defmodule Engram.Billing do
   alias Engram.Logger.Metadata
   alias Engram.Paddle.Client
   alias Engram.Repo
+  alias Engram.Workers.IndexCapMaintenance
 
   require Logger
 
@@ -28,13 +30,24 @@ defmodule Engram.Billing do
 
   # ── Limits ────────────────────────────────────────────────────────
 
+  # The four dialects of "no ceiling" that `effective_limit/2` can return.
+  # Named once so `cap/2`, `check_limit/3` and `limit_enforced?/2` cannot drift.
+  @no_cap [:unlimited, nil, -1]
+
   @doc """
   Returns the effective limit for a given key for a user.
 
-  Resolution order:
-    1. user_overrides[key]
-    2. plans[user.plan_id].limits[key]
-    3. LimitKeys.default_for(key, tier)
+  Resolution order, first hit wins:
+    1. user_limit_overrides[key]           (per-user, live via OverrideCache)
+    2. ENGRAM_<TIER>_<KEY> env             (:plan_overrides, parsed at boot)
+    3. plans[user.plan_id].limits[key]
+    4. LimitKeys.default_for(key, tier)
+
+  Step 3 is effectively dead: `users.plan_id` is written only in tests, so
+  every production user resolves through 1, 2 or 4. Step 2 is the one an
+  operator actually reaches, and it is a PULL model keyed off
+  `LimitKeys.env_var_names/0` — an env var whose key is not in the catalog is
+  never read and never warns.
 
   Uses explicit nil-checking (not ||) so that `false` values are honoured.
   Raises `Engram.Billing.UnknownLimitKey` for string keys or atoms not in
@@ -60,50 +73,10 @@ defmodule Engram.Billing do
 
     with :miss <- user_override_lookup(user.id, string_key),
          :miss <- env_override_lookup(user_tier, key),
-         :miss <- plan_lookup(user, string_key),
-         :miss <- legacy_alias_lookup(user, user_tier, key) do
+         :miss <- plan_lookup(user, string_key) do
       LimitKeys.default_for(key, user_tier)
     else
       {:hit, v} -> v
-    end
-  end
-
-  # Booleans that used to be RESTRICTION-shaped (`true` == denied) and were
-  # renamed to grant-shaped spellings so that `:unlimited` (enforcement off)
-  # can mean "granted" for every boolean without exception. Overrides already
-  # set by operators still carry the old key, and dropping a key from the
-  # catalog also stops `env_var_names/0` from generating its env var — so
-  # resolve the old spelling here and flip the sense. Without this an operator
-  # who deliberately restricted a tier would silently have that lifted.
-  # Delete alongside the legacy wire field in the contract step.
-  @legacy_inverted_keys %{
-    attachments_all_types: "attachments_text_only",
-    inactivity_warnings_exempt: "inactivity_warn_60_days"
-  }
-
-  defp legacy_alias_lookup(user, tier, key) do
-    case Map.fetch(@legacy_inverted_keys, key) do
-      {:ok, legacy_key} ->
-        with :miss <- user_override_lookup(user.id, legacy_key),
-             :miss <- legacy_env_lookup(tier, legacy_key),
-             :miss <- plan_lookup(user, legacy_key) do
-          :miss
-        else
-          # The old key meant "restricted", the new one means "granted".
-          {:hit, restricted} -> {:hit, restricted != true}
-        end
-
-      :error ->
-        :miss
-    end
-  end
-
-  defp legacy_env_lookup(tier, legacy_key) do
-    name = "ENGRAM_#{String.upcase(to_string(tier))}_#{String.upcase(legacy_key)}"
-
-    case System.get_env(name) do
-      nil -> :miss
-      raw -> {:hit, Engram.Billing.EnvLimits.parse!(raw, :boolean, name)}
     end
   end
 
@@ -153,12 +126,62 @@ defmodule Engram.Billing do
   end
 
   @doc """
+  The resolved integer ceiling for `key` as a NUMBER, or `nil` when there is not
+  a usable one.
+
+  `effective_limit/2` speaks four dialects of "no cap" — `:unlimited`
+  (enforcement off, i.e. self-host), `nil` (the catalog's unmetered default),
+  `-1` (the documented operator-override sentinel) and a real integer. Every
+  caller that wants a number had to decode all four, and before this function
+  existed eight modules did it independently under seven different private
+  names (`normalize_cap`, `normalize_int`, `as_int`, `cap_json`, ...).
+
+  They did not agree. `Engram.Accounts.Export`'s copy passed `-1` through
+  intact, so an operator override meaning "unlimited exports" resolved to a
+  ceiling of -1 and `count >= -1` refused EVERY export — the same
+  enforcement-off-inverts-the-rule shape that `LimitKeys`' polarity note
+  describes for `attachments_text_only`. Decode in one place and that class
+  cannot come back per-caller.
+
+  ## This is the DISPLAY/DIAL decoder, not the gate
+
+  A malformed override also answers `nil` here. `UserLimitOverride`'s changeset
+  validates the KEY against the catalog and never the value's type, so
+  `%{"v" => "2000"}` is storable, and this function honours its `@spec` rather
+  than handing a string to arithmetic. That makes `cap(user, key) || default`
+  safe, which is the whole point — a dial or a progress bar must not raise on a
+  corrupt row.
+
+  It also means `cap/2` fails OPEN and therefore **cannot be the gate**. The
+  gate pair is `limit_enforced?/2` + `check_limit/3`, which read
+  `effective_limit/2` directly and both treat an unreadable value as a real
+  ceiling (fail CLOSED). For a corrupt row the two deliberately disagree:
+  `limit_enforced?/2` says yes, `cap/2` says nil, and a caller that uses both —
+  `Engram.Notes.check_notes_cap/2` is the pattern — refuses the write and
+  reports a null limit in the 402. Refusing is the safe half; showing a
+  fabricated number is not.
+
+  Do not "fix" that disagreement by defining one in terms of the other.
+  """
+  @spec cap(term(), atom()) :: integer() | nil
+  def cap(user, key) do
+    case effective_limit(user, key) do
+      -1 -> nil
+      n when is_integer(n) -> n
+      _ -> nil
+    end
+  end
+
+  @spec granted?(term(), atom()) :: boolean()
+  def granted?(user, key), do: check_feature(user, key) == :ok
+
+  @doc """
   Returns :ok if current_count is below the limit, or the limit is -1 (unlimited).
   Returns {:error, :limit_reached} when at or over the limit.
   """
   def check_limit(user, key, current_count) do
     case effective_limit(user, key) do
-      limit when limit in [:unlimited, nil, -1] -> :ok
+      limit when limit in @no_cap -> :ok
       limit when is_integer(limit) and current_count < limit -> :ok
       _ -> {:error, :limit_reached}
     end
@@ -185,7 +208,7 @@ defmodule Engram.Billing do
   """
   @spec limit_enforced?(term(), atom()) :: boolean()
   def limit_enforced?(user, key) when is_atom(key) do
-    effective_limit(user, key) not in [:unlimited, nil, -1]
+    effective_limit(user, key) not in @no_cap
   end
 
   @doc """
@@ -299,11 +322,6 @@ defmodule Engram.Billing do
     %{
       tier: tier(user),
       attachments_all_types: all_types?,
-      # EXPAND step: kept so plugin builds older than the rename keep working.
-      # Both fields are derived from the same `attachments_all_types?/1` call,
-      # so they cannot drift. Remove in the contract step once the released
-      # plugin reads `attachments_all_types`.
-      attachments_text_only: not all_types?,
       max_file_bytes: numeric_limit(user, :max_file_bytes),
       attachment_bytes_cap: numeric_limit(user, :attachment_bytes_cap),
       # How many notes this plan indexes for search. The plugin pairs it with
@@ -321,8 +339,9 @@ defmodule Engram.Billing do
       # and normalize_capability/2 already maps it to nil. Passing it through as
       # a literal -1 means every client has to know the convention, and one that
       # does not inverts the limit: a cap of -1 reads as "nothing is allowed" on
-      # the most permissive plan. Same class as attachments_text_only blocking
-      # self-host attachments. Normalise it here, once.
+      # the most permissive plan. Same inverted-sentinel class as the
+      # restriction-shaped booleans that once blocked self-host attachments
+      # (removed in the pricing-v2 contract step). Normalise it here, once.
       n when is_integer(n) and n < 0 -> nil
       n when is_integer(n) -> n
       _ -> nil
@@ -718,7 +737,14 @@ defmodule Engram.Billing do
               # Nulls both index hashes; ReconcileEmbeddings rebuilds the notes
               # sparse-only on its next tick and the dense points go with the
               # replace. See IndexCap.revoke_dense_index/1.
-              _ = Engram.Indexing.IndexCap.revoke_dense_index(user.id)
+              #
+              # ENQUEUED, not inline. This is an unbounded UPDATE over the
+              # user's whole vault, and we are inside a Paddle webhook request:
+              # a 60k-note account made the delivery outlive Paddle's timeout,
+              # so a cancellation that COMMITTED was recorded as a failed
+              # delivery and retried. Only fires on a real downgrade — `user`
+              # is nil unless prev_tier was paid.
+              _ = IndexCapMaintenance.enqueue(user.id, :revoke_dense)
             end
 
             {:ok, updated}
@@ -851,7 +877,6 @@ defmodule Engram.Billing do
           plan_state(u)
           |> Map.take([
             :attachments_all_types,
-            :attachments_text_only,
             :max_file_bytes,
             :attachment_bytes_cap,
             :indexed_notes_cap
@@ -860,7 +885,6 @@ defmodule Engram.Billing do
         _ ->
           %{
             attachments_all_types: nil,
-            attachments_text_only: nil,
             max_file_bytes: nil,
             attachment_bytes_cap: nil,
             indexed_notes_cap: nil

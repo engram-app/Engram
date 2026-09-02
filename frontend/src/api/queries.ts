@@ -12,6 +12,7 @@ import { collideBump } from "@/lib/collide-bump";
 import { noteName } from "@/lib/note-name";
 import { randomUuid } from "@/lib/random-uuid";
 import { uuid7 } from "../crdt/uuid7";
+import { noteHref } from "../routes";
 import {
 	isSyntheticFolderId,
 	syntheticFolderId,
@@ -727,6 +728,11 @@ export function vaultTreeQueryOptions(vaultId: string | null | undefined) {
 export function invalidateVaultTree(qc: QueryClient, vaultId: string | null | undefined): void {
 	treeInvalidationGen++;
 	qc.invalidateQueries({ queryKey: ["vault-tree", vaultId] });
+	// Every caller of this is a note/folder create, delete, or move — exactly
+	// the mutations that change how many notes exist, and therefore whether the
+	// user is over their index cap. Riding the tree invalidation rather than
+	// hand-listing the mutations means a future write path cannot forget it.
+	qc.invalidateQueries({ queryKey: ["index_status"] });
 }
 
 export function useVaultTree() {
@@ -963,7 +969,7 @@ export function useCreateNote() {
 			// a context because it must fire exactly once, and router state is
 			// already scoped to a single navigation. Both creation entry points (the
 			// tree's context menu and the sidebar button) route through here.
-			navigate(slug ? `/${slug}/${id}` : `/note/${id}`, { state: { justCreated: true } });
+			navigate(noteHref(slug, id), { state: { justCreated: true } });
 		},
 		onError: (err, _vars, ctx) => {
 			if (ctx) {
@@ -1341,6 +1347,10 @@ export interface Capabilities {
 // ETS-cached for 24h server-side, and these move every time the user writes a
 // note. `indexed` is min(total, cap) — the cap is the contract; how far the
 // index queue has drained is an implementation detail we don't surface.
+//
+// Both are 0 for an uncapped tier: the server skips the whole-vault count
+// rather than pay for a number that tier never renders. Read them only as the
+// `indexed < total` question, never as "how many notes exist".
 export interface IndexStatus {
 	indexed: number;
 	total: number;
@@ -1367,19 +1377,26 @@ export function useCapabilities() {
 }
 
 /**
- * Cache-only: reads what useAppBootstrap seeded and never fetches on its own.
+ * Seeded by useAppBootstrap, then kept current on its own — see the staleTime
+ * note below for why it cannot stay frozen at the seed.
  *
- * Unlike useCapabilities, this has no fallback queryFn. The value drives one
- * advisory line ("Searching 2,000 of 4,312 notes"), so a consumer that mounts
- * before the bootstrap seed should render nothing rather than issue a second
- * /bootstrap round-trip — and a component test shouldn't hit the network to
- * render a search box.
+ * Unlike useCapabilities the fallback is not /bootstrap but /index-status,
+ * which returns these two counters alone: a consumer that mounts before the
+ * seed lands should not pay for the whole first-load payload to render one
+ * advisory line ("Searching 2,000 of 4,312 notes").
  */
 export function useIndexStatus() {
 	return useQuery<IndexStatus>({
 		queryKey: ["index_status"],
-		enabled: false,
-		staleTime: Number.POSITIVE_INFINITY,
+		queryFn: () => api.get<IndexStatus>("/index-status"),
+		// Seeded by /bootstrap, so the first render costs no request. But these
+		// counters move as the user writes and deletes notes, and they drive the
+		// only signal that stops a note past the cap returning nothing from
+		// reading as broken search — frozen at page load, a user who crossed the
+		// cap mid-session saw no banner until a full reload. A finite staleTime
+		// plus invalidation on create/delete keeps it honest; the refetch is
+		// cheap, and free for uncapped users (counts/1 skips the aggregate).
+		staleTime: 60_000,
 	});
 }
 
