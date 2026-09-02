@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.23.0](https://github.com/engram-app/Engram/compare/0.22.0...0.23.0) (2026-09-02)
+
+
+### Features
+
+* **billing:** publish current usage alongside every metered cap ([#1542](https://github.com/engram-app/Engram/issues/1542)) ([013fe0c](https://github.com/engram-app/Engram/commit/013fe0c1e19ca7e2c5a2e672caba6ec934b970c7))
+* **crdt:** room-free write for an idle note (crdt_doc_update) ([#1547](https://github.com/engram-app/Engram/issues/1547)) ([199d168](https://github.com/engram-app/Engram/commit/199d1687ebb1d9cb46420227ff2d9e185e2ab786))
+* **crdt:** scrape resident room count against its cap ([#1545](https://github.com/engram-app/Engram/issues/1545)) ([b1af291](https://github.com/engram-app/Engram/commit/b1af291ebe8ef91c01a7effec70d16d222ff1d70)), closes [#1493](https://github.com/engram-app/Engram/issues/1493)
+
+
+### Bug Fixes
+
+* **billing:** enforce the search cap on the MCP transport ([#1527](https://github.com/engram-app/Engram/issues/1527)) ([1c9e383](https://github.com/engram-app/Engram/commit/1c9e38392cd8e900db38509b2d7a3f6d451d4e26))
+* **billing:** make every plan limit hold on every transport ([#1544](https://github.com/engram-app/Engram/issues/1544)) ([856a42d](https://github.com/engram-app/Engram/commit/856a42dbf42dd5282a359551308baf5665ba2c59))
+* **billing:** stop re-theming a live inline Paddle checkout ([#1554](https://github.com/engram-app/Engram/issues/1554)) ([a2408f5](https://github.com/engram-app/Engram/commit/a2408f5a60e831eebce5270efaec85c8171a2902))
+* **crdt:** a late applier reply must not kill the channel ([#1552](https://github.com/engram-app/Engram/issues/1552)) ([3619f1c](https://github.com/engram-app/Engram/commit/3619f1c2c0a76add700f6ed0375093b2b44496d0))
+* **e2e:** mapping-poll ordering + Bypass teardown (partial; [#1503](https://github.com/engram-app/Engram/issues/1503) isolation is not stubbable) ([#1530](https://github.com/engram-app/Engram/issues/1530)) ([7565a45](https://github.com/engram-app/Engram/commit/7565a45255d14699563f54b9016ac4aa5749edfa))
+* **e2e:** stop suppression stubbing handleStreamEvent ([#1503](https://github.com/engram-app/Engram/issues/1503)) ([#1525](https://github.com/engram-app/Engram/issues/1525)) ([11b3127](https://github.com/engram-app/Engram/commit/11b3127a3dde2c06373ebdead04c4055df23f70c))
+* **indexing:** delete Qdrant points by id, and reap stranded ones ([#1534](https://github.com/engram-app/Engram/issues/1534)) ([b7a8b0c](https://github.com/engram-app/Engram/commit/b7a8b0c466c5c970d95d7cb80b1d190293e1e8d1))
+* **logs:** emit the Loki routing decision as a string ([#1543](https://github.com/engram-app/Engram/issues/1543)) ([1ca8a7d](https://github.com/engram-app/Engram/commit/1ca8a7db8cf97126b773c9013ec3264837d29eb7))
+
 ## [0.22.0](https://github.com/engram-app/Engram/compare/0.21.2...0.22.0) (2026-08-31)
 
 
