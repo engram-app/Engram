@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.24.0](https://github.com/engram-app/Engram/compare/0.23.0...0.24.0) (2026-09-02)
+
+
+### Features
+
+* **onboarding:** add dismissible Discord invite to setup checklist ([#1558](https://github.com/engram-app/Engram/issues/1558)) ([156eafb](https://github.com/engram-app/Engram/commit/156eafba4109678af426946d4b9f542c14c1a64f))
+* **onboarding:** seed "Welcome to Engram" into every new vault ([#1557](https://github.com/engram-app/Engram/issues/1557)) ([28335a3](https://github.com/engram-app/Engram/commit/28335a3e2e39b394ab6928e8227f0568ab4b4475))
+
+
+### Bug Fixes
+
+* **billing:** pin Paddle checkout theme, fix dark-mode contrast ([#1555](https://github.com/engram-app/Engram/issues/1555)) ([b60328f](https://github.com/engram-app/Engram/commit/b60328f43bc986511d629f42804d060bc5714755))
+
 ## [0.23.0](https://github.com/engram-app/Engram/compare/0.22.0...0.23.0) (2026-09-02)
 
 
