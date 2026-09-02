@@ -71,6 +71,12 @@ interface BillingPageProps {
 	// Onboarding-only: fired when the inline Paddle checkout view opens/closes so
 	// the wrapper can hide its own chrome (header, free link) during payment.
 	onCheckoutActiveChange?: (active: boolean) => void;
+	// Onboarding-only: fired specifically while the Paddle frame itself (or its
+	// dev stand-in) is showing — narrower than onCheckoutActiveChange, which
+	// also covers the slow/finalizing states. Those render our own
+	// theme-aware SlowActivationBanner/spinner, so the wrapper must NOT force
+	// its card light for them the way it does for the Paddle-branded frame.
+	onCheckoutFrameActiveChange?: (active: boolean) => void;
 }
 
 function SlowActivationBanner({
@@ -154,6 +160,7 @@ export default function BillingPage({
 	onActivated,
 	freeOption,
 	onCheckoutActiveChange,
+	onCheckoutFrameActiveChange,
 }: BillingPageProps) {
 	// Onboarding mounts BillingPage with onActivated; settings does not. The
 	// prop's presence is what flips Paddle from overlay → inline. Inline gives
@@ -478,6 +485,18 @@ export default function BillingPage({
 		onCheckoutActiveChangeRef.current?.(checkoutActive);
 	}, [checkoutActive]);
 
+	// Narrower than checkoutActive: true only for the branch that actually
+	// renders the Paddle frame (or its dev stand-in) — matches the ternary
+	// condition below exactly. slow/finalizing render our own components and
+	// must not be included, or the wrapper's forced-light card (see
+	// onboard-billing-page.tsx) makes their theme-aware text illegible.
+	const showingPaddleFrame = isInline && checkingOut && !slow && !finalizing;
+	const onCheckoutFrameActiveChangeRef = useRef(onCheckoutFrameActiveChange);
+	onCheckoutFrameActiveChangeRef.current = onCheckoutFrameActiveChange;
+	useEffect(() => {
+		onCheckoutFrameActiveChangeRef.current?.(showingPaddleFrame);
+	}, [showingPaddleFrame]);
+
 	if (isLoading || !billing) {
 		return <BillingPageSkeleton hideHeading={hideHeading} />;
 	}
@@ -607,9 +626,13 @@ export default function BillingPage({
 								← Choose a different plan
 							</button>
 							{DEV_FAKE_CHECKOUT ? (
-								<div className="rounded-lg border border-primary/50 border-dashed bg-muted/30 p-6 text-center">
-									<p className="font-medium text-foreground text-sm">Test checkout (dev only)</p>
-									<p className="mx-auto mt-1 max-w-sm text-muted-foreground text-xs">
+								// Fixed light colors throughout, not theme tokens: this stub
+								// only ever renders inside the forced-light checkout card (see
+								// onboard-billing-page.tsx), so text-foreground/text-muted-foreground
+								// would resolve to their dark-mode (light-on-light) values here.
+								<div className="rounded-lg border border-primary/50 border-dashed bg-gray-50 p-6 text-center">
+									<p className="font-medium text-gray-900 text-sm">Test checkout (dev only)</p>
+									<p className="mx-auto mt-1 max-w-sm text-gray-500 text-xs">
 										Paddle's checkout can't embed on localhost, so this stand-in lets you walk the
 										flow. Not shown in production.
 									</p>
@@ -633,6 +656,7 @@ export default function BillingPage({
 											className={cn(
 												"rounded-lg px-4 py-2 font-medium text-sm transition",
 												ctaOutline,
+												"border-gray-300 text-gray-900 hover:bg-gray-100",
 											)}
 										>
 											Simulate failure

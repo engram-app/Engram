@@ -439,6 +439,70 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		);
 	});
 
+	it("onboarding (inline): the recovery banner (slow) does NOT get the forced-light frame treatment, even though the wrapper is still told checkout is active", async () => {
+		// onCheckoutActiveChange (broad: checkingOut || slow || finalizing) drives
+		// header-hiding and stays true here. onCheckoutFrameActiveChange (narrow:
+		// only while the Paddle frame itself renders) drives the wrapper's
+		// forced-light card and must flip back to false once slow replaces the
+		// frame with our own theme-aware SlowActivationBanner — otherwise that
+		// banner's text renders light-on-white in dark mode.
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		mockBillingApi();
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn(), close: vi.fn() } };
+		});
+
+		const onCheckoutActiveChange = vi.fn();
+		const onCheckoutFrameActiveChange = vi.fn();
+		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const { container, queryAllByText } = render(
+			<QueryClientProvider client={qc}>
+				<AuthContext.Provider value={authAdapter}>
+					<ThemeProvider>
+						<MemoryRouter>
+							<BillingPage
+								onActivated={() => {}}
+								onCheckoutActiveChange={onCheckoutActiveChange}
+								onCheckoutFrameActiveChange={onCheckoutFrameActiveChange}
+							/>
+						</MemoryRouter>
+					</ThemeProvider>
+				</AuthContext.Provider>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+		const startBtn = Array.from(container.querySelectorAll("button")).find(
+			(b) => b.textContent === "Start free trial",
+		)!;
+		await act(async () => {
+			startBtn.click();
+			await Promise.resolve();
+		});
+
+		expect(onCheckoutActiveChange).toHaveBeenLastCalledWith(true);
+		expect(onCheckoutFrameActiveChange).toHaveBeenLastCalledWith(true);
+
+		await act(async () => {
+			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+			await Promise.resolve();
+		});
+		await act(async () => {
+			vi.advanceTimersByTime(15_500);
+			await Promise.resolve();
+		});
+
+		await waitFor(() =>
+			expect(
+				screen.queryByText(/Payment received\. We're finishing your activation/iu),
+			).toBeInTheDocument(),
+		);
+		expect(onCheckoutActiveChange).toHaveBeenLastCalledWith(true);
+		expect(onCheckoutFrameActiveChange).toHaveBeenLastCalledWith(false);
+	});
+
 	it("onboarding (inline): closes Paddle and fires onActivated when subscription_activated push arrives", async () => {
 		mockBillingApi();
 		const closeMock = vi.fn();

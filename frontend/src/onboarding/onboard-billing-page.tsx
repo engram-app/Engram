@@ -20,6 +20,11 @@ export default function OnboardBillingPage() {
 	// True while the inline Paddle checkout view is open — hides our own header +
 	// free link so they don't sit stuck above/below the payment form.
 	const [checkoutActive, setCheckoutActive] = useState(false);
+	// Narrower: true only while the Paddle frame itself is showing. Drives the
+	// card's forced-light background — the slow/finalizing states covered by
+	// checkoutActive render our own theme-aware components and must stay
+	// theme-following, not forced light.
+	const [showingPaddleFrame, setShowingPaddleFrame] = useState(false);
 
 	const onActivated = useCallback(
 		(status: OnboardingStatus) => {
@@ -56,9 +61,11 @@ export default function OnboardBillingPage() {
 				className={cn(
 					"rounded-2xl border p-4 sm:p-8",
 					// Paddle's checkout theme is pinned to light (see billing-page.tsx)
-					// — force this card light too while checkout is showing, so the
-					// Paddle frame doesn't sit on a dark surface behind it.
-					checkoutActive ? "border-gray-200 bg-white" : "border-border bg-background",
+					// — force this card light too while the Paddle frame is showing, so
+					// it doesn't sit on a dark surface behind it. Scoped to
+					// showingPaddleFrame, not the broader checkoutActive, since
+					// slow/finalizing render our own theme-aware components.
+					showingPaddleFrame ? "border-gray-200 bg-white" : "border-border bg-background",
 				)}
 			>
 				{/* Header is hidden once a plan is chosen (checkout view open) so it
@@ -81,6 +88,7 @@ export default function OnboardBillingPage() {
 					onActivated={onActivated}
 					freeOption={{ onContinue: handleContinueFree, loading: freeLoading }}
 					onCheckoutActiveChange={setCheckoutActive}
+					onCheckoutFrameActiveChange={setShowingPaddleFrame}
 				/>
 				{/* Desktop: understated bottom link — also hidden during checkout so it
             doesn't sit stuck below the payment form. */}
