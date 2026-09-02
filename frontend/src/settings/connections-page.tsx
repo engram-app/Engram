@@ -82,7 +82,7 @@ function ConnectionCard({
           <summary> aren't allowed by the HTML spec, and Firefox/Safari skip
           Tab focus on them. */}
 			<details className="min-w-0 flex-1 open:pb-3">
-				<summary className="flex cursor-pointer items-center gap-3 px-3 py-3 [&::-webkit-details-marker]:hidden">
+				<summary className="flex cursor-pointer items-center gap-3 p-3 [&::-webkit-details-marker]:hidden">
 					{/* Brand mark by slug first, @lobehub/icons-static-svg covers every
 					    catalog connector, so this needs no per-vendor asset. Falls back
 					    to the backend-supplied logo (Obsidian plugin, VS Code), then a
@@ -505,7 +505,7 @@ function CopyIcon({ copied }: { copied: boolean }) {
 				xmlns="http://www.w3.org/2000/svg"
 				viewBox="0 0 20 20"
 				fill="currentColor"
-				className="h-4 w-4"
+				className="size-4"
 				aria-hidden="true"
 			>
 				<path
@@ -521,7 +521,7 @@ function CopyIcon({ copied }: { copied: boolean }) {
 			xmlns="http://www.w3.org/2000/svg"
 			viewBox="0 0 20 20"
 			fill="currentColor"
-			className="h-4 w-4"
+			className="size-4"
 			aria-hidden="true"
 		>
 			<path d="M7 3a2 2 0 00-2 2v9a2 2 0 002 2h6a2 2 0 002-2V5a2 2 0 00-2-2H7z" />

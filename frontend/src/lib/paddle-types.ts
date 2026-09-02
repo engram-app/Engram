@@ -9,59 +9,6 @@ export interface PriceData {
 	trialPeriod?: string;
 }
 
-/**
- * Normalized payload delivered to the `onComplete` callback when a Paddle
- * checkout transaction completes successfully.
- *
- * This is a subset of the full Paddle checkout event data, containing the
- * fields most commonly needed for post-purchase handling (e.g. sending to
- * your backend, showing a confirmation screen).
- */
-export interface CheckoutCompleteData {
-	transactionId: string;
-	customerId: string;
-	customerEmail: string;
-}
-
-/**
- * A single line item in the checkout order summary.
- *
- * Monetary values are raw decimal numbers — the component formats them using
- * the parent `CheckoutSummaryData.currency`.
- * Produced by `mapCheckoutEventsToSummary` from `CheckoutEventsData`.
- */
-export interface CheckoutSummaryItem {
-	name: string;
-	priceName?: string;
-	quantity: number;
-	lineTotal: number;
-}
-
-/**
- * Display contract for the `CheckoutSummary` component.
- *
- * Monetary amounts are raw decimal numbers — the component formats them using `currency`.
- * Produced by `mapCheckoutEventsToSummary` from the `CheckoutEventsData` payload
- * emitted by Paddle.js checkout events.
- */
-export interface CheckoutSummaryData {
-	items: CheckoutSummaryItem[];
-	subtotal: number;
-	tax: number;
-	total: number;
-	discount?: number;
-	/** ISO 4217 currency code, e.g. "USD" */
-	currency: string;
-	/** Recurring total amount as a decimal number */
-	recurringTotal?: number;
-	/** Recurring billing interval, e.g. "month" */
-	recurringInterval?: string;
-	/** Recurring billing frequency, e.g. 1 */
-	recurringFrequency?: number;
-	/** Trial period label, e.g. "7 days" or "1 month" */
-	trialPeriod?: string;
-}
-
 // ---
 // Subscription display types
 // Display contracts for subscription management components. Monetary amounts

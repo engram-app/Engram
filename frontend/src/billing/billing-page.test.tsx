@@ -3,7 +3,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type AuthAdapter, AuthContext } from "../auth/auth-context";
-import { ThemeProvider } from "../theme/theme-provider";
+import { ThemeProvider, useTheme } from "../theme/theme-provider";
 import BillingPage from "./billing-page";
 
 const initializePaddleMock = vi.fn();
@@ -57,7 +57,12 @@ const authAdapter: AuthAdapter = {
 	hasBuiltInUI: false,
 };
 
-const ME = { id: 99, email: "u@example.com", role: "member" as const, display_name: null };
+const ME = {
+	id: 99,
+	email: "u@example.com",
+	role: "member" as const,
+	display_name: null,
+};
 
 describe("BillingPage — Paddle effect cleanup", () => {
 	beforeEach(() => {
@@ -112,7 +117,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			return { Checkout: { open: vi.fn() } };
 		});
 
-		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
 		const { unmount } = render(
 			<QueryClientProvider client={qc}>
 				<AuthContext.Provider value={authAdapter}>
@@ -130,7 +137,10 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		unmount();
 
 		expect(() =>
-			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "late" } }),
+			captured!({
+				name: "checkout.payment.initiated",
+				data: { transaction_id: "late" },
+			}),
 		).not.toThrow();
 	});
 
@@ -171,7 +181,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 	}
 
 	function renderBilling({ inline }: { inline: boolean }) {
-		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
 		const utils = render(
 			<QueryClientProvider client={qc}>
 				<AuthContext.Provider value={authAdapter}>
@@ -287,7 +299,10 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
 
 		await act(async () => {
-			captured!({ name: "checkout.payment.failed", data: { transaction_id: "txn_x" } });
+			captured!({
+				name: "checkout.payment.failed",
+				data: { transaction_id: "txn_x" },
+			});
 			await Promise.resolve();
 		});
 
@@ -326,6 +341,70 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(queryAllByText("Starter").length).toBeGreaterThan(0);
 	});
 
+	it("settings (overlay): does not rebuild the Paddle instance while a checkout is open, so an in-flight overlay isn't stranded on a stale theme", async () => {
+		// Regression for the theme-freeze fix: the overlay path (settings, no
+		// onActivated prop) has no `checkingOut` flag, so it must rely on Paddle's
+		// own checkout.loaded/checkout.closed events to freeze appliedTheme.
+		mockBillingApi();
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn(), close: vi.fn() } };
+		});
+
+		function Harness() {
+			const { setTheme } = useTheme();
+			return (
+				<>
+					<button type="button" onClick={() => setTheme("dark")}>
+						go-dark
+					</button>
+					<BillingPage />
+				</>
+			);
+		}
+
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		render(
+			<QueryClientProvider client={qc}>
+				<AuthContext.Provider value={authAdapter}>
+					<ThemeProvider>
+						<MemoryRouter>
+							<Harness />
+						</MemoryRouter>
+					</ThemeProvider>
+				</AuthContext.Provider>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() => expect(initializePaddleMock).toHaveBeenCalledTimes(1));
+
+		await act(async () => {
+			captured!({ name: "checkout.loaded" });
+			await Promise.resolve();
+		});
+
+		await act(async () => {
+			screen.getByRole("button", { name: "go-dark" }).click();
+			await Promise.resolve();
+		});
+
+		// Frozen: theme flip while the overlay is open must NOT tear down/rebuild.
+		expect(initializePaddleMock).toHaveBeenCalledTimes(1);
+
+		await act(async () => {
+			captured!({ name: "checkout.closed" });
+			await Promise.resolve();
+		});
+
+		// Resyncs once closed, and the rebuild picks up the new theme.
+		await waitFor(() => expect(initializePaddleMock).toHaveBeenCalledTimes(2));
+		const { settings } = initializePaddleMock.mock.calls[1]![0].checkout;
+		expect(settings.theme).toBe("dark");
+	});
+
 	it("onboarding (inline): cooldown arms on CHECKOUT_PAYMENT_INITIATED so a dropped COMPLETED still surfaces the recovery banner", async () => {
 		// Pre-#440 belt-and-suspenders: PAYMENT_INITIATED may drop on trial-signup
 		// redirects (and so may COMPLETED). The cooldown timer must be anchored
@@ -350,7 +429,10 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		// PAYMENT_INITIATED fires; COMPLETED never does (the drop case).
 		await act(async () => {
-			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_drop_99" } });
+			captured!({
+				name: "checkout.payment.initiated",
+				data: { transaction_id: "txn_drop_99" },
+			});
 			await Promise.resolve();
 		});
 
@@ -374,7 +456,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			Checkout: { open: vi.fn(), close: closeMock },
 		}));
 
-		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
 		qc.setQueryData(["onboarding", "status"], { next_step: "tools" });
 		const onActivated = vi.fn();
 		render(
@@ -418,8 +502,20 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		get.mockImplementation(async (url: string) => {
 			if (url === "/billing/status") {
 				return billingActive
-					? { tier: "starter", active: true, trial_days_remaining: 0, subscription: null, caps: {} }
-					: { tier: "free", active: false, trial_days_remaining: 0, subscription: null, caps: {} };
+					? {
+							tier: "starter",
+							active: true,
+							trial_days_remaining: 0,
+							subscription: null,
+							caps: {},
+						}
+					: {
+							tier: "free",
+							active: false,
+							trial_days_remaining: 0,
+							subscription: null,
+							caps: {},
+						};
 			}
 			if (url === "/billing/config") {
 				return {
@@ -450,7 +546,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		// no-op onActivated: mirrors the wizard NOT yet navigating, so the steady
 		// bridge must hold on its own instead of relying on an unmount.
 		const onActivated = vi.fn();
-		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
 		render(
 			<QueryClientProvider client={qc}>
 				<AuthContext.Provider value={authAdapter}>
@@ -533,7 +631,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			Checkout: { open: vi.fn(), close: vi.fn() },
 		}));
 
-		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
 		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 		render(
 			<QueryClientProvider client={qc}>
@@ -613,7 +713,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			return { Checkout: { open: vi.fn(), close: vi.fn() } };
 		});
 
-		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
 		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 		render(
 			<QueryClientProvider client={qc}>
@@ -635,7 +737,10 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		});
 
 		await act(async () => {
-			captured!({ name: "checkout.completed", data: { transaction_id: "txn_up_1" } });
+			captured!({
+				name: "checkout.completed",
+				data: { transaction_id: "txn_up_1" },
+			});
 			await Promise.resolve();
 		});
 
@@ -652,7 +757,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 	});
 
 	it("subscribed flow: Cancel button opens CancelPanel inline (no portal redirect)", async () => {
-		initializePaddleMock.mockResolvedValue({ Checkout: { open: vi.fn(), close: vi.fn() } });
+		initializePaddleMock.mockResolvedValue({
+			Checkout: { open: vi.fn(), close: vi.fn() },
+		});
 
 		get.mockImplementation(async (url: string) => {
 			if (url === "/billing/status") {
@@ -685,7 +792,10 @@ describe("BillingPage — Paddle effect cleanup", () => {
 				return { user: ME };
 			}
 			if (url === "/billing/subscription") {
-				return { next_billed_at: "2026-07-01T00:00:00Z", scheduled_change: null };
+				return {
+					next_billed_at: "2026-07-01T00:00:00Z",
+					scheduled_change: null,
+				};
 			}
 			if (url === "/billing/transactions") {
 				return { payment_method: null, transactions: [] };
@@ -695,7 +805,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		renderBilling({ inline: false });
 
-		const cancelButton = await screen.findByRole("button", { name: /cancel subscription/iu });
+		const cancelButton = await screen.findByRole("button", {
+			name: /cancel subscription/iu,
+		});
 		await act(async () => {
 			cancelButton.click();
 		});
@@ -706,7 +818,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 	});
 
 	it("subscribed flow: Change plan button opens PlanChangePanel inline", async () => {
-		initializePaddleMock.mockResolvedValue({ Checkout: { open: vi.fn(), close: vi.fn() } });
+		initializePaddleMock.mockResolvedValue({
+			Checkout: { open: vi.fn(), close: vi.fn() },
+		});
 
 		get.mockImplementation(async (url: string) => {
 			if (url === "/billing/status") {
@@ -739,7 +853,10 @@ describe("BillingPage — Paddle effect cleanup", () => {
 				return { user: ME };
 			}
 			if (url === "/billing/subscription") {
-				return { next_billed_at: "2026-07-01T00:00:00Z", scheduled_change: null };
+				return {
+					next_billed_at: "2026-07-01T00:00:00Z",
+					scheduled_change: null,
+				};
 			}
 			if (url === "/billing/transactions") {
 				return { payment_method: null, transactions: [] };
@@ -749,7 +866,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		renderBilling({ inline: false });
 
-		const changeButton = await screen.findByRole("button", { name: /change plan/iu });
+		const changeButton = await screen.findByRole("button", {
+			name: /change plan/iu,
+		});
 		await act(async () => {
 			changeButton.click();
 		});
