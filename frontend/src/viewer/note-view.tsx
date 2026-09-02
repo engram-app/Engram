@@ -153,8 +153,12 @@ function NoteView({ content, tags, links, manifestNotes }: NoteViewProps) {
 									</Link>
 								);
 							}
+							// External, anchor or unresolved: a new tab, always. Replacing
+							// the current one takes the reader away from a note they may
+							// be part-way through editing, and the SPA has no back-to-
+							// where-you-were state to restore.
 							return (
-								<a href={href} {...rest}>
+								<a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
 									{children}
 								</a>
 							);

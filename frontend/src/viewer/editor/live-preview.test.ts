@@ -25,6 +25,7 @@ function mountCallout(anchor: number): EditorView {
 				resolveWikiLink: (n) => `/w/wiki/${n}`,
 				openWikiLink: () => {},
 				wikiCompletionPaths: () => [],
+				openMarkdownLink: () => false,
 			}),
 		}),
 		parent: document.body,
@@ -38,6 +39,7 @@ describe("livePreviewExtensions", () => {
 			resolveWikiLink: (n) => `/w/wiki/${n}`,
 			openWikiLink: () => {},
 			wikiCompletionPaths: () => [],
+			openMarkdownLink: () => false,
 		});
 		const state = EditorState.create({ doc: MD, extensions: ext });
 		// Building state + reading facets must not alter doc bytes.
@@ -49,6 +51,7 @@ describe("livePreviewExtensions", () => {
 			resolveWikiLink: (n) => `/w/wiki/${n}`,
 			openWikiLink: () => {},
 			wikiCompletionPaths: () => [],
+			openMarkdownLink: () => false,
 		});
 		expect(() => EditorState.create({ doc: MD, extensions: ext })).not.toThrow();
 	});

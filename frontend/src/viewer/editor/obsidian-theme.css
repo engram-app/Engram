@@ -257,6 +257,14 @@
 	content: none;
 }
 
+/* A link opens on click in edit mode (editor/link-open.ts), so it has to look
+   clickable. CodeMirror's content DOM is a text-caret surface by default, and
+   an I-beam over the one thing that is NOT a text target reads as "nothing
+   happens here" — which is how the dead hit-zone went unnoticed. */
+.cm-atomic-link {
+	cursor: pointer;
+}
+
 /* Revealed-wikilink outer brackets are bare text nodes that inherit Atomic's
    un-themed fallback gray (#abb2bf-ish), while the inner bracket marks get the
    themed --atomic-editor-fg-faint via highlight classes — two mismatched

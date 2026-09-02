@@ -51,7 +51,7 @@ import { MoveDialog } from "./tree-actions/move-dialog";
 import { RenameInput } from "./tree-actions/rename-input";
 import { renameBaseName } from "./tree-actions/rename-path";
 import { useLiveContent } from "./use-live-content";
-import { buildWikiMap, wikiHref } from "./wiki-link";
+import { buildWikiMap, markdownLinkHref, wikiHref } from "./wiki-link";
 
 /** How long the routed note may fail to open before the pane explains itself. */
 const STALL_NOTICE_MS = 1500;
@@ -181,6 +181,22 @@ export default function NotePage() {
 	// Editor-mode click-to-open. Router nav must come from the React tree —
 	// see LivePreviewOpts.openWikiLink for why the editor can't reach the
 	// router singleton itself.
+	// Markdown links: resolve like Reading mode does, navigate in-app when the
+	// target is a note in this vault, and report false for everything else so
+	// link-open.ts sends it to a new tab.
+	const openMarkdownLink = useCallback(
+		(href: string) => {
+			const to = href.startsWith("/")
+				? href
+				: markdownLinkHref(href, slug, wikiMap, wikiManifestRef.current);
+			if (!to) {
+				return false;
+			}
+			navigate(to);
+			return true;
+		},
+		[navigate, slug, wikiMap],
+	);
 	const openWikiLink = useCallback(
 		(permalink: string) => {
 			const href = wikiHref(permalink, slug, wikiMap, wikiManifestRef.current);
@@ -689,6 +705,7 @@ export default function NotePage() {
 									mode={mode === "raw" ? "raw" : "rendered"}
 									resolveWikiLink={resolveWikiLink}
 									openWikiLink={openWikiLink}
+									openMarkdownLink={openMarkdownLink}
 									wikiCompletionPaths={wikiCompletionPaths}
 									onFrontmatterShortcut={handleFrontmatterShortcut}
 									onView={(v) => {

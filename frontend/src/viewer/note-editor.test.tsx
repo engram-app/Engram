@@ -8,6 +8,7 @@ import { buildEditorState, decorationsCompartment, decorationsFor } from "./note
 const resolveWikiLink = (n: string) => `/w/wiki/${n}`;
 const openWikiLink = () => {};
 const wikiCompletionPaths = () => [];
+const openMarkdownLink = () => false;
 
 // happy-dom CAN render a real CodeMirror EditorView (verified 2026-06-29).
 // The earlier comment was a cautious assumption; the DOM stubs in test-setup.ts
@@ -27,6 +28,7 @@ describe("buildEditorState", () => {
 			resolveWikiLink,
 			openWikiLink,
 			wikiCompletionPaths,
+			openMarkdownLink,
 		);
 
 		expect(state.doc.toString()).toBe("# Seeded heading\n\nbody text");
@@ -50,6 +52,7 @@ describe("buildEditorState", () => {
 				resolveWikiLink,
 				openWikiLink,
 				wikiCompletionPaths,
+				openMarkdownLink,
 			),
 		});
 		try {
@@ -72,6 +75,7 @@ describe("buildEditorState", () => {
 			resolveWikiLink,
 			openWikiLink,
 			wikiCompletionPaths,
+			openMarkdownLink,
 		);
 
 		expect(state.doc.toString()).toBe("");
@@ -92,6 +96,7 @@ describe("buildEditorState", () => {
 			resolveWikiLink,
 			openWikiLink,
 			wikiCompletionPaths,
+			openMarkdownLink,
 		);
 
 		expect(state.doc.toString()).toBe("first second");
@@ -111,6 +116,7 @@ describe("buildEditorState", () => {
 			resolveWikiLink,
 			openWikiLink,
 			wikiCompletionPaths,
+			openMarkdownLink,
 		);
 
 		// historyField is the StateField that @codemirror/commands history() adds.
@@ -134,6 +140,7 @@ describe("buildEditorState", () => {
 			resolveWikiLink,
 			openWikiLink,
 			wikiCompletionPaths,
+			openMarkdownLink,
 		);
 		const raw = buildEditorState(
 			ytext,
@@ -143,6 +150,7 @@ describe("buildEditorState", () => {
 			resolveWikiLink,
 			openWikiLink,
 			wikiCompletionPaths,
+			openMarkdownLink,
 		);
 
 		// Both seed identical, unaltered doc bytes (view-only decorations).
@@ -190,6 +198,7 @@ describe("CRDT undo behaviour (EditorView + yCollab)", () => {
 				resolveWikiLink,
 				openWikiLink,
 				wikiCompletionPaths,
+				openMarkdownLink,
 			),
 			parent,
 		});
@@ -265,6 +274,7 @@ describe("mode switch via decorationsCompartment.reconfigure (yCollab must survi
 				resolveWikiLink,
 				openWikiLink,
 				wikiCompletionPaths,
+				openMarkdownLink,
 			),
 			parent,
 		});
@@ -276,7 +286,7 @@ describe("mode switch via decorationsCompartment.reconfigure (yCollab must survi
 		// SAME view -- this must never recreate the view or detach yCollab.
 		view.dispatch({
 			effects: decorationsCompartment.reconfigure(
-				decorationsFor("raw", resolveWikiLink, openWikiLink, wikiCompletionPaths),
+				decorationsFor("raw", resolveWikiLink, openWikiLink, wikiCompletionPaths, openMarkdownLink),
 			),
 		});
 
