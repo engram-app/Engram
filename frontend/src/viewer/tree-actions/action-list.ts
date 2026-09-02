@@ -1,8 +1,7 @@
 import {
+	BookOpen,
 	Copy,
-	Eye,
 	FilePlus,
-	FileText,
 	FolderInput,
 	FolderPlus,
 	Link2,
@@ -10,6 +9,7 @@ import {
 	type LucideIcon,
 	Pencil,
 	SquareCode,
+	TextCursorInput,
 	Trash2,
 } from "lucide-react";
 
@@ -18,15 +18,18 @@ import {
 const ACTION_ICONS: Record<ActionId, LucideIcon> = {
 	"new-note": FilePlus,
 	"new-folder": FolderPlus,
-	rename: Pencil,
+	// Pencil belongs to the Edit VIEW MODE, not to rename: the note kebab shows
+	// both, and the header's reading/editing toggle already uses Pencil for the
+	// mode. Rename gets the text-field glyph so one pencil means one thing.
+	rename: TextCursorInput,
 	move: FolderInput,
 	duplicate: Copy,
 	"copy-wikilink": Link2,
 	delete: Trash2,
 	"add-property": ListPlus,
-	"view-rendered": FileText,
+	"view-rendered": Pencil,
 	"view-raw": SquareCode,
-	"view-reading": Eye,
+	"view-reading": BookOpen,
 };
 
 const FILE_ACTIONS: readonly Action[] = [
@@ -113,7 +116,10 @@ export type ViewMode = "rendered" | "raw" | "reading";
 // of the open editor, not of the file.
 export function noteMenuActions(mode: ViewMode): readonly Action[] {
 	return [
-		{ id: "view-rendered", label: "Rendered", active: mode === "rendered" },
+		// Label, not id: `view-rendered`/`"rendered"` stay put through the whole
+		// state machine (note-page's ViewMode, NoteEditor's compartment). Only the
+		// three strings a user reads are Edit / Raw / Reading.
+		{ id: "view-rendered", label: "Edit", active: mode === "rendered" },
 		{ id: "view-raw", label: "Raw", active: mode === "raw" },
 		{ id: "view-reading", label: "Reading", active: mode === "reading" },
 		{ id: "rename", label: "Rename" },

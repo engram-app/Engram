@@ -76,17 +76,17 @@ defmodule Engram.Vaults.WelcomeNote do
 
   ## Reading, editing, and the source
 
-  The button in the header flips between reading and editing, and it shows the mode
-  you are **in** — ✏️ means you're editing, 📖 means you're reading. Flip back and you
-  land in whichever editor you left, not a default.
+  The ✏️ button in the header flips between editing and reading, and it shows the
+  mode you are **in** — a pencil means you're editing, a book means you're reading.
+  Flip back and you land in whichever editor you left, not a default.
 
-  The kebab names all three, so you can jump straight to one:
+  The kebab names all three, with the same icons, so you can jump straight to one:
 
   | Icon | Mode | What you get |
   | --- | --- | --- |
-  | 📄 | **Rendered** | Editing with live preview: `**bold**` becomes **bold** as you type. This is the default. |
-  | `</>` | **Raw** | Editing the plain source: `**bold**` stays `**bold**`, and the properties above turn back into YAML text. |
-  | 👁️ | **Reading** | Read-only. No cursor to nudge anything out of place. |
+  | ✏️ | **Edit** | Live preview: `**bold**` becomes **bold** as you type. This is the default. |
+  | `</>` | **Raw** | The plain source: `**bold**` stays `**bold**`, and the properties above turn back into YAML text. |
+  | 📖 | **Reading** | Read-only. No cursor to nudge anything out of place. |
 
   > [!tip] Finish setup
   > The panel in the bottom right walks you through connecting Obsidian and your AI

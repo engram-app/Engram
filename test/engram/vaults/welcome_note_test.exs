@@ -69,11 +69,11 @@ defmodule Engram.Vaults.WelcomeNoteTest do
       # The kebab's own labels, verbatim — see `noteMenuActions/1` in
       # frontend/src/viewer/tree-actions/action-list.ts. A rename there without
       # one here ships a note describing a menu that no longer exists.
-      for mode <- ["**Rendered**", "**Raw**", "**Reading**"] do
+      for mode <- ["**Edit**", "**Raw**", "**Reading**"] do
         assert content =~ mode
       end
 
-      assert content =~ "flips between reading and editing"
+      assert content =~ "flips between editing and reading"
     end
 
     test "carries no H1 — the inline title renders the filename as one" do

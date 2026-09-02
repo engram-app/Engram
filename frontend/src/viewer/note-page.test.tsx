@@ -153,7 +153,7 @@ describe("NotePage (CRDT)", () => {
 		const trigger = await screen.findByRole("button", { name: "Note options" });
 		fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
 		fireEvent.click(trigger);
-		await screen.findByRole("menuitem", { name: "Rendered" });
+		await screen.findByRole("menuitem", { name: "Edit" });
 	};
 
 	beforeEach(() => {
@@ -700,7 +700,7 @@ describe("NotePage (CRDT)", () => {
 		await waitFor(() => expect(screen.getByTestId("has-editor")).toHaveTextContent("false"));
 
 		await openMenu();
-		fireEvent.click(screen.getByRole("menuitem", { name: "Rendered" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "Edit" }));
 		await waitFor(() => expect(screen.getByTestId("has-editor")).toHaveTextContent("true"));
 	});
 
@@ -836,7 +836,7 @@ describe("NotePage (CRDT)", () => {
 		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
 		expect(screen.queryByLabelText(/Frontmatter \(raw YAML\)/i)).not.toBeInTheDocument();
 		await openMenu();
-		expect(screen.getByRole("menuitem", { name: "Rendered" })).toHaveAttribute(
+		expect(screen.getByRole("menuitem", { name: "Edit" })).toHaveAttribute(
 			"aria-current",
 			"true",
 		);
@@ -1025,7 +1025,7 @@ describe("NotePage (CRDT)", () => {
 		it("no longer shows the old mode buttons in the header", async () => {
 			renderPage();
 			await screen.findByTestId("note-editor");
-			expect(screen.queryByRole("button", { name: "Rendered" })).not.toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
 		});
 
 		it("starts a rename from the menu", async () => {
