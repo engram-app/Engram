@@ -17,12 +17,7 @@ export interface PriceData {
 // ---
 
 /** Paddle subscription statuses. From `subscription.status`. */
-export type SubscriptionStatus =
-	| "active"
-	| "canceled"
-	| "past_due"
-	| "paused"
-	| "trialing";
+export type SubscriptionStatus = "active" | "canceled" | "past_due" | "paused" | "trialing";
 
 /**
  * A single line item within a subscription.

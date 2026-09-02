@@ -37,10 +37,7 @@ const { channelHandlers, socketCtor } = vi.hoisted(() => {
 		},
 		join: () => ({ receive: () => ({}) }),
 	};
-	const socketCtor = vi.fn(function MockSocket(
-		this: object,
-		..._args: unknown[]
-	) {
+	const socketCtor = vi.fn(function MockSocket(this: object, ..._args: unknown[]) {
 		Object.assign(this, {
 			connect: vi.fn(),
 			channel: vi.fn(() => channelMock),
@@ -114,15 +111,11 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			throw new Error(`unexpected GET ${url}`);
 		});
 
-		let captured:
-			| ((event: { name: string; data?: unknown }) => void)
-			| undefined;
-		initializePaddleMock.mockImplementation(
-			async (opts: { eventCallback?: typeof captured }) => {
-				captured = opts.eventCallback;
-				return { Checkout: { open: vi.fn() } };
-			},
-		);
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn() } };
+		});
 
 		const qc = new QueryClient({
 			defaultOptions: { queries: { retry: false } },
@@ -196,11 +189,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 				<AuthContext.Provider value={authAdapter}>
 					<ThemeProvider>
 						<MemoryRouter>
-							{inline ? (
-								<BillingPage onActivated={() => {}} />
-							) : (
-								<BillingPage />
-							)}
+							{inline ? <BillingPage onActivated={() => {}} /> : <BillingPage />}
 						</MemoryRouter>
 					</ThemeProvider>
 				</AuthContext.Provider>
@@ -265,14 +254,10 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		// Wait for the Paddle instance to land and plan cards to render. "Starter"
 		// appears twice — the desktop card grid and the mobile accordion are both
 		// in the DOM (CSS, not JS, hides one), so assert on the count.
-		await waitFor(() =>
-			expect(queryAllByText("Starter").length).toBeGreaterThan(0),
-		);
+		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 
 		const startButtons = container.querySelectorAll("button");
-		const startBtn = Array.from(startButtons).find(
-			(b) => b.textContent === "Start free trial",
-		);
+		const startBtn = Array.from(startButtons).find((b) => b.textContent === "Start free trial");
 		expect(startBtn).toBeDefined();
 
 		await act(async () => {
@@ -293,22 +278,16 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		// plan picker with no explanation. (Genuine checkout.error / payment.error
 		// events still close; see the next test.)
 		mockBillingApi();
-		let captured:
-			| ((event: { name: string; data?: unknown }) => void)
-			| undefined;
-		initializePaddleMock.mockImplementation(
-			async (opts: { eventCallback?: typeof captured }) => {
-				captured = opts.eventCallback;
-				return { Checkout: { open: vi.fn(), close: vi.fn() } };
-			},
-		);
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn(), close: vi.fn() } };
+		});
 
 		const { container, queryAllByText } = renderBilling({ inline: true });
 
 		// "Starter" renders twice (desktop card + mobile accordion); assert count.
-		await waitFor(() =>
-			expect(queryAllByText("Starter").length).toBeGreaterThan(0),
-		);
+		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
 			(b) => b.textContent === "Start free trial",
 		)!;
@@ -334,21 +313,15 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 	it("onboarding (inline): a genuine CHECKOUT_ERROR closes the frame and surfaces a message", async () => {
 		mockBillingApi();
-		let captured:
-			| ((event: { name: string; data?: unknown }) => void)
-			| undefined;
-		initializePaddleMock.mockImplementation(
-			async (opts: { eventCallback?: typeof captured }) => {
-				captured = opts.eventCallback;
-				return { Checkout: { open: vi.fn(), close: vi.fn() } };
-			},
-		);
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn(), close: vi.fn() } };
+		});
 
 		const { container, queryAllByText } = renderBilling({ inline: true });
 
-		await waitFor(() =>
-			expect(queryAllByText("Starter").length).toBeGreaterThan(0),
-		);
+		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
 			(b) => b.textContent === "Start free trial",
 		)!;
@@ -373,15 +346,11 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		// onActivated prop) has no `checkingOut` flag, so it must rely on Paddle's
 		// own checkout.loaded/checkout.closed events to freeze appliedTheme.
 		mockBillingApi();
-		let captured:
-			| ((event: { name: string; data?: unknown }) => void)
-			| undefined;
-		initializePaddleMock.mockImplementation(
-			async (opts: { eventCallback?: typeof captured }) => {
-				captured = opts.eventCallback;
-				return { Checkout: { open: vi.fn(), close: vi.fn() } };
-			},
-		);
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn(), close: vi.fn() } };
+		});
 
 		function Harness() {
 			const { setTheme } = useTheme();
@@ -443,15 +412,11 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		// the user stuck on Paddle's inline frame forever with no recovery.
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		mockBillingApi();
-		let captured:
-			| ((event: { name: string; data?: unknown }) => void)
-			| undefined;
-		initializePaddleMock.mockImplementation(
-			async (opts: { eventCallback?: typeof captured }) => {
-				captured = opts.eventCallback;
-				return { Checkout: { open: vi.fn(), close: vi.fn() } };
-			},
-		);
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn(), close: vi.fn() } };
+		});
 
 		renderBilling({ inline: true });
 
@@ -479,9 +444,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		await waitFor(() =>
 			expect(
-				screen.queryByText(
-					/Payment received\. We're finishing your activation/iu,
-				),
+				screen.queryByText(/Payment received\. We're finishing your activation/iu),
 			).toBeInTheDocument(),
 		);
 	});
@@ -510,9 +473,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			</QueryClientProvider>,
 		);
 
-		await waitFor(() =>
-			expect(channelHandlers.subscription_activated).toBeDefined(),
-		);
+		await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
 		// Wait for paddle instance to land
 		await act(async () => {
 			await Promise.resolve();
@@ -600,9 +561,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			</QueryClientProvider>,
 		);
 
-		await waitFor(() =>
-			expect(channelHandlers.subscription_activated).toBeDefined(),
-		);
+		await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
 		await act(async () => {
 			await Promise.resolve();
 			await Promise.resolve();
@@ -689,9 +648,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			</QueryClientProvider>,
 		);
 
-		await waitFor(() =>
-			expect(channelHandlers.subscription_activated).toBeDefined(),
-		);
+		await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
 
 		billingActive = true;
 		await act(async () => {
@@ -704,14 +661,10 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		});
 
 		await waitFor(() => {
-			const billingStatusInvalidations = invalidateSpy.mock.calls.filter(
-				([arg]) => {
-					const key = (arg as { queryKey?: unknown[] })?.queryKey;
-					return (
-						Array.isArray(key) && key[0] === "billing" && key[1] === "status"
-					);
-				},
-			);
+			const billingStatusInvalidations = invalidateSpy.mock.calls.filter(([arg]) => {
+				const key = (arg as { queryKey?: unknown[] })?.queryKey;
+				return Array.isArray(key) && key[0] === "billing" && key[1] === "status";
+			});
 			expect(billingStatusInvalidations.length).toBeGreaterThan(0);
 		});
 	});
@@ -754,15 +707,11 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			throw new Error(`unexpected GET ${url}`);
 		});
 
-		let captured:
-			| ((event: { name: string; data?: unknown }) => void)
-			| undefined;
-		initializePaddleMock.mockImplementation(
-			async (opts: { eventCallback?: typeof captured }) => {
-				captured = opts.eventCallback;
-				return { Checkout: { open: vi.fn(), close: vi.fn() } };
-			},
-		);
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn(), close: vi.fn() } };
+		});
 
 		const qc = new QueryClient({
 			defaultOptions: { queries: { retry: false } },
@@ -798,11 +747,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		const keyFired = (k0: string, k1?: string) =>
 			invalidateSpy.mock.calls.some(([arg]) => {
 				const key = (arg as { queryKey?: unknown[] })?.queryKey;
-				return (
-					Array.isArray(key) &&
-					key[0] === k0 &&
-					(k1 === undefined || key[1] === k1)
-				);
+				return Array.isArray(key) && key[0] === k0 && (k1 === undefined || key[1] === k1);
 			});
 
 		await waitFor(() => {
@@ -869,9 +814,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		// CancelPanel header is visible; button row collapses.
 		await screen.findByRole("region", { name: /cancel subscription/iu });
-		expect(
-			screen.getByRole("button", { name: /cancel at period end/iu }),
-		).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /cancel at period end/iu })).toBeInTheDocument();
 	});
 
 	it("subscribed flow: Change plan button opens PlanChangePanel inline", async () => {
