@@ -3,7 +3,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type AuthAdapter, AuthContext } from "../auth/auth-context";
-import { ThemeProvider } from "../theme/theme-provider";
+import { ThemeProvider, useTheme } from "../theme/theme-provider";
 import BillingPage from "./billing-page";
 
 const initializePaddleMock = vi.fn();
@@ -324,6 +324,68 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		// Fatal checkout error: frame gone, plan picker restored.
 		expect(container.querySelector(".paddle-checkout")).toBeNull();
 		expect(queryAllByText("Starter").length).toBeGreaterThan(0);
+	});
+
+	it("settings (overlay): does not rebuild the Paddle instance while a checkout is open, so an in-flight overlay isn't stranded on a stale theme", async () => {
+		// Regression for the theme-freeze fix: the overlay path (settings, no
+		// onActivated prop) has no `checkingOut` flag, so it must rely on Paddle's
+		// own checkout.loaded/checkout.closed events to freeze appliedTheme.
+		mockBillingApi();
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn(), close: vi.fn() } };
+		});
+
+		function Harness() {
+			const { setTheme } = useTheme();
+			return (
+				<>
+					<button type="button" onClick={() => setTheme("dark")}>
+						go-dark
+					</button>
+					<BillingPage />
+				</>
+			);
+		}
+
+		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={qc}>
+				<AuthContext.Provider value={authAdapter}>
+					<ThemeProvider>
+						<MemoryRouter>
+							<Harness />
+						</MemoryRouter>
+					</ThemeProvider>
+				</AuthContext.Provider>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() => expect(initializePaddleMock).toHaveBeenCalledTimes(1));
+
+		await act(async () => {
+			captured!({ name: "checkout.loaded" });
+			await Promise.resolve();
+		});
+
+		await act(async () => {
+			screen.getByRole("button", { name: "go-dark" }).click();
+			await Promise.resolve();
+		});
+
+		// Frozen: theme flip while the overlay is open must NOT tear down/rebuild.
+		expect(initializePaddleMock).toHaveBeenCalledTimes(1);
+
+		await act(async () => {
+			captured!({ name: "checkout.closed" });
+			await Promise.resolve();
+		});
+
+		// Resyncs once closed, and the rebuild picks up the new theme.
+		await waitFor(() => expect(initializePaddleMock).toHaveBeenCalledTimes(2));
+		const { settings } = initializePaddleMock.mock.calls[1]![0].checkout;
+		expect(settings.theme).toBe("dark");
 	});
 
 	it("onboarding (inline): cooldown arms on CHECKOUT_PAYMENT_INITIATED so a dropped COMPLETED still surfaces the recovery banner", async () => {

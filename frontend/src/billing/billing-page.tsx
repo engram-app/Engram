@@ -297,18 +297,25 @@ export default function BillingPage({
 		}
 	}, []);
 
+	// Mirrors Paddle's own checkout.loaded/checkout.closed events — covers ALL
+	// checkout entry points (inline, overlay plan purchase, overlay payment-method
+	// update), not just the inline/onboarding `checkingOut` flag.
+	const [checkoutOpen, setCheckoutOpen] = useState(false);
+
 	// Frozen while a checkout is mounted: the effect below tears down and
 	// rebuilds the Paddle instance whenever this changes, which would kill an
-	// open inline iframe mid-fill and leave it stranded on its old theme while
-	// the page around it (background, .dark class) has already flipped —
-	// invisible text. Only resync once checkingOut/slow/finalizing clears, so
-	// the next checkout opens with the current theme instead.
+	// open checkout mid-fill and leave it stranded on its old theme while the
+	// page around it (background, .dark class) has already flipped — invisible
+	// text. `checkingOut` covers the inline gap between click and Paddle's own
+	// `checkout.loaded` (the div is mounted but Paddle hasn't reported open
+	// yet); `checkoutOpen`/`slow`/`finalizing` cover the rest. Only resync once
+	// all of these clear, so the next checkout opens with the current theme.
 	const [appliedTheme, setAppliedTheme] = useState(resolved);
 	useEffect(() => {
-		if (!(checkingOut || slow || finalizing)) {
+		if (!(checkingOut || checkoutOpen || slow || finalizing)) {
 			setAppliedTheme(resolved);
 		}
-	}, [resolved, checkingOut, slow, finalizing]);
+	}, [resolved, checkingOut, checkoutOpen, slow, finalizing]);
 
 	useEffect(() => {
 		if (!config) {
@@ -323,6 +330,14 @@ export default function BillingPage({
 					return;
 				}
 				switch (event.name) {
+					case CheckoutEventNames.CHECKOUT_LOADED: {
+						setCheckoutOpen(true);
+						break;
+					}
+					case CheckoutEventNames.CHECKOUT_CLOSED: {
+						setCheckoutOpen(false);
+						break;
+					}
 					case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
 						// Belt-and-suspenders: either PAYMENT_INITIATED or COMPLETED may
 						// drop on trial-signup redirects. Arm the cooldown timer on
@@ -368,7 +383,11 @@ export default function BillingPage({
 					case CheckoutEventNames.CHECKOUT_ERROR: {
 						// Genuine checkout-level error (not a routine decline) — the frame
 						// may be in a broken state, so close it and surface a message.
+						// Also drop checkoutOpen defensively in case Paddle doesn't follow
+						// this with its own checkout.closed — otherwise the theme freeze
+						// above would stay stuck forever.
 						setCheckingOut(false);
+						setCheckoutOpen(false);
 						setCompletedAt(null);
 						setSlow(false);
 						toast.error("Something went wrong with checkout. Please try again.");
