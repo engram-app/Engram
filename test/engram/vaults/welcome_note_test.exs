@@ -120,6 +120,16 @@ defmodule Engram.Vaults.WelcomeNoteTest do
       refute content =~ "=="
     end
 
+    test "uses no footnote — the editor cannot render one" do
+      content = WelcomeNote.content(~D[2026-01-15])
+
+      # Reading view renders footnotes; the EDITOR does not, and the editor is
+      # where a first-run note is opened. @lezer/markdown's GFM bundle defines
+      # no Footnote node, so `[^1]` sits there as literal text.
+      # See docs/context/codemirror-footnote-options.md.
+      refute content =~ ~r/\[\^\w+\]/
+    end
+
     test "defaults to today" do
       assert WelcomeNote.content() =~ "created: #{Date.utc_today()}"
     end

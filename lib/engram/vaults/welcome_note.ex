@@ -17,7 +17,9 @@ defmodule Engram.Vaults.WelcomeNote do
   filename as one), and the absence of markdown the web viewer does not render.
   Before adding a syntax here, check `frontend/src/viewer/reference/markdown-syntax.ts`
   — foldable callouts (`> [!tip]-`), `==highlight==`, raw HTML and `%%comments%%`
-  are all deliberately unsupported.
+  are all deliberately unsupported. Footnotes render in Reading view but NOT in
+  the editor (no node for them in @lezer/markdown's GFM bundle), so this note
+  deliberately uses none — see docs/context/codemirror-footnote-options.md.
   """
 
   alias Engram.Logger.Metadata
@@ -54,7 +56,7 @@ defmodule Engram.Vaults.WelcomeNote do
     E <--> A[Claude, Cursor, ChatGPT]
   ```
 
-  One vault, three doors. Edit in any of them and it shows up in the others — no export step, no second copy.[^1]
+  One vault, three doors. Edit in any of them and it shows up in the others — no export step, no second copy. Same files, same bytes.
 
   ## Properties
 
@@ -84,7 +86,7 @@ defmodule Engram.Vaults.WelcomeNote do
   > [!tip] Finish setup
   > The panel in the bottom right walks you through connecting Obsidian and your AI tools. It disappears once you're done. Full guides: [engram.page/docs](https://engram.page/docs)
 
-  The rest of what you'd expect works too — footnotes, ~~strikethrough~~, `inline code`, KaTeX like $e^{i\pi} + 1 = 0$, and fences with syntax highlighting:
+  The rest of what you'd expect works too — ~~strikethrough~~, `inline code`, KaTeX like $e^{i\pi} + 1 = 0$, and fences with syntax highlighting:
 
   ```python
   def remember(thought: str) -> None:
@@ -92,7 +94,7 @@ defmodule Engram.Vaults.WelcomeNote do
       vault.write(thought)
   ```
 
-  [^1]: Same files, same bytes. Delete this note whenever — it's only markdown.
+  Delete this note whenever — it's only markdown.
   """
 
   @doc "Path of the seeded note, relative to the vault root."
