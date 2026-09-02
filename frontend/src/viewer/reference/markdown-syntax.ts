@@ -416,7 +416,13 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		label: "Footnote",
 		syntax: "Claim.[^1]\n\n[^1]: Source.",
 		demo: "Shipped on time.[^1]\n\n[^1]: For a generous value of on time.",
-		blurb: "Numbered automatically, with a link back.",
+		// Reading view renders this via remark-gfm. The EDITOR does not:
+		// @atomic-editor/editor has no footnote support at all — no entry in its
+		// inline class map, no hide rule — so `[^1]` stays literal in Edit and Raw.
+		// It is the one syntax in this reference that previews but does not render
+		// where you are typing, so the blurb has to say so.
+		blurb:
+			"Numbered automatically, with a link back. Reading view only — the editor leaves [^1] as text.",
 		block: true,
 		keywords: ["citation", "reference", "gfm"],
 	},

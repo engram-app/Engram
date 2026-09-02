@@ -252,3 +252,17 @@ describe("NoteView callout colour republish", () => {
 		expect(quote?.style.getPropertyValue("--callout-color")).toBe("");
 	});
 });
+
+// The seeded welcome note uses a footnote, and the markdown reference panel
+// advertises the syntax, so reading mode has to actually render one. Edit mode
+// does NOT — @atomic-editor/editor has no footnote support at all (no node in
+// its class map, no hide rule), so `[^1]` stays literal there.
+describe("NoteView footnotes", () => {
+	it("renders a footnote as a numbered superscript with its definition", () => {
+		renderNote("Shipped on time.[^1]\n\n[^1]: For a generous value of on time.\n");
+
+		const sup = document.querySelector("sup");
+		expect(sup?.textContent).toBe("1");
+		expect(screen.getByText(/generous value of on time/u)).toBeInTheDocument();
+	});
+});
