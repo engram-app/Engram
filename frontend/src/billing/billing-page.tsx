@@ -18,7 +18,6 @@ import {
 	useBillingSubscriptionDetail,
 	useMe,
 } from "../api/queries";
-import { useTheme } from "../theme/theme-provider";
 import BillingHistoryTable from "./billing-history-table";
 import CancelPanel from "./cancel-panel";
 import CurrentPlanCard from "./current-plan-card";
@@ -169,7 +168,6 @@ export default function BillingPage({
 	const hasSubscription = Boolean(billing?.subscription);
 	const { data: detail } = useBillingSubscriptionDetail(hasSubscription);
 	const { data: history } = useBillingHistory(hasSubscription);
-	const { resolved } = useTheme();
 	const qc = useQueryClient();
 	const [paddle, setPaddle] = useState<Paddle>();
 	// Ref mirror of `paddle` so the eventCallback (captured pre-instance) can
@@ -244,7 +242,6 @@ export default function BillingPage({
 		}
 		paddleRef.current?.Checkout.close();
 		setCheckingOut(false);
-		setCheckoutOpen(false);
 		setCompletedAt(null);
 		setSlow(false);
 		await invalidateBillingState(qc);
@@ -296,26 +293,6 @@ export default function BillingPage({
 		}
 	}, []);
 
-	// Mirrors Paddle's own checkout.loaded/checkout.closed events — covers ALL
-	// checkout entry points (inline, overlay plan purchase, overlay payment-method
-	// update), not just the inline/onboarding `checkingOut` flag.
-	const [checkoutOpen, setCheckoutOpen] = useState(false);
-
-	// Frozen while a checkout is mounted: the Paddle-init effect below tears
-	// down and rebuilds the SDK instance whenever this changes, which would
-	// kill an open checkout mid-fill and leave it stranded on its old theme
-	// while the page around it (background, .dark class) has already flipped —
-	// invisible text. `checkingOut` covers the inline gap between click and
-	// Paddle's own `checkout.loaded` (the div is mounted but Paddle hasn't
-	// reported open yet); `checkoutOpen`/`slow`/`finalizing` cover the rest.
-	// Only resync once all of these clear, so the next checkout opens with the
-	// current theme.
-	const appliedThemeRef = useRef(resolved);
-	if (!(checkingOut || checkoutOpen || slow || finalizing)) {
-		appliedThemeRef.current = resolved;
-	}
-	const appliedTheme = appliedThemeRef.current;
-
 	useEffect(() => {
 		if (!config) {
 			return;
@@ -329,14 +306,6 @@ export default function BillingPage({
 					return;
 				}
 				switch (event.name) {
-					case CheckoutEventNames.CHECKOUT_LOADED: {
-						setCheckoutOpen(true);
-						break;
-					}
-					case CheckoutEventNames.CHECKOUT_CLOSED: {
-						setCheckoutOpen(false);
-						break;
-					}
 					case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
 						// Belt-and-suspenders: either PAYMENT_INITIATED or COMPLETED may
 						// drop on trial-signup redirects. Arm the cooldown timer on
@@ -382,11 +351,7 @@ export default function BillingPage({
 					case CheckoutEventNames.CHECKOUT_ERROR: {
 						// Genuine checkout-level error (not a routine decline) — the frame
 						// may be in a broken state, so close it and surface a message.
-						// Also drop checkoutOpen defensively in case Paddle doesn't follow
-						// this with its own checkout.closed — otherwise the theme freeze
-						// above would stay stuck forever.
 						setCheckingOut(false);
-						setCheckoutOpen(false);
 						setCompletedAt(null);
 						setSlow(false);
 						toast.error("Something went wrong with checkout. Please try again.");
@@ -396,6 +361,11 @@ export default function BillingPage({
 						break;
 				}
 			},
+			// No `theme` here: Paddle's branded-inline-checkout dashboard config
+			// (Paddle > Checkout > Branded inline checkout) is a single static
+			// color set with no light/dark variant — once configured it fully
+			// overrides Paddle's theme-adaptive styling, so `theme` has no effect.
+			// Colors are 100% dashboard-driven.
 			checkout: {
 				settings: isInline
 					? {
@@ -408,12 +378,10 @@ export default function BillingPage({
 							// box. frameInitialHeight covers the initial paint before Paddle
 							// reports the real height. (min-width matches Paddle's own sample.)
 							frameStyle: "width:100%; min-width:312px; background:transparent; border:none;",
-							theme: appliedTheme === "dark" ? "dark" : "light",
 							locale: "en",
 						}
 					: {
 							displayMode: "overlay",
-							theme: appliedTheme === "dark" ? "dark" : "light",
 							locale: "en",
 						},
 			},
@@ -431,7 +399,7 @@ export default function BillingPage({
 			paddleRef.current = undefined;
 			setPaddle(undefined);
 		};
-	}, [config, appliedTheme, qc, isInline]);
+	}, [config, qc, isInline]);
 
 	// Open checkout. In inline mode we set checkingOut first so the mount
 	// div is in the DOM before Paddle tries to find it.
@@ -448,11 +416,6 @@ export default function BillingPage({
 			if (isInline) {
 				setCheckingOut(true);
 			}
-			// Set synchronously at the open() call, not left to wait for Paddle's
-			// async checkout.loaded — otherwise a theme toggle landing in that gap
-			// (network/render latency) sees checkoutOpen still false and tears down
-			// the Paddle instance while the overlay is actively opening.
-			setCheckoutOpen(true);
 			// Paddle finds the .paddle-checkout div by class — the div is rendered
 			// synchronously by the same render cycle as the setCheckingOut update.
 			// React 18 batches state into the same commit, so the DOM is ready by
@@ -542,9 +505,6 @@ export default function BillingPage({
 			const { transaction_id } = await api.get<{ transaction_id: string }>(
 				"/billing/payment-update-transaction",
 			);
-			// Same reasoning as handleStartCheckout: set before open(), not left to
-			// wait for Paddle's async checkout.loaded.
-			setCheckoutOpen(true);
 			paddle.Checkout.open({ transactionId: transaction_id });
 		} catch {
 			toast.error("Could not start the payment update. Please try again.");
@@ -631,7 +591,6 @@ export default function BillingPage({
 								onClick={() => {
 									paddleRef.current?.Checkout.close();
 									setCheckingOut(false);
-									setCheckoutOpen(false);
 									setCompletedAt(null);
 								}}
 								className="text-muted-foreground text-sm underline-offset-4 hover:text-foreground hover:underline"

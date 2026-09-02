@@ -341,21 +341,24 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(queryAllByText("Starter").length).toBeGreaterThan(0);
 	});
 
-	it("settings (overlay): does not rebuild the Paddle instance while a checkout is open, so an in-flight overlay isn't stranded on a stale theme", async () => {
-		// Regression for the theme-freeze fix: the overlay path (settings, no
-		// onActivated prop) has no `checkingOut` flag, so it must rely on Paddle's
-		// own checkout.loaded/checkout.closed events to freeze appliedTheme.
+	it("settings (overlay): does not pass a theme to Paddle, and does not rebuild on an app theme flip", async () => {
+		// Paddle's branded-inline-checkout dashboard config is a single static
+		// color set with no light/dark variant — feeding it a live theme just
+		// produces mismatched contrast against whatever palette is configured
+		// there, so `theme` is intentionally omitted. An app theme flip must
+		// neither add a theme value nor rebuild the Paddle instance.
 		mockBillingApi();
-		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
-		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
-			captured = opts.eventCallback;
-			return { Checkout: { open: vi.fn(), close: vi.fn() } };
-		});
+		initializePaddleMock.mockImplementation(async () => ({
+			Checkout: { open: vi.fn(), close: vi.fn() },
+		}));
 
 		function Harness() {
 			const { setTheme } = useTheme();
 			return (
 				<>
+					<button type="button" onClick={() => setTheme("light")}>
+						go-light
+					</button>
 					<button type="button" onClick={() => setTheme("dark")}>
 						go-dark
 					</button>
@@ -380,29 +383,16 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		);
 
 		await waitFor(() => expect(initializePaddleMock).toHaveBeenCalledTimes(1));
+		expect(initializePaddleMock.mock.calls[0]![0].checkout.settings.theme).toBeUndefined();
 
 		await act(async () => {
-			captured!({ name: "checkout.loaded" });
-			await Promise.resolve();
-		});
-
-		await act(async () => {
+			screen.getByRole("button", { name: "go-light" }).click();
 			screen.getByRole("button", { name: "go-dark" }).click();
 			await Promise.resolve();
 		});
 
-		// Frozen: theme flip while the overlay is open must NOT tear down/rebuild.
+		// No rebuild — the checkout settings never depended on app theme at all.
 		expect(initializePaddleMock).toHaveBeenCalledTimes(1);
-
-		await act(async () => {
-			captured!({ name: "checkout.closed" });
-			await Promise.resolve();
-		});
-
-		// Resyncs once closed, and the rebuild picks up the new theme.
-		await waitFor(() => expect(initializePaddleMock).toHaveBeenCalledTimes(2));
-		const { settings } = initializePaddleMock.mock.calls[1]![0].checkout;
-		expect(settings.theme).toBe("dark");
 	});
 
 	it("onboarding (inline): cooldown arms on CHECKOUT_PAYMENT_INITIATED so a dropped COMPLETED still surfaces the recovery banner", async () => {
