@@ -50,7 +50,12 @@ function LocationProbe() {
 }
 
 // NoteView reads the vault slug from the route to build wikilink hrefs.
-function renderNote(content: string, links?: NoteLinkEdge[], manifestNotes?: ManifestNote[]) {
+function renderNote(
+	content: string,
+	links?: NoteLinkEdge[],
+	manifestNotes?: ManifestNote[],
+	onCreateWikiTarget?: (page: string) => void,
+) {
 	return render(
 		<MemoryRouter initialEntries={["/v/work/n-1"]}>
 			<LocationProbe />
@@ -58,7 +63,13 @@ function renderNote(content: string, links?: NoteLinkEdge[], manifestNotes?: Man
 				<Route
 					path="/v/:slug/:itemId"
 					element={
-						<NoteView content={content} tags={[]} links={links} manifestNotes={manifestNotes} />
+						<NoteView
+							content={content}
+							tags={[]}
+							links={links}
+							manifestNotes={manifestNotes}
+							onCreateWikiTarget={onCreateWikiTarget}
+						/>
 					}
 				/>
 			</Routes>
@@ -67,28 +78,33 @@ function renderNote(content: string, links?: NoteLinkEdge[], manifestNotes?: Man
 }
 
 describe("NoteView wikilinks", () => {
-	it("links [[Page]] into the vault wiki resolver, name unmangled", () => {
+	it("marks an unresolved [[Page]] for creation, name unmangled", () => {
 		renderNote("See [[Folder/My Note]].");
 		const link = screen.getByRole("link", { name: "Folder/My Note" });
-		expect(link).toHaveAttribute("href", "/v/work/wiki/Folder/My%20Note");
+		expect(link).toHaveAttribute("href", "engram-new:Folder/My Note");
 	});
 
 	it("renders the alias as the link text", () => {
 		renderNote("See [[My Note|the note]].");
 		const link = screen.getByRole("link", { name: "the note" });
-		expect(link).toHaveAttribute("href", "/v/work/wiki/My%20Note");
+		expect(link).toHaveAttribute("href", "engram-new:My Note");
 	});
 
-	it("carries a heading as a slugged hash", () => {
-		renderNote("See [[My Note#Some Section]].");
-		const link = screen.getByRole("link", { name: "My Note#Some Section" });
-		expect(link).toHaveAttribute("href", "/v/work/wiki/My%20Note#some-section");
+	// Obsidian parity: the note does not exist, so clicking it creates the note
+	// rather than navigating to an interstitial that offers to. The
+	// `/v/:slug/wiki/*` route that used to render that screen is gone.
+	it("creates the note on click instead of navigating anywhere", () => {
+		const onCreate = vi.fn();
+		renderNote("See [[My Note]].", undefined, undefined, onCreate);
+		fireEvent.click(screen.getByRole("link", { name: "My Note" }));
+		expect(onCreate).toHaveBeenCalledWith("My Note");
+		expect(screen.getByTestId("loc").textContent).toBe("/v/work/n-1");
 	});
 
-	it("navigates in-app instead of a full page load", () => {
+	it("stays inert when no create handler is supplied (reference panel)", () => {
 		renderNote("See [[My Note]].");
 		fireEvent.click(screen.getByRole("link", { name: "My Note" }));
-		expect(screen.getByTestId("loc").textContent).toBe("/v/work/wiki/My%20Note");
+		expect(screen.getByTestId("loc").textContent).toBe("/v/work/n-1");
 	});
 
 	it("links straight to the note id when the links prop resolves the target", () => {

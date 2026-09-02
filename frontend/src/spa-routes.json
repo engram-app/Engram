@@ -21,12 +21,12 @@
 		"/v",
 		"/v/my-vault",
 		"/v/my-vault/018f2b3c-0000-7000-8000-000000000000",
-		"/v/my-vault/wiki/Some%20Note",
-		"/v/my-vault/wiki/Folder/Some%20Note",
 		"/settings/api-keys",
 		"/settings/connections"
 	],
 	"mustNotResolve": [
+		"/v/my-vault/wiki/Some%20Note",
+		"/v/my-vault/wiki/Folder/Some%20Note",
 		"/work",
 		"/work/018f2b3c-0000-7000-8000-000000000000",
 		"/v/my-vault/018f2b3c-0000-7000-8000-000000000000/extra",

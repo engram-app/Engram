@@ -847,7 +847,7 @@ export function useCreateNote() {
 		// `name` defaults to "Untitled.md" (the sidebar "New note" button) — the
 		// unresolved-wikilink "create this note" affordance passes the target's
 		// derived filename instead. Either way collideBump still guards a race.
-		{ folder: string; id: string; name?: string },
+		{ folder: string; id: string; name?: string; renameOnArrive?: boolean },
 		CreateNoteContext | undefined
 	>({
 		mutationFn: async ({ folder, id, name: desiredName = "Untitled.md" }) => {
@@ -969,7 +969,12 @@ export function useCreateNote() {
 			// a context because it must fire exactly once, and router state is
 			// already scoped to a single navigation. Both creation entry points (the
 			// tree's context menu and the sidebar button) route through here.
-			navigate(noteHref(slug, id), { state: { justCreated: true } });
+			// A wikilink create already knows the name — the link supplied it — so
+			// it opts out and the note just opens. Defaults on for the tree and
+			// sidebar buttons, which create "Untitled".
+			navigate(noteHref(slug, id), {
+				state: { justCreated: vars.renameOnArrive !== false },
+			});
 		},
 		onError: (err, _vars, ctx) => {
 			if (ctx) {

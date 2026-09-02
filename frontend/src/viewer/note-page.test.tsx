@@ -85,16 +85,22 @@ vi.mock("../crdt/session", () => ({
 }));
 
 const useNoteMock = vi.fn();
-const { renameNoteMutate, deleteNoteMutate, duplicateNoteMutate, batchMoveMutate } = vi.hoisted(
-	() => ({
-		renameNoteMutate: vi.fn(),
-		deleteNoteMutate: vi.fn(),
-		duplicateNoteMutate: vi.fn(),
-		batchMoveMutate: vi.fn(),
-	}),
-);
+const {
+	createNoteMutate,
+	renameNoteMutate,
+	deleteNoteMutate,
+	duplicateNoteMutate,
+	batchMoveMutate,
+} = vi.hoisted(() => ({
+	renameNoteMutate: vi.fn(),
+	createNoteMutate: vi.fn(),
+	deleteNoteMutate: vi.fn(),
+	duplicateNoteMutate: vi.fn(),
+	batchMoveMutate: vi.fn(),
+}));
 vi.mock("../api/queries", () => ({
 	useNote: (...a: unknown[]) => useNoteMock(...a),
+	useCreateNote: () => ({ mutate: createNoteMutate, isPending: false }),
 	useRenameNote: () => ({ mutate: renameNoteMutate, isPending: false }),
 	useDeleteNote: () => ({ mutate: deleteNoteMutate, isPending: false }),
 	useDuplicateNote: () => ({ mutate: duplicateNoteMutate, isPending: false }),
@@ -836,10 +842,7 @@ describe("NotePage (CRDT)", () => {
 		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
 		expect(screen.queryByLabelText(/Frontmatter \(raw YAML\)/i)).not.toBeInTheDocument();
 		await openMenu();
-		expect(screen.getByRole("menuitem", { name: "Edit" })).toHaveAttribute(
-			"aria-current",
-			"true",
-		);
+		expect(screen.getByRole("menuitem", { name: "Edit" })).toHaveAttribute("aria-current", "true");
 
 		// Switch to "raw": raw YAML region visible, pills hidden.
 		fireEvent.click(screen.getByRole("menuitem", { name: "Raw" }));

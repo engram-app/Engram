@@ -22,6 +22,9 @@ import {
 	type ManifestNote,
 	markdownLinkHref,
 	type NoteLinkEdge,
+	stripMd,
+	WIKI_CREATE_SCHEME,
+	wikiCreateTarget,
 	wikiHref,
 } from "./wiki-link";
 
@@ -37,6 +40,11 @@ interface NoteViewProps {
 	// NotePage threads its already-subscribed useSyncManifest data; the
 	// reference panel omits it (no vault context to resolve against anyway).
 	manifestNotes?: ManifestNote[];
+	// Click handler for a wikilink whose target does not exist. NotePage passes
+	// the create-and-open action; call sites without a vault context (the
+	// markdown reference panel) omit it and those links stay inert rather than
+	// creating notes from a preview pane.
+	onCreateWikiTarget?: (page: string) => void;
 }
 
 // Sentinel marks images rewritten from Obsidian `![[X]]` embed syntax. The
@@ -50,9 +58,10 @@ function rewriteEmbeds(raw: string): string {
 	});
 }
 
-// Slug-parameterized: wikilinks route through the vault-scoped resolver
-// (`/v/:slug/wiki/*`, see wiki-link.ts). pageResolver is identity — the default
-// would mangle names (`My Note` → `my_note`) before the resolver ever saw them.
+// Slug-parameterized: a resolved wikilink gets the note's `/v/:slug/:id` route
+// and an unresolved one gets a WIKI_CREATE_SCHEME sentinel (see wiki-link.ts).
+// pageResolver is identity — the default would mangle names (`My Note` →
+// `my_note`) before resolution ever saw them.
 const remarkPluginsFor = (
 	slug: string | undefined,
 	map: Map<string, NoteLinkEdge>,
@@ -89,7 +98,7 @@ const TEXT_EMBED = /\.(?:md|canvas)$/iu;
 // the preview stays force-mounted with identical props; react-markdown has
 // no internal memoization, so an unmemoized NoteView re-ran the full
 // remark/rehype pipeline (gfm + KaTeX + highlight) per keystroke.
-function NoteView({ content, tags, links, manifestNotes }: NoteViewProps) {
+function NoteView({ content, tags, links, manifestNotes, onCreateWikiTarget }: NoteViewProps) {
 	const isFreeTier = useIsFreeTier();
 	const { slug } = useParams();
 	const wikiMap = useMemo(() => buildWikiMap(links), [links]);
@@ -132,7 +141,9 @@ function NoteView({ content, tags, links, manifestNotes }: NoteViewProps) {
 					// preserve our internal `engram-attachment:` sentinel so the img
 					// component override can route it to AttachmentImg / fallback.
 					urlTransform={(url) =>
-						url.startsWith(ATTACHMENT_SCHEME) ? url : defaultUrlTransform(url)
+						url.startsWith(ATTACHMENT_SCHEME) || url.startsWith(WIKI_CREATE_SCHEME)
+							? url
+							: defaultUrlTransform(url)
 					}
 					components={{
 						// In-app hrefs go through the router — a plain <a> would
@@ -143,6 +154,25 @@ function NoteView({ content, tags, links, manifestNotes }: NoteViewProps) {
 						// same lookup. markdownLinkHref returns null for externals,
 						// anchors and unresolved targets, which stay plain anchors.
 						a({ node: _node, href, children, ...rest }) {
+							// Wikilink to a note that does not exist: create it on click,
+							// like Obsidian, rather than navigating anywhere.
+							const newPage = wikiCreateTarget(href);
+							if (newPage !== null) {
+								return (
+									<a
+										href={href}
+										className="cursor-pointer text-muted-foreground underline decoration-dashed underline-offset-2"
+										title={`Create "${stripMd(newPage)}"`}
+										onClick={(e) => {
+											e.preventDefault();
+											onCreateWikiTarget?.(newPage);
+										}}
+										{...rest}
+									>
+										{children}
+									</a>
+								);
+							}
 							const to = href?.startsWith("/")
 								? href
 								: markdownLinkHref(href, slug, wikiMap, manifestNotes);

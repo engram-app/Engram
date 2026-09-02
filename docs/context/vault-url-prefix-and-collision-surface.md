@@ -14,7 +14,7 @@ Vault-scoped SPA URLs, and nothing dynamic at the URL root:
 | `/v` | vault picker (`VaultRedirect`) |
 | `/v/:slug` | vault dashboard |
 | `/v/:slug/:id` | note or attachment |
-| `/v/:slug/wiki/*` | wikilink resolver (targets contain slashes) |
+| ~~`/v/:slug/wiki/*`~~ | REMOVED 2026-09-02 — an unresolved wikilink creates the note on click instead of routing to an interstitial. Both shapes now sit in `spa-routes.json`'s `mustNotResolve`. |
 
 Built in one place on the frontend:
 
@@ -74,35 +74,34 @@ it happened one hop before Phoenix. Fixed for free by the prefix: `/v/vendor`
 matches no `starts_with` rule.
 
 The `ends_with` rules (`.sql`, `.bak`, `.backup`, `.old`, `.log`) are not
-reachable **through the slug** -- `slugify` strips the dot. They ARE reachable
+reachable **through the slug** -- `slugify` strips the dot. They WERE reachable
 through the **wiki-target** segment, which is a different thing and was wrong
 in the first version of this doc:
 
-`frontend/src/viewer/wiki-link.ts` builds `${vaultPath(slug)}/wiki/${encoded}`
-where `encoded` is `encodeURIComponent` applied per path segment, and
-`encodeURIComponent` leaves `.` alone. So an unresolved `[[server.log]]`
-produces `/v/work/wiki/server.log`, and `[[dump.sql]]`, `[[notes.bak]]`,
+**OBSOLETE as of 2026-09-02 — the whole collision class is gone.**
+
+`wiki-link.ts` used to build `${vaultPath(slug)}/wiki/${encoded}` for an
+unresolved target, with `encodeURIComponent` applied per segment. Because
+`encodeURIComponent` leaves `.` alone, `[[server.log]]` produced
+`/v/work/wiki/server.log` — and `[[dump.sql]]`, `[[notes.bak]]`,
 `[[db.backup]]`, `[[archive.old]]` likewise. Client-side navigation never
-touches the edge, so this is invisible in dev and in the unit suite; refresh,
-paste, or share that URL on a `*.engram.page` host and Cloudflare answers 403
-instead of the create-note affordance.
+touches the edge, so it was invisible in dev and in the unit suite; refresh,
+paste or share that URL on a `*.engram.page` host and Cloudflare answered 403.
 
-Not introduced by the prefix move -- old `/work/wiki/server.log` ended the same
-way.
-
-**FIXED 2026-08-30** in engram-infra#1088 (`2dc0aa48`). The extension clause in
-`main/cloudflare/security.tf` now carves out the wikilink resolver, requiring
-BOTH `/v/` and `/wiki/`:
+It was fixed 2026-08-30 in engram-infra#1088 (`2dc0aa48`) by carving the
+wikilink resolver out of the extension-block rule in
+`main/cloudflare/security.tf`, requiring BOTH `/v/` and `/wiki/`:
 
 ```
 (ends_with(path, ".sql") or ... or ends_with(path, ".log"))
 and not (starts_with(path, "/v/") and path contains "/wiki/")
 ```
 
-`/v/work/other.log` (no `/wiki/`), `/backup.log` and `/vendor/db.sql` all stay
-blocked -- note the trailing slash in `"/v/"` means `/vendor/...` does not match
-the carve-out. Nothing is weakened at the web root, which is what that rule is
-for.
+`wikiHref` no longer emits any `/wiki/` URL — an unresolved target is created
+on click — so **no request can legitimately match that carve-out any more**.
+It is dead config that only widens the rule. Removing it is an engram-infra
+change, tracked separately; leave the rule alone until then rather than
+half-reverting it here.
 
 Two alternatives were rejected. Percent-encoding the dot does not work:
 Cloudflare URL normalization decodes `%2E` before rules run. Moving the target

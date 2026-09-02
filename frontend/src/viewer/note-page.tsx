@@ -11,6 +11,7 @@ import { isNotFound } from "../api/client";
 import type { Note } from "../api/queries";
 import {
 	useBatchMoveNotes,
+	useCreateNote,
 	useDeleteNote,
 	useDuplicateNote,
 	useFolders,
@@ -19,6 +20,7 @@ import {
 	useSyncManifest,
 } from "../api/queries";
 import { readRows } from "../crdt/frontmatter-doc";
+import { uuid7 } from "../crdt/uuid7";
 import { crdtMark } from "../crdt/perf";
 import {
 	type CrdtSyncStatus,
@@ -51,7 +53,13 @@ import { MoveDialog } from "./tree-actions/move-dialog";
 import { RenameInput } from "./tree-actions/rename-input";
 import { renameBaseName } from "./tree-actions/rename-path";
 import { useLiveContent } from "./use-live-content";
-import { buildWikiMap, markdownLinkHref, wikiHref } from "./wiki-link";
+import {
+	buildWikiMap,
+	markdownLinkHref,
+	wikiCreatePath,
+	wikiCreateTarget,
+	wikiHref,
+} from "./wiki-link";
 
 /** How long the routed note may fail to open before the pane explains itself. */
 const STALL_NOTICE_MS = 1500;
@@ -138,6 +146,7 @@ export default function NotePage() {
 
 	const navigate = useNavigate();
 	const { data: folders } = useFolders();
+	const createNote = useCreateNote();
 	const deleteNote = useDeleteNote();
 	const duplicateNote = useDuplicateNote();
 	const batchMoveNotes = useBatchMoveNotes();
@@ -181,6 +190,21 @@ export default function NotePage() {
 	// Editor-mode click-to-open. Router nav must come from the React tree —
 	// see LivePreviewOpts.openWikiLink for why the editor can't reach the
 	// router singleton itself.
+	// An unresolved wikilink names a note that does not exist yet, so clicking
+	// it creates that note and opens it — Obsidian's behavior, and what replaced
+	// the `/v/:slug/wiki/*` "doesn't exist yet" interstitial. A path-qualified
+	// target (`[[Folder/Note]]`) creates along that path; a bare one lands at
+	// the vault root.
+	const createWikiTarget = useCallback(
+		(page: string) => {
+			const { folder, name } = wikiCreatePath(page);
+			if (!name || name === ".md") {
+				return;
+			}
+			createNote.mutate({ folder, id: uuid7(), name, renameOnArrive: false });
+		},
+		[createNote],
+	);
 	// Markdown links: resolve like Reading mode does, navigate in-app when the
 	// target is a note in this vault, and report false for everything else so
 	// link-open.ts sends it to a new tab.
@@ -200,14 +224,17 @@ export default function NotePage() {
 	const openWikiLink = useCallback(
 		(permalink: string) => {
 			const href = wikiHref(permalink, slug, wikiMap, wikiManifestRef.current);
-			if (href.startsWith("/")) {
+			const newPage = wikiCreateTarget(href);
+			if (newPage !== null) {
+				createWikiTarget(newPage);
+			} else if (href.startsWith("/")) {
 				navigate(href);
 			} else if (href.startsWith("#")) {
 				// Same-page heading — hash assignment scrolls, no reload.
 				window.location.hash = href;
 			}
 		},
-		[navigate, slug, wikiMap],
+		[navigate, slug, wikiMap, createWikiTarget],
 	);
 	// `[[` autocomplete's candidate list. Read through a ref, not a useMemo keyed
 	// on manifest, so this callback's identity NEVER changes -- the manifest
@@ -694,6 +721,7 @@ export default function NotePage() {
 								tags={note.tags}
 								links={note.links}
 								manifestNotes={manifest?.notes}
+								onCreateWikiTarget={createWikiTarget}
 							/>
 						</div>
 					) : (
