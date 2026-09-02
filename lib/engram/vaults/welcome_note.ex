@@ -54,16 +54,11 @@ defmodule Engram.Vaults.WelcomeNote do
     E <--> A[Claude, Cursor, ChatGPT]
   ```
 
-  One vault, three doors. Edit in any of them and it shows up in the others — no
-  export step, no second copy.[^1]
+  One vault, three doors. Edit in any of them and it shows up in the others — no export step, no second copy.[^1]
 
   ## Properties
 
-  The fields above this note's text are its
-  [frontmatter](https://obsidian.md/help/properties): plain
-  [YAML](https://learnxinyminutes.com/yaml/) in the file, editable fields here. To add
-  them to a note that has none, type `---` on the very first line, or open the kebab
-  menu (`⋮`) and pick **Add property**.
+  The fields above this note's text are its [frontmatter](https://obsidian.md/help/properties): plain [YAML](https://learnxinyminutes.com/yaml/) in the file, editable fields here. To add them to a note that has none, type `---` on the very first line, or open the kebab menu (`⋮`) and pick **Add property**.
 
   | Type | Example |
   | --- | --- |
@@ -76,9 +71,7 @@ defmodule Engram.Vaults.WelcomeNote do
 
   ## Reading, editing, and the source
 
-  The ✏️ button in the header flips between editing and reading, and it shows the
-  mode you are **in** — a pencil means you're editing, a book means you're reading.
-  Flip back and you land in whichever editor you left, not a default.
+  The ✏️ button in the header flips between editing and reading, and it shows the mode you are **in** — a pencil means you're editing, a book means you're reading. Flip back and you land in whichever editor you left, not a default.
 
   The kebab names all three, with the same icons, so you can jump straight to one:
 
@@ -89,12 +82,9 @@ defmodule Engram.Vaults.WelcomeNote do
   | 📖 | **Reading** | Read-only. No cursor to nudge anything out of place. |
 
   > [!tip] Finish setup
-  > The panel in the bottom right walks you through connecting Obsidian and your AI
-  > tools. It disappears once you're done. Full guides:
-  > [engram.page/docs](https://engram.page/docs)
+  > The panel in the bottom right walks you through connecting Obsidian and your AI tools. It disappears once you're done. Full guides: [engram.page/docs](https://engram.page/docs)
 
-  The rest of what you'd expect works too — footnotes, ~~strikethrough~~, `inline code`,
-  KaTeX like $e^{i\pi} + 1 = 0$, and fences with syntax highlighting:
+  The rest of what you'd expect works too — footnotes, ~~strikethrough~~, `inline code`, KaTeX like $e^{i\pi} + 1 = 0$, and fences with syntax highlighting:
 
   ```python
   def remember(thought: str) -> None:

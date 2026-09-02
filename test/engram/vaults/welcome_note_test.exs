@@ -76,6 +76,36 @@ defmodule Engram.Vaults.WelcomeNoteTest do
       assert content =~ "flips between editing and reading"
     end
 
+    # The seeded file is a file the user edits, and the editor shows source
+    # newlines as real breaks. A paragraph hard-wrapped at 80 columns therefore
+    # arrives looking like it has stray line breaks in it — which is exactly
+    # what it looked like. One line per paragraph; let the editor soft-wrap.
+    test "never hard-wraps a paragraph across lines" do
+      offenders =
+        WelcomeNote.content(~D[2026-01-15])
+        |> String.split("\n")
+        # Drop the frontmatter block: its keys are one-per-line by definition,
+        # not wrapped prose.
+        |> Enum.drop_while(&(&1 != "---"))
+        |> Enum.drop(1)
+        |> Enum.drop_while(&(&1 != "---"))
+        |> Enum.chunk_every(2, 1, [""])
+        |> Enum.reduce({[], false}, fn [line, next], {bad, in_fence?} ->
+          cond do
+            String.starts_with?(line, "```") -> {bad, not in_fence?}
+            in_fence? -> {bad, in_fence?}
+            # Only prose lines: a table row, list item, callout, heading,
+            # frontmatter fence or footnote definition may legitimately be
+            # followed by another non-blank line.
+            prose?(line) and prose?(next) -> {[line | bad], in_fence?}
+            true -> {bad, in_fence?}
+          end
+        end)
+        |> elem(0)
+
+      assert offenders == []
+    end
+
     test "carries no H1 — the inline title renders the filename as one" do
       refute WelcomeNote.content(~D[2026-01-15]) =~ ~r/^# /m
     end
@@ -93,5 +123,14 @@ defmodule Engram.Vaults.WelcomeNoteTest do
     test "defaults to today" do
       assert WelcomeNote.content() =~ "created: #{Date.utc_today()}"
     end
+  end
+
+  # A continuation-capable prose line: not blank and not opening a block
+  # construct that owns its own line.
+  defp prose?(line) do
+    trimmed = String.trim(line)
+
+    trimmed != "" and
+      not String.starts_with?(trimmed, ["|", "-", ">", "#", "[^", "---", "```", "*"])
   end
 end
