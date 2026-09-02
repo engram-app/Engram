@@ -208,8 +208,10 @@ describe("ChecklistWidget, per-tool rows", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
 		render(wrap(<ChecklistWidget />));
 
-		const link = screen.getByRole("link", { name: /setup guide/iu });
-		expect(link).toHaveAttribute("href", "https://engram.page/docs/integrations/claude-desktop/");
+		const links = screen.getAllByRole("link", { name: /setup guide/iu });
+		expect(links.map((l) => l.getAttribute("href"))).toContain(
+			"https://engram.page/docs/integrations/claude-desktop/",
+		);
 	});
 
 	it("does not render a row for the web_only slug", () => {
@@ -249,8 +251,10 @@ describe("ChecklistWidget, per-tool rows", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["some_brand_new_tool"] };
 		render(wrap(<ChecklistWidget />));
 
-		const link = screen.getByRole("link", { name: /setup guide/iu });
-		expect(link).toHaveAttribute("href", "https://engram.page/docs/integrations/");
+		const links = screen.getAllByRole("link", { name: /setup guide/iu });
+		expect(links.map((l) => l.getAttribute("href"))).toContain(
+			"https://engram.page/docs/integrations/",
+		);
 	});
 
 	// #1157: `antigravity` sat in the widget's label map with no DOC_URLS entry,
@@ -277,7 +281,10 @@ describe("ChecklistWidget, per-tool rows", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
 		render(wrap(<ChecklistWidget />));
 
-		const link = screen.getByRole("link", { name: /setup guide/iu });
+		const links = screen.getAllByRole("link", { name: /setup guide/iu });
+		const link = links.find((l) =>
+			l.getAttribute("href")?.includes("claude-desktop"),
+		) as HTMLElement;
 		expect(link).toHaveAttribute("target", "_blank");
 		expect(link).toHaveAttribute("rel", "noreferrer");
 	});
@@ -290,8 +297,10 @@ describe("ChecklistWidget, Obsidian plugin row", () => {
 
 		expect(screen.getByText(/install.*obsidian/iu)).toBeInTheDocument();
 
-		const link = screen.getByRole("link", { name: /setup guide/iu });
-		expect(link).toHaveAttribute("href", "https://engram.page/docs/obsidian/install/");
+		const links = screen.getAllByRole("link", { name: /setup guide/iu });
+		expect(links.map((l) => l.getAttribute("href"))).toContain(
+			"https://engram.page/docs/obsidian/install/",
+		);
 	});
 
 	it("omits the Obsidian plugin row when uses_obsidian is false", () => {
@@ -387,7 +396,7 @@ describe("ChecklistWidget, dismiss", () => {
 
 describe("ChecklistWidget, hide when empty", () => {
 	it("renders nothing when every row is done or dismissed", () => {
-		actionsList.push("first_vault_created", "dismissed:claude");
+		actionsList.push("first_vault_created", "dismissed:claude", "dismissed:join_discord");
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
 
 		const { container } = render(wrap(<ChecklistWidget />));
@@ -401,7 +410,7 @@ describe("ChecklistWidget, hide when empty", () => {
 	// permanently un-done — which is why an e2e oracle keyed on this widget
 	// ("the dashboard opened") silently depended on the tour existing.
 	it("renders nothing for the wizard cohort: vault created, no tools, not Obsidian", () => {
-		actionsList.push("first_vault_created");
+		actionsList.push("first_vault_created", "dismissed:join_discord");
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] };
 
 		const { container } = render(wrap(<ChecklistWidget />));
@@ -446,9 +455,10 @@ describe("ChecklistWidget, completed rows stay visible (#604)", () => {
 		expect(claude).toHaveTextContent("☑");
 
 		// Action affordances are suppressed on the completed row: only the
-		// still-active cursor row keeps its Setup guide link + dismiss button.
+		// still-active cursor + join-discord rows keep their Setup guide link +
+		// dismiss button.
 		expect(screen.queryByLabelText(/dismiss connect claude/iu)).toBeNull();
-		expect(screen.getAllByRole("link", { name: /setup guide/iu })).toHaveLength(1);
+		expect(screen.getAllByRole("link", { name: /setup guide/iu })).toHaveLength(2);
 	});
 
 	it("counts a completed row in the progress readout while keeping it visible", () => {
@@ -481,8 +491,8 @@ describe("ChecklistWidget, completed rows stay visible (#604)", () => {
 		};
 		render(wrap(<ChecklistWidget />));
 
-		// vault + claude + cursor = 3 items, claude done = 1.
-		expect(screen.getByText(/1 of 3 done/iu)).toBeInTheDocument();
+		// vault + join_discord + claude + cursor = 4 items, claude done = 1.
+		expect(screen.getByText(/1 of 4 done/iu)).toBeInTheDocument();
 		expect(screen.getByText(/connect claude/iu)).toBeInTheDocument();
 	});
 });
@@ -503,8 +513,8 @@ describe("ChecklistWidget, chrome", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude", "cursor"] };
 		render(wrap(<ChecklistWidget />));
 
-		// vault + claude + cursor = 3 items, none done.
-		expect(screen.getByText(/0 of 3 done/iu)).toBeInTheDocument();
+		// vault + join_discord + claude + cursor = 4 items, none done.
+		expect(screen.getByText(/0 of 4 done/iu)).toBeInTheDocument();
 	});
 });
 
@@ -526,8 +536,8 @@ describe("ChecklistWidget, mobile", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude", "cursor"] };
 		render(wrap(<ChecklistWidget />));
 
-		// vault + claude + cursor, none done.
-		expect(screen.getByLabelText(/open setup checklist/iu)).toHaveTextContent("3");
+		// vault + join_discord + claude + cursor, none done.
+		expect(screen.getByLabelText(/open setup checklist/iu)).toHaveTextContent("4");
 	});
 
 	it("opens the checklist in a sheet when the badge is tapped", () => {

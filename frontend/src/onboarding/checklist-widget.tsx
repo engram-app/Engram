@@ -14,6 +14,7 @@ import {
 	SheetTitle,
 } from "../components/ui/sheet";
 import { Shimmer } from "../components/ui/shimmer";
+import { DISCORD_INVITE_URL } from "../settings/account/community-section";
 import { useOnboardingActions } from "./use-onboarding-actions";
 
 interface Item {
@@ -145,6 +146,14 @@ function ChecklistWidget() {
 			key: "vault",
 			label: "Create your first vault",
 			done: ob.has("first_vault_created"),
+		},
+		{
+			key: "join_discord",
+			label: "Join our Discord",
+			done: false,
+			dismissed: isDismissed("join_discord"),
+			docUrl: DISCORD_INVITE_URL,
+			dismissible: true,
 		},
 		...(profile?.uses_obsidian
 			? [

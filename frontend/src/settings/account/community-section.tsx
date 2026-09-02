@@ -3,7 +3,7 @@ import { DiscordIcon } from "./discord-icon";
 import { SettingsSectionCard } from "./section-card";
 
 // Community Discord invite — support and issue reports from users and devs.
-const DISCORD_INVITE_URL = "https://discord.gg/NKWcU2mm7N";
+export const DISCORD_INVITE_URL = "https://discord.gg/NG9Vn9VcPS";
 
 export function CommunitySection() {
 	return (
