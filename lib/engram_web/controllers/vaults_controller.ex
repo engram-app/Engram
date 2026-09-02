@@ -5,6 +5,7 @@ defmodule EngramWeb.VaultsController do
 
   alias Engram.Auth.DeviceFlow
   alias Engram.Vaults
+  alias Engram.Vaults.WelcomeNote
 
   action_fallback EngramWeb.FallbackController
 
@@ -320,6 +321,8 @@ defmodule EngramWeb.VaultsController do
     else
       case Vaults.register_vault(user, name, client_id) do
         {:ok, vault, :created} ->
+          WelcomeNote.seed(user, vault)
+
           conn
           |> put_status(201)
           |> json(

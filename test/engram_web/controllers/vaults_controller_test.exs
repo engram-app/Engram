@@ -11,6 +11,7 @@ defmodule EngramWeb.VaultsControllerTest do
   alias Engram.Accounts
   alias Engram.Auth.DeviceFlow
   alias Engram.Vaults
+  alias Engram.Vaults.WelcomeNote
 
   setup %{conn: conn} do
     user = insert(:user)
@@ -322,6 +323,37 @@ defmodule EngramWeb.VaultsControllerTest do
       body = json_response(conn2, 200)
       assert body["name"] == "My Mac"
       assert body["status"] == "existing"
+    end
+
+    test "seeds the welcome note on create", %{conn: conn, user: user} do
+      conn = post(conn, "/api/vaults/register", %{name: "Seeded", client_id: "mac-seed"})
+      body = json_response(conn, 201)
+
+      # The request created the user's DEK. The setup struct predates it, so
+      # every path lookup through it hashes with the wrong filter key and
+      # misses. `Repo.get!` is NOT enough — the DEK is not a users column.
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      {:ok, vault} = Vaults.get_vault(user, body["id"])
+      assert {:ok, note} = Engram.Notes.get_note(user, vault, WelcomeNote.path())
+      assert note.content =~ "## Try these"
+    end
+
+    test "does not re-seed the welcome note on an existing vault", %{conn: conn, user: user} do
+      body =
+        conn
+        |> post("/api/vaults/register", %{name: "Seeded", client_id: "mac-reseed"})
+        |> json_response(201)
+
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      {:ok, vault} = Vaults.get_vault(user, body["id"])
+      :ok = Engram.Notes.delete_note(user, vault, WelcomeNote.path())
+
+      post(conn, "/api/vaults/register", %{name: "Seeded", client_id: "mac-reseed"})
+      |> json_response(200)
+
+      # A deleted welcome note stays deleted. Re-seeding on the idempotent
+      # path would resurrect a note the user threw away on every plugin retry.
+      assert {:error, :not_found} = Engram.Notes.get_note(user, vault, WelcomeNote.path())
     end
 
     test "returns 402 when vault limit reached", %{conn: conn, user: user} do

@@ -3,6 +3,7 @@ defmodule EngramWeb.DeviceAuthController do
 
   alias Engram.Auth.DeviceFlow
   alias Engram.Vaults
+  alias Engram.Vaults.WelcomeNote
 
   # Fail the link at the moment the user clicks "connect", not later with a
   # silent socket refusal. This route sits on the user-scoped pipeline (it must
@@ -53,7 +54,11 @@ defmodule EngramWeb.DeviceAuthController do
     # idempotency key for the vault it creates: a double-tapped Authorize
     # resolves to the vault the first tap made instead of minting a second.
     case Vaults.register_vault(user, vault_name, "device-link:" <> user_code) do
-      {:ok, vault, _status} ->
+      {:ok, vault, status} ->
+        # Only on :created — a re-tapped Authorize resolves to the existing
+        # vault, and re-seeding there would resurrect a note the user deleted.
+        if status == :created, do: WelcomeNote.seed(user, vault)
+
         do_authorize(conn, user_code, user, vault.id)
 
       {:error, {:vault_limit_reached, limit, current}} ->
