@@ -24,6 +24,7 @@ import { tags } from "@lezer/highlight";
 import { blockquoteDepthPlugin } from "./blockquote-depth";
 import { calloutDecoration } from "./callout-decoration";
 import { calloutMarker } from "./callout-marker";
+import { noParagraphFold } from "./heading-fold";
 import { katexDecoration } from "./katex-decoration";
 import { linkOpenHandler } from "./link-open";
 import { mermaidDecoration, mermaidKeymap } from "./mermaid-decoration";
@@ -95,7 +96,7 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 			codeLanguages: ATOMIC_CODE_LANGUAGES,
 			// calloutMarker must come before Link in the inline parser list, which
 			// it declares itself; order here is irrelevant.
-			extensions: [highlightMarkdown, calloutMarker],
+			extensions: [highlightMarkdown, calloutMarker, noParagraphFold],
 		}),
 		// See syntaxOverrides above — two tags, both overriding atomicMarkdownSyntax.
 		Prec.highest(syntaxHighlighting(syntaxOverrides)),

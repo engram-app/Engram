@@ -12,6 +12,7 @@ import type * as Y from "yjs";
 import { useTheme } from "../theme/theme-provider";
 import { indentKeymap } from "./editor/format-commands";
 import { frontmatterShortcut } from "./editor/frontmatter-shortcut";
+import { headingFold, noParagraphFold } from "./editor/heading-fold";
 import { livePreviewExtensions } from "./editor/live-preview";
 
 // height:auto + overflow:visible hand scrolling to the page's ScrollArea, so
@@ -93,7 +94,7 @@ export function decorationsFor(
 				wikiCompletionPaths,
 				openMarkdownLink,
 			})
-		: [markdown({ base: markdownLanguage })];
+		: [markdown({ base: markdownLanguage, extensions: noParagraphFold })];
 }
 
 /**
@@ -130,6 +131,9 @@ export function buildEditorState(
 			EditorView.contentAttributes.of({ spellcheck: "true" }),
 			drawSelection(),
 			EditorView.lineWrapping,
+			// Base, not the mode compartment: the fold service comes from
+			// markdown() in BOTH modes, so Raw gets collapsible headings too.
+			headingFold,
 			Prec.highest(keymap.of(yUndoManagerKeymap)),
 			// Obsidian/VS Code-style bracket behavior: typing ( [ { ' " ` inserts
 			// the closer, typing the closer over an auto-inserted one skips it,

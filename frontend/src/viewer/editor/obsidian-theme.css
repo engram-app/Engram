@@ -272,3 +272,95 @@
 .cm-atomic-wiki-link-active {
 	color: var(--atomic-editor-fg-faint);
 }
+
+/* ── Collapsible headings (editor/heading-fold.ts) ────────────────────────────
+
+   Obsidian shows the fold arrow in the left margin, invisible until you hover
+   the editor. CodeMirror's fold UI is a gutter — there is no inline variant —
+   so the gutter is always mounted at a fixed width and only its MARKERS fade
+   in. Fading the gutter itself would reflow the text on every hover. */
+/* Atomic hides the gutter column outright (`.cm-gutters { display: none }`),
+   which is why a fold gutter alone renders at zero width and the arrows are
+   invisible however they are styled. Put the column back, but weightless:
+   transparent, borderless, and exactly as wide as the 20px of left padding it
+   takes over from .cm-content below — so the text does not shift right. */
+.cm-editor .cm-gutters {
+	display: flex;
+	border: none;
+	background: transparent;
+	color: var(--atomic-editor-fg-faint);
+}
+
+.cm-editor .cm-foldGutter {
+	/* Fixed width, always reserved: the text must not shift on hover. */
+	min-width: 20px;
+}
+
+/* A heading's line block is TALL — the live-preview theme gives h1/h2 a large
+   font size plus top margin — while the marker is a 12px glyph. Without this
+   the marker sits at the top of the block, visibly above the heading text it
+   belongs to. Centre it on the row instead. */
+.cm-editor .cm-foldGutter .cm-gutterElement {
+	display: flex;
+	align-items: center;
+}
+
+/* The gutter now supplies the left inset this padding used to, keeping the
+   editor text aligned with the inline title above it (which has its own px-5). */
+.cm-editor .cm-content {
+	padding-left: 0;
+}
+
+.cm-fold-chevron {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	/* Fills the row so `align-items: center` above has something to centre. */
+	height: 100%;
+	cursor: pointer;
+	/* Hidden until the editor is hovered — Obsidian's behaviour. Discovering an
+	   ALREADY-folded section does not depend on this: the inline `…` placeholder
+	   sits in the text itself and is always visible. */
+	opacity: 0;
+	transition: opacity 120ms ease, transform 120ms ease;
+	/* Points right when the section is collapsed. */
+	transform: rotate(0deg);
+}
+
+.cm-fold-chevron-open {
+	/* Points down when the section is open. */
+	transform: rotate(90deg);
+}
+
+/* Only the row under the pointer — the hover class is applied by
+   `foldHoverSync` in editor/heading-fold.ts, because the gutter is a sibling
+   of the line and CSS cannot pair them. */
+.cm-gutterElement.cm-fold-row-hover .cm-fold-chevron,
+.cm-fold-chevron:focus-visible {
+	opacity: 0.75;
+}
+
+.cm-fold-chevron:hover {
+	opacity: 1;
+	color: var(--atomic-editor-fg);
+}
+
+/* The `…` standing in for a folded section. Obsidian renders it as a quiet
+   inline chip rather than bare punctuation, which is easy to miss mid-note. */
+.cm-editor .cm-foldPlaceholder {
+	margin-inline-start: 0.25rem;
+	padding: 0 0.35rem;
+	border: 1px solid var(--atomic-editor-fg-faint);
+	border-radius: 0.25rem;
+	background: transparent;
+	color: var(--atomic-editor-fg-faint);
+	cursor: pointer;
+	font-size: 0.85em;
+	line-height: 1.4;
+}
+
+.cm-editor .cm-foldPlaceholder:hover {
+	border-color: var(--atomic-editor-fg);
+	color: var(--atomic-editor-fg);
+}

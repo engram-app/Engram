@@ -7,10 +7,10 @@ import Dashboard from "./dashboard";
 const useVaultsSpy = vi.fn(() => ({ data: [{ id: "v1", name: "Vault" }] }));
 // Vault-wide note inventory. Two notes by default so the single-note auto-open
 // below does not fire in the tests that are about the empty pane.
-type ManifestResult = {
+interface ManifestResult {
 	data: { notes: { id: string; path: string }[] } | undefined;
 	isPending: boolean;
-};
+}
 const useSyncManifestSpy = vi.fn(
 	(): ManifestResult => ({
 		data: {
