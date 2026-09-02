@@ -108,7 +108,7 @@
 		"@playwright/test": "^1.62.1",
 		"@resvg/resvg-js": "^2.6.2",
 		"@tailwindcss/vite": "^4.3.0",
-		"@testing-library/jest-dom": "^6.9.1",
+		"@testing-library/jest-dom": "^7.0.1",
 		"@testing-library/react": "^16.3.3",
 		"@types/phoenix": "^1.6.7",
 		"@types/react": "^19.2.18",
