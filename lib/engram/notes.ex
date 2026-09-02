@@ -369,6 +369,9 @@ defmodule Engram.Notes do
 
   Options:
 
+    * `announce_vault_populated: false` — suppress the `vault_populated`
+      broadcast for a write the SERVER originated. See the call site; the
+      welcome-note seed is the only caller that passes it.
     * `broadcast_from: pid` — emit the `note_changed` broadcast via
       `Endpoint.broadcast_from/4` so the given subscriber (the pushing
       channel process) is excluded. Channel pushes pass `self()`; HTTP
@@ -484,7 +487,18 @@ defmodule Engram.Notes do
             # FTUX vault page listens for this — fires when an empty vault
             # gets its first note (typical case: Obsidian plugin completes
             # its first sync push).
-            maybe_broadcast_vault_populated(user, vault)
+            #
+            # `announce_vault_populated: false` exists for ONE caller: the
+            # welcome-note seed (`Engram.Vaults.WelcomeNote`), which writes note
+            # #1 microseconds after the vault is created. Without the opt the
+            # seed satisfies the 0->1 probe itself, and both waiting screens —
+            # onboarding's "install the plugin" step and /link — forward the
+            # user into a vault holding nothing but the sample note while their
+            # real first sync has not started. The event means "a device pushed
+            # something", so a write we made on the user's behalf must not fire it.
+            if Keyword.get(opts, :announce_vault_populated, true) do
+              maybe_broadcast_vault_populated(user, vault)
+            end
 
             # Funnel telemetry — emit once per real creation so the funnel
             # doesn't double-count idempotent re-pushes of unchanged notes.

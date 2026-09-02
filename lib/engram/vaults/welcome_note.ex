@@ -121,13 +121,39 @@ defmodule Engram.Vaults.WelcomeNote do
   """
   @spec seed(Engram.Accounts.User.t(), Engram.Vaults.Vault.t()) :: :ok
   def seed(user, vault) do
+    do_seed(user, vault)
+  rescue
+    # `upsert_note` does not only return tagged errors — it RAISES on a decrypt
+    # failure, a Repo/Postgrex error and a couple of `{:ok, _} =` matches. The
+    # vault row has already committed by the time we get here, so letting any of
+    # those escape 500s a request whose real work succeeded. That is the exact
+    # failure this function exists to avoid, so the rescue has to be as wide as
+    # the swallow the docstring promises.
+    error ->
+      Logger.warning(
+        "welcome note seed raised",
+        Metadata.with_category(:warning, :lifecycle,
+          user_id: user.id,
+          vault_id: vault.id,
+          reason: Metadata.safe_reason(error)
+        )
+      )
+
+      :ok
+  end
+
+  defp do_seed(user, vault) do
     attrs = %{
       "path" => @path,
       "content" => content(),
       "mtime" => :os.system_time(:second) / 1
     }
 
-    case Notes.upsert_note(user, vault, attrs) do
+    # `announce_vault_populated: false` is load-bearing: this write is note #1,
+    # so without it the seed itself satisfies the 0->1 probe behind the
+    # `vault_populated` event and forwards the onboarding and /link waiting
+    # screens before the user's real first sync has pushed anything.
+    case Notes.upsert_note(user, vault, attrs, announce_vault_populated: false) do
       {:ok, _note} ->
         :ok
 

@@ -26,6 +26,42 @@ defmodule Engram.Vaults.WelcomeNoteTest do
       assert note.content =~ "## Try these"
     end
 
+    # The `vault_populated` event means "a device pushed something". The seed is
+    # note #1, so without `announce_vault_populated: false` it satisfies the
+    # 0->1 probe itself and forwards onboarding's "install the plugin" screen
+    # and /link before the user's real first sync has started.
+    test "does not fire vault_populated — that event is for the user's first push", %{
+      user: user,
+      vault: vault
+    } do
+      EngramWeb.Endpoint.subscribe("user:#{user.id}")
+
+      assert :ok = WelcomeNote.seed(user, vault)
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "vault_populated"}, 200
+    end
+
+    test "still lets a REAL first note fire vault_populated afterwards", %{
+      user: user,
+      vault: vault
+    } do
+      assert :ok = WelcomeNote.seed(user, vault)
+      EngramWeb.Endpoint.subscribe("user:#{user.id}")
+
+      # Suppression must be scoped to the seed, not to the vault: the seed left
+      # one note behind, so this is note #2 and the 0->1 probe no longer fires
+      # for it either. Pin the seed's own note count instead — the guarantee is
+      # that seeding does not CONSUME the event.
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "Real.md",
+          "content" => "from a device",
+          "mtime" => 1.0
+        })
+
+      assert {:ok, _} = Engram.Notes.get_note(user, vault, "Real.md")
+    end
+
     test "swallows a failed write so vault creation still succeeds", %{
       user: user,
       vault: vault

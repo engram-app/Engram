@@ -183,12 +183,18 @@ function NoteView({ content, tags, links, manifestNotes, onCreateWikiTarget }: N
 									</Link>
 								);
 							}
-							// External, anchor or unresolved: a new tab, always. Replacing
-							// the current one takes the reader away from a note they may
-							// be part-way through editing, and the SPA has no back-to-
-							// where-you-were state to restore.
+							// A new tab for links that LEAVE the app only. `#…` reaches this
+							// branch too — markdownLinkHref returns null for it — and
+							// remark-gfm generates one per footnote reference and backref,
+							// so blanket target="_blank" opened a second copy of the SPA
+							// instead of scrolling the page.
+							const external = /^(?:https?:|mailto:)/iu.test(href ?? "");
 							return (
-								<a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
+								<a
+									href={href}
+									{...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+									{...rest}
+								>
 									{children}
 								</a>
 							);

@@ -266,3 +266,31 @@ describe("NoteView footnotes", () => {
 		expect(screen.getByText(/generous value of on time/u)).toBeInTheDocument();
 	});
 });
+
+describe("NoteView link targets", () => {
+	it("opens an external link in a new tab", () => {
+		renderNote("See [docs](https://engram.page/docs).");
+		const link = screen.getByRole("link", { name: "docs" });
+
+		expect(link).toHaveAttribute("target", "_blank");
+		expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
+	});
+
+	// remark-gfm emits one `#user-content-fn-*` anchor per footnote reference and
+	// backref. A blanket target="_blank" opened a second copy of the SPA in a new
+	// tab instead of scrolling the page.
+	it("keeps an in-page anchor in the same tab", () => {
+		renderNote("Jump to [properties](#properties).");
+		const link = screen.getByRole("link", { name: "properties" });
+
+		expect(link).not.toHaveAttribute("target");
+	});
+
+	it("keeps a footnote reference in the same tab", () => {
+		renderNote("Shipped.[^1]\n\n[^1]: Source.\n");
+		const ref = document.querySelector("sup a");
+
+		expect(ref).not.toBeNull();
+		expect(ref).not.toHaveAttribute("target");
+	});
+});

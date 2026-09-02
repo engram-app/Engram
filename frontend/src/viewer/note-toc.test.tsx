@@ -10,6 +10,8 @@ vi.mock("./editor/active-editor-context", () => ({
 	useActiveEditor: () => ({ getView, setEditor: vi.fn(), hasEditor: getView() !== null }),
 }));
 
+const ONE_HEADING = "# Only one\n\nbody\n";
+
 const DOC = `# One
 
 body
@@ -68,7 +70,7 @@ describe("NoteToc", () => {
 
 	it("renders nothing for a note with fewer than two headings", () => {
 		getView.mockReturnValue(null);
-		const { container } = render(<NoteToc content={"# Only one\n\nbody\n"} />);
+		const { container } = render(<NoteToc content={ONE_HEADING} />);
 
 		expect(container).toBeEmptyDOMElement();
 	});

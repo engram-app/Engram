@@ -1,7 +1,7 @@
-import { foldable, forceParsing } from "@codemirror/language";
-import { EditorView } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { foldable, forceParsing } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { noParagraphFold } from "./heading-fold";
 

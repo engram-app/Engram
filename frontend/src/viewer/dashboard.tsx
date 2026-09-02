@@ -92,6 +92,23 @@ export default function Dashboard() {
 	// Self-disables the moment a second note exists, or the note is deleted.
 	const { data: manifest, isPending: manifestPending } = useSyncManifest();
 	const onlyNote = manifest?.notes?.length === 1 ? manifest.notes[0] : null;
+	// Once per vault per tab. Two reasons, one mechanism:
+	//
+	// 1. NotePage bounces a 404'd note back to the vault root (note-page.tsx,
+	//    `navigate(vaultRootHref(slug), {replace: true})`). With an unconditional
+	//    redirect, a manifest that still lists that note sends the user straight
+	//    back to it — the two ping-pong until React throws "Maximum update depth
+	//    exceeded". Having fired once, this stops.
+	// 2. A vault the user deliberately keeps at one note would otherwise be
+	//    impossible to view the root of at all.
+	//
+	// sessionStorage, not a ref: NotePage and Dashboard are different route
+	// elements, so navigating between them remounts this component.
+	// Keyed on the slug rather than the vault id: the slug is already in hand
+	// here and identifies the vault just as well. A rename re-arms the auto-open
+	// once, which is harmless.
+	const autoOpenKey = slug ? `engram:auto-opened:${slug}` : null;
+	const alreadyOpened = autoOpenKey !== null && sessionStorage.getItem(autoOpenKey) === "1";
 
 	// No note open still looks like an open (empty) document: mount the same
 	// right-panel content an open note gets, so the panel chrome is present.
@@ -115,7 +132,10 @@ export default function Dashboard() {
 		if (manifestPending && !manifest) {
 			return <LoadingPane />;
 		}
-		if (onlyNote && slug) {
+		if (onlyNote && slug && !alreadyOpened) {
+			if (autoOpenKey) {
+				sessionStorage.setItem(autoOpenKey, "1");
+			}
 			return <Navigate to={noteHref(slug, onlyNote.id)} replace />;
 		}
 	}

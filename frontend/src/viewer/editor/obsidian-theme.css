@@ -284,14 +284,14 @@
    invisible however they are styled. Put the column back, but weightless:
    transparent, borderless, and exactly as wide as the 20px of left padding it
    takes over from .cm-content below — so the text does not shift right. */
-.cm-editor .cm-gutters {
+.cm-editor:has(.cm-foldGutter) .cm-gutters {
 	display: flex;
 	border: none;
 	background: transparent;
 	color: var(--atomic-editor-fg-faint);
 }
 
-.cm-editor .cm-foldGutter {
+.cm-editor:has(.cm-foldGutter) .cm-foldGutter {
 	/* Fixed width, always reserved: the text must not shift on hover. */
 	min-width: 20px;
 }
@@ -300,14 +300,17 @@
    font size plus top margin — while the marker is a 12px glyph. Without this
    the marker sits at the top of the block, visibly above the heading text it
    belongs to. Centre it on the row instead. */
-.cm-editor .cm-foldGutter .cm-gutterElement {
+.cm-editor:has(.cm-foldGutter) .cm-foldGutter .cm-gutterElement {
 	display: flex;
 	align-items: center;
 }
 
 /* The gutter now supplies the left inset this padding used to, keeping the
-   editor text aligned with the inline title above it (which has its own px-5). */
-.cm-editor .cm-content {
+   editor text aligned with the inline title above it (which has its own px-5).
+   Scoped to editors that HAVE a fold gutter: this stylesheet is global, and the
+   raw frontmatter editor (raw-frontmatter-editor.tsx) never mounts headingFold,
+   so unscoped it lost its inset and hugged the left edge. */
+.cm-editor:has(.cm-foldGutter) .cm-content {
 	padding-left: 0;
 }
 
@@ -323,7 +326,9 @@
 	   ALREADY-folded section does not depend on this: the inline `…` placeholder
 	   sits in the text itself and is always visible. */
 	opacity: 0;
-	transition: opacity 120ms ease, transform 120ms ease;
+	transition:
+		opacity 120ms ease,
+		transform 120ms ease;
 	/* Points right when the section is collapsed. */
 	transform: rotate(0deg);
 }

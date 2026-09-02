@@ -22,8 +22,21 @@ interface LinkOpenOpts {
 	openInApp: (href: string) => boolean;
 }
 
+/** Schemes that may reach `window.open`.
+ *
+ *  Reading mode gets this for free — react-markdown's `defaultUrlTransform`
+ *  drops unsafe schemes before an href is ever rendered. The editor path reads
+ *  the destination straight out of the DOCUMENT, so `[x](javascript:…)` typed
+ *  into a note would otherwise be handed to `window.open` verbatim. Relative
+ *  targets and `#anchor` land here too when they do not resolve to a note, and
+ *  opening a junk tab for those is its own small bug. */
+const OPENABLE = /^(?:https?:|mailto:)/iu;
+
 /** Everything that is not an in-app note reference opens in a new tab. */
 function openExternal(url: string): void {
+	if (!OPENABLE.test(url)) {
+		return;
+	}
 	// `noopener` matters: without it the opened page gets a handle on our
 	// window via `opener` and can navigate the app away from under an
 	// unsaved edit.

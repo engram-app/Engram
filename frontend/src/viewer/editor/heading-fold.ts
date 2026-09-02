@@ -1,7 +1,7 @@
 import { codeFolding, foldGutter, foldKeymap, foldNodeProp } from "@codemirror/language";
-import type { MarkdownConfig } from "@lezer/markdown";
 import type { Extension } from "@codemirror/state";
 import { type EditorView, keymap, ViewPlugin } from "@codemirror/view";
+import type { MarkdownConfig } from "@lezer/markdown";
 
 /**
  * Obsidian-style collapsible headings.
@@ -21,24 +21,6 @@ import { type EditorView, keymap, ViewPlugin } from "@codemirror/view";
  * arrow you can only find by hovering is a fine way to fold and a terrible way
  * to discover you can unfold.
  */
-
-/**
- * Stops PARAGRAPHS being foldable.
- *
- * `lang-markdown`'s `foldNodeProp` marks every Block that is not a Document,
- * heading or list as foldable — which includes Paragraph, so any paragraph
- * running to two or more lines grew its own fold arrow. Obsidian folds
- * headings, lists and code, never a paragraph, and a chevron beside every
- * wrapped paragraph is pure noise on hover.
- *
- * Returning null from the fold function means "not foldable". Must be passed
- * to BOTH `markdown()` calls (live-preview's and raw mode's): props are
- * applied by `nodeSet.extend` in configure order, so this only overrides the
- * parser it is actually handed to.
- */
-export const noParagraphFold: MarkdownConfig = {
-	props: [foldNodeProp.add({ Paragraph: () => null })],
-};
 
 /** Chevron matching the tree's disclosure triangles, rotated when open. */
 function chevron(open: boolean): HTMLElement {
@@ -122,3 +104,21 @@ export const headingFold: Extension = [
 	foldHoverSync,
 	keymap.of(foldKeymap),
 ];
+
+/**
+ * Stops PARAGRAPHS being foldable.
+ *
+ * `lang-markdown`'s `foldNodeProp` marks every Block that is not a Document,
+ * heading or list as foldable — which includes Paragraph, so any paragraph
+ * running to two or more lines grew its own fold arrow. Obsidian folds
+ * headings, lists and code, never a paragraph, and a chevron beside every
+ * wrapped paragraph is pure noise on hover.
+ *
+ * Returning null from the fold function means "not foldable". Must be passed
+ * to BOTH `markdown()` calls (live-preview's and raw mode's): props are
+ * applied by `nodeSet.extend` in configure order, so this only overrides the
+ * parser it is actually handed to.
+ */
+export const noParagraphFold: MarkdownConfig = {
+	props: [foldNodeProp.add({ Paragraph: () => null })],
+};

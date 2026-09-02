@@ -88,6 +88,7 @@ describe("Dashboard single-note auto-open", () => {
 
 	beforeEach(() => {
 		useSyncManifestSpy.mockReturnValue(twoNotes);
+		sessionStorage.clear();
 	});
 
 	function LocationProbe() {
@@ -144,5 +145,24 @@ describe("Dashboard single-note auto-open", () => {
 		useSyncManifestSpy.mockReturnValue({ data: undefined, isPending: true });
 		renderAt("/");
 		expect(screen.queryByLabelText("No note open")).not.toBeInTheDocument();
+	});
+
+	// NotePage bounces a 404'd note to the vault root; an unconditional redirect
+	// sends it straight back and the two ping-pong to "Maximum update depth
+	// exceeded". Firing once per vault per tab also makes the root reachable at
+	// all for someone who deliberately keeps a one-note vault.
+	it("only auto-opens once per vault per tab", () => {
+		useSyncManifestSpy.mockReturnValue({
+			data: { notes: [{ id: "welcome-id", path: "Welcome to Engram.md" }] },
+			isPending: false,
+		});
+
+		const first = renderAt("/");
+		expect(screen.getByTestId("loc").textContent).toBe("/v/work/welcome-id");
+		first.unmount();
+
+		renderAt("/");
+		expect(screen.getByTestId("loc").textContent).toBe("/");
+		expect(screen.getByLabelText("No note open")).toBeInTheDocument();
 	});
 });

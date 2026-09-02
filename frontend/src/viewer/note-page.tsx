@@ -20,7 +20,6 @@ import {
 	useSyncManifest,
 } from "../api/queries";
 import { readRows } from "../crdt/frontmatter-doc";
-import { uuid7 } from "../crdt/uuid7";
 import { crdtMark } from "../crdt/perf";
 import {
 	type CrdtSyncStatus,
@@ -30,6 +29,7 @@ import {
 	openDoc,
 	subscribeToCrdtSyncStatus,
 } from "../crdt/session";
+import { uuid7 } from "../crdt/uuid7";
 import { useRightToolSlot } from "../layout/right-tools-context";
 import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";

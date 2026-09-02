@@ -19,11 +19,18 @@ interface Heading {
 function extractHeadings(markdown: string): Heading[] {
 	const slugger = new GithubSlugger();
 	const headings: Heading[] = [];
+	const lines = markdown.split("\n");
+	// An UNCLOSED fence must not hide every heading after it. Only skip a fenced
+	// region that actually closes; a stray ``` (common mid-edit, and the welcome
+	// note is edited on arrival) then costs nothing instead of blanking the
+	// outline for the rest of the document.
+	const fenceOpens = lines.filter((l) => /^\s*```/u.test(l)).length;
+	const fencesBalanced = fenceOpens % 2 === 0;
 	let offset = 0;
 	let inFence = false;
 
-	for (const line of markdown.split("\n")) {
-		if (/^\s*```/u.test(line)) {
+	for (const line of lines) {
+		if (fencesBalanced && /^\s*```/u.test(line)) {
 			inFence = !inFence;
 		} else if (!inFence) {
 			const match = /^(?<hashes>#{1,6})\s+(?<text>.+?)\s*#*\s*$/u.exec(line);
