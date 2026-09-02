@@ -3990,11 +3990,23 @@ jobs:
   # (the automated backstop for the manual #667 launch gate). Marketing CI runs
   # the mirror check so a marketing-only bump is caught there too.
   ci:
-    # is-full keeps the aggregate gate alive on full runs (main / [ci-full] /
-    # force_full) even when the coarse cache hit — otherwise ci skips on main
-    # and a real e2e/unit failure there is never gated. Mirrors the per-job +
-    # prebuild is-full forcing so main is genuinely the full safety net.
-    if: always() && (needs.fingerprint.outputs.is-full == 'true' || needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
+    # ALWAYS runs. It used to carry the same cache-hit condition as the jobs it
+    # aggregates, which meant that on the one case the provenance report exists
+    # for — a squash-merge to main whose tree is already proven, so every gate
+    # skips — `ci` skipped too and reported nothing. Observed on 84d35b89: the
+    # merge of the commit that ADDED the report, with `ci: skipped`, every gate
+    # skipped, and a run conclusion of `success`.
+    #
+    # Skipping the aggregate never saved anything real: the job is ~7s of
+    # runner time and its `needs` are already satisfied either way. Running it
+    # unconditionally costs ~7 minutes of runner time per week across ~61
+    # pushes, and buys an unambiguous answer to "was this SHA actually
+    # verified, or did it inherit a proof?" on every single run.
+    #
+    # The GATE is unchanged — the loop below still treats `skipped` as
+    # non-failing, because a content-addressed marker hit is a sound reason not
+    # to re-run. Only the reporting is new.
+    if: always()
     needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, e2e-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, migration-gates, static-checks]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
@@ -4099,6 +4111,17 @@ jobs:
               exit 1
             fi
           done
+
+          # fingerprint is the ONE job that must have actually succeeded. It has
+          # no `if:` guard, so it cannot legitimately skip — and if it fails,
+          # every job above it skips for want of its outputs, the loop reads a
+          # wall of `skipped`, and `ci` goes green having verified nothing at
+          # all. That is the same "green means nothing ran" failure the report
+          # above exists to surface, in its most complete form.
+          if [ "${{ needs.fingerprint.result }}" != "success" ]; then
+            echo "::error::fingerprint did not succeed (${{ needs.fingerprint.result }}) — every downstream gate skipped for want of its outputs, so this run verified nothing."
+            exit 1
+          fi
 
   # Nightly convergence ledger. MEASUREMENT ONLY — never gates anything (the
   # `ci` aggregate above already treats e2e-* as report-only per #1076) and is
