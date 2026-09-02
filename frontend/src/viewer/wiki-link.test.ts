@@ -73,12 +73,14 @@ describe("resolveWikiTarget", () => {
 });
 
 describe("wikiHref", () => {
-	test("routes into the vault wiki resolver, segment-encoded", () => {
-		expect(wikiHref("Folder/My Note", "my-vault")).toBe("/v/my-vault/wiki/Folder/My%20Note");
+	test("marks an unresolved target for creation rather than routing anywhere", () => {
+		expect(wikiHref("Folder/My Note", "my-vault")).toBe("engram-new:Folder/My Note");
 	});
 
 	test("carries the heading as a slugged hash", () => {
-		expect(wikiHref("Note#Some Heading", "work")).toBe("/v/work/wiki/Note#some-heading");
+		// A note that does not exist has no heading to land on, and keeping one
+		// would make the created file's name depend on where you clicked.
+		expect(wikiHref("Note#Some Heading", "work")).toBe("engram-new:Note");
 	});
 
 	test("bare heading links stay on the current page", () => {
@@ -100,7 +102,7 @@ describe("wikiCreatePath", () => {
 	});
 
 	test("keeps a # in the name — it is a legal path char, not a heading here", () => {
-		// wikiCreatePath receives an already-parsed page from the route splat
+		// wikiCreatePath receives an already-parsed page
 		// (the heading rode along in location.hash), and "#" is legal in a note
 		// path (PathSanitizer's @illegal_chars is [\\:*?<>"|]). Re-splitting on
 		// "#" turned [[C# Notes]] into an offer to create "C.md".
@@ -151,16 +153,16 @@ describe("wikiHref with resolver map", () => {
 		expect(wikiHref("my note#Some Heading", "work", map)).toBe("/v/work/n-1#some-heading");
 	});
 
-	test("dangling target falls back to the wiki resolver route", () => {
-		expect(wikiHref("Ghost", "work", map)).toBe("/v/work/wiki/Ghost");
+	test("dangling target is marked for creation", () => {
+		expect(wikiHref("Ghost", "work", map)).toBe("engram-new:Ghost");
 	});
 
-	test("target absent from the map falls back to the wiki resolver route", () => {
-		expect(wikiHref("Brand New", "work", map)).toBe("/v/work/wiki/Brand%20New");
+	test("target absent from the map is marked for creation", () => {
+		expect(wikiHref("Brand New", "work", map)).toBe("engram-new:Brand New");
 	});
 
 	test("no map behaves exactly as before", () => {
-		expect(wikiHref("My Note", "work")).toBe("/v/work/wiki/My%20Note");
+		expect(wikiHref("My Note", "work")).toBe("engram-new:My Note");
 	});
 });
 
@@ -190,8 +192,8 @@ describe("wikiHref layered manifest fallback", () => {
 		expect(wikiHref("Renamed Note", "work", map, notes)).toBe("/v/work/fresh-id");
 	});
 
-	test("unknown in both falls back to the wiki resolver route", () => {
-		expect(wikiHref("Brand New", "work", map, notes)).toBe("/v/work/wiki/Brand%20New");
+	test("unknown in both is marked for creation", () => {
+		expect(wikiHref("Brand New", "work", map, notes)).toBe("engram-new:Brand New");
 	});
 
 	test("heading hash preserved on edge-map hit", () => {
@@ -204,10 +206,8 @@ describe("wikiHref layered manifest fallback", () => {
 		);
 	});
 
-	test("heading hash preserved on wiki fallback", () => {
-		expect(wikiHref("Brand New#A Heading", "work", map, notes)).toBe(
-			"/v/work/wiki/Brand%20New#a-heading",
-		);
+	test("heading dropped when the target has to be created", () => {
+		expect(wikiHref("Brand New#A Heading", "work", map, notes)).toBe("engram-new:Brand New");
 	});
 });
 

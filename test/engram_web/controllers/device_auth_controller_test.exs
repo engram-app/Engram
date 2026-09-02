@@ -5,6 +5,7 @@ defmodule EngramWeb.DeviceAuthControllerTest do
 
   alias Engram.Auth.{DeviceFlow, DeviceRefreshToken}
   alias Engram.Repo
+  alias Engram.Vaults.WelcomeNote
 
   defp create_authed_conn(%{conn: conn}) do
     user = insert(:user)
@@ -98,6 +99,26 @@ defmodule EngramWeb.DeviceAuthControllerTest do
 
       assert %{"ok" => true, "vault_id" => vault_id} = json_response(conn, 200)
       assert {:ok, _} = Ecto.UUID.cast(vault_id)
+    end
+
+    test "seeds the welcome note into a vault created by the link", %{
+      authed_conn: conn,
+      user: user
+    } do
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+
+      conn =
+        post(conn, "/api/auth/device/authorize", %{
+          user_code: auth.user_code,
+          vault_id: "new",
+          vault_name: "Linked Vault"
+        })
+
+      assert %{"vault_id" => vault_id} = json_response(conn, 200)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      {:ok, vault} = Engram.Vaults.get_vault(user, vault_id)
+      assert {:ok, note} = Engram.Notes.get_note(user, vault, WelcomeNote.path())
+      assert note.content =~ "## Try these"
     end
 
     test "rejects non-uuid vault_id with 400", %{authed_conn: conn} do

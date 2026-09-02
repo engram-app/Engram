@@ -3,7 +3,9 @@ import { createVault, noteUrlRe, registerAndLogin, signInForNote, upsertNote } f
 import { row } from "./support/tree";
 
 /**
- * Wikilink navigation must NEVER route through the lazy /v/:slug/wiki/* resolver
+ * Wikilink navigation must NEVER route through a /v/:slug/wiki/* URL — that
+ * route is deleted, so any hop through one is now a hard 404 rather than a
+ * slow path. Originally this guarded against the lazy resolver
  * for a target that exists — not even as a transient flash. wikiHref resolves
  * in layers: (1) server-indexed link edges, (2) the sync-manifest client cache,
  * (3) only then the /wiki redirect (kept for deep links + the create
@@ -191,7 +193,7 @@ test.describe("wikilink navigation never routes through /wiki for existing notes
 		await ctx.close();
 	});
 
-	test("nonexistent target lands on /wiki with the create affordance, and Create opens the new note", async ({
+	test("clicking a nonexistent target creates the note and opens it", async ({
 		browser,
 		baseURL,
 	}) => {
@@ -207,18 +209,13 @@ test.describe("wikilink navigation never routes through /wiki for existing notes
 		await typeWikiLink(page, missing);
 		const link = editorWikiLink(page, missing);
 		await expect(link).toBeVisible();
-		console.log(`[wiki-nav] nonexistent: clicking [[${missing}]] -> expect /wiki create page`);
+		console.log(`[wiki-nav] nonexistent: clicking [[${missing}]] -> expect direct create`);
 		await link.click();
 
-		// A truly nonexistent target is exactly what the /wiki resolver is FOR.
-		await expect(page).toHaveURL(new RegExp(`/wiki/${missing}`, "u"), { timeout: 10_000 });
-		await expect(
-			page.getByRole("heading", { name: `"${missing}" doesn't exist yet.` }),
-		).toBeVisible();
-
-		await page.getByRole("button", { name: `Create "${missing}"` }).click();
-
-		// useCreateNote mints a uuid7 note id and navigates to its id route.
+		// Obsidian parity: a nonexistent target is created on click and opened.
+		// There is NO interstitial and no /wiki/* route to land on — clicking
+		// goes straight to the new note. useCreateNote mints a uuid7 note id and
+		// navigates to its id route.
 		await expect(page).toHaveURL(/\/[0-9a-f]{8}-[0-9a-f-]{27}(?:[?#]|$)/u, { timeout: 10_000 });
 		expect(page.url()).not.toContain("/wiki/");
 		await expect(row(page, missing)).toBeVisible({ timeout: 10_000 });

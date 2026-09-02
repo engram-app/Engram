@@ -2,10 +2,26 @@ import GithubSlugger from "github-slugger";
 import { vaultPath } from "../routes";
 
 // Obsidian-style wikilink resolution against the vault manifest. Pure module —
-// the /v/:slug/wiki/* redirect route and both link producers (note-view's
-// remark-wiki-link config, note-page's editor resolveWikiLink) share it.
+// both link producers (note-view's remark-wiki-link config, note-page's editor
+// resolveWikiLink) share it.
+//
+// An UNRESOLVED target is not a destination, it is a note that does not exist
+// yet: `wikiHref` marks it with WIKI_CREATE_SCHEME and the click handler
+// creates it, exactly like Obsidian. There used to be a `/v/:slug/wiki/*`
+// route that rendered a "doesn't exist yet" interstitial with a Create button;
+// it is gone, along with its Phoenix route and spa-routes entries.
 
 export const stripMd = (p: string) => p.replace(/\.md$/iu, "");
+
+// Marks a wikilink whose target does not exist. Not a URL and not a route —
+// a sentinel the click handlers key on to create the note instead of
+// navigating, mirroring note-view's `engram-attachment:` embed sentinel.
+export const WIKI_CREATE_SCHEME = "engram-new:";
+
+/** The page name inside a WIKI_CREATE_SCHEME href, or null if it isn't one. */
+export function wikiCreateTarget(href: string | undefined): string | null {
+	return href?.startsWith(WIKI_CREATE_SCHEME) ? href.slice(WIKI_CREATE_SCHEME.length) : null;
+}
 
 export interface ManifestNote {
 	id: string;
@@ -28,8 +44,8 @@ export interface NoteLinkEdge {
 
 // Keyed by lowercased target_text so wikiHref's lookup matches Obsidian's
 // case-insensitive resolution. Dangling entries stay OUT of the map — a
-// missing key and a dangling key both fall back to the wiki resolver route,
-// so there's no reason to carry a target_note_id: null entry into the lookup.
+// missing key and a dangling key are both "create it on click", so there is no
+// reason to carry a target_note_id: null entry into the lookup.
 export function buildWikiMap(links: NoteLinkEdge[] | undefined): Map<string, NoteLinkEdge> {
 	const map = new Map<string, NoteLinkEdge>();
 	for (const link of links ?? []) {
@@ -69,16 +85,15 @@ export function resolveWikiTarget(page: string, notes: ManifestNote[]): Manifest
 	return byName[0] ?? null;
 }
 
-// Vault-root-relative create path for the unresolved-wikilink "create this
-// note" affordance. Strips #heading/|alias via parseWikiTarget and any
+// Vault-root-relative create path for an unresolved wikilink. Strips #heading/|alias via parseWikiTarget and any
 // redundant .md, then splits on the last '/' — bare target creates at the
 // vault root, path-qualified target creates (and implicitly folders) along
 // that path, matching Obsidian's click-to-create behavior.
 // Takes an already-parsed PAGE, not raw `[[...]]` text. It must not re-split
-// on "#": the only caller is WikiLinkRedirect, whose route splat already has
-// the heading stripped into location.hash, and "#" is a legal character in a
-// note path here (PathSanitizer's @illegal_chars is [\\:*?<>"|]). Re-parsing
-// turned `[[C# Notes]]` into an offer to create "C.md".
+// on "#": callers hand it a page that `parseWikiTarget` has already stripped
+// the heading from, and "#" is a legal character in a note path here
+// (PathSanitizer's @illegal_chars is [\\:*?<>"|]). Re-parsing turned
+// `[[C# Notes]]` into an offer to create "C.md".
 export function wikiCreatePath(page: string): { folder: string; name: string } {
 	const segments = stripMd(page.trim()).split("/");
 	const name = `${segments.pop() ?? ""}.md`;
@@ -90,8 +105,8 @@ export function wikiCreatePath(page: string): { folder: string; name: string } {
 // (1) a resolved entry in `map` (from buildWikiMap, server-indexed edges)
 // short-circuits straight to the note id; (2) a miss there tries the sync
 // manifest (client cache — covers freshly typed links whose edge isn't
-// indexed yet); (3) only then the lazy /v/:slug/wiki/* redirect, kept for deep
-// links and the create-affordance on truly nonexistent targets.
+// indexed yet); (3) a miss in both means the note does not exist, so the href
+// carries WIKI_CREATE_SCHEME and the click creates it.
 export function wikiHref(
 	raw: string,
 	slug: string | undefined,
@@ -113,8 +128,10 @@ export function wikiHref(
 	if (fromManifest) {
 		return `${vaultPath(slug, fromManifest.id)}${hash}`;
 	}
-	const encoded = page.split("/").map(encodeURIComponent).join("/");
-	return `${vaultPath(slug)}/wiki/${encoded}${hash}`;
+	// The heading is dropped deliberately: a note that does not exist yet has no
+	// heading to land on, and carrying one would make the created file's name
+	// depend on where in the target you clicked.
+	return `${WIKI_CREATE_SCHEME}${page}`;
 }
 
 // Markdown-syntax link resolution (#1302). Obsidian writes

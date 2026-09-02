@@ -1,15 +1,38 @@
 import { render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { MemoryRouter, useLocation } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RightToolsProvider, useRightTools } from "../layout/right-tools-context";
 import Dashboard from "./dashboard";
 
 const useVaultsSpy = vi.fn(() => ({ data: [{ id: "v1", name: "Vault" }] }));
+// Vault-wide note inventory. Two notes by default so the single-note auto-open
+// below does not fire in the tests that are about the empty pane.
+interface ManifestResult {
+	data: { notes: { id: string; path: string }[] } | undefined;
+	isPending: boolean;
+}
+const useSyncManifestSpy = vi.fn(
+	(): ManifestResult => ({
+		data: {
+			notes: [
+				{ id: "n-1", path: "A.md" },
+				{ id: "n-2", path: "B.md" },
+			],
+		},
+		isPending: false,
+	}),
+);
 
 vi.mock("../api/queries", () => ({
 	useVaults: () => useVaultsSpy(),
 	useFolderNotes: () => ({ data: [], isLoading: false, isError: false }),
+	useSyncManifest: () => useSyncManifestSpy(),
 }));
+
+vi.mock("../api/vault-slug", async () => {
+	const actual = await vi.importActual<typeof import("../api/vault-slug")>("../api/vault-slug");
+	return { ...actual, useActiveVaultSlug: () => "work" };
+});
 
 function RightProbe() {
 	// The dashboard publishes an (empty) outline so the right panel keeps its
@@ -45,5 +68,101 @@ describe("Dashboard (no note open)", () => {
 		useVaultsSpy.mockReturnValueOnce({ data: [] });
 		renderDashboard();
 		expect(screen.queryByLabelText("No note open")).not.toBeInTheDocument();
+	});
+});
+
+// A brand-new vault holds exactly one note — the seeded welcome note — and
+// landing on "No note is open" with it one unexplained click away is the wrong
+// first screen. Keyed on the count, not the path: the path is owned by
+// `Engram.Vaults.WelcomeNote` in Elixir and a frontend copy would drift.
+describe("Dashboard single-note auto-open", () => {
+	const twoNotes = {
+		data: {
+			notes: [
+				{ id: "n-1", path: "A.md" },
+				{ id: "n-2", path: "B.md" },
+			],
+		},
+		isPending: false,
+	};
+
+	beforeEach(() => {
+		useSyncManifestSpy.mockReturnValue(twoNotes);
+		sessionStorage.clear();
+	});
+
+	function LocationProbe() {
+		const loc = useLocation();
+		return <span data-testid="loc">{loc.pathname}</span>;
+	}
+
+	function renderAt(url: string) {
+		return render(
+			<MemoryRouter initialEntries={[url]}>
+				<RightToolsProvider>
+					<Dashboard />
+					<LocationProbe />
+				</RightToolsProvider>
+			</MemoryRouter>,
+		);
+	}
+
+	it("opens the note when the vault holds exactly one", () => {
+		useSyncManifestSpy.mockReturnValue({
+			data: { notes: [{ id: "welcome-id", path: "Welcome to Engram.md" }] },
+			isPending: false,
+		});
+		renderAt("/");
+		expect(screen.getByTestId("loc").textContent).toBe("/v/work/welcome-id");
+	});
+
+	it("stays on the empty pane once a second note exists", () => {
+		renderAt("/");
+		expect(screen.getByLabelText("No note open")).toBeInTheDocument();
+	});
+
+	it("stays put for an empty vault", () => {
+		useSyncManifestSpy.mockReturnValue({ data: { notes: [] }, isPending: false });
+		renderAt("/");
+		expect(screen.getByLabelText("No note open")).toBeInTheDocument();
+	});
+
+	// A ?folder= browse is a deliberate destination, not a landing.
+	it("does not hijack a folder browse", () => {
+		useSyncManifestSpy.mockReturnValue({
+			data: { notes: [{ id: "welcome-id", path: "Welcome to Engram.md" }] },
+			isPending: false,
+		});
+		renderAt("/?folder=Notes");
+		// The folder heading, not the note list: useFolderNotes is mocked empty.
+		expect(screen.getByRole("heading", { name: "Notes" })).toBeInTheDocument();
+		expect(screen.queryByLabelText("No note open")).not.toBeInTheDocument();
+	});
+
+	// Painting the empty pane and yanking it away IS the first impression on a
+	// new vault, so the manifest has to land before anything renders.
+	it("holds instead of flashing the empty pane while the manifest loads", () => {
+		useSyncManifestSpy.mockReturnValue({ data: undefined, isPending: true });
+		renderAt("/");
+		expect(screen.queryByLabelText("No note open")).not.toBeInTheDocument();
+	});
+
+	// NotePage bounces a 404'd note to the vault root; an unconditional redirect
+	// sends it straight back and the two ping-pong to "Maximum update depth
+	// exceeded". Firing once per vault per tab also makes the root reachable at
+	// all for someone who deliberately keeps a one-note vault.
+	it("only auto-opens once per vault per tab", () => {
+		useSyncManifestSpy.mockReturnValue({
+			data: { notes: [{ id: "welcome-id", path: "Welcome to Engram.md" }] },
+			isPending: false,
+		});
+
+		const first = renderAt("/");
+		expect(screen.getByTestId("loc").textContent).toBe("/v/work/welcome-id");
+		first.unmount();
+
+		renderAt("/");
+		expect(screen.getByTestId("loc").textContent).toBe("/");
+		expect(screen.getByLabelText("No note open")).toBeInTheDocument();
 	});
 });

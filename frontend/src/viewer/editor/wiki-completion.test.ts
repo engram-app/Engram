@@ -269,6 +269,7 @@ describe("wikiCompletionSource composed into livePreviewExtensions", () => {
 			resolveWikiLink: (n) => `/w/wiki/${n}`,
 			openWikiLink: () => {},
 			wikiCompletionPaths: () => paths,
+			openMarkdownLink: () => false,
 		});
 		expect(() => {
 			view = new EditorView({

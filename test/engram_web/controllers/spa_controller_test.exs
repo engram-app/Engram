@@ -181,14 +181,20 @@ defmodule EngramWeb.SpaControllerTest do
       assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
     end
 
-    test "serves the SPA for a wikilink deep link", %{conn: conn} do
+    # These two used to assert a 200 shell for `/v/:slug/wiki/*`. That route is
+    # DELETED: an unresolved wikilink now creates the note on click instead of
+    # routing to a "doesn't exist yet" interstitial, and `wikiHref` emits no
+    # `/wiki/` URL at all. Kept, inverted, because a deleted route is exactly
+    # what a route manifest cannot catch on its own -- both shapes also sit in
+    # `spa-routes.json`'s `mustNotResolve`.
+    test "a wikilink deep link 404s -- that route is gone", %{conn: conn} do
       conn = get(conn, "/v/my-vault/wiki/Some%20Note")
-      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+      assert conn.status == 404
     end
 
-    test "serves the SPA for a wikilink deep link with a slash in the target", %{conn: conn} do
+    test "a wikilink deep link with a slash in the target 404s too", %{conn: conn} do
       conn = get(conn, "/v/my-vault/wiki/Folder/My%20Note")
-      assert html_response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+      assert conn.status == 404
     end
 
     test "an over-deep vault path 404s rather than serving a soft-404 shell", %{conn: conn} do

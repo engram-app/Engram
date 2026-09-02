@@ -12,6 +12,7 @@ import type * as Y from "yjs";
 import { useTheme } from "../theme/theme-provider";
 import { indentKeymap } from "./editor/format-commands";
 import { frontmatterShortcut } from "./editor/frontmatter-shortcut";
+import { headingFold, noParagraphFold } from "./editor/heading-fold";
 import { livePreviewExtensions } from "./editor/live-preview";
 
 // height:auto + overflow:visible hand scrolling to the page's ScrollArea, so
@@ -53,6 +54,8 @@ export interface NoteEditorProps {
 	openWikiLink: (name: string) => void;
 	/** Vault-wide note paths for `[[` autocomplete (see editor/wiki-completion.ts). */
 	wikiCompletionPaths: () => string[];
+	/** See LivePreviewOpts.openMarkdownLink. */
+	openMarkdownLink: (href: string) => boolean;
 	/** Reaches the live EditorView out to a caller (e.g. the formatting toolbar). */
 	onView?: (view: EditorView | null) => void;
 	/**
@@ -82,10 +85,16 @@ export function decorationsFor(
 	resolveWikiLink: (name: string) => string,
 	openWikiLink: (name: string) => void,
 	wikiCompletionPaths: () => string[],
+	openMarkdownLink: (href: string) => boolean,
 ) {
 	return mode === "rendered"
-		? livePreviewExtensions({ resolveWikiLink, openWikiLink, wikiCompletionPaths })
-		: [markdown({ base: markdownLanguage })];
+		? livePreviewExtensions({
+				resolveWikiLink,
+				openWikiLink,
+				wikiCompletionPaths,
+				openMarkdownLink,
+			})
+		: [markdown({ base: markdownLanguage, extensions: noParagraphFold })];
 }
 
 /**
@@ -108,6 +117,7 @@ export function buildEditorState(
 	resolveWikiLink: (name: string) => string,
 	openWikiLink: (name: string) => void,
 	wikiCompletionPaths: () => string[],
+	openMarkdownLink: (href: string) => boolean,
 	onFrontmatterShortcut?: () => boolean,
 ): EditorState {
 	return EditorState.create({
@@ -121,6 +131,9 @@ export function buildEditorState(
 			EditorView.contentAttributes.of({ spellcheck: "true" }),
 			drawSelection(),
 			EditorView.lineWrapping,
+			// Base, not the mode compartment: the fold service comes from
+			// markdown() in BOTH modes, so Raw gets collapsible headings too.
+			headingFold,
 			Prec.highest(keymap.of(yUndoManagerKeymap)),
 			// Obsidian/VS Code-style bracket behavior: typing ( [ { ' " ` inserts
 			// the closer, typing the closer over an auto-inserted one skips it,
@@ -155,7 +168,7 @@ export function buildEditorState(
 			// The ONLY source of the markdown language: swapping this compartment is
 			// what toggles Rendered vs Raw mode. See decorationsFor above.
 			decorationsCompartment.of(
-				decorationsFor(mode, resolveWikiLink, openWikiLink, wikiCompletionPaths),
+				decorationsFor(mode, resolveWikiLink, openWikiLink, wikiCompletionPaths, openMarkdownLink),
 			),
 			// yCollab keeps the view and Y.Text in sync AFTER this initial seed and
 			// wires local edits back into the Y.Text (→ CRDT channel). MUST stay in
@@ -178,6 +191,7 @@ export default function NoteEditor({
 	resolveWikiLink,
 	openWikiLink,
 	wikiCompletionPaths,
+	openMarkdownLink,
 	onView,
 	onFrontmatterShortcut,
 }: NoteEditorProps) {
@@ -203,7 +217,7 @@ export default function NoteEditor({
 	// hatch for the toolbar, not a doc/theme dependency -- including it would
 	// tear down and recreate the view (yCollab-detach hazard) whenever the
 	// caller passes a differently-identitied callback.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: mode/resolveWikiLink/openWikiLink/wikiCompletionPaths/onView are intentionally excluded, see comment above.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: mode/resolveWikiLink/openWikiLink/wikiCompletionPaths/openMarkdownLink/onView are intentionally excluded, see comment above.
 	useEffect(() => {
 		const parent = hostRef.current;
 		if (!parent) {
@@ -218,6 +232,7 @@ export default function NoteEditor({
 				resolveWikiLink,
 				openWikiLink,
 				wikiCompletionPaths,
+				openMarkdownLink,
 				() => Boolean(onShortcutRef.current?.()),
 			),
 			parent,
@@ -239,10 +254,10 @@ export default function NoteEditor({
 		}
 		view.dispatch({
 			effects: decorationsCompartment.reconfigure(
-				decorationsFor(mode, resolveWikiLink, openWikiLink, wikiCompletionPaths),
+				decorationsFor(mode, resolveWikiLink, openWikiLink, wikiCompletionPaths, openMarkdownLink),
 			),
 		});
-	}, [mode, resolveWikiLink, openWikiLink, wikiCompletionPaths]);
+	}, [mode, resolveWikiLink, openWikiLink, wikiCompletionPaths, openMarkdownLink]);
 
 	return <div ref={hostRef} />;
 }

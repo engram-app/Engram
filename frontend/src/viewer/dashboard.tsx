@@ -1,11 +1,12 @@
 import { useMemo } from "react";
-import { Link, useSearchParams } from "react-router";
-import { type NoteSummary, useFolderNotes, useVaults } from "../api/queries";
+import { Link, Navigate, useSearchParams } from "react-router";
+import { type NoteSummary, useFolderNotes, useSyncManifest, useVaults } from "../api/queries";
 import { useActiveVaultSlug } from "../api/vault-slug";
 import { EmptyVaultState } from "../layout/empty-vault-state";
 import { useRightToolSlot } from "../layout/right-tools-context";
 import { noteName } from "../lib/note-name";
 import { noteHref } from "../routes";
+import LoadingPane from "./loading-pane";
 import NoteToc from "./note-toc";
 
 function formatDate(iso: string): string {
@@ -79,6 +80,35 @@ export default function Dashboard() {
 	const [searchParams] = useSearchParams();
 	const folder = searchParams.get("folder") ?? "";
 	const { data: vaults } = useVaults();
+	const slug = useActiveVaultSlug();
+	// A vault holding exactly ONE note opens it instead of showing an empty
+	// pane. That is every brand-new vault: `Engram.Vaults.WelcomeNote` seeds
+	// "Welcome to Engram.md" on create, and landing on "No note is open" with a
+	// welcome note sitting unread one click away is the wrong first screen.
+	//
+	// Deliberately keyed on the COUNT, not on the welcome note's path: the path
+	// lives in Elixir, and a frontend copy of it would drift silently and take
+	// this behavior with it. One note means there is nothing to choose between.
+	// Self-disables the moment a second note exists, or the note is deleted.
+	const { data: manifest, isPending: manifestPending } = useSyncManifest();
+	const onlyNote = manifest?.notes?.length === 1 ? manifest.notes[0] : null;
+	// Once per vault per tab. Two reasons, one mechanism:
+	//
+	// 1. NotePage bounces a 404'd note back to the vault root (note-page.tsx,
+	//    `navigate(vaultRootHref(slug), {replace: true})`). With an unconditional
+	//    redirect, a manifest that still lists that note sends the user straight
+	//    back to it — the two ping-pong until React throws "Maximum update depth
+	//    exceeded". Having fired once, this stops.
+	// 2. A vault the user deliberately keeps at one note would otherwise be
+	//    impossible to view the root of at all.
+	//
+	// sessionStorage, not a ref: NotePage and Dashboard are different route
+	// elements, so navigating between them remounts this component.
+	// Keyed on the slug rather than the vault id: the slug is already in hand
+	// here and identifies the vault just as well. A rename re-arms the auto-open
+	// once, which is harmless.
+	const autoOpenKey = slug ? `engram:auto-opened:${slug}` : null;
+	const alreadyOpened = autoOpenKey !== null && sessionStorage.getItem(autoOpenKey) === "1";
 
 	// No note open still looks like an open (empty) document: mount the same
 	// right-panel content an open note gets, so the panel chrome is present.
@@ -92,6 +122,22 @@ export default function Dashboard() {
 	// vault list is still in flight.
 	if (vaults && vaults.length === 0) {
 		return <EmptyVaultState />;
+	}
+
+	// Only at the true vault root — a ?folder= browse is a deliberate
+	// destination, not a landing.
+	if (!folder) {
+		// Hold rather than paint "No note is open" and then yank it away: on a
+		// brand-new vault that flash IS the whole first impression.
+		if (manifestPending && !manifest) {
+			return <LoadingPane />;
+		}
+		if (onlyNote && slug && !alreadyOpened) {
+			if (autoOpenKey) {
+				sessionStorage.setItem(autoOpenKey, "1");
+			}
+			return <Navigate to={noteHref(slug, onlyNote.id)} replace />;
+		}
 	}
 
 	if (folder) {

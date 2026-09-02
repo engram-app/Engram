@@ -85,16 +85,22 @@ vi.mock("../crdt/session", () => ({
 }));
 
 const useNoteMock = vi.fn();
-const { renameNoteMutate, deleteNoteMutate, duplicateNoteMutate, batchMoveMutate } = vi.hoisted(
-	() => ({
-		renameNoteMutate: vi.fn(),
-		deleteNoteMutate: vi.fn(),
-		duplicateNoteMutate: vi.fn(),
-		batchMoveMutate: vi.fn(),
-	}),
-);
+const {
+	createNoteMutate,
+	renameNoteMutate,
+	deleteNoteMutate,
+	duplicateNoteMutate,
+	batchMoveMutate,
+} = vi.hoisted(() => ({
+	renameNoteMutate: vi.fn(),
+	createNoteMutate: vi.fn(),
+	deleteNoteMutate: vi.fn(),
+	duplicateNoteMutate: vi.fn(),
+	batchMoveMutate: vi.fn(),
+}));
 vi.mock("../api/queries", () => ({
 	useNote: (...a: unknown[]) => useNoteMock(...a),
+	useCreateNote: () => ({ mutate: createNoteMutate, isPending: false }),
 	useRenameNote: () => ({ mutate: renameNoteMutate, isPending: false }),
 	useDeleteNote: () => ({ mutate: deleteNoteMutate, isPending: false }),
 	useDuplicateNote: () => ({ mutate: duplicateNoteMutate, isPending: false }),
@@ -153,7 +159,7 @@ describe("NotePage (CRDT)", () => {
 		const trigger = await screen.findByRole("button", { name: "Note options" });
 		fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
 		fireEvent.click(trigger);
-		await screen.findByRole("menuitem", { name: "Rendered" });
+		await screen.findByRole("menuitem", { name: "Edit" });
 	};
 
 	beforeEach(() => {
@@ -700,7 +706,7 @@ describe("NotePage (CRDT)", () => {
 		await waitFor(() => expect(screen.getByTestId("has-editor")).toHaveTextContent("false"));
 
 		await openMenu();
-		fireEvent.click(screen.getByRole("menuitem", { name: "Rendered" }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "Edit" }));
 		await waitFor(() => expect(screen.getByTestId("has-editor")).toHaveTextContent("true"));
 	});
 
@@ -836,10 +842,7 @@ describe("NotePage (CRDT)", () => {
 		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
 		expect(screen.queryByLabelText(/Frontmatter \(raw YAML\)/i)).not.toBeInTheDocument();
 		await openMenu();
-		expect(screen.getByRole("menuitem", { name: "Rendered" })).toHaveAttribute(
-			"aria-current",
-			"true",
-		);
+		expect(screen.getByRole("menuitem", { name: "Edit" })).toHaveAttribute("aria-current", "true");
 
 		// Switch to "raw": raw YAML region visible, pills hidden.
 		fireEvent.click(screen.getByRole("menuitem", { name: "Raw" }));
@@ -1025,7 +1028,7 @@ describe("NotePage (CRDT)", () => {
 		it("no longer shows the old mode buttons in the header", async () => {
 			renderPage();
 			await screen.findByTestId("note-editor");
-			expect(screen.queryByRole("button", { name: "Rendered" })).not.toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
 		});
 
 		it("starts a rename from the menu", async () => {

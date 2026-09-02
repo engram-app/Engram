@@ -631,8 +631,8 @@ defmodule EngramWeb.Router do
     get "/oauth/consent", SpaController, :index
 
     # Vault-scoped SPA routes. These mirror the React subtree under
-    # `/v/:slug` EXACTLY -- index, `:itemId`, and the `wiki/*` splat -- rather
-    # than a single greedy `/v/*path`.
+    # `/v/:slug` EXACTLY -- index and `:itemId` -- rather than a single greedy
+    # `/v/*path`.
     #
     # Greedy was wrong for the reason the deleted deny-list existed: it made
     # `/v/work/n-1/extra` a 200 SPA shell that renders an in-app 404, so a
@@ -640,12 +640,13 @@ defmodule EngramWeb.Router do
     # as a soft-404. Matching only the real shapes means an over-deep path has
     # no route and gets a real 404.
     #
-    # The `wiki/*` entry is why the bounded list is not just `/v/:slug/:id`:
-    # wiki targets contain slashes ("Folder/My Note"), and without it every
-    # wikilink deep link hard-404'd on refresh or paste.
+    # There was a `/v/:slug/wiki/*path` entry here for the wikilink resolver
+    # route. That route is gone -- an unresolved wikilink now creates the note
+    # on click instead of rendering a "doesn't exist yet" interstitial -- and
+    # `spa-routes.json` lists both wiki shapes under `mustNotResolve` so it
+    # cannot come back by accident.
     get "/v", SpaController, :index
     get "/v/:slug", SpaController, :index
-    get "/v/:slug/wiki/*path", SpaController, :index
     get "/v/:slug/:id", SpaController, :index
   end
 end

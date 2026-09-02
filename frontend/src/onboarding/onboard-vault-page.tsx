@@ -11,13 +11,11 @@ import {
 	useMe,
 	useOnboardingStatus,
 	useSetOnboardingProfile,
-	useUpdateNote,
 } from "../api/queries";
 import { useConfig } from "../config-context";
 import LoadingScreen from "../layout/loading-screen";
 import { SyncStatusPill } from "./sync-status-pill";
 import { useVaultReadyEvents } from "./use-vault-ready-events";
-import { WELCOME_NOTE_CONTENT, WELCOME_NOTE_PATH } from "./welcome-note";
 
 type Source = "obsidian" | "fresh" | null;
 
@@ -27,7 +25,6 @@ interface VaultStepProps {
 	userId: string | null;
 	setProfile: ReturnType<typeof useSetOnboardingProfile>;
 	createVault: ReturnType<typeof useCreateVault>;
-	updateNote: ReturnType<typeof useUpdateNote>;
 	navigate: ReturnType<typeof useNavigate>;
 }
 
@@ -37,7 +34,6 @@ function VaultStep({
 	userId,
 	setProfile,
 	createVault,
-	updateNote,
 	navigate,
 }: VaultStepProps) {
 	// Mid-flow refresh: if uses_obsidian was already POSTed in a prior visit,
@@ -92,15 +88,8 @@ function VaultStep({
 			client_id: vaultClientId,
 		});
 		setActiveVaultId(vault.id);
-		try {
-			await updateNote.mutateAsync({
-				path: WELCOME_NOTE_PATH,
-				content: WELCOME_NOTE_CONTENT,
-			});
-		} catch {
-			// Vault still exists if the welcome-note seed fails — let the user
-			// proceed; an empty vault is recoverable, a missing vault is not.
-		}
+		// The welcome note is seeded server-side by `Engram.Vaults.WelcomeNote`
+		// on every vault creation, so there is nothing to write here.
 		navigate("/", { replace: true });
 	}
 
@@ -109,7 +98,7 @@ function VaultStep({
 			source={source}
 			onPickSource={pickSource}
 			userId={userId}
-			isCommitting={setProfile.isPending || createVault.isPending || updateNote.isPending}
+			isCommitting={setProfile.isPending || createVault.isPending}
 			pickError={
 				setProfile.isError && !obsidianCommitted
 					? "Could not save your choice. Try clicking again — if it keeps failing, refresh the page."
@@ -383,7 +372,6 @@ export default function OnboardVaultPage() {
 	const { data: me } = useMe();
 	const setProfile = useSetOnboardingProfile();
 	const createVault = useCreateVault();
-	const updateNote = useUpdateNote();
 
 	// Block render until status arrives so the source toggle never flashes
 	// the wrong branch on first paint for a returning mid-flow user.
@@ -407,7 +395,6 @@ export default function OnboardVaultPage() {
 			userId={me?.id ?? null}
 			setProfile={setProfile}
 			createVault={createVault}
-			updateNote={updateNote}
 			navigate={navigate}
 		/>
 	);
