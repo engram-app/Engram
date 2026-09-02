@@ -599,7 +599,10 @@ export default function BillingPage({
 									setCheckingOut(false);
 									setCompletedAt(null);
 								}}
-								className="text-muted-foreground text-sm underline-offset-4 hover:text-foreground hover:underline"
+								// Fixed light-gray, not theme tokens: this button sits on the
+								// checkout card, which is forced light (see
+								// onboard-billing-page.tsx) regardless of app theme.
+								className="text-gray-700 text-sm underline-offset-4 hover:text-gray-900 hover:underline"
 							>
 								← Choose a different plan
 							</button>

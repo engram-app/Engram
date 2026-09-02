@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 import { api } from "../api/client";
 import { type OnboardingStatus, useOnboardingStatus } from "../api/queries";
 import BillingPage from "../billing/billing-page";
@@ -51,7 +52,15 @@ export default function OnboardBillingPage() {
 
 	return (
 		<section className="m-auto max-h-full w-full max-w-2xl overflow-y-auto px-4 pt-5 pb-8 sm:pt-8">
-			<div className="rounded-2xl border border-border bg-background p-4 sm:p-8">
+			<div
+				className={cn(
+					"rounded-2xl border p-4 sm:p-8",
+					// Paddle's checkout theme is pinned to light (see billing-page.tsx)
+					// — force this card light too while checkout is showing, so the
+					// Paddle frame doesn't sit on a dark surface behind it.
+					checkoutActive ? "border-gray-200 bg-white" : "border-border bg-background",
+				)}
+			>
 				{/* Header is hidden once a plan is chosen (checkout view open) so it
             doesn't sit stuck above the Paddle payment form. */}
 				{!checkoutActive && (
