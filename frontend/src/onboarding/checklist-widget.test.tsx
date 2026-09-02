@@ -455,10 +455,12 @@ describe("ChecklistWidget, completed rows stay visible (#604)", () => {
 		expect(claude).toHaveTextContent("☑");
 
 		// Action affordances are suppressed on the completed row: only the
-		// still-active cursor + join-discord rows keep their Setup guide link +
-		// dismiss button.
+		// still-active cursor + join-discord rows keep their link + dismiss
+		// button. Discord's reads "Join", not "Setup guide" — the destination is
+		// an invite, not instructions.
 		expect(screen.queryByLabelText(/dismiss connect claude/iu)).toBeNull();
-		expect(screen.getAllByRole("link", { name: /setup guide/iu })).toHaveLength(2);
+		expect(screen.getAllByRole("link", { name: /setup guide/iu })).toHaveLength(1);
+		expect(screen.getByRole("link", { name: /join/iu })).toBeInTheDocument();
 	});
 
 	it("counts a completed row in the progress readout while keeping it visible", () => {

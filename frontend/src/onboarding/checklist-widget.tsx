@@ -26,6 +26,9 @@ interface Item {
 	done: boolean;
 	dismissed?: boolean;
 	docUrl?: string;
+	/** Text on the row's link button. Defaults to "Setup guide" — override when
+	 *  the destination is not a guide (Discord is an invite, not instructions). */
+	actionLabel?: string;
 	dismissible?: boolean;
 }
 
@@ -153,6 +156,7 @@ function ChecklistWidget() {
 			done: false,
 			dismissed: isDismissed("join_discord"),
 			docUrl: DISCORD_INVITE_URL,
+			actionLabel: "Join",
 			dismissible: true,
 		},
 		...(profile?.uses_obsidian
@@ -330,7 +334,7 @@ function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }
 								{i.docUrl ? (
 									<Button asChild size="sm" variant="outline">
 										<a href={i.docUrl} target="_blank" rel="noreferrer">
-											Setup guide ↗
+											{i.actionLabel ?? "Setup guide"} ↗
 										</a>
 									</Button>
 								) : null}
