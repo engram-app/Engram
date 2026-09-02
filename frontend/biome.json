@@ -151,6 +151,10 @@
 			"linter": { "rules": { "nursery": { "useTailwindShorthandClasses": "off" } } }
 		},
 		{
+			"includes": ["src/billing/billing-page.tsx", "src/settings/connections-page.tsx"],
+			"linter": { "rules": { "nursery": { "useReactCompiler": "off" } } }
+		},
+		{
 			"includes": ["vite.config.ts", "playwright.config.ts", "scripts/**", "**/*.config.ts"],
 			"linter": {
 				"rules": {
