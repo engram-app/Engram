@@ -151,6 +151,16 @@
 			"linter": { "rules": { "nursery": { "useTailwindShorthandClasses": "off" } } }
 		},
 		{
+			// useReactCompiler's validation crate panics on a byte/char-boundary
+			// bug (biomejs/biome#10974-adjacent) when a multi-byte UTF-8 char
+			// (—, ·, ─, …) lands on its internal chunk boundary — file-content-
+			// and batch-order-dependent, not something in our code to fix.
+			// billing-page.tsx started tripping it after edits shifted byte
+			// offsets; connections-page.tsx trips it independently, pre-existing.
+			"includes": ["src/billing/billing-page.tsx", "src/settings/connections-page.tsx"],
+			"linter": { "rules": { "nursery": { "useReactCompiler": "off" } } }
+		},
+		{
 			"includes": ["vite.config.ts", "playwright.config.ts", "scripts/**", "**/*.config.ts"],
 			"linter": {
 				"rules": {

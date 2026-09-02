@@ -37,7 +37,10 @@ const { channelHandlers, socketCtor } = vi.hoisted(() => {
 		},
 		join: () => ({ receive: () => ({}) }),
 	};
-	const socketCtor = vi.fn(function MockSocket(this: object, ..._args: unknown[]) {
+	const socketCtor = vi.fn(function MockSocket(
+		this: object,
+		..._args: unknown[]
+	) {
 		Object.assign(this, {
 			connect: vi.fn(),
 			channel: vi.fn(() => channelMock),
@@ -57,7 +60,12 @@ const authAdapter: AuthAdapter = {
 	hasBuiltInUI: false,
 };
 
-const ME = { id: 99, email: "u@example.com", role: "member" as const, display_name: null };
+const ME = {
+	id: 99,
+	email: "u@example.com",
+	role: "member" as const,
+	display_name: null,
+};
 
 describe("BillingPage — Paddle effect cleanup", () => {
 	beforeEach(() => {
@@ -106,13 +114,19 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			throw new Error(`unexpected GET ${url}`);
 		});
 
-		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
-		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
-			captured = opts.eventCallback;
-			return { Checkout: { open: vi.fn() } };
-		});
+		let captured:
+			| ((event: { name: string; data?: unknown }) => void)
+			| undefined;
+		initializePaddleMock.mockImplementation(
+			async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn() } };
+			},
+		);
 
-		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
 		const { unmount } = render(
 			<QueryClientProvider client={qc}>
 				<AuthContext.Provider value={authAdapter}>
@@ -130,7 +144,10 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		unmount();
 
 		expect(() =>
-			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "late" } }),
+			captured!({
+				name: "checkout.payment.initiated",
+				data: { transaction_id: "late" },
+			}),
 		).not.toThrow();
 	});
 
@@ -171,13 +188,19 @@ describe("BillingPage — Paddle effect cleanup", () => {
 	}
 
 	function renderBilling({ inline }: { inline: boolean }) {
-		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
 		const utils = render(
 			<QueryClientProvider client={qc}>
 				<AuthContext.Provider value={authAdapter}>
 					<ThemeProvider>
 						<MemoryRouter>
-							{inline ? <BillingPage onActivated={() => {}} /> : <BillingPage />}
+							{inline ? (
+								<BillingPage onActivated={() => {}} />
+							) : (
+								<BillingPage />
+							)}
 						</MemoryRouter>
 					</ThemeProvider>
 				</AuthContext.Provider>
@@ -242,10 +265,14 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		// Wait for the Paddle instance to land and plan cards to render. "Starter"
 		// appears twice — the desktop card grid and the mobile accordion are both
 		// in the DOM (CSS, not JS, hides one), so assert on the count.
-		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+		await waitFor(() =>
+			expect(queryAllByText("Starter").length).toBeGreaterThan(0),
+		);
 
 		const startButtons = container.querySelectorAll("button");
-		const startBtn = Array.from(startButtons).find((b) => b.textContent === "Start free trial");
+		const startBtn = Array.from(startButtons).find(
+			(b) => b.textContent === "Start free trial",
+		);
 		expect(startBtn).toBeDefined();
 
 		await act(async () => {
@@ -266,16 +293,22 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		// plan picker with no explanation. (Genuine checkout.error / payment.error
 		// events still close; see the next test.)
 		mockBillingApi();
-		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
-		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
-			captured = opts.eventCallback;
-			return { Checkout: { open: vi.fn(), close: vi.fn() } };
-		});
+		let captured:
+			| ((event: { name: string; data?: unknown }) => void)
+			| undefined;
+		initializePaddleMock.mockImplementation(
+			async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			},
+		);
 
 		const { container, queryAllByText } = renderBilling({ inline: true });
 
 		// "Starter" renders twice (desktop card + mobile accordion); assert count.
-		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+		await waitFor(() =>
+			expect(queryAllByText("Starter").length).toBeGreaterThan(0),
+		);
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
 			(b) => b.textContent === "Start free trial",
 		)!;
@@ -287,7 +320,10 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
 
 		await act(async () => {
-			captured!({ name: "checkout.payment.failed", data: { transaction_id: "txn_x" } });
+			captured!({
+				name: "checkout.payment.failed",
+				data: { transaction_id: "txn_x" },
+			});
 			await Promise.resolve();
 		});
 
@@ -298,15 +334,21 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 	it("onboarding (inline): a genuine CHECKOUT_ERROR closes the frame and surfaces a message", async () => {
 		mockBillingApi();
-		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
-		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
-			captured = opts.eventCallback;
-			return { Checkout: { open: vi.fn(), close: vi.fn() } };
-		});
+		let captured:
+			| ((event: { name: string; data?: unknown }) => void)
+			| undefined;
+		initializePaddleMock.mockImplementation(
+			async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			},
+		);
 
 		const { container, queryAllByText } = renderBilling({ inline: true });
 
-		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+		await waitFor(() =>
+			expect(queryAllByText("Starter").length).toBeGreaterThan(0),
+		);
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
 			(b) => b.textContent === "Start free trial",
 		)!;
@@ -331,11 +373,15 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		// onActivated prop) has no `checkingOut` flag, so it must rely on Paddle's
 		// own checkout.loaded/checkout.closed events to freeze appliedTheme.
 		mockBillingApi();
-		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
-		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
-			captured = opts.eventCallback;
-			return { Checkout: { open: vi.fn(), close: vi.fn() } };
-		});
+		let captured:
+			| ((event: { name: string; data?: unknown }) => void)
+			| undefined;
+		initializePaddleMock.mockImplementation(
+			async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			},
+		);
 
 		function Harness() {
 			const { setTheme } = useTheme();
@@ -349,7 +395,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			);
 		}
 
-		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
 		render(
 			<QueryClientProvider client={qc}>
 				<AuthContext.Provider value={authAdapter}>
@@ -395,11 +443,15 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		// the user stuck on Paddle's inline frame forever with no recovery.
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		mockBillingApi();
-		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
-		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
-			captured = opts.eventCallback;
-			return { Checkout: { open: vi.fn(), close: vi.fn() } };
-		});
+		let captured:
+			| ((event: { name: string; data?: unknown }) => void)
+			| undefined;
+		initializePaddleMock.mockImplementation(
+			async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			},
+		);
 
 		renderBilling({ inline: true });
 
@@ -412,7 +464,10 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		// PAYMENT_INITIATED fires; COMPLETED never does (the drop case).
 		await act(async () => {
-			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_drop_99" } });
+			captured!({
+				name: "checkout.payment.initiated",
+				data: { transaction_id: "txn_drop_99" },
+			});
 			await Promise.resolve();
 		});
 
@@ -424,7 +479,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		await waitFor(() =>
 			expect(
-				screen.queryByText(/Payment received\. We're finishing your activation/iu),
+				screen.queryByText(
+					/Payment received\. We're finishing your activation/iu,
+				),
 			).toBeInTheDocument(),
 		);
 	});
@@ -436,7 +493,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			Checkout: { open: vi.fn(), close: closeMock },
 		}));
 
-		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
 		qc.setQueryData(["onboarding", "status"], { next_step: "tools" });
 		const onActivated = vi.fn();
 		render(
@@ -451,7 +510,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			</QueryClientProvider>,
 		);
 
-		await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
+		await waitFor(() =>
+			expect(channelHandlers.subscription_activated).toBeDefined(),
+		);
 		// Wait for paddle instance to land
 		await act(async () => {
 			await Promise.resolve();
@@ -480,8 +541,20 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		get.mockImplementation(async (url: string) => {
 			if (url === "/billing/status") {
 				return billingActive
-					? { tier: "starter", active: true, trial_days_remaining: 0, subscription: null, caps: {} }
-					: { tier: "free", active: false, trial_days_remaining: 0, subscription: null, caps: {} };
+					? {
+							tier: "starter",
+							active: true,
+							trial_days_remaining: 0,
+							subscription: null,
+							caps: {},
+						}
+					: {
+							tier: "free",
+							active: false,
+							trial_days_remaining: 0,
+							subscription: null,
+							caps: {},
+						};
 			}
 			if (url === "/billing/config") {
 				return {
@@ -512,7 +585,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		// no-op onActivated: mirrors the wizard NOT yet navigating, so the steady
 		// bridge must hold on its own instead of relying on an unmount.
 		const onActivated = vi.fn();
-		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
 		render(
 			<QueryClientProvider client={qc}>
 				<AuthContext.Provider value={authAdapter}>
@@ -525,7 +600,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			</QueryClientProvider>,
 		);
 
-		await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
+		await waitFor(() =>
+			expect(channelHandlers.subscription_activated).toBeDefined(),
+		);
 		await act(async () => {
 			await Promise.resolve();
 			await Promise.resolve();
@@ -595,7 +672,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			Checkout: { open: vi.fn(), close: vi.fn() },
 		}));
 
-		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
 		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 		render(
 			<QueryClientProvider client={qc}>
@@ -610,7 +689,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			</QueryClientProvider>,
 		);
 
-		await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
+		await waitFor(() =>
+			expect(channelHandlers.subscription_activated).toBeDefined(),
+		);
 
 		billingActive = true;
 		await act(async () => {
@@ -623,10 +704,14 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		});
 
 		await waitFor(() => {
-			const billingStatusInvalidations = invalidateSpy.mock.calls.filter(([arg]) => {
-				const key = (arg as { queryKey?: unknown[] })?.queryKey;
-				return Array.isArray(key) && key[0] === "billing" && key[1] === "status";
-			});
+			const billingStatusInvalidations = invalidateSpy.mock.calls.filter(
+				([arg]) => {
+					const key = (arg as { queryKey?: unknown[] })?.queryKey;
+					return (
+						Array.isArray(key) && key[0] === "billing" && key[1] === "status"
+					);
+				},
+			);
 			expect(billingStatusInvalidations.length).toBeGreaterThan(0);
 		});
 	});
@@ -669,13 +754,19 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			throw new Error(`unexpected GET ${url}`);
 		});
 
-		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
-		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
-			captured = opts.eventCallback;
-			return { Checkout: { open: vi.fn(), close: vi.fn() } };
-		});
+		let captured:
+			| ((event: { name: string; data?: unknown }) => void)
+			| undefined;
+		initializePaddleMock.mockImplementation(
+			async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			},
+		);
 
-		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
 		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 		render(
 			<QueryClientProvider client={qc}>
@@ -697,14 +788,21 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		});
 
 		await act(async () => {
-			captured!({ name: "checkout.completed", data: { transaction_id: "txn_up_1" } });
+			captured!({
+				name: "checkout.completed",
+				data: { transaction_id: "txn_up_1" },
+			});
 			await Promise.resolve();
 		});
 
 		const keyFired = (k0: string, k1?: string) =>
 			invalidateSpy.mock.calls.some(([arg]) => {
 				const key = (arg as { queryKey?: unknown[] })?.queryKey;
-				return Array.isArray(key) && key[0] === k0 && (k1 === undefined || key[1] === k1);
+				return (
+					Array.isArray(key) &&
+					key[0] === k0 &&
+					(k1 === undefined || key[1] === k1)
+				);
 			});
 
 		await waitFor(() => {
@@ -714,7 +812,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 	});
 
 	it("subscribed flow: Cancel button opens CancelPanel inline (no portal redirect)", async () => {
-		initializePaddleMock.mockResolvedValue({ Checkout: { open: vi.fn(), close: vi.fn() } });
+		initializePaddleMock.mockResolvedValue({
+			Checkout: { open: vi.fn(), close: vi.fn() },
+		});
 
 		get.mockImplementation(async (url: string) => {
 			if (url === "/billing/status") {
@@ -747,7 +847,10 @@ describe("BillingPage — Paddle effect cleanup", () => {
 				return { user: ME };
 			}
 			if (url === "/billing/subscription") {
-				return { next_billed_at: "2026-07-01T00:00:00Z", scheduled_change: null };
+				return {
+					next_billed_at: "2026-07-01T00:00:00Z",
+					scheduled_change: null,
+				};
 			}
 			if (url === "/billing/transactions") {
 				return { payment_method: null, transactions: [] };
@@ -757,18 +860,24 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		renderBilling({ inline: false });
 
-		const cancelButton = await screen.findByRole("button", { name: /cancel subscription/iu });
+		const cancelButton = await screen.findByRole("button", {
+			name: /cancel subscription/iu,
+		});
 		await act(async () => {
 			cancelButton.click();
 		});
 
 		// CancelPanel header is visible; button row collapses.
 		await screen.findByRole("region", { name: /cancel subscription/iu });
-		expect(screen.getByRole("button", { name: /cancel at period end/iu })).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: /cancel at period end/iu }),
+		).toBeInTheDocument();
 	});
 
 	it("subscribed flow: Change plan button opens PlanChangePanel inline", async () => {
-		initializePaddleMock.mockResolvedValue({ Checkout: { open: vi.fn(), close: vi.fn() } });
+		initializePaddleMock.mockResolvedValue({
+			Checkout: { open: vi.fn(), close: vi.fn() },
+		});
 
 		get.mockImplementation(async (url: string) => {
 			if (url === "/billing/status") {
@@ -801,7 +910,10 @@ describe("BillingPage — Paddle effect cleanup", () => {
 				return { user: ME };
 			}
 			if (url === "/billing/subscription") {
-				return { next_billed_at: "2026-07-01T00:00:00Z", scheduled_change: null };
+				return {
+					next_billed_at: "2026-07-01T00:00:00Z",
+					scheduled_change: null,
+				};
 			}
 			if (url === "/billing/transactions") {
 				return { payment_method: null, transactions: [] };
@@ -811,7 +923,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		renderBilling({ inline: false });
 
-		const changeButton = await screen.findByRole("button", { name: /change plan/iu });
+		const changeButton = await screen.findByRole("button", {
+			name: /change plan/iu,
+		});
 		await act(async () => {
 			changeButton.click();
 		});

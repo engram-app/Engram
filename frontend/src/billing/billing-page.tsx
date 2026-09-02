@@ -1,4 +1,8 @@
-import { CheckoutEventNames, initializePaddle, type Paddle } from "@paddle/paddle-js";
+import {
+	CheckoutEventNames,
+	initializePaddle,
+	type Paddle,
+} from "@paddle/paddle-js";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -82,12 +86,16 @@ function SlowActivationBanner({
 	onRefresh: () => void;
 }) {
 	return (
-		<div role="alert" className="rounded-lg border border-border bg-muted/50 p-4 text-sm">
+		<div
+			role="alert"
+			className="rounded-lg border border-border bg-muted/50 p-4 text-sm"
+		>
 			<p className="font-medium text-foreground">
 				Payment received. We're finishing your activation in the background.
 			</p>
 			<p className="mt-1 text-muted-foreground">
-				This usually takes seconds. Refresh in a moment, or contact support if it persists.
+				This usually takes seconds. Refresh in a moment, or contact support if
+				it persists.
 			</p>
 			<div className="mt-3 flex flex-wrap gap-2">
 				<Button size="sm" onClick={onRefresh}>
@@ -108,7 +116,9 @@ function SlowActivationBanner({
 				</Button>
 			</div>
 			{transactionId ? (
-				<p className="mt-3 text-muted-foreground text-xs">Reference: {transactionId}</p>
+				<p className="mt-3 text-muted-foreground text-xs">
+					Reference: {transactionId}
+				</p>
 			) : null}
 		</div>
 	);
@@ -119,7 +129,11 @@ function SlowActivationBanner({
 // heading, cadence toggle row, two cards in the same grid as the real cards.
 function BillingPageSkeleton({ hideHeading }: { hideHeading: boolean }) {
 	return (
-		<article className="space-y-6" aria-busy="true" aria-label="Loading billing">
+		<article
+			className="space-y-6"
+			aria-busy="true"
+			aria-label="Loading billing"
+		>
 			{!hideHeading && (
 				<header className="space-y-2">
 					<Skeleton className="h-6 w-32" />
@@ -130,7 +144,10 @@ function BillingPageSkeleton({ hideHeading }: { hideHeading: boolean }) {
 				<Skeleton className="h-9 w-48" />
 				<ul className="grid items-stretch gap-4 sm:grid-cols-2">
 					{[0, 1].map((i) => (
-						<li key={i} className="flex flex-col gap-4 rounded-lg border border-border bg-card p-6">
+						<li
+							key={i}
+							className="flex flex-col gap-4 rounded-lg border border-border bg-card p-6"
+						>
 							<Skeleton className="h-6 w-24" />
 							<Skeleton className="h-9 w-32" />
 							<Skeleton className="h-3 w-40" />
@@ -212,7 +229,6 @@ export default function BillingPage({
 	// on a trial→active flip).
 	const onActivatedFiredRef = useRef(false);
 	const onActivatedRef = useRef(onActivated);
-	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render is the point: it keeps the callback identity stable so the consuming effect does not re-fire on every render. See the comment above.
 	onActivatedRef.current = onActivated;
 
 	// Cooldown timer — starts on CHECKOUT_COMPLETED. If the activation push
@@ -245,6 +261,7 @@ export default function BillingPage({
 		}
 		paddleRef.current?.Checkout.close();
 		setCheckingOut(false);
+		setCheckoutOpen(false);
 		setCompletedAt(null);
 		setSlow(false);
 		await invalidateBillingState(qc);
@@ -262,7 +279,10 @@ export default function BillingPage({
 					onActivatedRef.current(status);
 				}
 			} catch (err) {
-				console.error("failed to refetch onboarding/status after activation", err);
+				console.error(
+					"failed to refetch onboarding/status after activation",
+					err,
+				);
 				setFinalizing(false);
 			}
 		}
@@ -286,12 +306,15 @@ export default function BillingPage({
 		if (!onActivatedRef.current) {
 			return;
 		}
-		// biome-ignore lint/nursery/useReactCompiler: mount-only cache probe: billing?.active is intentionally sampled on first paint, and onActivated is read through a ref. Same reasoning as the useExhaustiveDependencies suppression above.
 		if (!billing?.active) {
 			return;
 		}
 		const cached = qc.getQueryData<OnboardingStatus>(["onboarding", "status"]);
-		if (cached && cached.next_step !== "billing" && !onActivatedFiredRef.current) {
+		if (
+			cached &&
+			cached.next_step !== "billing" &&
+			!onActivatedFiredRef.current
+		) {
 			onActivatedFiredRef.current = true;
 			onActivatedRef.current(cached);
 		}
@@ -313,10 +336,8 @@ export default function BillingPage({
 	// current theme.
 	const appliedThemeRef = useRef(resolved);
 	if (!(checkingOut || checkoutOpen || slow || finalizing)) {
-		// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render (not an effect) is the point: the frozen value must be readable synchronously by the Paddle-init effect's dependency check in the same render, with no extra render cycle for the freeze/resync to take effect. See the comment above.
 		appliedThemeRef.current = resolved;
 	}
-	// biome-ignore lint/nursery/useReactCompiler: same latest-ref pattern as the write above — read during render is the point, so appliedTheme reflects the frozen ref synchronously in this render's Paddle-init effect deps.
 	const appliedTheme = appliedThemeRef.current;
 
 	useEffect(() => {
@@ -392,7 +413,9 @@ export default function BillingPage({
 						setCheckoutOpen(false);
 						setCompletedAt(null);
 						setSlow(false);
-						toast.error("Something went wrong with checkout. Please try again.");
+						toast.error(
+							"Something went wrong with checkout. Please try again.",
+						);
 						break;
 					}
 					default:
@@ -410,7 +433,8 @@ export default function BillingPage({
 							// short post-payment success screen was stranded in a tall 450px
 							// box. frameInitialHeight covers the initial paint before Paddle
 							// reports the real height. (min-width matches Paddle's own sample.)
-							frameStyle: "width:100%; min-width:312px; background:transparent; border:none;",
+							frameStyle:
+								"width:100%; min-width:312px; background:transparent; border:none;",
 							theme: appliedTheme === "dark" ? "dark" : "light",
 							locale: "en",
 						}
@@ -451,6 +475,11 @@ export default function BillingPage({
 			if (isInline) {
 				setCheckingOut(true);
 			}
+			// Set synchronously at the open() call, not left to wait for Paddle's
+			// async checkout.loaded — otherwise a theme toggle landing in that gap
+			// (network/render latency) sees checkoutOpen still false and tears down
+			// the Paddle instance while the overlay is actively opening.
+			setCheckoutOpen(true);
 			// Paddle finds the .paddle-checkout div by class — the div is rendered
 			// synchronously by the same render cycle as the setCheckingOut update.
 			// React 18 batches state into the same commit, so the DOM is ready by
@@ -464,7 +493,9 @@ export default function BillingPage({
 					// the very first click, and checkoutReady would not catch it.
 					items: [
 						{
-							priceId: config.price_ids[tier][cadence] ?? config.price_ids[tier].monthly,
+							priceId:
+								config.price_ids[tier][cadence] ??
+								config.price_ids[tier].monthly,
 							quantity: 1,
 						},
 					],
@@ -482,7 +513,9 @@ export default function BillingPage({
 	const handleDevCheckoutSuccess = useCallback(async () => {
 		setFinalizing(true);
 		try {
-			const status = await api.post<OnboardingStatus>("/onboarding/accept_free_tier");
+			const status = await api.post<OnboardingStatus>(
+				"/onboarding/accept_free_tier",
+			);
 			qc.setQueryData(["onboarding", "status"], status);
 			setCheckingOut(false);
 			// Honor the at-most-once latch like the real activation path, so a
@@ -502,7 +535,6 @@ export default function BillingPage({
 	// link during payment. Ref-mirrored so the effect only depends on the boolean.
 	const checkoutActive = isInline && (checkingOut || slow || finalizing);
 	const onCheckoutActiveChangeRef = useRef(onCheckoutActiveChange);
-	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render is the point: it keeps the callback identity stable so the consuming effect does not re-fire on every render. See the comment above.
 	onCheckoutActiveChangeRef.current = onCheckoutActiveChange;
 	useEffect(() => {
 		onCheckoutActiveChangeRef.current?.(checkoutActive);
@@ -521,7 +553,9 @@ export default function BillingPage({
 	async function openPortal(action?: string) {
 		setPortalLoading(true);
 		try {
-			const path = action ? `/billing/portal?action=${action}` : "/billing/portal";
+			const path = action
+				? `/billing/portal?action=${action}`
+				: "/billing/portal";
 			const { url } = await api.get<{ url: string }>(path);
 			window.location.href = url;
 		} catch {
@@ -541,6 +575,9 @@ export default function BillingPage({
 			const { transaction_id } = await api.get<{ transaction_id: string }>(
 				"/billing/payment-update-transaction",
 			);
+			// Same reasoning as handleStartCheckout: set before open(), not left to
+			// wait for Paddle's async checkout.loaded.
+			setCheckoutOpen(true);
 			paddle.Checkout.open({ transactionId: transaction_id });
 		} catch {
 			toast.error("Could not start the payment update. Please try again.");
@@ -554,7 +591,9 @@ export default function BillingPage({
 			{!hideHeading && (
 				<header>
 					<h1 className="font-semibold text-foreground text-xl">Billing</h1>
-					<p className="mt-1 text-muted-foreground text-sm">Manage your plan and payment method.</p>
+					<p className="mt-1 text-muted-foreground text-sm">
+						Manage your plan and payment method.
+					</p>
 				</header>
 			)}
 
@@ -571,7 +610,10 @@ export default function BillingPage({
                   cancel') with a vague 'Could not cancel' toast. */}
 							{billing.subscription.status !== "canceled" &&
 								detail?.scheduled_change?.action !== "cancel" && (
-									<Button variant="destructive" onClick={() => setPanel("cancel")}>
+									<Button
+										variant="destructive"
+										onClick={() => setPanel("cancel")}
+									>
 										Cancel subscription
 									</Button>
 								)}
@@ -612,8 +654,13 @@ export default function BillingPage({
 							aria-live="polite"
 							className="flex flex-col items-center justify-center gap-3 py-16 text-center"
 						>
-							<Loader2 className="size-6 animate-spin text-primary" aria-hidden="true" />
-							<p className="text-muted-foreground text-sm">Setting up your account…</p>
+							<Loader2
+								className="size-6 animate-spin text-primary"
+								aria-hidden="true"
+							/>
+							<p className="text-muted-foreground text-sm">
+								Setting up your account…
+							</p>
 						</section>
 					) : slow ? (
 						<SlowActivationBanner
@@ -627,6 +674,7 @@ export default function BillingPage({
 								onClick={() => {
 									paddleRef.current?.Checkout.close();
 									setCheckingOut(false);
+									setCheckoutOpen(false);
 									setCompletedAt(null);
 								}}
 								className="text-muted-foreground text-sm underline-offset-4 hover:text-foreground hover:underline"
@@ -635,10 +683,12 @@ export default function BillingPage({
 							</button>
 							{DEV_FAKE_CHECKOUT ? (
 								<div className="rounded-lg border border-primary/50 border-dashed bg-muted/30 p-6 text-center">
-									<p className="font-medium text-foreground text-sm">Test checkout (dev only)</p>
+									<p className="font-medium text-foreground text-sm">
+										Test checkout (dev only)
+									</p>
 									<p className="mx-auto mt-1 max-w-sm text-muted-foreground text-xs">
-										Paddle's checkout can't embed on localhost, so this stand-in lets you walk the
-										flow. Not shown in production.
+										Paddle's checkout can't embed on localhost, so this stand-in
+										lets you walk the flow. Not shown in production.
 									</p>
 									<div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center">
 										<button
@@ -655,7 +705,9 @@ export default function BillingPage({
 											type="button"
 											onClick={() => {
 												setCheckingOut(false);
-												toast.error("Payment did not go through. Please try again.");
+												toast.error(
+													"Payment did not go through. Please try again.",
+												);
 											}}
 											className={cn(
 												"rounded-lg px-4 py-2 font-medium text-sm transition",
@@ -674,7 +726,9 @@ export default function BillingPage({
 						<>
 							{!hideHeading && (
 								<>
-									<h2 className="font-semibold text-foreground text-lg">Choose a Plan</h2>
+									<h2 className="font-semibold text-foreground text-lg">
+										Choose a Plan
+									</h2>
 									<p className="text-muted-foreground text-sm">
 										Both plans include a 7-day free trial.
 									</p>
@@ -756,7 +810,9 @@ export default function BillingPage({
 
 			{!hideHeading && billing.subscription && (
 				<>
-					<PendingChangeBanner scheduledChange={detail?.scheduled_change ?? null} />
+					<PendingChangeBanner
+						scheduledChange={detail?.scheduled_change ?? null}
+					/>
 					<PaymentMethodCard
 						paymentMethod={history?.payment_method ?? null}
 						onUpdate={handleUpdatePayment}
@@ -778,12 +834,14 @@ export default function BillingPage({
 							onClick={() => openPortal()}
 							disabled={portalLoading}
 						>
-							{Boolean(portalLoading) && <Loader2 aria-hidden className="size-4 animate-spin" />}
+							{Boolean(portalLoading) && (
+								<Loader2 aria-hidden className="size-4 animate-spin" />
+							)}
 							{portalLoading ? "Opening Paddle…" : "Open Paddle billing portal"}
 						</Button>
 						<p className="text-muted-foreground text-xs">
-							Paddle is our payment processor. Use this if the controls above don't cover what you
-							need.
+							Paddle is our payment processor. Use this if the controls above
+							don't cover what you need.
 						</p>
 					</div>
 				</>
