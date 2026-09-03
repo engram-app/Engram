@@ -271,6 +271,64 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert Engram.Connections.count_active(other.id, :mcp) == 1
     end
 
+    test "?family_id= revokes ONE grant and leaves the client's other alive", %{conn: conn} do
+      user = insert(:user)
+      client = insert(:oauth_client, kind: "mcp")
+      work = insert(:vault, user: user)
+      personal = insert(:vault, user: user)
+      work_family = Ecto.UUID.generate()
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        family_id: work_family,
+        label: "work",
+        vault_ids: [work.id]
+      )
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        label: "laptop",
+        vault_ids: [personal.id]
+      )
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/oauth/#{client.client_id}?family_id=#{work_family}")
+
+      assert conn.status == 204
+
+      rows =
+        build_conn()
+        |> put_req_header("accept", "application/json")
+        |> jwt_authed(user)
+        |> get("/api/connections")
+        |> json_response(200)
+
+      assert [survivor] = Enum.filter(rows, &(&1["kind"] == "mcp"))
+      assert survivor["name"] == "laptop"
+      assert survivor["family_id"] != work_family
+      assert survivor["vault_ids"] == [personal.id]
+    end
+
+    test "404 for a family_id the user does not own", %{conn: conn} do
+      user = insert(:user)
+      client = insert(:oauth_client, kind: "mcp")
+      insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/oauth/#{client.client_id}?family_id=#{Ecto.UUID.generate()}")
+
+      assert conn.status == 404
+      # The client's own grant is untouched — a bogus family must not fall
+      # back to the client-wide revoke.
+      assert Engram.Connections.count_active(user.id, :mcp) == 1
+    end
+
     test "returns 401/403 for API-key-authed requests", %{conn: conn} do
       user = insert(:user)
       grant_api_write!(user)

@@ -10,7 +10,10 @@ defmodule Engram.Connections do
     * `:obsidian` (device-flow) — `client_id = family_id` (UUID), revoke via
       `DELETE /api/connections/device/:family_id`
     * `:mcp`, `:obsidian` (OAuth) — `client_id = oauth_clients.client_id`,
-      revoke via `DELETE /api/connections/oauth/:client_id`
+      revoke via `DELETE /api/connections/oauth/:client_id`. One client can
+      hold SEVERAL grants (different vault sets, different labels), and each
+      is one row keyed by `family_id` — pass `?family_id=` to revoke the row
+      the user actually clicked, or omit it to disconnect the whole client.
     * `:pat` — `key_id` (integer), revoke via `DELETE /api/connections/pat/:id`
 
   Frontend consumers must branch on `kind` to choose the right route.
@@ -92,6 +95,12 @@ defmodule Engram.Connections do
   @doc """
   Revokes (sets `revoked_at = now`) all active refresh tokens for `(user_id, client_id, vault_id)`.
 
+  Client-grain: every grant the client holds dies, which is what the
+  connection-cap swap flows need — `count_active/2` counts DISTINCT
+  `client_id`, so freeing a cap slot means killing the client, not one of its
+  grants. To revoke a single grant the user picked off the connections list,
+  use `revoke_oauth_grant/2`.
+
   When `vault_id` is `nil`, ALL vault scopes for that user+client are revoked —
   this is the device-flow case where the original grant had no vault binding.
   Vault-scoped controllers MUST pass the originating `vault_id` to avoid
@@ -126,6 +135,36 @@ defmodule Engram.Connections do
 
     case Repo.update_all(query, set: [revoked_at: now]) do
       {0, _} -> if any_history?(user_id, client_id), do: :ok, else: {:error, :not_found}
+      {_, _} -> :ok
+    end
+  end
+
+  @doc """
+  Revokes (sets `revoked_at = now`) the active OAuth refresh tokens of ONE
+  grant lineage, `(user_id, family_id)`.
+
+  `family_id` is minted per authorization-code exchange and carried unchanged
+  across every rotation, so it names exactly the grant the user consented to —
+  and exactly one row of `list_for_user/2`. A client the user authorized twice
+  (say one grant over their work vaults, another over personal) has two
+  families, and revoking one leaves the other minting.
+
+  Same error semantics as `revoke_device_family/2`: idempotent `:ok` once the
+  family is known, `{:error, :not_found}` for a family this user never held.
+  """
+  @spec revoke_oauth_grant(Ecto.UUID.t(), Ecto.UUID.t()) :: :ok | {:error, :not_found}
+  def revoke_oauth_grant(user_id, family_id) do
+    now = DateTime.utc_now(:second)
+
+    query =
+      from(t in RefreshToken,
+        where: t.user_id == ^user_id,
+        where: t.family_id == ^family_id,
+        where: is_nil(t.revoked_at)
+      )
+
+    case Repo.update_all(query, set: [revoked_at: now]) do
+      {0, _} -> if oauth_family_history?(user_id, family_id), do: :ok, else: {:error, :not_found}
       {_, _} -> :ok
     end
   end
@@ -215,6 +254,10 @@ defmodule Engram.Connections do
   @type connection_view :: %{
           kind: :obsidian | :mcp | :pat,
           client_id: String.t() | nil,
+          # The grant lineage this row IS, and the id its revoke keys on. One
+          # client can hold several; `client_id` alone cannot tell them apart.
+          # nil for PATs, which have no lineage.
+          family_id: Ecto.UUID.t() | nil,
           key_id: integer() | nil,
           name: String.t() | nil,
           software_id: String.t() | nil,
@@ -278,11 +321,13 @@ defmodule Engram.Connections do
       # unconsumed successor. Filtering both gives the live grant.
       where: is_nil(t.consumed_at),
       order_by: [desc: coalesce(t.last_used_at, t.inserted_at)],
-      # Both columns: a multi-vault grant is one row (its whole array is one
-      # DISTINCT key), while two legacy scalar-only grants for the same client
-      # on different vaults stay two rows — keying on `vault_ids` alone would
-      # collapse them, since theirs is NULL.
-      distinct: [t.client_id, t.vault_ids, t.vault_id],
+      # One row per grant lineage, exactly as `device_rows/1` keys on its own
+      # family_id. Rotation successors share a family so they still collapse,
+      # while two separate authorizations of one client stay two rows even
+      # when they cover the same vaults — and each row's Disconnect can then
+      # revoke only itself. Keying on the vault columns instead would merge
+      # those two into a row no single revoke could clear.
+      distinct: t.family_id,
       select: {t, c}
     )
     |> Repo.all()
@@ -297,6 +342,7 @@ defmodule Engram.Connections do
       %{
         kind: String.to_existing_atom(c.kind),
         client_id: c.client_id,
+        family_id: t.family_id,
         key_id: nil,
         # The user's own label wins. `identity.display_name` is the CLIENT's
         # name, which is identical across two grants for the same client — the
@@ -339,6 +385,7 @@ defmodule Engram.Connections do
       %{
         kind: :pat,
         client_id: nil,
+        family_id: nil,
         key_id: k.id,
         name: k.name,
         software_id: nil,
@@ -378,6 +425,7 @@ defmodule Engram.Connections do
         kind: :obsidian,
         # family_id is stable per connection lineage — safe to use as client_id
         client_id: rt.family_id,
+        family_id: rt.family_id,
         key_id: nil,
         name: "Obsidian Vault Sync",
         software_id: "engram-vault-sync",
@@ -409,6 +457,16 @@ defmodule Engram.Connections do
     Repo.exists?(
       from(t in RefreshToken,
         where: t.user_id == ^user_id and t.client_id == ^client_id
+      )
+    )
+  end
+
+  # Returns true if `user_id` has any refresh token (of any state) in
+  # `family_id`, confirming the grant lineage belongs to this user.
+  defp oauth_family_history?(user_id, family_id) do
+    Repo.exists?(
+      from(t in RefreshToken,
+        where: t.user_id == ^user_id and t.family_id == ^family_id
       )
     )
   end

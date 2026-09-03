@@ -488,6 +488,85 @@ defmodule Engram.ConnectionsTest do
     end
   end
 
+  describe "revoke_oauth_grant/2" do
+    test "revokes ONE grant and leaves the client's other grant intact" do
+      # The defect this pins: both grants belong to one client, so a
+      # client-wide revoke kills a connection the user never clicked.
+      %{user: user, work: work, personal: personal, work_family: work_family} =
+        two_grants_one_client()
+
+      assert :ok = Connections.revoke_oauth_grant(user.id, work_family)
+
+      assert [survivor] = Connections.list_for_user(user)
+      refute survivor.family_id == work_family
+      assert survivor.vault_ids == [personal.id]
+
+      # And the revoked one is really dead, not merely hidden from the list.
+      assert [revoked] =
+               Engram.Repo.all(
+                 from(t in Engram.OAuth.RefreshToken, where: t.family_id == ^work_family)
+               )
+
+      assert revoked.revoked_at
+      assert revoked.vault_ids == [work.id]
+    end
+
+    test "revokes every token in the family, including rotation successors" do
+      user = insert_user()
+      client = insert(:oauth_client, kind: "mcp")
+      family = Ecto.UUID.generate()
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        family_id: family,
+        consumed_at: DateTime.utc_now(:second)
+      )
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        family_id: family
+      )
+
+      assert :ok = Connections.revoke_oauth_grant(user.id, family)
+      assert Connections.count_active(user.id, :mcp) == 0
+
+      assert Enum.all?(
+               Engram.Repo.all(
+                 from(t in Engram.OAuth.RefreshToken, where: t.family_id == ^family)
+               ),
+               & &1.revoked_at
+             )
+    end
+
+    test "is idempotent, second revoke returns :ok" do
+      %{user: user, work_family: work_family} = two_grants_one_client()
+
+      assert :ok = Connections.revoke_oauth_grant(user.id, work_family)
+      assert :ok = Connections.revoke_oauth_grant(user.id, work_family)
+    end
+
+    test "returns :not_found for a family the user does not own" do
+      %{work_family: work_family} = two_grants_one_client()
+      stranger = insert_user()
+
+      assert {:error, :not_found} = Connections.revoke_oauth_grant(stranger.id, work_family)
+
+      assert {:error, :not_found} =
+               Connections.revoke_oauth_grant(stranger.id, Ecto.UUID.generate())
+    end
+
+    test "the client-wide revoke still takes BOTH grants" do
+      # Kept reachable on purpose: the connection cap counts clients, so
+      # freeing a slot means disconnecting the app, not one of its grants.
+      %{user: user, client: client} = two_grants_one_client()
+
+      assert :ok = Connections.revoke_oauth_family(user.id, client.client_id, nil)
+      assert Connections.list_for_user(user) == []
+    end
+  end
+
   describe "revoke_device_family/2" do
     test "sets revoked_at on all active tokens for (user, family)" do
       user = insert_user()
@@ -824,6 +903,29 @@ defmodule Engram.ConnectionsTest do
       assert Enum.sort(ids) == Enum.sort([one.id, two.id])
     end
 
+    test "two grants of ONE client are two rows, even over the same vaults" do
+      # Under the old vault-keyed DISTINCT these collapsed into a single row
+      # that no per-grant revoke could clear. `family_id` is what tells them
+      # apart, and the labels are what let the user tell them apart.
+      user = insert_user()
+      client = insert(:oauth_client, kind: "mcp")
+      vault = insert(:vault, user: user)
+
+      for label <- ["laptop", "work"] do
+        insert(:oauth_refresh_token,
+          user_id: user.id,
+          client_id: client.client_id,
+          label: label,
+          vault_id: nil,
+          vault_ids: [vault.id]
+        )
+      end
+
+      rows = Connections.list_for_user(user)
+      assert Enum.sort(Enum.map(rows, & &1.name)) == ["laptop", "work"]
+      assert length(Enum.uniq(Enum.map(rows, & &1.family_id))) == 2
+    end
+
     test "PAT rows carry the same array shape (nil), never a scalar" do
       user = insert_user()
       insert(:api_key, user: user, name: "ci-bot")
@@ -833,6 +935,36 @@ defmodule Engram.ConnectionsTest do
       assert is_nil(row.vault_ids)
       refute Map.has_key?(row, :vault_id)
     end
+  end
+
+  # One MCP client the user authorized TWICE, over different vault sets — the
+  # shape multi-vault consent makes reachable, and the one a client-wide
+  # revoke gets wrong.
+  defp two_grants_one_client do
+    user = insert_user()
+    client = insert(:oauth_client, kind: "mcp")
+    work = insert(:vault, user: user)
+    personal = insert(:vault, user: user)
+    work_family = Ecto.UUID.generate()
+
+    insert(:oauth_refresh_token,
+      user_id: user.id,
+      client_id: client.client_id,
+      family_id: work_family,
+      label: "work",
+      vault_id: nil,
+      vault_ids: [work.id]
+    )
+
+    insert(:oauth_refresh_token,
+      user_id: user.id,
+      client_id: client.client_id,
+      label: "laptop",
+      vault_id: nil,
+      vault_ids: [personal.id]
+    )
+
+    %{user: user, client: client, work: work, personal: personal, work_family: work_family}
   end
 
   # One active MCP grant covering three vaults, in the post-release shape:

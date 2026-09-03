@@ -71,6 +71,16 @@ defmodule EngramWeb.Schemas.Connection do
     properties: %{
       kind: %Schema{type: :string, example: "oauth"},
       client_id: %Schema{type: :string, nullable: true},
+      family_id: %Schema{
+        type: :string,
+        format: :uuid,
+        nullable: true,
+        description:
+          "The grant lineage this row is. One OAuth client can hold several " <>
+            "grants over different vault sets, each its own row; pass this to " <>
+            "`DELETE /connections/oauth/{client_id}` to revoke only this one. " <>
+            "Null for PATs."
+      },
       key_id: %Schema{type: :string, nullable: true},
       name: %Schema{type: :string, nullable: true},
       software_id: %Schema{type: :string, nullable: true},
