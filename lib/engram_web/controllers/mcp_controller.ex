@@ -398,33 +398,17 @@ defmodule EngramWeb.McpController do
 
   # -- Vault resolution --
 
-  # The single source of truth for "which vaults can THIS credential reach":
-  # an OAuth-bound token sees only its bound vault; a restricted API key only
-  # its permitted vaults; an unrestricted credential all of the user's vaults.
-  # Every vault-scope decision (resolve, set_vault, list_vaults) routes through
-  # here so the privacy boundary is enforced in exactly one place.
+  # "Which vaults can THIS credential reach" — answered by Engram.Permissions,
+  # which intersects the OAuth grant's vault set with the API key's restricted
+  # set (either may be unrestricted). Every vault-scope decision (resolve,
+  # set_vault, list_vaults) routes through here, and here through Permissions,
+  # so the privacy boundary is enforced in exactly one place.
   defp accessible_vaults(user, conn), do: scope_vaults(Engram.Vaults.list_vaults(user), conn)
 
   # Narrows an already-loaded vault list to what the credential may reach, so a
   # caller that already has the list (e.g. bare search) doesn't re-query it.
-  defp scope_vaults(vaults, conn) do
-    oauth_bound = conn.assigns[:oauth_scope_vault_id]
-    # One query for the API key's restricted set, then filter in memory — not a
-    # per-vault DB round-trip.
-    allowed = Engram.Vaults.accessible_vault_ids(conn.assigns[:current_api_key])
-
-    vaults
-    |> maybe_filter_oauth(oauth_bound)
-    |> filter_api_key(allowed)
-  end
-
-  defp maybe_filter_oauth(vaults, nil), do: vaults
-
-  defp maybe_filter_oauth(vaults, bound) when is_binary(bound),
-    do: Enum.filter(vaults, &(to_string(&1.id) == to_string(bound)))
-
-  defp filter_api_key(vaults, :all), do: vaults
-  defp filter_api_key(vaults, ids), do: Enum.filter(vaults, &(&1.id in ids))
+  defp scope_vaults(vaults, conn),
+    do: Engram.Permissions.filter(Engram.Permissions.vault_scope(conn), vaults)
 
   # Resolves which vault a tool call targets. MCP is stateless — there is no
   # active-vault session — so the vault comes from either an explicit `vault_id`
@@ -453,38 +437,33 @@ defmodule EngramWeb.McpController do
 
           _many ->
             {:error,
-             "You own multiple vaults — specify which one. Call list_vaults to see the IDs, " <>
-               "then pass vault_id on this tool call."}
+             "This connection can reach more than one vault — specify which. Call " <>
+               "list_vaults to see the IDs, then pass vault_id on this tool call."}
         end
     end
   end
 
-  # A caller-named vault: enforce OAuth binding + API-key scope with a single
-  # get_vault (not a full list). vault_denied_message re-derives the specific
-  # reason on the error path only.
+  # A caller-named vault: enforce the credential's scope with a single get_vault
+  # (not a full list). vault_denied_message re-derives the specific reason on
+  # the error path only.
   defp resolve_requested_vault(user, requested, conn) do
-    oauth_bound = conn.assigns[:oauth_scope_vault_id]
-
-    if is_binary(oauth_bound) and to_string(requested) != to_string(oauth_bound) do
-      {:error, vault_denied_message(user, requested, conn)}
+    with {:ok, vault} <- Engram.Vaults.get_vault(user, requested),
+         :ok <- Engram.Permissions.check(Engram.Permissions.vault_scope(conn), vault) do
+      {:ok, vault}
     else
-      with {:ok, vault} <- Engram.Vaults.get_vault(user, requested),
-           :ok <- Engram.Vaults.check_api_key_access(conn.assigns[:current_api_key], vault) do
-        {:ok, vault}
-      else
-        _ -> {:error, vault_denied_message(user, requested, conn)}
-      end
+      _ -> {:error, vault_denied_message(user, requested, conn)}
     end
   end
 
-  # Explains why a requested vault isn't reachable — an OAuth binding, an
-  # API-key restriction, or a genuinely unknown vault — so the caller gets
+  # Explains why a requested vault isn't reachable — an OAuth grant's vault set,
+  # an API-key restriction, or a genuinely unknown vault — so the caller gets
   # actionable guidance instead of a flat "not found".
   defp vault_denied_message(user, requested, conn) do
     cond do
-      is_binary(conn.assigns[:oauth_scope_vault_id]) ->
-        "This connection is bound to vault #{conn.assigns.oauth_scope_vault_id} and cannot " <>
-          "access vault #{requested}. Reconnect with an all-vaults grant (or that vault) to switch."
+      is_list(conn.assigns[:oauth_scope_vault_ids]) ->
+        "This connection is authorized for #{length(conn.assigns.oauth_scope_vault_ids)} " <>
+          "vault(s) and cannot access vault #{requested}. Call list_vaults to see which " <>
+          "ones it can reach, or reconnect with a grant that includes this vault."
 
       match?({:ok, _}, Engram.Vaults.get_vault(user, requested)) ->
         "API key does not have access to vault #{requested}"

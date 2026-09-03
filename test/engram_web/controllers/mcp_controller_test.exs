@@ -378,7 +378,7 @@ defmodule EngramWeb.McpControllerTest do
 
       assert resp["result"]["isError"] == true
       text = resp["result"]["content"] |> hd() |> Map.get("text")
-      assert text =~ "multiple vaults"
+      assert text =~ "more than one vault"
       assert text =~ "list_vaults"
     end
 
@@ -395,8 +395,8 @@ defmodule EngramWeb.McpControllerTest do
         end)
 
       text = resp["result"]["content"] |> hd() |> Map.get("text")
-      refute text =~ "multiple vaults"
-      refute text =~ "specify which one"
+      refute text =~ "more than one vault"
+      refute text =~ "specify which"
     end
 
     test "a read targets the requested non-default vault", %{conn: conn, vault_b: vault_b} do
@@ -1010,7 +1010,7 @@ defmodule EngramWeb.McpControllerTest do
       conn = call_tool(conn, "list_folders")
       text = tool_text(conn)
 
-      refute text =~ "multiple vaults"
+      refute text =~ "more than one vault"
       refute text =~ "Error:"
     end
 
