@@ -598,6 +598,43 @@ defmodule EngramWeb.SearchControllerTest do
       end
     end
 
+    # Narrowing the SEARCH and then resolving ids outside the narrowing defeats
+    # the point: with `vault: nil` the id lookup matched `path_hmac` across every
+    # vault the user owns, so a path present in both a permitted and a
+    # non-permitted vault could return the out-of-scope note's UUID.
+    test "the id comes from the result's own vault, not a same-path note elsewhere", %{
+      restricted: conn,
+      bypass: bypass,
+      user: user,
+      vault: vault,
+      vault_c: vault_c
+    } do
+      stub(Engram.MockEmbedder, :embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      # Same path in both vaults. C is inserted LAST on purpose: the old
+      # vault-blind reduce kept whichever row came back last, so this ordering
+      # is what makes the bug observable rather than a coin flip.
+      permitted = Engram.Fixtures.insert_note!(user, vault, %{"path" => "Inbox.md"})
+      out_of_scope = Engram.Fixtures.insert_note!(user, vault_c, %{"path" => "Inbox.md"})
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "result" => [chunk("uuid-a", 0.9, "Inbox.md", "Inbox", "findme", user, vault.id)]
+          })
+        )
+      end)
+
+      conn = post(conn, "/api/search", %{query: "findme", cross_vault: true})
+      assert %{"results" => [hit]} = json_response(conn, 200)
+
+      assert hit["id"] == permitted.id
+      refute hit["id"] == out_of_scope.id
+    end
+
     # The over-block is as much a bug as the leak: an unrestricted credential is
     # entitled to search everything, so it must emit NO vault filter.
     test "an unrestricted key still searches every vault", %{
