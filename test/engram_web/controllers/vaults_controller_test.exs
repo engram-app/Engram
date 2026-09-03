@@ -506,14 +506,101 @@ defmodule EngramWeb.VaultsControllerTest do
     end
   end
 
-  defp ensure_external_id(%{external_id: ext} = user) when is_binary(ext) and ext != "", do: user
+  describe "per-vault destructive routes honour the grant's scope" do
+    # `delete`/`purge`/`restore` are irreversible and carried NO scope check,
+    # so a grant over vaults A+B could destroy vault C. `show`/`update` leaked
+    # and mutated out-of-scope vaults respectively.
+    setup do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      granted = insert(:vault, user: user, slug: "granted", is_default: true)
+      outside = insert(:vault, user: user, slug: "outside")
 
-  defp ensure_external_id(user) do
-    {:ok, updated} =
-      user
-      |> Ecto.Changeset.change(external_id: "test-#{user.id}")
-      |> Engram.Repo.update(skip_tenant_check: true)
+      user = ensure_external_id(user)
 
-    updated
+      scoped =
+        Accounts.generate_jwt(user, %{"scope" => "mcp", "vault_ids" => [granted.id]})
+
+      unscoped = Accounts.generate_jwt(user, %{"scope" => "mcp"})
+
+      %{user: user, granted: granted, outside: outside, scoped: scoped, unscoped: unscoped}
+    end
+
+    defp bearer(token) do
+      build_conn()
+      |> put_req_header("accept", "application/json")
+      |> put_req_header("authorization", "Bearer #{token}")
+    end
+
+    test "a scoped grant cannot DELETE a vault outside its scope", %{
+      scoped: scoped,
+      outside: outside
+    } do
+      conn = delete(bearer(scoped), ~p"/api/vaults/#{outside.id}")
+
+      assert %{"error" => "Not authorized for this vault"} = json_response(conn, 403)
+      # Still alive — a 403 that soft-deleted it anyway would be the real bug.
+      assert is_nil(
+               Engram.Repo.get!(Engram.Vaults.Vault, outside.id, skip_tenant_check: true).deleted_at
+             )
+    end
+
+    test "a scoped grant cannot PURGE a vault outside its scope", %{
+      scoped: scoped,
+      outside: outside
+    } do
+      conn = post(bearer(scoped), ~p"/api/vaults/#{outside.id}/purge")
+
+      assert %{"error" => "Not authorized for this vault"} = json_response(conn, 403)
+      assert Engram.Repo.get(Engram.Vaults.Vault, outside.id, skip_tenant_check: true)
+    end
+
+    test "a scoped grant cannot RESTORE a vault outside its scope", %{
+      scoped: scoped,
+      outside: outside
+    } do
+      conn = post(bearer(scoped), ~p"/api/vaults/#{outside.id}/restore")
+
+      assert %{"error" => "Not authorized for this vault"} = json_response(conn, 403)
+    end
+
+    test "a scoped grant cannot SHOW or UPDATE a vault outside its scope", %{
+      scoped: scoped,
+      outside: outside
+    } do
+      # Same leak class Task 8 closed on the index — `show` returned the name
+      # and counts, `update` renamed it.
+      assert %{"error" => "Not authorized for this vault"} =
+               bearer(scoped) |> get(~p"/api/vaults/#{outside.id}") |> json_response(403)
+
+      assert %{"error" => "Not authorized for this vault"} =
+               bearer(scoped)
+               |> patch(~p"/api/vaults/#{outside.id}", %{name: "renamed"})
+               |> json_response(403)
+    end
+
+    test "a scoped grant CAN delete a vault inside its scope", %{
+      scoped: scoped,
+      granted: granted
+    } do
+      # Over-block guard: the check narrows to the grant, it does not forbid
+      # per-vault writes outright.
+      conn = delete(bearer(scoped), ~p"/api/vaults/#{granted.id}")
+
+      assert %{"deleted" => true} = json_response(conn, 200)
+    end
+
+    test "an UNRESTRICTED grant can still delete any of the user's vaults", %{
+      unscoped: unscoped,
+      outside: outside
+    } do
+      # An all-vaults grant is deliberately still allowed here: this is a scope
+      # check, not a session requirement. Deciding otherwise is a product call,
+      # not a security one.
+      conn = delete(bearer(unscoped), ~p"/api/vaults/#{outside.id}")
+
+      assert %{"deleted" => true} = json_response(conn, 200)
+    end
   end
 end

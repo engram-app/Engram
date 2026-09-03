@@ -29,17 +29,6 @@ defmodule EngramWeb.McpOAuthScopeTest do
     %{conn: conn, user: user, vault_a: vault_a, vault_b: vault_b}
   end
 
-  defp ensure_external_id(%{external_id: ext} = user) when is_binary(ext) and ext != "", do: user
-
-  defp ensure_external_id(user) do
-    {:ok, updated} =
-      user
-      |> Ecto.Changeset.change(external_id: "test-#{user.id}")
-      |> Engram.Repo.update(skip_tenant_check: true)
-
-    updated
-  end
-
   defp oauth_authed(conn, user, vault_id) do
     user = ensure_external_id(user)
     token = Engram.Accounts.generate_jwt(user, %{"scope" => "mcp", "vault_id" => vault_id})

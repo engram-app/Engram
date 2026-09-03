@@ -100,7 +100,7 @@ defmodule Engram.Connections do
   Idempotent: a second call after revoke returns `:ok`. Unknown user+client
   combinations return `{:error, :not_found}`.
   """
-  @spec revoke_oauth_family(integer(), String.t(), integer() | nil) ::
+  @spec revoke_oauth_family(Ecto.UUID.t(), String.t(), Ecto.UUID.t() | nil) ::
           :ok | {:error, :not_found}
   def revoke_oauth_family(user_id, client_id, vault_id) do
     now = DateTime.utc_now(:second)

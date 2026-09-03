@@ -35,17 +35,6 @@ defmodule EngramWeb.Plugs.RequireSessionTest do
     put_req_header(conn, "authorization", "Bearer #{token}")
   end
 
-  defp ensure_external_id(%{external_id: ext} = user) when is_binary(ext) and ext != "", do: user
-
-  defp ensure_external_id(user) do
-    {:ok, updated} =
-      user
-      |> Ecto.Changeset.change(external_id: "test-#{user.id}")
-      |> Engram.Repo.update(skip_tenant_check: true)
-
-    updated
-  end
-
   describe "OAuth grants are blocked from credential management" do
     test "a vault-scoped grant cannot MINT an api key", %{conn: conn, user: user, vault: vault} do
       # THE escalation case. Without this the app walks away holding an
@@ -131,7 +120,72 @@ defmodule EngramWeb.Plugs.RequireSessionTest do
     end
   end
 
+  describe "account-wide primitives are session-only" do
+    test "a grant cannot approve its own device flow", %{conn: conn, user: user, vault: vault} do
+      # `POST /api/auth/device/start` is PUBLIC, so without this a third-party
+      # client starts its own device flow and approves it with its own token,
+      # minting a device refresh token bound to any vault the user owns — or to
+      # a brand-new one via `vault_id: "new"`. Same escalation as POST /api-keys.
+      conn =
+        conn
+        |> oauth_authed(user, %{"scope" => "mcp", "vault_ids" => [vault.id]})
+        |> post("/api/auth/device/authorize", %{
+          "user_code" => "ABCD-1234",
+          "vault_id" => vault.id
+        })
+
+      assert %{"error" => "oauth_grant_not_allowed"} = json_response(conn, 403)
+    end
+
+    test "a grant cannot delete the account", %{conn: conn, user: user, vault: vault} do
+      conn =
+        conn
+        |> oauth_authed(user, %{"scope" => "mcp", "vault_ids" => [vault.id]})
+        |> delete("/api/me")
+
+      assert %{"error" => "oauth_grant_not_allowed"} = json_response(conn, 403)
+
+      # Still there. A 403 that deleted the account anyway would be worse than
+      # no check at all.
+      assert Engram.Repo.get(Engram.Accounts.User, user.id, skip_tenant_check: true)
+    end
+
+    test "a session JWT still reaches device authorize", %{conn: conn, user: user, vault: vault} do
+      # Over-block guard: device linking runs through the browser for EVERY
+      # user, so a false positive here breaks onboarding outright. Asserts only
+      # that RequireSession let it through — the bogus user_code then 404s.
+      conn =
+        conn
+        |> session_authed(user)
+        |> post("/api/auth/device/authorize", %{
+          "user_code" => "NOPE-0000",
+          "vault_id" => vault.id
+        })
+
+      refute conn.status == 403
+    end
+  end
+
   describe "API keys keep their own rejection" do
+    test "an api key cannot approve a device flow either", %{conn: conn, user: user, vault: vault} do
+      # This route used to accept API keys. A vault-restricted key minting a
+      # device token bound to ANY vault is the same escalation as the OAuth
+      # case, so the tightening is deliberate — pinned here rather than left to
+      # be discovered as a regression.
+      {:ok, raw_key, _} = Engram.Accounts.create_api_key(user, "device-key")
+      grant_api_write!(user)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{raw_key}")
+        |> post("/api/auth/device/authorize", %{
+          "user_code" => "ABCD-1234",
+          "vault_id" => vault.id
+        })
+
+      assert %{"error" => "api_key_not_allowed"} = json_response(conn, 403)
+    end
+
     test "an api key still gets api_key_not_allowed, not the OAuth code", %{
       conn: conn,
       user: user

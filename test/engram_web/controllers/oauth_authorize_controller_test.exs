@@ -10,17 +10,6 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
     put_req_header(conn, "authorization", "Bearer #{token}")
   end
 
-  defp ensure_external_id(%{external_id: ext} = user) when is_binary(ext) and ext != "", do: user
-
-  defp ensure_external_id(user) do
-    {:ok, updated} =
-      user
-      |> Ecto.Changeset.change(external_id: "test-#{user.id}")
-      |> Repo.update(skip_tenant_check: true)
-
-    updated
-  end
-
   defp register_client(redirect_uri \\ "https://claude.ai/api/mcp/auth_callback") do
     {:ok, client} =
       OAuth.register_client(%{

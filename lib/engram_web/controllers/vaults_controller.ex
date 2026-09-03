@@ -123,29 +123,25 @@ defmodule EngramWeb.VaultsController do
   def show(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 
-    case parse_id(id) do
-      {:ok, vault_id} ->
-        case Vaults.get_vault(user, vault_id) do
-          {:ok, vault} ->
-            # Fires once per SPA navigation to /v/:id. The list endpoint
-            # /vaults (index/2) is the picker fetch — emitting there would
-            # conflate browsing with opening, so the event stays on show/2.
-            _ =
-              Engram.Observability.PostHog.capture(
-                Engram.Observability.PostHog.distinct_id_for(user),
-                "vault_opened",
-                %{vault_id: vault.id}
-              )
+    with_scoped_vault(conn, id, fn vault_id ->
+      case Vaults.get_vault(user, vault_id) do
+        {:ok, vault} ->
+          # Fires once per SPA navigation to /v/:id. The list endpoint
+          # /vaults (index/2) is the picker fetch — emitting there would
+          # conflate browsing with opening, so the event stays on show/2.
+          _ =
+            Engram.Observability.PostHog.capture(
+              Engram.Observability.PostHog.distinct_id_for(user),
+              "vault_opened",
+              %{vault_id: vault.id}
+            )
 
-            json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
+          json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
 
-          {:error, :not_found} ->
-            not_found(conn)
-        end
-
-      :error ->
-        not_found(conn)
-    end
+        {:error, :not_found} ->
+          not_found(conn)
+      end
+    end)
   end
 
   # ── update ─────────────────────────────────────────────────────────────────
@@ -171,22 +167,18 @@ defmodule EngramWeb.VaultsController do
     user = conn.assigns.current_user
     attrs = Map.take(params, ["name", "description", "is_default"])
 
-    case parse_id(id) do
-      {:ok, vault_id} ->
-        case Vaults.update_vault(user, vault_id, attrs) do
-          {:ok, vault} ->
-            json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
+    with_scoped_vault(conn, id, fn vault_id ->
+      case Vaults.update_vault(user, vault_id, attrs) do
+        {:ok, vault} ->
+          json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
 
-          {:error, :not_found} ->
-            not_found(conn)
+        {:error, :not_found} ->
+          not_found(conn)
 
-          {:error, %Ecto.Changeset{}} = error ->
-            error
-        end
-
-      :error ->
-        not_found(conn)
-    end
+        {:error, %Ecto.Changeset{}} = error ->
+          error
+      end
+    end)
   end
 
   # ── delete ─────────────────────────────────────────────────────────────────
@@ -208,16 +200,12 @@ defmodule EngramWeb.VaultsController do
   def delete(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 
-    case parse_id(id) do
-      {:ok, vault_id} ->
-        case Vaults.delete_vault(user, vault_id) do
-          {:ok, vault} -> json(conn, %{deleted: true, id: vault.id})
-          {:error, :not_found} -> not_found(conn)
-        end
-
-      :error ->
-        not_found(conn)
-    end
+    with_scoped_vault(conn, id, fn vault_id ->
+      case Vaults.delete_vault(user, vault_id) do
+        {:ok, vault} -> json(conn, %{deleted: true, id: vault.id})
+        {:error, :not_found} -> not_found(conn)
+      end
+    end)
   end
 
   # ── restore ──────────────────────────────────────────────────────────────────
@@ -240,29 +228,25 @@ defmodule EngramWeb.VaultsController do
   def restore(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 
-    case parse_id(id) do
-      {:ok, vault_id} ->
-        case Vaults.restore_vault(user, vault_id) do
-          {:ok, vault} ->
-            json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
+    with_scoped_vault(conn, id, fn vault_id ->
+      case Vaults.restore_vault(user, vault_id) do
+        {:ok, vault} ->
+          json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
 
-          {:error, {:limit_reached, limit, current}} ->
-            # Free-tier launch §4.5 — standardized 402 shape via LimitResponse.
-            EngramWeb.LimitResponse.halt(
-              conn,
-              "vaults_cap_exceeded",
-              :vaults_cap,
-              limit,
-              current
-            )
+        {:error, {:limit_reached, limit, current}} ->
+          # Free-tier launch §4.5 — standardized 402 shape via LimitResponse.
+          EngramWeb.LimitResponse.halt(
+            conn,
+            "vaults_cap_exceeded",
+            :vaults_cap,
+            limit,
+            current
+          )
 
-          {:error, :not_found} ->
-            not_found(conn)
-        end
-
-      :error ->
-        not_found(conn)
-    end
+        {:error, :not_found} ->
+          not_found(conn)
+      end
+    end)
   end
 
   # ── purge (immediate hard delete) ──────────────────────────────────────────────
@@ -282,16 +266,12 @@ defmodule EngramWeb.VaultsController do
   def purge(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 
-    case parse_id(id) do
-      {:ok, vault_id} ->
-        case Vaults.purge_vault(user, vault_id) do
-          {:ok, _vault} -> json(conn, %{purged: true, id: vault_id})
-          {:error, :not_found} -> not_found(conn)
-        end
-
-      :error ->
-        not_found(conn)
-    end
+    with_scoped_vault(conn, id, fn vault_id ->
+      case Vaults.purge_vault(user, vault_id) do
+        {:ok, _vault} -> json(conn, %{purged: true, id: vault_id})
+        {:error, :not_found} -> not_found(conn)
+      end
+    end)
   end
 
   # Phase B.4: encrypt/decrypt toggle actions are retired. Every vault is
@@ -407,6 +387,30 @@ defmodule EngramWeb.VaultsController do
 
   defp purge_at(nil), do: nil
   defp purge_at(deleted_at), do: DateTime.add(deleted_at, 30 * 86_400, :second)
+
+  # Every per-vault action routes through here: parse the id, then check it
+  # against what THIS request's credential may reach. A vault-scoped OAuth
+  # grant (or a restricted API key) must not delete, purge, restore, rename or
+  # read a vault outside its grant — `index`/`show` leaked names, and
+  # delete/purge were outright destructive.
+  #
+  # Checked against the id alone, with no fetch: that works for soft-deleted
+  # vaults (restore/purge operate on them) and avoids becoming an existence
+  # oracle — an out-of-scope caller gets 403 whether or not the vault exists.
+  defp with_scoped_vault(conn, id, fun) do
+    with {:ok, vault_id} <- parse_id(id),
+         :ok <- Engram.Permissions.check(Engram.Permissions.vault_scope(conn), %{id: vault_id}) do
+      fun.(vault_id)
+    else
+      # Same 403 shape VaultPlug uses, so a client sees one consistent error
+      # for "outside your grant" no matter which surface refused.
+      :forbidden ->
+        conn |> put_status(:forbidden) |> json(%{error: "Not authorized for this vault"})
+
+      :error ->
+        not_found(conn)
+    end
+  end
 
   defp not_found(conn) do
     conn

@@ -19,17 +19,6 @@ defmodule EngramWeb.VaultPlugOAuthScopeTest do
     put_req_header(conn, "authorization", "Bearer #{token}")
   end
 
-  defp ensure_external_id(%{external_id: ext} = user) when is_binary(ext) and ext != "", do: user
-
-  defp ensure_external_id(user) do
-    {:ok, updated} =
-      user
-      |> Ecto.Changeset.change(external_id: "test-#{user.id}")
-      |> Engram.Repo.update(skip_tenant_check: true)
-
-    updated
-  end
-
   test "a granted vault passes", %{conn: conn, user: user, granted: granted} do
     conn =
       conn

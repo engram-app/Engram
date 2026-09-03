@@ -335,17 +335,14 @@ defmodule EngramWeb.Router do
     get "/user/storage", StorageController, :index
     get "/me", UsersController, :me
     patch "/me", UsersController, :update
-    delete "/me", UsersController, :delete
 
     # Authenticated password change (old + new). Reset (token-gated) is public.
     post "/auth/password/change", PasswordController, :change
 
-    # Device flow authorization (authenticated — web app confirms)
-    post "/auth/device/authorize", DeviceAuthController, :authorize
-
-    # API key management — session/JWT only. An API key (especially a
-    # vault-restricted one) must never be able to enumerate, mint, or
-    # revoke other API keys for the same user.
+    # Credential + account-wide primitives — first-party session only. Neither a
+    # vault-restricted API key nor a third-party OAuth grant may mint, enumerate
+    # or revoke credentials for this user, or delete the account: issuing
+    # yourself a broader credential than your grant is privilege escalation.
     scope "/" do
       pipe_through EngramWeb.Plugs.RequireSession
       get "/api-keys", AuthController, :list_api_keys
@@ -356,6 +353,17 @@ defmodule EngramWeb.Router do
       delete "/connections/device/:family_id", ConnectionsController, :delete_device
       post "/connections/pat", ConnectionsController, :create_pat
       delete "/connections/pat/:id", ConnectionsController, :delete_pat
+
+      # Account deletion is the most account-wide primitive there is.
+      delete "/me", UsersController, :delete
+
+      # Device-flow approval MINTS a device refresh token bound to any vault the
+      # user owns (or a brand-new one via vault_id: "new"). `/auth/device/start`
+      # is public, so without this a third-party grant could start its own
+      # device flow and approve it with its own token — the same escalation as
+      # POST /api-keys. The approval UX is the browser, which always carries a
+      # session; verified against the SPA, the e2e helpers and the plugin.
+      post "/auth/device/authorize", DeviceAuthController, :authorize
     end
 
     # Vault management (user-level, not vault-scoped)

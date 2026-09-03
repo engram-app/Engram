@@ -306,7 +306,9 @@ defmodule EngramWeb.OAuthTokenControllerTest do
       # Simulate a row written before this release: scalar set, array NULL.
       Engram.Repo.update_all(
         Engram.OAuth.RefreshToken,
-        [set: [vault_ids: nil]], skip_tenant_check: true)
+        [set: [vault_ids: nil]],
+        skip_tenant_check: true
+      )
 
       refreshed =
         build_conn()

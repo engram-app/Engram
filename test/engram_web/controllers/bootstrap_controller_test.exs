@@ -155,15 +155,4 @@ defmodule EngramWeb.BootstrapControllerTest do
       assert conn |> get(~p"/api/index-status") |> json_response(401)
     end
   end
-
-  defp ensure_external_id(%{external_id: ext} = user) when is_binary(ext) and ext != "", do: user
-
-  defp ensure_external_id(user) do
-    {:ok, updated} =
-      user
-      |> Ecto.Changeset.change(external_id: "test-#{user.id}")
-      |> Engram.Repo.update(skip_tenant_check: true)
-
-    updated
-  end
 end
