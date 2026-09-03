@@ -113,7 +113,26 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # schema for the plugin's own log lines.
     "lib/engram/parsers/",
     "lib/engram/content_hash/",
-    "lib/engram/logs/"
+    "lib/engram/logs/",
+    # Has NO Logger call today, and is in scope anyway, because `filter/2` and
+    # `allows?/2` receive whole vault structs and a vault carries `.name` —
+    # user content. The two facts together are the reason: a module that holds
+    # content-bearing structs but happens not to log yet is exactly the one
+    # that goes wrong quietly later.
+    #
+    # In scope rather than out because `@out_of_scope` is read ONLY by
+    # `every_file_is_classified` and is never re-scanned — filing it there
+    # would mean a `Logger.error(..., reason: inspect(reason))` added here in a
+    # year is checked by nothing. In scope, that line fails this test, verified
+    # by injecting one. It costs nothing while the file stays silent.
+    #
+    # Scope, precisely: this guard catches a raw TERM being rendered
+    # (`inspect(reason)`, `Exception.message(e)`). It does NOT catch
+    # `inspect(vault.name)` — the `(?![.\w])` lookahead treats a field access
+    # as a scalar on purpose. So this entry buys the raw-term net, not a
+    # name-specific one; a deliberate `vault.name` in a log line still needs a
+    # reviewer.
+    "lib/engram/permissions.ex"
   ]
 
   # Everything in `lib/` that is deliberately NOT scanned, with the reason.
