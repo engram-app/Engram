@@ -92,8 +92,14 @@ defmodule Engram.PermissionsTest do
 
   test "scope_ids_from_claims/1 covers every claim shape" do
     assert Permissions.scope_ids_from_claims(%{"vault_ids" => ["a", "b"]}) == ["a", "b"]
-    # Empty list is never minted; treat it as unrestricted, not as "no vaults".
-    assert Permissions.scope_ids_from_claims(%{"vault_ids" => []}) == nil
+    # Empty list is never minted, so seeing one means a malformed token — and a
+    # malformed token must DENY, not widen to all. Without the explicit clause
+    # it falls through to `vault_id` and then to nil, which reads as `:all`.
+    assert Permissions.scope_ids_from_claims(%{"vault_ids" => []}) == []
+
+    # End to end: the empty claim must actually deny, not just parse to [].
+    assert Permissions.vault_scope(%{oauth_scope_vault_ids: []}) == MapSet.new([])
+    refute Permissions.allows?(Permissions.vault_scope(%{oauth_scope_vault_ids: []}), %{id: "a"})
     # Legacy scalar keeps pre-release refresh tokens bound.
     assert Permissions.scope_ids_from_claims(%{"vault_id" => "a"}) == ["a"]
     assert Permissions.scope_ids_from_claims(%{"scope" => "mcp"}) == nil

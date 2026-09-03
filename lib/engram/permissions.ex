@@ -48,14 +48,19 @@ defmodule Engram.Permissions do
 
   `vault_ids` first, falling back to the legacy scalar `vault_id` so refresh
   tokens minted before multi-vault grants shipped keep their binding. `nil`
-  means unrestricted. An empty list is treated as unrestricted rather than "no
-  vaults": it is never written (mint rejects it), so encountering one means a
-  malformed token, and the surrounding API-key and ownership checks still apply.
+  means unrestricted. An empty list means "no vaults" and denies everything: it
+  is never written (mint rejects it), so encountering one means a malformed
+  token, and a malformed token must not resolve to full access. Without the
+  explicit clause an empty list falls through to the scalar clause and then to
+  `nil`, which reads as `:all` — the one fail-OPEN cell in the matrix.
 
   Public because BOTH `OAuthScopeEnforce` (HTTP) and `UserSocket` (WebSocket)
   must derive the assign identically — two copies of this would drift.
   """
   @spec scope_ids_from_claims(map()) :: [String.t()] | nil
+  # Must match BEFORE the non-empty clause falls through to `vault_id`/nil.
+  def scope_ids_from_claims(%{"vault_ids" => []}), do: []
+
   def scope_ids_from_claims(%{"vault_ids" => ids}) when is_list(ids) and ids != [],
     do: Enum.map(ids, &to_string/1)
 
