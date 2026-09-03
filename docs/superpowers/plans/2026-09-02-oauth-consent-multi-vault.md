@@ -1638,7 +1638,28 @@ git commit -m "fix(vaults): scope the vault list to the grant"
 
 ---
 
-### Task 9: Array-aware revocation and one row per grant
+### Task 9: Array-aware revocation, one row per grant, and the connections leak
+
+> **A sixth enumeration gap, found during Task 8's review.**
+> `Connections.list_for_user/1` (`connections.ex:214`) calls
+> `Vaults.list_vaults(user)` UNFILTERED and merges `vault_name` onto every
+> connection row. The route is gated by `RequireSession`, which blocks
+> `current_api_key` but NOT an OAuth-grant internal JWT — `Auth` sets that as
+> `:internal_jwt` and never sets `current_api_key`, so `RequireSession`
+> (`require_session.ex:19-21`) lets it through. A vault-scoped OAuth token can
+> call `GET /api/connections` and read every vault's name.
+>
+> Pre-existing, same leak class as Task 8. This task already rewrites the
+> vault-name mapping for multi-vault grants, so it is the natural home:
+> filter the name lookup through `Engram.Permissions.filter/2` against
+> `Permissions.vault_scope(conn)` — note the scope must reach `list_for_user/1`,
+> which currently takes only a user, so its signature or its caller has to carry
+> it. Add a test: a scoped token's `GET /api/connections` must not surface a
+> non-granted vault's name.
+
+**The original Task 9 scope follows.**
+
+#### Array-aware revocation and one row per grant
 
 **Files:**
 - Modify: `lib/engram/connections.ex:105` (`revoke_oauth_family/3`), `:136` (`revoke_by_vault/2`), `:231` (list query), `:194` (typespec), `:253`, `:329`
