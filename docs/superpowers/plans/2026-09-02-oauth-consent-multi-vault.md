@@ -673,6 +673,8 @@ git commit -m "feat(oauth): carry vault_ids into access tokens"
     - `filter(scope, vaults) :: [vault]`
 
 > **This task creates the permission module the rest of the plan depends on.**
+> `vault_scope/1` must accept a bare assigns map as well as a conn — Task 7 calls
+> it from WebSocket channels, which have a `Phoenix.Socket`, not a `Plug.Conn`.
 > Three credential kinds authenticate against Engram — a Clerk/local JWT (the
 > user, unrestricted), an API key (optionally restricted via `api_key_vaults`),
 > and an OAuth grant (optionally restricted via the grant's `vault_ids`). Today
@@ -869,14 +871,40 @@ defmodule Engram.Permissions do
 
   @type scope :: :all | MapSet.t(String.t())
 
-  @doc "Resolves everything restricting this request into one scope."
-  @spec vault_scope(Plug.Conn.t()) :: scope
-  def vault_scope(conn) do
+  @doc """
+  Resolves everything restricting this request into one scope.
+
+  Takes a `Plug.Conn`, a `Phoenix.Socket`, or a bare assigns map. WebSocket
+  channels have no conn — plugs never run for a socket connect — so accepting
+  assigns directly is what lets HTTP and WS share one implementation instead of
+  growing a second copy for channels.
+  """
+  @spec vault_scope(Plug.Conn.t() | Phoenix.Socket.t() | map()) :: scope
+  def vault_scope(%{assigns: assigns}), do: vault_scope(assigns)
+
+  def vault_scope(assigns) when is_map(assigns) do
     intersect(
-      api_key_scope(conn.assigns[:current_api_key]),
-      oauth_scope(conn.assigns[:oauth_scope_vault_ids])
+      api_key_scope(assigns[:current_api_key]),
+      oauth_scope(assigns[:oauth_scope_vault_ids])
     )
   end
+
+  @doc """
+  Normalizes OAuth vault-scope claims into the assign both transports carry.
+
+  `vault_ids` first, falling back to the legacy scalar `vault_id` so refresh
+  tokens minted before multi-vault grants shipped keep their binding. `nil`
+  means unrestricted.
+
+  Public because BOTH `OAuthScopeEnforce` (HTTP) and `UserSocket` (WebSocket)
+  must derive the assign identically — two copies of this would drift.
+  """
+  @spec scope_ids_from_claims(map()) :: [String.t()] | nil
+  def scope_ids_from_claims(%{"vault_ids" => ids}) when is_list(ids) and ids != [],
+    do: Enum.map(ids, &to_string/1)
+
+  def scope_ids_from_claims(%{"vault_id" => id}) when is_binary(id), do: [id]
+  def scope_ids_from_claims(_), do: nil
 
   @spec allows?(scope, map()) :: boolean
   def allows?(:all, _vault), do: true
@@ -1254,13 +1282,29 @@ git commit -m "feat(mcp): search a granted vault subset"
 
 ---
 
-### Task 7: Enforce the grant on the REST pipeline
+### Task 7: Enforce the grant on REST *and* WebSocket
 
 **Files:**
 - Modify: `lib/engram_web/plugs/vault_plug.ex:26-34`
 - Modify: `lib/engram_web/router.ex` (vault-scoped pipeline)
+- Modify: `lib/engram_web/user_socket.ex` (assign the OAuth scope at connect)
+- Modify: `lib/engram_web/channels/sync_channel.ex:73,174-176`
+- Modify: `lib/engram_web/channels/crdt_channel.ex:168`
 - Modify: `lib/engram/vaults.ex` (DELETE `check_api_key_access/2`)
 - Create: `test/engram_web/plugs/vault_plug_oauth_scope_test.exs`
+- Create: `test/engram_web/channels/channel_oauth_scope_test.exs`
+
+> **A third enforcement gap, found during Task 4 and not in the original spec.**
+> `sync_channel.ex:73` and `crdt_channel.ex:168` check the API key's vault access
+> but never the OAuth grant's, and `UserSocket.accept/4` assigns only
+> `current_user` and `current_api_key` — it never extracts the OAuth claims at
+> all. So a vault-scoped OAuth token joining a sync or CRDT channel is
+> unrestricted. That is the LIVE NOTE-SYNC path, which streams document content,
+> so it matters at least as much as the REST gap this task was written for.
+> Closing it is also what makes the single-source rule true rather than
+> aspirational: two channels hand-calling `check_api_key_access/2` while
+> everything else goes through `Permissions` is exactly the duplication this
+> plan exists to remove.
 
 **Interfaces:**
 - Consumes: `Engram.Permissions.vault_scope/1` and `check/2` from Task 4.
@@ -1388,9 +1432,66 @@ Drop the now-unused `alias Engram.Vaults` line only if nothing else in the file 
 (`resolve_vault/2` still calls `Vaults.get_vault/2` and `Vaults.get_default_vault/1`, so it
 almost certainly stays).
 
-- [ ] **Step 4: Delete the superseded check**
+- [ ] **Step 4: Assign the OAuth scope at socket connect**
 
-`Engram.Vaults.check_api_key_access/2` now has no callers — `Permissions` calls
+`OAuthScopeEnforce` is a Plug — it never runs for WebSocket connections, so the
+socket has no OAuth scope to check. In `lib/engram_web/user_socket.ex`, extract the
+same claims the plug does and assign them in `accept/4`:
+
+```elixir
+    assign(socket, %{
+      current_user: user,
+      current_api_key: api_key,
+      # Same claims OAuthScopeEnforce surfaces for HTTP. Plugs do not run for
+      # socket connects, so without this the channels below have no OAuth scope
+      # to enforce and a vault-scoped token joins any vault's topic.
+      oauth_scope_vault_ids: oauth_scope_vault_ids(params),
+      ...
+    })
+```
+
+Derive it from the same verified token `connect/3` already validated — do NOT
+re-verify or trust an unverified param. If `connect/3` discards the claims after
+verifying, thread them through rather than parsing the token a second time.
+
+Reuse the plug's normalization so the two paths cannot drift: `vault_ids` first,
+falling back to the scalar `vault_id`, `nil` for unrestricted. Extract that
+normalization into `Engram.Permissions` (e.g. `scope_ids_from_claims/1`) and have
+BOTH `OAuthScopeEnforce` and `UserSocket` call it. Two copies of this logic is the
+same defect in a new place.
+
+- [ ] **Step 5: Route both channels through Permissions**
+
+`lib/engram_web/channels/sync_channel.ex` — replace the private wrapper at 174-176
+and its call site at 73:
+
+```elixir
+  defp check_vault_access(socket, vault),
+    do: Engram.Permissions.check(Engram.Permissions.vault_scope(socket.assigns), vault)
+```
+
+`lib/engram_web/channels/crdt_channel.ex:168` — replace the direct call:
+
+```elixir
+                case Engram.Permissions.check(
+                       Engram.Permissions.vault_scope(socket.assigns),
+                       vault
+                     ) do
+```
+
+Both keep their existing rejection shapes; only the check changes.
+
+- [ ] **Step 6: Channel tests**
+
+Create `test/engram_web/channels/channel_oauth_scope_test.exs` covering, for BOTH
+`sync:` and `crdt:` topics: a granted vault joins; a vault outside the grant is
+refused; an unscoped token joins anything. Model the join setup on the existing
+channel tests in `test/engram_web/channels/`.
+
+- [ ] **Step 7: Delete the superseded check**
+
+`Engram.Vaults.check_api_key_access/2` now has no callers — `VaultPlug`, both
+channels and `McpController` all route through `Permissions`, which calls
 `accessible_vault_ids/1` directly. Confirm and delete:
 
 ```bash
@@ -1405,7 +1506,7 @@ question is exactly what this task exists to prevent.
 `accessible_vault_ids/1` STAYS — it is the API-key half's query, and `Permissions` is now
 its only caller.
 
-- [ ] **Step 5: Mount the plug on the vault-scoped pipeline**
+- [ ] **Step 8: Mount the plug on the vault-scoped pipeline**
 
 In `lib/engram_web/router.ex`, find the vault-scoped pipeline (the one ending in `EngramWeb.Plugs.VaultPlug`, near the `RequireOnboarding` mount at line 307) and insert `OAuthScopeEnforce` immediately BEFORE `VaultPlug`:
 
@@ -1418,17 +1519,20 @@ In `lib/engram_web/router.ex`, find the vault-scoped pipeline (the one ending in
       EngramWeb.Plugs.VaultPlug
 ```
 
-- [ ] **Step 6: Run the new test plus the full plug and controller suites**
+- [ ] **Step 9: Run the new tests plus the plug, channel and controller suites**
 
 Run: `mix test test/engram_web/plugs/ test/engram_web/controllers/`
 Expected: PASS. Any failure here is a route that was silently relying on an OAuth token reaching a vault outside its grant — fix the caller, do not weaken the check.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add lib/engram/vaults.ex lib/engram_web/plugs/vault_plug.ex lib/engram_web/router.ex \
-        test/engram_web/plugs/vault_plug_oauth_scope_test.exs
-git commit -m "fix(auth): enforce vault permissions on REST"
+git add lib/engram/vaults.ex lib/engram/permissions.ex lib/engram_web/plugs/vault_plug.ex \
+        lib/engram_web/router.ex lib/engram_web/user_socket.ex \
+        lib/engram_web/channels/sync_channel.ex lib/engram_web/channels/crdt_channel.ex \
+        test/engram_web/plugs/vault_plug_oauth_scope_test.exs \
+        test/engram_web/channels/channel_oauth_scope_test.exs
+git commit -m "fix(auth): enforce vault grants on REST and WS"
 ```
 
 ---
