@@ -67,11 +67,32 @@ defmodule Engram.Search do
     #
     # Ahead of the span because a refused search never ran: counting it in the
     # duration / result-count histograms would skew both.
-    with :ok <- cross_vault_entitlement(user, opts),
+    #
+    # `vault_ids_present?` is ahead of everything else: `vault_ids: []` means
+    # the caller's credential can reach zero vaults, and the one thing that
+    # must never happen is treating that as "no filter" and running an
+    # unfiltered cross-vault search (#729). Refuse before billing/budget even
+    # look at the request, and long before a Qdrant query could be built.
+    with :ok <- vault_ids_present?(vault, opts),
+         :ok <- cross_vault_entitlement(user, opts),
          :ok <- spend_search_budget(user) do
       do_search_instrumented(user, vault, query, opts)
     end
   end
+
+  # Fail closed: an explicit empty `vault_ids` list (vault: nil) means the
+  # credential's accessible set is empty, so refuse rather than let it fall
+  # through to unfiltered cross-vault. `vault_ids` omitted entirely keeps its
+  # existing, unrelated meaning (unfiltered cross-vault) — only the explicit
+  # empty-list case is new.
+  defp vault_ids_present?(nil, opts) do
+    case Keyword.get(opts, :vault_ids) do
+      [] -> {:error, :no_accessible_vaults}
+      _ -> :ok
+    end
+  end
+
+  defp vault_ids_present?(_vault, _opts), do: :ok
 
   defp cross_vault_entitlement(user, opts) do
     if Keyword.get(opts, :cross_vault, false) do
@@ -502,6 +523,14 @@ defmodule Engram.Search do
   # A concrete vault narrows to one id; `vault_ids` narrows to a set (a
   # multi-vault OAuth grant or a subset-restricted API key); neither means an
   # unfiltered cross-vault search over everything the user owns.
+  #
+  # Fail-closed note: an empty `vault_ids` list never reaches this function —
+  # `search/4`'s `vault_ids_present?` guard refuses the request before
+  # `do_search_instrumented`/`do_search` runs, so no Qdrant query is ever
+  # built for it. The `ids != []` clause below is what's left over from that
+  # guard (a non-empty list narrows; anything else — including omitted
+  # `vault_ids` — keeps the existing unfiltered cross-vault behavior), not a
+  # second place that decides "empty means unfiltered."
   defp put_vault_filter(search_opts, %Engram.Vaults.Vault{} = vault, _opts),
     do: Keyword.put(search_opts, :vault_id, to_string(vault.id))
 

@@ -694,6 +694,16 @@ defmodule Engram.SearchTest do
       refute result == {:error, :feature_not_available}
     end
 
+    test "vault_ids: [] fails closed instead of falling through to unfiltered cross-vault",
+         %{user: user} do
+      # No embedder or Bypass expectation is set up: if this fell through to an
+      # unfiltered cross-vault search, either the Mox or the Bypass "no stub"
+      # failure would flag it — the error return alone already proves no
+      # Qdrant query was built or issued.
+      assert {:error, :no_accessible_vaults} =
+               Search.search(user, nil, "query", cross_vault: true, vault_ids: [])
+    end
+
     test "folder marker rows do not appear in search results", %{
       bypass: bypass,
       user: user,
