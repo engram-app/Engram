@@ -709,7 +709,7 @@ export default function BillingPage({
 								<PlanAccordionRow
 									name={PLAN_CATALOG.pro.name}
 									price={formatPlanPrice(PLAN_CATALOG.pro, cadence)}
-									summary="Unlimited vaults · 50 GB · unlimited AI"
+									summary="Unlimited vaults · 50 GB · cross-vault search + API"
 									features={PLAN_CATALOG.pro.features}
 									ctaLabel="Choose Pro"
 									ctaNote="7-day free trial · cancel anytime"
