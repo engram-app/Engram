@@ -164,9 +164,10 @@ defmodule Engram.Search do
   # Cross-vault is a Pro billing feature on the web/API path. The MCP server
   # makes multi-vault search the default for every tier (product decision
   # 2026-07-10), so it passes `allow_cross_vault: true` to bypass the gate.
-  # The MCP caller is responsible for having already narrowed `vault: nil` to
-  # the credential's ACCESSIBLE set (it only enables this when the credential
-  # can reach every vault), so this never widens beyond what the caller may see.
+  # The MCP caller is responsible for narrowing to the credential's ACCESSIBLE
+  # set — either by passing a concrete `vault` or, for a subset, by passing
+  # `vault_ids`, which becomes an any-match Qdrant filter. Neither widens
+  # beyond what the caller may see.
   defp cross_vault_allowed(user, opts) do
     if Keyword.get(opts, :allow_cross_vault, false) do
       :ok
@@ -273,7 +274,7 @@ defmodule Engram.Search do
       {:ok, phase_b_kw} ->
         search_opts =
           [user_id: to_string(user.id), limit: fetch_limit]
-          |> then(&if(vault, do: Keyword.put(&1, :vault_id, to_string(vault.id)), else: &1))
+          |> then(&put_vault_filter(&1, vault, opts))
           |> Keyword.merge(phase_b_kw)
           |> Keyword.merge(date_bounds)
           |> Keyword.put(:with_vector, need_vectors?)
@@ -496,6 +497,22 @@ defmodule Engram.Search do
     ]
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Enum.map(fn {k, %DateTime{} = dt} -> {k, DateTime.to_unix(dt)} end)
+  end
+
+  # A concrete vault narrows to one id; `vault_ids` narrows to a set (a
+  # multi-vault OAuth grant or a subset-restricted API key); neither means an
+  # unfiltered cross-vault search over everything the user owns.
+  defp put_vault_filter(search_opts, %Engram.Vaults.Vault{} = vault, _opts),
+    do: Keyword.put(search_opts, :vault_id, to_string(vault.id))
+
+  defp put_vault_filter(search_opts, nil, opts) do
+    case Keyword.get(opts, :vault_ids) do
+      ids when is_list(ids) and ids != [] ->
+        Keyword.put(search_opts, :vault_id, Enum.map(ids, &to_string/1))
+
+      _ ->
+        search_opts
+    end
   end
 
   # Single-vault search: return the passed-in vault directly — no extra DB query.

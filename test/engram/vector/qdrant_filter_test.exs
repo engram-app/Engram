@@ -31,4 +31,29 @@ defmodule Engram.Vector.QdrantFilterTest do
     assert %{must: [%{key: "user_id", match: %{value: "u1"}}]} =
              Qdrant.build_tenant_filter(@base)
   end
+
+  test "a vault_id list emits an any-match clause" do
+    a = Ecto.UUID.generate()
+    b = Ecto.UUID.generate()
+
+    %{must: must} =
+      Engram.Vector.Qdrant.build_tenant_filter(user_id: "u1", vault_id: [a, b])
+
+    assert %{key: "vault_id", match: %{any: [^a, ^b]}} =
+             Enum.find(must, &(&1[:key] == "vault_id"))
+  end
+
+  test "a single vault_id binary still emits an exact-value clause" do
+    a = Ecto.UUID.generate()
+
+    %{must: must} = Engram.Vector.Qdrant.build_tenant_filter(user_id: "u1", vault_id: a)
+
+    assert %{key: "vault_id", match: %{value: ^a}} =
+             Enum.find(must, &(&1[:key] == "vault_id"))
+  end
+
+  test "no vault_id emits no vault clause" do
+    %{must: must} = Engram.Vector.Qdrant.build_tenant_filter(user_id: "u1")
+    refute Enum.any?(must, &(&1[:key] == "vault_id"))
+  end
 end
