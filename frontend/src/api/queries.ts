@@ -1581,9 +1581,7 @@ export function useRevokePat() {
 	});
 }
 
-// Vault types (encryption fields are the ones we care about for settings)
-
-export type EncryptionStatus = "none" | "encrypting" | "encrypted" | "decrypt_pending";
+// Vault types
 
 export interface Vault {
 	id: string;
@@ -1592,23 +1590,10 @@ export interface Vault {
 	slug: string;
 	is_default: boolean;
 	created_at: string;
-	encrypted: boolean;
-	encryption_status: EncryptionStatus;
-	encrypted_at: string | null;
-	decrypt_requested_at: string | null;
-	last_toggle_at: string | null;
-	cooldown_days: number | null;
 	deleted_at?: string | null;
 	purge_at?: string | null;
 	note_count?: number;
 	attachment_count?: number;
-}
-
-export interface EncryptionProgress {
-	processed: number;
-	total: number;
-	status: EncryptionStatus;
-	started_at: string | null;
 }
 
 // Vault hooks
@@ -1641,15 +1626,6 @@ export function useEncryptVault() {
 			qc.invalidateQueries({ queryKey: ["vaults"] });
 			qc.invalidateQueries({ queryKey: ["encryption-progress"] });
 		},
-	});
-}
-
-export function useEncryptionProgress(vaultId: string | undefined, enabled: boolean) {
-	return useQuery({
-		queryKey: ["encryption-progress", vaultId],
-		queryFn: () => api.get<EncryptionProgress>(`/vaults/${vaultId}/encryption_progress`),
-		enabled: enabled && vaultId !== undefined,
-		refetchInterval: enabled ? 3000 : false,
 	});
 }
 
