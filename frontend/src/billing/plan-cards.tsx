@@ -80,13 +80,18 @@ export const PLAN_CATALOG: Record<PlanTier, PlanCardCatalog> = {
 		name: "Starter",
 		monthlyPrice: 7,
 		annualPrice: 70,
-		features: ["5 vaults", "Unlimited devices", "3 GB attachments", "500 AI queries/day"],
+		features: ["10 vaults", "Unlimited devices", "10 GB attachments", "Unlimited AI searches"],
 	},
 	pro: {
 		name: "Pro",
 		monthlyPrice: 14,
 		annualPrice: 140,
-		features: ["15 vaults", "Unlimited devices", "15 GB attachments", "10,000 AI queries/day"],
+		features: [
+			"Unlimited vaults",
+			"Unlimited devices",
+			"50 GB attachments",
+			"Unlimited AI searches",
+		],
 	},
 };
 
