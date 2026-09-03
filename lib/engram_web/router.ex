@@ -475,6 +475,9 @@ defmodule EngramWeb.Router do
     pipe_through [
       :api,
       :authed_api,
+      # Surfaces oauth_scope_vault_ids so VaultPlug's Permissions check sees the
+      # grant — must run before VaultPlug, which reads that assign.
+      EngramWeb.Plugs.OAuthScopeEnforce,
       EngramWeb.Plugs.VaultPlug,
       # Runs last so both current_user and current_vault are resolved:
       # stamps app.user_id AND app.vault_id on the request span.
