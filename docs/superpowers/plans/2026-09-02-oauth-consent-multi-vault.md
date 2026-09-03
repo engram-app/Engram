@@ -2466,6 +2466,20 @@ In `lib/engram/connections.ex:245`:
         name: t.label || identity.display_name || c.client_name,
 ```
 
+- [ ] **Step 6b: Carried-over minor from Task 10's review**
+
+`oauth-authorize-page.tsx:399` — the swap-confirm dialog's "Disconnect & connect"
+button guards only on `submitting`, not on the main Approve button's
+`submitting || (selected !== null && selected.size === 0)`. It is unreachable
+today because the dialog only opens from an already-guarded Approve click and the
+Radix overlay blocks the checkboxes behind it. But it is a second submit path to
+the same endpoint with a weaker guard, and its safety depends on modal-blocking
+behaviour staying true forever. Mirror the guard:
+
+```tsx
+disabled={submitting || (selected !== null && selected.size === 0)}
+```
+
 - [ ] **Step 7: Consent UI**
 
 Add `label?: string` to `OAuthConsentParams`. In the consent page, add a labelled text input
