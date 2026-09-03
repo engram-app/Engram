@@ -359,37 +359,26 @@ defmodule EngramWeb.McpController do
     end
   end
 
-  # Picks the vault context for a bare (no vault_id) search. Cross-vault search
-  # (Qdrant with no vault filter) sees EVERY vault the user owns, so it is only
-  # safe when the credential can already reach all of them — otherwise it would
-  # leak vaults the credential was scoped away from (#729).
+  # Picks the vault context for a bare (no vault_id) search. A credential that
+  # reaches exactly one vault searches it directly; anything wider goes through
+  # one Qdrant query carrying an any-match filter over the accessible set, so
+  # the result set can never include a vault the credential was scoped away
+  # from (#729).
   defp search_across_accessible(tool, user, args, conn) do
     # Fetch the vault list ONCE; derive both the accessible set and the total
     # from it (no double query).
     all = Engram.Vaults.list_vaults(user)
     accessible = scope_vaults(all, conn)
 
-    cond do
-      accessible == [] ->
+    case accessible do
+      [] ->
         error_result(no_vault_message_for(all))
 
-      length(accessible) == 1 ->
-        call_tool(tool, user, hd(accessible), args)
+      [only] ->
+        call_tool(tool, user, only, args)
 
-      # Credential reaches every vault → one cross-vault query (no vault filter
-      # == exactly the accessible set here). `{:cross_vault, _}` carries the set
-      # for per-result vault labelling.
-      length(accessible) == length(all) ->
-        call_tool(tool, user, {:cross_vault, accessible}, args)
-
-      # A per-vault-restricted key reaching a >1 subset: cross-vault would leak
-      # the vaults it can't see (Qdrant has no multi-vault filter), so require an
-      # explicit choice. Rare.
-      true ->
-        error_result(
-          "This connection is limited to specific vaults. Pass vault_id to choose one " <>
-            "(call list_vaults to see them)."
-        )
+      many ->
+        call_tool(tool, user, {:cross_vault, many}, args)
     end
   end
 

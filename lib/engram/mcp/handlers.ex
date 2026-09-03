@@ -55,14 +55,27 @@ defmodule Engram.MCP.Handlers do
 
   # -- Read tools --
 
-  # Cross-vault default (the credential can reach every vault and no vault_id was
-  # given): search all vaults at once and label each hit with its vault so the
-  # caller can follow up (e.g. get_note) against the right one. `allow_cross_vault`
-  # bypasses the Pro billing gate — multi-vault search is the MCP default on every
-  # tier (product decision 2026-07-10).
+  # Cross-vault default (no vault_id given): search every vault the credential
+  # can reach at once and label each hit with its vault so the caller can follow
+  # up (e.g. get_note) against the right one. `allow_cross_vault` bypasses the
+  # Pro billing gate — multi-vault search is the MCP default on every tier
+  # (product decision 2026-07-10).
+  #
+  # `vault_ids` is the privacy boundary, not an optimization: it becomes an
+  # any-match Qdrant vault filter over exactly `vaults`, so a credential scoped
+  # to a SUBSET can search that subset without seeing the vaults it was scoped
+  # away from (#729). Without it `vault: nil` would drop the vault clause
+  # entirely and search everything the user owns.
   def handle("search_notes", user, {:cross_vault, vaults}, args) do
     query = args["query"] || ""
-    opts = Keyword.merge(build_search_opts(args), cross_vault: true, allow_cross_vault: true)
+
+    opts =
+      Keyword.merge(build_search_opts(args),
+        cross_vault: true,
+        allow_cross_vault: true,
+        vault_ids: Enum.map(vaults, &to_string(&1.id))
+      )
+
     names = Map.new(vaults, &{to_string(&1.id), &1.name})
     render_search(Search.search(user, nil, query, opts), names)
   end
