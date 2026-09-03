@@ -165,7 +165,10 @@ defmodule EngramWeb.CrdtChannel do
           {:ok, vault_id} ->
             case Vaults.get_vault(user, vault_id) do
               {:ok, vault} ->
-                case Vaults.check_api_key_access(socket.assigns[:current_api_key], vault) do
+                case Engram.Permissions.check(
+                       Engram.Permissions.vault_scope(socket.assigns),
+                       vault
+                     ) do
                   :ok ->
                     Logger.info(
                       "crdt join",

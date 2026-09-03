@@ -70,7 +70,7 @@ defmodule EngramWeb.SyncChannel do
   end
 
   defp attach_vault_to_socket(vault, params, socket) do
-    case check_api_key_access(socket, vault) do
+    case check_vault_access(socket, vault) do
       :ok ->
         socket = assign(socket, :vault, vault)
         send(self(), {:after_join, params})
@@ -171,7 +171,8 @@ defmodule EngramWeb.SyncChannel do
   # Private helpers
   # ---------------------------------------------------------------------------
 
-  defp check_api_key_access(socket, vault) do
-    Vaults.check_api_key_access(socket.assigns[:current_api_key], vault)
-  end
+  # API-key restriction AND OAuth grant, intersected in one place. Plugs do not
+  # run on a socket, so this is the only enforcement point the live sync path has.
+  defp check_vault_access(socket, vault),
+    do: Engram.Permissions.check(Engram.Permissions.vault_scope(socket.assigns), vault)
 end
