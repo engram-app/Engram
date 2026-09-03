@@ -364,6 +364,15 @@ defmodule EngramWeb.Router do
       # POST /api-keys. The approval UX is the browser, which always carries a
       # session; verified against the SPA, the e2e helpers and the plugin.
       post "/auth/device/authorize", DeviceAuthController, :authorize
+
+      # Purge is IMMEDIATE, irreversible destruction of user data, so it needs
+      # the human at the keyboard rather than an app acting on their behalf.
+      # An OAuth grant — even an all-vaults one — is consent to read and write
+      # notes; it is not consent to destroy a vault beyond recovery. Its sibling
+      # `delete` is soft and restorable (30-day window + a `restore` route), so
+      # that one stays on the per-vault scope check in VaultsController, which
+      # is the right guard for a reversible action.
+      post "/vaults/:id/purge", VaultsController, :purge
     end
 
     # Vault management (user-level, not vault-scoped)
@@ -373,7 +382,8 @@ defmodule EngramWeb.Router do
     patch "/vaults/:id", VaultsController, :update
     delete "/vaults/:id", VaultsController, :delete
     post "/vaults/:id/restore", VaultsController, :restore
-    post "/vaults/:id/purge", VaultsController, :purge
+    # `/vaults/:id/purge` is NOT here — it sits in the RequireSession block
+    # above. Irreversible destruction is session-only; see the note there.
 
     # Billing — Paddle checkout opens client-side via paddle.js, so the
     # backend only exposes status, the public client config, and a portal
