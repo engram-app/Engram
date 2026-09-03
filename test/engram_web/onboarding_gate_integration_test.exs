@@ -40,8 +40,22 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
     vault = insert(:vault, user: user, is_default: true)
     {:ok, raw_key, _api_key} = Accounts.create_api_key(user, "test")
     grant_api_write!(user)
-    conn = put_req_header(conn, "authorization", "Bearer #{raw_key}")
-    {:ok, conn: conn, user: user, vault: vault}
+
+    # Two credentials on purpose. The vault-pipeline tests below keep the API
+    # key — proving the gate halts an API key is part of what they assert.
+    # `/auth/device/authorize` sits behind `RequireSession`, which halts an API
+    # key in the router pipeline before `RequireOnboarding` (a controller plug)
+    # runs, so the three device tests need a session to reach the gate at all.
+    # `Onboarding.gate/2` keys on `:current_user` only, so the verdict is
+    # identical either way.
+    user = ensure_external_id(user)
+    {:ok, token} = Engram.Auth.Providers.Local.issue_access_token(user.external_id, user.email)
+
+    {:ok,
+     conn: put_req_header(conn, "authorization", "Bearer #{raw_key}"),
+     session_conn: put_req_header(conn, "authorization", "Bearer #{token}"),
+     user: user,
+     vault: vault}
   end
 
   test "GET /api/folders returns 403 onboarding_required for new user", %{conn: conn} do
@@ -110,7 +124,7 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
   # RequireOnboarding from the vault pipeline — it declares the plug itself.
   # Without this the plugin links happily and only discovers the problem as a
   # silent channel-join refusal.
-  test "POST /api/auth/device/authorize is gated", %{conn: conn, user: user} do
+  test "POST /api/auth/device/authorize is gated", %{session_conn: conn, user: user} do
     vault = insert(:vault, user: user)
     {:ok, auth} = DeviceFlow.start_device_flow("client_1")
 
@@ -127,7 +141,7 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
   end
 
   test "POST /api/auth/device/authorize succeeds once onboarding completes", %{
-    conn: conn,
+    session_conn: conn,
     user: user
   } do
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
@@ -153,7 +167,7 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
   # "can flip the onboarding gate back to failing" — so zero-vault users are
   # an anticipated state, not a hypothetical.
   test "device authorize with vault_id=new works for a user with NO vault", %{
-    conn: conn,
+    session_conn: conn,
     user: user,
     vault: vault
   } do

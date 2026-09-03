@@ -195,7 +195,7 @@ defmodule Engram.Connections do
   Idempotent: a second call after all tokens are already revoked returns `:ok`.
   Unknown `(user_id, family_id)` combinations return `{:error, :not_found}`.
   """
-  @spec revoke_device_family(integer(), Ecto.UUID.t()) :: :ok | {:error, :not_found}
+  @spec revoke_device_family(Ecto.UUID.t(), Ecto.UUID.t()) :: :ok | {:error, :not_found}
   def revoke_device_family(user_id, family_id) do
     now = DateTime.utc_now(:second)
 
