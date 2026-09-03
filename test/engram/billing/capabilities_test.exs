@@ -33,7 +33,7 @@ defmodule Engram.Billing.CapabilitiesTest do
 
     assert caps.tier == "starter"
     assert caps.limits["notes_cap"] == 50_000
-    assert caps.limits["vaults_cap"] == 5
+    assert caps.limits["vaults_cap"] == 10
     # API keys are Pro-only — Starter resolves the same `false` as Free here.
     assert caps.limits["api_write_enabled"] == false
   end

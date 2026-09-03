@@ -74,6 +74,38 @@ defmodule Engram.VaultsTest do
       {:ok, _, _} = Vaults.register_vault(user, "Third", Ecto.UUID.generate())
     end
 
+    # Pricing v3.1 moved Pro's `vaults_cap` from 15 to nil. Every unlimited test
+    # above reaches unlimited through the `-1` OVERRIDE sentinel; these two are
+    # the only ones that exercise a TIER DEFAULT, which is the path Pro now
+    # takes. `@no_cap` in `Engram.Billing` happens to list `nil` alongside
+    # `:unlimited` and `-1`, so this works — but nothing proved it, and dropping
+    # `nil` from that list would have silently capped every Pro user at zero
+    # vaults with `check_limit/3` answering `{:error, :limit_reached}` on the
+    # first create.
+    test "pro tier default (nil) is unlimited, not zero", %{user: user} do
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      :ok = OverrideCache.evict(user.id)
+
+      for n <- 1..16 do
+        assert {:ok, _, :created} =
+                 Vaults.register_vault(user, "Vault #{n}", Ecto.UUID.generate()),
+               "pro should not cap at #{n} vaults"
+      end
+    end
+
+    test "starter tier default enforces 10", %{user: user} do
+      insert(:subscription, user: user, tier: "starter", status: "active")
+      :ok = OverrideCache.evict(user.id)
+
+      for n <- 1..10 do
+        assert {:ok, _, :created} =
+                 Vaults.register_vault(user, "Vault #{n}", Ecto.UUID.generate())
+      end
+
+      assert {:error, {:vault_limit_reached, 10, 10}} =
+               Vaults.register_vault(user, "Eleventh", Ecto.UUID.generate())
+    end
+
     test "specific override enforces that exact limit", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 2})
 

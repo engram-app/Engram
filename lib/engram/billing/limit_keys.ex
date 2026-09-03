@@ -14,10 +14,32 @@ defmodule Engram.Billing.LimitKeys do
   @catalog %{
     # Pricing v2 spec §9.2 — 17 keys
     notes_cap: %{type: :integer, defaults: %{free: 10_000, starter: 50_000, pro: nil}},
-    vaults_cap: %{type: :integer, defaults: %{free: 1, starter: 5, pro: 15}},
+    # PACKAGING, NOT A RESOURCE (pricing v3.1, 2026-09-03). An earlier draft
+    # justified a Pro ceiling on per-vault CRDT index-room memory. That was
+    # wrong three ways and is recorded so it is not re-derived:
+    #   * `CrdtIndexDoc.start_link` sets `auto_exit: true` — rooms are
+    #     demand-started and exit on last observer, so a vault nobody is
+    #     connected to holds zero rooms and zero bytes.
+    #   * `CrdtRoomLru.touch/3` only tracks rooms with a positive
+    #     `idle_exit_ms`; the index room sets none, so it is never LRU-tracked
+    #     and cannot evict another user's rooms.
+    #   * Every quota here is per USER (`Billing.effective_limit(user, ...)`,
+    #     `Notes.check_notes_cap/1`), so vault count multiplies nothing.
+    # Residency tracks concurrent connections, which `concurrent_devices`
+    # already bounds. Residual risk is scripted vault-row creation, which
+    # belongs to the rate limiter, not to a pricing tier.
+    vaults_cap: %{type: :integer, defaults: %{free: 1, starter: 10, pro: nil}},
+    # 1 / 10 / 50 GiB. Raised from 1 / 3 / 15 GiB in pricing v3.1.
+    #
+    # THIS IS AN EGRESS CEILING WEARING A STORAGE LABEL. Downloads stream
+    # through `AttachmentsController.show/2`, so every byte here is billed as
+    # data transfer out at ~$0.09/GB — 4x the ~$0.023/GB-mo storage price —
+    # and it is charged per device, per sync. A Pro user filling 50 GiB across
+    # four devices moves 200 GiB on first sync, ~$18 against $14 of revenue.
+    # DO NOT raise past 50 GiB until attachment downloads are edge-cached.
     attachment_bytes_cap: %{
       type: :integer,
-      defaults: %{free: 1_073_741_824, starter: 3_221_225_472, pro: 16_106_127_360}
+      defaults: %{free: 1_073_741_824, starter: 10_737_418_240, pro: 53_687_091_200}
     },
     attachments_enabled: %{type: :boolean, defaults: %{free: true, starter: true, pro: true}},
     # Every tier gets the full MimeWhitelist surface (images, audio, video,

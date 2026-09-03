@@ -71,8 +71,9 @@ defmodule Engram.Billing.LimitKeysTest do
 
     test "starter tier matrix matches spec §9.2" do
       assert LimitKeys.default_for(:notes_cap, :starter) == 50_000
-      assert LimitKeys.default_for(:vaults_cap, :starter) == 5
-      assert LimitKeys.default_for(:attachment_bytes_cap, :starter) == 3_221_225_472
+      assert LimitKeys.default_for(:vaults_cap, :starter) == 10
+      # 10 GiB. Raised from 3 GiB in pricing v3.1 (2026-09-03).
+      assert LimitKeys.default_for(:attachment_bytes_cap, :starter) == 10_737_418_240
       assert LimitKeys.default_for(:max_file_bytes, :starter) == 209_715_200
       assert LimitKeys.default_for(:lifetime_embed_token_cap, :starter) == nil
       assert LimitKeys.default_for(:search_semantic_enabled, :starter) == true
@@ -85,8 +86,12 @@ defmodule Engram.Billing.LimitKeysTest do
 
     test "pro tier matrix matches spec §9.2" do
       assert LimitKeys.default_for(:notes_cap, :pro) == nil
-      assert LimitKeys.default_for(:vaults_cap, :pro) == 15
-      assert LimitKeys.default_for(:attachment_bytes_cap, :pro) == 16_106_127_360
+      # Unlimited as of pricing v3.1 — vaults are packaging, not a resource.
+      # Rooms are demand-started with `auto_exit`, index rooms are not
+      # LRU-tracked, and every quota is per-user. See the decision log.
+      assert LimitKeys.default_for(:vaults_cap, :pro) == nil
+      # 50 GiB. Raised from 15 GiB in pricing v3.1 (2026-09-03).
+      assert LimitKeys.default_for(:attachment_bytes_cap, :pro) == 53_687_091_200
       assert LimitKeys.default_for(:max_file_bytes, :pro) == 524_288_000
       assert LimitKeys.default_for(:reranker_enabled, :pro) == true
       assert LimitKeys.default_for(:search_semantic_enabled, :pro) == true
