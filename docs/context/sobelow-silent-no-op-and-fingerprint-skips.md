@@ -1,12 +1,13 @@
 # Sobelow was a silent no-op, and the fingerprint skips that hid it
 
-_Last verified: 2026-08-18 (sobelow 0.14.1 → 0.15.0, branch `chore/bump-mix-minor-deps`)_
+_Last verified: 2026-09-02 (sobelow 0.15.0, branch `feat/oauth-consent-multi-vault`)_
 
 ## Status
 
-Fixed. Sobelow now actually scans. 21 findings triaged (all false positives) and
-pinned by fingerprint in `.sobelow-skips`; CI and the pre-push hook both run
-`mix sobelow --exit low --skip`.
+Fixed. Sobelow now actually scans. 21 findings triaged (all false positives);
+**three of them were later fixed at the source rather than pinned**, so
+`.sobelow-skips` now holds **18** fingerprints. CI and the pre-push hook both
+run `mix sobelow --exit low --skip`.
 
 ## The one idea
 
@@ -60,10 +61,11 @@ cited it as evidence the check's coverage is uneven. That file contains no
 than quietly deleted, because this doc is the designated record of the
 invariants each skip rests on, and a made-up site in it is worse than no note.
 
-### `XSS.ContentType` + `XSS.SendResp` x5
+### `XSS.ContentType` + `XSS.SendResp` x3 (was x5)
 
-`attachments` controller (411, 413), `oauth_authorize_controller` (119, 139),
-`spa_controller` (7).
+`attachments` controller (401, 404) and `spa_controller` (7). The two
+`oauth_authorize_controller` sites were pinned in the original wave and are
+**no longer pinned** — see "Fixed rather than pinned" below.
 
 Attachment MIME is user-settable, and `MimeWhitelist` allows the whole `text/`
 prefix, so `text/html` **can** be stored. Three things stop that from being a
@@ -96,8 +98,7 @@ stored-XSS vector:
 > uppercase forms. Not exploitable on its own thanks to the two guards above,
 > which is why it is recorded here rather than as an incident.
 
-The OAuth sites interpolate only hardcoded error-code literals and are HTML-escaped
-anyway. `spa_controller` injects zero request data.
+`spa_controller` injects zero request data.
 
 ### `Traversal.FileModule` x4
 
@@ -122,6 +123,11 @@ Interpolation builds query **shape** only: `$N` placeholder tuples from
 > injection point. Fingerprint skips will not re-fire on that change either
 > (different line, yes, but the skip is regenerated wholesale). Guard it at review
 > time.
+
+### `Config.CSRFRoute` x1 — FIXED, no longer pinned
+
+`router.ex:641`. `get "/mcp"` and `delete "/mcp"` both routed to
+`McpController.unsupported_transport`. See "Fixed rather than pinned" below.
 
 ### `Config.CSP` x1
 
@@ -155,7 +161,46 @@ mix sobelow --exit low --skip
 An `ignore:` list of check names in `.sobelow-conf` was considered and rejected:
 it permanently blinds whole **categories**. Ignoring `Misc.BinToTerm` means a
 future genuinely-unsafe `binary_to_term` never fires. The fingerprint approach
-keeps every category live; only these 21 exact sites are muted.
+keeps every category live; only these 18 exact sites are muted.
+
+## Fixed rather than pinned (2026-09-02)
+
+Three of the original 21 were removed by changing the code, not the skips file.
+None was a live vulnerability — the point is that a fingerprint defends a
+**location**, and all three had a cheap structural fix that removes the flagged
+shape entirely, which nothing has to keep true by hand afterwards.
+
+- **`XSS.SendResp` x2, `oauth_authorize_controller.ex:123/143.`** The two HTML
+  error pages hand-built a string with `#{html_escape(code)}` and passed it to
+  `send_resp/3`. They now render `EngramWeb.OAuthAuthorizeHTML` (HEEx, via
+  `put_format(:html) |> render/3`), so escaping is a property of the template
+  rather than of remembering the helper, and the module's private
+  `html_escape/1` is deleted.
+
+  For the record, because it was raised as a suspected latent crash and is not
+  one: the `html_escape/1` these pages called was the controller's **own
+  private function**, returning a plain binary. `use EngramWeb, :controller`
+  expands to `use Phoenix.Controller, formats: [:html, :json]`, which imports
+  only `Phoenix.Controller` and `Plug.Conn` — this app has no
+  `use Phoenix.Component` in any controller, so `Phoenix.HTML.html_escape/1`
+  (which returns `{:safe, iodata}` and would raise `Protocol.UndefinedError`
+  when interpolated) was never in scope. Both pages rendered fine. The 400 page
+  had test coverage proving it; the 503 page had none, which is now fixed.
+
+  Note the render needs `put_format(:html)` explicitly: the route sits on the
+  `:oauth_api` pipeline, whose `plug :accepts, ["json"]` negotiates a browser's
+  `*/*` down to json.
+
+- **`Config.CSRFRoute` x1, `router.ex:641`.** `get`/`delete "/mcp"` shared the
+  action `:unsupported_transport`, which is the exact GET-reaches-a-mutating-
+  action shape the check looks for (it keys on `[controller, action]` per
+  scope). Not a real CSRF — both answers are a bodyless 405 that changes
+  nothing — but the router should not carry the shape. Split into
+  `:unsupported_transport_get` and `:unsupported_transport_delete`, both
+  delegating to one private `method_not_allowed/1`. Behaviour is unchanged and
+  still pinned by `test/engram_web/controllers/mcp_transport_test.exs`: 405 +
+  `allow: POST`, on `:api_any_accept` so Cursor's `Accept: text/event-stream`
+  fallback does not 406.
 
 ### What a fingerprint does NOT protect (know this before trusting it)
 

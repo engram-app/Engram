@@ -1,5 +1,4 @@
 Config.CSP: Missing Content-Security-Policy,lib/engram_web/router.ex:172,61EF403
-Config.CSRFRoute: CSRF via Action Reuse,lib/engram_web/router.ex:641,5CF42DB
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:9,68D560D
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:30,6F8AC00
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:45,6EA19F5
@@ -16,6 +15,4 @@ Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram_web/control
 Traversal.FileModule: Directory Traversal in `File.read`,lib/engram/spa_integrity.ex:43,5D1BE94
 XSS.ContentType: XSS in `put_resp_content_type`,lib/engram_web/controllers/attachments_controller.ex:401,32F1ABC
 XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/attachments_controller.ex:404,567B25D
-XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/oauth_authorize_controller.ex:123,48C6312
-XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/oauth_authorize_controller.ex:143,24CF171
 XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/spa_controller.ex:7,589845D
