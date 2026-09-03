@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.1](https://github.com/engram-app/Engram/compare/0.24.0...0.24.1) (2026-09-03)
+
+
+### Bug Fixes
+
+* **ci:** stop e2e-crdt lying, and stop main reporting unrun gates as green ([#1559](https://github.com/engram-app/Engram/issues/1559)) ([84d35b8](https://github.com/engram-app/Engram/commit/84d35b8901524a00412d87507f253683c1793b9c))
+
 ## [0.24.0](https://github.com/engram-app/Engram/compare/0.23.0...0.24.0) (2026-09-02)
 
 
