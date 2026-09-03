@@ -244,10 +244,11 @@ defmodule Engram.Connections do
   Lists the user's connections, resolving vault names through `scope`.
 
   `scope` is what the REQUEST's credential may reach, not what the user owns.
-  `RequireSession` gates this route but only blocks API keys — an OAuth grant
-  authenticates as an internal JWT and passes straight through, so without the
-  filter a token scoped to one vault could read every vault's name off its own
-  connection row.
+  `RequireSession` gates this route and now rejects OAuth grants as well as API
+  keys, so this filter is defence in depth rather than the only guard: it still
+  covers a grant row with a NULL `scope` claim, which the plug cannot
+  discriminate, and it keeps the route correct if it is ever moved off that
+  pipeline.
   """
   @spec list_for_user(User.t(), Engram.Permissions.scope()) :: [connection_view()]
   def list_for_user(%User{} = user, scope \\ :all) do

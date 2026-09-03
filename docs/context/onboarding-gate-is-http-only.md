@@ -24,7 +24,8 @@ normal state rather than a blocked one).
 But a Plug takes a `conn` and **never runs on a socket** — and sync had moved to
 Phoenix Channels. The live path checked token validity (`user_socket.ex`
 `connect/3`), `crdt_proto` version, the DEK rotation lock,
-topic ownership, and `Vaults.check_api_key_access/2`. What it did **not** check
+topic ownership, and the credential's vault scope (now `Engram.Permissions`,
+the single source of truth for what a credential may reach). What it did **not** check
 was entitlement: nothing asked about ToS, plan, or wizard completion.
 
 Note the rotation check in that list — the gate is now ordered deliberately

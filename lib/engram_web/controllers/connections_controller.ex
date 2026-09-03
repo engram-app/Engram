@@ -28,8 +28,9 @@ defmodule EngramWeb.ConnectionsController do
   def index(conn, _params) do
     user = conn.assigns.current_user
     # Vault names resolve through the request's grant, not the user's whole
-    # vault list — a vault-scoped OAuth token reaches this route (RequireSession
-    # only blocks API keys) and must not read names it was never granted.
+    # vault list. `RequireSession` now rejects OAuth grants outright, so this is
+    # defence in depth — it still covers a grant whose `scope` claim is NULL,
+    # which the plug cannot discriminate.
     scope = Engram.Permissions.vault_scope(conn)
     json(conn, Enum.map(Connections.list_for_user(user, scope), &serialize/1))
   end
