@@ -119,6 +119,87 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert obs["client_id"] == family_id
       assert obs["software_id"] == "engram-vault-sync"
     end
+
+    test "a vault-scoped OAuth token cannot read a non-granted vault's name", %{conn: conn} do
+      # RequireSession gates this route, but it only blocks `current_api_key`.
+      # An OAuth grant authenticates as an internal JWT and passes straight
+      # through, so the vault-name lookup behind this list has to do the
+      # filtering itself.
+      %{user: user, granted: granted, hidden: hidden, client: client} = two_named_vaults()
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: nil,
+        vault_ids: [granted.id, hidden.id]
+      )
+
+      user = ensure_external_id(user)
+      token = Engram.Accounts.generate_jwt(user, %{"scope" => "mcp", "vault_ids" => [granted.id]})
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get("/api/connections")
+
+      body = json_response(conn, 200)
+
+      # Assert on the NAME, in the whole serialized body — not a row count.
+      # "Secret Client Work" must not appear anywhere in the response.
+      refute Jason.encode!(body) =~ "Secret Client Work"
+
+      row = Enum.find(body, fn r -> r["kind"] == "mcp" end)
+      assert "Personal" in row["vault_names"]
+      # Positional against vault_ids: the ungranted slot is nulled, not dropped,
+      # so the two lists stay index-aligned for the frontend.
+      assert length(row["vault_names"]) == length(row["vault_ids"])
+
+      assert Enum.at(row["vault_names"], Enum.find_index(row["vault_ids"], &(&1 == hidden.id))) ==
+               nil
+    end
+
+    test "an ordinary session JWT still sees every granted vault name", %{conn: conn} do
+      # The control for the test above: without a grant restriction the same
+      # row carries both names, so the filter is what removed one, not a bug in
+      # the name lookup.
+      %{user: user, granted: granted, hidden: hidden, client: client} = two_named_vaults()
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: nil,
+        vault_ids: [granted.id, hidden.id]
+      )
+
+      body =
+        conn
+        |> jwt_authed(user)
+        |> get("/api/connections")
+        |> json_response(200)
+
+      row = Enum.find(body, fn r -> r["kind"] == "mcp" end)
+      assert Enum.sort(row["vault_names"]) == ["Personal", "Secret Client Work"]
+    end
+  end
+
+  # Two vaults registered through the real encryption pipeline so their names
+  # decrypt back (factory vaults carry random ciphertext), plus an MCP client.
+  defp two_named_vaults do
+    user = insert(:user)
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
+
+    {:ok, granted, _} = Engram.Vaults.register_vault(user, "Personal", Ecto.UUID.generate())
+
+    {:ok, hidden, _} =
+      Engram.Vaults.register_vault(user, "Secret Client Work", Ecto.UUID.generate())
+
+    %{
+      user: user,
+      granted: granted,
+      hidden: hidden,
+      client: insert(:oauth_client, kind: "mcp")
+    }
   end
 
   describe "DELETE /api/connections/oauth/:client_id" do

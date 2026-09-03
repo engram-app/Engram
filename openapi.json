@@ -1645,16 +1645,29 @@
             "x-struct": null,
             "x-validate": null
           },
-          "vault_id": {
-            "format": "uuid",
+          "vault_ids": {
+            "description": "Vaults this connection may reach. Null means all vaults.",
+            "items": {
+              "format": "uuid",
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
             "nullable": true,
-            "type": "string",
+            "type": "array",
             "x-struct": null,
             "x-validate": null
           },
-          "vault_name": {
+          "vault_names": {
+            "description": "Positional against `vault_ids`. An entry is null when the vault is gone or outside the caller's own scope.",
+            "items": {
+              "nullable": true,
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
             "nullable": true,
-            "type": "string",
+            "type": "array",
             "x-struct": null,
             "x-validate": null
           },

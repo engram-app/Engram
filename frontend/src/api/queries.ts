@@ -1499,8 +1499,11 @@ export interface Connection {
 	verified: boolean;
 	logo: string | null;
 	slug: string | null;
-	vault_id: string | null;
-	vault_name: string | null;
+	/** Vaults this connection may reach. Null means all vaults. */
+	vault_ids: string[] | null;
+	/** Positional against `vault_ids`. An entry is null when the vault is gone
+	 *  or outside the caller's own grant scope. */
+	vault_names: (string | null)[] | null;
 	scope: string | null;
 	last_used_at: string | null;
 	connected_at: string | null;

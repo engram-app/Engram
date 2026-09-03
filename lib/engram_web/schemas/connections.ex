@@ -78,8 +78,20 @@ defmodule EngramWeb.Schemas.Connection do
       verified: %Schema{type: :boolean, nullable: true},
       logo: %Schema{type: :string, nullable: true},
       slug: %Schema{type: :string, nullable: true},
-      vault_id: %Schema{type: :string, format: :uuid, nullable: true},
-      vault_name: %Schema{type: :string, nullable: true},
+      vault_ids: %Schema{
+        type: :array,
+        nullable: true,
+        items: %Schema{type: :string, format: :uuid},
+        description: "Vaults this connection may reach. Null means all vaults."
+      },
+      vault_names: %Schema{
+        type: :array,
+        nullable: true,
+        items: %Schema{type: :string, nullable: true},
+        description:
+          "Positional against `vault_ids`. An entry is null when the vault is " <>
+            "gone or outside the caller's own scope."
+      },
       scope: %Schema{type: :string, nullable: true},
       last_used_at: %Schema{type: :string, format: :"date-time", nullable: true},
       connected_at: %Schema{type: :string, format: :"date-time", nullable: true},

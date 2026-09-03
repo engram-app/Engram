@@ -710,8 +710,11 @@ function VaultPickerFieldset({
 // (e.g., a freshly seeded test row with no UA / no vault name).
 function describeObsidianDevice(c: Connection): string {
 	const parts: string[] = [];
-	if (c.vault_name) {
-		parts.push(`the device syncing your '${c.vault_name}' vault`);
+	// A device family is always bound to exactly one vault, so the first entry
+	// is the whole story here.
+	const vaultName = c.vault_names?.[0];
+	if (vaultName) {
+		parts.push(`the device syncing your '${vaultName}' vault`);
 	}
 	const os = parseUserAgentOs(c.first_user_agent);
 	if (os) {

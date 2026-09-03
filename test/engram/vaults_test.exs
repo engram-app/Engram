@@ -712,7 +712,9 @@ defmodule Engram.VaultsTest do
 
       # The deleted vault's connections vanish from the page immediately (the
       # #764 symptom is the connections list, not just the active count).
-      vault_ids = user |> Connections.list_for_user() |> Enum.map(& &1.vault_id)
+      vault_ids =
+        user |> Connections.list_for_user() |> Enum.flat_map(&(&1.vault_ids || []))
+
       refute gone.id in vault_ids
       assert kept.id in vault_ids
 

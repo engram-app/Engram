@@ -27,7 +27,11 @@ defmodule EngramWeb.ConnectionsController do
 
   def index(conn, _params) do
     user = conn.assigns.current_user
-    json(conn, Enum.map(Connections.list_for_user(user), &serialize/1))
+    # Vault names resolve through the request's grant, not the user's whole
+    # vault list — a vault-scoped OAuth token reaches this route (RequireSession
+    # only blocks API keys) and must not read names it was never granted.
+    scope = Engram.Permissions.vault_scope(conn)
+    json(conn, Enum.map(Connections.list_for_user(user, scope), &serialize/1))
   end
 
   operation(:delete_oauth,
@@ -170,8 +174,11 @@ defmodule EngramWeb.ConnectionsController do
       verified: row.verified,
       logo: row.logo,
       slug: row.slug,
-      vault_id: row.vault_id,
-      vault_name: row.vault_name,
+      # Always arrays (or nil for "all vaults"), on every kind — a payload
+      # where one branch emits a list and another a scalar is a frontend bug
+      # waiting to happen.
+      vault_ids: row.vault_ids,
+      vault_names: row.vault_names,
       scope: row.scope,
       last_used_at: row.last_used_at,
       connected_at: row.connected_at,

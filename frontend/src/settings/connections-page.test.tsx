@@ -76,8 +76,8 @@ const baseObs: import("../api/queries").Connection = {
 	verified: true,
 	logo: "/x.svg",
 	slug: null,
-	vault_id: "1",
-	vault_name: null,
+	vault_ids: ["1"],
+	vault_names: [null],
 	scope: null,
 	last_used_at: null,
 	connected_at: "2026-05-30T00:00:00Z",
@@ -98,8 +98,8 @@ const basePat: import("../api/queries").Connection = {
 	verified: false,
 	logo: null,
 	slug: null,
-	vault_id: null,
-	vault_name: null,
+	vault_ids: null,
+	vault_names: null,
 	scope: null,
 	last_used_at: null,
 	connected_at: "2026-05-30T00:00:00Z",
@@ -120,8 +120,8 @@ const baseMcp: import("../api/queries").Connection = {
 	verified: false,
 	logo: null,
 	slug: null,
-	vault_id: null,
-	vault_name: null,
+	vault_ids: null,
+	vault_names: null,
 	scope: "notes:read notes:write",
 	last_used_at: null,
 	connected_at: "2026-05-30T00:00:00Z",
@@ -390,23 +390,23 @@ describe("ConnectionsPage", () => {
 		mockConnections.splice(
 			0,
 			mockConnections.length,
-			{ ...baseObs, vault_name: "Personal" },
+			{ ...baseObs, vault_names: ["Personal"] },
 			baseMcp,
 		);
 		mockTier = "starter";
 		renderPage();
 		expect(screen.getByText("Vault:")).toBeInTheDocument();
 		expect(screen.getByText(/Personal/u)).toBeInTheDocument();
-		// MCP card: plural + "All vaults" since baseMcp.vault_id is null
+		// MCP card: plural + "All vaults" since baseMcp.vault_ids is null
 		expect(screen.getByText("Vaults:")).toBeInTheDocument();
 		expect(screen.getByText(/All vaults/u)).toBeInTheDocument();
 	});
 
-	it("falls back to #<id> when vault_name is missing", () => {
+	it("falls back to #<id> when a vault name is missing", () => {
 		mockConnections.splice(0, mockConnections.length, {
 			...baseObs,
-			vault_id: "42",
-			vault_name: null,
+			vault_ids: ["42"],
+			vault_names: [null],
 		});
 		mockTier = "starter";
 		renderPage();

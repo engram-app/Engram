@@ -71,9 +71,9 @@ function ConnectionCard({
 	onRevoke: () => void;
 }) {
 	const vaultLabel =
-		connection.vault_id === null
+		connection.vault_ids === null
 			? "All vaults"
-			: (connection.vault_name ?? `#${connection.vault_id}`);
+			: connection.vault_ids.map((id, i) => connection.vault_names?.[i] ?? `#${id}`).join(", ");
 
 	return (
 		<article className="group flex items-start rounded-lg border border-border bg-card">

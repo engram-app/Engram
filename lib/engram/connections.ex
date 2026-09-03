@@ -114,7 +114,12 @@ defmodule Engram.Connections do
 
     query =
       if vault_id do
-        from(t in query, where: t.vault_id == ^vault_id)
+        # Matches BOTH shapes: grants written before `vault_ids` existed carry
+        # only the scalar column, so an array-only match would silently miss
+        # every legacy row and leave a "revoked" connection able to mint.
+        from(t in query,
+          where: type(^vault_id, Ecto.UUID) in t.vault_ids or t.vault_id == ^vault_id
+        )
       else
         query
       end
@@ -136,11 +141,37 @@ defmodule Engram.Connections do
   def revoke_by_vault(user_id, vault_id) do
     now = DateTime.utc_now(:second)
 
+    # A multi-vault grant must NOT die because one of its vaults did — killing
+    # a grant over A+B+C when B is deleted costs the user access to two vaults
+    # they never touched. Narrow the array first; the revoke pass below then
+    # no longer matches the narrowed row (the deleted id is gone from it), so
+    # only grants with nothing left standing get revoked.
     Repo.update_all(
       from(t in RefreshToken,
         where: t.user_id == ^user_id,
-        where: t.vault_id == ^vault_id,
-        where: is_nil(t.revoked_at)
+        where: type(^vault_id, Ecto.UUID) in t.vault_ids,
+        where: fragment("array_length(?, 1) > 1", t.vault_ids),
+        where: is_nil(t.revoked_at),
+        update: [
+          set: [
+            vault_ids: fragment("array_remove(?, ?)", t.vault_ids, type(^vault_id, Ecto.UUID))
+          ]
+        ]
+      ),
+      []
+    )
+
+    # Revoke outright when the deleted vault was the grant's ONLY one, and for
+    # legacy scalar-only rows which have no array to narrow. Rows with both
+    # columns NULL are "all vaults" and are deliberately left alone.
+    Repo.update_all(
+      from(t in RefreshToken,
+        where: t.user_id == ^user_id,
+        where: is_nil(t.revoked_at),
+        where:
+          (type(^vault_id, Ecto.UUID) in t.vault_ids and
+             fragment("array_length(?, 1) = 1", t.vault_ids)) or
+            (is_nil(t.vault_ids) and t.vault_id == ^vault_id)
       ),
       set: [revoked_at: now]
     )
@@ -191,8 +222,11 @@ defmodule Engram.Connections do
           verified: boolean(),
           logo: String.t() | nil,
           slug: String.t() | nil,
-          vault_id: integer() | nil,
-          vault_name: String.t() | nil,
+          # `nil` means "all vaults", not "no vaults". `vault_names` is
+          # positional against `vault_ids`; an entry is nil when the vault is
+          # gone or outside the caller's scope.
+          vault_ids: [String.t()] | nil,
+          vault_names: [String.t() | nil] | nil,
           scope: String.t() | nil,
           last_used_at: DateTime.t() | nil,
           connected_at: DateTime.t() | nil,
@@ -206,17 +240,32 @@ defmodule Engram.Connections do
           cimd_url: String.t() | nil
         }
 
-  @spec list_for_user(User.t()) :: [connection_view()]
-  def list_for_user(%User{} = user) do
+  @doc """
+  Lists the user's connections, resolving vault names through `scope`.
+
+  `scope` is what the REQUEST's credential may reach, not what the user owns.
+  `RequireSession` gates this route but only blocks API keys — an OAuth grant
+  authenticates as an internal JWT and passes straight through, so without the
+  filter a token scoped to one vault could read every vault's name off its own
+  connection row.
+  """
+  @spec list_for_user(User.t(), Engram.Permissions.scope()) :: [connection_view()]
+  def list_for_user(%User{} = user, scope \\ :all) do
     # Vault names are stored encrypted; bulk-decrypt once via the Vaults
     # context (RLS+tenant-scoped) and post-merge by id, rather than joining
-    # at SQL level.
-    vault_names = user |> Vaults.list_vaults() |> Map.new(&{&1.id, &1.name})
+    # at SQL level. Flat call, NOT a pipe: filter/2 takes the scope first and a
+    # reversed call fails at runtime, not compile time.
+    visible = Engram.Permissions.filter(scope, Vaults.list_vaults(user))
+    vault_names = Map.new(visible, &{&1.id, &1.name})
 
     (oauth_rows(user.id) ++ device_rows(user.id) ++ pat_rows(user.id))
-    |> Enum.map(&Map.put(&1, :vault_name, &1.vault_id && Map.get(vault_names, &1.vault_id)))
+    |> Enum.map(&Map.put(&1, :vault_names, resolve_names(&1.vault_ids, vault_names)))
     |> Enum.sort_by(&(&1.last_used_at || &1.connected_at), {:desc, DateTime})
   end
+
+  # nil vault_ids = all vaults; there is no name list to build for it.
+  defp resolve_names(nil, _names), do: nil
+  defp resolve_names(ids, names), do: Enum.map(ids, &Map.get(names, &1))
 
   defp oauth_rows(user_id) do
     from(t in RefreshToken,
@@ -228,7 +277,11 @@ defmodule Engram.Connections do
       # unconsumed successor. Filtering both gives the live grant.
       where: is_nil(t.consumed_at),
       order_by: [desc: coalesce(t.last_used_at, t.inserted_at)],
-      distinct: [t.client_id, t.vault_id],
+      # Both columns: a multi-vault grant is one row (its whole array is one
+      # DISTINCT key), while two legacy scalar-only grants for the same client
+      # on different vaults stay two rows — keying on `vault_ids` alone would
+      # collapse them, since theirs is NULL.
+      distinct: [t.client_id, t.vault_ids, t.vault_id],
       select: {t, c}
     )
     |> Repo.all()
@@ -250,7 +303,9 @@ defmodule Engram.Connections do
         verified: identity.verified,
         logo: identity.logo,
         slug: identity.slug,
-        vault_id: t.vault_id,
+        # Legacy rows carry only the scalar; lift it into the array shape so
+        # every branch of this list emits the SAME type.
+        vault_ids: t.vault_ids || (t.vault_id && [t.vault_id]),
         scope: t.scope,
         last_used_at: t.last_used_at,
         connected_at: t.inserted_at,
@@ -287,7 +342,7 @@ defmodule Engram.Connections do
         verified: false,
         logo: nil,
         slug: nil,
-        vault_id: nil,
+        vault_ids: nil,
         scope: nil,
         last_used_at: k.last_used,
         connected_at: k.created_at,
@@ -326,7 +381,7 @@ defmodule Engram.Connections do
         verified: true,
         logo: "/assets/clients/engram-vault-sync.svg",
         slug: nil,
-        vault_id: rt.vault_id,
+        vault_ids: rt.vault_id && [rt.vault_id],
         scope: nil,
         # Device flow does not stamp last_used_at on each access-token refresh.
         last_used_at: nil,
