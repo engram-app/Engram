@@ -50,7 +50,7 @@ defmodule EngramWeb.VaultsController do
 
   def index(conn, params) do
     user = conn.assigns.current_user
-    payload = index_payload(user)
+    payload = index_payload(user, Engram.Permissions.vault_scope(conn))
 
     payload =
       case Map.get(params, "user_code") do
@@ -79,11 +79,15 @@ defmodule EngramWeb.VaultsController do
   Builds the base `GET /api/vaults` JSON map (`%{vaults: [...]}`) for a user.
   Public so the consolidated `GET /api/bootstrap` endpoint serves the identical
   list shape without the device-link `user_code` extension.
-  """
-  def index_payload(user) do
-    vaults = Vaults.list_vaults(user)
-    counts = Vaults.content_counts_for(user, vaults)
 
+  `scope` narrows the list to what the request's credential may reach. Without
+  it a token scoped to one vault could still enumerate the names of every other
+  vault the user owns — the same leak the MCP list path closed in #729.
+  """
+  def index_payload(user, scope \\ :all) do
+    vaults = Engram.Permissions.filter(scope, Vaults.list_vaults(user))
+
+    counts = Vaults.content_counts_for(user, vaults)
     %{vaults: Enum.map(vaults, &vault_json(&1, Map.get(counts, &1.id, @zero_counts)))}
   end
 

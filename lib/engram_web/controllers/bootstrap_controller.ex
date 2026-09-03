@@ -57,7 +57,7 @@ defmodule EngramWeb.BootstrapController do
       # that silently returns nothing is the support ticket the cap exists to
       # avoid.
       index_status: IndexCap.counts(user),
-      vaults: VaultsController.index_payload(user)
+      vaults: VaultsController.index_payload(user, Engram.Permissions.vault_scope(conn))
     }
 
     payload =

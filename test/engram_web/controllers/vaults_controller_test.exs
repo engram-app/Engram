@@ -156,6 +156,42 @@ defmodule EngramWeb.VaultsControllerTest do
       assert row["note_count"] == 2
       assert row["attachment_count"] == 1
     end
+
+    test "under a scoped grant lists only the granted vault", %{conn: conn} do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      granted = insert(:vault, user: user, slug: "granted", is_default: true)
+      _hidden = insert(:vault, user: user, slug: "hidden")
+
+      user = ensure_external_id(user)
+      token = Accounts.generate_jwt(user, %{"scope" => "mcp", "vault_ids" => [granted.id]})
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get("/api/vaults")
+
+      slugs = conn |> json_response(200) |> Map.fetch!("vaults") |> Enum.map(& &1["slug"])
+      assert slugs == ["granted"]
+    end
+
+    test "an unscoped token still lists every vault", %{conn: conn} do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      _vault_a = insert(:vault, user: user, slug: "vault-a", is_default: true)
+      _vault_b = insert(:vault, user: user, slug: "vault-b")
+
+      user = ensure_external_id(user)
+      token = Accounts.generate_jwt(user, %{"scope" => "mcp"})
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get("/api/vaults")
+
+      slugs = conn |> json_response(200) |> Map.fetch!("vaults") |> Enum.map(& &1["slug"])
+      assert Enum.sort(slugs) == ["vault-a", "vault-b"]
+    end
   end
 
   # `POST /api/vaults` is gone — it created a vault per call with no
@@ -428,5 +464,16 @@ defmodule EngramWeb.VaultsControllerTest do
       assert body["current"] == 1
       assert body["upgrade_url"] =~ "/#settings/billing"
     end
+  end
+
+  defp ensure_external_id(%{external_id: ext} = user) when is_binary(ext) and ext != "", do: user
+
+  defp ensure_external_id(user) do
+    {:ok, updated} =
+      user
+      |> Ecto.Changeset.change(external_id: "test-#{user.id}")
+      |> Engram.Repo.update(skip_tenant_check: true)
+
+    updated
   end
 end

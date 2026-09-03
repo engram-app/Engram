@@ -105,6 +105,25 @@ defmodule EngramWeb.BootstrapControllerTest do
       assert is_map(body["capabilities"]["limits"])
       assert body["onboarding"]["enabled"] == true
     end
+
+    test "vaults slice under a scoped grant lists only the granted vault", %{conn: conn} do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      granted = insert(:vault, user: user, slug: "granted", is_default: true)
+      _hidden = insert(:vault, user: user, slug: "hidden")
+
+      user = ensure_external_id(user)
+      token = Accounts.generate_jwt(user, %{"scope" => "mcp", "vault_ids" => [granted.id]})
+
+      body =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get("/api/bootstrap")
+        |> json_response(200)
+
+      slugs = body["vaults"]["vaults"] |> Enum.map(& &1["slug"])
+      assert slugs == ["granted"]
+    end
   end
 
   describe "GET /api/index-status" do
@@ -135,5 +154,16 @@ defmodule EngramWeb.BootstrapControllerTest do
     test "requires auth", %{conn: conn} do
       assert conn |> get(~p"/api/index-status") |> json_response(401)
     end
+  end
+
+  defp ensure_external_id(%{external_id: ext} = user) when is_binary(ext) and ext != "", do: user
+
+  defp ensure_external_id(user) do
+    {:ok, updated} =
+      user
+      |> Ecto.Changeset.change(external_id: "test-#{user.id}")
+      |> Engram.Repo.update(skip_tenant_check: true)
+
+    updated
   end
 end

@@ -314,6 +314,10 @@ defmodule EngramWeb.Router do
     pipe_through [
       :api,
       EngramWeb.Plugs.Auth,
+      # Surfaces oauth_scope_vault_ids so GET /vaults can filter its list to
+      # the grant (Engram.Permissions.vault_scope reads this assign). Must run
+      # before anything that resolves the vault list.
+      EngramWeb.Plugs.OAuthScopeEnforce,
       # Stamps app.user_id on the request span right after Auth resolves
       # current_user. No current_vault at this scope, so app.vault_id is
       # simply absent from these spans.
@@ -395,6 +399,10 @@ defmodule EngramWeb.Router do
     pipe_through [
       :api,
       EngramWeb.Plugs.Auth,
+      # Surfaces oauth_scope_vault_ids so GET /bootstrap's embedded vault list
+      # gets the same grant-scoped filtering as GET /vaults — this scope is a
+      # separate pipe_through from the one above, so it needs its own copy.
+      EngramWeb.Plugs.OAuthScopeEnforce,
       # Stamps app.user_id on the request span (no current_vault at this
       # onboarding scope, so app.vault_id stays absent here too).
       EngramWeb.Plugs.TraceUserAttrs,
