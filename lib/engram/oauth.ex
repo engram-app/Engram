@@ -318,6 +318,7 @@ defmodule Engram.OAuth do
              client_id: code_row.client_id,
              user_id: code_row.user_id,
              vault_id: code_row.vault_id,
+             vault_ids: code_row.vault_ids,
              scope: code_row.scope,
              # Where the code was actually delivered — already matched against
              # the client's registered list at /authorize. Carried onto the
@@ -398,6 +399,7 @@ defmodule Engram.OAuth do
         client_id: rt.client_id,
         user_id: rt.user_id,
         vault_id: rt.vault_id,
+        vault_ids: rt.vault_ids,
         scope: rt.scope,
         # Immutable for the life of the family, like family_id: rotation mints
         # a successor to the SAME grant, and the grant was delivered once.
@@ -410,7 +412,7 @@ defmodule Engram.OAuth do
       {:ok, user} ->
         {:ok,
          %{
-           access_token: issue_access_token(user, rt.scope, rt.vault_id),
+           access_token: issue_access_token(user, rt.scope, grant_vault_ids(rt)),
            refresh_token: refresh_raw,
            token_type: "Bearer",
            expires_in: Engram.Token.ttl_seconds(),
@@ -517,11 +519,28 @@ defmodule Engram.OAuth do
     end
   end
 
-  defp issue_access_token(user, scope, vault_id) do
+  # Reads the grant's effective vault scope, tolerating rows written before
+  # the vault_ids column existed (scalar set, array NULL).
+  defp grant_vault_ids(%{vault_ids: ids}) when is_list(ids) and ids != [], do: ids
+  defp grant_vault_ids(%{vault_id: id}) when is_binary(id), do: [id]
+  defp grant_vault_ids(_), do: nil
+
+  defp issue_access_token(user, scope, vault_ids) do
     extras =
       %{}
       |> maybe_put("scope", scope)
-      |> maybe_put("vault_id", vault_id)
+      |> maybe_put("vault_ids", vault_ids)
+      # Single-vault grants keep emitting the legacy scalar claim so a token
+      # minted here stays readable by a rolled-back release. Multi-vault
+      # grants omit it — there is no scalar that means "A and C", and the old
+      # reader treats a missing claim as unrestricted, so it must never see
+      # one it would misread as narrower than it is.
+      |> then(fn m ->
+        case vault_ids do
+          [only] -> Map.put(m, "vault_id", only)
+          _ -> m
+        end
+      end)
 
     Accounts.generate_jwt(user, extras)
   end
@@ -607,7 +626,7 @@ defmodule Engram.OAuth do
 
   defp build_token_response(user, code_row, refresh_raw, _refresh_row) do
     %{
-      access_token: issue_access_token(user, code_row.scope, code_row.vault_id),
+      access_token: issue_access_token(user, code_row.scope, grant_vault_ids(code_row)),
       refresh_token: refresh_raw,
       token_type: "Bearer",
       expires_in: Engram.Token.ttl_seconds(),

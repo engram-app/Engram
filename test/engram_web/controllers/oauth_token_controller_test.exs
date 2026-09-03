@@ -33,7 +33,12 @@ defmodule EngramWeb.OAuthTokenControllerTest do
 
   defp mint_code(user, client, redirect_uri, challenge, opts \\ []) do
     state = Keyword.get(opts, :state, "xyz")
-    vault_choice = Keyword.get(opts, :vault_choice, :all)
+
+    vault_choice =
+      case Keyword.fetch(opts, :vault_ids) do
+        {:ok, ids} -> ids
+        :error -> Keyword.get(opts, :vault_choice, :all)
+      end
 
     {:ok, validated} =
       OAuth.validate_authorization_request(%{
@@ -235,6 +240,85 @@ defmodule EngramWeb.OAuthTokenControllerTest do
       conn = post(conn, "/oauth/token", params)
       body = json_response(conn, 400)
       assert body["error"] == "invalid_grant"
+    end
+
+    test "a multi-vault grant round-trips vault_ids through exchange and refresh",
+         %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "tok-a")
+      b = insert(:vault, user: user, slug: "tok-b")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+      {verifier, challenge} = pkce_pair()
+
+      code = mint_code(user, client, redirect_uri, challenge, vault_ids: [a.id, b.id])
+
+      body =
+        conn
+        |> post("/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => redirect_uri,
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+        |> json_response(200)
+
+      {:ok, claims} = Engram.Accounts.verify_jwt(body["access_token"])
+      assert Enum.sort(claims["vault_ids"]) == Enum.sort([a.id, b.id])
+      # No single id means "A and B" — must not claim a scalar binding.
+      refute Map.has_key?(claims, "vault_id")
+
+      refreshed =
+        build_conn()
+        |> post("/oauth/token", %{
+          "grant_type" => "refresh_token",
+          "refresh_token" => body["refresh_token"],
+          "client_id" => client.client_id
+        })
+        |> json_response(200)
+
+      {:ok, claims2} = Engram.Accounts.verify_jwt(refreshed["access_token"])
+      assert Enum.sort(claims2["vault_ids"]) == Enum.sort([a.id, b.id])
+    end
+
+    test "a legacy refresh token with only vault_id still mints a scoped access token",
+         %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "tok-legacy")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+      {verifier, challenge} = pkce_pair()
+
+      code = mint_code(user, client, redirect_uri, challenge, vault_ids: [a.id])
+
+      body =
+        conn
+        |> post("/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => redirect_uri,
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+        |> json_response(200)
+
+      # Simulate a row written before this release: scalar set, array NULL.
+      Engram.Repo.update_all(
+        Engram.OAuth.RefreshToken,
+        [set: [vault_ids: nil]], skip_tenant_check: true)
+
+      refreshed =
+        build_conn()
+        |> post("/oauth/token", %{
+          "grant_type" => "refresh_token",
+          "refresh_token" => body["refresh_token"],
+          "client_id" => client.client_id
+        })
+        |> json_response(200)
+
+      {:ok, claims} = Engram.Accounts.verify_jwt(refreshed["access_token"])
+      assert claims["vault_ids"] == [a.id]
     end
   end
 
