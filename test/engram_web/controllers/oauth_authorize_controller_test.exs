@@ -613,6 +613,28 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       assert uri =~ "error=access_denied"
     end
 
+    # A grapheme bound is not a size bound. This label is ONE grapheme, so it
+    # sails past the 120-char check, but the combining-mark stack makes it
+    # kilobytes — and the value is re-copied into a new row on every rotation.
+    # Only the byte ceiling catches it.
+    test "a one-grapheme label that is kilobytes of combining marks is rejected", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      zalgo = "e" <> String.duplicate(<<0x0301::utf8>>, 2500)
+      assert String.length(zalgo) == 1
+      assert byte_size(zalgo) > 4096, "the fixture must exceed the byte ceiling to exercise it"
+
+      params = client.client_id |> valid_params(redirect_uri) |> Map.put("label", zalgo)
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      uri = conn.resp_body |> Jason.decode!() |> Map.fetch!("redirect_uri")
+      assert uri =~ "error=access_denied"
+    end
+
     test "the label survives the code -> refresh-token exchange", %{conn: conn} do
       user = insert(:user)
       _vault = insert(:vault, user: user)

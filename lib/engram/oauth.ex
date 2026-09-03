@@ -243,7 +243,7 @@ defmodule Engram.OAuth do
   Returns `{:ok, redirect_url}` (caller 302s) or
   `{:redirect_error, redirect_uri, error_code, state}`.
   """
-  def mint_authorization_code(user, validated, vault_selection, label \\ nil) do
+  def mint_authorization_code(user, validated, vault_selection, label) do
     with {:ok, vault_ids} <- resolve_vaults(user, vault_selection),
          {:ok, label} <- resolve_label(label) do
       raw_code =
@@ -807,6 +807,19 @@ defmodule Engram.OAuth do
   # default, and stores NULL so the client identity keeps showing through.
   @max_label_chars 120
 
+  # A grapheme bound is NOT a size bound: one grapheme cluster can carry
+  # arbitrarily many combining marks, so 120 graphemes can be megabytes. The
+  # column is `:text` and the value is re-copied into a new row on every
+  # rotation, so the only other ceiling is Plug.Parsers' 11MB body limit.
+  #
+  # 4096, not 4 bytes/grapheme: measured worst-case REAL graphemes are far
+  # wider than 4 bytes — a tag-sequence flag (🏴󠁧󠁢󠁥󠁮󠁧󠁿) is 28 bytes and a 4-person
+  # ZWJ family is 25, so 120 of them is 3360/3000 bytes. A 480-byte cap would
+  # reject a legitimate all-emoji label. 4096 clears every real sequence while
+  # still refusing the combining-mark stack class (120 such graphemes measured
+  # at 48120 bytes).
+  @max_label_bytes 4096
+
   defp resolve_label(nil), do: {:ok, nil}
 
   defp resolve_label(label) when is_binary(label) do
@@ -814,6 +827,7 @@ defmodule Engram.OAuth do
 
     cond do
       trimmed == "" -> {:ok, nil}
+      byte_size(trimmed) > @max_label_bytes -> :error
       String.length(trimmed) > @max_label_chars -> :error
       true -> {:ok, trimmed}
     end

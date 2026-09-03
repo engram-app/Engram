@@ -49,7 +49,7 @@ defmodule EngramWeb.OAuthRevokeControllerTest do
         "state" => "s"
       })
 
-    {:ok, redirect_url} = OAuth.mint_authorization_code(user, validated, :all)
+    {:ok, redirect_url} = OAuth.mint_authorization_code(user, validated, :all, nil)
     code = URI.parse(redirect_url).query |> URI.decode_query() |> Map.fetch!("code")
 
     %{"refresh_token" => rt} =
@@ -166,7 +166,7 @@ defmodule EngramWeb.OAuthRevokeControllerTest do
           "code_challenge_method" => "S256"
         })
 
-      {:ok, _} = OAuth.mint_authorization_code(user, validated, :all)
+      {:ok, _} = OAuth.mint_authorization_code(user, validated, :all, nil)
 
       past = DateTime.utc_now(:second) |> DateTime.add(-86_400, :second)
 

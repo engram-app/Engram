@@ -660,7 +660,7 @@ defmodule Engram.OAuth.CimdTest do
       }
 
       assert {:ok, redirect} =
-               OAuth.mint_authorization_code(user, validated, [vault.id])
+               OAuth.mint_authorization_code(user, validated, [vault.id], nil)
 
       code = redirect |> URI.parse() |> Map.get(:query) |> URI.decode_query() |> Map.get("code")
 
@@ -706,7 +706,7 @@ defmodule Engram.OAuth.CimdTest do
         state: nil
       }
 
-      {:ok, redirect} = OAuth.mint_authorization_code(user, validated, [vault.id])
+      {:ok, redirect} = OAuth.mint_authorization_code(user, validated, [vault.id], nil)
       code = redirect |> URI.parse() |> Map.get(:query) |> URI.decode_query() |> Map.get("code")
 
       assert {:error, :invalid_grant} =

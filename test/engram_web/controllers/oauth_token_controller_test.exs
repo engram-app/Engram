@@ -51,10 +51,25 @@ defmodule EngramWeb.OAuthTokenControllerTest do
         "scope" => "mcp"
       })
 
-    {:ok, redirect_url} = OAuth.mint_authorization_code(user, validated, vault_choice)
+    {:ok, redirect_url} =
+      OAuth.mint_authorization_code(user, validated, vault_choice, Keyword.get(opts, :label))
 
     %{query: query} = URI.parse(redirect_url)
     URI.decode_query(query)["code"]
+  end
+
+  # The live grant row — unconsumed + unrevoked is exactly the pair
+  # `Engram.Connections.oauth_rows/1` filters on, so this is the row the
+  # connections list would render.
+  defp current_refresh_row(user) do
+    import Ecto.Query
+
+    Engram.Repo.one!(
+      from(r in Engram.OAuth.RefreshToken,
+        where: r.user_id == ^user.id and is_nil(r.consumed_at) and is_nil(r.revoked_at)
+      ),
+      skip_tenant_check: true
+    )
   end
 
   describe "POST /oauth/token — authorization_code grant" do
@@ -242,7 +257,7 @@ defmodule EngramWeb.OAuthTokenControllerTest do
       assert body["error"] == "invalid_grant"
     end
 
-    test "a multi-vault grant round-trips vault_ids through exchange and refresh",
+    test "a multi-vault grant round-trips vault_ids and label through exchange and refresh",
          %{conn: conn} do
       user = insert(:user)
       a = insert(:vault, user: user, slug: "tok-a")
@@ -251,7 +266,11 @@ defmodule EngramWeb.OAuthTokenControllerTest do
       redirect_uri = hd(client.redirect_uris)
       {verifier, challenge} = pkce_pair()
 
-      code = mint_code(user, client, redirect_uri, challenge, vault_ids: [a.id, b.id])
+      code =
+        mint_code(user, client, redirect_uri, challenge,
+          vault_ids: [a.id, b.id],
+          label: "Work laptop"
+        )
 
       body =
         conn
@@ -269,6 +288,12 @@ defmodule EngramWeb.OAuthTokenControllerTest do
       # No single id means "A and B" — must not claim a scalar binding.
       refute Map.has_key?(claims, "vault_id")
 
+      # The label is not a token claim — it exists for the connections list,
+      # which reads the refresh-token ROW. Assert on the row at both hops:
+      # dropping the carry at either site is otherwise invisible until the
+      # user's connection silently renames itself an hour later.
+      assert %{label: "Work laptop"} = current_refresh_row(user)
+
       refreshed =
         build_conn()
         |> post("/oauth/token", %{
@@ -280,6 +305,8 @@ defmodule EngramWeb.OAuthTokenControllerTest do
 
       {:ok, claims2} = Engram.Accounts.verify_jwt(refreshed["access_token"])
       assert Enum.sort(claims2["vault_ids"]) == Enum.sort([a.id, b.id])
+      # The ROTATION hop. This is a different row than the one asserted above.
+      assert %{label: "Work laptop"} = current_refresh_row(user)
     end
 
     test "a legacy refresh token with only vault_id still mints a scoped access token",

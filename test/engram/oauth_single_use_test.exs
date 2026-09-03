@@ -27,7 +27,7 @@ defmodule Engram.OAuthSingleUseTest do
         "scope" => "mcp"
       })
 
-    {:ok, redirect_url} = OAuth.mint_authorization_code(user, validated, :all)
+    {:ok, redirect_url} = OAuth.mint_authorization_code(user, validated, :all, nil)
 
     %{query: query} = URI.parse(redirect_url)
     URI.decode_query(query)["code"]
