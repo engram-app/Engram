@@ -327,6 +327,21 @@ export default function OAuthAuthorizePage() {
 							<legend className="mb-1 font-medium text-foreground text-sm">
 								Which vaults can {clientName} access?
 							</legend>
+							<label className={selectableRow(selected === null)}>
+								<input
+									type="radio"
+									name="all_vaults"
+									checked={selected === null}
+									onChange={() => setPicked(null)}
+									className="accent-primary"
+								/>
+								<span className="font-medium text-foreground text-sm">
+									All vaults
+									<span className="ml-2 font-normal text-muted-foreground text-xs">
+										including any you create later
+									</span>
+								</span>
+							</label>
 							{vaultsQuery.data?.map((v) => {
 								const id = String(v.id);
 								const active = Boolean(selected?.has(id));
@@ -355,21 +370,6 @@ export default function OAuthAuthorizePage() {
 									</label>
 								);
 							})}
-							<label className={selectableRow(selected === null)}>
-								<input
-									type="radio"
-									name="all_vaults"
-									checked={selected === null}
-									onChange={() => setPicked(null)}
-									className="accent-primary"
-								/>
-								<span className="font-medium text-foreground text-sm">
-									All vaults
-									<span className="ml-2 font-normal text-muted-foreground text-xs">
-										including any you create later
-									</span>
-								</span>
-							</label>
 						</fieldset>
 
 						{Boolean(submitError) && (
