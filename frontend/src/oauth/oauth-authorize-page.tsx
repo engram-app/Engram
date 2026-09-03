@@ -135,6 +135,9 @@ export default function OAuthAuthorizePage() {
 			return next;
 		});
 	};
+	// Prefilled via `placeholder`, never `value`: an untouched default is not a
+	// choice, and only a non-empty typed value is sent.
+	const [label, setLabel] = useState("");
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const [submitting, setSubmitting] = useState(false);
 	// At-cap users get a confirm modal before the implicit swap so they see
@@ -208,6 +211,10 @@ export default function OAuthAuthorizePage() {
 		}
 		if (selected && selected.size > 0) {
 			body.vault_ids = [...selected];
+		}
+		const trimmed = label.trim();
+		if (trimmed) {
+			body.label = trimmed;
 		}
 
 		// If swapping, disconnect the existing connection of the same kind
@@ -301,6 +308,21 @@ export default function OAuthAuthorizePage() {
 								to keep both connected.
 							</div>
 						) : null}
+						<label className="flex flex-col gap-1.5">
+							<span className="font-medium text-foreground text-sm">
+								Name this connection{" "}
+								<span className="font-normal text-muted-foreground">(optional)</span>
+							</span>
+							<input
+								type="text"
+								maxLength={120}
+								value={label}
+								onChange={(e) => setLabel(e.target.value)}
+								placeholder={clientName}
+								className="rounded-lg border border-border bg-background p-2.5 text-sm"
+							/>
+						</label>
+
 						<fieldset className="flex flex-col gap-2">
 							<legend className="mb-1 font-medium text-foreground text-sm">
 								Which vaults can {clientName} access?
@@ -399,7 +421,12 @@ export default function OAuthAuthorizePage() {
 									setShowSwapConfirm(false);
 									await runSubmit(true);
 								}}
-								disabled={submitting}
+								// Mirrors Approve's guard. Unreachable today (the dialog only
+								// opens from an already-guarded Approve and the overlay blocks
+								// the checkboxes behind it), but this is a second submit path
+								// to the same endpoint and its safety must not depend on
+								// modal-blocking behaviour staying true forever.
+								disabled={submitting || (selected !== null && selected.size === 0)}
 								className="w-full"
 							>
 								{submitting ? "Connecting…" : `Disconnect & connect ${clientName}`}

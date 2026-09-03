@@ -414,6 +414,32 @@ defmodule Engram.ConnectionsTest do
       assert row.vault_ids == [stale.id]
       assert row.vault_names == [nil]
     end
+
+    # `client_name` is the CLIENT's own name and is identical across two grants
+    # for the same client — the exact case a user-typed label exists to
+    # disambiguate, so it wins.
+    test "prefers the user's label over the client name" do
+      user = insert_user()
+      client = insert(:oauth_client, kind: "mcp", client_name: "Claude Desktop")
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        label: "My laptop"
+      )
+
+      assert [%{name: "My laptop"}] = Connections.list_for_user(user)
+    end
+
+    test "an unlabelled grant still falls back to the client identity" do
+      user = insert_user()
+      client = insert(:oauth_client, kind: "mcp", client_name: "Claude Desktop")
+
+      insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+
+      assert [listed] = Connections.list_for_user(user)
+      assert listed.name == "Claude Desktop"
+    end
   end
 
   describe "revoke_oauth_family/3" do

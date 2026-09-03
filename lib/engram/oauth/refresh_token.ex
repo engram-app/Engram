@@ -23,6 +23,10 @@ defmodule Engram.OAuth.RefreshToken do
     # A non-empty list = exactly that set. `vault_id` is dual-written for
     # single-vault grants until the phase/contract release drops it.
     field :vault_ids, {:array, Ecto.UUID}
+    # User-typed name for this grant, copied from the authorization code at
+    # exchange and carried across every rotation. NULL falls back to the OAuth
+    # client's own identity in the connections list.
+    field :label, :string
     field :scope, :string
     field :expires_at, :utc_datetime
     field :revoked_at, :utc_datetime
@@ -46,8 +50,8 @@ defmodule Engram.OAuth.RefreshToken do
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 
-  @cast ~w(token_hash family_id client_id user_id vault_id vault_ids scope
-           expires_at last_used_at last_used_ip redirect_uri)a
+  @cast ~w(token_hash family_id client_id user_id vault_id vault_ids label
+           scope expires_at last_used_at last_used_ip redirect_uri)a
   @required ~w(token_hash family_id client_id user_id expires_at)a
 
   def changeset(token, attrs) do

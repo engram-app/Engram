@@ -22,6 +22,9 @@ defmodule Engram.OAuth.AuthorizationCode do
     # A non-empty list = exactly that set. `vault_id` is dual-written for
     # single-vault grants until the phase/contract release drops it.
     field :vault_ids, {:array, Ecto.UUID}
+    # User-typed name for this grant, shown back to them in the connections
+    # list. NULL falls back to the OAuth client's own identity.
+    field :label, :string
     field :state, :string
     field :expires_at, :utc_datetime
     field :consumed_at, :utc_datetime
@@ -30,7 +33,8 @@ defmodule Engram.OAuth.AuthorizationCode do
   end
 
   @cast_fields ~w(code_hash client_id user_id redirect_uri code_challenge
-                  code_challenge_method scope vault_id vault_ids state expires_at)a
+                  code_challenge_method scope vault_id vault_ids label state
+                  expires_at)a
   @required ~w(code_hash client_id user_id redirect_uri code_challenge
                code_challenge_method expires_at)a
 

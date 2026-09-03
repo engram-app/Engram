@@ -11,8 +11,9 @@ defmodule EngramWeb.OAuthAuthorizeController do
       mediates consent under the user's existing JWT session.
 
     * `POST /api/oauth/authorize/consent` is **user-authenticated**
-      (Bearer JWT). The SPA submits the same params plus `vault_choice`
-      after the consent UI is approved, the controller mints an
+      (Bearer JWT). The SPA submits the same params plus `vault_ids`
+      and an optional user-typed `label` after the consent UI is
+      approved, the controller mints an
       authorization code, and returns JSON `{redirect_uri: "..."}` so
       the SPA can `window.location.assign` back to the OAuth client.
   """
@@ -48,7 +49,12 @@ defmodule EngramWeb.OAuthAuthorizeController do
 
     case OAuth.validate_authorization_request(params) do
       {:ok, validated} ->
-        case OAuth.mint_authorization_code(user, validated, OAuth.parse_vault_selection(params)) do
+        case OAuth.mint_authorization_code(
+               user,
+               validated,
+               OAuth.parse_vault_selection(params),
+               params["label"]
+             ) do
           {:ok, redirect_url} ->
             json(conn, %{redirect_uri: redirect_url})
 

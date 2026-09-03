@@ -236,46 +236,50 @@ defmodule Engram.OAuth do
   verified for every id — a user cannot grant an OAuth client access to a
   vault they do not own, and one bad id rejects the whole grant.
 
+  `label` is the optional free-text name the user typed on the consent
+  screen. An unusable one is rejected on the same `access_denied` path as a
+  bad vault id, so the consent screen has one rejection shape.
+
   Returns `{:ok, redirect_url}` (caller 302s) or
   `{:redirect_error, redirect_uri, error_code, state}`.
   """
-  def mint_authorization_code(user, validated, vault_selection) do
-    case resolve_vaults(user, vault_selection) do
-      {:ok, vault_ids} ->
-        raw_code =
-          "engram_ac_" <>
-            Base.url_encode64(:crypto.strong_rand_bytes(@code_bytes), padding: false)
+  def mint_authorization_code(user, validated, vault_selection, label \\ nil) do
+    with {:ok, vault_ids} <- resolve_vaults(user, vault_selection),
+         {:ok, label} <- resolve_label(label) do
+      raw_code =
+        "engram_ac_" <>
+          Base.url_encode64(:crypto.strong_rand_bytes(@code_bytes), padding: false)
 
-        expires_at =
-          DateTime.utc_now()
-          |> DateTime.add(@code_ttl_seconds, :second)
-          |> DateTime.truncate(:second)
+      expires_at =
+        DateTime.utc_now()
+        |> DateTime.add(@code_ttl_seconds, :second)
+        |> DateTime.truncate(:second)
 
-        attrs = %{
-          code_hash: hash_code(raw_code),
-          client_id: validated.client_id,
-          user_id: user.id,
-          redirect_uri: validated.redirect_uri,
-          code_challenge: validated.code_challenge,
-          code_challenge_method: validated.code_challenge_method,
-          scope: validated.scope,
-          vault_id: scalar_vault_id(vault_ids),
-          vault_ids: vault_ids,
-          state: validated.state,
-          expires_at: expires_at
-        }
+      attrs = %{
+        code_hash: hash_code(raw_code),
+        client_id: validated.client_id,
+        user_id: user.id,
+        redirect_uri: validated.redirect_uri,
+        code_challenge: validated.code_challenge,
+        code_challenge_method: validated.code_challenge_method,
+        scope: validated.scope,
+        vault_id: scalar_vault_id(vault_ids),
+        vault_ids: vault_ids,
+        label: label,
+        state: validated.state,
+        expires_at: expires_at
+      }
 
-        case %AuthorizationCode{}
-             |> AuthorizationCode.changeset(attrs)
-             |> Repo.insert(skip_tenant_check: true) do
-          {:ok, _row} ->
-            {:ok,
-             build_redirect(validated.redirect_uri, %{code: raw_code, state: validated.state})}
+      case %AuthorizationCode{}
+           |> AuthorizationCode.changeset(attrs)
+           |> Repo.insert(skip_tenant_check: true) do
+        {:ok, _row} ->
+          {:ok, build_redirect(validated.redirect_uri, %{code: raw_code, state: validated.state})}
 
-          {:error, changeset} ->
-            {:error, changeset}
-        end
-
+        {:error, changeset} ->
+          {:error, changeset}
+      end
+    else
       :error ->
         {:redirect_error, validated.redirect_uri, "access_denied", validated.state}
     end
@@ -319,6 +323,7 @@ defmodule Engram.OAuth do
              user_id: code_row.user_id,
              vault_id: code_row.vault_id,
              vault_ids: code_row.vault_ids,
+             label: code_row.label,
              scope: code_row.scope,
              # Where the code was actually delivered — already matched against
              # the client's registered list at /authorize. Carried onto the
@@ -400,6 +405,9 @@ defmodule Engram.OAuth do
         user_id: rt.user_id,
         vault_id: rt.vault_id,
         vault_ids: rt.vault_ids,
+        # Immutable for the life of the family, like redirect_uri below: a
+        # successor is the SAME grant, and the user named it once.
+        label: rt.label,
         scope: rt.scope,
         # Immutable for the life of the family, like family_id: rotation mints
         # a successor to the SAME grant, and the grant was delivered once.
@@ -791,6 +799,27 @@ defmodule Engram.OAuth do
   end
 
   defp resolve_vaults(_user, _), do: :error
+
+  # A label is free text the user typed on the consent screen, rendered back to
+  # them in the connections list. Bound the length rather than truncating —
+  # silently storing something other than what they typed is worse than
+  # refusing. Blank (or whitespace-only) is not a choice, it is the untouched
+  # default, and stores NULL so the client identity keeps showing through.
+  @max_label_chars 120
+
+  defp resolve_label(nil), do: {:ok, nil}
+
+  defp resolve_label(label) when is_binary(label) do
+    trimmed = String.trim(label)
+
+    cond do
+      trimmed == "" -> {:ok, nil}
+      String.length(trimmed) > @max_label_chars -> :error
+      true -> {:ok, trimmed}
+    end
+  end
+
+  defp resolve_label(_), do: :error
 
   defp build_redirect(base, params) do
     cleaned = params |> Enum.reject(fn {_, v} -> is_nil(v) or v == "" end) |> Map.new()

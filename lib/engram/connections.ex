@@ -297,7 +297,10 @@ defmodule Engram.Connections do
         kind: String.to_existing_atom(c.kind),
         client_id: c.client_id,
         key_id: nil,
-        name: identity.display_name || c.client_name,
+        # The user's own label wins. `identity.display_name` is the CLIENT's
+        # name, which is identical across two grants for the same client — the
+        # exact case a label exists to disambiguate.
+        name: t.label || identity.display_name || c.client_name,
         software_id: c.software_id,
         software_version: c.software_version,
         verified: identity.verified,

@@ -546,6 +546,111 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
     end
   end
 
+  describe "POST /api/oauth/authorize/consent — connection label" do
+    test "a supplied label is stored on the grant", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("label", "  Laptop — work vault  ")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      query =
+        conn.resp_body
+        |> Jason.decode!()
+        |> Map.fetch!("redirect_uri")
+        |> URI.parse()
+        |> Map.fetch!(:query)
+        |> URI.decode_query()
+
+      assert {:ok, code_row} = OAuth.get_authorization_code_by_raw(query["code"])
+      assert code_row.label == "Laptop — work vault"
+    end
+
+    test "a blank label stores nil rather than an empty string", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params = client.client_id |> valid_params(redirect_uri) |> Map.put("label", "   ")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      query =
+        conn.resp_body
+        |> Jason.decode!()
+        |> Map.fetch!("redirect_uri")
+        |> URI.parse()
+        |> Map.fetch!(:query)
+        |> URI.decode_query()
+
+      assert {:ok, code_row} = OAuth.get_authorization_code_by_raw(query["code"])
+      assert is_nil(code_row.label)
+    end
+
+    # Rejected, not truncated: storing something other than what the user typed
+    # and then showing it back to them is worse than refusing the grant.
+    test "an over-long label is rejected rather than truncated", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("label", String.duplicate("x", 200))
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      uri = conn.resp_body |> Jason.decode!() |> Map.fetch!("redirect_uri")
+      assert uri =~ "error=access_denied"
+    end
+
+    test "the label survives the code -> refresh-token exchange", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      verifier = "s3cret-code-verifier-value"
+      challenge = :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("code_challenge", challenge)
+        |> Map.put("label", "My laptop")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      query =
+        conn.resp_body
+        |> Jason.decode!()
+        |> Map.fetch!("redirect_uri")
+        |> URI.parse()
+        |> Map.fetch!(:query)
+        |> URI.decode_query()
+
+      assert {:ok, _} =
+               OAuth.exchange_authorization_code(%{
+                 "code" => query["code"],
+                 "client_id" => client.client_id,
+                 "redirect_uri" => redirect_uri,
+                 "code_verifier" => verifier
+               })
+
+      assert [%{label: "My laptop"}] =
+               Repo.all(Engram.OAuth.RefreshToken, skip_tenant_check: true)
+    end
+  end
+
   describe "POST /api/oauth/authorize/consent — invalid request" do
     test "invalid client_id returns 400 JSON (no redirect — code-leak prevention)", %{conn: conn} do
       user = insert(:user)

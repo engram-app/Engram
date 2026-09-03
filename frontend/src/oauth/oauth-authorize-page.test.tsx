@@ -345,6 +345,44 @@ describe("OAuthAuthorizePage", () => {
 		expect(postOAuthConsent.mock.calls[0]![0].vault_ids).toBeUndefined();
 	});
 
+	it("sends the typed label", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Desktop",
+			kind: "mcp",
+		});
+		postOAuthConsent.mockResolvedValue({ redirect_uri: "https://client.example/cb?code=x" });
+		renderAt(VALID_QS);
+
+		fireEvent.click(await screen.findByRole("checkbox", { name: /Personal/ }));
+		fireEvent.change(screen.getByLabelText(/Name this connection/), {
+			target: { value: "Work laptop" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+		await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+		expect(postOAuthConsent.mock.calls[0]![0].label).toBe("Work laptop");
+	});
+
+	// The input is prefilled via `placeholder`, never `value` — a default the
+	// user never touched must not be submitted as if they had chosen it.
+	it("omits the label when left at the prefilled default", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Desktop",
+			kind: "mcp",
+		});
+		postOAuthConsent.mockResolvedValue({ redirect_uri: "https://client.example/cb?code=x" });
+		renderAt(VALID_QS);
+
+		fireEvent.click(await screen.findByRole("checkbox", { name: /Personal/ }));
+		expect(screen.getByLabelText(/Name this connection/)).toHaveValue("");
+		fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+		await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+		expect(postOAuthConsent.mock.calls[0]![0].label).toBeUndefined();
+	});
+
 	it("disables Approve once the checked vaults drop to zero", async () => {
 		// Default state (nothing touched) is the "All vaults" grant, which is a
 		// valid submission on its own — so Approve starts enabled. Once the user
