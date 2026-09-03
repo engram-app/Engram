@@ -757,40 +757,6 @@ class CdpClient:
         result = await self.evaluate(f"{ENGINE_PATH}.getCatchupSeq()")
         return result if isinstance(result, int) else 0
 
-    async def accelerate_echo_expiry(self, path: str, ms: int = 200) -> None:
-        """Replace the pending recentlyPushed timer for ``path`` with a short one.
-
-        ``markRecentlyPushed`` arms a ``setTimeout(ECHO_COOLDOWN_MS=5000)`` to
-        clear the entry. Tests that just want to drive the expiry branch should
-        not sleep for the full production cooldown — shorten the timer so the
-        same clear path runs in tens of ms.
-
-        The timer-fires-and-clears mechanism is preserved (we install a real
-        ``setTimeout``, not a synchronous ``delete``), so assertions on
-        ``isRecentlyPushed`` going False still exercise the production code path.
-        Raises CdpError when no timer is armed for ``path``.
-        """
-        escaped = json.dumps(path)
-        result = await self.evaluate(
-            f"""
-            (() => {{
-                const m = {ENGINE_PATH}.recentlyPushed;
-                const t = m.get({escaped});
-                if (t === undefined) return 'no-timer';
-                window.clearTimeout(t);
-                const newT = window.setTimeout(
-                    () => m.delete({escaped}), {int(ms)}
-                );
-                m.set({escaped}, newT);
-                return 'rearmed';
-            }})()
-            """
-        )
-        if result != "rearmed":
-            raise CdpError(
-                f"accelerate_echo_expiry: no recentlyPushed timer for {path!r}"
-            )
-
     async def check_stream_connected(self) -> bool:
         """Check if the plugin's real-time stream (WebSocket channel) is connected."""
         result = await self.evaluate(f"{PLUGIN_PATH}.isLiveConnected()")
