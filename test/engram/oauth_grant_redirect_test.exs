@@ -41,7 +41,7 @@ defmodule Engram.OAuthGrantRedirectTest do
         "scope" => "mcp"
       })
 
-    {:ok, redirect_url} = OAuth.mint_authorization_code(user, validated, "vault:*")
+    {:ok, redirect_url} = OAuth.mint_authorization_code(user, validated, :all)
 
     code =
       redirect_url |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query() |> Map.get("code")

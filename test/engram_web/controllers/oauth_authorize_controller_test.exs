@@ -437,6 +437,126 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
     end
   end
 
+  describe "POST /api/oauth/authorize/consent — vault_ids (multi-vault grants)" do
+    test "mints a code carrying every granted vault id", %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "sel-a")
+      b = insert(:vault, user: user, slug: "sel-b")
+      _c = insert(:vault, user: user, slug: "sel-c")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("vault_ids", [a.id, b.id])
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      assert conn.status == 200
+
+      query =
+        conn.resp_body
+        |> Jason.decode!()
+        |> Map.fetch!("redirect_uri")
+        |> URI.parse()
+        |> Map.fetch!(:query)
+        |> URI.decode_query()
+
+      assert {:ok, code_row} = OAuth.get_authorization_code_by_raw(query["code"])
+      assert Enum.sort(code_row.vault_ids) == Enum.sort([a.id, b.id])
+      # >1 vault: the scalar column stays NULL, because no single id means "A and B".
+      assert is_nil(code_row.vault_id)
+    end
+
+    test "single-vault grant dual-writes the scalar vault_id", %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "solo")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params =
+        client.client_id |> valid_params(redirect_uri) |> Map.put("vault_ids", [a.id])
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      query =
+        conn.resp_body
+        |> Jason.decode!()
+        |> Map.fetch!("redirect_uri")
+        |> URI.parse()
+        |> Map.fetch!(:query)
+        |> URI.decode_query()
+
+      assert {:ok, code_row} = OAuth.get_authorization_code_by_raw(query["code"])
+      assert code_row.vault_ids == [a.id]
+      assert code_row.vault_id == a.id
+    end
+
+    test "one unowned id rejects the WHOLE grant", %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "mine")
+      stranger = insert(:vault, user: insert(:user), slug: "theirs")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("vault_ids", [a.id, stranger.id])
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      assert conn.status == 200
+      uri = conn.resp_body |> Jason.decode!() |> Map.fetch!("redirect_uri")
+      assert uri =~ "error=access_denied"
+
+      # Not a partial grant — nothing was minted at all.
+      assert Engram.Repo.aggregate(Engram.OAuth.AuthorizationCode, :count,
+               skip_tenant_check: true
+             ) == 0
+    end
+
+    test "an empty vault_ids array is rejected, never widened to all", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params = client.client_id |> valid_params(redirect_uri) |> Map.put("vault_ids", [])
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      uri = conn.resp_body |> Jason.decode!() |> Map.fetch!("redirect_uri")
+      assert uri =~ "error=access_denied"
+    end
+
+    test "vault_ids wins when both it and vault_choice are sent", %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "wins")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("vault_ids", [a.id])
+        |> Map.put("vault_choice", "vault:*")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      query =
+        conn.resp_body
+        |> Jason.decode!()
+        |> Map.fetch!("redirect_uri")
+        |> URI.parse()
+        |> Map.fetch!(:query)
+        |> URI.decode_query()
+
+      assert {:ok, code_row} = OAuth.get_authorization_code_by_raw(query["code"])
+      assert code_row.vault_ids == [a.id]
+    end
+  end
+
   describe "POST /api/oauth/authorize/consent — invalid request" do
     test "invalid client_id returns 400 JSON (no redirect — code-leak prevention)", %{conn: conn} do
       user = insert(:user)

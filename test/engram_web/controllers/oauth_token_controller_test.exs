@@ -33,7 +33,7 @@ defmodule EngramWeb.OAuthTokenControllerTest do
 
   defp mint_code(user, client, redirect_uri, challenge, opts \\ []) do
     state = Keyword.get(opts, :state, "xyz")
-    vault_choice = Keyword.get(opts, :vault_choice, "vault:*")
+    vault_choice = Keyword.get(opts, :vault_choice, :all)
 
     {:ok, validated} =
       OAuth.validate_authorization_request(%{

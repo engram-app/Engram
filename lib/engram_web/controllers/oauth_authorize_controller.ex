@@ -48,9 +48,7 @@ defmodule EngramWeb.OAuthAuthorizeController do
 
     case OAuth.validate_authorization_request(params) do
       {:ok, validated} ->
-        vault_choice = params["vault_choice"] || "vault:*"
-
-        case OAuth.mint_authorization_code(user, validated, vault_choice) do
+        case OAuth.mint_authorization_code(user, validated, OAuth.parse_vault_selection(params)) do
           {:ok, redirect_url} ->
             json(conn, %{redirect_uri: redirect_url})
 

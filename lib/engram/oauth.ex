@@ -210,18 +210,38 @@ defmodule Engram.OAuth do
   defp check_state_length(_), do: :ok
 
   @doc """
+  Reads a vault selection off consent params.
+
+  `vault_ids` is the current shape. `vault_choice` ("vault:<id>" | "vault:*")
+  is the pre-multi-vault shape and is still accepted for one release so an
+  SPA cached across the deploy keeps working; `vault_ids` wins when both are
+  present. Absent params default to `:all`, matching the previous
+  `params["vault_choice"] || "vault:*"` behaviour.
+  """
+  @spec parse_vault_selection(map()) :: :all | [String.t()] | :invalid
+  def parse_vault_selection(%{"vault_ids" => ids}) when is_list(ids) do
+    if Enum.all?(ids, &is_binary/1), do: ids, else: :invalid
+  end
+
+  def parse_vault_selection(%{"vault_ids" => _}), do: :invalid
+  def parse_vault_selection(%{"vault_choice" => "vault:*"}), do: :all
+  def parse_vault_selection(%{"vault_choice" => "vault:" <> id}), do: [id]
+  def parse_vault_selection(%{"vault_choice" => _}), do: :invalid
+  def parse_vault_selection(_), do: :all
+
+  @doc """
   Mints an authorization code for a validated request + a vault selection.
 
-  `vault_choice` is `"vault:<id>"` or `"vault:*"`. Vault ownership is
-  verified — a user cannot grant an OAuth client access to a vault they
-  do not own.
+  `vault_selection` is `:all` or a list of vault id strings. Ownership is
+  verified for every id — a user cannot grant an OAuth client access to a
+  vault they do not own, and one bad id rejects the whole grant.
 
   Returns `{:ok, redirect_url}` (caller 302s) or
   `{:redirect_error, redirect_uri, error_code, state}`.
   """
-  def mint_authorization_code(user, validated, vault_choice) do
-    case resolve_vault(user, vault_choice) do
-      {:ok, vault_id} ->
+  def mint_authorization_code(user, validated, vault_selection) do
+    case resolve_vaults(user, vault_selection) do
+      {:ok, vault_ids} ->
         raw_code =
           "engram_ac_" <>
             Base.url_encode64(:crypto.strong_rand_bytes(@code_bytes), padding: false)
@@ -239,7 +259,8 @@ defmodule Engram.OAuth do
           code_challenge: validated.code_challenge,
           code_challenge_method: validated.code_challenge_method,
           scope: validated.scope,
-          vault_id: vault_id,
+          vault_id: scalar_vault_id(vault_ids),
+          vault_ids: vault_ids,
           state: validated.state,
           expires_at: expires_at
         }
@@ -508,6 +529,14 @@ defmodule Engram.OAuth do
   defp maybe_put(map, _k, nil), do: map
   defp maybe_put(map, k, v), do: Map.put(map, k, v)
 
+  # Dual-write for the expand phase: a single-vault grant also populates the
+  # legacy scalar column so a rollback to the previous release still reads a
+  # correct binding. Multi-vault grants leave it NULL — there is no correct
+  # scalar answer, and NULL there means "all vaults" to old code, which is
+  # why multi-vault grants must not be rolled back into.
+  defp scalar_vault_id([only]), do: only
+  defp scalar_vault_id(_), do: nil
+
   # ── Revocation (Phase 6) ─────────────────────────────────────────
 
   @doc """
@@ -710,28 +739,39 @@ defmodule Engram.OAuth do
 
   defp check_scope(_params, _redirect_uri), do: :ok
 
-  defp resolve_vault(_user, "vault:*"), do: {:ok, nil}
+  # Resolves a vault selection to the id list stored on the grant.
+  #
+  # `:all` → {:ok, nil} — NULL keeps its existing meaning, including vaults
+  # created after the grant. An explicit list is verified in ONE query; if
+  # any id is unowned, deleted, or unknown, the WHOLE grant fails. Partially
+  # honouring a selection would silently hand out a scope the user never
+  # confirmed on the consent screen.
+  defp resolve_vaults(_user, :all), do: {:ok, nil}
 
-  defp resolve_vault(user, "vault:" <> id_str) do
-    case Ecto.UUID.cast(id_str) do
-      {:ok, id} -> verify_vault_ownership(user, id)
-      :error -> :error
+  defp resolve_vaults(_user, []), do: :error
+
+  defp resolve_vaults(user, ids) when is_list(ids) do
+    casted = Enum.map(ids, &Ecto.UUID.cast/1)
+
+    if Enum.any?(casted, &(&1 == :error)) do
+      :error
+    else
+      wanted = casted |> Enum.map(fn {:ok, id} -> id end) |> Enum.uniq()
+
+      query =
+        from(v in Engram.Vaults.Vault,
+          where: v.id in ^wanted and v.user_id == ^user.id and is_nil(v.deleted_at),
+          select: v.id
+        )
+
+      case Repo.all(query, skip_tenant_check: true) do
+        found when length(found) == length(wanted) -> {:ok, Enum.sort(found)}
+        _ -> :error
+      end
     end
   end
 
-  defp resolve_vault(_user, _), do: :error
-
-  defp verify_vault_ownership(user, vault_id) do
-    query =
-      from(v in Engram.Vaults.Vault,
-        where: v.id == ^vault_id and v.user_id == ^user.id and is_nil(v.deleted_at)
-      )
-
-    case Repo.one(query, skip_tenant_check: true) do
-      nil -> :error
-      _vault -> {:ok, vault_id}
-    end
-  end
+  defp resolve_vaults(_user, _), do: :error
 
   defp build_redirect(base, params) do
     cleaned = params |> Enum.reject(fn {_, v} -> is_nil(v) or v == "" end) |> Map.new()
