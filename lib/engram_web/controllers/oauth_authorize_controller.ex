@@ -108,39 +108,23 @@ defmodule EngramWeb.OAuthAuthorizeController do
     end
   end
 
-  defp render_client_error(conn, code) do
-    body = """
-    <!doctype html>
-    <html><body>
-    <h1>Authorization error</h1>
-    <p>Error: <code>#{html_escape(code)}</code>.</p>
-    <p>The OAuth client or redirect URI is not recognized. The request was rejected to prevent code-leak attacks.</p>
-    </body></html>
-    """
-
-    conn
-    |> put_resp_content_type("text/html")
-    |> send_resp(400, body)
-  end
+  defp render_client_error(conn, code), do: render_error(conn, 400, :client_error, code)
 
   # Deliberately NOT the invalid_client page. That copy tells the user their app
   # is not recognized, which is a lie when the truth is that we could not reach
   # or store the client's metadata document — and it is the lie that sent the
   # 2026-08-04 Claude outage looking for a misconfigured connector. 503 also
   # tells well-behaved clients to try again, which is the actual remedy.
-  defp render_server_error(conn, code) do
-    body = """
-    <!doctype html>
-    <html><body>
-    <h1>Authorization temporarily unavailable</h1>
-    <p>Error: <code>#{html_escape(code)}</code>.</p>
-    <p>We could not verify this application's metadata just now. This is a problem on our side, not with the app — please try connecting again in a moment.</p>
-    </body></html>
-    """
+  defp render_server_error(conn, code), do: render_error(conn, 503, :server_error, code)
 
+  # The route sits on the `:oauth_api` pipeline, whose `plug :accepts, ["json"]`
+  # negotiates a browser's `*/*` down to json. Without put_format/2 these pages
+  # would render through the (nonexistent) JSON view.
+  defp render_error(conn, status, template, code) do
     conn
-    |> put_resp_content_type("text/html")
-    |> send_resp(503, body)
+    |> put_status(status)
+    |> put_format(:html)
+    |> render(template, code: code)
   end
 
   defp redirect_with_error(conn, redirect_uri, error, state) do
@@ -152,14 +136,5 @@ defmodule EngramWeb.OAuthAuthorizeController do
     params = %{error: error, state: state} |> Enum.reject(fn {_, v} -> is_nil(v) or v == "" end)
     sep = if String.contains?(redirect_uri, "?"), do: "&", else: "?"
     redirect_uri <> sep <> URI.encode_query(params)
-  end
-
-  defp html_escape(s) when is_binary(s) do
-    s
-    |> String.replace("&", "&amp;")
-    |> String.replace("<", "&lt;")
-    |> String.replace(">", "&gt;")
-    |> String.replace("\"", "&quot;")
-    |> String.replace("'", "&#39;")
   end
 end
