@@ -457,43 +457,120 @@ git commit -m "feat(oauth): mint grants over a vault id list"
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `test/engram_web/controllers/oauth_token_controller_test.exs`. The file's helper already takes `vault_choice` (line 36) — add a `vault_ids` option alongside it and use it here:
+Add to `test/engram_web/controllers/oauth_token_controller_test.exs`. This file already has the helpers you need — `register_client/1` (line 24), `pkce_pair/0` (line 12), and `mint_code/5` (line 34), whose `opts` currently carries `:vault_choice`. First extend `mint_code/5` to accept `:vault_ids`, keeping `:vault_choice` working:
 
 ```elixir
-  test "a multi-vault grant round-trips vault_ids through exchange and refresh", %{conn: conn} do
-    %{user: user, vaults: [a, b]} = setup_two_vault_user()
+  defp mint_code(user, client, redirect_uri, challenge, opts \\ []) do
+    state = Keyword.get(opts, :state, "xyz")
 
-    {:ok, redirect_url} =
-      OAuth.mint_authorization_code(user, validated_request(), [a.id, b.id])
+    selection =
+      case Keyword.fetch(opts, :vault_ids) do
+        {:ok, ids} -> ids
+        :error -> OAuth.parse_vault_selection(%{
+                    "vault_choice" => Keyword.get(opts, :vault_choice, "vault:*")})
+      end
 
-    %{"access_token" => at, "refresh_token" => rt} = exchange_code(conn, redirect_url)
+    {:ok, validated} =
+      OAuth.validate_authorization_request(%{
+        "client_id" => client.client_id,
+        "redirect_uri" => redirect_uri,
+        "response_type" => "code",
+        "code_challenge" => challenge,
+        "code_challenge_method" => "S256",
+        "state" => state,
+        "scope" => "mcp"
+      })
 
-    {:ok, claims} = Engram.Accounts.verify_jwt(at)
-    assert Enum.sort(claims["vault_ids"]) == Enum.sort([a.id, b.id])
-    # No correct scalar answer for a 2-vault grant; must not claim one.
-    refute Map.has_key?(claims, "vault_id")
+    {:ok, redirect_url} = OAuth.mint_authorization_code(user, validated, selection)
 
-    %{"access_token" => at2} = refresh(conn, rt)
-    {:ok, claims2} = Engram.Accounts.verify_jwt(at2)
-    assert Enum.sort(claims2["vault_ids"]) == Enum.sort([a.id, b.id])
-  end
-
-  test "a legacy refresh token with only vault_id still mints a scoped access token",
-       %{conn: conn} do
-    %{user: user, vaults: [a, _b]} = setup_two_vault_user()
-
-    {:ok, redirect_url} = OAuth.mint_authorization_code(user, validated_request(), [a.id])
-    %{"refresh_token" => rt} = exchange_code(conn, redirect_url)
-
-    # Simulate a row written before this release: scalar set, array NULL.
-    Engram.Repo.update_all(Engram.OAuth.RefreshToken,
-      [set: [vault_ids: nil]], skip_tenant_check: true)
-
-    %{"access_token" => at} = refresh(conn, rt)
-    {:ok, claims} = Engram.Accounts.verify_jwt(at)
-    assert claims["vault_ids"] == [a.id]
+    %{query: query} = URI.parse(redirect_url)
+    URI.decode_query(query)["code"]
   end
 ```
+
+Then add the tests, following the exchange/refresh shape the existing tests in this file already use (`post(conn, "/oauth/token", %{...})`) — read one of them first and mirror it exactly:
+
+```elixir
+    test "a multi-vault grant round-trips vault_ids through exchange and refresh",
+         %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "tok-a")
+      b = insert(:vault, user: user, slug: "tok-b")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+      {verifier, challenge} = pkce_pair()
+
+      code = mint_code(user, client, redirect_uri, challenge, vault_ids: [a.id, b.id])
+
+      body =
+        conn
+        |> post("/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => redirect_uri,
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+        |> json_response(200)
+
+      {:ok, claims} = Engram.Accounts.verify_jwt(body["access_token"])
+      assert Enum.sort(claims["vault_ids"]) == Enum.sort([a.id, b.id])
+      # No single id means "A and B" — must not claim a scalar binding.
+      refute Map.has_key?(claims, "vault_id")
+
+      refreshed =
+        build_conn()
+        |> post("/oauth/token", %{
+          "grant_type" => "refresh_token",
+          "refresh_token" => body["refresh_token"],
+          "client_id" => client.client_id
+        })
+        |> json_response(200)
+
+      {:ok, claims2} = Engram.Accounts.verify_jwt(refreshed["access_token"])
+      assert Enum.sort(claims2["vault_ids"]) == Enum.sort([a.id, b.id])
+    end
+
+    test "a legacy refresh token with only vault_id still mints a scoped access token",
+         %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "tok-legacy")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+      {verifier, challenge} = pkce_pair()
+
+      code = mint_code(user, client, redirect_uri, challenge, vault_ids: [a.id])
+
+      body =
+        conn
+        |> post("/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => redirect_uri,
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+        |> json_response(200)
+
+      # Simulate a row written before this release: scalar set, array NULL.
+      Engram.Repo.update_all(Engram.OAuth.RefreshToken,
+        [set: [vault_ids: nil]], skip_tenant_check: true)
+
+      refreshed =
+        build_conn()
+        |> post("/oauth/token", %{
+          "grant_type" => "refresh_token",
+          "refresh_token" => body["refresh_token"],
+          "client_id" => client.client_id
+        })
+        |> json_response(200)
+
+      {:ok, claims} = Engram.Accounts.verify_jwt(refreshed["access_token"])
+      assert claims["vault_ids"] == [a.id]
+    end
+```
+
+Place both inside the existing `describe "POST /oauth/token — authorization_code grant"` block (line 55) so they inherit its `conn` setup.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -762,7 +839,7 @@ Update the corresponding assertion in `test/engram_web/controllers/mcp_oauth_sco
 - [ ] **Step 6: Run the tests**
 
 Run: `mix test test/engram_web/controllers/mcp_oauth_scope_test.exs test/engram_web/controllers/mcp_controller_test.exs`
-Expected: PASS except the subset-search test at `mcp_controller_test.exs:1058`, which Task 6 handles. If it is the only failure, continue.
+Expected: PASS, all of it. The subset-search test at `mcp_controller_test.exs:1058` is driven by a restricted API KEY, not an OAuth grant, so `oauth_scope_vault_ids` is nil there and `maybe_filter_oauth/2` takes its passthrough clause — this task must not change that test's result. If it goes red here, the new membership filter is wrongly catching the nil case; fix that before continuing.
 
 - [ ] **Step 7: Commit**
 
@@ -1414,7 +1491,7 @@ Reuse the file's existing `register_client/0` and code-exchange helpers if it al
   test "a multi-vault grant lists as ONE connection carrying every vault name" do
     %{user: user, a: a, b: b, c: c} = grant_over_three_vaults()
 
-    assert [listed] = Connections.list(user)
+    assert [listed] = Connections.list_for_user(user)
     assert Enum.sort(listed.vault_names) == Enum.sort([a.name, b.name, c.name])
     assert Enum.sort(listed.vault_ids) == Enum.sort([a.id, b.id, c.id])
   end
@@ -1422,13 +1499,13 @@ Reuse the file's existing `register_client/0` and code-exchange helpers if it al
   test "an all-vaults grant lists with nil vault_ids" do
     %{user: user} = grant_over_all_vaults()
 
-    assert [listed] = Connections.list(user)
+    assert [listed] = Connections.list_for_user(user)
     assert is_nil(listed.vault_ids)
     assert is_nil(listed.vault_names)
   end
 ```
 
-Confirm `Connections.list/1` is the real function name before writing these — `grep -n "def list" lib/engram/connections.ex`. The module's public list function is what `ConnectionsController` calls; use that name.
+`Connections.list_for_user/1` (line 210) is the module's public list function — the one `ConnectionsController` calls.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1832,8 +1909,9 @@ git commit -m "refactor(web): drop dead vault encryption fields"
 
 - [ ] **Step 1: Regenerate the OpenAPI spec**
 
-Run: `mix openapi.gen`
-(If the task name differs, find it with `mix help | grep -i openapi`.) CI fails on a stale `openapi.json`.
+Run: `mix openapi.spec.json --spec EngramWeb.ApiSpec --pretty=true openapi.json`
+
+That exact command is what the CI drift gate re-runs and diffs against the committed file (`.github/workflows/verify.yml:2434`). CI fails on a stale `openapi.json`.
 
 - [ ] **Step 2: Sweep for missed `vault_id` callers**
 
